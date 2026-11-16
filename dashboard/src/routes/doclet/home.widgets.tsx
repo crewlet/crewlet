@@ -45,6 +45,7 @@ import {
   gapsOf,
   type WidgetProps,
 } from "~/routes/home/board/kit.tsx";
+import { ago } from "~/lib/ago.ts";
 
 /** What the landing counts as writing: a new page, a save, a rename, a comment. */
 const WRITTEN_KINDS = "created,saved,renamed,comment";
@@ -215,7 +216,7 @@ function Watching() {
                   <span className="truncate">{page.title}</span>
                   <span className="knowledge-tile-meta truncate">
                     {tsKey(page.saved_at) > 0
-                      ? `Last saved ${relTime(page.saved_at, now)} by ${
+                      ? `Last saved ${ago(page.saved_at, now)} by ${
                           page.saved_by ? who(page.saved_by).name : "the engine"
                         }`
                       : " "}

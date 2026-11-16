@@ -30,13 +30,13 @@ import (
 // AND A CHANGE'S ROWS AND ITS ROUTING (codechange.go): `code_changes`,
 // `code_change`, `code_change_routing` and `code_reviews`, decided per
 // repository alike; AND A REPOSITORY'S CONTENT (codegit.go): `code_refs`,
-// `code_tree`, `code_find`, `code_blob`, `code_log`, `code_blame`, `code_diff`, `code_tips`,
-// `code_compare` and `code_commit`, decided per repository alike — the Gitlet
-// node that answers judges the grant again; AND ITS MERGE QUEUES AND ITS CHECKS
-// (codechecks.go): `code_queue`, `code_checks`, `code_check`,
-// `code_check_log` and `code_commit_marks`, the marks a history page's
-// commits carry (their checks and the changes they landed with), decided per
-// repository alike; AND A SEARCH OF ITS LINES
+// `code_tree`, `code_find`, `code_blob`, `code_log`, `code_blame`, `code_diff`,
+// `code_tips`, `code_tags`, `code_compare` and `code_commit`, decided per
+// repository alike — the Gitlet node that answers judges the grant again; AND
+// ITS MERGE QUEUES AND ITS CHECKS (codechecks.go): `code_queue`,
+// `code_checks`, `code_check`, `code_check_log` and `code_commit_marks`, the
+// marks a history page's commits carry (their checks and the changes they
+// landed with), decided per repository alike; AND A SEARCH OF ITS LINES
 // (codesearch.go): `code_search`, decided per repository alike by every Gitlet
 // node that answers a part of it, and read back at no session floor, since it
 // answers at the tip it names.
@@ -505,6 +505,7 @@ func registerCode(r *Registry, s Sources) {
 	r.Register("code_blame", gated, s.codeBlame)
 	r.Register("code_diff", gated, s.codeDiff)
 	r.Register("code_tips", gated, s.codeTips)
+	r.Register("code_tags", gated, s.codeTags)
 	r.Register("code_compare", gated, s.codeCompare)
 	r.Register("code_commit", gated, s.codeCommit)
 	r.Register("code_queue", gated, s.codeRead(gitlet.ReadQueue, "code_queue"))

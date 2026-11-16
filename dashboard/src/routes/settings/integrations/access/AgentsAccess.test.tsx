@@ -832,7 +832,7 @@ test("an agent's details say when it was checked and when its access was last ap
     details("SRE");
     const list = document.querySelector<HTMLElement>('dl[aria-label="SRE on Datadog"]')!;
     expect(within(list).getByText("Sync")).toBeTruthy();
-    expect(list.textContent).toContain("Checked 1m ago, last applied 10m ago");
+    expect(list.textContent).toContain("Checked 1 minute ago, last applied 10 minutes ago");
   } finally {
     vi.useRealTimers();
   }

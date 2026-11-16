@@ -56,6 +56,7 @@ import {
   defineWidgets,
   gapsOf,
 } from "~/routes/home/board/kit.tsx";
+import { ago } from "~/lib/ago.ts";
 
 /** The rows a widget lists before it says how many more its page holds. */
 const ROWS = 4;
@@ -479,7 +480,7 @@ function Configuration() {
             value={active ? active.revision_id.slice(0, 8) : EMPTY_VALUE}
             sub={
               active
-                ? `${relTime(active.activated_at ?? active.created_at, now)} by ${
+                ? `${ago(active.activated_at ?? active.created_at, now)} by ${
                     active.created_by || "an unnamed author"
                   }`
                 : "none active"

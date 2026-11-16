@@ -2119,3 +2119,51 @@ func TestAReaderWithNoChartRefusesAboutItself(t *testing.T) {
 		t.Errorf("with the chart, vp-sales's refs of %s = %v, want the chart's own refusal", private, err)
 	}
 }
+
+// A REPOSITORY'S DETAIL NAMES THE RECORD THAT LAST MOVED IT, in a refs page too.
+//
+// Mutation: answer Version from the read's checkpoint → red.
+func TestARepositorysDetailNamesTheRecordThatLastMovedIt(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	id := seededRepo(t, n, "app")
+	created := n.waiter.Committed()
+	versionOf := func(kind gitlet.ReadKind, name string) statelog.Position {
+		t.Helper()
+		a, err := n.reader.Read(t.Context(), gitlet.ReadQuery{Asker: asker, Kind: kind, Repo: name})
+		if err != nil || a.Repo == nil {
+			t.Fatalf("Read(%s %s) = %+v, %v", kind, name, a.Repo, err)
+		}
+		return a.Repo.Version
+	}
+	version := func(kind gitlet.ReadKind) statelog.Position { return versionOf(kind, "app") }
+	if got := version(gitlet.ReadRepo); got != created {
+		t.Errorf("the created repository's version is %v, want its create's %v", got, created)
+	}
+	pushed := n.push(id, entry("p1", set("refs/heads/main", gitlet.ZeroOID, oidOf("c1")))).Position
+	n.drain()
+	other := seededRepo(t, n, "web")
+	n.push(other, entry("w1", set("refs/heads/main", gitlet.ZeroOID, oidOf("w1"))))
+	n.drain()
+	if got := version(gitlet.ReadRepo); got != pushed {
+		t.Errorf("after a push and another repository's writes the version is %v, want the push's %v", got, pushed)
+	}
+	if got := version(gitlet.ReadRefs); got != pushed {
+		t.Errorf("a refs listing's first page carries version %v, want the push's %v", got, pushed)
+	}
+
+	svc := changeRepo(t, n, "svc")
+	c, _ := committerOn(t, n, n.pub)
+	opened, err := c.ProposeChange(t.Context(), opening(svc, featureRef, mainRef, dev))
+	requireChanged(t, opened, err)
+	n.drain()
+	if got := versionOf(gitlet.ReadRepo, "svc"); got != opened.Position {
+		t.Errorf("after a change's open the version is %v, want the open's %v", got, opened.Position)
+	}
+	edited, err := c.ProposeChange(t.Context(), retitled(svc, opened.ChangeID, dev, opened.Version, "Retry it"))
+	requireChanged(t, edited, err)
+	n.drain()
+	if got := versionOf(gitlet.ReadRepo, "svc"); got != edited.Position {
+		t.Errorf("after a change's edit the version is %v, want the edit's %v", got, edited.Position)
+	}
+}

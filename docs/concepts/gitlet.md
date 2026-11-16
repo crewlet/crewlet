@@ -3625,7 +3625,7 @@ the copy keeps for seats' reads go too, since one may quote what was purged,
 and so does a node's tip over a published chain; the multi-pack index and the
 published layers stay, never having covered the dropping packs.
 
-**What the cache writes beside the packs.** Six kinds of file in a
+**What the cache writes beside the packs.** Eight kinds of file in a
 repository's cache are derived on the Gitlet nodes rather than named by the
 rows: the multi-pack index — a full read's, written before it answers once
 the repository holds 256 packs, and the background indexing's, with its
@@ -3634,7 +3634,9 @@ each commit ([Which push landed a commit](#which-push-landed-a-commit)), the
 answers of seats' reads by object id ([The memo](#the-memo)), and an
 installed published chain's multi-pack-index layers with their bitmaps and
 its commit-graph layers, each half with the chain file the node writes over
-it ([Published layers](#published-layers)). Each lives
+it ([Published layers](#published-layers)), the trigram index of a
+repository searched by index, and the index of its tags
+([Tags by their date](#tags-by-their-date)). Each lives
 inside the repository's own directory, so it counts against the budget and
 leaves with the repository when it is evicted. The multi-pack index and the
 commit-graph are written again over a rebuild's packs, and each is dropped
@@ -3657,11 +3659,14 @@ of pushes is built from the push rows rather than the packs, and the memo's
 answers are about objects rather than packs, so a pack leaving changes nothing
 of either: a rebuild or a move to the next directory links the index of pushes
 into it and moves the memo there whole, in one rename however many answers it
-holds, and a log restored or recreated under the node drops both. One the node
+holds, and a log restored or recreated under the node drops both. The tag
+index is a function of the refs and of objects that never change, so a pack
+leaving changes nothing of it either: a move to the next directory links it,
+and a rebuild's whole read writes it again. One the node
 has not written since it started is held to its
 checksum before it serves — git's for the first two and a chain's layers,
 the layers installed for its chain files, the run's own for the
-index of pushes — and every file of a copy is checked again behind the
+index of pushes — and the tag index by the sync that reads it whole, and every file of a copy is checked again behind the
 serving; a memo's answer is checked by every read of it instead. Anything else in the directory that is neither one of them nor the
 repository's own files is moved aside the next time the node reads the
 repository whole — and so is a symbolic link, or anything but a regular file,
@@ -3675,7 +3680,7 @@ that text climbs back out of `refs/`, as the file it leads to.
 `crewlet gitlet verify` names any of them. Each is declared once in the engine,
 and this table is that list; the steps are what
 `code_cache_maintenance_refused` and its counter name when the node's memory
-refuses one — never `provenance`, `memo`, `layer` or `codeindex`, which the engine's own
+refuses one — never `provenance`, `memo`, `layer`, `codeindex` or `tags`, which the engine's own
 code writes, holding no git slot and charged against no memory budget. The
 `layers` and `graph-layers` files are git's own, written once by the
 repository's maintainer and installed byte for byte from the object store
@@ -3694,6 +3699,7 @@ written again at once.
 | `provenance`, the index of which push introduced each commit | `crewlet/provenance.<n>` | a sync, before it answers: `provenance`; the backfill: `provenance` | kept | kept | kept |
 | `memo`, the answers of seats' reads by object id — a directory, one file an answer | `crewlet/memo` | a seat's read by object id: `memo` | kept | dropped first | kept |
 | `codeindex`, the trigram index of the default branch's tip of a repository searched by index, on the first two Gitlet nodes of its git order — its segments, keyed by blob, and its tip map | `crewlet/codeindex/seg.<n>`, `crewlet/codeindex/tip.<n>` | the indexer of code indexes: `codeindex` | kept | dropped first | kept |
+| `tags`, the index of the copy's tags by their date and by the commit each names | `crewlet/tags` | a sync, before it answers: `tags` | kept | kept | kept |
 | `layers`, the installed published multi-pack-index chain — each layer's index and bitmap, and the chain file the node writes from the rows | `objects/pack/multi-pack-index.d/multi-pack-index-chain`, `objects/pack/multi-pack-index.d/multi-pack-index-<checksum>.midx`, `objects/pack/multi-pack-index.d/multi-pack-index-<checksum>.bitmap` | the install of the maintainer's published layers: `layer` | cut first, below the layer that names it | kept, no layer naming a pack an expunge drops | cut first, below the layer that names it |
 | `graph-layers`, the installed published commit-graph layers, one a layer, the node's tip over them, and their chain file | `objects/info/commit-graphs/commit-graph-chain`, `objects/info/commit-graphs/graph-<checksum>.graph` | the install of the maintainer's published layers: `layer`; the background indexing: `tip-graph` | cut first, below the layer that names it | kept, but for the node's tip, dropped first | cut first, below the layer that names it |
 
@@ -5297,7 +5303,8 @@ which commit last changed each line of a file
 branch and which push landed it (`landed_in`,
 [Which push landed a commit](#which-push-landed-a-commit)), many branch heads
 and tags at once, each with the commit it names and how far it is from a base
-([Many tips at once](#many-tips-at-once)), and what a change's
+([Many tips at once](#many-tips-at-once)), a repository's tags newest first by
+their own date ([Tags by their date](#tags-by-their-date)), and what a change's
 revisions are: a revision's facts against its target, where lines anchored in
 one revision are in another, and what the change changed between two
 ([A revision's facts](#a-revisions-facts)), and which lines of a commit a
@@ -5305,7 +5312,8 @@ code search matches ([A search of one repository](#a-search-of-one-repository)).
 It answers each with real git over its own
 [cache](#the-cache-on-a-gitlet-node), in the cache's read lane, from the copy it
 holds, and names in every answer the push that introduced each commit the
-answer names, with what its index of pushes holds.
+answer names, with what its index of pushes holds, and on a history's page the
+tags naming each commit.
 
 **Who asks them** is a seat, through its code tools, and a person through
 their own assistant, which the operator catalogue serves the same tools to:
@@ -5480,6 +5488,46 @@ moves on. Measured over a main of 20 000 commits with 80 branches forking along
 it and 20 annotated tags, a screen of all 100 read cold takes 1.4 s at the
 median and 2.0 s at the slowest, some 14 ms a tip, inside the read's ten seconds
 of git; read again it takes 5.5 ms.
+
+### Tags by their date
+
+`code_tags` lists a repository's tags newest first by their own date, the
+order `git for-each-ref --sort=-creatordate refs/tags/` gives: an annotated
+tag by its tagger's date, a lightweight tag by its commit's committer date, two
+of one date by name, and a tag with no date (a lightweight tag of a tree or a
+blob, an annotated tag naming no tagger) as dated at the epoch, after every
+later tag. A date past the year 9999 is
+answered in seconds as `date_unix` and listed where git lists it. Each row is
+the tag's ref, its object and that object's type (`tag` for an annotated tag),
+what it peels to and that object's type, and its date; the first row of the
+first page is the newest, which a repository's page calls Latest. An imported
+or mirrored tag keeps its own date. A page holds up to 100 tags (25 unless
+asked) within 56 KiB, its cursor the last tag's date and name, so a tag pushed
+or deleted between two pages puts no other tag on both or on neither. The
+listing is read at the repository's own last record, so it holds every tag the
+repository's row counts.
+
+**From the node's own index of its tags.** Every Gitlet node keeps, beside its
+copy's refs, an index of the copy's tags in the listing's order and by the
+commit each names. The sync that moves a tag merges it with the refs, reading
+only the tags that moved, and puts both in place together; a listing reads it
+with no git. It is the same on every node at a position, kept when packs are
+compacted or expunged, and written again when a rebuild or a log restored
+under the node reads the repository whole. A sync that fails to write it sets
+it aside rather than serve it behind the refs, and the next read of the tags
+past a minute has a sync write it again; meanwhile another node answers a
+listing.
+
+**Tags on a history.** A history's page names each listed commit's tags
+(`tagged`), up to 8 a commit newest first with how many more, and
+`code_commit` its commit's, as do a seat's `code_log` answers. A page from a
+node keeping no index it can read carries no `tagged`, which says nothing,
+where an empty `tagged` says no listed commit is tagged. Measured over 100 000
+tags, a sync moving one tag spends 58 ms on the index, within the 65 ms the
+same node's sync of one push takes at that many refs, and 125 ms with every
+name at 245 bytes; a sync reading the repository whole and finding the index
+level spends 98 ms on it, and one writing it whole about a second; a page of
+the listing takes 38 µs and a commit's tags on a history's page 41 µs.
 
 ### A path's history
 
@@ -8830,6 +8878,8 @@ A Gitlet node's [cache](#the-cache-on-a-gitlet-node) logs under the component `g
 | `code_cache_backfill_unpaced` | `WARN` | The backfill could not count the fleet's live git and data nodes to pace its next page (`error`), so it waits five seconds, doubling to five minutes, and counts again rather than reading on a guess. |
 | `code_cache_round_index_held` | `INFO` | A cold sync of a repository with many packs answered without writing its index first, because the background work in flight left the node's memory no room for it (`estimate` against the `budget`). Slower, never wrong; the background index follows. |
 | `code_cache_round_index_skipped` | `WARN` | A cold sync of a repository with many packs answered without writing its index first: the node's git reads were all busy, or the write failed. Slower, never wrong; the background index follows. |
+| `code_cache_tags_failed` | `WARN` | A sync could not bring a repository's index of its tags level with its refs (`error`), so it set the index aside rather than serve it behind them: that node answers its tag listing unavailable, and the next read of it past a minute has a sync write it again. |
+| `code_cache_tags_unreadable` | `WARN` | The node found a repository's index of its tags not as it wrote it (`error`): a sync wrote it again from git, or a read set it aside, asked a scrub of the copy and had a sync write it again. Recurring, the disk is damaging files: verify the repository's copy. |
 | `code_cache_trash_failed` | `WARN` | Something the cache had finished with could not be moved aside or removed. It stays on the disk until a later pass or the next boot removes it; recurring, the disk is refusing work. |
 | `code_cache_held_unmeasured`, `code_cache_scratch_unmeasured` | `WARN` | At boot, or at a pass of the cache's own housekeeping, a file in the cache could not be measured, so the cache counts less than it holds on the disk. Fix the disk or the file's permissions. |
 | `code_cache_use_unrecorded` | `WARN` | A repository's last use could not be written to the disk, so after a restart it may be evicted sooner than its use says. |

@@ -242,7 +242,7 @@ test("the properties name the seat the author wrote as, and the last save with i
   expect(props.textContent).toContain("Jane Founder");
   expect(props.textContent).not.toMatch(/\bjane\b/);
   const saved = within(props as HTMLElement).getByTitle("Revision 14: “Name the switch”");
-  expect(saved.textContent).toMatch(/^2h ago by SWE/);
+  expect(saved.textContent).toMatch(/^2 hours ago by SWE/);
   expect(props.textContent).not.toContain("Kind");
 });
 

@@ -8,6 +8,10 @@ import { zone } from "./prefs.ts";
 export interface AgoOptions {
   /** Name the time of day on the day before or after: "yesterday at 17:40". */
   readonly clock?: boolean;
+  /** After "since": "since a moment ago", "since Oct 02"; an instant ahead is clock skew. */
+  readonly since?: boolean;
+  /** A time something falls due: once it has arrived it reads "due", as inTime's does. */
+  readonly due?: boolean;
 }
 
 // h23 rather than hour12: false, so midnight reads 00, never 24.
@@ -24,13 +28,15 @@ export function ago(ts: string | null | undefined, now: number, options?: AgoOpt
   const days = Math.round(((civilAt(readerDay(now)) ?? 0) - (civilAt(readerDay(d)) ?? 0)) / DAY_MS);
   const at = () =>
     options?.clock ? ` at ${dateTimeFormat(undefined, zone(), CLOCK).format(d)}` : "";
+  if (options?.since && secs < 60) return "a moment ago";
+  if (options?.due && secs > -5) return secs >= 0 ? "due" : "in less than a minute";
   if (secs > -5) {
     if (secs < 60) return "just now";
     if (secs < 3600) return `${plural(Math.floor(secs / 60), "minute")} ago`;
     if (days === 0) return `${plural(Math.floor(secs / 3600), "hour")} ago`;
     if (days === 1) return `yesterday${at()}`;
     if (days < 30) return `${plural(days, "day")} ago`;
-    return `on ${fmtDateCompact(ts, now)}`;
+    return options?.since ? fmtDateCompact(ts, now) : `on ${fmtDateCompact(ts, now)}`;
   }
   const ahead = -secs;
   if (ahead < 60) return "in less than a minute";

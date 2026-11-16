@@ -99,13 +99,12 @@ func (doc stateDoc) midx() derivedDoc  { return doc.Derived[string(cache.Derived
 func (doc stateDoc) graph() derivedDoc { return doc.Derived[string(cache.DerivedGraph)] }
 
 // overPacks is the state's derived files built over the packs — every entry
-// but the index of pushes', which every full round makes, empty where no
-// delta has folded a push, and which a case about the packs' files does not
-// ask about.
+// but the index of pushes' and the tag index's, which every full round makes,
+// and which a case about the packs' files does not ask about.
 func (doc stateDoc) overPacks() map[string]derivedDoc {
 	out := map[string]derivedDoc{}
 	for name, d := range doc.Derived {
-		if name != string(cache.DerivedProvenance) {
+		if name != string(cache.DerivedProvenance) && name != string(cache.DerivedTags) {
 			out[name] = d
 		}
 	}
@@ -511,7 +510,9 @@ func TestADerivedFileGoneFromUnderItsStateIsForgotten(t *testing.T) {
 
 			c = w.reopen(t, c, clk.on)
 			opened := w.logs.lines(t, "code_cache_opened")
-			if got, want := opened[len(opened)-1]["bytes"], float64(doc.DiskBytes+kept); got != want {
+			// The tag index the round wrote is counted beside them.
+			tags := doc.Derived[string(cache.DerivedTags)].Bytes
+			if got, want := opened[len(opened)-1]["bytes"], float64(doc.DiskBytes+kept+tags); got != want {
 				t.Errorf("the next boot counts %v bytes, want the packs' and refs' %d and the %d left of the "+
 					"derived files", got, doc.DiskBytes, kept)
 			}

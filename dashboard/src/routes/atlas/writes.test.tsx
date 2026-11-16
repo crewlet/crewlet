@@ -81,6 +81,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   location.hash = "";
@@ -527,6 +528,20 @@ describe("Review", () => {
         { tool: "atlas_confirm", args: { atlas_entry: "service:ledger" } },
       ]),
     );
+  });
+
+  test("says since when each item has waited, in words", async () => {
+    // Three hours after the first item began waiting; the other waits from 41 days back.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-11T13:30:00Z"));
+    const company = grownCompany();
+    const [disagreement, guess] = waitingItems(company);
+    const items = [disagreement!, { ...guess!, since: "2026-10-01T09:00:00Z" }];
+    mountAtlas("#/company/atlas/review", <Review />, company, {
+      answers: { viewer: ADA, atlas_review: reviewAnswer(items) },
+    });
+    expect(await screen.findByText("Waiting since 3 hours ago")).toBeTruthy();
+    expect(screen.getByText("Waiting since Oct 01")).toBeTruthy();
   });
 
   test("says so when nothing waits", async () => {

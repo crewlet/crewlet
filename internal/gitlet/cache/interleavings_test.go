@@ -128,6 +128,9 @@ import (
 // rather than a compaction and a sweep meeting by chance: drawn apart, they
 // met with no round of the repository between them over a copy holding its
 // graph on no seed, so none reached a swap that dropped a graph the copy held.
+// A tag move is drawn at four (at one, two seeds moved a tag; at four,
+// seven), and a layer's part lost at four: at two beside it, no seed reached
+// "layer missing".
 // interleavingOutcomes holds the seeds to reaching every outcome; sixteen
 // reach them all, in about half a minute under the race detector on two
 // cores, the seeds in parallel. Sixty-four steps a seed, a check every ten:
@@ -151,6 +154,7 @@ var interleavingOps = []struct {
 }{
 	{"push", 30, (*interleaving).push},
 	{"tag", 8, (*interleaving).tag},
+	{"move a tag", 4, (*interleaving).moveTag},
 	{"delete a ref", 8, (*interleaving).deleteRef},
 	{"refused push", 5, (*interleaving).refusedPush},
 	{"adopt", 8, (*interleaving).adopt},
@@ -176,7 +180,7 @@ var interleavingOps = []struct {
 	{"publish", 6, (*interleaving).publish},
 	{"publish elsewhere", 5, (*interleaving).publishElsewhere},
 	{"install", 6, (*interleaving).install},
-	{"lose a layer's part", 2, (*interleaving).loseLayer},
+	{"lose a layer's part", 4, (*interleaving).loseLayer},
 	{"spoil a layer's part", 2, (*interleaving).spoilLayer},
 	{"tip", 3, (*interleaving).tip},
 }
@@ -187,7 +191,7 @@ var interleavingOps = []struct {
 // with rows it no longer holds. An outcome no seed reaches is an operation
 // this test only claims to interleave, so the seeds are held to all of them.
 var interleavingOutcomes = []string{
-	"push", "tag annotated", "tag lightweight", "delete a ref", "refused push", "adopt",
+	"push", "tag annotated", "tag lightweight", "tag moved", "delete a ref", "refused push", "adopt",
 	"sync stale", "sync session", "sync linearizable",
 	"sync killed at sync.download", "sync killed at sync.refs", "sync killed at sync.state",
 	"crash leaving a maintenance run's files", "evict", "rebuild", "a request repaired in place",
@@ -464,6 +468,36 @@ func (in *interleaving) tag(repo string) string {
 		kind = "annotated"
 	}
 	in.saw("tag " + kind)
+	return kind + " " + name
+}
+
+// moveTag moves a live tag of repo to its newest commit, as an annotated tag
+// or a lightweight one: what a tag index merges as one record out and one in.
+func (in *interleaving) moveTag(repo string) string {
+	var tags []string
+	for _, ref := range in.w.log.liveRefs(repo) {
+		if strings.HasPrefix(ref, "refs/tags/") {
+			tags = append(tags, ref)
+		}
+	}
+	f := in.w.repos[repo]
+	if len(tags) == 0 || f.head == "" {
+		return "no tag to move"
+	}
+	ref := tags[in.rng.IntN(len(tags))]
+	name := strings.TrimPrefix(ref, "refs/tags/")
+	kind := "lightweight"
+	if in.rng.IntN(2) == 0 {
+		kind = "annotated"
+		in.tags++
+		in.w.client.Run(in.t, f.work, "tag", "-a", "-f", name, "-m", fmt.Sprintf("moved %s %d", name, in.tags), f.head)
+		oid := strings.TrimSpace(in.w.client.Run(in.t, f.work, "rev-parse", ref))
+		row := in.w.pack(in.t, f, oid, "")
+		in.last[repo] = in.w.log.write(repo, []gitlet.PackRow{row}, map[string]string{ref: oid})
+	} else {
+		in.last[repo] = in.w.log.write(repo, nil, map[string]string{ref: f.head})
+	}
+	in.saw("tag moved")
 	return kind + " " + name
 }
 

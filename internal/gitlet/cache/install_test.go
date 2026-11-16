@@ -685,18 +685,28 @@ func noise(seed, size int) string {
 // A COLD SYNC RUNS NO GIT: a bundle carries the index and the reverse index
 // its receiving git wrote, so installing it is renames — no node but the
 // receiving one ever runs index-pack. The only processes a round may run are
-// the peel of the tags it sets and, from MidxRoundPacks packs (lowered here to
-// caseRoundPacks), the index it writes before it answers.
+// the peel of the tags it sets and the dates of those tags (tags.go) and, from
+// MidxRoundPacks packs (lowered here to caseRoundPacks), the index it writes
+// before it answers.
+//
+// Mutation: run the step's own batch-check where the peel read the tags → a
+// third process, red.
 func TestAColdSyncRunsNoGit(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
-		name  string
-		packs int
-		tag   bool
-		want  [][]string
+		name      string
+		packs     int
+		tag       bool
+		annotated bool
+		want      [][]string
 	}{
 		{name: "under the round's threshold", packs: caseRoundPacks - 1},
-		{name: "an annotated tag", packs: 3, tag: true, want: [][]string{{"cat-file", "--batch-check=%(objectname)", "--buffer"}}},
+		{name: "an annotated tag", packs: 3, tag: true, annotated: true, want: [][]string{
+			{"cat-file", "--batch", "--buffer"},
+			{"cat-file", "--batch-check=%(objectname) %(objecttype)", "--buffer"}}},
+		{name: "a lightweight tag", packs: 3, tag: true, want: [][]string{
+			{"cat-file", "--batch-check=%(objectname) %(objecttype)", "--buffer"},
+			{"log", "--no-walk=unsorted", "--no-mailmap", "--no-color", "--no-notes", "--stdin", "--format=%H %ct"}}},
 		{name: "twenty packs", packs: 20, want: [][]string{{"multi-pack-index", "write", "--stdin-packs", "--no-progress"}}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -709,7 +719,7 @@ func TestAColdSyncRunsNoGit(t *testing.T) {
 				w.push(t, repo, "refs/heads/main", nil)
 			}
 			if c.tag {
-				w.tag(t, repo, "v1", true)
+				w.tag(t, repo, "v1", c.annotated)
 			}
 			cc := w.open(t, cache.RoundPacksAt(caseRoundPacks))
 			// The recording lists its calls in no order: what the sync ran
@@ -727,6 +737,7 @@ func TestAColdSyncRunsNoGit(t *testing.T) {
 				}
 				got = append(got, call.Args)
 			}
+			slices.SortFunc(got, func(a, b []string) int { return strings.Compare(fmt.Sprint(a), fmt.Sprint(b)) })
 			if fmt.Sprint(got) != fmt.Sprint(c.want) {
 				t.Errorf("a cold sync ran %q, want %q", got, c.want)
 			}

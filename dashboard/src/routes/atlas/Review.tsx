@@ -39,7 +39,7 @@ import type {
   AtlasReviewKind,
 } from "~/contract/atlas.ts";
 import { useNow } from "~/lib/clock.ts";
-import { plural, relTime } from "~/lib/format.ts";
+import { plural } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { usePaged } from "~/lib/usePaged.ts";
@@ -51,6 +51,7 @@ import { ATLAS_POLL_MS, knownIn } from "./filters.ts";
 import { Cited, EntryDisc, sourceSetBy } from "./parts.tsx";
 import { KINDS, RELATIONS, factLabel } from "./words.ts";
 import { reviewDecisions, undecided, type Decision } from "./writes.ts";
+import { ago } from "~/lib/ago.ts";
 
 /** What each reason to wait is called, one and many, and what it means. */
 export const REVIEW_KINDS: Readonly<
@@ -207,7 +208,7 @@ export function Review() {
                             {words.one}
                           </Tag>
                           <Text variant="caption" tone="tertiary">
-                            Waiting since {relTime(item.since, now)}
+                            Waiting since {ago(item.since, now, { since: true })}
                           </Text>
                         </div>
                         {item.fact || item.relation ? (
