@@ -317,6 +317,11 @@ func judge(e Expect, frames []wire.Frame, refusals []string, heard bool) Trial {
 	if e.Taint != "" {
 		judgeTaint(e.Taint, taints, fail)
 	}
+	for _, s := range e.NeverShows {
+		if strings.Contains(cardText, strings.ToLower(s)) {
+			fail("never_shows: %q on a card", s)
+		}
+	}
 	if e.Brief != nil {
 		judgeBrief(*e.Brief, brief, fail)
 	}

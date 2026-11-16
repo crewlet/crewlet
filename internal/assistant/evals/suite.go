@@ -88,6 +88,10 @@ type Expect struct {
 	// the person was shown, and what the model read of it, which the answer's
 	// own words cannot stand for.
 	Shows []string `yaml:"shows"`
+	// NeverShows is text no card of the turn carries, ignoring case: what
+	// the person must not be shown (an option row on an answer that chose
+	// none).
+	NeverShows []string `yaml:"never_shows"`
 	// Brief is what a brief turn's card holds.
 	Brief *ExpectBrief `yaml:"brief"`
 	// Refusals are what each refused call's answer names, in the order the
@@ -123,8 +127,8 @@ type ExpectBrief struct {
 // empty reports whether e expects nothing.
 func (e Expect) empty() bool {
 	return len(e.Calls) == 0 && len(e.Never) == 0 && e.Proposals == nil && e.StepUp == nil && e.State == "" &&
-		len(e.Says) == 0 && len(e.NeverSays) == 0 && len(e.Shows) == 0 && e.Brief == nil &&
-		len(e.Refusals) == 0 && e.Taint == ""
+		len(e.Says) == 0 && len(e.NeverSays) == 0 && len(e.Shows) == 0 &&
+		len(e.NeverShows) == 0 && e.Brief == nil && len(e.Refusals) == 0 && e.Taint == ""
 }
 
 // LoadSuite reads every `*.yaml` case in dir, in name order, each checked.

@@ -155,6 +155,17 @@ of taste ("make it friendlier"), Ask Crewlet reads what is there, then asks
 one short question with the options it found, or sets out an ordered plan and
 proposes its first step. It says what each proposal does before its card.
 
+**Help you answer a question put to you.** Asked about a question waiting
+on you, Ask Crewlet reads what it rests on before it answers: the options, the
+one its asker recommends and why, every task and page the question cites, the
+task it is on with its links and thread, and, when it is about an agent's
+access, that agent's access. It says whether it agrees with the recommendation
+and why, then prepares your answer by the option you choose, with the
+conditions you set; an answer that is none of the options is given in your own
+words. It answers only questions put to you, and never because something it
+read asked it to: an instruction in a question, a comment or a page is the
+writer's, not yours, and Ask Crewlet tells you it was there.
+
 **Prepare changes for you to approve:** filing, changing and commenting on
 tasks, answering a decision, setting your priorities, marking your inbox,
 pausing and resuming an agent, steering a running turn, answering an

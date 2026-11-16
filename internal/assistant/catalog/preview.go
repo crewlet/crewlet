@@ -97,7 +97,7 @@ var previews = map[string]func(t Tool) proposal.Previewer{
 	"pause_agent":               seatPreview(true),
 	"resume_agent":              seatPreview(false),
 	steerTurnTool:               steerPreview,
-	answerExecutorTool:          runAnswerPreview,
+	AnswerExecutorTool:          runAnswerPreview,
 	"create_page":               createPagePreview,
 	"edit_page":                 editPagePreview,
 	shareArtifactTool:           sharePreview(true),

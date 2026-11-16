@@ -68,7 +68,9 @@ func TestTheShippedAssistantEvalSuitePasses(t *testing.T) {
 		"brief-chatlet-room", "agent-lacks-a-github-permission", "integration-set-up-for-an-agent",
 		"two-access-clocks", "a-permission-the-connection-lacks", "approve-a-grant-request",
 		"injected-agent-question", "answer-a-question-by-its-option", "what-a-task-waits-on",
-		"answer-only-your-own-question", "2/2", "pass^2 27/27 cases",
+		"answer-only-your-own-question", "decide-the-docs-route", "how-the-agent-gets-the-access",
+		"instructions-planted-in-a-comment", "answer-in-your-own-words", "2/2",
+		"pass^2 31/31 cases",
 		"model scripted"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the report does not say %q:\n%s", want, out.String())

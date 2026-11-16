@@ -454,7 +454,7 @@ func readTools() []Tool {
 				"on tasks, and executors parked on a question for them. Each question carries " +
 				"its options by id, the one its asker recommends and why, and what it cites; " +
 				"a task's question its comment id (answer_decision's answers), an executor's " +
-				"its turn and launch ids (" + answerExecutorTool + "'s). With list_agents' " +
+				"its turn and launch ids (" + AnswerExecutorTool + "'s). With list_agents' " +
 				"stopped seats, " +
 				"this is the Inbox screen's Needs you.",
 			schema: object(nil, map[string]*schema{
@@ -680,7 +680,7 @@ func readTools() []Tool {
 			Name: "list_executors", Phrase: "list executors",
 			Description: "Seats' executors in flight and recent, including any parked on a " +
 				"question: its options by id, the one recommended and why, and the turn and " +
-				"launch ids " + answerExecutorTool + " takes.",
+				"launch ids " + AnswerExecutorTool + " takes.",
 			schema: object(nil, map[string]*schema{}),
 			Routes: []string{"GET /executors"}, Fence: true,
 			// AN EXECUTOR'S QUESTION IS THE HARNESS'S, a third party's model
@@ -883,7 +883,7 @@ func readTools() []Tool {
 			Label: func(map[string]any) string { return "Listing the knowledge spaces" },
 		},
 		{
-			Name: getPageTool, Phrase: "read this page",
+			Name: GetPageTool, Phrase: "read this page",
 			Description: "Read one knowledge page whole: its body, labels, comments and the " +
 				"version an edit proposes against.",
 			schema: object([]string{"page"}, map[string]*schema{
