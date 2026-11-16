@@ -401,9 +401,9 @@ func TestOnlyAReadThatAsksIsAnsweredThePathOwners(t *testing.T) {
 // included: a read of each kind this build reads, as everyReadAsked asks it,
 // that also names a commit, an inbox, an inbox page's cards, a history
 // page's commits, the narrowing to protected repositories, a counts read's
-// parts or a repository's facts (fields only a `commit`, an `inbox`, a
-// `notice_cards`, a `commit_marks`, a `repos`, a `counts` and a `repos` or
-// `repo` read read) is refused naming the field, never
+// parts, a repository's facts or a listing's sort (fields only a `commit`, an
+// `inbox`, a `notice_cards`, a `commit_marks`, a `repos`, a `counts`, a
+// `repos` or `repo` and a `changes` read read) is refused naming the field, never
 // answered with it ignored. The engine's own reads validate
 // against lists of their own, and a field added after a list was written
 // passed it unseen.
@@ -439,6 +439,9 @@ func TestAFieldOneKindReadsIsRefusedOnEveryOther(t *testing.T) {
 		}},
 		{"repo_facts", []gitlet.ReadKind{gitlet.ReadRepos, gitlet.ReadRepo}, func(q *gitlet.ReadQuery) {
 			q.RepoFacts = true
+		}},
+		{"change_sort", []gitlet.ReadKind{gitlet.ReadChanges}, func(q *gitlet.ReadQuery) {
+			q.ChangeSort = gitlet.ChangeSortUpdated
 		}},
 		{"cards", []gitlet.ReadKind{gitlet.ReadChanges}, func(q *gitlet.ReadQuery) { q.Cards = true }},
 	} {

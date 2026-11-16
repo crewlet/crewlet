@@ -45,7 +45,7 @@ export interface KindViewProps {
 
 /** How each kind draws one version: a record over every kind, so a new kind fails the build until it is drawn. */
 export const KIND_VIEWS: Readonly<Record<ArtifactKind, (props: KindViewProps) => ReactNode>> = {
-  html: ({ detail, version, room, presence, bridgeStores, dataNote }) => (
+  html: ({ detail, version, room, presence, bridgeStores, dataNote, onPublished }) => (
     <FrameView
       detail={detail}
       version={version}
@@ -53,6 +53,8 @@ export const KIND_VIEWS: Readonly<Record<ArtifactKind, (props: KindViewProps) =>
       presence={presence}
       bridgeStores={bridgeStores}
       {...(dataNote === undefined ? {} : { dataNote })}
+      // THE PAGE ON SHOW draws its comments; a side of a compare draws none.
+      {...(onPublished ? { comments: "page" as const } : {})}
     />
   ),
   doc: ({ detail, version, presence, onPublished }) => (

@@ -62,7 +62,7 @@ func TestTheBridgeKeepsTheToolSessionContract(t *testing.T) {
 				var out []toolsessiontest.Recorded
 				for _, row := range calls.rows() {
 					out = append(out, toolsessiontest.Recorded{Seq: row.Seq, Name: row.Name,
-						Output: row.Output, Failed: row.Failed, Class: row.Refusal()})
+						Output: row.Output, Failed: row.Failed, Images: row.Images, Class: row.Refusal()})
 				}
 				return out
 			},
@@ -201,5 +201,5 @@ func (s *suiteTool) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	out := s.tool.Run(ctx, toolsessiontest.ToolCall{
 		Args: args, Ordinal: turn.CallLog().Ordinal(s.tool.Name, args), Activate: s.surface().Activate,
 	})
-	return tools.Result{Output: out}, nil
+	return tools.Result{Output: out, Images: s.tool.Images}, nil
 }

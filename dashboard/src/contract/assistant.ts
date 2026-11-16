@@ -173,6 +173,7 @@ export type AssistantTaintSource =
   | "chat_room"
   | "artifact_file"
   | "artifact_row"
+  | "artifact_comment"
   | "change_note"
   | "alert"
   | "notification"

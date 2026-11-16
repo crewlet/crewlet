@@ -75,9 +75,9 @@ func TestEveryNativeSourceNamesItsSendersByHandle(t *testing.T) {
 		return p.Source() == alarmwake.Source || p.Source() == accessreview.Source ||
 			p.Source() == atlaswake.Source
 	})
-	if len(parsers) != 4 {
+	if len(parsers) != 5 {
 		t.Fatalf("a company running every half natively registered %d parsers beside "+
-			"the alarms', want Worklet's, Doclet's, Chatlet's and Gitlet's",
+			"the alarms', want Worklet's, Doclet's, Chatlet's, Gitlet's and the artifacts'",
 			len(parsers))
 	}
 	reg := partyRegistry(o, nil)

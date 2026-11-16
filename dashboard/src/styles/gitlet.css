@@ -6,9 +6,10 @@
 
    Laid out as a code host is laid out, and coloured by the one rule: nothing
    here spends a hue but a state (a meter met) and the kit's code host colours
-   (a change's state, a branch), the seventh exception. A directory and a file
-   are told apart by their glyphs and their names, a seat by its own face, a
-   picked line by a rule at its edge. */
+   (a change's state, a branch, and its code's syntax in `gitlet-code.css`),
+   the seventh exception. A directory and a file are told apart by their
+   glyphs and their names, a seat by its own face, a picked line by a rule at
+   its edge. */
 
 /* GITLET › CHANGES' "NEEDS A PERSON" BAND: the changes an agent company cannot
    move on its own, above the grid. A ruled box rather than a callout, since

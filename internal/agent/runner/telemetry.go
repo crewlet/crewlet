@@ -1504,6 +1504,11 @@ func toolExecutions(execs []toolloop.Execution) []types.ToolExecution {
 		if ex.ArgsUnknown != "" {
 			row["arguments_unknown"] = string(ex.ArgsUnknown)
 		}
+		// WHAT ITS IMAGES WERE, by type and size: the record keeps no picture,
+		// and an answer that carried none has no key (types.ToolExecution).
+		if len(ex.Images) > 0 {
+			row["images"] = ex.Images
+		}
 		if ex.Failed {
 			// Rendered in place of the result when the call failed, so a
 			// consumer showing `result ?? error` has something to show.

@@ -333,6 +333,9 @@ func pageClass(err error) (tools.Refusal, bool) {
 // company or one folder holds at their bound the state (`conflict`), and a
 // destination inside the folder moved, one deeper than folders go, or a path
 // naming several folders the caller sees the argument to change (`invalid`).
+// A COMMENT by the same rule: a missing thread or remark is `not_found`, a
+// comment bound `conflict`, somebody else's remark `forbidden`, and a
+// credential in one `invalid`.
 func artifactClass(err error) (tools.Refusal, bool) {
 	var (
 		moved     *artifactsdomain.VersionMoved
@@ -342,7 +345,7 @@ func artifactClass(err error) (tools.Refusal, bool) {
 	)
 	switch {
 	case errors.Is(err, artifactsdomain.ErrNotFound), errors.Is(err, artifactsdomain.ErrPurged),
-		errors.Is(err, artifactsdomain.ErrFolderNotFound):
+		errors.Is(err, artifactsdomain.ErrFolderNotFound), errors.Is(err, artifactsdomain.ErrCommentNotFound):
 		return tools.RefusalNotFound, true
 	case errors.As(err, &moved):
 		return tools.RefusalStaleVersion, true
@@ -352,14 +355,15 @@ func artifactClass(err error) (tools.Refusal, bool) {
 	case errors.As(err, &quota):
 		return tools.RefusalQuotaExceeded, true
 	case errors.Is(err, artifactsdomain.ErrAgentCompanyShare),
-		errors.Is(err, artifactsdomain.ErrAboveOwnRole):
+		errors.Is(err, artifactsdomain.ErrAboveOwnRole), errors.Is(err, artifactsdomain.ErrNotTheAuthor):
 		return tools.RefusalForbidden, true
 	case errors.Is(err, artifactsdomain.ErrConflict), errors.Is(err, artifactsdomain.ErrPurging),
 		errors.Is(err, artifactsdomain.ErrTrashed), errors.Is(err, artifactsdomain.ErrLabelsFull),
 		errors.Is(err, artifactsdomain.ErrUploadStale), errors.As(err, &gone),
-		errors.Is(err, artifactsdomain.ErrFolderLimit):
+		errors.Is(err, artifactsdomain.ErrFolderLimit), errors.Is(err, artifactsdomain.ErrCommentLimit):
 		return tools.RefusalConflict, true
 	case errors.Is(err, artifactsdomain.ErrInvalid), errors.Is(err, artifactsdomain.ErrBadCursor),
+		errors.Is(err, artifactsdomain.ErrCommentCredential),
 		errors.Is(err, artifactsdomain.ErrFolderCycle), errors.Is(err, artifactsdomain.ErrFolderDepth),
 		errors.As(err, &ambiguous):
 		return tools.RefusalInvalid, true

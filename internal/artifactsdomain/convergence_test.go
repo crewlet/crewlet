@@ -19,10 +19,11 @@ import (
 // This is the identity claim the domain declares ([artifactsdomain.Domain]
 // claims identity), held across the cases that make it hard: creates, publishes
 // that race on one artifact from both nodes, carries, retention, shares and
-// narrowings, assets, links to work items, pins, a purge, and the folder tree
+// narrowings, assets, links to work items, pins, a purge, the folder tree
 // (chains, renames, moves and a removal on the one tree subject both nodes
-// write, and artifacts filed in it), all through two independent publishers
-// and appliers. Every Replicated table is compared
+// write, and artifacts filed in it), and comment threads (replies racing on
+// one thread, edits, resolves), all through two independent publishers and
+// appliers. Every Replicated table is compared
 // whole.
 //
 // Mutation: write the applying node's own clock into any row (time.Now for a
@@ -42,6 +43,13 @@ func TestTwoNodesConvergeOnOneLogAndAReplayRebuildsTheirEstate(t *testing.T) {
 		Audience: artifacts.Audience{Kind: artifacts.AudienceSeat, ID: "bob"}, Role: artifacts.RoleEditor,
 	}); err != nil {
 		t.Fatalf("share: %v", err)
+	}
+	b.drain()
+	talk, err := a.writer.OpenThread(t.Context(), jane, artifactsdomain.ThreadInput{
+		Artifact: shared, Body: "Which total is right?", Quote: "shared",
+	})
+	if err != nil {
+		t.Fatalf("open the shared thread: %v", err)
 	}
 	b.drain()
 
@@ -103,6 +111,31 @@ func TestTwoNodesConvergeOnOneLogAndAReplayRebuildsTheirEstate(t *testing.T) {
 		}
 		if _, err := n.writer.Opened(ctx, c, shared); err != nil {
 			failures <- fmt.Errorf("%s opened: %w", label, err)
+			return
+		}
+		// COMMENTS: both nodes reply on one thread, and each opens, edits
+		// and resolves one of its own on the artifact the other publishes.
+		for i := range 3 {
+			if _, err := n.writer.Reply(ctx, c, artifactsdomain.ReplyInput{Artifact: shared,
+				Thread: talk.Thread, Body: fmt.Sprintf("%s says %d", label, i)}); err != nil {
+				failures <- fmt.Errorf("%s reply %d: %w", label, i, err)
+				return
+			}
+		}
+		mine, err := n.writer.OpenThread(ctx, c, artifactsdomain.ThreadInput{Artifact: shared,
+			Body: "From " + label, Mentions: []string{"jane", "bob"}})
+		if err != nil {
+			failures <- fmt.Errorf("%s open: %w", label, err)
+			return
+		}
+		if _, err := n.writer.EditRemark(ctx, c, artifactsdomain.RemarkEdit{Body: "From " + label + ", edited",
+			RemarkRef: artifactsdomain.RemarkRef{Artifact: shared, Thread: mine.Thread, Remark: mine.Remark}}); err != nil {
+			failures <- fmt.Errorf("%s edit: %w", label, err)
+			return
+		}
+		if _, err := n.writer.Resolve(ctx, c, artifactsdomain.ResolveInput{Artifact: shared,
+			Thread: mine.Thread}); err != nil {
+			failures <- fmt.Errorf("%s resolve: %w", label, err)
 			return
 		}
 		// THE FOLDER TREE, ONE SUBJECT BOTH NODES WRITE AT ONCE: a chain,
@@ -190,7 +223,8 @@ func TestTwoNodesConvergeOnOneLogAndAReplayRebuildsTheirEstate(t *testing.T) {
 		}
 	}
 	if a.table("artifacts") == "" || a.table("artifact_objects") == "" || a.table("artifact_folders") == "" ||
-		a.table("artifact_folder_shares") == "" || a.table("artifact_folder_history") == "" {
+		a.table("artifact_folder_shares") == "" || a.table("artifact_folder_history") == "" ||
+		a.table("artifact_comment_threads") == "" || a.table("artifact_comments") == "" {
 		t.Fatal("the compared estate is empty, so the comparison proves nothing")
 	}
 	if got := a.count(`SELECT COUNT(*) FROM artifact_folders WHERE status = 'removed'`); got != 1 {

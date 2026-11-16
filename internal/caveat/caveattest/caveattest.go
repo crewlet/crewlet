@@ -117,6 +117,9 @@ var valueFields = []string{"tool", "outcome", "position", "op_id", "id", "item",
 	// a purge's request by its id with the Gitlet nodes that serve and hold it.
 	"entry_id", "target", "state", "sha", "checked_for", "reverts", "change_refusal",
 	"request", "maintainer", "gitlet_nodes",
+	// A COMMENT ON AN ARTIFACT: its thread and remark by the ids a screen finds
+	// them by, the seats it named, and the version a resolve cites.
+	"thread", "remark", "mentioned", "resolved_version",
 	// THE ATLAS'S WRITES: the entries a write names by the ids a screen opens
 	// them by, what it recorded as its word, the fact, the relation and the
 	// owner as the atlas keeps them, a value as the person gave it, what a

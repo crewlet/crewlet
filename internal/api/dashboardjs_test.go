@@ -2667,7 +2667,13 @@ const (
 	// 134 KiB of it the coding harness marks kit 0.139.0 added to the vendor mark chunk: 6512 KiB.
 	// The clear controls, Doclet changes, Settings polish and notices train, on kit 0.144.0:
 	// 6521.2 KiB (6,677,673 bytes), 149,862 over main: 6522 KiB.
-	treeBudget = 5<<20 + 1402<<10
+	// Anchored comments on kit 0.139.0: 6523.1 KiB (6,679,624 bytes); its vendor marks are 130.8 KiB: 6524 KiB.
+	// The artifacts' half of a person's inbox: 6525.6 KiB (6,682,224 bytes): 6526 KiB.
+	// Gitlet's code coloured by kind in its file view and blame, on kit 0.137.0:
+	// 6410.9 KiB (6,564,755 bytes), 36,917 bytes over main: 6411 KiB.
+	// The artifact comments, their inbox, Gitlet syntax and harness marks train, on kit 0.144.0:
+	// 6595.4 KiB (6,753,705 bytes), 76,032 over main: 6596 KiB.
+	treeBudget = 5<<20 + 1476<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

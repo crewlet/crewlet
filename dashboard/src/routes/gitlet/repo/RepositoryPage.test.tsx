@@ -29,7 +29,14 @@ import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { DECLARED, DECLARED_LIFE, PERSON_ONLY, PURGE_KEEPERS } from "~/lib/repoWrites.ts";
+import { SYNTAX_MAX_BYTES, load } from "~/lib/syntax/index.ts";
 import { RepositoryPage } from "./RepositoryPage.tsx";
+
+// EVERY GRAMMAR FETCH COUNTED, the registry's own load passed through.
+vi.mock("~/lib/syntax/index.ts", async (real) => {
+  const registry = await real<typeof import("~/lib/syntax/index.ts")>();
+  return { ...registry, load: vi.fn(registry.load) };
+});
 
 afterEach(() => {
   cleanup();
@@ -121,6 +128,8 @@ const byRef = (url: URL, part: Record<string, unknown>) => ({
 
 /** A file longer than a page, its lines each `line <n>`. */
 const BIG_FILE = "src/big.go";
+/** The big file's blob, which a read by its id alone names. */
+const BIG_OID = "fedcba9876543210fedcba9876543210fedcba98";
 const BIG_LINES = 3000;
 /** The lines one page of the big file holds, as about 56 KiB of ordinary source does. */
 const BIG_PAGE_LINES = 1500;
@@ -135,14 +144,18 @@ const bigText = (from: number, to: number) =>
  * and `end_line` (each from 1), and a cursor `<letter><line>` that must name a
  * line inside them — refused otherwise, as the engine refuses one.
  */
-function bigRange(url: URL, defaultEnd: (start: number) => number, letter: string) {
+function bigRange(
+  url: URL,
+  defaultEnd: (start: number) => number,
+  letter: string,
+  total = BIG_LINES,
+) {
   const p = url.searchParams;
   const start = Number(p.get("start_line") ?? 1);
-  const end = Number(p.get("end_line") ?? defaultEnd(start));
+  const end = Math.min(Number(p.get("end_line") ?? defaultEnd(start)), total);
   const cursor = p.get("cursor");
   const from = cursor ? Number(cursor.slice(1)) : start;
-  const ok =
-    start <= BIG_LINES && from >= start && from <= end && (!cursor || cursor[0] === letter);
+  const ok = start <= total && from >= start && from <= end && (!cursor || cursor[0] === letter);
   return { start, end, from, ok };
 }
 
@@ -157,7 +170,7 @@ function bigFileRead(url: URL) {
       ...(to < end ? { next: `l${to + 1}` } : {}),
       blob: {
         path: BIG_FILE,
-        oid: OTHER,
+        oid: BIG_OID,
         size: bigText(1, BIG_LINES).length,
         lines: BIG_LINES,
         start_line: from,
@@ -198,12 +211,88 @@ function bigBlameRead(url: URL) {
   );
 }
 
+/** A file a case colours: its blob's id, its text, and what its read says of it. */
+interface Coded {
+  oid: string;
+  text: string;
+  /** The blob's size when it is not its text's (a file past the bound). */
+  size?: number;
+  binary?: boolean;
+  /** Held until it settles: a read of the blob by its id alone. */
+  held?: Promise<void>;
+}
+
+/** A coded file's lines, without their newlines. */
+const codedLines = (f: Coded) => f.text.split("\n").slice(0, -1);
+
+/** A page of a coded file, from the range's first line or the cursor's, as the big file's. */
+function codedRead(url: URL, path: string, f: Coded) {
+  const all = codedLines(f);
+  const { end, from, ok } = bigRange(url, () => all.length, "l", all.length);
+  if (!ok) return json({ error: "bad_params" }, 400);
+  const to = Math.min(from + BIG_PAGE_LINES - 1, end);
+  return json(
+    byRef(url, {
+      kind: "blob",
+      ...(to < end ? { next: `l${to + 1}` } : {}),
+      blob: {
+        path,
+        oid: f.oid,
+        size: f.size ?? f.text.length,
+        lines: all.length,
+        ...(f.binary
+          ? { binary: true }
+          : {
+              start_line: from,
+              end_line: to,
+              text: all.slice(from - 1, to).join("\n") + "\n",
+            }),
+      },
+    }),
+  );
+}
+
+/** A coded file's blame, ranged and paged as the big file's. */
+function codedBlame(url: URL, path: string, f: Coded) {
+  const all = codedLines(f);
+  const { start, end, from, ok } = bigRange(
+    url,
+    (s) => Math.min(s + 499, all.length),
+    "b",
+    all.length,
+  );
+  if (!ok || end - start + 1 > 500) return json({ error: "bad_params" }, 400);
+  const to = Math.min(from + BIG_BLAME_PAGE_LINES - 1, end);
+  return json(
+    byRef(url, {
+      kind: "blame",
+      ...(to < end ? { next: `b${to + 1}` } : {}),
+      blame: {
+        path,
+        start_line: from,
+        end_line: to,
+        lines: all.slice(from - 1, to).map((text, i) => ({
+          line: from + i,
+          commit: HEAD,
+          orig_line: from + i,
+          text,
+        })),
+        commits: { [HEAD]: { author: "Ada", authored_at: "2026-10-20T10:00:00Z" } },
+      },
+    }),
+  );
+}
+
 /**
  * The engine: the repository, its refs, a root holding `src/` and a README, a
- * file of three lines and one of BIG_LINES, their blames and a history — and
- * every request made.
+ * file of three lines and one of BIG_LINES, their blames and a history, and
+ * `files` read by path or by their blob's id alone, and every request made.
  */
-function stubEngine(repo: Record<string, unknown> = detail(), acted: Acted[] = []) {
+function stubEngine(
+  repo: Record<string, unknown> = detail(),
+  acted: Acted[] = [],
+  files: Record<string, Coded> = {},
+) {
   const asked: URL[] = [];
   vi.stubGlobal(
     "fetch",
@@ -261,8 +350,17 @@ function stubEngine(repo: Record<string, unknown> = detail(), acted: Acted[] = [
               },
             }),
           );
-        case "/query/code_blob":
-          if (p.get("path") === "README.md") {
+        case "/query/code_blob": {
+          const path = p.get("path");
+          const coded = path
+            ? files[path] && ([path, files[path]] as const)
+            : Object.entries(files).find(([, f]) => f.oid === p.get("ref"));
+          if (coded) {
+            if (!path) await coded[1].held;
+            return codedRead(url, ...coded);
+          }
+          if (!path && p.get("ref") === BIG_OID) return bigFileRead(url);
+          if (path === "README.md") {
             return json(
               byRef(url, {
                 kind: "blob",
@@ -306,7 +404,10 @@ function stubEngine(repo: Record<string, unknown> = detail(), acted: Acted[] = [
               },
             }),
           );
+        }
         case "/query/code_blame":
+          if (files[p.get("path") ?? ""])
+            return codedBlame(url, p.get("path")!, files[p.get("path")!]!);
           if (p.get("path") === BIG_FILE) return bigBlameRead(url);
           return json(
             byRef(url, {
@@ -636,7 +737,9 @@ test("a file opens at a picked line past its first page, and reads back from the
   fireEvent.click(screen.getByRole("button", { name: "Load earlier lines" }));
   expect(await screen.findByRole("button", { name: "Line 850" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Line 2349" })).toBeTruthy();
-  const back = reads(asked, "code_blob").filter((u) => u.searchParams.has("end_line"));
+  const back = reads(asked, "code_blob").filter(
+    (u) => u.searchParams.has("end_line") && u.searchParams.get("path") === BIG_FILE,
+  );
   expect(
     back.map((u) => [u.searchParams.get("start_line"), u.searchParams.get("end_line")]),
   ).toEqual([["850", "2349"]]);
@@ -1434,4 +1537,241 @@ test("a declared repository's rename, archive and path owners are held with the 
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(screen.queryByRole("alertdialog")).toBeNull();
   expect(acted).toHaveLength(0);
+});
+
+/** A Go file the file view colours. */
+const MAIN_GO = [
+  "package main",
+  "",
+  "import (",
+  '\t"fmt"',
+  '\t"net/http"',
+  ")",
+  "",
+  "// Main serves the storefront.",
+  "func main() {",
+  '\tfmt.Println("serving")',
+  '\thttp.ListenAndServe(":8080", nil)',
+  "}",
+];
+const MAIN_OID = "1111111111111111111111111111111111111111";
+
+/** A long Go file whose lines 2300 to 2400 are one block comment. */
+const DEEP_LINES = 3000;
+const DEEP_OID = "2222222222222222222222222222222222222222";
+const deepText = () =>
+  Array.from({ length: DEEP_LINES }, (_, i) => {
+    const n = i + 1;
+    if (n === 2300) return "/* the renderer's notes";
+    if (n === 2400) return "the notes end */";
+    return n > 2300 && n < 2400 ? `note ${n}` : `var x${n} = ${n}`;
+  }).join("\n") + "\n";
+
+/** The lines of a file's view, by number, once drawn. */
+const textOf = (n: number) => document.querySelector(`#L${n} .code-source__text`);
+/** The coloured spans under `root`. */
+const painted = (root: ParentNode = document) => root.querySelectorAll('[class^="code-syn-"]');
+/** The reads of a blob by its id alone, as `[start_line, end_line, cursor]`. */
+const byId = (asked: URL[]) =>
+  reads(asked, "code_blob")
+    .filter((u) => !u.searchParams.has("path"))
+    .map((u) => ["start_line", "end_line", "cursor"].map((k) => u.searchParams.get(k)));
+
+// A FILE'S CODE IS COLOURED BY KIND, each token a span in its kind's class,
+// and the line reads the same text it did plain. Mutation: draw the kind's
+// class on the whole line, or drop a token's text, and this fails.
+test("a file's code is coloured by kind, and reads the same text", async () => {
+  stubEngine(detail(), [], {
+    "cmd/web/main.go": { oid: MAIN_OID, text: MAIN_GO.join("\n") + "\n" },
+  });
+  mount("#/gitlet/repos/web?path=cmd%2Fweb%2Fmain.go");
+
+  await waitFor(() => expect(textOf(1)?.querySelector(".code-syn-keyword")).toBeTruthy());
+  expect(textOf(1)!.querySelector(".code-syn-keyword")!.textContent).toBe("package");
+  expect(textOf(5)!.querySelector(".code-syn-string")!.textContent).toBe('"net/http"');
+  expect(textOf(8)!.querySelector(".code-syn-comment")!.textContent).toBe(
+    "// Main serves the storefront.",
+  );
+  MAIN_GO.forEach((text, i) => expect(textOf(i + 1)!.textContent, `line ${i + 1}`).toBe(text));
+});
+
+// A FILE OPENED PAST LINE 1 TAKES ITS STATE FROM THE LINES ABOVE IT, read once
+// by the blob's id, plain until they arrive. Mutation: walk from the first drawn
+// line with no state, or read the prefix again on Load earlier lines, and this fails.
+test("a file opened past line 1 reads the lines above it by the blob's id, once, and colours them from there", async () => {
+  let release = () => {};
+  const held = new Promise<void>((r) => (release = r));
+  const asked = stubEngine(detail(), [], {
+    "internal/render/page.go": { oid: DEEP_OID, text: deepText(), held },
+  });
+  mount("#/gitlet/repos/web?path=internal%2Frender%2Fpage.go&lines=2380");
+
+  await screen.findByRole("button", { name: "Line 2380" });
+  await waitFor(() => expect(byId(asked)).toEqual([["1", "2329", null]]));
+  expect(painted()).toHaveLength(0);
+  release();
+  await waitFor(() => expect(textOf(2380)?.querySelector(".code-syn-comment")).toBeTruthy());
+  expect(textOf(2380)!.querySelector(".code-syn-comment")!.textContent).toBe("note 2380");
+  expect(textOf(2401)!.querySelector(".code-syn-keyword")!.textContent).toBe("var");
+  expect(byId(asked)).toEqual([
+    ["1", "2329", null],
+    ["1", "2329", "l1501"],
+  ]);
+
+  fireEvent.click(screen.getByRole("button", { name: "Load earlier lines" }));
+  expect(await screen.findByRole("button", { name: "Line 830" })).toBeTruthy();
+  await waitFor(() => expect(textOf(830)?.querySelector(".code-syn-keyword")).toBeTruthy());
+  expect(textOf(2350)!.querySelector(".code-syn-comment")).toBeTruthy();
+  expect(byId(asked)).toHaveLength(2);
+});
+
+// A RAW STRING OPENED ON ONE PAGE IS CARRIED ONTO THE NEXT: the pages are one
+// file's lines. Mutation: walk each page from no state, and this fails.
+test("a raw string opened on one page is carried onto the next", async () => {
+  const lines = Array.from({ length: 1600 }, (_, i) => `var x${i + 1} = ${i + 1}`);
+  lines[1499] = "var s = `raw text";
+  lines[1500] = "still raw`";
+  stubEngine(detail(), [], {
+    "src/raw.go": { oid: DEEP_OID, text: lines.join("\n") + "\n" },
+  });
+  mount("#/gitlet/repos/web?path=src%2Fraw.go");
+
+  await screen.findByRole("button", { name: "Line 1500" });
+  fireEvent.click(await screen.findByRole("button", { name: "Load more lines" }));
+  await screen.findByRole("button", { name: "Line 1501" });
+  await waitFor(() => expect(textOf(1501)?.querySelector(".code-syn-string")).toBeTruthy());
+  expect(textOf(1501)!.querySelector(".code-syn-string")!.textContent).toBe("still raw`");
+});
+
+// A FILE AT OR PAST THE BOUND, A BINARY ONE AND A PLAIN-TEXT ONE are drawn as
+// before: no span, no read of the lines above, no grammar for plain text.
+// Mutation: colour by the drawn text's length, not the blob's size, and this fails.
+test("a file at or past 256 KiB, a binary one and a plain-text one draw no span and read nothing more", async () => {
+  for (const [path, file, at] of [
+    ["src/edge.go", { oid: DEEP_OID, text: deepText(), size: SYNTAX_MAX_BYTES }, 2380],
+    ["src/big.js", { oid: DEEP_OID, text: deepText(), size: 300 * 1024 }, 2380],
+    ["src/logo.go", { oid: DEEP_OID, text: "x\n", binary: true }, 0],
+    ["notes.txt", { oid: DEEP_OID, text: "func main() {}\n" }, 0],
+  ] as const) {
+    vi.mocked(load).mockClear();
+    const asked = stubEngine(detail(), [], { [path]: file });
+    mount(`#/gitlet/repos/web?path=${encodeURIComponent(path)}${at ? `&lines=${at}` : ""}`);
+    await screen.findByText(path === "src/logo.go" ? /no lines of a binary file/ : /./, {
+      selector: path === "src/logo.go" ? "p" : `#L${at || 1} .code-source__text`,
+    });
+    if (path === "notes.txt") expect(load).not.toHaveBeenCalled();
+    // A TICK FOR A GRAMMAR AND A WALK THAT MUST NOT COME.
+    await load("go");
+    await act(async () => {});
+    expect(painted(), path).toHaveLength(0);
+    expect(byId(asked), path).toEqual([]);
+    cleanup();
+  }
+});
+
+// THE BLAME IS COLOURED AS THE FILE IS: from line 1, or opened past its first
+// range, after the lines above it read by the blob's id. Mutation: walk the
+// blame from its first drawn line with no state, and this fails.
+test("the blame is coloured from line 1, and opened past its first range reads its prefix", async () => {
+  const cell = (n: number) =>
+    screen
+      .getByRole("button", { name: `Line ${n}` })
+      .closest("tr")!
+      .querySelector(".code-blame__text");
+  let asked = stubEngine(detail(), [], {
+    "cmd/web/main.go": { oid: MAIN_OID, text: MAIN_GO.join("\n") + "\n" },
+  });
+  mount("#/gitlet/repos/web?path=cmd%2Fweb%2Fmain.go&lens=blame");
+  await screen.findByRole("button", { name: "Line 8" });
+  await waitFor(() => expect(cell(8)?.querySelector(".code-syn-comment")).toBeTruthy());
+  expect(cell(1)!.querySelector(".code-syn-keyword")!.textContent).toBe("package");
+  expect(cell(5)!.textContent).toBe('\t"net/http"');
+  expect(byId(asked)).toEqual([]);
+  cleanup();
+
+  asked = stubEngine(detail(), [], {
+    "internal/render/page.go": { oid: DEEP_OID, text: deepText() },
+  });
+  mount("#/gitlet/repos/web?path=internal%2Frender%2Fpage.go&lens=blame&lines=2380");
+  await screen.findByRole("button", { name: "Line 2380" });
+  await waitFor(() => expect(cell(2380)?.querySelector(".code-syn-comment")).toBeTruthy());
+  expect(byId(asked)[0]).toEqual(["1", "2329", null]);
+});
+
+// A PRESS ON A LINE NUMBER TOKENIZES NOTHING: a line's tokens follow its text
+// and state, never its pick. Mutation: drop the memo on SourceLine's tokens,
+// or pass a fresh tokens array per render, and this fails.
+test("a press on a line number redraws the lines whose pick moved, and tokenizes nothing else", async () => {
+  stubEngine(detail(), [], {
+    "cmd/web/main.go": { oid: MAIN_OID, text: MAIN_GO.join("\n") + "\n" },
+  });
+  mount("#/gitlet/repos/web?path=cmd%2Fweb%2Fmain.go&lines=2");
+  await waitFor(() => expect(textOf(9)?.querySelector(".code-syn-keyword")).toBeTruthy());
+  const grammar = await load("go");
+  const line = vi.spyOn(grammar, "line");
+  try {
+    fireEvent.click(screen.getByRole("button", { name: "Line 9" }));
+    await waitFor(() => expect(location.hash).toContain("lines=9"));
+    await act(async () => {});
+    expect(screen.getByRole("button", { name: "Line 9" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(line).not.toHaveBeenCalled();
+  } finally {
+    line.mockRestore();
+  }
+});
+
+// A PRESS DEEP IN A FILE OR ITS BLAME WALKS NOTHING AGAIN: the prefix and the
+// rows keep their arrays across a render. Mutation: a fresh prefix slice per
+// render, or inline readers for the blame's pages, and this fails.
+test.each([
+  ["file", ""],
+  ["blame", "&lens=blame"],
+])("a press in a %s opened past line 1 tokenizes nothing", async (_, lens) => {
+  stubEngine(detail(), [], {
+    "internal/render/page.go": { oid: DEEP_OID, text: deepText() },
+  });
+  mount(`#/gitlet/repos/web?path=internal%2Frender%2Fpage.go${lens}&lines=2380`);
+  await screen.findByRole("button", { name: "Line 2385" });
+  await waitFor(() => expect(document.querySelector("#L2401 .code-syn-keyword")).toBeTruthy());
+  const grammar = await load("go");
+  const line = vi.spyOn(grammar, "line");
+  try {
+    fireEvent.click(screen.getByRole("button", { name: "Line 2385" }));
+    await waitFor(() => expect(location.hash).toContain("lines=2385"));
+    await act(async () => {});
+    expect(screen.getByRole("button", { name: "Line 2385" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(line).not.toHaveBeenCalled();
+  } finally {
+    line.mockRestore();
+  }
+});
+
+// A LINE OF MARKUP IS TEXT, NEVER ELEMENTS: a repository's bytes are drawn
+// as strings in spans. Mutation: draw a token's text as markup, and this fails.
+test("a line of markup is text, never elements", async () => {
+  const text = "<img src=x onerror=alert(1)>";
+  stubEngine(detail(), [], { "web/index.html": { oid: MAIN_OID, text: `${text}\n` } });
+  mount("#/gitlet/repos/web?path=web%2Findex.html");
+  await waitFor(() => expect(painted(textOf(1)!).length).toBeGreaterThan(0));
+  expect(document.querySelector("img")).toBeNull();
+  expect(textOf(1)!.textContent).toBe(text);
+});
+
+// A LINE PAST SYNTAX_MAX_LINE DRAWS PLAIN, its state still carried, so the
+// line after it is coloured right. Mutation: drop the long line's state, and
+// this fails.
+test("a line past 4,000 code units draws plain and the next line is still coloured right", async () => {
+  const long = `/* ${"a".repeat(4100)}`;
+  stubEngine(detail(), [], {
+    "src/long.go": { oid: MAIN_OID, text: `${long}\nstill a note */ var x\n` },
+  });
+  mount("#/gitlet/repos/web?path=src%2Flong.go");
+  await waitFor(() => expect(textOf(2)?.querySelector(".code-syn-comment")).toBeTruthy());
+  expect(textOf(2)!.querySelector(".code-syn-comment")!.textContent).toBe("still a note */");
+  expect(painted(textOf(1)!)).toHaveLength(0);
+  expect(textOf(1)!.textContent).toBe(long);
 });
