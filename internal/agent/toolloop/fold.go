@@ -223,13 +223,20 @@ func (d *dispatcher) foldGroup(g *group, comp *llm.Completion, model string, liv
 		// launched what the resume collects — and only its ANSWER is left
 		// open, above.
 		if rec != nil && rec.settled {
-			out.executions = append(out.executions, Execution{
+			ex := Execution{
 				Round: g.round, Name: e.call.Name, Args: rec.args, CallID: rec.id,
 				Output: rec.result.Output, Failed: rec.result.Failed,
 				StartedAt: zeroIfRefused(rec, rec.started), Duration: rec.took,
 				Origin: rec.result.Origin, Server: rec.result.Server,
 				Source: rec.result.Source, Refusal: rec.result.Refusal(),
-			})
+			}
+			if rec.argsErr != "" {
+				// ARGUMENTS THAT DID NOT PARSE ARE NOT ITS ARGS: an empty
+				// object, or what a harness made of text that was not one,
+				// which the record would draw as the call the model made.
+				ex.ArgsUnknown = ArgsUnread
+			}
+			out.executions = append(out.executions, ex)
 		}
 	}
 	// EVERY ROUND IS AN ASSISTANT TURN, an empty one included: it is a reply

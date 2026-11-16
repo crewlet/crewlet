@@ -56,3 +56,32 @@ func TestCleanTextSkipsEveryReplacement(t *testing.T) {
 			"full unguarded pass — it is still redacting to answer", contains, unguarded)
 	}
 }
+
+// CLEAN TEXT SKIPS EVERY REPLACEMENT AT A TRANSCRIPT'S LENGTH TOO: [Secrets]
+// reads a text of any length whole, so a clean one several times a stage's
+// window ([wholeBytes]) still costs a scan per rule and no copy, against the
+// same unguarded loop as [TestCleanTextSkipsEveryReplacement] at 10 KB. Read
+// by the stages a [Stream] redacts by, it paid a joined window and a written
+// output a step for every stage, about 75 bytes allocated a byte of it.
+//
+// Mutation: redact a text longer than a stage's window by the stages, and
+// Secrets over it allocates more than the unguarded loop.
+func TestCleanTextSkipsEveryReplacementAtATranscriptsLength(t *testing.T) {
+	line := "the build passed; see docs/concepts/code-sandbox.md\n"
+	text := strings.Repeat(line, 4*wholeBytes/len(line))
+	if Contains(text) {
+		t.Fatal("the fixture is not clean; every rule must miss it")
+	}
+	guarded := testing.AllocsPerRun(5, func() { _ = Secrets(text) })
+	unguarded := testing.AllocsPerRun(5, func() {
+		s := text
+		for _, r := range rules() {
+			s = r.pattern.ReplaceAllLiteralString(s, r.with)
+		}
+		_ = s
+	})
+	if saved := float64(len(rules())); unguarded-guarded < saved {
+		t.Errorf("Secrets over %d bytes of clean text allocated %v per call against %v for the "+
+			"unguarded loop: it is not reading the text whole", len(text), guarded, unguarded)
+	}
+}

@@ -2,7 +2,7 @@ name: dependabot-dashboard
 
 # Dependabot edits `dashboard/package.json` and the lockfile and cannot run a
 # bundler, but the build's output is COMMITTED, in every tree the Makefile's
-# UI_OUT names, and ci.yml's `dashboard` job rebuilds those trees and diffs
+# UI_OUT names, and ci.yml's `dashboard gates` job rebuilds those trees and diffs
 # them, so a bump that changes the emitted bytes (react, vite, the design
 # system) sat red on that gate until a person ran `make dashboard`. This
 # workflow is that person: it rebuilds on Dependabot's pull request and, if a
@@ -101,14 +101,14 @@ jobs:
 
     steps:
       # The pull request's merge ref, which is checkout's default and what
-      # ci.yml's `dashboard` job builds, so this produces the bundle that job
-      # will demand.
+      # ci.yml's `dashboard gates` job builds, so this produces the bundle that
+      # job will demand.
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       # Every tree the build writes: the Makefile's UI_OUT, the list
-      # `make dashboard-check` and ci.yml's `dashboard` job judge. Asked of
+      # `make dashboard-check` and ci.yml's `dashboard gates` job judge. Asked of
       # make itself, so it is the list the gate reads however the Makefile
       # spells it, and asked BEFORE `npm ci` has run anything a dependency
       # brought. Nothing `push` writes is decided here: it reads its own.
@@ -127,9 +127,10 @@ jobs:
           echo "$trees"
           echo "list=$trees" >> "$GITHUB_OUTPUT"
 
-      # `latest`, and it must stay the SAME as ci.yml's `dashboard` job: this
-      # rebuild is only worth anything if it is byte-for-byte the one the gate
-      # runs. If ci.yml moves to `lts/*`, so does this, in the same commit.
+      # `latest`, and it must stay the SAME as ci.yml's `dashboard gates` job:
+      # this rebuild is only worth anything if it is byte-for-byte the one the
+      # gate runs. If ci.yml moves to `lts/*`, so does this, in the same
+      # commit.
       - uses: actions/setup-node@v7
         with:
           node-version: latest

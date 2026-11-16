@@ -122,6 +122,23 @@ type roundTrip struct {
 	mu      sync.Mutex
 	samples int
 	srtt    time.Duration
+
+	// after, when set, stands in for the timer a wait between two of
+	// [casRetry]'s attempts is made with, as [writeLines.after] does for a
+	// line: a test's seam, unset in production, so a case whose subject is
+	// what a loop that loses every attempt answers is not also the minute
+	// of real windows the loop sits out on its way there.
+	after func(time.Duration) <-chan time.Time
+}
+
+// timer is a wait of d between two attempts and how to stop it: a real
+// timer, or the test's [roundTrip.after].
+func (r *roundTrip) timer(d time.Duration) (<-chan time.Time, func()) {
+	if r.after != nil {
+		return r.after(d), func() {}
+	}
+	t := time.NewTimer(d)
+	return t.C, func() { t.Stop() }
 }
 
 // observe counts one attempt that took sample.
@@ -198,12 +215,12 @@ func casRetry(ctx context.Context, trips *roundTrip, what string,
 	level := 0
 	for range fleetCASAttempts {
 		if wait := casWindow(level, trips.estimate()); wait > 0 {
-			timer := time.NewTimer(wait)
+			over, stop := trips.timer(wait)
 			select {
 			case <-ctx.Done():
-				timer.Stop()
+				stop()
 				return false, unavailable(what, ctx.Err())
-			case <-timer.C:
+			case <-over:
 			}
 		}
 		start := time.Now()

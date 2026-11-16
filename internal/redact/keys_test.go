@@ -1478,6 +1478,90 @@ func TestARunAnotherRuleClaimsIsNoPieceOfAKey(t *testing.T) {
 	}
 }
 
+// A TOKEN WRITTEN STRAIGHT ONTO A KEY'S RUN IS READ ALIKE ON EVERY PASS. A
+// token's pattern can end inside a run of base64 (`sk-` stops at a `+`, an
+// `AKIA` id after sixteen characters), so the token and the run are one run,
+// and two readings of it published what a second pass redacted:
+//
+//   - Claimed, the run is no piece of a key, and the rule replaces the token
+//     alone; its marker, no base64, leaves the rest a run of its own, which a
+//     second pass read as the body of a key on an END's line, and on a
+//     BEGIN's, and redacted. Read as glued to the marker, the rest is claimed
+//     on every pass, as the whole run was on the first. What that costs is a
+//     key's run written straight onto a rule's marker a text quotes: it is
+//     published, as a run holding a token's shape is. A key's own marker
+//     claims nothing, since no rule claimed what a key's block leaves beside
+//     it.
+//   - Taken at its full width by a key on one line, the run carried the
+//     block into the token, whose head the key's marker took: the rest
+//     matched no rule, and a second pass read the run token's signature as
+//     a key's run before the END and redacted it. So it did with an AWS
+//     secret's key read across as the body's short last run, and the value
+//     the key named. The block now ends where what a rule names begins.
+//
+// Mutations: read no run glued to a marker as claimed, and the run after the
+// token's marker is redacted by the second pass; read only a run after a
+// marker so, and the one before it on a BEGIN's line is; read only a run
+// before one, and the one after it on an END's line is; count a key's marker
+// as a rule's, and the run after one a text quotes is published; end a block
+// where its run does, inside a token, and the token's signature is redacted
+// by the second pass; or move back an end that meets a token's end, and a
+// token inside a key's body on one line is left out of its marker.
+func TestATokenWrittenStraightOntoARunIsReadAlikeOnEveryPass(t *testing.T) {
+	api, aws := redact.Marker+"api-key]", redact.Marker+"aws-key]"
+	begin, end := "-----BEGIN RSA PRIVATE KEY-----", "-----END RSA PRIVATE KEY-----"
+	// run is a run of base64 as wide as no encoder writes, in both cases with
+	// digits, which a token's body stops inside at its first `+`.
+	run := strings.Repeat("Ab3+", 12) + "=="
+	sk := "sk-" + strings.Repeat("q", 24)
+	rt := runToken("subj")
+	secret := "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEYab"
+	for name, c := range map[string]keyForm{
+		"a token written straight onto a run, before an END on its line": {
+			sk + run + " " + end + "\n", api + run[3:] + " " + end + "\n",
+		},
+		"the same in a string, its breaks escaped": {
+			`{"log": "` + sk + run + " " + end + `\n"}` + "\n", `{"log": "` + api + run[3:] + " " + end + `\n"}` + "\n",
+		},
+		"the same under a password's value": {
+			`"pwd=abc\n\n` + sk + run + " " + end + `\n"` + "\n", `"pwd=` + redact.Marker + `password]\n\n` + api + run[3:] + " " + end + `\n"` + "\n",
+		},
+		"an AWS key's id written straight onto one": {
+			"AKIAABCDEFGHIJKLMNOPabc" + run + " " + end + "\n", aws + "abc" + run + " " + end + "\n",
+		},
+		"a piece written straight onto a token, after a BEGIN on its line": {
+			begin + " Ab3+Ab3==" + sk + "\n", begin + " Ab3+Ab3==" + api + "\n",
+		},
+		"a run written straight onto a marker a text quotes, before an END on its line": {
+			api + run + " " + end + "\n", api + run + " " + end + "\n",
+		},
+		"a run written straight onto a key's marker a text quotes, before an END on its line": {
+			marker + run + " " + end + "\n", marker + marker + "\n",
+		},
+		"a run token written straight onto a key's run after a BEGIN on its line, the END straight after it": {
+			begin + " " + keyLine + rt + end + "\n", marker + redact.Marker + "run-token]" + end + "\n",
+		},
+		"the same on a run that reads like no key's": {
+			begin + " " + strings.Repeat("A", 100) + rt + end + " ", marker + redact.Marker + "run-token]" + end + " ",
+		},
+		"an AWS secret's key read across as the body's short last run": {
+			begin + " " + strings.Repeat("a", 100) + "aws_secret_access_key = " + secret + end + "\n",
+			marker + "ecret_access_key = " + redact.Marker + "secret-access-key]" + end + "\n",
+		},
+		"a token inside a key's body on one line, which its block takes": {
+			begin + " " + keyLine + " " + run + sk + "\n", marker + "\n",
+		},
+		"a token straight after a key's END, which is its own": {
+			begin + "\n" + keyLine + "\n" + keyLine + "\nu1SU1Lf=\n" + end + sk + "\n", marker + api + "\n",
+		},
+	} {
+		redactsWhole(t, name, c, "qqqqqqqq")
+		if twice := redact.Secrets(c.want); twice != c.want {
+			t.Errorf("%s: a second pass changed\n%q\nto\n%q", name, c.want, twice)
+		}
+	}
+}
+
 // A PASSWORD'S KEY UNDER A KEY WITH NO END IS NO LINE OF IT. Read as the body's
 // last line written up to the text around it, `Password:` gave the key's block
 // its word and left the `:` outside it, so the value on the next line was

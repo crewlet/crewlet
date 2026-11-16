@@ -323,6 +323,16 @@ export interface ToolExecution {
    */
   held?: boolean;
   approved?: boolean;
+  /**
+   * Why no record says what the call was made with (`ArgumentsUnknown` in
+   * contract/calls.ts): `unread`, arguments in text that could not be read,
+   * or `unkept`, an executor run's call still in flight as its round was
+   * read. `arguments` on such a row is not what the call sent, and is drawn
+   * as arguments not known, never as `{}`. A string rather than the union, so
+   * a reason a newer engine records arrives as itself. Absent on every other
+   * call.
+   */
+  arguments_unknown?: string;
 }
 
 /**
@@ -1142,6 +1152,13 @@ export interface BridgeCall {
    * the work on, so neither is drawn as empty.
    */
   approved?: boolean;
+  /**
+   * A call whose arguments DID NOT PARSE: the bridge answered it unrun,
+   * holding no object of what the model wrote, so `args` is absent as it is
+   * on a call made with none. Drawn as arguments not known, never as
+   * "(none)", which is a different call. Absent on every other call.
+   */
+  args_unparsed?: boolean;
   /**
    * A call the round's record took only after the job that made it was
    * replaced by a relaunch that carried the round on: still running as the

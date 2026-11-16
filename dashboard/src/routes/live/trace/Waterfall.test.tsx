@@ -19,7 +19,12 @@ import { buildWaterfall } from "~/lib/waterfall.ts";
 import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
 import type { EventRecord, ExecutorTailAnswer } from "~/protocol/index.ts";
 import { phaseRecord, toolCall } from "~/test/phaseRecord.ts";
-import { HELD_ARGUMENTS, SEALED_ARGUMENTS, SEALED_RESULT } from "~/lib/withheld.ts";
+import {
+  HELD_ARGUMENTS,
+  SEALED_ARGUMENTS,
+  SEALED_RESULT,
+  UNKNOWN_ARGUMENTS,
+} from "~/lib/withheld.ts";
 import { EXECUTOR_TAIL_POLL_MS } from "~/contract/executor.ts";
 import { Waterfall, liveState, steerMarks } from "./Waterfall.tsx";
 import { withDerived } from "~/test/org.ts";
@@ -926,5 +931,65 @@ describe("a sealed call's detail", () => {
     mount([], RUNNING, { phases: [record], selected: "turn-1|execute|1.r1.t1" });
     expect(screen.getByRole("region", { name: "Input" }).textContent).toBe(SEALED_ARGUMENTS);
     expect(screen.getByRole("region", { name: "Output" }).textContent).toBe(SEALED_RESULT);
+  });
+});
+
+/**
+ * A CALL WHOSE ARGUMENTS ARE NOT KNOWN SAYS SO, AND WHY. Its `{}` on the
+ * execute record is there only because no record holds what it was made with:
+ * its arguments were in text that could not be read, or it was still running
+ * as its round was read. The span's detail says which, in the words the
+ * execute card and the executors board use, rather than drawing the tool
+ * called with none; a call made with none is still drawn `{}`.
+ *
+ * Mutation: draw such a call's `{}`, or tell the two reasons alike, and this
+ * goes red.
+ */
+describe("a call whose arguments are not known", () => {
+  const record = phaseRecord({
+    key: "turn-1|execute|1",
+    startedAt: iso(0),
+    durationMs: 50_000,
+    narration: [{ round: 1, content: "Posting the summary.", declined: false }],
+    tools: [
+      toolCall({
+        name: "slack_post",
+        round: 1,
+        startedAt: iso(2_000),
+        durationMs: 10,
+        failed: true,
+        result: "slack_post was NOT run: its arguments could not be read",
+        argsUnknown: "unread",
+      }),
+      toolCall({
+        name: "deploy",
+        round: 1,
+        startedAt: iso(3_000),
+        durationMs: 10,
+        failed: true,
+        result: "still running when its round was read",
+        argsUnknown: "unkept",
+      }),
+      toolCall({ name: "list_files", round: 1, startedAt: iso(4_000), durationMs: 10 }),
+    ],
+  });
+
+  test("one in text that could not be read says so", () => {
+    mount([], RUNNING, { phases: [record], selected: "turn-1|execute|1.r1.t0" });
+    expect(screen.getByRole("region", { name: "Input" }).textContent).toBe(
+      UNKNOWN_ARGUMENTS.unread,
+    );
+  });
+
+  test("one still running as its round was read says no record keeps them", () => {
+    mount([], RUNNING, { phases: [record], selected: "turn-1|execute|1.r1.t1" });
+    expect(screen.getByRole("region", { name: "Input" }).textContent).toBe(
+      UNKNOWN_ARGUMENTS.unkept,
+    );
+  });
+
+  test("one made with none is still drawn as it was made", () => {
+    mount([], RUNNING, { phases: [record], selected: "turn-1|execute|1.r1.t2" });
+    expect(screen.getByRole("region", { name: "Input" }).textContent).toBe("{}");
   });
 });

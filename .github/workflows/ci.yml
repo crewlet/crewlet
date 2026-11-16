@@ -342,16 +342,16 @@ jobs:
       # was being written.
       - run: scripts/check-signoff_test.sh
 
-  # The dashboard is a React + TypeScript application built by Vite, and this
-  # job runs its three gates: `dashboard-lint` (prettier), `dashboard-check`
-  # (the rebuild-and-diff below) and `dashboard-test` (typecheck + Vitest).
-  # Its own assertions run here — the wire protocol, the router's history
-  # rules, the route table against the design doc and every dashboard address
-  # the rest of the tree prints, the ordering comparators, no price anywhere,
-  # and the MEASURED contrast of every colour token over every surface it can
-  # land on, in both themes and for protan and deutan vision. None of that is
-  # checkable by looking at the stylesheet, which is why it is computed from
-  # the file that actually ships.
+  # The dashboard is a React + TypeScript application built by Vite, and these
+  # jobs run its three gates: `dashboard-lint` (prettier), `dashboard-check`
+  # (the rebuild-and-diff below) and `dashboard-test` (typecheck, Vitest and
+  # the layout suites). Its own assertions run here — the wire protocol, the
+  # router's history rules, the route table against the design doc and every
+  # dashboard address the rest of the tree prints, the ordering comparators, no
+  # price anywhere, and the MEASURED contrast of every colour token over every
+  # surface it can land on, in both themes and for protan and deutan vision.
+  # None of that is checkable by looking at the stylesheet, which is why it is
+  # computed from the file that actually ships.
   #
   # `dashboard-check` is the load-bearing one. static/dashboard is COMMITTED —
   # `go build ./...` and `go install …@latest` must work on a clean checkout
@@ -359,8 +359,16 @@ jobs:
   # that has drifted from its source compiles, embeds, serves and passes every
   # Go test while running code nobody wrote. This rebuilds it and judges the
   # tree, the same way `go mod tidy -diff` and the generated schema/ are gated.
-  dashboard:
-    name: dashboard
+  #
+  # THREE JOBS, as the race half is several: `dashboard gates` runs everything
+  # but the unit suite, `dashboard unit I/N` runs one shard of the unit suite
+  # each, and `dashboard`, the check `main`'s ruleset requires by name, passes
+  # only when all of them did. On one runner the unit suite was 655 s of a
+  # 12.6-minute job (run 43716728680: 706 files on Vitest's four workers, 24%
+  # of it building a jsdom environment per file and 22% importing), and that
+  # job would end the run once the Go shards stop being the floor (#1268).
+  dashboard-gates:
+    name: dashboard gates
     runs-on: *linux
     steps:
       - uses: actions/checkout@v7
@@ -378,8 +386,10 @@ jobs:
       # major behind), not a hand-maintained number. Make it in
       # dependabot-dashboard.yml's `build` job in the same commit: that job
       # rebuilds the bundle this one diffs, and is only worth anything if it
-      # runs on the same node.
-      - uses: actions/setup-node@v7
+      # runs on the same node. The unit shards reuse this step, so one line
+      # names the node every dashboard job runs.
+      - &dashboard-node
+        uses: actions/setup-node@v7
         with:
           node-version: latest
       # NPM'S CACHE is restored here and saved only by a push to main, as the
@@ -388,9 +398,12 @@ jobs:
       # visible to that pull request alone (THE BUDGET, at the top). It is
       # keyed exactly on the lockfile, as setup-node keyed it, because `npm
       # ci` installs exactly what the lockfile names.
-      - name: locate npm's cache
+      # This job is the one that saves it; the unit shards restore the same key.
+      - &npm-locate
+        name: locate npm's cache
         run: echo "NPM_CACHE=$(npm config get cache)" >> "$GITHUB_ENV"
-      - name: restore npm's cache
+      - &npm-restore
+        name: restore npm's cache
         id: npm
         uses: actions/cache/restore@v6
         with:
@@ -400,7 +413,8 @@ jobs:
       # build whose dependency versions drift is a build whose committed output
       # cannot be reproduced — which is exactly what the drift gate below
       # depends on.
-      - run: npm ci
+      - &npm-ci
+        run: npm ci
         working-directory: dashboard
       - name: save npm's cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.npm.outputs.cache-hit != 'true'
@@ -411,8 +425,6 @@ jobs:
       - run: npm run format:check
         working-directory: dashboard
       - run: npm run typecheck
-        working-directory: dashboard
-      - run: npm test
         working-directory: dashboard
       # The layout suites measure panes in a headless browser, at the revision
       # the locked test runner names, with the system libraries it needs.
@@ -441,6 +453,54 @@ jobs:
               -- static/dashboard static/artifacts static/protocol | grep -v '^. ' || true
             echo "Run:"
             echo "  make dashboard && git add -A -- static/dashboard static/artifacts static/protocol"
+            exit 1
+          fi
+
+  # ONE SHARD OF THE UNIT SUITE per leg: `npm test -- --shard=I/N`, Vitest's
+  # own deal, which sorts the suite's files by a hash of their paths and gives
+  # each shard an equal COUNT of them, so every file runs in exactly one shard
+  # and a shard with none fails ("No test files found") rather than passes.
+  # It deals by count, not duration, so a shard can carry more than a third:
+  # at most by its heaviest file, src/lib/richEditor.test.tsx's 76 s.
+  #
+  # THREE, because a shard is about 220 s of the suite (655 s on one runner's
+  # four workers, a third each) plus a minute of setup, which ends it inside
+  # the run's floor, the slowest Go test shard; a fourth runner would end
+  # nothing sooner. fail-fast off for the reason the race shards give.
+  dashboard-unit:
+    name: dashboard unit ${{ matrix.shard }}/${{ strategy.job-total }}
+    runs-on: *linux
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v7
+      - *dashboard-node
+      - *npm-locate
+      - *npm-restore
+      - *npm-ci
+      - run: npm test -- --shard="${{ matrix.shard }}/${{ strategy.job-total }}"
+        working-directory: dashboard
+
+  # THE CHECK `main`'s RULESET REQUIRES, by its exact name, as `test (race)`
+  # is for the race half: it passes only when the gates and every unit shard
+  # did, and `always()` so a failed shard fails it rather than skipping it,
+  # which a required check would read as a pass.
+  dashboard:
+    name: dashboard
+    needs: [dashboard-gates, dashboard-unit]
+    if: ${{ always() }}
+    runs-on: *linux
+    steps:
+      - name: the dashboard's gates and every unit shard passed
+        env:
+          GATES_RESULT: ${{ needs.dashboard-gates.result }}
+          UNIT_RESULT: ${{ needs.dashboard-unit.result }}
+        run: |
+          echo "dashboard gates: $GATES_RESULT; unit shards: $UNIT_RESULT"
+          if [ "$GATES_RESULT" != success ] || [ "$UNIT_RESULT" != success ]; then
+            echo "::error::the dashboard did not pass: see the failed job above"
             exit 1
           fi
 
@@ -892,12 +952,13 @@ jobs:
       # built here. Both halves of the wire protocol are checked against each
       # other here and nowhere else, so a missing node fails rather than skips.
       #
-      # `latest` for the reason the `dashboard` job above states at length: no
-      # node version is pinned anywhere in the tree, because Dependabot moves
-      # neither a workflow `with:` nor an `engines` field, so a pin would go
-      # quietly out of date rather than stay put. No npm and no install here —
-      # this only needs a node. (It does NOT have to match the dashboard job:
-      # what runs here is the COMMITTED bundle, not that job's fresh output.)
+      # `latest` for the reason the `dashboard gates` job above states at
+      # length: no node version is pinned anywhere in the tree, because
+      # Dependabot moves neither a workflow `with:` nor an `engines` field, so
+      # a pin would go quietly out of date rather than stay put. No npm and no
+      # install here — this only needs a node. (It does NOT have to match the
+      # dashboard jobs: what runs here is the COMMITTED bundle, not their fresh
+      # output.)
       - uses: actions/setup-node@v7
         with:
           node-version: latest
@@ -1139,7 +1200,8 @@ jobs:
             golangci-lint-${{ runner.os }}-
       # `latest` is deliberate, and it is one of the five floating versions
       # in this repository: the others are the `node-version: latest` in the
-      # `dashboard` and `end-to-end gates` jobs above and in
+      # `dashboard gates` (which the unit shards reuse) and `end-to-end gates`
+      # jobs above and in
       # dependabot-dashboard.yml's `build` job, and goreleaser's `~> v2` in
       # release.yml, each held that way for its own reason stated at its own
       # line.

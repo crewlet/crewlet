@@ -45,7 +45,7 @@ const inRefusedRun = "GITLETTEST_RUNFLEET_OVER_TWO_MEMBERS"
 // what the case reads.
 func TestRunFleetRefusesTwoMembers(t *testing.T) {
 	if os.Getenv(inRefusedRun) != "" {
-		gitlettest.RunFleet(t, func(*testing.T) gitlettest.Cluster { return twoMembers{} })
+		gitlettest.RunFleet(t, gitlettest.EveryFleetCase, func(*testing.T) gitlettest.Cluster { return twoMembers{} })
 		return
 	}
 	//nolint:gosec // os.Args[0] is this test binary, run again on the one case.

@@ -1127,27 +1127,33 @@ func TestTheSlowestListIsTheLongestFirst(t *testing.T) {
 	}
 }
 
-// A TEST IS TIMED BY ITS ACTIVE SPAN, NOT BY ITS OWN ELAPSED.
+// A TEST IS TIMED BY WHEN SOME PART OF IT RAN, NOT BY ITS OWN ELAPSED, AND
+// NOT BY HOW LONG IT WAITED.
 //
 // The testing package stops a test's clock when its body returns, before its
 // parallel subtests run, so a suite of parallel cases under one test reported
-// its setup alone (internal/coord/kv's TestContract: 0.25 s). Its stamps say
-// what it held: from `run` to its result, less the stretch t.Parallel held it
-// paused. A `=== CONT` cmd/go prints only because the output switched back to
-// a running test is not a resume, and must not restart its clock.
-func TestATestIsTimedByItsActiveSpan(t *testing.T) {
+// its setup alone (internal/coord/kv's TestContract: 0.25 s). And run to
+// result, less only its own pauses, counted the time its parallel subtests
+// sat queued behind the rest of the package: a trivial table test in
+// internal/engine read 830 s. Its busy time is the union of the stretches
+// some part of it ran — its body, and each subtest as it ran — and a
+// `=== CONT` cmd/go prints only because the output switched back to a
+// running test is not a resume, and must not restart its clock.
+func TestATestIsTimedByWhenSomePartOfItRan(t *testing.T) {
 	t.Parallel()
 
 	const pkg = "github.com/crewlet/crewlet/internal/a"
 	at := func(seconds int) string {
-		return time.Date(2026, 11, 15, 12, 0, seconds, 0, time.UTC).Format(time.RFC3339Nano)
+		return time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC).Add(time.Duration(seconds) * time.Second).
+			Format(time.RFC3339Nano)
 	}
 	ev := func(action, test string, seconds int, elapsed float64) string {
 		return `{"Time":"` + at(seconds) + `","Action":"` + action + `","Package":"` + pkg +
 			`","Test":"` + test + `","Elapsed":` + strconv.FormatFloat(elapsed, 'f', -1, 64) + `}`
 	}
 	stream := strings.Join([]string{
-		// A suite: its body returns at once, its parallel cases run a minute.
+		// A suite: its body returns at once, its one parallel case runs a
+		// minute.
 		ev("run", "TestSuite", 0, 0),
 		ev("run", "TestSuite/case", 0, 0),
 		ev("pause", "TestSuite/case", 0, 0),
@@ -1161,7 +1167,28 @@ func TestATestIsTimedByItsActiveSpan(t *testing.T) {
 		ev("cont", "TestWaited", 31, 0),
 		ev("cont", "TestWaited", 35, 0),
 		ev("pass", "TestWaited", 41, 11),
-		`{"Time":"` + at(61) + `","Action":"pass","Package":"` + pkg + `","Elapsed":61}`,
+		// A table whose two parallel cases queued behind the package, a
+		// hundred and two hundred seconds, and ran a second each: two
+		// seconds of it ran, whatever its result's stamp says.
+		ev("run", "TestQueued", 0, 0),
+		ev("run", "TestQueued/x", 0, 0),
+		ev("pause", "TestQueued/x", 0, 0),
+		ev("run", "TestQueued/y", 0, 0),
+		ev("pause", "TestQueued/y", 0, 0),
+		ev("cont", "TestQueued/x", 100, 0),
+		ev("pass", "TestQueued/x", 101, 1),
+		ev("cont", "TestQueued/y", 200, 0),
+		ev("pass", "TestQueued/y", 201, 1),
+		ev("pass", "TestQueued", 201, 0),
+		// Sequential cases with the body's own work around them: all of it
+		// ran, eight seconds.
+		ev("run", "TestInTurn", 0, 0),
+		ev("run", "TestInTurn/a", 1, 0),
+		ev("pass", "TestInTurn/a", 3, 2),
+		ev("run", "TestInTurn/b", 4, 0),
+		ev("pass", "TestInTurn/b", 6, 2),
+		ev("pass", "TestInTurn", 8, 8),
+		`{"Time":"` + at(202) + `","Action":"pass","Package":"` + pkg + `","Elapsed":202}`,
 	}, "\n")
 
 	r := read(bufio.NewScanner(strings.NewReader(stream)), devNull(t))
@@ -1169,13 +1196,15 @@ func TestATestIsTimedByItsActiveSpan(t *testing.T) {
 	if err := writeTimings(&got, r); err != nil {
 		t.Fatal(err)
 	}
-	want := pkg + "\t61.000\n" +
+	want := pkg + "\t202.000\n" +
+		pkg + "\tTestInTurn\t8.000\n" +
+		pkg + "\tTestQueued\t2.000\n" +
 		pkg + "\tTestSuite\t60.000\n" +
 		pkg + "\tTestWaited\t11.000\n"
 	if got.String() != want {
 		t.Errorf("timings =\n%s\nwant\n%s", got.String(), want)
 	}
 	if list := slowest(r.timed, 3); !strings.Contains(list, "60.000s  internal/a TestSuite/case") {
-		t.Errorf("the slowest list does not time the parallel case by its span:\n%s", list)
+		t.Errorf("the slowest list does not time the parallel case by when it ran:\n%s", list)
 	}
 }

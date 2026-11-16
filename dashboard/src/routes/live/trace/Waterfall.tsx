@@ -77,7 +77,7 @@ import {
 } from "~/lib/format.ts";
 import { deliveredLine, outcomeWords, rounds, type PhaseRecord } from "~/lib/phases.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
-import { HELD_ARGUMENTS, SEALED_ARGUMENTS, SEALED_RESULT } from "~/lib/withheld.ts";
+import { argumentsInPlace, SEALED_RESULT } from "~/lib/withheld.ts";
 import { useLiveTail, type LiveView } from "~/lib/useLiveTail.ts";
 import { EXECUTOR_TAIL_POLL_MS } from "~/contract/executor.ts";
 import { STEER_BOUNDARIES, STEER_OUTCOMES } from "~/contract/steer.ts";
@@ -785,12 +785,9 @@ function ToolDetail({ span, record, agent }: { span: Span; record: PhaseRecord; 
   // approval, and the one they approved, keep their arguments sealed on the
   // run's row and on no record, and the approved one's result went to the run
   // sealed. Said as the execute card and the executors board say it, never
-  // drawn as a call made with nothing that returned nothing.
-  const input = call?.approved
-    ? SEALED_ARGUMENTS
-    : call?.held
-      ? HELD_ARGUMENTS
-      : call?.args || running?.arguments || "";
+  // drawn as a call made with nothing that returned nothing. And a call whose
+  // arguments are not known says so, and why, in their place, by the same rule.
+  const input = call ? argumentsInPlace(call) || call.args : running?.arguments || "";
   const output = call?.result || (call?.approved ? SEALED_RESULT : "");
   return (
     <>

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
@@ -466,6 +468,51 @@ func postWith(ctx context.Context, t *testing.T, client *http.Client, url, body 
 	}
 	_ = json.NewDecoder(res.Body).Decode(&refusal)
 	return polled{res: res, refusal: refusal.Error}
+}
+
+// A STOPPING NODE ANSWERS A CALL WAITING FOR A HOLDER AT ONCE: draining, and
+// when to try again. Nothing of the call runs anywhere while it waits, so the
+// box's retry lands on a node that stays, where a node that went on waiting
+// held its listener for the whole of a graceful stop's grace — the hold here
+// is an hour, so a wait that ignored the shutdown never answers inside the
+// case's bound — and was then cut.
+//
+// Mutation: drop the shutdown from the holder wait (Bridge.forward), and the
+// call waits out its hour.
+func TestAStoppingNodeAnswersACallWaitingForAHolderAtOnce(t *testing.T) {
+	t.Parallel()
+	fx := newFixture(t)
+	f := newFleet(t, 2, time.Hour)
+	entry, holder := f.members[0], f.members[1]
+	url := f.takeOver(t, holder, &mcpbridge.Session{RunID: "run-1", Launch: "job-1",
+		Handle: "dev", Role: "Engineer", Surface: fx.surface, Ledger: fx.ledger})
+	// THE HOLDER IS GONE: its lease released and nobody has taken the seat.
+	resource := coord.SeatResource(seat())
+	lease := f.held[holder.owner]
+	if _, err := f.leases.Release(t.Context(), resource, holder.owner, lease.Epoch); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	// THE ENTRY IS STOPPING, the node every call of the box lands on.
+	entry.bridge.Shutdown()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := httpxtest.Pool(t).Do(req)
+	if err != nil {
+		t.Fatalf("a call waiting for a holder on a stopping node was not answered: %v", err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusServiceUnavailable || res.Header.Get("Retry-After") == "" ||
+		!strings.Contains(string(body), string(httpjson.CodeDraining)) {
+		t.Errorf("a call waiting for a holder on a stopping node answered %d (Retry-After %q) %s, "+
+			"want 503 draining with a Retry-After", res.StatusCode, res.Header.Get("Retry-After"), body)
+	}
 }
 
 // A RELEASED SEAT TAKES ITS SESSIONS WITH IT: the run goes on under the seat's

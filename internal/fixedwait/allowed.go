@@ -453,8 +453,6 @@ var allowed = []Entry{
 	{File: "internal/engine/clockskew_internal_test.go", Func: "slowBeat", ExemptWait: 1, Piece: 17},
 	{File: "internal/engine/clockskew_internal_test.go", Func: "slowHeartbeat.finish", ExemptWait: 1, Piece: 17},
 	{File: "internal/engine/codeholds_internal_test.go", Func: "TestCodeHoldsReadsRowsAndEverySeatHolder", ExemptWait: 1, ExemptElapsed: 1, Piece: 18},
-	{File: "internal/engine/codemergerate_test.go", Func: "TestTheMergeRateAlarmBorrowsTheQueuesCapacity", ExemptWait: 2, ExemptElapsed: 2, Piece: 18},
-	{File: "internal/engine/codemirroralarm_test.go", Func: "TestTheMirrorAlarmFiresOnItsHome", ExemptWait: 2, ExemptElapsed: 1, Piece: 18},
 	{File: "internal/engine/codereads_internal_test.go", Func: "answered", ExemptWait: 1, Piece: 18},
 	{File: "internal/engine/codereconcile_bench_test.go", Func: "BenchmarkAChangedActivation", ExemptElapsed: 1, Piece: 18},
 	{File: "internal/engine/codereconciler_internal_test.go", Func: "TestANewerRequestOrAStopEndsTheRetry", ExemptWait: 1, Piece: 18},

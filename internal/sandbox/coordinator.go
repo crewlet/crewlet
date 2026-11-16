@@ -37,7 +37,32 @@ import (
 // The per-seat control topic makes this rare rather than routine — a
 // completion reaches its seat's owner by construction — but "rare" is not
 // "never": a lease can move between the publish and the receive.
+//
+// One another node or build can get past is [ErrResumeElsewhere]. A run with
+// no parked state and a state that is no state are met again wherever the run
+// goes, and a refusal that names nothing to wait on is decided by what refused
+// it (internal/engine's controlOutcome).
 var ErrResumeUnavailable = errors.New("sandbox: this node cannot resume the run")
+
+// ErrResumeElsewhere is an [ErrResumeUnavailable] another node or build can
+// get past: a seat this node does not hold, a parked state of a version this
+// build does not read, a reply kind it does not know, a seat or a company
+// that is not this node's. An error wrapping it matches both.
+//
+// NOT THE RUN'S FAILURE, AND NOT ITS MESSAGE'S. It is the node's on the seat's
+// control topic (internal/engine's controlOutcome), so a delivery a roll
+// spends waiting for a node that can resume the run is kept with the group's
+// unhandled deliveries rather than with its poison. And it counts nothing
+// toward the resume give-up WHILE A LIVE NODE MAY RESUME THE RUN
+// ([CoordinatorOptions.ResumableElsewhere], [Coordinator.runsOwnFailure]):
+// counted, a roll that kept an older node holding the seat for half an hour
+// ended a run a newer node had parked, and the engine's issue report filed it
+// as the engine's own defect. Once no live node may, it counts, so a rollback
+// that leaves no node reading the version of the run's parked state holds the
+// seat no longer than the give-up does. A reply kind is no part of that
+// version: an unknown one beside a state every live node reads is not counted
+// while another node is live.
+var ErrResumeElsewhere = fmt.Errorf("%w; another node or build may", ErrResumeUnavailable)
 
 // ErrResumeAbandoned reports a resumed turn that broke and must not be resumed
 // again from the same completion.
@@ -173,9 +198,13 @@ var ErrRunEnding = errors.New("sandbox: the run's ending is decided, so it takes
 // It must return an error wrapping [ErrResumeAbandoned] when the turn broke in a
 // way a retry must not repeat; see that sentinel for which ways those are.
 //
-// It must return an error wrapping [ErrResumeUnavailable] when this node has
-// no seat to resume into, so the caller reverts the claim instead of settling
-// the run.
+// It must return an error wrapping [ErrResumeUnavailable] when this node
+// cannot resume the run, so the caller reverts the claim instead of settling
+// it, and wrapping [ErrResumeElsewhere] where another node or build can (no
+// seat here to resume into, a state or a reply kind this build does not
+// read): the control topic hands that back as the node's, and the give-up
+// counts it only once no live node may
+// ([CoordinatorOptions.ResumableElsewhere]).
 type Resumer interface {
 	Resume(ctx context.Context, req ResumeRequest) error
 }
@@ -446,6 +475,16 @@ type CoordinatorOptions struct {
 	// above this package (internal/engine's nodesFailure, the one its seat's
 	// deliveries are NAKed by); nil counts every failure as the run's.
 	NodesFailure func(context.Context, error) bool
+
+	// ResumableElsewhere reports whether a live node other than this one may
+	// resume run: one whose build reads the version of the run's parked
+	// state. A resume that failed on [ErrResumeElsewhere] is not counted
+	// toward the give-up while one may, nor while the answer cannot be read
+	// (the next failure asks again); once none may, it is, so a rollback
+	// cannot hold the seat for ever ([Coordinator.runsOwnFailure]). The fleet
+	// it reads sits above this package (internal/engine's
+	// fleetReadsParkedState); nil counts every such failure as the run's.
+	ResumableElsewhere func(ctx context.Context, run PendingRun) (bool, error)
 
 	// Resume re-enters a suspended turn. Required: every node that builds a
 	// coordinator runs the engine whose seats a completion resumes into,
@@ -999,6 +1038,8 @@ type Coordinator struct {
 	failureKind func(error) string
 	// nodesFailure is [CoordinatorOptions.NodesFailure].
 	nodesFailure func(context.Context, error) bool
+	// resumableElsewhere is [CoordinatorOptions.ResumableElsewhere].
+	resumableElsewhere func(ctx context.Context, run PendingRun) (bool, error)
 
 	queue   Publisher
 	pending PendingStore
@@ -1282,29 +1323,30 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager, failureKind: opts.FailureKind,
 		resume: opts.Resume, pushes: opts.Pushes, account: opts.Account, audience: opts.Audience,
-		nodesFailure: opts.NodesFailure,
-		answers:      opts.Answers,
-		leads:        opts.Leads,
-		condense:     opts.Condense,
-		ended:        opts.Ended,
-		recovered:    opts.Recovered,
-		unresumable:  opts.Unresumable,
-		stopped:      opts.Stopped,
-		parked:       opts.Parked,
-		closeStopped: opts.CloseStopped,
-		turnLost:     opts.TurnLost,
-		steersEnded:  opts.SteersEnded,
-		node:         opts.Node,
-		boxes:        opts.Boxes,
-		nudge:        opts.Nudge,
-		refresh:      opts.Refresh,
-		sessions:     opts.Sessions,
-		keep:         opts.Keep,
-		restore:      opts.Restore,
-		relaunchWait: relaunchCaptureWait,
-		holdingsWait: holdingsReadWait,
-		endWait:      JobEndWait,
-		endPoll:      jobEndPoll,
+		nodesFailure:       opts.NodesFailure,
+		resumableElsewhere: opts.ResumableElsewhere,
+		answers:            opts.Answers,
+		leads:              opts.Leads,
+		condense:           opts.Condense,
+		ended:              opts.Ended,
+		recovered:          opts.Recovered,
+		unresumable:        opts.Unresumable,
+		stopped:            opts.Stopped,
+		parked:             opts.Parked,
+		closeStopped:       opts.CloseStopped,
+		turnLost:           opts.TurnLost,
+		steersEnded:        opts.SteersEnded,
+		node:               opts.Node,
+		boxes:              opts.Boxes,
+		nudge:              opts.Nudge,
+		refresh:            opts.Refresh,
+		sessions:           opts.Sessions,
+		keep:               opts.Keep,
+		restore:            opts.Restore,
+		relaunchWait:       relaunchCaptureWait,
+		holdingsWait:       holdingsReadWait,
+		endWait:            JobEndWait,
+		endPoll:            jobEndPoll,
 
 		// THE ONE WAIT every reading of a job's main thread shares.
 		mainThreadWait: MainThreadReadWait,
@@ -1808,7 +1850,7 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.ExecutorFinished
 		// completion is a ROUTING failure — handed back, so it reaches the
 		// holder, and the poll fires it again for as long as the job's row
 		// is running.
-		return fmt.Errorf("%w: %w", ErrResumeUnavailable,
+		return fmt.Errorf("%w: %w", ErrResumeElsewhere,
 			notHeld(ctx, ev.AgentHandle, ev.TurnID, "claiming a completion"))
 	}
 	// ADMITTED BEFORE THE CLAIM, and held through the resume: see
@@ -4386,10 +4428,11 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 				"attempt", run.Launch.ResumeFailures+1, "error", err.Error())
 		}
 		// A FAILURE IS COUNTED AND BOUNDED, a wait is not, and nor is a
-		// failure of the node's own: see [Coordinator.resumeGivenUp]. A
-		// completion's only, for the reason the deadline above gives.
+		// failure of the node's own, or one another node can get past while
+		// one may: see [Coordinator.resumeGivenUp]. A completion's only, for
+		// the reason the deadline above gives.
 		var failed failure
-		if !refused && !claimedAnswer(run) && c.runsOwnFailure(ctx, err) {
+		if !refused && !claimedAnswer(run) && c.runsOwnFailure(ctx, run, err) {
 			now := c.now()
 			if c.resumeGivenUp(ctx, run, now, err) {
 				return AnswerConsumed, nil
@@ -6408,11 +6451,14 @@ type recovery struct {
 // the re-arm ([Coordinator.keepRefused]), and whose signal carries it, the
 // seat's admission above all, which every acquisition signals once its
 // recovery is done. A re-fire that fails otherwise, a store that did not
-// answer it, leaves the re-arm standing, and THE RE-ARM HAS A RE-FIRE OF ITS
-// OWN at the backstop ([Coordinator.keepLocked]): kept on the recorded
-// condition alone, whose signal this holder may never see, the completion
-// waited for the waiter's next announcement, which a silent store keeps from
-// coming, and for nothing else while this holder kept the seat.
+// answer it, leaves the completion kept all the same: the re-arm stands where
+// the gate could not ask, and where the gate admitted the re-fire, which drops
+// the re-arm, and the claim went unanswered, the re-fire keeps it again
+// ([Coordinator.keepAgain]). AND EITHER KEEP HAS A RE-FIRE OF ITS OWN at the
+// backstop ([Coordinator.keepLocked]): kept on the recorded condition alone,
+// whose signal this holder may never see, the completion waited for the
+// waiter's next announcement, which a silent store keeps from coming, and for
+// nothing else while this holder kept the seat.
 //
 // A completion this node already keeps for the job, a delivery's refusal since
 // the seat was taken, is left as it is, and nothing is re-fired for it.

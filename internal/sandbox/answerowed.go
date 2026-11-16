@@ -314,7 +314,10 @@ type Admission func(ctx context.Context, handle string) (refusal Refusal, refuse
 // one ask of this node's gate per kept completion per five minutes, the
 // ceiling the waiter's own repeat reaches at the default cadence
 // ([reannounceCeilingPolls]), so a completion no waiter announces, its host's
-// store silent, is re-fired no later than one the waiter does.
+// store silent, is re-fired no later than one the waiter does. Save one this
+// node holds off itself until an instant, which every announcement before it
+// would meet refused here: its re-fire waits for that instant
+// ([Coordinator.keptRefireIn]).
 const answerWaitBackstop = 5 * time.Minute
 
 // Reply is a delivery offered to a parked run as the answer to its question.

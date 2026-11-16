@@ -1672,11 +1672,11 @@ func nakFailure(ctx context.Context, err error) queue.Result {
 //     prompt a full disk could not take) is the node's though its record
 //     names the provider's own kind. A coding sandbox's class is put on a
 //     side by whether a mail can cause it: a provider that did not answer,
-//     at its account's limit or wanting it paid for, a setup download failing
-//     on the far side and a configuration the deployment cannot start are the
-//     node's. A deadline, an abandoned wait, a write the state log refused for
-//     what the write itself is and a provider refusing the company's
-//     credentials stay the work's.
+//     at its account's limit, wanting it paid for or refusing the company's
+//     credentials, a setup download failing on the far side and a
+//     configuration the deployment cannot start are the node's. A deadline,
+//     an abandoned wait and a write the state log refused for what the write
+//     itself is stay the work's.
 //   - THE COORDINATION STORE'S SILENCE on a step of the sandbox coordinator's
 //     ([sandbox.ErrStoreSilent]).
 //   - A HAND-BACK MADE WHILE NO WAITER CAN ANNOUNCE ITS JOB
@@ -1688,6 +1688,13 @@ func nakFailure(ctx context.Context, err error) queue.Result {
 // the coordinator, its executor's launch ([sandbox.Coordinator.Launch]),
 // makes either. The mailbox reads them as the node's all the same, so the
 // two handlers cannot come to disagree on one.
+//
+// NOT A RESUME ANOTHER NODE OR BUILD CAN MAKE ([sandbox.ErrResumeElsewhere]):
+// the control topic hands that back as the node's as well ([controlOutcome]),
+// but it is no failure of this node's, and the give-up counts it once no live
+// node reads the version of the run's parked state
+// ([sandbox.CoordinatorOptions.ResumableElsewhere]) rather than never, which
+// this answer would make it. A mailbox's turn never meets it.
 func nodesFailure(ctx context.Context, err error) bool {
 	return storeUnheard(err) || queue.NodeFault(ctx, err) || infrastructureFailure(err)
 }

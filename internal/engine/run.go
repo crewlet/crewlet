@@ -560,6 +560,10 @@ type Engine struct {
 	// apply can be what starts the poll.
 	sandboxPollInterval time.Duration
 
+	// directoryRefresh is Options.DirectoryRefresh: the net's interval when
+	// set, [DirectoryRefresh] otherwise.
+	directoryRefresh time.Duration
+
 	// gitHookArgv is Options.GitHook, kept because an apply can be what
 	// builds Gitlet ([Engine.gitHook]).
 	gitHookArgv []string
@@ -1453,6 +1457,14 @@ type Options struct {
 	// rather than waiting out a real tick.
 	SandboxPollInterval time.Duration
 
+	// DirectoryRefresh overrides the interval of the party registry's net
+	// behind the directory's own signal ([DirectoryRefresh]). Zero takes the
+	// production value. A node without `data` has no signal and reads
+	// through a data node on every tick, so a test shrinks it to see a
+	// change the data node made within the case rather than after a half
+	// minute's wait.
+	DirectoryRefresh time.Duration
+
 	// GitHook is the argv the code cache's proc-receive hook execs on a node
 	// that serves git. Nil — production — is THIS binary as
 	// host.HookCommand names it, `crewlet gitlet hook proc-receive`, its path
@@ -1907,6 +1919,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		mcpRelistBase:       opts.mcpRelistBase,
 		sandboxOtel:         otel,
 		sandboxPollInterval: opts.SandboxPollInterval,
+		directoryRefresh:    opts.DirectoryRefresh,
 		gitHookArgv:         slices.Clone(opts.GitHook),
 		cacheDisk:           opts.cacheDisk,
 		sizedByTheMachine:   sizedByTheMachine(ctx),

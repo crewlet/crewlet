@@ -191,10 +191,11 @@ type keptRefire struct {
 }
 
 // keepLocked keeps kept for its condition, in place of anything kept for its
-// run before, and arms its own re-fire: at the instant its refusal named for
-// the clock to lift it, no later than [answerWaitBackstop], and at that
-// backstop where it named none or one already past. The caller holds c.mu
-// and has checked the coordinator is not closed.
+// run before, and arms its own re-fire ([Coordinator.keptRefireIn]): at the
+// instant its refusal named for the clock to lift it, no later than
+// [answerWaitBackstop] unless this node holds the completion off itself until
+// that instant, and at that backstop where it named none or one already past.
+// The caller holds c.mu and has checked the coordinator is not closed.
 //
 // # Why a kept completion has a timer of its own
 //
@@ -210,7 +211,9 @@ type keptRefire struct {
 // own, as an answer's wait does ([Coordinator.waitOwed]), on the same rule:
 // the refusal's instant where it names one, and no wait longer than the
 // backstop, which bounds a signal that never came at the cost of one ask of
-// this node's gate per kept completion per five minutes. Re-fired, it is
+// this node's gate per kept completion per five minutes; save a completion
+// this node holds off itself until its instant, whose re-fire waits for that
+// instant ([Coordinator.keptRefireIn]). Re-fired, it is
 // offered to [Coordinator.OnCompleted] as a signal's re-fire is: admitted, it
 // is carried; refused, it is kept again with a timer of its own.
 //
@@ -221,10 +224,7 @@ type keptRefire struct {
 func (c *Coordinator) keepLocked(kept refusedCompletion) {
 	turnID := kept.ev.TurnID
 	c.dropKeptLocked(turnID)
-	wait := answerWaitBackstop
-	if until := kept.until.Sub(c.now()); !kept.until.IsZero() && until > 0 {
-		wait = min(wait, until)
-	}
+	wait := c.keptRefireIn(kept)
 	armed := &keptRefire{}
 	kept.backstop = armed
 	c.refused[turnID] = kept
@@ -237,6 +237,36 @@ func (c *Coordinator) keepLocked(kept refusedCompletion) {
 		delete(c.refused, turnID)
 		c.refireLocked(kept)
 	})
+}
+
+// keptRefireIn is how long kept waits for its own re-fire
+// ([Coordinator.keepLocked]): until the instant its refusal named for the
+// clock to lift it, no longer than [answerWaitBackstop], and that backstop
+// where it named none or one already past.
+//
+// # A completion held here waits for its instant, never the backstop
+//
+// One whose resume was refused after its claim, on a condition the gate could
+// not see, is held here until the instant its refusal names
+// ([Coordinator.stillRefused]): the gate admitted it and would again, so a
+// re-fire before that instant claimed it, woke its box to collect it and ran
+// its review into the same refusal. A re-fire drops what is kept, the hold
+// with it, so one armed at the backstop resumed the job into the limit every
+// five minutes for as long as the limit lasted, up to the hour a vendor's
+// window is benched for, where the seat's park did not refuse it first. Its
+// re-fire is armed for the instant instead. The backstop bounds a signal that
+// never came, and nothing is owed to one here before the instant: this node
+// refuses every announcement of the job until then, and the signal that ends
+// the wait sooner re-fires it as it re-fires any kept completion.
+func (c *Coordinator) keptRefireIn(kept refusedCompletion) time.Duration {
+	now := c.now()
+	if held := kept.heldUntil.Sub(now); !kept.heldUntil.IsZero() && held > 0 {
+		return held
+	}
+	if until := kept.until.Sub(now); !kept.until.IsZero() && until > 0 {
+		return min(answerWaitBackstop, until)
+	}
+	return answerWaitBackstop
 }
 
 // dropKeptLocked drops what is kept for turnID's run, if anything, its own
@@ -308,7 +338,9 @@ func (c *Coordinator) dropKeptLocked(turnID string) {
 // the refusal's Until is the instant): its announcements are refused HERE,
 // before the gate and the claim ([Coordinator.stillRefused]), until that
 // instant, and the signal that ends the wait re-fires it as it does any kept
-// completion. A refusal that names no instant holds nothing: the gate is asked
+// completion; its own re-fire comes at that instant, never at the backstop,
+// which would drop the hold before it ([Coordinator.keptRefireIn]). A refusal
+// that names no instant holds nothing: the gate is asked
 // again on every announcement, as for a completion it refused itself.
 //
 // THE HOLD IS IN THIS NODE'S MEMORY, NEVER ON THE RUN'S ROW. (What the row
@@ -456,7 +488,7 @@ func (c *Coordinator) oweRefused(ctx context.Context, ev types.ExecutorFinished,
 	}
 	fence, held := c.leaseOf(ev.AgentHandle)
 	if !held {
-		return fmt.Errorf("%w: %w", ErrResumeUnavailable,
+		return fmt.Errorf("%w: %w", ErrResumeElsewhere,
 			notHeld(ctx, ev.AgentHandle, ev.TurnID, "recording a refused completion"))
 	}
 	since := c.now().UTC()
@@ -490,7 +522,18 @@ func (c *Coordinator) oweRefused(ctx context.Context, ev types.ExecutorFinished,
 // already (a refusal's keep, or a recovery's re-arm still standing), which
 // owns the re-fire, and unless this node no longer holds the seat, whose
 // next holder owes the completion from the job's record.
+//
+// KEPT UNHELD, FOR THE BACKSTOP ALONE. What re-fired it ended whatever its
+// refusal held it to (the condition's signal, a person's stop, the instant
+// itself), and what it met since is a step that settled nothing, which names
+// no instant of its own. Kept again as it was, a completion held here until a
+// limit's instant ([Coordinator.stillRefused]), re-fired by the signal that
+// ended the limit and then not answered by the store, was held again: the
+// waiter's announcements of the job refused here, and its re-fire armed for
+// the instant the signal had ended, up to the hour a vendor's window is
+// benched for.
 func (c *Coordinator) keepAgain(kept refusedCompletion) {
+	kept.heldUntil, kept.reason, kept.until = time.Time{}, "", time.Time{}
 	c.mu.Lock()
 	if _, already := c.refused[kept.ev.TurnID]; already || c.closed {
 		c.mu.Unlock()

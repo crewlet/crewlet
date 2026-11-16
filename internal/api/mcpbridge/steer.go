@@ -453,8 +453,10 @@ func readNotes(w http.ResponseWriter, r *http.Request, opened *binding, inbox St
 // Shutdown releases every poll for notes this bridge holds — one it serves from
 // its own opening, and one it is relaying to the session's holder
 // ([Bridge.forwardPoll]) — and turns away every one that arrives after it, at
-// once and as a failure the poller pauses on ([Bridge.pollNotes]), so a graceful
-// stop never waits out a hold. Safe to call more than once.
+// once and as a failure the poller pauses on ([Bridge.pollNotes]); and it ends
+// every call waiting for a holder to take it ([Bridge.forward]), answered that
+// this node is draining. So a graceful stop never waits out a hold. Safe to
+// call more than once.
 func (b *Bridge) Shutdown() {
 	if b == nil {
 		return

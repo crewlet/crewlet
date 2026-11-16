@@ -23,14 +23,19 @@ import (
 // with the broker's own object store: one bucket, reached by each member
 // through its own broker client, as a fleet's data nodes reach it.
 func TestGitletPassesTheFleetSuiteOnTheBroker(t *testing.T) {
-	gitlettest.RunFleet(t, func(t *testing.T) gitlettest.Cluster { return startCluster(t, "nats") })
+	gitlettest.RunFleet(t, gitlettest.EveryFleetCase,
+		func(t *testing.T) gitlettest.Cluster { return startCluster(t, "nats") })
 }
 
-// TestTheCodeHostPassesTheFleetSuiteOnS3 runs every multi-node case with S3,
-// through an in-process bucket speaking its wire — the production store,
-// whose puts go in parts and whose reads go in ranges.
+// TestTheCodeHostPassesTheFleetSuiteOnS3 runs every multi-node case whose
+// claim the object store can change with S3, through an in-process bucket
+// speaking its wire — the production store, whose puts go in parts and whose
+// reads go in ranges. The cases whose claim is routing, the committer, the
+// ledger or a recovery, decided before or after the bytes, are the broker
+// run's alone (gitlettest.StoreFleetCases says which and why).
 func TestTheCodeHostPassesTheFleetSuiteOnS3(t *testing.T) {
-	gitlettest.RunFleet(t, func(t *testing.T) gitlettest.Cluster { return startCluster(t, "s3") })
+	gitlettest.RunFleet(t, gitlettest.StoreFleetCases,
+		func(t *testing.T) gitlettest.Cluster { return startCluster(t, "s3") })
 }
 
 // EVERY PUSH OF A REPOSITORY IS APPENDED BY ITS COMMITTER, WHICHEVER MEMBER
