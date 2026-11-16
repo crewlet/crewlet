@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -170,11 +169,12 @@ func fakeIdleHelper() {
 
 // fakeFlood is a harness that writes FAKE_FLOOD_MIB mebibytes (33 unless set)
 // of FAKE_FLOOD_LINE lines to the stream FAKE_FLOOD names, after the line
-// FAKE_FLOOD_FIRST on stdout where set, a mebibyte at a write, paced by
-// FAKE_FLOOD_PACE_MS where set; then FAKE_FLOOD_AFTER on the same stream.
-// With FAKE_FLOOD_HOLD it then holds, beside a SIGTERM-deaf helper in its
-// group (FAKE_PIDFILE), and a SIGTERM writes FAKE_TERM_MARKER and eight
-// mebibytes more; otherwise it prints FAKE_STDOUT and exits 0.
+// FAKE_FLOOD_FIRST on stdout where set, a mebibyte at a write, each after a
+// byte read from the FIFO FAKE_FLOOD_GATE names where set ([floodGate]); then
+// FAKE_FLOOD_AFTER on the same stream. With FAKE_FLOOD_HOLD it then holds,
+// beside a SIGTERM-deaf helper in its group (FAKE_PIDFILE), and a SIGTERM
+// writes FAKE_TERM_MARKER and eight mebibytes more; otherwise it prints
+// FAKE_STDOUT and exits 0.
 func fakeFlood() {
 	stream := os.Stdout
 	if os.Getenv("FAKE_FLOOD") == "stderr" {
@@ -202,12 +202,22 @@ func fakeFlood() {
 	if err != nil {
 		mib = 33
 	}
-	pace, _ := strconv.Atoi(os.Getenv("FAKE_FLOOD_PACE_MS"))
-	for range mib {
-		_, _ = stream.Write(chunk)
-		if pace > 0 {
-			time.Sleep(time.Duration(pace) * time.Millisecond) //fixedwait:simulated a harness writing its record at a rate the watcher's tick sees
+	var gate *os.File
+	if path := os.Getenv("FAKE_FLOOD_GATE"); path != "" {
+		// The case holds a writer open already, so this never waits.
+		if gate, err = os.Open(path); err != nil { //nolint:gosec // the case's own FIFO
+			fmt.Fprintf(os.Stderr, "the flood's gate: %v\n", err)
+			os.Exit(2)
 		}
+	}
+	goAhead := make([]byte, 1)
+	for range mib {
+		if gate != nil {
+			if _, err := gate.Read(goAhead); err != nil {
+				break
+			}
+		}
+		_, _ = stream.Write(chunk)
 	}
 	fmt.Fprint(stream, os.Getenv("FAKE_FLOOD_AFTER"))
 	if hold {

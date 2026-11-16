@@ -1,0 +1,104 @@
+name: ci-cancel
+
+# A PULL REQUEST'S `ci` RUN STOPS AT ITS FIRST FAILED JOB. Every job `ci` runs
+# on a pull request has to pass before it merges, so one red job already means
+# another push, and that push cancels the whole run anyway (ci.yml's
+# `concurrency`). Letting the rest finish only holds runners the next run, and
+# every other pull request's, is queueing for. `fail-fast` cannot do this: it
+# stops the legs of ONE matrix, and nothing in a workflow stops its other jobs.
+# So this watches the run from outside and cancels it.
+#
+# A run on main is never cancelled. It is the record of a merge and the run
+# that saves the caches and the test weights (ci.yml, THE GO CACHES), so every
+# job of it runs to the end.
+#
+# FROM OUTSIDE, because cancelling takes `actions: write`, and ci.yml keeps
+# that scope away from every job that runs a pull request's code (its `caches`
+# job says so). A workflow_run job runs main's copy of THIS file, with a token
+# of the base repository, whatever triggered the run it watches: so a fork's
+# pull request is covered too, the pull request cannot change what runs here,
+# and the job checks nothing out. It reads the API and posts one cancel.
+#
+# The name under `workflows:` must match ci.yml's `name:` EXACTLY: GitHub
+# reports no error when nothing matches, and this simply never fires. Nothing
+# asserts it, so re-read both on a rename.
+on:
+  workflow_run:
+    workflows: [ci]
+    # `requested` fires when the run is created, and again for each re-run,
+    # which starts a new attempt of the same run.
+    types: [requested]
+
+permissions: {}
+
+jobs:
+  watch:
+    name: cancel the run at its first failure
+    # A fixed LTS image, never `ubuntu-latest`: ci.yml's `build` job says why.
+    runs-on: ubuntu-24.04
+    if: github.event.workflow_run.event == 'pull_request'
+    permissions:
+      actions: write
+    # No timeout-minutes of its own: the job ends when the run it watches
+    # does, and must not end sooner, so it takes the platform's limit, the
+    # same one every job of that run has.
+    steps:
+      - name: cancel the run when one of its jobs fails
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ github.event.workflow_run.id }}
+          ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        # ONE POLL A MINUTE, because GITHUB_TOKEN's API limit is 1,000
+        # requests an hour for the whole repository, shared by every workflow
+        # in it (ci.yml's `caches` job among them, which fails main when it is
+        # refused). A poll is one request, and a second only once no job is
+        # left unfinished, so a run costs about 60 an hour and five pull
+        # requests' runs at once about 300; against a run whose jobs take ten
+        # minutes and more, a minute's lag before the cancel is small.
+        #
+        # A request that fails is retried at the next poll rather than ending
+        # the watch: a lost poll costs a minute, a lost watch the whole run.
+        #
+        # Only THIS attempt's jobs count (`run_attempt`): a re-run of one job
+        # leaves the attempt before it holding its other failures, and those
+        # must not cancel the re-run.
+        run: |
+          set -uo pipefail
+          while :; do
+            sleep 60
+            if ! jobs="$(gh api --paginate "repos/$REPO/actions/runs/$RUN/attempts/$ATTEMPT/jobs?per_page=100" \
+                --jq ".jobs[] | select(.run_attempt == $ATTEMPT) | [.status, (.conclusion // \"\"), .name] | @tsv" 2>&1)"; then
+              echo "::warning::reading the run's jobs: $jobs"
+              continue
+            fi
+            failed="$(awk -F'\t' '$1 == "completed" && ($2 == "failure" || $2 == "timed_out") { print $3 }' <<<"$jobs")"
+            if [ -n "$failed" ]; then
+              while IFS= read -r name; do
+                echo "$name failed: cancelling the rest of run $RUN (attempt $ATTEMPT)"
+              done <<<"$failed"
+              if out="$(gh api -X POST "repos/$REPO/actions/runs/$RUN/cancel" 2>&1)"; then
+                exit 0
+              elif grep -q 'HTTP 409' <<<"$out"; then
+                # The run finished between the read and the cancel.
+                echo "run $RUN had already finished"
+                exit 0
+              fi
+              echo "::error::cancelling run $RUN: $out"
+              exit 1
+            fi
+            # A job that `needs` another is listed only once that one has
+            # finished, so an empty list of unfinished jobs is not yet the end
+            # of the run; the run's own status is.
+            if awk -F'\t' '$1 != "completed" { found = 1 } END { exit !found }' <<<"$jobs"; then
+              continue
+            fi
+            if ! status="$(gh api "repos/$REPO/actions/runs/$RUN" --jq '.status' 2>&1)"; then
+              echo "::warning::reading run $RUN: $status"
+              continue
+            fi
+            if [ "$status" = completed ]; then
+              echo "run $RUN finished with no failed job"
+              exit 0
+            fi
+          done

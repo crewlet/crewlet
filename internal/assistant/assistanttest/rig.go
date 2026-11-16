@@ -2,7 +2,6 @@ package assistanttest
 
 import (
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -39,10 +38,11 @@ func NewRig(t testing.TB, o evals.RigOptions) *Rig {
 	return &Rig{Rig: r, t: t}
 }
 
-// Follow reads a turn's stream from after seq after until it ends.
+// Follow reads a turn's stream from after seq after until it ends. No bound of
+// its own: a turn's time is the runner's, and a hang is go test -timeout's.
 func (r *Rig) Follow(turn uuid.UUID, after uint64) []wire.Frame {
 	r.t.Helper()
-	frames, err := r.Await(r.t.Context(), turn, after, 10*time.Second)
+	frames, err := r.Read(r.t.Context(), turn, after)
 	if err != nil {
 		r.t.Fatal(err)
 	}

@@ -692,6 +692,24 @@ type BridgedCall struct {
 	// tells. So the brief tells the first once, in its lead, and the second
 	// among the round's calls as any call is ([Runner.calledAfter]).
 	HeldID string
+
+	// CallID is the id the call's harness gave it, as its box sent it
+	// (sandbox.BridgeCall.CallID): for Claude Code the model's tool_use id,
+	// which the session's transcript files the call's use and its result
+	// under. Carried for a call still in flight as for a finished one. Empty
+	// where the harness sent none (OpenCode), on a call an older build
+	// recorded, on a skill load its harness's hook reported, and on the call
+	// a person approved, which the engine host made where no harness named it.
+	//
+	// THE BOX'S WORD, AND NO PART OF THE CALL'S IDENTITY: nothing finds,
+	// compares or deduplicates a call by it, and two calls under one id are
+	// two calls. It is read only to ask a reading of which calls a cut-off
+	// kept session holds (sandbox.HoldingsAsk), both sides of whose match are
+	// the box's own. So it is carried HERE and NOT ON [ledger.Call], which
+	// the turn's record persists and the telling compares whole ([leftOut]):
+	// a word no line of a brief shows, and no record needs, has no place in
+	// either.
+	CallID string
 }
 
 // bridgedLedger is an executor run's calls as the turn's record reads them:
