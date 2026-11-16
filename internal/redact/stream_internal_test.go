@@ -412,6 +412,7 @@ func (p *pipeline) held() streamHeld {
 		}
 	}
 	walk(p.rules)
+	h.text += len(p.carry)
 	if p.keys != nil {
 		walk(p.claims)
 		h.text += p.keys.in.held()
@@ -427,7 +428,9 @@ const streamWindow = stageReach + stageStep + pieceBytes + len(Marker+"secret-ac
 
 // streamBound is the most a [Stream]'s stages hold between two writes, as the
 // text they hold and as the entries they keep beside it (values, edits,
-// claims, blocks), derived from the code: every rule's stage over the keys'
+// claims, blocks), derived from the code: the piece the stream carries short
+// of the next of the text's offsets it hands its stages at ([pipeline.feed]),
+// less than [pieceBytes]; every rule's stage over the keys'
 // stage, every claims stage and every reader holds [streamWindow]; the keys'
 // stage holds what lies behind where it reads (four blocks' reach at most) and
 // a step's text past it, and while it waits on the claims, the text every
@@ -448,7 +451,7 @@ func streamBound() (text, entries int) {
 	tracking := table - 1 + readers
 	keys := pieceBytes + 4*keyReach + stageAdvance + keyAhead
 	lag := (table - 1 + 1) * (stageStep + pieceBytes + len(Marker+"secret-access-key]"))
-	text = (table+tracking)*streamWindow + keys + lag
+	text = (table+tracking)*streamWindow + keys + lag + pieceBytes
 	entries = tracking*streamWindow*32/15 + 2*2*16*((stageReach+8)/6+1) + (keys+stageStep)*24/5
 	return text, entries
 }
@@ -516,4 +519,52 @@ func TestAStreamHoldsNoMoreThanItsStagesWindows(t *testing.T) {
 		t.Logf("%s: held %d KiB of text, %d KiB of entries; a stage at most %d KiB and %d edits", name, most.text>>10, most.entries>>10, most.stageText>>10, most.stageEdits)
 	}
 	t.Logf("bound: %d KiB of text, %d KiB of entries; a stage %d KiB and %d edits", boundText>>10, boundEntries>>10, streamWindow>>10, boundEdits)
+}
+
+// A STREAM HANDS ITS STAGES THE SAME PIECES HOWEVER THE TEXT IS CUT: after
+// every write, its stages have been handed the text up to the last offset
+// that is a multiple of [pieceBytes] and no further, a piece of exactly that
+// length at a time, and the stream carries the rest ([pipeline.feed]); so
+// where each stage's input ends when it is handed a piece, and what it holds
+// when it steps, is the text's alone, whether it arrives a byte at a time, in
+// pieces of any size, or whole.
+//
+// Mutation: cut each write into pieces from the write's own start
+// ([pipeline.feed]), and the stages are handed the text up to where each
+// write ends, in pieces of the writes' making.
+func TestAStreamHandsItsStagesTheSamePiecesHoweverTheTextIsCut(t *testing.T) {
+	t.Parallel()
+	r := rand.New(rand.NewPCG(1170, 6))
+	text := streamText(r, wholeBytes+5*pieceBytes+r.IntN(pieceBytes))
+	for _, most := range []int{1, 4 << 10, pieceBytes - 1, pieceBytes + 1, 3 * pieceBytes, len(text)} {
+		var out bytes.Buffer
+		s := NewStream(&out)
+		written := 0
+		for written < len(text) {
+			n := min(len(text)-written, 1+r.IntN(most))
+			_, _ = s.Write([]byte(text[written : written+n]))
+			written += n
+			if s.p == nil {
+				continue
+			}
+			handed := written - written%pieceBytes
+			for name, in := range map[string]*feed{"the keys' stage": &s.p.keys.in, "the first claims stage": &s.p.claims.in} {
+				if in.end != handed {
+					t.Fatalf("pieces of at most %d bytes, %d written: %s was handed %d bytes, not the %d up to the last multiple of a piece", most, written, name, in.end, handed)
+				}
+				for _, c := range in.chunks {
+					if len(c) != pieceBytes {
+						t.Fatalf("pieces of at most %d bytes, %d written: %s was handed a piece of %d bytes, not %d", most, written, name, len(c), pieceBytes)
+					}
+				}
+			}
+			if len(s.p.carry) != written-handed {
+				t.Fatalf("pieces of at most %d bytes, %d written: the stream carries %d bytes, not the %d past the last multiple of a piece", most, written, len(s.p.carry), written-handed)
+			}
+		}
+		_ = s.Close()
+		if got, want := out.String(), Secrets(text); got != want {
+			t.Fatalf("pieces of at most %d bytes: %s", most, parted(got, want))
+		}
+	}
 }

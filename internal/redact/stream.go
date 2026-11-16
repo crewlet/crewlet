@@ -61,13 +61,20 @@ var errStreamClosed = errors.New("redact: write to a closed stream")
 // [Secrets] of everything written to it, however the text is cut into writes,
 // and redacting that again changes nothing.
 //
-// ITS MEMORY IS ITS STAGES' WINDOWS, but for the two texts the package doc's
-// "A text that arrives in pieces" names, which hold a run, so a text of any
-// length, a whole PDF's base64 on one line of a transcript, is redacted
-// without being held whole. What it writes trails what it is written by those
-// windows: nothing is written until a text passes [wholeBytes], which a
-// shorter one is redacted whole by, and then each stage writes on what it
-// decides as it decides it, the last some MiB behind. Close writes the rest.
+// HOW THE TEXT IS CUT INTO WRITES CHANGES NOTHING IT DOES: it hands its stages
+// the text a piece at a time at the text's own offsets, each piece ending at a
+// multiple of [pieceBytes], and carries what a write leaves short of the next
+// ([pipeline.feed]), so every stage is handed the same pieces, and steps where
+// it steps, however the text arrives.
+//
+// ITS MEMORY IS ITS STAGES' WINDOWS and the piece it carries, but for the two
+// texts the package doc's "A text that arrives in pieces" names, which hold a
+// run, so a text of any length, a whole PDF's base64 on one line of a
+// transcript, is redacted without being held whole. What it writes trails what
+// it is written by those windows: nothing is written until a text passes
+// [wholeBytes], which a shorter one is redacted whole by, and then each stage
+// writes on what it decides as it decides it, the last some MiB behind. Close
+// writes the rest.
 //
 // A WRITE TO ITS WRITER IS CUT AT ANY BYTE, inside a rune too: each is a piece
 // of the redacted text, and the pieces put together are text. A writer that
@@ -150,6 +157,10 @@ type pipeline struct {
 	// rules is the first of the rules over what the keys' stage writes,
 	// the pipeline itself where nothing comes before them.
 	rules sink
+	// carry is the text written past the last offset that is a multiple of
+	// [pieceBytes], held until the next multiple is written or the text
+	// ends ([pipeline.feed]).
+	carry []byte
 }
 
 // newPipeline is the stages, writing what they redact to out: the rules alone
@@ -197,10 +208,41 @@ func newPipeline(out func(string), keys bool) *pipeline {
 	return p
 }
 
-// feed hands the stages b, a piece at a time ([pieceBytes]).
+// feed hands the stages b, the next of the text, a piece at a time
+// ([pieceBytes]): the pieces of the text as written, each ending at an offset
+// that is a multiple of pieceBytes, what is written past the last such offset
+// carried until the next is written or the text ends ([pipeline.close]).
+//
+// AT THE TEXT'S OWN OFFSETS, NOT THE WRITE'S. Cut from each write's start, the
+// pieces were the caller's: where a stage's input ended after each, and so
+// when each stage stepped and what the next held when it stepped, followed how
+// the text was cut into writes. What a stage decides never did, but whether a
+// claims stage steps at a marker ([ruleStage.markerToStepAt]) and whether the
+// keys' stage decides a window before its claims are known turn on what a
+// stage holds when it is handed a piece, so cut by the writes, two readings
+// of one text, a gzip reader's reads following a pipe's, could part on them.
+// Cut here, every stage is handed the same pieces of a text however it
+// arrives.
 func (p *pipeline) feed(b []byte) {
-	for at := 0; at < len(b); at += pieceBytes {
-		p.write(string(b[at:min(len(b), at+pieceBytes)]))
+	if n := len(p.carry); n > 0 {
+		k := min(len(b), pieceBytes-n)
+		p.carry = append(p.carry, b[:k]...)
+		b = b[k:]
+		if len(p.carry) < pieceBytes {
+			return
+		}
+		p.write(string(p.carry))
+		p.carry = p.carry[:0]
+	}
+	for len(b) >= pieceBytes {
+		p.write(string(b[:pieceBytes]))
+		b = b[pieceBytes:]
+	}
+	if len(b) > 0 {
+		if p.carry == nil {
+			p.carry = make([]byte, 0, pieceBytes)
+		}
+		p.carry = append(p.carry, b...)
 	}
 }
 
@@ -215,8 +257,12 @@ func (p *pipeline) write(s string) {
 	p.keys.take(s)
 }
 
-// close ends the text.
+// close ends the text, handing the stages what it carried first.
 func (p *pipeline) close() {
+	if len(p.carry) > 0 {
+		p.write(string(p.carry))
+		p.carry = nil
+	}
 	if p.keys == nil {
 		p.rules.close()
 		return
