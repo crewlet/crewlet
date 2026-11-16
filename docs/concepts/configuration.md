@@ -407,7 +407,8 @@ heartbeat after the restart that made it — not at the next config
 activation.
 
 A node carries **at most 16 labels**. The presence lease is re-sent on
-every heartbeat, so the
+every heartbeat and the coordination store bounds what it carries
+([The presence's bound](coordination.md#the-presences-bound)), so the
 labels are bounded where you write them: a file with a 17th label, or a
 value past 64 bytes, is refused by `crewlet validate` and at startup,
 naming `node.labels` or the key, rather than accepted and then left out
