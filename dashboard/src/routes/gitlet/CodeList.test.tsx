@@ -489,14 +489,16 @@ describe("the reader's days", () => {
   });
 
   // Mutation: read the day once, so "Today" never turns over.
-  test("a heading turns over at the reader's midnight, through the one clock", async () => {
+  test("a heading turns over at the reader's midnight, through the one clock", () => {
     pinZoneForTest("Europe/Berlin");
-    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-11-15T22:59:00Z"));
     mount(<Timeline list={[row(1, "2026-11-15T10:00:00Z")]} />);
     expect(headings()).toEqual(["Today"]);
-    vi.setSystemTime(new Date("2026-11-15T23:00:30Z"));
-    await waitFor(() => expect(headings()).toEqual(["Yesterday"]), { timeout: 3000 });
+    act(() => {
+      vi.advanceTimersByTime(90_000);
+    });
+    expect(headings()).toEqual(["Yesterday"]);
   });
 
   // Mutation: drop a row whose time does not parse.
