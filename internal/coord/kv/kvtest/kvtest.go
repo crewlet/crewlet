@@ -47,6 +47,12 @@ type Across struct {
 	// link, opened as the engine opens a node's store across a link
 	// ([kv.AcrossLink]): what a case writes through.
 	Leaf *kv.FleetStore
+
+	// LeafBroker is the leaf's own broker, the store's connection one of its
+	// clients: a case dials another connection of it to put another
+	// subsystem's traffic on the same link as the store's, as a node's queue
+	// connection shares its leaf link with its coordination connection.
+	LeafBroker *js.Server
 }
 
 // SlowLeaf starts a member serving leaves, a link in front of its leaf
@@ -76,8 +82,9 @@ func SlowLeaf(t testing.TB, rate int64) Across {
 	// THE MEMBER'S FIRST, which creates the buckets; the leaf's adopts
 	// them, asked across its link once it is up.
 	return Across{
-		Member: open(t, client(t, "member", member), kv.InProcess),
-		Leaf:   open(t, client(t, "leaf", leaf), kv.AcrossLink),
+		Member:     open(t, client(t, "member", member), kv.InProcess),
+		Leaf:       open(t, client(t, "leaf", leaf), kv.AcrossLink),
+		LeafBroker: leaf,
 	}
 }
 

@@ -70,9 +70,8 @@
 // reader answers io.EOF itself — never at a body cut short — with no publish
 // retry and its messages out held to a WINDOW the connection's puts share
 // ([window]: [linkWindow] across a leaf's link or to an external cluster,
-// sized from the node's own lease heartbeat so a lease renewal queued behind
-// it at the floor still lands inside a heartbeat; [memberWindow] on a
-// member's own client); it is ended only when
+// sized so a request queued behind it at the floor is still answered inside
+// its term; [memberWindow] on a member's own client); it is ended only when
 // the broker has acknowledged nothing for [objstore.Stall] while messages are
 // out ([objstore.ErrStalled]); and a put that fails, the caller giving up among
 // the ways, drains what is out and purges what it stored under a context that
@@ -213,14 +212,14 @@
 //     ms against 5.8–6.2 — and sixty-four shared, beside sixteen in a run of
 //     its own, 48–69 MB/s alone against 59–68 and 42–65 eight at once
 //     against 50–62: nothing a member measured bought by a wider one.
-//   - THE LINK'S WINDOW ON A SHORTER LEASE ([linkWindow] follows the
-//     lease's heartbeat), through a leaf, interleaved runs of each on one
-//     machine (2026-10-18, `stream.sync: always`, four vCPUs running other
-//     work; four rounds, a fifth that overlapped another run left out): one
-//     message out — a lease under 22.5 s — ran a lone 16 MiB put at
-//     47–83 MB/s and eight at once at 56–78 together; two, at 109–125 and
-//     102–122; four, the shipped lease's, at 120–139 and 130–135. A 64 KiB
-//     put, one message whatever the window, took 2.3–4.0 ms in all three.
+//   - THE LINK'S WINDOW ([linkWindow], one message), through a leaf,
+//     interleaved runs of each on one machine (2026-10-18, `stream.sync:
+//     always`, four vCPUs running other work; four rounds, a fifth that
+//     overlapped another run left out): one message out ran a lone 16 MiB put
+//     at 47–83 MB/s and eight at once at 56–78 together; two, at 109–125 and
+//     102–122; four, the window the shipped lease's heartbeat once sized, at
+//     120–139 and 130–135. A 64 KiB put, one message whatever the window, took
+//     2.3–4.0 ms in all three.
 package natsobj
 
 import (
@@ -278,20 +277,12 @@ type Config struct {
 	// Clustered says the broker is a cluster, which is what the
 	// provisioning budget branches on (see [jsprovision]).
 	Clustered bool
-	// AcrossLink says the connection reaches the stream across a LINK the
-	// node's leases and events ride too — a leaf's link to its members, or
-	// a dial to an external cluster — rather than to the node's own member
-	// in its own process: it decides the puts' [window] ([linkWindow],
-	// [memberWindow]).
+	// AcrossLink says the connection reaches the stream across a LINK — a
+	// leaf's link to its members, or a dial to an external cluster — where
+	// every request the node sends after a put waits behind what it has out,
+	// rather than to the node's own member in its own process: it decides
+	// the puts' [window] ([linkWindow], [memberWindow]).
 	AcrossLink bool
-	// LeaseHeartbeat is how often the node renews the leases its connection
-	// carries — the seat and presence leases' heartbeat, the lease TTL IN
-	// FORCE over seat.HeartbeatRatio, never the shipped one — which sizes
-	// the window across a link ([linkWindow]). Required with AcrossLink,
-	// and refused as zero there rather than read as some default, because
-	// a window sized for a lease the node does not hold is the one that
-	// loses its seats; read nowhere else.
-	LeaseHeartbeat time.Duration
 
 	// MaxBytes is the byte reservation a bucket this node creates is given
 	// (store.objects.nats_max_bytes, or the share the engine derives),
@@ -338,11 +329,10 @@ type Backend struct {
 }
 
 // Window is how many messages the puts on b's connection may hold out at
-// once: [linkWindow] for [Config.LeaseHeartbeat] where [Config.AcrossLink]
-// said the connection crosses a link to the stream, [memberWindow] where it
-// did not. Whoever opens the bucket decides which, and the engine's choice —
-// by the node's broker kind, at the heartbeat of the lease in force — is held
-// by a test of its own that reads it here.
+// once: [linkWindow] where [Config.AcrossLink] said the connection crosses a
+// link to the stream, [memberWindow] where it did not. Whoever opens the
+// bucket decides which, and the engine's choice — by the node's broker kind —
+// is held by a test of its own that reads it here.
 func (b *Backend) Window() int { return b.window.size }
 
 // Open binds to the bucket, creating it first if it is not there.
@@ -388,11 +378,6 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 		return nil, fmt.Errorf("natsobj: the %s bucket needs a byte reservation, and "+
 			"this node was given %d: a bucket with no ceiling grows into the broker "+
 			"remainder the fleet's coordination records live in", Bucket, cfg.MaxBytes)
-	}
-	if cfg.AcrossLink && cfg.LeaseHeartbeat <= 0 {
-		return nil, fmt.Errorf("natsobj: a bucket reached across a link needs the "+
-			"node's lease heartbeat (Config.LeaseHeartbeat), which sizes the window "+
-			"its uploads share; got %v", cfg.LeaseHeartbeat)
 	}
 	replicas := max(cfg.Replicas, 1)
 	// ONE BREADCRUMB OVER THE WHOLE OF IT, because either half can be the
@@ -468,7 +453,7 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 	// before it is asked again, where the read term asks it at two.
 	size, pieces := memberWindow, leader
 	if cfg.AcrossLink {
-		size, pieces = linkWindow(cfg.LeaseHeartbeat), leader.Carrying(MessageBytes, objstore.MiBPace)
+		size, pieces = linkWindow, leader.Carrying(MessageBytes, objstore.MiBPace)
 	}
 	return &Backend{js: js, stream: stream, leader: leader, pieces: pieces,
 		stall: objstore.Stall, beginPace: listBeginPace, window: newWindow(size)}, nil

@@ -2892,30 +2892,6 @@ func (c *Coordination) LeaseTTL() time.Duration {
 	return time.Duration(c.LeaseTTLSeconds * float64(time.Second))
 }
 
-// LinkLeaseFloor is the shortest seat lease TTL whose heartbeat covers one
-// message of an upload to the broker's object store crossing a LINK at the
-// floor every leg is promised — 11.25 seconds: three heartbeats
-// (seat.HeartbeatRatio) of one 128 KiB message (natsobj.MessageBytes) at
-// thirty seconds a mebibyte (objstore.MiBPace).
-//
-// What it bounds: a node whose uploads cross a link holds at least one
-// message out on the connection its lease renewals ride, so a renewal can
-// queue behind it. At this TTL or over, the renewal still lands with a whole
-// heartbeat of its lease to spare; under it, with less, and under half of it a
-// renewal behind one message at the floor lands after its lease and the node
-// loses its seats to its own upload (natsobj's linkWindow says why the window
-// cannot go below one message).
-//
-// NOTHING WARNS OF IT, because nothing can be set under it: [MinLeaseTTL]
-// refuses every lease under 15 seconds, which is over this floor, so the
-// refusal that keeps a node from ending itself under load keeps it from
-// losing its seats to its own upload too. A test holds the one over the
-// other, so a lower lease floor cannot reopen the gap without a rule for it.
-//
-// A FIGURE HERE, not derived, because config imports none of the three
-// packages whose constants make it; a test in natsobj holds it to them.
-const LinkLeaseFloor = 11250 * time.Millisecond
-
 // ---- secrets --------------------------------------------------------- //
 
 // secretKeyIDPattern keeps a key id colon-free so the envelope

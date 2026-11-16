@@ -642,21 +642,15 @@ func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js nat
 			jsprovision.Clustered(clusteredStream(b)).SequenceBudget())
 		defer cancel()
 		// ACROSS A LINK on every node whose connection is not to its own
-		// member — a leaf's, an external cluster's client — where the
-		// puts' window is sized by the lease renewals queued behind it,
-		// at the heartbeat the node's seat host renews them on: the TTL
-		// IN FORCE — the lease bucket's, which a fleet's first node set
-		// and which `coordination.lease_ttl_seconds` set here may not be
-		// ([effectiveLeaseTTL]) — over seat.HeartbeatRatio, as the host
-		// derives it. Sized against the shipped heartbeat instead, a
-		// 15-second lease (renewed every five) waited 20 s behind the
-		// window at the floor and lapsed.
+		// member — a leaf's, an external cluster's client — where every
+		// request sent after a put waits behind the window it has out, so
+		// the window is the one a request's term allows at the floor
+		// (natsobj's linkWindow), whatever lease the node holds.
 		reservation, explicit := objectsReservation(ctx, b, out.Queue, volumeFree)
 		backend, err := natsobj.Open(openCtx, js, natsobj.Config{
 			Replicas: b.Stream.Replicas, Clustered: clusteredStream(b),
 			MaxBytes: reservation, Explicit: explicit,
-			AcrossLink:     acrossLink(b),
-			LeaseHeartbeat: effectiveLeaseTTL(b, out.Coord) / seat.HeartbeatRatio,
+			AcrossLink: acrossLink(b),
 		})
 		if err != nil {
 			return fmt.Errorf("engine: the object store (store.objects.backend: nats): %w", err)

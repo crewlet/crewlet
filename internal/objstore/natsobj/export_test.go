@@ -36,19 +36,16 @@ func OpenAt(ctx context.Context, js jetstream.JetStream, cfg Config, timing jspr
 	return open(ctx, js, cfg, timing)
 }
 
-// MemberWindow, MessageCrossing and PurgeWait are [memberWindow],
-// [messageCrossing] and [purgeWait], for the cases that count what a
-// connection's puts hold out, hold the link's window to the lease, and time
-// what a clean-up may add.
+// LinkWindow, MemberWindow, MessageCrossing and PurgeWait are [linkWindow],
+// [memberWindow], [messageCrossing] and [purgeWait], for the cases that count
+// what a connection's puts hold out, hold the link's window to a request's
+// term, and time what a clean-up may add.
 const (
+	LinkWindow      = linkWindow
 	MemberWindow    = memberWindow
 	MessageCrossing = messageCrossing
 	PurgeWait       = purgeWait
 )
-
-// LinkWindow is [linkWindow]: the window a connection across a link is given
-// for a node renewing its leases every heartbeat.
-func LinkWindow(heartbeat time.Duration) int { return linkWindow(heartbeat) }
 
 // SetWindow gives b's puts a window of n messages in place of the one Open
 // chose, so a case can make its puts wait their turn for a place.

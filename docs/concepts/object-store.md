@@ -123,26 +123,23 @@ logs survive, on the same members:
   them; an upload holds one message's worth of memory at a time.
 - **A node's uploads share one window of messages out.** Every upload a
   node makes — a person's file, a push's bundle, a seat's file — rides the
-  connection its leases and events ride, so the messages they have sent and
-  the broker has not yet acknowledged are counted for the connection, not
-  for each upload. Across a leaf's link, or to an external cluster, the
-  window **follows the node's lease**: it is as many messages as a link at
-  the floor of thirty seconds a mebibyte carries in one heartbeat of the
-  lease the node holds (the lease TTL in force over three), so a lease
-  renewal queued behind the node's uploads still lands within one heartbeat
-  and the node does not lose its seats to its own uploads. At the default
-  45-second lease that is four messages — half a mebibyte, fifteen seconds
-  at the floor; a lease under 22.5 seconds gets one, and one of three
-  minutes or more the sixteen a data node gets. A shorter lease costs
-  throughput on a fast link: through a leaf on loopback, a window of one
+  connection its events ride, so the messages they have sent and the broker
+  has not yet acknowledged are counted for the connection, not for each
+  upload. Across a leaf's link, or to an external cluster, every request the
+  node sends after them on that link waits behind them: a read or a small
+  write of its own, and a lease renewal wherever the renewals share the link
+  or wait at a bottleneck on it that queues first in first out. Each of those
+  is held to a five-second term, so the window is **one 128 KiB message**,
+  which crosses the floor of thirty seconds a mebibyte in 3.75 seconds: a
+  request sent behind a full window still has the second its own round trip
+  needs, at every lease TTL. The window does not follow the lease: sized by
+  the lease's heartbeat, as it once was, the default 45-second lease's window
+  of four messages held such a request fifteen seconds at the floor. A window
+  of one costs throughput on a fast link: through a leaf on loopback it
   carried a lone 16 MiB upload at 47–83 MB/s and eight at once at 56–78
-  together, against 120–139 and 130–135 with four — about half — and on a
-  link with a longer round trip the share lost is larger. A lease under **11.25 seconds** has a
-  heartbeat shorter than even one 128 KiB message takes at the floor, so a
-  renewal behind it lands with less than a heartbeat to spare — and under
-  5.6 seconds, after the lease. No node can hold such a lease:
-  `coordination.lease_ttl_seconds` is refused under 15 seconds, which is
-  over it. On a data node's own client, where
+  together, against 120–139 and 130–135 with four — about half — and across
+  a longer round trip the share lost is larger, since it moves 128 KiB a
+  round trip (1.31 MB/s across 100 ms). On a data node's own client, where
   no link lies between the upload and the stream, the window is sixteen.
   An upload waits its turn for a place behind the others, first come
   first served.
@@ -151,9 +148,9 @@ logs survive, on the same members:
   messages are out — or, waiting for a place, nothing of the node's at all;
   a put waiting on the person's own slow upload is not waiting on the
   broker. No message waits behind more than the window, so across a link at
-  the floor each is acknowledged within a heartbeat of the node's lease —
-  fifteen seconds at the default — a leaf's compressed link, which delivers
-  what it flushed as one block, included.
+  the floor each is acknowledged within four seconds of being sent — a
+  leaf's compressed link, which delivers what it flushed as one block,
+  included.
   An upload crossing a slow link is never failed for being slow — the floor
   of thirty seconds a mebibyte included — where the client library's own put
   failed any message the broker had not acknowledged five seconds after it

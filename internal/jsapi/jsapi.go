@@ -58,6 +58,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/jsprovision"
 )
 
 // Domain is the JetStream domain every broker of the engine's own embedded
@@ -153,6 +155,28 @@ func (a API) String() string {
 // every time it is sent, up to [WriteSends] sends ([WriteBound], [Budget]); a
 // request on a member's own connection crosses nothing.
 const RequestTerm = 5 * time.Second
+
+// WindowCrossing is the longest the bytes a connection sends ahead of a request
+// may take to cross a link and still leave the request answered inside its
+// [RequestTerm]: the term less one [jsprovision.ReadTerm], the request's own
+// round trip — four seconds. It is what a WINDOW across a link is sized by: the
+// object store's puts (internal/objstore/natsobj) hold no more out than the
+// slowest link the engine allows (objstore.MiBPace) carries in it.
+//
+// # The request's term, never the lease's heartbeat
+//
+// What waits behind a window is any request sent after it on the link: a read
+// or a small write on the same connection, and a lease renewal on a connection
+// beside it wherever the two share the link, or a bottleneck on it that queues
+// first in first out. Every one of them is held to this term, whatever lease
+// the node holds, and one not answered inside it is unknown — a renewal's seat
+// deferring until the next lands, a read asked again with its reply crossing
+// again. Sized by a lease's heartbeat instead, as the put window once was, the
+// window at the shipped lease held such a request fifteen seconds at the floor,
+// past its term three times over. One read term is the least the request's own
+// round trip is given anywhere: a read unanswered that long is presumed lost
+// and asked again ([jsprovision.ReadTerm]).
+const WindowCrossing = RequestTerm - jsprovision.ReadTerm
 
 // Client is a JetStream client over nc that speaks this API, its every
 // request held to [RequestTerm] where its caller set no deadline.
