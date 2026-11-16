@@ -145,7 +145,8 @@ test("the identity domain is changed in place as a patch of its one key", async 
   await show(undefined, {
     settings: [{ ...SETTINGS.settings[0]!, value: "old.example", set: true }],
   });
-  expect(screen.getByText("Changed from seats.invalid")).toBeTruthy();
+  expect(screen.getByRole("row", { name: /Identity domain/ }).textContent).toContain("Changed");
+  expect(screen.queryByText(/Changed from seats\.invalid/)).toBeNull();
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Change Identity domain" }));
   });
@@ -264,5 +265,8 @@ test("a reader without the grant sees the pencils disabled with the reason", asy
   expect(
     pencil.getAttribute("aria-disabled") ?? String((pencil as HTMLButtonElement).disabled),
   ).toBe("true");
-  expect(pencil.getAttribute("title")).toBe(CONFIG_WRITE_REASONS.no_grant);
+  const described = (pencil.getAttribute("aria-describedby") ?? "")
+    .split(" ")
+    .map((id) => document.getElementById(id)?.textContent);
+  expect(described).toContain(CONFIG_WRITE_REASONS.no_grant);
 });

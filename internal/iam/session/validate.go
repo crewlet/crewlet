@@ -268,6 +268,10 @@ type Validation struct {
 	// Bearer is the parsed cookie, zero on [RowMalformed].
 	Bearer Bearer
 
+	// Ends is when the session ends under the limits in force
+	// ([Bearer.EndsUnder]), zero on [RowMalformed].
+	Ends Ends
+
 	// Reissue is a fresh cookie value to set, or empty. It is produced on
 	// a served row only, and only once the idle deadline has drifted past
 	// [ReissueAfter], since a Set-Cookie on every response is a header
@@ -293,6 +297,30 @@ type Validation struct {
 
 	// Err is the read failure behind [RowStalled], when there was one.
 	Err error
+}
+
+// Ends is when a session ends: its absolute deadline, and the idle one its
+// next request must come before.
+type Ends struct {
+	Absolute time.Time
+	Idle     time.Time
+}
+
+// EndsUnder is when b ends under l: the deadlines it was signed with, or its
+// sign-in and issue instants plus l where those come first, so a lowered limit
+// applies at once and a raised one never stretches a session signed before it.
+func (b Bearer) EndsUnder(l Limits) Ends {
+	return Ends{
+		Absolute: earliest(b.AbsoluteExpiresAt, b.SignedInAt.Add(l.Lifetime)),
+		Idle:     earliest(b.IdleExpiresAt, b.IssuedAt.Add(l.Idle)),
+	}
+}
+
+func earliest(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
 }
 
 // EnrolmentOnly reports whether the session this bearer names may do nothing
@@ -362,7 +390,7 @@ func (s *Signer) Validate(ctx context.Context, directory Directory,
 //
 // THE IDLE DEADLINE IS SET ASIDE. A re-issue on a REST response is what moves
 // it, and a connection holds the bearer its handshake presented, so its idle
-// deadline is the handshake's plus [Idle] however busy the tab has been since.
+// deadline is the handshake's plus the idle limit however busy the tab has been since.
 // An open live view is activity: the session is decided on its ROWS — a record
 // ending it, its person's epoch or stage, the company's generation — and on its
 // ABSOLUTE deadline, which no re-issue moves and which still ends it here.
@@ -382,18 +410,19 @@ func (s *Signer) validate(ctx context.Context, directory Directory,
 	if err != nil {
 		return Validation{Row: RowMalformed, Detail: err.Error()}
 	}
-	now := s.now()
+	now, limits := s.now(), s.limits()
+	ends := b.EndsUnder(limits)
 
 	// THE DEADLINES FIRST, because they need nothing and because the
 	// ABSOLUTE one beats everything: a re-issue moves the idle deadline
 	// and never this, so a session that has reached it is over however
 	// recently it was used.
 	switch {
-	case !now.Before(b.AbsoluteExpiresAt):
-		return Validation{Row: RowEnded, Bearer: b,
+	case !now.Before(ends.Absolute):
+		return Validation{Row: RowEnded, Bearer: b, Ends: ends,
 			Detail: "the absolute deadline has passed"}
-	case !open && !now.Before(b.IdleExpiresAt):
-		return Validation{Row: RowEnded, Bearer: b,
+	case !open && !now.Before(ends.Idle):
+		return Validation{Row: RowEnded, Bearer: b, Ends: ends,
 			Detail: "the idle deadline has passed"}
 	}
 
@@ -401,6 +430,7 @@ func (s *Signer) validate(ctx context.Context, directory Directory,
 	// an unauthenticated caller cannot price a request by sending rubbish.
 	identity, err := directory.Resolve(ctx, b.Lineage.String(), b.Person)
 	v := standing(b, identity, err)
+	v.Ends = ends
 	switch {
 	case v.Row != RowValid && v.Row != RowBehind:
 		return v
@@ -412,7 +442,7 @@ func (s *Signer) validate(ctx context.Context, directory Directory,
 	// proof, so both must move the idle deadline: an arm that served
 	// without re-issuing would let a session in continuous use on a
 	// lagging node expire on the deadline it was minted with.
-	return s.served(v.Row, b, identity, now, v.Detail)
+	return s.served(v, identity, now, limits)
 }
 
 // standing is the row one read of the estate puts a bearer on — the half of
@@ -527,22 +557,24 @@ func StandingByName(lineage uuid.UUID, person string, identity Identity, err err
 }
 
 // served finishes a row that is allowed to serve, re-issuing the cookie once
-// its idle deadline has drifted past [ReissueAfter].
+// it is staler than [reissueAfter] its idle window.
 //
 // THE RE-ISSUE IS FREE — the deadline is in the signature, so nothing is
 // written — and the only cost being managed is a Set-Cookie header, which is
-// why the throttle exists at all.
-func (s *Signer) served(row Row, b Bearer, identity Identity,
-	now time.Time, detail string) Validation {
+// why the throttle exists at all. Its idle window is the shorter of the one it
+// was issued with and the limit in force, so a raised limit stretches no
+// session signed in before it.
+func (s *Signer) served(v Validation, identity Identity, now time.Time,
+	limits Limits) Validation {
 
-	out := Validation{Row: row, Bearer: b, Person: identity.Person,
-		Session: identity.Session, Detail: detail}
-	issuedAt := b.IdleExpiresAt.Add(-Idle)
-	stale := now.Sub(issuedAt) >= ReissueAfter
-	if !stale {
+	b := v.Bearer
+	out := Validation{Row: v.Row, Bearer: b, Ends: v.Ends, Person: identity.Person,
+		Session: identity.Session, Detail: v.Detail}
+	window := min(b.IdleExpiresAt.Sub(b.IssuedAt), limits.Idle)
+	if now.Sub(b.IssuedAt) < reissueAfter(window) {
 		return out
 	}
-	fresh, err := s.issue(b, now)
+	fresh, err := s.issue(b, now, window)
 	if err != nil {
 		// A RE-ISSUE THAT CANNOT BE SIGNED DOES NOT REFUSE THE REQUEST.
 		// The bearer in hand has already verified and has not expired,

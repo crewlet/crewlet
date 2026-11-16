@@ -378,12 +378,15 @@ func (m *MCPServer) validate(path Path) error {
 	// (mcp.DefaultStartupTimeout, mcp.DefaultRequestTimeout), applied where
 	// a zero reaches it, and this package sits below that one; a copy kept
 	// here to quote had already drifted to half the real startup default.
+	// Each carries a person's words too: the server wizard shows them.
 	if m.StartupTimeoutSeconds < 0 {
-		p.add(at(path, "startup_timeout_seconds"), ErrOutOfRange,
+		p.addSaying(at(path, "startup_timeout_seconds"), ErrOutOfRange,
+			"The start timeout can't be negative. Give a number of seconds, or leave it empty for the default.",
 			"must be 0 (the default) or positive, got %v", m.StartupTimeoutSeconds)
 	}
 	if m.RequestTimeoutSeconds < 0 {
-		p.add(at(path, "request_timeout_seconds"), ErrOutOfRange,
+		p.addSaying(at(path, "request_timeout_seconds"), ErrOutOfRange,
+			"The call timeout can't be negative. Give a number of seconds, or leave it empty for the default.",
 			"must be 0 (the default) or positive, got %v", m.RequestTimeoutSeconds)
 	}
 	return p.err()

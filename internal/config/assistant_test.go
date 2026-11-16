@@ -322,3 +322,82 @@ func TestACandidateAssistantModelIsJudgedAsAChainMember(t *testing.T) {
 		t.Errorf("an absent entry answered %v", err)
 	}
 }
+
+// A stronger chain is held to the quick chain's rules, at admission and where
+// it is handed out; with none set, or the assistant off, the error says which.
+func TestAStrongerChainIsHeldToTheAssistantsRules(t *testing.T) {
+	t.Parallel()
+	strong := "    strong:\n      harness: claude-code\n      model: opus\n" +
+		"      overrides: {web_tools: denied}\n"
+	open := "    open:\n      harness: claude-code\n      model: opus\n"
+
+	cfg := mustCompany(t, assistantCompany(assistantEntry+strong,
+		"  enabled: true\n  llm: [assistant]\n  deliberate:\n    llm: [strong, assistant]\n"+
+			"    decision_briefs: true\n"))
+	chain, err := cfg.DeliberateChain()
+	if err != nil {
+		t.Fatalf("DeliberateChain: %v", err)
+	}
+	if !slices.Equal(chain, ProviderKeys{"strong", "assistant"}) || !cfg.Assistant.Deliberate.DecisionBriefs {
+		t.Errorf("chain = %v, decision briefs %v", chain, cfg.Assistant.Deliberate.DecisionBriefs)
+	}
+
+	for name, tc := range map[string]struct{ entries, block, want string }{
+		"web allowed": {assistantEntry + open, "  deliberate:\n    llm: [open]\n",
+			"providers.llm.open.overrides: {web_tools: denied}"},
+		"not configured": {assistantEntry, "  deliberate:\n    llm: [missing]\n",
+			`"missing" is not a configured provider`},
+		"empty": {assistantEntry, "  deliberate:\n    llm: []\n", "names no model"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			doc := assistantCompany(tc.entries, "  enabled: true\n  llm: [assistant]\n"+tc.block)
+			err := rejects(t, doc, "assistant.deliberate.llm")
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("the refusal does not name %q:\n%v", tc.want, err)
+			}
+			stored, decodeErr := ParseCompanyDocument([]byte(doc))
+			if decodeErr != nil {
+				t.Fatal(decodeErr)
+			}
+			if _, chainErr := stored.DeliberateChain(); chainErr == nil ||
+				!strings.Contains(chainErr.Error(), tc.want) {
+				t.Errorf("DeliberateChain handed out a chain admission refuses: %v", chainErr)
+			}
+		})
+	}
+
+	none := mustCompany(t, assistantCompany(assistantEntry, "  enabled: true\n  llm: [assistant]\n"))
+	if _, err := none.DeliberateChain(); !errors.Is(err, ErrNoDeliberate) {
+		t.Errorf("no block: err = %v, want ErrNoDeliberate", err)
+	}
+	off := mustCompany(t, assistantCompany(assistantEntry+strong,
+		"  enabled: false\n  llm: [assistant]\n  deliberate:\n    llm: [strong]\n"))
+	if _, err := off.DeliberateChain(); !errors.Is(err, ErrAssistantOff) {
+		t.Errorf("assistant off: err = %v, want ErrAssistantOff", err)
+	}
+}
+
+// tools.deny takes each known family once; an unknown or repeated one is
+// refused at its own index.
+func TestToolsDenyTakesEachKnownFamilyOnce(t *testing.T) {
+	t.Parallel()
+	cfg := mustCompany(t, assistantCompany(assistantEntry,
+		"  enabled: true\n  llm: [assistant]\n  tools:\n    deny: [writes, deep_work]\n"))
+	if !cfg.Assistant.Tools.Denies(FamilyWrites) || cfg.Assistant.Tools.Denies(FamilyChatWrites) {
+		t.Errorf("deny = %v", cfg.Assistant.Tools.Deny)
+	}
+	for name, tc := range map[string]struct{ deny, at, want string }{
+		"unknown":  {"[writes, everything]", "assistant.tools.deny[1]", `"everything"`},
+		"repeated": {"[chat_writes, chat_writes]", "assistant.tools.deny[1]", "listed twice"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := rejects(t, assistantCompany(assistantEntry,
+				"  enabled: true\n  llm: [assistant]\n  tools:\n    deny: "+tc.deny+"\n"), tc.at)
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("the refusal does not name %q:\n%v", tc.want, err)
+			}
+		})
+	}
+}

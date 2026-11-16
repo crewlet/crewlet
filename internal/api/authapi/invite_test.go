@@ -471,7 +471,7 @@ func TestARedemptionInABrowserSignedInAsSomebodyElseEndsThatSession(t *testing.T
 	lineage := lineageAt(t, clock)
 	held, err := fixtureSigner(t).Mint(session.Mint{
 		Lineage: lineage, Person: dave, StartPosition: 1,
-		AbsoluteExpiresAt: clock.Add(time.Hour),
+		SignedInAt: clock, AbsoluteExpiresAt: clock.Add(time.Hour),
 	})
 	if err != nil {
 		t.Fatalf("mint: %v", err)

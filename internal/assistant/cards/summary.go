@@ -3,6 +3,7 @@ package cards
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
@@ -53,6 +54,8 @@ type tableDigest struct {
 	// Access is the sentence every list carries: what the person may not
 	// see is left out, so the model never reads an absence as proof.
 	Access string `json:"access"`
+	// Outside is the card's step outside Crewlet, without its address.
+	Outside string `json:"outside,omitempty"`
 }
 
 // MoreNote is what a table summary tells the model of a page with rows past
@@ -68,7 +71,7 @@ const AccessNote = "Rows the person may not see are left out, so a row missing h
 
 func tableSummary(t *wire.TableCard, more bool, zone *time.Location, budget int) ([]byte, error) {
 	d := tableDigest{Title: t.Title, RowCount: t.RowCount, Rows: onClock(t, zone),
-		Access: AccessNote, More: more}
+		Access: AccessNote, More: more, Outside: outsideSaid(t.Outside)}
 	for _, c := range t.Columns {
 		d.Columns = append(d.Columns, c.Label)
 	}
@@ -100,6 +103,7 @@ type entityDigest struct {
 	ItemsTotal   int               `json:"items_total,omitempty"`
 	MoreExist    bool              `json:"more_exist,omitempty"`
 	ItemsPartial string            `json:"note,omitempty"`
+	Outside      string            `json:"outside,omitempty"`
 }
 
 type itemDigest struct {
@@ -111,7 +115,7 @@ type itemDigest struct {
 
 func entitySummary(e *wire.EntityCard, zone *time.Location, budget int) ([]byte, error) {
 	d := entityDigest{Kind: e.Kind, ID: e.ID, Key: e.Key, Title: e.Title,
-		Subtitle: e.Subtitle, Text: e.Text}
+		Subtitle: e.Subtitle, Text: e.Text, Outside: outsideSaid(e.Outside)}
 	if len(e.Facts) > 0 {
 		d.Facts = map[string]string{}
 		for _, f := range e.Facts {
@@ -267,4 +271,17 @@ func EmptySummary(read string, asked map[string]any, note string, budget int) ([
 			"a model is handed", len(out), budget)
 	}
 	return out, nil
+}
+
+// outsideSaid is a card's step outside Crewlet as the model reads it: the
+// step and its host, never the address, which no model is handed.
+func outsideSaid(o *wire.Outside) string {
+	if o == nil {
+		return ""
+	}
+	host := ""
+	if u, err := url.Parse(o.URL); err == nil {
+		host = u.Host
+	}
+	return o.Label + " (at " + host + ": the person opens it from the card)"
 }

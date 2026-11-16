@@ -183,7 +183,8 @@ describe("Members", () => {
       ),
     });
     const toggle = await screen.findByRole("switch", { name: "Ops Agent gets every message" });
-    expect(screen.getByText(/Answers when named/)).toBeTruthy();
+    // The follow rule leads the line, so a narrow row cuts the team instead.
+    expect(screen.getByText(/^Answers when named · /)).toBeTruthy();
     // A PERSON IS NEVER WOKEN by a message, so a person's row has no switch.
     expect(screen.getAllByRole("switch")).toHaveLength(1);
     // HELD UNTIL THE ROOM'S OWN ANSWER SAYS IT TAKES THE CHANGE.

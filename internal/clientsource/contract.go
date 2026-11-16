@@ -549,6 +549,7 @@ var contract = []Entry{
 	// signin.ts
 	{"SignInPolicyAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends"},
 	{"SignInPolicy", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends"},
+	{"SignInLimits", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends"},
 	{"SecondFactorRule", ReadUnion, "internal/api.TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends"},
 
 	// health.ts
@@ -592,6 +593,7 @@ var contract = []Entry{
 	{"AssistantProposalState", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
 	{"AssistantProposalScope", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
 	{"AssistantProposalRisk", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
+	{"AssistantTaintSource", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
 	{"AssistantChangeKind", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
 	{"AssistantWordOp", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
 	{"AssistantColumnType", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
@@ -657,6 +659,7 @@ var contract = []Entry{
 	{"AssistantColumn", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantExports", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantLink", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
+	{"AssistantOutside", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantEntityCard", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantFact", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantEntityItem", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
@@ -1015,6 +1018,11 @@ var contract = []Entry{
 		"internal/api/queries.TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends"},
 	{"DelegatedGiver", ReadUnion, "internal/api/queries.TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends"},
 	{"DelegatedPath", ReadUnion, "internal/api/queries.TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends"},
+	{"DelegatedRepositoriesAnswer", ReadInterface,
+		"internal/api/queries.TestTheRuleFormReadsWhatItsGitHubAnswersSend"},
+	{"DelegatedRepository", ReadInterface, "internal/api/queries.TestTheRuleFormReadsWhatItsGitHubAnswersSend"},
+	{"DelegatedBranchesAnswer", ReadInterface, "internal/api/queries.TestTheRuleFormReadsWhatItsGitHubAnswersSend"},
+	{"DelegatedChecksAnswer", ReadInterface, "internal/api/queries.TestTheRuleFormReadsWhatItsGitHubAnswersSend"},
 	{"HeldDelegation", ReadInterface, "internal/api/queries.TestAHeldCallsCardReadsWhatItsDelegationSends"},
 	{"HeldDelegateAnswer", ReadInterface, "internal/api/queries.TestAHeldCallsCardReadsWhatItsDelegationSends"},
 	{"HeldEscalation", ReadInterface, "internal/api/queries.TestAHeldCallsCardReadsWhatItsDelegationSends"},

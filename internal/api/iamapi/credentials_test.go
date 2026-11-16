@@ -545,7 +545,7 @@ func TestAPersonMintsTheirOwnTokenFromTheirSession(t *testing.T) {
 	lineage := uuid.Must(uuid.NewV7())
 	cookie, err := signer.Mint(session.Mint{Lineage: lineage,
 		Person: bob.String(), Epoch: 1, StartPosition: 5,
-		AbsoluteExpiresAt: at.Add(8 * time.Hour)})
+		SignedInAt: at, AbsoluteExpiresAt: at.Add(8 * time.Hour)})
 	if err != nil {
 		t.Fatal(err)
 	}

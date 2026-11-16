@@ -96,12 +96,14 @@ api:
                     # its host is the origin every write is checked against.
                     # Behind a proxy, the public address.
   auth:
-    totp: optional  # people sign in with a login and a password; unset, a
+    limits:         # people sign in with a login and a password; unset, a
+      second_factor: optional
                     #   second factor (an authenticator app) is REQUIRED too.
-                    #   `optional` is fine here because the browser reaches
-                    #   this on loopback; leave the line out anywhere else.
-                    #   Nobody holds a password yet: the token below invites
-                    #   the first person onto their seat (step 4).
+                    #   `optional` lets the company drop it, which is fine
+                    #   here because the browser reaches this on loopback;
+                    #   leave the line out anywhere else. Nobody holds a
+                    #   password yet: the token below invites the first
+                    #   person onto their seat (step 4).
     admin: serve    # whether THIS node grants admin to those who hold it:
                     #   `serve`, or `refuse` to clamp admin away here and keep
                     #   every app. Required once a port is set.
@@ -138,6 +140,13 @@ mission: "Ship AI-powered products fast"
 policies:
   - "All features need PM sign-off before development starts"
   - "Communicate decisions in writing"
+
+sign_in:
+  require_second_factor: false          # a password alone, which crewlet.yaml's
+                                        #   limits allow on loopback. Leave it out
+                                        #   anywhere else: a second factor is then
+                                        #   required. Settings › Sign-in policy
+                                        #   changes this and the session limits
 
 providers:
   llm:
@@ -540,7 +549,7 @@ sent it when a person did; this one was issued under the founder token, a
 machine nobody holding the link would recognise, so it names no sender — and
 asks for a login — it proposes one from your address, dotted like
 `jane.doe`, how you sign in beside your address — your name, and a
-password of at least twelve characters (`api.auth.min_password_length` raises
+password of at least twelve characters (`sign_in.min_password_length` raises
 that). Redeeming it puts you on the `founder` seat and signs you in: from your
 first sign-in you act as that seat. The secret after the `.` never leaves the
 page in a URL: the link carries it in the fragment, which no browser sends to a
@@ -556,8 +565,9 @@ uses only the apps of the person it works
 for](../concepts/identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for)).
 The same holds for every human seat you add later.
 
-This walkthrough's `crewlet.yaml` says `totp: optional`, so a password alone
-signs you in here. **Leave that line out on a deployment reached off
+This walkthrough's `crewlet.yaml` says `limits: {second_factor: optional}`
+and its company says `sign_in: {require_second_factor: false}`, so a password
+alone signs you in here. **Leave both lines out on a deployment reached off
 loopback** — unset, a second factor is required, and the session a redemption
 or a password sign-in opens for somebody holding none may only enrol one: the
 dashboard shows a QR code to scan with an authenticator app on your phone

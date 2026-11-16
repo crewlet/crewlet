@@ -13,6 +13,7 @@
  */
 
 import type { SetupSSHServer } from "~/contract/setup.ts";
+import { fieldHeld, formHeld, type FormHold } from "~/lib/formHold.ts";
 
 /** The server fields a person types, as text. */
 export interface ServerForm {
@@ -71,38 +72,44 @@ export function keyLines(keys: string): string[] {
  * shape that no other server holds (a PUT to a registered id replaces that
  * server), an address with no scheme, user or port, a port in range, a read
  * user, a key line at least, a description of one line within its bound, and
- * a scan's fingerprints compared where the keys came from one.
+ * a scan's fingerprints compared where the keys came from one. A typed value
+ * in the wrong shape is its field's to say.
  */
 export function serverFormHeld(
   form: ServerForm,
   taken: readonly string[],
   editing: boolean,
   scanUnconfirmed: boolean,
-): string | undefined {
+): FormHold<"id" | "address" | "port" | "description"> | undefined {
   const id = form.id.trim();
   if (!editing) {
-    if (!new RegExp(`^[a-z0-9-]{1,${MAX_ID}}$`).test(id)) {
-      return `Name the server: up to ${MAX_ID} lowercase letters, digits and hyphens.`;
-    }
-    if (taken.includes(id)) return `A server named ${id} is registered already.`;
+    const named = `Name the server: up to ${MAX_ID} lowercase letters, digits and hyphens.`;
+    if (id === "") return formHeld(named);
+    if (!new RegExp(`^[a-z0-9-]{1,${MAX_ID}}$`).test(id)) return fieldHeld("id", named);
+    if (taken.includes(id)) return fieldHeld("id", `A server named ${id} is registered already.`);
   }
   const address = form.address.trim();
-  if (address === "" || /[\s/@]|:\/\//.test(address)) {
-    return "Give the server's host name or IP address, with no scheme, user, port or path.";
-  }
+  const where = "Give the server's host name or IP address, with no scheme, user, port or path.";
+  if (address === "") return formHeld(where);
+  if (/[\s/@]|:\/\//.test(address)) return fieldHeld("address", where);
   const port = form.port.trim();
   if (port !== "") {
     const n = Number(port);
-    if (!Number.isInteger(n) || n < 1 || n > 65535) return "The port is a number from 1 to 65535.";
+    if (!Number.isInteger(n) || n < 1 || n > 65535) {
+      return fieldHeld("port", "The port is a number from 1 to 65535.");
+    }
   }
-  if (form.read.trim() === "") return "Name the read user the server setup creates.";
+  if (form.read.trim() === "") return formHeld("Name the read user the server setup creates.");
   if (keyLines(form.keys).length === 0) {
-    return "Pin its host keys: read them from the server, or paste their lines.";
+    return formHeld("Pin its host keys: read them from the server, or paste their lines.");
   }
   if (form.description.includes("\n") || form.description.trim().length > MAX_DESCRIPTION) {
-    return `The description is one line of up to ${MAX_DESCRIPTION} characters.`;
+    return fieldHeld(
+      "description",
+      `The description is one line of up to ${MAX_DESCRIPTION} characters.`,
+    );
   }
-  if (scanUnconfirmed) return "Compare each fingerprint with the server's console first.";
+  if (scanUnconfirmed) return formHeld("Compare each fingerprint with the server's console first.");
   return undefined;
 }
 

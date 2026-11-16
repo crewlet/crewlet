@@ -55,7 +55,7 @@
 //
 // # A required second factor is enrolled before anything else
 //
-// `api.auth.totp: required` says nobody acts on a password alone, and a
+// A required second factor says nobody acts on a password alone, and a
 // person who holds no second factor has nothing else to present. So a sign-in
 // this surface verified that proved a password and no second factor opens a
 // session marked ENROLMENT-ONLY on its own start record, and answers
@@ -500,11 +500,15 @@ type Audit interface {
 
 // Options is what the surface is built from.
 type Options struct {
-	// Bootstrap is Tier A. REQUIRED: the cookie's name and Secure flag,
-	// the session deadlines, the password rules and the admin posture all come
-	// from it, and a surface that guessed any of them would mint cookies
-	// the next node rejects.
+	// Bootstrap is Tier A. REQUIRED: the cookie's name and Secure flag and
+	// the admin posture come from it, and a surface that guessed either
+	// would mint cookies the next node rejects.
 	Bootstrap *config.Bootstrap
+
+	// SignIn is the company's sign-in policy as this node holds it, read on
+	// every sign-in: the second factor, the password floor, the lifetime and
+	// the step-up window (ADR-0152). REQUIRED.
+	SignIn func() config.SignInPolicy
 
 	// Directory and Writer are the identity estate's two halves.
 	// REQUIRED.
@@ -594,6 +598,7 @@ type Options struct {
 // Service serves the sign-in surface.
 type Service struct {
 	boot      *config.Bootstrap
+	policy    func() config.SignInPolicy
 	directory Directory
 	writer    Writer
 	behalf    func(person iam.Principal) Writer
@@ -637,6 +642,7 @@ func New(opts Options) (*Service, error) {
 		absent bool
 	}{
 		{"Bootstrap", opts.Bootstrap == nil},
+		{"SignIn", opts.SignIn == nil},
 		{"Directory", opts.Directory == nil},
 		{"Writer", opts.Writer == nil},
 		{"Behalf", opts.Behalf == nil},
@@ -659,7 +665,7 @@ func New(opts Options) (*Service, error) {
 			"wiring mistake rather than a posture", joinNames(missing))
 	}
 	s := &Service{
-		boot: opts.Bootstrap, directory: opts.Directory, writer: opts.Writer,
+		boot: opts.Bootstrap, policy: opts.SignIn, directory: opts.Directory, writer: opts.Writer,
 		behalf: opts.Behalf,
 		signer: opts.Signer, hasher: opts.Hasher, throttle: opts.Throttle,
 		blinder: opts.Blinder,

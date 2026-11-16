@@ -208,25 +208,8 @@
             "null"
           ]
         },
-        "min_password_length": {
-          "anyOf": [
-            {
-              "maximum": 256,
-              "minimum": 0,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            {
-              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
-              "type": "string"
-            }
-          ],
-          "description": "Minimum password length. 0 takes the engine's floor of 12."
-        },
-        "session": {
-          "$ref": "#/$defs/APISession"
+        "limits": {
+          "$ref": "#/$defs/SignInLimits"
         },
         "tokens": {
           "description": "The deployment's machine credentials. At least one is required once the API is served.",
@@ -237,23 +220,6 @@
             "array",
             "null"
           ]
-        },
-        "totp": {
-          "anyOf": [
-            {
-              "enum": [
-                "required",
-                "optional",
-                "",
-                null
-              ]
-            },
-            {
-              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}",
-              "type": "string"
-            }
-          ],
-          "description": "Whether a second factor is required of a person signing in with a password (default required). optional off loopback needs accept_insecure."
         }
       },
       "type": [
@@ -298,33 +264,6 @@
             }
           ],
           "description": "Bind port for the dedicated public listener serving only /webhooks/, /otlp/ and /mcp/; 0 keeps every route on api.port."
-        }
-      },
-      "type": [
-        "object",
-        "null"
-      ]
-    },
-    "APISession": {
-      "additionalProperties": false,
-      "properties": {
-        "absolute": {
-          "description": "Longest a session may live from sign-in (default 168h, 1h..720h).",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ]
-        },
-        "step_up": {
-          "description": "How long a proof of identity authorises a step-up gesture (default 1h, 5m..24h).",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ]
         }
       },
       "type": [
@@ -1069,6 +1008,76 @@
             "array",
             "null"
           ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "SignInLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "max_idle_timeout": {
+          "description": "Longest idle limit the company may set (default 720h, 15m..720h).",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "max_session_lifetime": {
+          "description": "Longest session lifetime the company may set (default 720h, 1h..720h).",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "max_step_up": {
+          "description": "Longest step-up window the company may set (default 24h, 5m..24h).",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "min_password_length": {
+          "anyOf": [
+            {
+              "maximum": 256,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Shortest password floor the company may set (default 12, 12..256)."
+        },
+        "second_factor": {
+          "anyOf": [
+            {
+              "enum": [
+                "required",
+                "optional",
+                "",
+                null
+              ]
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}",
+              "type": "string"
+            }
+          ],
+          "description": "Whether the company may let people sign in with a password alone (optional) or must require a second factor (required, the default). optional off loopback needs accept_insecure."
         }
       },
       "type": [

@@ -1,11 +1,13 @@
 package seataccess
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -113,6 +115,11 @@ func (r GrantRequest) Grant(permanent bool, now time.Time) Grant {
 // granted, or lapsed ([RequestTTL]).
 var ErrNoRequest = errors.New("seataccess: no such request")
 
+// GrantRefused is a chosen grant that cannot be saved as asked, with why.
+type GrantRefused struct{ Reason string }
+
+func (e *GrantRefused) Error() string { return "seataccess: " + e.Reason }
+
 // CoordRequests is the agents' grant requests on the fleet's coordination
 // store: the whole company, now, since a request asked on the node holding the
 // seat is answered on whichever node serves the person.
@@ -145,6 +152,31 @@ func (c *CoordRequests) Request(ctx context.Context, id string) (GrantRequest, e
 		return GrantRequest{}, err
 	}
 	return r, nil
+}
+
+// Open is every readable request not past [RequestTTL], oldest first; one it
+// cannot read is left for [CoordRequests.Sweep].
+func (c *CoordRequests) Open(ctx context.Context, now time.Time) ([]GrantRequest, error) {
+	all, err := c.store.GrantRequests(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("seataccess: read the requests: %w", err)
+	}
+	var out []GrantRequest
+	for id, raw := range all {
+		var r GrantRequest
+		if json.Unmarshal(raw, &r) != nil {
+			continue
+		}
+		r.ID = id
+		if r.Validate() != nil || now.Sub(r.AskedAt) >= RequestTTL {
+			continue
+		}
+		out = append(out, r)
+	}
+	slices.SortFunc(out, func(a, b GrantRequest) int {
+		return cmp.Or(a.AskedAt.Compare(b.AskedAt), cmp.Compare(a.ID, b.ID))
+	})
+	return out, nil
 }
 
 // Put stores a request, once validated.

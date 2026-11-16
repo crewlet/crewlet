@@ -102,7 +102,7 @@ test("every removal request states the entry's tag, and the removal goes through
     entries: [apiKeyEntry({ key: "sonnet" }), apiKeyEntry({ key: "default", harness: "codex" })],
     doc: modelsDoc({}),
     seats: [seat("backend-engineer", "Backend Engineer")],
-    assistant: { enabled: false, key: null },
+    assistant: { enabled: false, key: null, fallbacks: [] },
   });
   const onDone = vi.fn();
   render(
@@ -151,7 +151,7 @@ test.each([403, 413])(
       entries: [apiKeyEntry({ key: "sonnet" }), apiKeyEntry({ key: "default", harness: "codex" })],
       doc: modelsDoc({}),
       seats: [seat("backend-engineer", "Backend Engineer")],
-      assistant: { enabled: false, key: null },
+      assistant: { enabled: false, key: null, fallbacks: [] },
     });
     const onDone = vi.fn();
     render(

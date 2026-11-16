@@ -83,6 +83,7 @@ import { DraftFile } from "./DraftFile.tsx";
 import { drawValue } from "./changeValue.tsx";
 import type { ProposalLocal, TurnPhase, TurnView } from "./turn.ts";
 import { FilesCard } from "./files.tsx";
+import { cautionOf } from "./taint.ts";
 import { recordWord } from "../brief.ts";
 
 type WireStepState = AssistantStepEvent["state"];
@@ -745,6 +746,10 @@ function Proposal({
       subtitle={scopeLine(proposal.scope, state)}
       scope={proposal.scope}
       state={state}
+      // A CHANGE PREPARED AFTER OUTSIDE TEXT SAYS SO FIRST (D25), naming the
+      // surface the turn read it in; the person weighs whether that text
+      // asked for it.
+      caution={proposal.taint ? cautionOf(proposal.taint) : undefined}
       // WHAT IT DOES LEADS THE CARD, above every row, in the engine's words:
       // what a destructive change takes away (ADR-0055), never only a
       // struck-through row among the others.
@@ -755,6 +760,11 @@ function Proposal({
       // presses anything; the page checks it again when it applies the change.
       approveBlocked={screen?.blocked ?? undefined}
       approveLabel={proposal.approve_label}
+      // WHAT APPROVING INVOLVES, said before the press: the engine's own
+      // step-up flag (the identity check the approval will ask for) and the
+      // proposal's expiry, after which the engine refuses the approval.
+      stepUp={proposal.step_up === true}
+      expiresAt={proposal.expires_at}
       onApprove={() => on.approve(proposal)}
       onDecline={() => on.decline(proposal)}
       onPrepareAgain={

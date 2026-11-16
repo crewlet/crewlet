@@ -299,3 +299,56 @@ func TestADelegatedLimitIsTheDocumentsWithinItsRange(t *testing.T) {
 		}
 	}
 }
+
+// Every refusal of a rule carries a person's words, with no key or path, for
+// the form to show under its field.
+func TestARuleRefusalIsSaidInAPersonsWords(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ name, rules, path, said string }{
+		{"no kind", "    - {kinds: [], delegates: [security-a], escalate_to: [ops-lead]}\n",
+			"delegated_decisions.rules[0].kinds", "Pick at least one kind of request."},
+		{"a kind in two rules", "    - {kinds: [ssh_operate], delegates: [security-a], escalate_to: [ops-lead]}\n" +
+			"    - {kinds: [ssh_operate], delegates: [security-b], escalate_to: [ops-lead]}\n",
+			"delegated_decisions.rules[1].kinds[0]",
+			"Rule 1 already decides server commands. A kind of request is in one rule only."},
+		{"no delegate", "    - {kinds: [ssh_operate], delegates: [], escalate_to: [ops-lead]}\n",
+			"delegated_decisions.rules[0].delegates", "Pick the agent that decides."},
+		{"a person delegate", "    - {kinds: [ssh_operate], delegates: [ops-lead], escalate_to: [ops-lead]}\n",
+			"delegated_decisions.rules[0].delegates[0]",
+			"Ops Lead is a person. An agent decides, and people get what it escalates."},
+		{"a delegate that operates", "    - {kinds: [ssh_operate], delegates: [sre], escalate_to: [ops-lead]}\n",
+			"delegated_decisions.rules[0].delegates[0]", "SRE can ask for server commands itself, so it can't decide them."},
+		{"one model twice", "    - {kinds: [ssh_operate], delegates: [security-a, security-c], escalate_to: [ops-lead]}\n",
+			"delegated_decisions.rules[0].delegates",
+			"Security A and Security C run on the same model. A panel needs two different models."},
+		{"no one to escalate to", "    - {kinds: [ssh_operate], delegates: [security-a], escalate_to: []}\n",
+			"delegated_decisions.rules[0].escalate_to", "Pick at least one person."},
+		{"an agent escalated to", "    - {kinds: [ssh_operate], delegates: [security-a], escalate_to: [security-b]}\n",
+			"delegated_decisions.rules[0].escalate_to[0]", "Security B is an agent. Only people answer an escalation."},
+		{"a rate past its bound", "    - {kinds: [ssh_operate], delegates: [security-a], escalate_to: [ops-lead], " +
+			"sample_one_in: 5000}\n", "delegated_decisions.rules[0].sample_one_in", "From 1 to 1000."},
+		{"paths on a command rule", "    - {kinds: [ssh_operate], delegates: [security-a], escalate_to: [ops-lead], " +
+			"always_escalate_paths: [billing/**]}\n", "delegated_decisions.rules[0].always_escalate_paths",
+			"Paths apply only to merges and deploys."},
+		{"a repository that is not owner/name", "    - {kinds: [pr_merge], delegates: [security-a], " +
+			"escalate_to: [ops-lead], required_checks: [{repo: api, branch: main, checks: [test]}]}\n",
+			"delegated_decisions.rules[0].required_checks[0].repo",
+			`"api" is not a GitHub repository. Write it as owner/name, like acme/api.`},
+		{"an entry with no checks", "    - {kinds: [pr_merge], delegates: [security-a], " +
+			"escalate_to: [ops-lead], required_checks: [{repo: acme/api, branch: main, checks: []}]}\n",
+			"delegated_decisions.rules[0].required_checks[0].checks", "Add at least one check."},
+	} {
+		_, err := config.ParseCompany([]byte(delegatedDoc(t, c.rules)))
+		p, ok := problemAt(err, c.path)
+		if !ok {
+			t.Errorf("%s: %v, want a refusal at %s", c.name, err, c.path)
+			continue
+		}
+		if p.Said != c.said {
+			t.Errorf("%s: said %q, want %q", c.name, p.Said, c.said)
+		}
+		if strings.Contains(p.Said, "_") || strings.Contains(p.Said, "delegated_decisions") {
+			t.Errorf("%s: said %q names a key", c.name, p.Said)
+		}
+	}
+}

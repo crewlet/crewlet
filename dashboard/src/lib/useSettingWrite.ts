@@ -67,6 +67,8 @@ export type SettingWriteState =
       readonly kind: "refused";
       readonly message: string;
       readonly reload: boolean;
+      /** The engine's problems with the document, for a form that places each under its field. */
+      readonly problems?: readonly ConfigProblem[];
     };
 
 export interface SettingWrite {
@@ -110,10 +112,13 @@ export function useSettingWrite({
   const wordsRef = useRef(problemWords);
   wordsRef.current = problemWords;
   const refusalWords = useCallback(
-    (refusal: ConfigRefusal | { readonly kind: "none" }): RefusalWords => {
+    (
+      refusal: ConfigRefusal | { readonly kind: "none" },
+    ): RefusalWords & { readonly problems?: readonly ConfigProblem[] } => {
       const words = wordsRef.current;
-      if (refusal.kind === "problems" && words) {
-        return { message: words(refusal.problems), reload: false };
+      if (refusal.kind === "problems") {
+        const said = words ? { message: words(refusal.problems), reload: false } : null;
+        return { ...(said ?? configRefusalWords(refusal, reread)), problems: refusal.problems };
       }
       return configRefusalWords(refusal, reread);
     },

@@ -129,7 +129,7 @@ export function onSessionNeed(listener: () => void): () => void {
  * accepted the proof and false when they declined or could not.
  *
  * ONE WINDOW: the engine's step-up refusal names `step_up`, the one
- * `api.auth.session.step_up` window every guarded gesture is held to, so there
+ * `sign_in.step_up_seconds` window every guarded gesture is held to, so there
  * is nothing for the confirmer to choose between.
  */
 export type StepUpConfirmer = () => Promise<boolean>;

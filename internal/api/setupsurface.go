@@ -47,7 +47,7 @@ func NewSetupSurface(boot *config.Bootstrap, e *engine.Engine, configSurface *co
 	// serves, and the pointer to it lands through the same merge,
 	// validation and activation PATCH /config performs.
 	fleetStore := fleetsecrets.New(e.Backends().Fleet, cipher)
-	return setupapi.New(setupapi.Options{
+	surface, err := setupapi.New(setupapi.Options{
 		Config: configSurface,
 		// The fleet's own store, sealed with the same keyring: the one
 		// every node holds, since Tier A refuses a file without it.
@@ -104,6 +104,12 @@ func NewSetupSurface(boot *config.Bootstrap, e *engine.Engine, configSurface *co
 		// Test connection and the SSH audit, over this node's access log.
 		SSH: e.SSHAccess(),
 	})
+	if err != nil {
+		return nil, err
+	}
+	// Choosing a request's grant option saves it through this surface (ADR-0118).
+	e.UseGrantSaver(surface.SaveRequestedGrant)
+	return surface, nil
 }
 
 // slackInstallLink is Slack's install-link mint as the Agents tab's install
