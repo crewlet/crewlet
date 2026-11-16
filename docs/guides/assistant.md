@@ -190,7 +190,7 @@ does not.
 An administrator can also change every setting of the block where it is read,
 on **Settings › Ask Crewlet** (`#/settings/ask-crewlet`): whether it is on,
 its model chain and the stronger chain, the bounds of a turn, the tool
-families turned off, and deep work. Each change is checked by the engine
+families turned off, the hosts web research may read, and deep work. Each change is checked by the engine
 before it is saved, as a configuration edit is.
 
 `crewlet validate` and every `/config` write refuse a chain that breaks the
@@ -363,10 +363,13 @@ for the listed hosts only, drops any result on another host, sends at most
 
 Each read or search is a step the person sees, and its text is the
 site's: a change Ask Crewlet proposes after reading one says it was prepared
-after reading a web page, and after one it proposes changes only to the records
-your question or open screen names (a task key such as ENG-41, the record you
-have open), so a page cannot steer it into changing anything else. List only the documentation hosts you trust, such as
-the vendors your integrations connect to.
+after reading a web page, and after one it proposes changes only to the
+records your question or open screen names (a task key such as ENG-41, the
+record you have open), so a page cannot steer it into changing anything else.
+List only the documentation hosts you trust, such as the vendors your
+integrations connect to. An administrator can change the list on **Settings ›
+Ask Crewlet**, under Web research, where removing every host removes the block
+and turns web research off.
 
 The pages a turn read are cited under its answer, under **Sources**: one link a
 page, with its host and when it was read, from the engine's own record of the
