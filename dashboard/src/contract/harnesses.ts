@@ -3,13 +3,7 @@
  * module of its own, so only Settings › Models loads it.
  */
 
-/**
- * How a model on a harness can sign in, as Settings › Models offers it:
- * `api-key` (a key in the harness's own variable, or, where `providerKeys`, a
- * provider's key in the entry's `env`), `host-login` (`crewlet llm login` on the
- * engine host), `token` (a headless subscription token), `device` (a device
- * code approved on the vendor's site) and `cloud` (a cloud provider or gateway).
- */
+/** How a model on a harness can sign in: a key (or a provider's key in `env`), a host login, a token, a device code or a cloud. */
 type HarnessSignIn = "api-key" | "host-login" | "token" | "device" | "cloud";
 
 /** What the engine's built-in profile of one harness says about adding a model on it. */
