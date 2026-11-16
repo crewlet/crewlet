@@ -1888,8 +1888,9 @@ func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testin
 	prompt, reply := ctLine(t, rcPlain[0]), ctLine(t, rcPlain[1])
 	reply.N = 3
 	for name, fault := range map[string]*threadLineError{
-		"no bytes":                {N: 2, Fault: faultNotObject, Size: len("[1,2]") + 1},
-		"bytes short of its Size": {N: 2, Fault: faultNotObject, Size: len("[1,2]") + 2, Raw: []byte("[1,2]")},
+		"no bytes": {N: 2, Fault: faultNotObject, Size: len("[1,2]") + 1},
+		"bytes short of its Size": {N: 2, Fault: faultNotObject, Size: len("[1,2]") + 2,
+			Bytes: wholeLineBytes([]byte("[1,2]"))},
 	} {
 		bare := newThreadChain("")
 		bare.See(prompt)

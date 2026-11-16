@@ -466,12 +466,12 @@ type threadLineError struct {
 	// included, so a reader that sums them with its records' sums the bytes
 	// the load reads.
 	Size int
-	// Raw is the line, its break dropped, valid until the reader's next Next,
-	// as a record's line is ([threadLine]): the bytes a reader judges a line
-	// by where it reads lines by their bytes as Claude Code's large-file
-	// readers do, whether the load reads a record off the line or not
-	// ([threadChain.Unread]). Error does not say it.
-	Raw []byte
+	// Bytes is what a reader of its bytes reads of the line, its break dropped
+	// ([threadBytes]), as a record's line carries it ([threadLine.Bytes]): what
+	// a reader judges a line by where it reads lines by their bytes as Claude
+	// Code's large-file readers do, whether the load reads a record off the
+	// line or not ([threadChain.Unread]). Error does not say it.
+	Bytes threadBytes
 }
 
 // lineFault is how Claude Code's load reads a whole line this layer reads as
@@ -551,14 +551,16 @@ func (e *threadLineError) Error() string {
 // Unwrap is what the line's decode met.
 func (e *threadLineError) Unwrap() error { return e.Err }
 
-// threadLine is one whole line of a thread: its place, its bytes and its head,
+// threadLine is one whole line of a thread: its place, its size, its bytes,
+// what a reader of its bytes reads of them ([threadBytes]) and its head,
 // beside the facts the accessors below read ([lineFacts]), all from the
 // line's one decode ([factsOf]).
 //
 // WHAT IT HANDS OUT RAW IS VALID UNTIL THE READER'S NEXT [threadReader.Next]:
-// the line's Raw, as a refused line's Raw is ([threadLineError]). A reader
-// that keeps it past that copies it, since the layer may hand out a line's own
-// bytes rather than a copy of them.
+// the line's Raw. A reader that keeps it past that copies it, since the layer
+// may hand out a line's own bytes rather than a copy of them. Its byte facts
+// are a value of a fixed size, as a refused line's are ([threadLineError]),
+// a reader's to keep.
 //
 // A VALUE AS LONG AS A LINE IT READS FOR ITS READERS, never hands out: what a
 // call's input, a result's text, a record's own toolUseResult and a message's
@@ -584,6 +586,15 @@ type threadLine struct {
 	// (above). A carriage return before the break is the line's own, which
 	// JSON reads as whitespace.
 	Raw []byte
+	// Size is how many bytes of the member the line takes, its break
+	// included, as a refused line's Size is ([threadLineError]), so a reader
+	// that sums them sums the bytes the load reads.
+	Size int
+	// Bytes is what a reader of its bytes reads of the line, its break
+	// dropped ([threadBytes]): what Claude Code's large-file readers read a
+	// line by ([threadChain], THE LARGE FILE), and the marks the resumed count
+	// reads ([resumedReading]).
+	Bytes threadBytes
 	// Head is what every reader needs of the line.
 	Head threadHead
 

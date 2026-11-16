@@ -66,7 +66,8 @@ type threadWire struct {
 // decodeThreadLine decodes whole line n, raw (its break dropped), into its
 // head and its facts: ONE decode of the whole line ([wireDecode]), which
 // holds every byte of it to JSON, then the head's keys held to their types,
-// then the facts its accessors read ([factsOf]). Nothing reads a
+// then the facts its accessors read ([factsOf]); and reads its byte facts
+// ([wholeLineBytes]), a refused line's too. Nothing reads a
 // line before this has: no keyword decides which lines are decoded, since a
 // line no keyword marks can still be no record (a write that tore into
 // another), and a reader that passed it unread would decide from the thread
@@ -76,18 +77,20 @@ func decodeThreadLine(n int, raw []byte) (threadLine, error) {
 	// as nothing at all, with no error, and would pass for a record of no keys.
 	if trimmed := bytes.TrimLeft(raw, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '{' {
 		return threadLine{}, &threadLineError{N: n, Err: errNotOneRecord, Fault: refusedFault(raw), Size: len(raw) + 1,
-			Raw: raw}
+			Bytes: wholeLineBytes(raw)}
 	}
 	var w threadWire
 	if err := wireDecode(raw, &w); err != nil {
-		return threadLine{}, &threadLineError{N: n, Err: err, Fault: refusedFault(raw), Size: len(raw) + 1, Raw: raw}
+		return threadLine{}, &threadLineError{N: n, Err: err, Fault: refusedFault(raw), Size: len(raw) + 1,
+			Bytes: wholeLineBytes(raw)}
 	}
 	head, err := w.head()
 	if err != nil {
 		return threadLine{}, &threadLineError{N: n, Err: err, Fault: faultHead, Type: kindOf(w.Type),
-			Size: len(raw) + 1, Raw: raw}
+			Size: len(raw) + 1, Bytes: wholeLineBytes(raw)}
 	}
-	return threadLine{N: n, Raw: raw, Head: head, f: factsOf(&w, head)}, nil
+	return threadLine{N: n, Raw: raw, Size: len(raw) + 1, Bytes: wholeLineBytes(raw), Head: head,
+		f: factsOf(&w, head)}, nil
 }
 
 // head is the line's head, its keys held to their types by the head's rule

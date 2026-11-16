@@ -492,12 +492,15 @@ func ctTypes(lines []threadLine) []string {
 // as whitespace, and alone it breaks nothing. The member's end is the end:
 // asked again, the reader answers it again. A subagent's metadata, one JSON
 // document with no break after it, is no line at all, only a torn piece: no
-// reader of a thread reads it through this one.
+// reader of a thread reads it through this one. Each line says the bytes it
+// takes, its break included, and hands what a reader of its bytes reads of
+// them, its break dropped ([threadBytes]).
 //
 // Mutation: hand out the last piece with no break as a line, and the torn
 // record, the padding, a piece a carriage return ends and a subagent's
 // metadata each come back as a line, or a line that is no record, where the
-// member's end belongs.
+// member's end belongs; count a record's size without its break, or read its
+// byte facts with the break, and every line says so.
 func TestAThreadIsReadAWholeLineAtATime(t *testing.T) {
 	t.Parallel()
 	brief := ctBrief(ctUUID(1))
@@ -529,6 +532,11 @@ func TestAThreadIsReadAWholeLineAtATime(t *testing.T) {
 			if line.N != i+1 || bytes.HasSuffix(line.Raw, []byte("\n")) {
 				t.Errorf("%s: line %d is numbered %d and keeps its break %t", name, i+1, line.N,
 					bytes.HasSuffix(line.Raw, []byte("\n")))
+			}
+			if line.Size != len(line.Raw)+1 || line.Bytes != wholeLineBytes(line.Raw) {
+				t.Errorf("%s: line %d says it takes %d bytes, and hands byte facts of %d; want %d with its break, "+
+					"and the facts of its bytes but the break", name, i+1, line.Size, line.Bytes.Len(),
+					len(line.Raw)+1)
 			}
 		}
 		if !errors.Is(got.end, io.EOF) || got.torn != tc.torn || !errors.Is(got.again, io.EOF) {
@@ -914,7 +922,8 @@ const fewestCalls = 200
 // decoder's 10,000 levels, which the load may read whole, faultDepth, where
 // one nested 10,000 deep reads as a record. Each says the bytes it takes, its
 // break included, a carriage return before it among them, and hands its
-// reader those bytes but the break, as a record's line does. NO LINE'S
+// reader what a reader of those bytes reads of them but the break
+// ([threadBytes]), as a record's line does. NO LINE'S
 // ACCEPTANCE CHANGES: a line the decode takes is decoded once, at the cost
 // of that one decode and its head, the classifier never run on it.
 //
@@ -926,7 +935,7 @@ const fewestCalls = 200
 // led by a NUL reads as a syntax error; drop the depth check, and a value
 // nested too deep reads as yielding nothing; hold a refused head's type as
 // written, and a summary's names a kind; count a line's size without its
-// break; hand a refused line's reader none of its bytes, from any one of the
+// break; hand a refused line's reader no byte facts, from any one of the
 // three refusals, and the lines it refuses there hand none; or classify every
 // line, refused or not, and a line the decode takes costs the classifier's
 // decoder too.
@@ -977,9 +986,9 @@ func TestALineThatIsNoRecordSaysHowTheLoadReadsIt(t *testing.T) {
 			t.Errorf("%s: the load reads it as %q, a record of the kind %q, of %d bytes; want %q, %q and %d", name,
 				e.Fault, e.Type, e.Size, tc.fault, tc.kind, len(tc.line)+1)
 		}
-		if e := got.broken[0]; !bytes.Equal(e.Raw, []byte(tc.line)) {
-			t.Errorf("%s hands its reader %d bytes of it, %.40q; want the line's own %d, its break dropped", name,
-				len(e.Raw), e.Raw, len(tc.line))
+		if e := got.broken[0]; e.Bytes != wholeLineBytes([]byte(tc.line)) {
+			t.Errorf("%s hands its reader the byte facts of %d bytes of it, headed %q; want the line's own %d, its "+
+				"break dropped", name, e.Bytes.Len(), e.Bytes.Head(), len(tc.line))
 		}
 	}
 	if got := ctRead(ctThread(deep(10000)), threadPlainMax); len(got.lines) != 1 || len(got.broken) != 0 {
