@@ -140,6 +140,20 @@ export function compareLines(
 ): LineComparison {
   const a = linesOf(before);
   const b = linesOf(after);
+  const compared = compareSequences(a, b);
+  if (compared.kind !== "compared") return compared;
+  return { kind: "compared", hunks: sectionsOf(compared.runs, a, b, context) };
+}
+
+/**
+ * The shortest edit turning `a` into `b`, as runs front to back, or why it was
+ * not made: [compareLines]'s comparison, bounds included, over any sequence of
+ * strings, such as a page's blocks or a block's words.
+ */
+export function compareSequences(
+  a: readonly string[],
+  b: readonly string[],
+): { kind: "compared"; runs: EditRun[] } | Uncompared {
   const shortest = Math.min(a.length, b.length);
   let start = 0;
   while (start < shortest && a[start] === b[start]) start++;
@@ -155,7 +169,7 @@ export function compareLines(
   runs.same(start);
   runs.append(middle);
   runs.same(end);
-  return { kind: "compared", hunks: sectionsOf(runs.all, a, b, context) };
+  return { kind: "compared", runs: runs.all };
 }
 
 /**
@@ -189,7 +203,8 @@ export function distanceFloor(a: ArrayLike<number>, b: ArrayLike<number>): numbe
 }
 
 /** One run of a comparison: lines both texts hold, or a change of lines removed and added. */
-type Run = { kind: "same"; count: number } | { kind: "change"; removed: number; added: number };
+export type EditRun =
+  { kind: "same"; count: number } | { kind: "change"; removed: number; added: number };
 
 /**
  * A comparison's runs, written front to back: a run of a kind follows one of
@@ -197,7 +212,7 @@ type Run = { kind: "same"; count: number } | { kind: "change"; removed: number; 
  * whichever order the algorithm found their lines in.
  */
 class Runs {
-  readonly all: Run[] = [];
+  readonly all: EditRun[] = [];
 
   same(count: number): void {
     if (count === 0) return;
@@ -229,7 +244,12 @@ class Runs {
  * The shortest edit turning `a` into `b` between their shared start and end,
  * or null when it removes and adds more than [MAX_EDITS] lines.
  */
-function shortestEdit(a: string[], b: string[], start: number, end: number): Runs | null {
+function shortestEdit(
+  a: readonly string[],
+  b: readonly string[],
+  start: number,
+  end: number,
+): Runs | null {
   const n = a.length - start - end;
   const m = b.length - start - end;
   const runs = new Runs();
@@ -415,9 +435,9 @@ function middleSnake(
  * a long text edited in one place are nearly all of it.
  */
 function sectionsOf(
-  runs: readonly Run[],
-  a: string[],
-  b: string[],
+  runs: readonly EditRun[],
+  a: readonly string[],
+  b: readonly string[],
   context: number,
 ): DiffSection[] {
   const out: DiffSection[] = [];
