@@ -1,6 +1,7 @@
 /** The page's half of the comment layer: anchors, layout while asked, picks and host asks. */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { eventually } from "~/test/settle.ts";
 import { ANCHOR_ATTRIBUTE, PageComments, anchorAround, clipBytes, fractionOf } from "./comments.ts";
 
 type Sent = { method: string; params: Record<string, unknown> };
@@ -184,7 +185,7 @@ describe("the host's requests", () => {
   test("a picture of a part is its box with a margin; one the page cannot draw is answered as none", async () => {
     expect(comments.regionOf({ name: "pricing" })).toMatchObject({ x: 0, y: 76 });
     comments.receive({ capture: { id: 4, name: "pricing" } });
-    await vi.waitFor(() => expect(sent.some((s) => s.method === "comments.crop")).toBe(true));
+    await eventually(() => expect(sent.some((s) => s.method === "comments.crop")).toBe(true));
     expect(sent.find((s) => s.method === "comments.crop")!.params).toEqual({ id: 4, image: null });
   });
 });
