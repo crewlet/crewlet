@@ -877,10 +877,6 @@
 .live-card > .coverage-note {
   margin: var(--spacing-3) var(--spacing-4) 0;
 }
-.coverage-nodes {
-  margin: var(--spacing-1) 0 0;
-  padding-inline-start: var(--spacing-5);
-}
 
 /* ---- Backups & retention ------------------------------------------------ */
 
@@ -1958,7 +1954,6 @@ a.prof-row:hover {
   }
 }
 
-.org-builder-problems ul,
 .org-builder-list {
   margin: 0;
   padding: 0;
@@ -8949,10 +8944,6 @@ a.live-row:hover {
 }
 .ceiling-status:empty {
   display: none;
-}
-.ceiling-warnings {
-  margin: 0 0 var(--spacing-2);
-  padding-left: 1.1em;
 }
 
 /* SETTINGS › CONFIGURATION, THE DOCUMENT EDITOR: the summary takes the row

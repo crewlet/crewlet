@@ -79,7 +79,32 @@ export function useSeatNamer(): SeatNamer {
   );
 }
 
-export function ConfigWarnings({
+/** The warnings, named by the caller's seats where it has them and by the chart's otherwise. */
+export function ConfigWarnings(props: ConfigWarningsProps) {
+  return props.seat ? <Drawn {...props} seat={props.seat} /> : <ChartNamed {...props} />;
+}
+
+function ChartNamed(props: ConfigWarningsProps) {
+  return <Drawn {...props} seat={useSeatNamer()} />;
+}
+
+interface ConfigWarningsProps {
+  warnings: readonly ConfigWarning[];
+  /** How a seat is named; the chart's names where the screen has no answer of its own. */
+  seat?: SeatNamer | undefined;
+  /** The one place each warning is changed, where the screen has one. */
+  actionFor?: ((w: ConfigWarning) => ReactNode) | undefined;
+  /** The callout's one action: a decision about all of them, such as Save anyway. */
+  action?: ReactNode;
+  title?: ((count: number) => ReactNode) | undefined;
+  /** The operator's words (`message`, naming document keys), for a screen that edits the document itself. */
+  operator?: boolean;
+  /** The group's name for a screen reader. */
+  label?: string | undefined;
+  className?: string;
+}
+
+function Drawn({
   warnings,
   seat,
   actionFor,
@@ -88,25 +113,9 @@ export function ConfigWarnings({
   label = "Warnings",
   operator = false,
   className,
-}: {
-  warnings: readonly ConfigWarning[];
-  /** How a seat is named; the chart's names where the screen has no answer of its own. */
-  seat?: SeatNamer | undefined;
-  /** The one place each warning is changed, where the screen has one. */
-  actionFor?: ((w: ConfigWarning) => ReactNode) | undefined;
-  /** The callout's one action: a decision about all of them, such as Save anyway. */
-  action?: ReactNode;
-  title?: (count: number) => ReactNode;
-  /** The operator's words (`message`, naming document keys), for a screen that edits the document itself. */
-  operator?: boolean;
-  /** The group's name for a screen reader. */
-  label?: string | undefined;
-  className?: string;
-}) {
-  const chart = useSeatNamer();
-  const namer = seat ?? chart;
-  const notices = groupNotices(configWarningEntries(warnings, namer, actionFor, operator), {
-    count: subjectCount(warnings, namer),
+}: ConfigWarningsProps & { seat: SeatNamer }) {
+  const notices = groupNotices(configWarningEntries(warnings, seat, actionFor, operator), {
+    count: subjectCount(warnings, seat),
   });
   if (notices.length === 0) return null;
   return (

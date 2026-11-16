@@ -23,11 +23,12 @@ import {
   Callout,
   ConfirmField,
   Disclosure,
+  NoticeList,
   Select,
+  type SelectOption,
   Skeleton,
   Text,
   useToast,
-  type SelectOption,
 } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 import { listed, plural } from "~/lib/format.ts";
@@ -603,23 +604,14 @@ function CheckCallout({
   }
   return (
     <Callout variant="info" title="Ready to remove" live="polite">
-      <span className="models-stack">
-        <span>{summary}</span>
-        {moves.length > 0 ? (
-          <ul className="models-checklist" aria-label="Where each moves">
-            {moves.map((line) => (
-              <li key={line}>{line}</li>
-            ))}
-          </ul>
-        ) : null}
-        {check.warnings.length > 0 ? (
-          <ul className="models-checklist" aria-label="Also changes">
-            {check.warnings.map((w, i) => (
-              <li key={i}>{warningWords(w, data)}</li>
-            ))}
-          </ul>
-        ) : null}
-      </span>
+      {summary}
+      <NoticeList
+        label="Where each moves"
+        notices={[
+          ...moves.map((line) => ({ key: `move ${line}`, title: line })),
+          ...check.warnings.map((w, i) => ({ key: `also ${i}`, title: warningWords(w, data) })),
+        ]}
+      />
     </Callout>
   );
 }
