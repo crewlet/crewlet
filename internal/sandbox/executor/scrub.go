@@ -104,8 +104,10 @@ import (
 // times the archive's bound of plaintext in one reading and rewrites no value
 // nested deeper than jsonscan.MaxDepth as JSON (a transcript's line or a
 // `.json` file so nested is text, and an export is refused); a session past
-// the first, or one the redaction refuses ([errRedaction]), is refused,
-// stamped with why, rather than costing the engine host its memory; and the
+// the first, or one the redaction refuses ([errRedaction]: its stream decided
+// a window before what it read there was known, redact.ErrDecidedEarly, at a
+// write or at its close), is refused, stamped with why, rather than costing
+// the engine host its memory; and the
 // whole scrub is held to the take's time (internal/sandbox's
 // SessionScrubWait).
 //

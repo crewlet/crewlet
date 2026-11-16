@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/jsonscan"
 	"github.com/crewlet/crewlet/internal/plainjson"
+	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // longValue is an engine value the cases below plant inside a long string.
@@ -513,6 +514,67 @@ func TestATextTheRedactionRefusesRefusesTheSessionAndSaysWhy(t *testing.T) {
 	}
 	if err := text.Close(); !errors.Is(err, failed) || errors.Is(err, errRedaction) {
 		t.Errorf("a text whose writer failed closed on %v; want the writer's error, as it came", err)
+	}
+}
+
+// A TEXT THE REDACTION DECIDED TOO EARLY REFUSES THE SESSION, NAMING WHY:
+// a string whose text is a key's armour and, after it, password's keys and a
+// run longer than the redaction stream's hold makes the stream decide the
+// armour's window before the keys' claims are known, and refuse
+// (redact.ErrDecidedEarly). Whether it says so at its close or at a write, in
+// a Claude Code line, a tool's output kept as text or an OpenCode export, the
+// take is refused as a text the redaction could not redact, the stream's
+// reason read off its error, and the first reading, which refused, wrote
+// nothing.
+//
+// Mutation: hand a write's refusal on unwrapped ([textScrub.Write]), and every
+// case at a write answers the stream's error alone, no errRedaction.
+func TestATextTheRedactionDecidedTooEarlyRefusesTheSessionNamingWhy(t *testing.T) {
+	t.Parallel()
+	s := newScrubber(nil)
+	refused := func(t *testing.T, err error, out *bytes.Buffer) {
+		t.Helper()
+		switch {
+		case !errors.Is(err, errRedaction):
+			t.Errorf("the take answered %v; want it refused as a text the redaction could not redact", err)
+		case !errors.Is(err, redact.ErrDecidedEarly):
+			t.Errorf("the take answered %v, which does not say the redaction decided too early", err)
+		case out.Len() != 0:
+			t.Errorf("the refused take wrote %d bytes", out.Len())
+		}
+	}
+	// The stream finds the miss once the password's keys' claims come, the
+	// stream's hold past the run's end: a short tail ends the text first, so
+	// Close says so, and a tail longer than the hold is still being written.
+	for when, tail := range map[string]int{"at its close": 256 << 10, "at a write": 2 << 20} {
+		text := "k: -----BEGIN RSA PRIVATE KEY-----\n" +
+			"MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\n\n" +
+			strings.Repeat("pwd:\n", 12000) + "sk-" + strings.Repeat("Ab0_-x9Z", 1<<20) + "\n" + strings.Repeat("ok\n", tail)
+		encoded, err := json.Marshal(text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Run("a Claude Code line, "+when, func(t *testing.T) {
+			t.Parallel()
+			line := `{"type":"user","message":{"role":"user","content":` + string(encoded) + `}}` + "\n"
+			archive := tarOf(t, map[string]string{"projects/p/s.jsonl": line})
+			var out bytes.Buffer
+			refused(t, scrubTar(bytes.NewReader(archive), reopenOf(archive), &out, s, testBounds), &out)
+		})
+		t.Run("a tool's output kept as text, "+when, func(t *testing.T) {
+			t.Parallel()
+			archive := tarOf(t, map[string]string{"projects/p/s/tool-results/out.txt": text})
+			var out bytes.Buffer
+			refused(t, scrubTar(bytes.NewReader(archive), reopenOf(archive), &out, s, testBounds), &out)
+		})
+		t.Run("an OpenCode export, "+when, func(t *testing.T) {
+			t.Parallel()
+			doc := `{"info":{"id":"ses_1"},"messages":[{"info":{"id":"msg_1","role":"user"},"parts":[{"type":"text",` +
+				`"text":` + string(encoded) + `}]}]}`
+			archive := gzipOf(t, doc)
+			var out bytes.Buffer
+			refused(t, scrubDocument(bytes.NewReader(archive), reopenOf(archive), &out, s, testBounds), &out)
+		})
 	}
 }
 

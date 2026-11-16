@@ -78,9 +78,13 @@ func (s scrubber) text(w io.Writer) *textScrub {
 	return &textScrub{values: s.stream(shape), shape: shape, out: out}
 }
 
-// Write scrubs the next piece of the text.
+// Write scrubs the next piece of the text. Its errors are Close's: the
+// redaction's stream refuses at the write where it finds a window it decided
+// too early, while more of the text is still to come, as readily as at its
+// close, and that refusal is [errRedaction] wherever it is found.
 func (t *textScrub) Write(p []byte) (int, error) {
-	return t.values.Write(p)
+	n, err := t.values.Write(p)
+	return n, redactionRefusal(err, t.out.err)
 }
 
 // Close writes the rest of the text. An error of the redaction's own is
