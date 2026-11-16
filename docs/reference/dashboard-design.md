@@ -131,10 +131,10 @@ filled only from a value that passed the design system's `#rrggbb` gate, never
 from raw CSS; and drawn with an edge of its own, so a colour that matches the
 ground is still a swatch.
 
-The seventh is **code read in Gitlet**: its diffs (`hue="code"`), its files'
-code coloured by kind, a change's state pill and a branch chip wear the kit's
-code host colours, each hue a kind beside its sign, word or glyph: never done,
-a fault or an action.
+The seventh is **code read in Gitlet**: its diffs (`hue="code"`), its code
+coloured by kind in its files, diffs and search hits, a change's state pill and
+a branch chip wear the kit's code host colours, each hue a kind beside its
+sign, word or glyph: never done, a fault or an action.
 
 Outside Gitlet no diff wears them; the pill and chip appear only in its
 Changes grid (a task, a seat, My work), its peek, Home's code card and the
@@ -292,8 +292,13 @@ suites do not run. Whether to add one, keep the value unmeasured, or lower it
 to the window's own 300 rows is the maintainers' call.
 The window bounds the reading as well as the mounting: which line pairs
 with which is settled from the change's shape, and a pair's words are
-tokenized for its underline only once one of its lines is drawn, so the
-first paint of a long diff never reads every line it holds.
+tokenized for its underline, and a line's code coloured, only once one of its
+lines is drawn, so the first paint of a long diff never reads every line it
+holds.
+In Gitlet a host hands it each line's coloured spans (`tokens`), asked as a
+row is drawn: from the blob under 256 KiB, else from the hunk's first line, so
+past it a hunk opening inside a comment may colour wrong until it closes.
+A coloured diff paints plain until its blobs are read, then walks each once.
 Its rules are a sheet of its own, `diff.css`, which arrives with the first
 screen that draws a diff rather than in the first paint: every one of those
 screens is a lazy chunk.
@@ -320,10 +325,11 @@ underline and an accent bar at its start.
 `styles/diffs.test.ts` holds the rule in the sheets (no rule naming a diff
 spends a state's, a chart series' or an identity's hue, only
 `.diff-view--code` reads the diff colours, and nothing takes a changed run's
-underline away), in the palette (the two steps are the rungs either side of
-the ground, measured off it in every state of every theme, and the coloured
-steps are the kit's, on a ground it measures them on) and in the tree (every
-diff Gitlet draws passes `hue="code"` and no other does; nothing reaches the
+underline away or colours code inside it), in the palette (the two steps are
+the rungs either side of the ground, measured off it in every state of every
+theme, and the coloured steps are the kit's, on a ground it measures them on)
+and in the tree (every diff Gitlet draws passes `hue="code"` and `tokens`, and
+no other passes either; nothing reaches the
 package's diffs — by name, by their own modules, or through a namespace, a
 dynamic import or a re-export of any module that hands them on in the package
 as installed — and no `VersionCompare` is handed the two texts that would make
@@ -340,6 +346,10 @@ its state walked from line 1; a larger file, or a plain-text one, is plain.
 The lines paint plain and their colours follow, and a file opened past line 1
 waits for the lines above it, read by its blob's id, so no line changes
 colour. `styles/codehost.test.ts` keeps the inks to `gitlet-code.css`.
+
+A diff's lines take the state of their blob's line, read by its id, under
+256 KiB, and of their hunk's first line past it; a changed run keeps the code's
+own text. A search hit is coloured on its own line.
 
 ---
 
@@ -9046,7 +9056,8 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   lines are grouped by repository and then by file in the engine's order —
   repository, path, line — never re-sorted, each file a card of its own as a
   code host's search draws one, its path across its head with how many of its
-  lines matched, its lines under it in the code face; each line's number opens its file
+  lines matched, its lines under it in the code face, each coloured by kind on its own
+  (a hit inside a block comment may read as code); each line's number opens its file
   on the repository's Code tab AT THAT COMMIT, by its whole id, with the line
   picked (`ref=`, `path=`, `lines=`), so the link says tomorrow what the
   search said today; a path that is not UTF-8 is drawn with no link, since no

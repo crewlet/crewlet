@@ -21,8 +21,10 @@ import { SessionReading } from "~/lib/frameSession.ts";
 import { EMPTY_TREE } from "~/lib/code.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
+import { load } from "~/lib/syntax/index.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
+import { blobAnswer, inkedLine, type StubBlob } from "~/test/codeScreens.tsx";
 import { withDerived } from "~/test/org.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { CommitPage } from "./CommitPage.tsx";
@@ -136,6 +138,7 @@ function stubEngine({
   act = () => json({ outcome: "applied", position: "CREWLET_CODE_LOG@1:13", receipt: {} }),
   patch = [PATCH],
   files = [[{ path: "app.go", status: "M", added: 1, deleted: 1 }]],
+  blobs = {},
 }: {
   commitAnswer?: unknown;
   compare?: Record<string, unknown>;
@@ -144,6 +147,8 @@ function stubEngine({
   patch?: readonly string[];
   /** The diff's files as their pages: page n is answered from the cursor `f:<n>`. */
   files?: readonly (readonly Record<string, unknown>[])[];
+  /** Each side's blob by its whole id, read with no path. */
+  blobs?: Readonly<Record<string, StubBlob>>;
 } = {}) {
   const asked: URL[] = [];
   const acted: Acted[] = [];
@@ -175,6 +180,8 @@ function stubEngine({
           });
         case "/query/code_commit":
           return json(commitAnswer);
+        case "/query/code_blob":
+          return blobAnswer(url, blobs);
         case "/query/code_diff": {
           const file = p.get("file");
           const page = Number((p.get("cursor") ?? "p:0").slice(2));
@@ -685,4 +692,309 @@ test("a commit is picked onto another branch at that branch's head", async () =>
     tool: "code_cherry_pick",
     args: { repo: "web", branch: "retry", expected_head: SHA, commit: SHA },
   });
+});
+
+// ---- Code coloured by kind in a diff ------------------------------------------
+
+const OLD_OID = "1".repeat(40);
+const NEW_OID = "2".repeat(40);
+
+/** A Go file whose block comment opens at line 10 and closes at 16, line 14 its edit. */
+const notes = (edit: string) =>
+  [
+    "package app",
+    "",
+    "func A() {}",
+    "",
+    "// Notes.",
+    "",
+    "var x = 1",
+    "",
+    "",
+    "/*",
+    "Long notes,",
+    "over lines.",
+    "still notes",
+    edit,
+    "more notes",
+    "*/",
+    "func Later() {}",
+  ].join("\n") + "\n";
+
+const NOTES_PATCH = [
+  "--- a/app.go",
+  "+++ b/app.go",
+  "@@ -14,4 +14,4 @@",
+  "-the old note",
+  "+the new note",
+  " more notes",
+  " */",
+  " func Later() {}",
+].join("\n");
+
+const goFile = (extra: Record<string, unknown> = {}) => ({
+  path: "app.go",
+  status: "M",
+  added: 1,
+  deleted: 1,
+  old_oid: OLD_OID,
+  new_oid: NEW_OID,
+  ...extra,
+});
+
+const blobReads = (asked: URL[], oid: string) =>
+  reads(asked, "code_blob").filter((u) => u.searchParams.get("ref") === oid);
+
+const COMMIT_FILE = (file: string) => `#/gitlet/repos/web/commits/${SHA}?file=${file}`;
+
+// A HUNK TAKES THE STATE ITS BLOB'S LINE OPENS IN, read from line 1, so the
+// edit inside the comment reads as comment. Mutation: start each hunk at "".
+test("a hunk opening inside a block comment is coloured as a comment", async () => {
+  const { asked } = stubEngine({
+    patch: [NOTES_PATCH],
+    files: [[goFile()]],
+    blobs: {
+      [OLD_OID]: { text: notes("the old note") },
+      [NEW_OID]: { text: notes("the new note") },
+    },
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, COMMIT_FILE("app.go"));
+
+  await waitFor(() =>
+    expect(inkedLine("add", "the new note")).toEqual([
+      "code-syn-comment:the ",
+      "[new]",
+      "code-syn-comment: note",
+    ]),
+  );
+  expect(inkedLine("remove", "the old note")).toEqual([
+    "code-syn-comment:the ",
+    "[old]",
+    "code-syn-comment: note",
+  ]);
+  expect(inkedLine("same", "more notes")).toEqual(["code-syn-comment:more notes"]);
+  expect(inkedLine("same", "func Later() {}")).toContain("code-syn-keyword:func");
+  // EACH BLOB IS READ ONCE, by its whole id and no path.
+  expect(blobReads(asked, OLD_OID)).toHaveLength(1);
+  expect(blobReads(asked, NEW_OID)).toHaveLength(1);
+  expect(blobReads(asked, NEW_OID)[0]!.searchParams.has("path")).toBe(false);
+});
+
+// Mutation: start each hunk at "".
+test("a hunk opening inside a Go raw string, and one inside a template literal", async () => {
+  const query = (where: string) =>
+    ["package app", "", "var q = `", "SELECT id", "FROM t", where, "`", "func B() {}"].join("\n") +
+    "\n";
+  stubEngine({
+    patch: [
+      [
+        "--- a/q.go",
+        "+++ b/q.go",
+        "@@ -6,3 +6,3 @@",
+        "-WHERE a = 1",
+        "+WHERE a = 2",
+        " `",
+        " func B() {}",
+      ].join("\n"),
+    ],
+    files: [[goFile({ path: "q.go" })]],
+    blobs: { [OLD_OID]: { text: query("WHERE a = 1") }, [NEW_OID]: { text: query("WHERE a = 2") } },
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, COMMIT_FILE("q.go"));
+  await waitFor(() =>
+    expect(inkedLine("add", "WHERE a = 2")).toEqual(["code-syn-string:WHERE a = ", "[2]"]),
+  );
+  expect(inkedLine("same", "func B() {}")).toContain("code-syn-keyword:func");
+  cleanup();
+
+  const page = (para: string) =>
+    [
+      "export const page = (title: string) => `",
+      "<main>",
+      "  <h1>${title}</h1>",
+      para,
+      "</main>`;",
+      "const n = 1;",
+    ].join("\n") + "\n";
+  stubEngine({
+    patch: [
+      [
+        "--- a/page.tsx",
+        "+++ b/page.tsx",
+        "@@ -3,4 +3,4 @@",
+        "   <h1>${title}</h1>",
+        "-<p>old</p>",
+        "+<p>new</p>",
+        " </main>`;",
+        " const n = 1;",
+      ].join("\n"),
+    ],
+    files: [[goFile({ path: "page.tsx" })]],
+    blobs: { [OLD_OID]: { text: page("<p>old</p>") }, [NEW_OID]: { text: page("<p>new</p>") } },
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, COMMIT_FILE("page.tsx"));
+  // THE TEMPLATE'S TEXT IS A STRING, and the code inside `${…}` is code.
+  await waitFor(() =>
+    expect(inkedLine("same", "  <h1>${title}</h1>")).toContain("code-syn-string:  <h1>"),
+  );
+  const heading = inkedLine("same", "  <h1>${title}</h1>");
+  expect(heading.filter((p) => p.includes("title"))).not.toContainEqual(
+    expect.stringMatching(/^code-syn-string:/),
+  );
+  expect(inkedLine("same", "const n = 1;")).toContain("code-syn-keyword:const");
+});
+
+// PAST THE BOUND A HUNK STARTS FRESH, and the blob is read no further than the
+// page that says so. Mutation: read on past the first page.
+test("past the bound each hunk starts fresh, and only one page of the blob is read", async () => {
+  const { asked } = stubEngine({
+    patch: [
+      [
+        "--- a/app.go",
+        "+++ b/app.go",
+        "@@ -14,3 +14,4 @@",
+        "-the old note",
+        "+the new note",
+        "+/* opened",
+        " more notes",
+        " */",
+      ].join("\n"),
+    ],
+    files: [[goFile()]],
+    blobs: {
+      [OLD_OID]: { text: notes("the old note") },
+      [NEW_OID]: { text: notes("the new note"), size: 300 * 1024 },
+    },
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, COMMIT_FILE("app.go"));
+
+  await waitFor(() =>
+    expect(inkedLine("add", "/* opened")).toEqual(["code-syn-comment:/* opened"]),
+  );
+  expect(inkedLine("same", "more notes")).toEqual(["code-syn-comment:more notes"]);
+  expect(inkedLine("add", "the new note").join("")).not.toContain("code-syn-comment");
+  // The older blob is under the bound: its line opens inside the comment.
+  expect(inkedLine("remove", "the old note")[0]).toMatch(/^code-syn-comment:/);
+  expect(blobReads(asked, NEW_OID)).toHaveLength(1);
+});
+
+// PLAIN UNTIL KNOWN: a line is never coloured from its hunk and then again.
+// Mutation: colour from the hunk while a blob is read.
+test("the lines draw plain while the blobs are read", async () => {
+  await load("go");
+  let release = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  stubEngine({
+    patch: [NOTES_PATCH],
+    files: [[goFile()]],
+    blobs: {
+      [OLD_OID]: { text: notes("the old note"), held },
+      [NEW_OID]: { text: notes("the new note"), held },
+    },
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, COMMIT_FILE("app.go"));
+
+  expect(await screen.findByText("func Later() {}")).toBeTruthy();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(document.querySelector('.diff-view [class^="code-syn-"]')).toBeNull();
+  release();
+  await waitFor(() =>
+    expect(inkedLine("same", "more notes")).toEqual(["code-syn-comment:more notes"]),
+  );
+});
+
+// A SIDE A FILE IS ABSENT FROM HAS NO BLOB, and a binary or lineless file is
+// read for none. Mutations: an absent side read by the other side's id, and
+// the lineless check dropped, each fail.
+test.each([
+  [
+    "an added file reads only its newer blob",
+    { path: "app.go", status: "A", added: 2, deleted: 0, new_oid: NEW_OID },
+    ["--- /dev/null", "+++ b/app.go", "@@ -0,0 +1,2 @@", "+package app", "+func N() {}"],
+    [NEW_OID],
+  ],
+  [
+    "a deleted file reads only its older blob",
+    { path: "app.go", status: "D", added: 0, deleted: 2, old_oid: OLD_OID },
+    ["--- a/app.go", "+++ /dev/null", "@@ -1,2 +0,0 @@", "-package app", "-func N() {}"],
+    [OLD_OID],
+  ],
+  ["a binary file reads none", { ...goFile(), binary: true }, [], []],
+  [
+    "a pure rename reads none",
+    { ...goFile({ old_path: "old.go", status: "R", similarity: 100 }), added: 0, deleted: 0 },
+    [],
+    [],
+  ],
+] as const)("%s", async (_, file, patch, read) => {
+  const text = "package app\nfunc N() {}\n";
+  const { asked } = stubEngine({
+    patch: [patch.join("\n")],
+    files: [[file]],
+    blobs: { [OLD_OID]: { text }, [NEW_OID]: { text } },
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, COMMIT_FILE("app.go"));
+  if (read.length > 0) {
+    await waitFor(() => expect(document.querySelector(".code-syn-keyword")).not.toBeNull());
+  } else {
+    const said =
+      "binary" in file ? "A binary file: git draws no lines of it." : "No line of it changed.";
+    expect(await screen.findByText(said)).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  expect(reads(asked, "code_blob").map((u) => u.searchParams.get("ref"))).toEqual(read);
+});
+
+// A PATCH LINE THAT IS NOT ITS BLOB'S LINE takes its hunk's state: here the
+// blob's line 14 ends in a carriage return. Mutation: drop the text check.
+test("a patch line that differs from its blob's line is coloured from its hunk", async () => {
+  stubEngine({
+    patch: [NOTES_PATCH],
+    files: [[goFile()]],
+    blobs: {
+      [OLD_OID]: { text: notes("the old note") },
+      [NEW_OID]: { text: notes("the new note\r") },
+    },
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, COMMIT_FILE("app.go"));
+
+  await waitFor(() =>
+    expect(inkedLine("same", "more notes")).toEqual(["code-syn-comment:more notes"]),
+  );
+  expect(inkedLine("add", "the new note").join("")).not.toContain("code-syn-comment");
+  expect(inkedLine("remove", "the old note")[0]).toMatch(/^code-syn-comment:/);
+});
+
+// EACH SIDE TAKES ITS OWN PATH'S LANGUAGE: a rename may change it.
+// Mutation: take the newer path's language for both sides.
+test("a renamed file's sides each take their own language", async () => {
+  const js = "const a = 1;\n";
+  const ts = "const b = 1;\n";
+  const { asked } = stubEngine({
+    patch: [
+      ["--- a/a.js", "+++ b/a.ts", "@@ -1 +1 @@", "-const a = 1;", "+const b = 1;"].join("\n"),
+    ],
+    files: [[goFile({ path: "a.ts", old_path: "a.js", status: "R" })]],
+    blobs: { [OLD_OID]: { text: js }, [NEW_OID]: { text: ts } },
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, COMMIT_FILE("a.ts"));
+  await waitFor(() =>
+    expect(inkedLine("remove", "const a = 1;")).toContain("code-syn-keyword:const"),
+  );
+  expect(inkedLine("add", "const b = 1;")).toContain("code-syn-keyword:const");
+  expect(blobReads(asked, OLD_OID)).toHaveLength(1);
+  cleanup();
+
+  const go = "func New() {}\n";
+  const renamed = stubEngine({
+    patch: [
+      ["--- a/x.txt", "+++ b/x.go", "@@ -1 +1 @@", "-func Old() {}", "+func New() {}"].join("\n"),
+    ],
+    files: [[goFile({ path: "x.go", old_path: "x.txt", status: "R" })]],
+    blobs: { [OLD_OID]: { text: "func Old() {}\n" }, [NEW_OID]: { text: go } },
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, COMMIT_FILE("x.go"));
+  await waitFor(() => expect(inkedLine("add", "func New() {}")).toContain("code-syn-keyword:func"));
+  expect(inkedLine("remove", "func Old() {}").join("")).not.toContain("code-syn-");
+  expect(blobReads(renamed.asked, OLD_OID)).toHaveLength(0);
 });

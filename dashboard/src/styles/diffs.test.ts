@@ -54,8 +54,8 @@ import {
  *   module the package says exports them — and nothing hands its
  *   `VersionCompare` the two texts that would make it draw one.
  * - IN GITLET: only `.diff-view--code` reads the diff colours, every Gitlet
- *   diff passes `hue="code"` and no other passes it or `tokens`, no rule colours
- *   code inside a changed run, and the steps it paints are the kit's measured ones.
+ *   diff passes `hue="code"` and `tokens` and no other passes either, no rule
+ *   colours code inside a changed run, and the steps it paints are the kit's measured ones.
  *
  * The accent is not among the hues forbidden: it says where the reader is (a
  * focus ring, a range they picked), which is never a line's kind.
@@ -648,7 +648,7 @@ describe("in the tree", () => {
   });
 });
 
-/** Every Gitlet module drawing a DiffView, each with `hue="code"`: two-sided. */
+/** Every Gitlet module drawing a DiffView, each with `hue="code"` and `tokens`: two-sided. */
 const CODE_DIFFS: { file: string; why: string }[] = [
   {
     file: "routes/gitlet/change/Files.tsx",
@@ -705,7 +705,7 @@ export function drawsDiffView(path: string, text: string, lang: Lang): boolean {
 
 /**
  * Where a module draws the tree's DiffView against the rule: in Gitlet without
- * `hue="code"`, outside it with a hue or tokens, or anywhere through a spread.
+ * `hue="code"` or tokens, outside it with either, or anywhere through a spread.
  */
 export function codeSites(path: string, text: string, lang: Lang): string[] {
   const line = lineOf(text);
@@ -724,6 +724,7 @@ export function codeSites(path: string, text: string, lang: Lang): string[] {
       if (tokens) out.push(`${at} passes tokens to DiffView`);
       continue;
     }
+    if (!tokens) out.push(`${at} draws DiffView without tokens`);
     if (!hue) {
       out.push(`${at} draws DiffView without hue="code"`);
       continue;
@@ -739,7 +740,7 @@ export function codeSites(path: string, text: string, lang: Lang): string[] {
 }
 
 describe("in Gitlet's tree", () => {
-  test('every Gitlet diff passes hue="code", and no other diff passes a hue or tokens', () => {
+  test('every Gitlet diff passes hue="code" and tokens, and no other diff passes either', () => {
     expect(modules().flatMap((m) => codeSites(m.path, m.text, m.lang))).toEqual([]);
   });
 
@@ -759,7 +760,7 @@ describe("in Gitlet's tree", () => {
     }
   });
 
-  test("it can tell: a hue or tokens outside Gitlet, a spread, a Gitlet diff without its hue and a hand-written class are reported", () => {
+  test("it can tell: a hue or tokens outside Gitlet, a spread, a Gitlet diff without either and a hand-written class are reported", () => {
     const named = 'import { DiffView } from "~/components/DiffView.tsx";';
     expect(
       codeSites(
@@ -791,19 +792,26 @@ describe("in Gitlet's tree", () => {
     ).toEqual(["routes/doclet/X.tsx:2 spreads into DiffView"]);
     const files = "routes/gitlet/change/Files.tsx";
     expect(codeSites(files, `${named}\nconst A = () => <DiffView hunks={h} />;`, "tsx")).toEqual([
+      `${files}:2 draws DiffView without tokens`,
       `${files}:2 draws DiffView without hue="code"`,
     ]);
-    expect(codeSites(files, `${named}\nconst A = () => <DiffView hue={pick} />;`, "tsx")).toEqual([
-      `${files}:2 passes a hue other than "code"`,
-    ]);
+    expect(
+      codeSites(files, `${named}\nconst A = () => <DiffView hue={pick} tokens={t} />;`, "tsx"),
+    ).toEqual([`${files}:2 passes a hue other than "code"`]);
+    expect(
+      codeSites(files, `${named}\nconst A = () => <DiffView hunks={h} hue="code" />;`, "tsx"),
+    ).toEqual([`${files}:2 draws DiffView without tokens`]);
+    expect(
+      codeSites(files, `${named}\nconst A = () => <DiffView hunks={h} tokens={t} />;`, "tsx"),
+    ).toEqual([`${files}:2 draws DiffView without hue="code"`]);
     const talk = "routes/gitlet/change/Conversation.tsx";
-    expect(codeSites(talk, `${named}\nconst A = () => <DiffView hunks={h} />;`, "tsx")).toEqual([
-      `${talk}:2 draws DiffView without hue="code"`,
-    ]);
+    expect(
+      codeSites(talk, `${named}\nconst A = () => <DiffView hunks={h} tokens={t} />;`, "tsx"),
+    ).toEqual([`${talk}:2 draws DiffView without hue="code"`]);
     expect(
       codeSites(
         "routes/gitlet/commit/DiffFiles.tsx",
-        `${named}\nconst A = () => <DiffView hunks={h} hue="code" />;`,
+        `${named}\nconst A = () => <DiffView hunks={h} hue="code" tokens={t} />;`,
         "tsx",
       ),
     ).toEqual([]);
