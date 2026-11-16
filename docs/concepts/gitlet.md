@@ -2283,6 +2283,16 @@ answer, and what each answer does:
   `not_raiser`. An answer that asks for what every finding already says
   changes nothing and appends nothing.
 
+**A finding's excerpt** is the lines of the blob it points at around its
+range, three either side unless the reader asks for up to ten, marked as the
+change's Files tab marks that file: added, deleted or kept, the deleted lines
+of the old side shown between the new side's, and a file the revision renamed
+diffed against where it was. An excerpt holds at most 40 lines, so a longer
+range shows its first, and each line up to 1 KiB; a longer line is described
+by its size. A finding on a revision whose facts its home has not recorded
+has no excerpt yet. The excerpt is read on the repository's Gitlet node by
+object ids and kept there, so a page of findings read again costs no git.
+
 A write of a conversation that is refused appends nothing, and says why in one
 sentence:
 

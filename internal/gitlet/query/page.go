@@ -200,11 +200,12 @@ func widestCursor(letter byte, numbers int) string {
 // n-th file of a diff's stat, "l:<n>" line n of a file — or of a blame's range
 // — "b:<n>:<o>" byte o of line n, "p:<o>" byte o of a patch, "s:<n>" the n-th
 // commit of a history's walk (counted from 0, the commits git skips first),
-// and "d:<seconds>:<name>" a tags page's last tag (tags.go), a KEY of the
-// listing rather than a position: a listing at another position resumes past
-// the same tag. Each other is a position in an answer that is a function of
-// object ids alone — the same listing, file, patch or walk on every node at
-// every position — so a cursor any node issued is sound on any other.
+// "x:<n>" the n-th anchor of an excerpts read, and "d:<seconds>:<name>" a tags
+// page's last tag (tags.go), a KEY of the listing rather than a position: a
+// listing at another position resumes past the same tag. Each other is a
+// position in an answer that is a function of object ids alone — the same
+// listing, file, patch or walk on every node at every position — so a cursor
+// any node issued is sound on any other.
 
 // cursor is a parsed Next: its letter and positions; the zero cursor is a
 // first page.
