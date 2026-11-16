@@ -21,7 +21,9 @@ import {
 } from "~/lib/syntax/index.ts";
 import { KINDS, type Grammar, type Kind, type State, type Token } from "~/lib/syntax/types.ts";
 import { codeRest } from "~/lib/useCodeQuery.ts";
-import type { CodeBlobAnswer } from "~/protocol/index.ts";
+import type { DiffSpan } from "~/lib/wordDiff.ts";
+import type { DiffHunk } from "~/components/DiffView.tsx";
+import type { CodeBlobAnswer, CodeDiffFile } from "~/protocol/index.ts";
 import "~/styles/gitlet-code.css";
 
 /** The one place a token's class is written (`styles/codehost.test.ts`). */
@@ -260,4 +262,112 @@ export function useLineStates(args: {
     },
     [walked, deferred, oid],
   );
+}
+
+/** A diff's side, as DiffView asks for a line's spans. */
+type Side = "before" | "after";
+
+/** Each side's patch lines by number: unchanged and removed before, unchanged and added after. */
+function patchLines(hunks: readonly DiffHunk[], side: Side): Map<number, string> {
+  const out = new Map<number, string>();
+  for (const hunk of hunks) {
+    for (const line of hunk.lines) {
+      const n = side === "before" ? line.before : line.after;
+      if (n !== null && line.path === undefined) out.set(n, line.text);
+    }
+  }
+  return out;
+}
+
+/** Each side's line states by number, each hunk walked from "" over that side's lines. */
+function hunkStates(grammar: Grammar, hunks: readonly DiffHunk[], side: Side): Map<number, State> {
+  const out = new Map<number, State>();
+  for (const hunk of hunks) {
+    let state: State = "";
+    for (const line of hunk.lines) {
+      const n = side === "before" ? line.before : line.after;
+      if (n === null || line.path !== undefined) continue;
+      out.set(n, state);
+      state = grammar.line(line.text, state).state;
+    }
+  }
+  return out;
+}
+
+/** One side's grammar, its blob's states when read under the bound, and whether it is known yet. */
+interface SideRead {
+  grammar: Grammar | null;
+  lines: readonly string[] | null;
+  states: readonly State[] | null;
+  /** Past the bound, binary or failed: each hunk starts fresh. */
+  fresh: boolean;
+}
+
+/** A side's grammar and its blob, read by its whole id when there is a grammar and lines to colour. */
+function useSideRead(repo: string, path: string, oid: string | null, read: boolean): SideRead {
+  const grammar = useGrammar(path);
+  const blob = useBlobLines(repo, oid, { enabled: grammar !== null && read });
+  const states = useMemo(
+    () => (grammar && blob.lines ? statesOf(grammar, blob.lines, "") : null),
+    [grammar, blob.lines],
+  );
+  return { grammar, lines: blob.lines, states, fresh: blob.over || blob.failed };
+}
+
+/**
+ * A diff's spans for DiffView: each side's line from its blob's state under the
+ * bound, else from its hunk's start; plain while a blob is being read.
+ */
+export function useDiffTokens(args: {
+  repo: string;
+  file: CodeDiffFile | undefined;
+  hunks: readonly DiffHunk[];
+}): ((side: Side, n: number) => readonly DiffSpan[] | null) | undefined {
+  const { repo, file, hunks } = args;
+  const binary = file?.binary === true;
+  // A PURE RENAME OR A MODE CHANGE has no lines, so no blob is read for it.
+  const read = !binary && (file?.added ?? 0) + (file?.deleted ?? 0) > 0;
+  // A RENAME MAY CHANGE A FILE'S LANGUAGE, so each side takes its own path's.
+  const before = useSideRead(
+    repo,
+    file ? (file.old_path ?? file.path) : "",
+    file?.old_oid ?? null,
+    read,
+  );
+  const after = useSideRead(repo, file?.path ?? "", file?.new_oid ?? null, read);
+  const { grammar: gb, lines: lb, states: sb, fresh: fb } = before;
+  const { grammar: ga, lines: la, states: sa, fresh: fa } = after;
+  const present = file !== undefined;
+  return useMemo(() => {
+    if (!present || binary) return undefined;
+    const sides = {
+      before: { grammar: gb, lines: lb, states: sb, fresh: fb },
+      after: { grammar: ga, lines: la, states: sa, fresh: fa },
+    };
+    const texts = { before: patchLines(hunks, "before"), after: patchLines(hunks, "after") };
+    const walked: Partial<Record<Side, Map<number, State>>> = {};
+    const kept = {
+      before: new Map<number, DiffSpan[] | null>(),
+      after: new Map<number, DiffSpan[] | null>(),
+    };
+    const spansOf = (side: Side, n: number): DiffSpan[] | null => {
+      const { grammar, lines, states, fresh } = sides[side];
+      const text = texts[side].get(n);
+      if (!grammar || text === undefined || text.length > SYNTAX_MAX_LINE) return null;
+      // PLAIN UNTIL KNOWN: a line is never coloured from its hunk and then again.
+      if (!fresh && !states) return null;
+      const hunk = () => (walked[side] ??= hunkStates(grammar, hunks, side)).get(n) ?? "";
+      // A PATCH LINE THAT IS NOT ITS BLOB'S LINE (an interdiff's base, a CRLF)
+      // takes its hunk's state instead.
+      const state = states && lines && lines[n - 1] === text ? states[n - 1]! : hunk();
+      return grammar
+        .line(text, state)
+        .tokens.map((t) => ({ end: t.end, className: t.kind ? SYNTAX_CLASS[t.kind] : null }));
+    };
+    return (side, n) => {
+      const cache = kept[side];
+      if (!cache.has(n)) cache.set(n, spansOf(side, n));
+      return cache.get(n)!;
+    };
+  }, [present, binary, hunks, gb, lb, sb, fb, ga, la, sa, fa]);
 }

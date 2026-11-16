@@ -16,6 +16,7 @@ import { ChangesGrid } from "./Changes.tsx";
 import { BranchChip } from "./ui.tsx";
 import { ComparePage } from "./commit/ComparePage.tsx";
 import { RepositoryPage } from "./repo/RepositoryPage.tsx";
+import { SYNTAX_CLASS } from "./syntax.tsx";
 
 const POSITION = { stream: "CREWLET_CODE_LOG", generation: 1, seq: 12 };
 const BASE = "3a3ecae0123456789abcdef0123456789abcdef0";
@@ -264,6 +265,8 @@ for (const width of [1440, 390]) {
 // A CODED DIFF'S BAND HOLDS ITS NUMBERS AND STOPS BEFORE THE SIGN, and a changed
 // run keeps a visible underline. Mutation: a narrower `--diff-gutter`, or a
 // transparent run decoration, fails it.
+// A CODED LINE KEEPS THE PLAIN LINE'S HEIGHT, and no ink is drawn inside a
+// run. Mutation: `font-size: 1.2em` on the comment rule fails it.
 test("a coloured diff's band holds its numbers, and a changed run keeps its underline", async () => {
   const hunks: DiffHunk[] = [
     {
@@ -276,8 +279,35 @@ test("a coloured diff's band holds its numbers, and a changed run keeps its unde
       ],
     },
   ];
+  // Each line's first word a keyword and the rest a comment, by its side and number.
+  const texts = { before: new Map<number, string>(), after: new Map<number, string>() };
+  for (const line of hunks[0]!.lines) {
+    if (line.before !== null) texts.before.set(line.before, line.text);
+    if (line.after !== null) texts.after.set(line.after, line.text);
+  }
+  const tokens = (side: "before" | "after", n: number) => {
+    const text = texts[side].get(n) ?? "";
+    const word = Math.max(text.indexOf(" "), 0);
+    return [
+      { end: word, className: SYNTAX_CLASS.keyword },
+      { end: text.length, className: SYNTAX_CLASS.comment },
+    ];
+  };
+  const heights = () =>
+    [...document.querySelectorAll<HTMLElement>(".diff-view__line")].map(
+      (line) => line.getBoundingClientRect().height,
+    );
   for (const layout of ["unified", "split"] as const) {
     mount(<DiffView hue="code" hunks={hunks} layout={layout} />);
+    const plain = await eventually(() => {
+      if (layout === "split") expect(document.querySelector(".diff-view--split")).not.toBeNull();
+      const drawn = heights();
+      expect(drawn.length).toBeGreaterThan(0);
+      return drawn;
+    });
+    flushSync(() => root?.unmount());
+    host?.remove();
+    mount(<DiffView hue="code" hunks={hunks} layout={layout} tokens={tokens} />);
     const changed = await eventually(() => {
       const found = [
         ...document.querySelectorAll<HTMLElement>(
@@ -303,6 +333,9 @@ test("a coloured diff's band holds its numbers, and a changed run keeps its unde
         mark.left + 0.5,
       );
     }
+    expect(document.querySelectorAll(".code-syn-comment").length).toBeGreaterThan(0);
+    expect(heights(), `${layout}: each line keeps its plain height`).toEqual(plain);
+    expect(document.querySelector('.diff-view__run [class*="code-syn-"]')).toBeNull();
     const runs = document.querySelectorAll(".diff-view--code .diff-view__run");
     expect(runs.length, `${layout}: the edited line draws its runs`).toBeGreaterThan(0);
     for (const run of runs) {
