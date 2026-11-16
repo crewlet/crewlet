@@ -1537,7 +1537,9 @@ func rcBytesAt(t *testing.T, line string, within bool) string {
 // reading it as part of the reply above that result; and one holding a line
 // the layer refuses that yields the load nothing and that no reader takes for
 // a slot by its bytes: one value that is no object, a line a later write tore
-// into, an object of no kind the load reads. Every other thread past the bound
+// into, an object of no kind the load reads; and one holding a line whose name
+// a decode reads as `parentUuid` and no reader's bytes read as that key, the
+// name escaped or a space before its colon. Every other thread past the bound
 // is whyLargeFile, and under it answers as its small path does with AnySize
 // false: one whose reply of an id hangs off another branch, whose abandoned
 // prompt hangs off a result off the walk, whose result is written before the
@@ -1551,7 +1553,13 @@ func rcBytesAt(t *testing.T, line string, within bool) string {
 // past a string holding a brace and an escaped quote; a record whose line does
 // not begin `{"parentUuid":`, its keys in another order, or another key's
 // value where the parent's would be; a last record holding a sidechain's bytes
-// in its first 256 bytes, or past them, where the prune alone reads them; a
+// in its first 256 bytes, or past them, where the prune alone reads them, or in
+// a call's input under a key whose name ends in them through an escaped quote,
+// which no decode reads as the mark; a record keyed by the uuid after such a
+// key ending in `uuid`'s bytes, before a time, its own uuid before none; a
+// refused line of one list whose object carries `"parentUuid":`, or whose
+// value, a string, spells the key, each at its depth one to a reader of bytes
+// and, to a decode, no key of the head a record's own object holds; a
 // parent written with an escape, or written twice, null first; a uuid the
 // readers key otherwise than the decode; a branch only the walk from the
 // checkpoint reaches, which the prune never makes; a parent naming no record
@@ -1611,7 +1619,12 @@ func rcBytesAt(t *testing.T, line string, within bool) string {
 // line, and the torn line marked after another key reads; take a head's
 // parent of any 36 bytes, and the torn line under an uppercase uuid reads;
 // or hold a line of no record to the key alone in a subagent's thread, and
-// the one headed as a sidechain's costs its thread the bound.
+// the one headed as a sidechain's costs its thread the bound; or read these
+// facts off a decode's names rather than the line's bytes (a key read as the
+// name it decodes to, an escaped quote passed over), and the threads holding a
+// key that ends in a mark's bytes, a uuid's key, or a refused line that spells
+// parentUuid read as path-free, and those whose name only a decode reads as
+// parentUuid cost the bound.
 func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testing.T) {
 	t.Parallel()
 	past := claudeResumeLargeFile + 1
@@ -1670,6 +1683,10 @@ func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testin
 			`{"type":"queue-operation","operation":"enq`+ctDequeue)),
 		"a refused line of no kind the load reads": shaped(append(slices.Clone(t4),
 			`{"type":"queue-operation","agentId":5}`)),
+		"a line whose name a decode reads as parentUuid, written with an escape": shaped(append(slices.Clone(t4),
+			`{"parent\u0055uid":null}`)),
+		"a line whose name a decode reads as parentUuid, a space before its colon": shaped(append(slices.Clone(t4),
+			`{"parentUuid" :null}`)),
 	} {
 		for _, size := range []int{0, past} {
 			lines := tc.lines
@@ -1734,6 +1751,20 @@ func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testin
 				`"content":"a prompt"},`, `"content":"a prompt`+strings.Repeat("x", 256)+
 					`"},"toolUseResult":{"isSidechain":true},`), false)}, 3, `"content":"a prompt`,
 			rcHanding(whyChain, []int{1, 2, 3}), []int{1, 2, 3}, 3},
+		"a sidechain's bytes ending a key's name in the last record's call": {[]string{rcPrompt(0, 1, 0),
+			ctReplace(t, rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), `"input":{}`,
+				`"input":{"x\"isSidechain":true}`)}, 1, `"content":"a prompt`, plain, []int{1, 2}, 2},
+		"a uuid the readers key by after a key ending in its key's bytes": {[]string{rcPrompt(0, 1, 0),
+			ctReplace(t, ctReplace(t, rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), `"input":{}`,
+				`"input":{"x\"uuid":"`+rcUUID(77)+`","timestamp":"`+rcAt(999)+`"}`),
+				`"uuid":"`+rcUUID(2)+`","timestamp":"`, `"uuid":"`+rcUUID(2)+`","entrypoint":"cli","timestamp":"`),
+			rcResults(2, 3, 1100, "x1"), rcReply(3, 4, "msg_b", 1200, rcSaid("done"))}, 1, `"content":"a prompt`,
+			rcHanding(whyChain, []int{1, 2, 3, 4}), []int{1, 2, 3, 4}, 4},
+		"a refused line of one list whose object carries parentUuid": {append(slices.Clone(turns),
+			`[{"parentUuid":null,"uuid":"`+rcUUID(9)+`"}]`), 1, `"content":"a prompt`, turnsAnswers,
+			[]int{1, 2, 3, 4}, 4},
+		"a refused line whose value spells parentUuid's key": {append(slices.Clone(turns),
+			`{"a":"parentUuid":1}`), 1, `"content":"a prompt`, turnsAnswers, []int{1, 2, 3, 4}, 4},
 		"a parent written with an escape": {[]string{rcPrompt(0, 1, 0), ctReplace(t, rcReply(1, 2, "msg_a",
 			1000, rcSaid("done")), `"parentUuid":"0`, `"parentUuid":"\u0030`)}, 1, `"content":"a prompt`, plain,
 			[]int{1, 2}, 2},
