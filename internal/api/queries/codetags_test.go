@@ -67,11 +67,9 @@ func TestATagsQuestionReadsItsRepositoryAndIsNeverImmutable(t *testing.T) {
 	}
 }
 
-// A COMMIT NAMES ITS TAGS where the node's tag index holds them, else none,
-// read at the repository's version.
+// A COMMIT NAMES ITS TAGS where the node's tag index holds them, read at the repository's version.
 //
-// Mutations: drop Tagged from code_commit's answer, or floor the commit's
-// read without the version → red.
+// Mutations: drop Tagged from code_commit's answer, or floor its read without the version → red.
 func TestACommitNamesItsTags(t *testing.T) {
 	t.Parallel()
 	version := statelog.Position{Stream: "CREWLET_CODE_LOG", Generation: 1, Seq: 41}

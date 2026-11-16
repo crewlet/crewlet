@@ -429,14 +429,9 @@
 //
 // # The tag index
 //
-// One file a copy, crewlet/tags (tags.go): every tag in git's creatordate
-// order, then each commit's tags. writeRefs levels it with packed-refs and
-// renames both in in one hold; a delta's merge streams the file and reads only
-// the moved tags through git. Every file the step reads is held to its trailer;
-// a failed step sets the index aside, never the round, and past TagsRetry a
-// read asks a round for it. BenchmarkTagIndex at 100 000 tags (git 2.56.0,
-// twelve vCPUs of an AMD EPYC Rome server): whole 1.07 s, one tag moved 58 ms
-// (125 ms at 245-byte names), level 98 ms, a page 38 µs, a commit's tags 41 µs.
+// One file a copy, crewlet/tags (tags.go): every tag in git's creatordate order, then
+// each commit's tags, renamed in with packed-refs. A failed step sets the index aside,
+// never the round, and past TagsRetry a read asks a round for it.
 //
 // # What this process did not write is checked before it serves, and every byte is scrubbed behind it
 //

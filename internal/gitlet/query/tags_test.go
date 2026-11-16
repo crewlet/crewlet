@@ -314,11 +314,9 @@ func tagged(a gitlet.GitAnswer, id string) ([]string, int, bool) {
 	return c.Refs, c.More, ok
 }
 
-// A HISTORY PAGE NAMES THE TAGS OF ITS COMMITS, newest first, from the memo
-// too.
+// A HISTORY PAGE NAMES THE TAGS OF ITS COMMITS, newest first, from the memo too.
 //
-// Mutations: memoize tagged with the page → the new tag is missing; a
-// commit's tags by name → red.
+// Mutations: memoize tagged with the page → the new tag is missing; a commit's tags by name → red.
 func TestAHistoryPageNamesTheTagsOfItsCommits(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())

@@ -857,10 +857,9 @@ const (
 // the rows name it, and a cold copy's first clone would otherwise walk
 // without a bitmap until the chain was fetched again.
 //
-// The TAG INDEX is the cache's own: merged by the round that moves a tag and
-// renamed in with packed-refs; a function of the refs and of object ids, so no
-// pack leaving changes it; a log gone back drops it, and a rebuild's full
-// round writes it again.
+// The TAG INDEX is the cache's own, renamed in with packed-refs: a function of the
+// refs and object ids, so no pack leaving changes it; a log gone back drops it and a
+// rebuild's full round writes it again.
 //
 // THE NODE'S TIP is git's own split commit-graph layer over the installed
 // commit-graph layers (maintain.go): the commits of the TAIL, the packs pushed

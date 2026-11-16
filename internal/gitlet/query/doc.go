@@ -261,11 +261,9 @@
 //
 // # The copy's tags
 //
-// A tags read (tags.go, gitlet.GitTags) is answered from the copy's tag index
-// (cache.Cache.Tags) with no git and no share: a page newest first by a keyset
-// cursor, the last tag's date and name, which its asker floors at the
-// repository's own last record. A history's page names each commit's tags
-// (gitlet.TagMarks), measured into each commit's cost as its push is.
+// A tags read (tags.go) is answered from the copy's tag index with no git: a page newest
+// first, by a keyset cursor its asker floors at the repository's last record. A
+// history's page names each commit's tags (gitlet.TagMarks).
 //
 // # Pages
 //
