@@ -79,7 +79,7 @@ import {
 } from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
-import { useParam } from "~/app/router.tsx";
+import { href, useParam } from "~/app/router.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import {
@@ -87,6 +87,7 @@ import {
   CHANGE_STATE_FILTERS,
   EVERY_STATE,
   changeLive,
+  changePath,
   changeStateWord,
   firstUnready,
   CHANGE_WINDOW_FILTERS,
@@ -94,6 +95,7 @@ import {
   isChangeWindow,
   isRepoName,
   knownChangeState,
+  parseChangeRef,
   refName,
   type KnownChangeState,
 } from "~/lib/code.ts";
@@ -102,7 +104,12 @@ import { fmtCount, fmtDateTime, plural } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { codeRest, useCodeQuery, type CodeParams } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
-import type { CodeChangeState, CodeChangeSummary, CodeChangesAnswer } from "~/protocol/index.ts";
+import type {
+  CodeChangeName,
+  CodeChangeState,
+  CodeChangeSummary,
+  CodeChangesAnswer,
+} from "~/protocol/index.ts";
 import { REPO_PARAM, changeObject } from "./paths.ts";
 import { readinessCount, readinessNext } from "./readinessWords.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
@@ -459,6 +466,30 @@ export function ChangeStateTag({ state }: { state: CodeChangeState }) {
     <Tag className="code-state" data-state={state} leadingIcon={<Glyph size="xs" />}>
       {changeStateWord(state)}
     </Tag>
+  );
+}
+
+/**
+ * A change by its reference on its state's pill (`web!41`), opening the change:
+ * how a commit or a branch names the change it belongs to.
+ */
+export function ChangeRefPill({ change }: { change: CodeChangeName }) {
+  const at = parseChangeRef(change.ref);
+  const Glyph = knownChangeState(change.state) ? STATE_GLYPHS[change.state] : null;
+  const pill = Glyph ? (
+    <Tag className="code-state" data-state={change.state} leadingIcon={<Glyph size="xs" />}>
+      {change.ref}
+    </Tag>
+  ) : (
+    <Tag appearance="outline">{change.ref}</Tag>
+  );
+  const title = `Change ${change.ref}, ${changeStateWord(change.state).toLowerCase()}: ${change.title}`;
+  return at ? (
+    <a className="code-change-ref" href={href(changePath(at.repo, at.number))} title={title}>
+      {pill}
+    </a>
+  ) : (
+    <span title={title}>{pill}</span>
   );
 }
 

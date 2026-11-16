@@ -108,6 +108,44 @@
   align-self: center;
 }
 
+/* GITLET'S FACE: its product mark in the box a seat's avatar takes. */
+.code-face {
+  display: inline-flex;
+  flex: none;
+  line-height: 0;
+  vertical-align: middle;
+}
+
+/* A CHECK'S VERDICT: a glyph and a word in the state's ink; the word carries it. */
+.code-check-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.code-check-mark[data-tone="success"] {
+  color: var(--color-feedback-success-ink);
+}
+.code-check-mark[data-tone="danger"] {
+  color: var(--color-feedback-danger-ink);
+}
+.code-check-mark[data-tone="info"] {
+  color: var(--color-feedback-info-ink);
+}
+.code-check-mark__word {
+  font-weight: var(--font-weight-medium);
+}
+
+/* A TAG NAMING A COMMIT, and a change's pill as a link: no underline, the focus ring kept. */
+.code-tag-chip,
+.code-change-ref {
+  display: inline-flex;
+  border-radius: var(--radius-pill);
+  text-decoration: none;
+}
+
 /* THE DESCRIPTION: a card its owner opened, the first thing on the page. */
 .code-description {
   border: 1px solid var(--color-border-default);
