@@ -2,11 +2,15 @@ package seat
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -149,12 +153,46 @@ type heartbeatTarget struct {
 	undead    bool
 }
 
+// renewConcurrency is how many of a pass's renewals are in flight at once.
+//
+// A pass renewed its seats one after another, so its length was the seat count
+// times a renewal's round trip: across a link of a hundred milliseconds,
+// twenty seats filled the floor TTL's four-second renew period and seventy-five
+// outran the fifteen-second TTL itself, so their leases lapsed between
+// renewals. Sent together, a pass takes the round trips of its slowest batch.
+//
+// 64 IS ABOVE WHAT THE SLOWEST LINK THE ENGINE ALLOWS CAN CARRY AT ONCE, so on
+// such a link the link sets the pace and never this bound: at the object
+// store's floor, thirty seconds a mebibyte (34,952.5 bytes a second), and a
+// satellite's 0.6 s round trip, the link holds 0.6 × 34,952.5 ≈ 20,972 bytes
+// in flight, about 36 renewals of some 573 bytes each. On a fast link a pass
+// of N seats is ⌈N/64⌉ round trips: a hundred seats at 100 ms, 0.2 s. And it
+// is a bound, so a node holding thousands of seats holds 64 goroutines and 64
+// requests on its connection for its pass, not thousands.
+const renewConcurrency = 64
+
+// renewal is one seat's renewal as the store answered it.
+type renewal struct {
+	// sent is the instant it was asked, the stamp a success records.
+	sent  time.Time
+	alive bool
+	err   error
+}
+
 // Heartbeat renews every held lease and returns the seats that were LOST.
 //
 // A lost seat is dropped immediately and locally: its lease is gone and a
 // peer may already be running it, so anything this node does for it from
 // here is a zombie's work. Fencing catches the writes; this is what stops
 // the rest.
+//
+// THE RENEWALS GO TOGETHER, up to [renewConcurrency] in flight, and the
+// presence's claim beside them, so a pass is about one round trip however many
+// seats it renews rather than one per seat. Each is still stamped at its own
+// send ([Host.renewAll]), and their answers are still applied one at a time,
+// in the order [Host.heartbeatTargets] gives, each under the locks it always
+// took — so what a pass decides about a seat does not depend on which of its
+// renewals the store happened to answer first.
 func (h *Host) Heartbeat(ctx context.Context) []string {
 	h.beatMu.Lock()
 	defer h.beatMu.Unlock()
@@ -162,27 +200,23 @@ func (h *Host) Heartbeat(ctx context.Context) []string {
 	targets := h.heartbeatTargets()
 	var lost []string
 
-	for _, t := range targets {
-		// THE BEAT AS EACH RENEW IS ASKED, not only once the whole pass
-		// has answered, because the pass is turning for as long as its
-		// renews return. A renew the store leaves unanswered is held to its
-		// read's whole bound — five seconds, where nothing set a deadline —
-		// so a pass over many seats on a node that cannot reach its store
-		// spends a bound per seat, doing exactly what an unreachable store
-		// asks of it: keeping each seat until its own lease's TTL, then
-		// dropping it. Stamped only at the pass's end, that read as a wedge
-		// once the bounds summed past the TTL — ten seats at the default —
-		// and the watchdog ended the process. A renew that hangs still
-		// freezes the beat, which is the wedge the watchdog is for.
-		h.stampBeat()
-		// Read the clock PER SEAT, not once before the loop. A single
-		// pre-loop timestamp is assigned to every seat's last-renew stamp,
-		// so with many seats and a slow store the later ones record a renew
-		// earlier than it happened — narrowing their grace, and their
-		// admission window, as the seat count grows.
-		now := h.now()
+	// THE PRESENCE BESIDE THE SEATS, never after them: its claim is two
+	// round trips and its status hook may spend a fifth of the heartbeat
+	// ([StatusBudgetRatio]), and neither is a reason for a seat's renewal
+	// to wait. It counts the seats the node held as the pass began; one
+	// this pass loses leaves that count on the next pass's renewal.
+	var presence sync.WaitGroup
+	presence.Go(func() {
+		h.safely("seat_presence_renew_failed", func() { h.renewNodePresence(ctx) })
+	})
+	defer presence.Wait()
 
-		alive, err := h.backend.Renew(ctx, t.lease.Resource, h.owner, t.lease.Epoch, h.ttl)
+	answers, wait := h.renewAll(ctx, targets)
+	defer wait()
+
+	for i, t := range targets {
+		r := <-answers[i]
+		now, alive, err := r.sent, r.alive, r.err
 		if err != nil {
 			// Unknown is not lost — the row is untouched and still held, so
 			// shedding on a blip would tear down a healthy node while no
@@ -270,9 +304,73 @@ func (h *Host) Heartbeat(ctx context.Context) []string {
 		}
 		h.mu.Unlock()
 	}
-	h.renewNodePresence(ctx)
+	presence.Wait()
 	h.stampBeat()
 	return lost
+}
+
+// renewAll asks the store to renew every target, at most [renewConcurrency] at
+// once, and hands back one channel per target, in the targets' order, on
+// which that target's answer arrives; wait returns once every renewal has
+// answered and every goroutine it started has ended.
+//
+// THE CLOCK IS READ PER SEAT, AS IT IS SENT, never once for the pass: the
+// stamp a success records is the instant that renewal was asked, the earliest
+// the store can have counted its new deadline from, so a seat sent in a later
+// batch is not credited with a renewal earlier than it happened — which would
+// narrow its grace and its admission window as the seat count grows.
+//
+// THE BEAT AS EACH RENEWAL IS ASKED AND AS EACH ANSWERS, not only once the
+// whole pass has answered, because the pass is turning for as long as its
+// renewals return. A renewal the store leaves unanswered is held to its read's
+// whole bound — five seconds, where nothing set a deadline — so a pass over
+// many seats on a node that cannot reach its store spends that bound per
+// batch, doing exactly what an unreachable store asks of it: keeping each seat
+// until its own lease's TTL, then dropping it. Stamped only at the pass's end,
+// that read as a wedge once the bounds summed past the TTL, and the watchdog
+// ended the process. Renewals that all hang still freeze the beat, which is
+// the wedge the watchdog is for.
+//
+// A renewal that panics is answered as unknown, logged with its stack, so it
+// costs its own seat a renewal and never the process or the rest of the pass.
+func (h *Host) renewAll(ctx context.Context, targets []heartbeatTarget) ([]chan renewal, func()) {
+	answers := make([]chan renewal, len(targets))
+	for i := range answers {
+		answers[i] = make(chan renewal, 1)
+	}
+	var (
+		next    atomic.Int64
+		workers sync.WaitGroup
+	)
+	for range min(renewConcurrency, len(targets)) {
+		workers.Go(func() {
+			for {
+				i := int(next.Add(1)) - 1
+				if i >= len(targets) {
+					return
+				}
+				h.stampBeat()
+				answers[i] <- h.renewOne(ctx, targets[i])
+				h.stampBeat()
+			}
+		})
+	}
+	return answers, workers.Wait
+}
+
+// renewOne asks the store to renew one target's lease, stamped at its send.
+func (h *Host) renewOne(ctx context.Context, t heartbeatTarget) (r renewal) {
+	r.sent = h.now()
+	defer func() {
+		if p := recover(); p != nil {
+			contained := panics.Recovered(panics.ScopeSeat, p)
+			log.Error("seat_renew_panicked", "node", h.nodeID, "seat", t.handle, "panic", p,
+				"stack", contained.Stack)
+			r.alive, r.err = false, fmt.Errorf("renew of seat %q panicked: %v", t.handle, p)
+		}
+	}()
+	r.alive, r.err = h.backend.Renew(ctx, t.lease.Resource, h.owner, t.lease.Epoch, h.ttl)
+	return r
 }
 
 // heartbeatTargets snapshots what to renew: the living and the undead, in a
