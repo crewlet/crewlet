@@ -238,6 +238,104 @@ func TestEveryClassHasWordsAndAFix(t *testing.T) {
 	}
 }
 
+// A FINDING FROM A WARNING IS LISTED IN ITS RULE'S WORDS, never in the
+// operator's sentence with its document keys: the rule's title, the one thing
+// it is about as its item, and, for a warning no class builds a fix for, its
+// person words as the why.
+//
+// Mutation: list an unclassed warning as "A setting worth checking." over its
+// message again, or leave the warning's item off its finding, and this goes
+// red.
+func TestAFindingFromAWarningIsListedInItsRulesWords(t *testing.T) {
+	t.Parallel()
+	doc, err := os.ReadFile("testdata/live-shape.company.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := company(t, string(doc)+"mcp_servers:\n  - {name: nobody, command: nobody-mcp, shared: false, access: {}}\n")
+	c.Roles[0].Manages = []string{"ghost"}
+	warnings := map[string]config.Warning{}
+	for _, w := range c.Warnings() {
+		warnings[w.Path] = w
+	}
+	seen := map[advisor.Class]bool{}
+	for _, f := range read(c, "r1").Findings {
+		w, ok := warnings[f.Path]
+		if !ok || f.Source != advisor.SourceStatic {
+			continue
+		}
+		seen[f.Class] = true
+		if w.Title == "" || f.Title != w.Title+"." || f.Item != w.Item {
+			t.Errorf("%s at %s: listed as %q (%q), want %q (%q)", f.Class, f.Path, f.Title, f.Item,
+				w.Title+".", w.Item)
+		}
+		unclassed := f.Class == advisor.ClassConfigAdvisory || f.Class == advisor.ClassConfigReference
+		if unclassed && f.Why != w.Person {
+			t.Errorf("%s at %s: why = %q, want its person words %q", f.Class, f.Path, f.Why, w.Person)
+		}
+	}
+	for _, class := range []advisor.Class{advisor.ClassConfigAdvisory, advisor.ClassConfigReference,
+		advisor.ClassAuxiliaryModel, advisor.ClassScheduleFrequent, advisor.ClassHealthUnheld} {
+		if !seen[class] {
+			t.Errorf("%s is never listed here, so its words are not checked", class)
+		}
+	}
+}
+
+// FINDINGS OF ONE CLASS ABOUT DIFFERENT SUBJECTS SAY THE SAME: six agents
+// learning on their own model, two schedules polling, two schedules that
+// rarely change anything and two sandboxes out of memory are four things to
+// know, each said once. What tells the findings of one class apart is their
+// Subject, Item and Names, never their words.
+//
+// Mutation: put a seat's name, a schedule's name, a model or a count back
+// into one class's title or why, and this goes red.
+func TestFindingsOfOneClassSayTheSameAboutEverySubject(t *testing.T) {
+	t.Parallel()
+	// Two schedules whose eight fires moved nothing (one of them PM's), and
+	// SRE's other two frequent ones left to be said as frequent.
+	var fires []advisor.ScheduleFire
+	for _, s := range []advisor.ScheduleFire{{Seat: "sre", Name: "health-check"}, {Seat: "pm", Name: "standup"}} {
+		for range 8 {
+			fires = append(fires, s)
+		}
+	}
+	ev := advisor.Evidence{Fires: fires, MemoryKills: []advisor.MemoryKill{
+		{Seat: "app", MemoryBytes: 2 << 30}, {Seat: "app", MemoryBytes: 2 << 30},
+		{Seat: "qa"}, {Seat: "qa"}, {Seat: "qa"},
+	}}
+	answer := advisor.ReadWithEvidence(advisor.Inputs{Company: liveShape(t), Revision: "r1"}, ev)
+	byClass := map[advisor.Class][]advisor.Finding{}
+	for _, f := range answer.Findings {
+		byClass[f.Class] = append(byClass[f.Class], f)
+	}
+	for _, class := range []advisor.Class{advisor.ClassAuxiliaryModel, advisor.ClassScheduleFrequent,
+		advisor.ClassScheduleUnproductive, advisor.ClassSandboxOutOfMemory} {
+		found := byClass[class]
+		if len(found) < 2 {
+			t.Errorf("%s: %d findings, want two or more to compare", class, len(found))
+			continue
+		}
+		subjects := map[string]bool{}
+		for _, f := range found {
+			subjects[f.Subject.Seat+"/"+f.Subject.Schedule+"/"+f.Item] = true
+			if f.Title != found[0].Title || f.Why != found[0].Why {
+				t.Errorf("%s says two things: %q / %q and %q / %q", class,
+					found[0].Title, found[0].Why, f.Title, f.Why)
+			}
+		}
+		if len(subjects) != len(found) {
+			t.Errorf("%s: the findings do not name their subjects apart: %+v", class, found)
+		}
+	}
+	for _, f := range byClass[advisor.ClassScheduleFrequent] {
+		if f.Subject.Schedule == "" || !strings.HasPrefix(f.Item, f.Subject.Schedule+" (") ||
+			!strings.HasSuffix(f.Item, " a day)") {
+			t.Errorf("a frequent schedule's item is %q, want its name and how often it runs", f.Item)
+		}
+	}
+}
+
 func TestAHealthChangeIsOfferedForEveryAgentAndNoPerson(t *testing.T) {
 	t.Parallel()
 	for _, f := range read(liveShape(t), "r1").Findings {
@@ -332,9 +430,9 @@ func TestTheAdvisorImportsNoWritePath(t *testing.T) {
 }
 
 // A SCHEDULE WHOSE FIRES RARELY MOVE WORK IS THE OWNER'S COST, with
-// schedule.frequent's fix; a frequent schedule says what its fires did and how
-// many turns it starts in a plan window, and one that is also unproductive is
-// said once, as the cost. An unread source adds nothing.
+// schedule.frequent's fix; a frequent schedule counts what its fires did, and
+// one that is also unproductive is said once, as the cost. An unread source
+// adds nothing.
 func TestAScheduleWhoseFiresRarelyMoveWorkIsTheOwnersCost(t *testing.T) {
 	t.Parallel()
 	c := liveShape(t)
@@ -357,11 +455,10 @@ func TestAScheduleWhoseFiresRarelyMoveWorkIsTheOwnersCost(t *testing.T) {
 	}
 	cost := of(advisor.ClassScheduleUnproductive, "health-check")
 	if cost == nil || cost.Severity != advisor.SeverityCosts || cost.Actor != advisor.ActorOwner ||
-		cost.Title != "health-check ran 12 times and changed something once." ||
-		!strings.Contains(cost.Why, "11 of them moved no work") ||
-		!strings.Contains(cost.Why, "about 0.4 turns in every five-hour plan window") ||
+		cost.Item != "health-check (changed something once in 12 runs)" ||
+		!slices.Equal(cost.Evidence, []advisor.Fact{{Key: "fires", Value: 12}, {Key: "moved", Value: 1}}) ||
 		cost.Fix.Kind != advisor.FixConfigChange || len(cost.Fix.Options) != 2 {
-		t.Errorf("the health check's cost = %+v, want the owner's, its fires said, with the frequent fix", cost)
+		t.Errorf("the health check's cost = %+v, want the owner's, its fires counted, with the frequent fix", cost)
 	}
 	if of(advisor.ClassScheduleFrequent, "health-check") != nil {
 		t.Error("an unproductive schedule was said twice, as frequent too")
@@ -369,10 +466,14 @@ func TestAScheduleWhoseFiresRarelyMoveWorkIsTheOwnersCost(t *testing.T) {
 	if of(advisor.ClassScheduleUnproductive, "post-release") != nil {
 		t.Error("a schedule a quarter of whose fires moved work was called unproductive")
 	}
+	// THE WEEK'S TALLY IS EVIDENCE, never words: every frequent schedule's
+	// finding says the same.
+	tally := func(f *advisor.Finding) bool {
+		return slices.ContainsFunc(f.Evidence, func(e advisor.Fact) bool { return e.Key == "fires" })
+	}
 	frequent := of(advisor.ClassScheduleFrequent, "post-release")
-	if frequent == nil || !strings.Contains(frequent.Why, "it fired 8 times and 2 of them (25%) moved any work") ||
-		!strings.Contains(frequent.Why, "turns in every five-hour plan window") {
-		t.Errorf("post-release's frequent note = %+v, want what its fires did and its turns per window", frequent)
+	if frequent == nil || !slices.Equal(frequent.Evidence, []advisor.Fact{{Key: "fires", Value: 8}, {Key: "moved", Value: 2}}) {
+		t.Errorf("post-release's frequent note = %+v, want what its fires did as evidence", frequent)
 	}
 	// An agent that writes code, work or pages at a vendor does work the
 	// engine keeps no per-turn record of, so its schedules are not judged; one
@@ -388,15 +489,14 @@ func TestAScheduleWhoseFiresRarelyMoveWorkIsTheOwnersCost(t *testing.T) {
 		if got := of(advisor.ClassScheduleUnproductive, "health-check") != nil; got != judged {
 			t.Errorf("with GitHub %s, the health check judged = %v, want %v", access, got, judged)
 		}
-		if f := of(advisor.ClassScheduleFrequent, "post-release"); f == nil ||
-			strings.Contains(f.Why, "In the last 7 days it fired") != judged {
-			t.Errorf("with GitHub %s, post-release's frequent note = %+v, want its fires said only if judged", access, f)
+		if f := of(advisor.ClassScheduleFrequent, "post-release"); f == nil || tally(f) != judged {
+			t.Errorf("with GitHub %s, post-release's frequent note = %+v, want its fires counted only if judged", access, f)
 		}
 	}
 	ev.FiresUnread = true
 	unread := advisor.ReadWithEvidence(advisor.Inputs{Company: c, Revision: "r1"}, ev)
-	for _, f := range unread.Findings {
-		if f.Class == advisor.ClassScheduleUnproductive || strings.Contains(f.Why, "In the last 7 days it fired") {
+	for i, f := range unread.Findings {
+		if f.Class == advisor.ClassScheduleUnproductive || tally(&unread.Findings[i]) {
 			t.Errorf("an unread source raised %+v", f)
 		}
 	}

@@ -381,10 +381,18 @@ func (c *Company) accessAdvisories() []Warning {
 		if server.IsShared() {
 			running = "its one instance still starts (turn it off with enabled: false to start nothing)"
 		}
-		out = append(out, advisory(at(idx(field("mcp_servers"), i), "access"), fmt.Sprintf(
+		w := grantedToNobodyAdvice.raise(at(idx(field("mcp_servers"), i), "access"), fmt.Sprintf(
 			"%q is granted to no agent seat, so no agent is offered its tools and %s. Name the "+
 				"units or seats that get it, or remove access to grant it to every agent",
-			server.Name, running)))
+			server.Name, running))
+		w.Item = server.Name
+		out = append(out, w)
 	}
 	return out
 }
+
+// grantedToNobodyAdvice is [Company.accessAdvisories]' rule; the warning's
+// Item is the server.
+var grantedToNobodyAdvice = says("MCP servers no agent may use",
+	"No agent may use this MCP server, so what it offers goes unused. Choose who gets it, or "+
+		"open it to every agent.")

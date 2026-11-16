@@ -1709,15 +1709,14 @@ export interface ConfigWarning {
   /**
    * The warning in the words of the person who owns the company, beside
    * `message`, which is the operator's: what it risks and what to do, naming
-   * no document key. Every classed advisory carries it and no other warning
-   * does; it is the same for every warning of one class about another seat
-   * (`seat` names which), so a screen says it once. Read through
-   * `warningWords`.
+   * no document key. Every advisory carries it, the same for every warning of
+   * one rule (`seat`, `unit` and `item` name what each is about), so a screen
+   * says it once. Read through `warningWords`.
    */
   person?: string;
   /**
-   * What a classed advisory is about in a few words, the same for every
-   * warning of its class: a list's title, with `person` as the explanation.
+   * What an advisory is about in a few words, the same for every warning of
+   * its rule: a list's title, with `person` as the explanation.
    */
   title?: string;
   /** The one thing within the seat or unit it is about: a schedule's name and how often it runs. */

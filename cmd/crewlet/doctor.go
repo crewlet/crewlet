@@ -103,7 +103,15 @@ func renderFindings(w io.Writer, a advisor.Answer, withWords bool) {
 	if withWords {
 		fmt.Fprintln(w)
 		for i, f := range a.Findings {
-			fmt.Fprintf(w, "%d. %s %s\n", i+1, f.Title, f.Why)
+			// A finding worded alike for every subject names its specifics apart.
+			line := f.Title + " " + f.Why
+			if f.Item != "" {
+				line += " (" + f.Item + ")"
+			}
+			if len(f.Names) > 0 {
+				line += " " + words.And(f.Names) + "."
+			}
+			fmt.Fprintf(w, "%d. %s\n", i+1, line)
 		}
 	}
 	fmt.Fprintf(w, "\nAt revision %s. An owner finding's fix is sent from the dashboard or with "+
