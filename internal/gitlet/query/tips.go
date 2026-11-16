@@ -72,8 +72,8 @@ func (r *read) recallTips(ctx context.Context, at cursor) (gitlet.GitAnswer, boo
 			if _, held := r.tips.sides[pair]; held {
 				continue
 			}
-			body, ok := r.s.o.Cache.MemoGet(r.synced, tipSidesKey(pair[0], pair[1]))
-			if behind, ahead, err := decodeSides(body); ok && err == nil {
+			body, found := r.s.o.Cache.MemoGet(r.synced, tipSidesKey(pair[0], pair[1]))
+			if behind, ahead, err := decodeSides(body); found && err == nil {
 				r.tips.sides[pair] = [2]int{behind, ahead}
 			} else {
 				whole = false
