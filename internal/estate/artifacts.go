@@ -57,6 +57,10 @@ type ArtifactsReader interface {
 	// The adopted brand.
 	Brand(ctx context.Context, fresh statelog.Freshness) (artifactsdomain.Adoption, bool, error)
 	BrandFile(ctx context.Context, hash objstore.Hash) (artifactsdomain.BrandFile, error)
+
+	// Comment threads.
+	Threads(ctx context.Context, id artifacts.ID) ([]artifactsdomain.CommentThread, error)
+	Thread(ctx context.Context, id artifacts.ID, thread uuid.UUID) (artifactsdomain.CommentThread, error)
 }
 
 // ArtifactsWriter is the artifacts write side: exactly the domain writer's
@@ -102,6 +106,20 @@ type ArtifactsWriter interface {
 	AdoptBrand(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.BrandAdoptInput) (
 		artifactsdomain.Written, error)
 	ClearBrand(ctx context.Context, c artifactsdomain.Call) (artifactsdomain.Written, error)
+
+	// Comment threads.
+	OpenThread(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.ThreadInput) (
+		artifactsdomain.Commented, error)
+	Reply(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.ReplyInput) (
+		artifactsdomain.Commented, error)
+	EditRemark(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.RemarkEdit) (
+		artifactsdomain.Written, error)
+	RemoveRemark(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.RemarkRemoval) (
+		artifactsdomain.Written, error)
+	Resolve(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.ResolveInput) (
+		artifactsdomain.Written, error)
+	Reopen(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.ReopenInput) (
+		artifactsdomain.Written, error)
 }
 
 // ArtifactsHalf is the artifacts estate a data node serves: its reader and its
@@ -382,6 +400,117 @@ var opArtifactBrandFile = define("artifacts.brand_file", opRead, artifactsDomain
 		}
 		return r.BrandFile(ctx, a.Hash)
 	})
+
+// ---- comment threads: reads ---------------------------------------------- //
+
+var opArtifactThreads = define("artifacts.threads", opRead, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a artifactRefArgs) ([]artifactsdomain.CommentThread, error) {
+		r, err := b.artifactsReader()
+		if err != nil {
+			return nil, err
+		}
+		return r.Threads(ctx, a.ID)
+	})
+
+type commentThreadArgs struct {
+	ID     artifacts.ID
+	Thread uuid.UUID
+}
+
+var opArtifactThread = define("artifacts.thread", opRead, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a commentThreadArgs) (artifactsdomain.CommentThread, error) {
+		r, err := b.artifactsReader()
+		if err != nil {
+			return artifactsdomain.CommentThread{}, err
+		}
+		return r.Thread(ctx, a.ID, a.Thread)
+	})
+
+// ---- comment threads: writes ---------------------------------------------- //
+
+type openThreadArgs struct {
+	Call  artifactsdomain.Call
+	Input artifactsdomain.ThreadInput
+}
+
+var opArtifactOpenThread = define("artifacts.open_thread", opOnceWrite, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a openThreadArgs) (artifactsdomain.Commented, error) {
+		w, err := b.artifactsWriter()
+		if err != nil {
+			return artifactsdomain.Commented{}, err
+		}
+		return w.OpenThread(ctx, a.Call, a.Input)
+	}).repeatableWhen(func(a openThreadArgs) bool { return keyedCall(a.Call) })
+
+type replyArgs struct {
+	Call  artifactsdomain.Call
+	Input artifactsdomain.ReplyInput
+}
+
+var opArtifactReply = define("artifacts.reply", opOnceWrite, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a replyArgs) (artifactsdomain.Commented, error) {
+		w, err := b.artifactsWriter()
+		if err != nil {
+			return artifactsdomain.Commented{}, err
+		}
+		return w.Reply(ctx, a.Call, a.Input)
+	}).repeatableWhen(func(a replyArgs) bool { return keyedCall(a.Call) })
+
+type editRemarkArgs struct {
+	Call  artifactsdomain.Call
+	Input artifactsdomain.RemarkEdit
+}
+
+var opArtifactEditRemark = define("artifacts.edit_remark", opOnceWrite, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a editRemarkArgs) (artifactsdomain.Written, error) {
+		w, err := b.artifactsWriter()
+		if err != nil {
+			return artifactsdomain.Written{}, err
+		}
+		return w.EditRemark(ctx, a.Call, a.Input)
+	}).repeatableWhen(func(a editRemarkArgs) bool { return keyedCall(a.Call) })
+
+type removeRemarkArgs struct {
+	Call  artifactsdomain.Call
+	Input artifactsdomain.RemarkRemoval
+}
+
+var opArtifactRemoveRemark = define("artifacts.remove_remark", opOnceWrite, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a removeRemarkArgs) (artifactsdomain.Written, error) {
+		w, err := b.artifactsWriter()
+		if err != nil {
+			return artifactsdomain.Written{}, err
+		}
+		return w.RemoveRemark(ctx, a.Call, a.Input)
+	}).repeatableWhen(func(a removeRemarkArgs) bool { return keyedCall(a.Call) })
+
+type resolveArgs struct {
+	Call  artifactsdomain.Call
+	Input artifactsdomain.ResolveInput
+}
+
+var opArtifactResolve = define("artifacts.resolve_thread", opOnceWrite, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a resolveArgs) (artifactsdomain.Written, error) {
+		w, err := b.artifactsWriter()
+		if err != nil {
+			return artifactsdomain.Written{}, err
+		}
+		return w.Resolve(ctx, a.Call, a.Input)
+	}).repeatableWhen(func(a resolveArgs) bool { return keyedCall(a.Call) })
+
+type reopenArgs struct {
+	Call  artifactsdomain.Call
+	Input artifactsdomain.ReopenInput
+}
+
+var opArtifactReopen = define("artifacts.reopen_thread", opOnceWrite, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a reopenArgs) (artifactsdomain.Written, error) {
+		w, err := b.artifactsWriter()
+		if err != nil {
+			return artifactsdomain.Written{}, err
+		}
+		return w.Reopen(ctx, a.Call, a.Input)
+	}).repeatableWhen(func(a reopenArgs) bool { return keyedCall(a.Call) })
 
 // ---- the folder tree and the brand: writes ---------------------------------- //
 
@@ -958,6 +1087,57 @@ func (a Artifacts) AdoptBrand(ctx context.Context, c artifactsdomain.Call,
 // ClearBrand withdraws the company's adopted brand.
 func (a Artifacts) ClearBrand(ctx context.Context, c artifactsdomain.Call) (artifactsdomain.Written, error) {
 	return a.written(call(ctx, a.r, opArtifactClearBrand, nil, brandClearArgs{Call: c}))
+}
+
+// Threads answers every comment thread of an artifact, with its remarks.
+func (a Artifacts) Threads(ctx context.Context, id artifacts.ID) ([]artifactsdomain.CommentThread, error) {
+	return call(ctx, a.r, opArtifactThreads, nil, artifactRefArgs{ID: id})
+}
+
+// Thread answers one comment thread, with its remarks.
+func (a Artifacts) Thread(ctx context.Context, id artifacts.ID, thread uuid.UUID) (
+	artifactsdomain.CommentThread, error) {
+	return call(ctx, a.r, opArtifactThread, nil, commentThreadArgs{ID: id, Thread: thread})
+}
+
+// OpenThread opens a comment thread with its first remark.
+func (a Artifacts) OpenThread(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.ThreadInput) (
+	artifactsdomain.Commented, error) {
+	out, err := call(ctx, a.r, opArtifactOpenThread, nil, openThreadArgs{Call: c, Input: in})
+	a.r.Observe(out.Result.Position)
+	return out, err
+}
+
+// Reply adds a remark to a comment thread.
+func (a Artifacts) Reply(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.ReplyInput) (
+	artifactsdomain.Commented, error) {
+	out, err := call(ctx, a.r, opArtifactReply, nil, replyArgs{Call: c, Input: in})
+	a.r.Observe(out.Result.Position)
+	return out, err
+}
+
+// EditRemark replaces a remark's body, by its author.
+func (a Artifacts) EditRemark(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.RemarkEdit) (
+	artifactsdomain.Written, error) {
+	return a.written(call(ctx, a.r, opArtifactEditRemark, nil, editRemarkArgs{Call: c, Input: in}))
+}
+
+// RemoveRemark removes a remark.
+func (a Artifacts) RemoveRemark(ctx context.Context, c artifactsdomain.Call,
+	in artifactsdomain.RemarkRemoval) (artifactsdomain.Written, error) {
+	return a.written(call(ctx, a.r, opArtifactRemoveRemark, nil, removeRemarkArgs{Call: c, Input: in}))
+}
+
+// Resolve marks a comment thread addressed by a version.
+func (a Artifacts) Resolve(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.ResolveInput) (
+	artifactsdomain.Written, error) {
+	return a.written(call(ctx, a.r, opArtifactResolve, nil, resolveArgs{Call: c, Input: in}))
+}
+
+// Reopen opens a resolved comment thread again.
+func (a Artifacts) Reopen(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.ReopenInput) (
+	artifactsdomain.Written, error) {
+	return a.written(call(ctx, a.r, opArtifactReopen, nil, reopenArgs{Call: c, Input: in}))
 }
 
 // written observes a write's position for the next read's floor and answers it.
