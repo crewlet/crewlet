@@ -80,4 +80,13 @@
 // own, not the SDK's. Nothing outside here should have to know which SDK the
 // engine speaks MCP with, and the SDK's typed surface is lossy in one place
 // that matters (again: annotations.go).
+//
+// # An image a tool's answer carries
+//
+// A first-party tool may hand the model a picture to see beside its text
+// ([Result.Images], image.go): at most [MaxImages], each a PNG, JPEG or WebP
+// within [MaxImageBytes], its type read from its bytes, never taken on its
+// word. An image cannot be fenced (ADR-0040), so it rides only beside text,
+// and that text says whose picture it is. A third-party server's image stays
+// the one line [Block.Render] writes: nothing the engine wrote says whose it is.
 package mcp
