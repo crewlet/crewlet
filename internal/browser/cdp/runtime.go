@@ -19,10 +19,9 @@ var runtimeRunIfWaitingForDebugger = Method[struct{}, struct{}]{name: "Runtime.r
 
 // RuntimeEnable is Runtime.enable: report the target's execution contexts.
 // It also has Chromium send the page's console calls and its uncaught
-// exceptions (Runtime.consoleAPICalled, Runtime.exceptionThrown), which this
-// package declares no event for and no listener can ask for: each is dropped
-// as it arrives, past ReadLimit as below it. First consumer: isolated worlds
-// and the landing check (internal/browser).
+// exceptions ([RuntimeConsoleAPICalled], [RuntimeExceptionThrown]), each
+// dropped as it arrives unless a listener asked for it. First consumer:
+// isolated worlds and the landing check (internal/browser).
 var RuntimeEnable = Method[struct{}, struct{}]{name: "Runtime.enable"}
 
 // RuntimeEvaluate is Runtime.evaluate: run an expression in one context —
@@ -136,6 +135,49 @@ type ExceptionDetails struct {
 	ColumnNumber int64         `json:"columnNumber"`
 	URL          string        `json:"url"`
 	Exception    *RemoteObject `json:"exception"`
+	StackTrace   *StackTrace   `json:"stackTrace"`
+	// ExecutionContextID is the context the script ran in.
+	ExecutionContextID ExecutionContextID `json:"executionContextId"`
+}
+
+// StackTrace is Runtime.StackTrace: where a console call or an exception came
+// from, innermost frame first.
+type StackTrace struct {
+	CallFrames []CallFrame `json:"callFrames"`
+}
+
+// CallFrame is Runtime.CallFrame: one frame of a stack, its line and column
+// counted from zero.
+type CallFrame struct {
+	FunctionName string `json:"functionName"`
+	URL          string `json:"url"`
+	LineNumber   int64  `json:"lineNumber"`
+	ColumnNumber int64  `json:"columnNumber"`
+}
+
+// RuntimeConsoleAPICalled is Runtime.consoleAPICalled: a page called the
+// console. Its arguments are the page's, so one past ReadLimit ends the
+// session whose listener asked for it, and no other. First consumer: the
+// artifact render's console report (internal/artifactrender).
+var RuntimeConsoleAPICalled = Event[RuntimeConsoleAPICalledEvent]{name: "Runtime.consoleAPICalled"}
+
+// RuntimeConsoleAPICalledEvent is Runtime.consoleAPICalled's parameters.
+type RuntimeConsoleAPICalledEvent struct {
+	// Type is "log", "warning", "error", "assert", "info", "debug" or
+	// another console method Chromium names.
+	Type               string             `json:"type"`
+	Args               []RemoteObject     `json:"args"`
+	ExecutionContextID ExecutionContextID `json:"executionContextId"`
+	StackTrace         *StackTrace        `json:"stackTrace"`
+}
+
+// RuntimeExceptionThrown is Runtime.exceptionThrown: a script threw and
+// nothing caught it. First consumer: the artifact render's console report.
+var RuntimeExceptionThrown = Event[RuntimeExceptionThrownEvent]{name: "Runtime.exceptionThrown"}
+
+// RuntimeExceptionThrownEvent is Runtime.exceptionThrown's parameters.
+type RuntimeExceptionThrownEvent struct {
+	ExceptionDetails ExceptionDetails `json:"exceptionDetails"`
 }
 
 // RuntimeBindingCalled is Runtime.bindingCalled: a page called a binding.
