@@ -353,6 +353,32 @@ member's loopback client listener on an embedded fleet —
 [Reaching an embedded fleet's broker with the nats tool](../guides/deployment.md#reaching-an-embedded-fleets-broker-with-the-nats-tool)) still
 reads through any replica.
 
+### A renewal of its own write is one round trip
+
+A lease renewal is the one write a node makes of every lease it holds on every
+heartbeat, and it used to read its record from the leader first — to learn that
+the record was still there, still named this owner at this epoch, and the
+revision to write at — and then write it: two round trips a seat. The store
+already knows all three for a lease it holds. It wrote the record itself, and
+the broker gave that write a revision it never hands out again. So the store
+keeps, per resource, the record it last wrote and that revision, and a renewal
+is **one write at that revision**: it lands only while the record is still
+exactly that write, with no peer's claim, release or reap since, which is
+everything the read established. A write refused on that comparison says only
+that the record moved, so the renewal then reads it and decides as it always
+did; one nobody answered is *unknown*, as before. A node's presence, which is
+renewed by a claim, starts from the same knowledge: its write and the read that
+returns the store's deadline, two round trips rather than three.
+
+**Only a record that cannot lapse while it can be read is renewed this way**: a
+seat or presence lease taken for the whole age of `leases`, which the bucket
+removes at its deadline, so a record still there is a live one. A record judged
+by its own deadline against the store's clock — every lease in `duties`, and a
+seat lease asked for less than the bucket's age — can lapse while it is still
+there, and a lapsed lease is never renewed, only re-acquired at a new epoch. A
+write at its revision would land on a lapsed lease, so its renewal still reads
+the record and the store's clock first.
+
 ### What a leader read does not promise
 
 A leader cut off from its quorum does not know it at once. Until nats-server's

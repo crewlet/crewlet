@@ -118,7 +118,8 @@
 // exactly the wrong token: a conditional write predicated on it matches an
 // unset column, and TryAcquire has not returned, so nothing can be written
 // under it. Exactly one claimant gets past step 1, so exactly one advances the
-// counter. A renew is still one write.
+// counter. A renew is still one write, and where this store wrote the record
+// last it is nothing else (below).
 //
 // A claim that fails AFTER step 1 GIVES THE RECORD BACK ([Store.abandon]). It
 // used to leave it claiming until its TTL, on the reasoning that a claimant
@@ -135,6 +136,33 @@
 // a tenure that did commit. What still lapses on its TTL is the record of a
 // claimant that could not give it back: one that died, or whose store refused
 // the give-back too.
+//
+// # A renewal of a record this store last wrote is one round trip
+//
+// A renewal used to read the record from the leader and then write it at the
+// revision it read: two round trips per seat, every renew period, which across
+// a link of a hundred milliseconds is a fifth of a second a seat, and a pass
+// renewing its seats one after another outran the floor TTL's renew period at
+// twenty seats. Yet the read tells this store nothing it does not already know
+// of a lease it holds: the store wrote the record itself, and the broker
+// handed that write a revision it never hands out again. So the store keeps,
+// per resource, the record it last wrote and the revision it got
+// ([knownRecords], known.go), and [Store.Renew] of a tenure it knows sends ONE
+// conditional write at that revision. It lands only while the record is still
+// exactly that write — no peer's claim, no release, no reap since — which is
+// everything the read would have established; one refused on its comparison
+// reads and decides as before. [Store.TryAcquire] starts its first round from
+// the same knowledge for a resource its own owner holds, so the presence's
+// renewal is its write and settle's read-back, two round trips rather than
+// three.
+//
+// ONLY A RECORD THAT CANNOT LAPSE WHILE IT CAN BE READ is known: a seat or
+// presence lease taken at the seat lease bucket's whole age, which the bucket
+// reaps at its deadline. A record judged by its deadline against the store's
+// clock — every duty, and a seat lease shorter than its bucket's age — can
+// lapse and still be there, and a write at its revision would renew a lapsed
+// lease, which is deliberately not renewable. Such a renewal still reads the
+// record and the store's clock first.
 //
 // # The protocol gate degrades, deliberately
 //
@@ -255,10 +283,12 @@
 // The cost, measured on an in-process cluster: a leader read takes 40–220 µs
 // at the median where a direct get takes 25–135 µs — the hop to the leader
 // when the caller's member is not it — and 27,000 reads a second through one
-// member's client where direct gets reached 50,000. A fleet's lease reads are
+// member's client where direct gets reached 50,000. A fleet's lease reads were
 // its heartbeats, one read per held lease per renew, so ten thousand seats on
-// the fifteen-second seat heartbeat ask for under seven hundred a second: a
-// few percent of that ceiling. What a direct get would buy back is served by
+// the fifteen-second seat heartbeat asked for under seven hundred a second: a
+// few percent of that ceiling. A renewal of a record this store last wrote
+// reads nothing now (above), so what remains is the presence's read-back and
+// the reads of a renewal whose record moved. What a direct get would buy back is served by
 // nothing here, because every read in this package is one a caller acts on as
 // current — which is why none of them stays direct.
 //
@@ -526,6 +556,11 @@ type Store struct {
 	// which is what every gated claim and FleetProtocolFloor judge instead
 	// of listing the fleet's leases.
 	gate *gateView
+
+	// known is the last record this store wrote of each lease it holds
+	// that cannot lapse while it can be read, at its revision: what makes
+	// a renewal of one a single conditional write (known.go).
+	known knownRecords
 
 	// beforeMint, set only by this package's tests, is called as a claim
 	// that won its record is about to advance the counter: how the shared
@@ -900,8 +935,14 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 	// minting, which names the answer if every round is spent: each round
 	// that reaches the record sets it before it can go round again.
 	var sibling bool
-	for range casAttempts {
-		snap, err := s.readForClaim(ctx, l, resource)
+	for attempt := range casAttempts {
+		// THE FIRST ROUND STARTS FROM WHAT THIS STORE LAST WROTE, where it
+		// knows the record and the record names this owner: a claim that
+		// renews its own lease — the presence on every beat, a sweep's
+		// re-claim of a seat it holds — then writes at that revision
+		// without reading first, and a record that moved since refuses the
+		// write, which sends the next round to read it (known.go).
+		snap, err := s.claimSnapshot(ctx, l, resource, opts.Owner, attempt == 0)
 		if err != nil {
 			return nil, "", err
 		}
@@ -998,6 +1039,7 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 			// Update at the read revision is the fencing CAS: it fails if
 			// anything at all wrote the record since we read it.
 			if _, err := l.kv.Update(ctx, key, data, mine.revision); err != nil {
+				s.known.forgetAt(resource, mine.revision)
 				if errors.Is(err, jetstream.ErrKeyRevisionMismatch) {
 					continue
 				}
@@ -1198,7 +1240,26 @@ func (s *Store) settle(
 			return nil, coord.RefusedProtocol, nil
 		}
 	}
+	// THE READ-BACK IS WHAT IS KNOWN, never the value written: it is the
+	// leader's newest, so a sibling's renewal that landed in between is the
+	// revision the next renewal writes at.
+	s.known.remember(l, resource, mine.revision, mine.value)
 	return mine.lease(), "", nil
+}
+
+// claimSnapshot is what a claim's round decides on: on the first round, the
+// record this store last wrote of resource where it is known and names owner
+// ([knownRecords.lookup]), and otherwise the record as the leader holds it
+// ([Store.readForClaim]).
+func (s *Store) claimSnapshot(ctx context.Context, l *lane, resource, owner string,
+	first bool) (snapshot, error) {
+
+	if first {
+		if mine, ok := s.known.lookup(l, resource, owner); ok {
+			return snapshot{mine: &mine, clock: s.newClock()}, nil
+		}
+	}
+	return s.readForClaim(ctx, l, resource)
 }
 
 // yield gives back a claim the protocol gate's re-check refused, when the
@@ -1345,12 +1406,23 @@ func (s *Store) giveBack(ctx context.Context, l *lane, resource string, claiming
 // Deliberately NOT gated: it extends a hold this node already has and is
 // already acting on, so refusing it during a mixed-version window would drop a
 // seat mid-turn rather than prevent anything.
+//
+// ONE ROUND TRIP where this store knows the record — it wrote it last, and it
+// cannot lapse while it can be read ([knownRecords]): the write at that
+// revision is the whole decision. Otherwise, and once that write is refused
+// on its comparison, it reads the record and decides.
 func (s *Store) Renew(ctx context.Context, resource, owner string, epoch int64, ttl time.Duration) (bool, error) {
 	l := s.laneFor(resource)
 	if err := s.validateTTL(l, resource, owner, ttl); err != nil {
 		return false, err
 	}
 	key := encodeResource(resource)
+
+	if known, ok := s.known.lookup(l, resource, owner); ok && known.value.Epoch == epoch {
+		if renewed, decided, err := s.renewKnown(ctx, l, key, known, ttl); decided {
+			return renewed, err
+		}
+	}
 
 	for range casAttempts {
 		e, err := s.readOne(ctx, l, resource)
@@ -1363,10 +1435,14 @@ func (s *Store) Renew(ctx context.Context, resource, owner string, epoch int64, 
 		// zombie heartbeat from before the gap carries the same owner
 		// string as the live tenure, and only the epoch tells them apart.
 		if e == nil || e.value.Owner != owner || e.value.Epoch != epoch {
+			s.known.forgetTenure(resource, owner, epoch)
 			return false, nil
 		}
 		live, err := s.tenure(ctx, *e, s.newClock())
 		if err != nil || !live {
+			if err == nil {
+				s.known.forgetTenure(resource, owner, epoch)
+			}
 			return false, err
 		}
 		value := e.value
@@ -1375,7 +1451,8 @@ func (s *Store) Renew(ctx context.Context, resource, owner string, epoch int64, 
 		if err != nil {
 			return false, err
 		}
-		if _, err := l.kv.Update(ctx, key, data, e.revision); err != nil {
+		rev, err := l.kv.Update(ctx, key, data, e.revision)
+		if err != nil {
 			// A lost CAS is NOT a lost lease: our own concurrent
 			// heartbeat writes the same record. Re-read and re-decide
 			// rather than telling the caller to shed every seat.
@@ -1384,9 +1461,39 @@ func (s *Store) Renew(ctx context.Context, resource, owner string, epoch int64, 
 			}
 			return false, unavailable("renew "+resource, err)
 		}
+		s.known.remember(l, resource, rev, value)
 		return true, nil
 	}
 	return false, contended("Renew", resource)
+}
+
+// renewKnown renews the record this store last wrote of a lease ([knownRecords])
+// with one write at its revision. decided is false when the write was refused
+// on its comparison: the record moved since, which says nothing about who holds
+// it, so the caller reads it and decides. Any other failure is unknown, as a
+// renewal's write always was.
+func (s *Store) renewKnown(ctx context.Context, l *lane, key string, known entry,
+	ttl time.Duration) (renewed, decided bool, err error) {
+
+	value := known.value
+	value.TTLNanos = int64(ttl)
+	data, err := encodeValue(value)
+	if err != nil {
+		return false, true, err
+	}
+	rev, err := l.kv.Update(ctx, key, data, known.revision)
+	switch {
+	case err == nil:
+		s.known.remember(l, known.resource, rev, value)
+		return true, true, nil
+	case errors.Is(err, jetstream.ErrKeyRevisionMismatch):
+		s.known.forgetAt(known.resource, known.revision)
+		return false, false, nil
+	default:
+		// It may have landed, at a revision nobody told us.
+		s.known.forgetAt(known.resource, known.revision)
+		return false, true, unavailable("renew "+known.resource, err)
+	}
 }
 
 // Release gives up a lease, predicated on owner AND epoch.
@@ -1403,6 +1510,9 @@ func (s *Store) Release(ctx context.Context, resource, owner string, epoch int64
 	}
 	l := s.laneFor(resource)
 	key := encodeResource(resource)
+	// The tenure is being given up, so nothing will renew it from here
+	// whatever the store answers.
+	s.known.forgetTenure(resource, owner, epoch)
 
 	for range casAttempts {
 		e, err := s.readOne(ctx, l, resource)
@@ -1753,7 +1863,7 @@ func (s *Store) held(ctx context.Context, e entry, clk *clock) (bool, error) {
 	// (the bucket's MaxAge reaps it), so a record that can still be read is
 	// live by construction, and no clock is consulted at all. This is the
 	// whole production path for seats and presence.
-	if e.lane.reapsAtMax && e.value.ttl() >= e.lane.maxTTL {
+	if liveWhilePresent(e.lane, e.value) {
 		return true, nil
 	}
 	now, err := clk.now(ctx, e.lane)
