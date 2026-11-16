@@ -54,20 +54,21 @@ announces nothing either, so the holder that kept the seat waited for neither
 for as long as that silence lasted. A completion it holds off itself after its
 claim waits for its instant instead (`sandbox.Coordinator.keptRefireIn`): a
 re-fire drops the hold, and one at five minutes claimed the job and ran its
-review into the same limit every five minutes until that instant. Its timer
-still fires every five minutes before the instant, and there does only what an
-announcement of the job does (`sandbox.Coordinator.recheckHeld`): past the
-turn's deadline the run is ended, and before it the hold is kept and the next
-backstop armed, so a turn whose deadline passes while no waiter announces the
-job ends within five minutes of it, rather than at the hold's instant. So does a
+review into the same limit every five minutes until that instant. So does a
 completion whose resume its seat's budget held on the run's row
 (`sandbox.Coordinator.keepHeldOnRow`): its delivery is spent by the hold, and
 the claim refuses a held row, so before the instant nothing carried the job
 but that host's waiter, and a re-fire then claimed nothing and dropped the
 keep; it is kept unheld, re-fired at the hold's instant and never sooner, and
 on its condition's signal once the lift of its hold has landed, and the seat's
-recovery keeps every held row it finds the same way. The claim is
-at-most-once, so any of them arriving together resume the run once. A seat this
+recovery keeps every held row it finds the same way. The timer of a completion
+held here still fires every five minutes before its instant, and there does
+only what an announcement of the job does (`sandbox.Coordinator.recheckHeld`):
+past the turn's deadline the run is ended, and before it the hold is kept and
+the next backstop armed, so a turn whose deadline passes while no waiter
+announces the job ends within five minutes of it, rather than at the hold's
+instant. The claim is at-most-once, so any of them arriving together resume
+the run once. A seat this
 node lets go of drops its kept completions, for the waiter that drives each
 run's box to announce to the seat's next holder.
 
