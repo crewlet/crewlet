@@ -58,9 +58,10 @@ type ArtifactsReader interface {
 	Brand(ctx context.Context, fresh statelog.Freshness) (artifactsdomain.Adoption, bool, error)
 	BrandFile(ctx context.Context, hash objstore.Hash) (artifactsdomain.BrandFile, error)
 
-	// Comment threads.
+	// Comment threads, and the work items whose assignees a comment wakes.
 	Threads(ctx context.Context, id artifacts.ID) ([]artifactsdomain.CommentThread, error)
 	Thread(ctx context.Context, id artifacts.ID, thread uuid.UUID) (artifactsdomain.CommentThread, error)
+	WorkItems(ctx context.Context, id artifacts.ID) ([]string, error)
 }
 
 // ArtifactsWriter is the artifacts write side: exactly the domain writer's
@@ -424,6 +425,15 @@ var opArtifactThread = define("artifacts.thread", opRead, artifactsDomain, false
 			return artifactsdomain.CommentThread{}, err
 		}
 		return r.Thread(ctx, a.ID, a.Thread)
+	})
+
+var opArtifactWorkItems = define("artifacts.work_items", opRead, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a artifactRefArgs) ([]string, error) {
+		r, err := b.artifactsReader()
+		if err != nil {
+			return nil, err
+		}
+		return r.WorkItems(ctx, a.ID)
 	})
 
 // ---- comment threads: writes ---------------------------------------------- //
@@ -1098,6 +1108,11 @@ func (a Artifacts) Threads(ctx context.Context, id artifacts.ID) ([]artifactsdom
 func (a Artifacts) Thread(ctx context.Context, id artifacts.ID, thread uuid.UUID) (
 	artifactsdomain.CommentThread, error) {
 	return call(ctx, a.r, opArtifactThread, nil, commentThreadArgs{ID: id, Thread: thread})
+}
+
+// WorkItems answers the work items an artifact was linked to or written for.
+func (a Artifacts) WorkItems(ctx context.Context, id artifacts.ID) ([]string, error) {
+	return call(ctx, a.r, opArtifactWorkItems, nil, artifactRefArgs{ID: id})
 }
 
 // OpenThread opens a comment thread with its first remark.

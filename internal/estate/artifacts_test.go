@@ -296,6 +296,13 @@ func (v *vault) Thread(_ context.Context, id artifacts.ID, thread uuid.UUID) (ar
 		ResolvedVersion: 3}, nil
 }
 
+func (v *vault) WorkItems(_ context.Context, id artifacts.ID) ([]string, error) {
+	if id == refused {
+		return nil, fmt.Errorf("%w: %s", artifactsdomain.ErrPurged, id)
+	}
+	return []string{"ENG-7", "ENG-9"}, nil
+}
+
 func (v *vault) OpenThread(_ context.Context, c artifactsdomain.Call, in artifactsdomain.ThreadInput) (
 	artifactsdomain.Commented, error) {
 	w := v.wrote(fmt.Sprintf("open_thread:%d:%s:%s:%s:%d:%s", in.Version, in.Anchor.Name, in.Quote,
@@ -466,6 +473,12 @@ func TestEveryArtifactsOperationCrossesWhole(t *testing.T) {
 	}
 	if _, err := a.Thread(ctx, id, uuid.New()); !errors.Is(err, artifactsdomain.ErrCommentNotFound) {
 		t.Errorf("a missing thread's refusal crossed as %v", err)
+	}
+	if items, err := a.WorkItems(ctx, id); err != nil || len(items) != 2 || items[1] != "ENG-9" {
+		t.Errorf("work items = (%v, %v)", items, err)
+	}
+	if _, err := a.WorkItems(ctx, refused); !errors.Is(err, artifactsdomain.ErrPurged) {
+		t.Errorf("a purged artifact's work items crossed as %v", err)
 	}
 	if got, err := a.OpenThread(ctx, jane, artifactsdomain.ThreadInput{Artifact: id, Body: "Total?",
 		Version: 2, Anchor: commentanchor.Anchor{Kind: commentanchor.KindHTML, Page: "index.html",
