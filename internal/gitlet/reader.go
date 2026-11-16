@@ -64,6 +64,8 @@ type Reader struct {
 	// refsScanned and activeCounted bound a refs listing's scan and its active
 	// count: MaxRefsScanned and MaxActiveBranchesCounted, or a test's.
 	refsScanned, activeCounted int
+	// spokenScanned bounds a live state's conversation side: MaxSpokenScanned, or a test's.
+	spokenScanned int
 }
 
 // ReaderOptions configure a reader.
@@ -101,7 +103,7 @@ func NewReader(o ReaderOptions) (*Reader, error) {
 	}
 	r := &Reader{log: o.Log, limits: o.Limits, roster: o.Roster, now: o.Now, pageRows: MaxSnapshotItems,
 		pageBytes: MaxPageBytes, tipWindow: MaxTipLandings, refsScanned: MaxRefsScanned,
-		activeCounted: MaxActiveBranchesCounted}
+		activeCounted: MaxActiveBranchesCounted, spokenScanned: MaxSpokenScanned}
 	if r.limits == nil {
 		r.limits = DefaultLimits
 	}
@@ -1934,7 +1936,8 @@ func (q ReadQuery) validate() error {
 // kindOwnedField refuses a field that one kind a principal reads alone reads
 // (a commit, an inbox, an inbox page's cards, a history page's commits, the
 // narrowing of a listing of repositories to the ones a rule protects, the
-// parts a counts read names, a repository's facts) on a read of any other
+// parts a counts read names, a repository's facts, a listing of changes'
+// order) on a read of any other
 // kind, the engine's own reads included ([ReadQuery.validate]).
 func (q ReadQuery) kindOwnedField() error {
 	switch {
@@ -1948,6 +1951,9 @@ func (q ReadQuery) kindOwnedField() error {
 	case len(q.NoticeCards) > 0 && q.Kind != ReadNoticeCards:
 		return fmt.Errorf("%w: notice_cards: only a notice_cards read names the changes whose cards it reads",
 			ErrInvalid)
+	case q.ChangeSort != "" && q.Kind != ReadChanges:
+		return fmt.Errorf("%w: change_sort: only a listing of changes is ordered by when its changes were "+
+			"opened or last moved", ErrInvalid)
 	case q.RefListing != nil && q.Kind != ReadRefs:
 		return fmt.Errorf("%w: ref_listing: only a refs listing is ordered, narrowed or read in detail",
 			ErrInvalid)

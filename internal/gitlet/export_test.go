@@ -52,6 +52,9 @@ func SetRefScanBounds(r *Reader, scanned, active int) {
 // MaxTipLandings pushes.
 func SetTipWindow(r *Reader, landings int) { r.tipWindow = landings }
 
+// SetSpokenScanBound has r read at most n conversations a page of a live state by last move.
+func SetSpokenScanBound(r *Reader, n int) { r.spokenScanned = n }
+
 // SetRetentionPace has r measure and pace its steps by clock and sleep, take
 // steps for budget, and read the listing page repositories at a time, rather
 // than the monotonic clock, a timer, RetentionPassBudget and retentionPage —

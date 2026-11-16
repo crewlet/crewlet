@@ -1381,8 +1381,12 @@ type ReadQuery struct {
 	// move first, and tests a terminal state and an owner on the rows it
 	// read; one that names any of those walks that one's index, in its order
 	// (a live state's newest opening first), and tests the window on each
-	// row.
+	// row. A live state asked by when its changes moved ([ChangeSortUpdated])
+	// walks by move and reads no change that moved before the window.
 	Window ChangeWindow `json:"window,omitempty"`
+	// ChangeSort orders a `changes` listing ([ChangeSort]); "" is its walk's own order. A request
+	// field, so an older build refuses it unread and the router asks the next node.
+	ChangeSort ChangeSort `json:"change_sort,omitempty"`
 	// Part is the list a `change` read pages beside the change — its
 	// revisions, which "" names too, its reviewers, its comments, its
 	// reviews, its findings or the asker's own standing findings

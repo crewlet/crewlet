@@ -327,6 +327,18 @@ func TestTheDashboardKnowsEveryWindowOfAListingOfChanges(t *testing.T) {
 	}
 }
 
+// THE DASHBOARD KNOWS EVERY SORT OF A LISTING OF CHANGES, in the engine's order: the `sort=` a
+// listing of changes is asked in is one of `CHANGE_SORTS` (`contract/code.ts`).
+//
+// Mutation: drop or reorder a sort on either side.
+func TestTheDashboardKnowsEverySortOfAListingOfChanges(t *testing.T) {
+	t.Parallel()
+	got, want := theDashboardsList(t, "CHANGE_SORTS"), spelledOut(gitlet.ChangeSorts())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's CHANGE_SORTS is %v, want the engine's, in order: %v", got, want)
+	}
+}
+
 // THE DASHBOARD KNOWS EVERY PRECONDITION A CHANGE'S READINESS JUDGES, in the
 // engine's order, and every state one stands in.
 //
