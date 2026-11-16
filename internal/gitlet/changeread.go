@@ -680,6 +680,9 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	if !found {
 		return fmt.Errorf("%w: %s", ErrChangeNotFound, ChangeRef(repo.ref.Name, q.Change))
 	}
+	if q.FindingPaths {
+		return r.changeFindingPaths(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)
+	}
 	switch q.Part {
 	case PartReviewers:
 		return r.changeReviewers(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)
@@ -725,6 +728,10 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		if mergeErr != nil {
 			return mergeErr
 		}
+		participants, participantsErr := participantsIn(ctx, tx, row.id)
+		if participantsErr != nil {
+			return participantsErr
+		}
 		// WHAT ITS CONVERSATION SAYS OF IT, from the row just read: the
 		// detail is the most re-read question of a change, so it pays no
 		// second statement for what [withConversations] would read of the
@@ -739,7 +746,7 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 			return readinessErr
 		}
 		out.Change = &ChangeDetail{ChangeSummary: repo.summary(row), Body: body, Authors: authors,
-			Conversation: conversation, Mergeability: merge}
+			Conversation: conversation, Mergeability: merge, Participants: participants}
 		out.Change.Readiness = readiness[row.id]
 		if q.DetailOnly {
 			// THE DETAIL ALONE: its asker reads no revision, so none is

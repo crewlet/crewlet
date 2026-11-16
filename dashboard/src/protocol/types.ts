@@ -8885,6 +8885,8 @@ export interface CodeChangeDetail extends CodeChangeSummary {
   conversation?: CodeConversationRow;
   /** Absent for a change its home has merged no revision of yet. */
   mergeability?: CodeMergeabilityRow;
+  /** Who takes part in its conversation, by handle (`gitlet.ParticipantList`); absent where not answered. */
+  participants?: CodeParticipantList;
 }
 
 /** A revision's facts, as its home Gitlet node recorded them (`gitlet.RevisionFactsRow`). */
@@ -8938,6 +8940,8 @@ export interface CodeReviewerRow {
   requested_by_kind: CodePartyKind;
   note?: string;
   position: LogPosition;
+  /** When the record at `position` landed; absent past the notices' horizon or for a record that told nobody. */
+  at?: string;
 }
 
 /** A verdict a review gives (`gitlet.Verdicts`). */
@@ -9019,6 +9023,8 @@ export interface CodeFindingRow {
   resolved_by_kind?: CodePartyKind;
   resolved_commit?: string;
   position: LogPosition;
+  /** When the review that raised it landed. */
+  raised_at?: string;
 }
 
 /**
@@ -9070,8 +9076,9 @@ export interface CodeDiffAnswer {
  * or the asker's own standing findings (`standing`, in `findings`);
  * `files` and `diff` a revision's files or one file's patch (`diff`), read by
  * object id on its home Gitlet node; `findings` placed in the revision asked
- * about (`placed`, by the finding's id); and `excerpts`, the lines around each
- * finding of a findings page as its own revision's diff marks them.
+ * about (`placed`, by the finding's id); `finding_paths`, its findings counted
+ * by path, state and revision; and `excerpts`, the lines around each finding of
+ * a findings page as its own revision's diff marks them.
  */
 export interface CodeChangeAnswer extends CodePage {
   change?: CodeChangeDetail;
@@ -9080,6 +9087,8 @@ export interface CodeChangeAnswer extends CodePage {
   comments?: CodeCommentRow[];
   reviews?: CodeReviewRow[];
   findings?: CodeFindingRow[];
+  /** The `finding_paths` part: its findings counted by path, state and revision. */
+  finding_paths?: CodeFindingPathRow[];
   /** The `files` and `diff` parts: the revision read at, and the one read since. */
   revision?: number;
   since_revision?: number;
@@ -9111,6 +9120,28 @@ export interface CodeExcerpt {
   lines: CodeExcerptLine[];
   /** The window held more lines than an excerpt shows. */
   more?: boolean;
+}
+
+/** One participant of a change's conversation (`gitlet.ParticipantRow`). */
+export interface CodeParticipantRow {
+  handle: string;
+  kind: CodePartyKind;
+  verdict?: CodeVerdict;
+  verdict_revision?: number;
+}
+
+/** A change's participants, at most 32, and how many more (`gitlet.ParticipantList`). */
+export interface CodeParticipantList {
+  rows: CodeParticipantRow[];
+  omitted?: number;
+}
+
+/** How many of a change's findings on one path stand in one state, raised on one revision. */
+export interface CodeFindingPathRow {
+  path: string;
+  state: string;
+  revision: number;
+  findings: number;
 }
 
 /** One handle a record about a change reached (`gitlet.RoutedRecipient`). */

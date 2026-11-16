@@ -153,6 +153,10 @@ func TestARowsComputedSizeIsItsEncodingsLength(t *testing.T) {
 		fill(rng, reflect.ValueOf(&finding).Elem())
 		check("finding", finding, finding.encodedBytes())
 
+		var byPath FindingPathRow
+		fill(rng, reflect.ValueOf(&byPath).Elem())
+		check("finding path", byPath, byPath.encodedBytes())
+
 		// A REPOSITORY'S PATH OWNERS, which MaxPathOwnersBytes bounds by this
 		// size: a list nil, empty or of owners whose globs may be either too.
 		var owners []PathOwner

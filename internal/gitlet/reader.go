@@ -156,7 +156,7 @@ func (r *Reader) chartFor(asker Principal, readiness bool) (Roster, error) {
 // which the chart judges: a listing of changes, and a change's first page of
 // its revisions, which carries its detail.
 func (q ReadQuery) judgesReadiness() bool {
-	return q.Kind == ReadChanges || q.Kind == ReadChange && q.Cursor == "" && q.Part.detailed() && !q.Brief
+	return q.Kind == ReadChanges || q.Kind == ReadChange && q.Cursor == "" && q.pagesDetail() && !q.Brief
 }
 
 // resolves reports a read that may resolve the repository it names
@@ -1482,7 +1482,7 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// deferrals order them — unless it resolves the repository, a point
 		// read of it whatever its page, as a `repo` read is
 		// ([ReadQuery.Resolve]).
-		query = fresh.Resolved(resolver(q.Repo), !q.Resolve && (q.Cursor != "" || !q.Part.detailed()))
+		query = fresh.Resolved(resolver(q.Repo), !q.Resolve && (q.Cursor != "" || !q.pagesDetail()))
 		serve = func(tx *sql.Tx, cp statelog.Position) error { return r.change(ctx, tx, q, chart, cp, &out) }
 	case ReadChangeRouting:
 		// A SET READ of the repository whose records write the change, as a
@@ -1844,6 +1844,9 @@ func (q ReadQuery) validate() error {
 	case len(q.FindingIDs) > 0 && q.Limit != 0:
 		return fmt.Errorf("%w: finding_ids: the findings named are the read's rows, which no limit cuts",
 			ErrInvalid)
+	case q.FindingPaths && (q.Part != "" || q.DetailOnly || q.Brief || len(q.FindingIDs) > 0):
+		return fmt.Errorf("%w: finding_paths: a change's findings by path are a page of their own, "+
+			"named by no part, detail_only, brief or finding_ids", ErrInvalid)
 	}
 	switch {
 	case q.Kind == ReadInbox && q.Repo != "":
@@ -1925,7 +1928,7 @@ func (q ReadQuery) validate() error {
 		}
 	}
 	bound := map[ReadKind]int{ReadRepos: MaxReposPerPage, ReadPushes: MaxPushesPerPage,
-		ReadRefs: MaxRefsPerPage, ReadChanges: MaxChangesPerPage, ReadChange: q.Part.maxPerPage(),
+		ReadRefs: MaxRefsPerPage, ReadChanges: MaxChangesPerPage, ReadChange: q.changePageMax(),
 		ReadChangeRouting: MaxRoutedRecordsPerPage, ReadReviews: MaxReviewsPerPage,
 		ReadChecks: MaxChecksPerPage, ReadQueue: MaxQueueRowsPerPage, ReadLandings: MaxLandingsPerPage,
 		ReadInbox: inbox.MaxRows}[q.Kind]
@@ -1945,7 +1948,7 @@ func (q ReadQuery) validate() error {
 // (a commit, an inbox, an inbox page's cards, a history page's commits, the
 // narrowing of a listing of repositories to the ones a rule protects, the
 // parts a counts read names, a repository's facts, a listing of changes'
-// order) on a read of any other
+// order, a change's findings by path) on a read of any other
 // kind, the engine's own reads included ([ReadQuery.validate]).
 func (q ReadQuery) kindOwnedField() error {
 	switch {
@@ -1956,6 +1959,8 @@ func (q ReadQuery) kindOwnedField() error {
 		return fmt.Errorf("%w: commit: only a commit read names a commit", ErrInvalid)
 	case q.Cards && q.Kind != ReadChanges:
 		return fmt.Errorf("%w: cards: only a listing of changes carries each change's card", ErrInvalid)
+	case q.FindingPaths && q.Kind != ReadChange:
+		return fmt.Errorf("%w: finding_paths: only a change read counts its findings by path", ErrInvalid)
 	case q.Inbox != nil && q.Kind != ReadInbox:
 		return fmt.Errorf("%w: inbox: only an inbox read names whose inbox it reads", ErrInvalid)
 	case len(q.NoticeCards) > 0 && q.Kind != ReadNoticeCards:
