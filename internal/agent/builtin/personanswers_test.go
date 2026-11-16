@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/commentanchor"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/caveat/caveattest"
@@ -191,6 +192,18 @@ func everyLandedAnswer(t *testing.T) map[string]tools.Result {
 		builtin.UnshareArtifactTool:      {"artifact": h.ID.String(), "from": "agent-ceo"},
 		builtin.CreateArtifactFolderTool: {"parent": "Marketing", "name": "Q3"},
 		builtin.MoveArtifactTool:         {"artifacts": []any{h.ID.String()}, "folder": "Marketing"},
+	} {
+		out[name] = art.call(t, turn, name, args)
+	}
+	// THE COMMENT WRITES, on a thread of the founder's.
+	th := art.f.comment(h.ID, commentanchor.Whole(), "", remark("agent-cto", iam.ActorAgent, "Plain words."))
+	ref := map[string]any{"artifact": h.ID.String(), "thread": th.ID.String(), "remark": th.Remarks[0].ID.String()}
+	for name, args := range map[string]map[string]any{
+		builtin.CommentOnArtifactTool:      {"artifact": h.ID.String(), "body": "Looks right.", "asks": false},
+		builtin.ResolveArtifactCommentTool: {"artifact": h.ID.String(), "thread": th.ID.String(), "version": 1},
+		builtin.EditArtifactCommentTool: {"artifact": ref["artifact"], "thread": ref["thread"],
+			"remark": ref["remark"], "body": "Plainer words."},
+		builtin.RemoveArtifactCommentTool: ref,
 	} {
 		out[name] = art.call(t, turn, name, args)
 	}
