@@ -389,24 +389,29 @@
 // same way (AdmitCheck) and asks the code domain's git reads as the engine's
 // own, held to that commit (gitlet.GitQuery.Check).
 //
+// # A file's bytes and a commit's ZIP are served inert beside git
+//
+// download.go answers a person's two downloads under /git/ in the transfer
+// lane, a large ZIP in one of the node's archive places, inert (ADR-0153).
+//
 // # Every transfer is charged to the credential that asked for it
 //
 // The same admission says whose TRANSFER every git process of the request is
 // (admission.share, gitproc.Cmd.Share): both advertisements, upload-pack and
-// receive-pack. The holder of a human seat is a PERSON, by the seat's handle —
-// a person through any credential of theirs, so their laptop, scripts and
-// browser are one principal, as their grant is one; or a Tier A token or
-// service account the identity directory binds to a seat nobody else holds —
-// and a credential acting as nobody is a MACHINE, by the credential's name
-// (`token:<id>`, a service account's `pat:<id>`), never by the account behind
-// it, so a token per CI runner is a turn per runner. A coding box is a RUN, by
-// its launch, and the run class holds at most half the lane (gitproc's
-// ShareClass.Cap), the one class the share does not let fill it. When the
-// node's transfer slots are all held, gitproc's fair share hands a released
-// one to the class furthest below its weighted share of what the lane has
-// spent lately (a person 4, a machine 2, a box 1), then to the principal that
-// spent least, each run
-// charged the greater of its CPU and the slot-time it held: so a CI
+// receive-pack, and a download's `cat-file blob` or `archive`. The holder of a
+// human seat is a PERSON, by the seat's handle — a person through any
+// credential of theirs, so their laptop, scripts and browser are one
+// principal, as their grant is one; or a Tier A token or service account the
+// identity directory binds to a seat nobody else holds — and a credential
+// acting as nobody is a MACHINE, by the credential's name (`token:<id>`, a
+// service account's `pat:<id>`), never by the account behind it, so a token
+// per CI runner is a turn per runner. A coding box is a RUN, by its launch,
+// and the run class holds at most half the lane (gitproc's ShareClass.Cap),
+// the one class the share does not let fill it. When the node's transfer slots
+// are all held, gitproc's fair share hands a released one to the class
+// furthest below its weighted share of what the lane has spent lately (a
+// person 4, a machine 2, a box 1), then to the principal that spent least,
+// each run charged the greater of its CPU and the slot-time it held: so a CI
 // credential's storm of clones or lazy fetches waits behind every credential
 // of its class that asked less, and a person's clone takes the next slot
 // released while people have spent less lately than twice what the machines
@@ -442,23 +447,25 @@
 // # Who read a unit's repository is recorded where its pack was sent
 //
 // A fetch of a `visibility: unit` repository is recorded ONCE
-// (Options.Fetched, types.CodeFetched via `git`) — the reader as its
-// admission names it, and the bytes its answer carried — where the request
-// ENDED WELL and its answer CARRIED A PACK, because what an audit asks is who
-// was sent the repository's contents. The fetch sink's own answerScan, the one
-// that decides when a held preamble may go, decides that the pack began, and
-// scans on past preambleHoldBytes where the hold gives up — passively,
-// buffering nothing and delaying no write, never a second pkt-line decoder
-// (ADR-0008). So a stateless negotiation of several rounds is ONE read,
-// counted by the round whose answer carried the pack, and its other rounds,
-// an ls-refs, the advertisement and a fetch the node ended record nothing
-// (TestAUnitRepositorysFetchIsRecorded, TestAFetchTheNodeEndedIsNoRecord);
-// nor does any read of a `visibility: company` repository, whose readers are
-// every seat by declaration. The engine files the read in the node's reads
-// ledger (internal/gitlet/readaudit), which publishes each reader's reads of a
-// flush as one event of the node's own log OFF THE REQUEST'S PATH — no fetch's
-// answer waits on the broker for its record — and the node's usage publisher
-// derives the day's repo_read record from those (internal/usage).
+// (Options.Fetched, types.CodeFetched via `git`; a download beside it with its
+// kind, raw or archive, once its first byte is written, and a file's 304) —
+// the reader as its admission names it, and the bytes its answer carried —
+// where the request ENDED WELL and its answer CARRIED A PACK, because what an
+// audit asks is who was sent the repository's contents. The fetch sink's own
+// answerScan, the one that decides when a held preamble may go, decides that
+// the pack began, and scans on past preambleHoldBytes where the hold gives up
+// — passively, buffering nothing and delaying no write, never a second
+// pkt-line decoder (ADR-0008). So a stateless negotiation of several rounds is
+// ONE read, counted by the round whose answer carried the pack, and its other
+// rounds, an ls-refs, the advertisement and a fetch the node ended record
+// nothing (TestAUnitRepositorysFetchIsRecorded,
+// TestAFetchTheNodeEndedIsNoRecord); nor does any read of a `visibility:
+// company` repository, whose readers are every seat by declaration. The engine
+// files the read in the node's reads ledger (internal/gitlet/readaudit), which
+// publishes each reader's reads of a flush as one event of the node's own log
+// OFF THE REQUEST'S PATH — no fetch's answer waits on the broker for its
+// record — and the node's usage publisher derives the day's repo_read record
+// from those (internal/usage).
 //
 // # The hook relay cannot end the process
 //
@@ -470,6 +477,11 @@
 // the parser are fuzzed (fuzz_test.go), seeded from what real git sends.
 //
 // # Measured
+//
+// A DOWNLOAD (BenchmarkDownload; git 2.56.0 on 12 cores of an AMD EPYC-Rome,
+// -benchtime 3x, 2026-11-16): a 32 MiB file is 0.0014 s of git CPU a MiB; a
+// ZIP of 10 000 incompressible 3 000-byte files is 0.062 s a MiB, beside a
+// clone of the same tree at 0.080 s a MiB of the node's git.
 //
 // On the node pin, git 2.56.0, in every pool and every client, Go 1.27.2,
 // on two E-cores of an Intel Core Ultra 7 265U (SHA instructions; the

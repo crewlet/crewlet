@@ -792,6 +792,7 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			return
 		}
 		if how != iam.Resolved {
+			git := GitAccess(r)
 			// A LOG LINE, AND DELIBERATELY NOT AN EVENT. Whoever can
 			// reach this listener authors the rate of these, with no
 			// credential and no identity — so no per-attempt event
@@ -816,7 +817,7 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 					// proxy, which is the one address that tells an
 					// operator nothing about who is guessing.
 					"remote", g.Client(r))
-			case GitAccess(r) != GitNone:
+			case git == GitFetch, git == GitPush:
 				// A GIT CLIENT'S FIRST REQUEST PRESENTS NOTHING BY DESIGN:
 				// git asks its credential helper only once a 401 carrying
 				// a challenge arrives, so every clone and push begins
@@ -841,7 +842,12 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			// code belongs to or where the sentence beside it
 			// comes from. A caller refused here and refused by a
 			// route reads one body.
-			if GitAccess(r) != GitNone {
+			switch git {
+			case GitDownload:
+				// A download is never challenged: a browser would prompt.
+				DownloadUnauthorized(w)
+				return
+			case GitFetch, GitPush:
 				// EXCEPT A GIT CLIENT, which is CHALLENGED: it asks its
 				// credential helper for a token only after a 401 carrying
 				// one, and prints nothing of a JSON body. The protocol's

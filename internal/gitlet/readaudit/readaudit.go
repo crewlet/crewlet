@@ -1,5 +1,5 @@
 // Package readaudit is WHO READ A UNIT'S REPOSITORY as the node that served
-// the reads keeps them between flushes: every clone and fetch Gitlet
+// the reads keeps them between flushes: every clone, fetch and download Gitlet
 // served, and every server-side read the git reads answered, of a
 // `visibility: unit` repository, folded per reader into ONE `code_fetched`
 // record a flush (types.CodeFetched) — which the node's event store writes and
