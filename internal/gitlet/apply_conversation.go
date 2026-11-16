@@ -207,8 +207,9 @@ type conversationCounts struct {
 // row made by the change's first conversation record — and, for a record
 // somebody wrote, its instant to the record's ([spoken]). A record nobody
 // wrote names no instant, so its write rewrites no entry of
-// code_conversations_updated_idx (the driver rewrites an index entry for
-// every column a write names, whatever the value).
+// code_conversations_updated_idx or code_conversations_repo_updated_idx (the
+// driver rewrites an index entry for every column a write names, whatever the
+// value).
 func touchConversation(ctx context.Context, tx *sql.Tx, at applyContext, repoID, changeID string,
 	counts conversationCounts) error {
 

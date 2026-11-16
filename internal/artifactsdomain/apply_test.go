@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -28,6 +29,7 @@ type estate struct {
 	applier *artifactsdomain.Applier
 	seq     uint64
 	moved   []artifactsdomain.Moved
+	inboxed []inbox.Movement
 }
 
 // newEstate is a fresh estate.
@@ -36,7 +38,7 @@ func newEstate(t *testing.T) *estate {
 	e := &estate{t: t, db: openStore(t, "estate.db")}
 	e.applier = artifactsdomain.NewApplier("estate-node", func(m []artifactsdomain.Moved) {
 		e.moved = append(e.moved, m...)
-	})
+	}, func(m []inbox.Movement) { e.inboxed = append(e.inboxed, m...) })
 	return e
 }
 

@@ -585,13 +585,23 @@ export const ACTIONS = {
   },
   // GITLET'S HALF OF AN INBOX'S MARKS: each domain keeps the marks over
   // its own notices on its own log, so a code notice is marked here and
-  // "Mark all read" sends both, each with its own `seen`. The person's own
-  // record, and the Gitlet app's as every code change is (ADR-0110): a reader
-  // without it is listed no code notice to mark.
+  // "Mark all read" sends one mark a source, each with its own `seen`. The
+  // person's own record, and the Gitlet app's as every code change is
+  // (ADR-0110): a reader without it is listed no code notice to mark.
   code_mark_inbox: {
     args: ["read", "unread", "snooze", "unsnooze", "read_through", "seen"],
     domain: "code",
     apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  // THE ARTIFACTS' HALF OF AN INBOX'S MARKS: a notice of a comment on an
+  // artifact is marked on the artifacts log, with its own `seen`. The person's
+  // own record and NO APP: commenting on an artifact is a relation, never an app.
+  artifact_mark_inbox: {
+    args: ["read", "unread", "snooze", "unsnooze", "read_through", "seen"],
+    domain: "artifacts",
+    apps: [],
     refreshes: [],
     scope: "person",
   },

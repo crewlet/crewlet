@@ -12,12 +12,14 @@ import (
 )
 
 // THE APPLIER MAINTAINS DERIVED COLUMNS: each repository's changes by state, whatever its
-// status, and the repositories in use tallied by visibility and owner, re-derived where the rules move.
+// status, the repositories in use's changes tallied by visibility and owner, and every repository
+// tallied by visibility, owner, kind and status, re-derived where the rules move.
 var _ statelog.Deriver = (*Applier)(nil)
 
 // DerivationVersion is the rule set this build derives its columns at: 1 is each repository's
-// changes by state and their tallies by owner and visibility. Bumped by any change to either.
-const DerivationVersion = 1
+// changes by state and their tallies by owner and visibility; 2 adds the repositories tallied by
+// owner, visibility, kind and status. Bumped by any change to either.
+const DerivationVersion = 2
 
 // DerivationVersion implements [statelog.Deriver].
 func (a *Applier) DerivationVersion() int { return DerivationVersion }
@@ -26,12 +28,13 @@ func (a *Applier) DerivationVersion() int { return DerivationVersion }
 // whole and closed before any of its rows is written.
 const rederivePageRows = 1000
 
-// Rederive implements [statelog.Deriver]: the counts recounted from code_changes and the
-// tallies from the counts, through the statements the applies keep them with. On rows this
-// build kept it writes nothing.
+// Rederive implements [statelog.Deriver]: the counts recounted from code_changes, the change
+// tallies from the counts and the repository tallies from the rows, through the statements the
+// applies keep them with. On rows this build kept it writes nothing.
 func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx, _ statelog.ApplyOptions) (int, error) {
 	written := 0
 	wanted := map[tallyKey]ChangeCounts{}
+	wantedRepos := repoTallies{}
 	after := ""
 	for {
 		page, err := rederivePage(ctx, tx, after)
@@ -53,6 +56,7 @@ func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx, _ statelog.ApplyOpti
 			if s.live && !counted.zero() {
 				wanted[s.key] = wanted[s.key].plus(counted)
 			}
+			wantedRepos.add(s.tallyStanding)
 		}
 		if len(page) < rederivePageRows {
 			break
@@ -96,7 +100,11 @@ func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx, _ statelog.ApplyOpti
 			written++
 		}
 	}
-	return written, nil
+	n, err := rederiveRepoTallies(ctx, tx, wantedRepos)
+	if err != nil {
+		return 0, err
+	}
+	return written + n, nil
 }
 
 // rederived is one repository as [Applier.Rederive] reads it.
@@ -169,27 +177,31 @@ func (k tallyKey) compare(o tallyKey) int {
 		cmp.Compare(k.owner.Ref, o.owner.Ref))
 }
 
-// tallyStanding is what one repository puts in the tallies: its key, and its counts
-// while it is in use ([RepoStatus.live]).
+// tallyStanding is what one repository puts in the tallies: its key, its counts while it is in
+// use ([RepoStatus.live]) and, for the repository tallies, its kind and status ("" where no
+// row holds it).
 type tallyStanding struct {
 	live   bool
 	key    tallyKey
 	counts ChangeCounts
+	kind   RepoKind
+	status RepoStatus
 }
 
-// scanStanding reads a row of lead, then status, visibility, owner kind, owner and the four
-// counts, as what the repository puts in the tallies.
+// scanStanding reads a row of lead, then status, visibility, owner kind, owner, the four
+// counts and kind, as what the repository puts in the tallies.
 func scanStanding(row interface{ Scan(...any) error }, lead ...any) (tallyStanding, error) {
 	var (
-		status, visibility, kind, owner string
-		draft, open, closed, merged     int64
+		status, visibility, ownerKind, owner, kind string
+		draft, open, closed, merged                int64
 	)
-	if err := row.Scan(append(lead, &status, &visibility, &kind, &owner, &draft, &open, &closed,
-		&merged)...); err != nil {
+	if err := row.Scan(append(lead, &status, &visibility, &ownerKind, &owner, &draft, &open, &closed,
+		&merged, &kind)...); err != nil {
 		return tallyStanding{}, err
 	}
 	return tallyStanding{live: RepoStatus(status).live(), key: tallyKey{visibility: Visibility(visibility),
-		owner: Owner{Kind: OwnerKind(kind), Ref: owner}}, counts: stateCounts(draft, open, closed, merged)}, nil
+		owner: Owner{Kind: OwnerKind(ownerKind), Ref: owner}}, counts: stateCounts(draft, open, closed, merged),
+		kind: RepoKind(kind), status: RepoStatus(status)}, nil
 }
 
 // countChanges moves repoID's counts by d and, while it is in use, its key's tally row;
@@ -225,13 +237,17 @@ func tallyStandingIn(ctx context.Context, tx *sql.Tx, repoID string) (tallyStand
 }
 
 // retally moves repoID's counts from what before put in the tallies to what its row puts there
-// now, deleting a row left at zero; it answers the tally rows it wrote.
+// now, deleting a row left at zero, and moves the repository between the repository tallies
+// (apply_repotallies.go); it answers the tally rows it wrote.
 func retally(ctx context.Context, tx *sql.Tx, repoID string, before tallyStanding) (int, error) {
 	after, err := tallyStandingIn(ctx, tx, repoID)
-	if err != nil || before == after {
+	if err != nil {
 		return 0, err
 	}
-	written := 0
+	written, err := retallyRepos(ctx, tx, before, after)
+	if err != nil || (before.live == after.live && before.key == after.key && before.counts == after.counts) {
+		return written, err
+	}
 	if before.live && !before.counts.zero() {
 		if err = tally(ctx, tx, before.key, before.counts.negated()); err != nil {
 			return 0, err
@@ -276,7 +292,7 @@ const (
 	changeCountsSQL = `UPDATE code_repos SET draft_changes = draft_changes + ?, open_changes = open_changes + ?,
 		closed_changes = closed_changes + ?, merged_changes = merged_changes + ? WHERE id = ?`
 	tallyStandingSQL = `SELECT status, visibility, owner_kind, owner, draft_changes, open_changes,
-		closed_changes, merged_changes FROM code_repos WHERE id = ?`
+		closed_changes, merged_changes, kind FROM code_repos WHERE id = ?`
 	tallySQL = `INSERT INTO code_change_tallies (visibility, owner_kind, owner, draft_changes, open_changes,
 			closed_changes, merged_changes) VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (visibility, owner_kind, owner) DO UPDATE SET
@@ -288,7 +304,7 @@ const (
 		AND draft_changes = 0 AND open_changes = 0 AND closed_changes = 0 AND merged_changes = 0`
 	// rederiveReposSQL is a page of repositories by their key, after ?1: what Rederive recounts.
 	rederiveReposSQL = `SELECT id, status, visibility, owner_kind, owner, draft_changes, open_changes,
-		closed_changes, merged_changes FROM code_repos WHERE id > ? ORDER BY id LIMIT ?`
+		closed_changes, merged_changes, kind FROM code_repos WHERE id > ? ORDER BY id LIMIT ?`
 	// changesByStateSQL is one repository's changes counted by state, one range of its index.
 	changesByStateSQL = `SELECT state, COUNT(*) FROM code_changes INDEXED BY ` + changesRepoStateKey + `
 		WHERE repo_id = ? GROUP BY state`

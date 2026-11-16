@@ -159,30 +159,41 @@ type CodeSource interface {
 // answered in this surface's vocabulary ([codeRefusal]).
 func (s Sources) codeRead(kind gitlet.ReadKind, what string) Answer {
 	return func(ctx context.Context, p Params) (any, error) {
-		reads, err := s.Code.CodeReads()
+		answer, err := s.readCode(ctx, kind, what, p)
 		if err != nil {
 			return nil, err
-		}
-		// A CODE READ IS HELD TO WHO ASKS, so one asked for nobody is never
-		// judged as somebody: the registry refuses an anonymous question and
-		// one this node could not tell before any answer runs
-		// ([Registry.AnswerWith]), [caller] holds the same rule for whatever
-		// reaches this answer without it, and the reader refuses an asker no
-		// principal can be.
-		principal, err := caller(ctx, what)
-		if err != nil {
-			return nil, err
-		}
-		q, err := codeReadQuery(kind, codeAsker(principal), p)
-		if err != nil {
-			return nil, err
-		}
-		answer, err := reads.Read(ctx, q)
-		if err != nil {
-			return nil, codeRefusal(q.Repo, err)
 		}
 		return answer, nil
 	}
+}
+
+// readCode is [Sources.codeRead]'s read, its answer as the reader gave it.
+func (s Sources) readCode(ctx context.Context, kind gitlet.ReadKind, what string, p Params) (gitlet.ReadAnswer,
+	error) {
+
+	reads, err := s.Code.CodeReads()
+	if err != nil {
+		return gitlet.ReadAnswer{}, err
+	}
+	// A CODE READ IS HELD TO WHO ASKS, so one asked for nobody is never
+	// judged as somebody: the registry refuses an anonymous question and
+	// one this node could not tell before any answer runs
+	// ([Registry.AnswerWith]), [caller] holds the same rule for whatever
+	// reaches this answer without it, and the reader refuses an asker no
+	// principal can be.
+	principal, err := caller(ctx, what)
+	if err != nil {
+		return gitlet.ReadAnswer{}, err
+	}
+	q, err := codeReadQuery(kind, codeAsker(principal), p)
+	if err != nil {
+		return gitlet.ReadAnswer{}, err
+	}
+	answer, err := reads.Read(ctx, q)
+	if err != nil {
+		return gitlet.ReadAnswer{}, codeRefusal(q.Repo, err)
+	}
+	return answer, nil
 }
 
 // codeAsker is who a code question asks as: the principal the guard resolved,
@@ -222,10 +233,12 @@ func codeReadQuery(kind gitlet.ReadKind, asker gitlet.Principal, p Params) (gitl
 	// reviews are listed across repositories, by the reviewer they name.
 	switch kind {
 	case gitlet.ReadRepos:
+		// ONE KIND, AND AN ORDER: the reader refuses a value it does not know.
+		q.RepoKind, q.RepoSort = gitlet.RepoKind(p.String("kind")), gitlet.RepoSort(p.String("sort"))
 	case gitlet.ReadChanges:
 		q.Repo, q.State, q.Owner = p.String("repo"), gitlet.ChangeState(p.String("state")), p.String("owner")
 		q.Work, q.Reviewer, q.Needs = p.String("work"), p.String("reviewer"), gitlet.Need(p.String("needs"))
-		q.Window = gitlet.ChangeWindow(p.String("window"))
+		q.Window, q.ChangeSort = gitlet.ChangeWindow(p.String("window")), gitlet.ChangeSort(p.String("sort"))
 	case gitlet.ReadReviews:
 		q.Reviewer = p.String("reviewer")
 	case gitlet.ReadQueue:
@@ -506,7 +519,7 @@ func (s Sources) codeRepoReaders(ctx context.Context, p Params) (any, error) {
 func registerCode(r *Registry, s Sources) {
 	gated := Requires(iam.GrantGitlet)
 	r.Register("code_repos", gated, s.codeRead(gitlet.ReadRepos, "code_repos"))
-	r.Register("code_repo", gated, s.codeRead(gitlet.ReadRepo, "code_repo"))
+	r.Register("code_repo", gated, s.codeRepo())
 	r.Register("code_pushes", gated, s.codeRead(gitlet.ReadPushes, "code_pushes"))
 	r.Register("code_repo_readers", DecidedBy(authz.ActionCodeRepoReaders), s.codeRepoReaders)
 	r.Register("code_changes", gated, s.codeRead(gitlet.ReadChanges, "code_changes"))

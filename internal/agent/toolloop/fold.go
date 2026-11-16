@@ -225,7 +225,7 @@ func (d *dispatcher) foldGroup(g *group, comp *llm.Completion, model string, liv
 		if rec != nil && rec.settled {
 			ex := Execution{
 				Round: g.round, Name: e.call.Name, Args: rec.args, CallID: rec.id,
-				Output: rec.result.Output, Failed: rec.result.Failed,
+				Output: rec.result.Output, Failed: rec.result.Failed, Images: rec.images,
 				StartedAt: zeroIfRefused(rec, rec.started), Duration: rec.took,
 				Origin: rec.result.Origin, Server: rec.result.Server,
 				Source: rec.result.Source, Refusal: rec.result.Refusal(),

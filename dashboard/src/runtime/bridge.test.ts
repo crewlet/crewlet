@@ -9,8 +9,13 @@ import { describe, expect, test } from "vitest";
 import {
   BRIDGE_MESSAGE,
   BRIDGE_METHODS,
+  COMMENT_LAYOUT_MAX_ANCHORS,
   capabilityOf,
+  isAnchorName,
   readCall,
+  readCommentCrop,
+  readCommentLayout,
+  readCommentPick,
   readDeclaredCapabilities,
   readDoc,
   readEvent,
@@ -19,6 +24,7 @@ import {
   readResult,
   readViewer,
 } from "./bridge.ts";
+import { ARTIFACT_COMMENT_CROP_MAX_BYTES } from "../contract/artifactsworkspace.ts";
 
 const viewer = { seat: "maya", kind: "human", displayName: "Maya", role: "editor" };
 const doc = {
@@ -207,12 +213,128 @@ describe("an event", () => {
   });
 });
 
+describe("the comment layer", () => {
+  const event = (fields: Record<string, unknown>) =>
+    readEvent({ type: BRIDGE_MESSAGE.event, topic: "comments", ...fields });
+
+  test("hears the host's mode, a part to reveal and a part to draw", () => {
+    expect(event({ mode: "place" })).toEqual({
+      type: BRIDGE_MESSAGE.event,
+      topic: "comments",
+      mode: "place",
+    });
+    expect(event({ reveal: { name: "pricing" } })).toMatchObject({ reveal: { name: "pricing" } });
+    expect(event({ reveal: { point: { x: 0.25, y: 2 } } })).toMatchObject({
+      reveal: { point: { x: 0.25, y: 1 } },
+    });
+    expect(event({ capture: { id: 3, name: "plans.annual" } })).toMatchObject({
+      capture: { id: 3, name: "plans.annual" },
+    });
+  });
+
+  test("drops a request that is not exactly one", () => {
+    for (const fields of [
+      { mode: "edit" },
+      { reveal: { name: "Pricing" } },
+      { reveal: { point: { x: Number.NaN, y: 0 } } },
+      { reveal: {} },
+      { capture: { id: 0, name: "pricing" } },
+      { capture: { id: 1.5, point: { x: 0, y: 0 } } },
+      { capture: { id: 2 } },
+      {},
+    ]) {
+      expect(event(fields)).toBeNull();
+    }
+  });
+
+  test("takes a name the engine indexes, and no other", () => {
+    for (const name of ["pricing", "0", "plans.annual", "a-b_c", "x".repeat(64)]) {
+      expect(isAnchorName(name)).toBe(true);
+    }
+    for (const name of ["", "Pricing", "-lead", ".x", "a b", "x".repeat(65), 7, null]) {
+      expect(isAnchorName(name)).toBe(false);
+    }
+  });
+
+  const layout = {
+    anchors: [{ name: "pricing", x: 0, y: 640, w: 1200, h: 480 }],
+    doc: { w: 1280, h: 4000 },
+    scroll: { x: 0, y: 320 },
+    viewport: { w: 1280, h: 800 },
+  };
+
+  test("reads a layout whole, the hovered anchor with it while placing", () => {
+    expect(readCommentLayout(layout)).toEqual(layout);
+    expect(readCommentLayout({ ...layout, hover: "pricing" })?.hover).toBe("pricing");
+    expect(readCommentLayout({ ...layout, hover: null })).not.toHaveProperty("hover");
+  });
+
+  test("drops a layout with a box that is not finite pixels, a name it refuses, or too many anchors", () => {
+    const anchor = layout.anchors[0]!;
+    for (const bad of [
+      { ...layout, anchors: [{ ...anchor, name: "Pricing" }] },
+      { ...layout, anchors: [{ ...anchor, w: -1 }] },
+      { ...layout, anchors: [{ ...anchor, y: Number.POSITIVE_INFINITY }] },
+      { ...layout, anchors: [{ ...anchor, x: "0" }] },
+      { ...layout, doc: { w: 0, h: 10 } },
+      { ...layout, scroll: { x: Number.NaN, y: 0 } },
+      { ...layout, viewport: { w: -1, h: 0 } },
+      { ...layout, hover: "Not a name" },
+      { ...layout, anchors: "pricing" },
+      { ...layout, anchors: Array.from({ length: COMMENT_LAYOUT_MAX_ANCHORS + 1 }, () => anchor) },
+    ]) {
+      expect(readCommentLayout(bad)).toBeNull();
+    }
+  });
+
+  test("reads a pick, its point held to the page, and refuses a quote past 1 KiB", () => {
+    expect(
+      readCommentPick({ name: "pricing", quote: "Plans", point: { x: 0.5, y: -0.1 } }),
+    ).toEqual({ name: "pricing", quote: "Plans", point: { x: 0.5, y: 0 } });
+    expect(readCommentPick({ name: null, point: { x: 0.1, y: 0.2 } })).toEqual({
+      name: null,
+      quote: "",
+      point: { x: 0.1, y: 0.2 },
+    });
+    // 342 three-byte letters are 1026 bytes: over, though 342 characters.
+    expect(readCommentPick({ name: null, quote: "€".repeat(342), point: { x: 0, y: 0 } })).toBe(
+      null,
+    );
+    expect(readCommentPick({ name: "x", quote: "€".repeat(341), point: { x: 0, y: 0 } })).not.toBe(
+      null,
+    );
+    expect(readCommentPick({ name: "Bad", quote: "", point: { x: 0, y: 0 } })).toBeNull();
+    expect(readCommentPick({ name: null, quote: "" })).toBeNull();
+  });
+
+  test("reads a picture as one the engine would keep, and anything else as none", () => {
+    const png = "data:image/png;base64,iVBORw0KGgo=";
+    expect(readCommentCrop({ id: 2, image: png })).toEqual({ id: 2, image: png });
+    expect(readCommentCrop({ id: 2, image: null })).toEqual({ id: 2, image: null });
+    expect(readCommentCrop({ id: 2, image: "data:image/svg+xml;base64,PHN2Zz4=" })).toEqual({
+      id: 2,
+      image: null,
+    });
+    const big = "A".repeat(Math.ceil((ARTIFACT_COMMENT_CROP_MAX_BYTES * 4) / 3) + 8);
+    expect(readCommentCrop({ id: 2, image: `data:image/webp;base64,${big}` })?.image).toBeNull();
+    expect(readCommentCrop({ id: 0, image: png })).toBeNull();
+    expect(readCommentCrop({ image: png })).toBeNull();
+  });
+});
+
 describe("every method", () => {
-  test("needs the capability the contract gives it, and only openLink and print need none", () => {
+  test("needs the capability the contract gives it, and only the host's own and the comment layer's need none", () => {
     const free = (Object.keys(BRIDGE_METHODS) as (keyof typeof BRIDGE_METHODS)[]).filter(
       (m) => capabilityOf(m) === null,
     );
-    expect(free).toEqual(["openLink", "print"]);
+    expect(free).toEqual([
+      "openLink",
+      "print",
+      "comments.layout",
+      "comments.pick",
+      "comments.crop",
+      "comments.escape",
+    ]);
     expect(capabilityOf("data.write")).toBe("db");
     expect(capabilityOf("state.set")).toBe("state");
     expect(capabilityOf("data.undo")).toBe("db");

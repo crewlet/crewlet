@@ -10,7 +10,7 @@ import { QueryError, type LiveSocket } from "~/protocol/index.ts";
 import { BRIDGE_MESSAGE, type RuntimeCapability } from "~/runtime/bridge.ts";
 import type { KeyedAnswer } from "~/lib/keyedWrite.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
-import { PageHost, bridgeOutcome, engineQuery } from "./host.ts";
+import { PageHost, bridgeOutcome, engineQuery, type PageCommentNews } from "./host.ts";
 
 describe("a page's query", () => {
   test("is the engine's grammar: operators, a list for in, one order and the cursor", () => {
@@ -321,5 +321,133 @@ describe("the host", () => {
       connection: "live",
     });
     expect(p.posted[1]).toMatchObject({ type: BRIDGE_MESSAGE.event, topic: "presence" });
+  });
+});
+
+describe("the comment layer", () => {
+  const layout = {
+    anchors: [{ name: "pricing", x: 0, y: 640, w: 1200, h: 480 }],
+    doc: { w: 1280, h: 4000 },
+    scroll: { x: 0, y: 320 },
+    viewport: { w: 1280, h: 800 },
+  };
+
+  /** A host with a page attached, and what the layer heard. */
+  function attached() {
+    const { h } = host([]);
+    const p = port();
+    h.attach(p.port);
+    const heard: PageCommentNews[] = [];
+    h.onComments((news) => heard.push(news));
+    return { h, p, heard };
+  }
+
+  test("needs no capability, and tells the page its mode now and again on every hello", async () => {
+    const { h, p } = attached();
+    h.setCommentMode("show");
+    expect(p.posted.at(-1)).toEqual({
+      type: BRIDGE_MESSAGE.event,
+      topic: "comments",
+      mode: "show",
+    });
+    const again = port();
+    h.attach(again.port);
+    expect(again.posted.at(-1)).toEqual({
+      type: BRIDGE_MESSAGE.event,
+      topic: "comments",
+      mode: "show",
+    });
+    expect(await call(h, "comments.layout", layout)).toMatchObject({ ok: true });
+  });
+
+  test("hears where the anchors are only while it asked, and forgets it when it stops", async () => {
+    const { h, heard } = attached();
+    expect(await call(h, "comments.layout", layout)).toMatchObject({
+      ok: false,
+      error: { code: "invalid" },
+    });
+    expect(heard).toEqual([]);
+    h.setCommentMode("show");
+    expect(await call(h, "comments.layout", layout)).toMatchObject({ ok: true, value: null });
+    expect(heard).toEqual([{ kind: "layout", layout }]);
+    expect(h.commentLayout).toEqual(layout);
+    h.setCommentMode("off");
+    expect(heard.at(-1)).toEqual({ kind: "layout", layout: null });
+    expect(h.commentLayout).toBeNull();
+  });
+
+  test("refuses a layout that is not finite pixels, and keeps the last good one", async () => {
+    const { h, heard } = attached();
+    h.setCommentMode("show");
+    await call(h, "comments.layout", layout);
+    expect(
+      await call(h, "comments.layout", { ...layout, doc: { w: Number.NaN, h: 1 } }),
+    ).toMatchObject({ ok: false, error: { code: "invalid" } });
+    expect(heard).toHaveLength(1);
+    expect(h.commentLayout).toEqual(layout);
+  });
+
+  test("takes a pick and Escape only while the reader is placing", async () => {
+    const { h, heard } = attached();
+    const pick = { name: "pricing", quote: "Plans", point: { x: 0.5, y: 0.2 } };
+    h.setCommentMode("show");
+    expect(await call(h, "comments.pick", pick)).toMatchObject({ ok: false });
+    expect(await call(h, "comments.escape")).toMatchObject({ ok: true });
+    expect(heard).toEqual([]);
+    h.setCommentMode("place");
+    expect(await call(h, "comments.pick", pick)).toMatchObject({ ok: true });
+    expect(await call(h, "comments.escape")).toMatchObject({ ok: true });
+    expect(heard).toEqual([{ kind: "pick", pick }, { kind: "escape" }]);
+    expect(await call(h, "comments.pick", { ...pick, name: "<img src=x>" })).toMatchObject({
+      ok: false,
+      error: { code: "invalid" },
+    });
+  });
+
+  test("asks for a picture by id and takes only the answer to one it asked for", async () => {
+    const { h, p, heard } = attached();
+    const id = h.captureComment({ name: "pricing" });
+    expect(p.posted.at(-1)).toEqual({
+      type: BRIDGE_MESSAGE.event,
+      topic: "comments",
+      capture: { id, name: "pricing" },
+    });
+    expect(await call(h, "comments.crop", { id: id + 1, image: null })).toMatchObject({
+      ok: false,
+    });
+    const png = "data:image/png;base64,iVBORw0KGgo=";
+    expect(await call(h, "comments.crop", { id, image: png })).toMatchObject({ ok: true });
+    expect(heard).toEqual([{ kind: "crop", crop: { id, image: png } }]);
+    // ONCE: a second answer under the same id is not taken.
+    expect(await call(h, "comments.crop", { id, image: png })).toMatchObject({ ok: false });
+  });
+
+  test("hands on a picture the engine would not keep as none, so nobody waits on it", async () => {
+    const { h, heard } = attached();
+    const id = h.captureComment({ point: { x: 0.5, y: 0.5 } });
+    expect(
+      await call(h, "comments.crop", { id, image: "data:text/html;base64,PGI+" }),
+    ).toMatchObject({ ok: false, error: { code: "invalid" } });
+    expect(heard).toEqual([{ kind: "crop", crop: { id, image: null } }]);
+  });
+
+  test("answers every picture still coming as none once the frame is gone", async () => {
+    const { h, heard } = attached();
+    h.setCommentMode("show");
+    await call(h, "comments.layout", layout);
+    const id = h.captureComment({ name: "pricing" });
+    h.detach();
+    expect(heard).toContainEqual({ kind: "layout", layout: null });
+    expect(heard).toContainEqual({ kind: "crop", crop: { id, image: null } });
+  });
+
+  test("brings a part into view on the reader's Jump to", () => {
+    const { h, p } = attached();
+    h.revealComment({ point: { x: 0.1, y: 0.9 } });
+    expect(p.posted.at(-1)).toEqual({
+      type: BRIDGE_MESSAGE.event,
+      topic: "comments",
+      reveal: { point: { x: 0.1, y: 0.9 } },
+    });
   });
 });

@@ -1,6 +1,7 @@
 /**
  * GITLET'S PAGES, LAID OUT: a comparison's title stays clear of the files'
- * sticky toolbar under it, and the clone panel shows its whole address.
+ * sticky toolbar under it, the clone panel shows its whole address, and code
+ * coloured by kind keeps the box it had plain.
  */
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { page } from "vitest/browser";
@@ -15,6 +16,7 @@ import { ChangesGrid } from "./Changes.tsx";
 import { BranchChip } from "./ui.tsx";
 import { ComparePage } from "./commit/ComparePage.tsx";
 import { RepositoryPage } from "./repo/RepositoryPage.tsx";
+import { SYNTAX_CLASS } from "./syntax.tsx";
 
 const POSITION = { stream: "CREWLET_CODE_LOG", generation: 1, seq: 12 };
 const BASE = "3a3ecae0123456789abcdef0123456789abcdef0";
@@ -33,9 +35,36 @@ const json = (payload: unknown) =>
     headers: { "Content-Type": "application/json" },
   });
 
-/** The engine, for one repository's comparison of feature into main. */
+/** A Go file whose third line holds a keyword, a call, a string and a comment, wider than a phone. */
+const MAIN_GO = [
+  "package main",
+  "",
+  'func main() { serve(":8080") } // the storefront, on the port the shell and the health check both read',
+  "",
+];
+
+/** The engine, for one repository's comparison of feature into main, and one file. */
 function answer(url: URL): Response {
   switch (url.pathname) {
+    case "/query/code_blob":
+      if (url.searchParams.get("path") !== "cmd/main.go") break;
+      return json({
+        repo: "web",
+        ref: url.searchParams.get("ref") ?? "main",
+        commit: BASE,
+        kind: "blob",
+        blob: {
+          path: "cmd/main.go",
+          oid: HEAD,
+          size: MAIN_GO.join("\n").length,
+          lines: MAIN_GO.length - 1,
+          start_line: 1,
+          end_line: MAIN_GO.length - 1,
+          text: MAIN_GO.join("\n"),
+        },
+        position: POSITION,
+        level: "session",
+      });
     case "/query/code_repo":
       return json({
         repo: {
@@ -236,6 +265,8 @@ for (const width of [1440, 390]) {
 // A CODED DIFF'S BAND HOLDS ITS NUMBERS AND STOPS BEFORE THE SIGN, and a changed
 // run keeps a visible underline. Mutation: a narrower `--diff-gutter`, or a
 // transparent run decoration, fails it.
+// A CODED LINE KEEPS THE PLAIN LINE'S HEIGHT, and no ink is drawn inside a
+// run. Mutation: `font-size: 1.2em` on the comment rule fails it.
 test("a coloured diff's band holds its numbers, and a changed run keeps its underline", async () => {
   const hunks: DiffHunk[] = [
     {
@@ -248,8 +279,35 @@ test("a coloured diff's band holds its numbers, and a changed run keeps its unde
       ],
     },
   ];
+  // Each line's first word a keyword and the rest a comment, by its side and number.
+  const texts = { before: new Map<number, string>(), after: new Map<number, string>() };
+  for (const line of hunks[0]!.lines) {
+    if (line.before !== null) texts.before.set(line.before, line.text);
+    if (line.after !== null) texts.after.set(line.after, line.text);
+  }
+  const tokens = (side: "before" | "after", n: number) => {
+    const text = texts[side].get(n) ?? "";
+    const word = Math.max(text.indexOf(" "), 0);
+    return [
+      { end: word, className: SYNTAX_CLASS.keyword },
+      { end: text.length, className: SYNTAX_CLASS.comment },
+    ];
+  };
+  const heights = () =>
+    [...document.querySelectorAll<HTMLElement>(".diff-view__line")].map(
+      (line) => line.getBoundingClientRect().height,
+    );
   for (const layout of ["unified", "split"] as const) {
     mount(<DiffView hue="code" hunks={hunks} layout={layout} />);
+    const plain = await eventually(() => {
+      if (layout === "split") expect(document.querySelector(".diff-view--split")).not.toBeNull();
+      const drawn = heights();
+      expect(drawn.length).toBeGreaterThan(0);
+      return drawn;
+    });
+    flushSync(() => root?.unmount());
+    host?.remove();
+    mount(<DiffView hue="code" hunks={hunks} layout={layout} tokens={tokens} />);
     const changed = await eventually(() => {
       const found = [
         ...document.querySelectorAll<HTMLElement>(
@@ -275,6 +333,9 @@ test("a coloured diff's band holds its numbers, and a changed run keeps its unde
         mark.left + 0.5,
       );
     }
+    expect(document.querySelectorAll(".code-syn-comment").length).toBeGreaterThan(0);
+    expect(heights(), `${layout}: each line keeps its plain height`).toEqual(plain);
+    expect(document.querySelector('.diff-view__run [class*="code-syn-"]')).toBeNull();
     const runs = document.querySelectorAll(".diff-view--code .diff-view__run");
     expect(runs.length, `${layout}: the edited line draws its runs`).toBeGreaterThan(0);
     for (const run of runs) {
@@ -527,3 +588,57 @@ for (const [viewport, column] of [
     }
   });
 }
+
+/** The file view of `cmd/main.go` at `width`, once its third line is coloured. */
+async function colouredLine(width: number): Promise<HTMLElement> {
+  await page.viewport(width, 900);
+  location.hash = "#/gitlet/repos/web?path=cmd%2Fmain.go";
+  mount(<RepositoryPage repo="web" />, width);
+  return eventually(() => {
+    const line = document.querySelector<HTMLElement>("#L3");
+    expect(line?.querySelector(".code-syn-comment")).toBeTruthy();
+    return line!;
+  });
+}
+
+// A COLOURED LINE KEEPS THE PLAIN LINE'S BOX: an ink changes no advance, and
+// a line too wide still scrolls the card, never the page. Mutation:
+// `letter-spacing: 1px` on the keyword rule fails it.
+for (const width of [1440, 390]) {
+  test(`a coloured line keeps the plain line's box, at ${width}px`, async () => {
+    const line = await colouredLine(width);
+    const text = line.querySelector(".code-source__text")!;
+    expect(text.textContent).toBe(MAIN_GO[2]);
+    for (const kind of ["keyword", "function", "string", "comment"])
+      expect(text.querySelector(`.code-syn-${kind}`), kind).toBeTruthy();
+    // THE SAME TEXT PLAIN, a line drawn beside it with no spans.
+    const plain = line.cloneNode(true) as HTMLElement;
+    plain.removeAttribute("id");
+    plain.querySelector(".code-source__text")!.textContent = MAIN_GO[2]!;
+    line.after(plain);
+    const box = (el: HTMLElement, part: string) => el.querySelector(part)!.getBoundingClientRect();
+    const [coloured, drawn] = [box(line, ".code-source__text"), box(plain, ".code-source__text")];
+    expect(Math.abs(coloured.width - drawn.width)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(coloured.height - drawn.height)).toBeLessThanOrEqual(0.5);
+    expect(box(line, ".code-source__number").left).toBe(box(plain, ".code-source__number").left);
+    plain.remove();
+    if (width === 390) {
+      const source = line.closest<HTMLElement>(".code-source")!;
+      expect(source.scrollWidth).toBeGreaterThan(source.clientWidth);
+      expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
+    }
+  });
+}
+
+// A COMMENT IS ITALIC AND IN ITS INK, as the kit draws one. Mutation: drop
+// the comment rule's `font-style`, or read another ink, and this fails.
+test("a comment is italic and in its ink", async () => {
+  const line = await colouredLine(1440);
+  const comment = line.querySelector(".code-syn-comment")!;
+  const probe = document.createElement("span");
+  probe.style.color = "var(--color-syntax-comment)";
+  host!.append(probe);
+  expect(getComputedStyle(comment).fontStyle).toBe("italic");
+  expect(getComputedStyle(comment).color).toBe(getComputedStyle(probe).color);
+  expect(getComputedStyle(comment).color).not.toBe(getComputedStyle(line).color);
+});

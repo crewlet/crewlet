@@ -237,6 +237,10 @@ type ToolResult struct {
 	// Output is fed back to the model as the tool message's content.
 	Output string
 
+	// Images ride to the harness after Output ([mcp.Result.Images]). The loop
+	// answers them and keeps their [mcp.ImageRecords] alone, never the bytes.
+	Images []mcp.Image
+
 	// Failed marks a tool that reported failure. The output still goes
 	// back to the model — that is the point — but the execution record
 	// carries the flag so a reader can tell a tool that ran from one that
@@ -378,6 +382,10 @@ type Execution struct {
 	// Output is the tool's own output, as it returned it.
 	Output string
 	Failed bool
+
+	// Images is what the answer's images were, by type and size: the bytes
+	// went to the harness and no record keeps them.
+	Images []mcp.ImageRecord
 
 	// StartedAt is when the call was handed to the surface, in UTC, and
 	// Duration how long the surface took to answer — measured on the

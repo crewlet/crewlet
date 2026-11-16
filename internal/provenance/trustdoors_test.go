@@ -84,6 +84,11 @@ var trustDoors = map[string]trustDoor{
 	"internal/events/types/a2a.go:colleagueLabel": {hosted, []string{
 		"internal/engine.TestEveryWakeTypeFencesSomebodyElsesWords",
 	}},
+	// The page text a comment's wake quotes, an artifact's file nobody named.
+	"internal/artifactsdomain/prompt.go:Build": {hosted, []string{
+		"internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote",
+		"internal/artifactsdomain.TestACommentsPromptSaysWhereItWasMadeAndHowToAnswer",
+	}},
 	"internal/doclet/search.go:HitLabel": {hosted, []string{
 		"internal/doclet.TestANativeHitIsAColleaguesPageWithNobodyNamed",
 	}},

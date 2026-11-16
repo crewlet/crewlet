@@ -25,6 +25,11 @@
 // subject and by nothing else, receive-pack never runs in a cache, and git is
 // told `ok` only from a push's applied row (ADR-0084).
 //
+// A LISTING OF REPOSITORIES (repolisting.go, apply_repotallies.go) is read by name or by last
+// push over an index of each kind, with each row's card read where asked; code_repo_tallies
+// counts the repositories by owner, visibility, kind and status, kept by the lifecycle applies
+// and re-derived by the applier.
+//
 // # The bundle is the permanent format, and no stored pack reaches 2 GiB
 //
 // One object a push — one PUT, and one GET on every Gitlet node that installs it,
@@ -162,7 +167,9 @@
 // state (replicated 0097), a repository's, the company's in a state —
 // newest first, testing every filter that index does not seek on the rows the
 // page read, so a page is the rows it read and never scans past its limit
-// for the few it keeps. One change ([ReadChange]) is read by its number on
+// for the few it keeps. A live state asked by when its changes moved
+// ([ChangeSortUpdated]) walks its lifecycle's and its conversations' indexes
+// in step (changesort.go). One change ([ReadChange]) is read by its number on
 // its repository, its revisions paged newest first beside it. Both are held to
 // the asker's grant on the change's repository ([JudgeRead]): a listing that
 // names a repository, and a read of one change, are refused whole where the

@@ -1,7 +1,7 @@
 /**
  * What changed from one commit (or tree) to another: the files, a page at a
  * time, and one file's patch drawn by the dashboard's one `DiffView`, in the
- * code hue.
+ * code hue, its code coloured by kind.
  *
  * READ BY OBJECT ID, WHOLE ON BOTH SIDES: a commit's page and a comparison
  * each name the two commits by their whole ids (`code_diff` `base=`, `head=`),
@@ -28,6 +28,7 @@ import { usePatchPages } from "~/lib/patchPages.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import type { CodeDiffFile, CodeGitAnswer } from "~/protocol/index.ts";
+import { useDiffTokens } from "../syntax.tsx";
 import { DiffHead, FileTree } from "../FileTree.tsx";
 import { PatchPager } from "../PatchPager.tsx";
 import { repoHref } from "../paths.ts";
@@ -204,6 +205,7 @@ function FilePatch({
     codeRest.query("code_diff", { ...params, cursor }),
   );
   const entry = listed ?? file;
+  const tokens = useDiffTokens({ repo, file: entry, hunks });
   // ONE PREDICATE FOR THE LINE, kept across renders: the diff marks what it
   // accepts and reveals it once for it, wherever its window is (`DiffView`).
   const at = useCallback((l: DiffLine) => l.after === line, [line]);
@@ -258,6 +260,7 @@ function FilePatch({
             // once, start over.
             key={path}
             hue="code"
+            tokens={tokens}
             hunks={hunks}
             layout={layout}
             aria-label={`Changes to ${path}`}

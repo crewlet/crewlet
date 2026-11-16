@@ -20,6 +20,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { Badge } from "~/routes/inbox/InboxColumn.tsx";
 import {
+  artifactWords,
   changeWords,
   noticeRows,
   noticeText,
@@ -94,6 +95,25 @@ function Updates() {
                   </ListItem>
                 );
               }
+              if (row.kind === "artifact") {
+                const who = rowWho(row, index);
+                const words = artifactWords(row.notice);
+                return (
+                  <ListItem
+                    key={row.key}
+                    href={href(["inbox"], { row: row.key })}
+                    leading={<Badge row={row} who={who} size={20} />}
+                    trailing={<span className="home-tasks-when">{shortWhen(row.at, now)}</span>}
+                  >
+                    <span className="home-tasks-stack">
+                      <span className="home-tasks-title">{`${rowName(row, who)} ${words.did}`}</span>
+                      {words.excerpt ? (
+                        <span className="home-tasks-meta">{words.excerpt}</span>
+                      ) : null}
+                    </span>
+                  </ListItem>
+                );
+              }
               if (row.kind !== "notice") return null;
               const who = rowWho(row, index);
               const said = noticeText(row.notice, index);
@@ -142,7 +162,7 @@ export const widgets = defineWidgets([
     once: true,
     // EVERY NATIVE DOMAIN'S NOTICES, so no one service: a reader on a company
     // that runs no Worklet still hears about the changes they are asked
-    // to review.
+    // to review and the comments on their artifacts.
     Component: Updates,
   },
 ]);

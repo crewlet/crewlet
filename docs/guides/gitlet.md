@@ -240,6 +240,10 @@ and a repository's page offers it under **Clone**, beside its files:
 git clone https://crewlet.example.com/git/web.git
 ```
 
+The engine answers that address as the repository's `clone_url`
+(`GET /gitlet/repos/{name}`), built from `api.external_url`, so a dashboard
+reached through another address still shows the one git must use.
+
 git asks for a user name and a password: the password is the token, and the
 user name is ignored. So that git never asks, give it a credential helper.
 The engine's own reads the token from your environment and keeps it nowhere
