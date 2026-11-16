@@ -574,7 +574,8 @@ words (`answer-in-your-own-words`, which chooses no option). Each case's
 header carries the rubric a real model's trials are graded on.
 `explain-how-a-grant-works` answers a question about the engine itself from
 Crewlet's own documentation, which the binary carries exactly as its version
-ships it. The flags and the suite format are in the
+ships it. `who-changed-what` answers who changed a task and which change was
+refused from the audit log. The flags and the suite format are in the
 [CLI reference](../reference/cli.md#crewlet-assistant-eval), and the shipped
 suite is under `examples/assistant-evals/`.
 

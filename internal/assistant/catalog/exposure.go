@@ -61,6 +61,7 @@ var questionExposures = []Exposure{
 	asked("work_inbox", "get_my_work"),
 	asked("company_feed", "get_company_feed"),
 	asked("decisions", "list_decisions"),
+	asked("events", "list_audit_events"),
 	asked("page", GetPageTool),
 	asked("work_search", "search_work"),
 	asked("config_audit", "list_config_changes"),
