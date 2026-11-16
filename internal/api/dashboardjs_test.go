@@ -2649,7 +2649,8 @@ const (
 	// kit 0.137.0, measures 6351.5 KiB (6,503,931 bytes), 9,452 bytes over main: 6352 KiB.
 	// The Ask Crewlet reads train, on kit 0.137.0: 6354.3 KiB (6,506,836 bytes): 6355 KiB.
 	// Anchored comments on kit 0.139.0: 6523.1 KiB (6,679,624 bytes); its vendor marks are 130.8 KiB: 6524 KiB.
-	treeBudget = 5<<20 + 1404<<10
+	// The artifacts' half of a person's inbox: 6525.6 KiB (6,682,224 bytes): 6526 KiB.
+	treeBudget = 5<<20 + 1406<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
