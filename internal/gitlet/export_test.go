@@ -2,11 +2,14 @@ package gitlet
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // Quiet is quiet, for this package's external benchmarks.
@@ -28,6 +31,9 @@ func ChangeCeilingRefusal(c *WriteCeiling, asker Principal, repo RepoRef, own bo
 // SetShareWait scales how long s's takers wait for a unit — production's
 // GitShareWait — so a case waits it out in milliseconds.
 func SetShareWait(s *GitShare, d time.Duration) { s.wait = d }
+
+// SummaryBytes is a repository summary's computed size, as a page of them is measured.
+func SummaryBytes(s RepoSummary) int { return s.encodedBytes() }
 
 // SetPageLimits has r end every page at rows rows or bytes of encoded rows —
 // the cases that read a snapshot across several pages without seeding tens of
@@ -354,6 +360,34 @@ const WidestComponent = widestComponent
 
 // ReconcileInFlight is how many repositories a reconcile decides at once.
 const ReconcileInFlight = reconcileInFlight
+
+// ReconcileRecordRows is the most rows one record a reconcile writes touches.
+const ReconcileRecordRows = reconcileRecordRows
+
+// RecountChanges re-derives db's change counts, as an upgraded node's first boot does, for a
+// case that seeds changes by hand.
+func RecountChanges(t testing.TB, db store.ReplicatedHandle) {
+	t.Helper()
+	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := NewApplier(nil).Rederive(t.Context(), tx, statelog.ApplyOptions{})
+		return err
+	}); err != nil {
+		t.Fatalf("re-derive the change counts: %v", err)
+	}
+}
+
+// ChangeCountsDrift names the first difference between db's change counts and its rows, "" for none.
+func ChangeCountsDrift(t testing.TB, db store.ReplicatedHandle) string {
+	t.Helper()
+	var drift string
+	if err := db.Reader().Read(t.Context(), func(tx *sql.Tx) (err error) {
+		drift, err = changeCountsDrift(t.Context(), tx)
+		return err
+	}); err != nil {
+		t.Fatalf("read the change counts: %v", err)
+	}
+	return drift
+}
 
 // DecideEach is the reconcile's closed loop of decisions.
 var DecideEach = decideEach

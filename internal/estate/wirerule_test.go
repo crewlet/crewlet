@@ -480,6 +480,38 @@ func TestAHomesQueueReadIsReadWholeOrRefused(t *testing.T) {
 	}
 }
 
+// A COUNTS PART THIS BUILD DOES NOT DECLARE IS REFUSED UNREAD: each part is a key of its own, so a
+// newer asker's part reaches this build's data node as a member it refuses naming it, its code half
+// never asked, and the walk asks another; the same read without it is asked.
+// Mutation: carry the parts as a list, and the unknown part is answered ErrInvalid, which ends the walk.
+func TestACountsPartThisBuildDoesNotDeclareIsRefusedUnread(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a")
+	node := f.nodes["data-a"]
+	start := f.start(t)
+	ask := func(parts string) reply {
+		return askSigned(t, start, "data-a", request{Op: opCodeRead.spec.name, Args: json.RawMessage(
+			`{"kind":"counts","asker":{"kind":"operator","operator_id":"token:founder"},"counts":{` + parts +
+				`},"fresh":{"level":"stale"}}`)})
+	}
+	rep := ask(`"changes":true,"later":true`)
+	var refused *ErrUnknownKeys
+	if err := decodeError(rep.Err); rep.Unserved != "" || rep.Result != nil || !errors.As(err, &refused) ||
+		refused.Op != opCodeRead.spec.name || !slices.Equal(refused.Keys, []string{"args.counts.later"}) {
+		t.Fatalf("a counts read naming a part this build does not declare was answered %+v, want it refused "+
+			"naming args.counts.later", rep)
+	}
+	if node.askedFor(opCodeRead.spec.name) {
+		t.Fatal("the code half was asked a counts read naming a part this build does not declare")
+	}
+	if rep = ask(`"changes":true`); rep.Err != nil {
+		t.Fatalf("a counts read of the parts this build declares was refused: %v", decodeError(rep.Err))
+	}
+	if !node.askedFor(opCodeRead.spec.name) {
+		t.Fatal("the code half was never asked a counts read of the parts this build declares")
+	}
+}
+
 // A REQUEST NO BUILD COULD READ WHOLE CROSSES AS ITSELF, AND AS AN ESTATE NOBODY
 // SERVED: a node that answers on another's behalf — a Gitlet node proposing a
 // push its data nodes refused — hands its asker the refusal with every field,

@@ -79,11 +79,12 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 	}
 	// AND A RECORD CARRYING A REPOSITORY'S SETTINGS WHOLE: a settings change
 	// or a restore deletes its rules and path owners and writes the new ones,
-	// and moves the repository's row — a create writes them with its claim.
-	if settings := 2*(gitlet.MaxProtectionsPerRepo+gitlet.MaxPathOwners) + 1; settings > gitlet.MaxRecordRows {
+	// and moves the repository's row and its two tally rows; a create writes
+	// them with its claim.
+	if settings := gitlet.ReconcileRecordRows; settings > gitlet.MaxRecordRows {
 		t.Errorf("a settings record touches up to %d rows (twice MaxProtectionsPerRepo %d and MaxPathOwners "+
-			"%d, and the row), past the %d one record's apply may touch (MaxRecordRows)", settings,
-			gitlet.MaxProtectionsPerRepo, gitlet.MaxPathOwners, gitlet.MaxRecordRows)
+			"%d, the row and the two tally rows), past the %d one record's apply may touch (MaxRecordRows)",
+			settings, gitlet.MaxProtectionsPerRepo, gitlet.MaxPathOwners, gitlet.MaxRecordRows)
 	}
 	// A MAXIMAL PUSH OF DELETIONS FITS ONE RECORD'S ROWS with its sweep's
 	// room: a push row, its pack and its refs, the object each deletion left,

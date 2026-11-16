@@ -177,6 +177,13 @@
 // reads by object id are asked at — is decided once, over those rows
 // (revisionread.go), for every surface that shows it.
 //
+// ITS COUNTS ARE ITS REPOSITORY'S ROW'S (apply_counts.go, counts.go):
+// code_repos counts each repository's changes by state and
+// code_change_tallies the repositories in use by owner and visibility, kept
+// by every apply that moves a change or a repository and re-derived by the
+// applier when its rules change; a counts read sums the tallies the asker's
+// grant reads.
+//
 // # A change's conversation is rows on its own subject
 //
 // What is said ABOUT a change — who is asked to review it, its comments and

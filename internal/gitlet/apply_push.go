@@ -251,7 +251,8 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	// THE CHANGES THE RECORD MOVES, before any horizon too: their rows are
 	// the record's own, which its decide counted as this writes them
 	// (revisions.go) — each entry in order, each change one version.
-	changed, err := applyChangeMoves(ctx, tx, at, p.RepoID, pushRows)
+	// THE TALLY ROWS STAY OUT OF rows: a horizon is given what an older build's rows leave it (record.go).
+	changed, tallied, err := applyChangeMoves(ctx, tx, at, p.RepoID, pushRows)
 	if err != nil {
 		return 0, err
 	}
@@ -420,7 +421,7 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	if err != nil {
 		return 0, err
 	}
-	return rows + expired + swept + forgotten, nil
+	return rows + expired + swept + forgotten + tallied, nil
 }
 
 // packKind is what added e's pack, as its code_packs row names it: a merge
@@ -440,17 +441,19 @@ func (e PushEntry) packKind() PackKind {
 // change an entry opens from its push's options (revisions.go), from the
 // change rows the record finds, and answers the rows it wrote. A record
 // carrying an open reads the repository's next number first, which its opens
-// take in their entries' order.
+// take in their entries' order. It answers apart the tally rows it wrote
+// counting the changes' states (apply_counts.go), which no horizon is given.
 func applyChangeMoves(ctx context.Context, tx *sql.Tx, at applyContext, repoID string,
-	pushes []PushEntry) (int, error) {
+	pushes []PushEntry) (written, tallied int, err error) {
 
 	book, err := readChangeBook(ctx, tx, repoID, pushes, at.packed, at.at())
 	if err != nil {
-		return 0, fmt.Errorf("gitlet: the push at %s: %w", at.position, err)
+		return 0, 0, fmt.Errorf("gitlet: the push at %s: %w", at.position, err)
 	}
+	read := book.statesRead()
 	if slices.ContainsFunc(pushes, func(e PushEntry) bool { return e.Change != nil }) {
 		if err = tx.QueryRowContext(ctx, nextChangeSQL, repoID).Scan(&book.next); err != nil {
-			return 0, fmt.Errorf("gitlet: read %s's next change at %s: %w", repoID, at.position, err)
+			return 0, 0, fmt.Errorf("gitlet: read %s's next change at %s: %w", repoID, at.position, err)
 		}
 	}
 	for _, e := range pushes {
@@ -465,11 +468,13 @@ func applyChangeMoves(ctx context.Context, tx *sql.Tx, at applyContext, repoID s
 			_, _ = changeNotApplied(ctx, at, repoID, PushChangeID(e.PushID), why)
 		}
 	}
-	written, err := book.write(ctx, tx, at.maxVariables)
-	if err != nil {
-		return 0, fmt.Errorf("gitlet: the changes the push at %s moves: %w", at.position, err)
+	if written, err = book.write(ctx, tx, at.maxVariables); err != nil {
+		return 0, 0, fmt.Errorf("gitlet: the changes the push at %s moves: %w", at.position, err)
 	}
-	return written, nil
+	if tallied, err = countChanges(ctx, tx, repoID, book.counted(read)); err != nil {
+		return 0, 0, fmt.Errorf("%w (the push at %s)", err, at.position)
+	}
+	return written, tallied, nil
 }
 
 // refDrop is one object a forced update or a deletion moved a ref off: one

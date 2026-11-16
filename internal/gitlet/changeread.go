@@ -566,9 +566,10 @@ func readinessIn(ctx context.Context, tx *sql.Tx, rows []changeRow, repos map[st
 }
 
 // listedReposIn is every repository a page of changes across repositories
-// names whose changes the listing serves, by id: active or archived, and read
-// by both asker and the seat it reads for ([JudgeRead]) — each read in ONE
-// statement over the page's repositories, and judged once a page.
+// names whose changes the listing serves, by id: in use (importing, active or
+// archived), and read by both asker and the seat it reads for ([JudgeRead]),
+// each read in ONE statement over the page's repositories, and judged once a
+// page.
 func listedReposIn(ctx context.Context, tx *sql.Tx, scanned []changeRow, asker Principal, ceilingSeat string,
 	chart Roster) (map[string]listedRepo, error) {
 
@@ -581,9 +582,10 @@ func listedReposIn(ctx context.Context, tx *sql.Tx, scanned []changeRow, asker P
 
 // listedReposAmong is every repository of ids — each named once however often
 // it is named, in any order — whose rows a listing across repositories serves,
-// by id: active or archived, and read by both asker and the seat it reads for
-// ([JudgeRead]) — each read in ONE statement over the page's repositories, and
-// judged once a page. what names the page in a failure's sentence.
+// by id: in use (importing, active or archived), and read by both asker and
+// the seat it reads for ([JudgeRead]), each read in ONE statement over the
+// page's repositories, and judged once a page. what names the page in a
+// failure's sentence.
 func listedReposAmong(ctx context.Context, tx *sql.Tx, ids []string, asker Principal, ceilingSeat string,
 	chart Roster, what string) (map[string]listedRepo, error) {
 
