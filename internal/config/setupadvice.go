@@ -138,7 +138,8 @@ func (c *Company) auxiliaryWarnings() []Warning {
 				"executor runs on, so learning costs a share of the seat's own spend "+
 				"at that model's price. Point llm_auxiliary at an entry with a smaller model",
 			handle, aux[0]))
-		w.Seat, w.Item = handle, c.ModelName(aux[0])
+		// NO ITEM: the seat is all that tells two apart, so several are named as a count.
+		w.Seat = handle
 		out = append(out, w)
 	}
 	return out
