@@ -4262,7 +4262,9 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 // ended it first: that party drives the run from its row, and a redelivery
 // reaching it finds no running job to claim, so the delivery carries nothing
 // any node needs. Handed back, it failed as the message's, a routing failure
-// marked as the message's own.
+// marked as the message's own. While no waiter can announce the job, the
+// coordinator hands it back marked all the same, as every answer that settled
+// nothing here (above), so it is the node's even then.
 //
 // A STORE'S SILENCE IS THIS NODE'S FAILURE, NEVER THE MESSAGE'S. A completion
 // handed back because the coordination store did not answer a step

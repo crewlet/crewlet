@@ -3984,9 +3984,11 @@ func (c *Coordinator) OnAnswerGiven(ctx context.Context, given types.ExecutorAns
 // to somebody else first — a newer lease owns it, or it was ended by another
 // party — so the disposition beside it ([AnswerNotMine]) is not a run that is
 // gone: whoever holds the run now drives what becomes of it, and announces it.
-// Neither route hands back the delivery that met it: a completion's is
-// settled ([Coordinator.OnCompleted]), and an answer's says nothing of the
-// answer.
+// Neither route hands back the delivery that met it as a failure of its own:
+// a completion's is settled ([Coordinator.OnCompleted]), handed back marked
+// [ErrUnannounced] only while no waiter can announce its job, as every answer
+// that settled nothing then is (renew.go), and an answer's says nothing of
+// the answer.
 var errRunMovedOn = errors.New("sandbox: the run moved on to another holder before this " +
 	"attempt could end it")
 
