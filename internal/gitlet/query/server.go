@@ -463,6 +463,12 @@ func (s *Server) serve(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer
 			return gitlet.GitAnswer{}, err
 		}
 		ok = true
+	} else if q.Kind == gitlet.GitTips {
+		// MANY TIPS ARE KEPT ONE BY ONE, never as a page (tips.go): the memo
+		// is asked for each before any git runs.
+		if a, ok, err = r.recallTips(ctx, at); err != nil {
+			return gitlet.GitAnswer{}, err
+		}
 	} else if a, ok, err = r.recallWhole(ctx, at); err != nil {
 		return gitlet.GitAnswer{}, err
 	}
@@ -630,6 +636,8 @@ type read struct {
 	gitLeft time.Duration
 	// filter is an interdiff's files, made once (read.interdiffFilter).
 	filter *pathFilter
+	// tips is what a tips read holds of its facts and counts (recallTips).
+	tips *tipsWarm
 }
 
 // judgeable refuses a seat's read on a node that cannot judge a seat (step 2).
@@ -879,6 +887,8 @@ func (r *read) answer(ctx context.Context, objs found, at cursor) (gitlet.GitAns
 		return r.blobRead(ctx, objs, at, m)
 	case gitlet.GitDiff:
 		return r.diffRead(ctx, objs, at, m)
+	case gitlet.GitTips:
+		return r.tipsRead(ctx, objs, at)
 	case gitlet.GitLandedIn:
 		return r.landedRead(ctx, objs)
 	case gitlet.GitRevisionFacts:
@@ -1008,6 +1018,9 @@ func cursorOf(q gitlet.GitQuery) (cursor, error) {
 		// A history's page begins past the commits of the walk the pages
 		// before it covered.
 		return parseCursor(q.Cursor, q.Kind, map[byte]int{'s': 1})
+	case gitlet.GitTips:
+		// A page of tips begins at the n-th tip the query names.
+		return parseCursor(q.Cursor, q.Kind, map[byte]int{'t': 1})
 	case gitlet.GitBlame:
 		return parseCursor(q.Cursor, q.Kind, map[byte]int{'l': 1})
 	}

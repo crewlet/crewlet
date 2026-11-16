@@ -3214,6 +3214,9 @@ const (
 	// contains which, the commits each has that the other lacks, and the
 	// first page of what head changed since the merge base.
 	GitCompare GitReadKind = "compare"
+	// GitTips is many branch heads and tags at once: what each peels to, an
+	// annotated tag's facts, its commit, and how far it is from a base (tips.go).
+	GitTips GitReadKind = "tips"
 	// GitLandedIn is whether a commit is in a ref's history, and the push
 	// that put it there and kept it there: the one question about history a
 	// seat asks the server rather than a clone.
@@ -3274,8 +3277,8 @@ const (
 // the code log names one, so a kind added here moves no RecordVersion and
 // takes no versionedFields row.
 func GitReadKinds() []GitReadKind {
-	return []GitReadKind{GitTree, GitBlob, GitDiff, GitCompare, GitLandedIn, GitRevisionFacts, GitReanchor,
-		GitInterdiff, GitLog, GitBlame, GitChecksFile, GitCodeFiles, GitSearch}
+	return []GitReadKind{GitTree, GitBlob, GitDiff, GitCompare, GitTips, GitLandedIn, GitRevisionFacts,
+		GitReanchor, GitInterdiff, GitLog, GitBlame, GitChecksFile, GitCodeFiles, GitSearch}
 }
 
 // Valid reports a kind this build answers.
@@ -3295,16 +3298,16 @@ func (k GitReadKind) EnginesOwn() bool {
 	return k == GitRevisionFacts || k == GitChecksFile || k == GitCodeFiles
 }
 
-// Unstampable reports a kind whose answer is a PAGE of the repository's
-// content — a listing, a file's lines, a diff, a comparison, an interdiff, a
+// Unstampable reports a kind whose answer is a PAGE of the repository's content
+// — a listing, a file's lines, a diff, a comparison, many tips, an interdiff, a
 // history or a blame — which a read may ask cut and answered with no stamp
 // ([GitQuery.Unstamped]). Never a landed-in read, whose answer IS what the
 // node's index says of a push; nor a revision's facts, a re-anchoring or a
-// checks file, which the engine and a change's own reads ask, never a
-// question that keeps a page.
+// checks file, which the engine and a change's own reads ask, never a question
+// that keeps a page.
 func (k GitReadKind) Unstampable() bool {
 	switch k {
-	case GitTree, GitBlob, GitDiff, GitCompare, GitInterdiff, GitLog, GitBlame:
+	case GitTree, GitBlob, GitDiff, GitCompare, GitTips, GitInterdiff, GitLog, GitBlame:
 		return true
 	}
 	return false
@@ -3438,6 +3441,7 @@ type GitQuery struct {
 	Blob          *BlobQuery          `json:"blob,omitempty"`
 	Diff          *DiffQuery          `json:"diff,omitempty"`
 	Compare       *CompareQuery       `json:"compare,omitempty"`
+	Tips          *TipsQuery          `json:"tips,omitempty"`
 	LandedIn      *LandedInQuery      `json:"landed_in,omitempty"`
 	RevisionFacts *RevisionFactsQuery `json:"revision_facts,omitempty"`
 	Reanchor      *ReanchorQuery      `json:"reanchor,omitempty"`
@@ -3811,13 +3815,14 @@ func WirePath(p string) (text, b64 string) {
 // Validate refuses a read the Gitlet node cannot answer as asked ([ErrInvalid],
 // naming the field): a kind this build does not know, a repository id that is
 // not canonical, an asker no principal is, a turn beside an asker that is no
-// seat or past a turn id's bounds, a sub-query other than its kind's
-// or none, a revision [ValidRev] refuses, a path [GitPath] refuses — or none
+// seat or past a turn id's bounds, a sub-query other than its kind's or none, a
+// revision [ValidRev] refuses, tips that are not whole ids, named twice or past
+// MaxTips, or a base [ValidRev] refuses, a path [GitPath] refuses — or none
 // where a blame names its file — a line range that runs backwards or past a
 // blame's MaxBlameLines, a diff naming both a file and paths, a log whose
 // literal, limit or date no log takes, and a read made for a check that names
-// an asker or reads anything but its check's commit. A cursor longer than any
-// a Gitlet node issues is [ErrBadCursor]; whether a shorter one is the kind's own
+// an asker or reads anything but its check's commit. A cursor longer than any a
+// Gitlet node issues is [ErrBadCursor]; whether a shorter one is the kind's own
 // is the Gitlet node's to judge.
 func (q GitQuery) Validate() error {
 	if !q.Kind.Valid() {
@@ -3870,7 +3875,7 @@ func (q GitQuery) Validate() error {
 		kind    GitReadKind
 		present bool
 	}{{GitTree, q.Tree != nil}, {GitBlob, q.Blob != nil}, {GitDiff, q.Diff != nil},
-		{GitCompare, q.Compare != nil}, {GitLandedIn, q.LandedIn != nil},
+		{GitCompare, q.Compare != nil}, {GitTips, q.Tips != nil}, {GitLandedIn, q.LandedIn != nil},
 		{GitRevisionFacts, q.RevisionFacts != nil}, {GitReanchor, q.Reanchor != nil},
 		{GitInterdiff, q.Interdiff != nil}, {GitLog, q.Log != nil}, {GitBlame, q.Blame != nil},
 		{GitChecksFile, q.ChecksFile != nil}, {GitCodeFiles, q.CodeFiles != nil},
@@ -3897,6 +3902,8 @@ func (q GitQuery) Validate() error {
 		return q.Blob.validate()
 	case GitDiff:
 		return q.Diff.validate()
+	case GitTips:
+		return q.Tips.validate()
 	case GitLandedIn:
 		return q.LandedIn.validate()
 	case GitRevisionFacts:
@@ -4291,6 +4298,7 @@ type GitAnswer struct {
 	Blob          *BlobAnswer          `json:"blob,omitempty"`
 	Diff          *DiffAnswer          `json:"diff,omitempty"`
 	Compare       *CompareAnswer       `json:"compare,omitempty"`
+	Tips          *TipsAnswer          `json:"tips,omitempty"`
 	LandedIn      *LandedInAnswer      `json:"landed_in,omitempty"`
 	RevisionFacts *RevisionFactsAnswer `json:"revision_facts,omitempty"`
 	Reanchor      *ReanchorAnswer      `json:"reanchor,omitempty"`

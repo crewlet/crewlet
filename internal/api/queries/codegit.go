@@ -19,11 +19,12 @@ import (
 // …/blob); `code_log` and `code_blame`, a path's history and who last changed
 // each line of a file (…/log, …/blame); `code_diff` and `code_compare`, what
 // changed between two revisions and how they relate, with what merging the
-// one into the other would do (…/diff, …/compare); and `code_commit`, one
-// commit with the push that introduced it and the changes it belongs to
-// (…/commits/{sha}). Each is decided per repository by the grant the serving
-// node derives, as every code question is (code.go), and read at the
-// caller's freshness.
+// one into the other would do (…/diff, …/compare); `code_tips`, many branch
+// heads and tags at once with how far each is from a base (…/tips); and
+// `code_commit`, one commit with the push that introduced it and the changes
+// it belongs to (…/commits/{sha}). Each is decided per repository by the grant
+// the serving node derives, as every code question is (code.go), and read at
+// the caller's freshness.
 //
 // # Read by object id, of the repository's home
 //
@@ -83,6 +84,8 @@ type CodePage struct {
 	// Compare is a comparison's own part, beside its merge preview
 	// ([CodeComparison]).
 	Compare *gitlet.CompareAnswer `json:"compare,omitempty"`
+	// Tips is a tips read's part (code_tips).
+	Tips *gitlet.TipsAnswer `json:"tips,omitempty"`
 
 	Resolved map[string]CodeResolved    `json:"resolved,omitempty"`
 	Position statelog.Position          `json:"position,omitzero"`
@@ -167,6 +170,30 @@ func revParam(p Params, param string, dflt bool) (*gitRev, error) {
 			gitlet.MinAbbrevDigits, headRev)
 	}
 	return &gitRev{param: param, spelled: rev}, nil
+}
+
+// oidsParam is the whole object ids a request names in key: every value of
+// it, a list off a socket frame or a query string's one value, split at commas.
+// How many, and a repeat, are the Gitlet node's to refuse.
+func oidsParam(p Params, key string) ([]string, error) {
+	values, ok := p.List(key)
+	var oids []string
+	for _, v := range values {
+		for id := range strings.SplitSeq(v, ",") {
+			if id = strings.TrimSpace(id); id != "" {
+				oids = append(oids, id)
+			}
+		}
+	}
+	if !ok || len(oids) == 0 {
+		return nil, fmt.Errorf("%w: %s is required: whole object ids, comma-separated", ErrBadParams, key)
+	}
+	for _, id := range oids {
+		if !gitref.ValidOID(id) || id == gitlet.ZeroOID {
+			return nil, fmt.Errorf("%w: %s names %q, which is not a whole object id", ErrBadParams, key, id)
+		}
+	}
+	return oids, nil
 }
 
 // gitAsk is one git question as its caller asks it: the code reads, who asks,
@@ -291,7 +318,7 @@ func (g gitAsk) read(ctx context.Context, repo gitlet.RepoRef, q gitlet.GitQuery
 		return CodePage{}, false, codeRefusal(g.name, err)
 	}
 	page := CodePage{Repo: g.name, Kind: a.Kind, Rev: a.Rev, Next: a.Next, Tree: a.Tree, Blob: a.Blob, Diff: a.Diff,
-		Log: a.Log, Blame: a.Blame, Compare: a.Compare}
+		Log: a.Log, Blame: a.Blame, Compare: a.Compare, Tips: a.Tips}
 	if immutable {
 		return page, true, nil
 	}
@@ -602,6 +629,39 @@ func (s Sources) codeCompare(ctx context.Context, p Params) (any, error) {
 	out := CodeComparison{CodePage: page, Preview: CodeMergePreview{State: preview.State,
 		Conflicts: preview.Conflicts, ConflictsOmitted: preview.ConflictsOmitted}}
 	return answered(out, immutable && preview.State != gitlet.MergeUnknown), nil
+}
+
+// codeTips answers `code_tips`: up to gitlet.MaxTips objects by their whole
+// `oids`, each peeled with its tag's facts and its commit, and with `base`
+// (any revision) how far each is from it; immutable unless base names a ref.
+func (s Sources) codeTips(ctx context.Context, p Params) (any, error) {
+	g, err := s.gitAskOf(ctx, p, "code_tips")
+	if err != nil {
+		return nil, err
+	}
+	oids, err := oidsParam(p, "oids")
+	if err != nil {
+		return nil, err
+	}
+	var revs []*gitRev
+	if strings.TrimSpace(p.String("base")) != "" {
+		base, _ := revParam(p, "base", false) // named, so never refused
+		revs = append(revs, base)
+	}
+	repo, err := g.resolve(ctx, revs...)
+	if err != nil {
+		return nil, err
+	}
+	q := gitlet.TipsQuery{OIDs: oids}
+	if len(revs) > 0 {
+		q.Base = revs[0].oid
+	}
+	page, immutable, err := g.read(ctx, repo, gitlet.GitQuery{Kind: gitlet.GitTips, Tips: &q}, p.String("cursor"),
+		revs...)
+	if err != nil {
+		return nil, err
+	}
+	return answered(page, immutable), nil
 }
 
 // codeCommit answers `code_commit`: the commit `sha` — a WHOLE id, which is

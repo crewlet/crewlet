@@ -215,6 +215,9 @@ func memoizable(q gitlet.GitQuery) bool {
 	case gitlet.GitLandedIn, gitlet.GitRevisionFacts, gitlet.GitReanchor, gitlet.GitChecksFile,
 		gitlet.GitCodeFiles:
 		return false
+	case gitlet.GitTips:
+		// Kept a tip at a time under tips/1 (tips.go), never as a page.
+		return false
 	}
 	return true
 }
@@ -492,20 +495,7 @@ func encodePage(p memoPage) []byte {
 		w.str(l.PathB64)
 		w.int(len(l.Commits))
 		for _, c := range l.Commits {
-			w.str(c.OID)
-			w.int(len(c.Parents))
-			for _, p := range c.Parents {
-				w.str(p)
-			}
-			w.int(c.ParentCount)
-			w.str(c.Author)
-			w.int(c.AuthorBytes)
-			w.str(c.AuthorEmail)
-			w.int(c.AuthorEmailBytes)
-			w.time(c.AuthoredAt)
-			w.time(c.CommittedAt)
-			w.str(c.Subject)
-			w.int(c.SubjectBytes)
+			appendLogCommit(&w, c)
 		}
 		w.int(l.Scanned)
 		w.flag(l.Complete)
@@ -831,6 +821,25 @@ func readLogCommit(r *pageReader) gitlet.LogCommit {
 	c.AuthoredAt, c.CommittedAt = r.time(), r.time()
 	c.Subject, c.SubjectBytes = r.str(), r.int()
 	return c
+}
+
+// appendLogCommit writes one commit as readLogCommit reads it: a history
+// page's and a tip's alike.
+func appendLogCommit(w *pageWriter, c gitlet.LogCommit) {
+	w.str(c.OID)
+	w.int(len(c.Parents))
+	for _, p := range c.Parents {
+		w.str(p)
+	}
+	w.int(c.ParentCount)
+	w.str(c.Author)
+	w.int(c.AuthorBytes)
+	w.str(c.AuthorEmail)
+	w.int(c.AuthorEmailBytes)
+	w.time(c.AuthoredAt)
+	w.time(c.CommittedAt)
+	w.str(c.Subject)
+	w.int(c.SubjectBytes)
 }
 
 // readFile reads one diff file as appendFile wrote it.

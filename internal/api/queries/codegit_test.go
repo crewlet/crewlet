@@ -47,6 +47,9 @@ var gitQuestions = []struct {
 	{"code_diff", func(rev string) map[string]any {
 		return map[string]any{"name": "web", "base": rev, "head": rev}
 	}},
+	{"code_tips", func(rev string) map[string]any {
+		return map[string]any{"name": "web", "oids": "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "base": rev}
+	}},
 	{"code_compare", func(rev string) map[string]any {
 		return map[string]any{"name": "web", "base": rev, "head": rev}
 	}},
@@ -423,6 +426,53 @@ func TestAReadByObjectIDRefusesInThisSurfacesVocabulary(t *testing.T) {
 		if _, err := askNative(t, queries.Sources{Code: stub}, "code_tree", map[string]any{"name": "web",
 			"ref": whole}); !tc.check(err) {
 			t.Errorf("%s: answered %v", tc.name, err)
+		}
+	}
+}
+
+// A TIPS QUESTION NAMES ITS TIPS by whole ids, listed or comma-separated, in
+// order; a base by ref is resolved once and not immutable; bad oids read nothing.
+// Mutations: take oids as one id → red; answer a base by ref immutable → red.
+func TestATipsQuestionNamesItsTips(t *testing.T) {
+	t.Parallel()
+	for _, oids := range []any{whole + "," + other, []any{whole, other}, " " + whole + " , " + other + ","} {
+		stub := &stubCode{git: stamping}
+		answer, err := askNative(t, queries.Sources{Code: stub}, "code_tips", map[string]any{"name": "web",
+			"oids": oids})
+		if err != nil {
+			t.Fatalf("oids %q: %v", oids, err)
+		}
+		if _, immutable := answer.(queries.Immutable); !immutable || len(stub.resolved) != 0 {
+			t.Errorf("oids %q with no base answered %T having resolved %v, want immutable and nothing resolved",
+				oids, answer, stub.resolved)
+		}
+		if len(stub.read) != 1 || stub.read[0].Tips == nil || !slices.Equal(stub.read[0].Tips.OIDs,
+			[]string{whole, other}) || stub.read[0].Tips.Base != "" {
+			t.Errorf("oids %q were read as %+v, want the two ids in order and no base", oids, stub.read)
+		}
+	}
+
+	stub := &stubCode{git: stamping}
+	answer, err := askNative(t, queries.Sources{Code: stub}, "code_tips", map[string]any{"name": "web",
+		"oids": whole, "base": "HEAD"})
+	if _, immutable := answer.(queries.Immutable); err != nil || immutable {
+		t.Errorf("a base by ref answered %T (%v), want it bare", answer, err)
+	}
+	if len(stub.resolved) != 1 || !slices.Equal(stub.resolved[0].Refs, []string{gitlet.HeadRef}) ||
+		len(stub.read) != 1 || stub.read[0].Tips.Base != stubOID {
+		t.Errorf("a base by ref resolved %+v and read %+v, want one resolve of HEAD and its id as the base",
+			stub.resolved, stub.read)
+	}
+
+	for name, oids := range map[string]any{"none": nil, "an abbreviation": whole + "," + abbrev, "a name": "main"} {
+		stub := &stubCode{git: stamping}
+		args := map[string]any{"name": "web"}
+		if oids != nil {
+			args["oids"] = oids
+		}
+		if _, err := askNative(t, queries.Sources{Code: stub}, "code_tips", args); !errors.Is(err,
+			queries.ErrBadParams) || len(stub.read) != 0 {
+			t.Errorf("%s: answered %v having read %d, want bad_params and nothing read", name, err, len(stub.read))
 		}
 	}
 }

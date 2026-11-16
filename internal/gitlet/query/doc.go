@@ -244,6 +244,30 @@
 // node's usage publisher derives the day's repo_read record from those
 // (internal/usage).
 //
+// # Many tips at once
+//
+// A tips read (tips.go, gitlet.GitTips) answers up to gitlet.MaxTips objects by
+// whole id: ONE objects check gives each one's type and peel, ONE
+// `cat-file --batch` reads every annotated tag (gitref.TagStream), ONE
+// `log --no-walk=unsorted` lists every commit in a history's format, and against
+// a base ONE `rev-list --left-right --count` counts each tip, all under one unit
+// of the share and one budget of git. A count the budget ends ends the page
+// with a cursor at that tip, or, where it is the page's first, answers it with
+// CountsOutOfTime and moves past it, so every page moves on.
+//
+// It is never a page of the memo, so memoFormat holds no tips: each tip's facts
+// are kept under tips/1 by object id and each count by its pair of commits, and
+// recallTips asks the memo for every one before any git runs, so a screen read
+// again runs none and a screen with one branch moved checks its objects and
+// reads and counts that branch alone.
+//
+// BenchmarkTips, over a main of 20 000 commits with 80 branches forking along
+// it and 20 annotated tags, one screen of all 100 against main (-benchtime 20x,
+// git 2.56.0 on twelve vCPUs of an AMD EPYC Rome server, the copy holding its
+// commit-graph): read cold, 1.37 s at the median and 2.04 s at the 95th and
+// 99th percentiles, 13.7 ms a tip, a fifth of gitproc.ReadDeadline; from the
+// memo, 5.5 ms and 12 ms.
+//
 // # Pages
 //
 // A page is measured as its JSON, in encoding/json's own terms (page.go), and

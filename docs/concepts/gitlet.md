@@ -5294,7 +5294,9 @@ the merge base), a path's history ([A path's history](#a-paths-history)),
 which commit last changed each line of a file
 ([Who changed a line](#who-changed-a-line)), whether a commit landed in a
 branch and which push landed it (`landed_in`,
-[Which push landed a commit](#which-push-landed-a-commit)), and what a change's
+[Which push landed a commit](#which-push-landed-a-commit)), many branch heads
+and tags at once, each with the commit it names and how far it is from a base
+([Many tips at once](#many-tips-at-once)), and what a change's
 revisions are: a revision's facts against its target, where lines anchored in
 one revision are in another, and what the change changed between two
 ([A revision's facts](#a-revisions-facts)), and which lines of a commit a
@@ -5446,6 +5448,37 @@ A read's git process that reports damage to the copy is never answered from,
 even where git answered anyway — it reads around a damaged index from the
 packs and exits as if it had not — and the cache repairs what it reported
 while other nodes answer.
+
+### Many tips at once
+
+`code_tips` reads up to 100 objects at once, each named by its whole id as a
+ref's row names it: a screen of branches or tags. Each one is answered with its
+type and what it peels to; an annotated tag with its own tagger, date and
+subject, the subject read as a commit's is (the message's first paragraph, a
+signature no part of it); and the commit it is or names as a history lists it.
+With a base, each commit also carries `behind` and `ahead`, git's three-dot
+counts: the commits the base has that it lacks, and the reverse. A tip that
+peels to a tree or a blob has no commit and no counts.
+
+**One process of each kind, and one walk a tip.** A read checks what every tip
+names in one batch, reads every annotated tag in one `cat-file --batch` and
+every commit in one `log --no-walk`, then counts each tip with one
+`rev-list --left-right --count`, all under one unit of the share and one budget
+of git. Each tip's facts are kept in the [memo](#the-memo) by its object id and
+each count by its pair of commits, and the memo is asked for every one before
+any git runs: a screen read again runs no git at all, and after one branch
+moved its next read checks the objects, reads the one new commit and counts it
+alone.
+
+**A page that runs out of time goes on.** A page holds as many tips as its
+56 KiB hold, in the order asked, with a cursor at the first one left out. A page
+whose budget runs out while counting ends there with a cursor at the tip it was
+counting; where that is the page's first tip, it is answered with
+`counts_out_of_time` and no counts and the cursor moves past it, so every page
+moves on. Measured over a main of 20 000 commits with 80 branches forking along
+it and 20 annotated tags, a screen of all 100 read cold takes 1.4 s at the
+median and 2.0 s at the slowest, some 14 ms a tip, inside the read's ten seconds
+of git; read again it takes 5.5 ms.
 
 ### A path's history
 
@@ -5702,8 +5735,9 @@ patch's, a blame's range — and the memo keeps each: reading a file page by
 page streams it once, listing that tree page by page runs `ls-tree` once, and
 blaming a range page by page blames it once. A comparison is kept whole; a
 history's page is its walk's own, kept where the walk ended it and never where
-the read's ten seconds of git did; whether a commit landed in a branch never
-is, since its answer moves with the branch. A read that misses a page another read on the node is
+the read's ten seconds of git did; a tips read is kept a tip at a time rather
+than as a page ([Many tips at once](#many-tips-at-once)); whether a commit
+landed in a branch never is, since its answer moves with the branch. A read that misses a page another read on the node is
 cutting waits for it and is answered from what that read kept, so the seats a
 push's review reaches, all asking for the same diff at once, cost the node one
 git process rather than one each.
