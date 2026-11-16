@@ -60,7 +60,8 @@ func TestTheDispatcherKeepsTheToolSessionContract(t *testing.T) {
 				var out []toolsessiontest.Recorded
 				for _, c := range toolloop.Recorded(r.host) {
 					out = append(out, toolsessiontest.Recorded{Seq: c.Seq, Name: c.Name,
-						Output: c.Result.Output, Failed: c.Result.Failed, Class: c.Result.Refusal()})
+						Output: c.Result.Output, Failed: c.Result.Failed, Images: c.Images,
+						Class: c.Result.Refusal()})
 				}
 				return out
 			},
@@ -182,5 +183,5 @@ func (s *suiteTool) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	out := s.tool.Run(ctx, toolsessiontest.ToolCall{
 		Args: args, Ordinal: turn.CallLog().Ordinal(s.tool.Name, args), Activate: s.surface().Activate,
 	})
-	return tools.Result{Output: out}, nil
+	return tools.Result{Output: out, Images: s.tool.Images}, nil
 }
