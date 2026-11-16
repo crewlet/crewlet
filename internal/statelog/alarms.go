@@ -1315,10 +1315,8 @@ type Alarm struct {
 	// Kind is which alarm.
 	Kind Kind `json:"kind"`
 
-	// Title says what is wrong in a few words, and Person what it affects and
-	// what to do: the kind's own static words for a company owner, the same on
-	// every surface. The measurement stays in Detail, the operator's steps in
-	// Remedy.
+	// Title and Person are the kind's static words for a company owner: what is
+	// wrong, then what it affects and what to do. Detail and Remedy stay the operator's.
 	Title  string `json:"title"`
 	Person string `json:"person"`
 

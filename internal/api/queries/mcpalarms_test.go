@@ -101,10 +101,7 @@ func TestTheMCPAnswerCarriesItsAlarmsWithTheGestureThatFixesEach(t *testing.T) {
 }
 
 // AN MCP ALARM IS ANSWERED WITH ITS KIND'S WORDS FOR A PERSON, its title and
-// person sentence, as the table's evaluation raised it: the answer builds its
-// own alarm, and a field it left behind would leave the page only the kind.
-//
-// Mutation: drop Title or Person from the answer's copy, and this fails.
+// person sentence. Mutation: drop Title or Person from the answer's copy.
 func TestTheMCPAnswerCarriesEachAlarmsWordsForAPerson(t *testing.T) {
 	t.Parallel()
 	src := mcpSources(t, mcpFleet(t))

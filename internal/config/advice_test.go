@@ -20,15 +20,9 @@ var fieldPath = regexp.MustCompile(`[a-z_]\.[a-z_]|\[\d+\]`)
 // wordsOf is how many words text holds.
 func wordsOf(text string) int { return len(strings.Fields(text)) }
 
-// EVERY RULE'S WORDS ARE A PERSON'S, whether or not a company in this suite
-// raises it: a title of a few words in sentence case and no full stop, and an
-// explanation short enough to read in one look, each naming no document key,
-// no field path and no backtick, carrying no em dash, and each its rule's own,
-// so a screen grouping warnings by them never merges two rules.
-//
-// Mutation: put `providers.llm` or a backtick in one rule's person words, a
-// full stop or a ninth word in its title, or give two rules one title, and
-// this goes red.
+// EVERY RULE'S WORDS ARE A PERSON'S: a short sentence-case title with no full
+// stop and a one-look explanation, with no key, path, backtick or em dash, each
+// its rule's own. Mutation: break one of those, or give two rules one title.
 func TestEveryRulesWordsAreAPersonsWords(t *testing.T) {
 	t.Parallel()
 	advices := config.Advices()
@@ -73,14 +67,9 @@ func TestEveryRulesWordsAreAPersonsWords(t *testing.T) {
 	}
 }
 
-// EVERY ADVISORY AND DANGLING REFERENCE CARRIES ITS RULE'S WORDS. The companies
-// below raise every rule that declares words, between them; each warning they
-// raise of those two kinds carries a title and person words, the pair one rule
-// declared, and every declared rule is raised at least once, so a rule left
-// out of a company here fails rather than going unread.
-//
-// Mutation: raise one advisory with the bare operator sentence (no rule's
-// words), or drop a company below, and this goes red.
+// EVERY ADVISORY AND DANGLING REFERENCE CARRIES ITS RULE'S WORDS; the companies
+// below raise every rule that declares words, so one left out fails.
+// Mutation: raise one advisory with the bare operator sentence, or drop a company.
 func TestEveryAdvisoryCarriesItsRulesWords(t *testing.T) {
 	t.Parallel()
 	declared := map[config.Advice]bool{}
@@ -105,14 +94,9 @@ func TestEveryAdvisoryCarriesItsRulesWords(t *testing.T) {
 	}
 }
 
-// TWO WARNINGS OF ONE RULE ABOUT DIFFERENT SUBJECTS SAY THE SAME TO A PERSON:
-// seven agents learning on their own model are one thing to know, and so are
-// two schedules running hourly. What tells them apart travels beside the words
-// (Seat, Unit, Item), and the operator's sentence still names each, so a
-// screen says the words once and lists the subjects.
-//
-// Mutation: put the schedule's name or its count back into the person words,
-// or the seat into a title, and this goes red.
+// TWO WARNINGS OF ONE RULE ABOUT DIFFERENT SUBJECTS SAY THE SAME TO A PERSON;
+// the subjects travel beside the words (Seat, Unit, Item). Mutation: put a
+// schedule's name or count into the person words, or a seat into a title.
 func TestOneRuleSaysTheSameAboutEverySubject(t *testing.T) {
 	t.Parallel()
 	c := parsed(t, "name: Acme\n"+setupModels+"roles:\n"+
@@ -136,9 +120,7 @@ func TestOneRuleSaysTheSameAboutEverySubject(t *testing.T) {
 }
 
 // A FREQUENT SCHEDULE'S ITEM IS ITS NAME AND HOW OFTEN IT RUNS, the two facts
-// its shared words leave out.
-//
-// Mutation: leave the count out of the item, and this goes red.
+// its shared words leave out. Mutation: leave the count out of the item.
 func TestAFrequentSchedulesItemNamesItAndItsRuns(t *testing.T) {
 	t.Parallel()
 	got := classedWarnings(everyClass(t), config.ClassScheduleFrequent)

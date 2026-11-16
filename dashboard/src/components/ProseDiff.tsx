@@ -1,8 +1,6 @@
 /**
- * A change to a page, drawn as the page reads (`lib/proseDiff.ts`): each block
- * rendered by the dashboard's markdown renderer, its changed words marked with
- * the design system's `DocumentDiffAdded` and `DocumentDiffRemoved`, inside
- * its `DocumentDiff`. Nothing that was removed is a live link.
+ * A change to a page drawn as the page reads (`lib/proseDiff.ts`), its changed
+ * words marked inside the design system's `DocumentDiff`. A removed link is not live.
  */
 
 import { Fragment, type ReactNode } from "react";

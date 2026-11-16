@@ -1,11 +1,7 @@
 // @vitest-environment node
 /**
- * A control's words are drawn, unless something beside it already says them.
- *
- * `hideLabel` and `labelHidden` keep a name for a screen reader and draw
- * nothing, which is right only where the same words are on screen anyway: a
- * column head, a tile's title, a row's own text. Each one is declared here
- * with where that is, and none is hidden to make room at a width.
+ * A control's words are drawn unless the same words are already on screen
+ * beside it: every `hideLabel` and `labelHidden` is declared here with where.
  */
 
 import { expect, test } from "vitest";

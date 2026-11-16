@@ -238,14 +238,9 @@ func TestEveryClassHasWordsAndAFix(t *testing.T) {
 	}
 }
 
-// A FINDING FROM A WARNING IS LISTED IN ITS RULE'S WORDS, never in the
-// operator's sentence with its document keys: the rule's title, the one thing
-// it is about as its item, and, for a warning no class builds a fix for, its
-// person words as the why.
-//
-// Mutation: list an unclassed warning as "A setting worth checking." over its
-// message again, or leave the warning's item off its finding, and this goes
-// red.
+// A FINDING FROM A WARNING IS LISTED IN ITS RULE'S WORDS, never the operator's
+// sentence: the rule's title, its item, and an unclassed warning's person words.
+// Mutation: list an unclassed warning over its message, or drop its item.
 func TestAFindingFromAWarningIsListedInItsRulesWords(t *testing.T) {
 	t.Parallel()
 	doc, err := os.ReadFile("testdata/live-shape.company.yaml")
@@ -282,14 +277,9 @@ func TestAFindingFromAWarningIsListedInItsRulesWords(t *testing.T) {
 	}
 }
 
-// FINDINGS OF ONE CLASS ABOUT DIFFERENT SUBJECTS SAY THE SAME: six agents
-// learning on their own model, two schedules polling, two schedules that
-// rarely change anything and two sandboxes out of memory are four things to
-// know, each said once. What tells the findings of one class apart is their
-// Subject, Item and Names, never their words.
-//
-// Mutation: put a seat's name, a schedule's name, a model or a count back
-// into one class's title or why, and this goes red.
+// FINDINGS OF ONE CLASS ABOUT DIFFERENT SUBJECTS SAY THE SAME; Subject, Item
+// and Names tell them apart. Mutation: put a name, a model or a count back into
+// one class's title or why.
 func TestFindingsOfOneClassSayTheSameAboutEverySubject(t *testing.T) {
 	t.Parallel()
 	// Two schedules whose eight fires moved nothing (one of them PM's), and

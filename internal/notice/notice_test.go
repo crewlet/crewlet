@@ -33,13 +33,9 @@ func alarm(kind string, since time.Time, nodes ...string) notice.Notice {
 		Since: since, Nodes: nodes, Title: title, Person: person}
 }
 
-// AN ALARM'S NOTICE SAYS WHAT IS WRONG IN ITS KIND'S WORDS for a company owner,
-// the backup finding's included, so the Inbox can say it without the alarm. A
-// kind this build does not raise (a newer node's, partway through a roll) is
-// still a notice, with no words rather than a guess.
-//
-// Mutation: drop the words from FromAlarms, or fill them for an unknown kind,
-// and this fails.
+// AN ALARM'S NOTICE SAYS WHAT IS WRONG IN ITS KIND'S WORDS, and a kind this
+// build does not raise is still a notice, with no words rather than a guess.
+// Mutation: drop the words from FromAlarms, or fill them for an unknown kind.
 func TestAnAlarmsNoticeCarriesItsKindsWords(t *testing.T) {
 	t.Parallel()
 	backup := string(statelog.KindBackupAge)

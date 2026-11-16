@@ -28,13 +28,8 @@ var notPlainWords = []struct {
 }
 
 // EVERY KIND TELLS A COMPANY OWNER WHAT IS WRONG IN PLAIN WORDS: a title of
-// three to eight words in sentence case, and a person sentence of at most 25
-// words, what it affects and then what to do. Neither holds a command, a
-// document key, a path or a figure: a screen draws them as they are, beside
-// the measurement it already shows.
-//
-// Mutation: empty a row's title, put a backtick, a key, a digit or an em dash
-// in a row's words, or run its person sentence past 25 words, and this fails.
+// three to eight words and a person sentence of at most 25, with no command, key,
+// path or figure. Mutation: empty a title, add a backtick, key, digit or em dash.
 func TestEveryAlarmKindTellsAPersonWhatIsWrongInPlainWords(t *testing.T) {
 	t.Parallel()
 	kinds := statelog.Kinds()
@@ -79,13 +74,9 @@ func TestEveryAlarmKindTellsAPersonWhatIsWrongInPlainWords(t *testing.T) {
 	}
 }
 
-// AN ALARM CARRIES ITS KIND'S WORDS WHEREVER IT IS BUILT, and on the wire: a
-// node-wide condition, one about a configured entry, and one about a log as
-// the report folds it under its kind. A path that dropped them would send a
-// screen an alarm it can only name by its kind.
-//
-// Mutation: drop Title or Person from the rule's alarm or from the report's
-// fold, or untag either field, and this fails.
+// AN ALARM CARRIES ITS KIND'S WORDS WHEREVER IT IS BUILT, and on the wire.
+// Mutation: drop Title or Person from the rule's alarm or the report's fold, or
+// untag either field.
 func TestEveryRaisedAlarmCarriesItsKindsWords(t *testing.T) {
 	t.Parallel()
 	var raised []statelog.Alarm

@@ -618,10 +618,8 @@ test("recent activity lists each page once, never the featured page, and a lone 
 const TIES =
   "# Settlement algorithm\n\nNets every balance first, as the [ledger](#/doclet/pages/0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d) records it.\n\n## Ties\n\n";
 
-// SUMMED UP FIRST, THEN READ AS THE PAGE READS: the save's note, who, when
-// and how much; then its change rendered, the changed words marked in place,
-// never the paragraph twice, never its markdown or a link's target, and never
-// the page's opening again. The page's earlier saves follow in the same form.
+// SUMMED UP FIRST, THEN READ AS THE PAGE READS: note, who, when and how much,
+// then the change rendered with its words marked, never as markdown.
 test("the newest save is summed up first, and its change is drawn as the page reads", async () => {
   const asked = landing({
     page_activity: {

@@ -505,11 +505,8 @@ type Warning struct {
 	// on their own model are one thing to know, and a screen that groups by
 	// Title and Person says it once and lists what it is about.
 	//
-	// TWO PHRASINGS ON ONE VALUE, written together where the warning is
-	// raised, for the reason a caveat carries two (ADR-0060): a code a client
-	// words by itself puts every sentence in two languages with nothing
-	// holding them together, and a class the client has not learned is drawn
-	// as nothing at all.
+	// TWO PHRASINGS ON ONE VALUE, written together where the warning is raised
+	// (ADR-0060): a client wording a code itself would draw an unknown class as nothing.
 	Person string `json:"person,omitempty"`
 	// Item is the one thing within the seat or unit the warning is about, as
 	// a person reads it in a list: a schedule's name and how often it runs,

@@ -1,17 +1,7 @@
 /**
- * Two versions of a markdown document compared as a reader reads them: by
- * block, then by word inside a block that was edited.
- *
- * A line diff of the source shows a paragraph edited in three words as the
- * whole paragraph removed and added, in markdown with its link targets. Here
- * the blocks are compared first (a list item is a block of its own), a removed
- * block and an added one of the same shape and mostly the same words are one
- * block edited, and only its changed words are marked. A link, a code span,
- * an image and an address are compared whole, so a reader never sees half a
- * link target. Both comparisons are `lib/lineDiff.ts`'s, bounds included.
- *
- * PURE: what changed is held by `proseDiff.test.ts`; `components/ProseDiff.tsx`
- * draws it.
+ * Two versions of a markdown document compared by block, then by word inside an
+ * edited block, with links and code compared whole (`lib/lineDiff.ts`, bounds
+ * included). Pure: `components/ProseDiff.tsx` draws it.
  */
 
 import { markdownInline, parseMarkdown, type MarkdownBlock } from "@crewlethq/ui";
@@ -60,10 +50,8 @@ export type ProseComparison =
   | Uncompared;
 
 /**
- * How much of two blocks' words must be shared for them to be one block
- * edited rather than one removed and another added: half, so a sentence with
- * a clause rewritten is still marked in place and a paragraph rewritten is not
- * a confetti of marks.
+ * The share of words two blocks need to be one block edited rather than one
+ * removed and one added: half, so a rewritten paragraph is not a confetti of marks.
  */
 export const SAME_BLOCK = 0.5;
 
@@ -334,10 +322,8 @@ function common(a: readonly string[], b: readonly string[]): number {
 }
 
 /**
- * A run of inline markdown as the pieces a word comparison moves whole: a
- * link, a code span, an image, an emphasis or an escape is one piece; in the
- * plain words between them, an address, a mention or a key is one piece, and
- * the rest is words, spaces and punctuation one by one.
+ * Inline markdown as the pieces a word comparison moves whole: a link, code span,
+ * image, emphasis, escape, address, mention or key; otherwise word by word.
  */
 export function atomsOf(text: string): string[] {
   const out: string[] = [];
@@ -465,13 +451,9 @@ export type PreviewEntry =
   | { kind: "skipped"; count: number; of: "same" | "added" | "removed" };
 
 /**
- * A change cut to a preview: at most `max` changed blocks. A run of more than
- * `run` blocks added or removed together keeps its headings, each with the
- * blocks under it counted, so a reader sees which sections went; a run with
- * no heading shows its first `run - 1` and counts the rest. Unchanged blocks
- * are counted where they stand, except the heading a change sits under, which
- * says where on the page it is. Nothing after the last change shown. `more`
- * is how many changed blocks the preview left out.
+ * A change cut to at most `max` changed blocks; a long added or removed run keeps
+ * its headings with counts, and unchanged blocks are counted except a change's heading.
+ * `more` is how many changed blocks were left out.
  */
 export function previewOf(
   blocks: readonly ProseBlock[],
