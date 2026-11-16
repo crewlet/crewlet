@@ -32,6 +32,9 @@
  * reader who needs it is already on it. Each kind's create page
  * (`routes/artifacts/new/`) is a chunk of its own too, and neither is it
  * prefetched: a reader who opens Artifacts to look never needs an editor.
+ * Gitlet is three, by address: its section pages, a repository's pages (a commit
+ * and a comparison among them) and a change's page with its peek, so a first click
+ * into one fetches neither other.
  *
  * The command palette (`palette/Palette.tsx`) and the assistant's panel
  * (`assistant/chunk/`) are the frame's own chunks. Each is mounted only while
@@ -130,6 +133,8 @@ const LOADERS = {
   me: () => import("~/routes/me/index.ts"),
   worklet: () => import("~/routes/worklet/index.ts"),
   gitlet: () => import("~/routes/gitlet/index.ts"),
+  "gitlet-repo": () => import("~/routes/gitlet/repo/index.ts"),
+  "gitlet-change": () => import("~/routes/gitlet/change/index.ts"),
   atlas: () => import("~/routes/atlas/index.ts"),
   agents: () => import("~/routes/agents/index.ts"),
   org: () => import("~/routes/org/index.ts"),
@@ -152,7 +157,14 @@ const LOADERS = {
   palette: () => import("./palette/Palette.tsx"),
   assistant: () => import("./assistant/chunk/index.ts"),
 } satisfies Record<
-  ScreenDir | "org" | "signin" | NewArtifactChunk | "palette" | "assistant" | "model-wizard",
+  | ScreenDir
+  | GitletChunk
+  | "org"
+  | "signin"
+  | NewArtifactChunk
+  | "palette"
+  | "assistant"
+  | "model-wizard",
   () => Promise<unknown>
 >;
 
@@ -173,6 +185,9 @@ type ScreenDir =
   | "spend"
   | "settings"
   | "account";
+
+/** Gitlet's chunks beside its section pages': a repository's pages, and a change's. */
+type GitletChunk = "gitlet-repo" | "gitlet-change";
 
 /**
  * A kind's create page, a chunk of its own: a doc's editor, a deck's composer
@@ -220,12 +235,12 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   project: "worklet",
   item: "worklet",
   "code-changes": "gitlet",
-  "code-change": "gitlet",
+  "code-change": "gitlet-change",
   "code-repos": "gitlet",
   "code-search": "gitlet",
-  "code-repo": "gitlet",
-  "code-commit": "gitlet",
-  "code-compare": "gitlet",
+  "code-repo": "gitlet-repo",
+  "code-commit": "gitlet-repo",
+  "code-compare": "gitlet-repo",
   "code-pushes": "gitlet",
   "code-queue": "gitlet",
   "code-checks": "gitlet",
@@ -300,6 +315,8 @@ export const CHUNKS: readonly Chunk[] = [
   "spend",
   "worklet",
   "gitlet",
+  "gitlet-repo",
+  "gitlet-change",
   "chatlet",
   "doclet",
   "artifacts",
@@ -313,13 +330,18 @@ export const CHUNKS: readonly Chunk[] = [
  * since a directory's name is nobody's word for anything.
  */
 const CHUNK_LABELS: Readonly<
-  Record<ScreenDir | "org" | "signin" | "palette" | "assistant" | "model-wizard", string>
+  Record<
+    ScreenDir | GitletChunk | "org" | "signin" | "palette" | "assistant" | "model-wizard",
+    string
+  >
 > = {
   home: "Home",
   inbox: "Inbox",
   me: "My work",
   worklet: "Worklet",
   gitlet: "Gitlet",
+  "gitlet-repo": "Gitlet repository",
+  "gitlet-change": "Gitlet change",
   atlas: "Atlas",
   chatlet: "Chatlet",
   agents: "Seats and schedules",

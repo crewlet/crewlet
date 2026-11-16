@@ -20,10 +20,12 @@ type CountPart string
 const (
 	// CountChanges is the scope's changes by state ([ChangeCounts]).
 	CountChanges CountPart = "changes"
+	// CountRepos is the repositories by kind and status ([RepoKindCounts]), the company's alone.
+	CountRepos CountPart = "repos"
 )
 
 // CountParts is the closed set, in the order the parts were added.
-func CountParts() []CountPart { return []CountPart{CountChanges} }
+func CountParts() []CountPart { return []CountPart{CountChanges, CountRepos} }
 
 // Valid reports a part this build counts.
 func (p CountPart) Valid() bool { return slices.Contains(CountParts(), p) }
@@ -32,6 +34,7 @@ func (p CountPart) Valid() bool { return slices.Contains(CountParts(), p) }
 // added later is a key an older build refuses unread, so the walk asks another node.
 type CountsQuery struct {
 	Changes bool `json:"changes,omitempty"`
+	Repos   bool `json:"repos,omitempty"`
 }
 
 // Ask sets p's key and reports whether this build counts p.
@@ -39,6 +42,8 @@ func (q *CountsQuery) Ask(p CountPart) bool {
 	switch p {
 	case CountChanges:
 		q.Changes = true
+	case CountRepos:
+		q.Repos = true
 	default:
 		return false
 	}
@@ -46,11 +51,12 @@ func (q *CountsQuery) Ask(p CountPart) bool {
 }
 
 // asks reports a query asking at least one part.
-func (q CountsQuery) asks() bool { return q.Changes }
+func (q CountsQuery) asks() bool { return q.Changes || q.Repos }
 
 // Counts is a counts read's answer: a part each it asked, absent where not asked.
 type Counts struct {
-	Changes *ChangeCounts `json:"changes,omitempty"`
+	Changes *ChangeCounts   `json:"changes,omitempty"`
+	Repos   *RepoKindCounts `json:"repos,omitempty"`
 }
 
 // ChangeCounts is changes by state; Live is those in a live state ([ChangeState.Live]).
@@ -117,6 +123,110 @@ func stateCounts(draft, open, closed, merged int64) ChangeCounts {
 	return c
 }
 
+// RepoKindCounts is repositories by kind, each by status: a field a kind ([RepoKinds]).
+type RepoKindCounts struct {
+	Project RepoCounts `json:"project"`
+	Scratch RepoCounts `json:"scratch"`
+}
+
+// of is k's counts, nil for a kind this build does not know.
+func (c *RepoKindCounts) of(k RepoKind) *RepoCounts {
+	switch k {
+	case RepoProject:
+		return &c.Project
+	case RepoScratch:
+		return &c.Scratch
+	}
+	return nil
+}
+
+// RepoCounts is repositories by status; Live is those in use ([RepoStatus.live]).
+// Every field is a count, a zero included; absence is the pointer's that holds it.
+type RepoCounts struct {
+	Live      int64 `json:"live"`
+	Importing int64 `json:"importing"`
+	Active    int64 `json:"active"`
+	Archived  int64 `json:"archived"`
+	Deleted   int64 `json:"deleted"`
+	Purging   int64 `json:"purging"`
+}
+
+// add counts n more in s, and in Live where s is in use; a status this build does not know
+// moves nothing.
+func (c *RepoCounts) add(s RepoStatus, n int64) {
+	switch s {
+	case RepoStatusImporting:
+		c.Importing += n
+	case RepoStatusActive:
+		c.Active += n
+	case RepoStatusArchived:
+		c.Archived += n
+	case RepoStatusDeleted:
+		c.Deleted += n
+	case RepoStatusPurging:
+		c.Purging += n
+	default:
+		return
+	}
+	if s.live() {
+		c.Live += n
+	}
+}
+
+// plus is c and o added field by field.
+func (c RepoCounts) plus(o RepoCounts) RepoCounts {
+	return RepoCounts{Live: c.Live + o.Live, Importing: c.Importing + o.Importing, Active: c.Active + o.Active,
+		Archived: c.Archived + o.Archived, Deleted: c.Deleted + o.Deleted, Purging: c.Purging + o.Purging}
+}
+
+// negated is c with every count's sign turned.
+func (c RepoCounts) negated() RepoCounts {
+	return RepoCounts{Live: -c.Live, Importing: -c.Importing, Active: -c.Active, Archived: -c.Archived,
+		Deleted: -c.Deleted, Purging: -c.Purging}
+}
+
+// zero reports counts holding no repository in any status.
+func (c RepoCounts) zero() bool {
+	return c.Importing == 0 && c.Active == 0 && c.Archived == 0 && c.Deleted == 0 && c.Purging == 0
+}
+
+// in is how many repositories c counts in s; none for a status this build does not know.
+func (c RepoCounts) in(s RepoStatus) int64 {
+	switch s {
+	case RepoStatusImporting:
+		return c.Importing
+	case RepoStatusActive:
+		return c.Active
+	case RepoStatusArchived:
+		return c.Archived
+	case RepoStatusDeleted:
+		return c.Deleted
+	case RepoStatusPurging:
+		return c.Purging
+	}
+	return 0
+}
+
+// sum is how many repositories c counts in the statuses named, a status named twice once.
+func (c RepoCounts) sum(statuses []RepoStatus) int64 {
+	var n int64
+	for _, s := range RepoStatuses() {
+		if slices.Contains(statuses, s) {
+			n += c.in(s)
+		}
+	}
+	return n
+}
+
+// statusCounts is the counts of the five count columns, in [RepoStatuses]' order.
+func statusCounts(importing, active, archived, deleted, purging int64) RepoCounts {
+	var c RepoCounts
+	for i, n := range []int64{importing, active, archived, deleted, purging} {
+		c.add(RepoStatuses()[i], n)
+	}
+	return c
+}
+
 // validateCounts is [ReadQuery.validate] for a `counts` read: at least one part,
 // and one answer, never paged.
 func (q ReadQuery) validateCounts() error {
@@ -128,6 +238,9 @@ func (q ReadQuery) validateCounts() error {
 		return refused("cursor", "counts are one answer, never paged")
 	case q.Limit != 0:
 		return refused("limit", "counts are one answer, never paged")
+	case q.Counts.Repos && q.Repo != "":
+		return refused("repo", "repositories are counted across every one the asker reads; a counts read "+
+			"asking for repos names none")
 	}
 	return nil
 }
@@ -161,6 +274,16 @@ func (r *Reader) counts(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		}
 		counts.Changes = &c
 	}
+	if q.Counts.Repos {
+		var (
+			c   RepoKindCounts
+			err error
+		)
+		if c, err = talliedRepos(ctx, tx, q.Asker, q.CeilingSeat, chart); err != nil {
+			return err
+		}
+		counts.Repos = &c
+	}
 	out.Counts = &counts
 	return nil
 }
@@ -176,6 +299,24 @@ func talliedChanges(ctx context.Context, tx *sql.Tx, asker Principal, ceilingSea
 		ref := RepoRef{Owner: key.owner, Visibility: key.visibility}
 		if _, refused := JudgeRead(asker, ceilingSeat, ref, chart); refused == nil {
 			sum = sum.plus(c)
+		}
+		return nil
+	})
+	return sum, err
+}
+
+// talliedRepos sums the repository tally rows asker and its ceiling read, by kind and status,
+// each key judged as [talliedChanges] judges it.
+func talliedRepos(ctx context.Context, tx *sql.Tx, asker Principal, ceilingSeat string,
+	chart Roster) (RepoKindCounts, error) {
+
+	var sum RepoKindCounts
+	err := eachRepoTally(ctx, tx, func(key repoTallyKey, c RepoCounts) error {
+		ref := RepoRef{Owner: key.owner, Visibility: key.visibility}
+		if _, refused := JudgeRead(asker, ceilingSeat, ref, chart); refused == nil {
+			if of := sum.of(key.kind); of != nil {
+				*of = of.plus(c)
+			}
 		}
 		return nil
 	})
@@ -218,8 +359,11 @@ func eachTally(ctx context.Context, tx *sql.Tx, fn func(tallyKey, ChangeCounts) 
 	return nil
 }
 
-// repoFacts is what [ReadQuery.RepoFacts] answers of one repository.
-type repoFacts struct{ changes ChangeCounts }
+// repoFacts is what [ReadQuery.RepoFacts] answers of one repository from its row.
+type repoFacts struct {
+	changes      ChangeCounts
+	pushMirrored bool
+}
 
 // repoFactsIn is the facts of the repositories ids name, by id, in one statement.
 func repoFactsIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]repoFacts, error) {
@@ -240,11 +384,12 @@ func repoFactsIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]repo
 		var (
 			id                          string
 			draft, open, closed, merged int64
+			pushMirrored                bool
 		)
-		if err = rows.Scan(&id, &draft, &open, &closed, &merged); err != nil {
+		if err = rows.Scan(&id, &draft, &open, &closed, &merged, &pushMirrored); err != nil {
 			return nil, fmt.Errorf("gitlet: read a repository's facts: %w", err)
 		}
-		facts[id] = repoFacts{changes: stateCounts(draft, open, closed, merged)}
+		facts[id] = repoFacts{changes: stateCounts(draft, open, closed, merged), pushMirrored: pushMirrored}
 	}
 	if err = rows.Err(); err != nil {
 		return nil, fmt.Errorf("gitlet: read the repositories' facts: %w", err)
@@ -252,7 +397,8 @@ func repoFactsIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]repo
 	return facts, nil
 }
 
-// withFacts sets each repository of repos' facts, each row its own copy, read in one statement.
+// withFacts sets each repository of repos' facts its row holds, each its own copy, read in one
+// statement; its card's other parts are [Reader.carded]'s.
 func withFacts(ctx context.Context, tx *sql.Tx, repos []*RepoSummary) error {
 	ids := make([]string, len(repos))
 	for i, s := range repos {
@@ -263,8 +409,9 @@ func withFacts(ctx context.Context, tx *sql.Tx, repos []*RepoSummary) error {
 		return err
 	}
 	for _, s := range repos {
-		changes := facts[s.ID].changes
-		s.ChangeCounts = &changes
+		f := facts[s.ID]
+		s.ChangeCounts = &f.changes
+		s.Card = &RepoCard{PushMirrored: f.pushMirrored}
 	}
 	return nil
 }
@@ -275,6 +422,6 @@ const (
 	changeTalliesSQL = `SELECT visibility, owner_kind, owner, draft_changes, open_changes, closed_changes,
 		merged_changes FROM code_change_tallies`
 	// repoFactsOfSQL is the facts of the repositories a JSON list names, by id.
-	repoFactsOfSQL = `SELECT id, draft_changes, open_changes, closed_changes, merged_changes FROM code_repos
-		WHERE id IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
+	repoFactsOfSQL = `SELECT id, draft_changes, open_changes, closed_changes, merged_changes, mirror_to != ''
+		FROM code_repos WHERE id IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
 )

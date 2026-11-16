@@ -8,10 +8,12 @@ import {
   CODE_GROUNDS,
   CODE_PICK,
   CODE_REF,
+  DIFF_HUNK,
+  DIFF_ROWS,
   SYNTAX_INKS,
 } from "@crewlethq/tokens/test/palette";
 
-import { declared, sheetRules, type SheetRule } from "../test/sheets.ts";
+import { declared, sheetRules, splitSelectors, type SheetRule } from "../test/sheets.ts";
 import {
   SRC,
   classWrites,
@@ -169,7 +171,10 @@ function gitletImports(m: Module): Set<string> {
   return out;
 }
 
-/** The modules that pick from the Gitlet chunk, and what each may pick. */
+/** Gitlet's chunks (`app/lazyScreen.ts`): its section pages, a repository's and a change's. */
+const GITLET_CHUNKS = new Set(["gitlet", "gitlet-repo", "gitlet-change"]);
+
+/** The modules that pick from Gitlet's chunks, and what each may pick. */
 const LAZY: { file: string; names: string[] | "pages"; why: string }[] = [
   {
     file: "app/App.tsx",
@@ -183,7 +188,7 @@ const LAZY: { file: string; names: string[] | "pages"; why: string }[] = [
   },
 ];
 
-/** Where a module picks from the Gitlet chunk (`lazyScreen("gitlet", …)`) what `LAZY` does not give it. */
+/** Where a module picks from Gitlet's chunks (`lazyScreen("gitlet…", …)`) what `LAZY` does not give it. */
 export function lazyPicks(path: string, text: string, lang: Lang): string[] {
   const entry = LAZY.find((l) => l.file === path);
   const line = lineOf(text);
@@ -193,7 +198,7 @@ export function lazyPicks(path: string, text: string, lang: Lang): string[] {
     const callee = node.callee as Node;
     const [chunk, pick] = node.arguments as Node[];
     if (callee.type !== "Identifier" || callee.name !== "lazyScreen") return;
-    if (stringValue(chunk) !== "gitlet") return;
+    if (!GITLET_CHUNKS.has(stringValue(chunk) ?? "")) return;
     const body = pick?.type === "ArrowFunctionExpression" ? (pick.body as Node) : null;
     const name = body?.type === "MemberExpression" ? memberName(body) : null;
     const at = `${path}:${line(node.start)}`;
@@ -366,23 +371,36 @@ export function syntaxSites(path: string, text: string, lang: Lang): string[] {
 }
 
 /** A class whose element holds coloured code: its grounds are the ones the inks are measured on. */
-const CODE_HOLDERS = /\.code-(?:source|blame)(?:__(?:line|text))?(?![\w-])/;
+const CODE_HOLDERS =
+  /\.code-(?:source|blame|search-(?:file|lines|line))(?:__(?:line|text))?(?![\w-])/;
+/** A coloured diff, whose lines, hunk row and body hold coloured code. */
+const CODE_DIFF = /\.diff-view--code(?![\w-])/;
+const RUN = /\.diff-view__run(?![\w-])/;
 
 /**
  * A rule painting a ground under coloured code with anything but the kit's
- * code grounds, their hover or the pick, as `file selector property: value`.
+ * code grounds, their hover or the pick (in a coloured diff its rows and hunk
+ * row too, and a word tint on a changed run alone), as `file selector property: value`.
  */
 export function unmeasuredCodeGrounds(rules: readonly SheetRule[]): string[] {
   const allowed = new Set([...CODE_GROUNDS, "--color-surface-hover", CODE_PICK]);
+  const lines = new Set([...allowed, ...DIFF_ROWS.map((d) => d.row), DIFF_HUNK.row]);
+  const words = new Set(DIFF_ROWS.map((d) => d.word));
   const out: string[] = [];
   for (const rule of rules) {
-    if (!CODE_HOLDERS.test(rule.selector)) continue;
+    const diff = CODE_DIFF.test(rule.selector);
+    if (!diff && !CODE_HOLDERS.test(rule.selector)) continue;
+    const run = diff && splitSelectors(rule.selector).every((s) => RUN.test(s));
     for (const decl of rule.body.split(";")) {
       const at = /^\s*(background(?:-color)?)\s*:\s*([\s\S]*?)\s*$/.exec(decl);
       if (!at) continue;
       const value = at[2]!;
       const token = /^var\((--color-[\w-]+)\)$/.exec(value)?.[1];
-      const ok = value === "none" || value === "transparent" || (token && allowed.has(token));
+      const ok =
+        value === "none" ||
+        value === "transparent" ||
+        (token && (diff ? lines : allowed).has(token)) ||
+        (token && run && words.has(token));
       if (!ok) out.push(`${rule.file} ${rule.selector} ${at[1]}: ${value}`);
     }
   }
@@ -458,12 +476,12 @@ describe("in the tree", () => {
     }
   });
 
-  test("only the router and the peeks pick from the Gitlet chunk, the peeks its change's", () => {
+  test("only the router and the peeks pick from Gitlet's chunks, the peeks its change's", () => {
     expect(modules().flatMap((m) => lazyPicks(m.path, m.text, m.lang))).toEqual([]);
     for (const { file, why } of LAZY) {
       const at = modules().find((m) => m.path === file);
-      expect(at?.text, `${file} picks nothing from the Gitlet chunk now`).toContain(
-        'lazyScreen("gitlet"',
+      expect(at?.text, `${file} picks nothing from Gitlet's chunks now`).toMatch(
+        /lazyScreen\("gitlet(?:-repo|-change)?"/,
       );
       expect(why.length, file).toBeGreaterThan(40);
     }
@@ -514,7 +532,15 @@ describe("in the palette", () => {
   });
 
   test("the code the inks colour stands on the grounds they are measured on", () => {
-    expect(unmeasuredCodeGrounds(sheetRules())).toEqual([]);
+    const rules = sheetRules();
+    // A VACUITY FLOOR: the search lines and a coloured diff's rows, runs, hunk row and pick.
+    expect(
+      rules.filter((r) => /\.code-search-line(?![\w-])/.test(r.selector)).length,
+    ).toBeGreaterThan(0);
+    expect(
+      rules.filter((r) => CODE_DIFF.test(r.selector) && /background/.test(r.body)).length,
+    ).toBeGreaterThanOrEqual(6);
+    expect(unmeasuredCodeGrounds(rules)).toEqual([]);
   });
 
   test("no step of the code host's families is cast in another's role", () => {
@@ -611,7 +637,7 @@ describe("it can tell", () => {
     expect(markSites("routes/inbox/model.ts", address, "ts")).toEqual([]);
   });
 
-  test("a pick from the Gitlet chunk outside the router and the peeks' change", () => {
+  test("a pick from Gitlet's chunks outside the router and the peeks' change", () => {
     const peek = 'const P = lazyScreen("gitlet", (m) => m.ChangePeek);';
     expect(lazyPicks("app/frame/peeks.tsx", peek, "tsx")).toEqual([]);
     expect(lazyPicks("routes/settings/Config.tsx", peek, "tsx")).toEqual([
@@ -624,6 +650,16 @@ describe("it can tell", () => {
     expect(lazyPicks("app/App.tsx", files, "tsx")).toEqual([]);
     const other = 'const S = lazyScreen("settings", (m) => m.NodePeek);';
     expect(lazyPicks("routes/live/X.tsx", other, "tsx")).toEqual([]);
+    // EACH OF THE THREE CHUNKS IS READ, so the router naming a new key keeps the gate seeing.
+    const change = 'const P = lazyScreen("gitlet-change", (m) => m.ChangePeek);';
+    expect(lazyPicks("app/frame/peeks.tsx", change, "tsx")).toEqual([]);
+    expect(lazyPicks("routes/settings/Config.tsx", change, "tsx")).toEqual([
+      "routes/settings/Config.tsx:1 picks ChangePeek from the Gitlet chunk",
+    ]);
+    const repo = 'const F = lazyScreen("gitlet-repo", (m) => m.CommitPage);';
+    expect(lazyPicks("app/frame/peeks.tsx", repo, "tsx")).toEqual([
+      "app/frame/peeks.tsx:1 picks CommitPage from the Gitlet chunk",
+    ]);
   });
 
   test("a mark's class written by another module", () => {
@@ -831,6 +867,12 @@ describe("it can tell", () => {
     expect(syntaxSites("routes/home/X.tsx", 'import "~/styles/gitlet-code.css";', "tsx")).toEqual([
       "routes/home/X.tsx:1 imports ~/styles/gitlet-code.css",
     ]);
+    // DiffView takes spans, never grammars, and so does the run it cuts them at.
+    for (const path of ["components/DiffView.tsx", "lib/wordDiff.ts"]) {
+      expect(syntaxSites(path, 'import { statesOf } from "~/lib/syntax/index.ts";', "tsx")).toEqual(
+        [`${path}:1 reaches ~/lib/syntax/index.ts`],
+      );
+    }
   });
 
   test("a ground under coloured code the inks are not measured on", () => {
@@ -845,9 +887,35 @@ describe("it can tell", () => {
         rule("gitlet.css", ".code-blame__commit", "background: var(--color-brand-accent-soft);"),
         rule("gitlet.css", ".code-blame tr[data-picked]", `background: var(${CODE_PICK});`),
         rule("gitlet.css", ".code-source__number", "background: none;"),
+        rule("gitlet.css", ".code-search-line", "background: var(--color-brand-accent-soft);"),
+        rule("gitlet.css", ".code-search-line:hover", "background: var(--color-surface-hover);"),
+        rule("gitlet.css", ".code-search-line__number", "background: var(--color-surface-raised);"),
+        rule(
+          "diff.css",
+          '.diff-view--code .diff-view__line[data-kind="add"]',
+          "background: var(--color-diff-added-word);",
+        ),
+        rule(
+          "diff.css",
+          '.diff-view--code .diff-view__line[data-kind="remove"]',
+          "background: var(--color-feedback-danger-soft);",
+        ),
+        rule(
+          "diff.css",
+          '.diff-view--code .diff-view__line[data-kind="add"] .diff-view__run',
+          "background: var(--color-diff-added-word);",
+        ),
+        rule(
+          "diff.css",
+          ".diff-view--code .diff-view__skip",
+          "background: var(--color-diff-hunk-row);",
+        ),
       ]),
     ).toEqual([
       "gitlet.css .code-source__line[data-picked] background: var(--color-brand-accent-soft)",
+      "gitlet.css .code-search-line background: var(--color-brand-accent-soft)",
+      'diff.css .diff-view--code .diff-view__line[data-kind="add"] background: var(--color-diff-added-word)',
+      'diff.css .diff-view--code .diff-view__line[data-kind="remove"] background: var(--color-feedback-danger-soft)',
     ]);
   });
 });

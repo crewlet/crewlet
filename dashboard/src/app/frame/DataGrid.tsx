@@ -131,7 +131,7 @@ const readers = new Map<string, number>();
  * Registers the keys a mounted grid reads, and reports a key a grid already
  * mounted reads too: two grids on one key re-sort (or re-column) each other.
  */
-function useOneReaderPerKey(keys: readonly string[]): void {
+export function useOneReaderPerKey(keys: readonly string[]): void {
   const joined = keys.join(" ");
   useEffect(() => {
     const held = joined.split(" ");

@@ -16,6 +16,7 @@ import { ChangesGrid } from "./Changes.tsx";
 import { BranchChip } from "./ui.tsx";
 import { ComparePage } from "./commit/ComparePage.tsx";
 import { RepositoryPage } from "./repo/RepositoryPage.tsx";
+import { SYNTAX_CLASS } from "./syntax.tsx";
 
 const POSITION = { stream: "CREWLET_CODE_LOG", generation: 1, seq: 12 };
 const BASE = "3a3ecae0123456789abcdef0123456789abcdef0";
@@ -264,6 +265,8 @@ for (const width of [1440, 390]) {
 // A CODED DIFF'S BAND HOLDS ITS NUMBERS AND STOPS BEFORE THE SIGN, and a changed
 // run keeps a visible underline. Mutation: a narrower `--diff-gutter`, or a
 // transparent run decoration, fails it.
+// A CODED LINE KEEPS THE PLAIN LINE'S HEIGHT, and no ink is drawn inside a
+// run. Mutation: `font-size: 1.2em` on the comment rule fails it.
 test("a coloured diff's band holds its numbers, and a changed run keeps its underline", async () => {
   const hunks: DiffHunk[] = [
     {
@@ -276,8 +279,35 @@ test("a coloured diff's band holds its numbers, and a changed run keeps its unde
       ],
     },
   ];
+  // Each line's first word a keyword and the rest a comment, by its side and number.
+  const texts = { before: new Map<number, string>(), after: new Map<number, string>() };
+  for (const line of hunks[0]!.lines) {
+    if (line.before !== null) texts.before.set(line.before, line.text);
+    if (line.after !== null) texts.after.set(line.after, line.text);
+  }
+  const tokens = (side: "before" | "after", n: number) => {
+    const text = texts[side].get(n) ?? "";
+    const word = Math.max(text.indexOf(" "), 0);
+    return [
+      { end: word, className: SYNTAX_CLASS.keyword },
+      { end: text.length, className: SYNTAX_CLASS.comment },
+    ];
+  };
+  const heights = () =>
+    [...document.querySelectorAll<HTMLElement>(".diff-view__line")].map(
+      (line) => line.getBoundingClientRect().height,
+    );
   for (const layout of ["unified", "split"] as const) {
     mount(<DiffView hue="code" hunks={hunks} layout={layout} />);
+    const plain = await eventually(() => {
+      if (layout === "split") expect(document.querySelector(".diff-view--split")).not.toBeNull();
+      const drawn = heights();
+      expect(drawn.length).toBeGreaterThan(0);
+      return drawn;
+    });
+    flushSync(() => root?.unmount());
+    host?.remove();
+    mount(<DiffView hue="code" hunks={hunks} layout={layout} tokens={tokens} />);
     const changed = await eventually(() => {
       const found = [
         ...document.querySelectorAll<HTMLElement>(
@@ -303,6 +333,9 @@ test("a coloured diff's band holds its numbers, and a changed run keeps its unde
         mark.left + 0.5,
       );
     }
+    expect(document.querySelectorAll(".code-syn-comment").length).toBeGreaterThan(0);
+    expect(heights(), `${layout}: each line keeps its plain height`).toEqual(plain);
+    expect(document.querySelector('.diff-view__run [class*="code-syn-"]')).toBeNull();
     const runs = document.querySelectorAll(".diff-view--code .diff-view__run");
     expect(runs.length, `${layout}: the edited line draws its runs`).toBeGreaterThan(0);
     for (const run of runs) {
@@ -464,6 +497,97 @@ test("a branch's chip keeps its name on one line at 390px", async () => {
     expect(chip.getBoundingClientRect().height, chip.textContent!).toBeLessThan(2 * glyph.height);
   }
 });
+
+/** A history page of three commits, the first with a 200-character subject. */
+function withHistory() {
+  const commit = (oid: string, subject: string, at: string) => ({
+    oid,
+    author: "Jane Founder",
+    authored_at: at,
+    committed_at: at,
+    subject,
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), location.origin);
+      if (url.pathname !== "/query/code_log") return answer(url);
+      return json({
+        repo: "web",
+        kind: "log",
+        log: {
+          commits: [
+            commit(HEAD, "render: ".padEnd(200, "stream the shell "), "2026-11-15T10:00:00Z"),
+            commit(BASE, "cart: cache the badge count for 30s", "2026-11-15T09:00:00Z"),
+            commit("1".repeat(40), "go.mod: bump to go 1.27", "2026-11-14T09:00:00Z"),
+          ],
+          scanned: 3,
+          complete: true,
+        },
+        pushed_by: {
+          [BASE]: {
+            push_id: "p1",
+            position: POSITION,
+            at: "2026-11-15T09:00:00Z",
+            principal: { kind: "agent", seat: "jane", run: { turn_id: "t", work_key: "ENG-399" } },
+            via: "engine",
+          },
+        },
+        position: POSITION,
+        level: "session",
+      });
+    }),
+  );
+}
+
+// A COMMIT ROW KEEPS ITS ID AND BROWSE ON ITS TITLE'S LINE where there is room, and stacks
+// them under its words on a phone or beside a peek, above the row's stretched link.
+// Mutation: drop the phone fold, or the controls' lift over the link.
+for (const [viewport, column] of [
+  [1440, 1200],
+  [390, 358],
+  [1440, 600],
+] as const) {
+  test(`a commit row's facts sit by its title or stack under it, at a ${column}px column`, async () => {
+    await page.viewport(viewport, 900);
+    withHistory();
+    location.hash = "#/gitlet/repos/web?tab=commits";
+    mount(<RepositoryPage repo="web" />, column);
+    const rows = await eventually(() => {
+      const found = [...document.querySelectorAll<HTMLElement>(".code-list__row")];
+      expect(found).toHaveLength(3);
+      return found;
+    });
+    const list = document.querySelector<HTMLElement>(".code-list")!;
+    expect(list.scrollWidth).toBeLessThanOrEqual(list.clientWidth);
+    for (const row of rows) {
+      expect(row.scrollWidth, row.dataset.key).toBeLessThanOrEqual(row.clientWidth);
+      const title = row.querySelector(".code-list__title")!.getBoundingClientRect();
+      const meta = row.querySelector(".code-list__meta")!.getBoundingClientRect();
+      const body = row.querySelector(".code-list__body")!.getBoundingClientRect();
+      const facts = row.querySelector(".code-list__facts")!.getBoundingClientRect();
+      const box = row.getBoundingClientRect();
+      expect(
+        row.querySelector(".code-list__link")!.getBoundingClientRect().right,
+      ).toBeLessThanOrEqual(box.right);
+      if (column >= 640) {
+        expect(facts.top).toBeLessThan(title.bottom);
+        expect(facts.left).toBeGreaterThanOrEqual(body.right);
+      } else {
+        expect(facts.top).toBeGreaterThanOrEqual(meta.bottom - 0.5);
+      }
+      expect(facts.right).toBeLessThanOrEqual(box.right + 0.5);
+      // THE ROW'S CONTROLS ARE WHAT A PRESS ON THEM HITS, not the link under them.
+      for (const control of row.querySelectorAll<HTMLElement>(
+        ".code-sha, a[aria-label^='Browse']",
+      )) {
+        const at = control.getBoundingClientRect();
+        const hit = document.elementFromPoint(at.left + at.width / 2, at.top + at.height / 2);
+        expect(control.contains(hit), control.getAttribute("aria-label") ?? "").toBe(true);
+      }
+    }
+  });
+}
 
 /** The file view of `cmd/main.go` at `width`, once its third line is coloured. */
 async function colouredLine(width: number): Promise<HTMLElement> {

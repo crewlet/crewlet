@@ -1280,23 +1280,117 @@
   font-weight: var(--font-weight-semibold);
 }
 
-/* ONE COMMIT OF THE HISTORY: its subject, then who wrote it, when, who
-   pushed it and its work item, on a second line that wraps. */
-.code-log-row {
+/* ---- A list of rows of sentences (`routes/gitlet/CodeList.tsx`) ---------- */
+
+.code-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+
+.code-list__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* THE CARD: one surface of rows, clipped to its rounding. */
+.code-list__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  overflow: clip;
+}
+
+.code-list__row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "body facts" "below below";
+  align-items: center;
+  gap: 0 var(--spacing-4);
+  padding: var(--spacing-3) var(--row-inline);
+}
+
+.code-list--lead .code-list__row {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "lead body facts" "lead below below";
+  gap: 0 var(--spacing-4);
+}
+
+.code-list--compact .code-list__row {
+  padding-block: var(--spacing-2);
+}
+
+.code-list__row + .code-list__row {
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-list__row:hover {
+  background: var(--color-surface-hover);
+}
+
+.code-list__row[data-current] {
+  background: var(--color-brand-accent-soft);
+}
+
+.code-list__row[data-cursor] {
+  box-shadow: inset 2px 0 0 var(--color-brand-accent);
+}
+
+.code-list__lead {
+  grid-area: lead;
+  align-self: start;
+}
+
+.code-list__body {
+  grid-area: body;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
   min-width: 0;
-  padding-block: var(--spacing-1);
 }
 
-.code-log-row__subject {
+.code-list__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  margin: 0;
   font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);
+}
+
+.code-list__link,
+.code-list__words {
+  min-width: 0;
+  color: var(--color-text-primary);
+  text-decoration: none;
   overflow-wrap: anywhere;
 }
 
-.code-log-row__by {
+/* THE ROW IS THE LINK: its title stretched over it, the row's own controls lifted above. */
+.code-list__link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.code-list__title > :not(.code-list__link),
+.code-list__meta a,
+.code-list__meta button,
+.code-list__facts > *,
+.code-list__below {
+  position: relative;
+  z-index: 1;
+}
+
+.code-list__meta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1305,13 +1399,142 @@
   color: var(--color-text-secondary);
 }
 
-.code-log-row__author {
+.code-list__facts {
+  grid-area: facts;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  white-space: nowrap;
+}
+
+/* SPACED BY ITS OWN MARGIN, so a row with nothing below keeps no gap for it. */
+.code-list__below {
+  grid-area: below;
+  min-width: 0;
+  margin-block-start: var(--spacing-2);
+}
+
+/* THE TIMELINE: a heading per group on a spine, its rows a card beside it. */
+.code-list--timeline .code-list__group {
+  position: relative;
+  padding-inline-start: var(--spacing-8);
+}
+
+.code-list--timeline .code-list__group::before {
+  content: "";
+  position: absolute;
+  inset-block: 0 calc(-1 * var(--spacing-4));
+  inset-inline-start: calc(var(--spacing-7) / 2 - 1px);
+  border-inline-start: 2px solid var(--color-border-default);
+}
+
+.code-list--timeline .code-list__group:not(:has(~ .code-list__group))::before {
+  inset-block-end: 0;
+}
+
+.code-list__heading {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-height: var(--spacing-7);
+  margin: 0 0 var(--spacing-2);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-tertiary);
+}
+
+.code-list--timeline .code-list__heading {
+  margin-inline-start: calc(-1 * var(--spacing-8));
+}
+
+.code-list__node {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  inline-size: var(--spacing-7);
+  block-size: var(--spacing-7);
+  background: var(--color-surface-background);
+  color: var(--color-text-tertiary);
+}
+
+.code-list__aside {
+  margin-inline-start: auto;
+  font-weight: var(--font-weight-regular);
+}
+
+.code-list__foot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-list--timeline .code-list__foot {
+  padding-inline-start: var(--spacing-8);
+}
+
+.code-list__note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* THE PHONE: the facts under the words, and the timeline's track given back to them. */
+@container page (width < 640px) {
+  .code-list__row {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "body" "facts" "below";
+  }
+
+  .code-list--lead .code-list__row {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "lead body" "lead facts" "lead below";
+  }
+
+  .code-list__facts {
+    flex-wrap: wrap;
+    margin-block-start: var(--spacing-2);
+    white-space: normal;
+  }
+
+  .code-list--timeline .code-list__group,
+  .code-list--timeline .code-list__foot {
+    padding-inline-start: 0;
+  }
+
+  .code-list--timeline .code-list__group::before {
+    content: none;
+  }
+
+  .code-list--timeline .code-list__heading {
+    margin-inline-start: 0;
+  }
+}
+
+/* A HISTORY ROW'S META: who wrote the commit and when, then how it reached its branch. */
+.code-commit-meta__who {
   color: var(--color-text-primary);
   font-weight: var(--font-weight-medium);
 }
 
-.code-log-row__work {
+.code-commit-prov {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  padding: calc(var(--spacing-1) / 2) var(--spacing-2) calc(var(--spacing-1) / 2) var(--spacing-1);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-inset);
+  font-weight: var(--font-weight-medium);
+}
+
+.code-commit-prov > svg {
+  flex: none;
   color: var(--color-text-tertiary);
+}
+
+.code-commit-prov__key {
+  color: var(--color-text-primary);
 }
 
 /* ---- A commit's page (`routes/gitlet/commit/`) --------------------------- */
