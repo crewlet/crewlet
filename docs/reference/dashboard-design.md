@@ -5758,6 +5758,63 @@ writers the engine named), the drain gate's certain `503`, a request that may
 have landed, or the problems the document has — which the org builder's model
 classifies through too.
 
+## Notices: one system
+
+A notice is anything the dashboard says about a state rather than shows as
+data: a warning, a refusal, an alarm, a note. Every one is drawn by the same
+few kit pieces, in the same anatomy, so a reader learns one shape.
+
+| Kind | Piece | When |
+|---|---|---|
+| Toast | `useToast` | The outcome of a press the reader just made. Never something to find again. |
+| Banner | `Callout layout="banner"` | A condition of the whole product, in the frame's state bar. |
+| Callout | `Callout` | One condition on a page, a section or a dialog. |
+| Grouped findings | `Callout` holding a `NoticeList` | Several findings from one source: a check's warnings, refused files, missing nodes. |
+| Panel | `AttentionList` | A page's mixed conditions, each with its fix (Settings › Advisor, tool server alarms). |
+| Field error | the field's own error | One field's refusal, beside the field. |
+
+**Tones.** Danger is broken, refused or lost: work stopped or a change cannot
+be saved. Warning runs, but costs or fails later. Info is a fact that changes
+what the reader does next. Success is only the answer to a check the reader
+ran, inside the dialog that ran it. Neutral is a state with no judgement (read
+only, not found, catching up). Worst tone first, the engine's order inside a
+tone.
+
+**Anatomy.** The tone's own glyph, always: it is what tells warning from
+danger without colour, so no callout replaces it. A one-line title of at most
+eight words when there is more than one sentence; none for a callout that is
+one sentence. A body of at most two short sentences, the effect then the fix.
+ONE action, in the `action` slot at the trailing edge (under the text on a
+narrow callout), never a link or a button inside the sentence; a decision pair
+(Save anyway, Cancel) shares the slot. `onDismiss` draws the X, only where the
+reader may put the notice away.
+
+**Grouping.** A source that reports once per item is said once per kind:
+`groupNotices` merges entries of one kind, names their subject (a seat, a
+team, a file) in bold, lists the items under it folded after four, says the
+explanation once and gives the kind one action. Several subjects with no items
+become a count ("9 agents") with the names listed. A `NoticeList` shows three
+notices and folds the rest behind "Show N more". The engine makes this
+possible by wording every warning of one rule alike: a configuration warning
+carries `title` and `person` (the same for every subject) and its specifics in
+`item`; an alarm carries `title` and `person` beside the operator's `detail`
+and `remedy`.
+
+**Placement.** One notice area per page, under the page bar and tabs, danger
+first. A section's own condition sits in its head; a dialog's above its
+footer. Two callouts of one tone from one source are one callout with a list.
+
+**Words.** What is wrong and its effect, then the fix in one short sentence.
+No document keys or paths in a company owner's words (the engine's `person`);
+the operator's sentence stays behind technical details or on the
+configuration page itself.
+
+`components/ConfigWarnings.tsx` draws every configuration warning a screen
+shows (the org builder's banner and save review, a setting's or a budget's
+write, a schedule, an advisor fix, the configuration document), and
+`app/notices.test.ts` fails on a list, a link or a button built inside a
+callout's body, a replaced glyph, or a hand-made Dismiss button.
+
 ## Honest empty states
 
 A screen that renders a blank where data would go is a screen that cannot be
