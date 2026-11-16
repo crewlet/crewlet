@@ -5,7 +5,6 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
-	"errors"
 	"slices"
 	"sort"
 	"strings"
@@ -1370,10 +1369,6 @@ func (c *threadChain) replacementsOf(line threadLine) {
 	}
 }
 
-// errChainFull ends a walk of a record's list, its retractions or the uuids
-// its boundary kept, that would pass the chain's bound.
-var errChainFull = errors.New("executor: a record's list runs past the chain's bound")
-
 // file files line, a record of the map, read as message m (mErr its error),
 // and answers its handle, or pastChainBound where it would pass a bound.
 func (c *threadChain) file(line threadLine, m threadMessage, mErr error) chainHandle {
@@ -1754,24 +1749,21 @@ func (c *threadChain) retractionsOf(line threadLine) bool {
 	if room < 0 {
 		return false
 	}
-	err := line.Retracted(func(entry string) error {
-		p, ok := chainPrefix(entry)
-		if !ok {
-			return nil
-		}
-		if len(c.scratch) >= room {
-			return errChainFull
-		}
-		c.scratch = append(c.scratch, p)
-		return nil
-	})
+	// THE ROOM BEFORE THE SHAPE: a list is read in order, so one whose
+	// prefixes pass the room before an entry in no shape is past the bound,
+	// and only one whose shape fails within it is in no shape. The list holds
+	// its prefixes up to an entry in no shape ([threadLine.Retracted]), and
+	// past threadChainMaxRecords of them says so, which is past every room.
+	r, err := line.Retracted()
+	held, all := r.Prefixes()
 	switch {
-	case errors.Is(err, errChainFull):
+	case !all || len(held) > room:
 		return false
 	case err != nil:
 		c.cannotTell(whyRetractionShape)
-		c.scratch = c.scratch[:0]
+		return true
 	}
+	c.scratch = append(c.scratch, held...)
 	return true
 }
 
@@ -1786,20 +1778,13 @@ func (c *threadChain) keptOf(line threadLine) (k chainKept, named, fits bool) {
 	c.keptScratch = c.keptScratch[:0]
 	// room is how many entries the list may hold beside the boundary itself.
 	room := threadChainMaxRecords - c.filed + c.kept.listed - 1
-	p, err := line.Preserved(func(entry string) error {
-		if k.listed >= room {
-			return errChainFull
-		}
-		k.listed++
-		if u, ok := uuidBytes(entry); ok {
-			c.keptScratch = append(c.keptScratch, u)
-		} else {
-			k.nowhere = true
-		}
-		return nil
-	})
+	// THE ROOM BEFORE THE SHAPE, as a retraction list's ([threadChain.retractionsOf]):
+	// every entry before one in no shape counts, so a list that passes the
+	// room before it is past the bound. A list of no entry passes no room,
+	// whatever the room left: the boundary's own room is judged below.
+	p, err := line.Preserved()
 	switch {
-	case errors.Is(err, errChainFull):
+	case p.More || p.Listed > max(room, 0):
 		return chainKept{}, false, false
 	case err != nil:
 		c.cannotTell(whyPreservedShape)
@@ -1807,10 +1792,10 @@ func (c *threadChain) keptOf(line threadLine) (k chainKept, named, fits bool) {
 	case !p.Named:
 		return chainKept{}, false, c.filed < threadChainMaxRecords
 	}
+	k.listed, k.nowhere = p.Listed, p.Nowhere
+	c.keptScratch = append(c.keptScratch, p.UUIDs...)
 	k.anchor, k.head, k.tail, k.segment = writtenUUID(p.Anchor), writtenUUID(p.Head), writtenUUID(p.Tail), p.Segment
-	// Each entry was held to the room as it was read, so no list grows past it
-	// in memory before it is refused; a list of none still needs the room the
-	// boundary itself takes.
+	// A list of none still needs the room the boundary itself takes.
 	return k, true, room >= 0
 }
 

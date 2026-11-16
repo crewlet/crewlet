@@ -1325,10 +1325,6 @@ func (w *holdingsWalk) subagentThread(ctx context.Context, agent string, a *suba
 	}
 }
 
-// errTakenBack is a subagent's record naming records taken back out of its
-// conversation ([holdingsWalk.subagentLine]).
-var errTakenBack = errors.New("it names records taken back")
-
 // subagentLine reads line, one of subagent agent's thread, into a, chain and
 // pairing.
 //
@@ -1359,8 +1355,12 @@ func (w *holdingsWalk) subagentLine(agent string, a *subagentFacts, chain *threa
 		a.notWhole(fmt.Sprintf("line %d of its thread replaces results in no shape Claude Code writes", line.N),
 			err)
 	}
-	switch err := line.Retracted(func(string) error { return errTakenBack }); {
-	case errors.Is(err, errTakenBack):
+	// AN ENTRY BEFORE ANY FAULT TAKES RECORDS BACK: the list is read in order,
+	// so one that names an entry before an entry in no shape takes back, and
+	// only one whose first entry is in no shape, or which is none, is in no
+	// shape.
+	switch retracted, err := line.Retracted(); {
+	case retracted.Entries > 0:
 		a.notWhole(fmt.Sprintf("line %d of its thread takes records back out of its conversation, which no load "+
 			"of a subagent's thread filters", line.N), nil)
 	case err != nil:

@@ -1962,7 +1962,12 @@ func TestALineThatIsNoRecordIsSkippedOnlyWhereTheLoadSkipsIt(t *testing.T) {
 // boundary at the bound in place of a longer list is read, and one past it
 // with no list to replace, whether it names what it kept or not, is whyBound;
 // and past the bound See still decodes and hands back each user and assistant
-// message, with pastChainBound, which answers whyBound.
+// message, with pastChainBound, which answers whyBound. THE ROOM COMES BEFORE
+// THE SHAPE, as the lists are read in order: a list whose prefixes, or whose
+// entries, pass the bound before an entry in no shape is whyBound, and one in
+// no shape within it is whyRetractionShape or whyPreservedShape; a retraction's
+// entries that name no prefix take no room; and a list of no anchor is in no
+// shape however many entries it holds, its anchor read before them.
 //
 // Mutation: take a bound's own count for past it, and the thread at it is
 // cannot tell; count no prefixes, no listed uuids or no calls, or no record
@@ -1972,8 +1977,13 @@ func TestALineThatIsNoRecordIsSkippedOnlyWhereTheLoadSkipsIt(t *testing.T) {
 // later one's, and the two lists of half the bound pass it; hold a boundary's
 // own room before the list it replaces is released, and the boundary at the
 // bound passes it; let a boundary pass the bound, and the boundary past it
-// reads; or hand back no message past the bound, and the reader that counts
-// what lies past it counts nothing.
+// reads; hand back no message past the bound, and the reader that counts
+// what lies past it counts nothing; judge a list's shape before its room, and
+// each list in no shape past the bound is whyRetractionShape or
+// whyPreservedShape; count a retraction's every entry against the room, and
+// the list whose entries naming nothing pass it is cannot tell; or count a
+// list's entries before its anchor is read, and the list of no anchor past
+// the bound is whyBound.
 func TestAThreadPastTheChainsBoundIsCannotTell(t *testing.T) {
 	t.Parallel()
 	prompt := rcPlain[0]
@@ -2014,6 +2024,33 @@ func TestAThreadPastTheChainsBoundIsCannotTell(t *testing.T) {
 	for name, metadata := range map[string]string{"listing none": none, "naming nothing": `{"trigger":"manual"}`} {
 		rcChain(t, "", prompt, retracting(threadChainMaxRecords-2), rcBoundary(3, 2000, metadata)).expectCannotTell(
 			t, "a boundary "+name+" past the bound", whyBound)
+	}
+
+	// then is a list's record with entries after its last.
+	retractingThen := func(entries int, then string) string {
+		return ctReplace(t, retracting(entries), `-"],`, `-"`+then+`],`)
+	}
+	listingThen := func(entries int, then string) string {
+		return ctReplace(t, listing(2, absent, entries), `]}}`, then+`]}}`)
+	}
+	rcChain(t, "", prompt, retractingThen(threadChainMaxRecords-2, `,"x"`+strings.Repeat(`,"x"`, 1<<10))).expect(t,
+		"records and prefixes at the bound beside entries naming none", map[int]rcAnswer{1: yes(whyChain),
+			2: yes(whyChain)}, rcOrder{[]int{1, 2}, allVariants})
+	for name, tc := range map[string]struct {
+		line string
+		why  chainWhy
+	}{
+		"a retraction in no shape within the bound": {retractingThen(threadChainMaxRecords-2, `,7`),
+			whyRetractionShape},
+		"a retraction's prefixes past the bound, then an entry in no shape": {
+			retractingThen(threadChainMaxRecords-1, `,7`), whyBound},
+		"a list in no shape within the bound": {listingThen(threadChainMaxRecords-2, `,7`), whyPreservedShape},
+		"a list's entries past the bound, then an entry in no shape": {listingThen(threadChainMaxRecords-1, `,7`),
+			whyBound},
+		"a list of no anchor past the bound": {ctReplace(t, listing(2, absent, threadChainMaxRecords),
+			`"anchorUuid":"`+rcUUID(1)+`",`, ""), whyPreservedShape},
+	} {
+		rcChain(t, "", prompt, tc.line).expectCannotTell(t, name, tc.why)
 	}
 
 	calling := func(calls int) string {

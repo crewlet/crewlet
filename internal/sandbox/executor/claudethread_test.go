@@ -1132,7 +1132,7 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	for name, metadata := range map[string]string{"a string": `"kept"`, "a list": `[]`, "a number": `7`} {
 		line := ctLine(t, ctReplace(t, ctBoundary(ctUUID(5), ctUUID(6), ctUUID(3)), `"compactMetadata":{`,
 			`"compactMetadata":`+metadata+`,"was":{`))
-		if p, err := line.Preserved(func(string) error { return nil }); err == nil {
+		if p, err := line.Preserved(); err == nil {
 			t.Errorf("a boundary whose compactMetadata is %s keeps %+v, want an error", name, p)
 		}
 		if uuid, err := line.UUID(); uuid != ctUUID(5) || err != nil ||
@@ -1144,8 +1144,8 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	for name, list := range map[string]string{"a string": `"` + ctUUID(4) + `"`, "an object": `{}`, "null": `null`} {
 		line := ctLine(t, ctReplace(t, ctRetry(ctUUID(5), ctUUID(6), ctUUID(4)),
 			`"retractedMessageUuids":["`+ctUUID(4)+`"]`, `"retractedMessageUuids":`+list))
-		if err := line.Retracted(func(string) error { return nil }); err == nil {
-			t.Errorf("a retry whose retractedMessageUuids is %s retracts with no error; want one", name)
+		if r, err := line.Retracted(); err == nil {
+			t.Errorf("a retry whose retractedMessageUuids is %s retracts %+v with no error; want one", name, r)
 		}
 		if m, err := line.Message(); err != nil || line.Head.Type != recordUser || !line.Head.Main() {
 			t.Errorf("a retry whose retractedMessageUuids is %s reads with the head %+v and the message %+v, %v",
@@ -1550,24 +1550,17 @@ func ctFacts(b *strings.Builder, l threadLine, m threadMessage) {
 	usage, used, err := l.Usage()
 	fmt.Fprintf(b, "usage %t: id %q, model %q, input %d, cache writes %d, cache reads %d, output %d; %v\n", used,
 		usage.ID, usage.Model, usage.Input, usage.CacheWrite, usage.CacheRead, usage.Output, err)
-	var listed []string
-	preserved, err := l.Preserved(func(uuid string) error {
-		listed = append(listed, uuid)
-		return nil
-	})
-	fmt.Fprintf(b, "preserved: %+v, listing %q; %v\n", preserved, strings.Join(listed, " "), err)
+	preserved, err := l.Preserved()
+	fmt.Fprintf(b, "preserved: %+v; %v\n", preserved, err)
 	leaf, marked, err := l.Checkpoint()
 	fmt.Fprintf(b, "checkpoint: leaf %q, marked %t; %v\n", leaf, marked, err)
 	keyed, err := l.LeafKeyed()
 	fmt.Fprintf(b, "leaf keyed: %t; %v\n", keyed, err)
 	attached, err := l.AttachmentType()
 	fmt.Fprintf(b, "attachment type: %q; %v\n", attached, err)
-	var retracted []string
-	err = l.Retracted(func(uuid string) error {
-		retracted = append(retracted, uuid)
-		return nil
-	})
-	fmt.Fprintf(b, "retracted: %q; %v\n", strings.Join(retracted, " "), err)
+	retracted, err := l.Retracted()
+	prefixes, all := retracted.Prefixes()
+	fmt.Fprintf(b, "retracted: %d entries, the prefixes %x, all %t; %v\n", retracted.Entries, prefixes, all, err)
 	var replaced []string
 	err = l.ReplacedResults(func(id string) { replaced = append(replaced, id) })
 	fmt.Fprintf(b, "replaced results: %q; %v\n", strings.Join(replaced, " "), err)
@@ -3481,25 +3474,49 @@ func ctRetry(parent, uuid string, retracted ...string) string {
 		ctQuoted(retracted) + `],` + ctTail("2.1.322") + `}`
 }
 
-// A RECORD SAYS WHICH RECORDS ITS HARNESS TOOK BACK: Retracted hands each
-// entry of a record's retractedMessageUuids, in order and as written, on a
-// refused reply's fallback (a system record of that subtype), on a malformed
-// reply's retry (a meta user record) and on a reply (an assistant record), the
-// records 2.1.322 reads the key on; whatever its length, an entry of 24
-// characters, of 30 and of 23 among them, since the resume cuts each at 24
-// characters itself; nothing where the key is absent, or on a system record of
-// another subtype or an attachment, whatever it carries; and an error where
-// the key holds anything but a list of strings, null among it, on a record it
-// is read on. An error each returns ends the walk as it is.
+// ctPrefix is the canonical prefix an entry beginning with uuid's first 24
+// characters names, read as the uuid package reads uuid: its first 10 bytes.
+func ctPrefix(u string) [chainPrefixBytes]byte {
+	whole := uuid.MustParse(u)
+	return [chainPrefixBytes]byte(whole[:chainPrefixBytes])
+}
+
+// ctRetracting is a refused reply's fallback whose list names n entries, the
+// uuids ctUUID numbers from 1000, then after, as written.
+func ctRetracting(t *testing.T, n int, after string) string {
+	entries := make([]string, n)
+	for i := range entries {
+		entries[i] = ctUUID(1000 + i)
+	}
+	return ctReplace(t, ctFallback(ctUUID(5), ctUUID(6), entries...), `],"refusedUserMessageUuid"`,
+		after+`],"refusedUserMessageUuid"`)
+}
+
+// A RECORD SAYS WHICH RECORDS ITS HARNESS TOOK BACK: Retracted counts each
+// entry of a record's retractedMessageUuids and holds, in order, the first 24
+// characters of each that begins with a canonical uuid's, on a refused reply's
+// fallback (a system record of that subtype), on a malformed reply's retry (a
+// meta user record) and on a reply (an assistant record), the records 2.1.322
+// reads the key on: an entry of 24 characters and one of 30 among them, since
+// the resume cuts each at 24 characters itself, and one of 23, in another
+// form or in uppercase counted and naming none; nothing where the key is
+// absent, or on a system record of another subtype or an attachment, whatever
+// it carries; and an error where the key holds anything but a list of
+// strings, null among it, on a record it is read on, handed with every entry
+// before the first that is no string. It holds threadChainMaxRecords prefixes
+// at most, and says where the list names more, still counting every entry.
 //
 // Mutation: read the key off every record, and a stop hook's summary or an
 // attachment carrying it retracts; read it off a refusal's fallback alone, as
 // 2.1.310 does, and a retry's names nothing; pass an entry that is no string
-// over, as the resume does, and a list the layer refuses reads; read a
-// null list as none, and it reads; drop an entry of 24 characters or fewer, or
-// of fewer than a uuid's 36, and the entries the resume cuts at 24 retract
-// nothing; or walk on past each's error, and the walk hands the entry after
-// it.
+// over, as the resume does, and a list the layer refuses reads; read a null
+// list as none, and it reads; drop an entry of 24 characters or fewer, or of
+// fewer than a uuid's 36, and the entries the resume cuts at 24 retract
+// nothing; count only the entries that name a prefix, and the entries that
+// name none are not counted; hand an error with nothing the list held before
+// it, and the entries before an entry that is no string are lost; or hold
+// prefixes past the bound, or stop counting there, and the list past it says
+// all, or counts short.
 func TestARecordSaysWhichRecordsItsHarnessTookBack(t *testing.T) {
 	t.Parallel()
 	named := []string{ctUUID(4), ctUUID(5)}
@@ -3507,53 +3524,76 @@ func TestARecordSaysWhichRecordsItsHarnessTookBack(t *testing.T) {
 		`"retractedMessageUuids":[`+ctQuoted(named)+`],"type":"assistant"`)
 	cut := []string{ctUUID(7)[:24], ctUUID(8)[:30], ctUUID(9)[:23]}
 	for name, tc := range map[string]struct {
-		record string
-		uuids  []string
+		record  string
+		entries int
+		// named is the uuids whose prefixes the list holds, in order.
+		named []string
 	}{
-		"a refused reply's fallback": {ctFallback(ctUUID(5), ctUUID(6), named...), named},
-		"a malformed reply's retry":  {ctRetry(ctUUID(5), ctUUID(6), named...), named},
-		"a reply":                    {reply, named},
-		"a fallback naming none":     {ctFallback(ctUUID(5), ctUUID(6)), nil},
-		"a fallback naming entries of 24, 30 and 23 characters": {ctFallback(ctUUID(5), ctUUID(6), cut...), cut},
-		"a fallback naming a uuid of another form": {ctFallback(ctUUID(5), ctUUID(6), "not a uuid"),
-			[]string{"not a uuid"}},
-		"a record that names none": {ctAssistant(ctUUID(3), ctUUID(4), ctUseContent), nil},
+		"a refused reply's fallback": {ctFallback(ctUUID(5), ctUUID(6), named...), 2, named},
+		"a malformed reply's retry":  {ctRetry(ctUUID(5), ctUUID(6), named...), 2, named},
+		"a reply":                    {reply, 2, named},
+		"a fallback naming none":     {ctFallback(ctUUID(5), ctUUID(6)), 0, nil},
+		"a fallback naming entries of 24, 30 and 23 characters": {ctFallback(ctUUID(5), ctUUID(6), cut...), 3,
+			[]string{ctUUID(7), ctUUID(8)}},
+		"a fallback naming a uuid of another form": {ctFallback(ctUUID(5), ctUUID(6), "not a uuid"), 1, nil},
+		"a fallback naming a uuid in uppercase": {ctFallback(ctUUID(5), ctUUID(6),
+			strings.ToUpper("abcdef01-0000-4000-8000-000000000001")), 1, nil},
+		"a record that names none": {ctAssistant(ctUUID(3), ctUUID(4), ctUseContent), 0, nil},
 		"a stop hook's summary carrying the key": {ctReplace(t, ctSummary(ctUUID(15), ctUUID(16)),
-			`"hookCount":1`, `"retractedMessageUuids":["`+ctUUID(4)+`"],"hookCount":1`), nil},
+			`"hookCount":1`, `"retractedMessageUuids":["`+ctUUID(4)+`"],"hookCount":1`), 0, nil},
 		"an attachment carrying the key": {ctAttachment(ctUUID(3), ctUUID(4), ctTokens,
-			`"retractedMessageUuids":["`+ctUUID(2)+`"],`), nil},
+			`"retractedMessageUuids":["`+ctUUID(2)+`"],`), 0, nil},
 	} {
-		var got []string
-		err := ctLine(t, tc.record).Retracted(func(uuid string) error {
-			got = append(got, uuid)
-			return nil
-		})
-		if err != nil || !slices.Equal(got, tc.uuids) {
-			t.Errorf("%s retracts %q, %v; want %q", name, strings.Join(got, ","), err, strings.Join(tc.uuids, ","))
+		r, err := ctLine(t, tc.record).Retracted()
+		held, all := r.Prefixes()
+		want := make([][chainPrefixBytes]byte, len(tc.named))
+		for i, u := range tc.named {
+			want[i] = ctPrefix(u)
+		}
+		if err != nil || r.Entries != tc.entries || !slices.Equal(held, want) || !all {
+			t.Errorf("%s retracts %d entries, the prefixes %x (all %t), %v; want %d and %x", name, r.Entries, held,
+				all, err, tc.entries, want)
 		}
 	}
 	fallback := ctFallback(ctUUID(5), ctUUID(6), named...)
 	for name, list := range map[string]string{"null": `null`, "a string": `"` + ctUUID(4) + `"`,
-		"an object": `{"uuid":"` + ctUUID(4) + `"}`, "a list holding a number": `["` + ctUUID(4) + `",7]`,
+		"an object": `{"uuid":"` + ctUUID(4) + `"}`, "a list holding a number": `[7,"` + ctUUID(4) + `"]`,
 		"a list holding null": `[null]`} {
 		for kind, record := range map[string]string{"a refused reply's fallback": fallback,
 			"a malformed reply's retry": ctRetry(ctUUID(5), ctUUID(6), named...)} {
 			line := ctLine(t, ctReplace(t, record, `"retractedMessageUuids":[`+ctQuoted(named)+`]`,
 				`"retractedMessageUuids":`+list))
-			if err := line.Retracted(func(string) error { return nil }); err == nil {
-				t.Errorf("%s whose retractedMessageUuids is %s retracts with no error; want one", kind, name)
+			if r, err := line.Retracted(); err == nil || r.Entries != 0 {
+				t.Errorf("%s whose retractedMessageUuids is %s retracts %d entries, %v; want none and an error",
+					kind, name, r.Entries, err)
 			}
 		}
 	}
-	stop := errors.New("stop")
-	var got []string
-	err := ctLine(t, fallback).Retracted(func(uuid string) error {
-		got = append(got, uuid)
-		return stop
-	})
-	if !errors.Is(err, stop) || !slices.Equal(got, named[:1]) {
-		t.Errorf("a walk each stops at the first uuid answers %v, having handed %q; want each's own error at %q", err,
-			got, named[0])
+	r, err := ctLine(t, ctReplace(t, fallback, `"retractedMessageUuids":[`+ctQuoted(named)+`]`,
+		`"retractedMessageUuids":["x",`+ctQuoted(named)+`,7,"`+ctUUID(9)+`"]`)).Retracted()
+	if held, all := r.Prefixes(); err == nil || r.Entries != 3 || !all ||
+		!slices.Equal(held, [][chainPrefixBytes]byte{ctPrefix(named[0]), ctPrefix(named[1])}) {
+		t.Errorf("a list of three strings, then a number, retracts %d entries, the prefixes %x (all %t), %v; want "+
+			"the three, the two uuids' prefixes and an error", r.Entries, held, all, err)
+	}
+
+	for name, tc := range map[string]struct {
+		record  string
+		entries int
+		all     bool
+	}{
+		"a list of the bound's prefixes and an entry of none": {ctRetracting(t, threadChainMaxRecords, `,"x"`),
+			threadChainMaxRecords + 1, true},
+		"a list of a prefix past the bound": {ctRetracting(t, threadChainMaxRecords+1, ""),
+			threadChainMaxRecords + 1, false},
+	} {
+		r, err := ctLine(t, tc.record).Retracted()
+		held, all := r.Prefixes()
+		if err != nil || r.Entries != tc.entries || all != tc.all || len(held) != threadChainMaxRecords ||
+			held[len(held)-1] != ctPrefix(ctUUID(1000+threadChainMaxRecords-1)) {
+			t.Errorf("%s retracts %d entries, %d prefixes, all %t, %v; want %d, the bound's first %d and %t", name,
+				r.Entries, len(held), all, err, tc.entries, threadChainMaxRecords, tc.all)
+		}
 	}
 }
 
@@ -3564,100 +3604,138 @@ func ctListed(summary string, kept ...string) string {
 	return `,"preservedMessages":{"anchorUuid":"` + summary + `","uuids":[` + ids + `],"allUuids":[` + ids + `]}`
 }
 
+// ctKept is the uuids a boundary lists, each read as the uuid package reads it.
+func ctKept(uuids ...string) [][16]byte {
+	var kept [][16]byte
+	for _, u := range uuids {
+		kept = append(kept, [16]byte(uuid.MustParse(u)))
+	}
+	return kept
+}
+
 // A COMPACTION'S BOUNDARY SAYS WHAT IT KEPT, as a resume relinks a thread by
 // it: Preserved reads a compact_boundary record's preservedMessages where it
-// carries one, its anchor and each uuid it lists handed in order, kept where
-// it lists any; else its preservedSegment, the anchor and the segment's two
-// ends; and nothing where the boundary carries neither, a null for either, or
-// no compactMetadata, null among it, or on a record of another type or
-// subtype, whatever it carries. A boundary that carries either names what it
-// kept, a list of none of no anchor among them, since the resume drops by it
-// every record before the last boundary whatever it keeps. Every other shape,
-// a metadata, a list, an anchor or an end of another type, an entry that is no
-// string, is an error. An error each returns ends the walk as it is.
+// carries one, its anchor, how many entries it lists and each that is a
+// canonical uuid, in order, kept where it lists any, and whether any entry is
+// none; else its preservedSegment, the anchor and the segment's two ends; and
+// nothing where the boundary carries neither, a null for either, or no
+// compactMetadata, null among it, or on a record of another type or subtype,
+// whatever it carries. A boundary that carries either names what it kept, a
+// list of none of no anchor among them, since the resume drops by it every
+// record before the last boundary whatever it keeps. Every other shape, a
+// metadata, a list, an anchor or an end of another type, an entry that is no
+// string, is an error, handed with the entries before it: those before the
+// first that is no string, and none where the anchor fails, which is checked
+// before the list. It holds threadChainMaxRecords uuids at most, and says
+// where the list holds more, still counting every entry.
 //
 // Mutation: read the segment where a list is, and the list's records go
 // unread; take a list of none for one that keeps records, and a boundary that
 // keeps nothing relinks; read a null list as one, and a boundary naming its
 // segment alone is an error; read a null metadata as one, and a boundary
-// that keeps nothing is an error; or read a boundary as naming what it kept
-// only where it keeps records, and a list of none of no anchor names nothing.
+// that keeps nothing is an error; read a boundary as naming what it kept only
+// where it keeps records, and a list of none of no anchor names nothing;
+// count only the entries that are uuids, and a list holding one that is none
+// counts short; hand an error with nothing the list held before it, or walk
+// the list before its anchor is checked, and the entries before the fault are
+// lost, or a list of no anchor counts its entries; or hold uuids past the
+// bound, or stop counting there, and the list past it says it holds no more.
 func TestACompactionsBoundarySaysWhatItKept(t *testing.T) {
 	t.Parallel()
 	kept := []string{ctUUID(3), ctUUID(5), ctUUID(6)}
 	boundary := ctBoundary(ctUUID(7), ctUUID(8), kept...)
 	listed := ctListed(ctUUID(8), kept...)
 	segment := ctReplace(t, boundary, listed, "")
+	listing := func(entries string) string {
+		return ctReplace(t, boundary, listed, `,"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":[`+
+			entries+`]}`)
+	}
 	for name, tc := range map[string]struct {
 		record string
 		want   threadPreserved
-		uuids  []string
 	}{
-		"a boundary listing what it kept beside its segment": {boundary,
-			threadPreserved{Named: true, Kept: true, Anchor: ctUUID(8)}, kept},
+		"a boundary listing what it kept beside its segment": {boundary, threadPreserved{Named: true, Kept: true,
+			Anchor: ctUUID(8), Listed: 3, UUIDs: ctKept(kept...)}},
+		"a boundary listing an entry that is no uuid": {listing(`"` + kept[0] + `","x","` + kept[1] + `"`),
+			threadPreserved{Named: true, Kept: true, Anchor: ctUUID(8), Listed: 3, UUIDs: ctKept(kept[:2]...),
+				Nowhere: true}},
 		"a boundary naming its segment alone": {segment, threadPreserved{Named: true, Kept: true,
-			Anchor: ctUUID(8), Segment: true, Head: ctUUID(3), Tail: ctUUID(6)}, nil},
+			Anchor: ctUUID(8), Segment: true, Head: ctUUID(3), Tail: ctUUID(6)}},
 		"a boundary whose list is null, beside its segment": {ctReplace(t, boundary, listed,
 			`,"preservedMessages":null`), threadPreserved{Named: true, Kept: true, Anchor: ctUUID(8),
-			Segment: true, Head: ctUUID(3), Tail: ctUUID(6)}, nil},
+			Segment: true, Head: ctUUID(3), Tail: ctUUID(6)}},
 		"a boundary listing none": {ctReplace(t, segment, `"compactMetadata":{`,
 			`"compactMetadata":{"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":[]},`),
-			threadPreserved{Named: true, Anchor: ctUUID(8)}, nil},
+			threadPreserved{Named: true, Anchor: ctUUID(8)}},
 		"a boundary listing none of no anchor": {ctReplace(t, segment, `"compactMetadata":{`,
 			`"compactMetadata":{"preservedMessages":{"anchorUuid":"","uuids":[]},`),
-			threadPreserved{Named: true}, nil},
+			threadPreserved{Named: true}},
 		"a boundary keeping nothing": {ctReplace(t, segment, `"preservedSegment":{"headUuid":"`+ctUUID(3)+
-			`","anchorUuid":"`+ctUUID(8)+`","tailUuid":"`+ctUUID(6)+`"},`, ""), threadPreserved{}, nil},
+			`","anchorUuid":"`+ctUUID(8)+`","tailUuid":"`+ctUUID(6)+`"},`, ""), threadPreserved{}},
 		"a boundary whose segment is null": {ctReplace(t, segment, `"preservedSegment":{"headUuid":"`+ctUUID(3)+
 			`","anchorUuid":"`+ctUUID(8)+`","tailUuid":"`+ctUUID(6)+`"}`, `"preservedSegment":null`),
-			threadPreserved{}, nil},
+			threadPreserved{}},
 		"a boundary whose metadata is null": {ctReplace(t, ctReplace(t, boundary, listed, ""),
 			`"compactMetadata":{"trigger":"manual"`, `"compactMetadata":null,"was":{"trigger":"manual"`),
-			threadPreserved{}, nil},
+			threadPreserved{}},
 		"a boundary with no metadata": {ctReplace(t, ctReplace(t, boundary, listed, ""),
-			`"compactMetadata":{"trigger":"manual"`, `"was":{"trigger":"manual"`), threadPreserved{}, nil},
+			`"compactMetadata":{"trigger":"manual"`, `"was":{"trigger":"manual"`), threadPreserved{}},
 		"a microcompaction's boundary carrying a list": {ctReplace(t, boundary, `"subtype":"compact_boundary"`,
-			`"subtype":"microcompact_boundary"`), threadPreserved{}, nil},
+			`"subtype":"microcompact_boundary"`), threadPreserved{}},
 		"a stop hook's summary carrying a list": {ctReplace(t, ctSummary(ctUUID(15), ctUUID(16)), `"hookCount":1`,
 			`"compactMetadata":{"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":["`+ctUUID(3)+`"]}},`+
-				`"hookCount":1`), threadPreserved{}, nil},
+				`"hookCount":1`), threadPreserved{}},
 	} {
-		var got []string
-		p, err := ctLine(t, tc.record).Preserved(func(uuid string) error {
-			got = append(got, uuid)
-			return nil
-		})
-		if err != nil || p != tc.want || !slices.Equal(got, tc.uuids) {
-			t.Errorf("%s keeps %+v, listing %q, %v; want %+v, listing %q", name, p, strings.Join(got, ","), err,
-				tc.want, strings.Join(tc.uuids, ","))
+		p, err := ctLine(t, tc.record).Preserved()
+		if got, want := fmt.Sprintf("%+v", p), fmt.Sprintf("%+v", tc.want); err != nil || got != want {
+			t.Errorf("%s keeps %s, %v; want %s", name, got, err, want)
 		}
 	}
-	for name, record := range map[string]string{
-		"a metadata that is a string": ctReplace(t, ctReplace(t, boundary, listed, ""), `"compactMetadata":{`,
-			`"compactMetadata":"kept","was":{`),
-		"a list that is a string": ctReplace(t, boundary, listed, `,"preservedMessages":"kept"`),
-		"a list's uuids that are a string": ctReplace(t, boundary, listed,
-			`,"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":"`+ctUUID(3)+`"}`),
-		"a list's uuids holding a number": ctReplace(t, boundary, listed,
-			`,"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":["`+ctUUID(3)+`",7]}`),
-		"a list of no anchor": ctReplace(t, boundary, listed,
-			`,"preservedMessages":{"uuids":["`+ctUUID(3)+`"]}`),
-		"a segment whose head is a number": ctReplace(t, segment, `"headUuid":"`+ctUUID(3)+`"`, `"headUuid":3`),
-		"a segment of no tail":             ctReplace(t, segment, `,"tailUuid":"`+ctUUID(6)+`"`, ""),
+	for name, tc := range map[string]struct {
+		record string
+		// held is what the list holds before its fault.
+		held threadPreserved
+	}{
+		"a metadata that is a string": {record: ctReplace(t, ctReplace(t, boundary, listed, ""),
+			`"compactMetadata":{`, `"compactMetadata":"kept","was":{`)},
+		"a list that is a string": {record: ctReplace(t, boundary, listed, `,"preservedMessages":"kept"`)},
+		"a list's uuids that are a string": {record: ctReplace(t, boundary, listed,
+			`,"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":"`+ctUUID(3)+`"}`)},
+		"a list's uuids holding a number after two strings": {record: listing(`"` + ctUUID(3) + `","x",7,"` +
+			ctUUID(5) + `"`), held: threadPreserved{Listed: 2, UUIDs: ctKept(ctUUID(3)), Nowhere: true}},
+		"a list of no anchor": {record: ctReplace(t, boundary, listed,
+			`,"preservedMessages":{"uuids":["`+ctUUID(3)+`"]}`)},
+		"a segment whose head is a number": {record: ctReplace(t, segment, `"headUuid":"`+ctUUID(3)+`"`,
+			`"headUuid":3`)},
+		"a segment of no tail": {record: ctReplace(t, segment, `,"tailUuid":"`+ctUUID(6)+`"`, "")},
 	} {
-		if p, err := ctLine(t, record).Preserved(func(string) error { return nil }); err == nil {
-			t.Errorf("%s keeps %+v with no error; want one", name, p)
+		p, err := ctLine(t, tc.record).Preserved()
+		if got, want := fmt.Sprintf("%+v", p), fmt.Sprintf("%+v", tc.held); err == nil || got != want {
+			t.Errorf("%s keeps %s, %v; want %s and an error", name, got, err, want)
 		}
 	}
-	stop := errors.New("stop")
-	var got []string
-	_, err := ctLine(t, boundary).Preserved(func(uuid string) error {
-		got = append(got, uuid)
-		return stop
-	})
-	if !errors.Is(err, stop) || !slices.Equal(got, kept[:1]) {
-		t.Errorf("a walk each stops at the first uuid answers %v, having handed %q; want each's own error at %q", err,
-			got, kept[0])
+
+	many := make([]string, threadChainMaxRecords+1)
+	for i := range many {
+		many[i] = `"` + ctUUID(1000+i) + `"`
+	}
+	for name, tc := range map[string]struct {
+		entries      string
+		listed       int
+		more, absent bool
+	}{
+		"a list of the bound's uuids and an entry of none": {strings.Join(many[:threadChainMaxRecords], ",") +
+			`,"x"`, threadChainMaxRecords + 1, false, true},
+		"a list of a uuid past the bound": {strings.Join(many, ","), threadChainMaxRecords + 1, true, false},
+	} {
+		p, err := ctLine(t, listing(tc.entries)).Preserved()
+		if err != nil || p.Listed != tc.listed || p.More != tc.more || p.Nowhere != tc.absent ||
+			len(p.UUIDs) != threadChainMaxRecords || p.UUIDs[threadChainMaxRecords-1] !=
+			[16]byte(uuid.MustParse(ctUUID(1000+threadChainMaxRecords-1))) {
+			t.Errorf("%s lists %d, holds %d uuids, more %t, an entry of none %t, %v; want %d, the bound's first "+
+				"%d, %t and %t", name, p.Listed, len(p.UUIDs), p.More, p.Nowhere, err, tc.listed,
+				threadChainMaxRecords, tc.more, tc.absent)
+		}
 	}
 }
 

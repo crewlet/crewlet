@@ -2718,10 +2718,23 @@ func (l threadLine) ReplacementCount() (int, error) {
 // as not whole, since what the subagent's model was handed there is not what
 // its file holds.
 //
+// WHAT IT HANDS ITS READERS: how many entries the list holds, and the first 24
+// characters of each entry that begins with a canonical uuid's ([chainPrefix]),
+// in order: what each reader reads of it, the resume's model the prefixes and
+// the reading of a subagent's thread whether it lists any entry. An entry of
+// fewer characters, or that begins otherwise, is counted and names no prefix,
+// since every record the model files carries a lowercase canonical uuid. AT
+// MOST [threadChainMaxRecords] PREFIXES ARE HELD: past them the list says so
+// ([threadRetracted.Prefixes]) and holds no more, still counting and checking
+// every entry after them. No reader reads past them, since the model refuses a
+// list past the room its records leave, which is below that bound.
+//
 // HELD TO ITS SHAPE HERE, AND HERE ALONE, as a key one reader reads is: a
 // list of strings where present, walked an element at a time ([eachElement]).
 // Anything else, null and an entry that is no string among it, is this
-// accessor's error, never the line's. No release's resume throws on such a
+// accessor's error, never the line's, handed with what the list held before
+// it: the entries before an entry that is no string, counted and their
+// prefixes held, as a reader that walks the list would have read them first. No release's resume throws on such a
 // list: each one's load repairs a refusal's fallback before its filter reads
 // it, keeping a list's strings and dropping a value that is no list (2.1.322's
 // UWt @293630140 through M2 @293633304, 2.1.310's cPt @247026592 through m1
@@ -2729,36 +2742,60 @@ func (l threadLine) ReplacementCount() (int, error) {
 // its strings alone, and a value that is no list as none (eGe @295286851).
 // The error is conservative: its readers refuse a list the harness wrote in
 // no shape it writes rather than follow it through those repairs, and no
-// thread the probes kept holds one. An error each returns ends the walk and
-// is returned as it is.
+// thread the probes kept holds one.
 //
 // Read off the line's one decode, its raw `retractedMessageUuids`, never a
 // second read of the line.
-func (l threadLine) Retracted(each func(uuid string) error) error {
+func (l threadLine) Retracted() (threadRetracted, error) {
 	switch {
 	case l.retracted == nil:
-		return nil
+		return threadRetracted{}, nil
 	case l.Head.Type == recordUser, l.Head.Type == recordAssistant:
 	case l.Head.Type == recordSystem && l.Head.Subtype == subtypeRefusalFallback:
 	default:
-		return nil
+		return threadRetracted{}, nil
 	}
-	var refused error
+	var r threadRetracted
 	err := eachElement(l.retracted, func(raw json.RawMessage, _ int) error {
-		uuid, err := wireRequiredString("an entry", raw)
+		entry, err := wireRequiredString("an entry", raw)
 		if err != nil {
 			return err
 		}
-		refused = each(uuid)
-		return refused
-	})
-	switch {
-	case err == nil:
+		r.Entries++
+		if p, ok := chainPrefix(entry); ok {
+			if len(r.prefixes) == threadChainMaxRecords {
+				r.more = true
+			} else {
+				r.prefixes = append(r.prefixes, p)
+			}
+		}
 		return nil
-	case refused != nil:
-		return refused
+	})
+	if err != nil {
+		return r, fmt.Errorf("retractedMessageUuids: %w", err)
 	}
-	return fmt.Errorf("retractedMessageUuids: %w", err)
+	return r, nil
+}
+
+// threadRetracted is what a record's retraction list names
+// ([threadLine.Retracted]).
+type threadRetracted struct {
+	// Entries is how many entries the list holds, each string counted
+	// whatever it names, up to an entry that is no string.
+	Entries int
+	// prefixes is the canonical prefix of each entry that begins with one
+	// ([chainPrefix]), in order, at most [threadChainMaxRecords]; more
+	// whether an entry past those began with one too.
+	prefixes [][chainPrefixBytes]byte
+	more     bool
+}
+
+// Prefixes is the first 24 characters of each entry that begins with a
+// canonical uuid's, as [chainPrefix] reads them, in order; all false where the
+// list names more than [threadChainMaxRecords] such, of which held is the
+// first [threadChainMaxRecords].
+func (r threadRetracted) Prefixes() (held [][chainPrefixBytes]byte, all bool) {
+	return r.prefixes, !r.more
 }
 
 // AttachmentWellFormed reports whether Claude Code's resume keeps an
@@ -2964,19 +3001,27 @@ type threadPreserved struct {
 	Named bool
 	// Kept is whether it says it kept records, and Anchor names the record
 	// they hang from. Segment is whether it names them as a segment, from
-	// Tail up to Head by parent; else it lists them, each handed to
-	// Preserved's each.
+	// Tail up to Head by parent; else it lists them.
 	Kept       bool
 	Anchor     string
 	Segment    bool
 	Head, Tail string
+	// Listed is how many entries its list holds, each counted whether it is
+	// a canonical uuid or not; none for a segment. UUIDs is each entry that
+	// is a canonical uuid ([uuidBytes]), in order, at most
+	// [threadChainMaxRecords] of them, More whether an entry past those was
+	// one too; and Nowhere whether an entry is none, a record no chain the
+	// model files carries.
+	Listed  int
+	UUIDs   [][16]byte
+	More    bool
+	Nowhere bool
 }
 
 // Preserved is what a compact_boundary record says its compaction kept of the
-// thread before it, handing each record it lists, by uuid and in order, to
-// each. Nothing, and no error, where the record carries no
-// `compactMetadata`, or null, or keeps nothing, and on every record of
-// another type or subtype.
+// thread before it, each record it lists by uuid, in order. Nothing, and no
+// error, where the record carries no `compactMetadata`, or null, or keeps
+// nothing, and on every record of another type or subtype.
 //
 // WHAT THE RECORD SAYS, as 2.1.310 and 2.1.322 write and read it. A
 // compaction that kept the last stretch of the conversation before it names
@@ -3016,11 +3061,19 @@ type threadPreserved struct {
 // 2.1.310's _po @247129357). The error is conservative: its readers refuse a
 // boundary the harness wrote in no shape it writes rather than follow it
 // through those repairs, and each boundary the probes kept is of its shape.
-// An error each returns ends the walk and is returned as it is.
+// AN ERROR IS HANDED WITH WHAT THE LIST HELD BEFORE IT, in the order the
+// shapes are checked (the metadata's kind, the list's, its anchor, its
+// `uuids`' kind, then each entry): the entries before the first that is no
+// string, counted and their uuids held, as a reader that walks the list reads
+// them first, and none where the error comes before the list. AT MOST
+// [threadChainMaxRecords] UUIDS ARE HELD: past them More says so and no more
+// is held, every entry after still counted and checked. No reader reads past
+// them, since the model refuses a list past the room its records leave, which
+// is below that bound.
 //
 // Read off the line's one decode, its raw `compactMetadata`, never a second
 // read of the line.
-func (l threadLine) Preserved(each func(uuid string) error) (threadPreserved, error) {
+func (l threadLine) Preserved() (threadPreserved, error) {
 	if l.Head.Type != recordSystem || l.Head.Subtype != subtypeCompactBoundary || l.compactMetadata == nil ||
 		bytes.Equal(l.compactMetadata, jsonNull) {
 		return threadPreserved{}, nil
@@ -3037,7 +3090,7 @@ func (l threadLine) Preserved(each func(uuid string) error) (threadPreserved, er
 	}
 	switch {
 	case meta.Messages != nil && !bytes.Equal(meta.Messages, jsonNull):
-		return preservedList(meta.Messages, each)
+		return preservedList(meta.Messages)
 	case meta.Segment != nil && !bytes.Equal(meta.Segment, jsonNull):
 		return preservedSegment(meta.Segment)
 	}
@@ -3045,10 +3098,10 @@ func (l threadLine) Preserved(each func(uuid string) error) (threadPreserved, er
 }
 
 // preservedList is what a compaction's `preservedMessages`, raw, says it kept
-// ([threadLine.Preserved]), each listed uuid handed to each: named whatever it
-// lists, and kept where it lists any, since a resume relinks by a list of none
-// no record, and still drops by it every record before the last boundary.
-func preservedList(raw json.RawMessage, each func(uuid string) error) (threadPreserved, error) {
+// ([threadLine.Preserved]): named whatever it lists, and kept where it lists
+// any, since a resume relinks by a list of none no record, and still drops by
+// it every record before the last boundary.
+func preservedList(raw json.RawMessage) (threadPreserved, error) {
 	if !wireObject(raw) {
 		return threadPreserved{}, fmt.Errorf("compactMetadata.preservedMessages is %s, not an object", wireKind(raw))
 	}
@@ -3063,26 +3116,28 @@ func preservedList(raw json.RawMessage, each func(uuid string) error) (threadPre
 	if err != nil {
 		return threadPreserved{}, err
 	}
-	var (
-		listed  int
-		refused error
-	)
+	var p threadPreserved
 	err = eachElement(list.UUIDs, func(element json.RawMessage, _ int) error {
-		uuid, entryErr := wireRequiredString("an entry", element)
+		entry, entryErr := wireRequiredString("an entry", element)
 		if entryErr != nil {
 			return entryErr
 		}
-		listed++
-		refused = each(uuid)
-		return refused
+		p.Listed++
+		switch u, ok := uuidBytes(entry); {
+		case !ok:
+			p.Nowhere = true
+		case len(p.UUIDs) == threadChainMaxRecords:
+			p.More = true
+		default:
+			p.UUIDs = append(p.UUIDs, u)
+		}
+		return nil
 	})
-	switch {
-	case err == nil:
-		return threadPreserved{Named: true, Kept: listed > 0, Anchor: anchor}, nil
-	case refused != nil:
-		return threadPreserved{}, refused
+	if err != nil {
+		return p, fmt.Errorf("compactMetadata.preservedMessages.uuids: %w", err)
 	}
-	return threadPreserved{}, fmt.Errorf("compactMetadata.preservedMessages.uuids: %w", err)
+	p.Named, p.Kept, p.Anchor = true, p.Listed > 0, anchor
+	return p, nil
 }
 
 // preservedSegment is what a compaction's `preservedSegment`, raw, says it
