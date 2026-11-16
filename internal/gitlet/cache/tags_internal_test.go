@@ -142,10 +142,12 @@ func (c *countingReaderAt) ReadAt(p []byte, off int64) (int, error) {
 // Mutation: write the commit records unsorted → Commit misses, red.
 func TestATagFileReadsBackWhatItHolds(t *testing.T) {
 	t.Parallel()
-	r := rand.New(rand.NewPCG(7, 7))
 	for _, n := range []int{0, 1, 1000} {
 		t.Run(fmt.Sprintf("tags=%d", n), func(t *testing.T) {
 			t.Parallel()
+			// Each subtest draws from its own source: a rand.Rand is not
+			// safe for concurrent use, and these subtests run in parallel.
+			r := rand.New(rand.NewPCG(7, uint64(n)))
 			tags := randomTags(r, n)
 			raw := tagFileOf(t, tags)
 			path := writeTags(t, raw)
@@ -196,6 +198,7 @@ func TestATagFileReadsBackWhatItHolds(t *testing.T) {
 
 	t.Run("twelve tags of one commit", func(t *testing.T) {
 		t.Parallel()
+		r := rand.New(rand.NewPCG(7, 12))
 		commit := randomOID(r)
 		var tags []tagInsert
 		for i := range 12 {
@@ -216,6 +219,7 @@ func TestATagFileReadsBackWhatItHolds(t *testing.T) {
 
 	t.Run("not ours", func(t *testing.T) {
 		t.Parallel()
+		r := rand.New(rand.NewPCG(7, 13))
 		commit := randomOID(r)
 		tags := []tagInsert{
 			testTag("a", commit, commit, typeCommit, typeCommit, 5),
