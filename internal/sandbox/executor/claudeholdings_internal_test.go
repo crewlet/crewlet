@@ -1477,6 +1477,72 @@ func hsProgress(parent, uuid string) string {
 		`","timestamp":"` + ctStamp + `",` + ctTail("2.1.322") + `}`
 }
 
+// THE BLOCK RULES READ EVERY BLOCK'S KIND: a reply that its model ended ends
+// a leg only where its blocks are texts and thinkings of either kind alone, at
+// least one, so one holding a call or a server's call beside its text ends
+// none; a user record starts a leg unless it is results alone, so a text, a
+// list of none and a result beside a text each start one; a plain results
+// record is results alone, one or two; and a record's own toolUseResult
+// answers its call only where that result is the record's one block, never
+// beside a text or a second result.
+//
+// Mutation: read a reply as finished by any block it holds of those kinds, a
+// record as plain results by any result it holds, or a result as alone by its
+// record's one call, and a record mixing kinds reads as one of a kind.
+func TestTheBlockRulesReadEveryBlocksKind(t *testing.T) {
+	t.Parallel()
+	text := `{"type":"text","text":"done."}`
+	thinking := `{"type":"thinking","thinking":"the batch","signature":"c2ln"},` +
+		`{"type":"redacted_thinking","data":"ZGF0YQ=="}`
+	server := `{"type":"server_tool_use","id":"srvtoolu_test","name":"web_search","input":{}}`
+	use := ctUseContent[1 : len(ctUseContent)-1]
+	result := ctResultBody[1 : len(ctResultBody)-1]
+	other := `{"tool_use_id":"toolu_other","type":"tool_result","content":"b2"}`
+	for name, tc := range map[string]struct {
+		content  string
+		finished bool
+	}{
+		"a text":                             {`[` + text + `]`, true},
+		"a text and both thinkings":          {`[` + thinking + `,` + text + `]`, true},
+		"a list of none":                     {`[]`, false},
+		"a text and a call":                  {`[` + text + `,` + use + `]`, false},
+		"a text and a server's call":         {`[` + text + `,` + server + `]`, false},
+		"both thinkings and a server's call": {`[` + thinking + `,` + server + `]`, false},
+	} {
+		m, err := ctLine(t, ctAssistant(ctUUID(2), ctUUID(3), tc.content)).Message()
+		if err != nil {
+			t.Fatalf("a reply of %s reads no message: %v", name, err)
+		}
+		if got := finishedReply(m.Blocks(), claudeEndedTurn, "claude-sonnet-4-5", false); got != tc.finished {
+			t.Errorf("a reply of %s ended by its model finishes its leg %t, want %t", name, got, tc.finished)
+		}
+	}
+	for name, tc := range map[string]struct {
+		record             string
+		start, plain, lone bool
+	}{
+		"a result alone": {record: ctResult(ctUUID(4), ctUUID(5), `[`+result+`]`, ctResultOwn), plain: true,
+			lone: true},
+		"two results": {record: ctResult(ctUUID(4), ctUUID(5), `[`+result+`,`+other+`]`, ctResultOwn),
+			plain: true},
+		"a result beside a text": {record: ctResult(ctUUID(4), ctUUID(5), `[`+result+`,`+text+`]`, ctResultOwn),
+			start: true},
+		"a list of none": {record: ctResult(ctUUID(4), ctUUID(5), `[]`, ctResultOwn), start: true},
+		"a text":         {record: ctBrief(ctUUID(1)), start: true},
+	} {
+		line := ctLine(t, tc.record)
+		m, err := line.Message()
+		if err != nil {
+			t.Fatalf("%s reads no message: %v", name, err)
+		}
+		if start, plain, lone := legStart(m), plainResults(line, m), resultAlone(m); start != tc.start ||
+			plain != tc.plain || lone != tc.lone {
+			t.Errorf("%s starts a leg %t, is plain results %t, a result alone %t; want %t, %t and %t", name, start,
+				plain, lone, tc.start, tc.plain, tc.lone)
+		}
+	}
+}
+
 // A CALL WHOSE RECORD A RETRACTION NAMES IS TOLD: Claude Code's resume drops
 // every record whose uuid's first 24 characters are those of an entry of a
 // retraction list it hands, once it has walked the chain and recovered beside

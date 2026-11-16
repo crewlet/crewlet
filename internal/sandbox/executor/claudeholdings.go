@@ -320,10 +320,10 @@ import (
 // subagents at [holdingsMaxAgents], legs at [holdingsMaxLegs], and every
 // chained record's writer, and the session's, at its floor. At its worst a
 // reading holds the line reader's buffer; one line and the slice that gathered
-// it; the line's raw keys and its message's decode,
-// each at most a line; what the message's calls keep (a line of the smallest
-// results keeps about three times the line); one result's text; a metadata; the
-// model of one thread, at most [threadChainMaxRecords] records and
+// it; the line's raw keys and its message's decode, each at most a line; what
+// the message's calls keep (a line of the smallest results keeps about three
+// and a half times the line); one result's text; a metadata; the model of one
+// thread, at most [threadChainMaxRecords] records and
 // [threadChainMaxCalls] call ids, past either of which it files nothing more
 // ([threadChain], THE BOUNDS), and the pairing rule's mark of each of its
 // records, two bytes a record ([holdingsPairing]), one thread's at a time; and
@@ -1097,14 +1097,19 @@ func (w *holdingsWalk) mainRecord(line threadLine, message threadMessage, record
 		}
 		return nil
 	}
-	// THE RECORD'S OWN toolUseResult IS ONE CALL'S ONLY ON A RECORD OF THAT
-	// ONE RESULT ALONE: on a record of two it is the record's, and says
-	// nothing of either call.
-	alone := len(message.Kinds()) == 1 && len(calls) == 1
+	alone := resultAlone(message)
 	for _, call := range calls {
 		w.legResult(line, call, alone, record)
 	}
 	return w.notification(line, message, record)
+}
+
+// resultAlone reports whether message, a user record's, is one result alone:
+// THE RECORD'S OWN toolUseResult IS ONE CALL'S ONLY ON A RECORD OF THAT ONE
+// RESULT ALONE, its one block. On a record of two blocks, two results or a
+// result beside a text, it is the record's, and says nothing of either.
+func resultAlone(message threadMessage) bool {
+	return message.Blocks().Len() == 1 && len(message.Calls()) == 1
 }
 
 // count files call, a block of line n of thread ("" the main thread, else a
@@ -1411,7 +1416,7 @@ func (w *holdingsWalk) subagentLine(agent string, a *subagentFacts, chain *threa
 		pairing.flag(record, pairLegStart)
 	}
 	if text, _ := message.Says(); head.Type == recordAssistant && text && stopErr == nil && apiErr == nil &&
-		modelErr == nil && finishedReply(message.Kinds(), stop, model, apiError) {
+		modelErr == nil && finishedReply(message.Blocks(), stop, model, apiError) {
 		pairing.flag(record, pairFinished)
 	}
 }
@@ -1549,11 +1554,11 @@ func legStart(message threadMessage) bool {
 	if message.IsText() {
 		return true
 	}
-	kinds := message.Kinds()
-	return len(kinds) == 0 || slices.ContainsFunc(kinds, func(kind string) bool { return kind != blockToolResult })
+	blocks := message.Blocks()
+	return blocks.Len() == 0 || !blocks.All(blockToolResult)
 }
 
-// finishedReply reports whether an assistant record whose blocks are kinds,
+// finishedReply reports whether an assistant record of blocks,
 // whose reply stopped for stop and names model as the model that wrote it,
 // and which its harness wrote in place of a failed request's reply where
 // apiError, ends a leg: a reply with which its model ended its turn, as
@@ -1575,13 +1580,11 @@ func legStart(message threadMessage) bool {
 // 2.1.322 builds says "end_turn", so the stop alone already leaves each one's
 // leg unfinished; the test is still the harness's whole one, so a release
 // that builds one saying so finishes no leg no model ended.
-func finishedReply(kinds []string, stop, model string, apiError bool) bool {
-	if len(kinds) == 0 || apiError || stop != claudeEndedTurn || model == claudeSyntheticModel {
+func finishedReply(blocks threadBlocks, stop, model string, apiError bool) bool {
+	if blocks.Len() == 0 || apiError || stop != claudeEndedTurn || model == claudeSyntheticModel {
 		return false
 	}
-	return !slices.ContainsFunc(kinds, func(kind string) bool {
-		return kind != blockText && kind != blockThinking && kind != blockRedactedThinking
-	})
+	return blocks.All(blockText, blockThinking, blockRedactedThinking)
 }
 
 // readSubagentMeta reads a subagent's metadata, whose bytes member hands out,

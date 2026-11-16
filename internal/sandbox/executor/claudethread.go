@@ -1375,14 +1375,17 @@ const (
 // names the handback tool), or its blocks. IT HOLDS NO TEXT: a prompt or a
 // notification is as long as whatever wrote it made it, and each fact its
 // readers ask of one is read as the text streams ([textNotice],
-// [textHandback], [textSays]).
+// [textHandback], [textSays]). AND NOTHING OF A BLOCK BUT A CALL: a list holds
+// as many blocks as whatever wrote it made it, and what its readers ask of the
+// blocks that are no call is how many there are and which kinds among them
+// ([threadBlocks]), a count and a set.
 type threadMessage struct {
 	isText bool
 	// notification and namesHandback are [threadMessage.Notification]'s and
 	// [threadMessage.NamesHandback]'s.
 	notification  taskNotice
 	namesHandback bool
-	kinds         []string
+	blocks        threadBlocks
 	calls         []threadCall
 	// saysText and saysAny are [threadMessage.Says]'s.
 	saysText, saysAny bool
@@ -1427,8 +1430,8 @@ const (
 )
 
 // knownKind is kind, a block's type, held as this layer's own constant where
-// it is one of the blocks the layer names, so a list of such blocks holds no
-// string of its own for a block's kind.
+// it is one of the blocks the layer names, so a call a message holds keeps no
+// string of its own for its kind.
 func knownKind(kind string) string {
 	switch kind {
 	case blockToolUse:
@@ -1443,6 +1446,80 @@ func knownKind(kind string) string {
 		return blockRedactedThinking
 	}
 	return kind
+}
+
+// threadBlocks is what a message's content list says of its blocks
+// ([threadMessage.Blocks]): how many it holds, and which kinds among them.
+//
+// A COUNT AND A SET, NEVER A KIND A BLOCK: every reader asks how many blocks a
+// list holds or whether they are all of some kinds (a leg's start, a finished
+// reply, a plain results record, a result alone on its record), and none asks
+// a block's place in the list. So a list of a million blocks holds two words
+// here, not a million kinds.
+type threadBlocks struct {
+	n    int
+	seen blockSet
+}
+
+// blockSet is a set of the kinds of block, one member for each kind the layer
+// names and one, blockOther, for every kind it does not.
+type blockSet uint8
+
+const (
+	blockSetToolUse blockSet = 1 << iota
+	blockSetToolResult
+	blockSetText
+	blockSetThinking
+	blockSetRedactedThinking
+	// blockOther is every kind the layer does not name: one member for all of
+	// them, since no reader tells one unnamed kind from another, and each
+	// reads one as a block of no kind it names.
+	blockOther
+)
+
+// blockOf is kind's member of a [blockSet]: its own where the layer names it,
+// blockOther else.
+func blockOf(kind string) blockSet {
+	switch kind {
+	case blockToolUse:
+		return blockSetToolUse
+	case blockToolResult:
+		return blockSetToolResult
+	case blockText:
+		return blockSetText
+	case blockThinking:
+		return blockSetThinking
+	case blockRedactedThinking:
+		return blockSetRedactedThinking
+	}
+	return blockOther
+}
+
+// add counts a block of kind.
+func (b *threadBlocks) add(kind string) {
+	b.n++
+	b.seen |= blockOf(kind)
+}
+
+// Len is how many blocks the list holds: 0 for a list of none, and for every
+// message that holds no list, a content that is one string
+// ([threadMessage.IsText] tells it) and the zero message among them.
+func (b threadBlocks) Len() int { return b.n }
+
+// All reports whether every block is of one of kinds, each one of the layer's
+// own names of a block (blockText, blockToolUse...): true of a list of none,
+// which a reader tells by [threadBlocks.Len]. A kind the layer does not name
+// matches no block, so a block of a kind the layer does not name is all of no
+// kinds a reader can ask for: never a sign that a reply finished, nor a block
+// that holds no call.
+func (b threadBlocks) All(kinds ...string) bool {
+	var named blockSet
+	for _, kind := range kinds {
+		if s := blockOf(kind); s != blockOther {
+			named |= s
+		}
+	}
+	return b.seen&^named == 0
 }
 
 // Message is a user or assistant record's `message`, decoded from the line's
@@ -1467,15 +1544,17 @@ func knownKind(kind string) string {
 // A CONTENT LIST IS READ A BLOCK AT A TIME ([eachElement]), each block held to
 // its type as it is read, and never decoded whole before its first block is
 // checked. So a list refused at a block costs what the blocks up to it cost,
-// however many follow, and what a list read to its end leaves held is a kind
-// for each block and a call for each call block, each kept as it is accepted:
+// however many follow, and what a list read to its end leaves held is a call
+// for each call block, each kept as it is accepted, and of every block its
+// count and its kind's member of a set ([threadBlocks]), nothing a block:
 // while it reads, a message holds, beyond those, one copy of its content and
 // one block's decode. A list of four million `1`s at [threadLineMax] is
 // refused at its first block for the allocations a list of one costs and, in
-// bytes, the one copy of its content, and a line at that bound of the
-// smallest results a list can hold leaves their calls held, about three times
-// the line (measured): a kind's header and a call's fields for each, at most
-// a quarter over for append's growth.
+// bytes, the one copy of its content; a line at that bound of the smallest
+// blocks of a kind no reader names leaves nothing of them held; and a line at
+// that bound of the smallest results a list can hold leaves their calls held,
+// about three and a half times the line (measured): a call's fields for each,
+// at most a quarter over for append's growth.
 func (l threadLine) Message() (threadMessage, error) {
 	// record is what an error of the message calls the record.
 	var call, record string
@@ -1532,21 +1611,20 @@ func messageContent(content json.RawMessage, call string) (threadMessage, error)
 		m.notification.agent, m.notification.leg, m.notification.ok = notice.notice()
 		return m, nil
 	}
-	// A BLOCK AT A TIME ([eachElement]), and the kinds and the calls grown
-	// from what was accepted, never sized from the list's length, which only
-	// a whole decode knows: a list refused at its first block costs that
-	// block. An empty list's kinds are empty, never nil, which only a content
-	// that is no list reads as.
-	m := threadMessage{kinds: []string{}}
+	// A BLOCK AT A TIME ([eachElement]), and the calls grown from what was
+	// accepted, never sized from the list's length, which only a whole decode
+	// knows: a list refused at its first block costs that block. Every other
+	// block is counted ([threadBlocks]), and held as nothing more.
+	var m threadMessage
 	// said is the block's text, unquoted into the one buffer every block
 	// reuses, where a block's text may still change what the message says.
 	var said []byte
 	if err := eachElement(content, func(raw json.RawMessage, _ int) error {
 		b, text, err := contentBlock(raw)
 		if err != nil {
-			return fmt.Errorf("content block %d: %w", len(m.kinds)+1, err)
+			return fmt.Errorf("content block %d: %w", m.blocks.Len()+1, err)
 		}
-		m.kinds = append(m.kinds, b.Kind)
+		m.blocks.add(b.Kind)
 		if b.Kind == call {
 			m.calls = append(m.calls, b)
 		}
@@ -1740,15 +1818,16 @@ func (m threadMessage) Notification() (agent, leg string, ok bool) {
 // notification's leg as answered by a handback. False for a message of blocks.
 func (m threadMessage) NamesHandback() bool { return m.namesHandback }
 
-// Kinds is each content block's type, in order. It is nil exactly where the
-// message holds no list: a content that is one string
-// ([threadMessage.IsText] says so), and the zero message every record but a user's or an assistant's
-// reads as; an empty list is an empty Kinds, never nil. A reader tells a
-// turn's own message from the results of its calls by it: a user record whose
-// blocks are tool_result alone, or not. A kind the layer does not name is
-// handed out as written, for its reader to treat as unknown: never as a sign
-// that a reply finished, nor as a block that holds no call.
-func (m threadMessage) Kinds() []string { return m.kinds }
+// Blocks is how many blocks the message's content list holds, and which
+// kinds among them ([threadBlocks]): none where the message holds no list, a
+// content that is one string ([threadMessage.IsText] tells it) and the zero
+// message every record but a user's or an assistant's reads as among them,
+// and none for a list of none. A reader tells a turn's own message from the
+// results of its calls by it: a user record whose blocks are tool_result
+// alone, or not. A kind the layer does not name is a kind of its own in the
+// set, for its reader to treat as unknown: never as a sign that a reply
+// finished, nor as a block that holds no call.
+func (m threadMessage) Blocks() threadBlocks { return m.blocks }
 
 // Calls is the message's call blocks: an assistant's tool_use blocks, a user's
 // tool_result blocks. THE ONLY WAY A CALL'S ID LEAVES THIS LAYER: no accessor

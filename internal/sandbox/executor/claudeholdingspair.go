@@ -214,13 +214,8 @@ func plainReply(line threadLine) bool {
 // where its accessor cannot read it, and an origin of any kind, or one whose
 // kind does not decode, as one.
 func plainResults(line threadLine, m threadMessage) bool {
-	if m.IsText() || len(m.Kinds()) == 0 {
+	if blocks := m.Blocks(); m.IsText() || blocks.Len() == 0 || !blocks.All(blockToolResult) {
 		return false
-	}
-	for _, kind := range m.Kinds() {
-		if kind != blockToolResult {
-			return false
-		}
 	}
 	for _, call := range m.Calls() {
 		if harnessID(call.ID) {

@@ -1104,7 +1104,7 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	if h := attachment.Head; h.Type != recordAttachment || !h.Chained() || !h.Main() {
 		t.Errorf("a record whose attachment is no object reads with the head %+v", h)
 	}
-	if m, err := attachment.Message(); err != nil || m.Kinds() != nil || m.Calls() != nil {
+	if m, err := attachment.Message(); err != nil || m.IsText() || m.Blocks().Len() != 0 || m.Calls() != nil {
 		t.Errorf("a record whose attachment is no object reads its message as %+v, %v", m, err)
 	}
 	if kind, err := attachment.OriginKind(); kind != "" || err != nil {
@@ -1345,9 +1345,9 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 			t.Errorf("a reply whose mark of an API error is %s reads as a failed request's %t, want an error", name,
 				failed)
 		}
-		if m, err := line.Message(); err != nil || !slices.Equal(m.Kinds(), []string{blockText}) {
-			t.Errorf("a reply whose mark is %s reads the blocks %q, %v; want its text", name,
-				strings.Join(m.Kinds(), " "), err)
+		if m, err := line.Message(); err != nil || ctBlocks(m.Blocks()) != "1 [text]" {
+			t.Errorf("a reply whose mark is %s reads the blocks %s, %v; want its text", name, ctBlocks(m.Blocks()),
+				err)
 		}
 		if reason, err := line.StopReason(); reason != "stop_sequence" || err != nil {
 			t.Errorf("a reply whose mark is %s stopped for %q, %v; want stop_sequence", name, reason, err)
@@ -1490,14 +1490,32 @@ func ctAllButUUID(l threadLine) string {
 
 // ctMessage writes to b what a message m, read with err, hands out: whether it
 // is one text, the subagent and the leg a task notification's text names,
-// whether it names the handback tool, its blocks' kinds, and its calls.
+// whether it names the handback tool, its blocks ([ctBlocks]), and its calls.
 func ctMessage(b *strings.Builder, m threadMessage, err error) {
 	agent, leg, notice := m.Notification()
-	fmt.Fprintf(b, "message: a text %t, a notification %t of %q's leg %q, naming the handback %t, kinds %q; %v\n",
-		m.IsText(), notice, agent, leg, m.NamesHandback(), strings.Join(m.Kinds(), " "), err)
+	fmt.Fprintf(b, "message: a text %t, a notification %t of %q's leg %q, naming the handback %t, blocks %s; %v\n",
+		m.IsText(), notice, agent, leg, m.NamesHandback(), ctBlocks(m.Blocks()), err)
 	for _, c := range m.Calls() {
 		ctCallFacts(b, c)
 	}
+}
+
+// ctBlocks is what blocks hand out, as text: how many there are, and each
+// kind among them, the ones the layer names in its order and then "other" for
+// any it does not: "2 [tool_use text]".
+func ctBlocks(blocks threadBlocks) string {
+	var kinds []string
+	for _, k := range []struct {
+		member blockSet
+		name   string
+	}{{blockSetToolUse, blockToolUse}, {blockSetToolResult, blockToolResult}, {blockSetText, blockText},
+		{blockSetThinking, blockThinking}, {blockSetRedactedThinking, blockRedactedThinking},
+		{blockOther, "other"}} {
+		if blocks.seen&k.member != 0 {
+			kinds = append(kinds, k.name)
+		}
+	}
+	return fmt.Sprintf("%d [%s]", blocks.Len(), strings.Join(kinds, " "))
 }
 
 // ctCallFacts writes to b everything a call hands out: its kind, its id, its
@@ -2689,9 +2707,9 @@ func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 		"a call in a user's message":    {record: ctResult(ctUUID(4), ctUUID(5), ctUseContent, ctResultOwn), kind: blockToolUse},
 	} {
 		m, err := ctLine(t, tc.record).Message()
-		if err != nil || m.Calls() != nil || !slices.Equal(m.Kinds(), []string{tc.kind}) {
-			t.Errorf("%s reads as the blocks %q and the calls %+v, %v; want a %s and no call", name,
-				strings.Join(m.Kinds(), " "), m.Calls(), err, tc.kind)
+		if err != nil || m.Calls() != nil || ctBlocks(m.Blocks()) != "1 ["+tc.kind+"]" {
+			t.Errorf("%s reads as the blocks %s and the calls %+v, %v; want a %s and no call", name,
+				ctBlocks(m.Blocks()), m.Calls(), err, tc.kind)
 		}
 	}
 
@@ -2733,8 +2751,8 @@ func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 			`","type":"tool_result","content":"m1","is_error":"false"}]},`),
 	} {
 		if m, err := ctLine(t, record).Message(); err == nil || !strings.Contains(err.Error(), "content block 2:") {
-			t.Errorf("%s reads as the blocks %q and the calls %+v, %v; want an error naming block 2", name,
-				strings.Join(m.Kinds(), " "), m.Calls(), err)
+			t.Errorf("%s reads as the blocks %s and the calls %+v, %v; want an error naming block 2", name,
+				ctBlocks(m.Blocks()), m.Calls(), err)
 		}
 	}
 
@@ -2752,18 +2770,19 @@ func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 // A MESSAGE SAYS ITS CONTENT'S SHAPE: content that is one string is one text,
 // with no blocks, and what its readers ask of it (the subagent and the leg a
 // task notification names, whether it names the handback tool, wherever the
-// name falls) is read off it; content that is a list is each block's type, in
-// order, and no text, a notification's words in a block naming none, and an
-// empty list is an empty Kinds, never the nil one a content that is no list
-// reads as. Every user and assistant record measured holds one block a
-// record; the API's own messages hold several, which a list of two holds to
-// its order.
+// name falls) is read off it; content that is a list is how many blocks it
+// holds and which kinds among them, and no text, a notification's words in a
+// block naming none, and an empty list is a list of no blocks, never the text
+// a content that is no list reads as. Every user and assistant record measured
+// holds one block a record; the API's own messages hold several, which a list
+// of two counts, each kind among them.
 //
 // Mutation: read content as one shape, and a string content is no message;
-// start a list's kinds at nil, and an empty list reads as no list; read a
-// text's notification, or its handback's name, as none, and a notification
-// names no leg, or no handback; stop reading a text once it says something,
-// and a handback named past its first piece is missed.
+// read an empty list as a text, and it reads as no list; count only a list's
+// first block, or hold only its last kind, and a text and a call read as one
+// block; read a text's notification, or its handback's name, as none, and a
+// notification names no leg, or no handback; stop reading a text once it says
+// something, and a handback named past its first piece is missed.
 func TestAMessageSaysItsContentsShape(t *testing.T) {
 	t.Parallel()
 	notification := ctNotification(ctUUID(1), ctUUID(3))
@@ -2779,28 +2798,32 @@ func TestAMessageSaysItsContentsShape(t *testing.T) {
 		// notice is whether its text names a leg, the notification's own;
 		// handback whether it names the handback tool.
 		notice, handback bool
-		kinds            []string
+		// blocks is its blocks as [ctBlocks] prints them; "" for a text.
+		blocks string
 	}{
 		"a brief":                      {record: ctBrief(ctUUID(1))},
 		"a notification":               {record: notification, notice: true},
 		"a notification of a handback": {record: handback, notice: true, handback: true},
 		"a notification of a handback named late": {record: late, notice: true, handback: true},
-		"a model's text":                    {record: ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."}]`), kinds: []string{"text"}},
-		"a notification's words in a block": {record: ctAssistant(ctUUID(2), ctUUID(3), inBlock), kinds: []string{"text"}},
-		"a call's result":                   {record: ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn), kinds: []string{blockToolResult}},
-		"a skill's text":                    {record: ctSkillText(ctUUID(4), ctUUID(5)), kinds: []string{"text"}},
-		"a text and a call":                 {record: ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."},`+ctUseContent[1:]), kinds: []string{"text", blockToolUse}},
-		"an empty list":                     {record: ctAssistant(ctUUID(2), ctUUID(3), `[]`), kinds: []string{}},
+		"a model's text":                    {record: ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."}]`), blocks: "1 [text]"},
+		"a notification's words in a block": {record: ctAssistant(ctUUID(2), ctUUID(3), inBlock), blocks: "1 [text]"},
+		"a call's result":                   {record: ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn), blocks: "1 [tool_result]"},
+		"a skill's text":                    {record: ctSkillText(ctUUID(4), ctUUID(5)), blocks: "1 [text]"},
+		"a text and a call":                 {record: ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."},`+ctUseContent[1:]), blocks: "2 [tool_use text]"},
+		"an empty list":                     {record: ctAssistant(ctUUID(2), ctUUID(3), `[]`), blocks: "0 []"},
 	} {
 		m, err := ctLine(t, tc.record).Message()
 		if err != nil {
 			t.Errorf("%s reads no message: %v", name, err)
 			continue
 		}
-		if m.IsText() != (tc.kinds == nil) || !slices.Equal(m.Kinds(), tc.kinds) ||
-			(tc.kinds == nil) != (m.Kinds() == nil) {
-			t.Errorf("%s reads as a text %t and the blocks %q, want a text %t and %q", name, m.IsText(),
-				strings.Join(m.Kinds(), " "), tc.kinds == nil, strings.Join(tc.kinds, " "))
+		want := tc.blocks
+		if want == "" {
+			want = "0 []"
+		}
+		if m.IsText() != (tc.blocks == "") || ctBlocks(m.Blocks()) != want {
+			t.Errorf("%s reads as a text %t and the blocks %s, want a text %t and %s", name, m.IsText(),
+				ctBlocks(m.Blocks()), tc.blocks == "", want)
 		}
 		agent, leg, ok := m.Notification()
 		if ok != tc.notice || (ok && (agent != ctAgent || leg != "toolu_test_agent")) || (!ok && agent+leg != "") ||
@@ -4502,11 +4525,11 @@ func ctKeysRecord(t *testing.T, head string, key func(i int) string, tail string
 // million `1`s, or a list of empty objects, shows it. The walk itself, with
 // nobody keeping what it hands out, costs the same for a long list as for a
 // list of one, in allocations and in bytes: it never collects the elements.
-// And a list read to its end leaves held what Message says it does, a kind
-// for each block and a call for each call block, and nothing of the list: for
-// a list of the smallest blocks of a kind no reader names, and of the smallest
-// results, each a header for each kind and each call's fields, at most a
-// quarter over for append's growth, and the bytes of each kind and id.
+// And a list read to its end leaves held what Message says it does, a call
+// for each call block and nothing of any other block, nor of the list: for a
+// list of the smallest blocks of a kind no reader names nothing a block, and
+// for one of the smallest results each call's fields, at most a quarter over
+// for append's growth, and the bytes of each id.
 //
 // Not parallel: the counts are the process's, and a parallel test's
 // allocations would be counted with this one's.
@@ -4514,11 +4537,12 @@ func ctKeysRecord(t *testing.T, head string, key func(i int) string, tail string
 // Mutation: decode a message's content, or a reply's edits, whole before its
 // first block is checked, and a list at the bound costs millions of
 // allocations more than a list of one; collect its blocks or its edits before
-// the first is checked, size its kinds from the list's length, or have the
+// the first is checked, size its calls from the list's length, or have the
 // walk collect the list before it hands out the first element, and it costs
 // from several times to tens of times the line more, in a few allocations;
 // keep a copy of the content in the message, and a list read to its end holds
-// that copy beside its kinds.
+// that copy beside its calls; keep a kind for each block, as a list of them,
+// and a list of blocks that are no call holds a header for each.
 func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 	// slack is how many more allocations a list at the bound may cost than a
 	// list of one, though it reads no more of it. The count is the process's,
@@ -4593,21 +4617,21 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 	}
 
 	// heldSlack is how many bytes a message read to its end may hold beyond its
-	// kinds and its calls: the message itself, and whatever else the heap holds
-	// at the second collection that it did not at the first. Measured, a
-	// message held its two arrays and nothing more to within a few dozen
-	// bytes; a copy of the list is the list's size.
+	// calls: the message itself, and whatever else the heap holds at the
+	// second collection that it did not at the first. Measured, a message held
+	// its array of calls and nothing more to within a few dozen bytes; a copy
+	// of the list is the list's size, and a kind's header for each of its
+	// blocks a dozen times the slack.
 	const heldSlack = 64 << 10
 	for name, tc := range map[string]struct {
 		element string
-		// own is how many bytes of its own each block may hold beyond its kind's
-		// header and its call's fields: the text of a kind the layer does not
-		// name, and a call's id. A kind the layer names is its own constant
+		// own is how many bytes of its own each call may hold beyond its
+		// fields: its id. A call's kind is the layer's own constant
 		// (TestAKnownBlockKindIsHeldAsTheLayersOwnString).
 		own   uint64
 		calls bool
 	}{
-		"blocks of a kind no reader names": {element: `{"type":"x"}`, own: 1},
+		"blocks of a kind no reader names": {element: `{"type":"x"}`},
 		"the smallest results":             {element: `{"type":"tool_result","tool_use_id":"a"}`, own: 1, calls: true},
 	} {
 		line := ctLine(t, ctListRecord(t, user, tc.element, `]}}`, listBytes))
@@ -4620,15 +4644,14 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 		if tc.calls {
 			calls = blocks
 		}
-		if err != nil || uint64(len(m.Kinds())) != blocks || uint64(len(m.Calls())) != calls {
-			t.Fatalf("%s: a list of %d blocks reads as %d kinds and %d calls, %v; want %d and %d", name, blocks,
-				len(m.Kinds()), len(m.Calls()), err, blocks, calls)
+		if err != nil || uint64(m.Blocks().Len()) != blocks || uint64(len(m.Calls())) != calls {
+			t.Fatalf("%s: a list of %d blocks reads as %d blocks and %d calls, %v; want %d and %d", name, blocks,
+				m.Blocks().Len(), len(m.Calls()), err, blocks, calls)
 		}
-		kinds := blocks * (uint64(unsafe.Sizeof("")) + tc.own)
-		fields := calls * uint64(unsafe.Sizeof(threadCall{}))
-		if held, limit := heldBy(read), (kinds+fields)*5/4+heldSlack; held > limit {
-			t.Errorf("%s: a list of %d bytes read to its end holds %d bytes, more than its %d kinds and %d calls "+
-				"take: %d", name, len(line.Raw)+1, held, blocks, calls, limit)
+		fields := calls * (uint64(unsafe.Sizeof(threadCall{})) + tc.own)
+		if held, limit := heldBy(read), fields*5/4+heldSlack; held > limit {
+			t.Errorf("%s: a list of %d bytes read to its end holds %d bytes, more than its %d calls of %d blocks "+
+				"take: %d", name, len(line.Raw)+1, held, calls, blocks, limit)
 		}
 	}
 }
@@ -4672,35 +4695,58 @@ func TestAnObjectsWalkCostsWhatOneKeyCosts(t *testing.T) {
 	}
 }
 
-// A KNOWN BLOCK KIND IS HELD AS THE LAYER'S OWN STRING: a block of a kind the
-// layer names (a text, a thinking and a redacted thinking, a call and a
-// result) is held in Kinds as the layer's own constant, so a list of such
-// blocks holds no string of its own for a block's kind, only its place in the
-// list; a kind the layer does not name is held as written.
+// A KNOWN BLOCK KIND IS HELD AS THE LAYER'S OWN STRING: a call's kind (a
+// call's or a result's) is held as the layer's own constant, so a list of
+// calls holds no string of its own for a call's kind; and every block,
+// whatever its kind, is counted in Blocks and held as its kind's member of a
+// set, nothing more: each kind the layer names (a text, a thinking and a
+// redacted thinking, a call and a result) its own, and a kind it does not name
+// one that no reader can ask for, so a reply holding a server's call among its
+// text and thinking is not all of the kinds the layer names, whatever kinds
+// the reader names beside them.
 //
-// Mutation: hold every kind as its decode left it, and each known kind is a
-// string of its own.
+// Mutation: hold a call's kind as its decode left it, and it is a string of
+// its own; read a kind the layer does not name as one it does, or match it by
+// its name, and the reply holding a server's call is all of the named kinds.
 func TestAKnownBlockKindIsHeldAsTheLayersOwnString(t *testing.T) {
 	t.Parallel()
-	reply, err := ctLine(t, ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."},`+
-		`{"type":"thinking","thinking":"the batch","signature":"c2ln"},{"type":"redacted_thinking","data":"ZGF0YQ=="},`+
-		ctUseContent[1:len(ctUseContent)-1]+`,{"type":"server_tool_use","id":"srvtoolu_test","name":"web_search",`+
-		`"input":{}}]`)).Message()
-	if err != nil {
-		t.Fatalf("a reply of every kind reads no message: %v", err)
-	}
-	result, err := ctLine(t, ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)).Message()
-	if err != nil {
-		t.Fatalf("a result reads no message: %v", err)
-	}
-	kinds := append(slices.Clone(reply.Kinds()), result.Kinds()...)
-	want := []string{blockText, blockThinking, blockRedactedThinking, blockToolUse, "server_tool_use", blockToolResult}
-	if !slices.Equal(kinds, want) {
-		t.Fatalf("the blocks read as %q, want %q", strings.Join(kinds, " "), strings.Join(want, " "))
-	}
-	for i, kind := range kinds {
-		if known := i != 4; known != (unsafe.StringData(kind) == unsafe.StringData(want[i])) {
-			t.Errorf("block %d, a %s, is held as the layer's own string %t, want %t", i+1, kind, !known, known)
+	named := `[{"type":"text","text":"batch 1."},{"type":"thinking","thinking":"the batch","signature":"c2ln"},` +
+		`{"type":"redacted_thinking","data":"ZGF0YQ=="},` + ctUseContent[1:len(ctUseContent)-1]
+	server := `{"type":"server_tool_use","id":"srvtoolu_test","name":"web_search","input":{}}`
+	every := []string{blockText, blockThinking, blockRedactedThinking, blockToolUse, blockToolResult}
+	for name, tc := range map[string]struct {
+		record string
+		// blocks is the message's blocks as [ctBlocks] prints them; all
+		// whether they are all of the kinds the layer names.
+		blocks string
+		all    bool
+	}{
+		"a reply of every kind the layer names": {record: ctAssistant(ctUUID(2), ctUUID(3), named+`]`),
+			blocks: "4 [tool_use text thinking redacted_thinking]", all: true},
+		"a reply holding a server's call beside them": {record: ctAssistant(ctUUID(2), ctUUID(3),
+			named+`,`+server+`]`), blocks: "5 [tool_use text thinking redacted_thinking other]"},
+		"a result": {record: ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn),
+			blocks: "1 [tool_result]", all: true},
+	} {
+		m, err := ctLine(t, tc.record).Message()
+		if err != nil {
+			t.Errorf("%s reads no message: %v", name, err)
+			continue
+		}
+		b := m.Blocks()
+		if ctBlocks(b) != tc.blocks || b.All(every...) != tc.all || b.All(append(every, "server_tool_use")...) != tc.all {
+			t.Errorf("%s reads as the blocks %s, all of the named kinds %t, and with the server's call's beside "+
+				"them %t; want %s and %t", name, ctBlocks(b), b.All(every...),
+				b.All(append(every, "server_tool_use")...), tc.blocks, tc.all)
+		}
+		if len(m.Calls()) != 1 {
+			t.Errorf("%s holds the calls %+v; want one", name, m.Calls())
+			continue
+		}
+		kind := m.Calls()[0].Kind
+		if own := map[string]string{blockToolUse: blockToolUse, blockToolResult: blockToolResult}[kind]; own == "" ||
+			unsafe.StringData(kind) != unsafe.StringData(own) {
+			t.Errorf("%s holds a call of the kind %q, not as the layer's own string", name, kind)
 		}
 	}
 }
@@ -4776,8 +4822,8 @@ func TestAServerClearingIsWhatAnAssistantRecordSaysItApplied(t *testing.T) {
 		if cleared, err := line.ToolResultsCleared(); err == nil {
 			t.Errorf("%s reads as cleared %t, want an error", name, cleared)
 		}
-		if m, err := line.Message(); err != nil || !slices.Equal(m.Kinds(), []string{"text"}) {
-			t.Errorf("%s reads its message as the blocks %q, %v; want it whole", name, strings.Join(m.Kinds(), " "), err)
+		if m, err := line.Message(); err != nil || ctBlocks(m.Blocks()) != "1 [text]" {
+			t.Errorf("%s reads its message as the blocks %s, %v; want it whole", name, ctBlocks(m.Blocks()), err)
 		}
 	}
 
