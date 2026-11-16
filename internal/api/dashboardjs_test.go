@@ -2627,7 +2627,9 @@ const (
 	// are not numbers changed in place, merged on kit 0.131.0, measures
 	// 6313.1 KiB (6,464,594 bytes), 46,487 bytes over the 6267.7 KiB of main
 	// it was built on: 6314 KiB.
-	treeBudget = 5<<20 + 1194<<10
+	// Saying a time inside Gitlet's sentences in words added 742 bytes and
+	// took it to 6314.1 KiB (6,465,667 bytes): 6315 KiB.
+	treeBudget = 5<<20 + 1195<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

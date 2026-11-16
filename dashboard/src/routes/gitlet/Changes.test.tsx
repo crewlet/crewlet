@@ -27,6 +27,7 @@ import { Changes, changesParams } from "./Changes.tsx";
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   location.hash = "";
 });
@@ -177,6 +178,21 @@ test("the changes are the engine's listing over REST, open by default, each row 
   const listing = listings(asked)[0]!;
   expect(listing.searchParams.get("state")).toBe("open");
   expect(onSocket).not.toContain("code_changes");
+});
+
+// A row's meta is a sentence, so its time is said in words, on the reader's calendar.
+test("a row says when its change was opened in words", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
+  stubFetch((url) =>
+    url.pathname === "/query/code_changes"
+      ? json({ changes: [change("web", 42)], position: POSITION, level: "session" })
+      : null,
+  );
+  mount(<Changes />);
+  const grid = await screen.findByRole("table", { name: "Changes" });
+  const meta = grid.querySelector(".code-change-cell__meta");
+  expect(meta?.textContent).toContain("opened yesterday by");
 });
 
 // A ROW'S READINESS AND BLOCKERS ARE THE ENGINE'S JUDGEMENT: the Meter counts
