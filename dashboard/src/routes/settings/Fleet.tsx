@@ -37,27 +37,27 @@ import {
   Card,
   EmptyState,
   EmptyValue,
+  groupNotices,
   InlineCode,
+  NoticeList,
+  peekRowActivation,
   Skeleton,
   StatCard,
   StatGroup,
-  Tag,
-  TableKeyCell,
-  TableNumberCell,
   TableDateCell,
   TableEntityCell,
+  TableKeyCell,
+  TableNumberCell,
   TableStatusCell,
   TableTagsCell,
-  peekRowActivation,
+  Tag,
 } from "@crewlethq/ui";
 import {
   ServerGlyph,
   UsersGlyph,
   KeyGlyph,
   CpuGlyph,
-  UserGlyph,
   PowerGlyph,
-  TargetGlyph,
   SlidersVerticalGlyph,
   TriangleAlertGlyph,
   DatabaseGlyph,
@@ -76,7 +76,7 @@ import { dutyName } from "~/lib/duties.ts";
 import { usePublishFleet } from "~/app/Shell.tsx";
 import { useEngineHealth } from "~/lib/store-hooks.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
-import { fmtCount, fmtDuration } from "~/lib/format.ts";
+import { fmtCount, fmtDuration, plural } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { configStanding, offRevision, type ConfigStanding } from "~/lib/configStanding.ts";
 import { standingCaption, standingWords } from "./standingWords.ts";
@@ -616,25 +616,32 @@ function FleetScreen() {
               <Card.Header icon={<TriangleAlertGlyph size="sm" />}>
                 <Card.Title>Not running anywhere</Card.Title>
               </Card.Header>
-              <div className="col gap-2">
-                {data?.unmanned_roles?.map((r) => (
-                  <Callout key={r} variant="warning" icon={<UserGlyph size="md" />}>
-                    <span>
-                      <strong>{r}</strong> isn’t running on any node. Its work is waiting.
-                    </span>
-                  </Callout>
-                ))}
-                {data?.unplaceable?.map((u) => (
-                  <Callout key={u.handle} variant="warning" icon={<TargetGlyph size="md" />}>
-                    <span>
-                      <a className="t-link" href={href(["company", "org", "seats", u.handle])}>
-                        <strong>{u.handle}</strong>
-                      </a>{" "}
-                      can’t be placed: {unplaceableWords(u.placement)}
-                    </span>
-                  </Callout>
-                ))}
-              </div>
+              <Card.Body padding="md">
+                <NoticeList
+                  notices={groupNotices(
+                    [
+                      ...(data?.unmanned_roles ?? []).map((r) => ({
+                        kind: "unmanned",
+                        subject: r,
+                        title: "Isn’t running on any node",
+                        detail: "Its work waits until a node runs it.",
+                      })),
+                      ...(data?.unplaceable ?? []).map((u) => ({
+                        kind: `unplaceable ${u.handle}`,
+                        subject: u.handle,
+                        title: "Can’t be placed",
+                        detail: <>Because {unplaceableWords(u.placement)}</>,
+                        action: (
+                          <a className="t-link" href={href(["company", "org", "seats", u.handle])}>
+                            Open the seat
+                          </a>
+                        ),
+                      })),
+                    ],
+                    { count: (s) => plural(s.length, "role") },
+                  )}
+                />
+              </Card.Body>
             </Card>
           )}
         </QueryState>

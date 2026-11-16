@@ -136,7 +136,6 @@ import {
   SendGlyph,
   PlusGlyph,
   BotGlyph,
-  ShieldGlyph,
   TriangleAlertGlyph,
   UserGlyph,
   UsersGlyph,
@@ -1267,7 +1266,7 @@ export function ApiTokens() {
  */
 function CompanyWriters({ writers }: { writers: readonly string[] }) {
   return (
-    <Callout variant="neutral" icon={<ShieldGlyph size="md" />}>
+    <Callout variant="neutral">
       <span>
         Only{" "}
         {writers.map((id, i) => (

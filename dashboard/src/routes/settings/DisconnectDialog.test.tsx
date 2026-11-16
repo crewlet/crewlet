@@ -109,9 +109,9 @@ test("a disconnect stuck at the app offers the way out immediately", async () =>
 
   // The app's own words, and the sentence that says what happened.
   expect(screen.getByText(/401: Client must be authenticated/)).toBeTruthy();
-  expect(screen.getByText("Jira hasn’t let the disconnect finish.")).toBeTruthy();
+  expect(screen.getByText("Jira hasn’t let the disconnect finish")).toBeTruthy();
   expect(
-    screen.getByText("Forcing it leaves anything still there for you to remove."),
+    screen.getByText(/Disconnecting anyway leaves anything still there for you to remove\.$/),
   ).toBeTruthy();
 
   const force = screen.getByRole("button", { name: /anyway/i });
@@ -141,7 +141,7 @@ test("a disconnect the settings hold names the setting and offers no force", asy
   );
   expect(screen.getByText("The company’s settings refused it")).toBeTruthy();
   expect(screen.getByText("roles[0].integrations.mattermost.channels")).toBeTruthy();
-  expect(screen.getByRole("link", { name: "Configuration" }).getAttribute("href")).toBe(
+  expect(screen.getByRole("link", { name: "Open Configuration" }).getAttribute("href")).toBe(
     "#/settings/config",
   );
   expect(screen.queryByText(/hasn’t let the disconnect finish/)).toBeNull();

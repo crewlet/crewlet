@@ -33,7 +33,7 @@ import type { DraftWarnings } from "./model/warnings.ts";
 import type { CheckStatus, SaveRules } from "./model/scheduler.ts";
 import type { BuilderMode } from "./model/transport.ts";
 import type { SavePhase } from "./useSave.ts";
-import { PlugGlyph, RotateCwGlyph, SaveGlyph } from "@crewlethq/icons/glyphs";
+import { SaveGlyph } from "@crewlethq/icons/glyphs";
 import { Button, Callout, Checkbox, NoticeList, Spinner } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 
@@ -235,9 +235,7 @@ export function ReviewSaveDialog({
       )}
       {phase.kind === "retry" && <Callout variant="warning">{phase.message}</Callout>}
       {phase.kind === "settling" && (
-        <Callout variant="warning" icon={<RotateCwGlyph />}>
-          Checking whether the save was stored.
-        </Callout>
+        <Callout variant="warning">Checking whether the save was stored.</Callout>
       )}
       {unknown && (
         <Callout variant="warning">
@@ -258,15 +256,16 @@ export function ReviewSaveDialog({
           {status === "problems" && documentProblems.length > 0 && (
             <NoticeList
               label="Problems with the whole configuration"
-              notices={documentProblems.map((p, i) => ({ key: String(i), title: engineWords(p.message) }))}
+              notices={documentProblems.map((p, i) => ({
+                key: String(i),
+                title: engineWords(p.message),
+              }))}
             />
           )}
         </Callout>
       )}
       {status === "unchecked" && (
-        <Callout variant="warning" icon={<PlugGlyph />}>
-          Couldn’t check this draft. Saving still validates it.
-        </Callout>
+        <Callout variant="warning">Couldn’t check this draft. Saving still validates it.</Callout>
       )}
 
       <section className="col gap-1" aria-label="Changes">

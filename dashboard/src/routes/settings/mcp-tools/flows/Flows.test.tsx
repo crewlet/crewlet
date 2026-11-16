@@ -174,8 +174,13 @@ test("a removal waits on its dry run, asks to clear what names the server, and s
     expect.anything(),
   );
   expect(screen.getByText("Still named in 2 places")).toBeDefined();
-  expect(screen.getByText(/Product Manager: its own/)).toBeDefined();
-  expect(screen.getByText(/Team Engineering: its/)).toBeDefined();
+  const named = [...document.querySelectorAll(".crewlet-notice-list__title")].map(
+    (e) => e.textContent,
+  );
+  expect(named).toEqual([
+    "Agent Product Manager: Its own mcp_env.linear values",
+    "Team Engineering: Its mcp_limits.linear limits",
+  ]);
   expect(screen.getByText(/its sign-in is revoked at the vendor/)).toBeDefined();
   const remove = screen.getByRole("button", { name: "Remove server" });
   expect(remove.hasAttribute("disabled") || remove.getAttribute("aria-disabled") === "true").toBe(

@@ -3,12 +3,13 @@
  * with the seats, teams and items it applies to listed under it.
  */
 
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { Callout, groupNotices, NoticeList, type NoticeEntry } from "@crewlethq/ui";
 import { plural } from "~/lib/format.ts";
 import { warningWords, type SeatNamer } from "~/protocol/configAnswer.ts";
 import type { ConfigWarning } from "~/protocol/types.ts";
 import { marked } from "~/ui/Problems.tsx";
+import { useOrgIndex } from "~/lib/seats.ts";
 
 /** An engine sentence as drawn in a notice: sentence case, its keys and values as code. */
 export function engineWords(text: string): ReactNode {
@@ -16,17 +17,19 @@ export function engineWords(text: string): ReactNode {
   return marked(raised, "inherit");
 }
 
-/** A warning's kit entry: its class merges repeats, its seat or unit is the subject. */
+/** A warning's kit entry: equal words merge repeats, its seat or unit is the subject. */
 export function configWarningEntries(
   warnings: readonly ConfigWarning[],
   seat: SeatNamer,
   action?: (w: ConfigWarning) => ReactNode,
+  operator = false,
 ): NoticeEntry[] {
   return warnings.map((w) => {
-    const words = warningWords(w);
-    const titled = Boolean(w.title);
+    const words = operator ? w.message : warningWords(w);
+    const titled = !operator && Boolean(w.title);
     return {
-      kind: w.class || `${w.kind}\u0000${words}`,
+      // ONE KIND IS ONE WORDING: the engine words every warning of a rule alike, so equal words merge.
+      kind: `${w.kind}\u0000${w.title ?? ""}\u0000${words}`,
       tone: "warning",
       subject: w.seat ? (seat(w.seat)?.name ?? w.seat) : w.unit || undefined,
       item: w.item || undefined,
@@ -59,26 +62,51 @@ export function subjectCount(warnings: readonly ConfigWarning[], seat: SeatNamer
 
 /** The default title: how many things there are to know, after repeats merge. */
 export const toKnow = (n: number) => `${plural(n, "warning")} to know about`;
+/** A write the engine takes, with warnings. */
+export const accepted = (n: number) => `The engine accepts this, with ${plural(n, "warning")}`;
+/** What a change would add to what the engine already warns about. */
+export const brings = (n: number) => `This change brings ${plural(n, "warning")}`;
+
+/** Seats named off the chart every screen reads. */
+export function useSeatNamer(): SeatNamer {
+  const index = useOrgIndex();
+  return useMemo(
+    () => (handle: string) => {
+      const s = index.byHandle.get(handle);
+      return s === undefined ? undefined : { name: s.name || handle, agent: s.kind === "agent" };
+    },
+    [index],
+  );
+}
 
 export function ConfigWarnings({
   warnings,
   seat,
+  actionFor,
   action,
   title = toKnow,
   label = "Warnings",
+  operator = false,
   className,
 }: {
   warnings: readonly ConfigWarning[];
-  seat: SeatNamer;
+  /** How a seat is named; the chart's names where the screen has no answer of its own. */
+  seat?: SeatNamer | undefined;
   /** The one place each warning is changed, where the screen has one. */
-  action?: (w: ConfigWarning) => ReactNode;
+  actionFor?: ((w: ConfigWarning) => ReactNode) | undefined;
+  /** The callout's one action: a decision about all of them, such as Save anyway. */
+  action?: ReactNode;
   title?: (count: number) => ReactNode;
+  /** The operator's words (`message`, naming document keys), for a screen that edits the document itself. */
+  operator?: boolean;
   /** The group's name for a screen reader. */
   label?: string | undefined;
   className?: string;
 }) {
-  const notices = groupNotices(configWarningEntries(warnings, seat, action), {
-    count: subjectCount(warnings, seat),
+  const chart = useSeatNamer();
+  const namer = seat ?? chart;
+  const notices = groupNotices(configWarningEntries(warnings, namer, actionFor, operator), {
+    count: subjectCount(warnings, namer),
   });
   if (notices.length === 0) return null;
   return (
@@ -87,6 +115,7 @@ export function ConfigWarnings({
       role="group"
       aria-label={label}
       title={title(notices.length)}
+      action={action}
       className={className}
     >
       <NoticeList notices={notices} />

@@ -299,7 +299,7 @@ test("a task refused after the design was made keeps the page, and the next pres
     fireEvent.click(screen.getByRole("button", { name: "Create and ask" }));
   });
   expect(location.hash).toBe("#/artifacts/new/design");
-  expect(screen.getByText("The project DES does not take new tasks.")).toBeTruthy();
+  expect(screen.getByText(/^The project DES does not take new tasks\./)).toBeTruthy();
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Ask" }));
   });

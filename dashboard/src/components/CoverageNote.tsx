@@ -15,7 +15,7 @@
  * names each missing node once, with the first reason it was given.
  */
 
-import { Callout, InlineCode } from "@crewlethq/ui";
+import { Callout, InlineCode, NoticeList } from "@crewlethq/ui";
 import type { Coverage } from "~/contract/coverage.ts";
 import { href } from "~/app/router.tsx";
 
@@ -86,28 +86,35 @@ export function CoverageNote({
   if (!incomplete && nodes.length === 0) return null;
   const one = nodes.length === 1;
   return (
-    <Callout variant="warning" className="coverage-note">
-      {nodes.length === 0 ? (
-        // IN A READER'S WORDS, and with somewhere to look: the engine could not
-        // say which nodes it runs, so it could not ask all of them.
-        <>
-          Not every node could be asked, so {what} may be incomplete.{" "}
-          <a className="prose-link" href={href(["settings", "nodes"])}>
+    <Callout
+      variant="warning"
+      className="coverage-note"
+      title={
+        nodes.length === 0
+          ? undefined
+          : `${what.charAt(0).toUpperCase() + what.slice(1)} is missing ${nodes.length} ${one ? "node" : "nodes"}`
+      }
+      action={
+        nodes.length === 0 && (
+          // The engine could not say which nodes it runs, so the reader is sent to look.
+          <a className="t-link" href={href(["settings", "nodes"])}>
             See the nodes
           </a>
-        </>
+        )
+      }
+    >
+      {nodes.length === 0 ? (
+        <>Not every node could be asked, so {what} may be incomplete.</>
       ) : (
         <>
-          {what.charAt(0).toUpperCase() + what.slice(1)} is missing {nodes.length}{" "}
-          {one ? "node" : "nodes"}. {one ? lost.one : lost.many}:
-          <ul className="coverage-nodes">
-            {nodes.map((n) => (
-              <li key={n.id}>
-                <InlineCode>{n.id}</InlineCode>
-                {n.error ? `: ${n.error}` : ""}
-              </li>
-            ))}
-          </ul>
+          {one ? lost.one : lost.many}.
+          <NoticeList
+            notices={nodes.map((n) => ({
+              key: n.id,
+              subject: <InlineCode>{n.id}</InlineCode>,
+              title: n.error || "did not answer",
+            }))}
+          />
         </>
       )}
     </Callout>

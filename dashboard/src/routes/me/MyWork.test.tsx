@@ -1130,7 +1130,7 @@ test("a queue a lead ordered is announced on the reading nobody opened", async (
   // The queue opens ordered by due date, so the banner is what carried it.
   expect(screen.getByRole("radio", { name: /Due/ }).getAttribute("aria-checked")).toBe("true");
   // And the way to the reading it is about is offered from here.
-  expect(screen.getByRole("button", { name: "Priorities →" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Priorities" })).toBeTruthy();
 });
 
 /** The queue's Priorities reading, in the page bar's order switch. */
@@ -1174,7 +1174,7 @@ test("the banner offers no way to the reading that is already open", async () =>
   serving(orderedByRui);
   mount();
   await waitFor(() => expect(screen.getByText(/Order set by/)).toBeTruthy());
-  expect(screen.queryByRole("button", { name: "Priorities →" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Priorities" })).toBeNull();
 });
 
 // THE COVERAGE OF THE READ THAT IDENTIFIES THIS OBJECT GOES TO THE FRAME, and

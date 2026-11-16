@@ -66,9 +66,7 @@ import {
   ActivityGlyph,
   EllipsisGlyph,
   PackageGlyph,
-  PauseGlyph,
   SquareKanbanGlyph,
-  TrashGlyph,
 } from "@crewlethq/icons/glyphs";
 import { heldReason, heldSetting, itemHold } from "~/lib/heldConversation.ts";
 import { ADVISOR_POLL_MS } from "~/lib/useAttention.ts";
@@ -173,7 +171,7 @@ export function itemFlags(detail: WorkItemDetail) {
  */
 export function HeldNote({ hold }: { hold: AdvisorNotice }) {
   return (
-    <Callout variant="info" icon={<PauseGlyph size="md" />}>
+    <Callout variant="info">
       <span>
         <strong>Held by the engine:</strong> {heldReason(hold)}. Writing on it, or changing the
         agent's {heldSetting(hold)}, releases it.
@@ -212,7 +210,7 @@ export function RemovedNote({
 }) {
   const by = tomb.by ? (seatName?.(tomb.by) ?? tomb.by) : "";
   return (
-    <Callout variant="warning" icon={<TrashGlyph size="md" />}>
+    <Callout variant="warning">
       <span>
         <strong>In the trash.</strong>
         {` Moved to the trash${by ? ` by ${by}` : ""} ${ago(tomb.at, now, { clock: true })}`}

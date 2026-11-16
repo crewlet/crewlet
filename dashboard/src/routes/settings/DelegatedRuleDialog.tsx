@@ -233,10 +233,11 @@ export function DelegatedRuleDialog({
       >
         {filled.kind === "reading" && <Skeleton variant="text" rows={6} label="Loading" />}
         {filled.kind === "refused" && (
-          <Callout variant="danger" title="The rule could not be opened">
-            <span>{filled.message}</span>
-            {filled.reload && (
-              <div className="row gap-2">
+          <Callout
+            variant="danger"
+            title="The rule could not be opened"
+            action={
+              filled.reload && (
                 <Button
                   size="small"
                   variant="secondary"
@@ -247,8 +248,10 @@ export function DelegatedRuleDialog({
                 >
                   Reload
                 </Button>
-              </div>
-            )}
+              )
+            }
+          >
+            {filled.message}
           </Callout>
         )}
         {filled.kind === "ready" && (

@@ -173,7 +173,6 @@ import {
   KeyGlyph,
   ChevronDownGlyph,
   ChevronUpGlyph,
-  CpuGlyph,
   EllipsisVerticalGlyph,
   RedoGlyph,
   RotateCwGlyph,
@@ -2035,18 +2034,14 @@ function BuilderScreen({
           </div>
         )}
 
-        {managed !== null && (
-          <Callout variant="info" icon={<ShieldGlyph />}>
-            {managed}
-          </Callout>
-        )}
+        {managed !== null && <Callout variant="info">{managed}</Callout>}
         {/* A DECLINED STEP-UP IS CHECKED AGAIN, NOT SIGNED OUT OF: the person
             holds the grant and is signed in, and the check sent again is what
             asks them to confirm. */}
         {guarded && (
           <Callout
             variant="danger"
-            icon={<KeyGlyph />}
+
             action={
               stepUp ? (
                 <Button variant="secondary" size="small" onClick={reset}>
@@ -2065,9 +2060,7 @@ function BuilderScreen({
           </Callout>
         )}
         {posture.kind === "unreachable" && (
-          <Callout variant="warning" icon={<PlugGlyph />}>
-            Can’t reach the engine. Your draft is kept.
-          </Callout>
+          <Callout variant="warning">Can’t reach the engine. Your draft is kept.</Callout>
         )}
         {(posture.kind === "failed" ||
           posture.kind === "unserved" ||
@@ -2089,7 +2082,7 @@ function BuilderScreen({
         {conflict && conflict.reason === "already_configured" && !companyExists && (
           <Callout
             variant="warning"
-            icon={<TriangleAlertGlyph />}
+
             action={
               <Button size="small" variant="primary" onClick={openExistingCompany}>
                 Discard it and open the company
@@ -2102,7 +2095,7 @@ function BuilderScreen({
         {conflict && conflict.reason === "no_active_revision" && (
           <Callout
             variant="warning"
-            icon={<TriangleAlertGlyph />}
+
             action={
               <Button
                 variant="secondary"
@@ -2122,7 +2115,7 @@ function BuilderScreen({
         {conflict && state.mode === "edit" && conflict.reason !== "no_active_revision" && (
           <Callout
             variant="warning"
-            icon={<TriangleAlertGlyph />}
+
             action={
               <span className="row gap-1 wrap">
                 {/* WHAT CHANGED SINCE THE DRAFT'S BASE is the newer revision
@@ -2160,7 +2153,7 @@ function BuilderScreen({
         {keeping.offer && (
           <Callout
             variant="info"
-            icon={<SaveGlyph />}
+
             action={
               <span className="row gap-1 wrap">
                 <Button variant="secondary" size="small" onClick={keeping.discard}>
@@ -2177,47 +2170,40 @@ function BuilderScreen({
           </Callout>
         )}
         {keeping.notice && (
-          <Callout
-            variant={keeping.notice.tone}
-            action={
-              <Button size="small" variant="ghost" onClick={keeping.dismissNotice}>
-                Dismiss
-              </Button>
-            }
-          >
+          <Callout variant={keeping.notice.tone} onDismiss={keeping.dismissNotice}>
             {keeping.notice.message}
           </Callout>
         )}
         {noProvider && (
-          <Callout variant="warning" icon={<CpuGlyph />}>
+          <Callout
+            variant="warning"
+            title="No model provider is set"
+            action={
+              documentManagedBy === null && (
+                <ButtonLink
+                  variant="secondary"
+                  size="small"
+                  href={href(MODELS_PATH, { flow: "add" })}
+                >
+                  Add a model
+                </ButtonLink>
+              )
+            }
+          >
             {documentManagedBy === null ? (
               <>
-                No model provider is set, so agents can’t work. Add one under{" "}
-                <a className="prose-link" href={href(MODELS_PATH, { flow: "add" })}>
-                  Settings, Models
-                </a>
-                , or from a terminal on the node’s host, starting from the company the store holds:
-                <Disclosure title="The steps" size="compact" headingLevel="none">
+                Agents can’t work until one is added, here or from a terminal on the node’s host.
+                <Disclosure title="From a terminal" size="compact" headingLevel="none">
                   <CodeBlock plain wrap code={PROVIDER_STEPS} />
                 </Disclosure>
               </>
             ) : (
-              <>
-                No model provider is set, so agents can’t work.{" "}
-                {managedModelSentence(documentManagedBy)}
-              </>
+              <>Agents can’t work until one is added. {managedModelSentence(documentManagedBy)}</>
             )}
           </Callout>
         )}
         {refusal && (
-          <Callout
-            variant="warning"
-            action={
-              <Button size="small" variant="ghost" onClick={() => setRefusal(null)}>
-                Dismiss
-              </Button>
-            }
-          >
+          <Callout variant="warning" onDismiss={() => setRefusal(null)}>
             {refusal}
           </Callout>
         )}

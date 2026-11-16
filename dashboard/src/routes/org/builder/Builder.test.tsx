@@ -918,16 +918,17 @@ test("a company with no model provider is told so, and one with a provider is no
   mountBuilder({ engine });
   // The engine applies the company and holds its agents' work, so the
   // caution says the agents cannot work rather than claiming nothing is applied.
-  const caution = (
-    await screen.findByText(/No model provider is set, so agents can’t work\./)
-  ).closest(".crewlet-callout") as HTMLElement;
+  const caution = (await screen.findByText("No model provider is set")).closest(
+    ".crewlet-callout",
+  ) as HTMLElement;
+  expect(caution.textContent).toContain("Agents can’t work until one is added");
   // It sends the reader to Settings › Models to add one, signed in and tested.
-  expect(within(caution).getByRole("link", { name: "Settings, Models" }).getAttribute("href")).toBe(
+  expect(within(caution).getByRole("link", { name: "Add a model" }).getAttribute("href")).toBe(
     "#/settings/models?flow=add",
   );
   // And it gives the steps that add one from a terminal, the card's own: the
   // declaration the engine walks from a company only the store holds.
-  fireEvent.click(within(caution).getByRole("button", { name: "The steps" }));
+  fireEvent.click(within(caution).getByRole("button", { name: "From a terminal" }));
   expect(within(caution).getByText(/crewlet config export > company\.yaml/).textContent).toBe(
     PROVIDER_STEPS,
   );
@@ -1487,13 +1488,13 @@ describe("a document another system manages", () => {
       const without = company();
       delete without.providers;
       mountBuilder({ engine: new Engine(without), viewer: () => viewer });
-      const caution = (
-        await screen.findByText(/No model provider is set, so agents can’t work\./)
-      ).closest(".crewlet-callout") as HTMLElement;
+      const caution = (await screen.findByText("No model provider is set")).closest(
+        ".crewlet-callout",
+      ) as HTMLElement;
       expect(caution.textContent).toContain(
         "The company’s configuration is managed by gitops, so the model is added there.",
       );
-      expect(within(caution).queryByRole("button", { name: "The steps" })).toBeNull();
+      expect(within(caution).queryByRole("button", { name: "From a terminal" })).toBeNull();
       expect(document.body.textContent).not.toContain("crewlet config");
       expect(document.body.textContent).not.toContain("crewlet llm");
     },

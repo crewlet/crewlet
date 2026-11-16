@@ -13,7 +13,8 @@ import { DiffView } from "~/components/DiffView.tsx";
 import { refusalWords } from "~/lib/ceilings.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
-import { introducedWarnings, warningWords } from "~/protocol/configAnswer.ts";
+import { introducedWarnings } from "~/protocol/configAnswer.ts";
+import { brings, ConfigWarnings } from "~/components/ConfigWarnings.tsx";
 import { dryRunEntity, getEntity, putEntity } from "~/protocol/configWrite.ts";
 import type { AdvisorFinding, AdvisorOption } from "~/protocol/advisor.ts";
 import type { ConfigWarning } from "~/protocol/types.ts";
@@ -150,15 +151,7 @@ export function FixDialog({
         {check?.kind === "ready" && (
           <>
             <DiffView before={check.before} after={check.after} aria-label="The change" />
-            {check.introduced.length > 0 && (
-              <Callout variant="warning" title="The engine would also say">
-                {check.introduced.map((w) => (
-                  <Text as="p" key={`${w.path}\u0000${w.message}`}>
-                    {warningWords(w)}
-                  </Text>
-                ))}
-              </Callout>
-            )}
+            <ConfigWarnings warnings={check.introduced} title={brings} />
           </>
         )}
         {check?.kind === "refused" && (

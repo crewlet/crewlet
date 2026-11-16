@@ -258,8 +258,11 @@ test("the document is checked under the read's revision, and a problem is placed
   expect(check.headers.get("If-Match")).toBe(`"${ACTIVE}"`);
   expect(check.headers.get("Content-Type")).toBe("application/yaml");
   expect(check.body).toBe(YAML.replace("3", "many"));
-  expect(screen.getByText(problem)).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Line 3" })).toBeTruthy();
+  const placed = screen.getByText(/cannot unmarshal/).closest(".crewlet-notice-list__item")!;
+  expect(placed.querySelector(".crewlet-notice-list__title")!.textContent).toBe(
+    "Line 3: cannot unmarshal !!str many into int",
+  );
+  expect(within(placed as HTMLElement).getByRole("button", { name: "Line 3" })).toBeTruthy();
 });
 
 test("a save checks first, then stores the document under the read's revision with its summary", async () => {
