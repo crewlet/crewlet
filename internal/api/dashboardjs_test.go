@@ -2656,7 +2656,9 @@ const (
 	// Gitlet's code host colours (diffs, change states, branches), on kit 0.137.0:
 	// 6358.5 KiB (6,511,153 bytes), 3,100 bytes over main: 6359 KiB.
 	// The Gitlet code host colours train, on kit 0.137.0: 6374.8 KiB (6,527,838 bytes), 3,079 over main: 6375 KiB.
-	treeBudget = 5<<20 + 1255<<10
+	// One notice system, on kit 0.142.0: 6511.6 KiB (6,667,924 bytes), 140,086 over main, about
+	// 134 KiB of it the coding harness marks kit 0.139.0 added to the vendor mark chunk: 6512 KiB.
+	treeBudget = 5<<20 + 1392<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
