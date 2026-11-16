@@ -351,6 +351,7 @@ describe("the figures", () => {
         items: [],
         total: 2,
         answerable: 0,
+        more: false,
         capped: false,
         oldest_at: "2026-09-22T10:00:00Z",
       },

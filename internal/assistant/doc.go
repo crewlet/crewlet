@@ -44,4 +44,9 @@
 // its own harness, in a box or confined on the engine host, whose one way into
 // Crewlet is this turn's own surface, bridged ([DeepWork], deep.go). Quick
 // mode's model keeps no tool of its own.
+//
+// # The web, only through the engine (ADR-0151)
+//
+// Quick mode reads the web only through the engine's own reads, from hosts the
+// company lists; the harness's own web tools stay denied.
 package assistant

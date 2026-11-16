@@ -11,8 +11,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"unicode"
 
+	"github.com/crewlet/crewlet/internal/enginedocs"
 	"github.com/crewlet/crewlet/internal/regexlit"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
@@ -146,8 +146,8 @@ func TestTheSlugIsGitHubs(t *testing.T) {
 		{"**Bold** and *italic*", "bold-and-italic"},
 		{"Café à la carte", "café-à-la-carte"},
 	} {
-		if got := slug(tc.heading); got != tc.want {
-			t.Errorf("slug(%q) = %q, want %q", tc.heading, got, tc.want)
+		if got := enginedocs.Anchor(tc.heading); got != tc.want {
+			t.Errorf("Anchor(%q) = %q, want %q", tc.heading, got, tc.want)
 		}
 	}
 	got := anchorsOf([]string{"# A", "## Setup", "```", "## Not a heading", "```", "## Setup", "### Setup"})
@@ -368,7 +368,7 @@ func anchorsOf(lines []string) map[string]bool {
 		if m == nil {
 			continue
 		}
-		s := slug(m[2])
+		s := enginedocs.Anchor(m[2])
 		if n := seen[s]; n > 0 {
 			out[fmt.Sprintf("%s-%d", s, n)] = true
 		} else {
@@ -377,30 +377,6 @@ func anchorsOf(lines []string) map[string]bool {
 		seen[s]++
 	}
 	return out
-}
-
-var (
-	headingLinkRE = regexp.MustCompile(`!?\[([^\]]*)\]\([^)]*\)`)
-	htmlTagRE     = regexp.MustCompile(`<[^>]+>`)
-)
-
-// slug is GitHub's anchor for a heading: the RENDERED text (a link is its
-// label, a tag is nothing), lower-cased, keeping only letters, marks, digits,
-// connector punctuation, spaces and hyphens, with each space a hyphen.
-func slug(heading string) string {
-	text := headingLinkRE.ReplaceAllString(heading, "$1")
-	text = htmlTagRE.ReplaceAllString(text, "")
-	var b strings.Builder
-	for _, r := range strings.ToLower(text) {
-		switch {
-		case r == ' ':
-			b.WriteRune('-')
-		case r == '-', unicode.IsLetter(r), unicode.IsMark(r), unicode.IsDigit(r),
-			unicode.Is(unicode.Pc, r):
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
 }
 
 func keys(m map[string]bool) []string {

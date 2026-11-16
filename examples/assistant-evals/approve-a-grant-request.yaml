@@ -68,8 +68,11 @@ answers:
       item: ENG-58
       ask: jane-founder
       asked_at: "2026-11-15T15:50:00Z"
+  - route: GET /worklet/decisions
+    body: {handle: jane-founder, items: [], more: false}
   - route: GET /worklet/comments
     body:
+      item: ENG-58
       key: ENG-58
       title: Route the deck library
       comments:

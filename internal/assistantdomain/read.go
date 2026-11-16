@@ -283,6 +283,10 @@ type Transcript struct {
 	Cards        []Card
 	Proposals    []Proposal
 	AuditReads   []AuditRead
+	// Summary is the summary of the conversation's first SummaryThrough
+	// messages, empty with 0 before one is written.
+	Summary        string
+	SummaryThrough int
 }
 
 // ---- listings ----------------------------------------------------------- //
@@ -517,6 +521,16 @@ func (r *Reader) transcriptIn(ctx context.Context, tx *sql.Tx, id uuid.UUID,
 		Steps: []wire.StepEvent{}, Cards: []Card{}, Proposals: []Proposal{},
 		AuditReads: []AuditRead{}}
 	conversation := id.String()
+	var summary string
+	if err = tx.QueryRowContext(ctx, `SELECT summary_sealed, summary_through
+		FROM assistant_conversations WHERE id = ?`, conversation).Scan(&summary,
+		&t.SummaryThrough); err != nil {
+		return Transcript{}, fmt.Errorf("assistantdomain: conversation %s's summary: %w", id, err)
+	}
+	if t.Summary, err = r.sealer.openString(summary, AAD(id, RecordConversation, id,
+		ColumnSummary)); err != nil {
+		return Transcript{}, fmt.Errorf("conversation %s's summary: %w", id, err)
+	}
 	if err := eachRow(ctx, tx, `SELECT `+turnColumns+` FROM assistant_turns
 		WHERE conversation_id = ? ORDER BY seq`, []any{conversation}, func(row rowScanner) error {
 		turn, err := r.scanTurn(row)

@@ -246,7 +246,7 @@ func (s *Service) offeredTools(ctx context.Context, person iam.Principal, acts [
 	if briefing {
 		tools = briefTools(offered)
 	} else {
-		tools = s.withDeep(ctx, offered)
+		tools = s.withConfigured(ctx, offered)
 	}
 	if c, _ := s.company(); c != nil {
 		tools = catalog.Allowed(tools, c.Assistant.Tools.Deny)
@@ -497,6 +497,7 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		}
 	}
 	t := s.newTurn(ts.Person, ts.Conversation, id, ts.Key, ts.Read, ts.Page, acts)
+	t.subjects = subjectsOf(ts.Input, ts.Page)
 	t.brief.on = briefing
 	t.strength = strength
 	var chip *wire.PageChip
@@ -553,9 +554,13 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	tools := s.offeredTools(ctx, ts.Person, acts, briefing)
 	earlier := historyEntries(history, ts.Person)
 	t.used(historyApps(earlier))
+	summary := summaryOf(history, ts.Person)
+	if summary != nil {
+		t.used(summary.Apps)
+	}
 	t.deep.attachments = attached
 	in := promptInput{Person: ts.Person, Apps: iam.Expand(ts.Person.Grants), Now: s.now(),
-		History: earlier, Page: ts.Page, Boundary: t.boundary, Question: input,
+		History: earlier, Summary: summary, Page: ts.Page, Boundary: t.boundary, Question: input,
 		Proposable: proposable(tools), Deep: offersDeep(tools), DeepConfigured: s.ReadsImages(),
 		Attachments: refsOf(attached)}
 	if c != nil {

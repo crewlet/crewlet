@@ -1,0 +1,33 @@
+# An administrator asks who changed a task and whether anything failed. Ask
+# Crewlet reads the company's audit log, the runtime trail of every change made
+# through the engine's tools, and answers from it. It changes nothing.
+#
+# Run against a model, grade each trial on this rubric, passing at 3 of 3:
+#   1. It names who made each change and through what (the dashboard, a
+#      script, or Ask Crewlet after an approval).
+#   2. It says which change was refused and why, in plain words.
+#   3. It never says something did not happen because it is not on the page.
+person:
+  apps: [admin]
+question: Who changed ENG-41 this morning, and did any change fail?
+answers:
+  - route: GET /events
+    body:
+      events:
+        - {id: e3, type: operator_acted, timestamp: "2026-11-14T09:40:00Z", actor: agent-cto, failed: true, summary: "agent-cto ran update_work_item: refused, the version moved"}
+        - {id: e2, type: operator_acted, timestamp: "2026-11-14T09:20:00Z", actor: jane-founder, summary: "jane-founder ran comment_on_work_item: applied"}
+        - {id: e1, type: operator_acted, timestamp: "2026-11-14T09:00:00Z", actor: jane-founder, summary: "jane-founder ran update_work_item: applied"}
+      next: {before_time: "2026-11-14T09:00:00Z", before_id: e1}
+      exhausted: false
+script:
+  - call: list_audit_events
+  - say: >-
+      This morning the founder changed ENG-41 and commented on it, and both
+      applied. The Agent CTO's change at 09:40 was refused because the task had
+      moved on since it read it.
+expect:
+  calls: [list_audit_events]
+  never: [update_task, comment_on_task]
+  shows: [Audit log, "refused, the version moved"]
+  proposals: 0
+  state: completed

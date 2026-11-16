@@ -11,6 +11,9 @@ import "github.com/crewlet/crewlet/internal/assistant/wire"
 const (
 	// TitleMaxBytes bounds a conversation's title.
 	TitleMaxBytes = 256
+	// SummaryMaxBytes bounds a conversation's summary of its earlier messages:
+	// a few paragraphs, a small share of a turn's prompt.
+	SummaryMaxBytes = 4 << 10
 
 	// MessageMaxBytes bounds one message's text.
 	MessageMaxBytes = 32 << 10

@@ -61,6 +61,14 @@ type ConversationTitled struct {
 	TitleSealed string `json:"title_sealed"`
 }
 
+// ConversationSummarized is a conversation's summary of its first Through
+// messages, which the prompt carries in their place.
+type ConversationSummarized struct {
+	V             int    `json:"v"`
+	SummarySealed string `json:"summary_sealed"`
+	Through       int    `json:"through"`
+}
+
 // ConversationPurged removes a conversation. A retention purge names the
 // instant the conversation had to be untouched since, and the apply refuses it
 // when activity landed after the writer decided: the activity is on the turn's
@@ -282,6 +290,8 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[ConversationCreated](rec)
 	case k == KindConversation && op == OpConversationTitled:
 		return decodePayload[ConversationTitled](rec)
+	case k == KindConversation && op == OpConversationSummarized:
+		return decodePayload[ConversationSummarized](rec)
 	case k == KindConversation && op == OpConversationPurged:
 		return decodePayload[ConversationPurged](rec)
 	case k == KindConversation && op == OpConversationAuditRead:

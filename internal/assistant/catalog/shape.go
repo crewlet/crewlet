@@ -234,7 +234,11 @@ func shapeAnswer(t Tool, args Args, resp exec.Response, b provenance.Boundary,
 		return Result{}, err
 	}
 	out := Result{Model: model, Trust: trust, Source: source}
-	if spec, rows, ok := cards.Infer(doc, callTitle(args)); ok {
+	title := callTitle(args)
+	if t.Title != nil {
+		title = t.Title(args)
+	}
+	if spec, rows, ok := cards.Infer(doc, title); ok {
 		encoded, err := json.Marshal(rows)
 		if err != nil {
 			return Result{}, fmt.Errorf("catalog: encode %s's rows: %w", t.Name, err)
@@ -303,6 +307,8 @@ var narrowingQuery = map[string]bool{
 	"label": true, "title": true, "asked_of": true, "asked_by": true, "has_open_asks": true,
 	"collection": true, "field": true, "due": true, "author": true,
 	"lane": true, "vendor": true, "confidence": true, "health": true,
+	// THE IDENTITY TRAIL's: whom its entries are about, and one kind of entry.
+	"person": true, "event": true,
 }
 
 // narrowWords are the arguments a person reads by other words than their

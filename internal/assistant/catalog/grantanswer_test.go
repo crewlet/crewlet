@@ -17,7 +17,7 @@ import (
 
 // grantQuestion is ENG-58's thread with the SRE's grant request question.
 func grantQuestion() map[string]any {
-	return map[string]any{"key": "ENG-58", "title": "Route the deck library", "comments": []any{
+	return map[string]any{"item": "ENG-58", "key": "ENG-58", "title": "Route the deck library", "comments": []any{
 		map[string]any{"id": "c-ask", "ask": "founder", "body": "Origin rule for the library route.",
 			"decision": map[string]any{"question": "Grant the Site Reliability Engineer Origin Rules: Edit?",
 				"options": []any{
@@ -46,6 +46,7 @@ func grantRoutes(grantable bool) proposal.Read {
 		Integration: "Cloudflare", Handle: "sre", Name: "Site Reliability Engineer", Grant: "Read",
 		Lookup: []seataccess.LookupEntry{entry}}
 	answers := map[string]any{
+		"/worklet/decisions":                                         map[string]any{"handle": "founder"},
 		"/worklet/comments":                                          grantQuestion(),
 		"/setup/access/requests/abcde12345":                          request,
 		"/setup/integrations/cloudflare/access/seats/sre/cloudflare": view,

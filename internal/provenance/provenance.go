@@ -192,6 +192,10 @@ const (
 	// agents and vendors' listings gave, each read at the trust its writers
 	// earn.
 	SourceAtlas Source = "atlas"
+
+	// SourceWebPage is a page Ask Crewlet read from a host the company lists
+	// (ADR-0151), written by whoever runs that site.
+	SourceWebPage Source = "web_page"
 )
 
 // Sources are every surface.
@@ -203,7 +207,7 @@ var Sources = []Source{
 	SourcePageContext, SourceDeepWork,
 	SourceRepoFile, SourceRepoPatch, SourceRepoCommit,
 	SourceChangeDescription, SourceChangeReview, SourceChangeComment, SourceCheckLog,
-	SourceTurnEnding, SourceServerOutput, SourceDelegatedRequest, SourceAtlas,
+	SourceTurnEnding, SourceServerOutput, SourceDelegatedRequest, SourceAtlas, SourceWebPage,
 }
 
 // Valid reports whether s is one of [Sources].

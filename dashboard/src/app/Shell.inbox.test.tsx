@@ -70,6 +70,7 @@ function shellAs(grants: string[]) {
           items: [],
           total: 0,
           answerable: 0,
+          more: false,
           capped: false,
         });
       default:
