@@ -478,11 +478,9 @@ func TestATipsQuestionNamesItsTips(t *testing.T) {
 	}
 }
 
-// A HISTORY NARROWED BY WHO PUSHED IT IS NEVER IMMUTABLE: by a whole id it is
-// read stamped and answered bare, `until` reaches the read, and a bad `until`
-// or handle is bad_params before any read.
-//
-// Mutation: immutability judged by the revisions alone → red.
+// A HISTORY NARROWED BY WHO PUSHED IT IS NEVER IMMUTABLE: read stamped and answered
+// bare, `until` reaches the read, and a bad `until` or handle is bad_params unread.
+// Mutation: judge immutability by the revisions alone.
 func TestAHistoryNarrowedByWhoPushedIsNeverImmutable(t *testing.T) {
 	t.Parallel()
 	stub := &stubCode{git: stamping}

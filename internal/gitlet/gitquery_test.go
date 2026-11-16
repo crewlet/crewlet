@@ -155,8 +155,7 @@ func TestAGitQueryIsRefusedByField(t *testing.T) {
 // at or after its start; a start with no end is a range all the same, however
 // far out. Each refusal names its field.
 //
-// Mutation: the Until and PushedBy arms inside the Since switch → the until
-// and pushed_by cases with no since accepted, red.
+// Mutation: the Until and PushedBy arms inside the Since switch → accepted with no since, red.
 func TestAHistoryAndABlameAreRefusedByField(t *testing.T) {
 	t.Parallel()
 	const id = "0123456789abcdef0123456789abcdef01234567"

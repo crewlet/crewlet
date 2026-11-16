@@ -303,10 +303,9 @@ type logPage struct {
 	ended   bool
 }
 
-// take places one record of the walk on the page, or passes it (unmatched by
-// the Grep or pushed by another seat, counted where the index could not judge
-// it), or ends the page before it: errStop, which ends the walk. A
-// filtered page ends at its Limit-th kept record, the one it places.
+// take places one record of the walk on the page, passes it (unmatched, pushed by
+// another seat, or counted as unjudged), or ends the page before it with errStop;
+// a filtered page ends at its Limit-th kept record.
 func (p *logPage) take(rec *logRecord) error {
 	// The seat after the Grep, so Unjudged counts only commits every other
 	// narrowing kept.

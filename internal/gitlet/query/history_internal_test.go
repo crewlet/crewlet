@@ -247,8 +247,7 @@ func porcelain(a, b string) string {
 //
 // Mutation: a commit's path taken from the line's group rather than kept for
 // the commit (the fourth line, a's again, with no filename) → red; the
-// committer-mail kept with its brackets → the mark false and the address
-// wrong, red.
+// committer-mail kept with its brackets → red.
 func TestABlamesPorcelainIsReadAsGitWritesIt(t *testing.T) {
 	t.Parallel()
 	a, b := strings.Repeat("a", 40), strings.Repeat("b", 40)

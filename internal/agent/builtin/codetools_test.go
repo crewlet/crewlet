@@ -1534,11 +1534,9 @@ func TestAGitAnswerFitsOneToolAnswer(t *testing.T) {
 	}
 }
 
-// CODE_LOG NARROWS BY TIME AND BY WHO PUSHED: `until` and `pushed_by` reach
-// Gitlet as given and `unjudged` comes back; a bad `until` or handle is
-// refused and Gitlet asked nothing.
-//
-// Mutation: the tool dropping `until` or `pushed_by` → red.
+// CODE_LOG NARROWS BY TIME AND BY WHO PUSHED: `until` and `pushed_by` reach Gitlet
+// as given and `unjudged` comes back; a bad `until` or handle is refused unasked.
+// Mutation: the tool dropping `until` or `pushed_by`.
 func TestCodeLogNarrowsByTimeAndWhoPushed(t *testing.T) {
 	t.Parallel()
 	host := newGitletHost()

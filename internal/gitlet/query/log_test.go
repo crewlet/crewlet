@@ -487,13 +487,9 @@ func (x *fixture) dated(at time.Time) *gittest.Client {
 	return x.p.Git().Env("GIT_AUTHOR_DATE="+d, "GIT_COMMITTER_DATE="+d)
 }
 
-// A LOG'S UNTIL KEEPS THE COMMITS BEFORE IT, a filter and never a stop: over
-// skewed committer dates the pages equal git's `rev-list --min-age=<second
-// before>`, exclusive at the bound, paged two at a time.
-//
-// Mutations: Until as --max-age → the skewed commit lost, red; the bound
-// inclusive → the commit at the bound listed, red; the skip over records git
-// did not output → a page repeats or loses one, red.
+// A LOG'S UNTIL KEEPS THE COMMITS BEFORE IT, a filter and never a stop: over skewed
+// dates the pages equal `rev-list --min-age`, exclusive at the bound, two at a time.
+// Mutation: Until as --max-age, an inclusive bound, or skip records git did not output.
 func TestALogUntilKeepsTheCommitsBeforeIt(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -553,13 +549,9 @@ func TestALogUntilKeepsTheCommitsBeforeIt(t *testing.T) {
 	}
 }
 
-// A LOG NARROWED BY WHO PUSHED IT COUNTS WHAT IT CANNOT JUDGE: each seat's
-// covered commits listed in walk order, the commits pushed before the index
-// began counted in Unjudged, Coverage on the page, and nothing memoized.
-//
-// Mutations: the seat judged by Principal.Actor → nothing kept, red; an
-// unjudged commit kept or dropped uncounted → red; a narrowed page memoized →
-// the second read runs no git, red.
+// A LOG NARROWED BY WHO PUSHED IT COUNTS WHAT IT CANNOT JUDGE: each seat's commits in
+// walk order, those pushed before the index began in Unjudged, Coverage set, no memo.
+// Mutation: judge by Principal.Actor, keep or drop an unjudged commit uncounted, or memoize.
 func TestALogNarrowedByWhoPushedCountsWhatItCannotJudge(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -676,12 +668,9 @@ func walks(rec *recording) []gitproc.Cmd {
 	return out
 }
 
-// A NARROWED PAGE THE BUDGET ENDS GOES ON FROM ITS CURSOR: cut after three
-// records it answers its one kept commit with Next s:3 and Unjudged set,
-// unmemoized, and the pages after it complete the unbroken narrowed history.
-//
-// Mutations: the cut page memoized → no second git run, red; its cursor
-// counting kept commits → Next s:1, red; its Unjudged left out → red.
+// A NARROWED PAGE THE BUDGET ENDS GOES ON FROM ITS CURSOR: cut after three records it
+// answers its kept commit with Next s:3, Unjudged set and no memo; later pages complete it.
+// Mutation: memoize the cut page, count kept commits in its cursor, or drop its Unjudged.
 func TestANarrowedPageTheBudgetEndsGoesOnFromItsCursor(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -752,12 +741,9 @@ func (b *budgetEndsAfter) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Resul
 	return res, err
 }
 
-// A COMMIT'S COMMITTER IS NAMED, AND THE ENGINE'S CONVENTION MARKED, in a
-// history and a blame: true exactly for `Crewlet` at `engine@` on any domain,
-// false (never nil) for every near miss and an address past its bound.
-//
-// Mutations: the mark case-folded, tied to one domain, judged on a cut
-// address, or left nil → red; the committer read from the author → red.
+// A COMMIT'S COMMITTER IS NAMED, AND THE ENGINE'S CONVENTION MARKED, in a history and a
+// blame: true exactly for `Crewlet` at `engine@` on any domain, false for every near miss.
+// Mutation: case-fold, tie to one domain, judge a cut address, leave nil, or read the author.
 func TestACommitsCommitterIsNamedAndTheEnginesConventionMarked(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())

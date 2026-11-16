@@ -369,12 +369,9 @@ func TestATreePathGitWouldRefuseIsRefused(t *testing.T) {
 	}
 }
 
-// THE ENGINE'S COMMITTER IS A CONVENTION, read exactly: `Crewlet` at `engine@`
-// on any domain; another case, more name, no domain, a second `@` or padding
-// marks nothing.
-//
-// Mutation: strings.EqualFold on the name, a split at the last `@`, or a
-// TrimSpace → the `crewlet`, two-`@` or padded rows marked, red.
+// THE ENGINE'S COMMITTER IS A CONVENTION, read exactly: `Crewlet` at `engine@` on any
+// domain; another case, more name, no domain, a second `@` or padding marks nothing.
+// Mutation: EqualFold the name, split at the last `@`, or TrimSpace.
 func TestEngineCommittedIsTheConvention(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
