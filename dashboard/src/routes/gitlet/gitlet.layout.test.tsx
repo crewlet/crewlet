@@ -1,6 +1,7 @@
 /**
  * GITLET'S PAGES, LAID OUT: a comparison's title stays clear of the files'
- * sticky toolbar under it, and the clone panel shows its whole address.
+ * sticky toolbar under it, the clone panel shows its whole address, and code
+ * coloured by kind keeps the box it had plain.
  */
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { page } from "vitest/browser";
@@ -33,9 +34,36 @@ const json = (payload: unknown) =>
     headers: { "Content-Type": "application/json" },
   });
 
-/** The engine, for one repository's comparison of feature into main. */
+/** A Go file whose third line holds a keyword, a call, a string and a comment, wider than a phone. */
+const MAIN_GO = [
+  "package main",
+  "",
+  'func main() { serve(":8080") } // the storefront, on the port the shell and the health check both read',
+  "",
+];
+
+/** The engine, for one repository's comparison of feature into main, and one file. */
 function answer(url: URL): Response {
   switch (url.pathname) {
+    case "/query/code_blob":
+      if (url.searchParams.get("path") !== "cmd/main.go") break;
+      return json({
+        repo: "web",
+        ref: url.searchParams.get("ref") ?? "main",
+        commit: BASE,
+        kind: "blob",
+        blob: {
+          path: "cmd/main.go",
+          oid: HEAD,
+          size: MAIN_GO.join("\n").length,
+          lines: MAIN_GO.length - 1,
+          start_line: 1,
+          end_line: MAIN_GO.length - 1,
+          text: MAIN_GO.join("\n"),
+        },
+        position: POSITION,
+        level: "session",
+      });
     case "/query/code_repo":
       return json({
         repo: {
@@ -435,4 +463,58 @@ test("a branch's chip keeps its name on one line at 390px", async () => {
     const glyph = chip.querySelector("svg")!.getBoundingClientRect();
     expect(chip.getBoundingClientRect().height, chip.textContent!).toBeLessThan(2 * glyph.height);
   }
+});
+
+/** The file view of `cmd/main.go` at `width`, once its third line is coloured. */
+async function colouredLine(width: number): Promise<HTMLElement> {
+  await page.viewport(width, 900);
+  location.hash = "#/gitlet/repos/web?path=cmd%2Fmain.go";
+  mount(<RepositoryPage repo="web" />, width);
+  return eventually(() => {
+    const line = document.querySelector<HTMLElement>("#L3");
+    expect(line?.querySelector(".code-syn-comment")).toBeTruthy();
+    return line!;
+  });
+}
+
+// A COLOURED LINE KEEPS THE PLAIN LINE'S BOX: an ink changes no advance, and
+// a line too wide still scrolls the card, never the page. Mutation:
+// `letter-spacing: 1px` on the keyword rule fails it.
+for (const width of [1440, 390]) {
+  test(`a coloured line keeps the plain line's box, at ${width}px`, async () => {
+    const line = await colouredLine(width);
+    const text = line.querySelector(".code-source__text")!;
+    expect(text.textContent).toBe(MAIN_GO[2]);
+    for (const kind of ["keyword", "function", "string", "comment"])
+      expect(text.querySelector(`.code-syn-${kind}`), kind).toBeTruthy();
+    // THE SAME TEXT PLAIN, a line drawn beside it with no spans.
+    const plain = line.cloneNode(true) as HTMLElement;
+    plain.removeAttribute("id");
+    plain.querySelector(".code-source__text")!.textContent = MAIN_GO[2]!;
+    line.after(plain);
+    const box = (el: HTMLElement, part: string) => el.querySelector(part)!.getBoundingClientRect();
+    const [coloured, drawn] = [box(line, ".code-source__text"), box(plain, ".code-source__text")];
+    expect(Math.abs(coloured.width - drawn.width)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(coloured.height - drawn.height)).toBeLessThanOrEqual(0.5);
+    expect(box(line, ".code-source__number").left).toBe(box(plain, ".code-source__number").left);
+    plain.remove();
+    if (width === 390) {
+      const source = line.closest<HTMLElement>(".code-source")!;
+      expect(source.scrollWidth).toBeGreaterThan(source.clientWidth);
+      expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
+    }
+  });
+}
+
+// A COMMENT IS ITALIC AND IN ITS INK, as the kit draws one. Mutation: drop
+// the comment rule's `font-style`, or read another ink, and this fails.
+test("a comment is italic and in its ink", async () => {
+  const line = await colouredLine(1440);
+  const comment = line.querySelector(".code-syn-comment")!;
+  const probe = document.createElement("span");
+  probe.style.color = "var(--color-syntax-comment)";
+  host!.append(probe);
+  expect(getComputedStyle(comment).fontStyle).toBe("italic");
+  expect(getComputedStyle(comment).color).toBe(getComputedStyle(probe).color);
+  expect(getComputedStyle(comment).color).not.toBe(getComputedStyle(line).color);
 });

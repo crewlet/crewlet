@@ -50,6 +50,11 @@
  * commit the branch resolved to (`resolved`), and the Permalink is the same
  * place at that commit's whole id — the address that says the same thing
  * tomorrow, and an answer the engine marks immutable.
+ *
+ * # Coloured by kind
+ *
+ * A file under SYNTAX_MAX_BYTES is coloured by its tokens' kinds, its state walked
+ * from line 1 (`routes/gitlet/syntax.tsx`); a larger one is drawn plain.
  */
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -97,6 +102,7 @@ import {
 import { fmtBytes, fmtCount, fmtDateTime, plural, relTime } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { codeRest, useCodeQuery, type CodeParams } from "~/lib/useCodeQuery.ts";
+import type { Grammar, State } from "~/lib/syntax/types.ts";
 import { usePaged, type Paged } from "~/lib/usePaged.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import {
@@ -119,6 +125,7 @@ import {
   entryKind,
   useWhoName,
 } from "../ui.tsx";
+import { Painted, tokensOf, useGrammar, useLineStates } from "../syntax.tsx";
 import { subjectOf } from "./History.tsx";
 import { RefPicker, revisionWord, type Revisions } from "./refs.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
@@ -301,12 +308,14 @@ function PathView({
               repo={repo}
               rev={commit || rev}
               path={path}
+              blob={file}
               total={file.lines}
               picked={picked}
               onPick={onPick}
             />
           ) : !file.binary && file.lines > 0 ? (
             <FileLines
+              repo={repo.name}
               rev={rev}
               path={path}
               params={base}
@@ -491,6 +500,7 @@ const pageId = (p: CodeBlobAnswer): string => `page:${p.start_line ?? 0}:${p.sta
  * before them are a press away.
  */
 function FileLines({
+  repo,
   rev,
   path,
   params,
@@ -501,6 +511,8 @@ function FileLines({
   picked,
   onPick,
 }: {
+  /** The repository's name, which a read of the blob's lines above them names. */
+  repo: string;
   rev: string;
   path: string;
   /** The path's read without a line: what every other read of its lines adds its own to. */
@@ -566,6 +578,7 @@ function FileLines({
     <>
       <EarlierLines earlier={earlier} />
       <Source
+        repo={repo}
         path={path}
         place={`${place}\n${from}`}
         pages={pages}
@@ -852,7 +865,8 @@ function PathBody({
       </QueryState>
     );
   }
-  if (first.data.blob) return <Source path={path} place={path} pages={pages} picked={null} />;
+  if (first.data.blob)
+    return <Source repo={repo.name} path={path} place={path} pages={pages} picked={null} />;
   return (
     <>
       <Listing
@@ -985,12 +999,14 @@ function Listing({
  * one line picked again lets it go.
  */
 function Source({
+  repo,
   path,
   place,
   pages,
   picked,
   onPick,
 }: {
+  repo: string;
   path: string;
   /** Where the lines were opened ([usePickInView]): the file and the line read forward from. */
   place: string;
@@ -1008,6 +1024,8 @@ function Source({
     return split;
   }, [pages]);
   const from = head?.start_line ?? 1;
+  const grammar = useGrammar(path);
+  const stateOf = useLineStates({ repo, blob: head ?? null, grammar, from, lines });
   usePickInView(place, picked, lines.length);
   // ONE PRESS FOR EVERY LINE, the same function whatever is picked, reading
   // the pick as it is when pressed: a line is drawn again only when its own
@@ -1049,6 +1067,8 @@ function Source({
               key={n}
               n={n}
               text={text}
+              grammar={grammar}
+              state={stateOf(n)}
               on={picked !== null && n >= picked.start && n <= picked.end}
               press={press}
             />
@@ -1068,14 +1088,21 @@ function Source({
 const SourceLine = memo(function SourceLine({
   n,
   text,
+  grammar,
+  state,
   on,
   press,
 }: {
   n: number;
   text: string;
+  grammar: Grammar | null;
+  /** The state the line opens in, or null until it is known. */
+  state: State | null;
   on: boolean;
   press: (n: number, extend: boolean) => void;
 }) {
+  // A press redraws the line but tokenizes nothing: its tokens follow its text and state.
+  const tokens = useMemo(() => tokensOf(grammar, text, state), [grammar, text, state]);
   return (
     <div id={`L${n}`} className="code-source__line" data-picked={on || undefined}>
       <button
@@ -1087,7 +1114,9 @@ const SourceLine = memo(function SourceLine({
       >
         {n}
       </button>
-      <span className="code-source__text">{text}</span>
+      <span className="code-source__text">
+        <Painted text={text} tokens={tokens} />
+      </span>
     </div>
   );
 });
@@ -1120,6 +1149,11 @@ function usePickInView(place: string, picked: LineRun | null, drawn: number) {
  * the lines were opened at, and is in none of these.
  */
 const blameAskedFrom = new WeakMap<CodeGitAnswer, number>();
+
+// A blame's lines and their ids, kept across renders so its rows change only
+// when a page arrives.
+const blameLinesOf = (a: CodeGitAnswer): readonly CodeBlameLine[] => a.blame?.lines ?? [];
+const blameLineId = (l: CodeBlameLine): string => String(l.line);
 
 /**
  * The cursor to the page of a blame after `a`: inside its range, the range's
@@ -1157,6 +1191,7 @@ function Blame({
   repo,
   rev,
   path,
+  blob,
   total,
   picked,
   onPick,
@@ -1164,6 +1199,8 @@ function Blame({
   repo: CodeRepoDetail;
   rev: string;
   path: string;
+  /** The file's first page: its blob's id and size, which colouring its lines reads. */
+  blob: CodeBlobAnswer;
   total: number;
   picked: LineRun | null;
   onPick: (run: LineRun | null) => void;
@@ -1197,8 +1234,8 @@ function Blame({
       blameAskedFrom.set(answer, line);
       return answer;
     },
-    (a: CodeGitAnswer): readonly CodeBlameLine[] => a.blame?.lines ?? [],
-    (l: CodeBlameLine) => String(l.line),
+    blameLinesOf,
+    blameLineId,
     (a: CodeGitAnswer) => rangeCursor(a, from, total),
   );
   const earlier = useEarlier(
@@ -1238,6 +1275,21 @@ function Blame({
     total,
   );
   usePickInView(`${place}\n${from}`, picked, rows.length);
+  // COLOURED AS THE FILE IS: a line past its bound counts as empty for the walk.
+  const grammar = useGrammar(path);
+  const texts = useMemo(() => rows.map((l) => l.text ?? ""), [rows]);
+  const stateOf = useLineStates({
+    repo: repo.name,
+    blob,
+    grammar,
+    from: head?.line ?? 1,
+    lines: texts,
+  });
+  const tokens = useMemo(
+    () =>
+      rows.map((l) => (l.text === undefined ? null : tokensOf(grammar, l.text, stateOf(l.line)))),
+    [rows, grammar, stateOf],
+  );
   const now = useNow();
   if (first.loading && !first.data)
     return <Skeleton variant="text" rows={8} label={`Blaming ${path}`} />;
@@ -1312,7 +1364,11 @@ function Blame({
                   </button>
                 </td>
                 <td className="code-blame__text mono">
-                  {l.text ?? `(a line of ${fmtBytes(l.text_bytes ?? 0)})`}
+                  {l.text === undefined ? (
+                    `(a line of ${fmtBytes(l.text_bytes ?? 0)})`
+                  ) : (
+                    <Painted text={l.text} tokens={tokens[i] ?? null} />
+                  )}
                 </td>
               </tr>
             );
