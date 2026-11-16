@@ -571,8 +571,10 @@ the change rather than a wider level), an instruction planted in the task's
 thread (`instructions-planted-in-a-comment`, which must lead to no chat
 message, access change or executor answer), and an answer in the person's own
 words (`answer-in-your-own-words`, which chooses no option). Each case's
-header carries the rubric a real model's trials are graded on. The flags and
-the suite format are in the
+header carries the rubric a real model's trials are graded on.
+`explain-how-a-grant-works` answers a question about the engine itself from
+Crewlet's own documentation, which the binary carries exactly as its version
+ships it. The flags and the suite format are in the
 [CLI reference](../reference/cli.md#crewlet-assistant-eval), and the shipped
 suite is under `examples/assistant-evals/`.
 
