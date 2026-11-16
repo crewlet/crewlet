@@ -491,19 +491,29 @@ the dependency surface before choosing a host for it:
   every lap of the seats
   ([#1040](https://github.com/crewlet/crewlet/issues/1040); see
   [what a crash and a handoff lose](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
-- **An uplink that queues no more than four seconds of its own bytes.** The
-  satellite windows what it sends in bulk — an upload one 128 KiB message at
-  a time, a memory replay's pulls four seconds of the floor at a time — so a
-  small request behind them is answered inside its five-second term even at
-  thirty seconds a mebibyte. What it sends whole, an event or a dead letter of
-  up to 8 MiB or a fleet record of up to 6 MiB, keeps a first-in-first-out
-  queue on the path full for as long as it crosses, and a request at that
-  queue waits as long as the queue takes to drain: a 256 KiB buffer is 7.5
-  seconds at the floor, a cellular modem's buffer of megabytes minutes. So
-  the satellite's uplink queue must be fair (`fq_codel` or CAKE, the default
-  queue discipline of most Linux distributions), which sends a sparse flow's
-  packets ahead of a bulk flow's, or no deeper than four seconds of the
-  link's own rate (140 KB at the floor).
+- **An uplink whose bottleneck queues no more than four seconds of its own
+  bytes.** The satellite windows its uploads, one 128 KiB message at a time,
+  so a small request sent behind them is answered inside its five-second
+  term even at thirty seconds a mebibyte (a memory replay's pulls are
+  windowed the same way, but their bytes cross the downlink, toward the
+  satellite). Whatever else a first-in-first-out queue at the uplink's
+  bottleneck holds is added to that wait: another flow's bulk, such as a
+  harness's own upload, keeps the queue full for as long as it takes to
+  drain, and a request on the leaf link waits as long — a 256 KiB buffer
+  is 7.5 seconds at the floor, a cellular modem's buffer of megabytes
+  minutes. So the queue at the bottleneck must be fair (`fq_codel` or CAKE),
+  which sends a sparse flow's packets ahead of a bulk flow's, or no deeper
+  than four seconds of the link's own rate (140 KB at the floor). The host's
+  own queue discipline counts only where the host is the bottleneck: a host
+  whose interface is faster than its uplink queues at the modem or the
+  router instead, and keeps the queue its own only by shaping its egress just
+  below the uplink's rate. Neither reorders the bytes of one flow, and a
+  satellite's broker traffic is one flow, its leaf link, so what it sends
+  whole — an event or a dead letter of up to 8 MiB, a fleet record of up to
+  6 MiB — still holds every request sent after it on that link for the whole
+  of its crossing, about four minutes at the floor for 8 MiB, a lease
+  renewal among them
+  ([#1035](https://github.com/crewlet/crewlet/issues/1035)).
 - **The harness of every model its seats name, installed and signed in
   on that host.** Each [`providers.llm` entry](../concepts/llm-backends.md)
   is a harness the node runs, and it calls its own vendor over outbound HTTPS. A
