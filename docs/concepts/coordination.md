@@ -271,9 +271,9 @@ holding a record for every resource the deployment has ever leased, which used
 to be read whole every five seconds to find one node's seats.
 
 **Every read of one key is the leader's too**, not only a certification's. A
-claim reads its own write back to learn the store's deadline, a renew and a
-release read the lease before they write, and the fleet's records are read by
-key — and each of those, answered by a replica that had not applied the write
+claim reads its own write back to learn the store's deadline, a release —
+and a renewal whose record moved since this node wrote it — reads the lease
+before it writes, and the fleet's records are read by key — and each of those, answered by a replica that had not applied the write
 yet, told its caller the write was never made. On a three-member cluster with
 a hundred nodes claiming at once, 743 of 10,000 claims on fresh seats answered
 "not held" for a lease that was then theirs until its TTL — a singleton duty
@@ -283,8 +283,12 @@ node acts on by shedding the seat. So every single-key read goes to the stream
 leader, and one the leader cannot answer — none elected, none reachable — is
 **unavailable**, never "absent". It costs the hop to the leader: measured
 in-process, 40–220 µs at the median where a replica's read took 25–135 µs, and
-about half the read throughput through one node's connection — a few percent
-of it spent by ten thousand seats renewing on the fifteen-second heartbeat.
+about half the read throughput through one node's connection. Ten thousand
+seats renewing on the fifteen-second heartbeat used to spend a few percent of
+it, a read a renewal; a renewal of a lease the node wrote last now reads
+nothing ([below](#a-renewal-of-its-own-write-is-one-round-trip)), so what is
+left is each presence's read-back and the reads of a renewal whose record
+moved.
 
 There is deliberately **no all-classes listing**. A class is one segment of a
 name, so the empty one addresses nothing, and a read of it would answer with
@@ -352,6 +356,32 @@ without anybody rewriting it. An operator's own tooling (`nats kv get`, through 
 member's loopback client listener on an embedded fleet —
 [Reaching an embedded fleet's broker with the nats tool](../guides/deployment.md#reaching-an-embedded-fleets-broker-with-the-nats-tool)) still
 reads through any replica.
+
+### A renewal of its own write is one round trip
+
+A lease renewal is the one write a node makes of every lease it holds on every
+heartbeat, and it used to read its record from the leader first — to learn that
+the record was still there, still named this owner at this epoch, and the
+revision to write at — and then write it: two round trips a seat. The store
+already knows all three for a lease it holds. It wrote the record itself, and
+the broker gave that write a revision it never hands out again. So the store
+keeps, per resource, the record it last wrote and that revision, and a renewal
+is **one write at that revision**: it lands only while the record is still
+exactly that write, with no peer's claim, release or reap since, which is
+everything the read established. A write refused on that comparison says only
+that the record moved, so the renewal then reads it and decides as it always
+did; one nobody answered is *unknown*, as before. A node's presence, which is
+renewed by a claim, starts from the same knowledge: its write and the read that
+returns the store's deadline, two round trips rather than three.
+
+**Only a record that cannot lapse while it can be read is renewed this way**: a
+seat or presence lease taken for the whole age of `leases`, which the bucket
+removes at its deadline, so a record still there is a live one. A record judged
+by its own deadline against the store's clock — every lease in `duties`, and a
+seat lease asked for less than the bucket's age — can lapse while it is still
+there, and a lapsed lease is never renewed, only re-acquired at a new epoch. A
+write at its revision would land on a lapsed lease, so its renewal still reads
+the record and the store's clock first.
 
 ### What a leader read does not promise
 

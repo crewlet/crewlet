@@ -112,7 +112,7 @@ import { KeyGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, leadsInLine, seatResolvers, type OrgIndex, type Seat } from "~/lib/seats.ts";
-import { plural, relTime } from "~/lib/format.ts";
+import { plural } from "~/lib/format.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { HoldWrites } from "~/lib/useWriteAccess.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -135,6 +135,7 @@ import type {
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PriorityQueue } from "./Priorities.tsx";
 import { listTotal, useOwnQueueCount, useQueueCountRead } from "~/lib/useQueueCount.ts";
+import { ago } from "~/lib/ago.ts";
 
 /**
  * What the Queue OPENS on, as the list's own parameters.
@@ -815,7 +816,7 @@ function OrderStamp({
   return (
     <Callout variant="info">
       Order set by {setByName}
-      {stamp?.priorities_set_at ? ` ${relTime(stamp.priorities_set_at, now)}` : ""}.{" "}
+      {stamp?.priorities_set_at ? ` ${ago(stamp.priorities_set_at, now)}` : ""}.{" "}
       {onPriorities && (
         <button type="button" className="t-link" onClick={onPriorities}>
           Priorities →

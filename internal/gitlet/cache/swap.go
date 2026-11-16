@@ -51,14 +51,14 @@ import (
 // incarnation rather than the one it leaves. Its durability is ONE SYNC A
 // DIRECTORY, made once the staging is complete and before its rename
 // (syncStaged): objects/pack, objects/info where it carries the commit-graph,
-// crewlet/ where it carries the index of pushes, the installed chain's two
-// directories where it holds one, then the state — its own file and the
-// staged root — and repos/ after the rename: four to six fsyncs a swap —
-// six to nine for a copy serving from a published chain, whose two chain
-// files the layer step writes from the rows, each made durable as it is
-// staged. The staging is ONE step of durable.go's rule, never several:
-// nothing in it is read before the rename makes it an incarnation, and a
-// crash before the rename leaves it in scratch/, which the boot moves aside.
+// crewlet/ where it carries the index of pushes or the tag index, which every
+// copy holds, the installed chain's two directories where it holds one, then
+// the state — its own file and the staged root — and repos/ after the rename:
+// five to six fsyncs a swap — seven to nine for a copy serving from a published
+// chain, whose two chain files the layer step writes from the rows, each made
+// durable as it is staged. The staging is ONE step of durable.go's rule, never
+// several: nothing in it is read before the rename makes it an incarnation, and
+// a crash before the rename leaves it in scratch/, which the boot moves aside.
 // Synced step by step, a swap made up to eleven, every one a journal commit
 // while the round holds the repository, on every Gitlet node at every
 // compaction.
@@ -760,15 +760,15 @@ func (s *swapping) carryDerived() error {
 // syncStaged makes durable what the staging holds below its root, before its
 // state is written: each directory a link or a write landed in, synced ONCE —
 // objects/pack for the live packs and a full round's index, which is written
-// only over them, the directory of each derived file it linked
-// (objects/info for the commit-graph, crewlet/ for the index of pushes), and
-// those of the installed chain the layer step linked, renamed in and wrote
-// (multi-pack-index.d and commit-graphs, a chain file in each). The
-// root — HEAD, config, packed-refs and the state — is synced by the state's
-// write, last (writeState). Nothing in the staging is read before the rename
-// makes it an incarnation, and a crash before the rename leaves it in
-// scratch/, which every boot moves aside, so the staging needs its files
-// durable once, at the end, and never step by step: each sync more is a
+// only over them, the directory of each derived file it linked (objects/info
+// for the commit-graph, crewlet/ for the index of pushes or the tag index,
+// which every copy holds), and those of the installed chain the layer step
+// linked, renamed in and wrote (multi-pack-index.d and commit-graphs, a chain
+// file in each). The root — HEAD, config, packed-refs and the state — is synced
+// by the state's write, last (writeState). Nothing in the staging is read
+// before the rename makes it an incarnation, and a crash before the rename
+// leaves it in scratch/, which every boot moves aside, so the staging needs its
+// files durable once, at the end, and never step by step: each sync more is a
 // journal commit while the round holds the repository, on every Gitlet node at
 // every compaction, which can wait out the data other rounds are writing, the
 // readers waiting on the round with it.
@@ -1419,6 +1419,10 @@ var swapFields = []swapField{
 	{name: "graphFailed", class: carried, why: "a graph-first run that failed waits for the ordinary rules " +
 		"whichever directory it would write in",
 		carry: func(s *swapping) { s.next.graphFailed = s.inc.graphFailed }},
+	{name: "tagsFailed", class: carried, why: "a tag step that failed waits its retry whichever directory it " +
+		"would write in", carry: func(s *swapping) { s.next.tagsFailed = s.inc.tagsFailed }},
+	{name: "tagsBad", class: carried, why: "the file is linked, the same inode, logged once",
+		carry: func(s *swapping) { s.next.tagsBad = s.inc.tagsBad }},
 	{name: "vouched", class: carriedFiltered, why: "a link is the same inode: inc's vouch for a live pack's " +
 		"index files and a linked derived file stands, beside next's own for what the swap wrote",
 		carry: func(s *swapping) { s.carryVouches() }},

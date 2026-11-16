@@ -81,6 +81,9 @@ func TestEveryDerivedFileIsDeclared(t *testing.T) {
 			{rel: "crewlet/codeindex/seg.0"}, {rel: "crewlet/codeindex/tip.01"}, {rel: "crewlet/codeindex"},
 			{rel: "crewlet/seg.1"},
 			{rel: "objects/info/memo"},
+			// The tag index, one file under crewlet/.
+			{rel: "crewlet/tags", owner: cache.DerivedTags},
+			{rel: "crewlet/tags.1"}, {rel: "crewlet/tags/x"}, {rel: "objects/info/tags"},
 			// The installed published chain (layers.go): each layer's
 			// multi-pack-index and bitmap and the chain file the cache writes
 			// from the rows, as git 2.56.0 names them, and each layer's
@@ -214,8 +217,11 @@ func TestEveryDerivedFileIsDeclared(t *testing.T) {
 				t.Errorf("%s's write ran and it owns no file on disk: its patterns name nothing git writes", d.Name)
 			}
 		}
-		if len(roundWrote) == 0 || !slices.Contains(cache.OwnersOf(roundWrote[0]), cache.DerivedMidx) {
-			t.Errorf("the round's own index left %v: want the multi-pack-index's files", roundWrote)
+		// The round writes its index and the tag index (tags.go).
+		if !slices.ContainsFunc(roundWrote, func(rel string) bool {
+			return slices.Contains(cache.OwnersOf(rel), cache.DerivedMidx)
+		}) || !slices.Contains(roundWrote, "crewlet/tags") {
+			t.Errorf("the round's own index left %v: want the multi-pack-index's files and the tag index", roundWrote)
 		}
 	})
 }

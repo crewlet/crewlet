@@ -296,6 +296,13 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{ObjectsBucketBytes: 9 << 30, ObjectsBucketMaxBytes: 10 << 30},
 			"holds 9.0 GiB of its 10.0 GiB reservation",
 		},
+		"an object bucket raise a boot did not make": {
+			statelog.KindObjectsBucketRaiseRefused,
+			statelog.Reading{ObjectsBucketWanted: 10 << 30, ObjectsBucketKept: 1 << 30,
+				ObjectsBucketWhy: "the broker states no limit this node can read"},
+			"asks for 10.0 GiB and the nats object bucket keeps its 1.0 GiB reservation: " +
+				"the broker states no limit this node can read",
+		},
 		"a clock further from the fleet's than the deletions assume": {
 			statelog.KindClockSkew,
 			statelog.Reading{ClockSkew: time.Hour + time.Minute, ClockSkewNodes: 3,
@@ -1734,6 +1741,32 @@ func TestTheBucketAlarmFiresAtTwiceALogsHeadroom(t *testing.T) {
 		}), statelog.KindObjectsBucketNearCeiling)
 		if fired != c.fires {
 			t.Errorf("%d MiB of %d MiB: fired %v, want %v", c.bytes, c.max, fired, c.fires)
+		}
+	}
+}
+
+// THE BUCKET'S ALARMS SEND EVERY NODE TO THE SETTING FIRST: a data node raises
+// the bucket to a larger store.objects.nats_max_bytes at boot, a solo embedded
+// one included, and a raise it did not make names the room to give the broker.
+func TestTheBucketAlarmsLeadWithTheSetting(t *testing.T) {
+	t.Parallel()
+	near, _ := find(statelog.Evaluate(statelog.Reading{
+		ObjectsBucketBytes: 9 << 30, ObjectsBucketMaxBytes: 10 << 30,
+	}), statelog.KindObjectsBucketNearCeiling)
+	if !strings.HasPrefix(near.Remedy, "Once the bucket is full every upload is refused. Raise "+
+		"`store.objects.nats_max_bytes` and restart a data node") {
+		t.Errorf("the near-ceiling remedy does not lead with the setting: %q", near.Remedy)
+	}
+	if strings.Contains(near.Remedy, "keeps the reservation its bucket was created with") {
+		t.Errorf("the near-ceiling remedy still tells a solo node it cannot raise its bucket: %q", near.Remedy)
+	}
+	refused, _ := find(statelog.Evaluate(statelog.Reading{
+		ObjectsBucketWanted: 10 << 30, ObjectsBucketKept: 1 << 30, ObjectsBucketWhy: "no raise fits",
+	}), statelog.KindObjectsBucketRaiseRefused)
+	for _, want := range []string{"`stream.store_max_bytes`", "`store.objects.nats_max_bytes`",
+		"nats stream update OBJ_crewlet_files"} {
+		if !strings.Contains(refused.Remedy, want) {
+			t.Errorf("the raise-refused remedy does not name %s: %q", want, refused.Remedy)
 		}
 	}
 }

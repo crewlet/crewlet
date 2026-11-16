@@ -973,6 +973,11 @@ const (
 	BackfillRetryCeiling = 5 * time.Minute
 )
 
+// TagsRetry is how long a tag index set aside or never built waits after a
+// failed step before a round builds it again: at most one whole build a
+// minute, about a second at 100 000 tags (BenchmarkTagIndex step=whole).
+const TagsRetry = time.Minute
+
 // MappedRunShare bounds the runs of the indexes of pushes — and the files of
 // the code indexes, which share the bound (codeindex.go) — the cache holds
 // mapped at once (runmaps.go): the process's count of mappings

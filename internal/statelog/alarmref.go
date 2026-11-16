@@ -201,6 +201,10 @@ var alarmMeaning = map[Kind]string{
 	KindObjectsBucketNearCeiling: "The fleet's own object bucket on the broker holds " +
 		"more than four fifths of the bytes it reserves. A full bucket refuses every " +
 		"upload, though nothing else on the broker is affected.",
+	KindObjectsBucketRaiseRefused: "This node's `store.objects.nats_max_bytes` is larger " +
+		"than the reservation the fleet's object bucket holds, and its boot did not raise " +
+		"the bucket to it, so uploads stay held to the smaller reservation. The decision " +
+		"is taken again at the node's next boot.",
 	KindObjectiveBurn: "A service objective this node measures (publishing, serving a " +
 		"document, a frame becoming ready in a viewer's browser, a datastore verdict, " +
 		"a committed change reaching the sockets watching it, a wake leaving the " +

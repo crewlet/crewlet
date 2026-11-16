@@ -63,7 +63,6 @@ import {
   fmtDuration,
   fmtElapsed,
   fmtTime,
-  inTime,
   plural,
   relTime,
 } from "~/lib/format.ts";
@@ -131,6 +130,7 @@ import { RunQuestionNotice } from "~/components/RunQuestion.tsx";
 import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { ModelChain, YourAccount } from "./shared.tsx";
 import { answersAddress, detailItem, itemAddress, itemPath, turnItem } from "~/lib/work.ts";
+import { ago } from "~/lib/ago.ts";
 
 /** The window the tiles count: a week of company days, and the week before. */
 export const ACTIVITY_DAYS = 7;
@@ -440,7 +440,7 @@ function CurrentTurn({
         </Card.Header>
         {last && (
           <p className="prof-turn-last">
-            Its last turn {lastTurnEnded(last.outcome)} {relTime(last.ended_at, now)}.
+            Its last turn {lastTurnEnded(last.outcome)} {ago(last.ended_at, now)}.
           </p>
         )}
       </Card>
@@ -1152,7 +1152,11 @@ function SchedulesCard({ seat, now }: { seat: Seat; now: number }) {
                 ) : !row.enabled ? (
                   "disabled"
                 ) : (
-                  <span title={row.next_run ? `next ${inTime(row.next_run, now)}` : undefined}>
+                  <span
+                    title={
+                      row.next_run ? `next ${ago(row.next_run, now, { due: true })}` : undefined
+                    }
+                  >
                     {describeCron(row.cron) ?? row.cron}
                   </span>
                 )}
@@ -1295,7 +1299,7 @@ function HumanOverview({
                       person.data.priorities_set_by
                         ? `set by ${nameOf(person.data.priorities_set_by)}${
                             person.data.priorities_set_at
-                              ? ` ${relTime(person.data.priorities_set_at, now)}`
+                              ? ` ${ago(person.data.priorities_set_at, now)}`
                               : ""
                           }`
                         : `${self ? "your" : "their"} own order`

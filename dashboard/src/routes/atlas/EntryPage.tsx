@@ -28,7 +28,7 @@ import type {
   AtlasStanding,
 } from "~/contract/atlas.ts";
 import { useNow } from "~/lib/clock.ts";
-import { plural, relTime } from "~/lib/format.ts";
+import { plural } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { Changes } from "./Changes.tsx";
@@ -68,6 +68,7 @@ import {
   useEntryWork,
 } from "./Work.tsx";
 import { factLabel, KINDS, RELATIONS, SOURCE_KINDS, USES, WORDS, entries } from "./words.ts";
+import { ago } from "~/lib/ago.ts";
 
 const TABS = ["overview", "relations", WORK_TAB, "sources", "history"] as const;
 type Tab = (typeof TABS)[number];
@@ -225,7 +226,7 @@ function Use({ entry, now }: { entry: AtlasEntry; now: number }) {
           const counted = use.counted
             ? `${plural(use.week, one, many)} this week, ${plural(use.month, one, many)} this month`
             : null;
-          const last = use.last ? `last ${relTime(use.last, now)}` : "never recorded";
+          const last = use.last ? `last ${ago(use.last, now)}` : "never recorded";
           const by = use.seats?.length
             ? `by ${use.seats.map((handle) => seatBadge(handle).name).join(", ")}`
             : null;
@@ -256,7 +257,7 @@ function Holders({ entry, now }: { entry: AtlasEntry; now: number }) {
               on {holder.lane}
               {holder.level ? `, ${holder.level}` : ""}
               {holder.enabled ? "" : ", turned off"}
-              {holder.observed_at ? `, seen ${relTime(holder.observed_at, now)}` : ""}
+              {holder.observed_at ? `, seen ${ago(holder.observed_at, now)}` : ""}
             </span>
           </li>
         ))}

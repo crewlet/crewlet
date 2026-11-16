@@ -84,7 +84,7 @@ import { QueryState } from "~/components/common.tsx";
 import { DiffView } from "~/components/DiffView.tsx";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import { useNow } from "~/lib/clock.ts";
-import { fmtDateCompact, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
+import { fmtDateCompact, fmtDateTime, openSentence, plural, relTime, tsKey } from "~/lib/format.ts";
 import { compareLines, notComparedReason } from "~/lib/lineDiff.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { plainText } from "~/lib/markdownText.ts";
@@ -138,6 +138,7 @@ import {
   type Run,
 } from "./landing.ts";
 import { openingOf, withoutRepeatedTitle } from "./page/body.ts";
+import { ago } from "~/lib/ago.ts";
 
 /** How often the landing's tiles are read again. */
 const LANDING_POLL_MS = 60_000;
@@ -805,7 +806,7 @@ function ForTheAgents() {
             ) : memory.data ? (
               <span className="knowledge-tile-meta">
                 {plural(seats.length, "agent")}
-                {newest ? ` · newest ${relTime(newest, now)}` : ""}
+                {newest ? ` · newest ${ago(newest, now)}` : ""}
               </span>
             ) : undefined
           }
@@ -923,7 +924,7 @@ function PageRow({
  */
 function lastSaved(at: string | undefined, by: string, who: Who, now: number): string {
   if (tsKey(at) <= 0) return "";
-  return `Last saved ${relTime(at, now)} by ${by ? who(by).name : "the engine"}`;
+  return `Last saved ${ago(at, now)} by ${by ? who(by).name : "the engine"}`;
 }
 
 /**
@@ -1340,7 +1341,8 @@ function ResultPreview({ hit, terms }: { hit: KnowledgeHit; terms: readonly stri
           <dd>
             {last ? (
               <span title={`Revision ${last.version}`}>
-                {relTime(last.created_at, now)} by {saver ? who(saver).name : "the engine"}
+                {openSentence(ago(last.created_at, now))} by{" "}
+                {saver ? who(saver).name : "the engine"}
               </span>
             ) : (
               "Not saved over since it was written"

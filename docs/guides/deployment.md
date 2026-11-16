@@ -205,7 +205,9 @@ configuration reserves, split into the logs and the bucket.
 - `store.objects.nats_max_bytes` sets the bucket's reservation instead of a
   quarter of the broker's limit. At its smallest, 1 GiB, a fresh node needs a
   limit of **9.75 GiB**, which three quarters of **13.00 GiB free** reaches.
-  The bucket then holds at most 1 GiB of the company's files; see
+  The bucket then holds at most 1 GiB of the company's files until you raise
+  the setting and restart a data node, which raises the bucket's reservation
+  where the broker can grant it; see
   [Object store](../concepts/object-store.md#its-byte-reservation).
 - `stream.store_max_bytes` sets the broker's limit outright, rather than three
   quarters of the free space at boot. It accepts values from 6 GiB, below
@@ -1986,9 +1988,11 @@ draining, and rolling upgrades. The two things that bite hardest:
 > [An external NATS server](#an-external-nats-server).
 >
 > **Raising it on a fleet that already ran needs the existing objects resized.**
-> Nothing the engine provisions is ever rewritten by a booting node — a
-> shared stream's configuration has one writer and it is not whichever node
-> started last — so a rolling restart after raising `stream.replicas` finds
+> A booting node never rewrites a replica count: a shared stream's
+> configuration has one writer and it is not whichever node started last
+> (the one change a boot makes is a data node raising the object bucket's
+> [byte reservation](../concepts/object-store.md#its-byte-reservation)), so a
+> rolling restart after raising `stream.replicas` finds
 > every stream and bucket already there at the old count and adopts it. A node
 > that is short refuses to start and says so, naming both counts: a stream
 > because an acknowledged publish would be proving fewer copies than
