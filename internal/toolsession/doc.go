@@ -64,6 +64,13 @@
 // no answer: the bridge waits on it before it closes the sessions of the
 // opening that ended.
 //
+// # An answer's images
+//
+// A call's answer may carry images beside its text ([Result.Images]), written
+// as image content after the text, so a client that reads no image still reads
+// the text saying whose picture it is. They are held to internal/mcp's
+// CheckImages as they are written, so an image it refuses never leaves.
+//
 // # No listener anywhere
 //
 // Nothing here binds a network port. A node may bind none at all (`api.port:

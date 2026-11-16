@@ -1,8 +1,12 @@
 package toolsession_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"image"
+	"image/color"
+	"image/png"
 	"net"
 	"os"
 	"os/exec"
@@ -43,6 +47,9 @@ type fakeDispatcher struct {
 	holdTool string
 	hold     chan struct{}
 	entered  chan struct{}
+
+	// images, where a tool is named, ride that tool's answer.
+	images map[string][]crewletmcp.Image
 }
 
 func tool(name string) toolsession.Tool {
@@ -83,7 +90,10 @@ func (d *fakeDispatcher) Call(call toolsession.Call) toolsession.Result {
 		return toolsession.Result{Output: "not run: " + call.ArgumentsError, Failed: true}
 	}
 	raw, _ := json.Marshal(call.Arguments)
-	return toolsession.Result{Output: call.Name + " got " + string(raw)}
+	d.mu.Lock()
+	images := d.images[call.Name]
+	d.mu.Unlock()
+	return toolsession.Result{Output: call.Name + " got " + string(raw), Images: images}
 }
 
 func (d *fakeDispatcher) recorded() []toolsession.Call {
@@ -560,5 +570,86 @@ func TestACallItsHarnessGaveUpOnReachesTheDispatcherAsAbandoned(t *testing.T) {
 	}
 	if err := <-returned; err == nil {
 		t.Error("the harness was answered a call it had given up on")
+	}
+}
+
+// pngOf is a small PNG, as a tool that crops a picture answers one.
+func pngOf(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 3, 3))
+	img.Set(1, 1, color.RGBA{B: 255, A: 255})
+	var b bytes.Buffer
+	if err := png.Encode(&b, img); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+// AN ANSWER'S IMAGE REACHES THE HARNESS AFTER ITS TEXT, through the relay a
+// harness is handed: one text block, then one image block holding the bytes
+// and the type the tool answered, so a client that reads no image still reads
+// the text that says whose picture it is.
+//
+// Mutation: answer the text alone, or put the image first, and the harness
+// reads one block or the image before its text.
+func TestAnAnswersImageReachesTheHarnessAfterItsText(t *testing.T) {
+	t.Parallel()
+	h := host(t)
+	data := pngOf(t)
+	d := &fakeDispatcher{offered: []toolsession.Tool{tool("read_comment")},
+		images: map[string][]crewletmcp.Image{"read_comment": {{MIMEType: crewletmcp.ImagePNG, Data: data}}}}
+	s, err := h.Open(t.Context(), "crewlet", "", d)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Retire()
+	command, args := h.Command(s)
+	c := mcp.NewClient(&mcp.Implementation{Name: "fake-cli", Version: "1"}, nil)
+	cs, err := c.Connect(t.Context(), &mcp.CommandTransport{Command: exec.Command(command, args...)}, nil)
+	if err != nil {
+		t.Fatalf("connect through the relay: %v", err)
+	}
+	defer cs.Close()
+	res, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "read_comment", Arguments: map[string]any{"id": 7}})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError || len(res.Content) != 2 {
+		t.Fatalf("the harness read %d blocks (failed %v), want the text and one image", len(res.Content), res.IsError)
+	}
+	if got, ok := res.Content[0].(*mcp.TextContent); !ok || got.Text != `read_comment got {"id":7}` {
+		t.Errorf("the first block is %#v, want the answer's text", res.Content[0])
+	}
+	img, ok := res.Content[1].(*mcp.ImageContent)
+	if !ok || img.MIMEType != crewletmcp.ImagePNG || !bytes.Equal(img.Data, data) {
+		t.Errorf("the second block is %#v, want the PNG the tool answered", res.Content[1])
+	}
+}
+
+// AN IMAGE THE RULE REFUSES IS NEVER WRITTEN. Whatever a dispatcher hands the
+// session, an answer carrying an image that is not one, or too large, or with
+// no text beside it, reaches the harness as a failed call saying why, and no
+// image block.
+//
+// Mutation: write the answer's images without the check, and the harness
+// holds bytes the rule refuses.
+func TestAnImageTheRuleRefusesIsNeverWritten(t *testing.T) {
+	t.Parallel()
+	h := host(t)
+	d := &fakeDispatcher{offered: []toolsession.Tool{tool("read_comment")},
+		images: map[string][]crewletmcp.Image{"read_comment": {{MIMEType: crewletmcp.ImagePNG,
+			Data: []byte("<svg>not a picture the engine sends</svg>")}}}}
+	s, err := h.Open(t.Context(), "crewlet", "", d)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Retire()
+	res, err := client(t, s).CallTool(t.Context(), &mcp.CallToolParams{Name: "read_comment"})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !res.IsError || len(res.Content) != 1 || !strings.Contains(text(res), "not a PNG, a JPEG or a WebP") {
+		t.Errorf("the harness was answered %d blocks, failed %v: %q, want one failed text saying why",
+			len(res.Content), res.IsError, text(res))
 	}
 }
