@@ -1198,16 +1198,17 @@ func TestTheEnginesCoordinatorCountsAResumeAnotherBuildCanMakeOnlyOnceNoneIsLive
 // BY THE LIVE NODES' BUILDS, never by the parked state's version, which a reply
 // kind is no part of: a run whose reply this build does not read is resumable
 // elsewhere while a live node runs another build (the newer one that wrote the
-// kind, or one that does not say which it runs), so the give-up counts nothing,
-// and not once every live node runs this build, which reads it nowhere, so it
-// counts. Read by the version, a rollback that left two nodes of this build
-// held the seat for as long as both lived, each reading the other as able to
-// resume it. A fleet that cannot be read is an error, which the coordinator
-// counts as nothing and warns of (internal/sandbox's runsOwnFailure).
+// kind, or one that does not say which it runs, its heartbeat naming no build
+// or carrying no status at all), so the give-up counts nothing, and not once
+// every live node runs this build, which reads it nowhere, so it counts. Read
+// by the version, a rollback that left two nodes of this build held the seat
+// for as long as both lived, each reading the other as able to resume it. A
+// fleet that cannot be read is an error, which the coordinator counts as
+// nothing and warns of (internal/sandbox's runsOwnFailure).
 //
 // Mutation: bound the reply's failure by the parked state's version again, or
-// read a node that does not say its build as this build's, or answer an
-// unread fleet as nobody, and a row goes red.
+// read a node that does not say its build, or says nothing at all, as this
+// build's, or answer an unread fleet as nobody, and a row goes red.
 func TestTheEnginesCoordinatorCountsAReplyNoBuildLiveReads(t *testing.T) {
 	t.Parallel()
 	live := t.Context()
@@ -1218,11 +1219,13 @@ func TestTheEnginesCoordinatorCountsAReplyNoBuildLiveReads(t *testing.T) {
 	}
 	for name, tc := range map[string]struct {
 		builds    []string
+		silent    bool
 		down      bool
 		elsewhere bool
 	}{
 		"two builds live":                         {builds: []string{version.String(), "v9.9.9"}, elsewhere: true},
 		"a node that does not say its build":      {builds: []string{version.String(), ""}, elsewhere: true},
+		"a node that says nothing at all":         {builds: []string{version.String()}, silent: true, elsewhere: true},
 		"one build fleet-wide":                    {builds: []string{version.String(), version.String()}},
 		"no other node live":                      {},
 		"a fleet that cannot be read, two builds": {builds: []string{"v9.9.9"}, down: true},
@@ -1233,6 +1236,11 @@ func TestTheEnginesCoordinatorCountsAReplyNoBuildLiveReads(t *testing.T) {
 			presentOnBuild(live, t, backend, "node-self", version.String())
 			for i, build := range tc.builds {
 				presentOnBuild(live, t, backend, "node-"+strconv.Itoa(i), build)
+			}
+			if tc.silent {
+				// A HEARTBEAT THAT CARRIED NO STATUS, its hook having
+				// overrun its share of the beat.
+				present(live, t, backend, "node-silent", -1)
 			}
 			if tc.down {
 				backend.Break(nil)
