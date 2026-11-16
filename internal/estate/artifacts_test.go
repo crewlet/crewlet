@@ -303,6 +303,32 @@ func (v *vault) WorkItems(_ context.Context, id artifacts.ID) ([]string, error) 
 	return []string{"ENG-7", "ENG-9"}, nil
 }
 
+func (v *vault) Inbox(_ context.Context, q artifactsdomain.InboxQuery) (artifactsdomain.InboxPage, error) {
+	if q.Cursor == "bad" {
+		return artifactsdomain.InboxPage{}, fmt.Errorf("%w: %q", artifactsdomain.ErrBadCursor, q.Cursor)
+	}
+	return artifactsdomain.InboxPage{Handle: q.Handle, Notices: []artifactsdomain.InboxNotice{{
+		RecordID: "r-1", Op: artifactsdomain.OpCommentReply, Thread: theThread.String(), Excerpt: string(q.Snoozed),
+		Reason: artifactsdomain.NotifyMention}}, Heads: map[string]artifactsdomain.Head{"a": {Title: "Kept"}},
+		Next: q.Cursor + "+", Level: q.Fresh.Level}, nil
+}
+
+func (v *vault) NoticeThreads(_ context.Context, refs []artifactsdomain.ThreadRef, _ statelog.Freshness) (
+	[]*artifactsdomain.NoticeThread, error) {
+	out := make([]*artifactsdomain.NoticeThread, len(refs))
+	for i, ref := range refs {
+		if ref.Thread == theThread.String() {
+			out[i] = &artifactsdomain.NoticeThread{Status: artifactsdomain.ThreadResolved, Remarks: 2}
+		}
+	}
+	return out, nil
+}
+
+func (v *vault) MarkInbox(_ context.Context, c artifactsdomain.Call, in artifactsdomain.MarkInput) (
+	artifactsdomain.Written, error) {
+	return v.wrote(fmt.Sprintf("mark_inbox:%s:%s", strings.Join(in.Gesture.Read, ","), in.Seen), c), nil
+}
+
 func (v *vault) OpenThread(_ context.Context, c artifactsdomain.Call, in artifactsdomain.ThreadInput) (
 	artifactsdomain.Commented, error) {
 	w := v.wrote(fmt.Sprintf("open_thread:%d:%s:%s:%s:%d:%s", in.Version, in.Anchor.Name, in.Quote,
@@ -480,6 +506,21 @@ func TestEveryArtifactsOperationCrossesWhole(t *testing.T) {
 	if _, err := a.WorkItems(ctx, refused); !errors.Is(err, artifactsdomain.ErrPurged) {
 		t.Errorf("a purged artifact's work items crossed as %v", err)
 	}
+	if p, err := a.Inbox(ctx, artifactsdomain.InboxQuery{Handle: "jane", Snoozed: "only", Cursor: "c",
+		Fresh: stale}); err != nil || p.Handle != "jane" || len(p.Notices) != 1 || p.Notices[0].Excerpt != "only" ||
+		p.Notices[0].Op != artifactsdomain.OpCommentReply || p.Heads["a"].Title != "Kept" || p.Next != "c+" ||
+		p.Level != stale.Level {
+		t.Errorf("inbox = (%+v, %v)", p, err)
+	}
+	if _, err := a.Inbox(ctx, artifactsdomain.InboxQuery{Handle: "jane", Cursor: "bad"}); !errors.Is(err,
+		artifactsdomain.ErrBadCursor) {
+		t.Errorf("a bad inbox cursor crossed as %v", err)
+	}
+	if cards, err := a.NoticeThreads(ctx, []artifactsdomain.ThreadRef{{Artifact: "a", Thread: "gone"},
+		{Artifact: "a", Thread: theThread.String()}}, stale); err != nil || len(cards) != 2 || cards[0] != nil ||
+		cards[1] == nil || cards[1].Remarks != 2 {
+		t.Errorf("notice threads = (%+v, %v)", cards, err)
+	}
 	if got, err := a.OpenThread(ctx, jane, artifactsdomain.ThreadInput{Artifact: id, Body: "Total?",
 		Version: 2, Anchor: commentanchor.Anchor{Kind: commentanchor.KindHTML, Page: "index.html",
 			Name: "summary"}, Quote: "Is this the right total?", Crop: []byte("\x89PNG"),
@@ -562,6 +603,12 @@ func TestEveryArtifactsOperationCrossesWhole(t *testing.T) {
 			_, err := a.Reopen(ctx, jane, artifactsdomain.ReopenInput{Artifact: id, Thread: theThread})
 			return err
 		},
+		"mark_inbox": func() error {
+			_, err := a.MarkInbox(ctx, jane, artifactsdomain.MarkInput{Gesture: artifactsdomain.MarkGesture{
+				Read: []string{"r-1"}}, Seen: statelog.Position{Stream: "CREWLET_ARTIFACTS_LOG", Generation: 1,
+				Seq: 9}})
+			return err
+		},
 	} {
 		if err := write(); err != nil {
 			t.Errorf("%s: %v", name, err)
@@ -577,7 +624,8 @@ func TestEveryArtifactsOperationCrossesWhole(t *testing.T) {
 		"adopt_brand:7:jane", "clear_brand:jane",
 		"open_thread:2:summary:Is this the right total?:image/png:4:pm:jane",
 		"reply:Agreed:" + theThread.String() + ":jane", "edit_remark:Agreed, mostly:jane",
-		"remove_remark:true:jane", "resolve:3:jane", "reopen:" + theThread.String() + ":jane"} {
+		"remove_remark:true:jane", "resolve:3:jane", "reopen:" + theThread.String() + ":jane",
+		"mark_inbox:r-1:CREWLET_ARTIFACTS_LOG@1:9:jane"} {
 		found := false
 		for _, got := range v.calls {
 			found = found || got == want

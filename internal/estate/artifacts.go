@@ -62,6 +62,11 @@ type ArtifactsReader interface {
 	Threads(ctx context.Context, id artifacts.ID) ([]artifactsdomain.CommentThread, error)
 	Thread(ctx context.Context, id artifacts.ID, thread uuid.UUID) (artifactsdomain.CommentThread, error)
 	WorkItems(ctx context.Context, id artifacts.ID) ([]string, error)
+
+	// A person's comment inbox, and what its cards draw of each thread.
+	Inbox(ctx context.Context, q artifactsdomain.InboxQuery) (artifactsdomain.InboxPage, error)
+	NoticeThreads(ctx context.Context, refs []artifactsdomain.ThreadRef, fresh statelog.Freshness) (
+		[]*artifactsdomain.NoticeThread, error)
 }
 
 // ArtifactsWriter is the artifacts write side: exactly the domain writer's
@@ -120,6 +125,10 @@ type ArtifactsWriter interface {
 	Resolve(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.ResolveInput) (
 		artifactsdomain.Written, error)
 	Reopen(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.ReopenInput) (
+		artifactsdomain.Written, error)
+
+	// A person's marks over their comment notices.
+	MarkInbox(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.MarkInput) (
 		artifactsdomain.Written, error)
 }
 
@@ -436,6 +445,31 @@ var opArtifactWorkItems = define("artifacts.work_items", opRead, artifactsDomain
 		return r.WorkItems(ctx, a.ID)
 	})
 
+// ---- a person's comment inbox: reads ------------------------------------- //
+
+var opArtifactInbox = define("artifacts.inbox", opRead, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q artifactsdomain.InboxQuery) (artifactsdomain.InboxPage, error) {
+		r, err := b.artifactsReader()
+		if err != nil {
+			return artifactsdomain.InboxPage{}, err
+		}
+		return r.Inbox(ctx, q)
+	})
+
+type noticeThreadsArgs struct {
+	Refs  []artifactsdomain.ThreadRef
+	Fresh statelog.Freshness
+}
+
+var opArtifactNoticeThreads = define("artifacts.notice_threads", opRead, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a noticeThreadsArgs) ([]*artifactsdomain.NoticeThread, error) {
+		r, err := b.artifactsReader()
+		if err != nil {
+			return nil, err
+		}
+		return r.NoticeThreads(ctx, a.Refs, a.Fresh)
+	})
+
 // ---- comment threads: writes ---------------------------------------------- //
 
 type openThreadArgs struct {
@@ -521,6 +555,22 @@ var opArtifactReopen = define("artifacts.reopen_thread", opOnceWrite, artifactsD
 		}
 		return w.Reopen(ctx, a.Call, a.Input)
 	}).repeatableWhen(func(a reopenArgs) bool { return keyedCall(a.Call) })
+
+type artifactMarkArgs struct {
+	Call  artifactsdomain.Call
+	Input artifactsdomain.MarkInput
+}
+
+// A PERSON'S MARK over their comment notices, decided on their reader subject
+// by whichever data node is asked; keyed, a repeat is the same gesture.
+var opArtifactMarkInbox = define("artifacts.mark_inbox", opOnceWrite, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a artifactMarkArgs) (artifactsdomain.Written, error) {
+		w, err := b.artifactsWriter()
+		if err != nil {
+			return artifactsdomain.Written{}, err
+		}
+		return w.MarkInbox(ctx, a.Call, a.Input)
+	}).repeatableWhen(func(a artifactMarkArgs) bool { return keyedCall(a.Call) })
 
 // ---- the folder tree and the brand: writes ---------------------------------- //
 
@@ -1153,6 +1203,23 @@ func (a Artifacts) Resolve(ctx context.Context, c artifactsdomain.Call, in artif
 func (a Artifacts) Reopen(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.ReopenInput) (
 	artifactsdomain.Written, error) {
 	return a.written(call(ctx, a.r, opArtifactReopen, nil, reopenArgs{Call: c, Input: in}))
+}
+
+// Inbox answers one page of a person's comment inbox.
+func (a Artifacts) Inbox(ctx context.Context, q artifactsdomain.InboxQuery) (artifactsdomain.InboxPage, error) {
+	return call(ctx, a.r, opArtifactInbox, nil, q)
+}
+
+// NoticeThreads answers what each named thread's card draws, in order.
+func (a Artifacts) NoticeThreads(ctx context.Context, refs []artifactsdomain.ThreadRef, fresh statelog.Freshness) (
+	[]*artifactsdomain.NoticeThread, error) {
+	return call(ctx, a.r, opArtifactNoticeThreads, nil, noticeThreadsArgs{Refs: refs, Fresh: fresh})
+}
+
+// MarkInbox moves the calling person's marks over their comment notices.
+func (a Artifacts) MarkInbox(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.MarkInput) (
+	artifactsdomain.Written, error) {
+	return a.written(call(ctx, a.r, opArtifactMarkInbox, nil, artifactMarkArgs{Call: c, Input: in}))
 }
 
 // written observes a write's position for the next read's floor and answers it.

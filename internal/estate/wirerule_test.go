@@ -790,6 +790,10 @@ var zeroThroughPointer = map[string]string{
 		"Gesture.Empty, CheckGesture and Apply in gitlet's mark decide and its marks record's apply, " +
 		"each asking IsZero first (inbox's Gesture.readThrough): a position that names nothing is no " +
 		"position, so nil, which is what crosses, reads the same",
+	"artifactsdomain.MarkGesture.ReadThrough": "read only as inbox's gesture (MarkGesture.Gesture), by " +
+		"Gesture.Empty, CheckGesture and Apply in the artifacts' MarkInbox decide and its marks record's " +
+		"apply, each asking IsZero first (inbox's Gesture.readThrough): a position that names nothing is " +
+		"no position, so nil, which is what crosses, reads the same",
 }
 
 // NO POINTER AT A ZERO CROSSES WHERE A READER WOULD MISS IT. The wire leaves a
