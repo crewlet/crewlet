@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/artifactdata"
@@ -113,12 +114,16 @@ type renderReads struct {
 	args map[string]any
 	id   artifacts.ID
 
+	// mu guards the admission: the page's calls arrive concurrently.
+	mu       sync.Mutex
 	admitted *dataAdmission
 	refusal  *artifactrender.Refusal
 }
 
 // admission is the seat's admission to the store, decided at the first read.
 func (r *renderReads) admission(ctx context.Context) (*dataAdmission, *artifactrender.Refusal) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.admitted != nil || r.refusal != nil {
 		return r.admitted, r.refusal
 	}

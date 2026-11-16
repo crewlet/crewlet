@@ -204,8 +204,11 @@ func (u *run) call(ctx context.Context, c bridgeCall) (any, *Refusal) {
 		if m, ok := page.(map[string]any); ok && m["docs"] != nil {
 			docs = m["docs"]
 		}
+		u.mu.Lock()
 		u.subscriptions++
-		return map[string]any{"subscription": u.subscriptions, "docs": docs}, nil
+		n := u.subscriptions
+		u.mu.Unlock()
+		return map[string]any{"subscription": n, "docs": docs}, nil
 	case "data.unsubscribe", "presence.set":
 		// TOLD TO NOBODY: a render is in no room.
 		return nil, nil
