@@ -34,10 +34,8 @@ const (
 	author    = "launch-writer"
 )
 
-// The page under test: the kit linked at the newest release this build
-// embeds, a sticky bar painted with a token the kit does not define, a file
-// the version lacks, a link to a page it lacks, an external link, a console
-// error, and a per-viewer write the render refuses.
+// The page under test: the newest embedded kit, a sticky bar painted with a
+// token the kit does not define, and what else a reviewer trips over.
 func pageFiles(kit string) map[string]string {
 	nonce := artifacts.NoncePlaceholder
 	return map[string]string{
@@ -65,6 +63,8 @@ func pageFiles(kit string) map[string]string {
 console.error("chart failed to draw");
 crewlet.ready.then(async () => {
   try { await crewlet.state.set("seen", true); } catch (e) { console.warn("state refused: " + e.code); }
+  const assets = await crewlet.assets.list();
+  console.warn("assets listed: " + assets.length);
 });
 document.getElementById("menu").addEventListener("click", () => { document.body.dataset.menu = "open"; });
 </script>
@@ -172,7 +172,7 @@ func newRig(t *testing.T, chrome string, mode artifacts.OriginMode, external str
 		entries = append(entries, e)
 	}
 	id := artifacts.IDFor("render-" + t.Name())
-	caps := []artifacts.Capability{artifacts.CapabilityState}
+	caps := []artifacts.Capability{artifacts.CapabilityAssets, artifacts.CapabilityState}
 	e := &estate{
 		head: artifactsdomain.Head{ID: id, Label: id.Label(), Kind: artifacts.KindHTML,
 			Title: "Launch review", Owner: author, OwnerKind: iam.ActorAgent, HeadNumber: 1,
@@ -252,10 +252,9 @@ func compareVersions(a, b string) int {
 	return len(pa) - len(pb)
 }
 
-// A page whose sticky bar is painted with a token the linked kit does not
-// define is reported: the token, its rule, its line and the element it
-// paints, the defined token nearest it, and the bar it leaves see-through in
-// both themes, beside four screenshots of the published page.
+// A sticky bar painted with a token the kit does not define is reported with
+// its rule, line, element and nearest token, and as see-through in both
+// themes, beside four screenshots.
 func TestARenderReportsATokenTheKitDoesNotDefine(t *testing.T) {
 	chromiumtest.Each(t, func(t *testing.T, chrome string) {
 		g := newRig(t, chrome, artifacts.OriginPerArtifact, template)
@@ -312,10 +311,9 @@ func TestARenderReportsATokenTheKitDoesNotDefine(t *testing.T) {
 	})
 }
 
-// What a reviewer would trip over besides the token is reported too: the
-// file the version lacks, the link to a page it lacks, the external link the
-// frame cannot open, the console error, the refused write, the action played,
-// and the in-page link that lands under the sticky bar.
+// The rest a reviewer trips over is reported too: a missing file and page, an
+// external link, console lines, a refused write, an asset listing, the action
+// played and an in-page link landing under the bar.
 func TestARenderReportsWhatAReviewerWouldTripOver(t *testing.T) {
 	g := newRig(t, chromiumtest.Newest(t), artifacts.OriginShared, "https://artifacts.example-usercontent.net")
 	g.request.Widths = []int{1440}
@@ -345,6 +343,8 @@ func TestARenderReportsWhatAReviewerWouldTripOver(t *testing.T) {
 		return l.Level == "error" && l.Text == "chart failed to draw"
 	}) || !slices.ContainsFunc(rep.Console, func(l artifactrender.ConsoleLine) bool {
 		return l.Level == "warning" && l.Text == "state refused: forbidden"
+	}) || !slices.ContainsFunc(rep.Console, func(l artifactrender.ConsoleLine) bool {
+		return l.Level == "warning" && l.Text == "assets listed: 0"
 	}) || !slices.ContainsFunc(rep.Console, func(l artifactrender.ConsoleLine) bool {
 		return l.Level == "error" && l.Source == "index.html" &&
 			strings.Contains(l.Text, "Content Security Policy")

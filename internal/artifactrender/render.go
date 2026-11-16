@@ -155,10 +155,8 @@ type Person struct {
 	Kind        string
 }
 
-// Bridge answers a page's reads as the render's viewer: `data.schema`,
-// `data.get`, `data.list`, `data.query`, `state.get`, `state.list` and
-// `assets.list`, each with the page's own parameters, its value in the
-// runtime contract's shape. Every write is the render's own to refuse.
+// Bridge answers a page's data and state reads as the render's viewer, in
+// the runtime contract's shapes. Every write is the render's own to refuse.
 type Bridge interface {
 	Read(ctx context.Context, method string, params map[string]any) (any, *Refusal)
 }
@@ -283,6 +281,7 @@ type Renderer struct {
 	frames    *artifactserve.Frames
 	origins   artifactserve.Origins
 	handler   *artifactserve.Handler
+	assets    artifactserve.Artifacts
 	lineages  *lineages
 	dashboard string
 	kit       string
@@ -321,7 +320,7 @@ func New(c Config) (*Renderer, error) {
 	}
 	return &Renderer{
 		browser: strings.TrimSpace(c.BrowserURL), client: c.Client, frames: frames,
-		origins: c.Origins, handler: h, lineages: l,
+		origins: c.Origins, handler: h, assets: c.Serve.Artifacts, lineages: l,
 		dashboard: strings.TrimRight(strings.TrimSpace(c.Dashboard), "/"),
 		kit:       c.KitVersion, contract: c.Contract, now: now,
 		slots: make(chan struct{}, artifacts.RenderConcurrency),
@@ -335,10 +334,8 @@ func (r *Renderer) ArtifactsMoved(moved []artifactsdomain.Moved) { r.handler.Art
 // Configured reports whether this node names a render browser.
 func (r *Renderer) Configured() bool { return r.browser != "" }
 
-// Render renders one version of one framed artifact as req.Viewer sees it,
-// and reports what it found. Nothing is written: no open is recorded, nobody
-// is told the viewer is present, and every write the page asks for is
-// refused and reported.
+// Render renders one version of a framed artifact as req.Viewer sees it and
+// reports what it found. Nothing is written; the page's writes are refused.
 func (r *Renderer) Render(ctx context.Context, req Request) (Report, error) {
 	if r.browser == "" {
 		return Report{}, ErrNoBrowser

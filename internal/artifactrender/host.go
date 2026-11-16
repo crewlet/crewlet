@@ -10,19 +10,9 @@ import (
 	"github.com/crewlet/crewlet/internal/browser/cdp"
 )
 
-// THE HOST: what the dashboard is around a viewer's frame, for a render. A
-// page served on the dashboard's own origin (so the artifact's frame-ancestors
-// admit it, as they admit the dashboard), painting the frame's box in the
-// kit's surface colour in the reader's theme, embedding the frame with the
-// sandbox and allow the engine minted, verbatim, and the fragment the
-// dashboard writes (the bridge nonce and the reader's appearance). It answers
-// the page's hello with one port and `bridge.init`, as the dashboard's page
-// host does, and hands every call on the port to the engine.
-//
-// ITS SCRIPT RUNS IN A WORLD OF ITS OWN. The handshake and the binding it
-// reports through live in an isolated world of the host's document, never its
-// main world, so a page that shares the host's process (an artifact origin on
-// the dashboard's site) can neither call the binding nor answer for the host.
+// The host: the dashboard's part around a frame, served on the dashboard's
+// origin so frame-ancestors admit it. Its script and binding live in an
+// isolated world, out of reach of a page sharing the host's process.
 
 // hostWorld is the isolated world the host's script runs in, and hostBinding
 // the binding it reports through, reachable from that world alone.
@@ -219,9 +209,10 @@ func (u *run) call(ctx context.Context, c bridgeCall) (any, *Refusal) {
 	case "data.unsubscribe", "presence.set":
 		// TOLD TO NOBODY: a render is in no room.
 		return nil, nil
-	case "data.schema", "data.get", "data.list", "data.query", "state.get", "state.list",
-		"assets.list":
+	case "data.schema", "data.get", "data.list", "data.query", "state.get", "state.list":
 		return u.req.Bridge.Read(ctx, c.Method, p)
+	case "assets.list":
+		return u.assets(ctx)
 	case "openLink":
 		target, _ := p["url"].(string)
 		u.found.bridged(BridgeNote{Method: c.Method, Detail: "asked to open " + clip(target, 200) +
@@ -243,4 +234,18 @@ func hasCapability(granted []artifacts.Capability, c artifacts.Capability) bool 
 		}
 	}
 	return false
+}
+
+// assets is the artifact's asset store as a page lists it.
+func (u *run) assets(ctx context.Context) (any, *Refusal) {
+	list, err := u.r.assets.Assets(ctx, u.req.Head.ID)
+	if err != nil {
+		return nil, &Refusal{Code: "unavailable", Message: "the asset store could not be read"}
+	}
+	out := make([]map[string]any, 0, len(list))
+	for _, a := range list {
+		out = append(out, map[string]any{"id": a.ID.String(), "name": a.Name,
+			"contentType": a.ContentType, "size": a.Object.Size})
+	}
+	return out, nil
 }
