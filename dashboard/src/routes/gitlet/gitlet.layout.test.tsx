@@ -498,6 +498,97 @@ test("a branch's chip keeps its name on one line at 390px", async () => {
   }
 });
 
+/** A history page of three commits, the first with a 200-character subject. */
+function withHistory() {
+  const commit = (oid: string, subject: string, at: string) => ({
+    oid,
+    author: "Jane Founder",
+    authored_at: at,
+    committed_at: at,
+    subject,
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), location.origin);
+      if (url.pathname !== "/query/code_log") return answer(url);
+      return json({
+        repo: "web",
+        kind: "log",
+        log: {
+          commits: [
+            commit(HEAD, "render: ".padEnd(200, "stream the shell "), "2026-11-15T10:00:00Z"),
+            commit(BASE, "cart: cache the badge count for 30s", "2026-11-15T09:00:00Z"),
+            commit("1".repeat(40), "go.mod: bump to go 1.27", "2026-11-14T09:00:00Z"),
+          ],
+          scanned: 3,
+          complete: true,
+        },
+        pushed_by: {
+          [BASE]: {
+            push_id: "p1",
+            position: POSITION,
+            at: "2026-11-15T09:00:00Z",
+            principal: { kind: "agent", seat: "jane", run: { turn_id: "t", work_key: "ENG-399" } },
+            via: "engine",
+          },
+        },
+        position: POSITION,
+        level: "session",
+      });
+    }),
+  );
+}
+
+// A COMMIT ROW KEEPS ITS ID AND BROWSE ON ITS TITLE'S LINE where there is room, and stacks
+// them under its words on a phone or beside a peek, above the row's stretched link.
+// Mutation: drop the phone fold, or the controls' lift over the link.
+for (const [viewport, column] of [
+  [1440, 1200],
+  [390, 358],
+  [1440, 600],
+] as const) {
+  test(`a commit row's facts sit by its title or stack under it, at a ${column}px column`, async () => {
+    await page.viewport(viewport, 900);
+    withHistory();
+    location.hash = "#/gitlet/repos/web?tab=commits";
+    mount(<RepositoryPage repo="web" />, column);
+    const rows = await eventually(() => {
+      const found = [...document.querySelectorAll<HTMLElement>(".code-list__row")];
+      expect(found).toHaveLength(3);
+      return found;
+    });
+    const list = document.querySelector<HTMLElement>(".code-list")!;
+    expect(list.scrollWidth).toBeLessThanOrEqual(list.clientWidth);
+    for (const row of rows) {
+      expect(row.scrollWidth, row.dataset.key).toBeLessThanOrEqual(row.clientWidth);
+      const title = row.querySelector(".code-list__title")!.getBoundingClientRect();
+      const meta = row.querySelector(".code-list__meta")!.getBoundingClientRect();
+      const body = row.querySelector(".code-list__body")!.getBoundingClientRect();
+      const facts = row.querySelector(".code-list__facts")!.getBoundingClientRect();
+      const box = row.getBoundingClientRect();
+      expect(
+        row.querySelector(".code-list__link")!.getBoundingClientRect().right,
+      ).toBeLessThanOrEqual(box.right);
+      if (column >= 640) {
+        expect(facts.top).toBeLessThan(title.bottom);
+        expect(facts.left).toBeGreaterThanOrEqual(body.right);
+      } else {
+        expect(facts.top).toBeGreaterThanOrEqual(meta.bottom - 0.5);
+      }
+      expect(facts.right).toBeLessThanOrEqual(box.right + 0.5);
+      // THE ROW'S CONTROLS ARE WHAT A PRESS ON THEM HITS, not the link under them.
+      for (const control of row.querySelectorAll<HTMLElement>(
+        ".code-sha, a[aria-label^='Browse']",
+      )) {
+        const at = control.getBoundingClientRect();
+        const hit = document.elementFromPoint(at.left + at.width / 2, at.top + at.height / 2);
+        expect(control.contains(hit), control.getAttribute("aria-label") ?? "").toBe(true);
+      }
+    }
+  });
+}
+
 /** The file view of `cmd/main.go` at `width`, once its third line is coloured. */
 async function colouredLine(width: number): Promise<HTMLElement> {
   await page.viewport(width, 900);
