@@ -343,21 +343,21 @@ type tagScan struct {
 
 // scanTagFile reads the tag file at path front to back, held to the format,
 // its keys strictly ascending, its trailer and its identity, else
-// errTagsMalformed; it answers the counts.
-func scanTagFile(path string, s tagScan) (tagCounts, error) {
+// errTagsMalformed.
+func scanTagFile(path string, s tagScan) error {
 	f, err := os.Open(path)
 	if err != nil {
-		return tagCounts{}, fmt.Errorf("%w: %w", errTagsMalformed, err)
+		return fmt.Errorf("%w: %w", errTagsMalformed, err)
 	}
 	defer func() { _ = f.Close() }() // read-only
 	info, err := f.Stat()
 	if err != nil {
-		return tagCounts{}, fmt.Errorf("%w: %w", errTagsMalformed, err)
+		return fmt.Errorf("%w: %w", errTagsMalformed, err)
 	}
 	id := idOf(info)
 	c, err := readTagCounts(f, info.Size())
 	if err != nil {
-		return c, err
+		return err
 	}
 	if s.begin != nil {
 		s.begin(c)
@@ -376,7 +376,7 @@ func scanTagFile(path string, s tagScan) (tagCounts, error) {
 		return b, nil
 	}
 	if _, err = read(tagsHeadBytes); err != nil {
-		return c, err
+		return err
 	}
 	// commitPeeled marks each record peeling to a commit, each taken once by
 	// a commit record.
@@ -391,23 +391,23 @@ func scanTagFile(path string, s tagScan) (tagCounts, error) {
 	for i := range c.n {
 		fixed, perr := r.Peek(tagFixedBytes)
 		if perr != nil {
-			return c, fmt.Errorf("%w: reading record %d: %w", errTagsMalformed, i, perr)
+			return fmt.Errorf("%w: reading record %d: %w", errTagsMalformed, i, perr)
 		}
 		raw, perr := r.Peek(tagFixedBytes + int(fixed[50]))
 		if perr != nil {
-			return c, fmt.Errorf("%w: reading record %d: %w", errTagsMalformed, i, perr)
+			return fmt.Errorf("%w: reading record %d: %w", errTagsMalformed, i, perr)
 		}
 		var size int
 		var derr error
 		if rec, size, derr = decodeTagRecord(raw); derr != nil {
-			return c, derr
+			return derr
 		}
 		raw = raw[:size]
 		if at += int64(size); at > c.records {
-			return c, fmt.Errorf("%w: record %d ends past the records", errTagsMalformed, i)
+			return fmt.Errorf("%w: record %d ends past the records", errTagsMalformed, i)
 		}
 		if i > 0 && compareTagKeys(lastDate, lastName, rec.facts.date, rec.name) >= 0 {
-			return c, fmt.Errorf("%w: record %d (%s) is not after the one before it", errTagsMalformed, i,
+			return fmt.Errorf("%w: record %d (%s) is not after the one before it", errTagsMalformed, i,
 				rec.name)
 		}
 		if rec.facts.ptyp == typeCommit {
@@ -415,7 +415,7 @@ func scanTagFile(path string, s tagScan) (tagCounts, error) {
 		}
 		if s.record != nil {
 			if err = s.record(i, &rec, raw); err != nil {
-				return c, err
+				return err
 			}
 		}
 		lastDate, lastName = rec.facts.date, append(lastName[:0], rec.name...)
@@ -423,22 +423,22 @@ func scanTagFile(path string, s tagScan) (tagCounts, error) {
 		_, _ = r.Discard(size)
 	}
 	if at != c.records {
-		return c, fmt.Errorf("%w: its records end at %d of %d bytes", errTagsMalformed, at, c.records)
+		return fmt.Errorf("%w: its records end at %d of %d bytes", errTagsMalformed, at, c.records)
 	}
 	if s.recordsEnd != nil {
 		if err = s.recordsEnd(c.n); err != nil {
-			return c, err
+			return err
 		}
 	}
 	var last uint32
 	for i := range c.n {
 		b, rerr := read(4)
 		if rerr != nil {
-			return c, rerr
+			return rerr
 		}
 		o := binary.BigEndian.Uint32(b)
 		if i == 0 && o != tagsHeadBytes || i > 0 && o <= last || int64(o) >= tagsHeadBytes+c.records {
-			return c, fmt.Errorf("%w: offset %d is %d", errTagsMalformed, i, o)
+			return fmt.Errorf("%w: offset %d is %d", errTagsMalformed, i, o)
 		}
 		last = o
 	}
@@ -446,42 +446,42 @@ func scanTagFile(path string, s tagScan) (tagCounts, error) {
 	for i := range c.m {
 		b, rerr := read(tagCommitBytes)
 		if rerr != nil {
-			return c, rerr
+			return rerr
 		}
 		idx := binary.BigEndian.Uint32(b[20:])
 		if i > 0 && bytes.Compare(prev[:], b) >= 0 || int(idx) >= c.n || commitPeeled[idx/8]&(1<<(idx%8)) == 0 {
-			return c, fmt.Errorf("%w: commit record %d names record %d", errTagsMalformed, i, idx)
+			return fmt.Errorf("%w: commit record %d names record %d", errTagsMalformed, i, idx)
 		}
 		commitPeeled[idx/8] &^= 1 << (idx % 8)
 		copy(prev[:], b)
 		if s.commit != nil {
 			copy(commit[:], b[:20])
 			if err = s.commit(&commit, idx); err != nil {
-				return c, err
+				return err
 			}
 		}
 	}
 	if slices.ContainsFunc(commitPeeled, func(b byte) bool { return b != 0 }) {
-		return c, fmt.Errorf("%w: a record peeling to a commit has no commit record", errTagsMalformed)
+		return fmt.Errorf("%w: a record peeling to a commit has no commit record", errTagsMalformed)
 	}
 	if _, err = read(tagsCountsBytes); err != nil {
-		return c, err
+		return err
 	}
 	want := sum.Sum(nil)
 	trailer := make([]byte, sha256.Size)
 	if _, err = io.ReadFull(r, trailer); err != nil {
-		return c, fmt.Errorf("%w: reading its trailer: %w", errTagsMalformed, err)
+		return fmt.Errorf("%w: reading its trailer: %w", errTagsMalformed, err)
 	}
 	if !bytes.Equal(trailer, want) {
-		return c, fmt.Errorf("%w: its trailer is %x, and its bytes hash to %x", errTagsMalformed, trailer, want)
+		return fmt.Errorf("%w: its trailer is %x, and its bytes hash to %x", errTagsMalformed, trailer, want)
 	}
 	if _, err = r.ReadByte(); !errors.Is(err, io.EOF) {
-		return c, fmt.Errorf("%w: bytes past its trailer", errTagsMalformed)
+		return fmt.Errorf("%w: bytes past its trailer", errTagsMalformed)
 	}
 	if now := lstatID(path); now != id {
-		return c, fmt.Errorf("%w: it changed while it was read", errTagsMalformed)
+		return fmt.Errorf("%w: it changed while it was read", errTagsMalformed)
 	}
-	return c, nil
+	return nil
 }
 
 // TagIndex is an incarnation's tag index, open for one read: valid until Close.
@@ -977,7 +977,7 @@ func checkTagFile(path string, snap snapshot) (bool, map[[20]byte]tagFacts, erro
 	level := snap.full
 	facts := map[[20]byte]tagFacts{}
 	var hexed [40]byte
-	_, err := scanTagFile(path, tagScan{record: func(_ int, r *tagRecord, _ []byte) error {
+	err := scanTagFile(path, tagScan{record: func(_ int, r *tagRecord, _ []byte) error {
 		facts[r.obj] = r.facts
 		if !level {
 			return nil
@@ -1100,7 +1100,7 @@ func mergeTagFile(path string, moves []tagMove, inserts []tagInsert, w *tagWrite
 		}
 		return nil
 	}
-	_, serr := scanTagFile(path, tagScan{
+	serr := scanTagFile(path, tagScan{
 		begin: func(old tagCounts) {
 			w.offsets = make([]uint32, 0, old.n+len(inserts))
 			skipped = make([]uint32, 0, len(moves))
