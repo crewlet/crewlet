@@ -68,9 +68,12 @@ import (
 //
 // What can take minutes — the upload of a session at its bound at the object
 // store's slowest pace, and the record — is the KEEP ([Coordinator.keepCapture]),
-// made after the read has answered, off its frame, under a budget of its own
-// ([SessionKeepBudget]): no read a node is waiting on, and no ending, holds
-// for an upload. The spool is the node's own and goes once the keep is done.
+// made off the read's frame from the moment its take is spooled, under a
+// budget of its own ([SessionKeepBudget]): no read a node is waiting on, and
+// no ending, holds for an upload, and no keep waits on what its read does
+// after the take (a collection's record of how its job's harness ended, the
+// box's pause and the pause's record), steps no capture's budget counts. The
+// spool is the node's own and goes once the keep is done.
 //
 // # Every capture is stamped on the run's row
 //

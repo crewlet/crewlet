@@ -117,7 +117,7 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // reads only for its share of the budget ([BoxReadAnswerShare]), so all of it
 // is counted at that share, and a take at its bound fits a host's read whole
 // rather than being cut by the host's own deadline. Only the take: the upload
-// and the record are made after the host has answered, off the read
+// and the record are made off the read, from the moment the session is spooled
 // ([Coordinator.keepCapture]), so no asker waits on an upload.
 //
 // # Each change of the run's row the host's read makes, at the slowest crossing

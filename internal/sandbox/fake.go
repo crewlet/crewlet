@@ -66,6 +66,11 @@ type FakeSandbox struct {
 	KillJobFunc func(ctx context.Context, commandID string) error
 	jobCalls    []string
 
+	// PauseFunc, when set, is asked first by every Pause, and a non-nil
+	// answer is that pause's error, leaving the box unpaused: a backend slow
+	// to snapshot the box, or one that could not.
+	PauseFunc func(ctx context.Context) error
+
 	// ReadErr, when set, is consulted by every read with the file's path,
 	// and a non-nil answer is that read's error — standing in for a box
 	// whose file could not be read back (a transport failure, not a size).
@@ -347,8 +352,14 @@ func (s *FakeSandbox) Timeouts() []FakeTimeout {
 	return slices.Clone(s.timeouts)
 }
 
-// Pause marks the box snapshotted; [FakeSandbox.Paused] reports it.
+// Pause marks the box snapshotted, once [FakeSandbox.PauseFunc] answers no
+// error where one is set; [FakeSandbox.Paused] reports it.
 func (s *FakeSandbox) Pause(ctx context.Context) error {
+	if s.PauseFunc != nil {
+		if err := s.PauseFunc(ctx); err != nil {
+			return err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.paused = true
