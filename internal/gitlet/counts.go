@@ -313,11 +313,10 @@ func talliedRepos(ctx context.Context, tx *sql.Tx, asker Principal, ceilingSeat 
 	var sum RepoKindCounts
 	err := eachRepoTally(ctx, tx, func(key repoTallyKey, c RepoCounts) error {
 		ref := RepoRef{Owner: key.owner, Visibility: key.visibility}
-		if _, refused := JudgeRead(asker, ceilingSeat, ref, chart); refused != nil {
-			return nil
-		}
-		if of := sum.of(key.kind); of != nil {
-			*of = of.plus(c)
+		if _, refused := JudgeRead(asker, ceilingSeat, ref, chart); refused == nil {
+			if of := sum.of(key.kind); of != nil {
+				*of = of.plus(c)
+			}
 		}
 		return nil
 	})

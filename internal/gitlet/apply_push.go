@@ -1125,9 +1125,9 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 		gone.tombstones, livePacksGone, liveBytesGone, liveObjectsGone, at.packed, p.RepoID); err != nil {
 		return 0, fmt.Errorf("gitlet: count %s's purge at %s: %w", p.RepoID, at.position, err)
 	}
-	moved, err := retally(ctx, tx, p.RepoID, before)
-	if err != nil {
-		return 0, err
+	moved, tallyErr := retally(ctx, tx, p.RepoID, before)
+	if tallyErr != nil {
+		return 0, tallyErr
 	}
 	return deleted + 1 + moved, nil
 }
