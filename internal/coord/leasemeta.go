@@ -43,7 +43,7 @@ const MaxLeaseMetaBytes = 8 << 10
 
 // MaxBuildBytes is the most of a node's build name its status carries
 // ([NodeStatus.Build]): 64 bytes. Every form internal/version writes is under
-// forty, and the cut is what makes the presence's bound TOTAL — a build name
+// fifty (a dirty build past a tag, a pseudo-version with "+dirty", is 42), and the cut is what makes the presence's bound TOTAL — a build name
 // is whatever its linker was handed, and the one field of the status no
 // table bounds.
 const MaxBuildBytes = 64
