@@ -301,6 +301,11 @@ as any page, framed on its own.
 - **Declare what the page uses.** `capabilities` lists the runtime features the
   page calls: `db`, `state`, `assets`, `identity`, `presence`. An undeclared
   feature is refused at runtime.
+- **Declare a comment anchor on every comparison, option and section**:
+  `<section data-crewlet-anchor="pricing">`, a lowercase name of letters,
+  digits, `-`, `_` or `.`. Reviewers pin comments to it, and the thread
+  follows it into your next version; a section without one takes only
+  comments on a point, which drift when the page reflows.
 - **Assets are referenced by path.** An image or data file added with
   `upload_artifact_asset` is referenced by the `reference` its answer gives,
   relative to the version's root.
