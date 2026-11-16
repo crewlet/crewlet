@@ -201,7 +201,7 @@ export function DelegatedRuleDialog({
 
   const releases = releasesIn(draft.kinds);
   const kindsId = useId();
-  const title = target.kind === "add" ? "Add a rule" : `Edit rule ${number}`;
+  const title = target.kind === "add" ? "Add rule" : `Edit rule ${number}`;
   return (
     <>
       <Modal

@@ -128,7 +128,7 @@ export function ServiceAccountDialog({
     <Modal
       open
       size="md"
-      title="New service account"
+      title="Add service account"
       icon={<UserPlusGlyph />}
       onClose={onClose}
       dismissable={!write.busy}
