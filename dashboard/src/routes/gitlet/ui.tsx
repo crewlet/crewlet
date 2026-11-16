@@ -12,10 +12,8 @@
  * the next. So each mark is written here, once, and every screen draws it.
  *
  * ONLY A BRANCH IS COLOURED, in the kit's code-ref chip (the seventh
- * exception). A seat's face is its own profile icon (the one rule's third
- * exception), a person's their initials on the neutral badge; a directory and
- * a file are glyphs, told apart by their drawing and their name, never by a
- * hue (`docs/reference/dashboard-design.md`, "The one rule").
+ * exception); faces, directories and files are told apart by drawing and name,
+ * never by hue (`docs/reference/dashboard-design.md`, "The one rule").
  */
 
 import "~/styles/gitlet.css";

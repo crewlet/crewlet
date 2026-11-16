@@ -615,12 +615,9 @@ describe("in Gitlet", () => {
   });
 });
 
-// NO HUE OUTSIDE GITLET. The design system's diffs paint an added line in the
-// success state's tint and a removed one in the danger state's; outside Gitlet
-// colour carries state, and a diff is not one, and in Gitlet only the code
-// hue's own rules reach it. Every rule that can reach what the diff draws is
-// read, so a rule added later for any class it carries is held too. The accent
-// is not in the list: it says where the reader is, never a line's kind.
+// NO HUE OUTSIDE GITLET: no rule that reaches what a diff draws spends a state's
+// hue, and in Gitlet only the code hue's own rules do. The accent is not listed:
+// it marks where the reader is, never a line's kind.
 describe("what a diff draws", () => {
   /** The sheet rules one of whose selectors names only classes `root` draws. */
   const reaching = (root: ParentNode) => {
