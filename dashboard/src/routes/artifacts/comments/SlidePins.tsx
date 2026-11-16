@@ -5,7 +5,11 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type RefObject } from "react";
-import { SLIDE_STAGE_HEIGHT, SLIDE_STAGE_WIDTH } from "~/contract/artifactsworkspace.ts";
+import {
+  ARTIFACT_COMMENT_QUOTE_MAX_BYTES,
+  SLIDE_STAGE_HEIGHT,
+  SLIDE_STAGE_WIDTH,
+} from "~/contract/artifactsworkspace.ts";
 import { nodeAt } from "~/lib/slides.tsx";
 import {
   anchorLabel,
@@ -16,7 +20,7 @@ import {
   type Box,
 } from "~/lib/artifacts/comments.ts";
 import type { ArtifactCommentAnchor, DeckSlide } from "~/protocol/index.ts";
-import { COMMENT_QUOTE_MAX_BYTES } from "~/runtime/bridge.ts";
+
 import { clipBytes } from "~/runtime/comments.ts";
 import { drawRegion, padRegion } from "~/runtime/crop.ts";
 import { DraftPin, Outline, Repositioned, ThreadPin } from "./layer.tsx";
@@ -139,7 +143,10 @@ export function SlidePins({
       tag: node.tag,
       text: elementText(node),
     };
-    const words = clipBytes(elementText(node, Number.MAX_SAFE_INTEGER), COMMENT_QUOTE_MAX_BYTES);
+    const words = clipBytes(
+      elementText(node, Number.MAX_SAFE_INTEGER),
+      ARTIFACT_COMMENT_QUOTE_MAX_BYTES,
+    );
     const seq = c.startDraft({
       anchor,
       label: anchorLabel(anchor, order),

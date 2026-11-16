@@ -9,7 +9,6 @@ import { describe, expect, test } from "vitest";
 import {
   BRIDGE_MESSAGE,
   BRIDGE_METHODS,
-  COMMENT_CROP_MAX_BYTES,
   COMMENT_LAYOUT_MAX_ANCHORS,
   capabilityOf,
   isAnchorName,
@@ -25,6 +24,7 @@ import {
   readResult,
   readViewer,
 } from "./bridge.ts";
+import { ARTIFACT_COMMENT_CROP_MAX_BYTES } from "../contract/artifactsworkspace.ts";
 
 const viewer = { seat: "maya", kind: "human", displayName: "Maya", role: "editor" };
 const doc = {
@@ -315,7 +315,7 @@ describe("the comment layer", () => {
       id: 2,
       image: null,
     });
-    const big = "A".repeat(Math.ceil((COMMENT_CROP_MAX_BYTES * 4) / 3) + 8);
+    const big = "A".repeat(Math.ceil((ARTIFACT_COMMENT_CROP_MAX_BYTES * 4) / 3) + 8);
     expect(readCommentCrop({ id: 2, image: `data:image/webp;base64,${big}` })?.image).toBeNull();
     expect(readCommentCrop({ id: 0, image: png })).toBeNull();
     expect(readCommentCrop({ image: png })).toBeNull();

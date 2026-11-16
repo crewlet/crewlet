@@ -4,7 +4,8 @@
  * a slide. One the browser cannot draw is null, never an error.
  */
 
-import { COMMENT_CROP_MAX_SIDE, isCropImage } from "./bridge.ts";
+import { isCropImage } from "./bridge.ts";
+import { ARTIFACT_COMMENT_CROP_MAX_SIDE } from "../contract/artifactsworkspace.ts";
 
 /** A rectangle in the drawing's own CSS pixels. */
 export interface CropRegion {
@@ -42,9 +43,9 @@ export function pointRegion(point: { x: number; y: number }, size: { w: number; 
   return { x, y, w, h };
 }
 
-/** The scale a region is drawn at: its long side at most [COMMENT_CROP_MAX_SIDE]. */
+/** The scale a region is drawn at: its long side at most [ARTIFACT_COMMENT_CROP_MAX_SIDE]. */
 export function cropScale(region: CropRegion): number {
-  return Math.min(1, COMMENT_CROP_MAX_SIDE / Math.max(region.w, region.h, 1));
+  return Math.min(1, ARTIFACT_COMMENT_CROP_MAX_SIDE / Math.max(region.w, region.h, 1));
 }
 
 /** The qualities and shrinks tried in turn until the picture fits the engine's bound. */

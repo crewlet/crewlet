@@ -6,7 +6,6 @@
 
 import {
   COMMENT_LAYOUT_MAX_ANCHORS,
-  COMMENT_QUOTE_MAX_BYTES,
   isAnchorName,
   type CommentAnchorBox,
   type CommentLayout,
@@ -16,6 +15,7 @@ import {
   type CommentTarget,
 } from "./bridge.ts";
 import { drawRegion, padRegion, pointRegion, type CropRegion } from "./crop.ts";
+import { ARTIFACT_COMMENT_QUOTE_MAX_BYTES } from "../contract/artifactsworkspace.ts";
 
 /** The attribute a part is declared by. */
 export const ANCHOR_ATTRIBUTE = "data-crewlet-anchor";
@@ -52,7 +52,7 @@ export function clipBytes(s: string, max: number): string {
 /** An element's words as a quote keeps them: whitespace collapsed, at most 1 KiB. */
 export function quoteOf(el: Element): string {
   const text = (el as HTMLElement).innerText ?? el.textContent ?? "";
-  return clipBytes(text.replace(/\s+/g, " ").trim(), COMMENT_QUOTE_MAX_BYTES);
+  return clipBytes(text.replace(/\s+/g, " ").trim(), ARTIFACT_COMMENT_QUOTE_MAX_BYTES);
 }
 
 /** The innermost declared anchor at or around `target`, skipping a name the grammar refuses. */

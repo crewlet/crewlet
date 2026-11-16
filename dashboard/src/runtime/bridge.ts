@@ -23,6 +23,11 @@
 // RELATIVE, like every contract import outside the app: this module is also
 // built into the runtime alone, where the `~` alias does not exist.
 import { ARTIFACT_CAPABILITIES, ARTIFACT_ROLES } from "../contract/artifacts.ts";
+import {
+  ARTIFACT_COMMENT_ANCHOR_NAME,
+  ARTIFACT_COMMENT_CROP_MAX_BYTES,
+  ARTIFACT_COMMENT_QUOTE_MAX_BYTES,
+} from "../contract/artifactsworkspace.ts";
 import { PRESENCE_ACTIVITIES } from "../contract/presence.ts";
 
 /** The bridge's message names on the port, beside the handshake's. */
@@ -175,16 +180,13 @@ export type CommentMode = "off" | "show" | "place";
 const COMMENT_MODES: readonly CommentMode[] = ["off", "show", "place"];
 
 /** A name a page declares a comment anchor by (`commentanchor.NamePattern`). */
-export const COMMENT_ANCHOR_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+export const COMMENT_ANCHOR_NAME = new RegExp(ARTIFACT_COMMENT_ANCHOR_NAME);
 
 /** The most of an anchor's words a pick carries (`artifacts.MaxCommentQuoteBytes`). */
-export const COMMENT_QUOTE_MAX_BYTES = 1 << 10;
 
 /** The largest picture of a part a page answers (`artifacts.MaxCommentCropBytes`). */
-export const COMMENT_CROP_MAX_BYTES = 64 << 10;
 
 /** The longest side of that picture, in pixels (`artifacts.MaxCommentCropSide`). */
-export const COMMENT_CROP_MAX_SIDE = 800;
 
 /** The most anchors one layout reports: far past any page a reader comments on part by part. */
 export const COMMENT_LAYOUT_MAX_ANCHORS = 2000;
@@ -224,7 +226,7 @@ export interface CommentLayout {
 /** Page to host (`comments.pick`): a click while placing, on an anchor or a point. */
 export interface CommentPick {
   name: string | null;
-  /** The anchor's words, at most [COMMENT_QUOTE_MAX_BYTES]; empty on a point. */
+  /** The anchor's words, at most [ARTIFACT_COMMENT_QUOTE_MAX_BYTES]; empty on a point. */
   quote: string;
   point: CommentPoint;
 }
@@ -554,7 +556,8 @@ export function readCommentPick(data: unknown): CommentPick | null {
   const name = m["name"] ?? null;
   if (name !== null && !isAnchorName(name)) return null;
   const quote = m["quote"] ?? "";
-  if (typeof quote !== "string" || utf8Length(quote) > COMMENT_QUOTE_MAX_BYTES) return null;
+  if (typeof quote !== "string" || utf8Length(quote) > ARTIFACT_COMMENT_QUOTE_MAX_BYTES)
+    return null;
   const point = readCommentPoint(m["point"]);
   if (!point) return null;
   return { name, quote, point };
@@ -570,7 +573,7 @@ export function isCropImage(v: unknown): v is string {
   if (!m) return false;
   const b64 = m[1]!;
   const bytes = (b64.length * 3) / 4 - (b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0);
-  return bytes <= COMMENT_CROP_MAX_BYTES;
+  return bytes <= ARTIFACT_COMMENT_CROP_MAX_BYTES;
 }
 
 /**
