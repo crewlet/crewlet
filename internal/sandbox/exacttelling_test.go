@@ -148,6 +148,87 @@ func TestABriefToldByAReadingIsHandedOnlyToABoxThatAnswersItsRelease(t *testing.
 	}
 }
 
+// A READING OF A CAPTURE THE BOX'S COPY WENT PAST IS SAID UNUSED. A kept
+// capture taken while its job still worked is passed over, in that job's own
+// box, for the box's copy of the same session, which went on past it
+// ([copyWentPast]): so a brief told by a reading of that capture is not handed,
+// and the launch says so once, naming the copy, as where it continues the
+// kept capture without the brief told by a reading. Said only where the copy
+// is what the launch continues: where the copy is a session its job ran out of
+// context in, the run starts a session of its own, and the not-continued lines
+// alone say why. Unsaid where the continuation carries no reading, and in another box,
+// where the capture is restored and handed the brief told by the reading.
+//
+// Mutation: log nothing for the copy, log it where the continuation carried
+// no reading, or where the launch starts a session of its own, and a case
+// goes red.
+//
+// Not parallel: it captures the process-wide logger ([captureLogs]).
+func TestAReadingOfACaptureTheBoxsCopyWentPastIsSaidUnused(t *testing.T) {
+	const copyBrief = "carry the box's copy on"
+	copyTold := BriefTold{Omitted: []int{7}}
+	for _, tc := range []struct {
+		name string
+		// reused is the job's own box; read carries a brief told by a
+		// reading beside the continuation; ranOut marks the copy's session
+		// one its job ran out of context in.
+		reused, read, ranOut bool
+		kind                 BriefKind
+		brief, session       string
+		told                 BriefTold
+		// exact is the brief told by the reading handed; unused, the
+		// reading said unused.
+		exact, unused bool
+	}{
+		{name: "its own box, the continuation read", reused: true, read: true, kind: BriefContinued,
+			brief: copyBrief, session: "s-1", told: copyTold, unused: true},
+		{name: "its own box, nothing read", reused: true, kind: BriefContinued, brief: copyBrief,
+			session: "s-1", told: copyTold},
+		{name: "its own box, the copy's session ran out", reused: true, read: true, ranOut: true,
+			kind: BriefFresh, brief: "the fresh brief"},
+		{name: "a new box, the continuation read", read: true, kind: BriefContinuedNewBox,
+			brief: readingNewBox, session: "s-1", told: toldByReading, exact: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureLogs(t)
+			rig, opened, req := exactRelaunch(t, true, readFor)
+			// A SAVE: taken while its job still worked, of the session the
+			// box's copy is.
+			save := *opened.Kept
+			save.Final, save.SessionID = false, "s-1"
+			opened.Capture, opened.Kept = &save, &save
+			if tc.ranOut {
+				opened.ExhaustedSessions = []string{"s-1"}
+			}
+			if !tc.read {
+				req.Session.Exact = nil
+			}
+			req.Continue = &Continuation{SessionID: "s-1", Brief: copyBrief, Told: copyTold}
+			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
+				rig.runner, tc.reused, false)
+			t.Cleanup(got.release)
+			if got.kind != tc.kind || got.brief != tc.brief || got.session != tc.session || got.exact != tc.exact {
+				t.Fatalf("the launch hands a %s brief %q on session %q (by a reading: %v); want a %s brief %q on "+
+					"%q (%v)", got.kind, got.brief, got.session, got.exact, tc.kind, tc.brief, tc.session, tc.exact)
+			}
+			if !slices.Equal(got.told.Omitted, tc.told.Omitted) {
+				t.Errorf("the launch records %v left out, want %v: the told set of the brief it hands",
+					got.told.Omitted, tc.told.Omitted)
+			}
+			lines := unusedLines(logs)
+			switch {
+			case !tc.unused && len(lines) != 0:
+				t.Errorf("the launch logged %q, want no reading said unused", lines)
+			case tc.unused && (len(lines) != 1 || !strings.Contains(lines[0], copyWentPastUnused) ||
+				!strings.Contains(lines[0], exactUnusedOutcome) || !strings.Contains(lines[0], "turn_id=t1") ||
+				!strings.Contains(lines[0], "agent=swe")):
+				t.Errorf("the launch logged %q; want one line naming t1, swe, the copy it continues (%q) and "+
+					"what it hands", lines, copyWentPastUnused)
+			}
+		})
+	}
+}
+
 // AN EMPTY BRIEF TOLD BY A READING FALLS BACK TO THE BRIEF WITHOUT. A telling
 // may write no brief for the box the launch got; that is no reason to refuse a
 // session the brief told by the save point continues: the launch hands that

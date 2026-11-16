@@ -1894,10 +1894,22 @@ func freshLaunch(req LaunchRequest) continuedLaunch {
 // a refused choice still leaves it, else a session of its own. Said as each
 // was refused, the line told an operator the run started fresh where it went
 // on in the box's copy.
+//
+// AND A READING OF THE KEPT CAPTURE IT PASSED OVER FOR THE COPY THAT WENT PAST
+// IT IS SAID UNUSED ([SessionContinuation.Exact], [Coordinator.exactUnused]),
+// as where it continues the kept capture without the brief told by one: the
+// copy is handed the brief that continues it there, which no reading told, and
+// only once the copy is what the launch continues. Unsaid, the reading the
+// relaunch read for that capture went nowhere, and nothing said why.
 func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, opened PendingRun,
 	box Sandbox, runner Runner, reused, begun bool) continuedLaunch {
 
-	var refused []string
+	var (
+		refused []string
+		// readPassedOver says the kept capture passed over for the box's
+		// copy ([copyWentPast]) came with a brief told by a reading of it.
+		readPassedOver bool
+	)
 	if want := req.Session; want != nil {
 		var (
 			launch continuedLaunch
@@ -1907,6 +1919,8 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 			launch, why = c.continueBase(ctx, req, opened, box, runner, reused, begun, *want)
 		} else if why = copyWentPast(req, opened, reused, *want); why == "" {
 			launch, why = c.continueKept(ctx, req, opened, box, runner, reused, *want)
+		} else {
+			readPassedOver = want.Exact != nil
 		}
 		if why == "" {
 			// WHAT ITS BRIEFS TOLD, what they left out of the round and what
@@ -1941,8 +1955,17 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 	for _, why := range refused {
 		c.notContinued(ctx, req, why, outcome)
 	}
+	if readPassedOver && outcome == continuesBoxCopy {
+		c.exactUnused(ctx, req, copyWentPastUnused)
+	}
 	return launch
 }
+
+// copyWentPastUnused is why a launch that continues its job's own box's copy in
+// place of the kept capture that copy went past ([copyWentPast]) hands none of
+// the brief told by a reading of that capture ([Coordinator.exactUnused]).
+const copyWentPastUnused = "the launch continues the copy of the session its job's own box holds, which went " +
+	"on past the capture the reading was read of"
 
 // copyWentPast is why the launch req, in the box the job it follows ran in
 // (reused), does not restore the turn's kept capture want over that box's own
@@ -2122,9 +2145,12 @@ func exactFor(exact *ExactTelling, check CarryCheck, reused bool) (brief, why st
 	return brief, ""
 }
 
-// exactUnused logs why a launch that continues the turn's kept session hands
-// it the brief told by the save point rather than the one told by a reading of
-// what it holds ([exactFor]), keyed as [Coordinator.notContinued]'s line.
+// exactUnused logs why a launch that continues the turn's session hands it a
+// brief other than the one told by a reading of what its kept capture holds:
+// the kept capture, told by its save point ([exactFor]), or the copy its job's
+// own box holds, which went on past that capture, told by the brief that
+// continues the copy there ([copyWentPast]). Keyed as
+// [Coordinator.notContinued]'s line. The one place the launch says so.
 func (c *Coordinator) exactUnused(ctx context.Context, req LaunchRequest, why string) {
 	log.InfoContext(ctx, "executor_session_holdings_unused", "turn_id", req.Turn.TurnID,
 		"agent", req.Turn.AgentHandle, "detail", redact.Secrets(why), "outcome", exactUnusedOutcome)
