@@ -1865,6 +1865,13 @@ test("the strip and its way into the inventory survive a company that saved noth
   // A REAL ANCHOR, middle-clickable like every other way out of a screen.
   const more = screen.getByRole("link", { name: "All saved views" });
   expect(more.tagName).toBe("A");
+  // THE KIT'S TIP SAYS IT on hover and focus; no native title beside it.
+  expect(more.hasAttribute("title")).toBe(false);
+  fireEvent.pointerEnter(more);
+  await waitFor(
+    () => expect(document.querySelector('[role="tooltip"]')?.textContent).toBe("All saved views"),
+    { timeout: 3000 },
+  );
   expect(more.getAttribute("href")).toBe("#/worklet/views");
   // AND NO COUNT ON THE CONTAINER TAB. The engine's total is over the FILTER
   // rather than over the container, so a number here would read as the

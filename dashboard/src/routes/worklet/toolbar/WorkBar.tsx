@@ -36,7 +36,7 @@
  */
 
 import { useRef, type ComponentProps, type RefObject } from "react";
-import { Input, Kbd, SegmentedControl, Select } from "@crewlethq/ui";
+import { Input, Kbd, SegmentedControl, Select, Tooltip } from "@crewlethq/ui";
 import {
   CalendarGlyph,
   ChartNoAxesGanttGlyph,
@@ -162,20 +162,17 @@ export function ViewSwitch({
  * narrowest room on the row and the one place a reader does not look for a
  * sentence. Written out ("All views →", 70px) it was the item that pushed the
  * search box and both menus onto a second line at 1280px, where the approved
- * board holds them on the row. Still a real anchor — middle-clickable like
- * every other way out of a screen — named for a screen reader and titled for
- * a pointer.
+ * board holds them on the row. Still a real anchor, middle-clickable like
+ * every other way out of a screen, named for a screen reader and tipped on
+ * hover and keyboard focus.
  */
 export function AllViewsLink() {
   return (
-    <a
-      className="work-strip-more"
-      href={href(["worklet", "views"])}
-      aria-label="All saved views"
-      title="All saved views"
-    >
-      <LayersGlyph size="sm" aria-hidden="true" />
-    </a>
+    <Tooltip content={<span aria-hidden="true">All saved views</span>}>
+      <a className="work-strip-more" href={href(["worklet", "views"])} aria-label="All saved views">
+        <LayersGlyph size="sm" aria-hidden="true" />
+      </a>
+    </Tooltip>
   );
 }
 
