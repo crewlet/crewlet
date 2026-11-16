@@ -1165,7 +1165,7 @@ type ModelCondition struct {
 }
 
 // MCPServerCondition is one MCP server's condition, joined from every live
-// node's heartbeat row for it ([coord.MCPServerStatus]).
+// node's status record row for it ([coord.MCPServerStatus]).
 //
 // ONE PER SERVER THE CONFIGURATION RUNS: a server turned off (`enabled:
 // false`) raises nothing, since nothing is started for it on purpose, and a
