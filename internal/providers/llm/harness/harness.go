@@ -738,10 +738,9 @@ func newSessionID() string {
 	return hex.EncodeToString(raw[:])
 }
 
-// argv is the invocation's arguments: the profile's completion argv — its tool
-// route's in place of it for a run with tools, where the route declares one,
-// rendered by [Provider.serveTools] — then the model and its effort, then (in
-// argv mode) the prompt, which the caller appends.
+// argv is the invocation's arguments: the profile's completion argv (its tool
+// route's for a run with tools, rendered by [Provider.serveTools]), then the
+// model and its effort, then in argv mode the prompt, which the caller appends.
 func (p *Provider) argv(tools bool) []string {
 	complete := p.profile.CompleteArgs
 	if m := p.profile.MCP; tools && m != nil && len(m.CompleteArgs) > 0 {

@@ -4146,9 +4146,23 @@ it. Every member opens the page; every change on it is an admin's.
 
 **Adding and editing a model is one wizard**, which writes the model and every
 use it is given as one revision: the name and the harness (both fixed once
-the model exists), how it signs in, the model, where it runs a seat's executor
+the model exists), how it signs in, the model and its reasoning effort, where it runs a seat's executor
 (only for a harness with a runner), what it is used for, its limits, a test call, and a review
-of exactly what changes. *Use it for* offers the work a person tells apart
+of exactly what changes.
+
+**Every built-in harness can be added**, each with the sign-ins the engine runs
+for it: a key in the harness's own variable (`api-key`), or for OpenCode, Hermes
+and Pi a provider's key in `env`; a login made on the engine host with
+`crewlet llm login`, or for Gemini CLI and Grok one made with the harness and
+adopted with `-from-host`; Claude Code's headless token and cloud providers;
+and Codex's device code. Qwen Code takes its key and its OpenAI-compatible
+endpoint. The effort control offers only the levels the harness takes on the
+chosen model, or says why it has none ([Reasoning effort](#reasoning-effort)).
+A harness with no box runner says it runs a seat's turns on the host, and the
+web tools switch and Ask Crewlet are offered only where the engine allows them.
+A `custom` harness is written in Configuration, since it needs a profile of its
+own. What the wizard knows of each harness is held to its profile by
+`internal/config.TestTheModelsScreenKnowsEveryHarnessAsItsProfileReads`. *Use it for* offers the work a person tells apart
 rather than the engine's five fields, and each choice writes every field it
 covers:
 

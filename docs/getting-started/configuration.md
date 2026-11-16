@@ -561,6 +561,11 @@ providers:
                                         #   breach is a retryable `timeout`. An executor run is
                                         #   not on this clock: its rounds are capped only where
                                         #   providers.sandbox.default_max_turns sets a cap
+      effort: high                      # optional: reasoning effort, in the harness's own levels
+                                        #   (claude-code: low | medium | high | xhigh | max). Absent
+                                        #   passes none, so the harness runs at its default. Refused
+                                        #   on a harness with no such setting or a level it does not
+                                        #   take. See LLM Backends, "Reasoning effort"
       max_concurrent: 4                 # optional — live harness processes on this host at once
                                         #   (default 4). Each is a 200-400 MB runtime that holds
                                         #   its slot for its whole run, and subscription plans
