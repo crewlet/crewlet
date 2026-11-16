@@ -14,9 +14,12 @@ permissions:
   contents: read
 
 # A PUSH TO A PULL REQUEST CANCELS THAT PULL REQUEST'S RUN FOR THE COMMIT IT
-# REPLACED, and nothing else is ever cancelled. Nobody can merge the replaced
-# commit, so its run only holds runners — ten jobs of them — that the new
-# commit's run is queueing for.
+# REPLACED. Nobody can merge the replaced commit, so its run only holds
+# runners — two dozen jobs of them — that the new commit's run is queueing
+# for. The one other cancel is ci-cancel.yml's, which stops a pull request's
+# run at its first failed job, by the same reasoning: every job here has to
+# pass before a merge, so a red one already means the push that would cancel
+# the rest.
 #
 # The group is UNIQUE PER RUN for every other event, and that is the half that
 # is easy to get wrong. A group keyed on the ref would put every push to main
@@ -649,8 +652,11 @@ jobs:
       - *gobuild-save
 
   # ONE SHARD OF THE PARALLEL HALF per leg, as the plan dealt it. fail-fast is
-  # off so a failure in one shard still reports every other's, as the single
-  # job did.
+  # off for main's run, every leg of which runs to the end: a red main records
+  # every failure it has, and each shard saves its build cache and its package
+  # durations, which a cancelled leg never does.
+  # A pull request's run needs no fail-fast either: ci-cancel.yml stops all of
+  # it, not one matrix, at its first failed job.
   test:
     name: test (race) ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: plan
