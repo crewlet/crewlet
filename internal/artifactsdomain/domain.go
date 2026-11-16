@@ -232,11 +232,10 @@ func (Domain) GatesSeatAdmission() bool { return false }
 // byte-identical: N copies of one SQL state from one ordered log.
 func (Domain) ClaimsIdentity() bool { return true }
 
-// FeedGroup is EMPTY: no consumer reads this log's feed yet. A comment record
-// carries who it wakes ([CommentNotify]); the feed that delivers it is declared
-// with that delivery, and until then empty is the answer that makes the trim's
-// feed term absent rather than a consumer nobody opens.
-func (Domain) FeedGroup() string { return "" }
+// FeedGroup is the artifacts log's wake consumer ([FeedGroup]): a comment
+// record carries who it wakes ([CommentNotify]), and the feed derives each
+// wake from the committed record (ADR-0012). The trim waits on it.
+func (Domain) FeedGroup() string { return FeedGroup }
 
 // BarrierTables is the empty set, DECLARED: the barrier writes no row on any
 // node, and stating that is what keeps "this kind wrote nothing" apart from

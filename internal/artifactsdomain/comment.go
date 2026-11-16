@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/commentanchor"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/words"
@@ -90,7 +91,34 @@ type Recipient struct {
 type CommentNotify struct {
 	Agents []Recipient `json:"agents,omitempty"`
 	People []Recipient `json:"people,omitempty"`
+
+	// About is what a wake says of where the comment was made.
+	About *CommentAbout `json:"about,omitempty"`
+
+	// WorkingFor is whom an agent's turn wrote the record for, so the turn
+	// it wakes works for them too (ADR-0109); nil for anybody else's.
+	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 }
+
+// CommentAbout is what a comment's wake says of where it was made, read when
+// the record was formed, as a code change's routing carries its title: the
+// artifact's title and kind, its head then, and the thread's version, anchor
+// label and quote.
+type CommentAbout struct {
+	Title string         `json:"title,omitempty"`
+	Kind  artifacts.Kind `json:"kind,omitempty"`
+	Head  int            `json:"head,omitempty"`
+
+	// Version is the version the thread was made on, Label where on it as a
+	// person reads it, and Quote the page's text it quotes.
+	Version int    `json:"version,omitempty"`
+	Label   string `json:"label,omitempty"`
+	Quote   string `json:"quote,omitempty"`
+}
+
+// MaxCommentLabelBytes bounds a wake's label of a thread's place: a section's
+// name or a slide's number and the first words of an element, with room to spare.
+const MaxCommentLabelBytes = 512
 
 // Empty reports a snapshot naming nobody.
 func (n CommentNotify) Empty() bool { return len(n.Agents) == 0 && len(n.People) == 0 }
@@ -332,6 +360,21 @@ type Remark struct {
 
 // checkNotify refuses a routing snapshot a record could not carry.
 func checkNotify(n CommentNotify) error {
+	if a := n.About; a != nil {
+		switch {
+		case len(a.Title) > artifacts.MaxTitleBytes:
+			return fmt.Errorf("%w: the comment's wake names a title of %d bytes and the most is %d",
+				ErrInvalid, len(a.Title), artifacts.MaxTitleBytes)
+		case len(a.Label) > MaxCommentLabelBytes:
+			return fmt.Errorf("%w: the comment's wake names a place of %d bytes and the most is %d",
+				ErrInvalid, len(a.Label), MaxCommentLabelBytes)
+		case int64(len(a.Quote)) > artifacts.MaxCommentQuoteBytes:
+			return fmt.Errorf("%w: the comment's wake quotes %d bytes and the most is %d",
+				ErrInvalid, len(a.Quote), artifacts.MaxCommentQuoteBytes)
+		case a.Head < 0 || a.Version < 0:
+			return fmt.Errorf("%w: the comment's wake names no version", ErrInvalid)
+		}
+	}
 	for side, list := range map[string][]Recipient{"agents": n.Agents, "people": n.People} {
 		if len(list) > MaxNotifyRecipients {
 			return fmt.Errorf("%w: the comment notifies %d %s and the most is %d", ErrInvalid,
