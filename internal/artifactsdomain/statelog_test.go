@@ -29,7 +29,7 @@ func TestTheArtifactsDomainIsACertifiedDomain(t *testing.T) {
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
 		return statelogtest.Candidate{
 			Domain:  artifactsdomain.Domain{},
-			Applier: artifactsdomain.NewApplier("suite-node", nil),
+			Applier: artifactsdomain.NewApplier("suite-node", nil, nil),
 			// Migrate is nil: these tables ship in the replicated estate's
 			// own migration (0043), so a fresh store already has them.
 			Encode: encodeSuiteRecord,
@@ -62,7 +62,7 @@ func TestTheArtifactsGateReaderKeepsTheSharedRule(t *testing.T) {
 		return statelogtest.GateCandidate{
 			Candidate: statelogtest.Candidate{
 				Domain:  artifactsdomain.Domain{},
-				Applier: artifactsdomain.NewApplier("suite-node", nil),
+				Applier: artifactsdomain.NewApplier("suite-node", nil, nil),
 				// RAW IDS: the family asks the reader about the very ids it
 				// handed out, so a record about one must name it on its
 				// subject as given.

@@ -31,7 +31,8 @@ func artifactsRegistrations() []registration {
 			// node: the serving origin's authorization cache and the socket
 			// hub, each of which serves only this node's own requests, so
 			// the apply on every data node is what reaches each of them.
-			return artifactsdomain.NewApplier(s.nodeID, s.artifactsMoved), nil
+			return artifactsdomain.NewApplier(s.nodeID, s.artifactsMoved,
+				s.inboxFor(artifactsdomain.Domain{})), nil
 		},
 		NewSeams: func(s *stateLog, spec statelog.StreamSpec, appendTo *jetstream.DomainLog,
 			runner *statelog.Runner) (writeSeams, error) {
