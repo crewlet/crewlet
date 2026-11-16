@@ -73,8 +73,8 @@ export function Advisor() {
   return (
     <>
       <PageNote>
-        What your company&rsquo;s setup costs it, why, and the change that fixes each. You review
-        every change before it is made; the engine never makes one on its own.
+        What the company&rsquo;s setup costs it and the change that fixes each; nothing changes
+        until you review it.
       </PageNote>
       {/* THE READ IN FLIGHT IS A SKELETON, drawn beside `QueryState`, which
           draws nothing while it waits: the screen was its one sentence over

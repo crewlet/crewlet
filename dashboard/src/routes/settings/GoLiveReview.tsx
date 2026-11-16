@@ -12,7 +12,6 @@
  */
 
 import { Card, DescriptionList, Text, type DescriptionListEntry } from "@crewlethq/ui";
-import { ShieldCheckGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { boxWords, integrationWords, toolServerWords } from "~/lib/agentAccess.ts";
 import { listed } from "~/lib/format.ts";
@@ -64,7 +63,7 @@ export function GoLiveReview() {
   const { data, error, refusal, detail, loading } = useQuery("go_live_review");
   return (
     <Card padding="none">
-      <Card.Header icon={<ShieldCheckGlyph size="sm" />} count={data?.agents.length}>
+      <Card.Header count={data?.agents.length}>
         <Card.Title>Review what each agent can do</Card.Title>
       </Card.Header>
       <Card.Body padding="md" className="col gap-3">

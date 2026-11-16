@@ -37,12 +37,7 @@ import {
   useToast,
   type DataGridColumn,
 } from "@crewlethq/ui";
-import {
-  ChevronDownGlyph,
-  SearchGlyph,
-  TriangleAlertGlyph,
-  WrenchGlyph,
-} from "@crewlethq/icons/glyphs";
+import { ChevronDownGlyph, SearchGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import type { McpMemberServerStatus, McpRisk, McpToolView } from "~/contract/mcp.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { indexOrg } from "~/lib/seats.ts";
@@ -340,7 +335,6 @@ export function ToolsTab({
       {admin && detail.reading === "admin" ? (
         <Card padding="none">
           <Card.Header
-            icon={<WrenchGlyph size="sm" />}
             actions={
               <Button
                 size="small"

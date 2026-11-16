@@ -216,7 +216,7 @@ export function BrokerMembership({
     // grants and a state-log one says that waiting will not clear it.
     return error ? (
       <Card>
-        <Card.Header icon={<NetworkGlyph size="sm" />}>
+        <Card.Header>
           <Card.Title>Broker members</Card.Title>
         </Card.Header>
         <QueryState error={error} refusal={refusal} loading={false} />
@@ -226,7 +226,7 @@ export function BrokerMembership({
   if (answer.external) {
     return (
       <Card>
-        <Card.Header icon={<NetworkGlyph size="sm" />}>
+        <Card.Header>
           <Card.Title>Broker members</Card.Title>
         </Card.Header>
         <EmptyState
@@ -252,23 +252,19 @@ export function BrokerMembership({
   return (
     <Card padding="none">
       <Card.Header
-        icon={<NetworkGlyph size="sm" />}
         // THE COUNT IS THE TABLE'S ROWS: counting the group's voters said 0
         // over a table listing the one node that advertises a broker.
         count={rows.length}
-        subtitle={answer.group ? groupSummary(answer.group, answer.group_from) : undefined}
+        subtitle={
+          answer.solo
+            ? "One embedded broker, with no cluster"
+            : answer.group
+              ? groupSummary(answer.group, answer.group_from)
+              : undefined
+        }
       >
         <Card.Title>Broker members</Card.Title>
       </Card.Header>
-      {/* ONE EMBEDDED BROKER IS A STATE, said plainly: it has no cluster, so
-          the group's columns would say "not a voter" of the only member. */}
-      {answer.solo && (
-        <Card.Body padding="md">
-          <p className="t-caption muted">
-            This engine runs one embedded broker, so there is no cluster to show.
-          </p>
-        </Card.Body>
-      )}
       {((!answer.group && !answer.solo) || answer.findings.length > 0 || error) && (
         <Card.Body padding="md">
           <div className="col gap-2">

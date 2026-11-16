@@ -52,12 +52,7 @@ import {
   type SourceMark,
 } from "@crewlethq/ui";
 import { ConfirmModal, Modal } from "~/components/Modal.tsx";
-import {
-  FileCodeGlyph,
-  RefreshCwGlyph,
-  RotateCcwGlyph,
-  UploadGlyph,
-} from "@crewlethq/icons/glyphs";
+import { RefreshCwGlyph, RotateCcwGlyph, UploadGlyph } from "@crewlethq/icons/glyphs";
 import {
   refuse,
   useAssistantDraft,
@@ -661,7 +656,6 @@ export function DocumentEditor({
   return (
     <Card>
       <Card.Header
-        icon={<FileCodeGlyph size="sm" />}
         subtitle="as YAML, checked by the engine before it is saved"
         actions={
           <span className="row gap-2">

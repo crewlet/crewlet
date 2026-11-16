@@ -359,11 +359,11 @@ test("a reader without Admin sees no write control, and an administrator sees th
   engine();
   mount(MEMBER, "ready", ServiceAccounts);
   await screen.findByText(/Changing any of this needs Admin access/);
-  expect(screen.queryByRole("button", { name: "New service account" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Add service account" })).toBeNull();
   cleanup();
   engine();
   mount(ADMIN, "ready", ServiceAccounts);
-  expect(await screen.findByRole("button", { name: "New service account" })).toBeTruthy();
+  expect(await screen.findByRole("button", { name: "Add service account" })).toBeTruthy();
   cleanup();
   engine();
   mount(ADMIN);
@@ -437,8 +437,8 @@ test("with no open seat, invite names Structure, where a human seat is added", a
 test("a service account login is checked on leaving the field and marks it", async () => {
   engine({});
   mount(ADMIN, "ready", ServiceAccounts);
-  fireEvent.click(await screen.findByRole("button", { name: "New service account" }));
-  const create = await screen.findByRole("dialog", { name: "New service account" });
+  fireEvent.click(await screen.findByRole("button", { name: "Add service account" }));
+  const create = await screen.findByRole("dialog", { name: "Add service account" });
   const login = within(create).getByLabelText("Login");
   fireEvent.change(login, { target: { value: "uxs.settings.probe" } });
   expect(within(create).queryByText(/not dots/)).toBeNull();
@@ -1180,8 +1180,8 @@ test("a service account is created keyed and its token minted unkeyed from its g
     ],
   });
   mount(ADMIN, "ready", ServiceAccounts);
-  fireEvent.click(await screen.findByRole("button", { name: "New service account" }));
-  const create = await screen.findByRole("dialog", { name: "New service account" });
+  fireEvent.click(await screen.findByRole("button", { name: "Add service account" }));
+  const create = await screen.findByRole("dialog", { name: "Add service account" });
   fireEvent.change(within(create).getByLabelText("Login"), { target: { value: "ci:deploy" } });
   for (const name of ["Admin", "Worklet", "Doclet"]) {
     expect(within(create).getByRole("checkbox", { name })).toHaveProperty("checked", false);
@@ -1220,8 +1220,8 @@ test("a service account created on a seat sends it in the same record", async ()
     "POST /iam/people": [json(201, { id: "p-new", outcome: "applied", op_id: "k" })],
   });
   mount(ADMIN, "ready", ServiceAccounts);
-  fireEvent.click(await screen.findByRole("button", { name: "New service account" }));
-  const create = await screen.findByRole("dialog", { name: "New service account" });
+  fireEvent.click(await screen.findByRole("button", { name: "Add service account" }));
+  const create = await screen.findByRole("dialog", { name: "Add service account" });
   fireEvent.change(within(create).getByLabelText("Login"), { target: { value: "ci:deploy" } });
   await settle();
   pick(within(create).getByLabelText(/^Seat/), /Lee Ops/);
@@ -1240,8 +1240,8 @@ test("a service account created on a seat sends it in the same record", async ()
 test("a login outside its kind's grammar is refused under the field and not posted", async () => {
   const eng = engine({});
   mount(ADMIN, "ready", ServiceAccounts);
-  fireEvent.click(await screen.findByRole("button", { name: "New service account" }));
-  const create = await screen.findByRole("dialog", { name: "New service account" });
+  fireEvent.click(await screen.findByRole("button", { name: "Add service account" }));
+  const create = await screen.findByRole("dialog", { name: "Add service account" });
   fireEvent.change(within(create).getByLabelText("Login"), { target: { value: "deploybot" } });
   fireEvent.click(within(create).getByRole("button", { name: "Create" }));
   await settle();

@@ -268,7 +268,7 @@ test("a reader without the grant sees every control disabled with the reason", a
   await show(READER_VIEWER);
   const reason = CONFIG_WRITE_REASONS.no_grant;
   for (const control of [
-    screen.getByRole("button", { name: /Add a rule/ }),
+    screen.getByRole("button", { name: /Add rule/ }),
     screen.getByRole("button", { name: "Edit rule 1" }),
     screen.getByRole("button", { name: "Remove rule 2" }),
   ]) {
@@ -373,10 +373,10 @@ async function showMerge(respond: (call: EngineCall) => Response = () => savedAn
 /** Opens the sheet for Add a rule, filled from the document. */
 async function openAdd() {
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: /Add a rule/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Add rule/ }));
   });
   await act(afterMicrotasks);
-  return screen.getByRole("dialog", { name: "Add a rule" });
+  return screen.getByRole("dialog", { name: "Add rule" });
 }
 
 // A KIND IN ONE RULE ONLY: one another rule decides is offered disabled with
@@ -495,7 +495,7 @@ test("with every kind in a rule, Add a rule is held with the reason", async () =
     },
   );
   await act(afterMicrotasks);
-  expect(screen.getByRole("button", { name: /Add a rule/ }).getAttribute("title")).toBe(
+  expect(screen.getByRole("button", { name: /Add rule/ }).getAttribute("title")).toBe(
     "Every kind of request has a rule. Edit one instead.",
   );
 });

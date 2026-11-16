@@ -135,10 +135,8 @@ import {
   KeyGlyph,
   SendGlyph,
   PlusGlyph,
-  BotGlyph,
   ShieldGlyph,
   TriangleAlertGlyph,
-  UserGlyph,
   UsersGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
@@ -170,7 +168,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { asSentence, fmtDate, plural, tsKey } from "~/lib/format.ts";
+import { asSentence, fmtDate, tsKey } from "~/lib/format.ts";
 import { NODE_FILE_CHANGE } from "~/lib/nodeFile.ts";
 import { ADMIN, accessLine, holds, needsWords } from "~/lib/access.ts";
 import { documentUnits, handleLabel, indexOrg, unitByKey } from "~/lib/seats.ts";
@@ -390,7 +388,7 @@ const KIND_WORDS: Record<string, string> = {
 /** What a Tier A token's login names in the directory. */
 export const TOKEN_ROW_WORDS: Record<string, Words> = {
   none: {
-    label: "Not bound",
+    label: "No",
     tone: "neutral",
     hint: "Not bound to a seat. Bind it with crewlet iam create -kind machine -login token:<id> -seat <seat> -grants none.",
   },
@@ -485,12 +483,7 @@ function WordTag({ words, fallback }: { words: Words | undefined; fallback: stri
  * figure of none said nothing about the seats that are held.
  */
 export function openSeatsWords(vacant: number, invited: number, total: number): string {
-  const of =
-    vacant === 0 && invited === 0
-      ? total === 1
-        ? "the one human seat is held"
-        : `all ${total} human seats are held`
-      : `of ${plural(total, "human seat")}`;
+  const of = vacant === 0 && invited === 0 ? "every seat is held" : `of ${total}`;
   return invited > 0 ? `${of} · ${invited} invited` : of;
 }
 
@@ -848,7 +841,7 @@ export function People() {
       </PageActions>
       <PageNote>
         {manages
-          ? "Invite people from their seat in the org chart."
+          ? "Everyone who signs in, the invitations still open and the seats people hold."
           : needsWords("Changing any of this", [ADMIN])}
       </PageNote>
       {inviting && (
@@ -876,14 +869,8 @@ export function People() {
           {!nobody && (
             <Card padding="none">
               <StatGroup columns={2}>
+                <StatCard label="People" value={people.length} sub={`${active} active`} />
                 <StatCard
-                  icon={<UsersGlyph size="xs" />}
-                  label="People"
-                  value={people.length}
-                  sub={`${active} active`}
-                />
-                <StatCard
-                  icon={<TriangleAlertGlyph size="xs" />}
                   label="Open seats"
                   value={seats.data ? vacant : EMPTY_VALUE}
                   sub={
@@ -906,7 +893,7 @@ export function People() {
           />
 
           <Card padding="none">
-            <Card.Header icon={<UsersGlyph size="sm" />} count={people.length}>
+            <Card.Header count={people.length}>
               <Card.Title>People</Card.Title>
             </Card.Header>
             <DataGrid<DirectoryRow>
@@ -941,7 +928,7 @@ export function People() {
           />
 
           <Card padding="none">
-            <Card.Header icon={<UserGlyph size="sm" />} count={seatRows.length}>
+            <Card.Header count={seatRows.length}>
               <Card.Title>Human seats</Card.Title>
             </Card.Header>
             {/* NO COMPANY IS NOT A FAILURE: the listing's 409 is the node
@@ -964,7 +951,11 @@ export function People() {
                   rows={seatRows}
                   rowKey={(s) => s.handle}
                   defaultSort="seat"
-                  empty={{ title: "The running company has no human seats" }}
+                  empty={{
+                    size: "inline",
+                    title: "No human seats",
+                    hint: "A person joins on a human seat, added in Company › Structure.",
+                  }}
                   columns={[
                     {
                       key: "seat",
@@ -1037,7 +1028,6 @@ export function ServiceAccounts() {
   const byId = useMemo(() => new Map(everyone.map((p) => [p.id, p])), [everyone]);
   const accounts = useMemo(() => everyone.filter(isServiceAccount), [everyone]);
   const openPeek = usePrincipalPeek(accounts);
-  const bound = accounts.filter((a) => a.seat).length;
 
   return (
     <>
@@ -1049,7 +1039,7 @@ export function ServiceAccounts() {
             leadingIcon={<PlusGlyph size="sm" />}
             onClick={() => setCreating(true)}
           >
-            New service account
+            Add service account
           </Button>
         )}
       </PageActions>
@@ -1077,18 +1067,6 @@ export function ServiceAccounts() {
             held={viewer.grants}
           />
           <Card padding="none">
-            {/* HOW MANY ACT AS A SEAT is the card's fact, said in its head
-                rather than as a footnote floating inside the card under the
-                table. */}
-            <Card.Header
-              icon={<BotGlyph size="sm" />}
-              count={accounts.length}
-              subtitle={
-                accounts.length > 0 ? `${bound} of ${accounts.length} act as a seat` : undefined
-              }
-            >
-              <Card.Title>Service accounts</Card.Title>
-            </Card.Header>
             <DataGrid<DirectoryRow>
               rows={accounts}
               rowKey={(p) => p.id}
@@ -1096,6 +1074,7 @@ export function ServiceAccounts() {
               rowHref={(p) => peekHref(personRef(p.id))}
               onRowActivate={peekRowActivation(openPeek)}
               empty={{
+                icon: "bot",
                 title: "No service accounts yet",
                 hint: manages
                   ? "Create one for an automation that signs in on its own."
@@ -1167,16 +1146,10 @@ export function ApiTokens() {
   return (
     <>
       <PageNote>
-        The tokens this node accepts, set in its configuration file and {NODE_FILE_CHANGE}. A
-        person&rsquo;s own tokens are on their Account.
+        The tokens this node&rsquo;s configuration file grants; a person&rsquo;s own tokens are on
+        their Account.
       </PageNote>
       <Card padding="none">
-        <Card.Header
-          icon={<KeyGlyph size="sm" />}
-          count={tokens.data ? tokenRows.length : undefined}
-        >
-          <Card.Title>API tokens on this node</Card.Title>
-        </Card.Header>
         {companyWriters.length > 0 && (
           <Card.Body padding="md">
             <CompanyWriters writers={companyWriters} />
@@ -1193,6 +1166,7 @@ export function ApiTokens() {
             rowKey={(t) => t.id}
             defaultSort="id"
             empty={{
+              icon: "key",
               title: "This node declares no API token",
               hint: `Tokens are set in the node's configuration file and ${NODE_FILE_CHANGE}.`,
             }}
@@ -1220,7 +1194,7 @@ export function ApiTokens() {
               },
               {
                 key: "row",
-                header: "Seat entry",
+                header: "Acts as a seat",
                 shrink: true,
                 sortValue: (t) => t.row,
                 cell: (t) => (
@@ -1325,7 +1299,8 @@ export function peopleColumns(index: ReturnType<typeof indexOrg>): DataGridColum
     {
       key: "stage",
       header: "Stage",
-      shrink: true,
+      // A stage is one short word that never truncates, even beside the peek.
+      width: "max-content",
       sortValue: (p) => p.stage,
       cell: (p) => (
         <StateCell words={STAGE_WORDS[p.stage]} fallback={p.stage} resting={p.stage === "active"} />
@@ -1653,7 +1628,6 @@ function Invitations({
   return (
     <Card padding="none">
       <Card.Header
-        icon={<SendGlyph size="sm" />}
         count={rows.length}
         // THE HEAD'S CONTROLS' STEP: a body-step label here stood larger than
         // the card's own title beside it.
@@ -1675,7 +1649,9 @@ function Invitations({
           rowKey={(i) => i.id}
           defaultSort="expires"
           empty={{
+            size: "inline",
             title: all ? "No invitations" : "No open invitations",
+            hint: "An invitation shows here until it is used or expires.",
           }}
           columns={[
             // THE ADDRESS IS THE ONE FLEXIBLE TRACK, and is never cut (its
@@ -2226,7 +2202,11 @@ function Principal({
             rows={credentials.data ?? []}
             rowKey={(c) => c.id}
             defaultSort="method"
-            empty={{ title: "Holds no credential" }}
+            empty={{
+              size: "inline",
+              title: "No credentials",
+              hint: "A password or token they hold shows here.",
+            }}
             columns={[
               {
                 key: "method",
@@ -2325,7 +2305,11 @@ function Principal({
               rows={sessions.data ?? []}
               rowKey={(s) => s.lineage}
               defaultSort="started"
-              empty={{ title: "Signed in nowhere" }}
+              empty={{
+                size: "inline",
+                title: "No active sessions",
+                hint: "A session shows here while they are signed in.",
+              }}
               columns={[
                 {
                   // A TIMESTAMP, so it is not the flexible column: it took the

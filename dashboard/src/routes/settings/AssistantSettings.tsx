@@ -16,14 +16,6 @@ import {
   Switch,
   withDraft,
 } from "@crewlethq/ui";
-import {
-  BrainGlyph,
-  GaugeGlyph,
-  GlobeGlyph,
-  WandSparklesGlyph,
-  SquareTerminalGlyph,
-  WrenchGlyph,
-} from "@crewlethq/icons/glyphs";
 import type { ReactNode } from "react";
 import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -295,19 +287,16 @@ export function AssistantSettings() {
         ) : (
           <>
             <Card padding="none">
-              <Card.Header
-                icon={<WandSparklesGlyph size="sm" />}
-                subtitle="Who answers, and on which models"
-              >
+              <Card.Header subtitle="On or off for everybody, and the models it answers on">
                 <Card.Title as="h3" id="assistant-models">
-                  Ask Crewlet
+                  Quick answers
                 </Card.Title>
               </Card.Header>
               <SettingsTable aria-labelledby="assistant-models">
                 <DocumentSetting<boolean>
                   doc={doc}
                   settingKey="assistant.enabled"
-                  label="Turned on"
+                  label="Ask Crewlet"
                   current={enabled}
                   fallback={false}
                   words={onOff}
@@ -360,10 +349,7 @@ export function AssistantSettings() {
             </Card>
 
             <Card padding="none">
-              <Card.Header
-                icon={<BrainGlyph size="sm" />}
-                subtitle="Think harder, one question at a time"
-              >
+              <Card.Header subtitle="Think harder, one question at a time">
                 <Card.Title as="h3" id="assistant-deliberate">
                   A stronger model for hard questions
                 </Card.Title>
@@ -415,7 +401,7 @@ export function AssistantSettings() {
             </Card>
 
             <Card padding="none">
-              <Card.Header icon={<GaugeGlyph size="sm" />} subtitle="What one turn may take">
+              <Card.Header subtitle="What one turn may take">
                 <Card.Title as="h3" id="assistant-turns">
                   Turns
                 </Card.Title>
@@ -435,10 +421,7 @@ export function AssistantSettings() {
             </Card>
 
             <Card padding="none">
-              <Card.Header
-                icon={<WrenchGlyph size="sm" />}
-                subtitle="It only narrows what each person's permissions offer"
-              >
+              <Card.Header subtitle="It only narrows what each person's permissions offer">
                 <Card.Title as="h3" id="assistant-tools">
                   Tools turned off
                 </Card.Title>
@@ -485,10 +468,7 @@ export function AssistantSettings() {
             </Card>
 
             <Card padding="none">
-              <Card.Header
-                icon={<GlobeGlyph size="sm" />}
-                subtitle="Vendor documentation, read through the engine"
-              >
+              <Card.Header subtitle="Vendor documentation, read through the engine">
                 <Card.Title as="h3" id="assistant-research">
                   Web research
                 </Card.Title>
@@ -543,10 +523,7 @@ export function AssistantSettings() {
             </Card>
 
             <Card padding="none">
-              <Card.Header
-                icon={<SquareTerminalGlyph size="sm" />}
-                subtitle="A large task, handed to a run with its own tools"
-              >
+              <Card.Header subtitle="A large task, handed to a run with its own tools">
                 <Card.Title as="h3" id="assistant-deep">
                   Deep work
                 </Card.Title>
@@ -566,8 +543,8 @@ export function AssistantSettings() {
                   label="Model"
                   current={deep}
                   fallback=""
-                  words={(key) => key || "Off"}
-                  helper="A Claude Code model. Off answers in quick mode only."
+                  words={(key) => key || "None"}
+                  helper="A Claude Code model. With none, Ask answers in quick mode only."
                   write={(key) => (key ? key : null)}
                   onApplied={refetch}
                   field={({ id, value, set, busy }) => (

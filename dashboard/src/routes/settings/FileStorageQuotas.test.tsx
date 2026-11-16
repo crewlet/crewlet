@@ -44,17 +44,11 @@ function mount() {
   );
 }
 
-test("each quota is a figure over its ceiling, with a bar and its key", () => {
+test("each quota is a figure over its ceiling, with a bar and no document key as prose", () => {
   mount();
   const card = screen.getByText("Storage quotas").closest(".crewlet-card") as HTMLElement;
   expect(within(card).getAllByRole("meter")).toHaveLength(3);
-  for (const key of [
-    "artifacts.limits.company_bytes",
-    "artifacts.limits.artifacts",
-    "artifacts.limits.data_bytes",
-  ]) {
-    expect(within(card).getByText(key)).toBeTruthy();
-  }
+  expect(within(card).queryByText(/artifacts\.limits\./)).toBeNull();
   expect(within(card).getByText("of 50k")).toBeTruthy();
 });
 
