@@ -840,13 +840,13 @@ func (w *activityWorld) tick() {
 func (w *activityWorld) redelivery() []built {
 	var newest time.Time
 	for _, r := range w.records {
-		if r.storedAt.After(newest) {
+		if r.storedAt.After(newest) { //fixedwait:stated the world's own stamps, no clock's
 			newest = r.storedAt
 		}
 	}
 	var recent []built
 	for _, r := range w.records {
-		if r.storedAt.After(newest.Add(-PushHistory)) {
+		if r.storedAt.After(newest.Add(-PushHistory)) { //fixedwait:stated the world's own stamps, no clock's
 			recent = append(recent, r)
 		}
 	}
