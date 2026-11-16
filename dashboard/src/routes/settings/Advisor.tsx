@@ -13,6 +13,7 @@
 import { Suspense, useState } from "react";
 import {
   AttentionList,
+  groupNotices,
   Button,
   Callout,
   EmptyState,
@@ -37,6 +38,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import type { AdvisorFinding, AdvisorPage, AdvisorSeverity } from "~/protocol/advisor.ts";
 import { marked } from "~/ui/Problems.tsx";
 import { TAKE_BACKUP } from "~/lib/backups.ts";
+import { plural } from "~/lib/format.ts";
 
 /**
  * An atlas finding's fix (ADR-0141), from the atlas's own chunk: its pickers
@@ -100,13 +102,13 @@ export function Advisor() {
             )
           ) : (
             <AttentionList
-              items={owner.map((f) => findingItem(f, () => setOpen(f), assistant))}
+              items={grouped(owner).map((g) => groupItem(g, (f) => setOpen(f), assistant))}
               labels={OWNER_LABELS}
             />
           ))}
         {engine.length > 0 && (
           <AttentionList
-            items={engine.map((f) => findingItem(f, null, null))}
+            items={grouped(engine).map((g) => groupItem(g, null, null))}
             labels={ENGINE_LABELS}
           />
         )}
@@ -212,6 +214,64 @@ export function findingMeta(f: AdvisorFinding): string | undefined {
   const subject = f.subject.name ?? "";
   if (!subject || f.title.includes(subject)) return undefined;
   return subject;
+}
+
+/**
+ * Findings that say the same thing (one class, one title, one why, one kind of
+ * fix) are one row, in the order the first of each came.
+ */
+export function grouped(findings: readonly AdvisorFinding[]): AdvisorFinding[][] {
+  const groups = new Map<string, AdvisorFinding[]>();
+  for (const f of findings) {
+    const key = [f.class, f.title, f.why, f.fix.kind].join("\u0000");
+    const group = groups.get(key);
+    if (group) group.push(f);
+    else groups.set(key, [f]);
+  }
+  return [...groups.values()];
+}
+
+/**
+ * A group as one row: its subjects named once (a count where several carry no
+ * item), each one's items under it, and the first finding's action, so a
+ * change reviewed one at a time leaves the rest in the row.
+ */
+function groupItem(
+  group: readonly AdvisorFinding[],
+  review: ((f: AdvisorFinding) => void) | null,
+  assistant: AssistantControl | null,
+): AttentionItem {
+  const first = group[0]!;
+  const item = findingItem(first, review && (() => review(first)), assistant);
+  const names = group.flatMap((f) => f.names ?? []);
+  if (group.length === 1 && names.length === 0 && !first.item) return item;
+  // TWO SEATS SHARING A NAME stay two, told apart by their handles.
+  const shared = new Set(
+    group.map((f) => f.subject.name ?? "").filter((n, i, all) => n !== "" && all.indexOf(n) !== i),
+  );
+  const nameOf = (f: AdvisorFinding) =>
+    shared.has(f.subject.name ?? "") && f.subject.seat
+      ? `${f.subject.name} (${f.subject.seat})`
+      : (f.subject.name ?? "");
+  const notice = groupNotices(
+    group.flatMap((f) => {
+      const subjects = f.names?.length ? f.names : [nameOf(f)];
+      return subjects.map((subject) => ({
+        kind: "group",
+        subject: subject || undefined,
+        item: f.item,
+        title: item.title,
+      }));
+    }),
+    { count: (s) => plural(s.length, "agent") },
+  )[0]!;
+  return {
+    ...item,
+    key: `${item.key}\u0000${group.length}`,
+    subject: notice.subject,
+    lines: notice.lines,
+    meta: group.length > 1 ? undefined : item.meta,
+  };
 }
 
 /** One finding as a row of the list: what is wrong, why, and its one action. */
