@@ -218,6 +218,9 @@ func memoizable(q gitlet.GitQuery) bool {
 	case gitlet.GitTips:
 		// Kept a tip at a time under tips/1 (tips.go), never as a page.
 		return false
+	case gitlet.GitTags:
+		// Read from the copy's tag index, never a page of the memo (tags.go).
+		return false
 	}
 	return true
 }

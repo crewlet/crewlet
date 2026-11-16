@@ -149,6 +149,9 @@ type knobs struct {
 	// peeling runs as a round's peel is about to read the incarnation at
 	// dir.
 	peeling func(dir string)
+	// tagging runs as a round's tag step is about to read the facts of reading
+	// objects through git in the incarnation at dir; its error fails the step.
+	tagging func(ctx context.Context, dir string, reading int) error
 	// roundEnding runs as a round over repo has converged and before it
 	// lets the repository go: a case holds a round there, its write lock
 	// given back and the round still the repository's.

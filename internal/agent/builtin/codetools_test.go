@@ -2267,3 +2267,31 @@ func TestACodeReadInATurnAPersonWithoutGitletWokeIsRefused(t *testing.T) {
 	control.Requester, control.Senders = "founder", []types.CanonicalIdentity{{Handle: "founder"}}
 	callCode(t, reg, control, builtin.CodeListReposTool, map[string]any{})
 }
+
+// A CODE_LOG ANSWER NAMES ITS COMMITS' TAGS where the node's index holds them.
+//
+// Mutation: clear Tagged in the tool's answer → red.
+func TestACodeLogAnswerNamesItsCommitsTags(t *testing.T) {
+	t.Parallel()
+	marks := &gitlet.TagMarks{Commits: map[string]gitlet.CommitTags{mainOID: {Refs: []string{"refs/tags/v1"},
+		More: 2}}}
+	for _, tagged := range []*gitlet.TagMarks{marks, nil} {
+		host := newGitletHost()
+		host.git = func(q gitlet.GitQuery) gitlet.GitAnswer {
+			return gitlet.GitAnswer{Kind: gitlet.GitLog, RepoID: q.RepoID, Rev: mainOID, Tagged: tagged,
+				Log: &gitlet.LogAnswer{Scanned: 1, Commits: []gitlet.LogCommit{{OID: mainOID, Subject: "one"}}}}
+		}
+		_, answer := callCode(t, codeRegistry(t, codeDeps(host)), codeTurn(t), builtin.CodeLogTool,
+			map[string]any{"repo": "site", "rev": mainOID})
+		got, carried := answer["tagged"].(map[string]any)
+		switch {
+		case tagged == nil && carried:
+			t.Errorf("a page from a node keeping no tag index carries tagged %v", got)
+		case tagged != nil:
+			commit, _ := got["commits"].(map[string]any)[mainOID].(map[string]any)
+			if refs, _ := commit["refs"].([]any); len(refs) != 1 || refs[0] != "refs/tags/v1" || commit["more"] != 2.0 {
+				t.Errorf("the page carries tagged %v, want v1 and 2 more for the commit", answer["tagged"])
+			}
+		}
+	}
+}

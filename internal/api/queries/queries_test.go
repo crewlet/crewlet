@@ -393,6 +393,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"code_blame":   string(iam.GrantGitlet),
 		"code_diff":    string(iam.GrantGitlet),
 		"code_tips":    string(iam.GrantGitlet),
+		"code_tags":    string(iam.GrantGitlet),
 		"code_compare": string(iam.GrantGitlet),
 		"code_commit":  string(iam.GrantGitlet),
 		// AND ITS MERGE QUEUES AND ITS CHECKS, decided per repository alike:

@@ -66,7 +66,9 @@ func headValid(raw []byte) bool {
 }
 
 // writeRefs makes inc's HEAD and packed-refs the snapshot's, and reports
-// whether it wrote either.
+// whether it wrote either, and whether it wrote the tag index or its record.
+// The tag index is levelled in the same step and renamed in with packed-refs
+// (tags.go), so no reader sees the two disagree.
 //
 // HEAD is written when the incarnation has no state, when the default branch
 // changed, or — on a full round — when its bytes are not the target's.
@@ -87,27 +89,29 @@ func headValid(raw []byte) bool {
 //
 // by is the round's reader of inc (roundReader), which the peel names.
 func (c *Cache) writeRefs(ctx context.Context, e *entry, inc *incarnation, snap snapshot,
-	by gitproc.Repairer) (bool, error) {
+	by gitproc.Repairer) (refsWrote, tagsWrote bool, err error) {
 	e.mu.Lock()
 	noState, branchMoved := inc.state == nil, inc.repo.DefaultBranch != snap.repo.DefaultBranch
 	digest := inc.refsDigest
+	tagsDue := c.tagsDue(inc, snap)
 	e.mu.Unlock()
 
 	head := headFor(snap.repo.DefaultBranch)
 	writeHead := noState || branchMoved
 	if !writeHead && snap.full {
-		on, err := os.ReadFile(filepath.Join(inc.dir, "HEAD"))
-		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return false, fmt.Errorf("cache: sync %s: refs: %w", e.id, err)
+		on, rerr := os.ReadFile(filepath.Join(inc.dir, "HEAD"))
+		if rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+			return false, false, fmt.Errorf("cache: sync %s: refs: %w", e.id, rerr)
 		}
 		writeHead = !bytes.Equal(on, head)
 	}
 	writePacked := snap.full || len(snap.refs) > 0
-	if !writeHead && !writePacked {
-		return false, nil
+	if !writeHead && !writePacked && !tagsDue {
+		return false, false, nil
 	}
 
 	var staged []placement
+	var tags tagStep
 	// refsMove: a new packed-refs is staged to be renamed in.
 	refsMove := false
 	defer func() {
@@ -116,41 +120,49 @@ func (c *Cache) writeRefs(ctx context.Context, e *entry, inc *incarnation, snap 
 				_ = removeStaged(s.staged, nil) // a round that failed: tmp/ is tidied
 			}
 		}
+		tags.discard(c)
 	}()
 	var written refsFile
+	var pf peelFacts
+	left := refsLeft{path: filepath.Join(inc.dir, "packed-refs"), digest: digest}
 	if writePacked {
-		peeled, err := c.peel(ctx, e.id, inc.dir, snap, by)
-		if err != nil {
-			return false, err
+		if pf, err = c.peel(ctx, e.id, inc.dir, snap, by); err != nil {
+			return false, false, err
 		}
-		path, out, err := c.stagePackedRefs(inc, snap, peeled, digest)
-		if err != nil {
-			return false, fmt.Errorf("cache: sync %s: refs: %w", e.id, err)
+		path, out, serr := c.stagePackedRefs(inc, snap, pf.peeled, digest)
+		if serr != nil {
+			return false, false, fmt.Errorf("cache: sync %s: refs: %w", e.id, serr)
 		}
 		written = out
 		if snap.full && holdsDigest(filepath.Join(inc.dir, "packed-refs"), out.digest) {
 			// Already the file it would write: nothing to rename in.
-			if err := removeStaged(path, nil); err != nil {
-				return false, fmt.Errorf("cache: sync %s: refs: %w", e.id, err)
+			if err = removeStaged(path, nil); err != nil {
+				return false, false, fmt.Errorf("cache: sync %s: refs: %w", e.id, err)
 			}
 		} else {
 			staged = append(staged, placement{staged: path, dst: filepath.Join(inc.dir, "packed-refs")})
 			refsMove = true
+			left = refsLeft{path: path, digest: out.digest}
 		}
 	}
 	if writeHead {
-		path, err := c.stage(hostbox.FileMode, func(f *os.File) error {
+		path, serr := c.stage(hostbox.FileMode, func(f *os.File) error {
 			_, werr := f.Write(head)
 			return werr
 		})
-		if err != nil {
-			return false, fmt.Errorf("cache: sync %s: refs: %w", e.id, err)
+		if serr != nil {
+			return false, false, fmt.Errorf("cache: sync %s: refs: %w", e.id, serr)
 		}
 		staged = append(staged, placement{staged: path, dst: filepath.Join(inc.dir, "HEAD")})
 	}
+	if tagsDue {
+		if tags, err = c.levelTags(ctx, e, inc, snap, left, pf, by, refsMove); err != nil {
+			return false, false, fmt.Errorf("cache: sync %s: refs: tags: %w", e.id, err)
+		}
+	}
 	if c.faults != nil {
-		if err := c.faults.Hit(ctx, gitletfault.SyncRefs, 0); err != nil {
-			return false, fmt.Errorf("cache: sync %s: refs: %w", e.id, err)
+		if err = c.faults.Hit(ctx, gitletfault.SyncRefs, 0); err != nil {
+			return false, false, fmt.Errorf("cache: sync %s: refs: %w", e.id, err)
 		}
 	}
 	if refsMove {
@@ -158,18 +170,18 @@ func (c *Cache) writeRefs(ctx context.Context, e *entry, inc *incarnation, snap 
 		// packed-refs is renamed in (dropFor's order rule). No declaration
 		// drops for moved refs today — a bitmap names commits it selected,
 		// and stays sound whichever refs point at them.
-		if _, err := c.dropFor(e, inc, EventRefsMoved, eventDetail{}); err != nil {
-			return false, fmt.Errorf("cache: sync %s: refs: %w", e.id, err)
+		if _, err = c.dropFor(e, inc, EventRefsMoved, eventDetail{}); err != nil {
+			return false, false, fmt.Errorf("cache: sync %s: refs: %w", e.id, err)
 		}
 	}
 
 	e.mu.Lock()
 	placedRefs := false
 	for i := range staged {
-		if err := c.place(staged[i].staged, staged[i].dst); err != nil {
+		if err = c.place(staged[i].staged, staged[i].dst); err != nil {
 			e.mu.Unlock()
 			staged[i].staged = ""
-			return false, fmt.Errorf("cache: sync %s: refs: %w", e.id, err)
+			return false, false, fmt.Errorf("cache: sync %s: refs: %w", e.id, err)
 		}
 		staged[i].staged = ""
 		placedRefs = placedRefs || filepath.Base(staged[i].dst) == "packed-refs"
@@ -180,19 +192,20 @@ func (c *Cache) writeRefs(ctx context.Context, e *entry, inc *incarnation, snap 
 	if placedRefs {
 		c.setSize(inc, inc.diskBytes+written.bytes-written.was)
 	}
+	tagsWrote = c.placeTags(e, inc, &tags)
 	e.mu.Unlock()
 	if len(staged) == 0 {
-		return false, nil
+		return false, tagsWrote, nil
 	}
-	if err := syncDir(inc.dir); err != nil {
-		return false, fmt.Errorf("cache: sync %s: refs: %w", e.id, err)
+	if err = syncDir(inc.dir); err != nil {
+		return false, tagsWrote, fmt.Errorf("cache: sync %s: refs: %w", e.id, err)
 	}
 	if refsMove {
 		// The default branch may have moved: the indexer looks at the
 		// repository now rather than at its next poll (codeindex.go).
 		c.nudgeIndex(e.id)
 	}
-	return true, nil
+	return true, tagsWrote, nil
 }
 
 // holdsDigest reports whether the file at path hashes to digest (SHA-256,
@@ -480,12 +493,13 @@ func (l *refsReader) next() (refsLine, error) {
 
 // peel peels every tag the snapshot sets — all of them on a full round, the
 // delta's on a delta — with ONE cat-file over the objects they name, and
-// answers each object that is an annotated tag with what it points at.
+// answers each object that is an annotated tag with what it points at, and
+// the type of what each peels to, which the tag index takes (tags.go).
 // An object no installed pack holds fails the round with
 // gitproc.ErrMissingObject: the rows name what the packs do not hold here.
 // The process names the round's reader by (gitproc.Cmd.Repairer), so what it
 // reports is held for the round's own repair (roundReader).
-func (c *Cache) peel(ctx context.Context, id, dir string, snap snapshot, by gitproc.Repairer) (map[string]string,
+func (c *Cache) peel(ctx context.Context, id, dir string, snap snapshot, by gitproc.Repairer) (peelFacts,
 	error) {
 	var oids []string
 	named := map[string]string{}
@@ -499,7 +513,7 @@ func (c *Cache) peel(ctx context.Context, id, dir string, snap snapshot, by gitp
 		}
 	}
 	if len(oids) == 0 {
-		return nil, nil
+		return peelFacts{}, nil
 	}
 	var stdin bytes.Buffer
 	for _, oid := range oids {
@@ -508,7 +522,7 @@ func (c *Cache) peel(ctx context.Context, id, dir string, snap snapshot, by gitp
 	if c.knobs != nil && c.knobs.peeling != nil {
 		c.knobs.peeling(dir)
 	}
-	peeled := map[string]string{}
+	pf := peelFacts{peeled: map[string]string{}, types: make(map[string]gitlet.ObjectType, len(oids))}
 	i := 0
 	lines := gitproc.NewLines(func(line []byte) error {
 		if i >= len(oids) {
@@ -516,15 +530,17 @@ func (c *Cache) peel(ctx context.Context, id, dir string, snap snapshot, by gitp
 		}
 		oid := oids[i]
 		i++
-		got := string(line)
-		switch {
-		case got == oid+"^{} missing":
+		if string(line) == oid+"^{} missing" {
 			return fmt.Errorf("%w: %s names %s, which no installed pack of %s holds",
 				gitproc.ErrMissingObject, named[oid], oid, id)
-		case !gitref.ValidOID(got):
-			return fmt.Errorf("cache: cat-file peeled %s as %q", oid, got)
-		case got != oid:
-			peeled[oid] = got
+		}
+		got, t, err := peelLine(oid, string(line))
+		if err != nil {
+			return err
+		}
+		pf.types[oid] = t
+		if got != oid {
+			pf.peeled[oid] = got
 		}
 		return nil
 	})
@@ -538,7 +554,8 @@ func (c *Cache) peel(ctx context.Context, id, dir string, snap snapshot, by gitp
 	// repository until the expunge's commit — which its maintainer's own
 	// rescue, waiting on a sync of the repository, could then never make.
 	_, err := c.git.Run(ctx, gitproc.Cmd{
-		Dir: dir, Dropping: heldView(dir), Args: []string{"cat-file", "--batch-check=%(objectname)", "--buffer"},
+		Dir: dir, Dropping: heldView(dir), Args: []string{"cat-file", "--batch-check=%(objectname) %(objecttype)",
+			"--buffer"},
 		Config: c.ServeConfig(), Stdin: bytes.NewReader(stdin.Bytes()), Stdout: lines, Class: gitproc.ClassRead,
 		Repairer: by, Deadline: gitproc.PackWorkDeadline(int64(stdin.Len())),
 	})
@@ -549,7 +566,7 @@ func (c *Cache) peel(ctx context.Context, id, dir string, snap snapshot, by gitp
 		err = fmt.Errorf("cache: cat-file answered %d of %d tags", i, len(oids))
 	}
 	if err != nil {
-		return nil, fmt.Errorf("cache: sync %s: refs: peel: %w", id, err)
+		return peelFacts{}, fmt.Errorf("cache: sync %s: refs: peel: %w", id, err)
 	}
-	return peeled, nil
+	return pf, nil
 }

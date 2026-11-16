@@ -507,11 +507,14 @@ func TestADerivedFileFollowsItsDeclarationOnEveryEvent(t *testing.T) {
 		}
 	}
 	// What the state records follows: no index over the packs, no bitmap,
-	// no graph, and an index of pushes made anew at the round's position,
-	// holding nothing yet.
+	// no graph, an index of pushes made anew at the round's position,
+	// holding nothing yet, and the tag index the full round wrote again.
 	doc := readStateDoc(t, s.Dir)
-	if prov, ok := doc.Derived[string(cache.DerivedProvenance)]; len(doc.Derived) != 1 || !ok || prov.Bytes != 0 {
-		t.Errorf("the state after the drop records %+v, want only an empty index of pushes", doc.Derived)
+	prov, ok := doc.Derived[string(cache.DerivedProvenance)]
+	tags, tagged := doc.Derived[string(cache.DerivedTags)]
+	if len(doc.Derived) != 2 || !ok || prov.Bytes != 0 || !tagged || tags.Step != string(cache.StepTags) {
+		t.Errorf("the state after the drop records %+v, want only an empty index of pushes and the tag index",
+			doc.Derived)
 	}
 	if idx, ok := cache.Index(c, repo); !ok || len(idx.Runs) != 0 || idx.From != s.Position.Packed() ||
 		idx.Through != s.Position.Packed() {
