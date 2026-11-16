@@ -151,18 +151,14 @@ afterEach(() => {
 // every lens, never a callout under the last card. It no longer says "read
 // only" of a document other pages write. Mutation: move it back under the
 // cards and the note is no longer the content's first element.
-test("the screen says what writes the document first, as its page note", async () => {
+test("the screen says what it does with the document first, as its page note", async () => {
   const { container } = mount("#/config?lens=audit");
   await screen.findByText("01JCFGAAAA");
   expect(screen.queryByText(/Read only here/)).toBeNull();
-  const note = screen.getByText(/This page shows the company document/);
+  const note = screen.getByText(/The whole company document: edit it, import over it/);
   expect(note.closest(".crewlet-page-note")).not.toBeNull();
   expect(note.closest(".crewlet-callout")).toBeNull();
   expect(container.querySelector(".crewlet-page-note")).toBe(note.closest(".crewlet-page-note"));
-  expect(
-    within(note.closest(".crewlet-page-note") as HTMLElement).getByText("crewlet config import")
-      .tagName,
-  ).toBe("CODE");
 });
 
 test("a revision row renders the server's own field names", async () => {

@@ -33,7 +33,7 @@ import {
   PageNote,
 } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
-import { DatabaseGlyph, FolderGlyph, GaugeGlyph } from "@crewlethq/icons/glyphs";
+import { DatabaseGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
@@ -183,8 +183,8 @@ export function FileStoragePage() {
   return (
     <>
       <PageNote>
-        Where the company&rsquo;s files are kept, what the collector last found, and what the
-        company holds against its storage quotas.
+        Where the company&rsquo;s files are kept, the collector&rsquo;s last passes and the storage
+        quotas.
       </PageNote>
       <QueryState error={error} refusal={refusal} loading={loading && !data}>
         {data && <FileStorage objects={data.objects} now={now} />}
@@ -202,7 +202,6 @@ function PassesCard({ node, children }: { node?: string; children: ReactNode }) 
   return (
     <Card padding="none">
       <Card.Header
-        icon={<DatabaseGlyph size="sm" />}
         subtitle={
           node ? (
             <>
@@ -271,10 +270,7 @@ function StorageQuotas() {
   ];
   return (
     <Card padding="none">
-      <Card.Header
-        icon={<GaugeGlyph size="sm" />}
-        subtitle="Every version of every artifact, private ones and the trash included"
-      >
+      <Card.Header subtitle="Every version of every artifact, private ones and the trash included">
         <Card.Title>Storage quotas</Card.Title>
       </Card.Header>
       <StatGroup columns={3}>
@@ -295,7 +291,6 @@ function StorageQuotas() {
                 valueText={`${quota.used} ${quota.of}`}
               />
             }
-            sub={<code className="storage-quota-key">{quota.key}</code>}
           />
         ))}
       </StatGroup>
@@ -350,7 +345,7 @@ export function FileStorage({ objects, now }: { objects?: FleetObjects; now: num
           control. Which node ran the last pass is a fact about the passes, and
           heads their card. */}
       <Card padding="none">
-        <Card.Header icon={<FolderGlyph size="sm" />}>
+        <Card.Header>
           <Card.Title id="file-storage-store">Where files are kept</Card.Title>
         </Card.Header>
         <SettingsTable aria-labelledby="file-storage-store">

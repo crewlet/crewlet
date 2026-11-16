@@ -35,7 +35,7 @@
 
 import { useState } from "react";
 import { Button, Card, Disclosure, EmptyState, InlineCode, SettingsTable } from "@crewlethq/ui";
-import { BellGlyph, CodeGlyph, SettingsGlyph, ShieldGlyph } from "@crewlethq/icons/glyphs";
+import { BellGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { alarmKindTitle } from "~/lib/alarms.ts";
 import { PageFailed, QueryState } from "~/components/common.tsx";
@@ -119,7 +119,6 @@ export function BranchProtection() {
   return (
     <Card padding="none">
       <Card.Header
-        icon={<ShieldGlyph size="sm" />}
         count={paged.more ? undefined : protectedRepos.length}
         subtitle="The rules on each repository's branches, and what a merge into each must meet"
         actions={
@@ -271,7 +270,6 @@ function CodeLog({ log, answered }: { log: RetentionDomain | undefined; answered
   return (
     <Card padding="none">
       <Card.Header
-        icon={<CodeGlyph size="sm" />}
         subtitle="Its ceiling, what it holds, and the six checks its trim waits on"
         actions={
           <a className="t-link" href={href(["settings", "backups"])}>
@@ -405,7 +403,6 @@ export function CodePolicy() {
   return (
     <Card padding="none">
       <Card.Header
-        icon={<SettingsGlyph size="sm" />}
         subtitle="What the configuration's code block sets"
         actions={
           <a className="t-link" href={href(["settings", "config"])}>
