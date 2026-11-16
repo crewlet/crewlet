@@ -3463,7 +3463,8 @@ func TestACallsRecordsInTwoThreadsAreTold(t *testing.T) {
 // read. Any other text names no subagent's leg: no header, or one with more on
 // its line; an agent or a leg outside its rule; the ids in the other order; a
 // line between them and the status; or a status other than completed, or with
-// more on its line.
+// more on its line. Read as the walk reads one, a piece at a time
+// ([textNotice]).
 //
 // Mutation: read any status as completed, read past a line that is no output
 // file, or take a leg outside the call-id rule, and a text of another shape
@@ -3491,7 +3492,7 @@ func TestATaskNotificationIsReadLineByLine(t *testing.T) {
 		"a status other than completed":   {head + ids + "<status>killed</status>", false},
 		"a status with more on its line":  {head + ids + done + " ", false},
 	} {
-		agent, leg, ok := taskNotification(tc.text)
+		agent, leg, ok := ltNotice(tc.text)
 		if ok != tc.ok || (ok && (agent != ctAgent || leg != hsStarted)) {
 			t.Errorf("%s reads as %t, naming %q and %q; want %t, naming %q and %q", name, ok, agent, leg, tc.ok,
 				ctAgent, hsStarted)

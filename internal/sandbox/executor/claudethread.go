@@ -1423,7 +1423,13 @@ func messageContent(content json.RawMessage, call string) (threadMessage, error)
 		if err := wireDecode(content, &text); err != nil {
 			return threadMessage{}, fmt.Errorf("content: %w", err)
 		}
-		return threadMessage{text: text, isText: true, saysAny: strings.ContainsFunc(text, jsTrimKeeps)}, nil
+		// READ AS IT WILL STREAM ([textSays]), a piece at a time.
+		var says textSays
+		cut := textCut{text: text}
+		for p := cut.next(); p != nil && !says.any; p = cut.next() {
+			says.write(p)
+		}
+		return threadMessage{text: text, isText: true, saysAny: says.any}, nil
 	}
 	// A BLOCK AT A TIME ([eachElement]), and the kinds and the calls grown
 	// from what was accepted, never sized from the list's length, which only
@@ -1448,7 +1454,8 @@ func messageContent(content json.RawMessage, call string) (threadMessage, error)
 			// meets no error but a lone surrogate's or invalid UTF-8's, each
 			// written as U+FFFD, as the layer's decode reads it.
 			said, _ = jsontext.AppendUnquote(said[:0], text)
-			if bytes.ContainsFunc(said, jsTrimKeeps) {
+			var says textSays
+			if says.write(said); says.any {
 				m.saysAny = true
 				m.saysText = b.Kind == blockText
 			}
@@ -2637,7 +2644,8 @@ func skillNamesKept(names json.RawMessage) (bool, error) {
 		// surrogate's or invalid UTF-8's, each written as U+FFFD, as the
 		// layer's decode reads it.
 		unquoted, _ = jsontext.AppendUnquote(unquoted[:0], name)
-		if utf16Units(unquoted) <= skillListingMaxNameUnits {
+		var units textUnits
+		if units.write(unquoted); units.units() <= skillListingMaxNameUnits {
 			return nil
 		}
 		if !utf8.Valid(name) {
@@ -2654,22 +2662,6 @@ func skillNamesKept(names json.RawMessage) (bool, error) {
 			"is not one the layer can count as Claude Code does")
 	}
 	return true, nil
-}
-
-// utf16Units is how many UTF-16 code units JavaScript counts the string text,
-// UTF-8 as the layer's decode leaves it, as long: two for a rune past the
-// basic plane, one for every other.
-func utf16Units(text []byte) int {
-	units := 0
-	for len(text) > 0 {
-		r, size := utf8.DecodeRune(text)
-		units++
-		if r > 0xffff {
-			units++
-		}
-		text = text[size:]
-	}
-	return units
 }
 
 // threadPreserved is what a compaction's boundary says it kept of the thread

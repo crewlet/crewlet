@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -224,10 +223,10 @@ import (
 //     ANSWERS NO LEG, the call's own or a notification, nor does any answer
 //     of a leg one of whose answers carries one: under a handback the
 //     subagent's report never reaches the main thread's model through it
-//     ([carriesHandback], [handbackNotice]).
+//     ([carriesHandback], [textHandback]).
 //     A NOTIFICATION IS AN ANSWER: a continuation hands its model the
 //     notification's record verbatim (probe T, T10, on 2.1.310 and 2.1.322),
-//     and its lines name the subagent and the leg ([taskNotification]). An
+//     and its lines name the subagent and the leg ([textNotice]). An
 //     answer is read off a record of that one result alone, since a record's
 //     own toolUseResult is that record's, never one call's of several.
 //  4. NO UNSEEN LEG: its file starts no more legs (a user record of its own
@@ -438,7 +437,7 @@ const (
 // What the records rule 2 reads say, as Claude Code writes it.
 const (
 	// claudeTaskNotification is the origin kind of the main thread's record of
-	// a subagent's end ([taskNotification]).
+	// a subagent's end ([textNotice]).
 	claudeTaskNotification = "task-notification"
 	// claudeAgentCompleted is the status of an Agent or Task call's answer
 	// whose subagent finished, and [claudeNotificationCompleted] a task
@@ -474,7 +473,7 @@ const (
 	claudeRefused = "refusal"
 	// claudeToolHandback is the tool through which a subagent under a handback
 	// contract delivers its report, which every answer of a leg that carries
-	// a handback names ([handbackNotice]).
+	// a handback names ([textHandback]).
 	claudeToolHandback = "SubagentHandback"
 )
 
@@ -712,7 +711,7 @@ type legFact struct {
 	refused    bool
 	// handback is whether a record of a result of it, or a task notification
 	// of it, carries a handback: no answer of the leg is then its subagent's
-	// report ([carriesHandback], [handbackNotice]).
+	// report ([carriesHandback], [textHandback]).
 	handback bool
 	// answered is whether the request a resumed session sends pairs the
 	// first call with the first result, by the pairing rule
@@ -1141,13 +1140,14 @@ func (w *holdingsWalk) count(thread string, call threadCall, n int, record int32
 		facts.resultThread, facts.line, facts.resultRec = thread, n, record
 		facts.failed, facts.textBytes = call.IsError != nil && *call.IsError, -1
 		if text, ok := resultText(call.Content); ok {
-			facts.textBytes = len(text)
-			facts.opening = sha256.Sum256([]byte(text[:min(sandbox.HoldingsOpeningBytes, len(text))]))
-			// WHOLE ONLY WHERE A LOG COULD HAVE KEPT IT WHOLE: a longer text
-			// is compared by its opening alone, so its whole is never hashed.
-			if len(text) <= sandbox.MaxBridgeOutputBytes {
-				facts.whole = sha256.Sum256([]byte(text))
+			// READ AS IT WILL STREAM ([textResult]), a piece at a time.
+			var read textResult
+			cut := textCut{text: text}
+			for p := cut.next(); p != nil; p = cut.next() {
+				read.write(p)
 			}
+			sum := read.sum()
+			facts.textBytes, facts.opening, facts.whole = int(sum.Bytes), sum.Opening, sum.Whole
 		}
 	}
 }
@@ -1247,7 +1247,9 @@ func (w *holdingsWalk) legResult(line threadLine, call threadCall, alone bool, r
 // notification files line, a user record of the main thread whose
 // message is message, record in its chain, as a task notification of a
 // subagent's leg where it is one: a text whose origin says so, its lines
-// naming the subagent and a leg whose call was read ([taskNotification]).
+// naming the subagent and a leg whose call was read ([textNotice]), and
+// whether it carries a handback ([textHandback]), each read as the text will
+// stream, a piece at a time.
 func (w *holdingsWalk) notification(line threadLine, message threadMessage, record int32) error {
 	text, ok := message.Text()
 	if !ok {
@@ -1256,16 +1258,26 @@ func (w *holdingsWalk) notification(line threadLine, message threadMessage, reco
 	if originOf(line) != claudeTaskNotification {
 		return nil
 	}
-	agent, leg, ok := taskNotification(text)
+	var (
+		notice   textNotice
+		handback textHandback
+	)
+	cut := textCut{text: text}
+	for p := cut.next(); p != nil && !(notice.done && handback.named); p = cut.next() {
+		notice.write(p)
+		handback.write(p)
+	}
+	notice.end()
+	// The agent and the leg are strings of the notice's own, never pieces of
+	// the text, which a kept substring would hold until the walk ends.
+	agent, leg, ok := notice.notice()
 	if !ok || w.legs[leg] == nil {
 		return nil
 	}
-	if handbackNotice(text) {
+	if handback.named {
 		w.legs[leg].handback = true
 	}
-	// CLONED, since each is a piece of a text up to a line long, which a kept
-	// substring would hold until the walk ends.
-	key := legNotice{agent: strings.Clone(agent), leg: strings.Clone(leg)}
+	key := legNotice{agent: agent, leg: leg}
 	if _, filed := w.notices[key]; !filed {
 		if err := w.keep(); err != nil {
 			return err
@@ -1758,69 +1770,6 @@ func carriesHandback(raw json.RawMessage) bool {
 		return true
 	}
 	return wire.Handback != nil || wire.HandbackReport != nil
-}
-
-// handbackNotice reports whether a task notification's text, whose leading
-// lines name a subagent's leg ([taskNotification]), carries a handback
-// ([carriesHandback]): where it names [claudeToolHandback] anywhere.
-//
-// THE NOTIFICATION MARKS A HANDBACK BY ITS WORDS ALONE. Both releases build a
-// completion's notification (2.1.322's MXt @298314707 through Pi @292640802,
-// 2.1.310's W0t @251577375 through Di) with the subagent's answer, joined, as
-// its `<result>`, and no tag of a handback's own: so under a handback its
-// result is the harness's words in the report's place, and each of their
-// three forms names the tool (2.1.322's H3i, tOr and iOr @288119298 and
-// @287819913, 2.1.310's Eqs, kqs and jQn @245869660 and @242470305, the tool
-// SubagentHandback in each). A report of the subagent's own that names it
-// costs only its leg, the safe direction.
-func handbackNotice(text string) bool { return strings.Contains(text, claudeToolHandback) }
-
-// taskNotification is the subagent and the leg a task notification's text
-// names: its lines, in order, `<task-notification>`, `<task-id>A</task-id>`,
-// `<tool-use-id>L</tool-use-id>`, any number of
-// `<output-file>…</output-file>`, and `<status>completed</status>`, nothing
-// after the status read. False for any other text, an agent outside
-// [validClaudeAgent]'s rule, or a leg outside the call-id rule
-// ([sandbox.ValidCallID]).
-func taskNotification(text string) (agent, leg string, ok bool) {
-	line, rest := nextLine(text)
-	if line != "<task-notification>" {
-		return "", "", false
-	}
-	line, rest = nextLine(rest)
-	if agent, ok = enclosed(line, "<task-id>", "</task-id>"); !ok || !validClaudeAgent(agent) {
-		return "", "", false
-	}
-	line, rest = nextLine(rest)
-	if leg, ok = enclosed(line, "<tool-use-id>", "</tool-use-id>"); !ok || !sandbox.ValidCallID(leg) {
-		return "", "", false
-	}
-	for {
-		line, rest = nextLine(rest)
-		if _, file := enclosed(line, "<output-file>", "</output-file>"); !file {
-			break
-		}
-	}
-	if line != claudeNotificationCompleted {
-		return "", "", false
-	}
-	return agent, leg, true
-}
-
-// nextLine is text's first line, its break dropped, and what follows it.
-func nextLine(text string) (line, rest string) {
-	line, rest, _ = strings.Cut(text, "\n")
-	return line, rest
-}
-
-// enclosed is what line holds between opening and closing, where line is
-// exactly that.
-func enclosed(line, opening, closing string) (string, bool) {
-	inner, ok := strings.CutPrefix(line, opening)
-	if !ok {
-		return "", false
-	}
-	return strings.CutSuffix(inner, closing)
 }
 
 // failed is err, which ended the reading, as the reading answers it: its
