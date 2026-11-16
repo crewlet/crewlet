@@ -55,7 +55,8 @@ import type { WizardAdd, WizardAt, WizardStep } from "../parts.tsx";
 import { useCheckModel } from "../useCheckModel.ts";
 import { CATEGORY_WORDS } from "../words.ts";
 import {
-  METHODS,
+  methodsOf,
+  providersFor,
   STEP_LABELS,
   baseOf,
   canExecute,
@@ -385,11 +386,17 @@ export function ModelWizard({
   const changeHarness = (harness: Harness) => {
     const executor = canExecute({ harness });
     const dropsCoding = !executor && (draft.intent === "all" || draft.intent === "coding");
+    const providers = providersFor(harness);
     set({
       harness,
-      method: METHODS[harness][0]!,
+      method: methodsOf(harness)[0] ?? "unchanged",
       credential: "",
       model: "",
+      effort: "",
+      endpoint: "",
+      ...(providers.length > 0 && !providers.some((p) => p.value === draft.provider)
+        ? { provider: providers[0]!.value }
+        : {}),
       ...(executor ? {} : { runIn: "" }),
       ...(dropsCoding
         ? { intent: "none", uses: { ...noUses(), assistant: draft.uses.assistant } }
@@ -808,7 +815,9 @@ export function ModelWizard({
             <ModelStep
               draft={draft}
               error={errorWhere(field("model"))}
+              effortError={errorWhere(field("effort"))}
               onChange={(model) => set({ model })}
+              onEffort={(effort) => set({ effort })}
             />
           ) : null}
           {step === "runs" ? (
