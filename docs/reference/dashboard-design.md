@@ -1735,6 +1735,8 @@ a project's Files listing: a block inside a card that already titles it, with
 nothing to sort, which is a table in the sense the element means rather than a
 list of objects. (The retention screen's per-domain terms were the other one;
 they are a description list now.)
+Gitlet's Branches and Tags are tables too: boxes titled in their first head
+cell, each row stacking on a phone, with the grid's `j`, `k` and Enter.
 
 **Gitlet's lists are rows of sentences, not a grid.** Its commits, changes, repositories and pushes are drawn by `CodeList`, which keeps the grid's `j`, `k` and Enter, the peek, a phone row, Load more and the address.
 
@@ -8933,8 +8935,10 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   with the way to Gitlet › Changes narrowed alike. **Commits** is the history at a revision, of the path the
   address names or of every path, as a timeline of the reader's days each commit was authored: a heading per run of one day, so git's order is never re-sorted to fit.
   Each commit is its subject, its author's face, name and when, how it reached its branch (a run for its work item, pushed with git, or who pushed it) where the answering node's index holds the push, its id with its copy, and a way to browse its files; Load older commits pages on. **Pushes** is the repository's push history, as Gitlet ›
-  Pushes draws it. **Branches** lists the live branches, each its name as a
-  branch chip and its marks, and writes them:
+  Pushes draws it. **Branches** is its branches as tables in views (Overview:
+  the default branch and the active ones; Active, Stale and All by when each
+  moved), each branch with who moved it and when (Gitlet for a merge or a
+  queue landing) and its change, with Find a branch, and writes them:
   **New branch** (`code_create_branch`, a name and where it starts, the
   default branch when left empty), and on each row **Protect**, which opens
   the protection form on that branch's ref (a branch a rule names already is
@@ -8946,7 +8950,8 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   history and that a change proposing it loses its source. The default
   branch's row has no Delete: the engine refuses its deletion whoever asks
   (`default_branch`), and it is let go by making another branch the default
-  on Settings first. Its **Tags** follow under it, the same listing under
+  on Settings first. Delete is held with the engine's own sentence where the
+  rules refuse it. Its **Tags** follow under it, the same listing under
   `refs/tags/`, each opening its code at its whole ref. A new branch takes
   write and a delete maintain, and
   a repository that is archived, deleted, importing or a pull mirror takes

@@ -249,7 +249,9 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
   },
   "routes/gitlet/repo/BranchWrites.tsx": {
-    why: "Branches' New branch and a row's Delete (code_create_branch, code_delete_branch)",
+    why:
+      "Branches' New branch and a row's Delete (code_create_branch, code_delete_branch), " +
+      "held with the engine's sentence where its rules refuse a delete",
     suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
   },
   "routes/gitlet/repo/FileWrites.tsx": {
