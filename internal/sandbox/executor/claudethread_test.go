@@ -995,14 +995,16 @@ func TestALineThatIsNoRecordSaysHowTheLoadReadsIt(t *testing.T) {
 	// classifier's own decoder over the line ([refusedFault], four objects
 	// with or without the race detector, where a second whole decode is nine),
 	// above the one to three the race detector's pools were measured to add.
-	// A line the decode takes costs less than its one decode and its head
-	// with that second read on top, or it was read again.
+	// A line the decode takes costs less than its one decode, its head and the
+	// facts its accessors read ([factsOf]) with that second read on top, or it
+	// was read again.
 	good := []byte(ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn))
 	read := fewestAllocations(func() { _, _ = decodeThreadLine(1, good) })
 	decode := fewestAllocations(func() {
 		var w threadWire
 		_ = wireDecode(good, &w)
-		_, _ = w.head()
+		h, _ := w.head()
+		_ = factsOf(&w, h)
 	})
 	again := fewestAllocations(func() { _ = refusedFault(good) })
 	if again < 4 {
@@ -4597,10 +4599,12 @@ func ctKeysRecord(t *testing.T, head string, key func(i int) string, tail string
 // it is read. So a list refused at its first block costs what a list of that
 // block alone costs, however many follow it: no allocation more, and no byte
 // more than the copies of the list its reader makes as it decodes the record
-// around it (Message one, its content's; ToolResultsCleared two, its report's
-// and its edits'), never a header and a copy for each element, nor a slice of
-// them, before the first is checked. A line at the layer's bound holding four
-// million `1`s, or a list of empty objects, shows it. The walk itself, with
+// around it (Message, read as its line is decoded ([factsOf]), two, the
+// message's and its content's; ToolResultsCleared, read off the report its
+// line's facts keep, one, its edits'), never a header and a copy for each
+// element, nor a slice of them, before the first is checked. A line at the
+// layer's bound holding four million `1`s, or a list of empty objects, shows
+// it. The walk itself, with
 // nobody keeping what it hands out, costs the same for a long list as for a
 // list of one, in allocations and in bytes: it never collects the elements.
 // And a list read to its end leaves held what Message says it does, a call
@@ -4631,8 +4635,14 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 	// detector a pool also drops a quarter of what is put in it. A whole
 	// decode costs millions more.
 	const slack = 64
+	// A MESSAGE IS READ AS ITS LINE IS DECODED ([factsOf]): what it costs is
+	// its line's decode and then Message.
 	message := func(l threadLine) error {
-		_, err := l.Message()
+		decoded, err := decodeThreadLine(l.N, l.Raw)
+		if err != nil {
+			t.Fatalf("line %d, decoded again, is no record: %v", l.N, err)
+		}
+		_, err = decoded.Message()
 		return err
 	}
 	cleared := func(l threadLine) error {
@@ -4645,16 +4655,16 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 		head, element, tail string
 		read                func(threadLine) error
 		// copies is how many copies of the list its reader makes as it decodes
-		// the record around it, measured: Message its content's, and
-		// ToolResultsCleared its report's and its edits'. A list may cost
+		// the record around it, measured: Message the message's and its
+		// content's, and ToolResultsCleared its edits'. A list may cost
 		// those and ONE LINE MORE, so a reader that makes a copy more still
 		// passes, where a slice of the list's elements, or a header for each,
 		// costs several lines.
 		copies uint64
 	}{
-		"a message's content of numbers":       {head: user, element: "1", tail: `]}}`, read: message, copies: 1},
-		"a message's content of empty objects": {head: user, element: "{}", tail: `]}}`, read: message, copies: 1},
-		"a reply's applied edits of numbers":   {head: reply, element: "1", tail: `]}}}`, read: cleared, copies: 2},
+		"a message's content of numbers":       {head: user, element: "1", tail: `]}}`, read: message, copies: 2},
+		"a message's content of empty objects": {head: user, element: "{}", tail: `]}}`, read: message, copies: 2},
+		"a reply's applied edits of numbers":   {head: reply, element: "1", tail: `]}}}`, read: cleared, copies: 1},
 	} {
 		one := ctLine(t, tc.head+tc.element+tc.tail)
 		full := ctLine(t, ctListRecord(t, tc.head, tc.element, tc.tail, threadLineMax))
@@ -4714,7 +4724,11 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 	} {
 		line := ctLine(t, ctListRecord(t, user, tc.element, `]}}`, listBytes))
 		read := func() any {
-			m, _ := line.Message()
+			decoded, err := decodeThreadLine(line.N, line.Raw)
+			if err != nil {
+				t.Fatalf("%s: the line, decoded again, is no record: %v", name, err)
+			}
+			m, _ := decoded.Message()
 			return m
 		}
 		m, err := line.Message()
@@ -5079,5 +5093,38 @@ func TestASavedCompactionIsNamedByBothNamesClaudeCodeReads(t *testing.T) {
 				t.Errorf("the session %q reads %q as the member %+v", session, name, member)
 			}
 		}
+	}
+}
+
+// A LINE THAT HOLDS NO FACTS READS AS A RECORD OF NO KEYS: every accessor reads
+// a line whose facts are nil, as the zero line's are, exactly as it reads the
+// decode of a record that carries its type and subtype and nothing else,
+// whatever that type, so a helper or a reader that hands out the zero line
+// never hands out one an accessor cannot read.
+//
+// Mutation: read the facts of a line that holds none as they lie, and the
+// first accessor that reads one panics.
+func TestALineThatHoldsNoFactsReadsAsARecordOfNoKeys(t *testing.T) {
+	t.Parallel()
+	for _, head := range []string{
+		`{}`, `{"type":"queue-operation"}`, `{"type":"system","subtype":"compact_boundary"}`,
+		`{"type":"system","subtype":"model_refusal_fallback"}`,
+	} {
+		want := ctLine(t, head)
+		got := threadLine{N: want.N, Raw: want.Raw, Head: want.Head}
+		if ctAll(got) != ctAll(want) {
+			t.Errorf("a line of no facts with the head of %s reads as\n%s\nwant\n%s", head, ctAll(got), ctAll(want))
+		}
+	}
+	for _, kind := range recordKinds {
+		head := `{"type":"` + string(kind) + `"}`
+		want := ctLine(t, head)
+		got := threadLine{N: want.N, Raw: want.Raw, Head: want.Head}
+		if ctAll(got) != ctAll(want) {
+			t.Errorf("a line of no facts with the head of %s reads as\n%s\nwant\n%s", head, ctAll(got), ctAll(want))
+		}
+	}
+	if got := ctAll(threadLine{}); got != ctAll(threadLine{Head: ctLine(t, `{}`).Head}) {
+		t.Errorf("the zero line reads as\n%s", got)
 	}
 }

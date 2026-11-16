@@ -1789,16 +1789,19 @@ func TestAThreadIsWalkedWithinItsRecordsBound(t *testing.T) {
 // string, its other keys passed over, every key matched exactly and a key
 // written twice read by its last value. Every other content, a ToolSearch's
 // list of tool references, two text blocks, an empty list, an image, a key
-// spelt in another case, absent or null, has no text, -1, which no log's
-// output matches. And a list a line long is read no further than its second
-// element: it costs no more than a list of two.
+// spelt in another case, a `text` that is no string (null among it), absent
+// or null, has no text, -1, which no log's output matches. And a list a line
+// long is read no further than its second element: it costs no more than a
+// list of two.
 //
 // Not parallel: the allocations are the process's, and a parallel case's
 // would be counted with this one's.
 //
 // Mutation: decode a result's content whole, its list before its first
 // element is held to a type, and the long list costs an allocation an element;
-// or take any list's first text block for its text, and two blocks match.
+// or take any list's first text block for its text, and two blocks match;
+// take an element's `text` of any kind for its text, and a null one reads as
+// the empty text.
 func TestAResultsTextIsAStringOrOneTextBlock(t *testing.T) {
 	const id = "toolu_text"
 	for name, tc := range map[string]struct {
@@ -1817,6 +1820,7 @@ func TestAResultsTextIsAStringOrOneTextBlock(t *testing.T) {
 		"a type spelt in another case": {`[{"Type":"text","text":"x"}]`, "", -1},
 		"a text spelt in another case": {`[{"type":"text","Text":"x"}]`, "", -1},
 		"a text that is no string":     {`[{"type":"text","text":1}]`, "", -1},
+		"a text that is null":          {`[{"type":"text","text":null}]`, "", -1},
 		"a block that is no object":    {`["x"]`, "", -1},
 		"null":                         {`null`, "", -1},
 	} {
