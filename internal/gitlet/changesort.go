@@ -8,10 +8,9 @@ import (
 	"slices"
 )
 
-// A LIVE STATE BY WHEN ITS CHANGES LAST MOVED walks its lifecycle's index and the conversations'
-// in step, as a window does (changewindow.go), floored at the lifecycle side's cut and stepping
-// over ended changes' conversations within MaxSpokenScanned a page. With no window, a page that
-// reads the lifecycle side to its end reads no conversation.
+// A LIVE STATE BY WHEN ITS CHANGES LAST MOVED walks its lifecycle's index and the conversations' in
+// step, as a window does (changewindow.go), floored at the lifecycle side's cut and stepping over
+// ended changes' conversations within MaxSpokenScanned a page.
 
 // ChangeSort is the order a `changes` listing is asked in; a closed set ([ChangeSorts]).
 type ChangeSort string

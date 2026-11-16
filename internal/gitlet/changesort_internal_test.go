@@ -8,10 +8,8 @@ import (
 	"testing"
 )
 
-// A CONVERSATION WRITE REWRITES THE MOVED INDEXES ONLY WHEN SOMEBODY SPOKE: the home's touch
-// names no instant, so it rewrites neither the company's nor a repository's index of when
-// somebody last spoke; a record somebody wrote rewrites both, one entry each.
-//
+// A CONVERSATION WRITE REWRITES THE MOVED INDEXES ONLY WHEN SOMEBODY SPOKE: the home's touch names
+// no instant and rewrites neither; a record somebody wrote rewrites both, one entry each.
 // Mutation: name updated_at in the home's touch, and every target move dates every live change.
 func TestAConversationWriteRewritesTheMovedIndexesOnlyWhenSomebodySpoke(t *testing.T) {
 	t.Parallel()

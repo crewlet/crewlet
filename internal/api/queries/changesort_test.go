@@ -7,10 +7,8 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// A CHANGES LISTING ASKS THE SORT ITS CALLER NAMED: `sort` reaches the reader as the read's
-// ChangeSort, as given, an order the reader does not know among them (the reader's to refuse), and
-// none named asks the walk's own order.
-//
+// A CHANGES LISTING ASKS THE SORT ITS CALLER NAMED: `sort` reaches the reader as given (an unknown
+// order is the reader's to refuse), and none named asks the walk's own order.
 // Mutation: read `sort` on another kind, or drop it.
 func TestAChangesListingAsksTheSortItsCallerNamed(t *testing.T) {
 	t.Parallel()

@@ -7,10 +7,9 @@ import (
 	"testing"
 )
 
-// BenchmarkALiveListingByUpdate is the walk of the open changes by last move, a first page and
-// every page to the end at the shipped bound, over 500 open changes and 50 000 merged ones, in one
-// repository and across 20, every merged change's conversation spoken after the open ones last
-// moved (the bound steps over them) or before (the floor never reads them).
+// BenchmarkALiveListingByUpdate pages the open changes by last move at the shipped bound, over 500
+// open and 50 000 merged changes in one repository and across 20, each merged one spoken of after
+// the open ones last moved (the bound steps over them) or before (the floor never reads them).
 func BenchmarkALiveListingByUpdate(b *testing.B) {
 	const open, merged = 500, 50_000
 	for _, repos := range []int{1, 20} {

@@ -57,12 +57,9 @@ func liveWorld(t *testing.T) *node {
 	return n
 }
 
-// A LIVE STATE IS LISTED BY WHEN ITS CHANGES LAST MOVED: newest move first, each live change once,
-// a change spoken of after its lifecycle last moved at the word, the rest at their lifecycle's
-// last move, whatever the page's size; a merged change somebody spoke of later is never listed.
-//
-// Mutation: date a change by its lifecycle alone, keep a change from both sides, or seek the live
-// index without its state.
+// A LIVE STATE IS LISTED BY WHEN ITS CHANGES LAST MOVED: newest first, each once, at its last word or
+// lifecycle move, whatever the page size; a merged change spoken of later is never listed. Mutation:
+// date a change by its lifecycle alone, keep a change from both sides, or seek without its state.
 func TestALiveStateIsListedByWhenItsChangesLastMoved(t *testing.T) {
 	t.Parallel()
 	n := liveWorld(t)
@@ -103,10 +100,8 @@ func TestALiveStateIsListedByWhenItsChangesLastMoved(t *testing.T) {
 	}
 }
 
-// A KEPT PREFIX OF A SORTED PAGE RESUMES WHERE IT STOPPED: a caller that keeps the first change of
-// a page by last move and hands back its cursor ([gitlet.ReadQuery.ChangesCursor]) is answered the
-// rest of that page first.
-//
+// A KEPT PREFIX OF A SORTED PAGE RESUMES WHERE IT STOPPED: its cursor ([gitlet.ReadQuery.ChangesCursor])
+// is answered the rest of that page first.
 // Mutation: spell the sorted walk's cursor by opening.
 func TestAKeptPrefixOfASortedPageResumesWhereItStopped(t *testing.T) {
 	t.Parallel()
@@ -135,14 +130,9 @@ func TestAKeptPrefixOfASortedPageResumesWhereItStopped(t *testing.T) {
 	}
 }
 
-// A LIVE LISTING STEPS OVER ENDED CHANGES' CONVERSATIONS WITHIN ITS BOUND: twelve merged changes
-// spoken of after every open change last moved, web!1 among them, hold the conversations' index
-// above the open ones, so a first page of two bounded to four of them answers short with a cursor,
-// where the shipped bound fills it, and paging on lists the three open changes, each once, newest
-// move first. A page that reads every live change reads no conversation, so one page holds them.
-//
-// Mutation: drop the conversation side's bound (web!1 is never listed), or answer a short page
-// with no cursor.
+// A LIVE LISTING STEPS OVER ENDED CHANGES' CONVERSATIONS WITHIN ITS BOUND: merged changes spoken of
+// later make a bounded first page answer short with a cursor, and paging on lists each open one once.
+// Mutation: drop the conversation side's bound (web!1 is never listed), or answer a short page with no cursor.
 func TestALiveListingStepsOverEndedChangesConversationsWithinItsBound(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -220,12 +210,9 @@ func TestALiveListingStepsOverEndedChangesConversationsWithinItsBound(t *testing
 	}
 }
 
-// A LIVE LISTING BY UPDATE KEEPS TO ITS WINDOW: the open changes that moved within it, newest move
-// first, a change spoken of today whose lifecycle last moved a week ago among them, and none that
-// moved only before it.
-//
-// Mutation: test the window on rows of a walk that never reads below it, or seek the lifecycle side
-// alone.
+// A LIVE LISTING BY UPDATE KEEPS TO ITS WINDOW: the open changes that moved within it, newest first,
+// a change spoken of today among them, none that moved only before it. Mutation: test the window on
+// rows of a walk that never reads below it, or seek the lifecycle side alone.
 func TestALiveListingByUpdateKeepsToItsWindow(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -273,12 +260,8 @@ func TestALiveListingByUpdateKeepsToItsWindow(t *testing.T) {
 	}
 }
 
-// A SORT IS REFUSED WHERE ITS WALK CANNOT ORDER IT, naming change_sort: an order this build does
-// not know; updated beside a reviewer or what the changes wait on, whose walks keep the asks'
-// order, and with no live state and no window nothing else leads; opened on a window nothing else
-// leads, which is listed by last move. Updated on such a window, and opened on a live state, each
-// answer what the listing unsorted answers.
-//
+// A SORT IS REFUSED WHERE ITS WALK CANNOT ORDER IT, naming change_sort: an unknown order, or one whose
+// walk keeps another order or has nothing to lead it; elsewhere it answers what the unsorted listing does.
 // Mutation: relax a refusal into today's order.
 func TestASortIsRefusedWhereItsWalkCannotOrderIt(t *testing.T) {
 	t.Parallel()
