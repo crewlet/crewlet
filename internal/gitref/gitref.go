@@ -3,8 +3,11 @@
 // ids, with their bounds — where the seats' own branches live ([SeatsRoot],
 // [ReservedSeatBranch]), which a push and a repository's default branch are
 // both judged by — the GLOB OVER A REPOSITORY'S TREE PATHS ([PathGlob]),
-// which a path owner names its part of a tree by, and the URL OF A REMOTE
-// REPOSITORY ([ParseRemoteURL]), which an import or a mirror dials.
+// which a path owner names its part of a tree by, the URL OF A REMOTE
+// REPOSITORY ([ParseRemoteURL]), which an import or a mirror dials, and the
+// GRAMMAR OF AN ANNOTATED TAG OBJECT as `cat-file --batch` writes it
+// ([TagStream]): its tagger, its date and its subject read as git's %s reads a
+// commit's, each field held to a cap.
 //
 // Configuration validates a document with it at `crewlet validate`, the code
 // domain decides a push with it, the sandbox judges with it the branch an

@@ -398,10 +398,24 @@ keys that are one key once trimmed are refused rather than collapsed. A
 key is at most 63 bytes — Kubernetes' limit on a label name — and holds no
 whitespace or unprintable character anywhere, because it is matched
 exactly wherever it is named: a key with a space inside it is refused
-rather than accepted as a label nothing could name. Labels are advertised
-to peers on this node's presence lease, so a label change takes effect
-one heartbeat after the restart that made it — not at the next config
+rather than accepted as a label nothing could name. A value is at most
+64 bytes — a seat handle's width, which holds Kubernetes' 63 — of
+printable characters: a space inside it is fine, a tab, a control
+character or a line separator is refused. Labels are advertised to peers
+on this node's presence lease, so a label change takes effect one
+heartbeat after the restart that made it — not at the next config
 activation.
+
+A node carries **at most 16 labels**. The presence lease is re-sent on
+every heartbeat and the coordination store bounds what it carries
+([The presence's bound](coordination.md#the-presences-bound)), so the
+labels are bounded where you write them: a file with a 17th label, or a
+value past 64 bytes, is refused by `crewlet validate` and at startup,
+naming `node.labels` or the key, rather than accepted and then left out
+of every peer's count. The published schema states the count, so an
+editor flags a 17th label as you type; a value's bound is counted in
+bytes, which a schema cannot express, so `crewlet validate` is what
+checks it.
 
 Nothing here means anything to the engine on its own: the org decides
 what to select on.

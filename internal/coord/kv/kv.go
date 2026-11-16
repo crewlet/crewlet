@@ -887,6 +887,12 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 	if err := s.validateTTL(l, resource, opts.Owner, opts.TTL); err != nil {
 		return nil, "", err
 	}
+	// A META PAST WHAT A LEASE CARRIES is refused before anything is sent,
+	// as the twin refuses it: a definite answer, which [unavailable] passes
+	// through unmarked.
+	if err := coord.HoldLeaseMeta(resource, opts.Meta); err != nil {
+		return nil, "", err
+	}
 	protocol := opts.EffectiveProtocol()
 	key := encodeResource(resource)
 
