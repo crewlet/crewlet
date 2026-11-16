@@ -2124,7 +2124,8 @@ func BenchmarkPeel(b *testing.B) {
 				b.Run("index="+index, func(b *testing.B) {
 					for b.Loop() {
 						res, err := pool.Run(b.Context(), gitproc.Cmd{
-							Dir: s.Dir, Args: []string{"cat-file", "--batch-check=%(objectname)", "--buffer"},
+							Dir: s.Dir, Args: []string{"cat-file", "--batch-check=%(objectname) %(objecttype)",
+								"--buffer"},
 							Config: c.ServeConfig(), Stdin: strings.NewReader(ask.String()),
 							Class: gitproc.ClassRead, Deadline: time.Minute,
 						})

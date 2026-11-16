@@ -147,6 +147,10 @@ const (
 	// under the incarnation's crewlet/codeindex — the cache's own write,
 	// which no git process reads.
 	DerivedCodeIndex DerivedName = "codeindex"
+	// DerivedTags is the tag index (tags.go): every tag the copy's refs hold,
+	// newest first by git's creatordate, levelled by a round that moves a tag
+	// and placed with packed-refs.
+	DerivedTags DerivedName = "tags"
 )
 
 // engineRoot is the one directory of an incarnation's root besides objects/
@@ -171,7 +175,7 @@ const (
 	InputPacks Input = "packs"
 	// InputRefs is packed-refs — a bitmap's selected commits, and a graph's
 	// --reachable tips (own mode's whole graph, and the node's tip over the
-	// tail).
+	// tail), and every tag the tag index lists.
 	InputRefs Input = "refs"
 	// InputPushRows is the code domain's push rows: those a delta's pushes
 	// phase serves (gitlet.StateQuery.Pushes), and those the backfill reads a
@@ -247,7 +251,7 @@ const (
 	// FreshAtRound is current at the incarnation's position whenever a round
 	// has answered, for the range its coverage names (gitlet.Coverage): an
 	// answer about a push outside that range says so, rather than answering
-	// that there is none.
+	// that there is none; the tag index whole, placed with packed-refs.
 	FreshAtRound Freshness = "at-round"
 	// FreshImmutable is keyed by everything it answers is a function of —
 	// object ids, which name one object for ever, and the read's arguments —
@@ -522,11 +526,14 @@ const (
 	// tip map (codeindex.go). Never refused for memory either: the git it
 	// runs only reads, and what it holds is one segment's postings.
 	StepCodeIndex Step = "codeindex"
+	// StepTags is the tag index, merged or written whole by a round that
+	// moves a tag. Never refused for memory either: the git it runs only reads.
+	StepTags Step = "tags"
 )
 
 // Steps is every Step, in the order a line or a count names them.
 var Steps = []Step{StepBitmap, StepIndex, StepGraph, StepTipGraph, StepProvenance, StepMemo, StepLayer,
-	StepCodeIndex}
+	StepCodeIndex, StepTags}
 
 // Valid reports whether s is one of Steps.
 func (s Step) Valid() bool { return slices.Contains(Steps, s) }
@@ -781,6 +788,8 @@ var (
 	// decimal from 1, as the index's record names it (codeIndexState).
 	codeIndexSegName = lazyPattern(`^seg\.[1-9][0-9]*$`)
 	codeIndexTipName = lazyPattern(`^tip\.[1-9][0-9]*$`)
+	// tagsName is the tag index, crewlet/tags (tags.go).
+	tagsName = lazyPattern(`^tags$`)
 )
 
 // lazyPattern is expr compiled at its first use and shared from then on
@@ -847,6 +856,11 @@ const (
 // layer names is seeded and the layer passes gitlet.CheckLayer there and then —
 // the rows name it, and a cold copy's first clone would otherwise walk
 // without a bitmap until the chain was fetched again.
+//
+// The TAG INDEX is the cache's own: merged by the round that moves a tag and
+// renamed in with packed-refs; a function of the refs and of object ids, so no
+// pack leaving changes it; a log gone back drops it, and a rebuild's full
+// round writes it again.
 //
 // THE NODE'S TIP is git's own split commit-graph layer over the installed
 // commit-graph layers (maintain.go): the commits of the TAIL, the packs pushed
@@ -1093,6 +1107,24 @@ func DerivedFiles() []Derived {
 		// and a compaction's swap link every file its record names into the
 		// copy they promote: no re-index after a compaction (S18).
 		Seed: SeedLink,
+	}, {
+		Name:   DerivedTags,
+		Inputs: []Input{InputRefs, InputOID},
+		Writes: []Write{{Step: StepTags, Trigger: TriggerRound, Writer: Writer{File: tagsFile},
+			Charge: "a delta's merge: the tags it moved with their facts and 4 bytes a tag for the new " +
+				"file's offsets, the old file streamed through one buffer into the new; a whole build (a full " +
+				"round, an index set aside): every tag's name and facts and the old file's facts by object id, " +
+				"some 1.2 KB allocated a tag over the build (121 MB at 100 000), at most gitlet.MaxRefsPerRepo; " +
+				"the facts git reads streamed through one cat-file --batch-check, one cat-file --batch and one log"}},
+		Owns:      []Owned{{FilePattern: FilePattern{engineRoot, tagsName()}, File: "tags", Main: true}},
+		Check:     CheckRunTrailer,
+		Freshness: FreshAtRound,
+		// A function of the refs and of object ids: no pack leaving changes an
+		// entry, and a log gone back is read again whole.
+		OnPackAdded: Keep, OnPackRemoved: Keep, OnRefsMoved: Keep, OnReported: Keep, OnHistoryGone: Drop,
+		OnPackRetired: Keep, OnPackExpunged: Keep, OnLayersMoved: Keep,
+		// A rebuild's full round reads the tags again over its own packs.
+		Seed: SeedNone,
 	}}
 }
 

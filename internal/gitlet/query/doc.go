@@ -97,6 +97,10 @@
 // would answer for another commit (objects.go has the measurement). One that
 // matches more than one object is refused, asking for more of its digits.
 //
+// The one read of what refs name is the tags listing, the copy's tags at its
+// position, which its asker floors at the repository's own last record
+// (gitlet.RepoDetail.Version).
+//
 // # Nothing a client wrote reaches git's command line as an option
 //
 // A read's argument lists carry fixed options and validated whole ids —
@@ -255,11 +259,21 @@
 // one tag batch, one log and one ahead/behind count under one budget of git, and
 // memoizes each tip's facts and counts, so a screen read again runs no git.
 //
+// # The copy's tags
+//
+// A tags read (tags.go, gitlet.GitTags) is answered from the copy's tag index
+// (cache.Cache.Tags) with no git and no share: a page newest first by a keyset
+// cursor, the last tag's date and name, which its asker floors at the
+// repository's own last record. A history's page names each commit's tags
+// (gitlet.TagMarks), measured into each commit's cost as its push is.
+//
 // # Pages
 //
 // A page is measured as its JSON, in encoding/json's own terms (page.go), and
-// every cursor is a position in an answer that is a function of object ids
-// alone, so a cursor one node issued is sound on any other: a listing's n-th
+// every cursor but the tags listing's is a position in an answer that is a
+// function of object ids alone, so a cursor one node issued is sound on any
+// other; the tags listing's is the last tag's key, `d:<seconds>:<name>`, which
+// any node's listing resumes past. The positions: a listing's n-th
 // entry, a stat's n-th file, a file's line or the byte inside an overlong one,
 // a patch's byte, a history's n-th commit, a blame's line. A listing's Total,
 // a file's Lines and a diff's totals are the whole answer's on every page. A

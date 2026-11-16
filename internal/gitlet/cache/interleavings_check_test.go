@@ -19,12 +19,12 @@ import (
 // index files (fileOf), answering the repository, the incarnation's
 // directory and the file's path relative to it, or "" when the cache holds
 // nothing.
-func (in *interleaving) heldFile(packs bool) (repo, dir, rel string) {
+func (in *interleaving) heldFile(packs, tags bool) (repo, dir, rel string) {
 	if repo = in.heldRepo(); repo == "" {
 		return "", "", ""
 	}
 	dir = in.w.dir(in.t, in.c, repo)
-	if rel = in.fileOf(dir, packs); rel == "" {
+	if rel = in.fileOf(dir, packs, tags); rel == "" {
 		return "", "", ""
 	}
 	return repo, dir, rel
@@ -48,11 +48,12 @@ func (in *interleaving) heldRepo() string {
 // fileOf picks one of the index files of the incarnation at dir — a pack's
 // .idx or .rev, or a derived file: own mode's, or a chained copy's, each of
 // its installed layers' files, its commit-graph layers and its tip, and both
-// chain files — and with packs a pack's .pack too — and answers its path
-// relative to dir, or "" when it holds none. A chained copy holds no derived
+// chain files — with packs a pack's .pack too, and with tags the tag index,
+// which no git reads — and answers its path relative to dir, or "" when it
+// holds none. A chained copy holds no derived
 // file of own mode's, so a damage drawn over the pack directory alone would
 // never meet a derived file of the copies a publication chained.
-func (in *interleaving) fileOf(dir string, packs bool) string {
+func (in *interleaving) fileOf(dir string, packs, tags bool) string {
 	var files []string
 	for _, name := range names(in.t, filepath.Join(dir, "objects", "pack")) {
 		if strings.HasSuffix(name, ".idx") || strings.HasSuffix(name, ".rev") || strings.HasSuffix(name, ".bitmap") ||
@@ -72,6 +73,9 @@ func (in *interleaving) fileOf(dir string, packs bool) string {
 	if statOK(in.t, filepath.Join(dir, "objects", "info", "commit-graph")) {
 		files = append(files, filepath.Join("objects", "info", "commit-graph"))
 	}
+	if tags && statOK(in.t, filepath.Join(dir, cache.TagsRel)) {
+		files = append(files, filepath.FromSlash(cache.TagsRel))
+	}
 	if len(files) == 0 {
 		return ""
 	}
@@ -85,7 +89,7 @@ func (in *interleaving) fileOf(dir string, packs bool) string {
 // again. The next process vouches for nothing, so its first round of the
 // repository holds the file to its trailer and repairs it before it answers.
 func (in *interleaving) damageAndRestart(string) string {
-	repo, dir, rel := in.heldFile(false)
+	repo, dir, rel := in.heldFile(false, true)
 	in.c.Stop(in.t.Context())
 	detail := "nothing held"
 	if rel != "" {
@@ -102,7 +106,7 @@ func (in *interleaving) damageAndRestart(string) string {
 // in over it (hashed): that hash gives no verdict and the round repairs
 // nothing, and the next full round hashes the successor.
 func (in *interleaving) replaceWhileHashed(string) string {
-	repo, dir, rel := in.heldFile(false)
+	repo, dir, rel := in.heldFile(false, false)
 	if rel == "" {
 		return "nothing held"
 	}

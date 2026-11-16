@@ -1497,6 +1497,8 @@ func Catalogue() []Instrument {
 				"`codeindex-segment`, `codeindex-tip`: a segment and a tip " +
 				"map of a repository's code index, which no git reads " +
 				"either, held to their own SHA-256 trailers by a scrub; " +
+				"`tags`, a copy's tag index, which no git reads either, " +
+				"held to its own SHA-256 trailer by a scrub; " +
 				"`idx`, `rev`: a " +
 				"pack's index and reverse index, stored with its push; " +
 				"`pack`, the pack itself, read only by a scrub), `outcome` " +

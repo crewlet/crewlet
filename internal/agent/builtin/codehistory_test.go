@@ -78,6 +78,7 @@ func (historyCopy) IndexTip(cache.Synced) (cache.IndexedTip, bool)     { return 
 func (historyCopy) CodeIndex(context.Context, cache.Synced) (*cache.CodeIndexView, bool) {
 	return nil, false
 }
+func (historyCopy) Tags(cache.Synced) (*cache.TagIndex, bool) { return nil, false }
 
 // commitID is the stand-in's i-th commit's id.
 func commitID(i int) string { return fmt.Sprintf("%040x", i+1) }
