@@ -2937,6 +2937,15 @@
         "auth": {
           "$ref": "#/$defs/HarnessAuth"
         },
+        "effort": {
+          "description": "Reasoning effort, in the harness's own levels (claude-code: low, medium, high, xhigh, max). Refused on a harness with no such setting, or a level it does not take. Absent: the harness's default.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
         "env": {
           "additionalProperties": {
             "type": [

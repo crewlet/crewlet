@@ -402,7 +402,22 @@ func TestAModelStepIsOfferedTheCataloguesModels(t *testing.T) {
 
 	r := queries.NewRegistry()
 	queries.Register(r, s)
-	for _, params := range []map[string]any{{"harness": "gemini-cli"}, {"harness": "opencode"}, {}} {
+	// EVERY BUILT-IN HARNESS IS ANSWERED: its own page and aliases, a catalogue
+	// where one provider serves it, and Pi's provider's models in its grammar.
+	got = answer(t, s, "llm_models", map[string]any{"harness": "gemini-cli"}).(queries.ModelsAnswer)
+	if got.Provider != "google" || len(got.Models) != 1 {
+		t.Errorf("gemini-cli = %+v", got)
+	}
+	got = answer(t, s, "llm_models", map[string]any{"harness": "cursor-agent"}).(queries.ModelsAnswer)
+	if got.Source != "none" || got.Provider != "" || len(got.Models) != 0 || got.Reason == "" {
+		t.Errorf("cursor-agent = %+v, want no catalogue and a reason", got)
+	}
+	got = answer(t, s, "llm_models", map[string]any{"harness": "pi", "provider": "anthropic"}).(queries.ModelsAnswer)
+	if got.Models[0].ID != "anthropic/m-1" {
+		t.Errorf("pi's model id = %q, want <provider>/<id>", got.Models[0].ID)
+	}
+	for _, params := range []map[string]any{{"harness": "custom"}, {"harness": "nope"},
+		{"harness": "opencode"}, {"harness": "pi"}, {}} {
 		if _, err := r.Answer(everyGrant(t), "llm_models", params); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("%v = %v, want bad params", params, err)
 		}

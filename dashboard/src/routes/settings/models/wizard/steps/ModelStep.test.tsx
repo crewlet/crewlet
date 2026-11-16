@@ -50,7 +50,9 @@ function Step({ model }: { model: string }) {
     <ModelStep
       draft={draft}
       error={undefined}
+      effortError={undefined}
       onChange={(next) => setDraft((d) => ({ ...d, model: next }))}
+      onEffort={(effort) => setDraft((d) => ({ ...d, effort }))}
     />
   );
 }
@@ -77,7 +79,7 @@ test.each(ALIASES)(
     openEdit(id);
     expect(checked(new RegExp(`^${name}`))).toBe(true);
     expect(checked(/^Another model/)).toBe(false);
-    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByRole("combobox", { name: /Model id/ })).toBeNull();
     expect(latest.model).toBe(id);
   },
 );
@@ -86,7 +88,9 @@ test("a full model id opens on Another model, named as the catalogue names it an
   openEdit("claude-haiku-4-5");
   expect(checked(/^Another model/)).toBe(true);
   expect(checked(/^Haiku/)).toBe(false);
-  expect((screen.getByRole("combobox") as HTMLInputElement).value).toBe("claude-haiku-4-5");
+  expect((screen.getByRole("combobox", { name: /Model id/ }) as HTMLInputElement).value).toBe(
+    "claude-haiku-4-5",
+  );
   expect(screen.getByText("Claude Haiku 4.5, a fixed version.")).toBeTruthy();
   expect(screen.queryByText("Any model id the harness takes.")).toBeNull();
 });
@@ -106,4 +110,39 @@ test("once the reader chooses, the choice is theirs: Another model stays chosen 
   fireEvent.click(screen.getByRole("radio", { name: /^Sonnet/ }));
   expect(latest.model).toBe("sonnet");
   expect(checked(/^Sonnet/)).toBe(true);
+});
+
+// THE EFFORT CONTROL OFFERS ONLY WHAT THE HARNESS TAKES ON THE MODEL: every Claude
+// Code level on an alias, none on a model it runs without effort, and a harness
+// with no setting says why instead of offering one.
+test("the effort control offers the levels the harness takes on the model", () => {
+  openEdit("opus");
+  fireEvent.click(screen.getByRole("combobox", { name: /Reasoning effort/ }));
+  for (const level of ["Harness default", "low", "medium", "high", "xhigh", "max"])
+    expect(screen.getByRole("option", { name: level })).toBeTruthy();
+  fireEvent.mouseDown(screen.getByRole("option", { name: "xhigh" }));
+  expect(latest.effort).toBe("xhigh");
+  cleanup();
+  openEdit("claude-haiku-4-5");
+  expect(
+    screen.getByText("Claude Code runs claude-haiku-4-5 with no reasoning effort setting."),
+  ).toBeTruthy();
+});
+
+test("a harness with no effort setting says why", () => {
+  render(
+    <ModelStep
+      draft={{ ...emptyDraft(), harness: "cursor-agent", model: "gpt-5.5" }}
+      error={undefined}
+      effortError={undefined}
+      onChange={() => {}}
+      onEffort={() => {}}
+    />,
+  );
+  expect(screen.queryByRole("combobox", { name: /Reasoning effort/ })).toBeNull();
+  expect(
+    screen.getByText(
+      /No reasoning effort setting here. Cursor Agent takes effort as part of the model id/,
+    ),
+  ).toBeTruthy();
 });

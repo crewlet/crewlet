@@ -68,7 +68,7 @@ import {
   isFastModel,
   product,
 } from "../../words.ts";
-import { canExecute, type Draft } from "../draft.ts";
+import { canExecute, factsOf, type Draft } from "../draft.ts";
 
 /** The choices, in the order offered: every seat job, each category, the Assistant, none yet. */
 const CHOICES: readonly Exclude<Intent, "custom">[] = [
@@ -301,7 +301,12 @@ export function UseItFor({
               disabledReason:
                 "Ask Crewlet is off. Turn it on with assistant.enabled in Settings, Configuration first.",
             }
-          : {}),
+          : !factsOf(draft.harness).assistant
+            ? {
+                disabled: true,
+                disabledReason: `Ask Crewlet runs only on a harness the engine can leave with no tool of its own, which ${product(draft.harness)} is not.`,
+              }
+            : {}),
       };
     }
     if (intent === "all") {

@@ -12,12 +12,13 @@
  * engine refuses the assistant on a model that allows them.
  */
 
-import { FormField, Input, Switch } from "@crewlethq/ui";
+import { FormField, Input, Switch, Text } from "@crewlethq/ui";
 import {
   DEFAULT_HARNESS_MAX_CONCURRENT,
   DEFAULT_HARNESS_TIMEOUT_SECONDS,
 } from "~/contract/models.ts";
-import type { Draft } from "../draft.ts";
+import { product } from "../../words.ts";
+import { factsOf, type Draft } from "../draft.ts";
 
 /** The web tools switch's helper, which Review repeats in the same words. */
 export const WEB_TOOLS_HELP =
@@ -84,17 +85,24 @@ export function LimitsStep({
           />
         )}
       </FormField>
-      <Switch
-        label="Deny the harness's web tools"
-        description={
-          held
-            ? `${WEB_TOOLS_HELP} Ask Crewlet runs on this model, so they stay denied.`
-            : WEB_TOOLS_HELP
-        }
-        checked={draft.webDenied}
-        disabled={held}
-        onCheckedChange={(webDenied) => onChange({ webDenied })}
-      />
+      {factsOf(draft.harness).webDeniable || draft.webDenied ? (
+        <Switch
+          label="Deny the harness's web tools"
+          description={
+            held
+              ? `${WEB_TOOLS_HELP} Ask Crewlet runs on this model, so they stay denied.`
+              : WEB_TOOLS_HELP
+          }
+          checked={draft.webDenied}
+          disabled={held}
+          onCheckedChange={(webDenied) => onChange({ webDenied })}
+        />
+      ) : (
+        <Text as="p" variant="caption" tone="secondary">
+          {product(draft.harness)} has no web denial the engine can apply, so its web tools stay
+          allowed.
+        </Text>
+      )}
     </>
   );
 }

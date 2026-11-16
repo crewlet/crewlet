@@ -409,6 +409,7 @@ func (d *assistantDeep) Run(ctx context.Context, r assistant.DeepRun) (assistant
 	// history to, so a commit it makes carries the co-author line alone.
 	handle, err := runner.Start(ctx, box, sandbox.RunRequest{System: r.System, Brief: r.Brief,
 		Env: run.env, Limits: sandbox.Limits{MaxTurns: r.Steps}, Model: run.model,
+		Effort: run.effort,
 		Resume: session, MCPServers: bridgeServers(endpoint, r.Surface, d.e.bridge.CallTimeout(r.Surface)),
 		// HELD TO ITS BRIDGE: deep work acts for a person, confined on the
 		// engine host, and reaches exactly the tools it is handed — never a

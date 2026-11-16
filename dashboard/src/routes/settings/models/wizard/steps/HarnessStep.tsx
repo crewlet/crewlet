@@ -10,25 +10,53 @@
  * run a seat's coding is the one difference that decides the rest.
  */
 
-import { ChoiceCards, FormField, Input } from "@crewlethq/ui";
+import { ChoiceCards, FormField, Input, Text } from "@crewlethq/ui";
+import { EXECUTOR_HARNESSES } from "~/contract/models.ts";
 import { HarnessMark, MARK_SIZE } from "../../HarnessMark.tsx";
 import { product } from "../../words.ts";
-import { HARNESSES, KEY_MAX, canExecute, type Harness, type Draft } from "../draft.ts";
+import { HARNESSES, KEY_MAX, canExecute, factsOf, type Harness, type Draft } from "../draft.ts";
 
-const HARNESS_WORDS: Record<Harness, { description: string; methods: string }> = {
-  "claude-code": {
-    description: "Anthropic's harness.",
-    methods: "Key, token, login or cloud",
-  },
-  codex: {
-    description: "OpenAI's harness.",
-    methods: "API key or ChatGPT",
-  },
+/** Each harness in a line, and how it signs in, in the words the Method step uses. */
+const HARNESS_WORDS: Readonly<Record<string, { description: string; methods: string }>> = {
+  "claude-code": { description: "Anthropic's harness.", methods: "Key, token, login or cloud" },
+  codex: { description: "OpenAI's harness.", methods: "API key or ChatGPT" },
   opencode: {
     description: "An open harness for many providers.",
-    methods: "The provider's API key",
+    methods: "A provider's key or login",
+  },
+  copilot: { description: "GitHub's harness.", methods: "GitHub token or login" },
+  "cursor-agent": { description: "Cursor's harness.", methods: "API key or login" },
+  "gemini-cli": { description: "Google's harness.", methods: "API key or login" },
+  grok: { description: "xAI's harness.", methods: "API key or login" },
+  hermes: {
+    description: "Nous Research's harness for many providers.",
+    methods: "A provider's key or login",
+  },
+  "kimi-code": { description: "Moonshot AI's harness.", methods: "Login" },
+  "muse-code": { description: "Meta's harness.", methods: "API key or login" },
+  pi: { description: "An open harness for many providers.", methods: "A provider's key or login" },
+  "qwen-code": {
+    description: "Qwen's harness, on any OpenAI-compatible endpoint.",
+    methods: "API key",
   },
 };
+
+/** "A or B", "A, B or C". */
+const either = (parts: readonly string[]) =>
+  parts.length < 3 ? parts.join(" or ") : `${parts.slice(0, -1).join(", ")} or ${parts.at(-1)}`;
+
+/** What a harness with no box runner does: its turns on the host, and Ask Crewlet where the engine allows it. */
+export function hostOnly(harness: string): string {
+  const name = product(harness);
+  const coding = either(EXECUTOR_HARNESSES.map(product));
+  if (factsOf(harness).assistant)
+    return `${name} runs a seat's turns on the engine host and Ask Crewlet. A seat's coding runs in a box on ${coding}.`;
+  const assistant = either(HARNESSES.filter((h) => factsOf(h).assistant).map(product));
+  return `${name} runs a seat's turns on the engine host. A seat's coding runs in a box on ${coding}, and Ask Crewlet on ${assistant}.`;
+}
+
+/** The value of the custom harness's card, which is never chosen here. */
+const CUSTOM = "custom";
 
 export function HarnessStep({
   draft,
@@ -43,8 +71,8 @@ export function HarnessStep({
   onName: (key: string) => void;
   onHarness: (harness: Harness) => void;
 }) {
-  const harnesses: readonly string[] = (HARNESSES as readonly string[]).includes(draft.harness)
-    ? HARNESSES
+  const harnesses: readonly string[] = HARNESSES.includes(draft.harness)
+    ? [...HARNESSES, CUSTOM]
     : [...HARNESSES, draft.harness];
   return (
     <>
@@ -82,8 +110,20 @@ export function HarnessStep({
         value={draft.harness}
         onChange={(v) => onHarness(v as Harness)}
         options={harnesses.map((a) => {
-          const words = HARNESS_WORDS[a as Harness];
+          const words = HARNESS_WORDS[a];
           const other = editing && a !== draft.harness;
+          if (a === CUSTOM && !editing) {
+            return {
+              value: a,
+              label: "Custom",
+              media: <HarnessMark harness={a} size={MARK_SIZE} />,
+              description: "A harness of your own.",
+              facts: [{ label: "Jobs", value: "All but coding" }],
+              disabled: true,
+              disabledReason:
+                "A custom harness needs its own profile: its binary, flags and output. Write it in Settings, Configuration.",
+            };
+          }
           return {
             value: a,
             label: product(a),
@@ -102,6 +142,11 @@ export function HarnessStep({
           };
         })}
       />
+      {canExecute(draft) ? null : (
+        <Text as="p" variant="caption" tone="secondary">
+          {hostOnly(draft.harness)}
+        </Text>
+      )}
     </>
   );
 }
