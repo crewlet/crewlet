@@ -2648,7 +2648,9 @@ const (
 	// The Gitlet history, tips, branches, committers and file finder train, on
 	// kit 0.137.0, measures 6351.5 KiB (6,503,931 bytes), 9,452 bytes over main: 6352 KiB.
 	// The Ask Crewlet reads train, on kit 0.137.0: 6354.3 KiB (6,506,836 bytes): 6355 KiB.
-	treeBudget = 5<<20 + 1235<<10
+	// Gitlet's code host colours (diffs, change states, branches), on kit 0.137.0:
+	// 6357.3 KiB (6,509,918 bytes), 3,082 bytes over main: 6358 KiB.
+	treeBudget = 5<<20 + 1238<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
