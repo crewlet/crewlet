@@ -6,8 +6,9 @@
 // file (blame.go), a file found by its name in a commit's tree (find.go) — and
 // of a change's revisions, by the ids their rows record: a
 // revision's facts against its target (facts.go), where lines anchored in one
-// revision are in another (anchor.go), and what a change changed between two
-// revisions (interdiff.go) — and the checks file a commit holds, read whole
+// revision are in another (anchor.go), what a change changed between two
+// revisions (interdiff.go), and the lines around findings' ranges with their
+// diff marks (excerpts.go) — and the checks file a commit holds, read whole
 // for the home that queues a change's checks from its target's (checksfile.go)
 // (and a commit's deploy and dependency files, listed by the closed list
 // and read one at a time for the atlas in codefiles.go, the engine's alone as
@@ -127,7 +128,9 @@
 // paths are each a file's whole name, looked up at both heads as
 // `<head>:<path>` lines of one cat-file's standard input (interdiff.go), so no
 // option can hide in one: `--output=x` is a file's name there like any other. A re-anchoring's
-// diff-pairs is handed no path at all, its pairs numbered (anchor.go).
+// diff-pairs is handed no path at all, its pairs numbered (anchor.go). Nor is
+// an excerpt's: its other side is found by the same batch and, for a rename, a
+// `diff-tree -M` of two ids matched here (excerpts.go).
 // TestAPathReachesGitOnlyAsData holds every argument list a read runs to its
 // template, a history's and a blame's path the one argument after `--`, and
 // a directory walk's every argument after it a literal pathspec.

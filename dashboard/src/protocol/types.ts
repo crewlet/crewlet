@@ -9076,8 +9076,9 @@ export interface CodeDiffAnswer {
  * or the asker's own standing findings (`standing`, in `findings`);
  * `files` and `diff` a revision's files or one file's patch (`diff`), read by
  * object id on its home Gitlet node; `findings` placed in the revision asked
- * about (`placed`, by the finding's id); and `finding_paths`, its findings
- * counted by path, state and revision.
+ * about (`placed`, by the finding's id); `finding_paths`, its findings counted
+ * by path, state and revision; and `excerpts`, the lines around each finding of
+ * a findings page as its own revision's diff marks them.
  */
 export interface CodeChangeAnswer extends CodePage {
   change?: CodeChangeDetail;
@@ -9094,6 +9095,31 @@ export interface CodeChangeAnswer extends CodePage {
   diff?: CodeDiffAnswer;
   /** The `findings` part's placing of each finding, by its id. */
   placed?: Record<string, CodeFindingPlace>;
+  /** The `excerpts` part: each finding's excerpt by its id, and the context applied. */
+  excerpts?: Record<string, CodeExcerpt>;
+  context?: number;
+}
+
+/** One line of a finding's excerpt (`gitlet.ExcerptLine`). */
+export interface CodeExcerptLine {
+  /** " " both sides hold it, "+" the revision adds it, "-" it deletes it. */
+  mark: " " | "+" | "-" | (string & {});
+  old?: number;
+  new?: number;
+  text?: string;
+  /** Its size where its text was too long to show. */
+  text_bytes?: number;
+}
+
+/** The lines around a finding's range, marked as its revision's diff marks them (`gitlet.Excerpt`). */
+export interface CodeExcerpt {
+  id: string;
+  /** A, D, M or R as the revision changes the file; absent for a file it leaves as it was. */
+  status?: string;
+  binary?: boolean;
+  lines: CodeExcerptLine[];
+  /** The window held more lines than an excerpt shows. */
+  more?: boolean;
 }
 
 /** One participant of a change's conversation (`gitlet.ParticipantRow`). */

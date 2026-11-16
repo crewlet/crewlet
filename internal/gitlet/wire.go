@@ -3326,6 +3326,9 @@ const (
 	// order, case-folded, best first, with how many match (find.go): read over the
 	// tree's memoized listing, so a person typing runs no git after the first query.
 	GitFind GitReadKind = "find"
+	// GitExcerpts is the lines around ranges of lines, each read in a blob a change's
+	// revision holds, marked as that revision's diff changes them (excerpts.go).
+	GitExcerpts GitReadKind = "excerpts"
 )
 
 // GitReadKinds is the closed set.
@@ -3337,7 +3340,7 @@ const (
 func GitReadKinds() []GitReadKind {
 	return []GitReadKind{GitTree, GitBlob, GitDiff, GitCompare, GitTips, GitTags, GitLandedIn,
 		GitRevisionFacts, GitReanchor, GitInterdiff, GitLog, GitBlame, GitTreeCommits, GitChecksFile, GitCodeFiles,
-		GitSearch, GitFind}
+		GitSearch, GitFind, GitExcerpts}
 }
 
 // Valid reports a kind this build answers.
@@ -3521,6 +3524,7 @@ type GitQuery struct {
 	CodeFiles     *CodeFilesQuery     `json:"code_files,omitempty"`
 	Search        *SearchQuery        `json:"search,omitempty"`
 	Find          *FindQuery          `json:"find,omitempty"`
+	Excerpts      *ExcerptsQuery      `json:"excerpts,omitempty"`
 }
 
 // CodeFilesQuery reads a commit's deploy and dependency files
@@ -3959,7 +3963,7 @@ func (q GitQuery) Validate() error {
 		{GitInterdiff, q.Interdiff != nil}, {GitLog, q.Log != nil}, {GitBlame, q.Blame != nil},
 		{GitTreeCommits, q.TreeCommits != nil},
 		{GitChecksFile, q.ChecksFile != nil}, {GitCodeFiles, q.CodeFiles != nil},
-		{GitSearch, q.Search != nil}, {GitFind, q.Find != nil}} {
+		{GitSearch, q.Search != nil}, {GitFind, q.Find != nil}, {GitExcerpts, q.Excerpts != nil}} {
 		switch {
 		case s.kind == q.Kind && !s.present:
 			return fmt.Errorf("%w: %s: a %s read names what it reads", ErrInvalid, s.kind, s.kind)
@@ -4012,6 +4016,8 @@ func (q GitQuery) Validate() error {
 		return q.Search.validate()
 	case GitFind:
 		return q.Find.validate()
+	case GitExcerpts:
+		return q.Excerpts.validate()
 	}
 	return q.Compare.validate()
 }
@@ -4423,6 +4429,7 @@ type GitAnswer struct {
 	CodeFiles     *CodeFilesAnswer     `json:"code_files,omitempty"`
 	Search        *SearchAnswer        `json:"search,omitempty"`
 	Find          *FindAnswer          `json:"find,omitempty"`
+	Excerpts      *ExcerptsAnswer      `json:"excerpts,omitempty"`
 }
 
 // CodeFilesAnswer is a commit's deploy and dependency files: its LISTING, at

@@ -957,15 +957,17 @@
 //
 // # A change's revisions are read by the ids their rows record
 //
-// Three of those reads are of a change's revisions: a revision's FACTS against
+// Four of those reads are of a change's revisions: a revision's FACTS against
 // its target ([GitRevisionFacts]) — its merge base, the trees of its base and
 // its head, the files it touches and their classes, and the patch-id of its
 // diff, the engine's own read, which its repository's home asks naming no
 // asker ([GitReadKind.EnginesOwn]) — where lines anchored in
-// one revision are in another ([GitReanchor]), and what the change changed
-// between two ([GitInterdiff]). Each names its commits by the whole ids the
-// rows record, never an abbreviation: an interdiff compares two revisions'
-// bases as ids, which an abbreviation would make two spellings of one commit.
+// one revision are in another ([GitReanchor]), what the change changed
+// between two ([GitInterdiff]), and the lines around a finding's range with
+// that revision's diff marks ([GitExcerpts]). Each names its commits by the
+// whole ids the rows record, never an abbreviation: an interdiff compares two
+// revisions' bases as ids, which an abbreviation would make two spellings of
+// one commit.
 // A revision's touched list is bounded by [MaxTouchedPaths] and by
 // [MaxTouchedBytes] of JSON, so the facts that carry it are one page; past
 // either the revision touches all. And [Reanchor] is the one rule that places

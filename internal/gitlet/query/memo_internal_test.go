@@ -29,7 +29,8 @@ var (
 		gitlet.GitRevisionFacts: "RevisionFacts", gitlet.GitReanchor: "Reanchor", gitlet.GitInterdiff: "Diff",
 		gitlet.GitLog: "Log", gitlet.GitBlame: "Blame", gitlet.GitTreeCommits: "TreeCommits",
 		gitlet.GitChecksFile: "ChecksFile",
-		gitlet.GitCodeFiles:  "CodeFiles", gitlet.GitSearch: "Search", gitlet.GitFind: "Find"}
+		gitlet.GitCodeFiles:  "CodeFiles", gitlet.GitSearch: "Search", gitlet.GitFind: "Find",
+		gitlet.GitExcerpts: "Excerpts"}
 	unkept = []string{"Tips", "Tags", "LandedIn", "RevisionFacts", "Reanchor", "ChecksFile", "CodeFiles", "Find"}
 )
 
@@ -274,10 +275,10 @@ func spell(ty reflect.Type) string {
 }
 
 // memoShapes is the shape of the answers each memoFormat this build reads was
-// written over: a format names one shape, for ever. page/6 adds a directory's
-// last commits to page/5's committers, engine marks and unjudged counts.
+// written over: a format names one shape, for ever. page/8 adds findings'
+// excerpts to page/6's answers.
 var memoShapes = map[string]string{
-	"page/6": "55a04e90c0bf1b91",
+	"page/8": "3624eff04a742745",
 }
 
 // AN ANSWER'S SHAPE IS ITS MEMO FORMAT. An entry a node keeps outlives the
