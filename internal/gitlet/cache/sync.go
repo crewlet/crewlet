@@ -1590,7 +1590,7 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		}
 	}
 
-	refsWritten, err := c.writeRefs(ctx, e, inc, snap, by)
+	refsWritten, tagsWritten, err := c.writeRefs(ctx, e, inc, snap, by)
 	if err != nil {
 		return res, err
 	}
@@ -1635,8 +1635,8 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	// A run of the index of pushes is written down with the state that
 	// names it, and one retired goes only once a state no longer names it
 	// (persist) — but neither is a file git reads, so no change a rebuild
-	// weighs.
-	changed := snap.full || wrote || provenanceWrote || len(inc.retiredRuns) > 0 ||
+	// weighs. Nor is the tag index, whose record the state carries.
+	changed := snap.full || wrote || provenanceWrote || tagsWritten || len(inc.retiredRuns) > 0 ||
 		!snap.streamCreated.Equal(inc.stream) || !sameRepo(inc.repo, snap.repo)
 	prevAt, prevStream, prevRepo, prevLeaving := inc.at, inc.stream, inc.repo, inc.leavingSince
 	inc.at, inc.stream, inc.repo = snap.position, snap.streamCreated, snap.repo

@@ -45,6 +45,34 @@ describe("ago", () => {
     expect(ago("2026-12-20T12:00:00Z", NOW)).toBe("on Dec 20");
   });
 
+  test("reads after since", () => {
+    const since = { since: true };
+    expect(ago(back(30), NOW, since)).toBe("a moment ago");
+    expect(ago(ahead(4), NOW, since)).toBe("a moment ago");
+    expect(ago(ahead(3 * 60), NOW, since)).toBe("a moment ago");
+    expect(ago(back(3 * 3600), NOW, since)).toBe("3 hours ago");
+    expect(ago("2026-11-15T16:40:00Z", NOW, { since: true, clock: true })).toBe(
+      "yesterday at 17:40",
+    );
+    expect(ago("2026-10-17T12:00:00Z", NOW, since)).toBe("Oct 17");
+    expect(ago("2025-10-02T12:00:00Z", NOW, since)).toBe("Oct 02, 2025");
+  });
+
+  test("leaves every other form alone after since", () => {
+    for (const ts of [back(60), back(3 * 3600), "2026-11-15T16:40:00Z", "2026-11-11T12:00:00Z"]) {
+      expect(ago(ts, NOW, { since: true })).toBe(ago(ts, NOW));
+    }
+  });
+
+  test("reads due once a due time has arrived", () => {
+    const due = { due: true };
+    expect(ago(back(0), NOW, due)).toBe("due");
+    expect(ago(back(3 * 60), NOW, due)).toBe("due");
+    expect(ago(ahead(3), NOW, due)).toBe("in less than a minute");
+    expect(ago(ahead(30), NOW, due)).toBe("in less than a minute");
+    expect(ago(ahead(4 * 60), NOW, due)).toBe("in 4 minutes");
+  });
+
   test("keeps minutes inside the first hour and the calendar after it, across midnight", () => {
     // 00:10 on the 16th in Berlin.
     const now = Date.parse("2026-11-15T23:10:00Z");

@@ -332,6 +332,7 @@ func (p *logPage) take(rec *logRecord) error {
 		cost++ // the comma before it
 	}
 	pushed, name := p.r.pushCost(c.OID)
+	pushed += p.r.tagCost(c.OID)
 	if cost+pushed > p.left {
 		if len(p.a.Commits) == 0 {
 			// The widest commit is a few KiB, its every field bounded:

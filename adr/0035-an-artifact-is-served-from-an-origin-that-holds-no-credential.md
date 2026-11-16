@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/artifactserve`
-- **Enforced-by:** `internal/artifactserve.TestTheArtifactListenerServesOnlyTheServingRoutes`, `internal/artifactserve.TestTheArtifactListenerReadsNoCookie`, `internal/artifactserve.TestAnArtifactGetsAnOriginOnlyOnASiteOfItsOwn`, `internal/artifactserve.TestEveryServedDocumentCarriesAFreshNonce`, `internal/artifactserve.TestARevokedShareStopsTheNextDocumentRequest`, `internal/artifactserve.TestAStaleServingNodeAnswersUnavailableRatherThanServe`, `internal/api/artifactsapi.TestTheAPIOriginNeverRendersAnArtifact`, `internal/artifactserve.TestEveryBoardIsADocumentUnderItsOwnTicket`, `internal/artifactserve.TestADesignTicketOpensItsOwnBoardAndNoOther`, `internal/artifactserve.TestADesignFrameNamesAPageOfItsVersion`, `internal/artifactserve.TestEveryBoardFailsClosedOnItsNextDocument`
+- **Enforced-by:** `internal/artifactserve.TestTheArtifactListenerServesOnlyTheServingRoutes`, `internal/artifactserve.TestTheArtifactListenerReadsNoCookie`, `internal/artifactserve.TestAnArtifactGetsAnOriginOnlyOnASiteOfItsOwn`, `internal/artifactserve.TestEveryServedDocumentCarriesAFreshNonce`, `internal/artifactserve.TestARevokedShareStopsTheNextDocumentRequest`, `internal/artifactserve.TestAStaleServingNodeAnswersUnavailableRatherThanServe`, `internal/api/artifactsapi.TestTheAPIOriginNeverRendersAnArtifact`, `internal/artifactserve.TestEveryBoardIsADocumentUnderItsOwnTicket`, `internal/artifactserve.TestADesignTicketOpensItsOwnBoardAndNoOther`, `internal/artifactserve.TestADesignFrameNamesAPageOfItsVersion`, `internal/artifactserve.TestEveryBoardFailsClosedOnItsNextDocument`, `internal/api/auth.TestARendersNameStandsForNobodyOnTheOrigin`, `internal/artifactrender.TestARenderReportsATokenTheKitDoesNotDefine`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -214,3 +214,29 @@ pinned hash alone, and only when the page's `<html>` element does not keep its
 own design. Nothing else of a page changes, and a version records the pin, so
 what a page shows is still fully determined by its version.
 `TestTheArtifactListenerServesOnlyTheServingRoutes` holds the five routes.
+
+## The engine's own render
+
+*Amendment, by `render_artifact`.*
+
+A seat checks its own page before anybody reviews it, and holds no credential
+a ticket can be minted through. So the engine renders the page itself, and the
+rules above hold for it unchanged:
+
+- **The same handler, in process.** A render's browser reaches no listener:
+  every request it makes is answered by an `artifactserve.Handler` built from
+  the node's own Tier A, estate router, object store and embedded tree, so the
+  bytes, the nonce and the policy are a viewer's, and anything not on the
+  artifact origin is refused.
+- **A ticket bound to the render, never a credential.** The ticket names a
+  render credential (`render:<uuid>`) that only the render's own resolver
+  knows, standing for the seat for the render's length and decided again, the
+  requester ceiling included, on every document. The public origin's resolver
+  answers it as an ended credential, so a render's URL opens nothing on the
+  listener.
+- **Framed by a host on the dashboard's origin.** The render's host page is
+  served on `api.external_url`, the origin `frame-ancestors` admits, and the
+  API origin still never renders an artifact: the host page is the engine's
+  own, and the artifact runs in its sandboxed frame.
+
+`internal/artifactrender` is the render's authority.

@@ -314,9 +314,11 @@ func cohortsBytes(cs []memoCohort) int64 {
 
 // The outcomes of crewlet.code.cache.memo.lookups.
 const (
-	memoHit     = "hit"
-	memoMiss    = "miss"
-	memoCorrupt = "corrupt"
+	memoHit       = "hit"
+	memoMiss      = "miss"
+	memoCorrupt   = "corrupt"
+	memoProbeHit  = "probe_hit"
+	memoProbeMiss = "probe_miss"
 )
 
 // memoing reports whether the build declares the memo — a case's cache opened
@@ -351,6 +353,18 @@ func (c *Cache) setMemo(inc *incarnation, cohorts []memoCohort, present bool) {
 // entry found in an older cohort than the node's newest moves into the newest
 // (memoUse), so the trim, which takes the oldest cohort, takes it last.
 func (c *Cache) MemoGet(s Synced, k MemoKey) ([]byte, bool) {
+	return c.memoGet(s, k, memoHit, memoMiss)
+}
+
+// MemoProbe is MemoGet for a part of an answer a read looks for under several
+// keys (a directory's window of last commits, under each commit its walk
+// passes): a miss there computes nothing under its key, so it is counted apart.
+func (c *Cache) MemoProbe(s Synced, k MemoKey) ([]byte, bool) {
+	return c.memoGet(s, k, memoProbeHit, memoProbeMiss)
+}
+
+// memoGet is MemoGet and MemoProbe, counting a hit and a miss as hit and miss.
+func (c *Cache) memoGet(s Synced, k MemoKey, hit, miss string) ([]byte, bool) {
 	if !c.memoing() || c.handedOut(s, "a memo lookup") != nil {
 		return nil, false
 	}
@@ -378,10 +392,10 @@ func (c *Cache) MemoGet(s Synced, k MemoKey) ([]byte, bool) {
 			return nil, false
 		}
 		c.memoUse(e, inc, n, k, info, bytes)
-		c.lookedUp(memoHit)
+		c.lookedUp(hit)
 		return body, true
 	}
-	c.lookedUp(memoMiss)
+	c.lookedUp(miss)
 	return nil, false
 }
 

@@ -100,6 +100,7 @@ import { reportFor } from "./start.ts";
 import { StartNote } from "./StartNote.tsx";
 import { ThreadPane } from "./Thread.tsx";
 import { ViewHead, useViewBarTight } from "./ViewHead.tsx";
+import { ago } from "~/lib/ago.ts";
 
 /** How many rows a view's page holds: the reader's views are short lists. */
 const VIEW_PAGE = 20;
@@ -780,7 +781,7 @@ export function ThreadsView() {
                     <RoomName room={room} />
                     <span className="chat-muted-text">
                       · {replies} {replies === 1 ? "reply" : "replies"} · last{" "}
-                      {relTime(summary?.last_reply_at ?? root.message.created_at, now)}
+                      {ago(summary?.last_reply_at ?? root.message.created_at, now)}
                     </span>
                   </span>
                   <WriteButton

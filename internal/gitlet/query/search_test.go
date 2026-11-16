@@ -31,8 +31,9 @@ func (grepOnly) IndexTip(cache.Synced) (cache.IndexedTip, bool) { return cache.I
 func (grepOnly) CodeIndex(context.Context, cache.Synced) (*cache.CodeIndexView, bool) {
 	return nil, false
 }
-func (grepOnly) MemoGet(cache.Synced, cache.MemoKey) ([]byte, bool) { return nil, false }
-func (grepOnly) Memo(cache.Synced) *cache.MemoBatch                 { return nil }
+func (grepOnly) MemoGet(cache.Synced, cache.MemoKey) ([]byte, bool)   { return nil, false }
+func (grepOnly) MemoProbe(cache.Synced, cache.MemoKey) ([]byte, bool) { return nil, false }
+func (grepOnly) Memo(cache.Synced) *cache.MemoBatch                   { return nil }
 
 // building is a node's cache on one of the repository's index holders whose
 // indexer has not yet indexed the tip: it keeps no index, and says it holds

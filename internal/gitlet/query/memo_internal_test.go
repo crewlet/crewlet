@@ -23,13 +23,14 @@ import (
 // the field each kind answers in, an interdiff in a diff's; and unkept is
 // every part no page holds, since its kind is never memoized (memoizable).
 var (
-	stamped = []string{"RepoID", "Position", "Memo", "PushedBy", "Coverage"}
+	stamped = []string{"RepoID", "Position", "Memo", "PushedBy", "Coverage", "Tagged"}
 	partOf  = map[gitlet.GitReadKind]string{gitlet.GitTree: "Tree", gitlet.GitBlob: "Blob", gitlet.GitDiff: "Diff",
-		gitlet.GitCompare: "Compare", gitlet.GitTips: "Tips", gitlet.GitLandedIn: "LandedIn",
+		gitlet.GitCompare: "Compare", gitlet.GitTips: "Tips", gitlet.GitTags: "Tags", gitlet.GitLandedIn: "LandedIn",
 		gitlet.GitRevisionFacts: "RevisionFacts", gitlet.GitReanchor: "Reanchor", gitlet.GitInterdiff: "Diff",
-		gitlet.GitLog: "Log", gitlet.GitBlame: "Blame", gitlet.GitChecksFile: "ChecksFile",
-		gitlet.GitCodeFiles: "CodeFiles", gitlet.GitSearch: "Search", gitlet.GitFind: "Find"}
-	unkept = []string{"Tips", "LandedIn", "RevisionFacts", "Reanchor", "ChecksFile", "CodeFiles", "Find"}
+		gitlet.GitLog: "Log", gitlet.GitBlame: "Blame", gitlet.GitTreeCommits: "TreeCommits",
+		gitlet.GitChecksFile: "ChecksFile",
+		gitlet.GitCodeFiles:  "CodeFiles", gitlet.GitSearch: "Search", gitlet.GitFind: "Find"}
+	unkept = []string{"Tips", "Tags", "LandedIn", "RevisionFacts", "Reanchor", "ChecksFile", "CodeFiles", "Find"}
 )
 
 // memoized is every kind memoizable answers from the memo.
@@ -273,10 +274,10 @@ func spell(ty reflect.Type) string {
 }
 
 // memoShapes is the shape of the answers each memoFormat this build reads was
-// written over: a format names one shape, for ever. page/5 added each
-// commit's committer and engine mark and a narrowed history's unjudged count.
+// written over: a format names one shape, for ever. page/6 adds a directory's
+// last commits to page/5's committers, engine marks and unjudged counts.
 var memoShapes = map[string]string{
-	"page/5": "3180ddc7fc1c1ff8",
+	"page/6": "55a04e90c0bf1b91",
 }
 
 // AN ANSWER'S SHAPE IS ITS MEMO FORMAT. An entry a node keeps outlives the
@@ -308,12 +309,14 @@ func (fakeCache) WantHistory(string)                                {}
 func (f fakeCache) MemoGet(cache.Synced, cache.MemoKey) ([]byte, bool) {
 	return f.body, f.body != nil
 }
-func (fakeCache) Memo(cache.Synced) *cache.MemoBatch             { return nil }
-func (fakeCache) Spool() (*os.File, error)                       { return nil, os.ErrInvalid }
-func (fakeCache) IndexTip(cache.Synced) (cache.IndexedTip, bool) { return cache.IndexedTip{}, false }
+func (fakeCache) MemoProbe(cache.Synced, cache.MemoKey) ([]byte, bool) { return nil, false }
+func (fakeCache) Memo(cache.Synced) *cache.MemoBatch                   { return nil }
+func (fakeCache) Spool() (*os.File, error)                             { return nil, os.ErrInvalid }
+func (fakeCache) IndexTip(cache.Synced) (cache.IndexedTip, bool)       { return cache.IndexedTip{}, false }
 func (fakeCache) CodeIndex(context.Context, cache.Synced) (*cache.CodeIndexView, bool) {
 	return nil, false
 }
+func (fakeCache) Tags(cache.Synced) (*cache.TagIndex, bool) { return nil, false }
 
 // A PAGE FROM THE MEMO FITS WHATEVER IT IS STAMPED WITH. A page carries its
 // budget — the most the fields Read stamps may encode to and the page still

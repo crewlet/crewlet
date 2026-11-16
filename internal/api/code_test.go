@@ -622,8 +622,10 @@ var codeQuestions = []codeQuestion{
 	{"code_blob", "GET /gitlet/repos/{name}/blob", "", "web", []string{gitlet.HeadRef}},
 	{"code_log", "GET /gitlet/repos/{name}/log", "", "web", []string{gitlet.HeadRef}},
 	{"code_blame", "GET /gitlet/repos/{name}/blame", "", "web", []string{gitlet.HeadRef}},
+	{"code_tree_commits", "GET /gitlet/repos/{name}/tree-commits", "", "web", []string{gitlet.HeadRef}},
 	{"code_diff", "GET /gitlet/repos/{name}/diff", "", "web", []string{gitlet.HeadRef}},
 	{"code_tips", "GET /gitlet/repos/{name}/tips", "", "web", []string{gitlet.HeadRef}},
+	{"code_tags", "GET /gitlet/repos/{name}/tags", gitlet.ReadRepo, "web", nil},
 	{"code_compare", "GET /gitlet/repos/{name}/compare", "", "web", []string{gitlet.HeadRef}},
 	{"code_commit", "GET /gitlet/repos/{name}/commits/{sha}", gitlet.ReadCommit, "web", nil},
 	// AND ITS MERGE QUEUES AND ITS CHECKS: the queues and the attempts listed

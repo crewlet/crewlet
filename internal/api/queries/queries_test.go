@@ -400,8 +400,11 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"code_blame":   string(iam.GrantGitlet),
 		"code_diff":    string(iam.GrantGitlet),
 		"code_tips":    string(iam.GrantGitlet),
+		"code_tags":    string(iam.GrantGitlet),
 		"code_compare": string(iam.GrantGitlet),
 		"code_commit":  string(iam.GrantGitlet),
+		// AND EACH ENTRY'S LAST COMMIT, decided per repository alike.
+		"code_tree_commits": string(iam.GrantGitlet),
 		// AND ITS MERGE QUEUES AND ITS CHECKS, decided per repository alike:
 		// a listing across repositories keeps the rows of those the caller
 		// reads, and one attempt — and its log — is refused on one it does

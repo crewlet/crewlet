@@ -66,15 +66,7 @@ import { QueryState } from "~/components/common.tsx";
 import { NowLine } from "~/components/time/NowLine.tsx";
 import { SpanBar } from "~/components/time/SpanBar.tsx";
 import { TimeAxis } from "~/components/time/TimeAxis.tsx";
-import {
-  fmtBytes,
-  fmtCount,
-  fmtDuration,
-  fmtElapsed,
-  fmtTime,
-  relTime,
-  utf8Bytes,
-} from "~/lib/format.ts";
+import { fmtBytes, fmtCount, fmtDuration, fmtElapsed, fmtTime, utf8Bytes } from "~/lib/format.ts";
 import { deliveredLine, outcomeWords, rounds, type PhaseRecord } from "~/lib/phases.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { argumentsInPlace, SEALED_RESULT } from "~/lib/withheld.ts";
@@ -89,6 +81,7 @@ import {
   type Waterfall as Model,
 } from "~/lib/waterfall.ts";
 import type { EventRecord, ExecutorTailAnswer } from "~/protocol/index.ts";
+import { ago } from "~/lib/ago.ts";
 
 /** What each kind of span is called in its detail's eyebrow. */
 const KIND_LABEL: Record<SpanKind, string> = {
@@ -1043,7 +1036,7 @@ export function LiveOutput({
         <span className="t-label">Live output</span>
         {out && (
           <span className="t-caption">
-            {holding ? `${holding} · ` : ""}read {relTime(out.as_of, now)}
+            {holding ? `${holding} · ` : ""}read {ago(out.as_of, now)}
             {answer?.node ? ` on ${answer.node}` : ""}
             {out.finished ? " · finished, waiting to be collected" : ""}
           </span>

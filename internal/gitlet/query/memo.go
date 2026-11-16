@@ -61,7 +61,9 @@ import (
 // range, as a file's does; a history's page is its walk's own — the walk ends
 // where the page does, since its cost is the walk — memoized where the walk
 // ended it, and never where the read's budget or its due instant did, which
-// is the machine's and the moment's; and a landed-in read, a revision's facts
+// is the machine's and the moment's; a directory's last commits' page is kept
+// as its read cut it, and its windows of answers apart, under the last commit
+// that changed the directory, its walk's first record (treecommits.go); and a landed-in read, a revision's facts
 // and a re-anchoring never (memoizable says why). A history's and a blame's
 // key carries the measure their pages were cut with (costModel), since a
 // fence they are measured with is a build's.
@@ -88,7 +90,7 @@ import (
 // TestAMemoEntryHoldsEveryFieldOfItsAnswer holds the encoding to the answers'
 // fields, and TestAnAnswersShapeIsItsMemoFormat holds this name to a
 // fingerprint of them, so a change to either fails until this moves with it.
-const memoFormat = "page/5"
+const memoFormat = "page/6"
 
 // memoPage is one page as the memo keeps it.
 type memoPage struct {
@@ -184,6 +186,9 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 	case gitlet.GitBlame:
 		start, end := q.Blame.Range()
 		parts = append(parts, whole[q.Blame.Rev], pathOf(q), strconv.Itoa(start), strconv.Itoa(end), costModel)
+	case gitlet.GitTreeCommits:
+		// The span bounds the page's entries.
+		parts = append(parts, whole[q.TreeCommits.Rev], pathOf(q), strconv.Itoa(r.s.treeWalk.span))
 	case gitlet.GitSearch:
 		// The commit read and the ref that named it, then the query's every
 		// part: whichever path cut the page, its hits are the same lines.
@@ -227,6 +232,9 @@ func memoizable(q gitlet.GitQuery) bool {
 		return false
 	case gitlet.GitTips:
 		// Kept a tip at a time under tipsMemoFormat (tips.go), never as a page.
+		return false
+	case gitlet.GitTags:
+		// Read from the copy's tag index, never a page of the memo (tags.go).
 		return false
 	}
 	return true
@@ -560,6 +568,26 @@ func encodePage(p memoPage) []byte {
 			w.str(c.Subject)
 			w.int(c.SubjectBytes)
 		}
+	case gitlet.GitTreeCommits:
+		t := a.TreeCommits
+		w.str(t.Tree)
+		w.str(t.Path)
+		w.str(t.PathB64)
+		w.int(len(t.Entries))
+		for _, e := range t.Entries {
+			w.str(e.Path)
+			w.str(e.PathB64)
+			w.str(e.Commit)
+			w.flag(e.OutOfTime)
+		}
+		w.int(len(t.Commits))
+		for _, c := range t.Commits {
+			appendLogCommit(&w, c)
+		}
+		w.int(t.Total)
+		// Never set on a page the memo keeps (Cut), and written all the same:
+		// an entry holds every field of its answer.
+		w.flag(t.OutOfTime)
 	case gitlet.GitSearch:
 		s := a.Search
 		w.str(s.Tip)
@@ -848,6 +876,28 @@ func decodePage(body []byte) (memoPage, error) {
 			}
 		}
 		a.Blame = b
+	case gitlet.GitTreeCommits:
+		t := &gitlet.TreeCommitsAnswer{Tree: r.str(), Path: r.str(), PathB64: r.str(), Entries: []gitlet.TreeCommit{},
+			Commits: []gitlet.LogCommit{}}
+		if n := r.count(); r.err == nil {
+			t.Entries = make([]gitlet.TreeCommit, n)
+			for i := range t.Entries {
+				t.Entries[i] = gitlet.TreeCommit{Path: r.str(), PathB64: r.str(), Commit: r.str(), OutOfTime: r.flag()}
+			}
+		}
+		if n := r.count(); r.err == nil {
+			seen := map[string]bool{}
+			t.Commits = make([]gitlet.LogCommit, n)
+			for i := range t.Commits {
+				t.Commits[i] = readLogCommit(r)
+				if seen[t.Commits[i].OID] {
+					r.err = errMemoPage // a commit twice: no page this build writes
+				}
+				seen[t.Commits[i].OID] = true
+			}
+		}
+		t.Total, t.OutOfTime = r.int(), r.flag()
+		a.TreeCommits = t
 	case gitlet.GitSearch:
 		s := &gitlet.SearchAnswer{Tip: r.str(), Ref: r.str(), Via: gitlet.SearchVia(r.str()), SkippedFiles: r.int(),
 			Truncated: r.flag(), Hits: []gitlet.SearchHit{}}
@@ -889,7 +939,7 @@ func readLogCommit(r *pageReader) gitlet.LogCommit {
 }
 
 // appendLogCommit writes one commit as readLogCommit reads it: a history
-// page's and a tip's alike.
+// page's, a tip's and a directory's last commits' alike.
 func appendLogCommit(w *pageWriter, c gitlet.LogCommit) {
 	w.str(c.OID)
 	w.int(len(c.Parents))

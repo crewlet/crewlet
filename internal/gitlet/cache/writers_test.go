@@ -483,6 +483,10 @@ var cacheWriters = []writerRow{
 			"made for its first file, a swap's and a rebuild's links of the files the record of the copy it " +
 			"replaces names — every segment and tip map itself staged in tmp/ and renamed in through durable.go, " +
 			"and retired through layout.go's toTrash", []cache.DerivedName{cache.DerivedCodeIndex}},
+	{"internal/gitlet/cache/tags.go", kindOS,
+		"the tag index, the cache's own derived file under the incarnation's crewlet/: the directory made for " +
+			"it, the file staged in tmp/ with no fsync and renamed in through durable.go, and a staged file not " +
+			"placed removed", []cache.DerivedName{cache.DerivedTags}},
 	{"internal/gitlet/cache/memo.go", kindOS,
 		"the memo of answers by object id, the cache's own derived file under the incarnation's crewlet/memo: " +
 			"each answer staged in tmp/ — with no sync, since every read holds an entry to its digest — " +
@@ -660,6 +664,12 @@ var cacheWriters = []writerRow{
 			"spells (`blame <id> -- --output=x` answers that no such path exists, measured on 2.56.0); " +
 			"query.TestAPathReachesGitOnlyAsData holds the argument list to its template, so no --output can be " +
 			"added unseen", nil},
+	{"internal/gitlet/query/treecommits.go", kindGit + " log",
+		"a directory's last commits: the only arguments not spelled as literals are the log formats, constants, " +
+			"the whole commit ids a read checked or its walks printed and, after `--`, the directory or entries " +
+			"of it as literal pathspecs, which git reads as paths whatever they spell; " +
+			"query.TestAPathReachesGitOnlyAsData holds every argument list to its template, so no --output can " +
+			"be added unseen", nil},
 }
 
 type writerKey struct{ file, kind string }

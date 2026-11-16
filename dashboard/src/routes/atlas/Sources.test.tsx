@@ -75,7 +75,9 @@ async function card(name: string): Promise<HTMLElement> {
 
 describe("a source's standing", () => {
   test("says when it is read next, and for a failed read when it was last read whole", () => {
-    expect(readLine(sourceStanding("cloudflare"), NOW)).toBe("Read 10m ago, next read in 50m.");
+    expect(readLine(sourceStanding("cloudflare"), NOW)).toBe(
+      "Read 10 minutes ago, next read in 50 minutes.",
+    );
     expect(
       readLine(
         sourceStanding("github", {
@@ -85,7 +87,7 @@ describe("a source's standing", () => {
         }),
         NOW,
       ),
-    ).toBe("Tried 2m ago, last read whole 10m ago, due now.");
+    ).toBe("Tried 2 minutes ago, last read whole 10 minutes ago, due now.");
     expect(
       readLine(
         sourceStanding("ssh", {
@@ -109,7 +111,7 @@ describe("a source's standing", () => {
     expect(refreshBlocked(sourceStanding("cloudflare"), NOW)).toBeUndefined();
     expect(
       refreshBlocked(sourceStanding("github", { refreshable_at: "2026-11-11T09:03:00Z" }), NOW),
-    ).toBe("Read moments ago. It can be read again in 3m");
+    ).toBe("Read moments ago. It can be read again in 3 minutes");
     // THE FLOOR HAS PASSED: an instant behind the clock holds nothing.
     expect(
       refreshBlocked(sourceStanding("github", { refreshable_at: "2026-11-11T08:59:00Z" }), NOW),

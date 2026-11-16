@@ -43,7 +43,7 @@ import { CODE_ALARM_KINDS } from "~/contract/code.ts";
 import { LimitSetting } from "~/components/LimitSetting.tsx";
 import { TextSetting } from "~/components/TextSetting.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { plural, relTime } from "~/lib/format.ts";
+import { plural } from "~/lib/format.ts";
 import { gateLine, pushRuleLine, ruleSourceLine } from "~/lib/protection.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
@@ -60,6 +60,7 @@ import type {
 import { FLEET_POLL_MS } from "./Fleet.tsx";
 import { LogRow, useRetentionReport } from "./Retention.tsx";
 import "~/styles/gitlet.css";
+import { ago } from "~/lib/ago.ts";
 
 /** The state log Gitlet keeps its rows on (`gitlet.Domain`). */
 export const CODE_DOMAIN = "code";
@@ -362,7 +363,9 @@ function CodeAlarms({ fleet }: { fleet: FleetAnswer }) {
                 <a className="t-link prose-link mono" href={href(["settings", "nodes", a.node])}>
                   {a.node}
                 </a>
-                {a.since && <span className="muted">, since {relTime(a.since, now)}</span>}
+                {a.since && (
+                  <span className="muted">, since {ago(a.since, now, { since: true })}</span>
+                )}
               </li>
             ))}
           </ul>

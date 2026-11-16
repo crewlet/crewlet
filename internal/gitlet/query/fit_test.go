@@ -3,6 +3,7 @@ package query_test
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"strconv"
 	"strings"
@@ -302,6 +303,45 @@ func TestTheTextCostIsJSONs(t *testing.T) {
 		}
 		if got, want := query.TextCost([]byte(s.String())), len(out)-2; got != want {
 			t.Fatalf("the page costs %q at %d bytes; encoding/json writes %d", s.String(), got, want)
+		}
+	}
+}
+
+// A DIRECTORY'S LAST COMMITS FIT A PAGE: 300 entries of 250 `<` bytes, each
+// last changed by its own commit whose author, address and subject are at
+// their encoded bounds, read page by page at the shipped bound: every page
+// within it, the pages holding every entry.
+// Mutation: leave a commit's cost, or its push's, out of the cut.
+func TestADirectorysLastCommitsFitAPage(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
+	name := func(i int) string { return fmt.Sprintf("d/%03d%s", i, strings.Repeat("<", 247)) }
+	ident := fmt.Sprintf("%s <%s@example.com>", strings.Repeat("&", gitlet.MaxLogPersonBytes/6),
+		strings.Repeat("&", (gitlet.MaxLogPersonBytes-12)/6))
+	subject := strings.Repeat("<", gitlet.MaxLogSubjectBytes/6)
+	tree := map[string]histNode{}
+	for i := range 300 {
+		tree[name(i)] = file("0")
+	}
+	hist := []histCommit{{ref: "refs/heads/main", tree: tree, date: 1_700_000_000}}
+	for i := range 300 {
+		tr := maps.Clone(hist[i].tree)
+		tr[name(i)] = file("1")
+		hist = append(hist, histCommit{ref: "refs/heads/main", parents: []int{i}, tree: tr,
+			date: 1_700_000_100 + int64(i), ident: ident, msg: subject})
+	}
+	ids := writeHistory(t, x.p.Git(), x.work, hist)
+	x.push(gitlettest.RepoName, "refs/heads/main:refs/heads/main")
+	repo := x.repo(gitlettest.RepoName)
+	x.synced(0, repo)
+	ps := pages(t, x.server(0, query.Options{}), treeCommitsQ(repo, ids[300], "d"), gitlet.MaxGitAnswerBytes)
+	got, commits := entriesOf(t, ps)
+	if len(got) != 300 || len(ps) < 3 {
+		t.Fatalf("the directory's last commits gave %d entries in %d pages, want 300 in several", len(got), len(ps))
+	}
+	for _, c := range commits {
+		if c.Subject == "" || c.Author == "" {
+			t.Fatalf("commit %s is carried with its subject or author described, want both at their bound", c.OID)
 		}
 	}
 }

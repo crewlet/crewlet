@@ -24,3 +24,20 @@ var EmulationSetFocusEmulationEnabled = Method[EmulationSetFocusEmulationEnabled
 type EmulationSetFocusEmulationEnabledParams struct {
 	Enabled bool `json:"enabled"`
 }
+
+// EmulationSetEmulatedMedia is Emulation.setEmulatedMedia: the media type and
+// features a page's queries read, such as prefers-color-scheme. First
+// consumer: the artifact render's themes (internal/artifactrender).
+var EmulationSetEmulatedMedia = Method[EmulationSetEmulatedMediaParams, struct{}]{name: "Emulation.setEmulatedMedia"}
+
+// EmulationSetEmulatedMediaParams is Emulation.setEmulatedMedia's parameters.
+type EmulationSetEmulatedMediaParams struct {
+	Media    string         `json:"media,omitempty"`
+	Features []MediaFeature `json:"features,omitempty"`
+}
+
+// MediaFeature is Emulation.MediaFeature: one media feature and its value.
+type MediaFeature struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
