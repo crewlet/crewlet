@@ -4434,11 +4434,11 @@ vendor for it, every pass including the check's dry run
 last ended, which a dry run leaves alone: a refusal a dry run finds (a sealing
 step the sync would refuse) is reported on the integration and leaves the
 lane's last sync as it was. The tab draws them as one value,
-"Checked 1m ago, last applied 10m ago", and its header's "Last check" is the
-integration's own pass. On GitHub, `observed.ceiling` is the permissions the
-agent's app is registered with, which every token is narrowed from: a
-permission there that `desired` leaves out or holds lower is one the agent does
-not use, never drift, and the tab says so under the row.
+"Checked 1 minute ago, last applied 10 minutes ago", and its header's "Last
+check" is the integration's own pass. On GitHub, `observed.ceiling` is the
+permissions the agent's app is registered with, which every token is narrowed
+from: a permission there that `desired` leaves out or holds lower is one the
+agent does not use, never drift, and the tab says so under the row.
 
 A level the company's connection cannot grant yet carries `unavailable`, the
 sentence saying what it waits on ("The Configure level is unavailable until the

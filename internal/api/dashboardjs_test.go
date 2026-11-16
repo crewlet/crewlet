@@ -2629,7 +2629,9 @@ const (
 	// it was built on: 6314 KiB.
 	// Saying a time inside Gitlet's sentences in words added 742 bytes and
 	// took it to 6314.1 KiB (6,465,667 bytes): 6315 KiB.
-	treeBudget = 5<<20 + 1195<<10
+	// Saying every time inside a sentence in words added 1,215 bytes and took
+	// it to 6315.3 KiB (6,466,882 bytes): 6316 KiB.
+	treeBudget = 5<<20 + 1196<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

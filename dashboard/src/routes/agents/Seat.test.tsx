@@ -369,6 +369,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   location.hash = "#/";
   document.title = "";
@@ -950,7 +951,10 @@ test("a pause the engine refuses keeps the dialog and says why; a pending one cl
   expect(posted).toHaveLength(2);
 });
 
-test("a paused seat says who paused it and why, and offers Resume", async () => {
+test("a paused seat says who paused it, when and why, and offers Resume", async () => {
+  // Noon in Berlin the next day: the pause reads in words on the calendar.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-09-22T10:00:00Z"));
   mount("#/company/org/seats/swe", {
     answers: { viewer: { ...OPERATOR, acts: EVERY_ACT } },
     agents: [
@@ -964,7 +968,7 @@ test("a paused seat says who paused it and why, and offers Resume", async () => 
         paused: {
           by_kind: "human",
           by: "jane",
-          at: "2026-09-21T09:00:00Z",
+          at: "2026-09-21T15:40:00Z",
           reason: "rolling the fleet",
           stop_running: false,
         },
@@ -974,7 +978,7 @@ test("a paused seat says who paused it and why, and offers Resume", async () => 
   await settle();
   // THE PERSON, by name — `paused.by` is an address.
   const notice = document.querySelector(".prof-notices") as HTMLElement;
-  expect(notice.textContent).toContain("Paused by Jane Founder");
+  expect(notice.textContent).toContain("Paused by Jane Founder yesterday at 17:40");
   expect(notice.textContent).toContain("rolling the fleet");
   expect(screen.getAllByText("Paused").length).toBeGreaterThan(0);
   // RESUMING ONE SEAT IS ONE PRESS: it changes nothing a person has to weigh.

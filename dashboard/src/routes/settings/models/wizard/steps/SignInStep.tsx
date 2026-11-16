@@ -9,16 +9,7 @@
  * will happen, and says what is wrong only once Continue or Save is pressed.
  */
 
-import {
-  Callout,
-  ChoiceList,
-  Copyable,
-  FormField,
-  RelativeTime,
-  Select,
-  Text,
-  ValueField,
-} from "@crewlethq/ui";
+import { Callout, ChoiceList, Copyable, FormField, Select, Text, ValueField } from "@crewlethq/ui";
 import { listed } from "~/lib/format.ts";
 import { HostLogin } from "../../HostLogin.tsx";
 import type { ModelView } from "../../data.ts";
@@ -33,6 +24,7 @@ import {
   type Draft,
   type Method,
 } from "../draft.ts";
+import { AgoTime } from "~/components/AgoTime.tsx";
 
 export const METHOD_WORDS: Record<Method, { label: string; detail: string }> = {
   "api-key": {
@@ -165,7 +157,7 @@ export function SignInStep({
               {editing?.admin?.sign_in.stored_at ? (
                 <>
                   {" · stored "}
-                  <RelativeTime value={editing.admin.sign_in.stored_at} />
+                  <AgoTime value={editing.admin.sign_in.stored_at} />
                 </>
               ) : (
                 " · stored"

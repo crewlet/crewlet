@@ -66,6 +66,7 @@ import {
 } from "./parts.tsx";
 import { JOB_WORDS, seatName } from "./places.ts";
 import { ROUTE, RUN_IN, WINDOW, product } from "./words.ts";
+import { AgoTime } from "~/components/AgoTime.tsx";
 
 type Open = (flow: Flow, at?: WizardAt) => void;
 
@@ -393,7 +394,7 @@ function ConditionCallout({
         {failure ? (
           <span className="models-stack">
             <span>
-              Refused <RelativeTime value={failure.at} /> on {failure.node}. Seats move to their
+              Refused <AgoTime clock value={failure.at} /> on {failure.node}. Seats move to their
               backups until it signs in again.
             </span>
             <VendorSaid said={failure.said} harness={model.harness} />
@@ -429,7 +430,7 @@ function ConditionCallout({
           </Button>
         }
       >
-        It expires <RelativeTime value={device.expires_at} />.
+        It expires <AgoTime value={device.expires_at} />.
       </Callout>
     );
   }
@@ -480,7 +481,7 @@ function SignInCard({
       "Expires",
       Date.parse(signIn.expires_at) <= Date.now() ? (
         <>
-          Expired <RelativeTime value={signIn.expires_at} />
+          Expired <AgoTime value={signIn.expires_at} />
         </>
       ) : (
         dated(signIn.expires_at)
@@ -553,7 +554,7 @@ function TestCard({ model, open }: { model: ModelView; open: Open }) {
                       <span className="col">
                         <span>
                           {failureWords(failure.kind, signInOf(model))},{" "}
-                          <RelativeTime value={failure.at} /> on {failure.node}
+                          <AgoTime clock value={failure.at} /> on {failure.node}
                         </span>
                         <VendorSaid said={failure.said} harness={model.harness} />
                       </span>,

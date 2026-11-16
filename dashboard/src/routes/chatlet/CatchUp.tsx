@@ -25,10 +25,10 @@ import { useNavigator } from "~/app/router.tsx";
 import type { AssistantBriefPoint } from "~/contract/assistant.ts";
 import { appRoute } from "~/lib/appRoute.ts";
 import { useNow } from "~/lib/clock.ts";
-import { relTime } from "~/lib/format.ts";
 
 import { useChatNav, useOpenRoom, type CatchUpMode } from "./nav.tsx";
 import { ChatSidePanel } from "./PanePanel.tsx";
+import { ago } from "~/lib/ago.ts";
 
 const TITLE: Record<CatchUpMode, string> = { catchup: "Catch up", summarize: "Summarize" };
 
@@ -151,7 +151,7 @@ function CatchUpBrief({ room, mode, onClose }: CatchUpProps) {
         // each point with the message it came from.
         <BriefCard
           scope={where}
-          asOf={`Drafted ${relTime(card.asOf, now)}`}
+          asOf={`Drafted ${ago(card.asOf, now)}`}
           about={card.about}
           needs={card.needs.map((need, index) => ({
             key: `${index}:${need.ref.id}`,

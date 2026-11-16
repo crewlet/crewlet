@@ -876,7 +876,7 @@ test("continue reading draws each page by its title now, and who last saved it",
   await waitFor(() => expect(within(reading).getByText("Settlement algorithm")).toBeTruthy());
   expect(within(reading).queryByText("Old title")).toBeNull();
   expect(within(reading).queryByText("ENG-4")).toBeNull();
-  expect(within(reading).getByText("Last saved 2h ago by Jane Founder")).toBeTruthy();
+  expect(within(reading).getByText("Last saved 2 hours ago by Jane Founder")).toBeTruthy();
 });
 
 test("watching draws who last saved each page, and nothing where no save is named", async () => {
@@ -912,7 +912,7 @@ test("watching draws who last saved each page, and nothing where no save is name
   });
   const watching = await screen.findByRole("region", { name: /Watching/ });
   await waitFor(() => expect(within(watching).getByText("Settlement algorithm")).toBeTruthy());
-  expect(within(watching).getByText("Last saved 1h ago by Crewlet-SWE")).toBeTruthy();
+  expect(within(watching).getByText("Last saved 1 hour ago by Crewlet-SWE")).toBeTruthy();
   const split = within(watching)
     .getAllByRole("listitem")
     .find((row) => row.textContent?.includes("Split modes"));

@@ -191,6 +191,7 @@ import { SeatCode } from "./seat/Code.tsx";
 import { Settings } from "./seat/Settings.tsx";
 import { Turns } from "./seat/Turns.tsx";
 import { Work } from "./seat/Work.tsx";
+import { ago } from "~/lib/ago.ts";
 
 /** How many open tasks the Work tab's list, and the Overview's card, are read from. */
 const WORK_PAGE = 50;
@@ -849,7 +850,8 @@ function Notices({
         <Callout variant={toneOf(state)} icon={<PauseGlyph size="md" />}>
           {paused ? (
             <>
-              <strong>Paused by {pauserOf(paused, nameOf)}</strong> {relTime(paused.at, now)}
+              <strong>Paused by {pauserOf(paused, nameOf)}</strong>{" "}
+              {ago(paused.at, now, { clock: true })}
               {paused.reason ? `: “${sentence(paused.reason)}”` : "."}
             </>
           ) : (
@@ -865,7 +867,7 @@ function Notices({
         >
           {paused ? (
             <>
-              Paused by {pauserOf(paused, nameOf)} {relTime(paused.at, now)}
+              Paused by {pauserOf(paused, nameOf)} {ago(paused.at, now, { clock: true })}
               {/* THE QUOTE ENDS THE SENTENCE: `sentence` has already stopped it. */}
               {paused.reason ? `: “${sentence(paused.reason)}” ` : ". "}
             </>
