@@ -2671,7 +2671,9 @@ const (
 	// The artifacts' half of a person's inbox: 6525.6 KiB (6,682,224 bytes): 6526 KiB.
 	// Gitlet's code coloured by kind in its file view and blame, on kit 0.137.0:
 	// 6410.9 KiB (6,564,755 bytes), 36,917 bytes over main: 6411 KiB.
-	treeBudget = 5<<20 + 1402<<10
+	// The artifact comments, their inbox, Gitlet syntax and harness marks train, on kit 0.144.0:
+	// 6595.4 KiB (6,753,705 bytes), 76,032 over main: 6596 KiB.
+	treeBudget = 5<<20 + 1476<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
