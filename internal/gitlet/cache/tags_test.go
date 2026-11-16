@@ -630,7 +630,7 @@ func TestADamagedTagIndexIsBuiltAgain(t *testing.T) {
 		s := w.sync(t, c, repo)
 		flipTags(t, s.Dir, firstDateByte, 0x7f)
 		c = w.reopen(t, c)
-		s = w.sync(t, c, repo)
+		w.sync(t, c, repo)
 		if got, want := w.image(t, c, repo), w.rebuilt(t, repo); got != want {
 			t.Errorf("a new process kept the damaged index:\n%s\nwant:\n%s", got, want)
 		}

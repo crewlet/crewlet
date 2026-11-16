@@ -24,6 +24,7 @@ const LastJSONSecond = 253402300799
 // ObjectType is a git object's type as git names it.
 type ObjectType string
 
+// The four object types git names.
 const (
 	ObjectCommit ObjectType = "commit"
 	ObjectTree   ObjectType = "tree"

@@ -31,7 +31,7 @@ func BeforeTags(o *Options, f func(ctx context.Context, dir string, reading int)
 // date or "-" where it is undated.
 func TagRows(path string) ([]string, error) {
 	var out []string
-	_, _, err := scanTagFile(path, tagScan{record: func(_ int, r *tagRecord, _ []byte) error {
+	_, err := scanTagFile(path, tagScan{record: func(_ int, r *tagRecord, _ []byte) error {
 		if err := validTagName(r.name); err != nil {
 			return err
 		}

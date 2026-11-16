@@ -171,7 +171,7 @@ func TestATagFileReadsBackWhatItHolds(t *testing.T) {
 					t.Errorf("the rows past a key after %s are %d, want %d", want[i].Ref, len(got), n-i-1)
 				}
 			}
-			if _, _, err := scanTagFile(path, tagScan{}); err != nil {
+			if _, err := scanTagFile(path, tagScan{}); err != nil {
 				t.Errorf("reading %d tags whole: %v", n, err)
 			}
 			// Every tagged commit's tags, newest first, from the index.
