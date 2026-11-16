@@ -413,3 +413,92 @@ func TestAnElementsTextIsItsRunsCollapsed(t *testing.T) {
 		t.Errorf("the slide order is %v, want %v", got, want)
 	}
 }
+
+// files is a version's files as a format reads them.
+type files map[string]string
+
+func (f files) Paths() []string {
+	var out []string
+	for p := range f {
+		out = append(out, p)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func (f files) Essence(p string) (string, bool) {
+	if _, ok := f[p]; !ok {
+		return "", false
+	}
+	if strings.HasSuffix(p, ".js") {
+		return "text/javascript", true
+	}
+	return "text/html", true
+}
+
+func (f files) Read(p string) ([]byte, error) {
+	data, ok := f[p]
+	if !ok {
+		return nil, errors.New("no such file")
+	}
+	return []byte(data), nil
+}
+
+// A VERSION'S INDEX IS READ BY WHAT ITS KIND'S COMMENTS POINT AT: an html
+// version's pages and scripts, and nothing at all for a kind whose comments
+// take the whole version, which reads no file.
+//
+// Mutation: read every file, or skip the scripts, and this goes red.
+func TestAVersionsIndexIsReadByWhatItsKindPointsAt(t *testing.T) {
+	t.Parallel()
+	site := files{"index.html": `<section data-crewlet-anchor="comparison"></section>`,
+		"app.js": `crewlet.comments.anchor('pricing', el)`, "data.csv": "a,b"}
+	idx, err := commentanchor.Read(artifacts.KindHTML, site, artifacts.Manifest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := idx.Names("index.html"); !slices.Equal(got, []string{"comparison", "pricing"}) {
+		t.Errorf("index.html declares %v, want comparison and pricing", got)
+	}
+	if idx.Size() == 0 {
+		t.Error("an index holding names weighs nothing")
+	}
+	doc, err := commentanchor.Read(artifacts.KindDoc, files{}, artifacts.Manifest{})
+	if err != nil || doc != nil {
+		t.Errorf("a doc's index is (%v, %v), want none: its comments take the whole version", doc, err)
+	}
+	if _, err := commentanchor.Read("poster", files{}, artifacts.Manifest{}); !errors.Is(err,
+		commentanchor.ErrInvalid) {
+		t.Errorf("an unknown kind answered %v", err)
+	}
+}
+
+// AN ELEMENT'S SOURCE IS ITS NODE ON THE DECK, written back as markup: the
+// whole slide for an empty path, the element at the path otherwise, and none
+// for a path the slide does not hold.
+func TestAnElementsSourceIsItsNodeAsMarkup(t *testing.T) {
+	t.Parallel()
+	d := deck(slide("results", el("h1", txt("Results")),
+		slideformat.Node{Tag: "p", Attrs: map[string]string{"class": "lead"},
+			Style:    []slideformat.Decl{{Property: "color", Value: "red"}},
+			Children: []slideformat.Node{txt("Up <40%>"), el("br")}}))
+	a := commentanchor.Anchor{Kind: commentanchor.KindSlides, Slide: "results", Path: "1", Tag: "p"}
+	n, ok := commentanchor.Element(d, a)
+	if !ok {
+		t.Fatal("the element at path 1 was not found")
+	}
+	if got, want := commentanchor.Markup(n), `<p class="lead" style="color: red">Up &lt;40%&gt;<br></p>`; got != want {
+		t.Errorf("the element's markup is %q, want %q", got, want)
+	}
+	whole := a
+	whole.Path = ""
+	if n, ok := commentanchor.Element(d, whole); !ok || n.Tag != "section" {
+		t.Errorf("an empty path found %+v, want the slide's section", n)
+	}
+	for _, path := range []string{"5", "1/0", "0/9"} {
+		a.Path = path
+		if _, ok := commentanchor.Element(d, a); ok {
+			t.Errorf("path %s found an element the slide does not hold", path)
+		}
+	}
+}
