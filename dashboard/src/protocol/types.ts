@@ -8579,6 +8579,43 @@ export interface CodeChangeSummary extends CodeChangeRow {
    * change read in brief carries its lifecycle's alone.
    */
   updated_at: string;
+  /** Its card, where `cards=true` asks (`gitlet.ChangeSummary.Card`); absent is not answered. */
+  card?: CodeChangeCard;
+}
+
+/** One reviewer on a listed change's card (`gitlet.ReviewerFace`). */
+export interface CodeReviewerFace {
+  handle: string;
+  kind: CodePartyKind;
+  /** Their standing verdict and the revision it judged, absent where they hold none. */
+  verdict?: CodeVerdict;
+  verdict_revision?: number;
+  /** An ask of them waits; `reason` is why: `requested` or `path_owner`. */
+  asked?: boolean;
+  reason?: string;
+}
+
+/** Why and when a queue last put a live change out (`gitlet.CardEjection`). */
+export interface CodeCardEjection {
+  reason: string;
+  at: string;
+  /** The required checks that failed, at most 8, and how many more. */
+  checks?: string[];
+  checks_more?: number;
+}
+
+/** What a listing's row draws beside its readiness (`gitlet.ChangeCard`). */
+export interface CodeChangeCard {
+  comments: number;
+  reviews: number;
+  changes_requested: number;
+  /** At most 8 faces, changes requested first, then waiting asks, then approvals. */
+  reviewers?: CodeReviewerFace[];
+  reviewers_omitted?: number;
+  /** Where its head's checks stand for its target; absent where no attempt is kept. */
+  checks?: CodeCheckRollup;
+  /** Set where a live change's newest queue entry was put out within the last day. */
+  ejected?: CodeCardEjection;
 }
 
 /**
