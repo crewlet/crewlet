@@ -1,6 +1,7 @@
 /**
  * What changed from one commit (or tree) to another: the files, a page at a
- * time, and one file's patch drawn by the dashboard's one hueless `DiffView`.
+ * time, and one file's patch drawn by the dashboard's one `DiffView`, in the
+ * code hue.
  *
  * READ BY OBJECT ID, WHOLE ON BOTH SIDES: a commit's page and a comparison
  * each name the two commits by their whole ids (`code_diff` `base=`, `head=`),
@@ -256,6 +257,7 @@ function FilePatch({
             // A NEW FILE IS A NEW DIFF: its window, and the line it reveals
             // once, start over.
             key={path}
+            hue="code"
             hunks={hunks}
             layout={layout}
             aria-label={`Changes to ${path}`}

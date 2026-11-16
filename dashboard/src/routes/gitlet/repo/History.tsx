@@ -1,8 +1,8 @@
 /**
  * A repository's branches, its tags and its history, drawn as a code host
- * draws them: a branch by its glyph, its name and its marks; the history by
- * the day each commit was written, each commit its subject, who wrote it and
- * when, who pushed it and for which work item, and its id with its copy.
+ * draws them: a branch as its chip and its marks; the history by the day each
+ * commit was written, each commit its subject, who wrote it and when, who
+ * pushed it and for which work item, and its id with its copy.
  *
  * BRANCHES are the engine's listing of its live refs under `refs/heads/`
  * (`code_refs`), in name order a page at a time — the rows, read at the tab's
@@ -31,7 +31,7 @@
 
 import { useMemo } from "react";
 import { Button, Skeleton, Tag, VisuallyHidden, type DataGridBand } from "@crewlethq/ui";
-import { BookmarkGlyph, GitBranchGlyph } from "@crewlethq/icons/glyphs";
+import { BookmarkGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { useParam } from "~/app/router.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
@@ -50,7 +50,7 @@ import type {
   CodeRepoDetail,
 } from "~/protocol/index.ts";
 import { commitHref, compareHref, repoHref } from "../paths.ts";
-import { Face, ShaChip, useWhoName } from "../ui.tsx";
+import { BranchChip, Face, ShaChip, useWhoName } from "../ui.tsx";
 import { DeleteBranchButton, NewBranchButton } from "./BranchWrites.tsx";
 import { ProtectButton } from "./Protect.tsx";
 import { RefPicker, revisionWord, type Revisions } from "./refs.tsx";
@@ -120,8 +120,7 @@ export function Branches({ repo }: { repo: CodeRepoDetail }) {
               phoneLead: true,
               cell: (r) => (
                 <span className="code-ref">
-                  <GitBranchGlyph size="sm" className="code-glyph" />
-                  <span className="code-ref__name">{refName(r.ref).name}</span>
+                  <BranchChip name={refName(r.ref).name} />
                   {refName(r.ref).name === repo.default_branch && (
                     <Tag appearance="outline">default</Tag>
                   )}

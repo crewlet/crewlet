@@ -6,8 +6,8 @@
  *
  * ONE GRID FOR EVERY LISTING OF CHANGES. Gitlet › Changes' own grid
  * (`ChangesGrid`), never a second rendering of a change: a change read on a
- * seat's page and on the Changes listing says the same reference, readiness,
- * owner and blockers, and opens the same peek.
+ * seat's page and on the Changes listing says the same reference, state,
+ * branches, readiness, owner and blockers, and opens the same peek.
  *
  * THE FILTER IS THE SCREEN'S, AND FIXED. The screen that mounts a listing
  * decides what it IS — this work item's changes, this owner's — so there is no

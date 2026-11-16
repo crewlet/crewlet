@@ -1,0 +1,532 @@
+// @vitest-environment node
+import { describe, expect, test } from "vitest";
+import { CHANGE_DRAFT_CHIP, CHANGE_STATES, CODE_REF } from "@crewlethq/tokens/test/palette";
+
+import { declared, sheetRules, type SheetRule } from "../test/sheets.ts";
+import {
+  classWrites,
+  lineOf,
+  memberName,
+  modules,
+  parse,
+  resolveSource,
+  stringValue,
+  walk,
+  type Lang,
+  type Module,
+  type Node,
+} from "../test/source.ts";
+import { spelled } from "../test/kit.ts";
+
+/**
+ * THE CODE HOST'S COLOURS ARE GITLET'S (the one rule's seventh exception): its
+ * change, syntax, ref and file colours are read by Gitlet's sheet alone, and
+ * its marks drawn by Gitlet's modules and the screens that list its changes.
+ */
+
+/** The change, syntax, ref and file families; the diff family is `diffs.test.ts`'s. */
+const FAMILY = /--color-(?:syntax|change-(?:open|merged|closed|draft)|code|file)-[\w-]+/g;
+
+/** Every code host token, the diff family's included. */
+const ALL = /--color-(?:diff|syntax|change-(?:open|merged|closed|draft)|code|file)-[\w-]+/g;
+
+/** The sheets that may read `FAMILY`. */
+const READERS: { file: string; why: string }[] = [
+  {
+    file: "gitlet.css",
+    why: "Gitlet's own sheet, which arrives with its modules and the marks they lend.",
+  },
+];
+
+/** The screens outside Gitlet that draw its marks, and the names each takes. */
+const HOSTS: { file: string; names: string[]; why: string }[] = [
+  {
+    file: "routes/home/CodeWaiting.tsx",
+    names: ["ChangeStateTag"],
+    why: "Home's code card lists Gitlet's changes, each with its state as Gitlet draws it.",
+  },
+  {
+    file: "routes/inbox/InboxPane.tsx",
+    names: ["ChangeStateTag"],
+    why: "A code notice says what became of its change, in Gitlet's state pill.",
+  },
+  {
+    file: "routes/me/MyWork.tsx",
+    names: ["ChangeList"],
+    why: "My work's Reviews mount Gitlet's Changes grid for the reviews and fixes a person owes.",
+  },
+  {
+    file: "routes/agents/seat/Code.tsx",
+    names: ["ChangeList", "ReviewList"],
+    why: "A seat's Code section mounts Gitlet's Changes grid for the changes the seat opened.",
+  },
+  {
+    file: "routes/worklet/WorkItem.tsx",
+    names: ["ChangeList"],
+    why: "A task's Changes tab mounts Gitlet's Changes grid for the changes that carry it out.",
+  },
+];
+
+/** What any module may take from Gitlet: its addresses, and the listings' poll. */
+const ADDRESSES = "routes/gitlet/paths";
+const ANYWHERE = new Set(["CODE_LIST_POLL_MS"]);
+
+/** The one module that writes each mark's class. */
+const WRITERS: Record<string, string> = {
+  "code-state": "routes/gitlet/Changes.tsx",
+  "code-branch-chip": "routes/gitlet/ui.tsx",
+};
+
+const inGitlet = (path: string) => path.startsWith("routes/gitlet/");
+
+/** Rules outside `READERS` reading the family, as `file selector -> token`. */
+export function familyRules(rules: readonly SheetRule[]): string[] {
+  return rules
+    .filter((rule) => !READERS.some((r) => r.file === rule.file))
+    .flatMap((rule) =>
+      [...rule.body.matchAll(FAMILY)].map((m) => `${rule.file} ${rule.selector} -> ${m[0]}`),
+    );
+}
+
+/** A code host token or the start of one a module builds; `--color-change-mark` is not one. */
+const SPELLED = /--color-(?:(?:diff|syntax|code|file)-|change-(?!mark(?![\w-])))[\w-]*/g;
+
+/** Every code host token a module spells outside its comments, as `path:line spells token`. */
+export function spelledTokens(path: string, text: string): string[] {
+  const bare = text
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+    .replace(/\/\/[^\n]*/g, "");
+  const line = lineOf(bare);
+  return [...bare.matchAll(SPELLED)].map((m) => `${path}:${line(m.index)} spells ${m[0]}`);
+}
+
+/**
+ * Where a module outside Gitlet takes from a Gitlet module what its `HOSTS`
+ * entry does not name, beyond `ADDRESSES` and `ANYWHERE`; a namespace import
+ * or a re-export of one is always reported. Types draw nothing.
+ */
+export function markSites(path: string, text: string, lang: Lang): string[] {
+  if (inGitlet(path)) return [];
+  const named = new Set(HOSTS.find((h) => h.file === path)?.names);
+  const line = lineOf(text);
+  const out: string[] = [];
+  for (const node of parse(text, lang).body as Node[]) {
+    const source = (node.source as Node | null | undefined)?.value;
+    if (typeof source !== "string") continue;
+    const to = resolveSource(path, source) ?? "";
+    if (!inGitlet(to)) continue;
+    const at = (n: Node) => `${path}:${line(n.start)}`;
+    if (node.type === "ImportDeclaration") {
+      if (node.importKind === "type" || to.replace(/\.tsx?$/, "") === ADDRESSES) continue;
+      for (const spec of node.specifiers as Node[]) {
+        if (spec.type === "ImportNamespaceSpecifier") {
+          out.push(`${at(spec)} imports ${source} whole`);
+        } else if (spec.type === "ImportDefaultSpecifier") {
+          out.push(`${at(spec)} imports ${source}'s default`);
+        } else if (spec.importKind !== "type") {
+          const name = spelled(spec.imported as Node);
+          if (!ANYWHERE.has(name) && !named.has(name)) out.push(`${at(spec)} imports ${name}`);
+        }
+      }
+    } else if (node.type === "ExportNamedDeclaration" || node.type === "ExportAllDeclaration") {
+      out.push(`${at(node)} re-exports ${source}`);
+    }
+  }
+  return out;
+}
+
+/** The names a module imports from Gitlet modules. */
+function gitletImports(m: Module): Set<string> {
+  const out = new Set<string>();
+  for (const node of parse(m.text, m.lang).body as Node[]) {
+    if (node.type !== "ImportDeclaration") continue;
+    if (!inGitlet(resolveSource(m.path, String((node.source as Node).value)) ?? "")) continue;
+    for (const spec of node.specifiers as Node[]) {
+      if (spec.type === "ImportSpecifier") out.add(spelled(spec.imported as Node));
+    }
+  }
+  return out;
+}
+
+/** The modules that pick from the Gitlet chunk, and what each may pick. */
+const LAZY: { file: string; names: string[] | "pages"; why: string }[] = [
+  {
+    file: "app/App.tsx",
+    names: "pages",
+    why: "The router mounts Gitlet's own pages, each at a Gitlet address.",
+  },
+  {
+    file: "app/frame/peeks.tsx",
+    names: ["ChangePeek"],
+    why: "A change's peek opens over any screen that lists the change, with its pill and chips.",
+  },
+];
+
+/** Where a module picks from the Gitlet chunk (`lazyScreen("gitlet", …)`) what `LAZY` does not give it. */
+export function lazyPicks(path: string, text: string, lang: Lang): string[] {
+  const entry = LAZY.find((l) => l.file === path);
+  const line = lineOf(text);
+  const out: string[] = [];
+  walk(parse(text, lang), (node: Node) => {
+    if (node.type !== "CallExpression") return;
+    const callee = node.callee as Node;
+    const [chunk, pick] = node.arguments as Node[];
+    if (callee.type !== "Identifier" || callee.name !== "lazyScreen") return;
+    if (stringValue(chunk) !== "gitlet") return;
+    const body = pick?.type === "ArrowFunctionExpression" ? (pick.body as Node) : null;
+    const name = body?.type === "MemberExpression" ? memberName(body) : null;
+    const at = `${path}:${line(node.start)}`;
+    if (name === null) out.push(`${at} picks from the Gitlet chunk unread`);
+    else if (!entry || (entry.names !== "pages" && !entry.names.includes(name))) {
+      out.push(`${at} picks ${name} from the Gitlet chunk`);
+    }
+  });
+  return out;
+}
+
+/** The pill's and the chip's colours, which only their own rules read. */
+const MARK_TOKENS = /--color-(?:change-(?:open|merged|closed|draft)|code-ref)-[\w-]+/;
+const MARK_CLASSES = /\.code-(?:state|branch-chip)(?![\w-])/;
+
+/** The pill's and the chip's rules: the four states, the pill's word, the chip and its selected row. */
+const MARK_RULES = new Set([
+  ...CHANGE_STATES.map(([state]) => `.code-state[data-state="${state}"]`),
+  ".code-state[data-state] > :last-child",
+  ".code-branch-chip",
+  '[role="row"]:is([aria-current="true"], :has([aria-current="true"])) .code-branch-chip',
+]);
+
+/**
+ * Every rule that reads the pill's or the chip's colours, or names either
+ * class, and is not one of `MARK_RULES` in Gitlet's sheet, as `file selector`.
+ */
+export function strayMarkRules(rules: readonly SheetRule[]): string[] {
+  return rules
+    .filter((r) => MARK_TOKENS.test(r.body) || MARK_CLASSES.test(r.selector))
+    .filter((r) => r.file !== "gitlet.css" || !MARK_RULES.has(r.selector))
+    .map((r) => `${r.file} ${r.selector}`);
+}
+
+/**
+ * Each state pill and the branch chip against the pairs the kit measures, as
+ * `file selector property: token, not want`.
+ */
+export function unmeasuredPaints(rules: readonly SheetRule[]): string[] {
+  const out: string[] = [];
+  const want = (selector: string, property: string, token: string) => {
+    let got: string | null;
+    try {
+      got = declared(selector, property, [...rules]);
+    } catch (e) {
+      out.push(`${selector}: ${(e as Error).message}`);
+      return;
+    }
+    if (got !== token) {
+      const file = rules.find((r) => r.selector === selector)?.file;
+      out.push(`${file} ${selector} ${property}: ${got}, not ${token}`);
+    }
+  };
+  for (const [state, fill, label] of CHANGE_STATES) {
+    const selector = `.code-state[data-state="${state}"]`;
+    want(selector, "background", fill);
+    want(selector, "color", label);
+    if (state === "draft") want(selector, "border-color", CHANGE_DRAFT_CHIP[1]);
+  }
+  want(".code-branch-chip", "background", CODE_REF[1]);
+  want(".code-branch-chip", "color", CODE_REF[0]);
+  return out;
+}
+
+/** A ground of the code host's families, which no text may be inked in. */
+const GROUND = /^--color-(?:[\w-]+-(?:row|word|gutter|fill|mark)|code-match)$/;
+/** A text step of the code host's families, which no ground may be painted in. */
+const TEXT = /^--color-(?:[\w-]+-(?:sign|ink|label)|syntax-[\w-]+)$/;
+
+/**
+ * A ground read as `color`, or a text step read as a background, over every
+ * sheet, as `file selector property -> token`.
+ */
+export function miscastSteps(rules: readonly SheetRule[]): string[] {
+  const out: string[] = [];
+  for (const rule of rules) {
+    for (const decl of rule.body.split(";")) {
+      const at = /^\s*([\w-]+)\s*:([\s\S]*)$/.exec(decl);
+      if (!at) continue;
+      const property = at[1]!;
+      for (const m of at[2]!.matchAll(ALL)) {
+        const token = m[0];
+        const wrong =
+          (property === "color" && GROUND.test(token)) ||
+          ((property === "background" || property === "background-color") && TEXT.test(token));
+        if (wrong) out.push(`${rule.file} ${rule.selector} ${property} -> ${token}`);
+      }
+    }
+  }
+  return out;
+}
+
+describe("in the sheets", () => {
+  test("only Gitlet's sheet reads the change, syntax, ref and file colours", () => {
+    expect(familyRules(sheetRules())).toEqual([]);
+    for (const { file, why } of READERS) {
+      const reads = sheetRules()
+        .filter((r) => r.file === file)
+        .flatMap((r) => [...r.body.matchAll(FAMILY)]);
+      expect(reads.length, `${file} no longer reads the family`).toBeGreaterThanOrEqual(2);
+      expect(why.length, file).toBeGreaterThan(40);
+    }
+  });
+});
+
+describe("in the tree", () => {
+  test("no module spells a code host colour", () => {
+    expect(modules().flatMap((m) => spelledTokens(m.path, m.text))).toEqual([]);
+  });
+
+  test("outside Gitlet its marks are reached only by the screens named here", () => {
+    expect(modules().flatMap((m) => markSites(m.path, m.text, m.lang))).toEqual([]);
+    for (const { file, names, why } of HOSTS) {
+      const host = modules().find((m) => m.path === file);
+      expect(host, `${file} is gone`).toBeDefined();
+      const taken = gitletImports(host!);
+      for (const name of names) expect(taken.has(name), `${file} takes no ${name} now`).toBe(true);
+      expect(why.length, file).toBeGreaterThan(40);
+    }
+  });
+
+  test("only the router and the peeks pick from the Gitlet chunk, the peeks its change's", () => {
+    expect(modules().flatMap((m) => lazyPicks(m.path, m.text, m.lang))).toEqual([]);
+    for (const { file, why } of LAZY) {
+      const at = modules().find((m) => m.path === file);
+      expect(at?.text, `${file} picks nothing from the Gitlet chunk now`).toContain(
+        'lazyScreen("gitlet"',
+      );
+      expect(why.length, file).toBeGreaterThan(40);
+    }
+  });
+
+  test("only each mark's module writes its class", () => {
+    for (const [name, owner] of Object.entries(WRITERS)) {
+      for (const m of modules()) {
+        const writes = classWrites(m, name);
+        if (m.path === owner) expect(writes, `${owner} writes ${name}`).not.toEqual([]);
+        else expect(writes, `${m.path} writes ${name}`).toEqual([]);
+      }
+    }
+  });
+});
+
+describe("in the palette", () => {
+  test("only the pill's and the chip's own rules read their colours or name them", () => {
+    expect(strayMarkRules(sheetRules())).toEqual([]);
+  });
+
+  test("a state pill and a branch chip paint the pairs the kit measures", () => {
+    expect(unmeasuredPaints(sheetRules())).toEqual([]);
+  });
+
+  test("no step of the code host's families is cast in another's role", () => {
+    expect(miscastSteps(sheetRules())).toEqual([]);
+  });
+});
+
+describe("it can tell", () => {
+  const rule = (file: string, selector: string, body: string): SheetRule => ({
+    file,
+    selector,
+    body,
+  });
+
+  test("a family colour read outside Gitlet's sheet", () => {
+    expect(
+      familyRules([
+        rule("screens.css", ".work-ref", "background: var(--color-code-ref-fill);"),
+        rule("gitlet.css", ".work-ref", "background: var(--color-code-ref-fill);"),
+        rule("screens.css", ".x", "color: var(--color-change-mark);"),
+      ]),
+    ).toEqual(["screens.css .work-ref -> --color-code-ref-fill"]);
+  });
+
+  test("a code host colour spelled in a module, whole or built", () => {
+    const text = 'export const A = () => <b style={{ color: "var(--color-change-open-ink)" }} />;';
+    expect(spelledTokens("routes/live/X.tsx", text)).toEqual([
+      "routes/live/X.tsx:1 spells --color-change-open-ink",
+    ]);
+    const built = [
+      "const row = (k: string) => `var(--color-diff-${k}-row)`;",
+      'const fill = (s: string) => "var(--color-change-" + s + "-fill)";',
+      'const mark = "var(--color-change-mark)";',
+    ].join("\n");
+    expect(spelledTokens("routes/settings/Config.tsx", built)).toEqual([
+      "routes/settings/Config.tsx:1 spells --color-diff-",
+      "routes/settings/Config.tsx:2 spells --color-change-",
+    ]);
+  });
+
+  test("a mark reached outside Gitlet and its hosts", () => {
+    const tag = 'import { ChangeStateTag } from "~/routes/gitlet/Changes.tsx";';
+    expect(markSites("routes/settings/Foo.tsx", tag, "tsx")).toEqual([
+      "routes/settings/Foo.tsx:1 imports ChangeStateTag",
+    ]);
+    expect(markSites("routes/gitlet/Foo.tsx", tag, "tsx")).toEqual([]);
+    expect(markSites("routes/home/CodeWaiting.tsx", tag, "tsx")).toEqual([]);
+    expect(
+      markSites(
+        "routes/settings/Foo.tsx",
+        'import { ChangeList } from "../gitlet/ChangeList.tsx";',
+        "tsx",
+      ),
+    ).toEqual(["routes/settings/Foo.tsx:1 imports ChangeList"]);
+    expect(
+      markSites("routes/settings/Foo.tsx", 'import { ChangeList } from "@crewlethq/ui";', "tsx"),
+    ).toEqual([]);
+    expect(
+      markSites(
+        "routes/settings/Foo.tsx",
+        [
+          'import * as g from "~/routes/gitlet/Changes.tsx";',
+          'export { RefName as Ref } from "~/routes/gitlet/ui.tsx";',
+          'export * from "../gitlet/ui.tsx";',
+        ].join("\n"),
+        "tsx",
+      ),
+    ).toEqual([
+      "routes/settings/Foo.tsx:1 imports ~/routes/gitlet/Changes.tsx whole",
+      "routes/settings/Foo.tsx:2 re-exports ~/routes/gitlet/ui.tsx",
+      "routes/settings/Foo.tsx:3 re-exports ../gitlet/ui.tsx",
+    ]);
+  });
+
+  test("any other Gitlet module mounted outside Gitlet, or a host's unlisted one", () => {
+    const config = [
+      'import { DiffFiles } from "~/routes/gitlet/commit/DiffFiles.tsx";',
+      'import { ChangePeek } from "../gitlet/ChangePeek.tsx";',
+      'import { CODE_LIST_POLL_MS } from "~/routes/gitlet/ChangeList.tsx";',
+      'import type { Revisions } from "~/routes/gitlet/repo/refs.tsx";',
+    ].join("\n");
+    expect(markSites("routes/settings/Config.tsx", config, "tsx")).toEqual([
+      "routes/settings/Config.tsx:1 imports DiffFiles",
+      "routes/settings/Config.tsx:2 imports ChangePeek",
+    ]);
+    const mine = [
+      'import { ChangeList } from "~/routes/gitlet/ChangeList.tsx";',
+      'import { DiffFiles } from "~/routes/gitlet/commit/DiffFiles.tsx";',
+    ].join("\n");
+    expect(markSites("routes/me/MyWork.tsx", mine, "tsx")).toEqual([
+      "routes/me/MyWork.tsx:2 imports DiffFiles",
+    ]);
+    const address = 'import { changeDiffHref } from "~/routes/gitlet/paths.ts";';
+    expect(markSites("routes/inbox/model.ts", address, "ts")).toEqual([]);
+  });
+
+  test("a pick from the Gitlet chunk outside the router and the peeks' change", () => {
+    const peek = 'const P = lazyScreen("gitlet", (m) => m.ChangePeek);';
+    expect(lazyPicks("app/frame/peeks.tsx", peek, "tsx")).toEqual([]);
+    expect(lazyPicks("routes/settings/Config.tsx", peek, "tsx")).toEqual([
+      "routes/settings/Config.tsx:1 picks ChangePeek from the Gitlet chunk",
+    ]);
+    const files = 'const F = lazyScreen("gitlet", (m) => m.CommitPage);';
+    expect(lazyPicks("app/frame/peeks.tsx", files, "tsx")).toEqual([
+      "app/frame/peeks.tsx:1 picks CommitPage from the Gitlet chunk",
+    ]);
+    expect(lazyPicks("app/App.tsx", files, "tsx")).toEqual([]);
+    const other = 'const S = lazyScreen("settings", (m) => m.NodePeek);';
+    expect(lazyPicks("routes/live/X.tsx", other, "tsx")).toEqual([]);
+  });
+
+  test("a mark's class written by another module", () => {
+    const at = (path: string, text: string): Module => ({ path, text, lang: "tsx" });
+    expect(
+      classWrites(
+        at("routes/gitlet/change/Rail.tsx", 'const c = cx("code-branch-chip", x);'),
+        "code-branch-chip",
+      ),
+    ).toEqual([1]);
+    expect(
+      classWrites(at("routes/settings/Foo.tsx", "const c = `code-state ${x}`;"), "code-state"),
+    ).toEqual([1]);
+    expect(
+      classWrites(at("routes/settings/Foo.tsx", 'const c = "code-state-x";'), "code-state"),
+    ).toEqual([]);
+  });
+
+  test("a pill or a chip painted with a pair the kit does not measure", () => {
+    const sheet = (open: string, chip: string): SheetRule[] => [
+      rule("gitlet.css", '.code-state[data-state="open"]', open),
+      ...(["merged", "closed"] as const).map((s) =>
+        rule(
+          "gitlet.css",
+          `.code-state[data-state="${s}"]`,
+          `background: var(--color-change-${s}-fill); color: var(--color-change-${s}-label);`,
+        ),
+      ),
+      rule(
+        "gitlet.css",
+        '.code-state[data-state="draft"]',
+        "border-color: var(--color-change-draft-edge); background: var(--color-change-draft-fill); color: var(--color-change-draft-label);",
+      ),
+      rule("gitlet.css", ".code-branch-chip", chip),
+    ];
+    const good =
+      "background: var(--color-change-open-fill); color: var(--color-change-open-label);";
+    const chip = "background: var(--color-code-ref-fill); color: var(--color-code-ref-ink);";
+    expect(unmeasuredPaints(sheet(good, chip))).toEqual([]);
+    // The success ink on the success ink: 1:1.
+    expect(
+      unmeasuredPaints(
+        sheet(
+          "background: var(--color-change-open-fill); color: var(--color-change-open-ink);",
+          chip,
+        ),
+      ),
+    ).toEqual([
+      'gitlet.css .code-state[data-state="open"] color: --color-change-open-ink, not --color-change-open-label',
+    ]);
+    expect(
+      unmeasuredPaints(
+        sheet(good, "background: var(--color-code-ref-ink); color: var(--color-code-ref-fill);"),
+      ),
+    ).toEqual([
+      "gitlet.css .code-branch-chip background: --color-code-ref-ink, not --color-code-ref-fill",
+      "gitlet.css .code-branch-chip color: --color-code-ref-fill, not --color-code-ref-ink",
+    ]);
+  });
+
+  test("a pill's or a chip's colour read, or its class named, by another rule", () => {
+    expect(
+      strayMarkRules([
+        rule("gitlet.css", ".code-ftree__status", "color: var(--color-change-closed-ink);"),
+        rule(
+          "gitlet.css",
+          '[role="row"] .code-state[data-state="open"]',
+          "color: var(--color-change-open-ink);",
+        ),
+        rule(
+          "gitlet.css",
+          '.code-state[data-state="open"]',
+          "color: var(--color-change-open-label);",
+        ),
+        rule("screens.css", ".code-branch-chip", "background: none;"),
+        rule("gitlet.css", ".code-ftree__status", "color: var(--color-change-mark);"),
+      ]),
+    ).toEqual([
+      "gitlet.css .code-ftree__status",
+      'gitlet.css [role="row"] .code-state[data-state="open"]',
+      "screens.css .code-branch-chip",
+    ]);
+  });
+
+  test("a ground inked as text, or a text step painted as a ground", () => {
+    expect(
+      miscastSteps([
+        rule("x.css", ".x", "color: var(--color-diff-added-row);"),
+        rule("x.css", ".x", "background: var(--color-diff-added-sign);"),
+        rule("x.css", ".x", "background: var(--color-diff-added-row);"),
+        rule("x.css", ".x", "color: var(--color-code-ref-ink);"),
+      ]),
+    ).toEqual([
+      "x.css .x color -> --color-diff-added-row",
+      "x.css .x background -> --color-diff-added-sign",
+    ]);
+  });
+});
