@@ -23,7 +23,6 @@ import {
   Text,
   Tooltip,
 } from "@crewlethq/ui";
-import { ActivityGlyph, FileTextGlyph, ShieldCheckGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import type { McpApproval, McpMemberServerStatus } from "~/contract/mcp.ts";
 import { listed, plural } from "~/lib/format.ts";
@@ -237,10 +236,7 @@ export function OverviewTab({
       {/* THE INSTANCES TAKE THE FULL ROW: a table of agents, one per agent on an
           unshared server, beside a card of facts left the agents' names no room. */}
       <Card padding="none">
-        <Card.Header
-          icon={<ActivityGlyph size="sm" />}
-          count={detail.instances.length || undefined}
-        >
+        <Card.Header count={detail.instances.length || undefined}>
           <Card.Title>{server.shared ? "Instance" : "One instance per agent"}</Card.Title>
         </Card.Header>
         <InstanceGrid detail={detail} data={data} enabled={server.enabled} />
@@ -253,7 +249,6 @@ export function OverviewTab({
       <div className="mcp-grid">
         <Card padding="none">
           <Card.Header
-            icon={<ShieldCheckGlyph size="sm" />}
             actions={
               admin && server.configured && server.enabled ? (
                 <Button
@@ -342,7 +337,7 @@ export function OverviewTab({
       </div>
       {admin?.instructions ? (
         <Card padding="none">
-          <Card.Header icon={<FileTextGlyph size="sm" />}>
+          <Card.Header>
             <Card.Title>Instructions the server reports</Card.Title>
           </Card.Header>
           <Card.Body>
