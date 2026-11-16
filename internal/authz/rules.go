@@ -724,6 +724,16 @@ const (
 	ActionArtifactDataRead  Action = "read_artifact_data"
 	ActionArtifactDataQuery Action = "query_artifact_data"
 	ActionArtifactDataWrite Action = "write_artifact_data"
+	// COMMENTS (ADR-0153). Reading an artifact's threads is reading it: a
+	// viewer's. Opening, replying, resolving and reopening are a
+	// commenter's. Editing and removing a remark admit a commenter at the
+	// table, and the domain's writer keeps an edit to the remark's author
+	// and a removal to its author or an administrator moderating.
+	ActionArtifactCommentList    Action = "list_artifact_comments"
+	ActionArtifactComment        Action = "comment_on_artifact"
+	ActionArtifactCommentResolve Action = "resolve_artifact_comment"
+	ActionArtifactCommentEdit    Action = "edit_artifact_comment"
+	ActionArtifactCommentRemove  Action = "remove_artifact_comment"
 
 	// ActionArtifactForce discards a newer version than the one the writer
 	// read: a publish asks it from inside, once it knows the base is stale.
@@ -2071,6 +2081,19 @@ var rules = map[Action]rule{
 		recency: iam.RecencyAny, assist: AssistRead},
 	ActionArtifactDataWrite: {class: ClassShared, minRole: artifacts.RoleViewer,
 		recency: iam.RecencyAny, steerable: true, assist: AssistApprove},
+	// COMMENTS ARE THE COMMENTER'S RUNG (ADR-0153), with no app: commenting
+	// is reading closely, not authoring. Reading threads is a viewer's. None
+	// is steerable, so a turn's requester must hold the role too.
+	ActionArtifactCommentList: {class: ClassShared, minRole: artifacts.RoleViewer,
+		recency: iam.RecencyAny, assist: AssistRead},
+	ActionArtifactComment: {class: ClassShared, minRole: artifacts.RoleCommenter,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionArtifactCommentResolve: {class: ClassShared, minRole: artifacts.RoleCommenter,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionArtifactCommentEdit: {class: ClassShared, minRole: artifacts.RoleCommenter,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionArtifactCommentRemove: {class: ClassShared, minRole: artifacts.RoleCommenter,
+		recency: iam.RecencyAny, assist: AssistApprove},
 	// DISCARDING A NEWER VERSION is a person's, present: refused to every
 	// seat before the class is read, and to every machine token.
 	ActionArtifactForce: {class: ClassShared, app: iam.GrantArtifacts,
