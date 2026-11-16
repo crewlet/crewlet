@@ -968,14 +968,15 @@ func misshapen(rule ShapeRule, dir string, alternate bool, format string, args .
 // runs git in, by hand, so a check of their SHAPE costs nothing legitimate and
 // turns "a repository can configure git" from a hope into a refusal.
 //
-// Not checked, deliberately: info/attributes and info/exclude (a
-// repository's own attributes — that file, and in a bare repository its
-// HEAD's .gitattributes, which git 2.43 reads too — steer only pack-objects'
-// delta search for that one repository, a cost and never an answer; exclude
-// is a work-tree file). The HOST's and the HOME's attributes are another
-// matter and are never read (GIT_ATTR_NOSYSTEM, the base's
-// core.attributesFile): written by whoever administers the machine, for
-// something else, they would apply to every repository the node serves.
+// Not checked, deliberately: info/attributes and info/exclude (a bare
+// repository's own attributes are info/attributes alone, since git reads no
+// tree's .gitattributes there, HEAD's included, on the node floor; they steer
+// pack-objects' delta search and the conversions an archive applies, and a
+// cache holds none, its image having no info/; exclude is a work-tree file).
+// The HOST's and the HOME's attributes are another matter and are never read
+// (GIT_ATTR_NOSYSTEM, the base's core.attributesFile): written by whoever
+// administers the machine, for something else, they would apply to every
+// repository the node serves.
 // Also not checked: hooks/ (never run: core.hooksPath is the pool's), the
 // refs and packed-refs (content the engine wrote, not configuration), and the
 // commit-graph and multi-pack-index (written by git itself under the

@@ -4490,7 +4490,10 @@ audit ([ADR-0085](https://github.com/crewlet/crewlet/blob/main/adr/0085-a-person
   repository is the company's source. The token may arrive as git's Basic
   password on `/git/` and on no other route. Neither prefix is ever on the
   [public listener](../reference/api-endpoints.md#which-listener-serves-what) —
-  it serves outside parties, who hold no token of the company's.
+  it serves outside parties, who hold no token of the company's. The
+  [downloads](#downloading-a-file-or-a-commit) under `/git/` also take the
+  dashboard's session cookie, as every guarded route does, and are never
+  challenged for Basic.
 
 git is served by every node whose `node.roles` name `gitlet` (an undeclared node
 has every role), once the company sets `code.backend: gitlet`: the node builds Gitlet
@@ -4502,6 +4505,102 @@ Gitlet's REST reads
 (`GET /gitlet/repos…`, [API Endpoints](../reference/api-endpoints.md#gitlet-git-and-gitlet)).
 The [Hosting Code on Gitlet](../guides/gitlet.md) guide walks through turning
 it on, declaring a repository, binding a token and the first push.
+
+### Downloading a file or a commit
+
+Beside git's smart HTTP, a Gitlet node answers two downloads of a commit, by
+its whole id (a tag of one peels to it; an abbreviation, a ref, a tree or a
+blob is refused `400`):
+
+- `GET /git/<name>/-/raw?rev=<commit>&path=<path>[&download=1]` is one file's
+  bytes exactly, as `git cat-file blob` writes them.
+- `GET /git/<name>/-/archive.zip?rev=<commit>` is every file of the commit as
+  a ZIP, in a folder `<name>-<first seven digits>/`.
+
+A query names only the route's keys, each once: any other key, or one given
+twice, is refused `400`, so a parameter a later build adds reaches an older
+node as a refusal rather than being ignored. The [API
+reference](../reference/api-endpoints.md#a-files-bytes-and-a-commits-zip)
+lists every answer.
+
+**What is served, and how.** The bytes are somebody's content on the origin
+that holds every person's session, so they are served inert
+([ADR-0153](https://github.com/crewlet/crewlet/blob/main/adr/0153-a-repositorys-bytes-are-served-inert-on-the-dashboards-origin.md)):
+a text file (no NUL in its first 8 000 bytes, git's own rule) not asked to
+download is `text/plain; charset=utf-8`, inline, and every other answer is an
+attachment, `application/octet-stream` for a file and `application/zip` for a
+ZIP. No type is ever read from a file's name. Every answer carries
+`nosniff`, a sandboxed policy that loads nothing and is framed nowhere,
+`Cross-Origin-Resource-Policy: same-origin` and `Cache-Control: private,
+no-store`. A file's strong `ETag` is its blob's id, and a request naming it in
+`If-None-Match` is answered `304` without reading the file: the lookup still
+runs.
+
+**A ZIP is the commit's files exactly as stored**, as `git archive
+--worktree-attributes --format=zip` writes them in a bare clone with no
+global, system or `info/attributes` file: no `.gitattributes` rule is applied,
+so an `export-ignore`d file is in it, an `export-subst` or `ident` placeholder
+is as committed, and no line ending or encoding is converted. git applies
+those rules in memory as it writes, so a pushed attribute could make one
+download hold gigabytes; served as stored, each file costs git its blob and
+nothing more. A symbolic link is a link, a submodule an empty folder, and the
+commit's id is the ZIP's comment.
+
+**Who may download.** Whoever may fetch: the Gitlet permission, then the
+repository's grant once the node has read it. The request may carry the
+dashboard's session cookie, a bearer token, or a token as the Basic password
+sent with the request. A download is never challenged: a request presenting
+no credential is `401` in one line with no `WWW-Authenticate`, since a browser
+answers a challenge with its own password prompt. So a client that sends Basic
+only after a challenge sends nothing here; send the token up front. A renamed
+repository's old name is served as the repository, under its current name; a
+deleted one is `404`; an archived one, one being imported and a pull mirror
+are served.
+
+**What it costs.** A download is served from the node's own copy, where it
+lands. Its lookup (one `cat-file --batch-check`) and a ZIP's measure (one
+`ls-tree -r -t -l`) run in the read lane and take no unit of the seat git-work
+share; the bytes stream in a [transfer slot](#fair-share) under the
+credential's share, paced as a clone is and cut past its deadline. A large ZIP
+is the one transfer that spends a core for as long as its client reads fast:
+git inflates every file and deflates it again, about 0.06 s of CPU a MiB of
+files. So:
+
+- **A large ZIP holds one of the node's archive places**: one for every four
+  read slots (cores), and never fewer than two. A ZIP whose output can be no
+  more than 64 MiB takes none, so most repositories' ZIPs never wait. A large
+  ZIP waits up to 10 s for a place, then is `503` with `Retry-After: 10`.
+- **One ZIP at a time for each principal** of the transfer share (a person by
+  seat, a credential bound to no seat by its name), from its measure to its
+  last byte: a second is `429` at once.
+- **A commit is measured before a byte is sent**, exactly, and refused `400`
+  past any of 1 000 000 entries, 4 GiB of files or 64 MiB of entry names, or
+  where a path with its folder passes the 65 535 bytes a ZIP entry's name can
+  hold. Each refusal names the bound and the remedy, `git clone --depth 1`.
+  The counts also size the output's bound (each file stored at most whole,
+  each name written twice, each entry's headers), and an answer past it is
+  cut.
+- **A large ZIP runs for at most an hour**, or less where its size at the
+  floor pace says so. A client that slow holds its place that long, so two
+  such clients hold a small node's two places, and its other large ZIPs are
+  refused meanwhile.
+
+Measured by `BenchmarkDownload` (`internal/gitlet/host`, 12 cores, git
+2.56.0): a 32 MiB file costs git 0.0014 s of CPU a MiB, a ZIP of 10 000
+incompressible files 0.062 s a MiB, and a clone of the same files 0.080 s a
+MiB of the node's git.
+
+**When it ends early.** A download that fails after its first byte is cut,
+never ended cleanly: a file or a ZIP has no way to say it is short, and a
+cleanly ended answer would be taken as whole. A draining node refuses a new
+download `503` and finishes one it began. A download is recorded on a
+`visibility: unit` repository ([Who read it](#who-read-it)) once its first
+byte is written, with the bytes it was sent.
+
+**An older Gitlet node** answers `404 no_route` for both routes, and its
+classifier calls the request a push. `HEAD` of either route is the probe that
+tells the two apart: this build answers `405` with `Allow: GET` before it reads
+any repository or runs any git.
 
 ---
 
@@ -6055,6 +6154,7 @@ recorded from that activation on.
 | A read of the repository | Recorded | As |
 |---|---|---|
 | A clone or a fetch whose answer carried a pack | yes, `via: git` | one read, and the bytes of the answer the reader was sent |
+| A [download](#downloading-a-file-or-a-commit) of a file's bytes or a commit's ZIP whose answer began, or a file's `304` | yes, `via: git` | one read, and the bytes it was sent (0 for a `304`), a download cut part way included |
 | A fetch's negotiation round that ended with no pack, an `ls-refs`, the advertisement | no | — |
 | A fetch the node ended before its answer did — a deadline, a stop | no | — |
 | A server-side read that answered — a tree, a file's lines, a diff, a comparison, `landed_in`, a path's [history](#a-paths-history) and a file's blame, a [merge preview](#a-merge-preview), and a change's [revision reads](#a-revisions-facts): its facts, where its anchored lines are, an interdiff — a page from the [memo](#the-memo) included | yes, `via: tool` | one read, and the bytes of the answer |
@@ -6071,8 +6171,9 @@ repository exists and what its branches point at are no secret
 machine token (`pat:<credential id>`), a signed-in session
 (`session:<lineage>`), a Tier A token (`token:<id>`, with no seat unless the
 identity directory binds it to one) — or a seat, by its handle, each with how
-it read (`git` or `tool`). The answer sums each reader's reads, bytes and
-newest read over every node and every day of the range:
+it read (`git` or `tool`; a download reads as `git`). The answer sums each
+reader's reads, bytes and newest read over every node and every day of the
+range:
 
 ```json
 {
@@ -6100,19 +6201,19 @@ and the last page carries none.
 
 **How it is kept.** The serving node files each read as it answers it, and
 every fifteen seconds publishes **one `code_fetched` event per reader** of
-each repository — one per credential or seat, way and, for a server-side read,
-kind — counting its reads and the bytes they were sent, into its own event log,
-kept out of the activity feed: a CI token fetching on every build would bury
-it there. So a CI token fetching every few seconds is one record a flush, not
-one a fetch, and no read waits for the event stream to take its record: a
-clone completes, and a code tool answers, at the speed of its own work while
-the stream elects a leader or is short of its quorum. A record the stream
-refuses is published again by the next flush, and the node keeps up to 4 096
-of them through an outage, the oldest dropped past that and logged
-(`code_fetched_dropped`, with the reads it held). The node's usage publisher
-derives each day of them, every fifteen seconds, into one record per
-repository naming every reader that day: the `repo_read` kind of the usage
-log, kept [181 days](../guides/retention.md) like the rest of it
+each repository — one per credential or seat, way and, for a server-side read
+or a download, kind (`raw` or `archive` for a download) — counting its reads
+and the bytes they were sent, into its own event log, kept out of the activity
+feed: a CI token fetching on every build would bury it there. So a CI token
+fetching every few seconds is one record a flush, not one a fetch, and no read
+waits for the event stream to take its record: a clone completes, and a code
+tool answers, at the speed of its own work while the stream elects a leader or
+is short of its quorum. A record the stream refuses is published again by the
+next flush, and the node keeps up to 4 096 of them through an outage, the oldest
+dropped past that and logged (`code_fetched_dropped`, with the reads it held).
+The node's usage publisher derives each day of them, every fifteen seconds, into
+one record per repository naming every reader that day: the `repo_read` kind of
+the usage log, kept [181 days](../guides/retention.md) like the rest of it
 ([ADR-0020](https://github.com/crewlet/crewlet/blob/main/adr/0020-a-nodes-own-day-is-a-compacted-domain.md)).
 A read is in the answer within about thirty seconds — the node's flush, then
 the publisher's tick. A node stopped in an orderly way publishes its last
@@ -8528,12 +8629,12 @@ repository's whatever the node.
 
 ## Fair share
 
-Every clone, fetch and push runs its git in one of the node's **transfer
-slots** — four a core, and no more than its memory backs — and a slot is held
-for as long as the client takes, so one credential can hold every slot: a CI
-system checking out behind one token, a mirror catching up, a blobless
-clone's lazy fetches one blob at a time. In arrival order, a person's clone
-behind sixty-four of them would wait for sixty-four of them. So when every
+Every clone, fetch, push and download runs its git in one of the node's
+**transfer slots** — four a core, and no more than its memory backs — and a
+slot is held for as long as the client takes, so one credential can hold every
+slot: a CI system checking out behind one token, a mirror catching up, a
+blobless clone's lazy fetches one blob at a time. In arrival order, a person's
+clone behind sixty-four of them would wait for sixty-four of them. So when every
 slot is held, the node hands the next one released by **share**:
 
 | Who asked | Class | Weight | One principal is |
@@ -8839,6 +8940,12 @@ revised is one click from the terminal that pushed it.
 | `code_git_signal_withheld`, `code_git_signal_failed` | `WARN` | The node could not read the kernel's record of a git process's group, so sent it no signal rather than risk signalling a stranger; or sending one failed. |
 | `code_git_cpu_unread` | `WARN` | Ending a git process, the node could not read every process record under `/proc` for what its group had spent (a `/proc` mounted `hidepid=1` hides other users' records), so the run's `crewlet.code.git.cpu` is short by whatever a record it could not read held. |
 | `code_git_protocol_dropped` | `DEBUG` | A client's `Git-Protocol` header was not one the node passes to git, and git ran without it. |
+| `code_download` | `INFO` for a ZIP, `DEBUG` for a file | A [download](#downloading-a-file-or-a-commit) answered `304`, or `200` once its first byte was written, whole or cut (a cut one also logs its failure line): the `repo`, its `kind` (`raw`, `archive`), `status`, `commit`, the `bytes` sent, `took_ms`, git's `cpu_ms`, the `operator_id` and `seat`, and the request's fetch metadata, `sec_fetch_site` (`same-origin`, `same-site`, `cross-site`, `none`) and `sec_fetch_user` (`?1`), empty where absent and `other` for any other value. A download a link on another site started reads `cross-site` and `?1`; one the dashboard started `same-origin`. No path is logged. |
+| `code_download_failed` | `WARN` | git failed serving a download, as `code_fetch_failed` says of a fetch's (`reason`: `deadline`, `stall`, `output`, `git`); after the first byte the connection was cut, with `sent` the bytes the client had been written. |
+| `code_download_retried` | `INFO` | git found this node's cache damaged during a download's lookup, measure or stream before its first byte, as `code_fetch_retried` says of a fetch's; the cache was repaired and git run again. |
+| `code_archive_busy` | `INFO` | A ZIP was refused for the places: `reason` `principal`, its principal already making one here (`429`), or `places`, every archive place stayed busy for the wait (`503`); `held` and `places` say how many of the node's places were in use. |
+| `code_archive_too_large` | `INFO` | A ZIP was refused `400` before its first byte: its commit passed the measure's `bound` (`entries`, `bytes`, `names`, or `name` for one path a ZIP cannot carry), with the counts measured. |
+| `code_archive_past_bound` | `WARN` | git wrote a ZIP past the output bound its measure set, and the connection was cut at it: the measure and git disagree, which is worth a report with the `repo`, `commit` and `bound`. |
 | `code_git_abandoned` | `DEBUG` | A git request ended because its client hung up (`by`: `client`), answered nothing, or because the node is stopping (`by`: `stop`), answered 503 — never the code log failing. A push abandoned after its proposal is recorded as its session concluded it (`unknown`, `applied`). |
 | `code_pack_missing` | `WARN` | A git request failed because a pack the rows name is gone from the object store or damaged there (`damaged`), answered 503 naming the pack. The [cache](#the-cache-on-a-gitlet-node) logs the same line once for the sync that found it (below); the alarm is [`objects_missing`](object-store.md#alarms). |
 | `code_pack_checksum_mismatch`, `code_bad_snapshot` | `ERROR` | A git request failed because a downloaded bundle is not the one its row describes — the cache logs that line too, once for the sync (below) — or the rows cannot be read into a cache: an operator's problem, answered 500 with no `Retry-After`, since no retry ends it. |

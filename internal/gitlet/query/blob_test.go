@@ -130,5 +130,19 @@ func TestAFileIsReadByLineRange(t *testing.T) {
 		if !errors.Is(err, gitlet.ErrNotABlob) {
 			t.Errorf("a path naming nothing = %v, want ErrNotABlob", err)
 		}
+		// A SUBMODULE'S PATH, its commit held (cat-file answers `commit`) or
+		// not (`submodule`): no file. Mutation: drop gitproc.ParseCheck's
+		// submodule arm, and the lost one fails as "no object".
+		x.git("update-index", "--add", "--cacheinfo", "160000,"+head+",held")
+		x.git("update-index", "--add", "--cacheinfo", "160000,1234567890123456789012345678901234567890,lost")
+		x.git("commit", "-q", "-m", "two submodules")
+		x.push(gitlettest.RepoName, "main")
+		subs := strings.TrimSpace(x.git("rev-parse", "HEAD"))
+		for _, path := range []string{"held", "lost"} {
+			_, err = s.Read(t.Context(), blobQ(repo, gitlet.BlobQuery{Rev: subs, Path: path}))
+			if !errors.Is(err, gitlet.ErrNotABlob) {
+				t.Errorf("a file read of submodule %s = %v, want ErrNotABlob", path, err)
+			}
+		}
 	})
 }

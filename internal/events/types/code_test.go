@@ -52,6 +52,10 @@ func TestACodeReadsSummaryNamesTheRepositoryAndTheRead(t *testing.T) {
 			Bytes: 12288}, "token:ci fetched platform 6 times (12288 bytes)"},
 		{CodeFetched{Principal: "dev", Seat: "dev", RepoName: "platform", Via: FetchedViaTool, Kind: "blob",
 			Reads: 3, Bytes: 2700}, "dev read platform's blob 3 times (2700 bytes)"},
+		{CodeFetched{Principal: "pat:7", Seat: "ceo", RepoName: "platform", Via: FetchedViaGit, Kind: FetchedRaw,
+			Reads: 1, Bytes: 120}, "ceo downloaded a file of platform (120 bytes)"},
+		{CodeFetched{Principal: "pat:7", Seat: "ceo", RepoName: "platform", Via: FetchedViaGit,
+			Kind: FetchedArchive, Reads: 2, Bytes: 4096}, "ceo downloaded platform as a ZIP 2 times (4096 bytes)"},
 	} {
 		if got := summaryOf(tc.read, ""); got != tc.want {
 			t.Errorf("%s: summary = %q, want %q", tc.read.Via, got, tc.want)

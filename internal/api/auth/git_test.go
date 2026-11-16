@@ -33,6 +33,10 @@ type gitAccessCase struct {
 // makes, and the shapes around it that must not be taken for one: a fetch is
 // what may be served while a node drains and by a token bound to nobody, so
 // every row that answers fetch is a row a mistake here would open to a push.
+// A download is a GET or HEAD of exactly one of its two tails.
+//
+// Mutation: match the download tails by prefix (-/rawx is a download), or
+// leave HEAD out (a HEAD of a download is a push).
 func TestGitAccessClassifiesEveryGitRoute(t *testing.T) {
 	t.Parallel()
 	for _, tc := range gitAccessCases {
@@ -41,13 +45,16 @@ func TestGitAccessClassifiesEveryGitRoute(t *testing.T) {
 			t.Errorf("%s %s = %q, want %q", tc.method, tc.target, got, tc.want)
 		}
 		if got := auth.GitAccess(r); !got.Valid() {
-			t.Errorf("%s %s answered %q, which is not one of the three", tc.method, tc.target, got)
+			t.Errorf("%s %s answered %q, which is not one of the four", tc.method, tc.target, got)
 		}
 	}
 	for _, op := range []auth.GitOp{"pull", "FETCH", "unknown"} {
 		if op.Valid() {
 			t.Errorf("%q is valid, and the set is closed", op)
 		}
+	}
+	if !auth.GitDownload.Valid() {
+		t.Errorf("%q is not valid", auth.GitDownload)
 	}
 }
 
@@ -87,6 +94,22 @@ var gitAccessCases = []gitAccessCase{
 	// ends at the first slash, so its tail is not the upload RPC.
 	{http.MethodPost, "/git/a/b/git-upload-pack", auth.GitPush},
 	{http.MethodPost, "/git/r.git//git-upload-pack", auth.GitPush},
+	// The two downloads, a GET or a HEAD of exactly their tails, whatever
+	// the query names; every other shape near them is a push.
+	{http.MethodGet, "/git/r/-/raw?rev=0123456789012345678901234567890123456789&path=README.md", auth.GitDownload},
+	{http.MethodHead, "/git/r/-/raw?rev=0123456789012345678901234567890123456789&path=README.md", auth.GitDownload},
+	{http.MethodGet, "/git/r.git/-/archive.zip?rev=0123456789012345678901234567890123456789", auth.GitDownload},
+	{http.MethodGet, "/git/r/-/raw?service=git-receive-pack", auth.GitDownload},
+	{http.MethodPost, "/git/r/-/raw", auth.GitPush},
+	{http.MethodDelete, "/git/r/-/raw", auth.GitPush},
+	{http.MethodGet, "/git/r/-/raw/x", auth.GitPush},
+	{http.MethodGet, "/git/r/-/rawx", auth.GitPush},
+	{http.MethodGet, "/git/a/b/-/raw", auth.GitPush},
+	{http.MethodGet, "/git/r/-/archive.tar", auth.GitPush},
+	{http.MethodGet, "/git/r%2F-/raw", auth.GitPush},
+	{http.MethodGet, "/git/r/-/r%61w", auth.GitPush},
+	{http.MethodGet, "/git/r/%2D/raw", auth.GitPush},
+	{http.MethodGet, "/git/r/-/archive%2Ezip", auth.GitPush},
 	// Not a git route at all.
 	{http.MethodGet, "/github/x", auth.GitNone},
 	{http.MethodGet, "/gitx", auth.GitNone},
@@ -141,6 +164,7 @@ func TestBasicIsAPersonsCredentialOnly(t *testing.T) {
 		{"/box/git/web.git/info/refs?service=git-upload-pack", ""},
 		{"/box/git/web.git/git-receive-pack", ""},
 		{"/git/web.git/info/refs?service=git-upload-pack", "x"},
+		{"/git/web/-/raw?rev=0123456789012345678901234567890123456789&path=a", "x"},
 	} {
 		r := httptest.NewRequest(http.MethodGet, tc.target, nil)
 		r.Header.Set("Authorization", basic("run", "x"))
@@ -335,6 +359,47 @@ func TestTheGitPrefixesAreGuardedEvenForReads(t *testing.T) {
 				"challenge", path, res.StatusCode, ch)
 		}
 	}
+}
+
+// A DOWNLOAD IS NEVER CHALLENGED: through the guard, an anonymous GET or HEAD
+// of either download, or one presenting a refused credential, is 401 in one
+// text/plain line with no WWW-Authenticate, so no browser opens its password
+// prompt; git's own routes still carry the challenge git answers.
+//
+// Mutation: drop the guard's download arm, and the header is back.
+func TestADownloadIsNeverChallenged(t *testing.T) {
+	t.Parallel()
+	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
+	const rev = "0123456789012345678901234567890123456789"
+	for _, path := range []string{"/git/web/-/raw?rev=" + rev + "&path=a", "/git/web.git/-/archive.zip?rev=" + rev} {
+		for _, tc := range []struct{ method, header string }{
+			{http.MethodGet, ""}, {http.MethodHead, ""}, {http.MethodGet, basic("", "wrong")},
+			{http.MethodGet, "Bearer wrong"},
+		} {
+			res, seen := serve(t, g, tc.method, path, tc.header)
+			if res.StatusCode != http.StatusUnauthorized || seen != "" {
+				t.Fatalf("%s %s with %q = %d as %q, want 401", tc.method, path, tc.header, res.StatusCode, seen)
+			}
+			if ch := res.Header.Get("WWW-Authenticate"); ch != "" {
+				t.Errorf("%s %s with %q challenged %q: a browser would prompt for a password", tc.method, path,
+					tc.header, ch)
+			}
+			if ct := res.Header.Get("Content-Type"); ct != "text/plain; charset=utf-8" {
+				t.Errorf("%s %s answered %q, want one text/plain line", tc.method, path, ct)
+			}
+			var body bytes.Buffer
+			if _, err := body.ReadFrom(res.Body); err != nil {
+				t.Fatal(err)
+			}
+			if tc.method == http.MethodGet && (strings.Count(body.String(), "\n") != 1 ||
+				!strings.Contains(body.String(), "sign in to Crewlet")) {
+				t.Errorf("%s %s said %q, want one line naming the sign-in and the token", tc.method, path,
+					body.String())
+			}
+		}
+	}
+	res, _ := serve(t, g, http.MethodGet, "/git/web.git/info/refs?service=git-upload-pack", "")
+	assertGitChallenge(t, res, "an anonymous advertisement")
 }
 
 // logLine is one record the JSON handler wrote.

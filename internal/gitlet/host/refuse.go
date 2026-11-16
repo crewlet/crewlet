@@ -289,12 +289,16 @@ func stopping(w http.ResponseWriter) {
 // failedLine is the log line of a git process that failed serving r — by
 // itself, or ended by this node: code_push_failed for a push's request (its
 // advertisement, its receive-pack, or a process its sync ran), and
-// code_fetch_failed for a fetch's, as auth.GitAccess classifies the request.
+// code_fetch_failed for a fetch's and code_download_failed for a download's,
+// as auth.GitAccess classifies the request.
 // The REQUEST names the line, never the process: a push whose sync's
 // cat-file failed is a push that failed.
 func failedLine(r *http.Request) string {
-	if auth.GitAccess(r) == auth.GitPush {
+	switch auth.GitAccess(r) {
+	case auth.GitPush:
 		return "code_push_failed"
+	case auth.GitDownload:
+		return "code_download_failed"
 	}
 	return "code_fetch_failed"
 }
