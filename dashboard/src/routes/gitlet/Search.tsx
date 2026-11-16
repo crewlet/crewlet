@@ -58,6 +58,7 @@ import {
   EmptyState,
   FormField,
   Input,
+  NoticeList,
   SegmentedControl,
   Skeleton,
 } from "@crewlethq/ui";
@@ -236,13 +237,7 @@ export function SearchCoverage({ coverage }: { coverage: Parameters<typeof cover
   const notes = coverageNotes(coverage);
   return (
     <Callout variant={notes.variant} title={notes.lead}>
-      {notes.notes.length > 0 && (
-        <ul className="code-search-coverage">
-          {notes.notes.map((n) => (
-            <li key={n}>{n}</li>
-          ))}
-        </ul>
-      )}
+      <NoticeList notices={notes.notes.map((n) => ({ key: n, title: n }))} />
     </Callout>
   );
 }

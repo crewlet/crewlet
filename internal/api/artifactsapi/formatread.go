@@ -162,7 +162,7 @@ func newBrandCache(objects Objects) *formatCache[brandformat.Brand] {
 func (c *formatCache[T]) read(w http.ResponseWriter, r *http.Request, a Admission,
 	v artifactsdomain.Version) (T, bool) {
 
-	value, err := c.get(r.Context(), a.Head.ID, v)
+	value, err := c.get(r.Context(), a.Head, v)
 	var unread *versionFileError
 	switch {
 	case errors.Is(err, c.refused):
@@ -187,9 +187,9 @@ func (c *formatCache[T]) read(w http.ResponseWriter, r *http.Request, a Admissio
 	return value, true
 }
 
-// get answers v's read, reading it on a miss.
-func (c *formatCache[T]) get(ctx context.Context, id artifacts.ID, v artifactsdomain.Version) (T, error) {
-	key := cacheKey{artifact: id, version: v.Number}
+// get answers v's read, a version of head's artifact, reading it on a miss.
+func (c *formatCache[T]) get(ctx context.Context, head artifactsdomain.Head, v artifactsdomain.Version) (T, error) {
+	key := cacheKey{artifact: head.ID, version: v.Number}
 	c.mu.Lock()
 	if el, ok := c.byKey[key]; ok {
 		c.order.MoveToFront(el)
@@ -198,7 +198,7 @@ func (c *formatCache[T]) get(ctx context.Context, id artifacts.ID, v artifactsdo
 		return value, nil
 	}
 	c.mu.Unlock()
-	value, weight, err := c.load(manifestSource{ctx: ctx, m: v.Manifest, objects: c.objects}, v)
+	value, weight, err := c.load(manifestSource{ctx: ctx, m: v.Manifest, kind: head.Kind, objects: c.objects}, v)
 	if err != nil {
 		var zero T
 		return zero, err
@@ -229,10 +229,11 @@ type versionFileError struct {
 func (e *versionFileError) Error() string { return fmt.Sprintf("read %s: %v", e.path, e.err) }
 func (e *versionFileError) Unwrap() error { return e.err }
 
-// manifestSource is a stored version as a format reads it.
+// manifestSource is a stored version as a format reads it, and its artifact's kind.
 type manifestSource struct {
 	ctx     context.Context
 	m       artifacts.Manifest
+	kind    artifacts.Kind
 	objects Objects
 }
 

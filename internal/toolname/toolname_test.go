@@ -52,6 +52,9 @@ var spelledElsewhere = map[string]map[string]string{
 		"my_work":        "an estate operation's wire name",
 		"write_project":  "an estate operation's wire name",
 	},
+	"internal/estate/artifacts.go": {
+		"mark_inbox": "an estate operation's wire name",
+	},
 	// AN ACT'S KIND (ADR-0125) is stored on held calls, tracker asks and the
 	// access log's verdicts, and a rename of the tool must not move what was
 	// written under it.

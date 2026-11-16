@@ -350,11 +350,20 @@ test("the go-live review says what several agents are told alike once", async ()
   expect(screen.getAllByText("Runs in")).toHaveLength(2);
 });
 
-test("two findings of one class about two seats sharing a name are two rows", async () => {
+test("two findings of one class are one row, and two seats sharing a name stay two", async () => {
   const pm = { ...HEALTH, subject: { kind: "seat", seat: "pm", name: "Engineer" } };
   const qa = { ...HEALTH, subject: { kind: "seat", seat: "qa", name: "Engineer" } };
   await mount({ revision: "r1", findings: [pm, qa], unread: [] });
-  expect(screen.getAllByText(HEALTH.title)).toHaveLength(2);
+  const row = screen
+    .getByText(
+      (_, el) =>
+        el?.className === "crewlet-attention-list__line" && el.textContent!.endsWith(HEALTH.title),
+    )
+    .closest("li")!;
+  expect(row.querySelector(".crewlet-attention-list__subject")?.textContent).toBe("2 agents");
+  expect(row.querySelector(".crewlet-attention-list__items")?.textContent).toBe(
+    "Engineer (pm), Engineer (qa)",
+  );
 });
 
 const APPROVAL: AdvisorFinding = {
@@ -569,4 +578,21 @@ test("the advisor in flight is a skeleton, and no claim that nothing needs chang
   await mount(new Promise(() => {}) as never);
   expect(document.querySelector(".crewlet-skeleton")).not.toBeNull();
   expect(screen.queryByText("Nothing to change")).toBeNull();
+});
+
+test("a lone finding about one agent names it once, before its title", async () => {
+  const one = {
+    ...HEALTH,
+    names: ["Engineer"],
+    subject: { kind: "seat", seat: "pm", name: "Engineer" },
+  };
+  await mount({ revision: "r1", findings: [one], unread: [] });
+  const row = screen
+    .getByText(
+      (_, el) =>
+        el?.className === "crewlet-attention-list__line" && el.textContent!.endsWith(HEALTH.title),
+    )
+    .closest("li")!;
+  expect(row.querySelector(".crewlet-attention-list__subject")?.textContent).toBe("Engineer");
+  expect(row.querySelector(".crewlet-attention-list__meta")).toBeNull();
 });

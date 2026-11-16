@@ -482,3 +482,112 @@ func RefuseObjectOnce(s *Server, id string) {
 			fmt.Errorf("index-pack exited 128")
 	}
 }
+
+// ArchiveMeasure is what a ZIP of a commit is made of, as the archive's measure
+// counts it: entries, files' bytes and names' bytes.
+type ArchiveMeasure struct{ Entries, Bytes, Names int64 }
+
+// ArchiveBoundOf is archiveBound of m: the most bytes a ZIP measured m can be.
+func ArchiveBoundOf(m ArchiveMeasure) int64 {
+	return archiveBound(treeMeasure{entries: m.Entries, bytes: m.Bytes, nameBytes: m.Names})
+}
+
+// SetArchiveBounds scales the measure's bounds: entries, files' bytes and
+// names' bytes. Set before s's first request.
+func SetArchiveBounds(s *Server, entries, bytes, names int64) {
+	s.archiveMaxEntries, s.archiveMaxBytes, s.archiveMaxNames = entries, bytes, names
+}
+
+// ZipNameMax is the longest name a ZIP entry carries.
+const ZipNameMax = zipNameMax
+
+// SetArchiveNameMax scales the longest entry name a ZIP carries. Set before
+// s's first request.
+func SetArchiveNameMax(s *Server, n int64) { s.archiveMaxName = n }
+
+// SetArchiveBound replaces archiveBound with bound. Set before s's first request.
+func SetArchiveBound(s *Server, bound func(ArchiveMeasure) int64) {
+	s.archiveBound = func(m treeMeasure) int64 {
+		return bound(ArchiveMeasure{Entries: m.entries, Bytes: m.bytes, Names: m.nameBytes})
+	}
+}
+
+// SetArchiveFree scales the largest bound a ZIP may have and take no place.
+func SetArchiveFree(s *Server, n int64) { s.archiveFree = n }
+
+// SetArchivePlaces gives s places archive places, each waited for up to wait.
+func SetArchivePlaces(s *Server, places int, wait time.Duration) {
+	s.archives = newArchivePlaces(places, wait)
+}
+
+// ArchivesHeld is how many of s's archive places are held now, and how many
+// principals are making a ZIP.
+func ArchivesHeld(s *Server) (places, principals int) {
+	held, _ := s.archives.inUse()
+	s.archives.mu.Lock()
+	defer s.archives.mu.Unlock()
+	return held, len(s.archives.held)
+}
+
+// FailGitOnce has s answer the next process it hands the pool whose arguments
+// start with args with err, running none, and run every later one.
+func FailGitOnce(s *Server, err error, args ...string) {
+	var once sync.Once
+	run := s.runGit
+	s.runGit = func(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
+		fail := false
+		if len(c.Args) >= len(args) && slices.Equal(c.Args[:len(args)], args) {
+			once.Do(func() { fail = true })
+		}
+		if fail {
+			return gitproc.Result{}, err
+		}
+		return run(ctx, c)
+	}
+}
+
+// AnswerGitOnce has s's next process whose arguments start with args write
+// out to its Stdout in place of running, then end with failed (nil for a run
+// that exited well), or as the pool ends a run whose Stdout refused a write;
+// every later one runs.
+func AnswerGitOnce(s *Server, out []byte, failed error, args ...string) {
+	var once sync.Once
+	run := s.runGit
+	s.runGit = func(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
+		answer := false
+		if len(c.Args) >= len(args) && slices.Equal(c.Args[:len(args)], args) {
+			once.Do(func() { answer = true })
+		}
+		if !answer {
+			return run(ctx, c)
+		}
+		if _, err := c.Stdout.Write(out); err != nil {
+			return gitproc.Result{}, fmt.Errorf("%w: git %s: %w", gitproc.ErrOutput, c.Args[0], err)
+		}
+		return gitproc.Result{}, failed
+	}
+}
+
+// GitCPU has s total the CPU of every process it hands the pool from now on
+// whose arguments start with args, and answers a reader of that total.
+func GitCPU(s *Server, args ...string) func() time.Duration {
+	var (
+		mu    sync.Mutex
+		total time.Duration
+	)
+	run := s.runGit
+	s.runGit = func(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
+		res, err := run(ctx, c)
+		if len(c.Args) >= len(args) && slices.Equal(c.Args[:len(args)], args) {
+			mu.Lock()
+			total += res.CPU
+			mu.Unlock()
+		}
+		return res, err
+	}
+	return func() time.Duration {
+		mu.Lock()
+		defer mu.Unlock()
+		return total
+	}
+}

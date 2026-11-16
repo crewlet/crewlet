@@ -13,6 +13,9 @@
  * NOTHING ARRIVING ON THE PORT IS TRUSTED. A call is read by the bridge's own
  * reader (`runtime/bridge.ts`), its parameters checked here, and anything
  * that is not exactly a call is dropped.
+ *
+ * THE COMMENT LAYER LISTENS HERE TOO: the page is told its mode on each hello, and its reports
+ * are checked and handed on only while the layer asks.
  */
 
 import { EXTERNAL_URL_MAX, externalUrl } from "@crewlethq/ui";
@@ -22,6 +25,9 @@ import {
   BRIDGE_MESSAGE,
   capabilityOf,
   readCall,
+  readCommentCrop,
+  readCommentLayout,
+  readCommentPick,
   type BridgeCall,
   type BridgeConnection,
   type BridgeDoc,
@@ -29,6 +35,11 @@ import {
   type BridgeRoster,
   type BridgeViewer,
   type BridgeWriteOutcome,
+  type CommentCrop,
+  type CommentLayout,
+  type CommentMode,
+  type CommentPick,
+  type CommentTarget,
   type RuntimeCapability,
 } from "~/runtime/bridge.ts";
 import type { ArtifactDataStore, WriteResult } from "~/lib/artifacts/datastore.ts";
@@ -102,6 +113,13 @@ export function bridgeOutcome(result: WriteResult): BridgeWriteOutcome {
   }
 }
 
+/** The page's news to the comment layer: layout (null once it stops), a pick, a crop or Escape. */
+export type PageCommentNews =
+  | { kind: "layout"; layout: CommentLayout | null }
+  | { kind: "pick"; pick: CommentPick }
+  | { kind: "crop"; crop: CommentCrop }
+  | { kind: "escape" };
+
 /** The host for one embedded page. */
 export class PageHost {
   private port: MessagePort | null = null;
@@ -116,6 +134,11 @@ export class PageHost {
   >();
   private readonly stopStore: () => void;
   private readonly send: (req: KeyedRequest) => Promise<KeyedAnswer>;
+  private commentMode: CommentMode = "off";
+  private layout: CommentLayout | null = null;
+  private nextCapture = 1;
+  private readonly captures = new Set<number>();
+  private readonly commentListeners = new Set<(news: PageCommentNews) => void>();
 
   constructor(private readonly options: PageHostOptions) {
     this.send = options.write ?? keyedWrite;
@@ -134,12 +157,14 @@ export class PageHost {
       connection: this.connection,
     });
     this.pushPresence();
+    if (this.commentMode !== "off") this.event({ topic: "comments", mode: this.commentMode });
   }
 
-  /** The frame is gone: nothing more is said to it. */
+  /** The frame is gone: nothing more is said to it, and nothing it said still stands. */
   detach(): void {
     this.port = null;
     this.subscriptions.clear();
+    this.forgetComments();
   }
 
   /** Stop: the frame is unmounted. */
@@ -171,6 +196,58 @@ export class PageHost {
   setRoster(roster: BridgeRoster): void {
     this.roster = roster;
     this.pushPresence();
+  }
+
+  // ---- the comment layer ---------------------------------------------------
+
+  /** Hears what the page tells the comment layer; the returned call stops. */
+  onComments(listener: (news: PageCommentNews) => void): () => void {
+    this.commentListeners.add(listener);
+    return () => void this.commentListeners.delete(listener);
+  }
+
+  /** Where the page last said its anchors are, while the layer is on. */
+  get commentLayout(): CommentLayout | null {
+    return this.layout;
+  }
+
+  /** The layer's mode: said to the page now and on its every hello. */
+  setCommentMode(mode: CommentMode): void {
+    if (mode === this.commentMode) return;
+    this.commentMode = mode;
+    if (mode === "off") this.forgetComments();
+    this.event({ topic: "comments", mode });
+  }
+
+  /** Asks the page to bring a part into view. */
+  revealComment(target: CommentTarget): void {
+    this.event({ topic: "comments", reveal: target });
+  }
+
+  /** Asks the page for a picture of a part; its answer carries the returned id. */
+  captureComment(target: CommentTarget): number {
+    const id = this.nextCapture++;
+    if (!this.port) {
+      queueMicrotask(() => this.tell({ kind: "crop", crop: { id, image: null } }));
+      return id;
+    }
+    this.captures.add(id);
+    this.event({ topic: "comments", capture: { id, ...target } });
+    return id;
+  }
+
+  private tell(news: PageCommentNews): void {
+    for (const fn of this.commentListeners) fn(news);
+  }
+
+  /** Nothing the page said still stands: no layout, and no picture coming. */
+  private forgetComments(): void {
+    if (this.layout) {
+      this.layout = null;
+      this.tell({ kind: "layout", layout: null });
+    }
+    for (const id of this.captures) this.tell({ kind: "crop", crop: { id, image: null } });
+    this.captures.clear();
   }
 
   private pushPresence(): void {
@@ -371,6 +448,54 @@ export class PageHost {
         }
         return this.options.print();
       }
+      // THE COMMENT LAYER'S, each taken only while the layer asked for it,
+      // so a page cannot put a pin or a draft in front of the reader.
+      case "comments.layout": {
+        if (this.commentMode === "off") {
+          throw new Refusal("invalid", "the host did not ask where the page's anchors are");
+        }
+        const layout = readCommentLayout(p);
+        if (!layout) {
+          throw new Refusal(
+            "invalid",
+            "a layout names each declared anchor's box, the document's size, its scroll and its viewport, in finite pixels",
+          );
+        }
+        this.layout = layout;
+        this.tell({ kind: "layout", layout });
+        return null;
+      }
+      case "comments.pick": {
+        if (this.commentMode !== "place") {
+          throw new Refusal("invalid", "the reader is not placing a comment");
+        }
+        const pick = readCommentPick(p);
+        if (!pick) {
+          throw new Refusal(
+            "invalid",
+            "a pick names a declared anchor or none, its words in at most 1 KiB, and the point as fractions of the page",
+          );
+        }
+        this.tell({ kind: "pick", pick });
+        return null;
+      }
+      case "comments.crop": {
+        const crop = readCommentCrop(p);
+        if (!crop || !this.captures.delete(crop.id)) {
+          throw new Refusal("invalid", "no picture was asked for under that id");
+        }
+        this.tell({ kind: "crop", crop });
+        if (crop.image === null && p["image"] !== null) {
+          throw new Refusal(
+            "invalid",
+            "a picture is a PNG, JPEG or WebP data URL of at most 64 KiB, so none was kept",
+          );
+        }
+        return null;
+      }
+      case "comments.escape":
+        if (this.commentMode === "place") this.tell({ kind: "escape" });
+        return null;
     }
   }
 

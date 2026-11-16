@@ -32,7 +32,6 @@ import {
   type DescriptionListEntry,
 } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
-import { BugGlyph, FileTextGlyph, ListChecksGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Insights } from "./Insights.tsx";
@@ -151,9 +150,7 @@ export function Diagnostics() {
   return (
     <>
       <PageNote>
-        When the engine runs into a bug in its own code, it can let the Crewlet team know so they
-        can fix it. It&rsquo;s off until an admin turns it on, and reports are anonymous: nothing
-        about your company is ever sent.{" "}
+        Anonymous reports the engine can send the Crewlet team, off until an admin turns them on.{" "}
         {/* A LINK INSIDE THE SENTENCE carries the underline register: the
             kit's link marks itself by its ink alone until hovered, which in
             the dark theme is 1.18:1 against the words around it. */}
@@ -213,7 +210,7 @@ function ReportsSwitch({
   const shown = wanted ?? answer.enabled;
   return (
     <Card padding="none">
-      <Card.Header icon={<BugGlyph size="sm" />}>
+      <Card.Header>
         <Card.Title>Bug reports to Crewlet</Card.Title>
       </Card.Header>
       <Card.Body padding="md" className="col gap-2">
@@ -271,7 +268,7 @@ function ReportsList({ answer }: { answer: IssueReportsAnswer }) {
   const [opened, setOpened] = useState<IssueReportRow | null>(null);
   return (
     <Card padding="none">
-      <Card.Header icon={<ListChecksGlyph size="sm" />} count={answer.reports.length}>
+      <Card.Header count={answer.reports.length}>
         <Card.Title>Reports you&rsquo;ve sent</Card.Title>
       </Card.Header>
       <DataGrid<IssueReportRow>
@@ -282,9 +279,9 @@ function ReportsList({ answer }: { answer: IssueReportsAnswer }) {
         defaultSort="-first_sent"
         isFailed={(r) => r.status === "failed"}
         empty={{
+          size: "inline",
           title: "Nothing sent yet",
           hint: "With this on, a bug shows up here once the engine runs into it a few times.",
-          icon: "list-checks",
         }}
         columns={[
           {
@@ -417,7 +414,7 @@ function KeptReport({ payload }: { payload: unknown }) {
 function ReportPreview({ answer }: { answer: IssueReportsAnswer }) {
   return (
     <Card padding="none">
-      <Card.Header icon={<FileTextGlyph size="sm" />}>
+      <Card.Header>
         <Card.Title>See a sample report</Card.Title>
       </Card.Header>
       <Card.Body padding="md" className="col gap-2">

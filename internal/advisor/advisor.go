@@ -152,10 +152,17 @@ type Finding struct {
 	Source   Source   `json:"source"`
 	Area     Area     `json:"area"`
 	Subject  Subject  `json:"subject"`
-	// Title says what is wrong, in one line.
+	// Title says what is wrong, in one line. Title and Why are the same on
+	// every finding of one class: what it is about is Subject, Item and Names.
 	Title string `json:"title"`
 	// Why says what it costs, in the owner's words.
 	Why string `json:"why"`
+	// Item is the one thing within the subject the finding is about, as a
+	// person reads it in a list: a schedule's name and how often it runs.
+	Item string `json:"item,omitempty"`
+	// Names is every seat the finding is about by display name, in the order
+	// of their handles, where one finding holds several.
+	Names []string `json:"names,omitempty"`
 	// Path is where in the company document the finding is located.
 	Path     string `json:"path"`
 	Evidence []Fact `json:"evidence"`
@@ -242,6 +249,7 @@ func fromWarning(c *config.Company, w config.Warning) Finding {
 		f.Subject = Subject{Kind: SubjectCompany}
 	}
 	f.Title, f.Why = entry.words(c, place, w)
+	f.Item = w.Item
 	f.Fix = entry.fix(c, place, w)
 	return f
 }

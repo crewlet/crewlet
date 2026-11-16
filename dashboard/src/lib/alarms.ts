@@ -39,6 +39,11 @@ export function alarmKindTitle(kind: string): string {
 }
 
 /** One alarm as a list names it: its kind, which is its identity, and its name. */
+/** An alarm's title: the engine's words, or the kind read as words for one this build does not raise. */
+export function alarmTitle(alarm: { kind: string; title?: string | undefined }): string {
+  return alarm.title || alarmKindTitle(alarm.kind);
+}
+
 export interface NamedAlarm {
   key: string;
   title: string;
@@ -53,10 +58,10 @@ export interface NamedAlarm {
  * report's order.
  */
 export function namedAlarms(
-  alarms: readonly Pick<RetentionAlarm, "kind">[],
+  alarms: readonly { kind: string; title?: string | undefined }[],
   worst: string | undefined,
 ): NamedAlarm[] {
-  const named = alarms.map((alarm) => ({ key: alarm.kind, title: alarmKindTitle(alarm.kind) }));
+  const named = alarms.map((alarm) => ({ key: alarm.kind, title: alarmTitle(alarm) }));
   return [...named.filter((a) => a.key === worst), ...named.filter((a) => a.key !== worst)];
 }
 

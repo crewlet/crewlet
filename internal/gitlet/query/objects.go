@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/gitlet"
@@ -326,11 +325,11 @@ func (r *read) check(ctx context.Context, in []string) ([]object, error) {
 			out = append(out, object{})
 			return nil
 		}
-		o, ok := parseCheck(rec)
+		o, ok := gitproc.ParseCheck(rec)
 		if long || !ok {
 			return fmt.Errorf("query: cat-file answered %q for %q, which is no object", rec, in[i])
 		}
-		out = append(out, o)
+		out = append(out, object{id: o.ID, kind: o.Type, size: o.Size})
 		return nil
 	})
 	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
@@ -348,21 +347,4 @@ func (r *read) check(ctx context.Context, in []string) ([]object, error) {
 		return nil, fmt.Errorf("query: cat-file answered %d records for %d lines", len(out), len(in))
 	}
 	return out, nil
-}
-
-// parseCheck reads one --batch-check record: "<id> <type> <size>".
-func parseCheck(rec []byte) (object, bool) {
-	fields := strings.Fields(string(rec))
-	if len(fields) != 3 || !gitref.ValidOID(fields[0]) {
-		return object{}, false
-	}
-	size, err := strconv.ParseInt(fields[2], 10, 64)
-	if err != nil || size < 0 {
-		return object{}, false
-	}
-	switch fields[1] {
-	case "commit", "tree", "blob", "tag":
-		return object{id: fields[0], kind: fields[1], size: size}, true
-	}
-	return object{}, false
 }

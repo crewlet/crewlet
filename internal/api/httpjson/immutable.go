@@ -79,14 +79,14 @@ func Immutable(w http.ResponseWriter, r *http.Request, body any) {
 	h.Set("Cache-Control", ImmutableCacheControl)
 	// ADDED, never set: a route's own Vary (CORS's Origin) stays beside it.
 	h.Add("Vary", "Authorization, "+ReaderHeader)
-	if noneMatch(r.Header.Get("If-None-Match"), tag) {
+	if NoneMatch(r.Header.Get("If-None-Match"), tag) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 	writeEncoded(w, http.StatusOK, raw)
 }
 
-// noneMatch reports whether an `If-None-Match` header names tag, by the WEAK
+// NoneMatch reports whether an `If-None-Match` header names tag, by the WEAK
 // comparison RFC 9110 §13.1.2 holds If-None-Match to — `W/"x"` names `"x"` —
 // and `*`, which names any current representation: the one an answer being
 // sent is.
@@ -96,7 +96,7 @@ func Immutable(w http.ResponseWriter, r *http.Request, body any) {
 // a full body where the caller already holds it — or, worse, match half of a
 // tag that is not this one. A header that is not a list of entity tags names
 // nothing, and the caller is sent the body.
-func noneMatch(header, tag string) bool {
+func NoneMatch(header, tag string) bool {
 	header = strings.TrimSpace(header)
 	if header == "*" {
 		return true

@@ -620,6 +620,12 @@ func (c *Company) checkSSH(p *problems, path Path, b *RoleSSH) {
 	}
 }
 
+// readOnlyHostAdvice is [Company.sshAdvisories]' rule; the warning's Item is
+// the host.
+var readOnlyHostAdvice = says("Servers an agent can only read",
+	"This server has no account for making changes, so the agent can only read there. Add one "+
+		"in the server's settings.")
+
 // sshAdvisories says where a seat's operate level reaches a host only at read,
 // since the host names no operate user.
 func (c *Company) sshAdvisories() []Warning {
@@ -631,8 +637,10 @@ func (c *Company) sshAdvisories() []Warning {
 		}
 		for i, id := range b.Hosts {
 			if h, ok := c.Integrations.SSH.Host(id); ok && h.Users.Operate == "" {
-				out = append(out, SeatAdvisory(idx(at(path, "integrations.ssh.hosts"), i), role.IdentityKey(),
-					fmt.Sprintf("host %q has no operate user, so %s reaches it at read", id, role.IdentityKey())))
+				w := readOnlyHostAdvice.raise(idx(at(path, "integrations.ssh.hosts"), i),
+					fmt.Sprintf("host %q has no operate user, so %s reaches it at read", id, role.IdentityKey()))
+				w.Seat, w.Item = role.IdentityKey(), id
+				out = append(out, w)
 			}
 		}
 	}

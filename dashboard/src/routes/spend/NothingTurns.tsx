@@ -5,7 +5,6 @@
  */
 
 import { useMemo } from "react";
-import { CircleDashedGlyph } from "@crewlethq/icons/glyphs";
 import { Card, Link, TableEntityCell, TableNumberCell } from "@crewlethq/ui";
 import { plainSeat } from "~/app/frame/cells.tsx";
 import { href } from "~/app/router.tsx";
@@ -17,13 +16,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { wakeWords } from "~/lib/wakes.ts";
 import type { TurnOutcomeRow } from "~/protocol/turnOutcomes.ts";
 
-export function NothingTurns({
-  params,
-  words,
-}: {
-  params: Record<string, unknown>;
-  words: string | null;
-}) {
+export function NothingTurns({ params }: { params: Record<string, unknown> }) {
   const answer = useQuery("turn_outcomes", params);
   // EACH AGENT BY ITS NAME, as By agent above draws it: the answer keys a row
   // on the seat's handle, and the handle drawn as the name put `agent-ceo` on
@@ -39,12 +32,7 @@ export function NothingTurns({
   );
   return (
     <Card className="spend-card" padding="none">
-      <Card.Header
-        icon={<CircleDashedGlyph size="sm" />}
-        subtitle={words ?? undefined}
-        subtitlePlacement="below"
-        count={rows.length}
-      >
+      <Card.Header count={rows.length}>
         <Card.Title>Turns that changed nothing</Card.Title>
       </Card.Header>
       <QueryState
@@ -59,9 +47,9 @@ export function NothingTurns({
           rows={rows}
           rowKey={(r) => `${r.agent_id}/${r.wake}`}
           empty={{
+            size: "inline",
             title: "Every turn changed something",
             hint: "A turn that moves no work and writes no words shows up here, by what woke it.",
-            icon: "circle-check",
           }}
           columns={[
             {

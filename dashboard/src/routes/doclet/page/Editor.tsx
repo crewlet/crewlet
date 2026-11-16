@@ -242,33 +242,35 @@ export function PageEditor({
         {moved && !merging && (
           <Callout
             variant="warning"
-            title={`Somebody saved revision ${page.version} while you edited.`}
+            title={`Somebody saved revision ${page.version} while you edited`}
+            action={
+              <>
+                <Button size="small" variant="secondary" onClick={() => setTheirs(!theirs)}>
+                  {theirs ? "Hide their change" : "View their change"}
+                </Button>
+                <Button
+                  size="small"
+                  variant="secondary"
+                  onClick={() => {
+                    const theirBody = page.body ?? "";
+                    const merge = merge3(base.body, draft, theirBody);
+                    setTheirs(false);
+                    save.dismiss();
+                    if (merge.conflicts === 0) {
+                      setDraft(mergedText(merge));
+                      setBase({ version: page.version, body: theirBody });
+                      setMerged(page.version);
+                    } else {
+                      setMerging({ version: page.version, body: theirBody, merge });
+                    }
+                  }}
+                >
+                  Keep editing on top of it
+                </Button>
+              </>
+            }
           >
-            Someone saved revision {page.version} since you started. Bring their change in first.
-            <span className="knowledge-callout-actions">
-              <Button size="small" variant="secondary" onClick={() => setTheirs(!theirs)}>
-                {theirs ? "Hide their change" : "View their change"}
-              </Button>
-              <Button
-                size="small"
-                variant="secondary"
-                onClick={() => {
-                  const theirBody = page.body ?? "";
-                  const merge = merge3(base.body, draft, theirBody);
-                  setTheirs(false);
-                  save.dismiss();
-                  if (merge.conflicts === 0) {
-                    setDraft(mergedText(merge));
-                    setBase({ version: page.version, body: theirBody });
-                    setMerged(page.version);
-                  } else {
-                    setMerging({ version: page.version, body: theirBody, merge });
-                  }
-                }}
-              >
-                Keep editing on top of it
-              </Button>
-            </span>
+            Bring their change in before you save.
           </Callout>
         )}
         {moved && theirs && !merging && (

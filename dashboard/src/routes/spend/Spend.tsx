@@ -13,10 +13,10 @@
  * be compared on one screen; the live window is the live push's, which Home
  * and Live draw.
  *
- * So the hero, the chart, the tables and the export are all ONE window, and
- * each says which: the label is built from the ANSWER's own days, never from
- * the control, so an answer still on screen while the next loads is never
- * captioned with the window it is not.
+ * So the hero, the chart, the tables and the export are all ONE window, which
+ * the hero names once, from the ANSWER's own days rather than the control, so
+ * an answer still on screen while the next loads is never captioned with the
+ * window it is not.
  *
  * # The budget is a different fact, and says so
  *
@@ -119,6 +119,8 @@ export function Spend() {
   // and nothing is drawn that is not this window's.
   const refused = tokens.error === "bad_params";
   const rollup = refused ? null : tokens.data;
+  // A window that spent no tokens has nothing to break down by them: the chart's one empty state says so.
+  const quiet = rollup?.totals.total_tokens === 0;
   // EACH SEAT'S DAY BY ITS AGENT ID, the key the spend row carries too
   // (`agentLines`).
   const dayOf = useMemo(() => {
@@ -141,7 +143,7 @@ export function Spend() {
       <PageActions>
         <TimeRangePicker {...rangePickerProps(range, "Window")} />
         <DownloadButton
-          label="Export"
+          label="Export CSV"
           filename={`crewlet-spend-${rollup?.from ?? "window"}-${rollup?.to ?? ""}.csv`}
           mime="text/csv;charset=utf-8"
           text={() => (rollup ? spendCsv(rollup, lines, `${rollup.from}..${rollup.to}`) : "")}
@@ -184,37 +186,40 @@ export function Spend() {
           </div>
           {/* WHO SPENT IT, three ways: the seats' table beside the two ranked
               lists that break the same tokens down by model and by team. */}
-          <div className="spend-pair">
-            <ByAgent
-              lines={lines}
-              loading={tokens.loading}
-              error={tokens.error}
-              words={words}
-              range={range.window}
-            />
-            <div className="spend-side">
-              <ByModel rollup={rollup} loading={tokens.loading} words={words} />
-              <ByUnit params={params} words={words} />
-              {/* WHERE THE COMPANY RUNS NO WORKLET there are no tasks to
+          {!quiet && (
+            <>
+              <div className="spend-pair">
+                <ByAgent
+                  lines={lines}
+                  loading={tokens.loading}
+                  error={tokens.error}
+                  range={range.window}
+                />
+                <div className="spend-side">
+                  <ByModel rollup={rollup} loading={tokens.loading} />
+                  <ByUnit params={params} />
+                  {/* WHERE THE COMPANY RUNS NO WORKLET there are no tasks to
                   rank, and the auxiliary model's card joins this column
                   rather than standing alone in a row of its own. */}
-              {!runs.tracker && <Workers rollup={rollup} loading={tokens.loading} words={words} />}
-            </div>
-          </div>
-          {/* WHAT IT WAS SPENT ON: the tasks, in the wide track their titles
+                  {!runs.tracker && <Workers rollup={rollup} loading={tokens.loading} />}
+                </div>
+              </div>
+              {/* WHAT IT WAS SPENT ON: the tasks, in the wide track their titles
               need, beside the auxiliary model's purposes. */}
-          {runs.tracker && (
-            <div className="spend-pair">
-              <ExpensiveTasksCard
-                since={rollup?.since}
-                until={rollup?.until}
-                window={windowParam(range.window)}
-              />
-              <Workers rollup={rollup} loading={tokens.loading} words={words} />
-            </div>
+              {runs.tracker && (
+                <div className="spend-pair">
+                  <ExpensiveTasksCard
+                    since={rollup?.since}
+                    until={rollup?.until}
+                    window={windowParam(range.window)}
+                  />
+                  <Workers rollup={rollup} loading={tokens.loading} />
+                </div>
+              )}
+            </>
           )}
-          {/* WHAT TURNS CHANGED NOTHING, by what woke them and who can act. */}
-          <NothingTurns params={params} words={words} />
+          {/* WHAT TURNS CHANGED NOTHING, by what woke them and who can act: turns, not tokens. */}
+          <NothingTurns params={params} />
         </div>
       )}
     </>

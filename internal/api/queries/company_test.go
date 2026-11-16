@@ -36,6 +36,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/usage"
@@ -3218,6 +3219,7 @@ func TestTheFleetSaysWhatIsFiringOnEachNode(t *testing.T) {
 	claim("node-a", coord.NodeStatus{AlarmsEvaluated: true, Alarms: []coord.AlarmMark{
 		{Kind: "backup_age", Since: since},
 		{Kind: "apply_lag", Since: since.Add(2 * time.Minute)},
+		{Kind: "a_newer_kind", Since: since.Add(3 * time.Minute)},
 	}})
 	claim("node-b", coord.NodeStatus{AlarmsEvaluated: true})
 	claim("node-c", coord.NodeStatus{})
@@ -3229,9 +3231,16 @@ func TestTheFleetSaysWhatIsFiringOnEachNode(t *testing.T) {
 	for _, row := range rows(t, body["nodes"]) {
 		byID[fmt.Sprint(row["id"])] = row
 	}
+	// EACH WITH ITS KIND'S WORDS for a person, and none for a kind this build
+	// does not raise: a newer node's, partway through a roll.
+	backupTitle, backupPerson, _ := statelog.PersonWords(statelog.KindBackupAge)
+	lagTitle, lagPerson, _ := statelog.PersonWords(statelog.KindApplyLag)
 	want := []any{
-		map[string]any{"kind": "backup_age", "since": "2026-03-04T05:06:07Z"},
-		map[string]any{"kind": "apply_lag", "since": "2026-03-04T05:08:07Z"},
+		map[string]any{"kind": "backup_age", "since": "2026-03-04T05:06:07Z",
+			"title": backupTitle, "person": backupPerson},
+		map[string]any{"kind": "apply_lag", "since": "2026-03-04T05:08:07Z",
+			"title": lagTitle, "person": lagPerson},
+		map[string]any{"kind": "a_newer_kind", "since": "2026-03-04T05:09:07Z"},
 	}
 	if got := byID["node-a"]["alarms"]; !reflect.DeepEqual(got, want) {
 		t.Errorf("node-a reports its alarms as %#v, want %#v", got, want)

@@ -584,7 +584,7 @@ func newDomainNode(t *testing.T, clock *clock) *domainNode {
 		t.Fatal(err)
 	}
 	n := &domainNode{t: t, db: db, log: log, writer: writer, reader: reader, waiter: w, verify: verifier,
-		applier: artifactsdomain.NewApplier("node-a", func([]artifactsdomain.Moved) {})}
+		applier: artifactsdomain.NewApplier("node-a", func([]artifactsdomain.Moved) {}, nil)}
 	w.advance = n.drain
 	return n
 }

@@ -1132,8 +1132,8 @@ test("the seat-tab reading sees both link spellings", () => {
   expect(read('href(["worklet", key], { tab: "turns" });')).toEqual([]);
 });
 
-// THE PAGE BAR'S CONTROLS ARE ONE SIZE. Invite person, New service account
-// and Store a secret were the kit's medium buttons, 30px, in a bar whose every
+// THE PAGE BAR'S CONTROLS ARE ONE SIZE. Invite person, Add service account
+// and Add secret were the kit's medium buttons, 30px, in a bar whose every
 // other control is a 26px small one, so the bar changed height between
 // Settings sections. Every kit button written straight into `PageActions` says
 // `size="small"`; the product's own buttons (New task and the rest) set it

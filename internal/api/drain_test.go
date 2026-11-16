@@ -214,7 +214,10 @@ func TestNothingIsRefusedForDrainingBeforeADrain(t *testing.T) {
 // because the GET is where git prints a refusal's reason — on the POST it
 // prints only `RPC failed; HTTP 503`. Every refusal is in git's own form,
 // text/plain, since git prints the API's JSON as nothing at all. A coding
-// box's git, classified as a person's, is drained by the same rules.
+// box's git, classified as a person's, is drained by the same rules. A
+// download is new work, refused in its own words.
+//
+// Mutation: serve a download as a read through a drain.
 func TestADrainingNodeFinishesAFetchAndBeginsNoGitWork(t *testing.T) {
 	t.Parallel()
 	continues := []struct{ method, path string }{
@@ -232,6 +235,9 @@ func TestADrainingNodeFinishesAFetchAndBeginsNoGitWork(t *testing.T) {
 		// A coding box's advertisement and push.
 		{http.MethodGet, "/box/git/r.git/info/refs?service=git-upload-pack"},
 		{http.MethodPost, "/box/git/r.git/git-receive-pack"},
+		// A download of a file and of a commit's ZIP.
+		{http.MethodGet, "/git/r/-/raw?rev=" + strings.Repeat("a", 40) + "&path=a"},
+		{http.MethodGet, "/git/r/-/archive.zip?rev=" + strings.Repeat("a", 40)},
 	}
 	for _, draining := range []bool{true, false} {
 		a := drainingApp(t, draining)
@@ -265,7 +271,11 @@ func TestADrainingNodeFinishesAFetchAndBeginsNoGitWork(t *testing.T) {
 			if got := rec.Header().Get("Retry-After"); got != want {
 				t.Errorf("%s %s: Retry-After = %q, want %q", req.method, req.path, got, want)
 			}
-			const sentence = "this node is draining for a shutdown and begins no new fetch or push: " +
+			what := "fetch or push"
+			if strings.Contains(req.path, "/-/") {
+				what = "download"
+			}
+			sentence := "this node is draining for a shutdown and begins no new " + what + ": " +
 				"retry in 30 s, against another node or once it has restarted\n"
 			if got := rec.Body.String(); got != sentence {
 				t.Errorf("%s %s said %q, want %q", req.method, req.path, got, sentence)
@@ -331,6 +341,8 @@ func TestADrainFinishesTheGitRequestsItIsServing(t *testing.T) {
 		{"a push begun before the drain", false, http.MethodPost, "/git/r.git/git-receive-pack"},
 		{"a clone's advertisement begun before the drain", false, http.MethodGet,
 			"/git/r.git/info/refs?service=git-upload-pack"},
+		{"a download begun before the drain", false, http.MethodGet,
+			"/git/r/-/archive.zip?rev=" + strings.Repeat("a", 40)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

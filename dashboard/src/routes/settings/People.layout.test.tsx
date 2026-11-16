@@ -101,3 +101,12 @@ test("with the room of a whole window every column is drawn", async () => {
   expect(heads()).toEqual(["Name", "Kind", "Stage", "Seat", "Access"]);
   expect(host!.textContent).not.toContain("Hidden to fit");
 });
+
+test("beside the peek a stage tag keeps its whole word", async () => {
+  await mount(490);
+  const label = [...host!.querySelectorAll<HTMLElement>(".crewlet-tag__label")].find(
+    (el) => el.textContent === "Suspended",
+  );
+  expect(label).toBeDefined();
+  expect(label!.scrollWidth).toBeLessThanOrEqual(label!.clientWidth);
+});

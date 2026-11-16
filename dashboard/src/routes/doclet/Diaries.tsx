@@ -49,7 +49,7 @@ import {
   TableEntityCell,
   PageNote,
 } from "@crewlethq/ui";
-import { BrainGlyph, CircleAlertGlyph } from "@crewlethq/icons/glyphs";
+import { BrainGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { seatKindKey } from "~/app/crumbs.ts";
@@ -254,7 +254,7 @@ export function Diary({ handle }: { handle: string }) {
         <PageNote>Last written {ago(data.latest_reflection.created_at, now)}.</PageNote>
       )}
       {!seat && org && (
-        <Callout variant="info" icon={<CircleAlertGlyph size="md" />}>
+        <Callout variant="info">
           No agent is called <InlineCode close=".">{handleLabel(handle)}</InlineCode> Showing memory
           left under that handle.
         </Callout>

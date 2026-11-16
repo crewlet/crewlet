@@ -742,7 +742,10 @@ test("an agent's permissions are a count beside a pencil that edits them, and re
   expect(screen.getByText("6 permissions")).toBeTruthy();
   const edit = screen.getByRole("button", { name: "Edit QA's GitHub permissions" });
   expect(glyphIn(edit)).toBe(PENCIL);
-  expect(edit.getAttribute("title")).toContain("Issues: Read and write");
+  fireEvent.keyDown(document.body, { key: "Tab" });
+  act(() => edit.focus());
+  expect(screen.getByRole("tooltip").textContent).toContain("Issues: Read and write");
+  act(() => edit.blur());
   expect((edit as HTMLButtonElement).disabled).toBe(false);
   cleanup();
   draw(githubAnswer(), { readOnly: OPERATOR_MANAGED });

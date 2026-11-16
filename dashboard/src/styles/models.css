@@ -59,9 +59,7 @@
 }
 
 .models-doctor,
-.models-checklist,
-.models-repoint,
-.models-problems {
+.models-repoint {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
@@ -183,14 +181,6 @@
   }
 }
 
-/* A list of what changed: each line's dot, then its words, which wrap. */
-.models-checklist > li {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: baseline;
-  gap: var(--spacing-2);
-}
-
 .models-field-error {
   color: var(--color-feedback-danger-ink);
 }
@@ -199,15 +189,6 @@
   display: flex;
   align-items: center;
   gap: var(--spacing-3);
-}
-
-/* Review's list of the seats that change model, one change to a line. */
-.models-changes {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  margin: 0;
-  padding-inline-start: var(--spacing-4);
 }
 
 /* Who uses it: the seat chips and the summary lines. */
@@ -579,15 +560,6 @@
   margin: 0;
   padding: 0;
   list-style: none;
-}
-
-/* One problem to a line: the field and the sentence, then the step that fixes it as a link (design QA M9). */
-.models-problems__line {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--spacing-1) var(--spacing-3);
 }
 
 /* Review's Test call row: its word, and the way to run it. */

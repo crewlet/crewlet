@@ -32,7 +32,7 @@ import (
 // # Why one is needed at all
 //
 // A node's sockets learn what changed from its OWN appliers, after every
-// committed batch: the tracker's and Gitlet's say whose inbox moved
+// committed batch: the tracker's, Gitlet's and the artifacts' say whose inbox moved
 // ([Engine.SetOnInboxMoved]), chat's what landed in a room
 // ([Engine.SetChatLive]), the artifacts' and the datastore's what moved on an
 // artifact and which documents changed ([Engine.OnArtifactsMoved],
@@ -282,7 +282,7 @@ const liveRelayRetry = servingRecheck
 // EXACTLY ONE FIELD IS SET, because a batch is one applier's commit and each
 // applier is one domain's ([liveBatch.domain]). The fields are the kinds of
 // announcement the appliers make at all — the inbox sources' movements (the
-// tracker's and Gitlet's, each movement naming its source), chat's
+// tracker's, Gitlet's and the artifacts', each naming its source), chat's
 // committed effects, and what the artifacts' and the datastore's commits
 // moved — and a domain that starts announcing is one more field here (or one
 // more [registration.Inbox] source) and one more arm in [liveBatch.domain],
@@ -320,10 +320,17 @@ func (b liveBatch) domain() string {
 // liveDomains is every domain whose applier announces to this node's sockets,
 // in a fixed order: the inbox sources the register marks ([inboxSources]),
 // chat, the artifacts and the datastore — the domains whose copies the relay
-// judges, each on its own verdict.
+// judges, each on its own verdict. EACH ONCE: the artifacts announce both
+// what their commits moved and the inbox their comments moved, on one copy.
 func liveDomains() []string {
-	return append(inboxSources(), chatlet.Domain{}.Name(),
-		artifactsdomain.Domain{}.Name(), artifactdata.Domain{}.Name())
+	out := inboxSources()
+	for _, d := range []string{chatlet.Domain{}.Name(), artifactsdomain.Domain{}.Name(),
+		artifactdata.Domain{}.Name()} {
+		if !slices.Contains(out, d) {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // relayedBatch is one batch a server's appliers announced, numbered by the
@@ -983,7 +990,10 @@ func (e *Engine) liveGap(domains []string) {
 		case chatlet.Domain{}.Name():
 			e.chatGap()
 		case artifactsdomain.Domain{}.Name():
+			// BOTH OF ITS ANNOUNCEMENTS: what its commits moved, and the
+			// inbox its comments moved.
 			e.artifactsListeners.tell([]artifactsdomain.Moved{artifactsdomain.Reset()})
+			e.inboxGap(domain)
 		case artifactdata.Domain{}.Name():
 			e.artifactDataListeners.tell([]artifactdata.Moved{artifactdata.ResetMove()})
 		default:

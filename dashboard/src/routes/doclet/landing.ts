@@ -147,3 +147,20 @@ export function byDay(
   }
   return out;
 }
+
+/**
+ * How much a save changed, in words a reader weighs at a glance: "3 words
+ * added, 1 removed, in 2 places". Counted in words, not markdown lines.
+ */
+export function changeSize(added: number, removed: number, places: number): string {
+  const words = (n: number) => `${n.toLocaleString()} ${n === 1 ? "word" : "words"}`;
+  const size =
+    added && removed
+      ? `${words(added)} added, ${removed.toLocaleString()} removed`
+      : added
+        ? `${words(added)} added`
+        : removed
+          ? `${words(removed)} removed`
+          : "No words changed";
+  return places > 1 ? `${size}, in ${places} places` : size;
+}

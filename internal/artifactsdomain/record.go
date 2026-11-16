@@ -29,7 +29,10 @@ import (
 //     subject kinds and every op on them, an artifact's `move`, the `folder`
 //     a create files into, a create of the `brand` artifact kind (a brand
 //     kit), and the `brand` stylesheet a version pins.
-const RecordVersion = 2
+//   - 3: comment threads (ADR-0154): the `comment` subject kind and every op
+//     on it, and a person's marks over the notices they write: a reader's
+//     `inbox_marks`.
+const RecordVersion = 3
 
 // baseRecordVersion is version 1, the base format. The barrier, the trim's
 // trimmed record, a reanchor's generation and every gate are pinned at it for
@@ -68,6 +71,8 @@ var versionedFields = statelog.RecordFields{
 	{Name: "CreatePayload.Kind brand", Since: 2, Op: string(OpCreate), Path: []string{"mutation", "kind"},
 		Equals: string(artifacts.KindBrand)},
 	{Name: "VersionPayload.Brand", Since: 2, Path: []string{"mutation", "version", "brand"}},
+	{Name: "Subject.Kind comment", Since: 3, Path: []string{"subject", "k"}, Equals: string(KindComment)},
+	{Name: "RecordEnvelope.Op inbox_marks", Since: 3, Path: []string{"op"}, Equals: string(OpInboxMarks)},
 }
 
 // VersionedFields is the table, for the conformance suite.
@@ -171,6 +176,19 @@ const (
 	// the brand subject, and OpClear withdraws the adoption.
 	OpAdopt OpKind = "adopt"
 	OpClear OpKind = "clear"
+
+	// The ops on a comment thread's subject (ADR-0154), named for the thread so
+	// a log line says what happened without its subject beside it.
+	OpCommentOpen    OpKind = "comment_open"
+	OpCommentReply   OpKind = "comment_reply"
+	OpCommentEdit    OpKind = "comment_edit"
+	OpCommentRemove  OpKind = "comment_remove"
+	OpCommentResolve OpKind = "comment_resolve"
+	OpCommentReopen  OpKind = "comment_reopen"
+
+	// OpInboxMarks moves a person's marks over their comment notices by one
+	// gesture, on the person's own reader subject (marks.go).
+	OpInboxMarks OpKind = "inbox_marks"
 )
 
 // OpKinds are every op, in the order they are documented.
@@ -182,7 +200,15 @@ var OpKinds = []OpKind{
 	OpCreate, OpPublish, OpRestoreVersion, OpPatch, OpShare, OpUnshare, OpTransfer,
 	OpTrash, OpRestore, OpPurgeBegin, OpPurge, OpRemove, OpPin, OpUnpin, OpOpened, OpLinkWorkItem,
 	OpReadElevated, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpMove, OpRename,
-	OpAdopt, OpClear,
+	OpAdopt, OpClear, OpCommentOpen, OpCommentReply, OpCommentEdit, OpCommentRemove,
+	OpCommentResolve, OpCommentReopen, OpInboxMarks,
+}
+
+// CommentOps are every op on a comment thread's subject, in the order they are
+// documented.
+var CommentOps = []OpKind{
+	OpCommentOpen, OpCommentReply, OpCommentEdit, OpCommentRemove, OpCommentResolve,
+	OpCommentReopen,
 }
 
 // HistoryOps are every op an artifact's history row is filed under, in the
@@ -195,7 +221,9 @@ var OpKinds = []OpKind{
 // records are about no artifact; and an asset's records are filed under the
 // asset's own name ([historyOp]), so the history tells an asset's create from
 // the artifact's. A folder's records and the brand's are filed in their own
-// histories ([FolderHistoryOps], [BrandHistoryOps]). An artifact's move is
+// histories ([FolderHistoryOps], [BrandHistoryOps]), and a comment thread's
+// records write no history row at all: the thread's own rows are what happened
+// to it, and its writer reads its verdict back from them. An artifact's move is
 // filed here, naming folder ids only, never a folder's name, so the row tells
 // a reader of the artifact nothing about a folder they cannot see.
 var HistoryOps = []OpKind{

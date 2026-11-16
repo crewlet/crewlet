@@ -381,10 +381,17 @@ function OutsideTheChart({
     // available and a picker with nothing in it.
     parts.push(
       replacements.length === 0 ? (
-        <Callout key="datadog" variant="danger">
+        <Callout
+          key="datadog"
+          variant="danger"
+          action={
+            <ScreenLink to="integrations" standalone>
+              Open Integrations
+            </ScreenLink>
+          }
+        >
           {fallbackSeat.data.name} is the Datadog fallback and no other agent can take over. Add an
-          agent first, or disconnect Datadog.{" "}
-          <ScreenLink to="integrations">Open Integrations</ScreenLink>
+          agent first, or disconnect Datadog.
         </Callout>
       ) : (
         <ConfigField

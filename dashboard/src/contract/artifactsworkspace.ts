@@ -301,6 +301,18 @@ export const ARTIFACT_ANSWER_VERSION = "version";
  */
 export const RUNTIME_CONTRACT = "1.0.0";
 
+/** The most of a part's words a comment keeps, in bytes (`artifacts.MaxCommentQuoteBytes`). */
+export const ARTIFACT_COMMENT_QUOTE_MAX_BYTES = 1024;
+
+/** The largest picture a comment carries, in bytes (`artifacts.MaxCommentCropBytes`). */
+export const ARTIFACT_COMMENT_CROP_MAX_BYTES = 65536;
+
+/** The longest side of a comment's picture, in pixels (`artifacts.MaxCommentCropSide`). */
+export const ARTIFACT_COMMENT_CROP_MAX_SIDE = 800;
+
+/** The grammar of a comment anchor's name (`commentanchor.NamePattern`). */
+export const ARTIFACT_COMMENT_ANCHOR_NAME = "^[a-z0-9][a-z0-9._-]{0,63}$";
+
 /*
  * THE SLIDE SUBSET, as the renderer allows it (`lib/slides.ts`). The engine
  * refuses at publish what is outside it (`internal/artifacts/slideformat`);

@@ -10,7 +10,7 @@
 
 import { Button, Callout } from "@crewlethq/ui";
 import type { SettingWrite } from "~/lib/useSettingWrite.ts";
-import { warningWords } from "~/protocol/configAnswer.ts";
+import { brings, ConfigWarnings } from "~/components/ConfigWarnings.tsx";
 
 export function SettingWriteStatus({
   write,
@@ -39,34 +39,36 @@ export function SettingWriteStatus({
       {state.kind === "saving" && <span className="t-caption">Saving…</span>}
       {state.kind === "unchanged" && <span className="t-caption">{unchanged}</span>}
       {state.kind === "warned" && (
-        <Callout variant="warning" title="The engine accepts this, with a warning">
-          <ul className="ceiling-warnings">
-            {state.warnings.map((w) => (
-              <li key={`${w.path}:${w.message}`}>{warningWords(w)}</li>
-            ))}
-          </ul>
-          {answersWarning && (
-            <div className="row gap-2">
-              <Button size="small" variant="primary" onClick={write.confirm}>
-                Save anyway
-              </Button>
-              <Button size="small" variant="ghost" onClick={write.reset}>
-                Cancel
-              </Button>
-            </div>
-          )}
-        </Callout>
+        <ConfigWarnings
+          warnings={state.warnings}
+          title={brings}
+          action={
+            answersWarning && (
+              <>
+                <Button size="small" variant="primary" onClick={write.confirm}>
+                  Save anyway
+                </Button>
+                <Button size="small" variant="ghost" onClick={write.reset}>
+                  Cancel
+                </Button>
+              </>
+            )
+          }
+        />
       )}
       {state.kind === "refused" && (
-        <Callout variant="danger" title="Nothing was saved">
-          <span>{refused ?? state.message}</span>
-          {state.reload && (
-            <div className="row gap-2">
+        <Callout
+          variant="danger"
+          title="Nothing was saved"
+          action={
+            state.reload && (
               <Button size="small" variant="secondary" onClick={onReload}>
                 Reload
               </Button>
-            </div>
-          )}
+            )
+          }
+        >
+          {refused ?? state.message}
         </Callout>
       )}
     </div>

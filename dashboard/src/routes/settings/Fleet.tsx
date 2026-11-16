@@ -37,31 +37,23 @@ import {
   Card,
   EmptyState,
   EmptyValue,
+  groupNotices,
   InlineCode,
+  NoticeList,
+  peekRowActivation,
   Skeleton,
   StatCard,
   StatGroup,
-  Tag,
-  TableKeyCell,
-  TableNumberCell,
   TableDateCell,
   TableEntityCell,
+  TableKeyCell,
+  TableNumberCell,
   TableStatusCell,
   TableTagsCell,
-  peekRowActivation,
+  TableTextCell,
+  Tag,
 } from "@crewlethq/ui";
-import {
-  ServerGlyph,
-  UsersGlyph,
-  KeyGlyph,
-  CpuGlyph,
-  UserGlyph,
-  PowerGlyph,
-  TargetGlyph,
-  SlidersVerticalGlyph,
-  TriangleAlertGlyph,
-  DatabaseGlyph,
-} from "@crewlethq/icons/glyphs";
+import { ServerGlyph, TriangleAlertGlyph, DatabaseGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { RelatedRow } from "~/app/frame/RelatedRow.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -76,7 +68,7 @@ import { dutyName } from "~/lib/duties.ts";
 import { usePublishFleet } from "~/app/Shell.tsx";
 import { useEngineHealth } from "~/lib/store-hooks.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
-import { fmtCount, fmtDuration } from "~/lib/format.ts";
+import { fmtCount, fmtDuration, plural } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { configStanding, offRevision, type ConfigStanding } from "~/lib/configStanding.ts";
 import { standingCaption, standingWords } from "./standingWords.ts";
@@ -104,6 +96,36 @@ const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> 
   error: "danger",
 };
 
+/** A node's config status and posture in words; a word a newer engine adds is drawn as it came. */
+const CONFIG_WORDS: Record<string, string> = {
+  ok: "Applied",
+  degraded: "Degraded",
+  error: "Failed",
+};
+const POSTURE_WORDS: Record<string, string> = {
+  serve: "Serving",
+  wait: "Waiting",
+  shed: "Shedding",
+  isolated: "Isolated",
+  stuck: "Stuck",
+};
+
+/** The roles with no seat running, unplaced ones included, or that every role has a home. */
+export function homelessWords(answer: Pick<FleetAnswer, "unmanned_roles" | "unplaceable">): string {
+  const homeless = new Set([
+    ...(answer.unmanned_roles ?? []),
+    ...(answer.unplaceable ?? []).map((u) => u.handle),
+  ]).size;
+  return homeless ? `${plural(homeless, "role")} with no seat running` : "every role has a home";
+}
+
+/** A config status: the resting one as a word, any other as a toned tag. */
+function ConfigStatus({ status }: { status: string | undefined }) {
+  const words = status ? (CONFIG_WORDS[status] ?? status) : "Unknown";
+  if (status === "ok") return <TableTextCell>{words}</TableTextCell>;
+  return <Tag variant={STATUS_TONE[status ?? ""] ?? "neutral"}>{words}</Tag>;
+}
+
 /** Seconds on the wire, milliseconds in a [TableNumberCell], converted once. */
 function leaseMs(seconds?: number | null): number | null {
   return seconds == null ? null : seconds * 1000;
@@ -130,9 +152,9 @@ export function BrokerCell({ broker }: { broker: string }) {
  * the word its control plane chose, or a dash that says which of two absences
  * it is.
  *
- * A TAG RATHER THAN A `TableStatusCell`: a posture is a word the node itself
- * chooses (`serve`, `wait`, `shed`, `isolated`, `stuck`, whatever it reports),
- * and a glyph would claim a binary the posture does not have.
+ * A WORD OR A TAG RATHER THAN A `TableStatusCell`: a posture is the node's own
+ * choice (`serve`, `wait`, `shed`, `isolated`, `stuck`), and a glyph would claim a
+ * binary it does not have. Serving is the resting word; any other is a warning tag.
  *
  * TWO ABSENCES, told apart by `in_flight`, which every published status
  * carries. A node that could not read its control plane on a heartbeat still
@@ -149,8 +171,9 @@ export function BrokerCell({ broker }: { broker: string }) {
  * for both.
  */
 function PostureCell({ node }: { node: FleetNode }) {
+  if (node.posture === "serve") return <TableTextCell>{POSTURE_WORDS.serve}</TableTextCell>;
   if (node.posture) {
-    return <Tag variant={node.posture === "serve" ? "success" : "warning"}>{node.posture}</Tag>;
+    return <Tag variant="warning">{POSTURE_WORDS[node.posture] ?? node.posture}</Tag>;
   }
   const absence =
     node.in_flight != null
@@ -195,13 +218,6 @@ function FleetScreen() {
 
   return (
     <>
-      {/* NO COUNT OF NODES HERE: the Live nodes tile below says it, and the
-          bar's chip repeated the same figure an inch above it. Where the
-          reader is, is a fact no tile carries. */}
-      <PageActions>
-        {data?.this_node && <Tag variant="brand">you are on {data.this_node}</Tag>}
-      </PageActions>
-
       {/* TWO DIFFERENT FAILURES. A poll that failed AFTER one succeeded
           leaves a reading on screen, and the banner says it is old. One that
           failed with no reading ever taken has nothing to be the last of: it
@@ -218,24 +234,13 @@ function FleetScreen() {
       {data && (
         <Card padding="none">
           <StatGroup columns={4}>
+            <StatCard label="Live nodes" value={nodes.length} sub="holding an unexpired lease" />
             <StatCard
-              icon={<ServerGlyph size="xs" />}
-              label="Live nodes"
-              value={nodes.length}
-              sub="holding an unexpired lease"
-            />
-            <StatCard
-              icon={<UsersGlyph size="xs" />}
               label="Seats placed"
               value={data?.seats?.length ?? 0}
-              sub={
-                data?.unmanned_roles?.length
-                  ? `${data.unmanned_roles.length} role(s) with no seat running`
-                  : "every role has a home"
-              }
+              sub={homelessWords(data)}
             />
             <StatCard
-              icon={<TriangleAlertGlyph size="xs" />}
               label="Unplaceable"
               value={data?.unplaceable?.length ?? 0}
               sub={
@@ -245,7 +250,6 @@ function FleetScreen() {
               }
             />
             <StatCard
-              icon={<SlidersVerticalGlyph size="xs" />}
               label="Behind on config"
               value={behind.length}
               sub={data?.activation ? `target epoch ${data.activation.epoch}` : "no target epoch"}
@@ -269,7 +273,7 @@ function FleetScreen() {
           }
         >
           <Card padding="none">
-            <Card.Header icon={<ServerGlyph size="sm" />} count={nodes.length}>
+            <Card.Header count={nodes.length}>
               <Card.Title>Nodes</Card.Title>
             </Card.Header>
             <DataGrid<FleetNode>
@@ -406,9 +410,7 @@ function FleetScreen() {
                     const caption = standingCaption(standing);
                     return (
                       <span className="row gap-1">
-                        <Tag variant={STATUS_TONE[n.config_status ?? ""] ?? "neutral"}>
-                          {n.config_status || "unknown"}
-                        </Tag>
+                        <ConfigStatus status={n.config_status} />
                         {caption && (
                           <span className="t-caption" title={standingTitle(n, data)}>
                             {caption}
@@ -479,7 +481,7 @@ function FleetScreen() {
 
           <div className="grid grid-auto-lg">
             <Card padding="none">
-              <Card.Header icon={<UsersGlyph size="sm" />} count={data?.seats?.length ?? 0}>
+              <Card.Header count={data?.seats?.length ?? 0}>
                 <Card.Title>Seat placement</Card.Title>
               </Card.Header>
               <DataGrid<FleetSeatLease>
@@ -487,7 +489,11 @@ function FleetScreen() {
                 rows={data?.seats ?? []}
                 rowKey={(s) => s.handle}
                 defaultSort="handle"
-                empty={{ title: "No seats are leased" }}
+                empty={{
+                  size: "inline",
+                  title: "No seats are leased",
+                  hint: "A seat shows here once a node takes it.",
+                }}
                 rowHref={(s) => peekHref({ kind: "seat", id: s.handle })}
                 onRowActivate={peekRowActivation<FleetSeatLease>((s) =>
                   openPeek({ kind: "seat", id: s.handle }),
@@ -549,7 +555,7 @@ function FleetScreen() {
             </Card>
 
             <Card padding="none">
-              <Card.Header icon={<CpuGlyph size="sm" />} count={data?.duties?.length ?? 0}>
+              <Card.Header count={data?.duties?.length ?? 0}>
                 <Card.Title>Company-wide duties</Card.Title>
               </Card.Header>
               <DataGrid<FleetDutyLease>
@@ -558,6 +564,7 @@ function FleetScreen() {
                 rowKey={(d) => d.duty}
                 defaultSort="duty"
                 empty={{
+                  size: "inline",
                   title: "No singleton duties are leased",
                   hint: "Duties appear once a node takes them.",
                 }}
@@ -616,25 +623,32 @@ function FleetScreen() {
               <Card.Header icon={<TriangleAlertGlyph size="sm" />}>
                 <Card.Title>Not running anywhere</Card.Title>
               </Card.Header>
-              <div className="col gap-2">
-                {data?.unmanned_roles?.map((r) => (
-                  <Callout key={r} variant="warning" icon={<UserGlyph size="md" />}>
-                    <span>
-                      <strong>{r}</strong> isn’t running on any node. Its work is waiting.
-                    </span>
-                  </Callout>
-                ))}
-                {data?.unplaceable?.map((u) => (
-                  <Callout key={u.handle} variant="warning" icon={<TargetGlyph size="md" />}>
-                    <span>
-                      <a className="t-link" href={href(["company", "org", "seats", u.handle])}>
-                        <strong>{u.handle}</strong>
-                      </a>{" "}
-                      can’t be placed: {unplaceableWords(u.placement)}
-                    </span>
-                  </Callout>
-                ))}
-              </div>
+              <Card.Body padding="md">
+                <NoticeList
+                  notices={groupNotices(
+                    [
+                      ...(data?.unmanned_roles ?? []).map((r) => ({
+                        kind: "unmanned",
+                        subject: r,
+                        title: "Isn’t running on any node",
+                        detail: "Its work waits until a node runs it.",
+                      })),
+                      ...(data?.unplaceable ?? []).map((u) => ({
+                        kind: `unplaceable ${u.handle}`,
+                        subject: u.handle,
+                        title: "Can’t be placed",
+                        detail: <>Because {unplaceableWords(u.placement)}</>,
+                        action: (
+                          <a className="t-link" href={href(["company", "org", "seats", u.handle])}>
+                            Open the seat
+                          </a>
+                        ),
+                      })),
+                    ],
+                    { count: (s) => plural(s.length, "role") },
+                  )}
+                />
+              </Card.Body>
             </Card>
           )}
         </QueryState>
@@ -655,7 +669,7 @@ function FleetScreen() {
           path={["settings", "backups"]}
           icon={<DatabaseGlyph size="sm" />}
           title="Backups & retention"
-          description="Every log's position on every node, its trim and its evictions."
+          description="Where each node's logs stand, and how long they are kept."
         />
       )}
     </>
@@ -758,7 +772,7 @@ export function NodeScreen({ id }: { id: string }) {
               />
               <NodePanels node={node} answer={data} now={now} />
               <Card>
-                <Card.Header icon={<SlidersVerticalGlyph size="sm" />}>
+                <Card.Header>
                   <Card.Title>Placement</Card.Title>
                 </Card.Header>
                 <div className="col gap-2">
@@ -1072,7 +1086,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
           which revision it is doing it on. The second half is the question an
           operator came for; the first is the one they check next. */}
       <Card>
-        <Card.Header icon={<PowerGlyph size="sm" />}>
+        <Card.Header>
           <Card.Title>Running</Card.Title>
         </Card.Header>
         <div className="col gap-2">
@@ -1088,9 +1102,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
               title={standingTitle(node, answer)}
               tone={uiletTone(STANDING_TONE[standing.kind])}
             />
-            <Tag variant={STATUS_TONE[node.config_status ?? ""] ?? "neutral"}>
-              {node.config_status || "unknown"}
-            </Tag>
+            <ConfigStatus status={node.config_status} />
             <span className="spacer" />
             <span className="t-caption">reported</span>
             <TableDateCell value={node.config_reported_at} now={now} />
@@ -1120,11 +1132,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
       </Card>
 
       <Card padding="none">
-        <Card.Header
-          icon={<KeyGlyph size="sm" />}
-          count={seats.length}
-          subtitle="its own, and one per seat it holds"
-        >
+        <Card.Header count={seats.length} subtitle="its own, and one per seat it holds">
           <Card.Title>Leases</Card.Title>
         </Card.Header>
         <div className="row wrap gap-2" style={{ padding: "var(--spacing-3)" }}>
@@ -1184,7 +1192,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
       </Card>
 
       <Card padding="none">
-        <Card.Header icon={<CpuGlyph size="sm" />} count={duties.length}>
+        <Card.Header count={duties.length}>
           <Card.Title>Duties</Card.Title>
         </Card.Header>
         <DataGrid<FleetDutyLease>

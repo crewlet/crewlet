@@ -129,10 +129,10 @@ export function Branches({ repo }: { repo: CodeRepoDetail }) {
               ),
             },
             {
+              // A VALUE, not a row action, so a phone names it on a line of its own.
               key: "head",
               header: "Head",
               shrink: true,
-              action: true,
               cell: (r) => (r.oid ? <ShaChip oid={r.oid} /> : null),
             },
             {

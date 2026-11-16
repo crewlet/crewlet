@@ -46,6 +46,19 @@ func Sanitize(path, essence string, data []byte) ([]byte, error) {
 	return a.out, nil
 }
 
+// Still reads a PNG or a WebP that must be one still image, chunk by chunk and
+// never into pixels: its stored form (metadata dropped) and its size in pixels.
+// A comment's crop is read by it too, so one reader judges each raster kept.
+func Still(essence string, data []byte) ([]byte, int, int, error) {
+	switch essence {
+	case "image/png":
+		return sanitizePNG(data)
+	case "image/webp":
+		return sanitizeWebP(data)
+	}
+	return nil, 0, 0, fmt.Errorf("%s is not a PNG or a WebP", essence)
+}
+
 // inspect checks one file against the rule of its essence.
 func inspect(path, essence string, data []byte) (asset, []Finding) {
 	refuse := func(format string, args ...any) (asset, []Finding) {

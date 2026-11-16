@@ -9,8 +9,9 @@ import (
 	"strings"
 )
 
-// GitPrefix is where a person's git client reaches Gitlet, and
-// CodePrefix Gitlet's REST reads.
+// GitPrefix is where a person's git client reaches Gitlet, and where a person
+// downloads a file or a commit's files beside it; CodePrefix is Gitlet's REST
+// reads.
 //
 // Both are GUARDED, as every route the exemption list ([Unguarded]) does not
 // name is, and neither is on the public listener ([Public] names neither).
@@ -70,14 +71,24 @@ const (
 	// upload-pack RPC (POST git-upload-pack).
 	GitFetch GitOp = "fetch"
 	// GitPush is the receive-pack advertisement and RPC, and EVERY OTHER
-	// request under [GitPrefix] or [BoxGitPrefix].
+	// request under [GitPrefix] or [BoxGitPrefix] but a download.
 	GitPush GitOp = "push"
+	// GitDownload reads a file's bytes or a commit's ZIP beside git: a GET or
+	// HEAD of a download tail, made by a browser or a script, never git.
+	GitDownload GitOp = "download"
+)
+
+// The two download tails, after a repository's segment under [GitPrefix]:
+// the host's route patterns are spelled from them.
+const (
+	DownloadRawTail     = "-/raw"
+	DownloadArchiveTail = "-/archive.zip"
 )
 
 // gitOps is the closed set, in declaration order.
-var gitOps = []GitOp{GitNone, GitFetch, GitPush}
+var gitOps = []GitOp{GitNone, GitFetch, GitPush, GitDownload}
 
-// Valid reports whether o is one of the three.
+// Valid reports whether o is one of the four.
 func (o GitOp) Valid() bool { return slices.Contains(gitOps, o) }
 
 // git's names for its two services, as they appear in an advertisement's
@@ -124,12 +135,17 @@ const serviceKey = "service"
 //
 // No service at all is a fetch: it is the dumb protocol's request for a
 // read-only file, which Gitlet answers by refusing it.
+//
+// A DOWNLOAD is a GET or HEAD of exactly one of the two download tails, its
+// query never read; any other method or path near them stays a push.
 func GitAccess(r *http.Request) GitOp {
 	tail, under := gitTail(r)
 	if !under {
 		return GitNone
 	}
 	switch {
+	case downloads(r, tail):
+		return GitDownload
 	case advertises(r, tail):
 		query, err := url.ParseQuery(r.URL.RawQuery)
 		if err != nil {
@@ -189,6 +205,14 @@ func gitTail(r *http.Request) (tail string, under bool) {
 // same question without the body. A POST to it is nothing git sends.
 func advertises(r *http.Request, tail string) bool {
 	return tail == "info/refs" && (r.Method == http.MethodGet || r.Method == http.MethodHead)
+}
+
+// downloads reports whether a request whose path ends in tail is a download:
+// a GET or HEAD of exactly one of the two download tails, its path spelled
+// with no escape, so an encoded slash cannot make a tail of a repository's name.
+func downloads(r *http.Request, tail string) bool {
+	return (tail == DownloadRawTail || tail == DownloadArchiveTail) && r.URL.RawPath == "" &&
+		(r.Method == http.MethodGet || r.Method == http.MethodHead)
 }
 
 // GitText answers a git client in the one form it prints: text/plain, the
@@ -271,6 +295,16 @@ func GitUnavailable(w http.ResponseWriter, retryAfterSeconds int, sentence strin
 	}
 	GitText(w, http.StatusServiceUnavailable, sentence)
 }
+
+// DownloadUnauthorized is a download's 401: no challenge, since a browser
+// answers Basic with a password prompt and keeps what is typed into it.
+func DownloadUnauthorized(w http.ResponseWriter) {
+	GitText(w, http.StatusUnauthorized, downloadAuthSentence)
+}
+
+// downloadAuthSentence is what a download presenting no credential is told.
+const downloadAuthSentence = "authentication required: sign in to Crewlet in this browser, or send a " +
+	"Crewlet API token with the request, as a bearer or as a Basic password"
 
 // gitIdentityUnavailable is the guard's 503 on a git route: this node could not
 // tell who the credential is, which waiting clears — the same answer

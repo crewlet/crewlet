@@ -1,9 +1,13 @@
 package toolsessiontest
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"slices"
 	"strconv"
 	"strings"
@@ -13,6 +17,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 )
 
 // The surface every case runs on.
@@ -39,7 +45,23 @@ const (
 	// launchTool's work outlives its call: it asks the run to park.
 	launchTool   = "launch"
 	launchAnswer = "launched"
+
+	// pictureTool answers its text and one PNG ([picture]).
+	pictureTool   = "picture"
+	pictureAnswer = "the crop the suite drew of its own chart"
 )
+
+// picture is the PNG pictureTool answers: a small one the standard library
+// encodes, so its bytes are what any reader reads as an image.
+var picture = func() []byte {
+	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	img.Set(2, 2, color.RGBA{G: 180, A: 255})
+	var b bytes.Buffer
+	if err := png.Encode(&b, img); err != nil {
+		panic(err)
+	}
+	return b.Bytes()
+}()
 
 // answerWait bounds every wait for something a dispatcher owes the case — an
 // answer, a record, a tool beginning. Far past anything a passing case takes,
@@ -120,8 +142,10 @@ func newFixture(t *testing.T, factory Factory) *fixture {
 				f.launches.Add(1)
 				return launchAnswer
 			}},
+			{Name: pictureTool, Run: func(context.Context, ToolCall) string { return pictureAnswer },
+				Images: []crewletmcp.Image{{MIMEType: crewletmcp.ImagePNG, Data: picture}}},
 		},
-		Offered: []string{readTool, writeTool, brokenTool, activateTool, launchTool},
+		Offered: []string{readTool, writeTool, brokenTool, activateTool, launchTool, pictureTool},
 		Fence: func() error {
 			if err := f.fence.Load(); err != nil {
 				return *err

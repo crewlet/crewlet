@@ -19,6 +19,7 @@ import {
   Callout,
   Disclosure,
   FormField,
+  NoticeList,
   Select,
   Spinner,
   StepList,
@@ -110,11 +111,7 @@ export function TestResult({ answer }: { answer: McpCheckAnswer }) {
             answer.warnings.length === 1 ? "One warning" : `${answer.warnings.length} warnings`
           }
         >
-          <ul className="mcp-list">
-            {answer.warnings.map((w) => (
-              <li key={w}>{w}</li>
-            ))}
-          </ul>
+          <NoticeList notices={answer.warnings.map((w) => ({ key: w, title: w }))} />
         </Callout>
       ) : null}
       {answered.map((n) => (

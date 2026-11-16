@@ -189,6 +189,9 @@ const (
 	// GateArtifactOwner names the artifact's owner ([authz.ClassShared], least
 	// role owner, no app).
 	GateArtifactOwner Gate = "artifact_owner"
+	// GateArtifactCommenter names anybody the artifact is shared with as a
+	// commenter or more ([authz.ClassShared], least role commenter, no app).
+	GateArtifactCommenter Gate = "artifact_commenter"
 	// GateHealthTools names an agent whose role carries the health grant,
 	// `role.health_tools` ([authz.ClassAdmin] with [authz.SeatGrantHealth]):
 	// the grant alone decides an agent seat, and no app or relation does.
@@ -205,11 +208,12 @@ const (
 	GateDelegate Gate = "delegated_decisions"
 )
 
-// Gates are the seventeen, in declaration order.
+// Gates are the eighteen, in declaration order.
 var Gates = []Gate{
 	GateEverybody, GateSelf, GateWorklet, GateWorkletAsked, GateProjectLead,
 	GateDoclet, GateChatlet, GateArtifacts, GateGitlet, GateAtlas, GateArtifactViewer,
-	GateArtifactEditor, GateArtifactOwner, GateHealthTools, GateSSHRead, GateSSHOperate, GateDelegate,
+	GateArtifactEditor, GateArtifactOwner, GateArtifactCommenter, GateHealthTools, GateSSHRead,
+	GateSSHOperate, GateDelegate,
 }
 
 // Valid reports whether g is a gate this build names.
@@ -296,6 +300,11 @@ var filed = []struct {
 	{UploadArtifactAssetTool, GroupArtifacts, GateArtifactEditor, reachesNoVendor},
 	{CreateArtifactFolderTool, GroupArtifacts, GateArtifacts, reachesNoVendor},
 	{MoveArtifactTool, GroupArtifacts, GateArtifactEditor, reachesNoVendor},
+	{ListArtifactCommentsTool, GroupArtifacts, GateArtifactViewer, reachesNoVendor},
+	{CommentOnArtifactTool, GroupArtifacts, GateArtifactCommenter, reachesNoVendor},
+	{ResolveArtifactCommentTool, GroupArtifacts, GateArtifactCommenter, reachesNoVendor},
+	{EditArtifactCommentTool, GroupArtifacts, GateArtifactCommenter, reachesNoVendor},
+	{RemoveArtifactCommentTool, GroupArtifacts, GateArtifactCommenter, reachesNoVendor},
 	{WriteArtifactDataTool, GroupArtifacts, GateArtifactViewer, reachesNoVendor},
 	{SetArtifactSchemaTool, GroupArtifacts, GateArtifactEditor, reachesNoVendor},
 

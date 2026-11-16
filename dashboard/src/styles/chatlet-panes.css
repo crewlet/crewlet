@@ -661,8 +661,8 @@
   background: var(--color-surface-background);
 }
 
-/* The list's own tools, on the find field's start line: the Unreads switch,
-   then Mark all as read and New message at the end. */
+/* The list's own tools, on the find field's start line: the Unread filter,
+   then Mark all read and New message at the end. */
 .chat-dms-head {
   display: flex;
   align-items: center;
