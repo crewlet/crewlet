@@ -67,7 +67,7 @@ func seatID(t *testing.T, c *Company, handle string) uuid.UUID {
 	return id
 }
 
-// AN MCP SERVER'S CONDITION IS THE FLEET'S, JOINED FROM EVERY NODE'S HEARTBEAT:
+// AN MCP SERVER'S CONDITION IS THE FLEET'S, JOINED FROM EVERY NODE'S STATUS RECORD:
 // its instances summed over the nodes; the instance down longest anywhere, with
 // its node, its agent by handle, its class and what it said; the wait held
 // longest likewise; and its refused names once across the fleet, counted as the
@@ -76,13 +76,13 @@ func seatID(t *testing.T, c *Company, handle string) uuid.UUID {
 //
 // Mutation: keep one node's outage rather than the earliest, name the agent by
 // its id, sum the refusal counts, or judge a server turned off, and this fails.
-func TestAnMCPServersConditionIsTheFleetsHeartbeats(t *testing.T) {
+func TestAnMCPServersConditionIsTheFleetsStatusRecords(t *testing.T) {
 	t.Parallel()
 	c := mcpAlarmFixture(t)
 	backend, pm := seatID(t, c, "backend-dev"), seatID(t, c, "pm")
 	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 	early, late := now.Add(-time.Hour), now.Add(-time.Minute)
-	statuses := map[string]coord.NodeStatus{
+	statuses := map[string]coord.NodeStatusRecord{
 		"node-a": {MCP: []coord.MCPServerStatus{
 			{Server: "archive", Shared: true, Failed: 1, DownSince: early, Error: "gone"},
 			{Server: "github", Started: 1, Failed: 1, DownSince: early, ErrorSeat: backend,
@@ -159,28 +159,47 @@ func (f *flakyLeases) ListLive(ctx context.Context, class coord.Class) ([]coord.
 	return f.Backend.ListLive(ctx, class)
 }
 
+// flakyRecords is a status record store whose listing fails while fail is set.
+type flakyRecords struct {
+	innerFleet
+	fail atomic.Bool
+}
+
+func (f *flakyRecords) NodeStatusRecords(ctx context.Context) ([]coord.NodeStatusRecord, error) {
+	if f.fail.Load() {
+		return nil, errors.New("the coordination store did not answer")
+	}
+	return f.innerFleet.NodeStatusRecords(ctx)
+}
+
 // A FAILED LEASE READ CARRIES THE LAST GOOD ONE for the MCP servers too: a
 // blip must not read as every server serving, which cleared every standing
 // outage on the blip and raised it again a beat later, two log lines per server
-// per blip and a health count that flickered.
+// per blip and a health count that flickered. And so does a failed read of the
+// status records the leases are joined to, for the same reason.
 //
-// Mutation: answer an unreadable lease table as an empty fleet, and the outage
-// is lost on the blip.
+// Mutation: answer an unreadable lease table, or unreadable records, as an
+// empty fleet, and the outage is lost on the blip.
 func TestAFailedLeaseReadKeepsTheMCPConditions(t *testing.T) {
 	t.Parallel()
 	c := mcpAlarmFixture(t)
 	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 	leases := &flakyLeases{Backend: coordmemory.New()}
-	status := coord.NodeStatus{MCP: []coord.MCPServerStatus{
-		{Server: "docs", Shared: true, Failed: 1, DownSince: now.Add(-time.Hour), Error: "exit status 1"},
-	}}
-	if _, _, err := leases.TryAcquire(t.Context(), coord.NodeResource("node-a"), coord.AcquireOptions{
-		Owner: "node-a:1", TTL: time.Minute, Meta: map[string]any{coord.StatusKey: status.Meta()},
-	}); err != nil {
+	presence, _, err := leases.TryAcquire(t.Context(), coord.NodeResource("node-a"), coord.AcquireOptions{
+		Owner: "node-a:1", TTL: time.Minute,
+	})
+	if err != nil || presence == nil {
+		t.Fatalf("claim node-a's presence: %v, %v", presence, err)
+	}
+	fleet := &flakyRecords{innerFleet: coordmemory.NewFleet()}
+	if err := fleet.PutNodeStatus(t.Context(), coord.NodeStatusRecord{Node: "node-a", Epoch: presence.Epoch,
+		MCP: []coord.MCPServerStatus{
+			{Server: "docs", Shared: true, Failed: 1, DownSince: now.Add(-time.Hour), Error: "exit status 1"},
+		}}); err != nil {
 		t.Fatal(err)
 	}
 	e := epochEngine(c)
-	e.backends, e.testNode = &Backends{Coord: leases}, "node-a"
+	e.backends, e.testNode = &Backends{Coord: leases, Fleet: fleet}, "node-a"
 
 	var first, second statelog.Reading
 	e.entriesReading(t.Context(), now, &first)
@@ -194,5 +213,14 @@ func TestAFailedLeaseReadKeepsTheMCPConditions(t *testing.T) {
 		!second.MCPServers[0].DownSince.Equal(first.MCPServers[0].DownSince) {
 		t.Errorf("after a failed read the servers are %+v, want the last good %+v", second.MCPServers,
 			first.MCPServers)
+	}
+	leases.fail.Store(false)
+	fleet.fail.Store(true)
+	var third statelog.Reading
+	e.entriesReading(t.Context(), now.Add(2*statelog.AlarmInterval), &third)
+	if len(third.MCPServers) != 2 || third.MCPServers[0].Failed != 1 ||
+		!third.MCPServers[0].DownSince.Equal(first.MCPServers[0].DownSince) {
+		t.Errorf("after a failed read of the status records the servers are %+v, want the last good %+v",
+			third.MCPServers, first.MCPServers)
 	}
 }

@@ -381,6 +381,7 @@ func Run(t *testing.T, newBackend func(t *testing.T) coord.Backend) {
 		cases []testCase
 	}{
 		{"lease", leaseCases},
+		{"lease_meta", leaseMetaCases},
 		{"read", readCases},
 		{"protocol", protocolCases},
 		{"tristate", tristateCases},

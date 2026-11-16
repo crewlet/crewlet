@@ -54,10 +54,10 @@ func agentsSources(t *testing.T, doc string, statuses map[string][]coord.MCPServ
 	}
 	backend := coordmemory.New()
 	for _, node := range []string{"node-a", "node-b"} {
-		presentNode(t, backend, node, &coord.NodeStatus{MCP: statuses[node]})
+		presentNode(t, backend, node, &coord.NodeStatusRecord{MCP: statuses[node]})
 	}
 	return queries.Sources{
-		Coord: backend, Company: companySource(t, cfg),
+		Coord: backend, NodeStatuses: recordsOf(backend), Company: companySource(t, cfg),
 		Builtins:    catalogueOffer,
 		MCPListings: fakeListings{listings: listings(epochs(t, backend))},
 	}

@@ -156,7 +156,7 @@ func TestAMembersReadingNamesNoLaunchLineHeaderVariableAccountOrCallDetail(t *te
 	}
 	down := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
 	backend := coordmemory.New()
-	presentNode(t, backend, "node-a", &coord.NodeStatus{MCP: []coord.MCPServerStatus{
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{MCP: []coord.MCPServerStatus{
 		{Server: "github", Started: 1, Failed: 1, Waiting: 1, Tools: 1, ErrorSeat: swe, WaitSeat: swe,
 			Error:      "exec: github-mcp-server not found under /opt/launch-sentinel",
 			ErrorClass: string(mcp.FailCommandNotFound), DownSince: down, Restarts: 2,
@@ -165,7 +165,7 @@ func TestAMembersReadingNamesNoLaunchLineHeaderVariableAccountOrCallDetail(t *te
 			ErrorClass: string(mcp.FailCredentialRejected), DownSince: down},
 	}})
 	surface, _ := configSurface(t, memberCompany)
-	s := queries.Sources{Coord: backend, Company: companySource(t, cfg), Config: surface,
+	s := queries.Sources{Coord: backend, NodeStatuses: recordsOf(backend), Company: companySource(t, cfg), Config: surface,
 		Builtins: catalogueOffer,
 		MCPListings: fakeListings{listings: []coord.MCPListing{{Server: "github", Node: "node-a",
 			Epoch: epochs(t, backend)["node-a"], At: down, Instances: 1,

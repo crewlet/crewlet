@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -601,10 +602,72 @@ func TestANodeThatStopsRemovesItsOwnListings(t *testing.T) {
 	if held, _ := fleet.ListMCPListings(ctx); len(held) != 1 {
 		t.Fatalf("the fleet holds %+v, want node-a's listing", held)
 	}
-	e.stopMCPListings(ctx)
+	e.stopMCPListings()
+	if held, _ := fleet.ListMCPListings(ctx); len(held) != 1 {
+		t.Fatalf("stopping the publisher left %+v, want its listing until the removal", held)
+	}
+	e.removeMCPListings(ctx)
 	if held, _ := fleet.ListMCPListings(ctx); len(held) != 0 {
 		t.Errorf("a stopped node left %+v", held)
 	}
+}
+
+// deadlinedRemovals records the deadline each listing removal was handed: the
+// zero instant for none.
+type deadlinedRemovals struct {
+	innerFleet
+	mu        sync.Mutex
+	deadlines []time.Time
+}
+
+func (d *deadlinedRemovals) DeleteMCPListing(ctx context.Context, server, node string, version uint64) (bool, error) {
+	deadline, _ := ctx.Deadline()
+	d.mu.Lock()
+	d.deadlines = append(d.deadlines, deadline)
+	d.mu.Unlock()
+	return d.innerFleet.DeleteMCPListing(ctx, server, node, version)
+}
+
+// A STOPPING NODE'S LISTING REMOVAL IS A STEP OF THE STOP'S ONE ALLOWANCE.
+// Its fallback is the sweep, and nothing counts the listings once the presence
+// has gone, so running out of the allowance costs no more than not trying:
+// the removal is handed what the stop has left ([seat.StopStep]), never a
+// bound of its own beside it, which on an unreachable store was a reconcile
+// interval more for the stop to wait out. Read off the deadline the removal
+// was handed, against the instant the removal began, in a bubble: its clock
+// does not move while the case runs, so the arithmetic is exact.
+//
+// Mutation: give the removal a bound of its own, and its deadline is past the
+// stop's allowance.
+func TestAStopsListingRemovalSpendsTheStopsAllowance(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		ctx := t.Context()
+		fleet := &deadlinedRemovals{innerFleet: coordmemory.NewFleet()}
+		e := &Engine{backends: &Backends{Fleet: fleet, Coord: coordmemory.New()}, testNode: "node-a"}
+		e.startMCPListings(ctx)
+		e.writeMCPListings(ctx, "node-a", 3, map[string]nodeListing{
+			"github": fakeListing("github", "node-a", 3, "get_issue"),
+		})
+		e.stopMCPListings()
+		const allowance = time.Second
+		began := time.Now()
+		e.removeMCPListings(seat.WithStopBudget(ctx, seat.NewStopBudget(allowance)))
+		fleet.mu.Lock()
+		deadlines := slices.Clone(fleet.deadlines)
+		fleet.mu.Unlock()
+		if len(deadlines) != 1 {
+			t.Fatalf("the stop made %d listing removals, want node-a's one", len(deadlines))
+		}
+		if deadlines[0].IsZero() {
+			t.Fatalf("the listing removal was handed no deadline, want what is left of the stop's %v allowance",
+				allowance)
+		}
+		if handed := deadlines[0].Sub(began); handed > allowance {
+			t.Errorf("the listing removal was handed %v, want what is left of the stop's %v allowance",
+				handed, allowance)
+		}
+	})
 }
 
 // heldRemovals holds every listing removal until the case releases it, handing

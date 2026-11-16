@@ -31,7 +31,7 @@ func standIn(name, tool string, shared bool) string {
 		procgrouptest.GORACE, procgrouptest.StandInRaceOptions())
 }
 
-// A TOOL LOST TO ITS NAME IS ON THE HEARTBEAT, with why, on the row of the
+// A TOOL LOST TO ITS NAME IS ON THE STATUS RECORD, with why, on the row of the
 // server that lists it: refused where no model can be handed the name (a
 // character, the length) or a built-in holds it, and shadowed where another
 // server's tool of the name is offered in its place, on one bridge or against
@@ -41,7 +41,7 @@ func standIn(name, tool string, shared bool) string {
 //
 // Mutation: skip the surface in unfiled, report a same-server entry as a
 // shadow, or let settle drop the counts, and this is red.
-func TestAToolLostToItsNameReachesTheHeartbeat(t *testing.T) {
+func TestAToolLostToItsNameReachesTheStatusRecord(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	long := strings.Repeat("l", harnessprofile.ToolNameMax()+1)
@@ -89,7 +89,7 @@ roles:
 		row, ok := rows[server]
 		switch {
 		case !ok:
-			t.Errorf("%s: no heartbeat row", server)
+			t.Errorf("%s: no status record row", server)
 		case row.Started != 1 || row.Tools != tools:
 			t.Errorf("%s: started %d serving %d tools, want 1 serving %d: %+v", server, row.Started, row.Tools, tools, row)
 		case !slices.Equal(row.Refused, refused) || row.RefusedCount != len(refused):

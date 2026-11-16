@@ -197,7 +197,7 @@ A company can use all three: the cell is the entry's, so two entries on the same
 
 ### Whether a cell is ready
 
-Each node probes the cells `providers.sandbox` declares and publishes the answer on its heartbeat, so the Models page can say, per node, which cells can start a box now and disable the rest with the reason:
+Each node probes the cells `providers.sandbox` declares and publishes the answer on its [status record](coordination.md#its-status-record), so the Models page can say, per node, which cells can start a box now and disable the rest with the reason:
 
 | Cell | Ready when |
 |---|---|

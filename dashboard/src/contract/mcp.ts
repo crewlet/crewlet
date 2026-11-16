@@ -1,7 +1,7 @@
 /**
  * Settings › MCP & tools, as the engine answers it: `mcp_servers_status`
  * (what each MCP server is doing on each live node, read off every node's
- * presence heartbeat, beside what the configuration declares for it), one
+ * status record, beside what the configuration declares for it), one
  * server whole (`GET /mcp-servers/{name}`), its removal
  * (`DELETE /config/mcp-servers/{name}`) and its restart
  * (`POST /mcp-servers/{name}/retry`).
@@ -43,7 +43,7 @@ import type { DelegatedAct, HeldDelegation } from "./delegated.ts";
  * for a credential a provisioning pass mints for it and has not sealed yet,
  * which is not a failure: it starts once the credential is sealed.
  * `not_started`: every reporting node started nothing for it. `unreported`:
- * no live node's latest heartbeat carried the report.
+ * no live node's status record carried the report.
  */
 export type McpServerState =
   | "disabled"
@@ -55,12 +55,11 @@ export type McpServerState =
   | "not_started"
   | "unreported";
 
-/** One live node, and whether its latest heartbeat carried its MCP servers. */
+/** One live node, and whether its status record carried its MCP servers. */
 interface McpStatusNode {
   id: string;
-  /** False: the node's last heartbeat carried no status (its status hook
-   *  did not answer within its share of the beat), so its cells are unknown,
-   *  never zero. */
+  /** False: no status record of the node's counts (one not written yet at
+   *  its presence's epoch), so its cells are unknown, never zero. */
   reported: boolean;
 }
 

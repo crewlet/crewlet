@@ -1052,16 +1052,23 @@ func TestTheAdvisorListsASourceThatStoppedReading(t *testing.T) {
 	}
 }
 
-// fleetNodes is acme's two live nodes as their presence rows say them: a
-// broker member that names its address, and a second node.
+// fleetNodes is acme's two live nodes as their presence rows and status records
+// say them: a broker member that names its address, and a second node.
 type fleetNodes struct{}
 
 func (fleetNodes) ListLive(context.Context, coord.Class) ([]coord.Lease, error) {
 	return []coord.Lease{
-		{Resource: coord.ClassNode.Resource("node-a"), Meta: map[string]any{"broker": "member",
-			coord.InfraKey: coord.NodeInfra{Address: "10.0.0.4", ObjectsBackend: "nats"}.Meta()}},
-		{Resource: coord.ClassNode.Resource("node-b"), Meta: map[string]any{"broker": "leaf",
-			coord.InfraKey: coord.NodeInfra{Address: "203.0.113.9", ObjectsBackend: "nats"}.Meta()}},
+		{Resource: coord.ClassNode.Resource("node-a"), Epoch: 1, Meta: map[string]any{"broker": "member"}},
+		{Resource: coord.ClassNode.Resource("node-b"), Epoch: 1, Meta: map[string]any{"broker": "leaf"}},
+	}, nil
+}
+
+// NodeStatusRecords is what each of them says it runs on, on its status
+// record at its presence's epoch.
+func (fleetNodes) NodeStatusRecords(context.Context) ([]coord.NodeStatusRecord, error) {
+	return []coord.NodeStatusRecord{
+		{Node: "node-a", Epoch: 1, Infra: coord.NodeInfra{Address: "10.0.0.4", ObjectsBackend: "nats"}},
+		{Node: "node-b", Epoch: 1, Infra: coord.NodeInfra{Address: "203.0.113.9", ObjectsBackend: "nats"}},
 	}, nil
 }
 
@@ -1073,7 +1080,7 @@ func fleetSources(t *testing.T) queries.Sources {
 	records := deps.Records
 	deps.Records = func(ctx context.Context) gather.Sources {
 		src := records(ctx)
-		src.Nodes = fleetNodes{}
+		src.Nodes, src.NodeStatuses = fleetNodes{}, fleetNodes{}
 		return src
 	}
 	s.Atlas = &deps

@@ -254,9 +254,16 @@ type Secrets interface {
 }
 
 // Leases is the fleet's lease table, for this node's own report: which
-// entries sat out here before a credential replaced their sign-in.
+// entries sat out here before a credential replaced their sign-in. Its
+// presence is what a status record is counted against.
 type Leases interface {
 	ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error)
+}
+
+// Records is the fleet's node status records ([coord.NodeStatusRecords]), which
+// carry each node's model rows beside its presence.
+type Records interface {
+	NodeStatusRecords(ctx context.Context) ([]coord.NodeStatusRecord, error)
 }
 
 // Options wire the service. Every field is required: `crewlet run` builds
@@ -267,6 +274,7 @@ type Options struct {
 	Config  Config
 	Secrets Secrets
 	Leases  Leases
+	Records Records
 	// Audit is where each call's `model_acted` is published: this node's
 	// own queue, as the operator surface's.
 	Audit operator.AuditPublisher
@@ -287,6 +295,7 @@ type Service struct {
 	config  Config
 	secrets Secrets
 	leases  Leases
+	records Records
 	audit   operator.AuditPublisher
 	node    string
 	now     func() time.Time
@@ -304,6 +313,9 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("llmapi: Options.Secrets is required: a credential is sealed in the fleet's store")
 	case opts.Leases == nil:
 		return nil, errors.New("llmapi: Options.Leases is required: a credential write says which entries it cleared")
+	case opts.Records == nil:
+		return nil, errors.New("llmapi: Options.Records is required: a credential write reads this node's " +
+			"model rows off its status record")
 	case opts.Audit == nil:
 		return nil, errors.New("llmapi: Options.Audit is required: every model gesture is audited")
 	case opts.Node == "":
@@ -318,7 +330,7 @@ func New(opts Options) (*Service, error) {
 		guard = authz.ContextGuard(authz.NoChart{})
 	}
 	return &Service{engine: opts.Engine, config: opts.Config, secrets: opts.Secrets,
-		leases: opts.Leases, audit: opts.Audit, node: opts.Node, now: now, guard: guard}, nil
+		leases: opts.Leases, records: opts.Records, audit: opts.Audit, node: opts.Node, now: now, guard: guard}, nil
 }
 
 // Routes registers the surface on the API's mux, every route through

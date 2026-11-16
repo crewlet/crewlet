@@ -1,6 +1,7 @@
 package configplane
 
 import (
+	"slices"
 	"testing"
 	"time"
 )
@@ -124,8 +125,12 @@ func TestDecidePosture(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := DecidePosture(tc.view); got != tc.want {
+			got := DecidePosture(tc.view)
+			if got != tc.want {
 				t.Errorf("DecidePosture(%+v) = %s, want %s", tc.view, got, tc.want)
+			}
+			if !got.Valid() {
+				t.Errorf("DecidePosture(%+v) = %s, which Postures does not list", tc.view, got)
 			}
 		})
 	}
@@ -193,6 +198,7 @@ func TestLagIsConfirmedOnlyByAFailureOrByOutlastingTheGrace(t *testing.T) {
 // an isolated node is serving a rolled-back config correctly.
 func TestReadinessKeepsLaggingAndIsolatedNodesReady(t *testing.T) {
 	t.Parallel()
+	var seen []Posture
 	for _, tc := range []struct {
 		p     Posture
 		ready bool
@@ -203,11 +209,23 @@ func TestReadinessKeepsLaggingAndIsolatedNodesReady(t *testing.T) {
 		{PostureShed, false},
 		{PostureStuck, false},
 	} {
+		seen = append(seen, tc.p)
 		if got := tc.p.Ready(); got != tc.ready {
 			t.Errorf("%s.Ready() = %v, want %v", tc.p, got, tc.ready)
 		}
 		if got := tc.p.ServesTraffic(); got != tc.ready {
 			t.Errorf("%s.ServesTraffic() = %v, want %v", tc.p, got, tc.ready)
+		}
+	}
+	// Every posture a node can report answers the two questions, so the
+	// table above is the list: a posture added to one and not the other
+	// fails here. Text no node reports is not one.
+	if listed := Postures(); !slices.Equal(slices.Sorted(slices.Values(seen)), slices.Sorted(slices.Values(listed))) {
+		t.Errorf("the readiness table covers %v, and Postures lists %v", seen, listed)
+	}
+	for _, p := range []Posture{"", "Serve", "draining"} {
+		if p.Valid() {
+			t.Errorf("%q is Valid, and no node reports it", p)
 		}
 	}
 }
