@@ -564,6 +564,7 @@ func (c *Coordinator) keepRefused(ev types.ExecutorFinished, trigger *events.Eve
 // the row's hold and then re-fires it ([Coordinator.liftAndRefire]). trigger is
 // the completion's event, or nil for one rebuilt from the row
 // ([announcementOf]); seen is what was signalled before the hold was written,
+// or before a claim the hold refused was asked ([Coordinator.keepHeldClaim]),
 // nil where nothing was asked ([Coordinator.keepHeldRows]).
 //
 // # Why a hold on the row is kept in memory too
@@ -583,6 +584,12 @@ func (c *Coordinator) keepRefused(ev types.ExecutorFinished, trigger *events.Eve
 // NOT HELD HERE, and never re-fired before the instant: the row holds it, for
 // every node alike, and a re-fire before the hold lifts claims nothing, which
 // settles nothing and drops the keep.
+//
+// NOR LOST TO A CLAIM THE HOLD REFUSES: a delivery of the completion admitted
+// leaves the keep standing ([Coordinator.forgetAdmitted]), and a claim the hold
+// refuses where nothing is kept for the job, what was kept in the keep's place
+// re-fired into the hold, keeps it again from the row
+// ([Coordinator.keepHeldClaim]).
 //
 // A SIGNAL THAT LANDED BEFORE THE KEEP IS NOT LOST, as for a refused completion
 // ([Coordinator.keepRefused]): one whose listing of the runs ran before the
@@ -776,13 +783,96 @@ func (c *Coordinator) stillRefused(ev types.ExecutorFinished) (Refusal, bool) {
 	return Refusal{Condition: kept.cond, Reason: kept.reason, Until: kept.heldUntil}, true
 }
 
-// forgetRefused drops a kept completion of turnID's run, once a completion of
-// it has been admitted: from there the claim settles it, whichever announcement
-// carried it.
+// forgetRefused drops a kept completion of turnID's run: once a claim of its
+// completion has won, since from there the claim settles it, whichever
+// announcement carried it, and where this node no longer holds the seat, whose
+// next holder owes the completion. A delivery admitted drops what is kept for
+// its run before its claim is asked ([Coordinator.forgetAdmitted]).
 func (c *Coordinator) forgetRefused(turnID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.dropKeptLocked(turnID)
+}
+
+// forgetAdmitted drops what is kept for ev's run once a delivery of ev's
+// completion has been admitted, for the claim the delivery goes on to make,
+// which settles the job whichever announcement carried it
+// ([Coordinator.forgetRefused]).
+//
+// SAVE A KEEP FOR THE HOLD ON THE RUN'S ROW OF EV'S OWN JOB, short of the
+// hold's instant ([Coordinator.keepHeldOnRow]): the store refuses that claim
+// while the hold stands, so it settles nothing, and the keep is this node's
+// one carrier of the job while the waiter that drives the job's box reads a
+// silent store. Dropped here, it went with a delivery of the completion queued
+// behind the resume that held the job, which the claim refuses, and the job
+// waited, after its hold had lifted, for as long as that store's silence
+// lasted. A claim that wins drops it ([Coordinator.completeAdmitted]).
+func (c *Coordinator) forgetAdmitted(ev types.ExecutorFinished) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if kept, ok := c.refused[ev.TurnID]; ok && kept.ev.LaunchID == ev.LaunchID &&
+		c.now().Before(kept.heldOnRow) {
+		return
+	}
+	c.dropKeptLocked(ev.TurnID)
+}
+
+// keepHeldClaim keeps ev's completion where a claim of it under fence the store
+// refused finds nothing kept here for ev's job and the run's row still holding
+// the job running, under no newer lease: for the hold on the row where it holds
+// the job's resume ([PendingRun.Held]), as the resume that wrote the hold keeps
+// it ([Coordinator.keepHeldOnRow]), against seen, what was signalled before the
+// claim was asked; and for the backstop where it no longer does
+// ([Coordinator.keepAgain]). trigger is the completion's event.
+//
+// # Why a refused claim reads the row
+//
+// The keep made where the hold was written is this node's one carrier of the
+// job while the waiter that drives the job's box reads a silent store, and a
+// run has one keep: a refusal of the node's gate is kept in its place
+// ([Coordinator.keepRefused]), and a re-fire that settled nothing, the
+// signal's re-fire of a hold whose release this node still owed among them, is
+// kept again unheld, for the backstop ([Coordinator.keepAgain]). Each one's
+// re-fire met the hold with its claim, settled nothing and left nothing kept,
+// so the job waited, after its hold had lifted, for as long as that store's
+// silence lasted. So a claim refused with nothing kept for its job reads the
+// run's row, one read, and a hold on it keeps the completion for the hold's
+// instant and its signal again.
+//
+// A ROW STILL RUNNING THE JOB AND HELD NO LONGER keeps it for the backstop: the
+// claim met a hold since lifted, its condition's lift of every hold on it
+// landing between the claim and the read, with nothing kept for that signal to
+// re-fire; or a row that moved under the claim. Either way the claim settled
+// nothing and the row still owes the job its resume. So does A ROW THE STORE
+// DOES NOT ANSWER: nothing says it does not hold the job. A row that holds
+// another job, this one claimed or settled, or a newer lease's, is no longer
+// this delivery's: the claim refuses a row a newer lease owns, whose holder
+// recovers it.
+func (c *Coordinator) keepHeldClaim(ctx context.Context, ev types.ExecutorFinished, trigger *events.Event,
+	fence Fence, seen map[signal]uint64,
+) {
+	c.mu.Lock()
+	kept, ok := c.refused[ev.TurnID]
+	c.mu.Unlock()
+	if ok && kept.ev.LaunchID == ev.LaunchID {
+		return
+	}
+	run, found, err := c.pending.Get(ctx, ev.TurnID)
+	switch {
+	case err != nil:
+		log.InfoContext(ctx, "sandbox_completion_hold_unread",
+			"turn_id", ev.TurnID, "launch_id", ev.LaunchID, "agent", ev.AgentHandle, "error", err.Error(),
+			"detail", "a claim of the completion settled nothing and the run's row could not be read for a "+
+				"hold on it; this node keeps the completion for its backstop")
+		c.keepAgain(refusedCompletion{ev: ev, trigger: trigger})
+	case !found || run.LaunchID != ev.LaunchID || run.Status != StatusRunning || superseded(run, fence):
+		// NOT THIS DELIVERY'S ANY MORE: another job, this one claimed or
+		// settled, or a newer lease's.
+	case run.Held(c.now()):
+		c.keepHeldOnRow(run, trigger, Refusal{Condition: run.HeldFor, Until: run.HeldUntil}, seen)
+	default:
+		c.keepAgain(refusedCompletion{ev: ev, trigger: trigger})
+	}
 }
 
 // refireRefusedLocked re-fires every kept completion refused on cond, for the

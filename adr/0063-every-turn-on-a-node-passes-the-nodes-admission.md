@@ -61,16 +61,19 @@ the claim refuses a held row, so before the instant nothing carried the job
 but that host's waiter, and a re-fire then claimed nothing and dropped the
 keep; it is kept unheld, re-fired at the hold's instant and never sooner, and
 on its condition's signal once the lift of its hold has landed, and the seat's
-recovery keeps every held row it finds the same way. The timer of a completion
-held here still fires every five minutes before its instant, and there does
-only what an announcement of the job does (`sandbox.Coordinator.recheckHeld`):
-past the turn's deadline the run is ended, and before it the hold is kept and
-the next backstop armed, so a turn whose deadline passes while no waiter
-announces the job ends within five minutes of it, rather than at the hold's
-instant. The claim is at-most-once, so any of them arriving together resume
-the run once. A seat this
-node lets go of drops its kept completions, for the waiter that drives each
-run's box to announce to the seat's next holder.
+recovery keeps every held row it finds the same way. A delivery of it that the
+hold refuses leaves it kept, and a claim the hold refuses with nothing kept for
+the job, whatever was kept in its place having re-fired into the hold, keeps it
+again from the row (`sandbox.Coordinator.keepHeldClaim`). The timer of a
+completion held here still fires every five minutes before its instant, and
+there does only what an announcement of the job does
+(`sandbox.Coordinator.recheckHeld`): past the turn's deadline the run is ended,
+and before it the hold is kept and the next backstop armed, so a turn whose
+deadline passes while no waiter announces the job ends within five minutes of
+it, rather than at the hold's instant. The claim is at-most-once, so any of
+them arriving together resume the run once. A seat this node lets go of drops
+its kept completions, for the waiter that drives each run's box to announce to
+the seat's next holder.
 
 **An acknowledged refusal is an obligation the seat's holder owes, recorded on
 the run's row.** The acknowledgement stays: it spends none of the completion's

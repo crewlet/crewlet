@@ -1897,7 +1897,7 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.ExecutorFinished
 		return fmt.Errorf("%w: %w", ErrResumeUnavailable, err)
 	}
 	defer adm.release()
-	c.forgetRefused(ev.TurnID)
+	c.forgetAdmitted(ev)
 	err = c.completeAdmitted(adm, ev, trigger, fence)
 	if refusal, refused := waitingRefusal(err); refused {
 		// REVERTED ON A WAIT, and so the gate's refusal found a round
@@ -1931,6 +1931,9 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 	trigger *events.Event, fence Fence,
 ) error {
 	ctx := adm.ctx
+	// WHAT WAS SIGNALLED BEFORE THE CLAIM IS ASKED, for a claim the hold on
+	// the run's row refuses ([Coordinator.keepHeldClaim]).
+	seen := c.signalsSeen()
 	// NOTHING OF THE JOB IS CLAIMED WHILE THIS NODE GIVES BACK, OR OWES, THE
 	// RELEASE OF ITS LAST CLAIM ([Coordinator.claimCompletion]): that release,
 	// made again, would give back a claim taken now while its collection is
@@ -1948,13 +1951,21 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 		// that job asked, replaced by the turn's next launch, or over —
 		// or a newer lease than this node's owns it, or its resume is
 		// held on it (a duplicate queued behind the resume that held it,
-		// which the poll announces again once the hold lifts). Where no
-		// poll can announce it (the clock on its box's host running), the
-		// delivery is handed back instead (renew.go).
+		// which the poll announces again once the hold lifts, and which
+		// this node keeps for the hold where it keeps nothing for the job:
+		// [Coordinator.keepHeldClaim]). Where no poll can announce it (the
+		// clock on its box's host running), the delivery is handed back
+		// instead (renew.go).
 		log.InfoContext(ctx, "sandbox_completion_already_claimed",
 			"turn_id", ev.TurnID, "launch_id", ev.LaunchID)
+		c.keepHeldClaim(ctx, ev, trigger, fence, seen)
 		return nil
 	}
+	// THE CLAIM SETTLES THE JOB from here, whichever announcement carried it,
+	// so what is kept for its run goes: a keep for the hold on its row, which
+	// the admission left standing ([Coordinator.forgetAdmitted]), with the
+	// rest.
+	c.forgetRefused(ev.TurnID)
 
 	// THE JOB WAS LOST WITH ITS HOST ([PendingRun.Lost]), and this completion
 	// is the waiter's announcement of that: what it left is no result. Or the

@@ -423,6 +423,41 @@ func (s *unliftedHolds) LiftHold(ctx context.Context, turnID string, cond Condit
 	return s.PendingStore.LiftHold(ctx, turnID, cond)
 }
 
+// countedCalls is a run store that counts its reads of one run's row and its
+// claims of a run for its resume, and answers every call as the store beneath
+// it does.
+type countedCalls struct {
+	PendingStore
+	gets, claims atomic.Int64
+}
+
+func (s *countedCalls) Get(ctx context.Context, turnID string) (PendingRun, bool, error) {
+	s.gets.Add(1)
+	return s.PendingStore.Get(ctx, turnID)
+}
+
+func (s *countedCalls) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
+) (PendingRun, bool, error) {
+	s.claims.Add(1)
+	return s.PendingStore.ClaimForResume(ctx, turnID, tail, fence)
+}
+
+// liftedOnRefusal is a run store that lifts a run's hold for the budget as soon
+// as it has refused a claim of the run's completion, and answers every call as
+// the store beneath it does: the budget's signal, whose lift of every hold on
+// the condition lands between a claim the hold refused and what the claimant
+// does next.
+type liftedOnRefusal struct{ PendingStore }
+
+func (s liftedOnRefusal) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
+) (PendingRun, bool, error) {
+	run, won, err := s.PendingStore.ClaimForResume(ctx, turnID, tail, fence)
+	if err == nil && !won {
+		_, _ = s.PendingStore.LiftHold(ctx, turnID, "budget")
+	}
+	return run, won, err
+}
+
 // unlistedRuns is a run store whose coordination store does not answer a
 // listing of the runs, which is all a waiter announces from.
 type unlistedRuns struct{ PendingStore }
@@ -474,13 +509,27 @@ func budgetHeldOnRow(t *testing.T, rig *coordRig, until time.Time) {
 // is kept on this node, unheld: re-fired at the hold's instant and never
 // sooner, since before it the claim takes nothing; and on its condition's
 // signal once the lift of the hold has landed, and not before, since a re-fire
-// beside the lift met the hold still standing and dropped the keep.
+// beside the lift met the hold still standing and dropped the keep. A claim the
+// hold refuses leaves it kept: a delivery queued behind the resume that held
+// the job leaves it standing, and the re-fire of whatever was kept in its place
+// keeps it again from the row.
 //
 // Mutation: keep nothing for a hold on the row, and the job is never carried;
 // arm its re-fire no later than the backstop, and it is armed sooner than the
-// instant; re-fire it on its signal without lifting the hold first, or after a
-// lift the store did not answer, and the keep is gone; leave a held row out of
-// a recovery, or re-fire one a stop's lift left held, and nothing is kept.
+// instant; re-fire it on its signal without lifting the hold first, and its
+// claim meets the hold; re-fire it after a lift the store did not answer, its
+// signal's or a stop's, and the job is claimed into the hold before its
+// instant; drop it as every keep is dropped once a delivery is admitted, and a
+// delivery the hold refuses reads the row to keep it again; leave it standing
+// once a claim of it wins, and its re-fire is still armed for an instant the
+// job no longer waits for; keep nothing from the row where a claim meets the
+// hold with nothing kept for the job, and a refusal of the node's gate kept in
+// the hold's place leaves nothing kept once its re-fire meets the hold, nor
+// anything for the backstop where that claim's row is not read or its hold
+// lifted between the claim and the read; keep it for the backstop whatever
+// lease owns the row, and a node whose lease the row has passed keeps re-firing
+// a job another holder owns; leave a held row out of a recovery, and nothing is
+// kept.
 func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 	t.Parallel()
 
@@ -507,6 +556,9 @@ func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 		t.Parallel()
 		rig := newCoordRig(t)
 		budgetHeldOnRow(t, rig, rig.now.Add(24*time.Hour))
+		// THE SIGNAL'S LISTING OF EVERY HOLD ON ITS CONDITION NOT ANSWERED:
+		// the keep's own lift of its row's hold is what releases the job.
+		rig.coordinator.pending = unlistedRuns{rig.coordinator.pending}
 		rig.coordinator.Readmit("budget", "swe")
 		rig.coordinator.inflight.Wait()
 		if resumed := rig.resumer.calls(); len(resumed) != 1 || !resumed[0].Success {
@@ -515,12 +567,203 @@ func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 		}
 	})
 
+	t.Run("kept through a delivery of it the hold refuses", func(t *testing.T) {
+		t.Parallel()
+		live := t.Context()
+		rig := newCoordRig(t)
+		until := rig.now.Add(time.Hour)
+		budgetHeldOnRow(t, rig, until)
+		// ANOTHER DELIVERY OF THE COMPLETION, queued behind the resume that
+		// held it: admitted, its claim refused by the hold, and spent with
+		// nothing settled.
+		store := &countedCalls{PendingStore: rig.coordinator.pending}
+		rig.coordinator.pending = store
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(live, payload, ev); err != nil {
+			t.Fatalf("the premise: the delivery behind the hold = %v; want it spent", err)
+		}
+		if resumed := rig.resumer.calls(); len(resumed) != 0 {
+			t.Fatalf("the premise: the turn resumed %d times with its hold standing", len(resumed))
+		}
+		if delays := rig.retries.delays(); len(delays) != 1 || delays[0] != time.Hour {
+			t.Fatalf("after a delivery the hold refused the re-fires armed = %v; want the held completion "+
+				"still kept, its re-fire at the hold's instant", delays)
+		}
+		// KEPT STANDING, not dropped and made again from the row: a delivery
+		// the hold refuses costs its claim and no read of the row.
+		if reads := store.gets.Load(); reads != 0 {
+			t.Fatalf("a delivery the hold refused read the run's row %d times; want the keep left standing "+
+				"through its admission, and no read", reads)
+		}
+		rig.now = until
+		rig.fireRetries()
+		rig.coordinator.inflight.Wait()
+		if resumed := rig.resumer.calls(); len(resumed) != 1 || !resumed[0].Success {
+			t.Fatalf("the turn resumed %d times (%+v) at the hold's instant; want it carried once", len(resumed),
+				resumed)
+		}
+	})
+
+	t.Run("dropped once a claim of it wins", func(t *testing.T) {
+		t.Parallel()
+		live := t.Context()
+		rig := newCoordRig(t)
+		budgetHeldOnRow(t, rig, rig.now.Add(time.Hour))
+		// THE HOLD LIFTED BY A WRITE THAT LANDED WITH ITS ANSWER LOST: the
+		// keep stands, its re-fire armed for the instant still.
+		if _, err := rig.pending.LiftHold(live, "t1", "budget"); err != nil {
+			t.Fatalf("lifting the hold: %v", err)
+		}
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(live, payload, ev); err != nil {
+			t.Fatalf("a delivery after the hold lifted = %v; want it carried", err)
+		}
+		if resumed := rig.resumer.calls(); len(resumed) != 1 || !resumed[0].Success {
+			t.Fatalf("the turn resumed %d times (%+v) after the hold lifted; want it carried once", len(resumed),
+				resumed)
+		}
+		for _, d := range rig.retries.delays() {
+			if d == time.Hour {
+				t.Fatalf("after a claim of the held completion won, the re-fires armed = %v; want its keep for "+
+					"the hold gone with the claim", rig.retries.delays())
+			}
+		}
+	})
+
+	t.Run("kept again where a refusal kept in its place meets the hold", func(t *testing.T) {
+		t.Parallel()
+		live := t.Context()
+		rig := newCoordRig(t)
+		until := rig.now.Add(time.Hour)
+		budgetHeldOnRow(t, rig, until)
+		// A DELIVERY BEHIND THE HOLD THAT THE NODE'S GATE REFUSES: kept for
+		// the gate's condition in the hold's place, its re-fire at the
+		// backstop.
+		gate := gated(rig)
+		gate.refuse(true)
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(live, payload, ev); !errors.Is(err, ErrResumeUnavailable) {
+			t.Fatalf("the premise: the delivery the gate refused = %v; want it refused", err)
+		}
+		if delays := rig.retries.delays(); len(delays) != 1 || delays[0] != answerWaitBackstop {
+			t.Fatalf("the premise: the re-fires armed = %v; want the gate's refusal kept for the backstop", delays)
+		}
+		// THE GATE ADMITS AGAIN, and that keep's re-fire meets the hold.
+		gate.refuse(false)
+		rig.fireRetries()
+		rig.coordinator.inflight.Wait()
+		if resumed := rig.resumer.calls(); len(resumed) != 0 {
+			t.Fatalf("the premise: the turn resumed %d times with its hold standing", len(resumed))
+		}
+		if delays := rig.retries.delays(); len(delays) != 1 || delays[0] != time.Hour {
+			t.Fatalf("after a re-fire the hold refused the re-fires armed = %v; want the held completion kept "+
+				"again, its re-fire at the hold's instant", delays)
+		}
+		rig.now = until
+		rig.fireRetries()
+		rig.coordinator.inflight.Wait()
+		if resumed := rig.resumer.calls(); len(resumed) != 1 || !resumed[0].Success {
+			t.Fatalf("the turn resumed %d times (%+v) at the hold's instant; want it carried once", len(resumed),
+				resumed)
+		}
+	})
+
+	t.Run("kept for the backstop where a claim the hold refused reads no row", func(t *testing.T) {
+		t.Parallel()
+		live := t.Context()
+		rig := newCoordRig(t)
+		budgetHeldOnRow(t, rig, rig.now.Add(time.Hour))
+		gate := gated(rig)
+		gate.refuse(true)
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(live, payload, ev); !errors.Is(err, ErrResumeUnavailable) {
+			t.Fatalf("the premise: the delivery the gate refused = %v; want it refused", err)
+		}
+		// THE GATE ADMITS AGAIN, and that keep's re-fire meets the hold while
+		// the store does not answer a read of the run's row.
+		gate.refuse(false)
+		store := &silentStore{PendingStore: rig.coordinator.pending}
+		store.silence("Get")
+		rig.coordinator.pending = store
+		rig.fireRetries()
+		rig.coordinator.inflight.Wait()
+		if delays := rig.retries.delays(); len(delays) != 1 || delays[0] != answerWaitBackstop {
+			t.Fatalf("after a claim the hold refused, its row unread, the re-fires armed = %v; want the "+
+				"completion kept for the backstop", delays)
+		}
+		// THE ROW READ AT THAT BACKSTOP: kept for the hold again.
+		store.answer()
+		rig.fireRetries()
+		rig.coordinator.inflight.Wait()
+		if delays := rig.retries.delays(); len(delays) != 1 || delays[0] != time.Hour {
+			t.Fatalf("after a claim the hold refused, its row read, the re-fires armed = %v; want the held "+
+				"completion kept again, its re-fire at the hold's instant", delays)
+		}
+	})
+
+	t.Run("kept for the backstop where its hold lifts between a refused claim and the read", func(t *testing.T) {
+		t.Parallel()
+		live := t.Context()
+		rig := newCoordRig(t)
+		budgetHeldOnRow(t, rig, rig.now.Add(time.Hour))
+		gate := gated(rig)
+		gate.refuse(true)
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(live, payload, ev); !errors.Is(err, ErrResumeUnavailable) {
+			t.Fatalf("the premise: the delivery the gate refused = %v; want it refused", err)
+		}
+		// THE GATE ADMITS AGAIN, and that keep's re-fire meets the hold,
+		// which its signal lifts before the run's row is read, with nothing
+		// kept for the signal to re-fire.
+		gate.refuse(false)
+		rig.coordinator.pending = liftedOnRefusal{rig.coordinator.pending}
+		rig.fireRetries()
+		rig.coordinator.inflight.Wait()
+		if delays := rig.retries.delays(); len(delays) != 1 || delays[0] != answerWaitBackstop {
+			t.Fatalf("after a claim the hold refused, the hold lifted since, the re-fires armed = %v; want the "+
+				"completion kept for the backstop", delays)
+		}
+		rig.fireRetries()
+		rig.coordinator.inflight.Wait()
+		if resumed := rig.resumer.calls(); len(resumed) != 1 || !resumed[0].Success {
+			t.Fatalf("the turn resumed %d times (%+v) at the backstop; want it carried once", len(resumed),
+				resumed)
+		}
+	})
+
+	t.Run("nothing kept where the claim met a newer lease's row", func(t *testing.T) {
+		t.Parallel()
+		live := t.Context()
+		rig := newCoordRig(t)
+		rig.launch("t1")
+		rig.coordinator.countRun("swe", StatusRunning)
+		rig.runner.Finish(Result{Success: true, Text: "first pass"})
+		// THE SEAT'S NEXT HOLDER HAS TAKEN THE RUN, while this node's lease
+		// still reads held: its claim of the completion is refused, and the
+		// row, running and unheld, is that holder's to recover.
+		if won, err := rig.pending.ClaimOwnership(live, "t1", "node-c:1", rigLease.Epoch+1); err != nil || !won {
+			t.Fatalf("the premise: ClaimOwnership = %v, %v", won, err)
+		}
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(live, payload, ev); err != nil {
+			t.Fatalf("the premise: the delivery under the older lease = %v; want its claim refused", err)
+		}
+		if resumed := rig.resumer.calls(); len(resumed) != 0 {
+			t.Fatalf("the premise: the turn resumed %d times under an older lease", len(resumed))
+		}
+		if delays := rig.retries.delays(); len(delays) != 0 {
+			t.Fatalf("after a claim a newer lease's row refused the re-fires armed = %v; want nothing kept on "+
+				"the node whose lease the row has passed", delays)
+		}
+	})
+
 	t.Run("kept for the instant where the signal's lift is not answered", func(t *testing.T) {
 		t.Parallel()
 		rig := newCoordRig(t)
 		until := rig.now.Add(time.Hour)
 		budgetHeldOnRow(t, rig, until)
-		store := &unliftedHolds{PendingStore: rig.coordinator.pending}
+		counted := &countedCalls{PendingStore: rig.coordinator.pending}
+		store := &unliftedHolds{PendingStore: counted}
 		store.silent.Store(true)
 		rig.coordinator.pending = store
 		rig.coordinator.Readmit("budget", "swe")
@@ -531,6 +774,11 @@ func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 		if delays := rig.retries.delays(); len(delays) != 1 || delays[0] != time.Hour {
 			t.Fatalf("after a lift the store did not answer the re-fires armed = %v; want the held completion "+
 				"still kept, its re-fire at the hold's instant", delays)
+		}
+		// KEPT AS IT WAS, never re-fired into the hold it could not lift.
+		if claims := counted.claims.Load(); claims != 0 {
+			t.Fatalf("after a lift the store did not answer the job was claimed %d times; want no claim "+
+				"before the hold's instant", claims)
 		}
 		store.silent.Store(false)
 		rig.now = until
@@ -578,7 +826,8 @@ func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 		rig := newCoordRig(t)
 		until := rig.now.Add(time.Hour)
 		budgetHeldOnRow(t, rig, until)
-		store := &unliftedHolds{PendingStore: rig.coordinator.pending}
+		counted := &countedCalls{PendingStore: rig.coordinator.pending}
+		store := &unliftedHolds{PendingStore: counted}
 		store.silent.Store(true)
 		rig.coordinator.pending = store
 		if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
@@ -588,6 +837,11 @@ func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 		if delays := rig.retries.delays(); len(delays) != 1 || delays[0] != time.Hour {
 			t.Fatalf("after a stop whose lift the store did not answer the re-fires armed = %v; want the held "+
 				"completion still kept, its re-fire at the hold's instant", delays)
+		}
+		// KEPT AS IT WAS, never re-fired into the hold it could not lift.
+		if claims := counted.claims.Load(); claims != 0 {
+			t.Fatalf("after a stop whose lift the store did not answer the job was claimed %d times; want no "+
+				"claim before the hold's instant", claims)
 		}
 	})
 }
