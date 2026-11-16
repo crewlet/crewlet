@@ -1,5 +1,4 @@
 -- A live change is listed by when it last moved.
---
 -- WHO HAS TO AGREE ON IT: every data node, identically; code_changes and code_conversations stay reproducible, and an index adds no row.
 -- About 60 and 100 bytes a live change and 90 a conversation somebody spoke in; a write that moves a live change's version rewrites its two entries, and a record somebody writes on a change one more.
 CREATE INDEX code_changes_live_updated_idx ON code_changes (state, updated_at, id)

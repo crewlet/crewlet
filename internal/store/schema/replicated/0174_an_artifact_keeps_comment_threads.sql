@@ -1,22 +1,6 @@
--- An artifact keeps comment threads (ADR-0154).
---
--- A thread is its own subject on the artifacts log (`comment`, id
--- `<artifact>.<thread>`), written by the artifacts domain's one applier
--- (internal/artifactsdomain) and nothing else. A thread keeps the anchor it
--- was made with and the version it was made on, and nothing else about where
--- it is: its place on any version is found at read, from that version's files,
--- by internal/artifacts/commentanchor. A publish therefore writes no row here.
---
--- WHO HAS TO AGREE ON IT: every data node, identically. Both tables are in the
--- domain's reproducible set (artifactsdomain.ReproducibleTables), so a replay
--- from zero rebuilds them byte for byte and an identity claim compares them
--- across the fleet. The rules 0043 states for every replicated table hold
--- here: no foreign key (an artifact's purge deletes its threads and remarks in
--- the applier's own statement list), no UNIQUE outside a primary key, no
--- COLLATE, attribution is a seat handle beside its kind, and every instant is
--- the broker's. A comment record writes no history row: each row carries the
--- packed position of the last record that wrote it, which is what the writer
--- reads its own verdict back from.
+-- An artifact keeps comment threads (ADR-0154): each thread is its own `comment` subject (`<artifact>.<thread>`) on the artifacts log, written only by its applier.
+-- A thread keeps the anchor and version it was made on; its place on any version is found at read (internal/artifacts/commentanchor), so a publish writes no row here.
+-- WHO HAS TO AGREE ON IT: every data node, identically; both tables are reproducible (artifactsdomain.ReproducibleTables) under 0043's rules, and a purge deletes them in the applier.
 
 -- artifact_comment_threads: one row per thread.
 CREATE TABLE artifact_comment_threads (
