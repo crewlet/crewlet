@@ -1207,6 +1207,12 @@ type Coordinator struct {
 	// by turn id, kept so the condition's clearing re-fires each at once
 	// ([Coordinator.Readmit]) rather than a poll later. Under mu.
 	refused map[string]refusedCompletion
+	// refiring counts the re-fires of each run's job on their way, by turn
+	// id, from the moment one is started until it returns
+	// ([Coordinator.refireLocked], [Coordinator.liftAndRefireLocked]): a
+	// node re-fires a job at most once at a time ([Coordinator.carriedLocked]).
+	// Under mu.
+	refiring map[string]int
 	// blocked are the completions whose last resume here failed on a
 	// condition only an operator clears, by turn id ([blockedResume]).
 	// Under mu.
@@ -1388,6 +1394,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		unsettled:    map[string]hostUnsettled{},
 		republish:    map[string]*refirePublish{},
 		refused:      map[string]refusedCompletion{},
+		refiring:     map[string]int{},
 		blocked:      map[string]blockedResume{},
 		owed:         map[string]map[string]struct{}{},
 		held:         map[string]bool{},
@@ -4460,7 +4467,7 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			// a re-fire of its own at the hold's instant and for the
 			// signal that lifts it: the poll reads the row through its
 			// host's store, whose silence has no bound.
-			c.keepHeldOnRow(run, trigger, hold, seen)
+			c.keepHeldOnRow(run, trigger, hold, seen, false)
 			return AnswerConsumed, nil
 		}
 		// UN-CLAIM so a retry can win the flip again. Without this the NAK'd
@@ -6552,8 +6559,11 @@ type recovery struct {
 // waiter's next announcement, which a silent store keeps from coming, and for
 // nothing else while this holder kept the seat.
 //
-// A completion this node already keeps for the job, a delivery's refusal since
-// the seat was taken, is left as it is, and nothing is re-fired for it.
+// A job this node already carries is left as it is, and nothing is re-fired
+// for it ([Coordinator.carriedLocked]): a completion it keeps for the job, a
+// delivery's refusal since the seat was taken, and a re-fire of the job on its
+// way, a signal's that lifted the job's hold while the pass ran among them
+// ([Coordinator.refireLifted]).
 func (c *Coordinator) rearmOwed(ctx context.Context, runs []PendingRun) {
 	if len(runs) == 0 {
 		return
@@ -6562,7 +6572,7 @@ func (c *Coordinator) rearmOwed(ctx context.Context, runs []PendingRun) {
 	c.mu.Lock()
 	if !c.closed {
 		for _, run := range runs {
-			if _, kept := c.refused[run.TurnID]; kept {
+			if c.carriedLocked(run.TurnID) {
 				continue
 			}
 			ev, trigger := announcementOf(run)
@@ -6609,17 +6619,17 @@ func (c *Coordinator) rearmOwed(ctx context.Context, runs []PendingRun) {
 // nothing kept here yet: kept for the instant regardless, the job waited for
 // the hold's instant after the signal that lifts it.
 //
-// A completion this node already keeps for the job is left as it is.
+// A JOB THIS NODE ALREADY CARRIES IS LEFT AS IT IS ([Coordinator.carriedLocked]):
+// a completion it keeps for the job, and a re-fire of the job on its way. The
+// signal's lift that landed on the row after the pass's fence read it held
+// re-fires the job ([Coordinator.refireLifted]), and kept here too, with that
+// signal since seen, the job was lifted and re-fired a second time beside it.
+// Asked under the lock the keep is made under ([Coordinator.keepHeldOnRow]), so
+// that lift's re-fire cannot start between the question and the keep.
 func (c *Coordinator) keepHeldRows(ctx context.Context, runs []PendingRun, seen map[signal]uint64) {
 	var kept []PendingRun
 	for _, run := range runs {
-		c.mu.Lock()
-		_, already := c.refused[run.TurnID]
-		c.mu.Unlock()
-		if already {
-			continue
-		}
-		if c.keepHeldOnRow(run, nil, Refusal{Condition: run.HeldFor, Until: run.HeldUntil}, seen) {
+		if c.keepHeldOnRow(run, nil, Refusal{Condition: run.HeldFor, Until: run.HeldUntil}, seen, true) {
 			kept = append(kept, run)
 		}
 	}

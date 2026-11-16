@@ -64,9 +64,14 @@ on its condition's signal once the lift of its hold has landed, and the seat's
 recovery keeps every held row it finds the same way; and every lift of a hold a
 signal makes re-fires the job too (`sandbox.Coordinator.refireLifted`), since a
 lift that found nothing kept, as one racing the seat's recovery can, left the
-job to that host's waiter. A delivery of it that the hold refuses leaves it
-kept, and a claim the hold refuses with nothing kept for the job, whatever was
-kept in its place having re-fired into the hold, keeps it again from the row
+job to that host's waiter, unless the node carries the job already, kept or a
+re-fire of it on its way, as the seat's recovery keeps no row whose job it
+does: a node re-fires a job at most once at a time
+(`sandbox.Coordinator.carriedLocked`), since a second re-fire beside the first
+asked the gate, claimed and read the row for a job the first carried already.
+A delivery of it that the hold refuses leaves it kept, and a claim the hold
+refuses with nothing kept for the job, whatever was kept in its place having
+re-fired into the hold, keeps it again from the row
 (`sandbox.Coordinator.keepHeldClaim`). The timer of a completion held here
 still fires every five minutes before its instant, and there does only what an
 announcement of the job does (`sandbox.Coordinator.recheckHeld`): past the

@@ -565,10 +565,13 @@ func (c *Coordinator) keepRefused(ev types.ExecutorFinished, trigger *events.Eve
 // the completion's event, or nil for one rebuilt from the row
 // ([announcementOf]); seen is what was signalled before the hold was written,
 // or before a claim the hold refused was asked ([Coordinator.keepHeldClaim]),
-// or before a recovery read the held row ([Coordinator.keepHeldRows]). Reports
-// whether the completion was kept for the hold's instant: not where it was
-// re-fired at once, the coordinator is closed or this node no longer holds the
-// seat.
+// or before a recovery read the held row ([Coordinator.keepHeldRows]); and
+// recovered is whether the caller is that recovery, which keeps nothing and
+// re-fires nothing for a job this node already carries
+// ([Coordinator.carriedLocked]), decided under the lock the keep is made under.
+// Reports whether the completion was kept for the hold's instant: not where it
+// was re-fired at once, was carried already, the coordinator is closed or this
+// node no longer holds the seat.
 //
 // # Why a hold on the row is kept in memory too
 //
@@ -600,7 +603,7 @@ func (c *Coordinator) keepRefused(ev types.ExecutorFinished, trigger *events.Eve
 // person's stop signalled for the seat since seen lifts the hold here and
 // re-fires at once.
 func (c *Coordinator) keepHeldOnRow(run PendingRun, trigger *events.Event, hold Refusal,
-	seen map[signal]uint64,
+	seen map[signal]uint64, recovered bool,
 ) bool {
 	if hold.Condition == "" {
 		return false
@@ -611,7 +614,7 @@ func (c *Coordinator) keepHeldOnRow(run PendingRun, trigger *events.Event, hold 
 	}
 	kept := refusedCompletion{cond: hold.Condition, ev: ev, trigger: trigger, heldOnRow: hold.Until}
 	c.mu.Lock()
-	if c.closed {
+	if c.closed || (recovered && c.carriedLocked(ev.TurnID)) {
 		c.mu.Unlock()
 		return false
 	}
@@ -875,7 +878,7 @@ func (c *Coordinator) keepHeldClaim(ctx context.Context, ev types.ExecutorFinish
 		// NOT THIS DELIVERY'S ANY MORE: another job, this one claimed or
 		// settled, or a newer lease's.
 	case run.Held(c.now()):
-		c.keepHeldOnRow(run, trigger, Refusal{Condition: run.HeldFor, Until: run.HeldUntil}, seen)
+		c.keepHeldOnRow(run, trigger, Refusal{Condition: run.HeldFor, Until: run.HeldUntil}, seen, false)
 	default:
 		c.keepAgain(refusedCompletion{ev: ev, trigger: trigger})
 	}
@@ -907,8 +910,10 @@ func (c *Coordinator) refireRefusedLocked(cond Condition, handles []string) {
 // holds c.mu and has checked the coordinator is not closed.
 func (c *Coordinator) liftAndRefireLocked(kept refusedCompletion) {
 	c.inflight.Add(1)
+	c.refiringLocked(kept.ev.TurnID)
 	go func() {
 		defer c.inflight.Done()
+		defer c.refired(kept.ev.TurnID)
 		c.liftAndRefire(kept)
 	}()
 }
@@ -966,15 +971,24 @@ func (c *Coordinator) liftAndRefire(kept refusedCompletion) {
 // alone: a signal that landed while the seat's recovery ran, its lift landing
 // before the recovery's fence read the row ([Coordinator.RecoverSeat]), so the
 // row the recovery took over was held no longer and nothing was kept for it;
-// or a keep replaced by a refusal's ([Coordinator.keepRefused]), whose re-fire
-// waits for that refusal's own signal or backstop. A lift that finds the
-// completion kept re-fires it beside that keep's own re-fire, and the claim is
-// at-most-once.
+// or a keep replaced by a refusal's ([Coordinator.keepRefused]) and dropped
+// since.
+//
+// BUT NOT A JOB THIS NODE ALREADY CARRIES ([Coordinator.carriedLocked]): one it
+// keeps a completion of, whose own re-fire, signal and backstop carry it, the
+// keep this signal's lift released among them, which the signal lifts and
+// re-fires itself ([Coordinator.liftAndRefire]); and one a re-fire of is on its
+// way. Re-fired beside either, the job was re-fired twice at once: a seat's
+// recovery that read the row held before this lift landed kept the job and,
+// the signal landing since, lifted and re-fired it, while this lift re-fired
+// it too; and a keep's own lift raced this one, each re-firing the job. A keep
+// replaced by a refusal's re-fires within that refusal's backstop at the
+// latest, and asks the gate that refused it, which this re-fire would ask too.
 func (c *Coordinator) refireLifted(run PendingRun, cond Condition) {
 	ev, trigger := announcementOf(run)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.closed {
+	if c.closed || c.carriedLocked(run.TurnID) {
 		return
 	}
 	c.refireLocked(refusedCompletion{cond: cond, ev: ev, trigger: trigger})
@@ -985,10 +999,57 @@ func (c *Coordinator) refireLifted(run PendingRun, cond Condition) {
 // holds c.mu and has checked the coordinator is not closed.
 func (c *Coordinator) refireLocked(kept refusedCompletion) {
 	c.inflight.Add(1)
+	c.refiringLocked(kept.ev.TurnID)
 	go func() {
 		defer c.inflight.Done()
+		defer c.refired(kept.ev.TurnID)
 		c.refire(kept)
 	}()
+}
+
+// refiringLocked counts a re-fire of turnID's job on its way
+// ([Coordinator.refiring]), and refired counts it off once it has returned.
+// The caller of refiringLocked holds c.mu.
+func (c *Coordinator) refiringLocked(turnID string) {
+	if c.refiring == nil {
+		c.refiring = map[string]int{}
+	}
+	c.refiring[turnID]++
+}
+
+func (c *Coordinator) refired(turnID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.refiring[turnID]--; c.refiring[turnID] <= 0 {
+		delete(c.refiring, turnID)
+	}
+}
+
+// carriedLocked reports whether this node already carries turnID's job: it
+// keeps a completion of it ([Coordinator.refused]), whose own re-fire, signal
+// and backstop carry it, or a re-fire of it is on its way
+// ([Coordinator.refiring]). A frame that would start a re-fire of the job from
+// outside both, a signal's lift of the job's hold ([Coordinator.refireLifted])
+// or a recovery's keep or re-arm of it from its row ([Coordinator.keepHeldRows],
+// [Coordinator.rearmOwed]), starts none where it does. The caller holds c.mu.
+//
+// # Why a node re-fires a job at most once at a time
+//
+// Two re-fires of one job race each other through the claim, and the claim
+// is at-most-once, so only one resumes it; but the other is not nothing. It
+// asks this node's gate, claims, and, refused, reads the run's row for a hold
+// to keep the job for ([Coordinator.keepHeldClaim]), all for a job the first
+// carries already; and it meets whatever the first left on the row at that
+// moment, a claim, or a hold the first's resume met again and wrote, which it
+// keeps the job for a second time. A signal's lift of a hold this node kept
+// the job for raced the keep's own lift and re-fire of it, and a seat's
+// recovery that read the row held before the signal's lift landed raced that
+// lift's re-fire, each pair re-firing the one job twice. So the claim's
+// at-most-once decides which re-fire resumes the job, and this decides that
+// there is one to decide.
+func (c *Coordinator) carriedLocked(turnID string) bool {
+	_, kept := c.refused[turnID]
+	return kept || c.refiring[turnID] > 0
 }
 
 // refire offers a kept completion to [Coordinator.OnCompleted] again, under

@@ -2133,9 +2133,10 @@ func (c *Coordinator) Readmit(cond Condition, handles ...string) {
 
 // liftHoldsLocked lifts, in the background, every hold on cond this node's
 // seats' runs are under ([PendingRun.HeldFor]) — the seats named, or every
-// seat — and re-fires the completion of each job whose hold it lifted
-// ([Coordinator.refireLifted]), which the waiter would announce again on its
-// schedule only while its host's store answers it. The caller holds c.mu.
+// seat — and re-fires the completion of each job whose hold it lifted and
+// this node does not carry already ([Coordinator.refireLifted]), which the
+// waiter would announce again on its schedule only while its host's store
+// answers it. The caller holds c.mu.
 //
 // THE ROWS ARE THE RECORD, not a list in memory: a hold is written on the run
 // and survives the node, so a node that took the seat over since lifts what
