@@ -35,6 +35,7 @@ import type {
 } from "~/protocol/index.ts";
 import { withPanel } from "../panels.ts";
 import type { PageHost } from "../host.ts";
+import "~/styles/comments.css";
 
 /** A comment being written: where it points, and what the drawing showed there. */
 export interface CommentDraft {

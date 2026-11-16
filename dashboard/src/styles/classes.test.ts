@@ -978,6 +978,7 @@ describe("every class the dashboard names", () => {
 // the create pages', `charter.css`, the Principles editor's, `brand.css`, the
 // brand's (Company › Brand, a kit's view and its gallery cover),
 // `folders.css`, the folders' (their tiles, dialogs, row and fact),
+// `comments.css`, the comments' (the pin layer, Comment mode and the panel),
 // `models.css`, Settings › Models' (its list, model page, wizard and By job),
 // `integrations.css`, Company › Integrations' (the directory's detail, an
 // app's tabs, its setup form and disconnect dialog), `access.css`, the
@@ -1034,6 +1035,10 @@ const LAZY_SHEETS: Readonly<Record<string, { importer: string; owns: RegExp }>> 
   "mcp.css": {
     importer: "routes/settings/mcp-tools/McpTools.tsx",
     owns: /\.mcp-[a-z_-]+\b/,
+  },
+  "comments.css": {
+    importer: "routes/artifacts/comments/state.tsx",
+    owns: /\.artifact-(?:comments?(?:-[a-z-]+)?|frame-stage)\b/,
   },
   "folders.css": {
     importer: "routes/artifacts/MoveDialog.tsx",
