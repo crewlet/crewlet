@@ -465,8 +465,8 @@ func streamBound() (text, entries int) {
 // JSON Web Token every fifteen bytes), over values a reach below their keys
 // that run on past a window, and over the runs a stage counts rather than
 // holds, a Google token's dots and the backslashes an escaped break ends a
-// value before, each a MiB long. Not over the two texts the package doc's "A
-// text that arrives in pieces" names, which hold a run.
+// value before, each a MiB long. Not over the texts the package doc's "A text
+// that arrives in pieces" names, which hold what the claims there wait on.
 //
 // Mutation: hand a stage's output on a step at a time rather than a piece at a
 // time ([ruleStage.pass]), write a run's counted dots or backslashes out at

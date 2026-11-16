@@ -109,7 +109,11 @@
 // run's own test rather than held, the dots a Google token may end before and
 // the backslashes a value may end before counted rather than held, and
 // written out a piece at a time once the run ends. Each stage reads its own
-// input, since a marker stands for a run of any length.
+// input, since a marker stands for a run of any length; and so a stage that
+// claims tokens or AWS secrets in the text as written, holding markers that
+// stand for more of it than a step, or one that is still being read, decides
+// up to the last marker it holds, since no token's or AWS secret's read
+// crosses a marker's `[` ([ruleStage.markerToStepAt]).
 //
 // The keys' blocks read what the rules claim in the text as written
 // ([claims]), so the rules run twice: as a second instance of the same stages
@@ -124,13 +128,16 @@
 // every rule run twice, and the readers of the claims, that is at most about
 // 21 MiB of text, and at most about as much again of the edits, values and
 // claims the stages keep beside it, where a text is markers end to end (a JSON
-// Web Token every fifteen bytes). A test holds both. Two texts hold more: a
-// key's armour within a window of a run a claims stage is reading on, whose
-// marker the stages after it cannot decide what lies within reach before
-// until the run ends, so the keys' stage waits on those claims and the stream
-// holds the run; and an AWS secret's key quoted and followed by spaces past a
-// window, whose claim waits on where they end. Neither is a credential's
-// format, and what the stream holds there is what the whole text is.
+// Web Token every fifteen bytes). A test holds both. Three texts hold more,
+// each where the keys' stage waits on claims the password's reader, or an AWS
+// secret's, has yet to make, and the stream holds the text up to them: a
+// key's armour within a window of a run the password's reader waits at, since
+// it decides a key before a marker only with what follows the marker, which
+// stands for the whole run; a text whose tokens the rules before it collapse
+// into markers past what the reader's own window stands for, a step of which
+// it holds; and an AWS secret's key quoted and followed by spaces past a
+// window, whose claim waits on where they end. None is a credential's format,
+// and what the stream holds there is what the whole text is.
 //
 // # What a password's rule still publishes
 //

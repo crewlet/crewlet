@@ -67,10 +67,10 @@ var errStreamClosed = errors.New("redact: write to a closed stream")
 // ([pipeline.feed]), so every stage is handed the same pieces, and steps where
 // it steps, however the text arrives.
 //
-// ITS MEMORY IS ITS STAGES' WINDOWS and the piece it carries, but for the two
-// texts the package doc's "A text that arrives in pieces" names, which hold a
-// run, so a text of any length, a whole PDF's base64 on one line of a
-// transcript, is redacted without being held whole. What it writes trails what
+// ITS MEMORY IS ITS STAGES' WINDOWS and the piece it carries, but for the
+// texts the package doc's "A text that arrives in pieces" names, which hold
+// what the claims there wait on, so a text of any length, a whole PDF's base64
+// on one line of a transcript, is redacted without being held whole. What it writes trails what
 // it is written by those windows: nothing is written until a text passes
 // [wholeBytes], which a shorter one is redacted whole by, and then each stage
 // writes on what it decides as it decides it, the last some MiB behind. Close
@@ -88,6 +88,9 @@ type Stream struct {
 	// which is redacted whole; p the stages once it is longer.
 	head []byte
 	p    *pipeline
+	// observe is handed to the keys' stage the stream makes, where a test
+	// sets one ([keyObserver]).
+	observe *keyObserver
 }
 
 // NewStream is a Stream that writes what it redacts to w.
@@ -115,6 +118,7 @@ func (s *Stream) Write(p []byte) (int, error) {
 	s.head = append(s.head, p[:n]...)
 	if len(s.head) > wholeBytes {
 		s.p = newPipeline(s.emit, true)
+		s.p.keys.observe = s.observe
 		s.p.feed(s.head)
 		s.head = nil
 		s.p.feed(p[n:])
@@ -203,7 +207,7 @@ func newPipeline(out func(string), keys bool) *pipeline {
 	}
 	p.keys = &keyStage{to: next, sources: p.sources}
 	for _, src := range p.sources {
-		src.floor = &p.keys.floor
+		src.keys = p.keys
 	}
 	return p
 }
@@ -253,6 +257,7 @@ func (p *pipeline) write(s string) {
 		p.rules.take(s, nil)
 		return
 	}
+	p.keys.arrived += len(s)
 	p.claims.take(s, nil)
 	p.keys.take(s)
 }
@@ -422,6 +427,10 @@ func (m *rawMap) prune(lo int) {
 // claimSource is what one claims stage, or one reader, claims in the text as
 // written ([claims]): its tokens, or its passwords' keys, separators and
 // values, in order, and how far it has decided them.
+//
+// A CLAIM CHANGES where it is handed, or where one of its ends is set, and
+// only the last a source holds is ever open: a stage reading a run on claims
+// nothing else until it ends.
 type claimSource struct {
 	// frontier is where in the text as written its claims stop being known:
 	// every claim it makes that begins before it is here, and each one's
@@ -429,14 +438,16 @@ type claimSource struct {
 	frontier int
 	tokens   [][2]int
 	words    [][3]int
-	// floor is where the keys' stage's next window begins: a claim that
-	// ends there or before it is asked of no window, and is not kept.
-	floor *int
+	// keys is the keys' stage that reads the claims: a claim that ends at
+	// or before where its next window begins ([keyStage.floor]) is asked
+	// of no window, and is not kept.
+	keys *keyStage
 }
 
 // token claims t, a token's stretch, its end -1 while to come.
 func (c *claimSource) token(t [2]int) {
-	if t[1] < 0 || t[1] > *c.floor {
+	c.changed(t[0])
+	if t[1] < 0 || t[1] > c.keys.floor {
 		c.tokens = append(c.tokens, t)
 	}
 }
@@ -444,8 +455,34 @@ func (c *claimSource) token(t [2]int) {
 // word claims w, a key, its separator's end and its value's end, the last -1
 // while to come.
 func (c *claimSource) word(w [3]int) {
-	if w[2] < 0 || w[2] > *c.floor {
+	c.changed(w[0])
+	if w[2] < 0 || w[2] > c.keys.floor {
 		c.words = append(c.words, w)
+	}
+}
+
+// endToken sets the end of the token claimed last, claimed while open.
+func (c *claimSource) endToken(end int) {
+	c.tokens[len(c.tokens)-1][1] = end
+	c.changed(end)
+}
+
+// endWord sets the ends of the word claimed last, claimed while open: its
+// separator's, where sep is not -1, and its value's.
+func (c *claimSource) endWord(sep, end int) {
+	w := &c.words[len(c.words)-1]
+	if sep >= 0 {
+		w[1] = sep
+	}
+	w[2] = end
+	c.changed(end)
+}
+
+// changed tells the keys' stage's observer, where a test sets one, that a
+// claim changed at place: where it begins, or the end set.
+func (c *claimSource) changed(place int) {
+	if o := c.keys.observe; o != nil && o.changed != nil {
+		o.changed(c, place)
 	}
 }
 
@@ -548,11 +585,19 @@ func (s *ruleStage) close() {
 }
 
 // step decides one window of the input, if the stage holds one: [stageStep]
-// past where it resumes, or the rest of a text that has ended.
+// past where it resumes, or the rest of a text that has ended, or, short of
+// that, up to the last marker it holds ([ruleStage.markerToStepAt]).
 func (s *ruleStage) step() bool {
 	end := s.in.end
-	if s.done || !s.in.eof && end < s.pos+stageStep {
+	if s.done {
 		return false
+	}
+	if !s.in.eof && end < s.pos+stageStep {
+		m, ok := s.markerToStepAt()
+		if ok {
+			s.stepAtMarker(m)
+		}
+		return ok
 	}
 	hi := min(end, s.pos+stageStep)
 	eof := s.in.eof && hi == end
@@ -581,7 +626,14 @@ func (s *ruleStage) step() bool {
 		// rather than answered by holding the rest of the text.
 		panic(fmt.Sprintf("redact: a stage's window decided nothing at %d of its input", s.pos))
 	}
-	s.pos = lo + at
+	s.resume(lo+at, eof)
+	return true
+}
+
+// resume is where a step ends: the stage resumes at pos, and lets go of what
+// no later window reads.
+func (s *ruleStage) resume(pos int, eof bool) {
+	s.pos = pos
 	s.done = eof
 	s.prior = slices.DeleteFunc(s.prior, func(v [2]int) bool { return v[1] < s.pos-stageReach })
 	s.in.release(s.pos - stageReach)
@@ -596,7 +648,114 @@ func (s *ruleStage) step() bool {
 		}
 	}
 	s.flush()
-	return true
+}
+
+// markerToStepAt is the marker a claims stage, or an AWS secret's reader,
+// steps at short of a step ([ruleStage.stepAtMarker]): the last it holds
+// whole past where it resumes, where that marker is open, the run it stands
+// for still being read upstream, or what the stage holds past where it
+// resumes stands for more of the text as written than a step and a piece of
+// text with no marker in it do.
+//
+// WHY IT STEPS AT ALL. A marker stands for a run of any length, so a stage
+// that waits for a step of its own input waits on as much of the text as
+// written as the markers in it stand for: behind a run being read upstream,
+// for the run's whole length, and over tokens a rule before it collapsed, for
+// the collapse times a step. Where it waits, the claims it has yet to make
+// wait, and the keys' stage waits on them, holding the text. Stepping here, a
+// stage decides up to less than a step and a piece of the text as written
+// behind its input's end, so every token's and AWS secret's claim is known
+// within the claims' lag of where it lies, and so is every run's end but a
+// Google token's before the dots it may end on: those are counted while they
+// run, the token running on through them where a byte of its own follows, and
+// its end is set only once a byte outside its class does
+// ([ruleStage.carryToken]): before the dots, as far past where it lies as they
+// run, which no step bounds.
+//
+// NEVER THE PASSWORD'S READER: its decisions read [MaxReach] past a key in its
+// own input, past a marker, which stands for any length of the text as
+// written, so what it holds before a marker is decided only with what follows
+// the marker. And never a rule over what the keys' stage writes, which claims
+// nothing and steps on its own input as it always has.
+func (s *ruleStage) markerToStepAt() (edit, bool) {
+	if s.raw == nil || s.mode == reads || s.in.eof {
+		return edit{}, false
+	}
+	es := s.raw.edits
+	k := len(es) - 1
+	for k >= 0 && es[k].end > s.in.end {
+		k--
+	}
+	if k < 0 || es[k].at < s.pos {
+		return edit{}, false
+	}
+	m := es[k]
+	if m.rawEnd < 0 || s.raw.at(s.in.end)-s.raw.at(s.pos) > stageStep+pieceBytes {
+		return m, true
+	}
+	return edit{}, false
+}
+
+// stepAtMarker decides the stage's input up to the marker m, writes it on
+// through m, open or closed, and resumes past it.
+//
+// A DECISION THAT BEGINS BEFORE THE MARKER'S `[` READS NOTHING AT IT OR PAST
+// IT: no token's pattern takes a `[` (the run token's subject is anything but
+// one), nor an AWS secret's separator or value ([awsSecretByte]), nor an
+// armour's label, which a run's end and a value's read past their dashes
+// ([pemArmour]); so the window up to the `[`, the bracket included, decides
+// it as the whole input does, and a pattern that holds where its input ends
+// does not hold there. And no decision begins inside a marker: an AWS
+// secret's key a marker spells is followed by the `]`, which no separator
+// takes. A run the stage reads on ends at the `[` too, so the window carries
+// it to its end.
+func (s *ruleStage) stepAtMarker(m edit) {
+	lo := max(s.in.base, s.pos-stageReach)
+	text := s.in.window(lo, m.end)
+	edge := m.at - lo
+	at := s.pos - lo
+	if s.run.on {
+		at = s.carry(text, lo, at, len(text), false)
+		if s.run.on {
+			panic(fmt.Sprintf("redact: a stage read a run on through a marker's bracket at %d of its input", m.at))
+		}
+	}
+	at = s.scanTo(text, lo, at, edge)
+	if lo+at <= s.pos {
+		panic(fmt.Sprintf("redact: a stage's step at a marker decided nothing at %d of its input", s.pos))
+	}
+	s.resume(lo+at, false)
+}
+
+// scanTo is [ruleStage.scan] for a window that ends at a marker whose `[` is
+// at edge: every decision that begins before edge is trusted, and the window
+// is written on through its end.
+func (s *ruleStage) scanTo(text string, lo, at, edge int) int {
+	prior := make([][2]int, len(s.prior))
+	for i, v := range s.prior {
+		prior[i] = [2]int{v[0] - lo, v[1] - lo}
+	}
+	defer func() {
+		s.prior = s.prior[:0]
+		for _, v := range prior {
+			s.prior = append(s.prior, [2]int{v[0] + lo, v[1] + lo})
+		}
+	}()
+	done, from := at, at
+	for {
+		ev, found := s.decide(text, from, prior)
+		if !found || ev.key[0] >= edge {
+			c := len(text)
+			if found {
+				c = min(c, ev.key[0])
+			}
+			return s.commit(text, lo, done, c)
+		}
+		if ev.key[1] > edge || ev.v[1] > edge {
+			panic(fmt.Sprintf("redact: a decision at %d of a stage's input read through a marker's bracket at %d", lo+ev.key[0], lo+edge))
+		}
+		done, from = s.apply(text, lo, done, ev, &prior)
+	}
 }
 
 // flush writes on what the step wrote.
@@ -834,10 +993,10 @@ func (s *ruleStage) closeRun(end int) {
 	}
 	rawEnd := s.raw.at(end)
 	if s.mode == reads {
-		s.src.words[len(s.src.words)-1][2] = rawEnd
+		s.src.endWord(-1, rawEnd)
 		return
 	}
-	s.src.tokens[len(s.src.tokens)-1][1] = rawEnd
+	s.src.endToken(rawEnd)
 	s.to.closeEdit(rawEnd)
 }
 
@@ -1041,8 +1200,7 @@ func (s *ruleStage) carryTrail(text string, lo, at int, eof bool) int {
 	}
 	s.run = openRun{}
 	end := s.raw.at(lo + i)
-	w := &s.src.words[len(s.src.words)-1]
-	w[1], w[2] = end, end
+	s.src.endWord(end, end)
 	return i
 }
 
@@ -1119,8 +1277,7 @@ func (s *ruleStage) carrySeparator(text string, lo, at, limit int, eof bool) int
 func (s *ruleStage) claimSeparator(end int) {
 	rawEnd := s.raw.at(end)
 	if s.run.claimed {
-		w := &s.src.words[len(s.src.words)-1]
-		w[1], w[2] = rawEnd, rawEnd
+		s.src.endWord(rawEnd, rawEnd)
 	} else {
 		s.src.word([3]int{s.raw.at(s.run.start), rawEnd, rawEnd})
 	}
@@ -1232,8 +1389,22 @@ type keyStage struct {
 	sources []*claimSource
 	to      sink
 	done    bool
-	// floor is where its next window begins ([claimSource.floor]).
+	// floor is where its next window begins: no claim that ends at it or
+	// before it is asked of again ([claimSource]).
 	floor int
+	// arrived is how much of the text the stages have been handed, the
+	// piece the claims stages are being handed included: what a claim's
+	// change trails the text by is arrived less where it lies.
+	arrived int
+	// observe is told what the stage and its claims do, where a test sets
+	// it; nil in every stream.
+	observe *keyObserver
+}
+
+// keyObserver is what a test is told of a keys' stage: each claim that
+// changes, the source and the place it changed at ([claimSource.changed]).
+type keyObserver struct {
+	changed func(c *claimSource, place int)
 }
 
 // take hands the stage the next stretch of the text.

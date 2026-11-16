@@ -184,29 +184,63 @@ func TestAStreamAnswersItsWritersErrorAndRefusesAWriteOnceClosed(t *testing.T) {
 	}
 }
 
-// BenchmarkStreamAtThePlaintextBound streams 256 MiB of what a kept session
-// holds (prose and tool output in JSON lines, a credential now and then, and
-// base64 images) through a [redact.Stream] in 64 KiB writes, the most the
-// take's scrub reads of an archive at once: the plaintext bound of one reading
-// (internal/sandbox/executor's scrubExpansion times the archive's), which
-// internal/sandbox's SessionScrubWait reads twice within its two minutes.
+// BenchmarkStreamAtThePlaintextBound streams 256 MiB of text through a
+// [redact.Stream] in 64 KiB writes, the most the take's scrub reads of an
+// archive at once: the plaintext bound of one reading (internal/sandbox/
+// executor's scrubExpansion times the archive's), which internal/sandbox's
+// SessionScrubWait reads twice within its two minutes. Two texts: what a kept
+// session holds (prose and tool output in JSON lines, a credential now and
+// then, and base64 images), and a key's armour and then 200-byte tokens back
+// to back, which the first rules collapse into markers, so every claims stage
+// after them steps at the markers it holds.
 //
-// Recorded on two cores of a runner shared with other work, 2026-11-15: 19.7
-// MB/s, 13.6 s a reading at the bound, under a quarter of the minute each of
-// the scrub's two readings has. Over 64 MiB of the same text, Secrets, which
-// reads it whole, ran at about 95 MB/s, and the stages with no key's armour to
-// read (fed a whole text that holds none) at about 43.
+// Recorded on two cores of a runner shared with other work, 2026-11-16: the
+// kept session at 19.0 MB/s, 14.1 s a reading at the bound, under a quarter
+// of the minute each of the scrub's two readings has (19.7 MB/s on
+// 2026-11-15, before a claims stage stepped at markers); the dense tokens at
+// 10.0 MB/s, 26.8 s a reading, under half of it, every claims stage after the
+// first rules writing a window's copy a piece to step at the markers they
+// hold. Over 64 MiB of the kept session, Secrets, which reads it whole, ran at
+// about 95 MB/s, and the stages with no key's armour to read (fed a whole text
+// that holds none) at about 43.
 func BenchmarkStreamAtThePlaintextBound(b *testing.B) {
-	text := keptSession(256 << 20)
-	b.SetBytes(int64(len(text)))
-	for b.Loop() {
-		s := redact.NewStream(io.Discard)
-		for at := 0; at < len(text); at += 64 << 10 {
-			_, _ = s.Write(text[at:min(len(text), at+64<<10)])
-		}
-		_ = s.Close()
+	for _, c := range []struct {
+		name string
+		text func(int) []byte
+	}{
+		{"kept session", keptSession},
+		{"dense tokens", denseTokens},
+	} {
+		b.Run(c.name, func(b *testing.B) {
+			text := c.text(256 << 20)
+			b.SetBytes(int64(len(text)))
+			for b.Loop() {
+				s := redact.NewStream(io.Discard)
+				for at := 0; at < len(text); at += 64 << 10 {
+					_, _ = s.Write(text[at:min(len(text), at+64<<10)])
+				}
+				_ = s.Close()
+			}
+			b.ReportMetric(float64(b.Elapsed())/float64(b.N)/float64(time.Second), "s/reading")
+		})
 	}
-	b.ReportMetric(float64(b.Elapsed())/float64(b.N)/float64(time.Second), "s/reading")
+}
+
+// denseTokens is n bytes of a key's armour and then 200-byte tokens back to
+// back, a space apart.
+func denseTokens(n int) []byte {
+	r := rand.New(rand.NewPCG(1, 2))
+	const b64url = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	b := make([]byte, 0, n+256)
+	b = append(b, "a key: -----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\n\n"...)
+	for len(b) < n {
+		b = append(b, "sk-"...)
+		for range 197 {
+			b = append(b, b64url[r.IntN(64)])
+		}
+		b = append(b, ' ')
+	}
+	return b[:n]
 }
 
 // keptSession is n bytes of what a kept session holds: JSON lines of prose and
