@@ -105,6 +105,18 @@ func holdShapes(n int) []holdShape {
 		{"gd2 an armour, its key's line, a Google token and its dots on the next", func() string {
 			return "a key: " + testBegin + "\n" + testKeyLine + "\nya29." + long[:30] + dots + " \n" + tail
 		}},
+		{"gd3 a key on one line, a Google token on it and dots that end with a byte of its own", func() string {
+			return testBegin + " " + testKeyLine + " ya29." + long[:30] + dots + "a " + testEnd + "\n" + tail
+		}},
+		{"gd4 a key on one line, a Google token on it and dots to the text's end", func() string {
+			return testBegin + " " + testKeyLine + " ya29." + long[:30] + dots
+		}},
+		{"gd5 a key's line, a Google token and its dots, the key's END read back after them", func() string {
+			return testKeyLine + "\n" + testKeyLine + " ya29." + long[:30] + dots + "\n" + testKeyLine + "\n" + testEnd + "\n" + tail
+		}},
+		{"gd6 a key on one line, two Google tokens on it, the first's dots stopping", func() string {
+			return testBegin + " " + testKeyLine + " ya29." + long[:30] + "... ya29." + long[30:60] + dots + " " + testEnd + "\n" + tail
+		}},
 		{"hc1 an armour, 200 B tokens", func() string { return head + repeat(sk200, n) }},
 		{"hc2 an armour, 237 B JSON Web Tokens", func() string { return head + repeat(jwt237, n) }},
 		{"hc3 an armour, run tokens of 60 KiB subjects", func() string { return head + repeat(rt, n) }},
@@ -344,16 +356,22 @@ func TestNoTextHoldsAStreamPastItsWindowsAndItsHold(t *testing.T) {
 // AWS secrets' quoted keys drawn at random and cut at random, at a hold far
 // below the stream's own, so most of their armours' windows are decided early;
 // over a shape of every hold a stream was found to have, at a hold of 256 KiB,
-// of which exactly those named refuse; and at the stream's own hold, over a
-// run, a key's block and a run of an earlier rule, which writes Secrets, and
-// over a key on one line with a Google token on it whose dots run past the
-// hold, which refuses: the window that reads the key read the token open,
-// and its end, before the dots, inside the window, is set only once they stop.
+// of which exactly those named refuse, a Google token beside a key whose dots
+// run past the hold, ending with a byte of its own, a space or the text's
+// end, among those that do not; and at the stream's own hold, over a run, a
+// key's block and a run of an earlier rule, and over a key on one line with a
+// Google token on it whose dots run past the hold, each of which writes
+// Secrets: the window that reads the key read the token open, and its end,
+// before the dots, inside the window, is set only once they stop, but what
+// the window read of it differs only over the dots, which it asked nothing of.
 //
 // Mutation: step no claims stage at a marker ([ruleStage.markerToStepAt]), and
-// the shape at the stream's own hold refuses; read an end set inside an early
-// window on a claim it read open as no change ([keyStage.ended]), and a random
-// text here is written otherwise with Close nil; or write a span an early
+// a run, a key's block and a run of an earlier rule at the stream's own hold
+// refuses; check an end set late from where its claim begins
+// ([keyStage.ended]), and the key on one line with a Google token on it
+// refuses; read an end set inside an early window on a claim it read open as
+// no change, and a random text here is written otherwise with Close nil; or
+// write a span an early
 // window moved to or before its start ([keyStage.readArmours]), and the stage
 // panics on a run past what claims it reads beside a key on one line.
 func TestAStreamThatDecidesEarlySaysSo(t *testing.T) {
@@ -370,8 +388,8 @@ func TestAStreamThatDecidesEarlySaysSo(t *testing.T) {
 	}
 	// A shape of every hold, and those that read a claim otherwise: at
 	// this hold a token's claim too can come past it, and these refuse.
-	each := []string{"a1", "b1", "c1", "d4", "e1", "g2", "gd1", "gd2", "hc1", "pb1", "pc4", "pd2"}
-	refuse := []string{"c1", "e1", "g2", "gd1", "pb1", "pc4"}
+	each := []string{"a1", "b1", "c1", "d4", "e1", "g2", "gd1", "gd2", "gd3", "gd4", "gd5", "gd6", "hc1", "pb1", "pc4", "pd2"}
+	refuse := []string{"c1", "e1", "g2", "pb1", "pc4"}
 	for _, s := range holdShapes(768 << 10) {
 		if !slices.Contains(each, s.name[:strings.IndexByte(s.name, ' ')]) {
 			continue
@@ -390,7 +408,7 @@ func TestAStreamThatDecidesEarlySaysSo(t *testing.T) {
 		}
 		text := s.text()
 		got := readHolding(text, holdBytes(), nil, 0)
-		if (got.err != nil) != (name == "gd1") {
+		if got.err != nil || got.early == 0 {
 			t.Errorf("%s at the stream's own hold: Close answered %v, %d windows decided early", s.name, got.err, got.early)
 		}
 		checkReading(t, s.name+" at the stream's own hold", text, got)
@@ -457,9 +475,11 @@ func TestAnEarlyWindowsFootprintHoldsEveryClaimItsAnswersRead(t *testing.T) {
 // stage that decided a window early, its footprint known, refuses a claim
 // handed more than the hold past where it lies that meets the footprint, even
 // a piece past the hold or less; an end set inside the window on a claim it
-// read open, from where the claim begins; and a word handed late whose key
-// lies before a block read forward the stage let go, with its value past where
-// the stage's next window begins, naming the key; each named from the start of
+// read open where the stretch from the end to the window's end meets the
+// footprint, and not where only the claim before the end does, to the byte;
+// and a word handed late whose key lies before a block read forward the stage
+// let go, with its value past where the stage's next window begins, naming
+// the key; each named from the start of
 // a window decided early that still waits where that comes first, and a
 // window whose claims are all known waits no longer once the stage is handed
 // more ([keyStage.settle]); past [earlyWindows] waiting, the two oldest
@@ -467,7 +487,10 @@ func TestAnEarlyWindowsFootprintHoldsEveryClaimItsAnswersRead(t *testing.T) {
 // one between two later windows' is not ([keyStage.wait]); and refuses nothing
 // for a claim that meets no footprint, or comes within the hold.
 //
-// Mutation: drop the check of a late word behind a block let go
+// Mutation: check an end set late from where its claim begins
+// ([keyStage.ended]), or from a byte either side of the end, and an end set
+// past the footprint, or at its end, is refused, or one on its last byte is
+// not; drop the check of a late word behind a block let go
 // ([keyStage.handed]), or count a change late only a piece past the hold, and
 // a miss here goes unseen; name a miss from where it was found alone
 // ([keyStage.miss]), and the late word before a waiting window names its key;
@@ -501,6 +524,11 @@ func TestALateChangeToWhatAnEarlyWindowReadIsAMiss(t *testing.T) {
 			src.tokens = [][2]int{{140 << 10, -1}}
 			k.arrived = 2 * h
 			src.endToken(145 << 10)
+		}, 100 << 10},
+		{"an end set on the footprint's last byte, on a claim it read open from before it", func(k *keyStage, src *claimSource) {
+			src.tokens = [][2]int{{140 << 10, -1}}
+			k.arrived = 2 * h
+			src.endToken(160<<10 - 1)
 		}, 100 << 10},
 		{"a late word behind a block let go", func(k *keyStage, src *claimSource) {
 			k.early, k.arrived = nil, 4*h
@@ -537,6 +565,16 @@ func TestALateChangeToWhatAnEarlyWindowReadIsAMiss(t *testing.T) {
 		{"a claim over the footprint within the hold", func(k *keyStage, src *claimSource) {
 			k.arrived = 155<<10 + h
 			src.token([2]int{155 << 10, 156 << 10})
+		}, -1},
+		{"an end set past the footprint, on a claim it read open from before it", func(k *keyStage, src *claimSource) {
+			src.tokens = [][2]int{{140 << 10, -1}}
+			k.arrived = 2 * h
+			src.endToken(165 << 10)
+		}, -1},
+		{"an end set at the footprint's end, on a claim it read open from inside it", func(k *keyStage, src *claimSource) {
+			src.tokens = [][2]int{{155 << 10, -1}}
+			k.arrived = 2 * h
+			src.endToken(160 << 10)
 		}, -1},
 		{"an end set past the window", func(k *keyStage, src *claimSource) {
 			src.tokens = [][2]int{{140 << 10, -1}}

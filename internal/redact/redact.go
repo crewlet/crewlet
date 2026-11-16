@@ -147,19 +147,21 @@
 // only where it is decided further past it: by the password's reader, which
 // decides a key before a marker only with what follows the marker, a run of
 // any length, and holds a step of its own input, which tokens the rules before
-// it collapse into markers make as long as the collapse; by an AWS secret's
-// reader, which claims a quoted key where the blanks after it end; and at a
-// Google token's end before the dots it may end on, which its stage counts
-// while they run and sets only once they stop. The keys' stage keeps what
-// each such window asked of the claims, and a claim that then comes, or ends,
-// otherwise over it stops the stream: what it wrote is not Secrets of the
-// text and may hold what Secrets redacts, so its caller neither keeps nor
-// shows it. A text gets that only where a key's block is read beside such a
-// claim: many password's keys between an armour and a run longer than the
-// lag, armours among long tokens each with a password's key after it, or a key
-// on one line with a Google token on it whose dots run on past the lag. None
-// is a credential's format. A window decided early that read no claim
-// otherwise decided what the whole text does.
+// it collapse into markers make as long as the collapse; and by an AWS
+// secret's reader, which claims a quoted key where the blanks after it end.
+// The one run's end that comes later than the lag, a Google token's before
+// the dots it may end on, which its stage counts while they run and sets only
+// once they stop, is read otherwise by a window that read the token open only
+// from that end on, over the dots, and is checked over that alone
+// ([keyStage.ended]). The keys' stage keeps what each such window asked of
+// the claims, and a claim that then comes, or ends, otherwise over it stops
+// the stream: what it wrote is not Secrets of the text and may hold what
+// Secrets redacts, so its caller neither keeps nor shows it. A text gets that
+// only where a key's block is read beside such a claim: many password's keys
+// between an armour and a run longer than the lag, or armours among long
+// tokens each with a password's key after it. Neither is a credential's
+// format. A window decided early that read no claim otherwise decided what
+// the whole text does.
 //
 // # What a password's rule still publishes
 //
@@ -2823,11 +2825,10 @@ const maxKeyLine = 76 + 1
 // and read whole, clean text costs a scan per rule and no copy. [Stream] runs
 // the same passes as stages over a text it does not hold, each deciding with
 // this code over its window ([rule.decide], [keyReading]); they write what
-// this does, or refuse a text built against the password's rule, an AWS
-// secret's quoted key, or a Google token's dots past the claims' lag, beside
-// a key's armour ([ErrDecidedEarly]), which the stream's tests hold over texts
-// of every shape a stage carries across its window, each window's edge at
-// every byte around the shapes there. Read by the stages too, a text past a
+// this does, or refuse a text built against the password's rule or an AWS
+// secret's quoted key beside a key's armour ([ErrDecidedEarly]), which the
+// stream's tests hold over texts of every shape a stage carries across its
+// window, each window's edge at every byte around the shapes there. Read by the stages too, a text past a
 // window paid for windows it did not need, the redaction 3.4 to 4.4 times as
 // slow, and about 75 bytes allocated a byte of it, where clean text here
 // allocates none.

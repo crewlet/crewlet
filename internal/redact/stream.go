@@ -39,10 +39,10 @@ const (
 // in the table, the term the stream's memory figure counts for the keys'
 // stage waiting on its claims ([keyStage.frontier]). Every token's and AWS
 // secret's claim is known within it ([ruleStage.markerToStepAt]), and so is
-// every run's end but a Google token's before dots that run on past it, so a
-// window it decides early can be wrong only on what the password's reader, or
-// an AWS secret's quoted key, decides past it, and on where such a Google
-// token ends.
+// every run's end but a Google token's before dots that run on past it, which
+// a window decided early read otherwise only over the dots ([keyStage.ended]);
+// so a window it decides early can be wrong only on what the password's
+// reader, or an AWS secret's quoted key, decides past it.
 //
 // A smaller H holds less of the text and decides more windows early, so more
 // texts are refused ([ErrDecidedEarly]); a larger one the reverse. At this one
@@ -90,9 +90,8 @@ const wholeBytes = stageStep
 // not [Secrets] of the text and may hold what Secrets redacts, so the caller
 // must neither keep nor show any of it. A text gets it only where a key's
 // block is read beside a password's key, or an AWS secret's quoted key, whose
-// claim is decided more than the claims' lag past it, or beside a Google
-// token whose dots run on past the lag, whose end before them is set only once
-// they stop: texts no credential's format writes.
+// claim is decided more than the claims' lag past it: texts no credential's
+// format writes.
 var ErrDecidedEarly = errors.New("redact: the stream decided a window before a claim it read was known")
 
 // decidedEarly is [ErrDecidedEarly] and the first byte of the text from which
@@ -121,9 +120,8 @@ var errStreamClosed = errors.New("redact: write to a closed stream")
 // claim there was known, and a claim it read came otherwise. What the stream
 // wrote is then not the text redacted, and may hold what the redaction takes
 // out, so the caller must neither keep nor show any of it. Only a text built
-// against the password's rule, or an AWS secret's quoted key, or a Google
-// token followed by dots past the claims' lag, beside a key's armour is
-// refused (the package doc's "A text that arrives in pieces").
+// against the password's rule, or an AWS secret's quoted key, beside a key's
+// armour is refused (the package doc's "A text that arrives in pieces").
 //
 // HOW THE TEXT IS CUT INTO WRITES CHANGES NOTHING IT DOES: it hands its stages
 // the text a piece at a time at the text's own offsets, each piece ending at a
@@ -585,7 +583,7 @@ func (c *claimSource) word(w [3]int) {
 func (c *claimSource) endToken(end int) {
 	t := &c.tokens[len(c.tokens)-1]
 	t[1] = end
-	c.keys.ended(c, t[0], end)
+	c.keys.ended(c, end)
 }
 
 // endWord sets the ends of the word claimed last, claimed while open: its
@@ -596,7 +594,7 @@ func (c *claimSource) endWord(sep, end int) {
 		w[1] = sep
 	}
 	w[2] = end
-	c.keys.ended(c, w[0], end)
+	c.keys.ended(c, end)
 }
 
 // prune lets go of the claims that end at or before lo.
@@ -783,7 +781,9 @@ func (s *ruleStage) resume(pos int, eof bool) {
 // run, the token running on through them where a byte of its own follows, and
 // its end is set only once a byte outside its class does
 // ([ruleStage.carryToken]): before the dots, as far past where it lies as they
-// run, which no step bounds.
+// run, which no step bounds. A window decided early that read the token open
+// read it otherwise only from that end on, over the dots, so that is all the
+// end is checked over ([keyStage.ended]).
 //
 // NEVER THE PASSWORD'S READER: its decisions read [MaxReach] past a key in its
 // own input, past a marker, which stands for any length of the text as
@@ -1546,9 +1546,10 @@ type keyObserver struct {
 // a MISS: the window may have decided otherwise than the whole text does,
 // and the stream is refused ([ErrDecidedEarly]). A claim the window read open
 // read as running past it ([keyStage.claimsIn]), so its end set inside the
-// window is checked over all it read the claim to cover. One that meets
-// none decided what the whole text does, by induction over the windows in
-// order.
+// window is checked over the stretch from that end to where the window read
+// it to, the one stretch its answers could read otherwise ([keyStage.ended]).
+// One that meets none decided what the whole text does, by induction over
+// the windows in order.
 
 // handed checks a claim handed at a, its extent ending at end (-1 while to
 // come), a word's value ending at value, against the windows decided early;
@@ -1582,11 +1583,50 @@ func (k *keyStage) handed(c *claimSource, a, end int, word bool, value int) {
 	}
 }
 
-// ended checks the end e set on a claim at a, read open by any window
-// decided early that it ends inside: the window read the claim as running to
-// one past its end, so what it read and what is true differ from e to there,
-// and the two together run from a.
-func (k *keyStage) ended(c *claimSource, a, e int) {
+// ended checks the end e set on a claim against each window decided early
+// that it ends inside, kept in k.early as its start, its end hi and its
+// footprint: the window read the claim open, as running to one past hi
+// ([keyStage.claimsIn]), so it is a miss where [e, hi+1), the stretch the
+// claim was read to cover and does not, meets the footprint. A
+// window the claim ends past read it as the whole text does, clipped to the
+// same end.
+//
+// NOT FROM WHERE THE CLAIM BEGINS, though it covers [a, e) too: over [a, e)
+// the window answered as it would have with the claim ending at e. Its
+// answers read the claims through three questions, each over the range or
+// the place it asks of, which the footprint holds ([claims.asked]); each
+// answer the same, the next question is the same, and the window decides
+// as the whole text does wherever the footprint stays short of e.
+//
+//   - [claims.any] and [claims.names] ask whether what the claims cover
+//     takes any of [start, end). The claim read open and the claim ending at
+//     e cover the same of a range that ends at or before e. Where e is at or
+//     before the window's start, the whole text's reading leaves the claim
+//     out, and [e, hi+1) holds the window whole.
+//   - [claims.shortOfNames] asks [within] whether a place falls strictly
+//     inside a range of what names, and where that range begins. For a place
+//     before e, both readings of the claim run past it, and a range merges
+//     with the claim before the place only by beginning before it, where the
+//     two readings are the same claim: the same range, from the same start.
+//   - A password's value is the one claim [claims.build] reads other than as
+//     the stretch it covers: a block read forward from a BEGIN that holds its
+//     key takes a value that runs past the block, keeping the key and
+//     separator alone, so a value read open is cut to them, and one ending at
+//     e inside the block is kept whole. The two differ from the separator's
+//     end to e, before e. But the window that read that block forward asked
+//     of the claims at the block's end ([claims.shortOfNames]), at or past e,
+//     so its own footprint meets [e, hi+1): it was decided early, since the
+//     value's end was not known; it waits still, since the reader's frontier
+//     stands inside the value ([keyStage.settle]); and it read the value
+//     open, or the value was handed after it, late, and missed there over
+//     all the value covers ([keyStage.handed]). So that end is a miss there.
+//
+// Counted from a, the check refused every window that asked of the claim
+// before e alone: a Google token on a key's line whose end before the dots
+// it may end on is set only once they stop ([ruleStage.carryToken]) was
+// refused where the dots ran past the hold, though the window asked of
+// nothing from e on and decided as the whole text does.
+func (k *keyStage) ended(c *claimSource, e int) {
 	if o := k.observe; o != nil && o.changed != nil {
 		o.changed(c, e)
 	}
@@ -1594,10 +1634,10 @@ func (k *keyStage) ended(c *claimSource, a, e int) {
 		return
 	}
 	for _, w := range k.early {
-		if e > w[1] || a > w[1] {
+		if e > w[1] {
 			continue
 		}
-		if a < w[3] && w[2] <= w[1] {
+		if e < w[3] && w[2] <= w[1] {
 			k.miss(w[0])
 			return
 		}
