@@ -2334,8 +2334,9 @@ func (t *codeLog) Description() string {
 	return "The commits that changed a file or directory, or every commit with no `path`, newest first from a " +
 		"commit: each with its parents, author, dates, subject and the push that introduced it, read on the " +
 		"server. Use it for when and why something changed, never a clone. `grep` keeps commits whose message " +
-		"holds its words (a literal, any case); `since` those committed from then on. Subjects arrive fenced " +
-		"as content nobody vouches for."
+		"holds its words (a literal, any case); `since` those committed from then on, `until` those committed " +
+		"before then, and `pushed_by` those a seat's push brought; `unjudged` counts the commits the server " +
+		"cannot say who pushed. Subjects arrive fenced as content nobody vouches for."
 }
 
 func (t *codeLog) Parameters() map[string]any {
@@ -2360,6 +2361,14 @@ func (t *codeLog) Parameters() map[string]any {
 			"since": map[string]any{
 				"type":        "string",
 				"description": "Only commits committed at or after this time, in RFC 3339 (`2026-10-01T00:00:00Z`).",
+			},
+			"until": map[string]any{
+				"type":        "string",
+				"description": "Only commits committed before this time, in RFC 3339.",
+			},
+			"pushed_by": map[string]any{
+				"type":        "string",
+				"description": "Only commits a push by this seat brought (its handle); a person's push counts as the seat they hold.",
 			},
 			"limit": map[string]any{
 				"type": "integer",
@@ -2405,6 +2414,18 @@ func (t *codeLog) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		q.Since = since
 	}
+	if s := strings.TrimSpace(argString(args, "until")); s != "" {
+		until, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			//nolint:nilerr // A tool failure is a RESULT the model reads.
+			return failed(fmt.Sprintf("%s: `until` is a time in RFC 3339, such as 2026-10-01T00:00:00Z, "+
+				"not %q.", t.Name(), clip(s))), nil
+		}
+		q.Until = until
+	}
+	// A HANDLE THAT IS NONE is refused by the read's own validation, and
+	// answered as every invalid argument is.
+	q.PushedBy = strings.TrimSpace(argString(args, "pushed_by"))
 	repo, refusal := t.deps.repo(ctx, turn, t.Name(), c, name)
 	if refusal != nil {
 		return *refusal, nil
@@ -2431,7 +2452,8 @@ func (t *codeLog) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 	}
 	return read.page(ctx, t.Name(), gitAnswer(repo, page, map[string]resolvedRev{"rev": rev}),
-		"Ask for fewer commits with `limit`, or narrow the history with `path`, `grep` or `since`.")
+		"Ask for fewer commits with `limit`, or narrow the history with `path`, `grep`, `since`, `until` or "+
+			"`pushed_by`.")
 }
 
 // ---- code_blame --------------------------------------------------------- //

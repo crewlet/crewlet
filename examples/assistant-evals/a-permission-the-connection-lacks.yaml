@@ -1,0 +1,107 @@
+# An agent on Cloudflare's Read level needs to change an origin rule and asks
+# whether to be raised a level or granted the one permission. The assistant
+# reads the agent's access, which shows its grants, its open request and that
+# the company's own connection lacks Origin Rules: Edit, then looks the
+# permission up in the catalogue: no level holds it, and the provisioner token
+# must hold it first. Nothing is proposed: the step that comes first is a
+# person's, at Cloudflare, on the company's own token, and the agent's grant is
+# then answered in Crewlet.
+person:
+  apps: [admin]
+page:
+  screen: integrations
+  title: Integrations › Cloudflare
+  params: {kind: cloudflare}
+  query: {}
+  resources: []
+  selection: null
+  source_revision: url:2b7c9e41
+  accepts: []
+question: >-
+  The Site Reliability Engineer has to add an origin rule on example.com and
+  asks whether it should be raised to Configure or granted Origin Rules: Edit.
+  Which is it, and is anything missing on our side?
+answers:
+  - route: GET /org
+    body:
+      timezone: UTC
+      roles:
+        - {handle: sre, name: Site Reliability Engineer, kind: agent}
+  - route: GET /setup/integrations/{kind}/access/seats/{handle}/{lane}
+    body:
+      kind: cloudflare
+      lane: cloudflare
+      integration: Cloudflare
+      handle: sre
+      name: Site Reliability Engineer
+      status: in_sync
+      status_label: In sync
+      grant: Read
+      holds: Read
+      scope: Default reach
+      account: crewlet-nimbus-sre
+      tool: live
+      grants: >-
+        Workers Scripts Write on the account until 2026-11-15 18:00 UTC, granted
+        by Jane Founder on 2026-11-15 for the agent's request zyxwv98765
+      requests: >-
+        request abcde12345 asks for Origin Rules: Edit on example.com for 4
+        hours, on ENG-58 on 2026-11-15; its question grants it with
+        grant-rabcde12345-t (for 4 hours) or grant-rabcde12345-p (for good)
+      grantable: >-
+        Cloudflare offers 212 permissions beside this agent's level; the
+        company's connection lacks 170 of them
+      catalogue_read_at: "2026-11-15T15:59:20Z"
+      permissions: >-
+        Workers Scripts Write (Account, changes things, in no level): the
+        company's connection can grant it; Origin Rules: Edit (Zone, changes
+        things, in no level): The provisioner token does not hold Origin Rules:
+        Edit; a person adds Origin Rules: Edit to the company's connection at
+        https://dash.cloudflare.com/profile/api-tokens
+      at_vendor:
+        label: Add to the company's connection at Cloudflare
+        add: ["Origin Rules: Edit"]
+        url: https://dash.cloudflare.com/profile/api-tokens
+      lookup:
+        - {id: Origin Read, name: "Origin Rules: Read", group: Zone, write: false, level: No level, grantable: "Yes"}
+        - id: Origin Write
+          name: "Origin Rules: Edit"
+          group: Zone
+          write: true
+          level: No level
+          grantable: "The provisioner token does not hold Origin Rules: Edit"
+          missing: "Origin Rules: Edit"
+          action_url: https://dash.cloudflare.com/profile/api-tokens
+      checked_at: "2026-11-15T15:58:00Z"
+      applied_at: "2026-11-15T14:02:00Z"
+      outcome: Applied
+      plan: []
+script:
+  - call: get_seat_access
+    args: {handle: Site Reliability Engineer, integration: cloudflare}
+  - call: search_grant_catalogue
+    args: {handle: Site Reliability Engineer, integration: cloudflare, q: Origin Rules}
+  - say: >-
+      A grant, not Configure: no Cloudflare level holds Origin Rules: Edit, so
+      raising the Site Reliability Engineer would not give it. Its request for
+      Origin Rules: Edit on example.com for 4 hours is already open on ENG-58.
+      Before it can be granted, the company's own Cloudflare token lacks
+      Origin Rules: Edit: somebody has to add it to that token at Cloudflare
+      first. Crewlet reads the catalogue again within a minute, and the
+      request can then be granted for its 4 hours.
+expect:
+  calls: [get_seat_access, search_grant_catalogue]
+  never: [set_seat_access, answer_decision]
+  proposals: 0
+  shows:
+    - Grants beside its level
+    - Open requests
+    - grant-rabcde12345-t
+    - Can be granted
+    - "a person adds Origin Rules: Edit to the company's connection"
+    - Permissions in the catalogue
+    - Add at the vendor
+    - "The provisioner token does not hold Origin Rules: Edit"
+    - Add at the vendor first
+    - Add to the company's connection at Cloudflare
+  says: [no Cloudflare level holds, add it to that token at Cloudflare]

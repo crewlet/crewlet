@@ -1752,6 +1752,7 @@ const waitingOn = (handle: string, n: number, capped = false) => ({
   items: [],
   total: n,
   answerable: 0,
+  more: false,
   capped,
 });
 

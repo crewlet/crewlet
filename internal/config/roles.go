@@ -215,8 +215,10 @@ type RolePlacement struct {
 	// nodeIDPattern.
 	Node string `yaml:"node,omitempty" json:"node,omitempty" js:"pattern=^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" desc:"Exact node id to pin this seat to."`
 
-	// Labels are pairs a node must carry, ALL of them, matched exactly.
-	Labels map[string]string `yaml:"labels,omitempty" json:"labels,omitempty" desc:"Node labels that must all match."`
+	// Labels are pairs a node must carry, ALL of them, matched exactly, and
+	// so held to node.labels' own bounds: no more than a node can carry, each
+	// value in [placement.CheckLabelValue]'s grammar.
+	Labels map[string]string `yaml:"labels,omitempty" json:"labels,omitempty" js:"maxkeys=16" desc:"Node labels that must all match: at most 16, each value at most 64 bytes of printable text."`
 }
 
 // Seat is the placement constraint in the form the seat host consumes.
@@ -238,11 +240,12 @@ func (p *RolePlacement) Seat() placement.SeatPlacement {
 //
 // EVERY PART IS MATCHED EXACTLY against what a node advertises, and what a
 // node advertises has already passed Tier A: its id holds to [nodeIDPattern],
-// its label keys to [placement.CheckLabelKey], and every label value has been
-// trimmed of the whitespace around it. A selector outside those shapes is not
-// a narrow placement but an impossible one — the seat is served by nobody,
-// and the only symptom is a seats_unplaceable line on a running fleet, long
-// after the document that caused it validated clean. So the grammars are the
+// its label keys to [placement.CheckLabelKey], its values to
+// [placement.CheckLabelValue] (every one also trimmed of the whitespace around
+// it as the file loads), and their count to [placement.MaxLabels]. A selector
+// outside those shapes is not a narrow placement but an impossible one — the
+// seat is served by nobody, and the only symptom is a seats_unplaceable line
+// on a running fleet, long after the document that caused it validated clean. So the grammars are the
 // SAME ONES, reached rather than restated, because a copy that drifted would
 // reopen exactly that gap.
 //
@@ -267,6 +270,15 @@ func (p *RolePlacement) validate(path Path) error {
 	}
 
 	labels := at(path, "labels")
+	// A SELECTOR NAMING MORE LABELS THAN A NODE CAN CARRY can never be
+	// matched: every one must be on the node, and node.labels holds at most
+	// placement.MaxLabels.
+	if len(p.Labels) > placement.MaxLabels {
+		probs.add(labels, ErrOutOfRange,
+			"%d labels, at most %d: a node carries at most %d under node.labels, and "+
+				"this seat is placed only on a node carrying every one, so it could "+
+				"never be placed", len(p.Labels), placement.MaxLabels, placement.MaxLabels)
+	}
 	// Sorted, so a document with several bad keys reports them in the
 	// same order on every run rather than in map order.
 	for _, key := range slices.Sorted(maps.Keys(p.Labels)) {
@@ -286,11 +298,12 @@ func (p *RolePlacement) validate(path Path) error {
 					"under node.labels, and no node can carry one outside "+
 					"that grammar", err)
 		}
-		if value := p.Labels[key]; strings.TrimSpace(value) != value {
+		if err := placement.CheckLabelValue(p.Labels[key]); err != nil {
 			probs.add(where, ErrUnknownValue,
-				"the value %q has whitespace around it, and every node's "+
-					"label values are trimmed of theirs, so no node could "+
-					"ever match it: write %q", value, strings.TrimSpace(value))
+				"%v. This seat is placed only on a node carrying the value under "+
+					"node.labels, and no node can carry one outside that grammar "+
+					"(every node's values are also trimmed of the whitespace "+
+					"around them as its file loads)", err)
 		}
 	}
 	return probs.err()

@@ -75,6 +75,10 @@ import (
 // the round's calls in that relaunch's brief tells it again — while one an
 // earlier answer of the round approved, which no lead of it tells, is told as
 // any call is (runner.BridgedCall.HeldID).
+//
+// AND THE ID ITS HARNESS GAVE IT ([sandbox.BridgeCall.CallID]), the box's
+// word and no part of its identity, which only a reading of what a cut-off
+// kept session holds is asked by (runner.BridgedCall.CallID).
 func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 	out := make([]runner.BridgedCall, 0, len(logged))
 	for _, call := range logged {
@@ -106,6 +110,7 @@ func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 			Held:        call.Held,
 			Approved:    call.Approved,
 			HeldID:      call.HeldID,
+			CallID:      call.CallID,
 		})
 	}
 	return out
@@ -122,6 +127,12 @@ func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 // submission or a load, and answered with the words that say its effects may
 // stand ([runner.UnfinishedNote]), never as a plain failure, which a run would
 // make again.
+//
+// AND THE ID ITS HARNESS GAVE IT ([sandbox.BridgeCall.CallID]), as a finished
+// call carries it: a reading of what a cut-off kept session holds names the
+// finished calls it is asked of by their ids, and the session may show a call
+// still in flight under the id a finished one carries, so the runner asks of
+// no call whose id one in flight carries too (runner.BridgedCall.CallID).
 func unfinishedCalls(entries []sandbox.BridgeCall) []runner.BridgedCall {
 	if len(entries) == 0 {
 		return nil
@@ -131,7 +142,7 @@ func unfinishedCalls(entries []sandbox.BridgeCall) []runner.BridgedCall {
 		out = append(out, runner.BridgedCall{
 			Call: ledger.Call{Name: entry.Name, Result: runner.UnfinishedNote, Failed: true,
 				Digest: entry.Digest, Unfinished: true},
-			Seq: entry.Seq, StartedAt: entry.StartedAt,
+			Seq: entry.Seq, StartedAt: entry.StartedAt, CallID: entry.CallID,
 		})
 	}
 	return out

@@ -119,11 +119,14 @@ type CarriedSession struct {
 
 // CarryCheck is a box's answer to whether a session carried from another box
 // can be continued in it (executor's Runner.CheckCarry), with the release of
-// the box's harness it read to decide, which the run's record carries.
+// the box's harness it read to decide, asked before the run's brief is chosen:
+// what decides whether the brief told by a reading of what the session holds
+// is handed ([ExactTelling]).
 type CarryCheck struct {
 	// Version is the box harness's release as its `--version` gave it
 	// ("2.1.310"); "" where it printed nothing this build can read, which is
-	// taken for a current release.
+	// taken for a current release, and which matches no release a reading
+	// was read for ([ExactTelling.Resumer]).
 	Version string
 
 	// Continues says the session can be continued here.

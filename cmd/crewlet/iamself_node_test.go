@@ -41,11 +41,11 @@ func TestYourOwnTokenMintsOnARealNode(t *testing.T) {
 	// OPTIONAL on a loopback address, which is the posture a laptop runs and
 	// the one `crewlet validate` admits without an acknowledgement; the
 	// second factor has cases of its own.
-	boot.API.Auth.TOTP = iam.SecondFactorOptional
 	company, err := config.ParseCompany([]byte(peopleCompanyYAML))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
+	passwordOnly(boot, company)
 	e, err := engine.New(t.Context(), engine.Options{Bootstrap: boot, Company: company})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)

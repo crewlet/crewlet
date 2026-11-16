@@ -342,9 +342,9 @@ shards, heaviest first, each package to the shard carrying the least so far;
 without weights the deal is by package count. A package weighs its CPU in
 `make test`'s half, whose runners are CPU-bound, so a package's wall time
 there grows with whatever shares the machine with it, and its wall time in
-`make test-solo`'s, which runs one package at a time; skipgate estimates a
-package's CPU as its share of the run's CPU by its share of the tests' busy
-time. The file must exist
+`make test-solo`'s, which runs one package at a time; skipgate reads a
+package's CPU at its test binary, through go test's `-exec`, which it hands
+the `go test` it runs whenever `TEST_TIMINGS` is set. The file must exist
 (`internal/solo/partition` refuses one it cannot open rather than guess), and
 an empty file is `go list`'s order. CI's weights are the shards' timings from
 the last passing run on `main`, merged by `go run ./internal/solo/partition
@@ -2189,6 +2189,15 @@ what readers see in the generated release notes. See below.
    someone running Crewlet — rather than as a commit log. Labels
    group it: Dependabot's `dependencies` label sorts bumps to the bottom (see
    `.github/release.yml`).
+
+**A pull request's CI run stops at its first failed job.** Every job of
+`ci.yml` has to pass before a merge, so one red job already means another push,
+and that push cancels the run. So
+[`ci-cancel.yml`](.github/workflows/ci-cancel.yml) cancels the rest as soon as
+a job fails, rather than let it hold runners other pull requests are waiting
+for, and the run shows the first failure rather than every one. **Re-run
+failed jobs** re-runs the cancelled jobs too, so a flaky failure costs the
+whole run again. A run on `main` is never cancelled.
 
 Small, focused PRs are much easier to review than large ones. If you are
 planning a substantial change — a new subsystem, or a reshaping of the config

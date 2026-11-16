@@ -211,6 +211,7 @@ function mount() {
                 unavailable={null}
                 model={null}
                 attach={null}
+                deliberate={false}
                 admin={false}
                 onClose={() => {}}
                 initialFocus="composer"

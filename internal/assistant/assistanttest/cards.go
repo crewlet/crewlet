@@ -45,6 +45,10 @@ const (
 // code, which only the handler shows.
 type ValueTypes map[string]reflect.Type
 
+// AnswerScope is the [ValueTypes] key of the answer's own type, which a member
+// the answer leaves out (omitted where empty) is held to.
+const AnswerScope = "answer"
+
 // HoldCard holds every path spec reads to answer, the decoded body a route's
 // handler gave the request a tool named name sent, and fails each one the
 // answer does not hold:
@@ -93,7 +97,11 @@ func HoldCard(t testing.TB, name string, spec cards.Spec, answer any, types Valu
 		}
 		held++
 		if p.From == scopeAnswer {
+			// A member the answer leaves out is held to its declared type ([AnswerScope]).
 			if !Present(answer, p.Path) {
+				if typ := consult(AnswerScope); typ != nil && TypeHolds(typ, p.Path) {
+					continue
+				}
 				t.Errorf("%s reads %q from its answer, which has no such key: %.300s", name,
 					p.Path, encoded(answer))
 			}
@@ -136,31 +144,44 @@ func HoldCard(t testing.TB, name string, spec cards.Spec, answer any, types Valu
 }
 
 // heldBy reports whether some value holds path: to its end, or to a null whose
-// declared type ([ValueTypes], at scope and the keys walked) holds the rest.
+// declared type ([ValueTypes], at scope and the keys walked) holds the rest. A
+// step that reaches a list steps into its entries, as a card writes a list
+// entry by entry (cards.Entries): some entry must hold the rest.
 func heldBy(values []any, scope, path string, consult func(string) reflect.Type) bool {
 	keys := strings.Split(path, ".")
 	for _, v := range values {
-		for i, key := range keys {
-			obj, ok := v.(map[string]any)
-			if !ok {
-				break
-			}
-			if v, ok = obj[key]; !ok {
-				break
-			}
-			if i == len(keys)-1 {
-				return true
-			}
-			if v == nil {
-				at := scope + "." + strings.Join(keys[:i+1], ".")
-				if typ := consult(at); typ != nil && TypeHolds(typ, strings.Join(keys[i+1:], ".")) {
-					return true
-				}
-				break
-			}
+		if holds(v, keys, 0, scope, consult) {
+			return true
 		}
 	}
 	return false
+}
+
+// holds reports whether v holds keys[i:], each key a member of an object and
+// a list's entries each walked in its place, or a null whose declared type
+// holds the rest.
+func holds(v any, keys []string, i int, scope string, consult func(string) reflect.Type) bool {
+	if list, ok := v.([]any); ok {
+		return slices.ContainsFunc(list, func(entry any) bool {
+			return holds(entry, keys, i, scope, consult)
+		})
+	}
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return false
+	}
+	if v, ok = obj[keys[i]]; !ok {
+		return false
+	}
+	if i == len(keys)-1 {
+		return true
+	}
+	if v == nil {
+		at := scope + "." + strings.Join(keys[:i+1], ".")
+		typ := consult(at)
+		return typ != nil && TypeHolds(typ, strings.Join(keys[i+1:], "."))
+	}
+	return holds(v, keys, i+1, scope, consult)
 }
 
 // cardScopes are what a card reads its row, record and item paths from: the
@@ -235,10 +256,10 @@ func Present(v any, path string) bool {
 
 // TypeHolds reports whether a value of type t encodes path: each step a JSON
 // member of a struct, an embedded struct's members promoted as encoding/json
-// promotes them, through pointers.
+// promotes them, through pointers and into a list's entries.
 func TypeHolds(t reflect.Type, path string) bool {
 	for _, key := range strings.Split(path, ".") {
-		for t.Kind() == reflect.Pointer {
+		for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice {
 			t = t.Elem()
 		}
 		if t.Kind() != reflect.Struct {
@@ -251,6 +272,59 @@ func TypeHolds(t reflect.Type, path string) bool {
 		t = next
 	}
 	return true
+}
+
+// EngineLink reports whether path from type t names a string field tagged
+// `link:"engine"`: the only field a card may draw as a step outside Crewlet.
+func EngineLink(t reflect.Type, path string) bool {
+	keys := strings.Split(path, ".")
+	for i, key := range keys {
+		for t.Kind() == reflect.Pointer {
+			t = t.Elem()
+		}
+		if t.Kind() != reflect.Struct {
+			return false
+		}
+		f, ok := jsonField(t, key)
+		if !ok {
+			return false
+		}
+		if i == len(keys)-1 {
+			return f.Type.Kind() == reflect.String && f.Tag.Get("link") == "engine"
+		}
+		t = f.Type
+	}
+	return false
+}
+
+// jsonField is the field of struct t encoding/json writes as name.
+func jsonField(t reflect.Type, name string) (reflect.StructField, bool) {
+	for i := range t.NumField() {
+		f := t.Field(i)
+		tag, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if tag == "-" || (!f.IsExported() && !f.Anonymous) {
+			continue
+		}
+		if f.Anonymous && tag == "" {
+			inner := f.Type
+			for inner.Kind() == reflect.Pointer {
+				inner = inner.Elem()
+			}
+			if inner.Kind() == reflect.Struct {
+				if found, ok := jsonField(inner, name); ok {
+					return found, true
+				}
+			}
+			continue
+		}
+		if tag == "" {
+			tag = f.Name
+		}
+		if tag == name {
+			return f, true
+		}
+	}
+	return reflect.StructField{}, false
 }
 
 // memberMissing is a key of v (a decoded object) that type t has no member
@@ -358,8 +432,12 @@ var (
 	rawType  = reflect.TypeFor[json.RawMessage]()
 )
 
+// fillDepth is the deepest a filled value is set, which ends a recursive type and
+// reaches a decision's option fields (a page, a row, its decision, an option).
+const fillDepth = 7
+
 func fill(v reflect.Value, at time.Time, depth int) {
-	if depth > 6 || !v.CanSet() {
+	if depth > fillDepth || !v.CanSet() {
 		return
 	}
 	switch v.Type() {

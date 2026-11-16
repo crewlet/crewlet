@@ -64,7 +64,9 @@ import "slices"
 // stamped, in a fleet mid-upgrade. So a continuation of such a capture is told
 // every call of its round, within the prior-work ledger's budgets, and its
 // brief, and the floor its launch is held to (internal/engine's
-// continuedFloor), grow with them.
+// continuedFloor), grow with them; where no reading of its archive says which
+// of them the session holds ([Coordinator.HoldingsOf]): a brief told by a
+// reading tells only the ones it does not find held.
 //
 // A SAVE IS PLACED THE SAME WAY ([SessionTake.Save]; this version stamps
 // none), packed as it is while its job still works — and by one more capture
@@ -76,7 +78,10 @@ import "slices"
 // A continuation from such a capture is told every call after that point, a
 // subagent's included, and the ones its harness had already recorded are told
 // again, as a continuation already accepts ([SessionCapture.Through]): told
-// more than once, never not at all. The places an older build reads a save
+// more than once, never not at all. Where a reading of the capture's archive
+// finds the session holding a call's logged result, the brief told by it
+// leaves that call out ([ExactTelling]), and tells a call it finds in an
+// unreported subagent's thread under that subagent's name. The places an older build reads a save
 // point by come from the same capture as the point ([SessionCapture.BridgeSeq],
 // [SessionCapture.BridgeOpen]), so a peer reading them is never told less.
 

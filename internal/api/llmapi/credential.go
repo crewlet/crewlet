@@ -535,28 +535,25 @@ func entriesReading(company *config.Company, names []string) []string {
 	return out
 }
 
-// sittingOutHere is which of keys THIS node's latest beat reports sitting
+// sittingOutHere is which of keys THIS node's status record reports sitting
 // out: the entries whose previous sign-in a new credential replaces, and so
-// starts clean.
+// starts clean. Its record counts only at its live presence's epoch
+// ([coord.LiveNodeStatuses]), so an earlier incarnation's sit-out is never
+// reported as this one's.
 func (s *Service) sittingOutHere(ctx context.Context, keys []string) ([]string, error) {
 	leases, err := s.leases.ListLive(ctx, coord.ClassNode)
 	if err != nil {
 		return nil, err
 	}
+	records, err := s.records.NodeStatusRecords(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := []string{}
 	now := s.now()
-	for _, lease := range leases {
-		if coord.NodeResource(s.node) != lease.Resource {
-			continue
-		}
-		status, ok := coord.StatusFromMeta(lease.Meta)
-		if !ok {
-			break
-		}
-		for _, m := range status.Models {
-			if m.SittingOut != nil && m.SittingOut.Until.After(now) && slices.Contains(keys, m.Key) {
-				out = append(out, m.Key)
-			}
+	for _, m := range coord.LiveNodeStatuses(records, leases)[s.node].Models {
+		if m.SittingOut != nil && m.SittingOut.Until.After(now) && slices.Contains(keys, m.Key) {
+			out = append(out, m.Key)
 		}
 	}
 	slices.Sort(out)

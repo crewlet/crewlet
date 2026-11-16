@@ -272,9 +272,10 @@ type outage struct {
 	next time.Time
 }
 
-// describe is the outage for the heartbeat and the bridge's own record:
-// the most recent reason first, and what is being done about it. Free of
-// times, so a heartbeat re-sending the same facts sends the same bytes.
+// describe is the outage for the node's status record and the bridge's own
+// record: the most recent reason first, and what is being done about it. Free
+// of times, so a record carrying the same facts is the same bytes, and its
+// writer does not write it again.
 func (o *outage) describe() string {
 	reason := o.cause
 	if o.failed != "" {

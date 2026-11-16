@@ -531,6 +531,14 @@ describe("an OAuth sign-in", () => {
     expect(fromServer(saved, [{ ...secret, set: false }], null, "oauth").secretStored).toBe(true);
     expect(entityOf(d, saved)).toEqual(saved);
     expect(valuesOf(d)).toEqual({});
+    // A typed timeout is a number of seconds, 0 or more; empty is the default.
+    expect(missingIn({ ...d, requestTimeout: "-5" }, "connection").requestTimeout).toMatch(
+      /0 or more/,
+    );
+    expect(missingIn({ ...d, startupTimeout: "soon" }, "connection").startupTimeout).toMatch(
+      /0 or more/,
+    );
+    expect(missingIn({ ...d, requestTimeout: "0", startupTimeout: "" }, "connection")).toEqual({});
     expect(missingIn(d, "signin")).toEqual({});
     expect(missingIn({ ...d, secretStored: false, clientId: "" }, "signin")).toEqual({
       clientId: "Give the id the client was registered under at the vendor.",

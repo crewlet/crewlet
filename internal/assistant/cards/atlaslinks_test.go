@@ -3,6 +3,7 @@ package cards_test
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -128,7 +129,7 @@ func TestAnEntitysItemsExpandLikeRows(t *testing.T) {
 		{Kind: wire.ResourceAtlasEntry, ID: "b", Label: "billing", Fact: "service", Depth: 1},
 		{Kind: wire.ResourceAtlasEntry, ID: "c", Label: "web-1", Fact: "host", Depth: 2},
 	} {
-		if items[i] != want {
+		if !reflect.DeepEqual(items[i], want) {
 			t.Errorf("item %d is %+v, want %+v", i, items[i], want)
 		}
 	}

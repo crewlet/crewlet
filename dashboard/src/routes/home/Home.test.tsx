@@ -557,6 +557,7 @@ describe("the decisions", () => {
           ],
           total: 0,
           answerable: 1,
+          more: false,
           capped: false,
         },
         executors: { runs: [theirs] },
@@ -583,7 +584,14 @@ describe("the decisions", () => {
     mount({
       viewer: { ...JANE, login: "token:ops", handle: "", owner: "token:ops", name: "", kind: "" },
       answers: {
-        decisions: { handle: "token:ops", items: [], total: 0, answerable: 0, capped: false },
+        decisions: {
+          handle: "token:ops",
+          items: [],
+          total: 0,
+          answerable: 0,
+          more: false,
+          capped: false,
+        },
       },
     });
     await settle();

@@ -541,7 +541,7 @@ func TestTheSessionRouteReadsAnExchangedSession(t *testing.T) {
 // that arithmetic and this case reads not due.
 func TestAStepUpIsDueOnceTheProofIsStale(t *testing.T) {
 	t.Parallel()
-	window := bootstrapFor(t).API.Auth.Session.StepUp()
+	window := config.DefaultStepUp
 	mux := http.NewServeMux()
 	surface(t).Routes(mux)
 	for _, tc := range []struct {

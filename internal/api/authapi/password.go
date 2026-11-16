@@ -283,6 +283,7 @@ func (s *Service) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	s.completeSignIn(w, r, held, signIn{
 		method: types.SignInPassword, factor: factor.factor, stepUp: true,
 		replaces: replaced.Bearer.Lineage.String(),
+		signedIn: replaced.Bearer.SignedInAt,
 		absolute: replaced.Bearer.AbsoluteExpiresAt,
 		because:  ownPasswordChanged,
 	})
@@ -301,7 +302,7 @@ func (s *Service) mayChangeOwnPassword(w http.ResponseWriter, r *http.Request,
 	proving := principal
 	// THE DEADLINE A PROOF TAKEN NOW EARNS ON THIS NODE, as the guard stamps
 	// one from a session's proof instant.
-	proving.ReauthAt = now.Add(s.boot.API.Auth.Session.StepUp())
+	proving.ReauthAt = now.Add(s.policy().StepUp)
 	d := authz.Decide(r.Context(), proving, authz.ActionCredentialProof,
 		authz.Object{Kind: authz.KindPerson, Owner: principal.ID.String()},
 		authz.NoChart{}, now)

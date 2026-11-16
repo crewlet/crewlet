@@ -144,11 +144,9 @@ type CodeFetched struct {
 	// handle; empty for a token bound to nobody.
 	Seat string `json:"seat,omitempty"`
 
-	// Via is how it was read; Kind, for a server-side read, is which read
-	// (gitlet.GitReadKind: tree, blob, diff, compare, landed_in, log and blame,
-	// and a change's revision_facts, reanchor and interdiff; or merge_preview,
-	// a comparison's merge of two commits, internal/gitlet/home's
-	// PreviewReadKind), and empty for a fetch.
+	// Via is how it was read; Kind, for a server-side read, is which read (one
+	// of gitlet.GitReadKinds, or merge_preview, a comparison's merge of two
+	// commits, internal/gitlet/home's PreviewReadKind), and empty for a fetch.
 	Via  CodeFetchedVia `json:"via"`
 	Kind string         `json:"kind,omitempty"`
 

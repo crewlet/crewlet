@@ -34,6 +34,13 @@ func SetShareWait(s *GitShare, d time.Duration) { s.wait = d }
 // thousands of rows. The shipped limits are MaxSnapshotItems and MaxPageBytes.
 func SetPageLimits(r *Reader, rows, bytes int) { r.pageRows, r.pageBytes = rows, bytes }
 
+// SetRefScanBounds has a refs listing read at most scanned refs a page narrowed
+// by Contains, and count at most active branches: MaxRefsScanned and
+// MaxActiveBranchesCounted as shipped.
+func SetRefScanBounds(r *Reader, scanned, active int) {
+	r.refsScanned, r.activeCounted = scanned, active
+}
+
 // SetTipWindow has r read at most landings landings above a target's green
 // for its tip work — the cases that reach a window's bound without landing
 // MaxTipLandings pushes.

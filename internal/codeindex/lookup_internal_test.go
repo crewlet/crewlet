@@ -7,7 +7,6 @@ import (
 	"math/bits"
 	"math/rand/v2"
 	"regexp"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -125,8 +124,7 @@ func alone(f ref) bool { return f.held < 0 }
 // eighteen and ten times as much; with only the lists every word holds read
 // once, they still read 30 936, two and a half times what the 2 did.
 func TestAClauseReadsEachListItNamesOnce(t *testing.T) {
-	// Not parallel: runtime.MemStats counts every goroutine's allocations,
-	// and a parallel case's would be counted as the plan's.
+	// Not parallel: a parallel case's measured call would be counted as this one's.
 	const blobs = 2048
 	type cost struct {
 		read, named       int
@@ -201,16 +199,13 @@ func TestAClauseReadsEachListItNamesOnce(t *testing.T) {
 		if err != nil || len(set) != blobs {
 			t.Fatalf("a clause of %d words admits %d of the %d blobs holding one (%v)", words, len(set), blobs, err)
 		}
-		var before, after runtime.MemStats
-		runtime.ReadMemStats(&before)
-		got, err := plan.Candidates(s)
-		runtime.ReadMemStats(&after)
+		var got []OID
+		spent, _ := allocations(t, func() { got, err = plan.Candidates(s) })
 		if err != nil || len(got) != blobs {
 			t.Fatalf("a clause of %d words admits %d of the %d blobs holding one (%v)", words, len(got), blobs, err)
 		}
 		answer := uint64(len(got)) * oidBytes
-		return cost{read: r.read, named: named(s, c), allocated: after.TotalAlloc - before.TotalAlloc,
-			budget: answer + 3*shared + common}
+		return cost{read: r.read, named: named(s, c), allocated: spent, budget: answer + 3*shared + common}
 	}
 	two, many := lookup(2), lookup(64)
 	t.Logf("over %d blobs, a clause of 2 words read %d bytes of postings (its lists hold %d) and allocated %d; one "+
@@ -257,8 +252,7 @@ func TestAClauseReadsEachListItNamesOnce(t *testing.T) {
 // lists hold; and the word's folded clause, looked up beside its plain one,
 // held every blob again.
 func TestAPlanReadsEachListItsClausesNameOnce(t *testing.T) {
-	// Not parallel: runtime.MemStats counts every goroutine's allocations,
-	// and a parallel case's would be counted as the plan's.
+	// Not parallel: a parallel case's measured call would be counted as this one's.
 	const blobs, words = 2048, 32
 	alts := make([]string, words)
 	for i := range alts {
@@ -283,16 +277,13 @@ func TestAPlanReadsEachListItsClausesNameOnce(t *testing.T) {
 			t.Fatalf("the plan of %s admits %d of the %d blobs, each holding every word (%v)", pattern, len(set),
 				blobs, lookupErr)
 		}
-		var before, after runtime.MemStats
-		runtime.ReadMemStats(&before)
-		got, err := plan.Candidates(s)
-		runtime.ReadMemStats(&after)
+		var got []OID
+		spent, _ := allocations(t, func() { got, err = plan.Candidates(s) })
 		if err != nil || len(got) != blobs {
 			t.Fatalf("the plan of %s admits %d of the %d blobs, each holding every word (%v)", pattern, len(got),
 				blobs, err)
 		}
-		return cost{clauses: len(plan.index), read: r.read, named: named(s, plan.index...),
-			allocated: after.TotalAlloc - before.TotalAlloc}
+		return cost{clauses: len(plan.index), read: r.read, named: named(s, plan.index...), allocated: spent}
 	}
 	every := lookup(strings.Join(alts, ".*"))
 	alone := lookup(alts[0])
@@ -834,8 +825,7 @@ func TestALookupReadsAListOnlyAsFarAsTheBlobsItKeeps(t *testing.T) {
 // whether the race detector doubles slices.Grow's growth, by as much as a
 // spare too long.
 func TestAClausesUnionSparesWhatItMergesNotWhatItsBufferHolds(t *testing.T) {
-	// Not parallel: runtime.MemStats counts every goroutine's allocations,
-	// and a parallel case's would be counted as the merge's.
+	// Not parallel: a parallel case's measured call would be counted as this one's.
 	const blobs, every = 16384, 1024
 	texts := make([][]byte, blobs)
 	for i := range texts {
@@ -870,14 +860,11 @@ func TestAClausesUnionSparesWhatItMergesNotWhatItsBufferHolds(t *testing.T) {
 			lists, admitted, cap(u.buf))
 	}
 	capacity := cap(u.buf)
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	got := u.merged()
-	runtime.ReadMemStats(&after)
+	var got []uint32
+	allocated, _ := allocations(t, func() { got = u.merged() })
 	if want := perLiteral(t, c, s); !slices.Equal(got, want) {
 		t.Fatalf("the union of what the literals admit is %v; looked up a literal at a time, %v", got, want)
 	}
-	allocated := after.TotalAlloc - before.TotalAlloc
 	budget := uint64(2 * (4*admitted + 8*lists))
 	t.Logf("merging %d ordinals of %d lists from a buffer of capacity %d allocated %d bytes, against a budget of "+
 		"%d", admitted, lists, capacity, allocated, budget)

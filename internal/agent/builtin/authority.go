@@ -232,6 +232,9 @@ func (e *DecisionRefused) Error() string {
 	if e.Decision.Reason == authz.ReasonCeiling {
 		refusal += ceilingWords(e.Decision)
 	}
+	if e.Decision.Reason == authz.ReasonTokenRefused {
+		refusal += ": it needs the person here, signed in as themselves, which an access token is not"
+	}
 	return refusal
 }
 

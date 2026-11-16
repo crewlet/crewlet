@@ -313,7 +313,7 @@ func (t *turn) runDeep(ctx context.Context, dc deepCall) (toolloop.ToolResult, e
 	t.svc.deep.Discard(context.WithoutCancel(ctx), outcome.Box)
 	state, stepState, summary, reason := deepEnding(outcome, len(files))
 	run.end(state, stepState, summary, reason)
-	t.tainted(catalog.Tool{Fence: true, Source: deepReport.Source}, deepReport.Trust)
+	t.tainted(deepReport.Source, deepReport.Trust)
 	return toolloop.ToolResult{Output: deepAnswer(t.boundary, outcome, files, notes),
 		Failed: state != wire.DeepFinished, Cause: deepCause(outcome)}, nil
 }
@@ -535,6 +535,9 @@ func (s *Service) deepConfig() (config.AssistantDeepWork, error) {
 	if _, _, err := c.AssistantDeepWork(); err != nil {
 		return config.AssistantDeepWork{}, err
 	}
+	if c.Assistant.Tools.Denies(config.FamilyDeepWork) {
+		return config.AssistantDeepWork{}, errors.New("assistant.tools.deny turns deep work off")
+	}
 	return *c.Assistant.DeepWork, nil
 }
 
@@ -545,9 +548,15 @@ func (s *Service) ReadsImages() bool {
 	return err == nil
 }
 
-// withDeep is tools with the escalation tool, where this node can run deep work
-// for the company now.
-func (s *Service) withDeep(ctx context.Context, tools []catalog.Tool) []catalog.Tool {
+// withConfigured is tools with the escalation tool, where this node can run deep work
+// for the company now, and the web read where the company lists research hosts.
+func (s *Service) withConfigured(ctx context.Context, tools []catalog.Tool) []catalog.Tool {
+	if c, _ := s.company(); c != nil && len(c.Assistant.ResearchHosts()) > 0 {
+		tools = append(slices.Clone(tools), catalog.FetchWebPageTool())
+		if c.Assistant.Research.Search != nil {
+			tools = append(tools, catalog.SearchWebTool())
+		}
+	}
 	if s.deepAvailable(ctx) != nil {
 		return tools
 	}

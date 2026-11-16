@@ -94,6 +94,7 @@ const ANSWER: DelegatedDecisionsAnswer = {
       range: { min: 1, max: 60 },
     },
   ],
+  sample: { default: 10, min: 1, max: 1000 },
   day: "2026-11-09",
   since: "2026-11-09T00:00:00Z",
   until: "2026-11-10T00:00:00Z",

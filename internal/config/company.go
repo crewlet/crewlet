@@ -104,6 +104,9 @@ type Company struct {
 	// place, within the engine's rules. See [DelegatedDecisions].
 	DelegatedDecisions DelegatedDecisions `yaml:"delegated_decisions,omitempty" json:"delegated_decisions,omitzero"`
 
+	// SignIn is how the company's people sign in. See [SignIn].
+	SignIn SignIn `yaml:"sign_in,omitempty" json:"sign_in,omitzero"`
+
 	// SkillVariables is an operator-defined name -> value map substituted
 	// into tool-skill text wherever a skill writes ${name}.
 	//
@@ -747,6 +750,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 		p.wrap(c.Units[i].validate(idx(field("units"), i)))
 	}
 	p.wrap(c.Inbox.validate(field("inbox")))
+	p.wrap(c.SignIn.validate(field("sign_in")))
 	p.wrap(c.AccessHistory.validate(field("access_history")))
 	p.wrap(c.Atlas.validate(field("atlas")))
 	p.wrap(c.Chat.Chatlet.validate(field("chat.chatlet")))

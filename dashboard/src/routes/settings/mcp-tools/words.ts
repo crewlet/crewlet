@@ -500,7 +500,7 @@ export function writeRefusalWords(
         ? `${unsettledSentence(outcome)} Nothing was changed.`
         : `${unsettledSentence(outcome)} The change may or may not have landed. Close this and look at the list before trying again.`;
     case "problems":
-      return outcome.problems.map((p) => p.message).join(" ");
+      return outcome.problems.map((p) => p.said || p.message).join(" ");
   }
 }
 

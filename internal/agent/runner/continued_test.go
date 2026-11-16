@@ -993,6 +993,13 @@ type guarded struct {
 	// during is what the run does once its launch has decided and before the
 	// launch returns ([playLauncher.during]).
 	during func(runner.AgentRunRequest)
+	// reads is the reading of what a cut-off session holds the launcher
+	// answers ([readingLauncher]); nil for a launcher that reads none.
+	reads *reading
+	// skip is the meta-tools no list of a brief tells ([runner.Config.SkipNames]).
+	skip []string
+	// pub is where the runner publishes the turn's events; nil publishes none.
+	pub *capture
 }
 
 // loadSkill is a call that loaded the seat's one required skill, the seq'th
@@ -1038,6 +1045,10 @@ func (g guarded) relaunched(t *testing.T) (*runner.Runner, runner.AgentRunReques
 	organization := &org.Organization{Name: "Acme", Roles: []*org.Role{role}}
 	launcher := &probingLauncher{basis: g.basis}
 	launcher.decides, launcher.says, launcher.during = g.decides, g.says, g.during
+	var asked runner.AgentLauncher = launcher
+	if g.reads != nil {
+		asked = readingLauncher{probingLauncher: launcher, reads: g.reads}
+	}
 	state := g.state
 	state.Version, state.Round = execstate.Version, 1
 	resume := &runner.Resume{State: state, Bridged: g.bridged, Continued: g.continued}
@@ -1047,15 +1058,19 @@ func (g guarded) relaunched(t *testing.T) (*runner.Runner, runner.AgentRunReques
 	if g.carry != nil {
 		g.carry(resume)
 	}
-	r, err := runner.New(runner.Config{
+	cfg := runner.Config{
 		Seat:     prompts.Seat{Org: organization, Role: role},
 		Registry: reg, Models: models, Skills: registry,
-		Launcher: launcher, Task: "post the summary",
-		Resume: resume,
+		Launcher: asked, Task: "post the summary",
+		Resume: resume, SkipNames: g.skip,
 		Turn: runner.Turn{RunID: "t-guard", WorkKey: "wk-t-guard", AgentID: "agent-1",
 			Context: &turnctx.Turn{RunID: "t-guard", WorkKey: "wk-t-guard", Seat: role, Org: organization}},
 		Sessions: sessions,
-	})
+	}
+	if g.pub != nil {
+		cfg.Publisher = g.pub
+	}
+	r, err := runner.New(cfg)
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
 	}

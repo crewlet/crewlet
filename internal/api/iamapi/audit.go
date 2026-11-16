@@ -10,14 +10,15 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
-// auditView is one entry of the identity estate's own trail.
+// AuditRow is one entry of the identity estate's own trail, as `GET /iam/audit`
+// answers it (exported for the suites that hold a reader of the answer to it).
 //
 // THE CREDENTIAL BESIDE THE ACTOR: `operator_id` is what the actor acted
 // through — `pat:<id>` for a machine token acting as its owner,
 // `session:<lineage>` for one of their browser sessions — and absent where the
 // entry names none ([iamdomain.HistoryRow.OperatorID]). A token acts as its
 // owner, so without it the actor alone read a token's gesture as the owner's.
-type auditView struct {
+type AuditRow struct {
 	ID         string                 `json:"id"`
 	Class      iamdomain.HistoryClass `json:"class"`
 	ObjectKind string                 `json:"object_kind"`
@@ -104,9 +105,9 @@ func (s *Service) GetAudit(w http.ResponseWriter, r *http.Request) {
 		s.unavailable(w, r, "read the identity trail", err)
 		return
 	}
-	events := make([]auditView, 0, len(page.Entries))
+	events := make([]AuditRow, 0, len(page.Entries))
 	for _, row := range page.Entries {
-		events = append(events, auditView{
+		events = append(events, AuditRow{
 			ID: row.ID, Class: row.Class, ObjectKind: row.ObjectKind,
 			ObjectID: row.ObjectID, Person: row.PersonID, Login: row.Login,
 			Op:    row.Op,

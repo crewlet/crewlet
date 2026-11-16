@@ -102,7 +102,7 @@ func atlasReads() []Tool {
 			Names: map[string]Directory{"entry": DirAtlasEntry},
 			// AN ENTRY SAYS WHO NAMED IT: external where an integration is
 			// among its sources, the company's own words otherwise.
-			TrustOf: func(_ Args, answer any) provenance.Trust { return atlasEntryTrust(answer) },
+			TrustOf: func(_ Args, answer any) Trusted { return atlasEntryTrust(answer) },
 			Build: func(a map[string]any) (exec.Request, error) {
 				return get(atlasEntryRoute, map[string]string{"id": Args(a).String("entry")}, nil)
 			},
@@ -197,12 +197,12 @@ func atlasScope(a Args) string {
 // named it, since a vendor's users name what it reports and anybody with a
 // push writes a file; the company's own words otherwise, by the one rule for
 // a surface the engine hosts.
-func atlasEntryTrust(answer any) provenance.Trust {
+func atlasEntryTrust(answer any) Trusted {
 	sources, _ := cards.Lookup(answer, "entry.sources").([]any)
 	for _, src := range sources {
 		if kind := value(src, "kind"); kind == string(atlas.SourceIntegration) || kind == string(atlas.SourceCode) {
-			return provenance.TrustExternal
+			return Trusted{Trust: provenance.TrustExternal, Source: provenance.SourceAtlas}
 		}
 	}
-	return provenance.TrustForHosted("", nil, false)
+	return Trusted{Trust: provenance.TrustForHosted("", nil, false)}
 }

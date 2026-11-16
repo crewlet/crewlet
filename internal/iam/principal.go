@@ -137,7 +137,7 @@ type Principal struct {
 
 	// ReauthAt is the instant after which this principal's proof of
 	// identity is too old for a step-up gesture ([RecencyStepUp]), in UTC:
-	// the proof plus `api.auth.session.step_up`.
+	// the proof plus the step-up window in force (`sign_in.step_up_seconds`).
 	//
 	// AN INSTANT RATHER THAN THE PROOF AND THE WINDOW, because the window
 	// is THIS NODE's setting and the node that composed the principal is

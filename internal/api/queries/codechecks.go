@@ -31,7 +31,10 @@ import (
 //     the failures its ending named and the log a failed run kept — named on
 //     its repository's path by its commit, its check and its attempt, beside
 //     the branch it was checked for (`target`);
-//   - `code_check_log`, a page of that log's bytes.
+//   - `code_check_log`, a page of that log's bytes;
+//   - `code_commit_marks`, a history page's commits (`commits`, whole ids) with
+//     their checks per branch and the changes they landed with; read bare and
+//     never held immutable, since a commit's checks and landings move.
 //
 // Each is decided PER REPOSITORY as every code question is: registered
 // [Requires] the gitlet app, and held to the grant the serving node derives

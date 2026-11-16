@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -193,7 +194,7 @@ func TestATraceListsWhatItReachedAndShowsItOnTheMap(t *testing.T) {
 	}
 	want := []wire.EntityItem{{Kind: wire.ResourceAtlasEntry, ID: assistanttest.AtlasServiceID,
 		Label: "Checkout API", Fact: "service", Depth: 1}}
-	if !slices.Equal(e.Items, want) {
+	if !reflect.DeepEqual(e.Items, want) {
 		t.Errorf("the trace lists %+v, want %+v", e.Items, want)
 	}
 	if e.ItemsNoun == nil || e.ItemsNoun.Many != "dependents" {

@@ -73,6 +73,17 @@ func TestFleetContractThroughALeaf(t *testing.T) {
 	})
 }
 
+// AND THE NODES' STATUS RECORDS, which a node without `data` writes and reads
+// across its leaf link like every other fleet record, beside its presence.
+func TestNodeStatusRecordContractThroughALeaf(t *testing.T) {
+	t.Parallel()
+	client := leafClient(t)
+	coordtest.RunNodeStatusRecords(t, func(t *testing.T) (coord.Backend, coord.NodeStatusRecords) {
+		return openStoreVia(t, client, AcrossLink, coordtest.LongTTL),
+			openFleetVia(t, client, AcrossLink, fmt.Sprintf("f%d", bucketSeq.Add(1)))
+	})
+}
+
 // leafClient starts a member serving leaves and a leaf joined to it, and is a
 // JetStream client of the LEAF — in the embedded fleet's domain, the only API
 // a leaf's broker carries across its link.

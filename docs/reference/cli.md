@@ -2130,7 +2130,7 @@ iam token -login` mints one — bound to the human seat you hold: a purge drops
 what nothing brings back, so a token bound to nobody is refused, naming why,
 and so is a seat's tool call. Your grant on the repository must be
 `maintain`, which every person holds. The fresh proof of who you are a purge
-asks of a dashboard session (`api.auth.session.step_up`) is not asked of a
+asks of a dashboard session (`sign_in.step_up_seconds`) is not asked of a
 token, which is stepped up by construction as every machine token is — so a
 token that can purge is one to keep as carefully as your password.
 
@@ -3554,6 +3554,8 @@ page:                             # optional: the page chip, as the dashboard se
   title: Spend
   source_revision: spend@1
 question: Who spent the most tokens this week?
+research: [docs.example.com]      # optional: hosts listed for web research (fetch_web_page)
+search: true                      # optional: a search server too (search_web); needs research
 mode: ask                         # ask (default) or brief, which needs the page
 answers:                          # what each request Ask Crewlet sends answers
   - route: GET /tokens/breakdown  # a route pattern, {name} matching one segment
@@ -3571,12 +3573,14 @@ expect:
   says: [ada]                     # text the answer contains, ignoring case
   never_says: ["http"]            # text it must not contain, ignoring case
   shows: [Spend by agent]         # text the turn's cards carry, ignoring case
+  never_shows: [Budgets]          # text no card of the turn carries, ignoring case
   brief:                          # a brief turn's card (mode: brief only)
     needs: [ENG-42, qa]           # the records its rows cite, in order; [] is "Nothing needs you"
     tones: [warning, danger]      # optional: each row's tone, in the same order
     verdict: 2 things need you    # optional: the verdict the engine counted from the rows it kept
   refusals:                       # what each refused call's answer names, in order
     - [about, "needs[0].do"]      # judged against the scripted model, which hears every answer
+  taint: none                     # the outside surface every proposal names (executor, page_body, ...), or none
 ```
 
 A case is read by the configuration's own strict reader: a member this build does
@@ -3590,10 +3594,13 @@ engine's error envelope, as a route answers a record that is not there. Every
 `expect` field is optional, and a case with none is refused: a case that
 cannot fail measures nothing. A write the model calls is never sent: it
 becomes a proposal, as it does in the dashboard, which is what `proposals`
-counts. `shows` reads the cards the turn drew (a table's title and cells, a
+counts, and `step_up` holds every one of those proposals to whether the engine
+asks the person to confirm it is them before it is approved (approving an
+agent's grant request does), failing a turn that ends with none. `shows` reads the cards the turn drew (a table's title and cells, a
 proposal's rows and note), so a case can hold what the person was shown, not
 only what the answer said: the place a page is proposed in, or the reason a
-read card gives. A `mode: brief` case runs a brief turn (the drawer's "Brief me
+read card gives; `never_shows` holds what no card may carry, such as an option
+row on an answer given in the person's own words. A `mode: brief` case runs a brief turn (the drawer's "Brief me
 on this page"), whose script ends with an `answer_brief` call; `brief` holds the
 card the engine drew from it, after the engine dropped every row whose record
 the turn did not read or the person may not open, and drew a danger tone only

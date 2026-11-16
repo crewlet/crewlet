@@ -23,7 +23,7 @@ import { AgoTime } from "~/components/AgoTime.tsx";
 
 /**
  * The node cell an entry's failure is read from: the named agent's, else the
- * one down longest. The engine dates and classes it on the heartbeat.
+ * one down longest. The engine dates and classes it on its status record.
  */
 function cellFor(row: McpServerStatus | null, entry: McpAlarmEntry): McpServerNode | null {
   if (!row) return null;

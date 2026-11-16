@@ -1468,7 +1468,9 @@ const (
 	// built on: Worklet's task operations and the polish, the kit's
 	// punctuation peel a marked chip now takes among it, in the shared chunk.
 	// So it moved to 418 KiB, 2.28 seconds.
-	initialBudget = 418 << 10
+	// Delegated decisions made readable, on kit 0.134.0: 418.0 KiB, 508 bytes over main: 419 KiB, 2.29 seconds.
+	// Code host glyphs, colours and kit marks, on kit 0.137.0: 419.8 KiB, 1,511 bytes over main: 420 KiB, 2.29 seconds.
+	initialBudget = 420 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2627,11 +2629,27 @@ const (
 	// are not numbers changed in place, merged on kit 0.131.0, measures
 	// 6313.1 KiB (6,464,594 bytes), 46,487 bytes over the 6267.7 KiB of main
 	// it was built on: 6314 KiB.
+	// A proposal's caution, step-up and expiry (kit 0.132.0) take it to
+	// 6316.2 KiB (6,467,757 bytes): 6317 KiB.
+	// Think harder and Settings › Ask Crewlet take it to 6324.8 KiB (6,476,618
+	// bytes), 11,693 over main's 6313.4 KiB: 6325 KiB.
+	// Held reasons for every reader, field errors and kit 0.133.0: 6317.9 KiB
+	// (6,469,591 bytes), 4,666 bytes over main's 6313.4 KiB: 6318 KiB.
+	// The company's sign-in policy changed in place (Settings › Sign-in
+	// policy's pencils, a duration typed as one) takes it to 6316.7 KiB
+	// (6,468,275 bytes): 6317 KiB.
+	// Delegated decisions made readable, on kit 0.134.0: 6322.5 KiB, 9,271 bytes over main: 6323 KiB.
+	// The Ask Crewlet, sign-in policy, settings and Delegated decisions train,
+	// on kit 0.134.0, measures 6342.3 KiB (6,494,479 bytes), 29,554 bytes over
+	// main's 6313.4 KiB: 6343 KiB.
 	// Saying a time inside Gitlet's sentences in words added 742 bytes and
 	// took it to 6314.1 KiB (6,465,667 bytes): 6315 KiB.
-	// Saying every time inside a sentence in words added 1,215 bytes and took
-	// it to 6315.3 KiB (6,466,882 bytes): 6316 KiB.
-	treeBudget = 5<<20 + 1196<<10
+	// Code host glyphs, colours and kit marks, on kit 0.137.0: 6350.7 KiB, 8,666 bytes over main: 6351 KiB.
+	// The Gitlet history, tips, branches, committers and file finder train, on
+	// kit 0.137.0, measures 6351.5 KiB (6,503,931 bytes), 9,452 bytes over main: 6352 KiB.
+	// The Ask Crewlet reads train, on kit 0.137.0: 6354.3 KiB (6,506,836 bytes): 6355 KiB.
+	// Every time inside a sentence said in words: 6355.5 KiB (6,508,041 bytes), 1,205 bytes over main: 6356 KiB.
+	treeBudget = 5<<20 + 1236<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
