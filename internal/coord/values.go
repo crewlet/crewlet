@@ -86,12 +86,14 @@ const MaxValueBytes = 6_290_542
 // spends four minutes of at the floor (crewlet/crewlet#1149).
 const MaxValueCrossing = 780_025_663_374 * time.Nanosecond
 
-// ErrValueTooLarge is a write refused because its value is past
-// [MaxValueBytes]. It is refused BEFORE ANYTHING IS SENT, so nothing was
-// written: a definite answer, never [ErrUnavailable] — no retry changes it —
-// and never [ErrWriteUnknown]. Its message names the key, the value's size and
-// the bound.
-var ErrValueTooLarge = errors.New("coord: a value past what one key holds")
+// ErrValueTooLarge is a write refused because what it carries is past the
+// store's bound on it: a key's value past [MaxValueBytes] ([HoldValue]), or a
+// lease's Meta past [MaxLeaseMetaBytes] ([HoldLeaseMeta]). It is refused
+// BEFORE ANYTHING IS SENT, so nothing was written: a definite answer, never
+// [ErrUnavailable] — no retry changes it — and never [ErrWriteUnknown]. Its
+// message names what was written, its size and the bound it is past, so its
+// own text says neither bound.
+var ErrValueTooLarge = errors.New("coord: a write past what the store takes")
 
 // HoldValue refuses a value of size bytes written to key past [MaxValueBytes],
 // with [ErrValueTooLarge] naming the three; nil for one that fits. The one

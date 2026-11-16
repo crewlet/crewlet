@@ -3,8 +3,10 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -665,6 +667,99 @@ func TestEveryBadNodeLabelKeyIsReportedInOneStableOrder(t *testing.T) {
 		if !slices.Equal(got, want) {
 			t.Fatalf("problems at %q, want %q", got, want)
 		}
+	}
+}
+
+// NODE LABELS ARE HELD TO A COUNT, A LENGTH AND A GRAMMAR, on the node and on
+// the selector alike. Every label rides the node's presence lease, rewritten
+// on every heartbeat and held to coord.MaxLeaseMetaBytes, so the bounds are
+// what keeps a legal file from writing a presence the store refuses; and a
+// value is matched exactly, so the two sides share placement's one grammar.
+// Each refusal is placed where an operator searches their file — the map for
+// the count, the key for its value — and names its limit.
+//
+// Mutations: drop the count check from Node.validate, or from the selector's,
+// and its 17-label arm accepts; drop either side's CheckLabelValue and its
+// value arms accept.
+func TestNodeLabelsAreHeldToCountLengthAndGrammar(t *testing.T) {
+	t.Parallel()
+	labels := func(n int, value string) map[string]string {
+		out := make(map[string]string, n)
+		for i := range n {
+			out[fmt.Sprintf("k%02d", i)] = value
+		}
+		return out
+	}
+	yamlMap := func(indent string, m map[string]string) string {
+		var b strings.Builder
+		for _, k := range slices.Sorted(maps.Keys(m)) {
+			b.WriteString(indent + k + ": " + strconv.Quote(m[k]) + "\n")
+		}
+		return b.String()
+	}
+	widest := strings.Repeat("v", placement.MaxLabelValueBytes)
+	cases := []struct {
+		name   string
+		labels map[string]string
+		path   string // "" where the labels are legal
+		says   string
+	}{
+		{"as many labels as a node carries, each value at its widest",
+			labels(placement.MaxLabels, widest), "", ""},
+		{"one label more than a node carries",
+			labels(placement.MaxLabels+1, "eu"), "labels", fmt.Sprintf("at most %d", placement.MaxLabels)},
+		{"a value one byte past its bound",
+			map[string]string{"zone": widest + "v"}, "labels.zone",
+			fmt.Sprintf("at most %d", placement.MaxLabelValueBytes)},
+		{"a value holding a control character",
+			map[string]string{"zone": "e\x01u"}, "labels.zone", "U+0001"},
+		{"a value holding a tab",
+			map[string]string{"zone": "eu\twest"}, "labels.zone", "U+0009"},
+	}
+	for _, tc := range cases {
+		t.Run("node: "+tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ParseRunnableBootstrap([]byte("node:\n  labels:\n"+yamlMap("    ", tc.labels)),
+				EnvOnly())
+			requireOneLabelProblem(t, err, tc.path, "node."+tc.path, tc.says)
+		})
+		t.Run("selector: "+tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ParseCompany([]byte("name: Acme\nroles:\n  - name: Builder\n    placement:\n" +
+				"      labels:\n" + yamlMap("        ", tc.labels)))
+			requireOneLabelProblem(t, err, tc.path, "roles[0].placement."+tc.path, tc.says)
+		})
+	}
+
+	// WHITESPACE AROUND A VALUE: Tier A trims every string as its file
+	// loads, so a node's own file never carries any — the grammar refuses
+	// it on a node built any other way — and a selector, in Tier B, keeps
+	// what its author wrote and is refused.
+	n := &Node{Labels: map[string]string{"zone": " eu"}}
+	if err := n.validate(Path{"node"}); err == nil || !strings.Contains(err.Error(), "node.labels.zone") {
+		t.Errorf("a node label value with whitespace around it = %v, want a refusal at node.labels.zone", err)
+	}
+	_, err := ParseCompany([]byte("name: Acme\nroles:\n  - name: Builder\n    placement:\n" +
+		"      labels: {zone: \" eu\"}\n"))
+	requireOneLabelProblem(t, err, "labels.zone", "roles[0].placement.labels.zone", "whitespace around it")
+}
+
+// requireOneLabelProblem asserts err is nil where want is "", and otherwise
+// exactly one problem, at path, whose message says says.
+func requireOneLabelProblem(t *testing.T, err error, want, path, says string) {
+	t.Helper()
+	if want == "" {
+		if err != nil {
+			t.Fatalf("legal labels were refused: %v", err)
+		}
+		return
+	}
+	got := Problems(err)
+	if len(got) != 1 || got[0].Path != path {
+		t.Fatalf("want one problem at %q, got %+v", path, got)
+	}
+	if !strings.Contains(got[0].Message, says) {
+		t.Fatalf("the problem at %q says %q, want it to name %q", path, got[0].Message, says)
 	}
 }
 
