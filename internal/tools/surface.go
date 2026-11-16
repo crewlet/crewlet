@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/tools/toolargs"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -187,6 +188,10 @@ type Call struct {
 	Args   map[string]any
 	Output string
 	Failed bool
+
+	// Images is what the answer's images were, by type and size: a record
+	// of a call keeps no picture's bytes ([mcp.ImageRecords]).
+	Images []mcp.ImageRecord
 
 	// Cause is WHY a failed call failed, as the returned
 	// [toolloop.ToolResult] carries it: the tool's own [Result.Cause] for a
@@ -629,7 +634,8 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 	// THE MODEL READS TEXT, so the note is rendered after the output here
 	// ([Rendered]), and the ledger records what the model read.
 	recorded, run := s.settle(Call{Name: name, Args: args.Map(), Output: Rendered(res),
-		Failed: res.Failed, Cause: res.Cause}, e.Annotations, target, e.OutputUnkept)
+		Images: mcp.ImageRecords(res.Images), Failed: res.Failed, Cause: res.Cause},
+		e.Annotations, target, e.OutputUnkept)
 	res.Output = recorded.Output
 	s.reportLoop(name, target, run, turn)
 	// INTO THE RUN'S LOG TOO, failed or not: a call that reports a failure
@@ -664,7 +670,7 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 	// path: the refusals above never reached a tool, so they name none.
 	server, _ := e.FromMCP()
 	return toolloop.ToolResult{
-		Output: res.Output, Failed: res.Failed, Cause: res.Cause,
+		Output: res.Output, Images: res.Images, Failed: res.Failed, Cause: res.Cause,
 		Origin: e.Origin, Server: server, Source: e.Origin, Unkept: e.OutputUnkept,
 	}, nil
 }
