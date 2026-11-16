@@ -1224,14 +1224,14 @@ func (w *holdingsWalk) legResult(line threadLine, call threadCall, alone bool, r
 	if leg == nil {
 		return
 	}
-	leg.handback = leg.handback || carriesHandback(line.ToolUseResult())
+	leg.handback = leg.handback || line.HandsBack()
 	leg.results++
 	if leg.results > 1 {
 		return
 	}
 	leg.resultRec, leg.resultLine, leg.failed = record, line.N, call.Failed
 	if alone {
-		leg.completed, leg.agent, leg.refused = agentAnswer(line.ToolUseResult())
+		leg.completed, leg.agent, leg.refused = line.AgentAnswer()
 	}
 }
 
@@ -1684,62 +1684,6 @@ func cutDescription(description string) string {
 		cut--
 	}
 	return strings.Clone(description[:cut])
-}
-
-// agentAnswer is what a leg's result record's own toolUseResult, raw, says,
-// read by its exact keys and a key written twice by its last value: whether
-// an Agent or Task call's subagent completed (`status` "completed"), the
-// subagent it names (`agentId`, "" where it names none a reading reads), and
-// whether a SendMessage was refused (`success`, the literal false). A result
-// of another shape says none of them: no answer, and no refusal.
-func agentAnswer(raw json.RawMessage) (completed bool, agent string, refused bool) {
-	if !wireObject(raw) {
-		return false, "", false
-	}
-	var wire struct {
-		Status  json.RawMessage `json:"status"`
-		AgentID json.RawMessage `json:"agentId"`
-		Success json.RawMessage `json:"success"`
-	}
-	if wireDecode(raw, &wire) != nil {
-		return false, "", false
-	}
-	status, err := wireRequiredString("status", wire.Status)
-	completed = err == nil && status == claudeAgentCompleted
-	if agent, err = wireRequiredString("agentId", wire.AgentID); err != nil || !validClaudeAgent(agent) {
-		agent = ""
-	}
-	return completed, agent, string(wire.Success) == "false"
-}
-
-// carriesHandback reports whether a leg's result record's own toolUseResult,
-// raw, carries a handback: a `handback` or a `handbackReport` key, any value,
-// read by its exact key.
-//
-// A HANDBACK ANSWERS NO LEG. Under a handback contract, which both releases
-// arm on a run of a subagent behind a flag on by default (2.1.322's BFt
-// @288117159, 2.1.310's p_t @245867640, armed @302126445), the subagent
-// delivers its report through a call of its own ([claudeToolHandback]), and
-// its completion drops the text of its last reply and answers its caller
-// with words of the harness's own in its place: that the report was delivered
-// as a message, that it has not reported yet, or that none was delivered
-// (2.1.322's pkn @302170267, `if(r!==void 0){Z=[];...}`, 2.1.310's Owr
-// @255311767). A call's own answer then carries the `handback` key beside
-// that text (`...ee!==void 0&&{handback:ee}`, spread into its result at
-// @302347284), so no answer of the leg is the subagent's report.
-func carriesHandback(raw json.RawMessage) bool {
-	if !wireObject(raw) {
-		return false
-	}
-	var wire struct {
-		Handback       json.RawMessage `json:"handback"`
-		HandbackReport json.RawMessage `json:"handbackReport"`
-	}
-	// ONE THAT DOES NOT DECODE IS READ AS CARRYING ONE, the safe direction.
-	if wireDecode(raw, &wire) != nil {
-		return true
-	}
-	return wire.Handback != nil || wire.HandbackReport != nil
 }
 
 // failed is err, which ended the reading, as the reading answers it: its

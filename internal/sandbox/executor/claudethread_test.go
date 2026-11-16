@@ -1082,8 +1082,8 @@ func TestARecordIsTheMainThreadsOnlyWhereItSaysSo(t *testing.T) {
 // (null, a number, an object, a boolean), on the harness's bookkeeping, on a
 // model's call or on a hook's record, leaves everything else the record hands
 // out as it reads with its uuid as written, and is refused by UUID alone. As
-// written, each reads: an origin's kind, and a user record's own
-// toolUseResult, raw, which no other record hands out.
+// written, each reads: an origin's kind, and what a user record's own
+// toolUseResult answers of a subagent's leg, which no other record's answers.
 //
 // Mutation: hold the attachment to an object in the head, and the record whose
 // attachment is not one is no record at all; hold the stop_reason, the report
@@ -1096,7 +1096,8 @@ func TestARecordIsTheMainThreadsOnlyWhereItSaysSo(t *testing.T) {
 // retraction list to its type in the head, and the record that reshapes it is
 // no record at all;
 // hold the uuid to its type in the head, and every record here whose uuid is
-// reshaped is no record at all.
+// reshaped is no record at all; read an answer off every record's
+// toolUseResult, and an assistant's answers a leg.
 func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	t.Parallel()
 	attachment := ctLine(t, ctAttachment(ctUUID(1), ctUUID(2), `"hook_success"`, ""))
@@ -1412,22 +1413,27 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 		}
 	}
 
-	if got := ctLine(t, ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)).ToolUseResult(); string(got) != ctResultOwn {
-		t.Errorf("a result's own toolUseResult reads as %s, want it as written", got)
-	}
-	if got := ctLine(t, ctResult(ctUUID(9), ctUUID(10), ctMCPResult, ctMCPBlocks)).ToolUseResult(); string(got) != ctMCPBlocks {
-		t.Errorf("an MCP result's own toolUseResult reads as %s, want it as written", got)
-	}
+	answer := `{"status":"completed","agentId":"` + ctAgent + `","handback":"withheld"}`
 	assistant := strings.Replace(ctAssistant(ctUUID(3), ctUUID(4), ctUseContent), `"apiBlockIndex"`,
-		`"toolUseResult":`+ctResultOwn+`,"apiBlockIndex"`, 1)
-	for name, record := range map[string]string{
-		"an assistant's":                   assistant,
-		"a brief's, which has none":        ctBrief(ctUUID(1)),
-		"an attachment's":                  ctAttachment(ctUUID(1), ctUUID(2), ctTokens, ctTokensRendered),
-		"a request blob's, which has none": ctRequestBlob,
+		`"toolUseResult":`+answer+`,"apiBlockIndex"`, 1)
+	for name, tc := range map[string]struct {
+		record  string
+		answers bool
+	}{
+		"a result's that answers a leg":         {record: ctResult(ctUUID(4), ctUUID(5), ctResultBody, answer), answers: true},
+		"a command's result's, its output":      {record: ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)},
+		"an MCP result's, a list of its blocks": {record: ctResult(ctUUID(9), ctUUID(10), ctMCPResult, ctMCPBlocks)},
+		"an assistant's":                        {record: assistant},
+		"a brief's, which has none":             {record: ctBrief(ctUUID(1))},
+		"an attachment's":                       {record: ctAttachment(ctUUID(1), ctUUID(2), ctTokens, ctTokensRendered)},
+		"a request blob's, which has none":      {record: ctRequestBlob},
 	} {
-		if got := ctLine(t, record).ToolUseResult(); got != nil {
-			t.Errorf("%s toolUseResult reads as %s, want none: only a user record's is one", name, got)
+		line := ctLine(t, tc.record)
+		completed, agent, refused := line.AgentAnswer()
+		if handback := line.HandsBack(); completed != tc.answers || (agent == ctAgent) != tc.answers ||
+			(agent != "" && agent != ctAgent) || refused || handback != tc.answers {
+			t.Errorf("%s toolUseResult answers completed %t, agent %q, refused %t, a handback %t; want an answer "+
+				"%t: only a user record's answers", name, completed, agent, refused, handback, tc.answers)
 		}
 	}
 }
@@ -1442,10 +1448,10 @@ func ctReplace(t *testing.T, record, from, to string) string {
 }
 
 // ctAll is everything a line hands out through every accessor, as text: its
-// head, its own uuid, its message and its calls, its origin's kind,
-// its own toolUseResult, whether it says tool results were cleared, why its
-// reply stopped, whether its harness wrote it for a failed request, the model
-// that wrote it, the reply it is, what its request took, what it says a
+// head, its own uuid, its message and its calls, its origin's kind, what its
+// own toolUseResult answers, whether it says tool results were cleared, why
+// its reply stopped, whether its harness wrote it for a failed request, the
+// model that wrote it, the reply it is, what its request took, what it says a
 // compaction kept, the leaf it says a resume starts from and whether it names
 // one at all, its attachment's type, the records it says its harness took
 // back, the results it says its harness replaced, and whether it is virtual,
@@ -1454,9 +1460,9 @@ func ctReplace(t *testing.T, record, from, to string) string {
 // written, whether it is meta, the reply it names as its results' source, the
 // key of the call its attachment followed, whether its message says
 // anything, whether a resume keeps it as an attachment of its shape, and the
-// release that wrote it, each beside the error it answered. A
-// raw value it hands out is printed by [ctRaw], so an absent one and a null
-// one never read alike.
+// release that wrote it, each beside the error it answered. A raw value it
+// hands out is printed by [ctRaw], so an absent one and a null one never read
+// alike.
 func ctAll(l threadLine) string {
 	uuid, err := l.UUID()
 	return fmt.Sprintf("uuid: %q; %v\n", uuid, err) + ctAllButUUID(l)
@@ -1480,7 +1486,7 @@ func ctAllButUUID(l threadLine) string {
 	}
 	kind, err := l.OriginKind()
 	fmt.Fprintf(&b, "origin: kind %q; %v\n", kind, err)
-	fmt.Fprintf(&b, "toolUseResult: %s\n", ctRaw(l.ToolUseResult()))
+	ctLegAnswer(&b, l)
 	ctFacts(&b, l, m)
 	return b.String()
 }
@@ -1493,8 +1499,16 @@ func ctCallFacts(b *strings.Builder, c threadCall) {
 		"whole %x\n", c.Kind, c.ID, c.Name, c.To, c.Failed, c.Text.Bytes, c.Text.Opening, c.Text.Whole)
 }
 
-// ctFacts writes to b everything [ctAllButUUID] prints after a line's own
-// toolUseResult, its message m among it.
+// ctLegAnswer writes to b what a line's own toolUseResult says: what it answers
+// of a subagent's leg, and whether it carries a handback.
+func ctLegAnswer(b *strings.Builder, l threadLine) {
+	completed, agent, refused := l.AgentAnswer()
+	fmt.Fprintf(b, "its answer: completed %t, agent %q, refused %t, a handback %t\n", completed, agent, refused,
+		l.HandsBack())
+}
+
+// ctFacts writes to b everything [ctAllButUUID] prints after a line's answer
+// ([ctLegAnswer]), its message m among it.
 func ctFacts(b *strings.Builder, l threadLine, m threadMessage) {
 	cleared, err := l.ToolResultsCleared()
 	fmt.Fprintf(b, "tool results cleared: %t; %v\n", cleared, err)
@@ -1848,12 +1862,9 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 }
 
 // ctOutcome is how a reader reads record, the one line of a thread: where it
-// is a record, what every accessor reads of it ([ctAll]) but the value it
-// hands out raw, a record's own toolUseResult, of which it prints what its
-// readers read instead (what an answer says); where it is
-// none, its fault, the type it names and its error. A line's place and size
-// are left out, so two lines that differ in nothing a reader reads print
-// alike.
+// is a record, what every accessor reads of it ([ctAll]); where it is none,
+// its fault, the type it names and its error. A line's place and size are left
+// out, so two lines that differ in nothing a reader reads print alike.
 func ctOutcome(t *testing.T, record string) string {
 	t.Helper()
 	got := ctRead(ctThread(record), threadPlainMax)
@@ -1884,10 +1895,7 @@ func ctOutcome(t *testing.T, record string) string {
 	}
 	kind, err := l.OriginKind()
 	fmt.Fprintf(&b, "origin: kind %q; %v\n", kind, err)
-	own := l.ToolUseResult()
-	completed, agent, refused := agentAnswer(own)
-	fmt.Fprintf(&b, "its answer: completed %t, agent %q, refused %t, a handback %t\n", completed, agent, refused,
-		carriesHandback(own))
+	ctLegAnswer(&b, l)
 	ctFacts(&b, l, m)
 	return b.String()
 }
@@ -2120,8 +2128,8 @@ func TestAKeyWrittenTwiceIsReadWhollyByItsLast(t *testing.T) {
 // point), and a byte that is no UTF-8 each read as U+FFFD, as encoding/json's
 // own decode reads them, wherever a line holds one: in a text the layer reads
 // (a brief's, and a result's, whose length and digests are its reading's), in
-// a hook's record, in a value it hands out raw (a result's own output), and
-// in a key no reader reads. Each line reads whole. Refused, one such line
+// a hook's record, in a result's own output, which its answer is read past,
+// and in a key no reader reads. Each line reads whole. Refused, one such line
 // would cost a reader its whole reading of a thread its harness reads whole.
 //
 // Mutation: drop the option that reads them, and every line here is no
@@ -2184,11 +2192,14 @@ func TestAStringClaudeCodeWroteBrokenReadsAsTheReplacementCharacter(t *testing.T
 			}
 		}
 		if output, ok := read(ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctReplace(t, ctResultOwn, `"stdout":"b1"`,
-			`"stdout":`+tc.written))); ok {
-			if m, err := output.Message(); err != nil || len(m.Calls()) != 1 || m.Calls()[0].ID != ctCall ||
-				!bytes.Contains(output.ToolUseResult(), []byte(tc.written)) {
-				t.Errorf("%s: a result whose own output holds it hands out the calls %+v, %v, and the output %q", name,
-					m.Calls(), err, output.ToolUseResult())
+			`"status":"completed","agentId":"`+ctAgent+`","stdout":`+tc.written))); ok {
+			m, err := output.Message()
+			completed, agent, refused := output.AgentAnswer()
+			if err != nil || len(m.Calls()) != 1 || m.Calls()[0].ID != ctCall || !completed || agent != ctAgent ||
+				refused {
+				t.Errorf("%s: a result whose own output holds it hands out the calls %+v, %v, and the answer "+
+					"completed %t, agent %q, refused %t; want its call, and its answer read past it", name, m.Calls(),
+					err, completed, agent, refused)
 			}
 		}
 	}

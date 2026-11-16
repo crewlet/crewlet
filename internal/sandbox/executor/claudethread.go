@@ -80,10 +80,11 @@ import (
 //     since a PostToolUse hook's firing carries the id of the call it
 //     followed. An id written inside a record's text (a task notification's
 //     `<tool-use-id>`, a tool's output, a call's input) leaves it as bytes
-//     in a line's Raw, a message's Text and a record's ToolUseResult, its
-//     reader's to parse and to hold to a rule of its own, or not at all: of a
-//     call's input and a result's text the layer hands out only the facts it
-//     reads of them ([threadCall]).
+//     in a line's Raw and a message's Text, its reader's to parse and to
+//     hold to a rule of its own, or not at all: of a call's input, a
+//     result's text and a record's own toolUseResult the layer hands out
+//     only the facts it reads of them ([threadCall], [threadLine.HandsBack],
+//     [threadLine.AgentAnswer]).
 //
 // What these rules were measured on is Claude Code 2.1.310 and 2.1.322, driven
 // as the engine drives a box's executor, and 2.1.118 beside 2.1.310 for a hook
@@ -552,18 +553,19 @@ func (e *threadLineError) Unwrap() error { return e.Err }
 // line's one decode.
 //
 // WHAT IT HANDS OUT RAW IS VALID UNTIL THE READER'S NEXT [threadReader.Next]:
-// the line's Raw and ToolUseResult, as a refused line's Raw is
-// ([threadLineError]). A reader that keeps either past that copies it, since
-// the layer may hand out a line's own bytes rather than a copy of them.
+// the line's Raw, as a refused line's Raw is ([threadLineError]). A reader
+// that keeps it past that copies it, since the layer may hand out a line's own
+// bytes rather than a copy of them.
 //
-// AND IT HANDS ToolUseResult OUT RAW ON PURPOSE: its one reader holds it to
-// the shape that reader reads (an agent's answer) under the layer's own
-// options ([threadDecoding]), so a release that reshapes it costs that reader
-// alone, as a key one reader reads does. What a call's input and a result's
-// text are read for (the subagent a SendMessage sends to, a result's length
-// and digests) the layer reads itself, by its readers' own rules, each shape
-// it does not read the answer "none" rather than an error, so a call hands
-// out facts of a fixed size, never bytes as long as a line ([threadCall]).
+// A VALUE AS LONG AS A LINE IT READS FOR ITS READERS, never hands out: what a
+// call's input, a result's text and a record's own toolUseResult are read for
+// (the subagent a SendMessage sends to, a result's length and digests, a
+// handback and what an answer says of a subagent's leg) the layer reads
+// itself, by its readers' own rules, a shape a rule does not read answered by
+// that rule rather than with an error, so a release that reshapes one costs
+// that reader alone, as a key one reader reads does, and what it hands out is
+// facts of a fixed size ([threadCall], [threadLine.HandsBack],
+// [threadLine.AgentAnswer]).
 //
 // A KEY ONLY ONE READER READS IS HELD TO ITS TYPE IN THAT READER'S ACCESSOR,
 // never in the head: a release that reshapes it is that accessor's error and
@@ -1205,21 +1207,85 @@ func (l threadLine) UUID() (string, error) { return wireString("uuid", l.uuid) }
 // transcript's words.
 func (l threadLine) Version() (string, error) { return wireString("version", l.version) }
 
-// ToolUseResult is a user record's own `toolUseResult`, raw (an object, a list
-// or a string, as the tool's result had it); nil where it is absent and on
-// every other record, valid until the reader's next [threadReader.Next]
-// ([threadLine]). Never an id: a call's id leaves this layer only through
-// [threadMessage.Calls].
+// HandsBack reports whether a user record's own `toolUseResult` carries a
+// handback ([carriesHandback]); false on every other record, which carries
+// none a reader reads.
 //
-// IT IS THE RECORD'S, NEVER A CALL'S, handed out raw on purpose for its one
-// reader to hold: a reader takes it for a call's only where the record's
-// message holds that call's one tool_result and nothing else, as every record
-// measured that carries one does.
-func (l threadLine) ToolUseResult() json.RawMessage {
+// IT IS THE RECORD'S, NEVER A CALL'S: a reader takes it for every result the
+// record holds, a handback of any one of them being one the record carries.
+func (l threadLine) HandsBack() bool {
+	return l.Head.Type == recordUser && carriesHandback(l.toolUseResult)
+}
+
+// AgentAnswer is what a user record's own `toolUseResult` says of a
+// subagent's leg ([agentAnswer]): whether an Agent or Task call's subagent
+// completed, the subagent it names, and whether a SendMessage was refused;
+// none of them on every other record.
+//
+// IT IS THE RECORD'S, NEVER A CALL'S: a reader takes it for a call's only
+// where the record's message holds that call's one tool_result and nothing
+// else, as every record measured that carries one does.
+func (l threadLine) AgentAnswer() (completed bool, agent string, refused bool) {
 	if l.Head.Type != recordUser {
-		return nil
+		return false, "", false
 	}
-	return l.toolUseResult
+	return agentAnswer(l.toolUseResult)
+}
+
+// agentAnswer is what a leg's result record's own toolUseResult, raw, says,
+// read by its exact keys and a key written twice by its last value: whether
+// an Agent or Task call's subagent completed (`status` "completed"), the
+// subagent it names (`agentId`, "" where it names none a reading reads), and
+// whether a SendMessage was refused (`success`, the literal false). A result
+// of another shape says none of them: no answer, and no refusal.
+func agentAnswer(raw json.RawMessage) (completed bool, agent string, refused bool) {
+	if !wireObject(raw) {
+		return false, "", false
+	}
+	var wire struct {
+		Status  json.RawMessage `json:"status"`
+		AgentID json.RawMessage `json:"agentId"`
+		Success json.RawMessage `json:"success"`
+	}
+	if wireDecode(raw, &wire) != nil {
+		return false, "", false
+	}
+	status, err := wireRequiredString("status", wire.Status)
+	completed = err == nil && status == claudeAgentCompleted
+	if agent, err = wireRequiredString("agentId", wire.AgentID); err != nil || !validClaudeAgent(agent) {
+		agent = ""
+	}
+	return completed, agent, string(wire.Success) == "false"
+}
+
+// carriesHandback reports whether a leg's result record's own toolUseResult,
+// raw, carries a handback: a `handback` or a `handbackReport` key, any value,
+// read by its exact key.
+//
+// A HANDBACK ANSWERS NO LEG. Under a handback contract, which both releases
+// arm on a run of a subagent behind a flag on by default (2.1.322's BFt
+// @288117159, 2.1.310's p_t @245867640, armed @302126445), the subagent
+// delivers its report through a call of its own ([claudeToolHandback]), and
+// its completion drops the text of its last reply and answers its caller
+// with words of the harness's own in its place: that the report was delivered
+// as a message, that it has not reported yet, or that none was delivered
+// (2.1.322's pkn @302170267, `if(r!==void 0){Z=[];...}`, 2.1.310's Owr
+// @255311767). A call's own answer then carries the `handback` key beside
+// that text (`...ee!==void 0&&{handback:ee}`, spread into its result at
+// @302347284), so no answer of the leg is the subagent's report.
+func carriesHandback(raw json.RawMessage) bool {
+	if !wireObject(raw) {
+		return false
+	}
+	var wire struct {
+		Handback       json.RawMessage `json:"handback"`
+		HandbackReport json.RawMessage `json:"handbackReport"`
+	}
+	// ONE THAT DOES NOT DECODE IS READ AS CARRYING ONE, the safe direction.
+	if wireDecode(raw, &wire) != nil {
+		return true
+	}
+	return wire.Handback != nil || wire.HandbackReport != nil
 }
 
 // The record types and subtypes this layer reads by name.
