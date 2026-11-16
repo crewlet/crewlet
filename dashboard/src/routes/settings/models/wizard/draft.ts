@@ -405,11 +405,8 @@ export function modelId(d: Pick<Draft, "harness" | "provider" | "model">): strin
     : model;
 }
 
-/**
- * The effort levels the draft's harness takes on its model, lowest first: the
- * harness's own, or the narrower set its profile names for the model. Empty where
- * it has no setting the engine passes.
- */
+/** The effort levels the draft's harness takes on its model, lowest first (its profile may narrow
+ * them per model); empty where it has no setting the engine passes. */
 export function effortLevels(d: Pick<Draft, "harness" | "provider" | "model">): readonly string[] {
   const facts = factsOf(d.harness);
   const model = modelId(d);

@@ -1,7 +1,5 @@
-/**
- * What each built-in harness's profile says about adding a model on it: a
- * module of its own, so only Settings › Models loads it.
- */
+/** What each built-in harness's profile says about adding a model on it: a module of its own,
+ * so only Settings › Models loads it. */
 
 /** How a model on a harness can sign in: a key (or a provider's key in `env`), a host login, a token, a device code or a cloud. */
 type HarnessSignIn = "api-key" | "host-login" | "token" | "device" | "cloud";
@@ -32,11 +30,8 @@ interface HarnessFacts {
   effortNote?: string;
 }
 
-/**
- * Every built-in harness bar `custom`, as its profile reads. Held against
- * `harnessprofile` by `internal/config.TestTheModelsScreenKnowsEveryHarnessAsItsProfileReads`,
- * so a sign-in or a level the wizard offers is one the engine runs.
- */
+/** Every built-in harness bar `custom`, as its profile reads, so the wizard offers only what the
+ * engine runs (held by `internal/config.TestTheModelsScreenKnowsEveryHarnessAsItsProfileReads`). */
 export const HARNESS_FACTS: Readonly<Record<string, HarnessFacts>> = {
   "claude-code": {
     binary: "claude",

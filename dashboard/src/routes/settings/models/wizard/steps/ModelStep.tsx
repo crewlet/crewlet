@@ -45,10 +45,8 @@ const MODEL_PLACEHOLDER: Readonly<Record<string, string>> = {
 /** The value the effort control holds for the harness's default, which writes no `effort`. */
 const DEFAULT_EFFORT = "";
 
-/**
- * How hard the model reasons: only the levels the harness takes on this model, or
- * why it has none. The harness default writes nothing.
- */
+/** How hard the model reasons: only the levels the harness takes on this model, or why it has
+ * none. The harness default writes nothing. */
 export function EffortField({
   draft,
   error,
