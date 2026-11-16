@@ -160,8 +160,9 @@ const RequestTerm = 5 * time.Second
 // may take to cross a link and still leave the request answered inside its
 // [RequestTerm]: the term less one [jsprovision.ReadTerm], the request's own
 // round trip — four seconds. It is what a WINDOW across a link is sized by: the
-// object store's puts (internal/objstore/natsobj) hold no more out than the
-// slowest link the engine allows (objstore.MiBPace) carries in it.
+// object store's puts (internal/objstore/natsobj) and a memory replay's pulls
+// (internal/learning/memsync) each hold no more out than the slowest link the
+// engine allows (objstore.MiBPace) carries in it.
 //
 // # The request's term, never the lease's heartbeat
 //
@@ -171,7 +172,7 @@ const RequestTerm = 5 * time.Second
 // first in first out. Every one of them is held to this term, whatever lease
 // the node holds, and one not answered inside it is unknown — a renewal's seat
 // deferring until the next lands, a read asked again with its reply crossing
-// again. Sized by a lease's heartbeat instead, as the put window once was, the
+// again. Sized by a lease's heartbeat instead, as the windows once were, a
 // window at the shipped lease held such a request fifteen seconds at the floor,
 // past its term three times over. One read term is the least the request's own
 // round trip is given anywhere: a read unanswered that long is presumed lost

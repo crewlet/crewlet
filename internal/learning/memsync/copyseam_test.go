@@ -7,34 +7,24 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
-	seathost "github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
 // newSyncer is [New] for a node in its broker's own process, which a case
-// over a real broker's own connection is: answered whole, since New refuses
-// only a link with no heartbeat.
+// over a real broker's own connection is.
 func newSyncer(db *store.DB, js jetstream.JetStream, agentID AgentIDFor) *Syncer {
-	return mustNew(db, js, agentID, Config{})
+	return New(db, js, agentID, Config{})
 }
 
 // newSyncerAcross is [New] for a node across a link from its changelog, a
-// leaf's, renewing its leases at the shipped heartbeat.
+// leaf's.
 func newSyncerAcross(db *store.DB, js jetstream.JetStream, agentID AgentIDFor) *Syncer {
-	return mustNew(db, js, agentID, Config{AcrossLink: true, LeaseHeartbeat: seathost.HeartbeatInterval})
-}
-
-func mustNew(db *store.DB, js jetstream.JetStream, agentID AgentIDFor, cfg Config) *Syncer {
-	s, err := New(db, js, agentID, cfg)
-	if err != nil {
-		panic(err)
-	}
-	return s
+	return New(db, js, agentID, Config{AcrossLink: true})
 }
 
 // bubbleSyncer is a syncer of the seat over db whose changelog is the model
 // copies is played over (copyfake_test.go): in this node's own process, or
-// across a link at the shipped lease where link says so.
+// across a link where link says so.
 func bubbleSyncer(t *testing.T, db *store.DB, copies *fakeCopies, link bool) *Syncer {
 	t.Helper()
 	js := &fakeJS{log: copies.log, created: time.Unix(1_700_000_000, 0).UTC()}

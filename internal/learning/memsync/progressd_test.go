@@ -11,6 +11,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
@@ -273,9 +274,8 @@ func TestTheHydrationLinesSayWhatItTook(t *testing.T) {
 //
 // A pull's heartbeat at most half its expiry, which the server requires; the
 // expiry the moment the replay calls its copy behind; four heartbeats inside
-// the quiet wait; the behind bound the object store's stall; across a link
-// the window what the floor carries within the lease's heartbeat; and on
-// either topology a replay's consumer kept by the broker past the last bytes
+// the quiet wait; the behind bound the object store's stall; and on either
+// topology a replay's consumer kept by the broker past the last bytes
 // of a pull at the transport's bound and an end barrier asked to its ceiling
 // behind them, the longest a live replay goes between two pulls.
 func TestTheReplaysKnobsHoldTheirReasons(t *testing.T) {
@@ -301,24 +301,44 @@ func TestTheReplaysKnobsHoldTheirReasons(t *testing.T) {
 	if behindWait != objstore.Stall {
 		t.Errorf("the behind bound is %v, want the object store's stall of %v", behindWait, objstore.Stall)
 	}
-	for heartbeat, want := range map[time.Duration]int{15 * time.Second: 524288, 5 * time.Second: 174762} {
-		if got := windowFor(heartbeat); got != want {
-			t.Errorf("the window at a heartbeat of %v is %d bytes, want %d", heartbeat, got, want)
-		}
-	}
 }
 
-// A NODE ACROSS A LINK WITH NO LEASE HEARTBEAT IS REFUSED.
+// A PULL ACROSS A LINK CROSSES WITHIN A REQUEST'S TERM.
 //
-// Its replays' window is what a link at the floor carries within the node's
-// lease heartbeat, so a node across a link that names none has no window to
-// hold its pulls to: it is refused by name rather than given some default.
-func TestANodeAcrossALinkWithNoLeaseHeartbeatIsRefused(t *testing.T) {
+// A replay's pull rides the coordination connection, and across a link the
+// requests sent after it, a lease renewal's among them wherever the renewals
+// share that link, wait behind whatever of its reply is still crossing. Such
+// a request is answered within its term ([jsapi.RequestTerm]) only if the
+// pull crosses the floor ([objstore.MiBPace]) in what the term leaves after
+// the request's own round trip, one [jsprovision.ReadTerm]: four seconds,
+// 139 810 bytes, whatever lease the node holds. So a pull across a link is
+// bounded by the widest window that crosses within that, and one in a
+// member's own process by no window at all.
+//
+// Mutation: size the window by the whole five-second term, leaving the
+// request no round trip of its own, and this goes red.
+func TestAPullAcrossALinkCrossesWithinARequestsTerm(t *testing.T) {
 	t.Parallel()
-	_, err := New(openStore(t), &fakeJS{}, func(string) string { return seat.AgentID },
-		Config{AcrossLink: true})
-	if !says(err, "Config.LeaseHeartbeat") {
-		t.Errorf("New across a link with no lease heartbeat answered %v, want a refusal naming "+
-			"Config.LeaseHeartbeat", err)
+	agentID := func(string) string { return seat.AgentID }
+	budget := jsapi.RequestTerm - jsprovision.ReadTerm
+	crossing := func(bytes int) time.Duration {
+		return time.Duration(bytes) * objstore.MiBPace / objstore.MiB
+	}
+	window := windowOf(newSyncerAcross(openStore(t), &fakeJS{}, agentID))
+	if c := crossing(window); c > budget {
+		t.Errorf("a pull across a link carries %d bytes, which cross the floor in %v: a request sent "+
+			"behind it is answered past the %v its %v term leaves after its own round trip", window, c,
+			budget, jsapi.RequestTerm)
+	}
+	if crossing(window+1) <= budget {
+		t.Errorf("a pull across a link carries %d bytes, and a byte more still crosses the floor "+
+			"within %v: round trips thrown away", window, budget)
+	}
+	if window != 139810 {
+		t.Errorf("a pull across a link carries %d bytes, want the 139 810 the floor carries in %v",
+			window, budget)
+	}
+	if got := windowOf(newSyncer(openStore(t), &fakeJS{}, agentID)); got != 0 {
+		t.Errorf("a pull in a member's own process is windowed at %d bytes, want no window", got)
 	}
 }

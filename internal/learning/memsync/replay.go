@@ -98,7 +98,7 @@ import (
 // count binds only for the small rows, profiles and markers, where 1024 of
 // them are a few hundred KiB. A year of episodes, some eighteen thousand,
 // takes 23 pulls in a member's own process, where 256 rows a pull took 71.
-// Across a link a pull's window binds first for any row past 512 bytes
+// Across a link a pull's window binds first for any row past 136 bytes
 // ([Syncer.pullBound]). A pull is one transaction too ([tableReplay.write]),
 // and its bytes, not its count, bound what that transaction writes.
 const fetchBatch = 1024
@@ -178,18 +178,11 @@ const apiBytes = 4 << 10
 // Config is how a syncer's node reaches the changelog.
 type Config struct {
 	// AcrossLink says the node's connection reaches the changelog across a
-	// LINK its leases ride too, a leaf's link to its members or a dial to an
-	// external cluster, rather than its own member in its own process: a
-	// replay's pulls are then windowed ([Syncer.pullBound]) and every
-	// request is given the link's crossing at the floor
-	// ([objstore.MiBPace]).
+	// LINK, a leaf's link to its members or a dial to an external cluster,
+	// rather than its own member in its own process: a replay's pulls are
+	// then windowed ([Syncer.pullBound]) and every request is given the
+	// link's crossing at the floor ([objstore.MiBPace]).
 	AcrossLink bool
-	// LeaseHeartbeat is how often the node renews the leases its connection
-	// carries: the lease TTL in force over seat.HeartbeatRatio. It sizes the
-	// window across a link, and is required with AcrossLink, refused as zero
-	// there rather than read as some default, because a window sized for a
-	// lease the node does not hold holds its renewals past it.
-	LeaseHeartbeat time.Duration
 	// Clustered says the broker is a cluster, which is what a create's
 	// term branches on ([jsprovision.AskTerm]).
 	Clustered bool
@@ -355,41 +348,39 @@ func (s *Syncer) pullBytes() int {
 }
 
 // pullBound is the byte bound of an ordinary replay pull: [Syncer.pullBytes]
-// in this node's own process, and across a link the WINDOW, what a link at the
-// floor carries within one lease heartbeat, where that is smaller.
+// in this node's own process, and across a link the WINDOW ([pullWindow]),
+// what a link at the floor carries within a request's term less its own round
+// trip, where that is smaller.
 //
 // # Why the window
 //
 // A replay rides the coordination connection (ADR-0001), and across a link
-// the node's lease renewals cross the same link, behind whatever pull is in
-// flight. A pull of the transport's 8 MiB at the floor every link is promised
-// ([objstore.MiBPace]) holds a renewal four minutes. Windowed, a renewal's
-// reply waits behind at most one heartbeat's bytes of this hydration's pulls
-// at the floor, since a replay keeps one pull out at a time
-// ([tableReplay.pull]), so a renewal sent a heartbeat after the last lands
-// with a whole interval of its lease to spare: the rule
-// internal/objstore/natsobj windows an upload by (linkWindow), counted in
-// bytes here because a row has no fixed size. 524 288 bytes at the shipped
-// lease, renewed every fifteen seconds; 174 762 at config.MinLeaseTTL's.
+// every request the node sends after a pull — a read, a small write, and a
+// lease renewal wherever the renewals share the link, or a bottleneck on it
+// that queues first in first out — waits behind whatever of the pull's reply
+// is still crossing. A pull of the transport's 8 MiB at the floor every link
+// is promised ([objstore.MiBPace]) holds such a request four minutes.
+// Windowed, it waits behind at most four seconds of this hydration's pulls at
+// the floor, since a replay keeps one pull out at a time ([tableReplay.pull]),
+// and is still answered inside its term: the rule internal/objstore/natsobj
+// windows an upload by (linkWindow), counted in bytes here because a row has
+// no fixed size.
 //
-// Its price is round trips on a fast distant link: a year of episodes, 368
-// windows, takes about a minute with its writes across 100 ms at 100 Mbit/s,
-// where 8 MiB pulls took half that.
+// Its price is round trips on a fast distant link: a year of episodes, 1 380
+// windows, takes about two and a half minutes with its writes across 100 ms at
+// 100 Mbit/s, where 8 MiB pulls took about half a minute and windows sized by
+// the shipped lease's heartbeat (512 KiB) about a minute.
 //
 // # What the window does not cover
 //
-// crewlet/crewlet#1035's residual. A renewal's own request term is five
-// seconds, so on a link slower than a window in five seconds (0.84 Mbit/s at
-// the shipped lease) a renewal sent behind a full window still misses its
-// term. And the window is this hydration's alone: the object store's upload
-// window is a budget of its own on the same connection (natsobj, linkWindow),
-// and an upload's bytes cross the link outbound while a pull's cross it
-// inbound, so a renewal whose request crosses behind an upload and whose reply
-// crosses behind a pull waits behind both — up to two windows, a MiB at the
-// shipped lease, which misses the term below 1.68 Mbit/s. (A node hydrates
-// one seat at a time: the seat host's placement pass claims them one after
-// another.) One row larger than the window crosses alone, holding the link for
-// its own crossing.
+// The window is this hydration's alone: the object store's upload window is a
+// budget of its own on the same link (natsobj, linkWindow), and an upload's
+// bytes cross the link outbound while a pull's cross it inbound, so a request
+// whose bytes cross behind an upload's window and whose reply crosses behind a
+// pull's waits behind both — up to 7.75 seconds at the floor, past its term.
+// (A node hydrates one seat at a time: the seat host's placement pass claims
+// them one after another.) One row larger than the window crosses alone,
+// holding the link for its own crossing.
 func (s *Syncer) pullBound() int {
 	bound := s.pullBytes()
 	if s.window > 0 {
@@ -398,19 +389,19 @@ func (s *Syncer) pullBound() int {
 	return bound
 }
 
-// windowFor is what a link at the floor carries within heartbeat: the window
-// of a node that renews its leases every heartbeat ([Syncer.pullBound]).
-func windowFor(heartbeat time.Duration) int {
-	return int(int64(heartbeat) * objstore.MiB / int64(objstore.MiBPace))
-}
+// pullWindow is what a replay pull carries at most across a link: the bytes a
+// link at the floor ([objstore.MiBPace]) carries within
+// [jsapi.WindowCrossing], the request term less its own round trip — 139 810
+// bytes, four seconds at the floor, whatever lease the node holds
+// ([Syncer.pullBound]). A test holds it to the terms' own constants.
+const pullWindow = int(int64(jsapi.WindowCrossing) * objstore.MiB / int64(objstore.MiBPace))
 
 // stall is how long a replay pull of maxBytes may go without a word before
 // the seat is refused: the client's request term (its DefaultTimeout), and
 // what that many bytes take to reach this node whole, handled in the engine's
 // processes and crossing its link at the floor ([jsapi.Delivering]). 13.0 s in
-// a member's own process at the transport's bound; 20.5 s across a link at the
-// window at the shipped lease; 253 s for a pull of one row at the transport's
-// bound across a link.
+// a member's own process at the transport's bound; 9.1 s across a link at the
+// window; 253 s for a pull of one row at the transport's bound across a link.
 func (s *Syncer) stall(maxBytes int) time.Duration {
 	return s.js.Options().DefaultTimeout + jsapi.Delivering(maxBytes, s.pace)
 }

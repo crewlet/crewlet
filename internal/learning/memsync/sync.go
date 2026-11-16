@@ -177,7 +177,7 @@ type Syncer struct {
 	pace time.Duration
 
 	// window is what a replay pull carries at most across a link
-	// ([Syncer.pullBound]), and 0 in a member's own process.
+	// ([pullWindow], [Syncer.pullBound]), and 0 in a member's own process.
 	window int
 
 	// copies, when set, is where a hydration's replays make their consumers
@@ -216,23 +216,17 @@ type Syncer struct {
 // pulls, which are bounded by this connection's own limit ([Syncer.pullBytes]),
 // so no answer of its can be larger than the link carries ([Syncer.replay]).
 // What the topology changes is how long each request is given and how much a
-// pull carries across a link ([Config]). A node across a link that names no
-// lease heartbeat is refused, by name.
-func New(db *store.DB, js jetstream.JetStream, agentID AgentIDFor, cfg Config) (*Syncer, error) {
+// pull carries across a link ([Config]).
+func New(db *store.DB, js jetstream.JetStream, agentID AgentIDFor, cfg Config) *Syncer {
 	if db == nil || js == nil || agentID == nil {
-		return nil, nil
+		return nil
 	}
 	s := &Syncer{db: db, js: js, agentID: agentID, marks: map[markKey]int64{},
 		holdings: map[string]*seatHolding{}, timing: jsprovision.Clustered(cfg.Clustered).Timing()}
 	if cfg.AcrossLink {
-		if cfg.LeaseHeartbeat <= 0 {
-			return nil, fmt.Errorf("memsync: a node that reaches the memory changelog across a "+
-				"link needs its lease heartbeat (Config.LeaseHeartbeat), which sizes the window "+
-				"its replays' pulls share with its lease renewals; got %v", cfg.LeaseHeartbeat)
-		}
-		s.pace, s.window = objstore.MiBPace, windowFor(cfg.LeaseHeartbeat)
+		s.pace, s.window = objstore.MiBPace, pullWindow
 	}
-	return s, nil
+	return s
 }
 
 // info logs one of a hydration's lines at info, and hands it to the said seam

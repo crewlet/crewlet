@@ -2540,20 +2540,16 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// THE SEAT'S DERIVED ID, never a roster lookup, so a seat a revision
 	// removed still flushes on release ([memoryAgentID]).
 	//
-	// ACROSS A LINK OR NOT ([acrossLink]), at the lease heartbeat the host
-	// renews at, and on the stream's topology ([clusteredStream]): what each
-	// of a hydration's requests is given, and the window its pulls share
-	// with this node's lease renewals across a link (memsync.Config).
-	e.memory, err = memsync.New(backends.Store, backends.CoordinationJetStream(),
+	// ACROSS A LINK OR NOT ([acrossLink]), and on the stream's topology
+	// ([clusteredStream]): what each of a hydration's requests is given, and
+	// whether its pulls are windowed so a request sent behind one on the link
+	// is still answered inside its term (memsync.Config).
+	e.memory = memsync.New(backends.Store, backends.CoordinationJetStream(),
 		func(handle string) string { return memoryAgentID(e.Company(), handle) },
 		memsync.Config{
-			AcrossLink:     acrossLink(opts.Bootstrap),
-			LeaseHeartbeat: n.Host().HeartbeatInterval(),
-			Clustered:      clusteredStream(opts.Bootstrap),
+			AcrossLink: acrossLink(opts.Bootstrap),
+			Clustered:  clusteredStream(opts.Bootstrap),
 		})
-	if err != nil {
-		return nil, fmt.Errorf("engine: memory sync: %w", err)
-	}
 	// ARMED HERE, STARTED IN Start. The watchdog stands down permanently
 	// the first time no watched duty is live, and the host is not live
 	// until node.Start runs it — so building it here and starting it there

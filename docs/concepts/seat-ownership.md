@@ -436,21 +436,22 @@ for the subjects the broker counts beside it, which is what a hydration holds
 of the changelog's rows at once, and all it holds of them: an ordinary row of
 some 10 KiB fills a pull's bytes at about 795 rows, so a year of episodes takes
 23 pulls in a member's own process. **Across a link a pull carries a window**,
-what the link carries within one lease heartbeat at the floor of thirty seconds
-a mebibyte (512 KiB at the shipped lease, renewed every fifteen seconds),
-because the node's lease renewals cross the same link behind whatever pull is
-in flight, as the object store windows an upload. A row larger than the window
-crosses alone, in a pull of one message at the broker's limit. The window's
-price is round trips on a fast distant link: a year of episodes takes 368
-pulls, about a minute with its writes across 100 ms at 100 Mbit/s. What it does
-not cover is [#1035](https://github.com/crewlet/crewlet/issues/1035)'s, shared
-with uploads: a renewal's own five-second request term is shorter than a full
-window below 0.84 Mbit/s; the window is the hydration's own, and the object
-store's upload window is another on the same connection, so a renewal whose
-request crosses behind an upload and whose reply crosses behind a pull waits
-behind both, which misses its term below 1.68 Mbit/s at the shipped lease; and
-one row larger than the window holds the link for its own crossing. A memory
-row is bounded only by the broker (an episode keeps its ask whole), so a pull
+what the link carries in four seconds at the floor of thirty seconds a mebibyte
+(139,810 bytes), because every request the node sends after a pull on that link
+waits behind whatever of it is still crossing — a read, a small write, and a
+lease renewal wherever the renewals share the link — and each is held to a
+five-second term: a request behind a full window still has the second its own
+round trip needs, at every lease TTL, as the object store windows an upload. A
+row larger than the window crosses alone, in a pull of one message at the
+broker's limit. The window's price is round trips on a fast distant link: a
+year of episodes takes 1,380 pulls, about two and a half minutes with its
+writes across 100 ms at 100 Mbit/s. What it does not cover: the window is the
+hydration's own, and the object store's upload window is another on the same
+link, so a request whose bytes cross behind an upload and whose reply crosses
+behind a pull waits behind both, up to 7.75 seconds at the floor, past its
+term, a lease renewal sent there among them
+([#1035](https://github.com/crewlet/crewlet/issues/1035)); and one row larger
+than the window holds the link for its own crossing. A memory row is bounded only by the broker (an episode keeps its ask whole), so a pull
 bounded by its rows alone
 held up to 256 rows of 8 MiB each, 2 GiB, inside seat acquisition
 ([#1052](https://github.com/crewlet/crewlet/issues/1052)). The broker sends a
