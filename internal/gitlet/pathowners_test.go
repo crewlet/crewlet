@@ -440,6 +440,7 @@ func TestAFieldOneKindReadsIsRefusedOnEveryOther(t *testing.T) {
 		{"repo_facts", []gitlet.ReadKind{gitlet.ReadRepos, gitlet.ReadRepo}, func(q *gitlet.ReadQuery) {
 			q.RepoFacts = true
 		}},
+		{"cards", []gitlet.ReadKind{gitlet.ReadChanges}, func(q *gitlet.ReadQuery) { q.Cards = true }},
 	} {
 		for _, kind := range gitlet.ReadKinds() {
 			q, named := asks[kind]

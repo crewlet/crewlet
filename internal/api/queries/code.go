@@ -327,6 +327,10 @@ func codeReadQuery(kind gitlet.ReadKind, asker gitlet.Principal, p Params) (gitl
 	if q.RepoFacts, err = askedFor(p, "repo_facts"); err != nil {
 		return gitlet.ReadQuery{}, err
 	}
+	// A LISTING'S CARDS are asked, `cards=true`; the reader refuses them on any other read.
+	if q.Cards, err = askedFor(p, "cards"); err != nil {
+		return gitlet.ReadQuery{}, err
+	}
 	for v := range strings.SplitSeq(p.String("status"), ",") {
 		if v = strings.TrimSpace(v); v == "" {
 			continue

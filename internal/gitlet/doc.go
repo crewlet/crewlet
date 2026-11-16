@@ -303,6 +303,10 @@
 // person's own push under direct_push persons, which is that person's recorded
 // override; never by a seat's push, which every protection refuses.
 //
+// A LISTING'S CARDS (changecards.go): asked with [ReadQuery.Cards], each listed change's
+// conversation counts, its reviewers' faces, its head's [CheckRollup] and a recent
+// ejection, a statement a part over the page's ids and one rollup a head.
+//
 // # A change wakes the seats its records concern
 //
 // Every record about a change that concerns anybody carries whom it concerns,

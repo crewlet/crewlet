@@ -515,14 +515,23 @@ func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 	if err != nil {
 		return err
 	}
-	pg := page{maxRows: limit, maxB: r.pageBytes}
+	var listed []changeRow
 	for _, row := range kept {
-		judged := readiness[row.id]
-		if walk.person && (judged == nil || !judged.WaitsPerson()) {
-			continue
+		if judged := readiness[row.id]; !walk.person || (judged != nil && judged.WaitsPerson()) {
+			listed = append(listed, row)
 		}
+	}
+	// THE CARDS ([ReadQuery.Cards]) are read for the rows the page lists, and weigh in its cut.
+	var cards map[string]*ChangeCard
+	if q.Cards {
+		if cards, err = r.changeCardsIn(ctx, tx, listed); err != nil {
+			return err
+		}
+	}
+	pg := page{maxRows: limit, maxB: r.pageBytes}
+	for _, row := range listed {
 		s := repos[row.repoID].summary(row)
-		s.Readiness = judged
+		s.Readiness, s.Card = readiness[row.id], cards[row.id]
 		out.Changes = append(out.Changes, s)
 		if pg.add(s.encodedBytes()) {
 			out.Next = walk.cursor(row)
