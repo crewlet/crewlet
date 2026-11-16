@@ -1199,6 +1199,10 @@ const (
 	// writes, so a client sending one per keystroke is held to a few a
 	// second. 429 with a Retry-After; never a lockout.
 	CodeCheckBudget Code = "check_budget"
+	// CodeRateLimited is a comment on an artifact this node's budget for
+	// comment writes refused for now, the writer's own on the artifact or
+	// the artifact's. 429 with a Retry-After; never a lockout.
+	CodeRateLimited Code = "rate_limited"
 
 	// --- the Dashboard Assistant ---
 
@@ -1781,6 +1785,8 @@ var codes = map[Code]string{
 		"moment Retry-After names, then refresh it.",
 	CodeCheckBudget: "Too many checks at once. Wait the moment Retry-After names, " +
 		"then check the page again.",
+	CodeRateLimited: "Too many comments on this artifact at once. Wait the moment " +
+		"Retry-After names, then send it again.",
 
 	CodeApplying: "This node is applying the configuration the fleet " +
 		"activated. Try again in a moment, or ask another node.",
