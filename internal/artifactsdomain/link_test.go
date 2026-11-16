@@ -174,6 +174,40 @@ func TestALinkTheRowsRefusedListsTheArtifactUnderNothing(t *testing.T) {
 	if got := n.listedFor("ENG-12"); len(got) != 0 {
 		t.Errorf("ENG-12 lists %v on the strength of a refused link", got)
 	}
+	if items, err := n.reader.WorkItems(t.Context(), id); err != nil || len(items) != 0 {
+		t.Errorf("the artifact's work items are (%v, %v) after a refused link, want none", items, err)
+	}
+}
+
+// AN ARTIFACT'S WORK ITEMS ARE EVERY ITEM ITS APPLIED HISTORY NAMES, once each
+// and sorted: the item it was made for and every item it was linked to, which
+// is whom a comment on it reads the assignees of.
+//
+// Mutation: drop DISTINCT and ENG-13 is answered twice; drop the outcome and a
+// refused link's item is answered.
+func TestAnArtifactsWorkItemsAreTheItemsItsHistoryNames(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	made := person("jane", artifacts.RoleOwner)
+	made.Authority.WorkItem = "ENG-13"
+	id := n.create(made, "Made for ENG-13", upload(t, "index.html", "<p>m</p>")).Artifact
+	next := page(upload(t, "index.html", "<p>2</p>"))
+	next.Artifact, next.Base = id, 1
+	if _, err := n.writer.Publish(t.Context(), made, next); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	jane := person("jane", artifacts.RoleOwner)
+	if _, err := n.writer.LinkWorkItem(t.Context(), jane, id, "ENG-2"); err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	items, err := n.reader.WorkItems(t.Context(), id)
+	if err != nil || !slices.Equal(items, []string{"ENG-13", "ENG-2"}) {
+		t.Errorf("the artifact's work items are (%v, %v), want ENG-13 and ENG-2", items, err)
+	}
+	if _, err := n.reader.WorkItems(t.Context(), artifacts.IDFor("nothing")); !errors.Is(err,
+		artifactsdomain.ErrNotFound) {
+		t.Errorf("an artifact nothing holds answered %v", err)
+	}
 }
 
 // EVERY HISTORY ROW IS FILED UNDER ONE OF [artifactsdomain.HistoryOps], and
