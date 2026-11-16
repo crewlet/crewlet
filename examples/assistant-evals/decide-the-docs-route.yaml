@@ -1,14 +1,9 @@
-# E1, which way to route a docs site's versioned pages. The Agent CTO asks
-# the founder to choose between an origin rule (recommended, which needs a plan
-# upgrade), a Worker route on the free tier, or waiting. Ask Crewlet reads the
-# question with its options and evidence, the task with its links, the thread,
-# each task and the runbook the question cites, and the agent's access, then
-# proposes an answer by the option's id with the conditions in the body.
+# E1: the founder chooses how to route a docs site's versioned pages; Ask Crewlet
+# reads the question, its evidence, the linked tasks, the runbook and the agent's
+# access, then proposes the answer by its option with the conditions as the body.
 #
-# Scripted, this holds the structure: every read reachable, the evidence on
-# the cards, one answer proposed and nothing sent. Run against a model
-# (-model <key> -paid -trials 5), grade each trial on this rubric, passing at
-# 6 of 7:
+# Scripted, it holds the reads and one answer proposed with nothing sent. Run
+# against a model (-model <key> -paid -trials 5), grade each trial, passing at 6 of 7:
 #   1. It weighs the recommendation against what it read, and says why it
 #      disagrees: the earlier blog rule (ENG-35) was a Worker route that failed
 #      open, and the runbook's conditions fit it.

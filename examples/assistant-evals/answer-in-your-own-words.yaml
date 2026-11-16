@@ -1,7 +1,5 @@
-# E5, an answer in the person's own words. The founder answers the question
-# with none of its options and sets the conditions themselves. Ask Crewlet
-# proposes the answer with no option chosen and the person's conditions as the
-# body, adding none of its own.
+# E5: the founder answers with none of the options and their own conditions;
+# the answer is proposed with no option chosen and their conditions as the body.
 #
 # Run against a model, grade each trial on this rubric, passing at 3 of 3:
 #   1. The body keeps every condition the person gave.

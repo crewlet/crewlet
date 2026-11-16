@@ -1,7 +1,5 @@
-# The founder asks what a task is waiting on before answering a question on
-# it. The assistant reads the task, whose card carries the task it is filed
-# under and both directions of its links, each with the other end's status, so
-# it can say what blocks the work without reading the raw answer.
+# The founder asks what a task waits on; its card carries the task it is filed
+# under and both directions of its links with each end's status.
 person:
   apps: [worklet]
 page:

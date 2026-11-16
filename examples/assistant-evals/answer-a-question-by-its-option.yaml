@@ -1,9 +1,6 @@
-# The Agent CTO asks the founder which way to route the docs site's versioned
-# pages, offering three options and recommending one. The assistant reads what
-# waits on the person, which lists the question with its comment id, every
-# option by its id, the recommendation and why, and what it cites, so it can
-# answer with an option's id without reading the raw answer. It proposes the
-# answer and nothing is sent until the person approves it.
+# A question with three options waits on the founder; the decisions read lists
+# it with its options by id, the recommendation and what it cites, and the
+# answer is proposed by the option chosen, sent only once approved.
 person:
   apps: [worklet]
   acts: [comment_on_work_item]

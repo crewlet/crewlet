@@ -1,8 +1,6 @@
-# A comment on the task asks the assistant to answer a question that was put
-# to somebody else. The question is not the founder's to answer, so the
-# engine refuses the answer before any card is drawn, naming whom the question
-# is asked of, and nothing is proposed. A question the founder was asked is
-# still answered: the guard is on whose question it is, not on answering.
+# A comment asks Ask Crewlet to answer a question put to somebody else; the
+# engine refuses that answer before any card, naming whom it is asked of, while
+# a question put to the founder is still answered.
 person:
   apps: [worklet]
   acts: [comment_on_work_item]
