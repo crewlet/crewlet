@@ -25,6 +25,10 @@
  * refused because somebody published since is merged onto their version item
  * by item (lib/artifacts/canvas.ts) and saved again by the person.
  *
+ * COMMENTS ARE PINNED ON THE CANVAS, in its own overlay (`comments/BoardPins.tsx`):
+ * a pin follows its board through every pan and zoom, and a live board's page
+ * draws the picture of a point a reader comments on.
+ *
  * PRINT IS PER BOARD, and the host's (`crewlet.print()`, or Print on an opened
  * board): a print view covers the window with that board alone, framed afresh
  * at its own size at the window's corner, and once its page has said hello
@@ -88,6 +92,8 @@ import {
   type DraftFieldSpec,
 } from "~/app/assistant/draft.ts";
 import { FrameView } from "./FrameView.tsx";
+import { BoardPins } from "./comments/BoardPins.tsx";
+import { useComments } from "./comments/state.tsx";
 import type { PresenceReport } from "./presence.ts";
 
 /** The region a reader on one board is at, as the room hears it. */
@@ -176,6 +182,10 @@ function Design({
   const save = useKeyedGesture();
   const publish = useArtifactAccess({ app: true, role: "editor", held: detail.role });
   const canvasRef = useRef<CanvasHandle>(null);
+  // THE CANVAS ON SHOW carries the artifact's comments; a side of a compare none.
+  const comments = useComments();
+  const commenting = primary && comments !== null;
+  const [viewMoved] = useState(() => new Set<() => void>());
 
   // THE DRAFT AND THE TEXT IT STARTED FROM: a save replaces exactly that text,
   // which after a merge is the newer version's.
@@ -314,7 +324,12 @@ function Design({
     canvasRef.current?.focusRegion({ x: b.x, y: b.y, width: b.w, height: b.h });
   };
 
-  const frameOf = (b: CanvasBoardItem, className: string, onReady?: () => void): ReactNode => (
+  const frameOf = (
+    b: CanvasBoardItem,
+    className: string,
+    onReady?: () => void,
+    layer?: "board",
+  ): ReactNode => (
     // Keyed by board, so another board opened is a frame of its own.
     <FrameView
       detail={detail}
@@ -328,6 +343,7 @@ function Design({
       print={() => print(b.id)}
       onReady={onReady}
       className={className}
+      comments={layer}
     />
   );
 
@@ -402,7 +418,9 @@ function Design({
             label={shown.title || detail.title}
             boards={boards}
             notes={notes}
-            renderBoard={(b) => frameOf(b, "design-board-frame")}
+            renderBoard={(b) =>
+              frameOf(b, "design-board-frame", undefined, commenting ? "board" : undefined)
+            }
             editable={editing}
             minSide={CANVAS_MIN_SIDE}
             maxSide={CANVAS_MAX_SIDE}
@@ -415,6 +433,14 @@ function Design({
             selected={selected}
             onSelectedChange={setSelected}
             canvasRef={canvasRef}
+            {...(commenting
+              ? {
+                  overlay: <BoardPins canvas={canvasRef} boards={boards} moved={viewMoved} />,
+                  onViewChange: () => {
+                    for (const redraw of viewMoved) redraw();
+                  },
+                }
+              : {})}
           />
         </div>
       </div>

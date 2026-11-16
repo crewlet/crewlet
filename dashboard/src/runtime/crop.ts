@@ -1,15 +1,7 @@
 /**
- * A picture of part of a drawing, for a comment on it: the page's runtime
- * draws its own document this way when the host asks (`comments.crop`), and
- * the dashboard draws a slide, which it renders itself, the same way.
- *
- * DRAWN THROUGH AN SVG `foreignObject`, with every element's computed style
- * written inline on a copy of it, so the copy looks as the original does with
- * no stylesheet to load: an SVG drawn as an image loads nothing from outside
- * itself. A picture the browser cannot draw (a tainted canvas, a decode that
- * fails) is no picture, never an error.
- *
- * No DOM at module scope: the runtime build imports this.
+ * A picture of part of a drawing, drawn through an SVG foreignObject with
+ * every computed style inlined: by a page's runtime, and by the dashboard for
+ * a slide. One the browser cannot draw is null, never an error.
  */
 
 import { COMMENT_CROP_MAX_SIDE, isCropImage } from "./bridge.ts";

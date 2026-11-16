@@ -302,6 +302,20 @@ describe("binding a row", () => {
     expect(next).toHaveBeenCalledTimes(1);
   });
 
+  // ONE LETTER, TWO ROWS: an artifact's Comments panel bare, Comment mode
+  // with Shift. Mutation: drop either row's `shift` and one press does both.
+  test("an artifact's comments take c, and Comment mode Shift with it", () => {
+    const panel = vi.fn();
+    const place = vi.fn();
+    render(<Bound handlers={{ "artifact.comments": panel, "artifact.comment": place }} />);
+    press("c");
+    expect(panel).toHaveBeenCalledTimes(1);
+    expect(place).not.toHaveBeenCalled();
+    press("C", { shiftKey: true });
+    expect(place).toHaveBeenCalledTimes(1);
+    expect(panel).toHaveBeenCalledTimes(1);
+  });
+
   // A JUMP MAY TAKE ITS PREFIX'S OWN LETTER: Gitlet's is `g g`, the one
   // letter of its name no other chord holds (`nav.ts`). The prefix in flight
   // takes the next key whatever it is, so the second `g` is the jump and

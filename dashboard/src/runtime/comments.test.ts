@@ -1,8 +1,6 @@
 /**
- * The page's half of the comment layer: a part declared by its attribute or
- * by `crewlet.comments.anchor`, its layout reported only while the host asks,
- * a click in Comment mode picked before the page's own handlers hear it, and
- * Escape, a reveal and a picture answered as the host asked.
+ * The page's half of the comment layer: anchors declared, layout reported only
+ * while asked, a pick kept from the page's own handlers, and the host's asks.
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";

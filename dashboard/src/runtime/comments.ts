@@ -1,20 +1,7 @@
 /**
- * The page's half of the comment layer (`crewlet.comments`): a page declares
- * the parts worth commenting on, and while the host asks, the runtime reports
- * where they are drawn, a reader's click in Comment mode, and a picture of a
- * part.
- *
- * ONE MECHANISM, THE ATTRIBUTE. `data-crewlet-anchor="name"` is the
- * declaration, and `comments.anchor(name, element)` only sets it, so the
- * engine's index of a version (which reads the attribute and the literal
- * calls in its files) and the frame agree on every name.
- *
- * THE PAGE GAINS NOTHING. It reports geometry, words and pixels it already
- * holds, only while the host asked for them, and never learns or writes a
- * remark: the host checks every value and writes the comment as the reader.
- *
- * No DOM at module scope: the runtime build imports this, and a suite drives
- * it over its own document.
+ * The page's half of the comment layer (`crewlet.comments`): the declared
+ * anchors' layout while the host asks, a click in Comment mode, and a picture
+ * of a part. The page only reports what it draws; the host writes the comment.
  */
 
 import {

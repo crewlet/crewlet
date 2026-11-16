@@ -14,10 +14,9 @@
  * reader (`runtime/bridge.ts`), its parameters checked here, and anything
  * that is not exactly a call is dropped.
  *
- * THE COMMENT LAYER LISTENS HERE TOO. The host tells the page the layer's
- * mode (and again on every hello), and what the page reports back (where its
- * anchors are, a reader's pick, a picture asked for, Escape) is read, checked
- * and handed to the layer, and only while the layer asked for it.
+ * THE COMMENT LAYER LISTENS HERE TOO: the page is told the layer's mode on
+ * every hello, and what it reports back is checked and handed to the layer
+ * only while the layer asked for it.
  */
 
 import { EXTERNAL_URL_MAX, externalUrl } from "@crewlethq/ui";

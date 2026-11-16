@@ -20,6 +20,10 @@
  * is merged onto their version slide by slide (`lib/artifacts/deck.ts`); what
  * both changed differently is the person's to resolve before saving again.
  *
+ * COMMENTS ARE PINNED ON THE STAGE (`comments/SlidePins.tsx`), on the element
+ * each thread names by path; placing a comment brings the editor's stage back
+ * from the grid or a show.
+ *
  * THE PRESENTER WINDOW IS THE DASHBOARD'S OWN, opened by the reader's press,
  * never by artifact code: the same artifact address with `mode=presenter`.
  * The two windows keep one position over a `BroadcastChannel`, so pressing
@@ -123,6 +127,8 @@ import {
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import type { PresenceReport } from "./presence.ts";
 import { useKindControls, useRegionNames } from "~/lib/artifacts/kindControls.ts";
+import { SlidePins } from "./comments/SlidePins.tsx";
+import { useComments } from "./comments/state.tsx";
 
 /** The views of a deck, as `mode=` names them; "" is the editor (or the reader's slides). */
 type DeckMode = "" | "grid" | "present" | "presenter";
@@ -185,6 +191,13 @@ function Deck({
   const primary = onPublished !== undefined;
   const [modeParam, setMode] = useParam("mode", "");
   const mode: DeckMode = MODES.includes(modeParam as DeckMode) ? (modeParam as DeckMode) : "";
+  // THE DECK ON SHOW carries the artifact's comments; a side of a compare none.
+  const comments = useComments();
+  const commenting = primary && comments !== null;
+  const placing = commenting && comments.placing;
+  useEffect(() => {
+    if (placing && mode !== "") setMode("");
+  }, [placing, mode, setMode]);
   const [slideParam, setSlide] = useParam("slide", "");
   const publish = useArtifactAccess({ app: true, role: "editor", held: detail.role });
 
@@ -294,6 +307,7 @@ function Deck({
       {mode === "" && (
         <DeckEditor
           detail={detail}
+          commenting={commenting}
           theme={deck.theme ?? ""}
           base={base}
           shown={shown}
@@ -467,6 +481,7 @@ export function deckEditFields(order: readonly string[]): DraftFieldSpec<DeckDra
 
 function DeckEditor({
   detail,
+  commenting,
   theme,
   base,
   shown,
@@ -483,6 +498,8 @@ function DeckEditor({
   onPublished,
 }: {
   detail: ArtifactDetail;
+  /** The stage draws the artifact's comments. */
+  commenting: boolean;
   /** The theme the deck's index names, whose layouts New slide adds from; "" for none. */
   theme: string;
   base: DeckDraft;
@@ -510,6 +527,8 @@ function DeckEditor({
   const [saving, setSaving] = useState(false);
   const prefix = useId().replace(/:/g, "");
   const position = slides.findIndex((s) => s.id === current.id);
+  const stageBox = useRef<HTMLDivElement>(null);
+  const order = useMemo(() => slides.map((s) => s.id), [slides]);
   // ON A PHONE THE STRIP IS A ROW UNDER THE STAGE, where the next slide is a
   // swipe away, rather than a column of full-width slides under the notes.
   const phone = useScreenBelow(PHONE_BREAKPOINT);
@@ -710,12 +729,17 @@ function DeckEditor({
       )}
       {!phone && strip}
       <div className="slides-main">
-        <SlideStage
-          label={`Slide ${position + 1} of ${slides.length}, ${current.title || "Untitled"}`}
-          framed
-        >
-          {renderSlide(current, { prefix: `${prefix}-s-`, image, edit })}
-        </SlideStage>
+        <div className="artifact-comment-stage" ref={stageBox}>
+          <SlideStage
+            label={`Slide ${position + 1} of ${slides.length}, ${current.title || "Untitled"}`}
+            framed
+          >
+            {renderSlide(current, { prefix: `${prefix}-s-`, image, edit })}
+          </SlideStage>
+          {commenting && (
+            <SlidePins stage={stageBox} slide={current} order={order} onGo={onSelect} />
+          )}
+        </div>
         <p className="slides-stage-caption">
           <span className="slides-stage-position">
             Slide {position + 1} of {slides.length}

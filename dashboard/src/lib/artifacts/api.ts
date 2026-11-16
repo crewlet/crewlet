@@ -176,7 +176,7 @@ export function cropBody(dataURL: string): { crop: string; crop_type: string } |
 /** What a new thread says, and where it points. */
 export interface CommentOpening {
   body: string;
-  /** The version on show, which the thread is made on. */
+  /** The version on show, which the thread is made on; 0 leaves it to the engine, which takes the head. */
   version: number;
   anchor: ArtifactCommentAnchor;
   /** The part's words as the reader saw them. */
@@ -196,7 +196,7 @@ export function openComment(id: string, opening: CommentOpening): Omit<KeyedRequ
     path: comments(id),
     body: {
       body: opening.body,
-      version: opening.version,
+      ...(opening.version > 0 ? { version: opening.version } : {}),
       anchor: opening.anchor,
       ...(opening.quote ? { quote: opening.quote } : {}),
       ...(crop ?? {}),
