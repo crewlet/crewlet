@@ -579,7 +579,8 @@ describe("a person's note", () => {
   });
 
   // EVERY END THE RECORD KNOWS, said as it is and drawn at its step: a note a
-  // step took for a reader that never had it is MISSED there; one handed to the
+  // step took for a reader that never had it is MISSED there, said as never
+  // reaching its reader and, for a review's round, as never handed over; one handed to the
   // executor that never confirmed it is UNCONFIRMED at that job, its session
   // maybe holding it; one a later launch's brief told again is DELIVERED at
   // that brief, said as told again after a step that never handed it over;
@@ -644,7 +645,7 @@ describe("a person's note", () => {
     mount(events, RUNNING);
     await flush();
     for (const words of [
-      "taken for the executor in Execute, after a tool batch, but never handed to it",
+      "taken for the executor in Execute, after a tool batch, but it never reached it",
       "taken at round 2 of Review but never handed over",
       "handed to the executor in Execute, at its next step, which never confirmed reading it " +
         "\\(its session may hold it\\)",
@@ -661,8 +662,41 @@ describe("a person's note", () => {
     // THE LAUNCH'S BADGE SAYS EVERY END AT ITS STEPS.
     const badge = within(screen.getByRole("button", { name: /^Launch/ })).getByText("note");
     expect(badge.getAttribute("title")).toBe(
-      "Your note was taken here but never handed over; Your note was handed over here and never confirmed; " +
+      "Your note was taken here and never reached its reader; Your note was handed over here and never confirmed; " +
         "Your note was read here",
+    );
+  });
+
+  // A HOOK'S SERVE ITS JOB'S SESSION NEVER SHOWED IS MISSED AT ITS TOOL BATCH:
+  // the hook was handed the note, so it was handed over, and the model it was
+  // for never had it. The badge and the line say that it never reached its
+  // reader, never that it was not handed over, which said the hook's answer
+  // carried nothing.
+  test("a hook's serve its session never showed is said as never reaching its reader", async () => {
+    const events = [
+      ...PARKED,
+      event("agent_turn_steered", 2_000, {
+        note_id: "h",
+        outcome: "missed",
+        phase: "execute",
+        iteration: 1,
+        round: 1,
+        boundary: "tool_batch",
+        launch_id: "L1",
+        note: "note h",
+      }),
+    ];
+    mount(events, RUNNING);
+    await flush();
+    expect(
+      screen.getByText(
+        /taken for the executor in Execute, after a tool batch, but it never reached it/,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/never handed/)).toBeNull();
+    const badge = within(screen.getByRole("button", { name: /^Launch/ })).getByText("note");
+    expect(badge.getAttribute("title")).toBe(
+      "Your note was taken here and never reached its reader",
     );
   });
 
