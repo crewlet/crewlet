@@ -10,7 +10,13 @@
 // consuming work it no longer owns.
 //
 // That ordering is the whole point, and it is why the fleet suite exercises
-// this package rather than the seat host directly.
+// this package rather than the seat host directly. Every HOLD of the mailbox
+// is taken for the attachment this acquisition makes: the attachment
+// ([queue.Attachment]) is read FIRST and handed to the seat's preparation
+// ([Config.SeatReady]), which takes whatever hold the mailbox must be attached
+// under (a person's pause), and this node's own turn holds name it too, so a
+// hold asked after the release's detach is refused rather than carried onto
+// the next attachment.
 //
 // The second thing that belongs here for the same reason is that every seat in
 // the COMPANY has a mailbox, whether or not this node will ever run it — the
