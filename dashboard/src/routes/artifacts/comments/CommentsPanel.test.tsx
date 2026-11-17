@@ -343,7 +343,13 @@ describe("a draft", () => {
       },
     });
     mount(value);
-    expect(screen.getByText("Drawing a picture of this part…")).toBeTruthy();
+    // THE WELL WAITS, BUSY, and the picture cannot be chosen until it is there.
+    expect(screen.getByText("Drawing a picture of this part…").getAttribute("role")).toBe("status");
+    expect(document.querySelector(".artifact-comment-preview")!.getAttribute("aria-busy")).toBe(
+      "true",
+    );
+    const include = screen.getByRole("checkbox", { name: /Include this picture/ });
+    expect((include as HTMLInputElement).disabled).toBe(true);
     expect(screen.getByRole("textbox", { name: "Comment on Section: Pricing" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(value.clearDraft).toHaveBeenCalled();
@@ -381,6 +387,25 @@ describe("a draft", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: /Include this picture/ }));
     fireEvent.change(screen.getByRole("textbox", { name: "Comment on Section: Pricing" }), {
       target: { value: "Again" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Comment" }));
+    });
+    expect(sent[0]!.body).not.toHaveProperty("crop");
+  });
+
+  test("says when no picture could be drawn, and posts none", async () => {
+    const value = comments({
+      narrow: true,
+      draft: { seq: 1, anchor: SECTION, label: "Section: Pricing", crop: null },
+    });
+    mount(value);
+    expect(screen.getByText("No picture of this part could be drawn.")).toBeTruthy();
+    const include = screen.getByRole("checkbox", { name: /Include this picture/ });
+    expect((include as HTMLInputElement).disabled).toBe(true);
+    expect((include as HTMLInputElement).checked).toBe(false);
+    fireEvent.change(screen.getByRole("textbox", { name: "Comment on Section: Pricing" }), {
+      target: { value: "Lead with annual" },
     });
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Comment" }));

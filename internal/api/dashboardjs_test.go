@@ -2681,9 +2681,10 @@ const (
 	// 3,670 over main: 6619 KiB.
 	// Gitlet's commits with their checks, landing change and tags, filtered by seat and time:
 	// 6631.3 KiB (6,790,461 bytes), 12,721 over main: 6632 KiB.
-	// A repository's branches and tags as tables, with who moved each, its checks, drift and change:
-	// 6650.2 KiB (6,809,771 bytes), 19,310 over main: 6651 KiB.
-	treeBudget = 5<<20 + 1531<<10
+	// A comment's draft beside its pin, its picture fitted in a well, on kit 0.146.0: 6633.1 KiB
+	// (6,792,312 bytes), 1,851 over main: 6634 KiB.
+	// A repository's branches and tags as tables, on kit 0.146.0: 6652.0 KiB (6,811,622 bytes), 19,310 over main: 6652 KiB.
+	treeBudget = 5<<20 + 1532<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

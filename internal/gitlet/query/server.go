@@ -1048,11 +1048,17 @@ func cursorOf(q gitlet.GitQuery) (cursor, error) {
 		// an entry's.
 		return parseCursor(q.Cursor, q.Kind, map[byte]int{'l': 1, 'b': 2, 'e': 1})
 	case gitlet.GitDiff:
+		if q.Diff.Patches {
+			return parseCursor(q.Cursor, q.Kind, map[byte]int{'w': 2})
+		}
 		if q.Diff.File != "" || q.Diff.FileB64 != "" {
 			return parseCursor(q.Cursor, q.Kind, map[byte]int{'p': 1})
 		}
 		return parseCursor(q.Cursor, q.Kind, map[byte]int{'f': 1})
 	case gitlet.GitInterdiff:
+		if q.Interdiff.Patches {
+			return parseCursor(q.Cursor, q.Kind, map[byte]int{'w': 2})
+		}
 		if q.Interdiff.File != "" || q.Interdiff.FileB64 != "" {
 			return parseCursor(q.Cursor, q.Kind, map[byte]int{'p': 1})
 		}

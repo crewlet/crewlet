@@ -114,6 +114,8 @@ type changeCall struct {
 	revision      int64
 	since         int64
 	file, fileB64 string
+	// patches asks the diff part for every file's patch rather than one file's.
+	patches bool
 	// context is the lines an excerpt shows either side of its range, nil for the default.
 	context *int
 }
@@ -146,6 +148,11 @@ func changeCallOf(p Params) (changeCall, error) {
 		}
 		call.context = new(int(v))
 	}
+	patches, err := boolParam(p, "patches", false)
+	if err != nil {
+		return changeCall{}, err
+	}
+	call.patches = patches
 	takes := func(ps ...codeChangePart) bool { return slices.Contains(ps, codeChangePart(call.part)) }
 	switch {
 	case call.part != "" && !slices.Contains(codeChangeParts(), call.part):
@@ -164,7 +171,12 @@ func changeCallOf(p Params) (changeCall, error) {
 	case call.file != "" && call.fileB64 != "":
 		return changeCall{}, fmt.Errorf("%w: file and file_b64 name one file two ways: name it once",
 			ErrBadParams)
-	case takes(partDiff) && call.file == "" && call.fileB64 == "":
+	case call.patches && !takes(partDiff):
+		return changeCall{}, fmt.Errorf("%w: patches reads every file's patch of a revision's diff", ErrBadParams)
+	case call.patches && (call.file != "" || call.fileB64 != ""):
+		return changeCall{}, fmt.Errorf("%w: file names one file's patch and patches every file's: name one",
+			ErrBadParams)
+	case takes(partDiff) && call.file == "" && call.fileB64 == "" && !call.patches:
 		return changeCall{}, badParams("file", "", nil)
 	case p.Has("context") && !takes(partExcerpts):
 		return changeCall{}, fmt.Errorf("%w: context is the lines around each finding an excerpts part shows",
@@ -337,6 +349,13 @@ func (g changeAsk) files(ctx context.Context, call changeCall) (any, error) {
 		// UNREACHABLE past gap's refusals and changeCallOf's order of the two
 		// revisions, so this node's own fault, never the caller's.
 		return nil, err
+	}
+	if call.patches {
+		if gq.Diff != nil {
+			gq.Diff.Patches = true
+		} else {
+			gq.Interdiff.Patches = true
+		}
 	}
 	gq.Asker, gq.Fresh, gq.Cursor = g.q.Asker, gitlet.ObjectFloor(g.reads.FloorOf(d.RepoID), revs...), g.q.Cursor
 	page, err := g.gitRead(ctx, gq)

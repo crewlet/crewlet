@@ -228,6 +228,16 @@ describe("the layer over a page", () => {
       }),
     );
     expect(value.showPanel).toHaveBeenCalled();
+    expect(value.stepAside).not.toHaveBeenCalled();
+  });
+
+  test("a pick beside the page asks a panel drawn over the page to make way for the draft", async () => {
+    const p = page();
+    const value = comments({ placing: true });
+    mount(p.host, value);
+    await p.call("comments.pick", { name: null, quote: "", point: { x: 0.5, y: 0.5 } });
+    expect(value.stepAside).toHaveBeenCalled();
+    expect(value.showPanel).not.toHaveBeenCalled();
   });
 
   test("Escape in the page ends Comment mode", async () => {

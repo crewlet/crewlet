@@ -1,11 +1,12 @@
 // Package query is THE SERVER-SIDE READS OF A REPOSITORY BY OBJECT ID: a
 // tree's listing, the commit that last changed each of its entries
-// (treecommits.go), a file's lines, a diff's stat or one file's patch, how two
-// commits compare, whether a commit landed in a branch and which push landed
-// it, a path's history (log.go) and which commit last changed each line of a
-// file (blame.go), a file found by its name in a commit's tree (find.go) — and
-// of a change's revisions, by the ids their rows record: a
-// revision's facts against its target (facts.go), where lines anchored in one
+// (treecommits.go), a file's lines, a diff's stat, one file's patch or every
+// file's patch page by page (patches.go), how two commits compare, whether a
+// commit landed in a branch and which push landed it, a path's history
+// (log.go) and which commit last changed each line of a file (blame.go), a
+// file found by its name in a commit's tree (find.go) — and of a change's
+// revisions, by the ids their rows record: a revision's facts against its
+// target (facts.go), where lines anchored in one
 // revision are in another (anchor.go), what a change changed between two
 // revisions (interdiff.go), and the lines around findings' ranges with their
 // diff marks (excerpts.go) — and the checks file a commit holds, read whole

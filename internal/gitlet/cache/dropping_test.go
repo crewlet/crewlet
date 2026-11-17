@@ -679,6 +679,7 @@ var droppingViewers = []struct{ file, word, why string }{
 	{"internal/gitlet/query/log.go", "log", queryServes},
 	{"internal/gitlet/query/objects.go", "rev-parse", queryServes},
 	{"internal/gitlet/query/objects.go", "cat-file", queryServes},
+	{"internal/gitlet/query/patches.go", "diff-pairs", queryServes},
 	{"internal/gitlet/query/search.go", "rev-parse", queryServes},
 	{"internal/gitlet/query/search.go", "ls-tree", queryServes},
 	{"internal/gitlet/query/search.go", "grep", queryServes},
