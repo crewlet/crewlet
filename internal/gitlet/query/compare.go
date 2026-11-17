@@ -76,7 +76,7 @@ func (r *read) compareRead(ctx context.Context, objs found, m *memoRun) (gitlet.
 		// What head changed since the merge base, its first page; with no
 		// common ancestor, or head one, nothing.
 		st, err := r.stat(ctx, mb, head.peeled, pathFilter{}, false, 0, left,
-			"diff the merge base and head naming paths, or compare commits closer together", nil)
+			"diff the merge base and head naming paths, or compare commits closer together", nil, nil)
 		if err != nil {
 			return gitlet.GitAnswer{}, err
 		}

@@ -18,8 +18,10 @@ var _ statelog.Deriver = (*Applier)(nil)
 
 // DerivationVersion is the rule set this build derives its columns at: 1 is each repository's
 // changes by state and their tallies by owner and visibility; 2 adds the repositories tallied by
-// owner, visibility, kind and status. Bumped by any change to either.
-const DerivationVersion = 2
+// owner, visibility, kind and status; 3 adds each repository's pushes by UTC day and quarter-hour
+// and by pusher and day (apply_activity.go), each bump re-reading every push row at about 20 µs a
+// row (doc.go's measured section). Bumped by any change to any of them.
+const DerivationVersion = 3
 
 // DerivationVersion implements [statelog.Deriver].
 func (a *Applier) DerivationVersion() int { return DerivationVersion }
@@ -28,11 +30,15 @@ func (a *Applier) DerivationVersion() int { return DerivationVersion }
 // whole and closed before any of its rows is written.
 const rederivePageRows = 1000
 
-// Rederive implements [statelog.Deriver]: the counts recounted from code_changes, the change
-// tallies from the counts and the repository tallies from the rows, through the statements the
-// applies keep them with. On rows this build kept it writes nothing.
-func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx, _ statelog.ApplyOptions) (int, error) {
-	written := 0
+// Rederive implements [statelog.Deriver]: each repository's push activity from its push rows,
+// the counts recounted from code_changes, the change tallies from the counts and the repository
+// tallies from the rows, through the statements the applies keep them with. On rows this build
+// kept it writes nothing.
+func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx, opts statelog.ApplyOptions) (int, error) {
+	written, activityErr := rederivePushActivity(ctx, tx, opts.MaxVariables)
+	if activityErr != nil {
+		return 0, activityErr
+	}
 	wanted := map[tallyKey]ChangeCounts{}
 	wantedRepos := repoTallies{}
 	after := ""

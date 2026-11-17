@@ -3,6 +3,7 @@ package executor
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"encoding/json/jsontext"
@@ -74,12 +75,19 @@ import (
 //     assistant record of that thread, and takes its error as that line's, no
 //     record, as it takes a *threadLineError, never as a line with no calls.
 //   - A HOOK'S FIRING IS NEVER A CALL'S ID: no id leaves this layer AS an id
-//     but a firing through [threadLine.Hook] and a call's through
-//     [threadMessage.Calls] ([threadHook.Firing]). An id written inside a
-//     record's text (a task notification's `<tool-use-id>`, a tool's output,
-//     a call's input) is bytes the layer hands out raw, in a line's Raw, a
-//     message's Text, a call's Input and Content and a record's
-//     ToolUseResult: its reader's to parse, and to hold to a rule of its own.
+//     but a call's, through [threadMessage.Calls], and an attachment's
+//     `toolUseID` leaves it only as a key ([threadLine.AttachmentToolUseID]),
+//     since a PostToolUse hook's firing carries the id of the call it
+//     followed. An id written inside a record's text (a tool's output, a
+//     call's input) leaves it as bytes in a line's Raw, its reader's to
+//     parse and to hold to a rule of its own, or not at all: of a call's
+//     input, a result's text, a record's own toolUseResult and a message's
+//     text the layer hands out only the facts it reads of them
+//     ([threadCall], [threadLine.HandsBack], [threadLine.AgentAnswer],
+//     [threadMessage.NamesHandback]). A task notification's
+//     `<tool-use-id>`, the text's own claim, leaves it as the leg it names
+//     ([threadMessage.Notification]), which its one reader matches only
+//     against a call it read.
 //
 // What these rules were measured on is Claude Code 2.1.310 and 2.1.322, driven
 // as the engine drives a box's executor, and 2.1.118 beside 2.1.310 for a hook
@@ -320,10 +328,12 @@ func validClaudeAgent(agent string) bool {
 }
 
 // threadReader reads one member of a Claude Code session a whole line at a
-// time, each line's head decoded ([threadReader.Next]). One goroutine reads
-// it. A THREAD'S MEMBER: a subagent's metadata is one JSON document with no
-// line break ([claudeSubagentMeta]), which it reads as nothing but a torn
-// piece.
+// time, each line decoded into its head and its facts ([threadReader.Next]).
+// One goroutine reads it. A THREAD'S MEMBER: a subagent's metadata is one JSON
+// document with no line break ([claudeSubagentMeta]), which it reads as nothing
+// but a torn piece. ONE READER READS A SESSION'S MEMBERS, one after another
+// ([threadReader.Reset]): a reading of a session's threads keeps one reader's
+// buffers whatever members it reads, never one a member.
 type threadReader struct {
 	r *bufio.Reader
 	// maxBytes is the member's bound, and left what of it the lines read so
@@ -344,6 +354,17 @@ type threadReader struct {
 func newThreadReader(r io.Reader, maxBytes int64) *threadReader {
 	maxBytes = max(maxBytes, 0)
 	return &threadReader{r: bufio.NewReaderSize(threadSource{r}, lineChunkBytes), maxBytes: maxBytes, left: maxBytes}
+}
+
+// Reset makes t read r, one member, within maxBytes, as [newThreadReader]
+// does: whatever t read before, how it ended among it (a torn piece, a bound,
+// an error, a context that ended), is gone, and t reads r exactly as a fresh
+// reader would, keeping only its buffer.
+func (t *threadReader) Reset(r io.Reader, maxBytes int64) {
+	maxBytes = max(maxBytes, 0)
+	t.r.Reset(threadSource{r})
+	t.maxBytes, t.left = maxBytes, maxBytes
+	t.n, t.torn, t.end = 0, false, nil
 }
 
 // threadSource is a member's reader whose every error but its end reaches
@@ -378,7 +399,8 @@ func (e *threadSourceError) Error() string { return e.err.Error() }
 func (e *threadSourceError) Unwrap() error { return e.err }
 
 // Next is the member's next WHOLE line, one that ends in "\n", its break
-// dropped and its head decoded. It answers:
+// dropped and the line decoded into its head and its facts
+// ([decodeThreadLine]). It answers:
 //
 //   - io.EOF at the member's end. A last piece with no break is never a line:
 //     it is a write its harness never finished, or the NULs GNU tar fills a
@@ -403,9 +425,19 @@ func (e *threadSourceError) Unwrap() error { return e.err }
 //     that wraps the take's scrub's bound, as a reader metering a kept
 //     archive with the scrub's own meter returns, is that reader's, never
 //     errThreadBound ([threadSource]).
-func (t *threadReader) Next() (threadLine, error) {
+//   - ctx's error once ctx has ended, asked before each line is read: the
+//     reading is over, and stays over, whatever context a later Next is
+//     handed. A line's read itself asks no context, so a reading overruns its
+//     caller's wait by one line's read and decode at most. ctx is the one
+//     place a reading's caller is heard: its callers ask none of their own
+//     between lines.
+func (t *threadReader) Next(ctx context.Context) (threadLine, error) {
 	if t.end != nil {
 		return threadLine{}, t.end
+	}
+	if err := ctx.Err(); err != nil {
+		t.end = err
+		return threadLine{}, err
 	}
 	bound, member := threadLineMax, t.left < threadLineMax
 	if member {
@@ -479,12 +511,12 @@ type threadLineError struct {
 	// included, so a reader that sums them with its records' sums the bytes
 	// the load reads.
 	Size int
-	// Raw is the line, its break dropped, valid until the reader's next Next,
-	// as a record's line is ([threadLine]): the bytes a reader judges a line
-	// by where it reads lines by their bytes as Claude Code's large-file
-	// readers do, whether the load reads a record off the line or not
-	// ([threadChain.Unread]). Error does not say it.
-	Raw []byte
+	// Bytes is what a reader of its bytes reads of the line, its break dropped
+	// ([threadBytes]), as a record's line carries it ([threadLine.Bytes]): what
+	// a reader judges a line by where it reads lines by their bytes as Claude
+	// Code's large-file readers do, whether the load reads a record off the
+	// line or not ([threadChain.Unread]). Error does not say it.
+	Bytes threadBytes
 }
 
 // lineFault is how Claude Code's load reads a whole line this layer reads as
@@ -507,7 +539,7 @@ const (
 	// oMt).
 	faultNotObject lineFault = "not_object"
 	// faultHead is one object whose head key is of the wrong type
-	// ([threadWire.head]): the load reads it, and keeps it under its own
+	// ([headOf]): the load reads it, and keeps it under its own
 	// reading of that key where it is a kind the load reads
 	// ([threadLineError.Type]).
 	faultHead lineFault = "head"
@@ -564,28 +596,34 @@ func (e *threadLineError) Error() string {
 // Unwrap is what the line's decode met.
 func (e *threadLineError) Unwrap() error { return e.Err }
 
-// threadLine is one whole line of a thread: its place, its bytes and its head,
-// beside the raw values of the keys the accessors below read, all from the
-// line's one decode.
+// threadLine is one whole line of a thread: its place, its size, its bytes,
+// what a reader of its bytes reads of them ([threadBytes]) and its head,
+// beside the facts the accessors below read ([lineFacts]), all from the
+// line's one decode ([factsOf]).
 //
 // WHAT IT HANDS OUT RAW IS VALID UNTIL THE READER'S NEXT [threadReader.Next]:
-// the line's Raw, a hook's Content and Stdout, a call's Input and Content, and
-// ToolUseResult, as a refused line's Raw is ([threadLineError]). A reader that
-// keeps any of them past that copies it, since the layer may hand out a
-// line's own bytes rather than a copy of them.
+// the line's Raw. A reader that keeps it past that copies it, since the layer
+// may hand out a line's own bytes rather than a copy of them. Its byte facts
+// are a value of a fixed size, as a refused line's are ([threadLineError]),
+// a reader's to keep.
 //
-// AND IT HANDS THEM OUT RAW ON PURPOSE: each has one reader, which holds it to
-// the shape that reader reads (a SendMessage's `input.to`, a result's text, a
-// hook's answer) under the layer's own options ([threadDecoding]) and walk
-// ([eachElement]), so a release that reshapes one costs that reader alone, as
-// a key one reader reads does.
+// A VALUE AS LONG AS A LINE IT READS FOR ITS READERS, never hands out: what a
+// call's input, a result's text, a record's own toolUseResult and a message's
+// text are read for (the subagent a SendMessage sends to, a result's length
+// and digests, a handback and what an answer says of a subagent's leg, the
+// subagent and the leg a task notification names) the layer reads itself, by
+// its readers' own rules, a shape a rule does not read answered by that rule
+// rather than with an error, so a release that reshapes one costs that reader
+// alone, as a key one reader reads does, and what it hands out is facts of a
+// bounded size ([threadCall], [threadLine.HandsBack],
+// [threadLine.AgentAnswer], [threadMessage.Notification]).
 //
 // A KEY ONLY ONE READER READS IS HELD TO ITS TYPE IN THAT READER'S ACCESSOR,
 // never in the head: a release that reshapes it is that accessor's error and
 // costs the reader that asks, so a reshaped attachment never blinds a reader
-// of calls, a reshaped origin never blinds a reader of hooks, and a reshaped
-// uuid blinds neither. A key a reader comes to need is added beside these,
-// read off the same decode, with its own accessor and its own error.
+// of calls, a reshaped origin never blinds a reader of attachments, and a
+// reshaped uuid blinds neither. A key a reader comes to need is added beside
+// these, a fact of the same decode, with its own accessor and its own error.
 type threadLine struct {
 	// N is the line's place among the member's whole lines, from 1.
 	N int
@@ -593,196 +631,119 @@ type threadLine struct {
 	// (above). A carriage return before the break is the line's own, which
 	// JSON reads as whitespace.
 	Raw []byte
+	// Size is how many bytes of the member the line takes, its break
+	// included, as a refused line's Size is ([threadLineError]), so a reader
+	// that sums them sums the bytes the load reads.
+	Size int
+	// Bytes is what a reader of its bytes reads of the line, its break
+	// dropped ([threadBytes]): what Claude Code's large-file readers read a
+	// line by ([threadChain], THE LARGE FILE), and the marks the resumed count
+	// reads ([resumedReading]).
+	Bytes threadBytes
 	// Head is what every reader needs of the line.
 	Head threadHead
 
-	uuid, message, attachment, origin, toolUseID, toolUseResult json.RawMessage
-	apiError, replacements, leafUUID, explicit, rewound         json.RawMessage
-	compactMetadata, retracted                                  json.RawMessage
-	isVirtual, interruptedByShutdown, isCompactSummary          json.RawMessage
-	taskDelivery, batchToolUses                                 json.RawMessage
-	timestamp, isMeta, sourceToolAssistantUUID                  json.RawMessage
-	version                                                     json.RawMessage
+	// f is what the accessors read ([lineFacts]); nil reads as a line of no
+	// keys ([threadLine.facts]).
+	f *lineFacts
 }
 
-// threadWire is a whole line as its one decode ([wireDecode]) leaves it: every
-// key this layer reads, by its exact name and raw, so a key that is absent is
-// nil and one that is null holds the bytes `null`. Each is held to its type
-// where it is read: the head's by [threadWire.head], every other by its
-// accessor.
-type threadWire struct {
-	Type          json.RawMessage `json:"type"`
-	Subtype       json.RawMessage `json:"subtype"`
-	UUID          json.RawMessage `json:"uuid"`
-	ParentUUID    json.RawMessage `json:"parentUuid"`
-	IsSidechain   json.RawMessage `json:"isSidechain"`
-	AgentID       json.RawMessage `json:"agentId"`
-	ReplacesSpan  json.RawMessage `json:"replacesSpan"`
-	Message       json.RawMessage `json:"message"`
-	Attachment    json.RawMessage `json:"attachment"`
-	Origin        json.RawMessage `json:"origin"`
-	ToolUseID     json.RawMessage `json:"toolUseID"`
-	ToolUseResult json.RawMessage `json:"toolUseResult"`
-	APIError      json.RawMessage `json:"isApiErrorMessage"`
-	LeafUUID      json.RawMessage `json:"leafUuid"`
-	Explicit      json.RawMessage `json:"explicit"`
-	Rewound       json.RawMessage `json:"rewound"`
-	Compacted     json.RawMessage `json:"compactMetadata"`
-	Retracted     json.RawMessage `json:"retractedMessageUuids"`
-	Replacements  json.RawMessage `json:"replacements"`
-	IsVirtual     json.RawMessage `json:"isVirtual"`
-	Shutdown      json.RawMessage `json:"interruptedByShutdown"`
-	Summary       json.RawMessage `json:"isCompactSummary"`
-	TaskDelivery  json.RawMessage `json:"taskDelivery"`
-	Batch         json.RawMessage `json:"batchToolUses"`
-	Timestamp     json.RawMessage `json:"timestamp"`
-	IsMeta        json.RawMessage `json:"isMeta"`
-	Source        json.RawMessage `json:"sourceToolAssistantUUID"`
-	Version       json.RawMessage `json:"version"`
-}
-
-// decodeThreadLine decodes whole line n, raw (its break dropped), into its
-// head: ONE decode of the whole line ([wireDecode]), which holds every byte
-// of it to JSON, then the head's keys held to their types. Nothing reads a
-// line before this has: no keyword decides which lines are decoded, since a
-// line no keyword marks can still be no record (a write that tore into
-// another), and a reader that passed it unread would decide from the thread
-// around it as though it were whole.
-func decodeThreadLine(n int, raw []byte) (threadLine, error) {
-	// HELD TO AN OBJECT BEFORE IT IS DECODED: a JSON null decodes into a struct
-	// as nothing at all, with no error, and would pass for a record of no keys.
-	if trimmed := bytes.TrimLeft(raw, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '{' {
-		return threadLine{}, &threadLineError{N: n, Err: errNotOneRecord, Fault: refusedFault(raw), Size: len(raw) + 1,
-			Raw: raw}
-	}
-	var w threadWire
-	if err := wireDecode(raw, &w); err != nil {
-		return threadLine{}, &threadLineError{N: n, Err: err, Fault: refusedFault(raw), Size: len(raw) + 1, Raw: raw}
-	}
-	head, err := w.head()
-	if err != nil {
-		return threadLine{}, &threadLineError{N: n, Err: err, Fault: faultHead, Type: kindOf(w.Type),
-			Size: len(raw) + 1, Raw: raw}
-	}
-	return threadLine{
-		N: n, Raw: raw, Head: head,
-		uuid: w.UUID, message: w.Message, attachment: w.Attachment, origin: w.Origin,
-		toolUseID: w.ToolUseID, toolUseResult: w.ToolUseResult, apiError: w.APIError,
-		leafUUID: w.LeafUUID, explicit: w.Explicit, rewound: w.Rewound, compactMetadata: w.Compacted,
-		retracted: w.Retracted, replacements: w.Replacements,
-		isVirtual: w.IsVirtual, interruptedByShutdown: w.Shutdown, isCompactSummary: w.Summary,
-		taskDelivery: w.TaskDelivery, batchToolUses: w.Batch,
-		timestamp: w.Timestamp, isMeta: w.IsMeta, sourceToolAssistantUUID: w.Source, version: w.Version,
-	}, nil
-}
-
-// refusedFault is how Claude Code's load reads raw, a whole line its decode
-// refused before it read the line's head ([lineFault]), with ONE
-// jsontext.Decoder over the line, under the layer's own options, in this
-// order: a leading NUL or byte order mark; a value cut at the line's end; a
-// value nested past the decoder's bound; any other failure before a whole
-// value; a whole value followed by more; and a whole value that is no object.
-//
-// ONLY A REFUSED LINE IS READ AGAIN, and only here: [decodeThreadLine] calls
-// this from its refusals alone, so a line it takes is decoded once, and what
-// it takes and refuses is what it took and refused before lines said how the
-// load reads them. The decoder reads the line where it lies, from a
-// bytes.Buffer, which jsontext reads with no copy, so a refused line costs
-// what its decoder's state costs and never a copy of the line.
-func refusedFault(raw []byte) lineFault {
-	if len(raw) > 0 && raw[0] == 0 || bytes.HasPrefix(raw, utf8ByteOrderMark) {
-		return faultLead
-	}
-	dec := jsontext.NewDecoder(bytes.NewBuffer(raw), threadDecoding)
-	value, err := dec.ReadValue()
-	var syntax *jsontext.SyntacticError
-	switch {
-	case errors.Is(err, io.ErrUnexpectedEOF):
-		return faultPrefix
-	case errors.As(err, &syntax) && syntax.Err != nil && syntax.Err.Error() == jsontextMaxDepth:
-		return faultDepth
-	case err != nil:
-		return faultSyntax
-	}
-	if _, err = dec.ReadToken(); !errors.Is(err, io.EOF) {
-		return faultTrailing
-	}
-	if value.Kind() != '{' {
-		return faultNotObject
-	}
-	// One object the decode refused, which no decode under these options
-	// does: no fault, which every reader reads as a line whose load it cannot
-	// say, never as one that yields the load nothing.
-	return ""
-}
-
-// utf8ByteOrderMark is the byte order mark UTF-8 writes ([refusedFault]).
-var utf8ByteOrderMark = []byte{0xef, 0xbb, 0xbf}
-
-// jsontextMaxDepth is what encoding/json/jsontext says of a value nested past
-// its bound ([faultDepth]), an error it does not export: held to it by
-// [TestALineThatIsNoRecordSaysHowTheLoadReadsIt], which fails where a release
-// of Go says it otherwise.
-const jsontextMaxDepth = "exceeded max depth"
-
-// kindOf is raw, a refused record's `type`, as the kind of record Claude
-// Code's load reads where it is a string naming one ([recordKind]), the
-// layer's own string; the zero kind for anything else, so no string the box
-// wrote is held.
-func kindOf(raw json.RawMessage) recordKind {
-	kind, err := wireRequiredString("type", raw)
-	if err != nil {
-		return ""
-	}
-	for _, k := range recordKinds {
-		if string(k) == kind {
-			return k
-		}
-	}
-	return ""
-}
-
-// head holds the head's keys to their types: `type`, `subtype` and `agentId`
-// strings, `parentUuid` null or a string, `isSidechain` a boolean, each where
-// present, and a user record's `replacesSpan` a boolean where present.
+// headOf holds the head's keys, k, to their types: `type`, `subtype` and
+// `agentId` strings, `parentUuid` null or a string, `isSidechain` a boolean,
+// each where present, and a user record's `replacesSpan` a boolean where
+// present. THE ONE RULE OF A HEAD, whichever reading of the line hands it the
+// keys.
 // ANOTHER TYPE IS NO RECORD: a newer Claude Code that changes one fails toward
 // no reading, which every reader takes for "not confirmed", never for a fact.
+//
+// A KEY'S KIND ALONE DECIDES EVERY ERROR IT GIVES ([headKey]), never its raw
+// value: a reading that keeps a key's kind but not its value, one too long to
+// keep, still refuses the line's head exactly as a reading that kept it does.
+// A boolean's value is its kind too.
 //
 // `replacesSpan` IS HELD ON A USER RECORD ALONE, the one record the harness
 // reads it on and the one the restart rule reads it on ([threadRestarts.See]).
 // On any other record it says nothing to any reader, so whatever it holds
 // there, null or a string among it, never costs a reader the line.
-func (w threadWire) head() (threadHead, error) {
+func headOf(k headKeys) (threadHead, error) {
 	var (
 		h   threadHead
 		err error
 	)
-	if h.Type, err = wireString("type", w.Type); err != nil {
+	if h.Type, err = k.typ.text("type"); err != nil {
 		return threadHead{}, err
 	}
-	if h.Subtype, err = wireString("subtype", w.Subtype); err != nil {
+	if h.Subtype, err = k.subtype.text("subtype"); err != nil {
 		return threadHead{}, err
 	}
-	if h.AgentID, err = wireString("agentId", w.AgentID); err != nil {
+	if h.AgentID, err = k.agentID.text("agentId"); err != nil {
 		return threadHead{}, err
 	}
-	if w.ParentUUID != nil && !bytes.Equal(w.ParentUUID, jsonNull) && w.ParentUUID[0] != '"' {
-		return threadHead{}, fmt.Errorf("parentUuid is %s, neither null nor a string", wireKind(w.ParentUUID))
+	switch k.parent.kind {
+	case 0, '"':
+		h.Parent = k.parent.raw
+	case 'n':
+		h.Parent = jsonNull
+	default:
+		return threadHead{}, fmt.Errorf("parentUuid is %s, neither null nor a string", k.parent.kind)
 	}
-	h.Parent = w.ParentUUID
-	if w.IsSidechain != nil {
+	if k.sidechain.kind != 0 {
 		var side bool
-		if side, err = wireBool("isSidechain", w.IsSidechain); err != nil {
+		if side, err = k.sidechain.boolean("isSidechain"); err != nil {
 			return threadHead{}, err
 		}
 		h.Sidechain = &side
 	}
-	if w.ReplacesSpan != nil && h.Type == recordUser {
-		if h.ReplacesSpan, err = wireBool("replacesSpan", w.ReplacesSpan); err != nil {
+	if k.replacesSpan.kind != 0 && h.Type == recordUser {
+		if h.ReplacesSpan, err = k.replacesSpan.boolean("replacesSpan"); err != nil {
 			return threadHead{}, err
 		}
 	}
 	return h, nil
+}
+
+// headKeys is the head's keys as a line writes them ([headOf]).
+type headKeys struct {
+	typ, subtype, agentID, parent, sidechain, replacesSpan headKey
+}
+
+// headKey is one key of a line's head as a reading of the line hands it to
+// [headOf]: kind, its value's kind, 0 where the key is absent; and raw, its
+// value as written, where the reading kept it, nil where it kept the kind
+// alone. The head's rule refuses a key by its kind, and reads its raw only
+// for the value it hands out, so a head built of a kind alone hands out no
+// value for that key: the reading that kept no value hands that head to no
+// reader.
+type headKey struct {
+	kind valueKind
+	raw  json.RawMessage
+}
+
+// headKeyOf is raw, a head key's value as written, nil where the key is
+// absent, as [headOf] reads it: its kind, and itself.
+func headKeyOf(raw json.RawMessage) headKey { return headKey{kind: kindOfValue(raw), raw: raw} }
+
+// text is k, a key named key, held to a string: "" where it is absent, and
+// where its value was not kept.
+func (k headKey) text(key string) (string, error) {
+	switch {
+	case k.kind == 0:
+		return "", nil
+	case k.kind != '"':
+		return "", fmt.Errorf("%s is %s, not a string", key, k.kind)
+	case k.raw == nil:
+		return "", nil
+	}
+	return wireRequiredString(key, k.raw)
+}
+
+// boolean is k, a key named key that is there, held to a boolean: its value
+// is its kind, 't' or 'f'.
+func (k headKey) boolean(key string) (bool, error) {
+	if k.kind != 't' && k.kind != 'f' {
+		return false, fmt.Errorf("%s is %s, not a boolean", key, k.kind)
+	}
+	return k.kind == 't', nil
 }
 
 // threadHead is what EVERY reader needs of a whole line, held to its type by
@@ -818,7 +779,7 @@ type threadHead struct {
 	// with a JSON true, false where it is absent or false. A user record that
 	// says so is a restart ([threadRestarts.See]). False on every other
 	// record, whatever the key holds there: it is read on a user record
-	// alone ([threadWire.head]).
+	// alone ([headOf]).
 	ReplacesSpan bool
 }
 
@@ -881,10 +842,11 @@ func (h threadHead) Main() bool { return h.Sidechain != nil && !*h.Sidechain && 
 //     and `toolUseId` apart. encoding/json's own decode takes a key that
 //     differs from a field's name only in case for that field, the last of the
 //     two written winning: decoded so, a line carrying `parentUuid` and then
-//     `ParentUuid` would read as the second, and a hook's record carrying its
-//     firing's `toolUseID` and then a `toolUseId` would hand the second out as
-//     its firing, a spelling 2.1.322 already writes, where a subagent's
-//     metadata names the call that started it.
+//     `ParentUuid` would read as the second, and an attachment carrying a
+//     hook's firing as its `toolUseID` and then a `toolUseId` would key the
+//     second as the call it followed ([threadLine.AttachmentToolUseID]), a
+//     spelling 2.1.322 already writes, where a subagent's metadata names the
+//     call that started it.
 //   - A KEY WRITTEN TWICE ALLOWED, AND READ BY ITS LAST VALUE (jsontext's
 //     AllowDuplicateNames, on), as JSON.parse allows and reads it. Refusing
 //     it, a decoder keeps every name of every object it reads, a cost a key,
@@ -1125,11 +1087,29 @@ func wireCount(key string, raw json.RawMessage) (int64, error) {
 
 // wireKind says what raw is: "absent" where its key is not there, else the
 // kind of JSON value it holds.
-func wireKind(raw json.RawMessage) string {
+func wireKind(raw json.RawMessage) string { return kindOfValue(raw).String() }
+
+// valueKind is the kind of a JSON value as its first byte tells it, as
+// written: '"' a string, '{' an object, '[' a list, 't' and 'f' a boolean,
+// 'n' null, any other a number; 0 where the value is absent. The facts of a
+// line hold a value's kind where a reader asks only that of it
+// ([lineFacts]), and an error words it as [wireKind] does.
+type valueKind byte
+
+// kindOfValue is raw's kind ([valueKind]).
+func kindOfValue(raw []byte) valueKind {
 	if len(raw) == 0 {
-		return "absent"
+		return 0
 	}
-	switch raw[0] {
+	return valueKind(raw[0])
+}
+
+// String says what k is, as an error words it: "absent", "a string", "an
+// object", "a list", "a boolean", "null" or "a number".
+func (k valueKind) String() string {
+	switch k {
+	case 0:
+		return "absent"
 	case '"':
 		return "a string"
 	case '{':
@@ -1150,16 +1130,17 @@ func wireObject(raw json.RawMessage) bool { return len(raw) > 0 && raw[0] == '{'
 // OriginKind is the record's `origin.kind`: "" where either is absent, an error
 // where `origin` is no object or its kind no string.
 func (l threadLine) OriginKind() (string, error) {
-	if l.origin == nil {
+	o := l.facts().origin
+	if o == nil {
 		return "", nil
 	}
-	if !wireObject(l.origin) {
-		return "", fmt.Errorf("origin is %s, not an object", wireKind(l.origin))
+	if !wireObject(o) {
+		return "", fmt.Errorf("origin is %s, not an object", wireKind(o))
 	}
 	var origin struct {
 		Kind json.RawMessage `json:"kind"`
 	}
-	if err := wireDecode(l.origin, &origin); err != nil {
+	if err := wireDecode(o, &origin); err != nil {
 		return "", fmt.Errorf("origin: %w", err)
 	}
 	return wireString("origin.kind", origin.Kind)
@@ -1194,7 +1175,7 @@ func (l threadLine) OriginKind() (string, error) {
 //
 // Read off the line's one decode, its raw `uuid`, never a second read of the
 // line.
-func (l threadLine) UUID() (string, error) { return wireString("uuid", l.uuid) }
+func (l threadLine) UUID() (string, error) { return wireString("uuid", l.facts().uuid) }
 
 // Version is the record's `version`, the release of Claude Code that wrote
 // it: "" where the key is absent, and an error where it holds no string. It
@@ -1211,25 +1192,48 @@ func (l threadLine) UUID() (string, error) { return wireString("uuid", l.uuid) }
 //
 // IN AN ACCESSOR, NEVER THE HEAD: one reader reads it, the reading of which
 // calls a kept session holds ([writerBelowFloor]), so a release that reshapes
-// it costs that reading alone, never a reader of hooks or of a transcript's
-// words.
-func (l threadLine) Version() (string, error) { return wireString("version", l.version) }
+// it costs that reading alone, never a reader of attachments or of a
+// transcript's words.
+func (l threadLine) Version() (string, error) { return wireString("version", l.facts().version) }
 
-// ToolUseResult is a user record's own `toolUseResult`, raw (an object, a list
-// or a string, as the tool's result had it); nil where it is absent and on
-// every other record, valid until the reader's next [threadReader.Next]
-// ([threadLine]). Never an id: a call's id leaves this layer only through
-// [threadMessage.Calls].
+// HandsBack reports whether a user record's own `toolUseResult` carries a
+// handback ([carriesHandback]); false on every other record, which carries
+// none a reader reads.
 //
-// IT IS THE RECORD'S, NEVER A CALL'S, handed out raw on purpose for its one
-// reader to hold: a reader takes it for a call's only where the record's
-// message holds that call's one tool_result and nothing else, as every record
-// measured that carries one does.
-func (l threadLine) ToolUseResult() json.RawMessage {
+// IT IS THE RECORD'S, NEVER A CALL'S: a reader takes it for every result the
+// record holds, a handback of any one of them being one the record carries.
+func (l threadLine) HandsBack() bool {
+	return l.Head.Type == recordUser && l.facts().result.handsBack
+}
+
+// AgentAnswer is what a user record's own `toolUseResult` says of a
+// subagent's leg ([agentAnswer]): whether an Agent or Task call's subagent
+// completed, the subagent it names, and whether a SendMessage was refused;
+// none of them on every other record.
+//
+// IT IS THE RECORD'S, NEVER A CALL'S: a reader takes it for a call's only
+// where the record's message holds that call's one tool_result and nothing
+// else, as every record measured that carries one does.
+func (l threadLine) AgentAnswer() (completed bool, agent string, refused bool) {
 	if l.Head.Type != recordUser {
-		return nil
+		return false, "", false
 	}
-	return l.toolUseResult
+	r := &l.facts().result
+	return r.completed, r.agent, r.refused
+}
+
+// answerOf is what a leg's result record's own toolUseResult says of the leg
+// ([agentAnswer]), its `status`, `agentId` and `success` as written: whether
+// an Agent or Task call's subagent completed (`status` "completed"), the
+// subagent it names (`agentId`, "" where it names none a reading reads), and
+// whether a SendMessage was refused (`success`, the literal false).
+func answerOf(status, agentID, success json.RawMessage) (completed bool, agent string, refused bool) {
+	s, err := wireRequiredString("status", status)
+	completed = err == nil && s == claudeAgentCompleted
+	if agent, err = wireRequiredString("agentId", agentID); err != nil || !validClaudeAgent(agent) {
+		agent = ""
+	}
+	return completed, agent, string(success) == "false"
 }
 
 // The record types and subtypes this layer reads by name.
@@ -1279,27 +1283,18 @@ const (
 	// subtypeMicrocompactBoundary is a microcompaction's boundary, which no
 	// release measured writes ([threadRestarts.See]).
 	subtypeMicrocompactBoundary = "microcompact_boundary"
-	// hookStopSummary is the summary a Stop firing ends with: a system record
-	// of this subtype, and the [threadHook.Record] it is read as.
-	hookStopSummary = "stop_hook_summary"
 
 	// editClearToolUses is the server's context edit that clears the content
 	// of old tool results ([threadLine.ToolResultsCleared]).
 	editClearToolUses = "clear_tool_uses_20250919"
 )
 
-// The hook attachments [threadLine.Hook] reads: what a hook's firing records.
+// The attachments whose payloads Claude Code's resume holds to a shape
+// ([threadLine.AttachmentWellFormed]): two of the records of a hook's firing,
+// its success and its additional context, and the others.
 const (
-	hookSuccess           = "hook_success"
-	hookSystemMessage     = "hook_system_message"
-	hookAdditionalContext = "hook_additional_context"
-	hookCancelled         = "hook_cancelled"
-)
-
-// The other attachments whose payloads Claude Code's resume holds to a shape
-// ([threadLine.AttachmentWellFormed]), beside a hook's success and its
-// additional context.
-const (
+	hookSuccess              = "hook_success"
+	hookAdditionalContext    = "hook_additional_context"
 	attachmentInvokedSkills  = "invoked_skills"
 	attachmentSkillListing   = "skill_listing"
 	attachmentTaskReminder   = "task_reminder"
@@ -1318,167 +1313,36 @@ const (
 	skillListingMaxNameUnits = 512
 )
 
-// threadHook is what a hook's record says of the firing it records.
-type threadHook struct {
-	// Record is the attachment's type, or [hookStopSummary].
-	Record string
-	// Event is the attachment's `hookEvent`. "" on a summary, which carries
-	// none (34 of 34 measured): a summary's event is its firing's, which that
-	// firing's attachments name under the same Firing.
-	Event string
-	// Firing is Claude Code's own id of ONE FIRING of a hook, which every
-	// record of that firing shares: the attachment's `toolUseID`, or a
-	// summary's top-level one. `hook-<uuid>` after a batch, a bare uuid at
-	// Stop (328 of 328 attachments and 34 of 34 summaries measured).
-	//
-	// NEVER A CALL'S ID, although the key says tool use, and although a
-	// PostToolUse hook's firing carries the id of the model's call it
-	// followed (`toolu_…`, measured on a skill's hook): so a firing leaves
-	// this layer here alone, and a call's id only through
-	// [threadMessage.Calls], with no accessor of "a line's ids" that would
-	// hand a reader of calls a hook's firing, or a reader of firings a call.
-	Firing string
-	// Command is the attachment's `command`, where it has one.
-	Command string
-	// Content is the attachment's `content`, raw: a string on a success and a
-	// system message, a list on an additional context. Valid until the
-	// reader's next Next ([threadLine]).
-	Content json.RawMessage
-	// Stdout is a success's `stdout`, raw: the hook's whole answer, as text.
-	// Valid until the reader's next Next ([threadLine]).
-	Stdout json.RawMessage
-}
-
-// Hook is what a HOOK's record says of the firing it records: the
-// hook_success, hook_system_message, hook_additional_context and
-// hook_cancelled attachments, and a system stop_hook_summary. False for every
-// other record, whatever `toolUseID` it carries.
-//
-// An error for an attachment record whose `attachment` is no object or whose
-// type is no string (it may be a hook's, and cannot be read as one), and for a
-// hook's record whose fields are not of their type: an attachment's event and
-// firing, and a summary's firing, strings that name something, an empty one
-// refused (a summary names no event, and none is asked of it); an
-// attachment's command a string where present; a success's stdout a string,
-// and its content a string where present; a system message's content a
-// string, and an additional context's a list. A firing whose record was
-// reshaped is never read as one that recorded nothing.
-//
-// A TOP-LEVEL `toolUseID` IS READ ON A SUMMARY ALONE, the one record measured
-// to carry its firing there: on any other, a later release could carry a
-// call's id at the top, and a reader would be handed it under a hook's name.
-func (l threadLine) Hook() (threadHook, bool, error) {
-	switch {
-	case l.Head.Type == recordAttachment:
-		return attachmentHook(l.attachment)
-	case l.Head.Type == recordSystem && l.Head.Subtype == hookStopSummary:
-		firing, err := wireRequiredString("toolUseID", l.toolUseID)
-		if err == nil && firing == "" {
-			err = errors.New("toolUseID names no firing")
-		}
-		if err != nil {
-			return threadHook{}, false, fmt.Errorf("a %s: %w", hookStopSummary, err)
-		}
-		return threadHook{Record: hookStopSummary, Firing: firing}, true, nil
-	}
-	return threadHook{}, false, nil
-}
-
-// attachmentHook is the hook an attachment records, raw the record's
-// `attachment` ([threadLine.Hook]).
-func attachmentHook(raw json.RawMessage) (threadHook, bool, error) {
-	if !wireObject(raw) {
-		return threadHook{}, false, fmt.Errorf("an attachment record's attachment is %s, not an object", wireKind(raw))
-	}
-	var a struct {
-		Type      json.RawMessage `json:"type"`
-		HookEvent json.RawMessage `json:"hookEvent"`
-		ToolUseID json.RawMessage `json:"toolUseID"`
-		Command   json.RawMessage `json:"command"`
-		Content   json.RawMessage `json:"content"`
-		Stdout    json.RawMessage `json:"stdout"`
-	}
-	if err := wireDecode(raw, &a); err != nil {
-		return threadHook{}, false, fmt.Errorf("an attachment: %w", err)
-	}
-	record, err := wireRequiredString("attachment.type", a.Type)
-	if err != nil {
-		return threadHook{}, false, err
-	}
-	switch record {
-	case hookSuccess, hookSystemMessage, hookAdditionalContext, hookCancelled:
-	default:
-		return threadHook{}, false, nil
-	}
-	h, err := hookFields(record, a.HookEvent, a.ToolUseID, a.Command)
-	if err != nil {
-		return threadHook{}, false, fmt.Errorf("a %s: %w", record, err)
-	}
-	h.Content, h.Stdout = a.Content, a.Stdout
-	if err = hookShape(record, a.Content, a.Stdout); err != nil {
-		return threadHook{}, false, fmt.Errorf("a %s: %w", record, err)
-	}
-	return h, true, nil
-}
-
-// hookFields is a hook attachment's firing: its event and its firing,
-// strings that are there and say something, and its command, a string where
-// present.
-func hookFields(record string, event, firing, command json.RawMessage) (threadHook, error) {
-	h := threadHook{Record: record}
-	var err error
-	if h.Event, err = wireRequiredString("hookEvent", event); err != nil {
-		return threadHook{}, err
-	}
-	if h.Firing, err = wireRequiredString("toolUseID", firing); err != nil {
-		return threadHook{}, err
-	}
-	switch {
-	case h.Event == "":
-		return threadHook{}, errors.New("hookEvent names no event")
-	case h.Firing == "":
-		return threadHook{}, errors.New("toolUseID names no firing")
-	}
-	if h.Command, err = wireString("command", command); err != nil {
-		return threadHook{}, err
-	}
-	return h, nil
-}
-
-// hookShape holds a hook attachment's content and stdout to the types its
-// record gives them ([threadLine.Hook]).
-func hookShape(record string, content, stdout json.RawMessage) error {
-	switch record {
-	case hookSuccess:
-		if _, err := wireRequiredString("stdout", stdout); err != nil {
-			return err
-		}
-		_, err := wireString("content", content)
-		return err
-	case hookSystemMessage:
-		_, err := wireRequiredString("content", content)
-		return err
-	case hookAdditionalContext:
-		if len(content) == 0 || content[0] != '[' {
-			return fmt.Errorf("content is %s, not a list", wireKind(content))
-		}
-	}
-	return nil
-}
-
 // threadMessage is a user or assistant record's message as its one decode
-// left it: its content as one string, or its blocks.
+// left it: what its readers ask of its content where that is one string (that
+// it is one, the subagent and the leg a task notification names, whether it
+// names the handback tool), or its blocks. IT HOLDS NO TEXT: a prompt or a
+// notification is as long as whatever wrote it made it, and each fact its
+// readers ask of one is read as the text streams ([textNotice],
+// [textHandback], [textSays]). AND NOTHING OF A BLOCK BUT A CALL: a list holds
+// as many blocks as whatever wrote it made it, and what its readers ask of the
+// blocks that are no call is how many there are and which kinds among them
+// ([threadBlocks]), a count and a set.
 type threadMessage struct {
-	text   string
 	isText bool
-	kinds  []string
-	calls  []threadCall
+	// notification and namesHandback are [threadMessage.Notification]'s and
+	// [threadMessage.NamesHandback]'s.
+	notification  taskNotice
+	namesHandback bool
+	blocks        threadBlocks
+	calls         []threadCall
 	// saysText and saysAny are [threadMessage.Says]'s.
 	saysText, saysAny bool
 }
 
 // threadCall is one call block of a message: a model's call, or the result it
 // was answered with.
+//
+// IT HOLDS FACTS, NEVER A CALL'S BYTES: a call's input and a result's content
+// are each as long as whatever wrote them made them, and what a reader asks of
+// them is the subagent a SendMessage sends to and the text a result holds as a
+// log's output is compared with, each read here, by value, so a call costs the
+// same whatever its input or its result held.
 type threadCall struct {
 	// Kind is "tool_use" or "tool_result".
 	Kind string
@@ -1486,14 +1350,17 @@ type threadCall struct {
 	ID string
 	// Name is the tool a tool_use called.
 	Name string
-	// Input is a tool_use's `input`, raw, valid until the reader's next Next
-	// ([threadLine]).
-	Input json.RawMessage
-	// IsError is a tool_result's `is_error`; nil where absent.
-	IsError *bool
-	// Content is a tool_result's `content`, raw: a string or a list of blocks.
-	// Valid until the reader's next Next ([threadLine]).
-	Content json.RawMessage
+	// To is the subagent a tool_use's `input` sends to ([sendTarget]): its
+	// `to`, where that is a string naming an agent; "" else, and on a
+	// tool_result.
+	To string
+	// Failed is whether a tool_result's `is_error` is true; false where it is
+	// absent, and on a tool_use.
+	Failed bool
+	// Text is a tool_result's text ([resultText]), as the reading compares it
+	// with a log's output ([threadResultText]); no text, its zero value, where
+	// its content holds none, and on a tool_use.
+	Text threadResultText
 }
 
 // The content blocks this layer names: the blocks that are calls, and those
@@ -1506,9 +1373,86 @@ const (
 	blockRedactedThinking = "redacted_thinking"
 )
 
+// blockKeys is what a content block's rule reads of it ([blockCallOf]), each
+// key's raw as written, nil where absent: its `type`, `id`, `name`,
+// `tool_use_id` and `is_error`; to, the subagent its `input` sends to
+// ([sendTargetOf]); and text, its `content`'s text ([threadResultText]).
+type blockKeys struct {
+	typ, id, name, toolUseID, isError json.RawMessage
+	to                                string
+	text                              threadResultText
+}
+
+// blockCallOf is a content block of kind, b its keys, as [threadLine.Message]
+// holds one to its types: an object whose `type` is a string; a tool_use's
+// `id` a string that names a call ([callID]) and its `name` a string; a
+// tool_result's `tool_use_id` the same and its `is_error` a boolean where
+// present. Its call carries its kind, the layer's own string where the layer
+// names it ([knownKind]), and of a tool_use its target, of a tool_result its
+// failure and its text; the other keys of a block that is no call are read by
+// no rule. THE ONE RULE OF A BLOCK, whichever reading of the line hands it
+// the keys.
+func blockCallOf(kind valueKind, b blockKeys) (threadCall, error) {
+	if kind != '{' {
+		return threadCall{}, fmt.Errorf("is %s, not an object", kind)
+	}
+	k, err := wireRequiredString("type", b.typ)
+	if err != nil {
+		return threadCall{}, err
+	}
+	c := threadCall{Kind: knownKind(k)}
+	switch k {
+	case blockToolUse:
+		if c.ID, err = callID("id", b.id); err != nil {
+			return threadCall{}, err
+		}
+		if c.Name, err = wireRequiredString("name", b.name); err != nil {
+			return threadCall{}, err
+		}
+		c.To = b.to
+	case blockToolResult:
+		if c.ID, err = callID("tool_use_id", b.toolUseID); err != nil {
+			return threadCall{}, err
+		}
+		if b.isError != nil {
+			if c.Failed, err = wireBool("is_error", b.isError); err != nil {
+				return threadCall{}, err
+			}
+		}
+		c.Text = b.text
+	}
+	return c, nil
+}
+
+// sendTargetOf is the subagent a SendMessage call's input sends to, input its
+// kind and to its `to` as written: `to` where the input is an object and that
+// is a string naming an agent ([validClaudeAgent]); "" else, a send to no
+// subagent a reading reads.
+func sendTargetOf(input valueKind, to json.RawMessage) string {
+	if input != '{' {
+		return ""
+	}
+	target, err := wireRequiredString("to", to)
+	if err != nil || !validClaudeAgent(target) {
+		return ""
+	}
+	return target
+}
+
+// resultElementIsText reports whether a tool_result's content list's one
+// element is its text ([resultText]): an object, kind, whose `type`, typ, is
+// the string "text", and whose `text` is of the kind text, a string.
+func resultElementIsText(kind valueKind, typ json.RawMessage, text valueKind) bool {
+	if kind != '{' || text != '"' {
+		return false
+	}
+	k, err := wireRequiredString("type", typ)
+	return err == nil && k == blockText
+}
+
 // knownKind is kind, a block's type, held as this layer's own constant where
-// it is one of the blocks the layer names, so a list of such blocks holds no
-// string of its own for a block's kind.
+// it is one of the blocks the layer names, so a call a message holds keeps no
+// string of its own for its kind.
 func knownKind(kind string) string {
 	switch kind {
 	case blockToolUse:
@@ -1525,11 +1469,85 @@ func knownKind(kind string) string {
 	return kind
 }
 
-// Message is a user or assistant record's `message`, decoded from the line's
-// raw `message` on each call: nothing keeps it, so a reader that asks twice
-// pays for two decodes. It is the zero message for every other record,
-// whatever `message` it carries: an api-request-blob repeats what a request
-// sent, and a call in it is no call the thread made.
+// threadBlocks is what a message's content list says of its blocks
+// ([threadMessage.Blocks]): how many it holds, and which kinds among them.
+//
+// A COUNT AND A SET, NEVER A KIND A BLOCK: every reader asks how many blocks a
+// list holds or whether they are all of some kinds (a leg's start, a finished
+// reply, a plain results record, a result alone on its record), and none asks
+// a block's place in the list. So a list of a million blocks holds two words
+// here, not a million kinds.
+type threadBlocks struct {
+	n    int
+	seen blockSet
+}
+
+// blockSet is a set of the kinds of block, one member for each kind the layer
+// names and one, blockOther, for every kind it does not.
+type blockSet uint8
+
+const (
+	blockSetToolUse blockSet = 1 << iota
+	blockSetToolResult
+	blockSetText
+	blockSetThinking
+	blockSetRedactedThinking
+	// blockOther is every kind the layer does not name: one member for all of
+	// them, since no reader tells one unnamed kind from another, and each
+	// reads one as a block of no kind it names.
+	blockOther
+)
+
+// blockOf is kind's member of a [blockSet]: its own where the layer names it,
+// blockOther else.
+func blockOf(kind string) blockSet {
+	switch kind {
+	case blockToolUse:
+		return blockSetToolUse
+	case blockToolResult:
+		return blockSetToolResult
+	case blockText:
+		return blockSetText
+	case blockThinking:
+		return blockSetThinking
+	case blockRedactedThinking:
+		return blockSetRedactedThinking
+	}
+	return blockOther
+}
+
+// add counts a block of kind.
+func (b *threadBlocks) add(kind string) {
+	b.n++
+	b.seen |= blockOf(kind)
+}
+
+// Len is how many blocks the list holds: 0 for a list of none, and for every
+// message that holds no list, a content that is one string
+// ([threadMessage.IsText] tells it) and the zero message among them.
+func (b threadBlocks) Len() int { return b.n }
+
+// All reports whether every block is of one of kinds, each one of the layer's
+// own names of a block (blockText, blockToolUse...): true of a list of none,
+// which a reader tells by [threadBlocks.Len]. A kind the layer does not name
+// matches no block, so a block of a kind the layer does not name is all of no
+// kinds a reader can ask for: never a sign that a reply finished, nor a block
+// that holds no call.
+func (b threadBlocks) All(kinds ...string) bool {
+	var named blockSet
+	for _, kind := range kinds {
+		if s := blockOf(kind); s != blockOther {
+			named |= s
+		}
+	}
+	return b.seen&^named == 0
+}
+
+// Message is a user or assistant record's `message`, read once, as its line
+// is decoded ([factsOf]): a reader that asks twice is handed what that one
+// reading left, never a second decode. It is the zero message for every other
+// record, whatever `message` it carries: an api-request-blob repeats what a
+// request sent, and a call in it is no call the thread made.
 //
 // AN ERROR WHERE IT DOES NOT DECODE, and never a message with half a call in
 // it: `message` an object; its `content` a string or a list of objects, each
@@ -1547,145 +1565,42 @@ func knownKind(kind string) string {
 // A CONTENT LIST IS READ A BLOCK AT A TIME ([eachElement]), each block held to
 // its type as it is read, and never decoded whole before its first block is
 // checked. So a list refused at a block costs what the blocks up to it cost,
-// however many follow, and what a list read to its end leaves held is a kind
-// for each block and a call for each call block, each kept as it is accepted:
+// however many follow, and what a list read to its end leaves held is a call
+// for each call block, each kept as it is accepted, and of every block its
+// count and its kind's member of a set ([threadBlocks]), nothing a block:
 // while it reads, a message holds, beyond those, one copy of its content and
 // one block's decode. A list of four million `1`s at [threadLineMax] is
 // refused at its first block for the allocations a list of one costs and, in
-// bytes, the one copy of its content, and a line at that bound of the
-// smallest results a list can hold leaves their calls held, about three times
-// the line (measured): a kind's header and a call's fields for each, at most
-// a quarter over for append's growth.
+// bytes, the copies of the message and of its content its line's decode
+// makes; a line at that bound of the smallest blocks of a kind no reader
+// names leaves nothing of them held; and a line at that bound of the smallest
+// results a list can hold leaves their calls held, about three and a half
+// times the line (measured): a call's fields for each, at most a quarter over
+// for append's growth.
 func (l threadLine) Message() (threadMessage, error) {
 	// record is what an error of the message calls the record.
-	var call, record string
+	var record string
 	switch l.Head.Type {
 	case recordAssistant:
-		call, record = blockToolUse, "an assistant record"
+		record = "an assistant record"
 	case recordUser:
-		call, record = blockToolResult, "a user record"
+		record = "a user record"
 	default:
 		return threadMessage{}, nil
 	}
-	if !wireObject(l.message) {
-		return threadMessage{}, fmt.Errorf("%s's message is %s, not an object", record, wireKind(l.message))
-	}
-	var wire struct {
-		Content json.RawMessage `json:"content"`
-	}
-	if err := wireDecode(l.message, &wire); err != nil {
-		return threadMessage{}, fmt.Errorf("%s's message: %w", record, err)
-	}
-	m, err := messageContent(wire.Content, call)
-	if err != nil {
-		return threadMessage{}, fmt.Errorf("%s's message: %w", record, err)
-	}
-	return m, nil
-}
-
-// messageContent is a message whose `content` is content, its blocks of kind
-// call its calls.
-func messageContent(content json.RawMessage, call string) (threadMessage, error) {
-	switch {
-	case len(content) == 0 || (content[0] != '"' && content[0] != '['):
-		return threadMessage{}, fmt.Errorf("content is %s, neither a string nor a list", wireKind(content))
-	case content[0] == '"':
-		var text string
-		if err := wireDecode(content, &text); err != nil {
-			return threadMessage{}, fmt.Errorf("content: %w", err)
-		}
-		return threadMessage{text: text, isText: true, saysAny: strings.ContainsFunc(text, jsTrimKeeps)}, nil
-	}
-	// A BLOCK AT A TIME ([eachElement]), and the kinds and the calls grown
-	// from what was accepted, never sized from the list's length, which only
-	// a whole decode knows: a list refused at its first block costs that
-	// block. An empty list's kinds are empty, never nil, which only a content
-	// that is no list reads as.
-	m := threadMessage{kinds: []string{}}
-	// said is the block's text, unquoted into the one buffer every block
-	// reuses, where a block's text may still change what the message says.
-	var said []byte
-	if err := eachElement(content, func(raw json.RawMessage, _ int) error {
-		b, text, err := contentBlock(raw)
-		if err != nil {
-			return fmt.Errorf("content block %d: %w", len(m.kinds)+1, err)
-		}
-		m.kinds = append(m.kinds, b.Kind)
-		if b.Kind == call {
-			m.calls = append(m.calls, b)
-		}
-		if !m.saysText && (b.Kind == blockText || !m.saysAny) && len(text) > 0 && text[0] == '"' {
-			// The block's text was read whole with its line, so unquoting it
-			// meets no error but a lone surrogate's or invalid UTF-8's, each
-			// written as U+FFFD, as the layer's decode reads it.
-			said, _ = jsontext.AppendUnquote(said[:0], text)
-			if bytes.ContainsFunc(said, jsTrimKeeps) {
-				m.saysAny = true
-				m.saysText = b.Kind == blockText
-			}
-		}
-		return nil
-	}); err != nil {
+	m := &l.facts().message
+	if err := m.object(record); err != nil {
 		return threadMessage{}, err
 	}
-	return m, nil
-}
-
-// contentBlock is one block of a message's content, its kind and, for a call
-// block, its call: held to the types [threadLine.Message] names; and the
-// block's `text`, raw, which [threadMessage.Says] reads of every block whatever
-// its type, valid only while the block's walk runs.
-func contentBlock(raw json.RawMessage) (threadCall, json.RawMessage, error) {
-	if !wireObject(raw) {
-		return threadCall{}, nil, fmt.Errorf("is %s, not an object", wireKind(raw))
+	if m.contentErr != nil {
+		return threadMessage{}, fmt.Errorf("%s's message: %w", record, m.contentErr)
 	}
-	var b struct {
-		Type      json.RawMessage `json:"type"`
-		ID        json.RawMessage `json:"id"`
-		Name      json.RawMessage `json:"name"`
-		Input     json.RawMessage `json:"input"`
-		ToolUseID json.RawMessage `json:"tool_use_id"`
-		IsError   json.RawMessage `json:"is_error"`
-		Content   json.RawMessage `json:"content"`
-		Text      json.RawMessage `json:"text"`
-	}
-	if err := wireDecode(raw, &b); err != nil {
-		return threadCall{}, nil, err
-	}
-	kind, err := wireRequiredString("type", b.Type)
-	if err != nil {
-		return threadCall{}, nil, err
-	}
-	c := threadCall{Kind: knownKind(kind)}
-	switch kind {
-	case blockToolUse:
-		if c.ID, err = callID("id", b.ID); err != nil {
-			return threadCall{}, nil, err
-		}
-		if c.Name, err = wireRequiredString("name", b.Name); err != nil {
-			return threadCall{}, nil, err
-		}
-		c.Input = b.Input
-	case blockToolResult:
-		if c.ID, err = callID("tool_use_id", b.ToolUseID); err != nil {
-			return threadCall{}, nil, err
-		}
-		if b.IsError != nil {
-			var failed bool
-			if failed, err = wireBool("is_error", b.IsError); err != nil {
-				return threadCall{}, nil, err
-			}
-			c.IsError = &failed
-		}
-		c.Content = b.Content
-	}
-	return c, b.Text, nil
+	return m.content, nil
 }
 
 // callID is raw, a call block's key named key, held to a string that names a
-// call. AN ID THAT NAMES NONE IS REFUSED, as a hook's record whose firing
-// names none is ([threadLine.Hook]): the API names every call a model makes,
-// no block measured carries an empty id (811 calls and 744 results, every
+// call. AN ID THAT NAMES NONE IS REFUSED: the API names every call a model
+// makes, no block measured carries an empty id (811 calls and 744 results, every
 // thread the probes kept), and handed out, a call whose id names none is one
 // no reader could match against a call it knows.
 func callID(key string, raw json.RawMessage) (string, error) {
@@ -1696,22 +1611,54 @@ func callID(key string, raw json.RawMessage) (string, error) {
 	return id, err
 }
 
-// Text is the message's content where it is one string.
-func (m threadMessage) Text() (string, bool) { return m.text, m.isText }
+// taskNotice is the subagent and the leg a task notification's text names
+// ([textNotice]), each a string of its own of at most 64 bytes, never a piece
+// of the text; ok where it names them.
+type taskNotice struct {
+	agent, leg string
+	ok         bool
+}
 
-// Kinds is each content block's type, in order. It is nil exactly where the
-// message holds no list: a content that is one string ([threadMessage.Text]
-// says so), and the zero message every record but a user's or an assistant's
-// reads as; an empty list is an empty Kinds, never nil. A reader tells a
-// turn's own message from the results of its calls by it: a user record whose
-// blocks are tool_result alone, or not. A kind the layer does not name is
-// handed out as written, for its reader to treat as unknown: never as a sign
-// that a reply finished, nor as a block that holds no call.
-func (m threadMessage) Kinds() []string { return m.kinds }
+// IsText reports whether the message's content is one string: a prompt, a
+// task notification or a message sent to a subagent, rather than blocks.
+func (m threadMessage) IsText() bool { return m.isText }
+
+// Notification is the subagent and the leg the message's text names where it
+// is a TASK NOTIFICATION's ([textNotice]): its lines `<task-notification>`,
+// `<task-id>A</task-id>`, `<tool-use-id>L</tool-use-id>`, any output files'
+// and `<status>completed</status>`, A an agent ([validClaudeAgent]) and L an
+// id the call-id rule keeps ([sandbox.ValidCallID]); ok false for any other
+// text, and for a message of blocks. It is the text's own claim, whatever
+// record holds it: its reader takes it for a notification only where the
+// record's origin says so, and matches the leg only against a call it read.
+func (m threadMessage) Notification() (agent, leg string, ok bool) {
+	return m.notification.agent, m.notification.leg, m.notification.ok
+}
+
+// NamesHandback reports whether the message's text names the handback tool
+// ([claudeToolHandback]) anywhere ([textHandback]): what marks a task
+// notification's leg as answered by a handback. False for a message of blocks.
+func (m threadMessage) NamesHandback() bool { return m.namesHandback }
+
+// Blocks is how many blocks the message's content list holds, and which
+// kinds among them ([threadBlocks]): none where the message holds no list, a
+// content that is one string ([threadMessage.IsText] tells it) and the zero
+// message every record but a user's or an assistant's reads as among them,
+// and none for a list of none. A reader tells a turn's own message from the
+// results of its calls by it: a user record whose blocks are tool_result
+// alone, or not. A kind the layer does not name is a kind of its own in the
+// set, for its reader to treat as unknown: never as a sign that a reply
+// finished, nor as a block that holds no call.
+func (m threadMessage) Blocks() threadBlocks { return m.blocks }
 
 // Calls is the message's call blocks: an assistant's tool_use blocks, a user's
-// tool_result blocks. THE ONLY WAY A CALL'S ID LEAVES THIS LAYER
-// ([threadHook.Firing]).
+// tool_result blocks. THE ONE WAY AN ID LEAVES THIS LAYER AS A CALL'S: no
+// accessor hands out "a line's ids", which would hand a reader of calls a
+// hook's firing; an attachment's `toolUseID` leaves only as a key
+// ([threadLine.AttachmentToolUseID]); and a task notification's
+// `<tool-use-id>` leaves as the leg its text claims
+// ([threadMessage.Notification]), which its one reader matches only against a
+// call it read here.
 func (m threadMessage) Calls() []threadCall { return m.calls }
 
 // Says reports whether the message SAYS ANYTHING, as Claude Code reads a
@@ -1790,18 +1737,13 @@ func (l threadLine) StopReason() (string, error) {
 	if l.Head.Type != recordAssistant {
 		return "", nil
 	}
-	// HELD TO AN OBJECT BEFORE IT IS DECODED: a null decodes into a struct as
-	// nothing at all, and would read as a reply that says nothing of its stop.
-	if !wireObject(l.message) {
-		return "", fmt.Errorf("an assistant record's message is %s, not an object", wireKind(l.message))
+	// HELD TO AN OBJECT BEFORE IT IS READ: a null holds no key at all, and
+	// would read as a reply that says nothing of its stop.
+	m := &l.facts().message
+	if err := m.object("an assistant record"); err != nil {
+		return "", err
 	}
-	var message struct {
-		StopReason json.RawMessage `json:"stop_reason"`
-	}
-	if err := wireDecode(l.message, &message); err != nil {
-		return "", fmt.Errorf("an assistant record's message: %w", err)
-	}
-	return wireString("stop_reason", message.StopReason)
+	return wireString("stop_reason", m.stopReason)
 }
 
 // APIError reports whether an assistant record is the reply Claude Code wrote
@@ -1844,10 +1786,11 @@ func (l threadLine) StopReason() (string, error) {
 // Read off the line's one decode, its raw `isApiErrorMessage`, never a second
 // read of the line.
 func (l threadLine) APIError() (bool, error) {
-	if l.Head.Type != recordAssistant || l.apiError == nil {
+	f := l.facts()
+	if l.Head.Type != recordAssistant || f.apiError == nil {
 		return false, nil
 	}
-	return wireBool("isApiErrorMessage", l.apiError)
+	return wireBool("isApiErrorMessage", f.apiError)
 }
 
 // Model is the model that wrote the reply an assistant record holds, its
@@ -1868,24 +1811,19 @@ func (l threadLine) APIError() (bool, error) {
 // model's reply, and never Message's, so a reshaped model costs only the
 // readers that ask for it.
 //
-// Decoded from the line's raw `message` on each call, as
-// [threadLine.StopReason] reads its key: nothing keeps it.
+// Read off the message's own key as written, which the line's one decode
+// keeps ([factsOf]), as [threadLine.StopReason] reads its key.
 func (l threadLine) Model() (string, error) {
 	if l.Head.Type != recordAssistant {
 		return "", nil
 	}
-	// HELD TO AN OBJECT BEFORE IT IS DECODED: a null decodes into a struct as
-	// nothing at all, and would read as a reply that names no model.
-	if !wireObject(l.message) {
-		return "", fmt.Errorf("an assistant record's message is %s, not an object", wireKind(l.message))
+	// HELD TO AN OBJECT BEFORE IT IS READ: a null holds no key at all, and
+	// would read as a reply that names no model.
+	m := &l.facts().message
+	if err := m.object("an assistant record"); err != nil {
+		return "", err
 	}
-	var message struct {
-		Model json.RawMessage `json:"model"`
-	}
-	if err := wireDecode(l.message, &message); err != nil {
-		return "", fmt.Errorf("an assistant record's message: %w", err)
-	}
-	return wireString("model", message.Model)
+	return wireString("model", m.model)
 }
 
 // MessageID is the id of the reply an assistant record holds, its message's
@@ -1930,24 +1868,19 @@ func (l threadLine) Model() (string, error) {
 // assistant records of the 521 thread files the probes kept carries an ASCII
 // id of at most 36 bytes; only a box rewriting its own file writes another.
 //
-// Decoded from the line's raw `message` on each call, as
-// [threadLine.StopReason] reads its key: nothing keeps it.
+// Read off the message's own key as written, which the line's one decode
+// keeps ([factsOf]), as [threadLine.StopReason] reads its key.
 func (l threadLine) MessageID() (string, error) {
 	if l.Head.Type != recordAssistant {
 		return "", nil
 	}
-	// HELD TO AN OBJECT BEFORE IT IS DECODED: a null decodes into a struct as
-	// nothing at all, and would read as a reply that names no id.
-	if !wireObject(l.message) {
-		return "", fmt.Errorf("an assistant record's message is %s, not an object", wireKind(l.message))
+	// HELD TO AN OBJECT BEFORE IT IS READ: a null holds no key at all, and
+	// would read as a reply that names no id.
+	m := &l.facts().message
+	if err := m.object("an assistant record"); err != nil {
+		return "", err
 	}
-	var message struct {
-		ID json.RawMessage `json:"id"`
-	}
-	if err := wireDecode(l.message, &message); err != nil {
-		return "", fmt.Errorf("an assistant record's message: %w", err)
-	}
-	id, err := wireString("id", message.ID)
+	id, err := wireString("id", m.id)
 	if err != nil {
 		return "", err
 	}
@@ -2000,10 +1933,11 @@ const threadTime = "2006-01-02T15:04:05.000Z"
 // Read off the line's one decode, its raw `timestamp`, never a second read of
 // the line.
 func (l threadLine) Timestamp() (ms int64, present bool, err error) {
-	if l.timestamp == nil {
+	raw := l.facts().timestamp
+	if raw == nil {
 		return 0, false, nil
 	}
-	text, err := wireRequiredString("timestamp", l.timestamp)
+	text, err := wireRequiredString("timestamp", raw)
 	if err != nil {
 		return 0, false, err
 	}
@@ -2045,10 +1979,11 @@ func (l threadLine) Timestamp() (ms int64, present bool, err error) {
 // Read off the line's one decode, its raw `isMeta`, never a second read of the
 // line.
 func (l threadLine) IsMeta() (bool, error) {
-	if l.Head.Type != recordUser || l.isMeta == nil {
+	raw := l.facts().isMeta
+	if l.Head.Type != recordUser || raw == nil {
 		return false, nil
 	}
-	return wireBool("isMeta", l.isMeta)
+	return wireBool("isMeta", raw)
 }
 
 // SourceToolAssistantUUID is the record a user record says its results answer,
@@ -2076,10 +2011,11 @@ func (l threadLine) IsMeta() (bool, error) {
 // Read off the line's one decode, its raw `sourceToolAssistantUUID`, never a
 // second read of the line.
 func (l threadLine) SourceToolAssistantUUID() ([16]byte, bool) {
-	if l.Head.Type != recordUser || l.sourceToolAssistantUUID == nil {
+	raw := l.facts().sourceToolAssistantUUID
+	if l.Head.Type != recordUser || raw == nil {
 		return [16]byte{}, false
 	}
-	source, err := wireRequiredString("sourceToolAssistantUUID", l.sourceToolAssistantUUID)
+	source, err := wireRequiredString("sourceToolAssistantUUID", raw)
 	if err != nil {
 		return [16]byte{}, false
 	}
@@ -2159,18 +2095,14 @@ func lowercaseHexDigit(c byte) int {
 // ITS READER is the model of which records Claude Code's resume hands its
 // model.
 //
-// Decoded from the line's raw `attachment` on each call: nothing keeps it.
+// Read off the attachment's own keys as written, which the line's one decode
+// keeps ([factsOf]), never a second read of the line.
 func (l threadLine) AttachmentToolUseID() (key [32]byte, isString bool) {
-	if l.Head.Type != recordAttachment || !wireObject(l.attachment) {
+	a := &l.facts().attachment
+	if l.Head.Type != recordAttachment || a.kind != '{' || a.err != nil {
 		return [32]byte{}, false
 	}
-	var a struct {
-		ToolUseID json.RawMessage `json:"toolUseID"`
-	}
-	if wireDecode(l.attachment, &a) != nil {
-		return [32]byte{}, false
-	}
-	id, err := wireRequiredString("toolUseID", a.ToolUseID)
+	id, err := wireRequiredString("toolUseID", a.toolUseID)
 	if err != nil {
 		return [32]byte{}, false
 	}
@@ -2205,10 +2137,11 @@ func (l threadLine) AttachmentToolUseID() (key [32]byte, isString bool) {
 // Read off the line's one decode, its raw `isVirtual`, never a second read of
 // the line.
 func (l threadLine) IsVirtual() (bool, error) {
-	if (l.Head.Type != recordUser && l.Head.Type != recordAssistant) || l.isVirtual == nil {
+	raw := l.facts().isVirtual
+	if (l.Head.Type != recordUser && l.Head.Type != recordAssistant) || raw == nil {
 		return false, nil
 	}
-	return wireBool("isVirtual", l.isVirtual)
+	return wireBool("isVirtual", raw)
 }
 
 // InterruptedByShutdown reports whether a user record says a SHUTDOWN
@@ -2236,10 +2169,11 @@ func (l threadLine) IsVirtual() (bool, error) {
 // Read off the line's one decode, its raw `interruptedByShutdown`, never a
 // second read of the line.
 func (l threadLine) InterruptedByShutdown() (bool, error) {
-	if l.Head.Type != recordUser || l.interruptedByShutdown == nil {
+	raw := l.facts().interruptedByShutdown
+	if l.Head.Type != recordUser || raw == nil {
 		return false, nil
 	}
-	return wireBool("interruptedByShutdown", l.interruptedByShutdown)
+	return wireBool("interruptedByShutdown", raw)
 }
 
 // IsCompactSummary reports whether a user record is a COMPACTION'S SUMMARY:
@@ -2265,10 +2199,11 @@ func (l threadLine) InterruptedByShutdown() (bool, error) {
 // Read off the line's one decode, its raw `isCompactSummary`, never a second
 // read of the line.
 func (l threadLine) IsCompactSummary() (bool, error) {
-	if l.Head.Type != recordUser || l.isCompactSummary == nil {
+	raw := l.facts().isCompactSummary
+	if l.Head.Type != recordUser || raw == nil {
 		return false, nil
 	}
-	return wireBool("isCompactSummary", l.isCompactSummary)
+	return wireBool("isCompactSummary", raw)
 }
 
 // TaskDelivery reports whether a user record carries `taskDelivery`, a
@@ -2291,7 +2226,7 @@ func (l threadLine) IsCompactSummary() (bool, error) {
 // Read off the line's one decode, its raw `taskDelivery`, never a second read
 // of the line.
 func (l threadLine) TaskDelivery() bool {
-	return l.Head.Type == recordUser && l.taskDelivery != nil
+	return l.Head.Type == recordUser && l.facts().taskDelivery
 }
 
 // BatchToolUses reports whether an assistant record carries `batchToolUses`,
@@ -2319,30 +2254,21 @@ func (l threadLine) TaskDelivery() bool {
 // calls no batch split, and a list of no shape throws in its request. An
 // error ends the walk, and the entries before it have been handed.
 //
-// Read off the line's one decode, its raw `batchToolUses`, never a second
-// read of the line.
+// Read once, as the line is decoded ([factsOf]), off its raw `batchToolUses`
+// there: never a second read of the line, and a reader that asks again is
+// handed what that reading held.
 func (l threadLine) BatchToolUses(each func(id string)) (bool, error) {
-	if l.Head.Type != recordAssistant || l.batchToolUses == nil {
+	b := &l.facts().batch
+	if l.Head.Type != recordAssistant || !b.present {
 		return false, nil
 	}
-	if err := eachElement(l.batchToolUses, func(raw json.RawMessage, _ int) error {
-		if !wireObject(raw) {
-			return fmt.Errorf("an entry is %s, not an object", wireKind(raw))
-		}
-		var entry struct {
-			ID json.RawMessage `json:"id"`
-		}
-		if err := wireDecode(raw, &entry); err != nil {
-			return fmt.Errorf("an entry: %w", err)
-		}
-		id, err := wireRequiredString("id", entry.ID)
-		if err != nil {
-			return err
-		}
+	// REPLAYED, THEN ANSWERED: every entry before one its rule refuses, in
+	// order, then that entry's error, as a walk of the list hands them.
+	for _, id := range b.ids {
 		each(id)
-		return nil
-	}); err != nil {
-		return false, fmt.Errorf("batchToolUses: %w", err)
+	}
+	if b.err != nil {
+		return false, fmt.Errorf("batchToolUses: %w", b.err)
 	}
 	return true, nil
 }
@@ -2386,11 +2312,12 @@ func (l threadLine) Checkpoint() (leaf string, marked bool, err error) {
 	if l.Head.Type != recordLastPrompt {
 		return "", false, nil
 	}
-	marked = bytes.Equal(l.explicit, jsonTrue) || bytes.Equal(l.rewound, jsonTrue)
-	if l.leafUUID == nil || bytes.Equal(l.leafUUID, jsonNull) {
+	f := l.facts()
+	marked = bytes.Equal(f.explicit, jsonTrue) || bytes.Equal(f.rewound, jsonTrue)
+	if f.leafUUID == nil || bytes.Equal(f.leafUUID, jsonNull) {
 		return "", marked, nil
 	}
-	leaf, err = wireRequiredString("leafUuid", l.leafUUID)
+	leaf, err = wireRequiredString("leafUuid", f.leafUUID)
 	return leaf, marked, err
 }
 
@@ -2417,11 +2344,12 @@ var jsonTrue = []byte("true")
 // present, and anything else this accessor's error, as it is Checkpoint's, so
 // the one key reads alike through both.
 func (l threadLine) LeafKeyed() (bool, error) {
-	if l.Head.Type != recordLastPrompt || l.leafUUID == nil {
+	leaf := l.facts().leafUUID
+	if l.Head.Type != recordLastPrompt || leaf == nil {
 		return false, nil
 	}
-	if !bytes.Equal(l.leafUUID, jsonNull) && l.leafUUID[0] != '"' {
-		return false, fmt.Errorf("leafUuid is %s, neither a string nor null", wireKind(l.leafUUID))
+	if !bytes.Equal(leaf, jsonNull) && leaf[0] != '"' {
+		return false, fmt.Errorf("leafUuid is %s, neither a string nor null", wireKind(leaf))
 	}
 	return true, nil
 }
@@ -2442,21 +2370,20 @@ func (l threadLine) LeafKeyed() (bool, error) {
 // "fork_briefing"`) reads every such attachment as none, and so may its
 // reader.
 //
-// Decoded from the line's raw `attachment` on each call: nothing keeps it.
+// Read off the attachment's own keys as written, which the line's one decode
+// keeps ([factsOf]), never a second read of the line.
 func (l threadLine) AttachmentType() (string, error) {
-	if l.Head.Type != recordAttachment || l.attachment == nil {
+	a := &l.facts().attachment
+	if l.Head.Type != recordAttachment || a.kind == 0 {
 		return "", nil
 	}
-	if !wireObject(l.attachment) {
-		return "", fmt.Errorf("an attachment record's attachment is %s, not an object", wireKind(l.attachment))
+	if a.kind != '{' {
+		return "", fmt.Errorf("an attachment record's attachment is %s, not an object", a.kind)
 	}
-	var a struct {
-		Type json.RawMessage `json:"type"`
+	if a.err != nil {
+		return "", fmt.Errorf("an attachment: %w", a.err)
 	}
-	if err := wireDecode(l.attachment, &a); err != nil {
-		return "", fmt.Errorf("an attachment: %w", err)
-	}
-	return wireString("attachment.type", a.Type)
+	return wireString("attachment.type", a.typ)
 }
 
 // ReplacedResults hands each, in order, the id of every tool result a
@@ -2490,34 +2417,24 @@ func (l threadLine) AttachmentType() (string, error) {
 // passed over, as the harness's resume passes it over, and the preview itself
 // is never read.
 //
-// Read off the line's one decode, its raw `replacements`, never a second read
-// of the line.
+// Read once, as the line is decoded ([factsOf]), off its raw `replacements`
+// there: never a second read of the line, and a reader that asks again is
+// handed what that reading held.
 func (l threadLine) ReplacedResults(each func(id string)) error {
 	if l.Head.Type != recordContentReplacement {
 		return nil
 	}
-	return eachElement(l.replacements, func(raw json.RawMessage, _ int) error {
-		if !wireObject(raw) {
-			return fmt.Errorf("a replacement is %s, not an object", wireKind(raw))
-		}
-		var entry struct {
-			Kind      json.RawMessage `json:"kind"`
-			ToolUseID json.RawMessage `json:"toolUseId"`
-		}
-		if err := wireDecode(raw, &entry); err != nil {
-			return fmt.Errorf("a replacement: %w", err)
-		}
-		kind, err := wireRequiredString("replacements.kind", entry.Kind)
-		if err != nil || kind != replacementToolResult {
-			return err
-		}
-		id, err := wireRequiredString("replacements.toolUseId", entry.ToolUseID)
-		if err != nil {
-			return err
-		}
+	// REPLAYED, THEN ANSWERED: every result replaced before an entry its rule
+	// refuses, in order, then that entry's error, as a walk of the list hands
+	// them.
+	r := &l.facts().replacements
+	if err := r.list(); err != nil {
+		return err
+	}
+	for _, id := range r.ids {
 		each(id)
-		return nil
-	})
+	}
+	return r.err
 }
 
 // ReplacementCount is how many entries a content-replacement record's
@@ -2543,20 +2460,18 @@ func (l threadLine) ReplacedResults(each func(id string)) error {
 // element counted whatever it is. Anything else, a string among it, is this
 // accessor's error, never the line's.
 //
-// Read off the line's one decode, its raw `replacements`, never a second read
-// of the line.
+// Read once, as the line is decoded ([factsOf]), off its raw `replacements`
+// there: never a second read of the line, and a reader that asks again is
+// handed what that reading held.
 func (l threadLine) ReplacementCount() (int, error) {
 	if l.Head.Type != recordContentReplacement {
 		return 0, nil
 	}
-	n := 0
-	if err := eachElement(l.replacements, func(json.RawMessage, int) error {
-		n++
-		return nil
-	}); err != nil {
+	r := &l.facts().replacements
+	if err := r.list(); err != nil {
 		return 0, fmt.Errorf("replacements: %w", err)
 	}
-	return n, nil
+	return r.count, nil
 }
 
 // Retracted hands each, in order and as written, every entry of a record's
@@ -2596,47 +2511,110 @@ func (l threadLine) ReplacementCount() (int, error) {
 // as not whole, since what the subagent's model was handed there is not what
 // its file holds.
 //
+// WHAT IT HANDS ITS READERS: how many entries the list holds, and the first 24
+// characters of each entry that begins with a canonical uuid's ([chainPrefix]),
+// in order: what each reader reads of it, the resume's model the prefixes and
+// the reading of a subagent's thread whether it lists any entry. An entry of
+// fewer characters, or that begins otherwise, is counted and names no prefix,
+// since every record the model files carries a lowercase canonical uuid. AT
+// MOST [threadChainMaxRecords] PREFIXES ARE HELD: past them the list says so
+// ([threadRetracted.Prefixes]) and holds no more, still counting and checking
+// every entry after them. No reader reads past them, since the model refuses a
+// list past the room its records leave, which is below that bound.
+//
 // HELD TO ITS SHAPE HERE, AND HERE ALONE, as a key one reader reads is: a
 // list of strings where present, walked an element at a time ([eachElement]).
 // Anything else, null and an entry that is no string among it, is this
-// accessor's error, never the line's. No release's resume throws on such a
-// list: each one's load repairs a refusal's fallback before its filter reads
-// it, keeping a list's strings and dropping a value that is no list (2.1.322's
-// UWt @293630140 through M2 @293633304, 2.1.310's cPt @247026592 through m1
-// @247029756), and 2.1.322's filter reads a user's or an assistant's list for
-// its strings alone, and a value that is no list as none (eGe @295286851).
+// accessor's error, never the line's, handed with what the list held before
+// it: the entries before an entry that is no string, counted and their
+// prefixes held, as a reader that walks the list would have read them first.
+// No release's resume throws on such a list: each one's load repairs a
+// refusal's fallback before its filter reads it, keeping a list's strings and
+// dropping a value that is no list (2.1.322's UWt @293630140 through M2
+// @293633304, 2.1.310's cPt @247026592 through m1 @247029756), and 2.1.322's
+// filter reads a user's or an assistant's list for its strings alone, and a
+// value that is no list as none (eGe @295286851).
 // The error is conservative: its readers refuse a list the harness wrote in
 // no shape it writes rather than follow it through those repairs, and no
-// thread the probes kept holds one. An error each returns ends the walk and
-// is returned as it is.
+// thread the probes kept holds one.
 //
-// Read off the line's one decode, its raw `retractedMessageUuids`, never a
-// second read of the line.
-func (l threadLine) Retracted(each func(uuid string) error) error {
+// Read once, as the line is decoded ([factsOf]), off its raw
+// `retractedMessageUuids` there: never a second read of the line, and a
+// reader that asks again is handed what that reading held.
+func (l threadLine) Retracted() (threadRetracted, error) {
 	switch {
-	case l.retracted == nil:
-		return nil
 	case l.Head.Type == recordUser, l.Head.Type == recordAssistant:
 	case l.Head.Type == recordSystem && l.Head.Subtype == subtypeRefusalFallback:
 	default:
-		return nil
+		return threadRetracted{}, nil
 	}
-	var refused error
-	err := eachElement(l.retracted, func(raw json.RawMessage, _ int) error {
-		uuid, err := wireRequiredString("an entry", raw)
-		if err != nil {
-			return err
+	f := l.facts()
+	return f.retracted, f.retractedErr
+}
+
+// threadRetracted is what a record's retraction list names
+// ([threadLine.Retracted]).
+type threadRetracted struct {
+	// Entries is how many entries the list holds, each string counted
+	// whatever it names, up to an entry that is no string.
+	Entries int
+	// prefixes is the canonical prefix of each entry that begins with one
+	// ([chainPrefix]), in order, at most [threadChainMaxRecords]; more
+	// whether an entry past those began with one too.
+	prefixes [][chainPrefixBytes]byte
+	more     bool
+}
+
+// Prefixes is the first 24 characters of each entry that begins with a
+// canonical uuid's, as [chainPrefix] reads them, in order; all false where the
+// list names more than [threadChainMaxRecords] such, of which held is the
+// first [threadChainMaxRecords].
+func (r threadRetracted) Prefixes() (held [][chainPrefixBytes]byte, all bool) {
+	return r.prefixes, !r.more
+}
+
+// entry reads the list's next entry, a string: counted, and its canonical
+// prefix held where it begins with one, while fewer than
+// [threadChainMaxRecords] are held ([threadLine.Retracted]).
+func (r *threadRetracted) entry(s string) {
+	r.Entries++
+	if p, ok := chainPrefix(s); ok {
+		if len(r.prefixes) == threadChainMaxRecords {
+			r.more = true
+		} else {
+			r.prefixes = append(r.prefixes, p)
 		}
-		refused = each(uuid)
-		return refused
-	})
-	switch {
-	case err == nil:
-		return nil
-	case refused != nil:
-		return refused
 	}
-	return fmt.Errorf("retractedMessageUuids: %w", err)
+}
+
+// replacedID is the rule of an entry of a content-replacement record's list
+// ([threadLine.ReplacedResults]), kind the entry's kind and entryKind and
+// toolUseID its `kind` and `toolUseId` as written: an object whose `kind` is
+// a string and, where that is "tool-result", whose `toolUseId` is a string,
+// the id of the result it replaces; replaced false for an entry of another
+// kind, which no reader reads.
+func replacedID(kind valueKind, entryKind, toolUseID json.RawMessage) (id string, replaced bool, err error) {
+	if kind != '{' {
+		return "", false, fmt.Errorf("a replacement is %s, not an object", kind)
+	}
+	k, err := wireRequiredString("replacements.kind", entryKind)
+	if err != nil || k != replacementToolResult {
+		return "", false, err
+	}
+	if id, err = wireRequiredString("replacements.toolUseId", toolUseID); err != nil {
+		return "", false, err
+	}
+	return id, true, nil
+}
+
+// batchEntryID is the rule of an entry of an assistant record's
+// `batchToolUses` ([threadLine.BatchToolUses]), kind the entry's kind and id
+// its `id` as written: an object whose `id` is a string.
+func batchEntryID(kind valueKind, id json.RawMessage) (string, error) {
+	if kind != '{' {
+		return "", fmt.Errorf("an entry is %s, not an object", kind)
+	}
+	return wireRequiredString("id", id)
 }
 
 // AttachmentWellFormed reports whether Claude Code's resume keeps an
@@ -2682,164 +2660,86 @@ func (l threadLine) Retracted(each func(uuid string) error) error {
 // Read the same way, a name the layer counts at or under the bound is under
 // it to the harness too.
 //
-// Decoded from the line's raw `attachment` on each call, each list walked an
-// element at a time ([eachElement]): nothing keeps it.
+// Read once, as the line is decoded ([factsOf]), each list walked an element
+// at a time ([eachElement]), and every rule's answer kept, so the accessor
+// picks by the attachment's type: never a second read of the line.
 func (l threadLine) AttachmentWellFormed() (bool, error) {
 	if l.Head.Type != recordAttachment {
 		return true, nil
 	}
-	if !wireObject(l.attachment) {
+	a := &l.facts().attachment
+	if a.kind != '{' {
 		return false, nil
 	}
-	var a struct {
-		Type    json.RawMessage `json:"type"`
-		Skills  json.RawMessage `json:"skills"`
-		Content json.RawMessage `json:"content"`
-		Names   json.RawMessage `json:"names"`
-		By      json.RawMessage `json:"by"`
-		Entries json.RawMessage `json:"entries"`
-	}
-	if err := wireDecode(l.attachment, &a); err != nil {
-		return false, fmt.Errorf("an attachment: %w", err)
+	if a.err != nil {
+		return false, fmt.Errorf("an attachment: %w", a.err)
 	}
 	// A payload of no type, or of one that is no string, is one the drop
 	// takes: an answer, never an error. A string the decode cannot read is the
 	// layer's own failure, and its error.
-	if len(a.Type) == 0 || a.Type[0] != '"' {
+	if kindOfValue(a.typ) != '"' {
 		return false, nil
 	}
-	kind, err := wireRequiredString("type", a.Type)
+	kind, err := wireRequiredString("type", a.typ)
 	if err != nil {
 		return false, fmt.Errorf("an attachment: %w", err)
 	}
 	switch kind {
 	case attachmentInvokedSkills:
-		return everyElement(a.Skills, func(raw json.RawMessage) bool { return raw[0] == '{' || raw[0] == '[' }), nil
+		return a.skillsShaped, nil
 	case hookSuccess:
-		return len(a.Content) > 0 && a.Content[0] == '"', nil
+		return a.content == '"', nil
 	case attachmentSkillListing:
-		return skillNamesKept(a.Names)
+		return a.namesKept, a.namesErr
 	case hookAdditionalContext:
-		return everyElement(a.Content, func(raw json.RawMessage) bool { return raw[0] == '"' }), nil
+		return a.contentStrings, nil
 	case attachmentTaskReminder, attachmentTodoReminder:
-		return everyElement(a.Content, wireObject), nil
+		return a.contentObjects, nil
 	case attachmentFile, attachmentAlreadyRead:
-		return wireObject(a.Content), nil
+		return a.content == '{', nil
 	case attachmentWithheldMemory:
-		by, byErr := wireRequiredString("by", a.By)
-		return byErr == nil && by != "" && everyElement(a.Entries, withheldEntryKept), nil
+		by, byErr := wireRequiredString("by", a.by)
+		return byErr == nil && by != "" && a.entriesKept, nil
 	}
 	return true, nil
 }
 
-// errNotEvery stops a walk of a list at its first element a test refuses
-// ([everyElement]).
-var errNotEvery = errors.New("an element fails its test")
-
-// everyElement reports whether raw is a list, and every element of it passes
-// keep, as JavaScript's Array.isArray and every() read one: a list of none
-// passes. Walked an element at a time ([eachElement]), stopping at the
-// first that fails, so a long list costs its reader one element at a time.
-func everyElement(raw json.RawMessage, keep func(element json.RawMessage) bool) bool {
-	if len(raw) == 0 || raw[0] != '[' {
+// withheldKept reports whether an entry of a withheld_memory attachment is of
+// the shape Claude Code's resume keeps the attachment with
+// ([threadLine.AttachmentWellFormed]), kind the entry's kind, path and
+// displayPath the kinds of its `path` and `displayPath`, why its `why` as
+// written: an object whose `path` and `displayPath` are strings and whose
+// `why` is one of "denied", "outside", "unjudged" and "unsettled".
+func withheldKept(kind, path valueKind, why json.RawMessage, displayPath valueKind) bool {
+	if kind != '{' || path != '"' || displayPath != '"' {
 		return false
 	}
-	return eachElement(raw, func(element json.RawMessage, _ int) error {
-		if !keep(element) {
-			return errNotEvery
-		}
-		return nil
-	}) == nil
-}
-
-// withheldEntryKept reports whether entry, one of a withheld_memory
-// attachment's entries, is of the shape Claude Code's resume keeps the
-// attachment with ([threadLine.AttachmentWellFormed]).
-func withheldEntryKept(entry json.RawMessage) bool {
-	if !wireObject(entry) {
-		return false
-	}
-	var e struct {
-		Path        json.RawMessage `json:"path"`
-		Why         json.RawMessage `json:"why"`
-		DisplayPath json.RawMessage `json:"displayPath"`
-	}
-	if wireDecode(entry, &e) != nil {
-		return false
-	}
-	why, err := wireRequiredString("why", e.Why)
+	w, err := wireRequiredString("why", why)
 	if err != nil {
 		return false
 	}
-	switch why {
+	switch w {
 	case "denied", "outside", "unjudged", "unsettled":
-	default:
-		return false
+		return true
 	}
-	return len(e.Path) > 0 && e.Path[0] == '"' && len(e.DisplayPath) > 0 && e.DisplayPath[0] == '"'
+	return false
 }
 
-// skillNamesKept reports whether names, a skill_listing attachment's raw
-// `names`, is of the shape Claude Code's resume keeps the attachment with:
-// absent, or a list of at most [skillListingMaxNames] strings, each at most
-// [skillListingMaxNameUnits] UTF-16 code units long, its length checked
-// before its names, as the harness checks them. An error where the answer
-// turns on a name the layer cannot count as the harness does
-// ([threadLine.AttachmentWellFormed]).
-func skillNamesKept(names json.RawMessage) (bool, error) {
-	if names == nil {
-		return true, nil
+// skillNameKept is the rule of one of a skill listing's names
+// ([skillNamesKept]), units its length in UTF-16 code units as the layer's
+// decode reads it and valid whether its bytes as written are UTF-8: kept
+// where it is at most [skillListingMaxNameUnits] units long; and kept but
+// unreadable where it is longer and holds a byte that is no UTF-8, which the
+// decode reads as one U+FFFD where the harness's read of its file can read
+// several as one, so no reader can say whether it is under the bound.
+func skillNameKept(units int, valid bool) (kept, unreadable bool) {
+	switch {
+	case units <= skillListingMaxNameUnits:
+		return true, false
+	case !valid:
+		return true, true
 	}
-	if names[0] != '[' {
-		return false, nil
-	}
-	var (
-		count      int
-		unreadable bool
-		unquoted   []byte
-	)
-	kept := eachElement(names, func(name json.RawMessage, _ int) error {
-		count++
-		if count > skillListingMaxNames || name[0] != '"' {
-			return errNotEvery
-		}
-		// Read whole with its line, the name unquotes with no error but a lone
-		// surrogate's or invalid UTF-8's, each written as U+FFFD, as the
-		// layer's decode reads it.
-		unquoted, _ = jsontext.AppendUnquote(unquoted[:0], name)
-		if utf16Units(unquoted) <= skillListingMaxNameUnits {
-			return nil
-		}
-		if !utf8.Valid(name) {
-			unreadable = true
-			return nil
-		}
-		return errNotEvery
-	}) == nil
-	if !kept {
-		return false, nil
-	}
-	if unreadable {
-		return false, errors.New("a skill's name holds a byte that is no UTF-8, so its length in UTF-16 code units " +
-			"is not one the layer can count as Claude Code does")
-	}
-	return true, nil
-}
-
-// utf16Units is how many UTF-16 code units JavaScript counts the string text,
-// UTF-8 as the layer's decode leaves it, as long: two for a rune past the
-// basic plane, one for every other.
-func utf16Units(text []byte) int {
-	units := 0
-	for len(text) > 0 {
-		r, size := utf8.DecodeRune(text)
-		units++
-		if r > 0xffff {
-			units++
-		}
-		text = text[size:]
-	}
-	return units
+	return false, false
 }
 
 // threadPreserved is what a compaction's boundary says it kept of the thread
@@ -2857,19 +2757,43 @@ type threadPreserved struct {
 	Named bool
 	// Kept is whether it says it kept records, and Anchor names the record
 	// they hang from. Segment is whether it names them as a segment, from
-	// Tail up to Head by parent; else it lists them, each handed to
-	// Preserved's each.
+	// Tail up to Head by parent; else it lists them.
 	Kept       bool
 	Anchor     string
 	Segment    bool
 	Head, Tail string
+	// Listed is how many entries its list holds, each counted whether it is
+	// a canonical uuid or not; none for a segment. UUIDs is each entry that
+	// is a canonical uuid ([uuidBytes]), in order, at most
+	// [threadChainMaxRecords] of them, More whether an entry past those was
+	// one too; and Nowhere whether an entry is none, a record no chain the
+	// model files carries.
+	Listed  int
+	UUIDs   [][16]byte
+	More    bool
+	Nowhere bool
+}
+
+// list reads the list's next entry, a string: counted; held where it is a
+// canonical uuid ([uuidBytes]), while fewer than [threadChainMaxRecords] are
+// held, and More set where one is past them; Nowhere set where it is none
+// ([threadLine.Preserved]).
+func (p *threadPreserved) list(entry string) {
+	p.Listed++
+	switch u, ok := uuidBytes(entry); {
+	case !ok:
+		p.Nowhere = true
+	case len(p.UUIDs) == threadChainMaxRecords:
+		p.More = true
+	default:
+		p.UUIDs = append(p.UUIDs, u)
+	}
 }
 
 // Preserved is what a compact_boundary record says its compaction kept of the
-// thread before it, handing each record it lists, by uuid and in order, to
-// each. Nothing, and no error, where the record carries no
-// `compactMetadata`, or null, or keeps nothing, and on every record of
-// another type or subtype.
+// thread before it, each record it lists by uuid, in order. Nothing, and no
+// error, where the record carries no `compactMetadata`, or null, or keeps
+// nothing, and on every record of another type or subtype.
 //
 // WHAT THE RECORD SAYS, as 2.1.310 and 2.1.322 write and read it. A
 // compaction that kept the last stretch of the conversation before it names
@@ -2909,73 +2833,37 @@ type threadPreserved struct {
 // 2.1.310's _po @247129357). The error is conservative: its readers refuse a
 // boundary the harness wrote in no shape it writes rather than follow it
 // through those repairs, and each boundary the probes kept is of its shape.
-// An error each returns ends the walk and is returned as it is.
+// AN ERROR IS HANDED WITH WHAT THE LIST HELD BEFORE IT, in the order the
+// shapes are checked (the metadata's kind, the list's, its anchor, its
+// `uuids`' kind, then each entry): the entries before the first that is no
+// string, counted and their uuids held, as a reader that walks the list reads
+// them first, and none where the error comes before the list. AT MOST
+// [threadChainMaxRecords] UUIDS ARE HELD: past them More says so and no more
+// is held, every entry after still counted and checked. No reader reads past
+// them, since the model refuses a list past the room its records leave, which
+// is below that bound.
 //
-// Read off the line's one decode, its raw `compactMetadata`, never a second
-// read of the line.
-func (l threadLine) Preserved(each func(uuid string) error) (threadPreserved, error) {
-	if l.Head.Type != recordSystem || l.Head.Subtype != subtypeCompactBoundary || l.compactMetadata == nil ||
-		bytes.Equal(l.compactMetadata, jsonNull) {
+// Read once, as the line is decoded ([factsOf]), off its raw `compactMetadata`
+// there: never a second read of the line, and a reader that asks again is
+// handed what that reading held.
+func (l threadLine) Preserved() (threadPreserved, error) {
+	if l.Head.Type != recordSystem || l.Head.Subtype != subtypeCompactBoundary {
 		return threadPreserved{}, nil
 	}
-	if !wireObject(l.compactMetadata) {
-		return threadPreserved{}, fmt.Errorf("compactMetadata is %s, not an object", wireKind(l.compactMetadata))
-	}
-	var meta struct {
-		Messages json.RawMessage `json:"preservedMessages"`
-		Segment  json.RawMessage `json:"preservedSegment"`
-	}
-	if err := wireDecode(l.compactMetadata, &meta); err != nil {
-		return threadPreserved{}, fmt.Errorf("compactMetadata: %w", err)
-	}
+	c := &l.facts().compacted
 	switch {
-	case meta.Messages != nil && !bytes.Equal(meta.Messages, jsonNull):
-		return preservedList(meta.Messages, each)
-	case meta.Segment != nil && !bytes.Equal(meta.Segment, jsonNull):
-		return preservedSegment(meta.Segment)
+	case c.kind == 0 || c.kind == 'n':
+		return threadPreserved{}, nil
+	case c.kind != '{':
+		return threadPreserved{}, fmt.Errorf("compactMetadata is %s, not an object", c.kind)
+	case c.err != nil:
+		return threadPreserved{}, fmt.Errorf("compactMetadata: %w", c.err)
+	case c.messages != 0 && c.messages != 'n':
+		return c.list, c.listErr
+	case c.segment != nil && !bytes.Equal(c.segment, jsonNull):
+		return preservedSegment(c.segment)
 	}
 	return threadPreserved{}, nil
-}
-
-// preservedList is what a compaction's `preservedMessages`, raw, says it kept
-// ([threadLine.Preserved]), each listed uuid handed to each: named whatever it
-// lists, and kept where it lists any, since a resume relinks by a list of none
-// no record, and still drops by it every record before the last boundary.
-func preservedList(raw json.RawMessage, each func(uuid string) error) (threadPreserved, error) {
-	if !wireObject(raw) {
-		return threadPreserved{}, fmt.Errorf("compactMetadata.preservedMessages is %s, not an object", wireKind(raw))
-	}
-	var list struct {
-		Anchor json.RawMessage `json:"anchorUuid"`
-		UUIDs  json.RawMessage `json:"uuids"`
-	}
-	if err := wireDecode(raw, &list); err != nil {
-		return threadPreserved{}, fmt.Errorf("compactMetadata.preservedMessages: %w", err)
-	}
-	anchor, err := wireRequiredString("preservedMessages.anchorUuid", list.Anchor)
-	if err != nil {
-		return threadPreserved{}, err
-	}
-	var (
-		listed  int
-		refused error
-	)
-	err = eachElement(list.UUIDs, func(element json.RawMessage, _ int) error {
-		uuid, entryErr := wireRequiredString("an entry", element)
-		if entryErr != nil {
-			return entryErr
-		}
-		listed++
-		refused = each(uuid)
-		return refused
-	})
-	switch {
-	case err == nil:
-		return threadPreserved{Named: true, Kept: listed > 0, Anchor: anchor}, nil
-	case refused != nil:
-		return threadPreserved{}, refused
-	}
-	return threadPreserved{}, fmt.Errorf("compactMetadata.preservedMessages.uuids: %w", err)
 }
 
 // preservedSegment is what a compaction's `preservedSegment`, raw, says it
@@ -3076,39 +2964,32 @@ type threadUsage struct {
 // every reply, usage or not. Which reply counts, and what "<synthetic>" or an
 // empty ID means, are its reader's to judge, never this accessor's.
 //
-// Read off the line's one decode, its raw `message`, never a second read of
-// the line.
+// Read off the message's own keys as written, which the line's one decode
+// keeps ([factsOf]), never a second read of the line.
 func (l threadLine) Usage() (threadUsage, bool, error) {
 	if l.Head.Type != recordAssistant {
 		return threadUsage{}, false, nil
 	}
-	// HELD TO AN OBJECT BEFORE IT IS DECODED: a null decodes into a struct as
-	// nothing at all, and would read as a reply that names no usage.
-	if !wireObject(l.message) {
-		return threadUsage{}, false, fmt.Errorf("an assistant record's message is %s, not an object", wireKind(l.message))
-	}
-	var message struct {
-		ID    json.RawMessage `json:"id"`
-		Model json.RawMessage `json:"model"`
-		Usage json.RawMessage `json:"usage"`
-	}
-	if err := wireDecode(l.message, &message); err != nil {
-		return threadUsage{}, false, fmt.Errorf("an assistant record's message: %w", err)
+	// HELD TO AN OBJECT BEFORE IT IS READ: a null holds no key at all, and
+	// would read as a reply that names no usage.
+	m := &l.facts().message
+	if err := m.object("an assistant record"); err != nil {
+		return threadUsage{}, false, err
 	}
 	var (
 		u   threadUsage
 		err error
 	)
-	if u.ID, err = wireString("id", message.ID); err != nil {
+	if u.ID, err = wireString("id", m.id); err != nil {
 		return threadUsage{}, false, err
 	}
-	if u.Model, err = wireString("model", message.Model); err != nil {
+	if u.Model, err = wireString("model", m.model); err != nil {
 		return threadUsage{}, false, err
 	}
-	if message.Usage == nil {
+	if m.usage == nil {
 		return u, false, nil
 	}
-	if err = readUsage(message.Usage, &u); err != nil {
+	if err = readUsage(m.usage, &u); err != nil {
 		return threadUsage{}, false, err
 	}
 	return u, true, nil
@@ -3327,24 +3208,19 @@ func wholeIteration(entry []byte) ([4]float64, bool) {
 // cleared state Claude Code counts the cleared tokens back into the count it
 // compacts by, which no line of the thread states.
 //
-// Read off the line's one decode, its raw `message`, never a second read of
-// the line.
+// Read off the message's own keys as written, which the line's one decode
+// keeps ([factsOf]), never a second read of the line.
 func (l threadLine) ToolResultsCleared() (bool, error) {
 	if l.Head.Type != recordAssistant {
 		return false, nil
 	}
-	// HELD TO AN OBJECT BEFORE IT IS DECODED: a null decodes into a struct as
-	// nothing at all, and would read as a message that reports no edit.
-	if !wireObject(l.message) {
-		return false, fmt.Errorf("an assistant record's message is %s, not an object", wireKind(l.message))
+	// HELD TO AN OBJECT BEFORE IT IS READ: a null holds no key at all, and
+	// would read as a message that reports no edit.
+	m := &l.facts().message
+	if err := m.object("an assistant record"); err != nil {
+		return false, err
 	}
-	var message struct {
-		ContextManagement json.RawMessage `json:"context_management"`
-	}
-	if err := wireDecode(l.message, &message); err != nil {
-		return false, fmt.Errorf("an assistant record's message: %w", err)
-	}
-	report := message.ContextManagement
+	report := m.contextManagement
 	switch {
 	case report == nil || bytes.Equal(report, jsonNull):
 		return false, nil

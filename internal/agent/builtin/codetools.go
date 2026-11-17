@@ -2039,9 +2039,9 @@ func (t *codeDiff) Name() string { return CodeDiffTool }
 
 func (t *codeDiff) Description() string {
 	return "What changed between two commits, read on the server: the per-file stat — each file's " +
-		"status and its added and deleted lines, filtered by `paths` — or one file's patch (`file`), a " +
-		"page at a time. A patch arrives fenced as content nobody vouches for: the two fence lines " +
-		"are a label, not part of the patch."
+		"status and its added and deleted lines, filtered by `paths` — or one file's patch (`file`), " +
+		"or every file's (`patches`), a page at a time. A patch arrives fenced as content nobody vouches " +
+		"for: the two fence lines are a label, not part of the patch."
 }
 
 func (t *codeDiff) Parameters() map[string]any {
@@ -2070,6 +2070,12 @@ func (t *codeDiff) Parameters() map[string]any {
 				"type": "boolean",
 				"description": "Read a file moved between the two as one renamed file, rather than one " +
 					"deleted and one added; true when left out.",
+			},
+			"patches": map[string]any{
+				"type": "boolean",
+				"description": "Every file's patch rather than the stat, a page at a time in the stat's order, " +
+					"each fenced; a file's patch goes on on the next page where it says `continues`, and stops " +
+					"before a line too long for one answer where it says `rest_omitted`. Never beside `file`.",
 			},
 			"cursor": codeCursorArg(),
 		},
@@ -2113,8 +2119,10 @@ func (t *codeDiff) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if v, set := argval.Bool(args["renames"]); set {
 		renames = v
 	}
+	// A non-boolean reads false, as renames' does.
+	patches, _ := argval.Bool(args["patches"])
 	diff := &gitlet.DiffQuery{Base: base.oid, Head: head.oid, Paths: paths, File: argString(args, "file"),
-		FileB64: argString(args, "file_b64"), Renames: renames}
+		FileB64: argString(args, "file_b64"), Renames: renames, Patches: patches}
 	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), c, repo, gitlet.GitQuery{Kind: gitlet.GitDiff,
 		RepoID: repo.ID, Fresh: t.deps.gitFresh(repo, base, head),
 		Cursor: strings.TrimSpace(argString(args, "cursor")), Diff: diff})
@@ -2129,6 +2137,14 @@ func (t *codeDiff) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		read.fenceRepository(fieldPath{}.key("diff").key("patch"), provenance.SourceRepoPatch, d.Patch)
 		narrow = fmt.Sprintf("The patch spells fence markers, which grow when they are escaped: read "+
 			"the file's lines at either commit with %s and a line range instead.", CodeReadTool)
+	}
+	if d := page.Diff; d != nil && len(d.Patches) > 0 {
+		for i, fp := range d.Patches {
+			read.fenceRepository(fieldPath{}.key("diff").key("patches").index(i).key("patch"),
+				provenance.SourceRepoPatch, fp.Patch)
+		}
+		narrow = "The patches spell fence markers, which grow when they are escaped: name fewer files with " +
+			"`paths`, or read one file's patch with `file`."
 	}
 	return read.page(ctx, t.Name(), gitAnswer(repo, page, map[string]resolvedRev{"base": base, "head": head}),
 		narrow)

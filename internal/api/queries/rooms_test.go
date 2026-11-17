@@ -540,21 +540,12 @@ var readOutsideTheDashboard = map[string]string{
 	// prints.
 	"work_inbox": "a script: GET /worklet/inbox, as docs/reference/api-endpoints.md prints it, and Worklet's " +
 		"own tool work_inbox",
-	// A HISTORY PAGE'S MARKS, answered ahead of the rooms that draw them: until
-	// the first reads it, a script reads the reference's path.
-	"code_commit_marks": "a script: GET /gitlet/repos/{name}/commit-marks, as docs/reference/api-endpoints.md " +
-		"prints it",
 	// GITLET'S SECTION COUNTS, answered ahead of the tabs that draw them: until the first reads it, a script
 	// reads the reference's path.
 	"code_counts": "a script: GET /gitlet/counts, as docs/reference/api-endpoints.md prints it",
-	// MANY TIPS AT ONCE, answered ahead of the Branches and Tags screens that
-	// draw them: until the first reads it, a script reads the reference's path.
-	"code_tips": "a script: GET /gitlet/repos/{name}/tips, as docs/reference/api-endpoints.md prints it",
 	// A DIRECTORY'S LAST COMMITS: the first room that reads them deletes this line.
 	"code_tree_commits": "a script: GET /gitlet/repos/{name}/tree-commits, as docs/reference/api-endpoints.md " +
 		"prints it",
-	// TAGS BY THEIR DATE, answered ahead of the screens that draw them.
-	"code_tags": "a script: GET /gitlet/repos/{name}/tags, as docs/reference/api-endpoints.md prints it",
 }
 
 // AND THE SWEEP ITSELF CANNOT GO QUIET.

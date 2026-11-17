@@ -466,37 +466,141 @@ for (const width of [1440, 390]) {
   });
 }
 
-// A BRANCH'S CHIP KEEPS ITS NAME ON ONE LINE on the phone, its tags wrapping
-// under it. Mutation: drop `.code-ref`'s `flex-wrap`, and a protected `main`
-// stands one letter a line.
-test("a branch's chip keeps its name on one line at 390px", async () => {
-  await page.viewport(390, 900);
+/** A 120-character branch name, which has to wrap inside its row. */
+const LONG_BRANCH = "frontend/".padEnd(120, "stream-the-shell-");
+
+/** The repository's branches in detail: a protected main, a long name with its change, a protected release. */
+function withBranches() {
+  const row = (name: string, extra: Record<string, unknown>) => ({
+    ref: `refs/heads/${name}`,
+    oid: HEAD,
+    position: POSITION,
+    moved_at: "2026-11-15T10:00:00Z",
+    moved_by: {
+      push_id: "p1",
+      actor: "jane",
+      actor_kind: "person",
+      actor_seat: "jane",
+      via: "git",
+    },
+    ...extra,
+  });
+  const rule = (pattern: string) => ({ patterns: [pattern], direct_push: "none" });
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), location.origin);
-      if (url.pathname !== "/query/code_repo") return answer(url);
-      const read = (await answer(url).json()) as { repo: Record<string, unknown> };
+      if (url.pathname === "/query/code_tips") {
+        const oids = (url.searchParams.get("oids") ?? "").split(",");
+        return json({
+          repo: "web",
+          kind: "tips",
+          tips: {
+            base: BASE,
+            tips: oids.map((oid) => ({
+              oid,
+              type: "commit",
+              peeled: oid,
+              peeled_type: "commit",
+              behind: 12,
+              ahead: 3,
+            })),
+          },
+        });
+      }
+      if (url.pathname !== "/query/code_refs" || url.searchParams.get("detail") !== "true") {
+        return answer(url);
+      }
       return json({
-        ...read,
-        repo: { ...read.repo, protections: [{ pattern: "refs/heads/main" }] },
+        refs_detail: [
+          row("main", {
+            oid: BASE,
+            protection: rule("refs/heads/main"),
+            delete_refusal: "default_branch",
+            delete_detail: "main is web's default branch",
+          }),
+          row(LONG_BRANCH, {
+            change: { number: 42, title: "Stream the shell", state: "open" },
+            may_delete: true,
+          }),
+          row("release/2026.11", {
+            protection: rule("refs/heads/release/*"),
+            delete_refusal: "protected_delete",
+            delete_detail: "release/2026.11 is protected: its rule refuses a delete",
+          }),
+        ],
+        position: POSITION,
+        level: "session",
       });
     }),
   );
-  location.hash = "#/gitlet/repos/web?tab=branches";
-  // The shell's column inside a phone's viewport.
-  mount(<RepositoryPage repo="web" />, 358);
-  const chips = await eventually(() => {
-    const found = [...document.querySelectorAll<HTMLElement>(".code-ref .code-branch-chip")];
-    expect(found.map((c) => c.textContent)).toEqual(["feature", "main"]);
-    expect(found[1]!.closest(".code-ref")?.textContent).toBe("maindefaultprotected");
-    return found;
+}
+
+const overlaps = (a: DOMRect, b: DOMRect) =>
+  a.left < b.right - 0.5 &&
+  b.left < a.right - 0.5 &&
+  a.top < b.bottom - 0.5 &&
+  b.top < a.bottom - 0.5;
+
+// A BRANCH ROW KEEPS EVERY CONTROL CLEAR of its words, a long name wrapping inside
+// its row, on a phone, beside a peek and at full width. Mutation: drop the phone
+// stack, or the name's wrap, and a control lands on the name or leaves the box.
+for (const [viewport, column] of [
+  [1440, 1200],
+  [390, 358],
+  [1440, 600],
+] as const) {
+  test(`a branch row keeps every control clear and its name inside it, at a ${column}px column`, async () => {
+    await page.viewport(viewport, 900);
+    withBranches();
+    location.hash = "#/gitlet/repos/web?tab=branches&view=all";
+    mount(<RepositoryPage repo="web" />, column);
+    const rows = await eventually(() => {
+      const found = [...document.querySelectorAll<HTMLElement>(".code-refs__table tbody tr")];
+      expect(found).toHaveLength(3);
+      return found;
+    });
+    const box = document.querySelector<HTMLElement>(".code-refs")!;
+    expect(box.scrollWidth).toBeLessThanOrEqual(box.clientWidth);
+    const edge = box.getBoundingClientRect();
+    for (const row of rows) {
+      expect(row.scrollWidth, row.dataset.key).toBeLessThanOrEqual(row.clientWidth);
+      const words = [
+        ...row.querySelectorAll<HTMLElement>(".code-refs__marks, .code-byline, .code-change-ref"),
+      ].map((w) => w.getBoundingClientRect());
+      for (const control of row.querySelectorAll<HTMLElement>(
+        ".code-refs__actions a, .code-refs__actions button",
+      )) {
+        const at = control.getBoundingClientRect();
+        const name = control.getAttribute("aria-label") ?? control.textContent ?? "";
+        for (const w of words) expect(overlaps(at, w), name).toBe(false);
+        expect(at.right, name).toBeLessThanOrEqual(edge.right);
+      }
+      // A STACKED ROW: the name over who moved it, the controls under both.
+      if (column < 640) {
+        const cell = (c: string) => row.querySelector(`.code-refs__${c}`)!.getBoundingClientRect();
+        expect(cell("updated").top).toBeGreaterThanOrEqual(cell("name").bottom - 0.5);
+        expect(cell("actions").top).toBeGreaterThanOrEqual(cell("updated").bottom - 0.5);
+      }
+    }
+    // HOW FAR A BRANCH IS FROM main: bars beside the columns, words where the row stacks.
+    const drift = await eventually(() => {
+      const found = document.querySelector<HTMLElement>(".code-drift");
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    const shown = (el: Element) => getComputedStyle(el).display !== "none";
+    expect(shown(drift.querySelector(".code-drift__words")!)).toBe(column < 640);
+    expect(shown(drift.querySelector(".code-drift__bars")!)).toBe(column >= 640);
+    if (column < 640) return;
+    // THE TABLE FILLS ITS BOX: the name on the title's inset, the controls ending on the box's.
+    const title = box.querySelector(".code-refs__heading")!.getBoundingClientRect();
+    const marks = rows[0]!.querySelector(".code-refs__marks")!.getBoundingClientRect();
+    expect(Math.abs(marks.left - title.left)).toBeLessThan(1);
+    const controls = rows[1]!.querySelector(".code-refs__controls")!.getBoundingClientRect();
+    expect(edge.right - controls.right).toBeCloseTo(marks.left - edge.left, 0);
   });
-  for (const chip of chips) {
-    const glyph = chip.querySelector("svg")!.getBoundingClientRect();
-    expect(chip.getBoundingClientRect().height, chip.textContent!).toBeLessThan(2 * glyph.height);
-  }
-});
+}
 
 /** A history page of three commits, the first with a 200-character subject. */
 function withHistory() {
@@ -585,6 +689,73 @@ for (const [viewport, column] of [
         const hit = document.elementFromPoint(at.left + at.width / 2, at.top + at.height / 2);
         expect(control.contains(hit), control.getAttribute("aria-label") ?? "").toBe(true);
       }
+    }
+  });
+}
+
+// A COMMIT'S ID STAYS PUT WHEN ITS CHECK ARRIVES: the check's slot keeps its width while the
+// marks are read, and at a phone's width a row's pill, change and tags wrap inside it.
+// Mutation: draw the slot only once the marks answer.
+const THIRD = "1".repeat(40);
+for (const [viewport, column] of [
+  [1440, 1200],
+  [390, 358],
+] as const) {
+  test(`a commit's id stays put when its check arrives, at ${viewport}px`, async () => {
+    await page.viewport(viewport, 900);
+    withHistory();
+    const history = vi.mocked(fetch).getMockImplementation()!;
+    let release = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    const tags = ["refs/tags/v2026.11.2", "refs/tags/v2026.11.1"];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input), location.origin);
+        if (url.pathname === "/query/code_log") {
+          const answer = (await (await history(input)).json()) as Record<string, unknown>;
+          return json({ ...answer, tagged: { commits: { [THIRD]: { refs: tags } } } });
+        }
+        if (url.pathname !== "/query/code_commit_marks") return history(input);
+        await held;
+        const change = { repo: "web", title: "cache the badge", state: "merged" };
+        const passed = { state: "passed", counts: { passed: 2 }, required: 2, required_passed: 2 };
+        return json({
+          commit_marks: [
+            { commit: BASE, checks: [{ ...passed, target: "refs/heads/main" }] },
+            {
+              commit: THIRD,
+              merged: [{ ...change, ref: "web!41", merge_oid: THIRD }],
+              heads: [{ change: { ...change, ref: "web!40" }, n: 2 }],
+            },
+          ],
+          position: POSITION,
+          level: "session",
+        });
+      }),
+    );
+    location.hash = "#/gitlet/repos/web?tab=commits";
+    mount(<RepositoryPage repo="web" />, column);
+    const rows = await eventually(() => {
+      const found = [...document.querySelectorAll<HTMLElement>(".code-list__row")];
+      expect(found).toHaveLength(3);
+      return found;
+    });
+    const sha = () => rows[1]!.querySelector(".code-sha")!.getBoundingClientRect();
+    const before = sha();
+    release();
+    await eventually(() => expect(rows[1]!.querySelector(".code-check-mark")).toBeTruthy());
+    await eventually(() => expect(rows[2]!.querySelector(".code-change-ref")).toBeTruthy());
+    expect([sha().x, sha().y]).toEqual([before.x, before.y]);
+    const last = rows[2]!;
+    expect(last.scrollWidth).toBeLessThanOrEqual(last.clientWidth);
+    const box = last.getBoundingClientRect();
+    for (const el of last.querySelectorAll<HTMLElement>(
+      ".code-change-ref, .code-tag-chip, .code-commit-landed",
+    )) {
+      expect(el.getBoundingClientRect().right, el.textContent!).toBeLessThanOrEqual(
+        box.right + 0.5,
+      );
     }
   });
 }

@@ -170,7 +170,8 @@ func (s *Store) NameOf(ctx context.Context, id string) string {
 // The purge's decide statements. remainingSQL is the tracker's BOUNDED COUNT:
 // the decide needs "more than PurgePartRows", never the total, so each table
 // a part deletes from — the pushes, the refs, the packs, the retired packs, the
-// ref drops, the changes' revisions, authors, bodies and rows, and their
+// ref drops, the days and pusher days the pushes are counted in, the
+// changes' revisions, authors, bodies and rows, and their
 // conversations' reviewers, participants, findings, comments, finding texts,
 // reviews, revisions' facts, mergeability and rows, the checks and their
 // logs, the home's dispatches and its targets' readings, and the merge queues'
@@ -254,6 +255,8 @@ const (
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_landings WHERE repo_id = ?1 LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_green WHERE repo_id = ?1 LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_tips_due WHERE repo_id = ?1 LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_push_days WHERE repo_id = ?1 LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_pusher_days WHERE repo_id = ?1 LIMIT ?2))
 		+ (SELECT COALESCE(SUM(notices), 0) FROM
 			(SELECT notices FROM code_changes INDEXED BY ` + changesNumberKey + `
 				WHERE repo_id = ?1 LIMIT ?2)),

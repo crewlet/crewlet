@@ -125,6 +125,7 @@ var notRefArgs = map[string]string{
 	"end_line":           "a line of a file",
 	"recursive":          "how a tree is listed",
 	"renames":            "how a diff pairs files",
+	"patches":            "how a diff is read: every file's patch rather than the stat",
 	"grep":               "a message filter",
 	"since":              "an instant",
 	"until":              "an instant",

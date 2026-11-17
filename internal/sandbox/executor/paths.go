@@ -55,10 +55,13 @@
 // ([eachElement]), never decoded whole before its first element is checked,
 // and an object whose keys are open, as a map's are, a key at a time
 // ([eachKey]), never decoded into a map of every key first; a key only one
-// reader reads held to its type in that reader's accessor; and a hook's
-// firing handed out by [threadLine.Hook] alone, a call's id by
-// [threadMessage.Calls] alone, since a PostToolUse hook's firing carries the id
-// of the call it followed. The take's context meter (measure.go) reads the main
+// reader reads held to its type in that reader's accessor; and no id handed
+// out as a call's but by [threadMessage.Calls], an attachment's `toolUseID`
+// only as a key ([threadLine.AttachmentToolUseID]), since a PostToolUse
+// hook's firing carries the id of the call it followed, and a task
+// notification's `<tool-use-id>` as the leg its text claims
+// ([threadMessage.Notification]), matched only against a call read. The
+// take's context meter (measure.go) reads the main
 // thread through the layer too, in one walk of its whole lines
 // ([walkThread]): it decides what a continuation of the capture is told, by
 // what Claude Code counts the session at ([resumedReading]). Its one decode

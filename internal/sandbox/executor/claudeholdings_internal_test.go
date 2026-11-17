@@ -1477,6 +1477,72 @@ func hsProgress(parent, uuid string) string {
 		`","timestamp":"` + ctStamp + `",` + ctTail("2.1.322") + `}`
 }
 
+// THE BLOCK RULES READ EVERY BLOCK'S KIND: a reply that its model ended ends
+// a leg only where its blocks are texts and thinkings of either kind alone, at
+// least one, so one holding a call or a server's call beside its text ends
+// none; a user record starts a leg unless it is results alone, so a text, a
+// list of none and a result beside a text each start one; a plain results
+// record is results alone, one or two; and a record's own toolUseResult
+// answers its call only where that result is the record's one block, never
+// beside a text or a second result.
+//
+// Mutation: read a reply as finished by any block it holds of those kinds, a
+// record as plain results by any result it holds, or a result as alone by its
+// record's one call, and a record mixing kinds reads as one of a kind.
+func TestTheBlockRulesReadEveryBlocksKind(t *testing.T) {
+	t.Parallel()
+	text := `{"type":"text","text":"done."}`
+	thinking := `{"type":"thinking","thinking":"the batch","signature":"c2ln"},` +
+		`{"type":"redacted_thinking","data":"ZGF0YQ=="}`
+	server := `{"type":"server_tool_use","id":"srvtoolu_test","name":"web_search","input":{}}`
+	use := ctUseContent[1 : len(ctUseContent)-1]
+	result := ctResultBody[1 : len(ctResultBody)-1]
+	other := `{"tool_use_id":"toolu_other","type":"tool_result","content":"b2"}`
+	for name, tc := range map[string]struct {
+		content  string
+		finished bool
+	}{
+		"a text":                             {`[` + text + `]`, true},
+		"a text and both thinkings":          {`[` + thinking + `,` + text + `]`, true},
+		"a list of none":                     {`[]`, false},
+		"a text and a call":                  {`[` + text + `,` + use + `]`, false},
+		"a text and a server's call":         {`[` + text + `,` + server + `]`, false},
+		"both thinkings and a server's call": {`[` + thinking + `,` + server + `]`, false},
+	} {
+		m, err := ctLine(t, ctAssistant(ctUUID(2), ctUUID(3), tc.content)).Message()
+		if err != nil {
+			t.Fatalf("a reply of %s reads no message: %v", name, err)
+		}
+		if got := finishedReply(m.Blocks(), claudeEndedTurn, "claude-sonnet-4-5", false); got != tc.finished {
+			t.Errorf("a reply of %s ended by its model finishes its leg %t, want %t", name, got, tc.finished)
+		}
+	}
+	for name, tc := range map[string]struct {
+		record             string
+		start, plain, lone bool
+	}{
+		"a result alone": {record: ctResult(ctUUID(4), ctUUID(5), `[`+result+`]`, ctResultOwn), plain: true,
+			lone: true},
+		"two results": {record: ctResult(ctUUID(4), ctUUID(5), `[`+result+`,`+other+`]`, ctResultOwn),
+			plain: true},
+		"a result beside a text": {record: ctResult(ctUUID(4), ctUUID(5), `[`+result+`,`+text+`]`, ctResultOwn),
+			start: true},
+		"a list of none": {record: ctResult(ctUUID(4), ctUUID(5), `[]`, ctResultOwn), start: true},
+		"a text":         {record: ctBrief(ctUUID(1)), start: true},
+	} {
+		line := ctLine(t, tc.record)
+		m, err := line.Message()
+		if err != nil {
+			t.Fatalf("%s reads no message: %v", name, err)
+		}
+		if start, plain, lone := legStart(m), plainResults(line, m), resultAlone(m); start != tc.start ||
+			plain != tc.plain || lone != tc.lone {
+			t.Errorf("%s starts a leg %t, is plain results %t, a result alone %t; want %t, %t and %t", name, start,
+				plain, lone, tc.start, tc.plain, tc.lone)
+		}
+	}
+}
+
 // A CALL WHOSE RECORD A RETRACTION NAMES IS TOLD: Claude Code's resume drops
 // every record whose uuid's first 24 characters are those of an entry of a
 // retraction list it hands, once it has walked the chain and recovered beside
@@ -1723,16 +1789,19 @@ func TestAThreadIsWalkedWithinItsRecordsBound(t *testing.T) {
 // string, its other keys passed over, every key matched exactly and a key
 // written twice read by its last value. Every other content, a ToolSearch's
 // list of tool references, two text blocks, an empty list, an image, a key
-// spelt in another case, absent or null, has no text, -1, which no log's
-// output matches. And a list a line long is read no further than its second
-// element: it costs no more than a list of two.
+// spelt in another case, a `text` that is no string (null among it), absent
+// or null, has no text, -1, which no log's output matches. And a list a line
+// long is read no further than its second element: it costs no more than a
+// list of two.
 //
 // Not parallel: the allocations are the process's, and a parallel case's
 // would be counted with this one's.
 //
 // Mutation: decode a result's content whole, its list before its first
 // element is held to a type, and the long list costs an allocation an element;
-// or take any list's first text block for its text, and two blocks match.
+// or take any list's first text block for its text, and two blocks match;
+// take an element's `text` of any kind for its text, and a null one reads as
+// the empty text.
 func TestAResultsTextIsAStringOrOneTextBlock(t *testing.T) {
 	const id = "toolu_text"
 	for name, tc := range map[string]struct {
@@ -1751,6 +1820,7 @@ func TestAResultsTextIsAStringOrOneTextBlock(t *testing.T) {
 		"a type spelt in another case": {`[{"Type":"text","text":"x"}]`, "", -1},
 		"a text spelt in another case": {`[{"type":"text","Text":"x"}]`, "", -1},
 		"a text that is no string":     {`[{"type":"text","text":1}]`, "", -1},
+		"a text that is null":          {`[{"type":"text","text":null}]`, "", -1},
 		"a block that is no object":    {`["x"]`, "", -1},
 		"null":                         {`null`, "", -1},
 	} {
@@ -2102,15 +2172,16 @@ func (c *hsCancelling) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// A READING STOPS BETWEEN LINES WHEN ITS CONTEXT ENDS, since a line's read
-// takes none: a caller that left while a thread was read, many mebibytes that
+// A READING STOPS BETWEEN LINES WHEN ITS CONTEXT ENDS, which the line reader
+// asks before each line ([threadReader.Next]), since a line's read takes
+// none: a caller that left while a thread was read, many mebibytes that
 // gzip barely shrinks, the main thread's or a subagent's, ends the reading
 // within a line, with the caller's own error and the rest of the stream never
 // read. A walk that asked only between members would read the thread whole
 // and drain the stream.
 //
-// Mutation: ask the context between members alone, in either thread's walk,
-// and the reading reads that whole thread and stands.
+// Mutation: ask the context between members alone, never in the line
+// reader's Next, and the reading reads that whole thread and stands.
 func TestAReadingStopsBetweenLinesWhenItsContextEnds(t *testing.T) {
 	t.Parallel()
 	random := rand.NewChaCha8([32]byte{'h', 'o', 'l', 'd'})
@@ -3135,6 +3206,61 @@ func TestARetractionListInASubagentsThreadLeavesItNotWhole(t *testing.T) {
 	}
 }
 
+// A CALL A SUBAGENT'S LIST NAMES BEFORE ITS FAULT IS TOLD: where a subagent's
+// content-replacement record lists an asked call's result and then an entry
+// that is no object, or its reply's batch lists that call and then such an
+// entry, the subagent is not whole, and the call, whose use and result lie
+// whole in the main thread, is told all the same. Every entry a list hands
+// before its fault is read, as the entries of a whole list are: the harness
+// reads the entries it can of a list (it replaces a result an entry names; a
+// batch an entry names folds its calls), so an entry dropped with the one that
+// broke the list would leave a call held whose result its model was not
+// handed whole. A batch's entry reaches a call of the main thread where the
+// reading meets it before the main thread is decided, so that case's archive
+// holds the subagent's members first, an order a box may write them in. The
+// session whose subagent's lists name no such entry holds the call and
+// reports its subagent, in either order.
+//
+// Mutation: walk a list whole before it hands an entry, answering its fault
+// before any entry it read (in the replacements' accessor, or in the
+// batch's), and the call that list names is held.
+func TestACallASubagentsListNamesBeforeItsFaultIsTold(t *testing.T) {
+	t.Parallel()
+	const id, out = "toolu_test_listed", "listed done"
+	call := hsLogged(id, out)
+	for name, tc := range map[string]struct {
+		edit func(*testing.T, *hsSession)
+		held bool
+	}{
+		"no list names it": {func(*testing.T, *hsSession) {}, true},
+		"no list names it, its subagent's members first": {func(_ *testing.T, s *hsSession) { s.reversed = true },
+			true},
+		"a replacement names it, then an entry that is no object": {func(_ *testing.T, s *hsSession) {
+			s.thread = append(s.thread, ctReplacement(ctAgent, `{"kind":"tool-result","toolUseId":"`+id+`"}`, `7`))
+		}, false},
+		"a batch names it, then an entry that is no object": {func(t *testing.T, s *hsSession) {
+			s.thread[1] = ctReplace(t, s.thread[1], `"apiBlockIndex"`, `"batchToolUses":[{"id":"`+id+`"},7],`+
+				`"apiBlockIndex"`)
+			s.reversed = true
+		}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := hsForeground(t)
+			s.main = append(s.main, hsCall(ctUUID(3), 5, id, hsBlock(t, out))...)
+			tc.edit(t, &s)
+			got, err := hsRead(t, tarOfMembers(t, s.members()), ctSession, hsAsk(call, hsLogged(hsSubCall, hsSubOut)))
+			hsReadWhole(t, got, err)
+			held, under := got.Holds(call)
+			report := got.Subagents[ctAgent]
+			if held != tc.held || under != "" || report.Reported != tc.held {
+				t.Errorf("Holds = %t under %q, the subagent %+v, its records %+v; want it held %t in the main list, "+
+					"the subagent reported %t", held, under, report, got.Calls[id], tc.held, tc.held)
+			}
+		})
+	}
+}
+
 // A LEG FINISHED WITHOUT TEXT IS UNFINISHED (rule 2, condition 5): a subagent
 // answers its caller with the text of its last reply whose text says
 // something, as JavaScript's trim() reads it (2.1.322's pkn through t5t,
@@ -3407,11 +3533,14 @@ func TestACallsRecordsInTwoThreadsAreTold(t *testing.T) {
 // read. Any other text names no subagent's leg: no header, or one with more on
 // its line; an agent or a leg outside its rule; the ids in the other order; a
 // line between them and the status; or a status other than completed, or with
-// more on its line.
+// more on its line. Read as the walk reads one: the text a user record's
+// content, through the line's decode ([decodeThreadLine]) and the message's
+// [threadMessage.Notification].
 //
 // Mutation: read any status as completed, read past a line that is no output
 // file, or take a leg outside the call-id rule, and a text of another shape
-// answers a leg.
+// answers a leg; end the text's reading without deciding its last line, and
+// a notification ending at its status names none.
 func TestATaskNotificationIsReadLineByLine(t *testing.T) {
 	t.Parallel()
 	const head, done = "<task-notification>\n", "<status>completed</status>"
@@ -3435,7 +3564,14 @@ func TestATaskNotificationIsReadLineByLine(t *testing.T) {
 		"a status other than completed":   {head + ids + "<status>killed</status>", false},
 		"a status with more on its line":  {head + ids + done + " ", false},
 	} {
-		agent, leg, ok := taskNotification(tc.text)
+		record := ctReplace(t, ctNotification(ctUUID(1), ctUUID(3)),
+			`"content":"`+strings.ReplaceAll(ctNotificationText, "\n", `\n`)+`"`, `"content":`+jsonString(t, tc.text))
+		m, err := ctLine(t, record).Message()
+		if err != nil {
+			t.Errorf("%s reads no message: %v", name, err)
+			continue
+		}
+		agent, leg, ok := m.Notification()
 		if ok != tc.ok || (ok && (agent != ctAgent || leg != hsStarted)) {
 			t.Errorf("%s reads as %t, naming %q and %q; want %t, naming %q and %q", name, ok, agent, leg, tc.ok,
 				ctAgent, hsStarted)
@@ -3683,6 +3819,34 @@ func TestEveryKeyTheReadingDecodesIsExactAndLastWins(t *testing.T) {
 	}
 }
 
+// EVERY THREAD OF A SESSION IS READ THROUGH ONE READER ([holdingsWalk.reader]):
+// the walk reads its main thread and each subagent's through the one line
+// reader it made for the first, reset for each, so a session of a thousand
+// subagents costs the walk one reader's buffers, never one a member; and each
+// thread is still read whole, the reading standing.
+//
+// Mutation: make a reader for each member, and the walk reads its two threads
+// through two.
+func TestEveryThreadOfASessionIsReadThroughOneReader(t *testing.T) {
+	t.Parallel()
+	w := newHoldingsWalk(ctSession, hsAsk(hsLogged(hsSubCall, hsSubOut)), hsBounds())
+	var readers []*threadReader
+	if err := eachMember(bytes.NewReader(tarOfMembers(t, hsResumed(t).members())), hsBounds(),
+		func(h *tar.Header, member io.Reader) error {
+			err := w.member(t.Context(), h, member)
+			if w.lines != nil && !slices.Contains(readers, w.lines) {
+				readers = append(readers, w.lines)
+			}
+			return err
+		}); err != nil {
+		t.Fatalf("reading the session: %v", err)
+	}
+	if !w.read[hsMain] || !w.read[hsAgentThread] || len(readers) != 1 {
+		t.Errorf("the walk read its main thread %t and its subagent's %t through %d readers; want both read "+
+			"through one", w.read[hsMain], w.read[hsAgentThread], len(readers))
+	}
+}
+
 // NO ID THE CALL-ID RULE REFUSES IS KEPT: an id is the box's word, as long as a
 // line, and nothing can link, answer or notice a call under one, so a leg filed
 // under it would hold the box's bytes until the walk ends, a hundred mebibytes
@@ -3699,12 +3863,11 @@ func TestNoIDTheCallIDRuleRefusesIsKept(t *testing.T) {
 	t.Parallel()
 	w := newHoldingsWalk(ctSession, hsAsk(hsLogged(hsSubCall, hsSubOut)), hsBounds())
 	for _, call := range []threadCall{
-		{Kind: blockToolUse, ID: "toolu_" + strings.Repeat("l", 1<<20), Name: claudeToolAgent,
-			Input: json.RawMessage(hsAgentInput)},
-		{Kind: blockToolUse, ID: "toolu test task", Name: claudeToolTask, Input: json.RawMessage(hsAgentInput)},
+		{Kind: blockToolUse, ID: "toolu_" + strings.Repeat("l", 1<<20), Name: claudeToolAgent},
+		{Kind: blockToolUse, ID: "toolu test task", Name: claudeToolTask},
 		{Kind: blockToolUse, ID: strings.Repeat("s", sandbox.MaxBridgeCallIDBytes+1), Name: claudeToolSendMessage,
-			Input: json.RawMessage(hsSendInput)},
-		{Kind: blockToolUse, ID: hsStarted, Name: claudeToolAgent, Input: json.RawMessage(hsAgentInput)},
+			To: sendTarget(json.RawMessage(hsSendInput))},
+		{Kind: blockToolUse, ID: hsStarted, Name: claudeToolAgent},
 	} {
 		if err := w.leg(call, 0); err != nil {
 			t.Fatalf("filing a call of %s: %v", call.Name, err)
