@@ -66,6 +66,11 @@ type FakeSandbox struct {
 	KillJobFunc func(ctx context.Context, commandID string) error
 	jobCalls    []string
 
+	// PauseFunc, when set, is asked first by every Pause, and a non-nil
+	// answer is that pause's error, leaving the box unpaused: a backend slow
+	// to snapshot the box, or one that could not.
+	PauseFunc func(ctx context.Context) error
+
 	// ReadErr, when set, is consulted by every read with the file's path,
 	// and a non-nil answer is that read's error — standing in for a box
 	// whose file could not be read back (a transport failure, not a size).
@@ -347,8 +352,14 @@ func (s *FakeSandbox) Timeouts() []FakeTimeout {
 	return slices.Clone(s.timeouts)
 }
 
-// Pause marks the box snapshotted; [FakeSandbox.Paused] reports it.
+// Pause marks the box snapshotted, once [FakeSandbox.PauseFunc] answers no
+// error where one is set; [FakeSandbox.Paused] reports it.
 func (s *FakeSandbox) Pause(ctx context.Context) error {
+	if s.PauseFunc != nil {
+		if err := s.PauseFunc(ctx); err != nil {
+			return err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.paused = true
@@ -1137,8 +1148,19 @@ type FakeSession struct {
 	// Taking, where set, runs as a take reads the box — after the capture
 	// read the run's log to place the session, and before the archive is
 	// handed over — so a case can land a call between the two, as a call
-	// answered while its box is read does.
-	Taking func()
+	// answered while its box is read does, or spend the take's time, as a
+	// pack and a scrub at their bound do: it is handed the take's context.
+	Taking func(ctx context.Context)
+
+	// Streaming, where set, runs as the take's archive is first read, once its
+	// place is reserved and it spools, handed the take's context, so a case can
+	// spend the take's time where a stream at its bound spends it.
+	Streaming func(ctx context.Context)
+
+	// Keeping, where set, runs as the take's digest is recorded in the box
+	// ([TakenSession.Keep]), before it is, handed the digest's context, so a
+	// case can stand in for a box slow to answer the write.
+	Keeping func(ctx context.Context)
 
 	// kept counts the digests recorded.
 	kept atomic.Int32
@@ -1172,18 +1194,25 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 		return TakenSession{}, session.TakeErr
 	}
 	if session.Taking != nil {
-		session.Taking()
+		session.Taking(ctx)
 	}
 	var count func() *ResumedCount
 	if session.Count != nil {
 		count = func() *ResumedCount { counted := *session.Count; return &counted }
 	}
+	body := io.Reader(bytes.NewReader(session.Body))
+	if session.Streaming != nil {
+		body = &firstRead{Reader: body, first: func() { session.Streaming(ctx) }}
+	}
 	return TakenSession{
 		Archive: session.Archive,
-		Body:    io.NopCloser(bytes.NewReader(session.Body)),
+		Body:    io.NopCloser(body),
 		Context: func() int64 { return session.ContextTokens },
 		Count:   count,
-		Keep: func(context.Context) error {
+		Keep: func(ctx context.Context) error {
+			if session.Keeping != nil {
+				session.Keeping(ctx)
+			}
 			if session.KeepErr != nil {
 				return session.KeepErr
 			}
@@ -1191,6 +1220,18 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 			return nil
 		},
 	}, nil
+}
+
+// firstRead is a reader that runs first once, as it is first read.
+type firstRead struct {
+	io.Reader
+	first func()
+	once  sync.Once
+}
+
+func (r *firstRead) Read(p []byte) (int, error) {
+	r.once.Do(r.first)
+	return r.Reader.Read(p)
 }
 
 // Takes is every capture asked of this runner, in order.

@@ -11121,8 +11121,10 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   has neither taken its final capture nor begun its turn; its capture is still
   being kept, or its record was sent and never answered, which a relaunch asks
   the executor log for again before it decides, continuing the capture where it
-  landed (until the capture's object is past the twelve hours a record may name
-  it in, when the ask refuses it unasked); what the launch is launched on
+  landed (until fourteen hours have passed since the capture's object was
+  minted, on the reading node's clock: the twelve a record may name it in,
+  past which the executor log refuses the record on its own clock, and the two
+  any two machines' clocks may stand apart); what the launch is launched on
   cannot be said (every member of
   the seat's chain sitting out its plan, no node holding the seat, the node
   holding it not answering); only the resume of a collected job decides the
@@ -13345,7 +13347,10 @@ it, for a person's stop. Such a run is over, and its `status` is the one it
 was ended in: its record waits only for the ending's last steps, which on an
 engine that records every turn's end include [recording that
 end](../concepts/turn-engine.md#how-a-turn-ends-on-the-executor-log) once the
-turn's captures have settled, and can take minutes. The seat's next work
+turn's captures have settled, and can take minutes, and up to about three
+hours and fifty minutes from the moment the end first sees a read standing
+by for one of them, where a store answers each change of a run's record at
+the slowest pace a link is allowed. The seat's next work
 waits behind it. `answerable_in_chat` is `false`
 for a run whose turn was triggered by something other than an inbound
 message — a schedule's fire, a task assignment, an A2A wake — because the

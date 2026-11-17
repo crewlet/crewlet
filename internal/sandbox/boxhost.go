@@ -127,14 +127,14 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // paused, all of it on its own host. And the TAKE of the job's harness session
 // beside it ([SessionTakeBudget]), and the room its reservation of the
 // capture's place is given beside it ([Coordinator.reserveRoom]), with the
-// room the take leaves after it — once for its own records, the stamp of what
-// came of it and the digest it leaves in the box, beside which a collection
-// records how its job's harness ended ([Coordinator.markHarnessEnd],
-// [Coordinator.takeRecordsRoom]), and once for the pause, its record and the
-// answer ([Coordinator.pauseRoom]) — because the read is where the session is
-// taken out of the box, on the host and before the box is paused: the host
-// reads only for its share of the wait the request carries, counted from the
-// moment the request reaches it, on its own clock
+// room the take leaves after it: a grace for its own record (the stamp of
+// what came of it, or the digest it leaves in the box), another for how a
+// collection's job's harness ended ([Coordinator.markHarnessEnd],
+// [Coordinator.takeRecordsRoom]), and a third for the pause, its record and
+// the answer ([Coordinator.pauseRoom]). They are counted because the read is
+// where the session is taken out of the box, on the host and before the box is
+// paused: the host reads only for its share of the wait the request carries,
+// counted from the moment the request reaches it, on its own clock
 // ([BoxReadRequest.AnswerBudget]), so all of it is counted at that share, and
 // a take at its bound fits whole a read the host makes as the request arrives
 // rather than being cut by the host's own deadline. A read that first waited
@@ -142,8 +142,8 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // share, so one that waited long may be cut by that deadline and answer that
 // it could not read the box: reading on would take the session out of the box
 // for an asker that had gone. Only the take: the upload and the record are
-// made after the host has answered, off the read ([Coordinator.keepCapture]),
-// so no asker waits on an upload.
+// made off the read, from the moment the session is spooled
+// ([Coordinator.keepCapture]), so no asker waits on an upload.
 //
 // # Each change of the run's row the host's read makes, at the slowest crossing
 //
@@ -171,7 +171,7 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // ([Coordinator.markEndedAtDeadline]), so it is counted at both, as every
 // other change is at its reason and its crossing. The host's share of such a
 // read's budget is then the end's 145 seconds and that record's grace, the
-// take's 240 and its reservation's room, its two graces, the crossings of the
+// take's 240 and its reservation's room, its three graces, the crossings of the
 // changes, and 45 — the poll's bound at the share — for the read's own steps,
 // so a take after an end at its bound and its record at theirs is handed its
 // whole budget all the same ([Coordinator.takeContext]).
@@ -189,20 +189,20 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // twenty for its asker. Another harness's collection, a stop's and a loss's ask
 // the thread nothing, and wait as they did.
 //
-// What that costs is the wait for a host that has truly stopped — about
+// What that costs is the wait for a host that has truly stopped (about
 // seventy-eight minutes for a collection of a turn with no cap before the
-// asker hands the claim back, where it was one, about eighty-one for a stop's
-// or a loss's read, and about ninety-nine for a collection of a turn with a
-// cap — which a host that is only slow, ending a job at its bound, packing a
-// session at its bound or changing a run's row at its bound across a link at
-// the slowest pace allowed, must not be taken for. Ordinary reads answer in
-// seconds, a job ending in a few and a session of a day's work being a
-// mebibyte or two. A read that has not finished in that is a host that is not
-// answering, and is answered as one ([ErrBoxHostSilent]); it announces the
-// completion again from its own next poll. Only a node that asks ANOTHER
-// node's host waits on it: a box this node hosts it reads itself.
+// asker hands the claim back, where it was one, about eighty-one and a half
+// for a stop's or a loss's read, and about ninety-nine and a half for a
+// collection of a turn with a cap), which a host that is only slow, ending a
+// job at its bound, packing a session at its bound or changing a run's row at
+// its bound across a link at the slowest pace allowed, must not be taken for.
+// Ordinary reads answer in seconds, a job ending in a few and a session of a
+// day's work being a mebibyte or two. A read that has not finished in that is
+// a host that is not answering, and is answered as one ([ErrBoxHostSilent]);
+// it announces the completion again from its own next poll. Only a node that
+// asks ANOTHER node's host waits on it: a box this node hosts it reads itself.
 func BoxReadBudget(run PendingRun, read BoxRead) time.Duration {
-	held := SessionTakeBudget + sessionRecordBudget + 2*discardGrace + boxReadChanges*coord.MaxValueCrossing
+	held := SessionTakeBudget + sessionRecordBudget + 3*discardGrace + boxReadChanges*coord.MaxValueCrossing
 	if read.mayEnd(run) {
 		held += JobEndBudget
 	}

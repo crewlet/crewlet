@@ -176,7 +176,7 @@ func keptAfter(t *testing.T, before, during []int) (SessionCapture, BridgeLog) {
 		appendAt(seq)
 	}
 	session := rig.runner.Session
-	session.Taking = func() {
+	session.Taking = func(context.Context) {
 		for _, seq := range during {
 			appendAt(seq)
 		}

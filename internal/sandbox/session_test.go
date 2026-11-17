@@ -274,9 +274,9 @@ const handedToken = "the-entrys-own-token"
 // EVERY CASE OF A KEEPING OR A LOGGING RIG RUNS IN ONE ([keepingRig],
 // [loggingRig]). A rig cuts a record's budget to 200 ms and ages a capture on
 // its own clock, which only a case moves, while an end, or a read standing by,
-// waits for a capture on the clock it runs on: an end for as long as the
-// turn's last capture can still land ([endCaptureWait], over an hour), a
-// read standing by for as long as a standby may stand ([standbyBudget]). On
+// waits for a capture on the clock it runs on: an end for each capture's whole
+// life from when it first sees it ([captureLife], over an hour), a read
+// standing by for the capture it stands by for ([standbyWait]). On
 // the machine's clock a runner starved for those 200 ms inside a keep's stamp
 // of its capture's outcome left the capture begun with nothing to settle it,
 // and the end's wait outlasted the package's timeout (#1022). In the bubble
@@ -577,19 +577,21 @@ func TestACapturesPlaceOnlyGrowsOnTheRow(t *testing.T) {
 }
 
 // A COLLECTION TAKES THE JOB'S SESSION BEFORE IT PAUSES THE BOX AND KEEPS IT
-// AFTER: the archive the run's script packed at its harness's exit, scrubbed of
-// what the launch handed the box and bounded by the archive's bound, spooled,
-// the box paused, and only then uploaded and recorded at the launch's ordinal
-// and its own, its digest kept in the box, stamped landed on the row with what
-// the job had answered and read through — and the launch's own record says
-// what was taken, and which session it ran.
+// OFF THE READ: the archive the run's script packed at its harness's exit,
+// scrubbed of what the launch handed the box and bounded by the archive's
+// bound, spooled, and from then uploaded and recorded off the read, which goes
+// on to pause the box, at the launch's ordinal and its own, its digest kept in
+// the box, stamped landed on the row with what the job had answered and read
+// through; and the launch's own record says what was taken, and which session
+// it ran. That the keep waits on nothing the read does after its take is
+// [TestACollectionsKeepStartsOnceItsTakeIsSpooled]'s.
 //
 // Mutation: take the session after the pause (the fake reads no paused box),
 // pack it on demand for a job that packed its own, drop what the box was
 // handed from the scrub, stamp before the record lands, leave the record's
 // fields off `executor_collected`, or leave the spool behind the keep, and a
 // check here goes red.
-func TestACollectionTakesTheSessionBeforeThePauseAndKeepsItAfter(t *testing.T) {
+func TestACollectionTakesTheSessionBeforeThePauseAndKeepsItOffTheRead(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
 		rig, writes, keep := keepingRig(t)
@@ -640,6 +642,142 @@ func TestACollectionTakesTheSessionBeforeThePauseAndKeepsItAfter(t *testing.T) {
 			t.Errorf("the kept session's spool is left on the node's disk: %v", left)
 		}
 	})
+}
+
+// A COLLECTION'S KEEP STARTS ONCE ITS TAKE IS SPOOLED, never behind what its
+// read does after the take. A collection goes on after its take to record how
+// its job's harness ended, pause the box and record the pause, and a
+// collection of a box this node hosts reads under its admission, which has no
+// deadline: a keep started only once the read returned waited on a pause only
+// the box's backend bounds, and the stamp of what came of the capture waited
+// with it, past the budget every reader of a begun capture holds it to. Here
+// the box's pause blocks until the case lets it go, and within a keep's whole
+// budget the capture is uploaded once, recorded once and stamped landed while
+// the pause still blocks.
+//
+// Mutation: start the keep only once the read returns (`defer c.keepLater`),
+// and nothing is uploaded, recorded or stamped while the pause blocks.
+func TestACollectionsKeepStartsOnceItsTakeIsSpooled(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		rig, writes, keep := keepingRig(t)
+		rig.launchKept(t, "t1")
+		session := rig.runner.Session
+		box := rig.provider.Box(rig.get("t1").SandboxID)
+		pausing, release := make(chan struct{}), make(chan struct{})
+		box.PauseFunc = func(ctx context.Context) error {
+			close(pausing)
+			select {
+			case <-release:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+		rig.resumer.failWith(errors.New("held for the case to read the row"))
+		payload, ev := rig.completion("t1")
+		collected := make(chan error, 1)
+		go func() { collected <- rig.coordinator.OnCompleted(t.Context(), payload, ev) }()
+		<-pausing
+		// A KEEP'S WHOLE BUDGET, in the bubble's time, while the pause blocks.
+		time.Sleep(SessionKeepBudget)
+		select {
+		case err := <-collected:
+			t.Fatalf("the premise: the collection returned (%v) while its box's pause blocked", err)
+		default:
+		}
+		if uploads := keep.uploads(); len(uploads) != 1 {
+			t.Errorf("uploaded %d sessions while the box's pause blocked, want the take's one", len(uploads))
+		}
+		if captures := writes.captured(); len(captures) != 1 {
+			t.Errorf("recorded %d captures while the box's pause blocked, want the take's one", len(captures))
+		}
+		if kept := rig.get("t1").Kept; kept == nil || kept.State != CaptureLanded {
+			t.Errorf("the row keeps %+v while the box's pause blocks, want the capture stamped landed", kept)
+		}
+		close(release)
+		if err := <-collected; err == nil {
+			t.Error("the refused resume was acknowledged")
+		}
+		rig.awaitKeeps()
+		if !box.Paused() {
+			t.Error("the collection did not pause the box once its pause was let go")
+		}
+	})
+}
+
+// A COLLECTION'S RECORD OF ITS BOX'S PAUSE IS HELD TO THE ROOM ITS READ LEAVES
+// IT ([Coordinator.pauseRoom]): a teardown's grace and this node's crossing of
+// one change of the run's row. A collection of a box this node hosts reads
+// under its admission, which has no deadline, and the store's contract
+// promises no bound to a caller that sets none: held to the read's context
+// alone, a store that never answered the record held the read, and the resume
+// of the turn it collects for, for as long as it did not. Here the store never
+// answers it, and the collection returns exactly that room after the pause.
+// Exact, in a bubble.
+//
+// Mutation: record the pause under the read's context alone, and the
+// collection is still waiting a minute past its room.
+func TestACollectionsPauseRecordIsHeldToItsRoom(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		const crossing = 7 * time.Minute
+		rig, _, _ := keepingRigWith(t, func(o *CoordinatorOptions) {
+			o.Pending = &unansweredPauses{PendingStore: o.Pending, crossing: crossing}
+		})
+		rig.launchKept(t, "t1")
+		session := rig.runner.Session
+		var paused time.Time
+		rig.provider.Box(rig.get("t1").SandboxID).PauseFunc = func(context.Context) error {
+			paused = time.Now()
+			return nil
+		}
+		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+		rig.resumer.failWith(errors.New("held for the case to read the row"))
+		payload, ev := rig.completion("t1")
+		read, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		collected := make(chan struct{})
+		go func() {
+			defer close(collected)
+			_ = rig.coordinator.OnCompleted(read, payload, ev)
+		}()
+		room := discardGrace + crossing
+		if got := rig.coordinator.pauseRoom(); got != room {
+			t.Fatalf("the premise: the read leaves its pause %v, want a teardown's grace and the row's "+
+				"crossing, %v", got, room)
+		}
+		select {
+		case <-collected:
+			if took := time.Since(paused); took != room {
+				t.Errorf("the collection returned %v after its box's pause, want the pause's record cut at "+
+					"its room, %v", took, room)
+			}
+		case <-time.After(room + time.Minute):
+			t.Errorf("the collection is still waiting %v after it began, on a record of its box's pause the "+
+				"store never answers, past that record's room, %v", room+time.Minute, room)
+			cancel()
+			<-collected
+		}
+		rig.awaitKeeps()
+	})
+}
+
+// unansweredPauses is a pending store whose connection takes crossing to carry
+// a run's row at its bound, and which never answers a record of a box's pause
+// ([PendingStore.MarkBoxPaused]), as a store whose row is still crossing a slow
+// link does not: the record waits until its context ends.
+type unansweredPauses struct {
+	PendingStore
+	crossing time.Duration
+}
+
+func (s *unansweredPauses) RowCrossing() time.Duration { return s.crossing }
+
+func (s *unansweredPauses) MarkBoxPaused(ctx context.Context, _ string, _ time.Time) error {
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 // A JOB TAKEN ONCE IT HAD ENDED IS NOT TAKEN AGAIN, whatever that take came to.

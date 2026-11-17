@@ -303,12 +303,12 @@ func TestARowsWriteInTheStoresOwnProcessIsGivenItsReasonAlone(t *testing.T) {
 	if got := RowBudget(store, sessionRecordBudget); got != sessionRecordBudget {
 		t.Errorf("RowBudget in process = %v, want the reason alone, %v", got, sessionRecordBudget)
 	}
-	// AND THE READ STANDING BY, which any node may be, waits for the
-	// slowest node's record whatever this node's store says: past the
-	// capture it stands by for and the read that sees how it came out,
-	// room for the record's reason and a row's crossing at the slowest
-	// pace a link is allowed.
-	if room := standbyBudget - SessionCaptureBudget - captureWaitTick; room < sessionRecordBudget+coord.MaxValueCrossing {
+	// AND THE READ STANDING BY, which any node may be, is held to the
+	// slowest node's record whatever this node's store says: its window
+	// leaves, past the capture it stands by for and the read that sees how
+	// it came out, room for the record's reason and a row's crossing at the
+	// slowest pace a link is allowed.
+	if room := standbyWindow - captureLife - captureWaitTick; room < sessionRecordBudget+coord.MaxValueCrossing {
 		t.Errorf("a read standing by leaves %v for its record of the next place, want at least the "+
 			"record's %v and the slowest node's crossing of a row, %v", room, sessionRecordBudget,
 			coord.MaxValueCrossing)
@@ -362,50 +362,6 @@ func TestEveryCallAnEndingMakesOfItsRowIsGivenItsOwnCrossing(t *testing.T) {
 			}
 		}
 	})
-}
-
-// A CAPTURE'S BUDGET COUNTS ITS STAMP OF WHAT CAME OF IT, AND SO DOES EVERY WAIT
-// AFTER IT, AT THE SLOWEST NODE'S CROSSING.
-//
-// A keep stamps what came of its capture after the keep's own budget, and the
-// stamp writes the run's row whole, which across a slow link takes the row's
-// crossing; the node keeping it may be any node, and the node reading the
-// capture's age any other. So a capture begun is in flight until its take, its
-// keep and that stamp can all have run; a read standing by for it stands until
-// that and its own stamp of the next place; and a turn's end waits for the
-// standby's keep and that keep's stamp past both. Counted without the stamp,
-// a reader aged out a capture whose stamp was still crossing: a standby took
-// its place over and uploaded the session again, and the turn's end named it
-// begun and never finished.
-//
-// Mutation: drop the stamp from a capture's budget, from the standby's, or
-// from the end's wait, and the last instant it can still be crossing reads as
-// past.
-func TestACapturesBudgetCountsItsStampAtTheSlowestNodesCrossing(t *testing.T) {
-	t.Parallel()
-	stamp := sessionRecordBudget + coord.MaxValueCrossing
-	begun := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
-	capture := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, Launch: "launch-1", State: CaptureBegun, At: begun}
-	// THE LAST INSTANT EACH CAN STILL BE UNDER WAY, a nanosecond short of
-	// its bound, as an age past the capture's own instant.
-	stamped := SessionTakeBudget + SessionKeepBudget + stamp
-	if !captureInFlight(PendingRun{Capture: &capture}, begun.Add(stamped-time.Nanosecond)) {
-		t.Errorf("a capture begun %v ago, its stamp of what came of it still crossing, reads as past its budget "+
-			"of %v, want in flight until its take, its keep and that stamp at the slowest node's crossing",
-			stamped-time.Nanosecond, SessionCaptureBudget)
-	}
-	standing := capture
-	standing.StandbyAt, standing.StandbyTaker = begun, "node-b:standby"
-	stood := stamped + captureWaitTick + stamp
-	if !standing.standing(begun.Add(stood - time.Nanosecond)) {
-		t.Errorf("a read standing by %v reads as gone, want it standing until the capture it stands by for "+
-			"can have stamped what came of it, one read after, and its own stamp of the next place: %v",
-			stood-time.Nanosecond, standbyBudget)
-	}
-	if kept := stood + SessionKeepBudget + stamp; endCaptureWait < kept {
-		t.Errorf("a turn's end waits %v for its captures, want at least the standby's stand, its keep and that "+
-			"keep's stamp of what came of it, %v", endCaptureWait, kept)
-	}
 }
 
 // unansweredStamps is a pending store whose connection takes crossing to carry
@@ -616,24 +572,25 @@ func TestAWaitersWriteOfARunsRowIsGivenTheRowsCrossingPastItsTask(t *testing.T) 
 // bytes were still crossing (crewlet/crewlet#1151). So on a host whose store
 // takes a crossing, the take's context keeps the reservation one record's
 // reason and that crossing beside the pack's budget, and the read leaves the
-// take's two records and the pause's record a crossing each beside their
-// graces; and the asker, which cannot know the host's connection, waits the
-// slowest node's crossing for each change, coord.MaxValueCrossing. Here the
-// host's read is given exactly its share of that budget, and the room it then
-// keeps for each is held. Exact, in a bubble.
+// take's two records and the pause's record a grace and a crossing each; and
+// the asker, which cannot know the host's connection, waits the slowest node's
+// crossing for each change, coord.MaxValueCrossing, and the three graces.
+// Here the host's read is given exactly its share of that budget, and the room
+// it then keeps for each is held. Exact, in a bubble.
 //
 // Mutation: drop the crossing from the reservation's room, from the take's
-// records' room or from the pause's, or count fewer changes at the slowest
-// crossing in the asker's budget, and its check goes red.
+// records' room or from the pause's, give the take's two records one grace, or
+// count fewer changes at the slowest crossing in the asker's budget, and its
+// check goes red.
 func TestABoxReadGivesEachChangeOfTheRowItsHostMakesItsCrossing(t *testing.T) {
 	t.Parallel()
 	const crossing = 7 * time.Minute
 	run := PendingRun{TurnID: "t1"}
-	held := SessionTakeBudget + sessionRecordBudget + 2*discardGrace + 4*coord.MaxValueCrossing
+	held := SessionTakeBudget + sessionRecordBudget + 3*discardGrace + 4*coord.MaxValueCrossing
 	if got, want := BoxReadBudget(run, BoxReadCollect),
 		pollBound+time.Duration(float64(held)/BoxReadAnswerShare); got != want {
 		t.Errorf("a collection of a turn with no cap waits %v, want the poll's bound and, at the host's "+
-			"share, the take, its reservation's reason, two graces and four changes of the row at the "+
+			"share, the take, its reservation's reason, three graces and four changes of the row at the "+
 			"slowest node's crossing, %v", got, want)
 	}
 	inBubble(t, func(t *testing.T) {
@@ -662,7 +619,7 @@ func TestABoxReadGivesEachChangeOfTheRowItsHostMakesItsCrossing(t *testing.T) {
 		defer cancelTake()
 		deadline, _ = take.Deadline()
 		end, _ := short.Deadline()
-		if got, want := by.Sub(deadline), discardGrace+2*crossing; got != want {
+		if got, want := by.Sub(deadline), 2*discardGrace+2*crossing; got != want {
 			t.Errorf("a take's records are left %v after it, want a grace and a crossing for each of "+
 				"its two changes of the row, %v", got, want)
 		}
