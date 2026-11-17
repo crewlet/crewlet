@@ -52,7 +52,8 @@ import (
 // lex a Go file's two versions — `--output=y.go`'s — from blobs a batch is
 // fed by id, anchors on them are found by the batch and diffed by pairs
 // numbered rather than named, and an interdiff kept to them looks its touched
-// paths up as `<id>:<path>` lines of a lookup's batch, no pathspec. A
+// paths up as `<id>:<path>` lines of a lookup's batch, no pathspec. An excerpt
+// of each is found the same way, its rename by a walk of two ids. A
 // history's until reaches git as a formatted number, its seat not at all.
 //
 // Mutations: the log's path before `--`, or `--output=x` added to the log's
@@ -109,6 +110,44 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 		ToTouched: []string{"--output=x/f", "-r", "a:b"}}))
 	mustRead(t, s, interdiffQ(repo, gitlet.InterdiffQuery{FromBase: head, FromHead: base, ToBase: base, ToHead: head,
 		ToTouched: []string{"-r"}, File: "-r"}))
+
+	// EXCERPTS of the paths on both sides, and of a file renamed to an odd path: the other
+	// side found by the batch, the rename by a walk of two ids, the pairs diffed by number.
+	x.branch("moved", head)
+	x.git("mv", "--", "a:b", "--output=w")
+	moved := x.p.Commit(x.work, nil, "move a:b")
+	x.push(gitlettest.RepoName, "refs/heads/moved")
+	x.git("checkout", "-q", "main")
+	var excerpted []gitlet.ExcerptAnchor
+	for i, p := range paths[:4] {
+		excerpted = append(excerpted,
+			gitlet.ExcerptAnchor{LineAnchor: gitlet.LineAnchor{ID: fmt.Sprintf("new%d", i), Path: p,
+				Side: gitlet.SideNew, BlobOID: x.blobAt(head, p), Start: 1, End: 1}, Base: base, Head: head},
+			gitlet.ExcerptAnchor{LineAnchor: gitlet.LineAnchor{ID: fmt.Sprintf("old%d", i), Path: p,
+				Side: gitlet.SideOld, BlobOID: x.blobAt(base, p), Start: 1, End: 1}, Base: base, Head: head})
+	}
+	excerpted = append(excerpted,
+		gitlet.ExcerptAnchor{LineAnchor: gitlet.LineAnchor{ID: "moved", Path: "--output=w", Side: gitlet.SideNew,
+			BlobOID: x.blobAt(moved, "--output=w"), Start: 1, End: 1}, Base: head, Head: moved},
+		gitlet.ExcerptAnchor{LineAnchor: gitlet.LineAnchor{ID: "moved from", Path: "a:b", Side: gitlet.SideOld,
+			BlobOID: x.blobAt(head, "a:b"), Start: 1, End: 1}, Base: head, Head: moved})
+	for _, e := range mustRead(t, s, excerptsQ(repo, gitlet.ExcerptsQuery{Anchors: excerpted})).Excerpts.Excerpts {
+		var want []gitlet.ExcerptLine
+		switch {
+		case strings.HasPrefix(e.ID, "new"):
+			want = []gitlet.ExcerptLine{{Mark: "+", New: 1, Text: "two"}}
+		case strings.HasPrefix(e.ID, "old"):
+			want = []gitlet.ExcerptLine{{Mark: "-", Old: 1, Text: "one"}}
+		default:
+			want = []gitlet.ExcerptLine{{Mark: " ", Old: 1, New: 1, Text: "two"}}
+			if e.Status != "R" {
+				t.Errorf("the excerpt %q reads status %q, want the rename", e.ID, e.Status)
+			}
+		}
+		if !slices.Equal(e.Lines, want) {
+			t.Errorf("the excerpt %q reads %+v, want %+v", e.ID, e.Lines, want)
+		}
+	}
 
 	// A HISTORY AND A BLAME, each path the one argument after `--`: every
 	// path's history is its two commits, and its blame its one line of the
@@ -256,6 +295,7 @@ var templates = [][]string{
 	{"diff-pairs", "-z", "--numstat", "--no-ext-diff", "--no-textconv"},
 	{"diff-pairs", "-z", "-p", "--full-index", "--no-color", "--no-ext-diff", "--no-textconv", "-U3"},
 	{"diff-pairs", "-z", "-p", "-U0", "--no-color", "--no-ext-diff", "--no-textconv"},
+	{"diff-pairs", "-z", "-p", "-U1073741824", "--no-color", "--no-ext-diff", "--no-textconv"},
 	{"merge-base", "<oid>", "<oid>"},
 	{"merge-base", "--is-ancestor", "<oid>", "<oid>"},
 	{"rev-list", "--left-right", "--count", "<range>"},

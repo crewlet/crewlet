@@ -1388,6 +1388,9 @@ Endpoints](../reference/api-endpoints.md#gitlet-git-and-gitlet)). Going
 the other way, from a commit to whoever landed it, `code_landed_in`,
 `code_log` and `code_blame` name the push behind each commit ([Which push
 landed a commit](../concepts/gitlet.md#which-push-landed-a-commit)).
+On a repository's **Commits** tab the dashboard narrows the history to one
+seat's pushes and to recent days, and searches commit messages; each commit
+shows its checks and the change it landed with.
 
 ### Working in a clone
 

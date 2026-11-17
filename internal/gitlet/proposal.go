@@ -723,7 +723,8 @@ func entryBound(p Proposal) (int, error) {
 }
 
 // rowBound is the most rows p's entry can make its record's apply touch of what
-// its proposal alone says: its push row, its pack, [commandRows] for every
+// its proposal alone says: its push row, its pack, its pusher's day but an
+// expiry's ([pusherDayRows]), [commandRows] for every
 // command the receiver did not refuse, and for a SEAT'S push the
 // [seatDayRows] its day's count takes. What only the repository's rows say —
 // the live changes its commands move ([changeBook]) and the landings it makes
@@ -764,6 +765,9 @@ func rowBound(p Proposal) int {
 	if p.Principal.Kind == PrincipalAgent {
 		rows += seatDayRows
 	}
+	if p.Via != ViaExpiry {
+		rows += pusherDayRows
+	}
 	return rows
 }
 
@@ -799,7 +803,8 @@ func measuredLandings(principal Principal, cmds []Command) []PushLanding {
 func lands(c Command) bool { return strings.HasPrefix(c.Ref, branchPrefix) && c.New != ZeroOID }
 
 // entryRows is the most rows a DECIDED entry makes its record's apply touch
-// besides the changes its commands move: its push row, [commandRows] for every
+// besides the changes its commands move: its push row, its pusher's day but an
+// expiry's ([pusherDayRows]), [commandRows] for every
 // command that applies, its pack, and for a seat's entry the [seatDayRows]
 // its day's count takes — [rowBound] of the commands its decide found ok —
 // and [landingRows] for each landing its decide stamped, which the decide
@@ -816,6 +821,9 @@ func entryRows(e PushEntry) int {
 	}
 	if e.Principal.Kind == PrincipalAgent {
 		rows += seatDayRows
+	}
+	if e.Via != ViaExpiry {
+		rows += pusherDayRows
 	}
 	return rows + landingRows*len(e.Landings)
 }
@@ -856,10 +864,11 @@ func commandRows(c Command) int {
 // recordRows is the row bound of a record carrying a batch whose entries
 // bound rows rows between them ([rowBound], the tombstone sweep's room for the
 // entries' own deletions among them): those, the repository's counters, the
-// push history's share of the horizon and the tombstone mark. Whatever else
+// day row its pushes are counted in (apply_activity.go), the push history's
+// share of the horizon and the tombstone mark. Whatever else
 // the record leaves the sweep takes for tombstones past their horizon, and
 // the removal of the ref drops past PruneGrace what the sweep leaves.
-func recordRows(rows int) int { return rows + 1 + HorizonDeletesPerRecord + 1 }
+func recordRows(rows int) int { return rows + 1 + pushDayRows + HorizonDeletesPerRecord + 1 }
 
 // refuseAll is p answered with a refusal of the whole push: every command the
 // receiver did not already refuse becomes ng under code with detail, and

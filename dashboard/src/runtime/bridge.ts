@@ -194,8 +194,14 @@ export interface CommentPoint {
   y: number;
 }
 
-/** What the host asks about: a declared anchor, or a point. */
-export type CommentTarget = { name: string } | { point: CommentPoint };
+/** What the host asks about: a declared anchor, a point of the document, or a point of the viewport. */
+export type CommentTarget = { name: string } | { point: CommentPoint } | { view: CommentView };
+
+/** A point of the page's viewport in CSS pixels, as a board names one: the page adds its own scroll. */
+export interface CommentView {
+  x: number;
+  y: number;
+}
 
 /** Host to page, on the `comments` topic: the mode, a part to bring into view, or a part to draw. */
 export type CommentRequest =
@@ -477,9 +483,13 @@ export function readCommentPoint(data: unknown): CommentPoint | null {
   return { x: fraction(p["x"]), y: fraction(p["y"]) };
 }
 
-/** Reads what a request names: a declared name, or a point. */
+/** Reads what a request names: a declared name, a point of the document, or one of the viewport. */
 function readTarget(data: Record<string, unknown>): CommentTarget | null {
   if (data["name"] !== undefined) return isAnchorName(data["name"]) ? { name: data["name"] } : null;
+  if (data["view"] !== undefined) {
+    const v = record(data["view"]);
+    return v && finite(v["x"]) && finite(v["y"]) ? { view: { x: v["x"], y: v["y"] } } : null;
+  }
   const point = readCommentPoint(data["point"]);
   return point ? { point } : null;
 }

@@ -1453,6 +1453,10 @@ type ReadQuery struct {
 	// versionedFields row. The domain landed on main with it
 	// ([RecordVersion]).
 	FindingIDs []string `json:"finding_ids,omitempty"`
+	// FindingPaths asks a `change` read for its findings counted by path, state and revision
+	// ([ReadAnswer.FindingPaths]), paged by Limit and Cursor; refused on every other kind and beside
+	// a part, detail_only, brief or finding_ids. A key of its own, so an older build refuses it unread.
+	FindingPaths bool `json:"finding_paths,omitempty"`
 	// Introduced is an `introduced` read's range: REQUIRED for that kind,
 	// refused on every other.
 	Introduced *IntroducedQuery `json:"introduced,omitempty"`
@@ -1557,6 +1561,10 @@ type ReadQuery struct {
 	// ids, once each, required for that kind and refused on every other. A request
 	// field, no record's, so no versionedFields row: an older build refuses the kind.
 	CommitMarks []string `json:"commit_marks,omitempty"`
+	// DayBounds is the asker's day boundaries, a day between each two: on a push history, and with
+	// RepoFacts on a listing of repositories or a read of one ([ReadQuery.validateDayBounds]); refused
+	// on every other kind. A request field, no record's: an older build refuses it unread.
+	DayBounds []time.Time `json:"day_bounds,omitempty"`
 	// Counts is a `counts` read's parts, each a key of its own so an older build refuses one
 	// it lacks unread; required there and refused on every other kind. A request field, no record's.
 	Counts *CountsQuery `json:"counts,omitempty"`
@@ -1611,7 +1619,10 @@ type ReadAnswer struct {
 	// executor's pushes, oldest first — each repository the run was given
 	// in its query's order, and each one's pushes in log order.
 	Pushes []PushRow `json:"pushes,omitempty"`
-	Refs   []RefRow  `json:"refs,omitempty"`
+	// PushDays is the repository's pushes on each of the asker's days, oldest first, zeros included:
+	// answered on a push history asked with [ReadQuery.DayBounds], whatever the page holds.
+	PushDays []int64  `json:"push_days,omitempty"`
+	Refs     []RefRow `json:"refs,omitempty"`
 	// RefsDetail is a refs page read in detail, in place of Refs, and
 	// ActiveBranches a first page's count of the branches moved since
 	// [RefListingQuery.ActiveSince].
@@ -1636,17 +1647,19 @@ type ReadAnswer struct {
 	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no
 	// versionedFields row. The domain landed on main with it, as with
 	// [ReadQuery.Resolve].
-	Resolved   *RepoRef               `json:"resolved,omitempty"`
-	Revisions  []RevisionRow          `json:"revisions,omitempty"`
-	Reviewers  []ReviewerRow          `json:"reviewers,omitempty"`
-	Comments   []CommentRow           `json:"comments,omitempty"`
-	Reviews    []ReviewRow            `json:"reviews,omitempty"`
-	Findings   []FindingRow           `json:"findings,omitempty"`
-	Routed     *RoutedPage            `json:"routed,omitempty"`
-	Introduced []IntroducedRow        `json:"introduced,omitempty"`
-	Due        []CompactionCandidate  `json:"due,omitempty"`
-	Publish    []PublicationCandidate `json:"publish,omitempty"`
-	Expunge    []ExpungeCandidate     `json:"expunge,omitempty"`
+	Resolved  *RepoRef      `json:"resolved,omitempty"`
+	Revisions []RevisionRow `json:"revisions,omitempty"`
+	Reviewers []ReviewerRow `json:"reviewers,omitempty"`
+	Comments  []CommentRow  `json:"comments,omitempty"`
+	Reviews   []ReviewRow   `json:"reviews,omitempty"`
+	Findings  []FindingRow  `json:"findings,omitempty"`
+	// FindingPaths is a `finding_paths` page of a change ([ReadQuery.FindingPaths]).
+	FindingPaths []FindingPathRow       `json:"finding_paths,omitempty"`
+	Routed       *RoutedPage            `json:"routed,omitempty"`
+	Introduced   []IntroducedRow        `json:"introduced,omitempty"`
+	Due          []CompactionCandidate  `json:"due,omitempty"`
+	Publish      []PublicationCandidate `json:"publish,omitempty"`
+	Expunge      []ExpungeCandidate     `json:"expunge,omitempty"`
 	// Imports is an `imports_due` read's page, Mirrors a `mirrors_due`
 	// read's.
 	Imports []ImportCandidate `json:"imports,omitempty"`
@@ -2548,6 +2561,9 @@ type RepoSummary struct {
 	// Pushes is pushes EVER.
 	Pushes     int64     `json:"pushes"`
 	LastPushAt time.Time `json:"last_push_at,omitzero"`
+	// Spark is its pushes on each of the asker's days, oldest first, zeros included: Spark[i] those
+	// landed from DayBounds[i] up to DayBounds[i+1]. Answered only where RepoFacts asks with DayBounds.
+	Spark []int64 `json:"spark,omitempty"`
 	// ChangeCounts is its changes by state, answered only where [ReadQuery.RepoFacts] asks.
 	ChangeCounts *ChangeCounts `json:"change_counts,omitempty"`
 	// Card is what a listing's row draws of it, where [ReadQuery.RepoFacts] asks: absent from a
@@ -2592,6 +2608,9 @@ type RepoDetail struct {
 	// row never carries, read in the same transaction as the rules it does,
 	// so every source names a rule of the row.
 	RuleSources []RuleSource `json:"rule_sources,omitempty"`
+	// Pushers is who pushed to it on the UTC days that begin within the asker's day bounds, most
+	// first: answered only where RepoFacts asks with DayBounds ([Pushers]).
+	Pushers *Pushers `json:"pushers,omitempty"`
 	// Expunge is where the repository's expunges stand ([ExpungeState]):
 	// the one open, the purge a person asked for and not yet served, and the
 	// last one committed — the repository's own row, read with the rest of
@@ -2818,6 +2837,9 @@ type ChangeDetail struct {
 	// no revision of yet. One of an earlier revision than the change's head,
 	// or into another branch, is the home's to merge again.
 	Mergeability *MergeabilityRow `json:"mergeability,omitempty"`
+	// Participants is who takes part in its conversation (code_participants), by handle, at
+	// most MaxDetailParticipants; nil where not answered.
+	Participants *ParticipantList `json:"participants,omitempty"`
 }
 
 // ConversationRow is a change's conversation's counters
@@ -2969,6 +2991,8 @@ type FindingRow struct {
 	ResolvedCommit   string            `json:"resolved_commit,omitempty"`
 	ResolvedPosition statelog.Position `json:"resolved_position,omitzero"`
 	Position         statelog.Position `json:"position"`
+	// RaisedAt is the broker instant of the review that raised it (code_reviews.at).
+	RaisedAt time.Time `json:"raised_at,omitzero"`
 }
 
 // ReviewerRow is one reviewer a change has asked (code_reviewers): a seat by
@@ -2984,6 +3008,9 @@ type ReviewerRow struct {
 	RequestedByKind PartyKind         `json:"requested_by_kind"`
 	Note            string            `json:"note,omitempty"`
 	Position        statelog.Position `json:"position"`
+	// At is when the record at Position landed, read from one of its notices on the change;
+	// zero where none is kept (past the notices' horizon, or a record that told nobody).
+	At time.Time `json:"at,omitzero"`
 }
 
 // CommentRow is one comment on a change (code_comments): its thread — its own
@@ -3312,6 +3339,9 @@ const (
 	// order, case-folded, best first, with how many match (find.go): read over the
 	// tree's memoized listing, so a person typing runs no git after the first query.
 	GitFind GitReadKind = "find"
+	// GitExcerpts is the lines around ranges of lines, each read in a blob a change's
+	// revision holds, marked as that revision's diff changes them (excerpts.go).
+	GitExcerpts GitReadKind = "excerpts"
 )
 
 // GitReadKinds is the closed set.
@@ -3323,7 +3353,7 @@ const (
 func GitReadKinds() []GitReadKind {
 	return []GitReadKind{GitTree, GitBlob, GitDiff, GitCompare, GitTips, GitTags, GitLandedIn,
 		GitRevisionFacts, GitReanchor, GitInterdiff, GitLog, GitBlame, GitTreeCommits, GitChecksFile, GitCodeFiles,
-		GitSearch, GitFind}
+		GitSearch, GitFind, GitExcerpts}
 }
 
 // Valid reports a kind this build answers.
@@ -3507,6 +3537,7 @@ type GitQuery struct {
 	CodeFiles     *CodeFilesQuery     `json:"code_files,omitempty"`
 	Search        *SearchQuery        `json:"search,omitempty"`
 	Find          *FindQuery          `json:"find,omitempty"`
+	Excerpts      *ExcerptsQuery      `json:"excerpts,omitempty"`
 }
 
 // CodeFilesQuery reads a commit's deploy and dependency files
@@ -3945,7 +3976,7 @@ func (q GitQuery) Validate() error {
 		{GitInterdiff, q.Interdiff != nil}, {GitLog, q.Log != nil}, {GitBlame, q.Blame != nil},
 		{GitTreeCommits, q.TreeCommits != nil},
 		{GitChecksFile, q.ChecksFile != nil}, {GitCodeFiles, q.CodeFiles != nil},
-		{GitSearch, q.Search != nil}, {GitFind, q.Find != nil}} {
+		{GitSearch, q.Search != nil}, {GitFind, q.Find != nil}, {GitExcerpts, q.Excerpts != nil}} {
 		switch {
 		case s.kind == q.Kind && !s.present:
 			return fmt.Errorf("%w: %s: a %s read names what it reads", ErrInvalid, s.kind, s.kind)
@@ -3998,6 +4029,8 @@ func (q GitQuery) Validate() error {
 		return q.Search.validate()
 	case GitFind:
 		return q.Find.validate()
+	case GitExcerpts:
+		return q.Excerpts.validate()
 	}
 	return q.Compare.validate()
 }
@@ -4409,6 +4442,7 @@ type GitAnswer struct {
 	CodeFiles     *CodeFilesAnswer     `json:"code_files,omitempty"`
 	Search        *SearchAnswer        `json:"search,omitempty"`
 	Find          *FindAnswer          `json:"find,omitempty"`
+	Excerpts      *ExcerptsAnswer      `json:"excerpts,omitempty"`
 }
 
 // CodeFilesAnswer is a commit's deploy and dependency files: its LISTING, at

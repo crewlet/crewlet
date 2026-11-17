@@ -296,6 +296,20 @@ func TestAReadOfAChangesRevisionsIsRefusedByField(t *testing.T) {
 		m(q.Interdiff)
 		return q
 	}
+	excerpts := func(m func(q *gitlet.ExcerptsQuery)) gitlet.GitQuery {
+		q := gitlet.GitQuery{Kind: gitlet.GitExcerpts, RepoID: repo, Asker: asker,
+			Excerpts: &gitlet.ExcerptsQuery{Anchors: []gitlet.ExcerptAnchor{{LineAnchor: anchor, Base: a, Head: b}}}}
+		m(q.Excerpts)
+		return q
+	}
+	excerpted := func(n int) []gitlet.ExcerptAnchor {
+		out := make([]gitlet.ExcerptAnchor, n)
+		for i := range out {
+			out[i] = gitlet.ExcerptAnchor{LineAnchor: anchor, Head: b}
+			out[i].ID = fmt.Sprintf("f-%d", i)
+		}
+		return out
+	}
 	many := func(n int) []gitlet.LineAnchor {
 		out := make([]gitlet.LineAnchor, n)
 		for i := range out {
@@ -369,6 +383,52 @@ func TestAReadOfAChangesRevisionsIsRefusedByField(t *testing.T) {
 		{"an abbreviated head", interdiff(func(q *gitlet.InterdiffQuery) { q.ToHead = a[:12] }), "interdiff.to_head"},
 		{"a file", interdiff(func(q *gitlet.InterdiffQuery) { q.File = "a*" }), ""},
 		{"a file from the work tree", interdiff(func(q *gitlet.InterdiffQuery) { q.File = "./a" }), "interdiff.file"},
+		{"an excerpt", excerpts(func(*gitlet.ExcerptsQuery) {}), ""},
+		{"an excerpt of a revision with no base", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors[0].Base = "" }),
+			""},
+		{"the most excerpts at the widest context", excerpts(func(q *gitlet.ExcerptsQuery) {
+			q.Anchors, q.Context = excerpted(gitlet.MaxExcerptAnchors), new(gitlet.MaxExcerptContext)
+		}), ""},
+		{"no excerpt", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors = nil }), "excerpts.anchors"},
+		{"an excerpt too many", excerpts(func(q *gitlet.ExcerptsQuery) {
+			q.Anchors = excerpted(gitlet.MaxExcerptAnchors + 1)
+		}), "excerpts.anchors"},
+		{"one excerpt id twice", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors = append(q.Anchors, q.Anchors[0]) }),
+			"excerpts.anchors[1].id"},
+		{"an excerpt id past its bytes", excerpts(func(q *gitlet.ExcerptsQuery) {
+			q.Anchors[0].ID = strings.Repeat("x", 65)
+		}), "excerpts.anchors[0].id"},
+		{"an old side excerpt with no base", excerpts(func(q *gitlet.ExcerptsQuery) {
+			q.Anchors[0].Side, q.Anchors[0].Base = gitlet.SideOld, ""
+		}), "excerpts.anchors[0].side"},
+		{"an excerpt of an abbreviated head", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors[0].Head = b[:7] }),
+			"excerpts.anchors[0].head"},
+		{"an excerpt of an abbreviated base", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors[0].Base = a[:7] }),
+			"excerpts.anchors[0].base"},
+		{"an excerpt of the zero blob", excerpts(func(q *gitlet.ExcerptsQuery) {
+			q.Anchors[0].BlobOID = gitlet.ZeroOID
+		}), "excerpts.anchors[0].blob_oid"},
+		{"an excerpt from line zero", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors[0].Start = 0 }),
+			"excerpts.anchors[0]"},
+		{"a backwards excerpt", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors[0].End = 2 }),
+			"excerpts.anchors[0]"},
+		{"an excerpt of an unclean path", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors[0].Path = "./a" }),
+			"excerpts.anchors[0].path"},
+		{"no context", excerpts(func(q *gitlet.ExcerptsQuery) { q.Context = new(0) }), ""},
+		{"a context below none", excerpts(func(q *gitlet.ExcerptsQuery) { q.Context = new(-1) }), "excerpts.context"},
+		{"a context past the widest", excerpts(func(q *gitlet.ExcerptsQuery) {
+			q.Context = new(gitlet.MaxExcerptContext + 1)
+		}), "excerpts.context"},
+		{"an excerpts read carrying a re-anchoring", func() gitlet.GitQuery {
+			q := excerpts(func(*gitlet.ExcerptsQuery) {})
+			q.Reanchor = &gitlet.ReanchorQuery{Head: a, Anchors: []gitlet.LineAnchor{anchor}}
+			return q
+		}(), "reanchor"},
+		{"an unstamped excerpts read", func() gitlet.GitQuery {
+			q := excerpts(func(*gitlet.ExcerptsQuery) {})
+			q.Unstamped = true
+			return q
+		}(), "unstamped"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

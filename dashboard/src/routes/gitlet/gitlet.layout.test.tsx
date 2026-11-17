@@ -693,6 +693,73 @@ for (const [viewport, column] of [
   });
 }
 
+// A COMMIT'S ID STAYS PUT WHEN ITS CHECK ARRIVES: the check's slot keeps its width while the
+// marks are read, and at a phone's width a row's pill, change and tags wrap inside it.
+// Mutation: draw the slot only once the marks answer.
+const THIRD = "1".repeat(40);
+for (const [viewport, column] of [
+  [1440, 1200],
+  [390, 358],
+] as const) {
+  test(`a commit's id stays put when its check arrives, at ${viewport}px`, async () => {
+    await page.viewport(viewport, 900);
+    withHistory();
+    const history = vi.mocked(fetch).getMockImplementation()!;
+    let release = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    const tags = ["refs/tags/v2026.11.2", "refs/tags/v2026.11.1"];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input), location.origin);
+        if (url.pathname === "/query/code_log") {
+          const answer = (await (await history(input)).json()) as Record<string, unknown>;
+          return json({ ...answer, tagged: { commits: { [THIRD]: { refs: tags } } } });
+        }
+        if (url.pathname !== "/query/code_commit_marks") return history(input);
+        await held;
+        const change = { repo: "web", title: "cache the badge", state: "merged" };
+        const passed = { state: "passed", counts: { passed: 2 }, required: 2, required_passed: 2 };
+        return json({
+          commit_marks: [
+            { commit: BASE, checks: [{ ...passed, target: "refs/heads/main" }] },
+            {
+              commit: THIRD,
+              merged: [{ ...change, ref: "web!41", merge_oid: THIRD }],
+              heads: [{ change: { ...change, ref: "web!40" }, n: 2 }],
+            },
+          ],
+          position: POSITION,
+          level: "session",
+        });
+      }),
+    );
+    location.hash = "#/gitlet/repos/web?tab=commits";
+    mount(<RepositoryPage repo="web" />, column);
+    const rows = await eventually(() => {
+      const found = [...document.querySelectorAll<HTMLElement>(".code-list__row")];
+      expect(found).toHaveLength(3);
+      return found;
+    });
+    const sha = () => rows[1]!.querySelector(".code-sha")!.getBoundingClientRect();
+    const before = sha();
+    release();
+    await eventually(() => expect(rows[1]!.querySelector(".code-check-mark")).toBeTruthy());
+    await eventually(() => expect(rows[2]!.querySelector(".code-change-ref")).toBeTruthy());
+    expect([sha().x, sha().y]).toEqual([before.x, before.y]);
+    const last = rows[2]!;
+    expect(last.scrollWidth).toBeLessThanOrEqual(last.clientWidth);
+    const box = last.getBoundingClientRect();
+    for (const el of last.querySelectorAll<HTMLElement>(
+      ".code-change-ref, .code-tag-chip, .code-commit-landed",
+    )) {
+      expect(el.getBoundingClientRect().right, el.textContent!).toBeLessThanOrEqual(
+        box.right + 0.5,
+      );
+    }
+  });
+}
+
 /** The file view of `cmd/main.go` at `width`, once its third line is coloured. */
 async function colouredLine(width: number): Promise<HTMLElement> {
   await page.viewport(width, 900);

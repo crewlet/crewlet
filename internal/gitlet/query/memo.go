@@ -90,7 +90,7 @@ import (
 // TestAMemoEntryHoldsEveryFieldOfItsAnswer holds the encoding to the answers'
 // fields, and TestAnAnswersShapeIsItsMemoFormat holds this name to a
 // fingerprint of them, so a change to either fails until this moves with it.
-const memoFormat = "page/6"
+const memoFormat = "page/8"
 
 // memoPage is one page as the memo keeps it.
 type memoPage struct {
@@ -206,6 +206,16 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 			strconv.FormatBool(s.IgnoreCase), s.Text, strconv.Itoa(s.Hits()), after, strconv.Itoa(afterLine),
 			strconv.Itoa(len(paths)))
 		parts = append(parts, paths...)
+	case gitlet.GitExcerpts:
+		// The context as applied, then every anchor whole: its revision, its blob, its path's
+		// bytes, its side and its range.
+		e := q.Excerpts
+		parts = append(parts, strconv.Itoa(e.ContextOf()), strconv.Itoa(len(e.Anchors)))
+		for _, a := range e.Anchors {
+			p, _ := gitlet.GitPath("path", a.Path, a.PathB64, false)
+			parts = append(parts, a.ID, whole[a.Base], whole[a.Head], a.BlobOID, p, string(a.Side),
+				strconv.Itoa(a.Start), strconv.Itoa(a.End))
+		}
 	}
 	return cache.NewMemoKey(append(parts, formatCursor(at))...)
 }
@@ -603,6 +613,22 @@ func encodePage(p memoPage) []byte {
 			w.str(h.Text)
 			w.str(h.Blob)
 		}
+	case gitlet.GitExcerpts:
+		w.int(len(a.Excerpts.Excerpts))
+		for _, e := range a.Excerpts.Excerpts {
+			w.str(e.ID)
+			w.str(e.Status)
+			w.flag(e.Binary)
+			w.flag(e.More)
+			w.int(len(e.Lines))
+			for _, l := range e.Lines {
+				w.str(l.Mark)
+				w.int(l.Old)
+				w.int(l.New)
+				w.str(l.Text)
+				w.int(l.TextBytes)
+			}
+		}
 	}
 	return w
 }
@@ -909,6 +935,24 @@ func decodePage(body []byte) (memoPage, error) {
 			}
 		}
 		a.Search = s
+	case gitlet.GitExcerpts:
+		x := &gitlet.ExcerptsAnswer{Excerpts: []gitlet.Excerpt{}}
+		if n := r.count(); r.err == nil {
+			x.Excerpts = make([]gitlet.Excerpt, n)
+			for i := range x.Excerpts {
+				e := gitlet.Excerpt{ID: r.str(), Status: r.str(), Binary: r.flag(), More: r.flag(),
+					Lines: []gitlet.ExcerptLine{}}
+				if m := r.count(); r.err == nil {
+					e.Lines = make([]gitlet.ExcerptLine, m)
+					for j := range e.Lines {
+						e.Lines[j] = gitlet.ExcerptLine{Mark: r.str(), Old: r.int(), New: r.int(), Text: r.str(),
+							TextBytes: r.int()}
+					}
+				}
+				x.Excerpts[i] = e
+			}
+		}
+		a.Excerpts = x
 	default:
 		return memoPage{}, errMemoPage
 	}
