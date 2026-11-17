@@ -145,7 +145,7 @@ func TestALinksMovementIsJudgedOverTheSpanAskedAbout(t *testing.T) {
 // a link that moved then moves for ever, and hold every wait that reads it to
 // its cap.
 //
-// Mutant: a closed meter answers from its frozen readings.
+// Mutant: a closed meter answers from the readings its ring held at its close.
 func TestAClosedMeterSaysItsLinkIsNotMoving(t *testing.T) {
 	t.Parallel()
 	const floor = 1 << 20
