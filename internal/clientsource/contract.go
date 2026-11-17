@@ -496,6 +496,8 @@ var contract = []Entry{
 	// code.ts
 	{"REPO_STATUSES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryRepositoryState"},
 	{"REPO_SEARCH_MODES", ReadLiteral, "internal/gitlet.TestTheDashboardOffersEverySearchModeOfARepository"},
+	{"REPO_KINDS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryKindOfRepository"},
+	{"REPO_SORTS", ReadLiteral, "internal/gitlet.TestTheDashboardSortsRepositoriesAsTheEngineDoes"},
 	{"CODE_PATH_CLASSES", ReadLiteral, "internal/gitlet.TestTheDashboardOffersEveryPathClassAGateExempts"},
 	{"CODE_MAX_QUEUE_DEPTH", ReadScalar, "internal/gitlet.TestTheDashboardBoundsALandingAsTheEngineDoes"},
 	{"CODE_MAX_QUEUE_BATCH", ReadScalar, "internal/gitlet.TestTheDashboardBoundsALandingAsTheEngineDoes"},
@@ -509,6 +511,7 @@ var contract = []Entry{
 	{"CHANGE_WINDOWS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryWindowOfAListingOfChanges"},
 	{"PRECONDITION_KINDS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryPreconditionOfAChange"},
 	{"PRECONDITION_STATES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryPreconditionOfAChange"},
+	{"PUSHER_KINDS", ReadLiteral, "internal/gitlet.TestTheDashboardCountsEveryPusherKind"},
 	{"FINDING_SEVERITIES", ReadLiteral, "internal/gitlet.TestTheDashboardRaisesFindingsInTheEnginesWords"},
 	{"FINDING_CATEGORIES", ReadLiteral, "internal/gitlet.TestTheDashboardRaisesFindingsInTheEnginesWords"},
 	{"CODE_PHRASES", ReadLiteral, "internal/gitlet.TestEveryCodeReasonReadsAsEnglishOnTheClient"},

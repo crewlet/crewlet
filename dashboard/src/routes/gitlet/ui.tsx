@@ -1,7 +1,6 @@
 /**
  * The marks every Gitlet screen draws the same way: a commit's id, a branch,
- * who did something and when, what a directory entry is, and how a repository
- * is cloned; a check's verdict, a tag.
+ * who did something and when, what a directory entry is; a check's verdict, a tag.
  *
  * # Why they are one module
  *
@@ -19,7 +18,7 @@
 import "~/styles/gitlet.css";
 
 import type { ComponentType, ReactNode } from "react";
-import { Button, Copyable, InlineCode, Popover, Spinner, Tag, VisuallyHidden } from "@crewlethq/ui";
+import { Copyable, Spinner, Tag, VisuallyHidden } from "@crewlethq/ui";
 import { ProductMark } from "@crewlethq/icons/product-mark";
 import {
   BookOpenGlyph,
@@ -209,53 +208,6 @@ export function EntryGlyph({ entry }: { entry: Pick<CodeTreeEntry, "mode" | "pat
     <FileTextGlyph size="sm" className="code-glyph" />
   ) : (
     <FileCodeGlyph size="sm" className="code-glyph" />
-  );
-}
-
-/**
- * The address a person clones a repository from: the API's own origin — the
- * one this dashboard is served from, since the engine serves `/git/` beside
- * it and never on the public listener — and `/git/{name}.git`.
- */
-export function cloneURL(repo: string, origin: string = location.origin): string {
-  return `${origin}/git/${repo}.git`;
-}
-
-/**
- * Clone: the repository's HTTPS address with its copy, and what git asks for
- * — the person's own token as the password, minted by `crewlet iam token
- * -login`, which `crewlet gitlet credential` hands git from the environment.
- * The clone is git's, from the reader's own machine: nothing here writes.
- */
-export function CloneButton({ repo }: { repo: string }) {
-  const url = cloneURL(repo);
-  return (
-    <Popover
-      label={`Clone ${repo}`}
-      align="end"
-      trigger={(open, toggle) => (
-        <Button size="small" variant="primary" aria-expanded={open} onClick={toggle}>
-          Clone
-        </Button>
-      )}
-    >
-      <div className="code-clone">
-        <p className="code-clone__head">Clone with HTTPS</p>
-        <Copyable
-          className="code-clone__url"
-          value={url}
-          variant="block"
-          monospace
-          ariaLabel={`Copy ${url}`}
-          title="Copy the address"
-        />
-        <p className="code-clone__note">
-          git asks for a password: give it your own token, which{" "}
-          <InlineCode>crewlet iam token -login</InlineCode> mints. To have git never ask, make{" "}
-          <InlineCode>crewlet gitlet credential</InlineCode> its credential helper.
-        </p>
-      </div>
-    </Popover>
   );
 }
 

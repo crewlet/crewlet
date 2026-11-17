@@ -724,6 +724,7 @@ days keep none.
 | `crewlet_custody` | Which data node keeps each batch of a stateless node's events: claimed create-only by the data node that wrote the batch, after it wrote it, so exactly one node's log keeps it ([custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)). The bucket's age, 32 days, outlasts the event log's retention, so a node settling a batch it wrote before a crash always finds the answer |
 | `crewlet_uploads` | The bytes an artifact's upload intents have **reserved** and no record names yet: one ledger of every hold the company has outstanding, written by compare-and-set so two intents racing for the last of a budget cannot both win, and one record per upload naming the keys the engine minted for it and how far each transfer got. The bucket's age, 30 hours, outlasts the longest hold a reservation keeps (until the [object collector](object-store.md) could have deleted the bytes), so an abandoned upload's record goes on its own |
 | `crewlet_integrations` · `crewlet_mailboxes` | Each surface's reconcile status, and the seat mailboxes that may exist so a removed seat's can be retired |
+| `crewlet_atlas_sources` · `crewlet_atlas_source_refreshes` · `crewlet_atlas_code_scans` | The [atlas](atlas.md)'s standings and asks: each source's standing (its last complete read, that read's calls and withheld values, its last fault, the listings it was refused, and the entries it has stopped seeing since when); a person's ask that a source be read now, until the collect duty honours it; and each scanned repository's standing, with each forge's for its repositories' files under keys of their own. **No age**: an expired standing would read as a source never read or a repository never scanned, and an expired ask would be dropped before the duty reached it |
 | `crewlet_statelog_positions` | **Four key classes**, all answering what the log may delete: each node's position per domain; the trim holds a backup or a join takes; what each node's newest backup and each log's newest operator acknowledgement cover, which is the only input each log's backup term has; and the floor the trim published, with the term holding it and how long it has been holding — the last is the one nothing can re-derive, because a duty that moves on a lease carries no memory across the move. **No age at all**, and this is the one where an age would be worst — an expired position reads as a node that has applied *nothing*, which either pins the trim for ever or, read the other way, deletes records that node still needs |
 
 **In flight, or keyed — the event stream.**
@@ -805,8 +806,8 @@ They were moved, and the rule is now the one above. See
 **Retention here is a bucket's age, never a per-write TTL.** On the embedded
 broker a per-key TTL is create-only — an update clears it, leaving the key
 immortal — so a horizon has to be fixed when its bucket is created, and that is
-why there are twenty-two of them rather than one with prefixes: three in the lease
-store, nineteen in the fleet store. The lease store is the sharpest illustration: `crewlet_leases` has an age, *and that age is the
+why there is a bucket per horizon rather than one with prefixes: three in the lease
+store, and every other in the fleet store, each listed in the table above. The lease store is the sharpest illustration: `crewlet_leases` has an age, *and that age is the
 lease TTL* — a renew rewrites the key and restarts the clock, so a node that
 stops renewing stops holding and nothing has to notice it died. `crewlet_epochs`
 sits beside it with no age at all, because a fence that restarts is not a fence.

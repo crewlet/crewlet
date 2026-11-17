@@ -457,7 +457,9 @@ func (s *Server) refusedByStatus(repo gitlet.RepoRef, sec section,
 
 // refusedEvery refuses a push every command of which pre refuses — or, an
 // --atomic push, any of whose commands pre refuses (gitlet.Atomic) — before
-// receive-pack runs: there is nothing to upload and nothing to propose.
+// receive-pack runs: there is nothing to upload and nothing to propose. But an
+// attempt (gitlet.Attempted) is received, every command it refuses added to
+// pre, so its landing records it with nothing stored.
 func (s *Server) refusedEvery(sec section, pre map[string]answered,
 	refuseAll func(AuditRefusal, []answered)) bool {
 
@@ -472,6 +474,14 @@ func (s *Server) refusedEvery(sec section, pre map[string]answered,
 		}
 	}
 	cmds = gitlet.Atomic(cmds)
+	if gitlet.Attempted(cmds) {
+		for _, c := range cmds {
+			if _, refused := pre[c.Ref]; !refused {
+				pre[c.Ref] = answered{Ref: c.Ref, Reason: c.Reason, Detail: c.Detail}
+			}
+		}
+		return false
+	}
 	var first gitlet.Refusal
 	for _, c := range cmds {
 		if pre[c.Ref].Reason != "" {

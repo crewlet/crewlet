@@ -105,3 +105,24 @@ func TestAPendingPushIsReadAgainUntilItsGraceIsSpent(t *testing.T) {
 		}
 	})
 }
+
+// A COLLAPSED ROW READS AS ITS COMMANDS SAY: a retried push id that meets the
+// row an earlier record applied reads applied where a command moved a ref or
+// every one was a noop, and refused under its first code where it was an
+// attempt, every command refused.
+//
+// Mutation: read every collapsed row applied (the attempt's reads applied, red).
+func TestACollapsedAttemptReadsRefused(t *testing.T) {
+	at := statelog.Position{Stream: "s", Generation: 1, Seq: 7}
+	refused := gitlet.Command{Ref: "refs/heads/locked", Result: gitlet.ResultNG, Reason: gitlet.RefusalProtectedDirect}
+	moved := gitlet.Command{Ref: "refs/heads/topic", Result: gitlet.ResultOK}
+	if v := settled([]gitlet.Command{refused}, at, true, true); v.outcome != types.AuditRefused ||
+		v.refusal != AuditRefusal(gitlet.RefusalProtectedDirect) || !v.position.IsZero() {
+		t.Errorf("a collapsed attempt's row read %s %s at %s, want refused protected_direct", v.outcome, v.refusal,
+			v.position)
+	}
+	if v := settled([]gitlet.Command{refused, moved}, at, true, true); v.outcome != types.AuditApplied ||
+		v.position != at {
+		t.Errorf("a collapsed row with a ref moved read %s at %s, want applied at %s", v.outcome, v.position, at)
+	}
+}

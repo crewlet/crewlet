@@ -25,7 +25,8 @@ import (
 //     each check stands at, one page), or — naming no repository — the
 //     WINDOW, every repository's the asker reads whose attempts ended at or
 //     after `since` and before `until`; each shape narrowed by a check's
-//     `name` and a `state`;
+//     `name` and a `state`; or where each check stands (`standing`, `recent`
+//     or `failing`), of a repository or of every one, within `since`;
 //   - `code_check`, one attempt whole — its row, its definition, its tail,
 //     the failures its ending named and the log a failed run kept — named on
 //     its repository's path by its commit, its check and its attempt, beside
@@ -110,9 +111,10 @@ type CheckLogPage struct {
 // [ErrBadParams] naming what is not one: a change's number, a commit's whole
 // id and the branch it was checked for on the repository it names, whether
 // each check's latest attempt alone is asked for, the window's two bounds, a
-// check's name and a state — nil where it names none, the repository's or the
-// window's whole listing. Which of them stand beside which is the reader's
-// to refuse, naming the field.
+// check's name, a state and where each check stands in which order
+// (`standing`); nil where it names none, the repository's or the window's
+// whole listing. Which of them stand beside which, and an order it does not
+// know, is the reader's to refuse, naming the field.
 func checksListing(p Params) (*gitlet.CheckQuery, error) {
 	var c gitlet.CheckQuery
 	if p.Has("change") {
@@ -147,6 +149,7 @@ func checksListing(p Params) (*gitlet.CheckQuery, error) {
 	if c.Until, err = instantParam(p, "until"); err != nil {
 		return nil, err
 	}
+	c.Standing = gitlet.StandingOrder(strings.TrimSpace(p.String("standing")))
 	if c == (gitlet.CheckQuery{}) {
 		return nil, nil
 	}

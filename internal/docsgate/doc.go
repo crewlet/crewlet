@@ -47,6 +47,18 @@
 // this package cannot evaluate a route, and a second copy of the route table
 // here would be the drift the table's own gate exists to prevent.
 //
+// # An inventory is held to the code it lists
+//
+// A few pages list a set the code defines, and a reader trusts the list
+// exactly when it is complete: the coordination store's buckets are listed in
+// architecture.md's coordination KV table, in coordination.md's diagram, slot
+// table and retention table, and counted in deployment.md, where an operator
+// sizes an external broker's account. TestEveryCoordinationBucketIsInEveryInventory
+// reads the buckets from internal/coord/kv's own source (every `...Suffix`
+// constant, the fleet store's being the ones OpenFleet names) and holds each
+// inventory to them both ways, because the atlas's buckets and the uploads
+// bucket each shipped missing from one of them with nothing to notice.
+//
 // The package is test-only: this file is its documentation and the gates are
 // its tests.
 package docsgate

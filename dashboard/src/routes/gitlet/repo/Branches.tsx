@@ -38,7 +38,7 @@ import { PageFailed, QueryState } from "~/components/common.tsx";
 import { ago } from "~/lib/ago.ts";
 import { useClock, useNow } from "~/lib/clock.ts";
 import { CHECK_HISTORY_DAYS, rollupFor, rollupTitle } from "~/lib/checks.ts";
-import { PUSH_HISTORY_DAYS, changeRef, refName, repoPath, shortOID } from "~/lib/code.ts";
+import { changeRef, refName, repoPath, shortOID } from "~/lib/code.ts";
 import { civilAt, civilKey, fmtDateTime, plural, readerDay, relTime } from "~/lib/format.ts";
 import { zone } from "~/lib/prefs.ts";
 import { dayStartIn } from "~/lib/range.ts";
@@ -50,7 +50,6 @@ import {
   type CodeRefListing,
   type CodeTip,
   type CodeGitAnswer,
-  type CodeRefMover,
   type CodeRefProtection,
   type CodeRefsAnswer,
   type CodeRepoDetail,
@@ -58,8 +57,9 @@ import {
 } from "~/protocol/index.ts";
 import { ChangeRefPill } from "../Changes.tsx";
 import { useListKeys } from "../CodeList.tsx";
+import { moverOf } from "../movers.ts";
 import { commitHref, compareHref, repoHref } from "../paths.ts";
-import { BranchChip, CheckRollupMark, Face, GITLET, useWhoName, type Who } from "../ui.tsx";
+import { BranchChip, CheckRollupMark, Face, useWhoName } from "../ui.tsx";
 import { DeleteBranchButton, NewBranchButton } from "./BranchWrites.tsx";
 import { useCommitMarks } from "./marks.ts";
 import { ProtectButton } from "./Protect.tsx";
@@ -245,7 +245,7 @@ function DefaultBox({
 }
 
 /** The default branch read in detail: found page by page, since a find matches any part of a name. */
-function useDefaultBranch(repo: CodeRepoDetail) {
+export function useDefaultBranch(repo: CodeRepoDetail, enabled = true) {
   const params = useMemo(
     () => ({
       name: repo.name,
@@ -255,7 +255,7 @@ function useDefaultBranch(repo: CodeRepoDetail) {
     }),
     [repo.name, repo.default_branch],
   );
-  const first = useCodeQuery("code_refs", params);
+  const first = useCodeQuery("code_refs", params, { enabled });
   const want = HEADS + repo.default_branch;
   const inFirst = first.data?.refs_detail?.find((r) => r.ref === want);
   const next = first.data?.next ?? "";
@@ -618,9 +618,9 @@ function CopyName({ name }: { name: string }) {
   );
 }
 
-/** A branch's rules in words: "Protected by release/*: no force-push, no delete, pushes through changes only". */
-function protectionTitle(p: CodeRefProtection): string {
-  const clauses = [
+/** A branch's rules as clauses: "no force-push, no delete, pushes through changes only". */
+export function protectionWords(p: CodeRefProtection): string {
+  return [
     p.allow_force ? "force-push allowed" : "no force-push",
     p.allow_delete ? "delete allowed" : "no delete",
     p.direct_push === "none"
@@ -628,11 +628,15 @@ function protectionTitle(p: CodeRefProtection): string {
       : p.direct_push === "persons"
         ? "persons push directly"
         : `direct pushes by ${p.direct_push}`,
-  ];
+  ].join(", ");
+}
+
+/** A branch's rules in words: "Protected by release/*: no force-push, no delete, pushes through changes only". */
+export function protectionTitle(p: CodeRefProtection): string {
   const names = p.patterns.map((pattern) =>
     pattern.startsWith(HEADS) ? pattern.slice(HEADS.length) : pattern,
   );
-  return `Protected by ${names.join(" and ")}: ${clauses.join(", ")}`;
+  return `Protected by ${names.join(" and ")}: ${protectionWords(p)}`;
 }
 
 /** One branch: its name and marks, who moved it and when, its change, and its controls. */
@@ -921,52 +925,6 @@ function Drift({ tip, most, base }: { tip: CodeTip | undefined; most: number; ba
   );
 }
 
-/** Who moved a branch, in a word and a sentence: Gitlet for a merge or a queue landing; never a guess. */
-function moverOf(
-  mover: CodeRefMover | undefined,
-  movedAt: string,
-  now: number,
-  name: string,
-  whoName: (who: Who) => string,
-): { who: Who | null; words: string; title: string } {
-  if (!mover) {
-    return now - Date.parse(movedAt) < PUSH_HISTORY_DAYS * DAY_MS
-      ? {
-          who: null,
-          words: "Unknown",
-          title: "Who moved it is unknown: one record moved it away and back.",
-        }
-      : {
-          who: null,
-          words: "No longer kept",
-          title: `Who moved it is no longer kept: pushes are kept ${PUSH_HISTORY_DAYS} days.`,
-        };
-  }
-  const by = mover.actor_seat || mover.actor;
-  switch (mover.via) {
-    case "merge":
-      return {
-        who: GITLET,
-        words: "Gitlet",
-        title: `Gitlet moved ${name} when ${whoName(by)} merged a change`,
-      };
-    case "queue":
-      return {
-        who: GITLET,
-        words: "Gitlet",
-        title: `Gitlet moved ${name} landing its merge queue's train, for ${whoName(by)}`,
-      };
-    case "mirror":
-      return { who: by, words: whoName(by), title: "Moved by the mirror's sync" };
-    case "import":
-      return { who: by, words: whoName(by), title: "Moved by the import" };
-    case "engine":
-      return { who: by, words: whoName(by), title: "Written by a Gitlet tool" };
-    default:
-      return { who: by, words: whoName(by), title: "Pushed with git" };
-  }
-}
-
 /** Who moved a branch and when, as a byline. */
 function MovedBy({ row, now }: { row: CodeRefListing; now: number }) {
   const whoName = useWhoName();
@@ -1068,6 +1026,12 @@ function TagsView({ repo }: { repo: CodeRepoDetail }) {
   );
 }
 
+/** What a tag says when `date` carries none, shared with the revision picker. */
+export const TAG_LATE = "after the year 9999";
+export const TAG_UNDATED = "undated";
+export const TAG_UNDATED_TITLE =
+  "A lightweight tag of a tree or a blob, or an annotated tag naming no tagger, has no date of its own.";
+
 /** When a tag was made: its own date, past the year 9999, or none of its own. */
 function TagDate({ tag, now }: { tag: CodeTagRow; now: number }) {
   if (tag.date) {
@@ -1077,12 +1041,8 @@ function TagDate({ tag, now }: { tag: CodeTagRow; now: number }) {
       </time>
     );
   }
-  if (tag.date_unix !== undefined) return <span>after the year 9999</span>;
-  return (
-    <span title="A lightweight tag of a tree or a blob, or an annotated tag naming no tagger, has no date of its own.">
-      undated
-    </span>
-  );
+  if (tag.date_unix !== undefined) return <span>{TAG_LATE}</span>;
+  return <span title={TAG_UNDATED_TITLE}>{TAG_UNDATED}</span>;
 }
 
 /** One tag: its name opening its files at its whole ref, the commit it names and when, and its controls. */

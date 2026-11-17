@@ -198,9 +198,11 @@ func (s Sources) backups(ctx context.Context, _ Params) (any, error) {
 		out.Points = append(out.Points, row)
 	}
 	slices.SortFunc(out.Points, func(a, b BackupPointRow) int {
-		// THE LOG BREAKS A TIE between two acknowledgements given in one
-		// instant: they share an owner, and an order that left them to
-		// the register's listing would differ between two reads.
+		// THE LOG BREAKS A TIE between two acknowledgements of copies taken
+		// at one instant, the common case, since one backup run is
+		// acknowledged log by log: they share an owner, and an order that
+		// left them to the register's listing would differ between two
+		// reads.
 		return cmp.Or(b.TakenAt.Compare(a.TakenAt), cmp.Compare(a.Owner, b.Owner),
 			cmp.Compare(firstStream(a), firstStream(b)))
 	})

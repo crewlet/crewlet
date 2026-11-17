@@ -345,10 +345,14 @@ func (r CheckRow) encodedBytes() int {
 		key, value string
 	}{
 		{"candidate_id", r.CandidateID}, {"entry_id", r.EntryID}, {"base", r.Base}, {"defs_oid", r.DefsOID},
+		{"source_ref", r.SourceRef}, {"change_head", r.ChangeHead},
 	} {
 		if s.value != "" {
 			n += field(s.key, stringBytes(s.value), false)
 		}
+	}
+	if r.Change != nil {
+		n += field("change", r.Change.encodedBytes(), false)
 	}
 	if r.Required {
 		n += field("required", trueBytes, false)
@@ -1446,6 +1450,9 @@ func (row PushRow) encodedBytes(commands int) int {
 	}
 	if row.IntroducedCount != 0 {
 		n += field("introduced_count", intBytes(int64(row.IntroducedCount)), false)
+	}
+	if row.Offered != 0 {
+		n += field("offered", intBytes(int64(row.Offered)), false)
 	}
 	return n + field("received_at", timeBytes(row.ReceivedAt), false)
 }

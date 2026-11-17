@@ -16,14 +16,16 @@ type TurnsMovedQuery struct {
 }
 
 // turnsMovedSQL is, of the turns its argument lists (a JSON array), the ones
-// that pushed, opened a change or gave a review.
+// that pushed, opened a change or gave a review. A push counts where a command
+// of it moved a ref: an attempt a rule refused whole is recorded and moved nothing.
 const turnsMovedSQL = `SELECT CAST(j.value AS TEXT) FROM json_each(?) AS j
-	WHERE EXISTS (SELECT 1 FROM code_pushes AS p WHERE p.turn_id = CAST(j.value AS TEXT) AND p.turn_id != '')
+	WHERE EXISTS (SELECT 1 FROM code_pushes AS p WHERE p.turn_id = CAST(j.value AS TEXT) AND p.turn_id != ''
+		AND EXISTS (SELECT 1 FROM json_each(p.commands) AS c WHERE json_extract(c.value, '$.result') = 'ok'))
 	OR EXISTS (SELECT 1 FROM code_changes AS c WHERE c.created_turn = CAST(j.value AS TEXT) AND c.created_turn != '')
 	OR EXISTS (SELECT 1 FROM code_reviews AS r WHERE r.turn_id = CAST(j.value AS TEXT) AND r.turn_id != '')`
 
-// TurnsMovedCode reports which of q's turns moved work in code: pushed, opened a
-// change or gave a review.
+// TurnsMovedCode reports which of q's turns moved work in code: pushed a ref,
+// opened a change or gave a review.
 func (r *Reader) TurnsMovedCode(ctx context.Context, q TurnsMovedQuery) (map[string]bool, error) {
 	out := map[string]bool{}
 	if len(q.Turns) == 0 {

@@ -71,6 +71,10 @@ type Reader struct {
 	pushesScanned int
 	// spokenScanned bounds a live state's conversation side: MaxSpokenScanned, or a test's.
 	spokenScanned int
+	// standingCounted bounds a standing count's places a state: MaxStandingCounted, or a test's.
+	standingCounted int
+	// queueCounted bounds a queue read's and a counts read's walks: MaxQueueCounted, or a test's.
+	queueCounted int
 }
 
 // ReaderOptions configure a reader.
@@ -113,10 +117,12 @@ func NewReader(o ReaderOptions) (*Reader, error) {
 	if r.limits == nil {
 		r.limits = DefaultLimits
 	}
+	r.standingCounted = MaxStandingCounted
 	if r.now == nil {
 		r.now = time.Now
 	}
 	r.reposSized, r.lastPushWalk = MaxReposSized, MaxLastPushWalk
+	r.queueCounted = MaxQueueCounted
 	return r, nil
 }
 
@@ -1263,7 +1269,7 @@ func scanPush(s scanner) (PushRow, int, error) {
 	if err := s.Scan(&row.PushID, &row.RepoID, &position, &at, &row.Actor, &row.ActorKind,
 		&row.ActorSeat, &via, &row.Run.TurnID, &row.Run.WorkBackend, &row.Run.WorkKey, &row.Run.Model,
 		&row.Run.RunID, &row.Run.Harness, &row.Node, &row.Atomic, &commands, &row.PackID, &row.PackBytes,
-		&introduced, &row.IntroducedCount, &received); err != nil {
+		&introduced, &row.IntroducedCount, &row.Offered, &received); err != nil {
 		return PushRow{}, 0, err
 	}
 	if row.Via = PushVia(via); !row.Via.Valid() {
@@ -1964,7 +1970,7 @@ func (q ReadQuery) validate() error {
 }
 
 // kindOwnedField refuses a field that one kind a principal reads alone reads
-// (a commit, an inbox, an inbox page's cards, a history page's commits, the
+// (a commit, a queue read's trains, an inbox, an inbox page's cards, a history page's commits, the
 // narrowing of a listing of repositories to the ones a rule protects, the
 // parts a counts read names, a repository's facts, a listing of changes'
 // order, a change's findings by path, a change's viewed files) on a read of
@@ -2014,6 +2020,8 @@ func (q ReadQuery) kindOwnedField() error {
 	case q.RepoSort != "" && q.Kind != ReadRepos:
 		return fmt.Errorf("%w: repo_sort: only a listing of repositories is ordered by name or last push",
 			ErrInvalid)
+	case q.Trains && q.Kind != ReadQueue:
+		return fmt.Errorf("%w: trains: only a queue read answers its trains and ejections", ErrInvalid)
 	}
 	return nil
 }
@@ -4733,7 +4741,7 @@ const (
 		ORDER BY retired_position, pack_id, part LIMIT ?`
 	pushColumns = `push_id, repo_id, position, at, actor, actor_kind, actor_seat, via, turn_id,
 		work_backend, work_key, model, run_id, harness, node, atomic, commands, pack_id, pack_bytes,
-		introduced, introduced_count, received_at`
+		introduced, introduced_count, offered, received_at`
 	pushSQL        = `SELECT ` + pushColumns + ` FROM code_pushes WHERE push_id = ?`
 	pushesFirstSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ?
 		ORDER BY position DESC, push_id DESC LIMIT ?`
