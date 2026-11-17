@@ -54,7 +54,6 @@ import {
   type DataGridColumn,
 } from "@crewlethq/ui";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
-import { VendorMark } from "@crewlethq/icons";
 import { CheckGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { PROJECT_PAGE } from "~/contract/work.ts";
@@ -153,7 +152,6 @@ function Elsewhere({ service, model }: { service: BuiltInService; model: Model |
   const by = service.replacedBy;
   const what = HOLDS[service.key];
   const apps = by?.keys ?? [];
-  const only = apps.length === 1 ? apps[0] : undefined;
   // THE SENTENCE NAMES THE CONNECTION THE APP RIDES: Jira and Confluence
   // through the one Atlassian integration, a chat vendor as itself. A vendor
   // nobody named (the `viewer` answer tells the names to a holder of Chatlet) is
@@ -168,7 +166,7 @@ function Elsewhere({ service, model }: { service: BuiltInService; model: Model |
     <div className="int-service-off">
       <Callout
         variant="neutral"
-        icon={only ? <VendorMark vendor={connectionOf(only)} size="md" /> : undefined}
+
         title={
           by
             ? `${capitalised(by.name)} ${apps.length > 1 ? "do" : "does"} this for your company`
@@ -613,38 +611,35 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
 
 /**
  * Doclet's four settings, each the engine's row (`settings`) changed in place:
- * what each is called here, the line under its field, and how a value reads
+ * what each is called here, the short line under its field, and how a value reads
  * where the plain words would mislead (an empty reach is every space).
  */
 const DOCLET_SETTINGS: readonly {
   key: string;
   label: string;
-  helper: string;
+  hint: string;
   words?: (value: SettingRow["value"]) => string;
 }[] = [
   {
     key: "knowledge.root_space",
     label: "Company pages",
-    helper:
-      "The space that holds the company's own pages, starting with the Onboarding page every agent reads first.",
+    hint: "Holds the Onboarding page every agent reads first.",
   },
   {
     key: "knowledge.skills_container",
     label: "Tool skills",
-    helper:
-      "The space that holds tool-skill pages, which search and routing leave out. Off turns tool skills off.",
+    hint: "Search leaves it out. Off turns tool skills off.",
   },
   {
     key: "knowledge.scope",
     label: "Search reaches",
-    helper: "The spaces a knowledge search reads. Empty reaches every space.",
+    hint: "Empty reaches every space.",
     words: (value) => (Array.isArray(value) && value.length > 0 ? value.join(", ") : "Every space"),
   },
   {
     key: "knowledge.vectors",
     label: "Search by meaning",
-    helper:
-      "Adds search by meaning to knowledge and work search. Off also stops embedding pages. The default follows whether an embeddings provider is set.",
+    hint: "Off also stops embedding pages.",
   },
 ];
 
@@ -800,7 +795,7 @@ function DocletPane({ service, head }: { service: BuiltInService; head: Head }) 
                     area="Doclet"
                     reread="Reload to see the Doclet settings as they are now."
                     onApplied={settings.refetch}
-                    helper={d.helper}
+                    hint={d.hint}
                     {...(d.words ? { words: d.words } : {})}
                     {...(d.key === "knowledge.scope" ? { choices: spaces.map((c) => c.key) } : {})}
                   />

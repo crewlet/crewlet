@@ -61,26 +61,32 @@ import (
 // repository's owners — repo_size; and an --atomic push with any refusal is
 // refused whole ([Atomic]). A push with an ok command left is an entry of the
 // record — unless a seat's day's quota or the pack bound refuses it whole
-// (below); one with none is answered here and writes nothing. A push checked
-// at another drop epoch than the repository's meets none of these rules: it
-// is refused whole before them (below).
+// (below); one with none is answered here, and is an entry only as an ATTEMPT
+// ([Attempted]): a push git received every command of which is refused, one by
+// a rule on who may move which ref, recorded moving nothing and storing no
+// pack, so its history says who tried, and counted against a seat's day; any
+// other writes nothing. A push checked at another drop epoch than the
+// repository's meets none of these rules: it is refused whole before them
+// (below).
 //
 // # A seat's push is held to its grant, recorded, and to its day, not
 //
 // A grant's refusal is RECORDED on its command (not_permitted, rule 2b): who
-// tried to move what past their grant is an audit fact, and the receiving
-// node's own check of the grant before the bytes moved makes it rare — it
-// arises only where the chart moved between the two. The day's quota is NOT
-// ([RefusalPushQuota]): a seat whose pushes this company day — every
-// repository together, [Limits.PushesPerSeatDay] — reach the bound has its
+// tried to move what past their grant is an audit fact, kept beside the
+// commands that land or, where none does, as an attempt. The receiving node's
+// own check of the grant before the bytes moved makes this rule's own refusal
+// rare: it arises only where the chart moved between the two. The day's quota
+// is NOT ([RefusalPushQuota]): a seat whose pushes this company day (every
+// repository together, [Limits.PushesPerSeatDay]) reach the bound has its
 // push refused WHOLE, no entry of the record, the batch's other entries going
 // on, because a recorded refusal would cost the log a record a push of a
 // seat pushing in a loop, the very cost the quota bounds. The quota is judged
-// on a push that would otherwise be an entry — after every rule of the push's
+// on a push that would otherwise be an entry: after every rule of the push's
 // own, so a stale, protected, oversized or --atomic push is told the reason
-// running it again tomorrow would not change, and is no entry to count — and
-// before the pack bound, so a push past both is told the bound that lasts a
-// day rather than sent to run again in a minute.
+// running it again tomorrow would not change (an attempt counts, and one past
+// the bound is told its own refusals and recorded nowhere), and before the
+// pack bound, so a push past both is told the bound that lasts a day rather
+// than sent to run again in a minute.
 //
 // THE COUNT IS ONE ROW A SEAT AND DAY (code_seat_days), read once a round for
 // every seat the batch names, which the push apply keeps from the day this
@@ -584,14 +590,26 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		p := batch[i]
 		cmds := w.decide(i, p, v, limits, GrantOf(p.Principal, ref, seats.Roster))
 		answers[i].commands = cmds
-		if !slices.ContainsFunc(cmds, isOK) {
+		// AN ATTEMPT is an entry that moves nothing and names no pack or change: a pack its
+		// receiver stored is named by no row, and the collector takes it.
+		attempt := !slices.ContainsFunc(cmds, isOK)
+		if attempt && (p.Via != ViaGit || !Attempted(cmds)) {
 			continue
+		}
+		if attempt {
+			// A decide-made attempt keeps its receiver's listing as what it offered.
+			p.Offered = max(p.Offered, p.IntroducedCount)
+			p.Pack, p.Introduced, p.IntroducedCount, p.Change = nil, nil, 0, nil
 		}
 		// A SEAT'S DAY, then THE PACK BOUND, LAST: each the push whole —
 		// what the receiver refused kept, every other command under the
 		// one sentence, the ones found ok here among them, since nothing of
-		// it is decided.
+		// it is decided. An attempt past the day keeps its own refusals and
+		// is recorded nowhere.
 		if detail, over := quota.over(p); over {
+			if attempt {
+				continue
+			}
 			answers[i].refused, answers[i].detail = RefusalPushQuota, detail
 			answers[i].commands = refuseEvery(p.Commands, RefusalPushQuota, detail)
 			continue
@@ -631,7 +649,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 			}
 		}
 		own := entryRows(entry)
-		if recordRows(rows+own+book.rowCount()) > MaxRecordRows {
+		if recordRows(rows+own+book.decidedRows()) > MaxRecordRows {
 			// ALONE is the push leading the next record, the entries before
 			// it landed: what it would cost there decides whether it can
 			// land at all.
@@ -655,7 +673,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 			return nil, nil, batchMoves{}, 0, routeErr
 		}
 		fits, rest, fitErr := room.fit(i, len(entries) == 0, routings,
-			MaxRecordRows-recordRows(rows+own+book.rowCount()))
+			MaxRecordRows-recordRows(rows+own+book.decidedRows()))
 		if fitErr != nil {
 			return nil, nil, batchMoves{}, 0, fitErr
 		}
@@ -674,7 +692,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		entries = append(entries, entry)
 	}
 	ejected, _, _ := book.queueEnds()
-	return entries, answers, batchMoves{rows: book.rowCount(), ejected: ejected}, repo.version, nil
+	return entries, answers, batchMoves{rows: book.decidedRows(), ejected: ejected}, repo.version, nil
 }
 
 // seatQuota is one round's count of each seat's pushes on the deciding
@@ -765,12 +783,12 @@ func (q seatQuota) count(p Proposal) {
 }
 
 // quotaDetail is the sentence of a seat's push refused push_quota: who, how
-// many pushes it has made since its company day began, the bound, and the
-// instant the count starts again — the day's end on the company's calendar,
-// in its zone. Formed by the push decide alone, the one judge of the count.
+// many pushes it has made since its company day began (attempts a rule
+// refused among them), the bound, and the instant the count starts again:
+// the day's end on the company's calendar, in its zone. Formed by the push decide alone, the one judge of the count.
 func quotaDetail(seat string, pushed, limit int, day period.Window) string {
-	return fmt.Sprintf("seat %s has landed %s since %s began on the company's calendar, and "+
-		"code.limits.pushes_per_seat_day lets a seat land %s a day: nothing was decided; the count starts "+
+	return fmt.Sprintf("seat %s has made %s, refused attempts included, since %s began on the company's calendar, "+
+		"and code.limits.pushes_per_seat_day lets a seat make %s a day: nothing was decided; the count starts "+
 		"again at %s", seat, pushCount(pushed), day.Label, pushCount(limit), day.End.Format(time.RFC3339))
 }
 

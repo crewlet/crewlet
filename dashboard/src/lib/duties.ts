@@ -22,6 +22,8 @@ export const DUTY_WORDS: Readonly<Record<string, string>> = {
   "embedded broker": "Event broker",
   "atlas-collect": "Atlas collection",
   "atlas-wake": "Atlas wake-ups",
+  "delegated-decisions": "Delegated decision deadlines",
+  "trash-reaper": "Trash emptying",
 };
 
 /** A duty's name in words, or its key where this build has none. */

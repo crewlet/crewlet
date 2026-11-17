@@ -331,6 +331,7 @@ func everyReadAsked(id string) map[gitlet.ReadKind]gitlet.ReadQuery {
 		gitlet.ReadInbox:         {Asker: asker, Inbox: &gitlet.InboxQuery{Handle: "founder", Snoozed: inbox.SnoozeExclude}},
 		gitlet.ReadNoticeCards:   {Asker: asker, NoticeCards: []string{"0192f4c8-0000-7000-8000-000000000001"}},
 		gitlet.ReadCommitMarks:   {Asker: asker, Repo: "web", CommitMarks: []string{strings.Repeat("6", 40)}},
+		gitlet.ReadCounts:        {Asker: asker, Counts: &gitlet.CountsQuery{Changes: true}},
 	}
 }
 
@@ -399,9 +400,10 @@ func TestOnlyAReadThatAsksIsAnsweredThePathOwners(t *testing.T) {
 // A FIELD ONE KIND READS IS REFUSED ON EVERY OTHER, the engine's own reads
 // included: a read of each kind this build reads, as everyReadAsked asks it,
 // that also names a commit, an inbox, an inbox page's cards, a history
-// page's commits or the narrowing to protected repositories (fields only a
-// `commit`, an `inbox`, a `notice_cards`, a `commit_marks` and a `repos` read
-// read) is refused naming the field, never
+// page's commits, the narrowing to protected repositories, a counts read's
+// parts, a repository's facts, a listing's sort or a queue's trains (fields
+// only a `commit`, an `inbox`, a `notice_cards`, a `commit_marks`, a `repos`,
+// a `counts`, a `repos` or `repo`, a `changes` and a `queue` read read) is refused naming the field, never
 // answered with it ignored. The engine's own reads validate
 // against lists of their own, and a field added after a list was written
 // passed it unseen.
@@ -415,26 +417,56 @@ func TestAFieldOneKindReadsIsRefusedOnEveryOther(t *testing.T) {
 	id := n.ensure("web", suiteSettings(), t1).RepoID
 	asks := everyReadAsked(id)
 	for _, field := range []struct {
-		name  string
-		owner gitlet.ReadKind
-		set   func(q *gitlet.ReadQuery)
+		name   string
+		owners []gitlet.ReadKind
+		set    func(q *gitlet.ReadQuery)
 	}{
-		{"commit", gitlet.ReadCommit, func(q *gitlet.ReadQuery) { q.Commit = strings.Repeat("6", 40) }},
-		{"inbox", gitlet.ReadInbox, func(q *gitlet.ReadQuery) {
+		{"commit", []gitlet.ReadKind{gitlet.ReadCommit}, func(q *gitlet.ReadQuery) {
+			q.Commit = strings.Repeat("6", 40)
+		}},
+		{"inbox", []gitlet.ReadKind{gitlet.ReadInbox}, func(q *gitlet.ReadQuery) {
 			q.Inbox = &gitlet.InboxQuery{Handle: "founder", Snoozed: inbox.SnoozeExclude}
 		}},
-		{"notice_cards", gitlet.ReadNoticeCards, func(q *gitlet.ReadQuery) {
+		{"notice_cards", []gitlet.ReadKind{gitlet.ReadNoticeCards}, func(q *gitlet.ReadQuery) {
 			q.NoticeCards = []string{"0192f4c8-0000-7000-8000-000000000001"}
 		}},
-		{"commit_marks", gitlet.ReadCommitMarks, func(q *gitlet.ReadQuery) {
+		{"commit_marks", []gitlet.ReadKind{gitlet.ReadCommitMarks}, func(q *gitlet.ReadQuery) {
 			q.CommitMarks = []string{strings.Repeat("6", 40)}
 		}},
-		{"protected", gitlet.ReadRepos, func(q *gitlet.ReadQuery) { q.Protected = true }},
+		{"protected", []gitlet.ReadKind{gitlet.ReadRepos}, func(q *gitlet.ReadQuery) { q.Protected = true }},
+		{"repo_kind", []gitlet.ReadKind{gitlet.ReadRepos}, func(q *gitlet.ReadQuery) { q.RepoKind = gitlet.RepoScratch }},
+		{"repo_sort", []gitlet.ReadKind{gitlet.ReadRepos}, func(q *gitlet.ReadQuery) {
+			q.RepoSort = gitlet.RepoSortPushed
+		}},
+		{"counts", []gitlet.ReadKind{gitlet.ReadCounts}, func(q *gitlet.ReadQuery) {
+			q.Counts = &gitlet.CountsQuery{Changes: true}
+		}},
+		{"repo_facts", []gitlet.ReadKind{gitlet.ReadRepos, gitlet.ReadRepo}, func(q *gitlet.ReadQuery) {
+			q.RepoFacts = true
+		}},
+		{"change_sort", []gitlet.ReadKind{gitlet.ReadChanges}, func(q *gitlet.ReadQuery) {
+			q.ChangeSort = gitlet.ChangeSortUpdated
+		}},
+		{"readiness", []gitlet.ReadKind{gitlet.ReadChanges}, func(q *gitlet.ReadQuery) {
+			q.Readiness = gitlet.BucketReady
+		}},
+		{"cards", []gitlet.ReadKind{gitlet.ReadChanges}, func(q *gitlet.ReadQuery) { q.Cards = true }},
+		{"push_filter", []gitlet.ReadKind{gitlet.ReadPushes}, func(q *gitlet.ReadQuery) {
+			q.PushFilter = &gitlet.PushFilter{Since: harnessAt}
+		}},
+		{"day_bounds", []gitlet.ReadKind{gitlet.ReadRepos, gitlet.ReadRepo, gitlet.ReadPushes},
+			func(q *gitlet.ReadQuery) {
+				day := harnessAt.Truncate(gitlet.PushSlot)
+				q.DayBounds = []time.Time{day, day.Add(24 * time.Hour)}
+			}},
+		{"finding_paths", []gitlet.ReadKind{gitlet.ReadChange}, func(q *gitlet.ReadQuery) { q.FindingPaths = true }},
+		{"viewed", []gitlet.ReadKind{gitlet.ReadChange}, func(q *gitlet.ReadQuery) { q.Viewed = true }},
+		{"trains", []gitlet.ReadKind{gitlet.ReadQueue}, func(q *gitlet.ReadQuery) { q.Trains = true }},
 	} {
 		for _, kind := range gitlet.ReadKinds() {
 			q, named := asks[kind]
 			switch {
-			case kind == field.owner:
+			case slices.Contains(field.owners, kind):
 				continue
 			case !named:
 				t.Errorf("a %s read is never asked here: name it in everyReadAsked, so its refusals are held",

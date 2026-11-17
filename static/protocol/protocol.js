@@ -163,8 +163,10 @@ var SESSION_QUERIES = {
 		"code_blob",
 		"code_log",
 		"code_blame",
+		"code_tree_commits",
 		"code_diff",
 		"code_tips",
+		"code_tags",
 		"code_compare",
 		"code_commit",
 		"code_queue",
@@ -172,8 +174,10 @@ var SESSION_QUERIES = {
 		"code_check",
 		"code_check_log",
 		"code_commit_marks",
+		"code_counts",
 		"inbox"
-	]
+	],
+	artifacts: ["inbox"]
 };
 // src/protocol/session.ts
 /**
@@ -4437,6 +4441,20 @@ var ACTIONS = {
 		refreshes: [],
 		scope: "person"
 	},
+	artifact_mark_inbox: {
+		args: [
+			"read",
+			"unread",
+			"snooze",
+			"unsnooze",
+			"read_through",
+			"seen"
+		],
+		domain: "artifacts",
+		apps: [],
+		refreshes: [],
+		scope: "person"
+	},
 	code_update_repo: {
 		args: [
 			"repo",
@@ -4638,7 +4656,9 @@ var ACTIONS = {
 			"repo",
 			"change",
 			"expected_version",
-			"draft"
+			"draft",
+			"title",
+			"body"
 		],
 		domain: "code",
 		apps: ["gitlet"],

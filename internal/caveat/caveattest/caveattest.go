@@ -42,7 +42,7 @@ var modelVocabulary = []struct {
 // app's, chat's included: the tools a seat holds there and the gestures only
 // a person is given.
 var toolNames = slices.Concat(builtin.WorkTools(), builtin.PageTools(),
-	builtin.ArtifactTools(), builtin.ArtifactDataTools(), chatlet.Tools(),
+	builtin.ArtifactTools(), builtin.RenderTools(), builtin.ArtifactDataTools(), chatlet.Tools(),
 	chatlet.OperatorOnlyTools())
 
 // Problems is every reason text is not worded for a person, or none. It names
@@ -117,6 +117,9 @@ var valueFields = []string{"tool", "outcome", "position", "op_id", "id", "item",
 	// a purge's request by its id with the Gitlet nodes that serve and hold it.
 	"entry_id", "target", "state", "sha", "checked_for", "reverts", "change_refusal",
 	"request", "maintainer", "gitlet_nodes",
+	// A COMMENT ON AN ARTIFACT: its thread and remark by the ids a screen finds
+	// them by, the seats it named, and the version a resolve cites.
+	"thread", "remark", "mentioned", "resolved_version",
 	// THE ATLAS'S WRITES: the entries a write names by the ids a screen opens
 	// them by, what it recorded as its word, the fact, the relation and the
 	// owner as the atlas keeps them, a value as the person gave it, what a

@@ -2199,3 +2199,47 @@ func TestARunsExtensionOfAPageIsThePages(t *testing.T) {
 		t.Errorf("the memo counts %d bytes staged once the batch is placed", got)
 	}
 }
+
+// A PROBE IS COUNTED APART FROM A LOOKUP: MemoProbe counts probe_hit and
+// probe_miss, a damaged entry corrupt, and its hit moves the entry to the newest
+// cohort as a lookup's does.
+// Mutation: MemoProbe counting as MemoGet does, or skipping memoUse.
+func TestAProbeIsCountedApartFromALookup(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t)
+	share := 18 * memoEntry(0)
+	cache.SetMaxBytes(c, cache.MemoShare*share)
+	s := w.sync(t, c, repo)
+	defer s.Release()
+	keys := memoKeys("probed", 8)
+	memoize(t, c, s, keys[:4])
+	memoize(t, c, s, keys[4:])
+	newest := cache.MemoCohortDir(s.Dir, cache.MemoNewest(c)) + string(os.PathSeparator)
+	if strings.HasPrefix(cache.MemoEntryFile(s, keys[0]), newest) {
+		t.Fatal("the premise: the first run's answers are in an older cohort than the newest")
+	}
+	if got, ok := c.MemoProbe(s, keys[0]); !ok || string(got) != string(memoBody(0))+memoTail {
+		t.Fatalf("a probe of a whole entry read back %q (%t), want its body and its tail", got, ok)
+	}
+	if !strings.HasPrefix(cache.MemoEntryFile(s, keys[0]), newest) {
+		t.Error("a probe's hit left the entry in its older cohort, where the trim takes it first")
+	}
+	if _, ok := c.MemoProbe(s, cache.NewMemoKey("case", "probed", "absent")); ok {
+		t.Error("a probe of a key nothing was kept under was answered")
+	}
+	damaged := cache.MemoEntryFile(s, keys[1])
+	if err := os.Truncate(damaged, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.MemoProbe(s, keys[1]); ok || statOK(t, damaged) {
+		t.Error("a probe answered a damaged entry, or left it in the tree")
+	}
+	for outcome, want := range map[string]uint64{"probe_hit": 1, "probe_miss": 1, "corrupt": 1, "hit": 0, "miss": 0} {
+		if got := counter(w.rec, metrics.CodeCacheMemoLookups, "outcome", outcome); got != want {
+			t.Errorf("lookups{outcome=%s} = %d after the probes, want %d", outcome, got, want)
+		}
+	}
+}

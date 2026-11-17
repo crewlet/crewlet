@@ -24,6 +24,7 @@ import (
 //	a                         the whole domain: a gate, or an unreadable scope
 //	a/x/<artifact>            one artifact, its versions, objects, shares and history
 //	a/x/<artifact>/s/<asset>  one asset of it
+//	a/x/<artifact>/c/<thread> one comment thread on it, and its remarks
 //	a/s/<owner>.<token>       one owner's hold on one republish-in-place address
 //	a/r/<record>              one person's pins and opened marks
 //	a/x                       every artifact: a folder's removal re-files them all
@@ -47,6 +48,7 @@ const (
 	pathDomain   = "a"
 	pathArtifact = "x"
 	pathAsset    = "s"
+	pathComment  = "c"
 	pathSource   = "s"
 	pathReader   = "r"
 	pathFolder   = "f"
@@ -90,11 +92,16 @@ const (
 	// TermBrand is the company's adopted brand (`a/b`): the brand subject's
 	// own path.
 	TermBrand TermKind = "brand"
+
+	// TermComment is one comment thread, within its artifact
+	// (`a/x/<artifact>/c/<thread>`), so a deferred purge of the artifact
+	// blocks a write to any of its threads.
+	TermComment TermKind = "comment"
 )
 
-// TermKinds are the nine.
+// TermKinds are the ten.
 var TermKinds = []TermKind{TermArtifact, TermAsset, TermSource, TermReader, TermDomain,
-	TermArtifacts, TermTree, TermFolder, TermBrand}
+	TermArtifacts, TermTree, TermFolder, TermBrand, TermComment}
 
 // Valid reports whether a term kind off the wire is one this build knows.
 func (t TermKind) Valid() bool { return slices.Contains(TermKinds, t) }
@@ -115,12 +122,12 @@ const MaxScopeTerms = 4
 type ScopeTerm struct {
 	Kind TermKind `json:"k"`
 
-	// Artifact is the artifact an asset lives in. Required for TermAsset
-	// and empty for every other kind.
+	// Artifact is the artifact an asset or a comment thread lives in.
+	// Required for TermAsset and TermComment and empty for every other kind.
 	Artifact string `json:"a,omitempty"`
 
-	// ID is the artifact's id, the asset's, the source subject's id or the
-	// reader's record. Empty for TermDomain.
+	// ID is the artifact's id, the asset's, the thread's, the source
+	// subject's id or the reader's record. Empty for TermDomain.
 	ID string `json:"i,omitempty"`
 }
 
@@ -145,6 +152,8 @@ func (t ScopeTerm) Path() string {
 		return join(pathDomain, pathFolder, t.ID)
 	case TermBrand:
 		return join(pathDomain, pathBrand)
+	case TermComment:
+		return join(pathDomain, pathArtifact, t.Artifact, pathComment, t.ID)
 	}
 	// AN UNKNOWN TERM KIND IS THE DOMAIN, NOT A SKIPPED TERM: a term this
 	// build cannot interpret is a claim about a blast radius it cannot
@@ -262,10 +271,10 @@ func (s ScopeSet) Validate() error {
 				return fmt.Errorf("artifactsdomain: a %s term names a whole set and "+
 					"carries no id", t.Kind)
 			}
-		case TermAsset:
+		case TermAsset, TermComment:
 			if t.ID == "" || t.Artifact == "" {
-				return errors.New("artifactsdomain: an asset term names its " +
-					"artifact and itself")
+				return fmt.Errorf("artifactsdomain: a %s term names its "+
+					"artifact and itself", t.Kind)
 			}
 		case TermDomain:
 		default:
@@ -289,6 +298,13 @@ func subjectPath(s Subject) string {
 			return pathDomain
 		}
 		return ScopeTerm{Kind: TermAsset, Artifact: artifact, ID: asset}.Path()
+	case KindComment:
+		artifact, thread, err := SplitCommentID(s.ID)
+		if err != nil {
+			// The asset's reason: a narrower guess is a claim never made.
+			return pathDomain
+		}
+		return ScopeTerm{Kind: TermComment, Artifact: artifact, ID: thread}.Path()
 	case KindSource:
 		return ScopeTerm{Kind: TermSource, ID: s.ID}.Path()
 	case KindReader:

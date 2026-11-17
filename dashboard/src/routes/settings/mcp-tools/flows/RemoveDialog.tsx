@@ -17,7 +17,18 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Button, Callout, Checkbox, FormField, Spinner, Text, useToast } from "@crewlethq/ui";
+import {
+  Button,
+  Callout,
+  Checkbox,
+  FormField,
+  groupNotices,
+  InlineCode,
+  NoticeList,
+  Spinner,
+  Text,
+  useToast,
+} from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 import type { McpDependants, McpMemberServerStatus, McpSecretDeletion } from "~/contract/mcp.ts";
 import { listed, plural } from "~/lib/format.ts";
@@ -200,25 +211,40 @@ export function RemoveDialog({
           {deps && elsewhere > 0 ? (
             <Callout variant="warning" title={`Still named in ${plural(elsewhere, "place")}`}>
               <div className="mcp-field-group">
-                <ul className="mcp-list">
-                  {deps.mcp_env.map((d) => (
-                    <li key={`env-${d.kind}-${d.key}`}>
-                      {d.kind === "seat" ? "Agent" : "Team"} {d.name}: its own{" "}
-                      <span className="mono">mcp_env.{server.name}</span> values
-                    </li>
-                  ))}
-                  {deps.sandbox.map((d) => (
-                    <li key={`box-${d.seat}`}>
-                      {d.name}'s coding box: <span className="mono">sandbox.mcp.servers</span>
-                    </li>
-                  ))}
-                  {deps.mcp_limits.map((d) => (
-                    <li key={`limits-${d.kind}-${d.key}`}>
-                      {d.kind === "seat" ? "Agent" : "Team"} {d.name}: its{" "}
-                      <span className="mono">mcp_limits.{server.name}</span> limits
-                    </li>
-                  ))}
-                </ul>
+                <NoticeList
+                  notices={groupNotices(
+                    [
+                      ...deps.mcp_env.map((d) => ({
+                        kind: "env",
+                        subject: `${d.kind === "seat" ? "Agent" : "Team"} ${d.name}`,
+                        title: (
+                          <>
+                            Its own <InlineCode>mcp_env.{server.name}</InlineCode> values
+                          </>
+                        ),
+                      })),
+                      ...deps.sandbox.map((d) => ({
+                        kind: "box",
+                        subject: d.name,
+                        title: (
+                          <>
+                            Its coding box lists it in <InlineCode>sandbox.mcp.servers</InlineCode>
+                          </>
+                        ),
+                      })),
+                      ...deps.mcp_limits.map((d) => ({
+                        kind: "limits",
+                        subject: `${d.kind === "seat" ? "Agent" : "Team"} ${d.name}`,
+                        title: (
+                          <>
+                            Its <InlineCode>mcp_limits.{server.name}</InlineCode> limits
+                          </>
+                        ),
+                      })),
+                    ],
+                    { count: (s) => plural(s.length, "place") },
+                  )}
+                />
                 <Checkbox
                   label="Clear these in the same change"
                   checked={clear}

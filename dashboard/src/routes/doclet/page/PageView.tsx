@@ -78,7 +78,7 @@ import { QueryState } from "~/components/common.tsx";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useNow } from "~/lib/clock.ts";
-import { fmtDateTime, relTime } from "~/lib/format.ts";
+import { fmtDateTime, openSentence } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { OnThisPage } from "~/components/OnThisPage.tsx";
 import { copyPageLink } from "~/lib/pageLink.ts";
@@ -106,6 +106,7 @@ import { PageEditor } from "./Editor.tsx";
 import { PageChanges, VersionView } from "./History.tsx";
 import { IN_TRASH, TrashedNotice, usePageTidy } from "./Tidy.tsx";
 import { WatchControl } from "./Watch.tsx";
+import { ago } from "~/lib/ago.ts";
 
 /** How often a page reads itself again, and how often who read it. */
 const PAGE_POLL_MS = 20_000;
@@ -185,7 +186,7 @@ function PageProps({
         {last ? (
           <span title={revision}>
             <time dateTime={last.created_at} title={fmtDateTime(last.created_at)}>
-              {relTime(last.created_at, now)}
+              {openSentence(ago(last.created_at, now))}
             </time>{" "}
             by {saver ? who(saver).name : "the engine"}
             <span className="sr-only">. {revision}</span>

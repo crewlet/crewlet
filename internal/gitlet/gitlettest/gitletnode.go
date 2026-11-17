@@ -453,15 +453,18 @@ func (g *GitletNode) start(t testing.TB) *gitIncarnation {
 		Logger: g.o.Logger}); err != nil {
 		t.Fatalf("gitlettest: build %s's compactor: %v", n.id, err)
 	}
-	// A PERSON'S THREE ROUTES AND A CODING BOX'S THREE, on one mux behind the
-	// API's real guard, as a Gitlet node serves them: the host's own handlers
-	// — never the API's mount, which internal/api's own tests hold — so a
-	// box meets the guard exactly as it does in production, its route
-	// unguarded and its run's token no credential of the guard's.
+	// A PERSON'S THREE ROUTES AND TWO DOWNLOADS, AND A CODING BOX'S THREE,
+	// on one mux behind the API's real guard, as a Gitlet node serves them:
+	// the host's own handlers — never the API's mount, which internal/api's
+	// own tests hold — so a box meets the guard exactly as it does in
+	// production, its route unguarded and its run's token no credential of
+	// the guard's.
 	mux := http.NewServeMux()
 	mux.Handle(host.PatternInfoRefs, n.host.InfoRefs())
 	mux.Handle(host.PatternUploadPack, n.host.UploadPack())
 	mux.Handle(host.PatternReceivePack, n.host.ReceivePack())
+	mux.Handle(host.PatternRaw, n.host.Raw())
+	mux.Handle(host.PatternArchive, n.host.Archive())
 	mux.Handle(host.PatternBoxInfoRefs, n.host.BoxInfoRefs())
 	mux.Handle(host.PatternBoxUploadPack, n.host.BoxUploadPack())
 	mux.Handle(host.PatternBoxReceivePack, n.host.BoxReceivePack())

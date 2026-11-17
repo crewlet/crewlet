@@ -16,6 +16,8 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE ARTIFACTS TOOLS' ENGINE WIRING: the same deps for a seat's registry and
@@ -44,7 +46,8 @@ func ArtifactToolDeps(e *Engine) builtin.ArtifactDeps {
 	}
 	estate := e.router.Artifacts()
 	deps := builtin.ArtifactDeps{
-		Reader: estate, Writer: estate, Publisher: publisher,
+		Reader: estate, Writer: estate, Publisher: publisher, Comments: estate,
+		Routing:      ArtifactCommentRouter(e),
 		Chart:        ChartAuthorityOf(e),
 		Requesters:   turnRequesters{engine: e},
 		Limits:       e.artifactLimits,
@@ -65,6 +68,47 @@ func ArtifactToolDeps(e *Engine) builtin.ArtifactDeps {
 		deps.Presence = e.presence
 	}
 	return deps
+}
+
+// ArtifactCommentRouter decides who a comment on an artifact wakes and tells:
+// the chart now, the seats a remark names and the linked items' assignees.
+// Exported for the artifacts API, which forms the same records.
+func ArtifactCommentRouter(e *Engine) builtin.ArtifactCommentRouter {
+	return builtin.ArtifactCommentRouter{Org: e.currentOrg, Mentions: LiveMentions(e),
+		Assignees: artifactAssignees{engine: e}}
+}
+
+// artifactAssignees reads the assignee of every work item an artifact was made
+// for or linked to, through the router; a company without Worklet adds nobody.
+type artifactAssignees struct{ engine *Engine }
+
+func (a artifactAssignees) Assignees(ctx context.Context, id artifacts.ID) ([]string, error) {
+	if a.engine.router == nil || !a.engine.NativeStarted() {
+		return nil, nil
+	}
+	work, ok := OperatorWork(a.engine)
+	if !ok {
+		return nil, nil
+	}
+	items, err := a.engine.router.Artifacts().WorkItems(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	fresh := statelog.Freshness{Level: statelog.DefaultReadLevel(statelog.SurfaceSeat)}
+	var out []string
+	for _, item := range items {
+		detail, err := work.Task(ctx, item, worklet.DetailWants{}, fresh)
+		switch {
+		case errors.Is(err, worklet.ErrNoTask):
+			continue
+		case err != nil:
+			return nil, fmt.Errorf("engine: read work item %s's assignee: %w", item, err)
+		case detail.Task.Removed != nil || detail.Task.Assignee == "":
+			continue
+		}
+		out = append(out, detail.Task.Assignee)
+	}
+	return out, nil
 }
 
 // artifactsManageOthers is the company's `artifacts.agents_manage_others` as
@@ -110,6 +154,17 @@ func (e *Engine) currentOrg() *org.Organization {
 type artifactBoxes struct{ engine *Engine }
 
 func (b artifactBoxes) Box(ctx context.Context, t *turnctx.Turn) (builtin.ArtifactBox, error) {
+	box, err := b.attach(ctx, t)
+	if err != nil {
+		return nil, err
+	}
+	return &runBox{box: box, root: path.Join(box.Home(), sandbox.WorkspaceSubdir),
+		listed: map[string]bool{}}, nil
+}
+
+// attach is the box of the executor working in turn t, attached: the one box
+// a turn reads its build from and a render writes its screenshots to.
+func (b artifactBoxes) attach(ctx context.Context, t *turnctx.Turn) (sandbox.Sandbox, error) {
 	rt := b.engine.sandbox.Load()
 	if rt == nil || t == nil || t.RunID == "" {
 		return nil, builtin.ErrNoBox
@@ -150,8 +205,7 @@ func (b artifactBoxes) Box(ctx context.Context, t *turnctx.Turn) (builtin.Artifa
 	case err != nil:
 		return nil, err
 	}
-	return &runBox{box: box, root: path.Join(box.Home(), sandbox.WorkspaceSubdir),
-		listed: map[string]bool{}}, nil
+	return box, nil
 }
 
 // runBox is one reattached box, read under its workspace.

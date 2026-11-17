@@ -668,7 +668,7 @@ describe("a section, for a reader holding none of its grants", () => {
     },
   );
 
-  // SETTINGS LISTS ONLY WHAT LIVES IN IT, in its four groups, and for a reader
+  // SETTINGS LISTS ONLY WHAT LIVES IN IT, in its five groups, and for a reader
   // holding no permission it is not nothing but locks: Spend's readings are
   // every reader's. Each row's title is its hint, the words the palette shows.
   test("the Settings column lists only what lives in Settings, Spend open to every reader", async () => {
@@ -676,9 +676,9 @@ describe("a section, for a reader holding none of its grants", () => {
     mountAs(Promise.resolve({ ...reader, grants: [] }));
     const column = await screen.findByRole("navigation", { name: "Settings sections" });
     const rows = within(column).getAllByRole("link");
-    expect(rows[0]?.getAttribute("href")).toBe("#/settings/models");
+    expect(rows[0]?.getAttribute("href")).toBe("#/settings/general");
     for (const row of rows) expect(row.getAttribute("href")).toMatch(/^#\/settings\//);
-    for (const group of ["Runtime", "Spend", "Access", "Engine"]) {
+    for (const group of ["Company", "Runtime", "Spend", "Access", "Engine"]) {
       expect(column.querySelector(`.crewlet-nav-group__label`)).not.toBeNull();
       expect(within(column).getAllByText(group).length).toBeGreaterThan(0);
     }

@@ -134,6 +134,18 @@ func stringsBytes(ss []string) int {
 	return n
 }
 
+// int64sBytes is the length of a list of numbers.
+func int64sBytes(ns []int64) int {
+	n := 2
+	for i, v := range ns {
+		if i > 0 {
+			n++
+		}
+		n += intBytes(v)
+	}
+	return n
+}
+
 // encodedBytes is the length of the ref's JSON encoding.
 func (r RefRow) encodedBytes() int {
 	n := 2 + field("ref", stringBytes(r.Ref), true)
@@ -333,10 +345,14 @@ func (r CheckRow) encodedBytes() int {
 		key, value string
 	}{
 		{"candidate_id", r.CandidateID}, {"entry_id", r.EntryID}, {"base", r.Base}, {"defs_oid", r.DefsOID},
+		{"source_ref", r.SourceRef}, {"change_head", r.ChangeHead},
 	} {
 		if s.value != "" {
 			n += field(s.key, stringBytes(s.value), false)
 		}
+	}
+	if r.Change != nil {
+		n += field("change", r.Change.encodedBytes(), false)
 	}
 	if r.Required {
 		n += field("required", trueBytes, false)
@@ -742,7 +758,51 @@ func (s RepoSummary) encodedBytes() int {
 	if !s.LastPushAt.IsZero() {
 		n += field("last_push_at", timeBytes(s.LastPushAt), false)
 	}
+	if len(s.Spark) > 0 {
+		n += field("spark", int64sBytes(s.Spark), false)
+	}
+	if s.ChangeCounts != nil {
+		n += field("change_counts", s.ChangeCounts.encodedBytes(), false)
+	}
+	if s.Card != nil {
+		n += field("card", s.Card.encodedBytes(), false)
+	}
 	return n
+}
+
+// encodedBytes is the length of the counts' JSON encoding, every field written.
+func (c ChangeCounts) encodedBytes() int {
+	return 2 + field("live", intBytes(c.Live), true) + field("draft", intBytes(c.Draft), false) +
+		field("open", intBytes(c.Open), false) + field("closed", intBytes(c.Closed), false) +
+		field("merged", intBytes(c.Merged), false)
+}
+
+// encodedBytes is the length of the card's JSON encoding: each part omitted where absent, the
+// first written one opening the object.
+func (c RepoCard) encodedBytes() int {
+	n, first := 2, true
+	if c.PushMirrored {
+		n += field("push_mirrored", trueBytes, first)
+		first = false
+	}
+	if c.LastPush != nil {
+		n += field("last_push", c.LastPush.encodedBytes(), first)
+		first = false
+	}
+	if c.TipChecks != nil {
+		n += field("tip_checks", c.TipChecks.encodedBytes(), first)
+	}
+	return n
+}
+
+// encodedBytes is the length of the last push's JSON encoding.
+func (p LastPush) encodedBytes() int {
+	n := 2 + field("push_id", stringBytes(p.PushID), true) + field("at", timeBytes(p.At), false) +
+		field("actor", stringBytes(p.Actor), false) + field("actor_kind", stringBytes(p.ActorKind), false)
+	if p.ActorSeat != "" {
+		n += field("actor_seat", stringBytes(p.ActorSeat), false)
+	}
+	return n + field("via", stringBytes(string(p.Via)), false) + field("outcome", p.Outcome.encodedBytes(), false)
 }
 
 // members is the length of the change's own members, without the braces that
@@ -826,8 +886,87 @@ func (s ChangeSummary) encodedBytes() int {
 	if s.Readiness != nil {
 		n += field("readiness", s.Readiness.encodedBytes(), false)
 	}
-	return n + field("open_findings", intBytes(s.OpenFindings), false) +
+	n += field("open_findings", intBytes(s.OpenFindings), false) +
 		field("updated_at", timeBytes(s.UpdatedAt), false)
+	if s.Card != nil {
+		n += field("card", s.Card.encodedBytes(), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the card's JSON encoding.
+func (c ChangeCard) encodedBytes() int {
+	n := 2 + field("comments", intBytes(c.Comments), true) + field("reviews", intBytes(c.Reviews), false) +
+		field("changes_requested", intBytes(c.ChangesRequested), false)
+	if len(c.Reviewers) > 0 {
+		list := 2 + len(c.Reviewers) - 1
+		for _, f := range c.Reviewers {
+			list += f.encodedBytes()
+		}
+		n += field("reviewers", list, false)
+	}
+	if c.ReviewersOmitted != 0 {
+		n += field("reviewers_omitted", intBytes(int64(c.ReviewersOmitted)), false)
+	}
+	if c.Checks != nil {
+		n += field("checks", c.Checks.encodedBytes(), false)
+	}
+	if c.Ejected != nil {
+		n += field("ejected", c.Ejected.encodedBytes(), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the face's JSON encoding.
+func (f ReviewerFace) encodedBytes() int {
+	n := 2 + field("handle", stringBytes(f.Handle), true) + field("kind", stringBytes(string(f.Kind)), false)
+	if f.Verdict != "" {
+		n += field("verdict", stringBytes(string(f.Verdict)), false)
+	}
+	if f.VerdictRevision != 0 {
+		n += field("verdict_revision", intBytes(f.VerdictRevision), false)
+	}
+	if f.Asked {
+		n += field("asked", trueBytes, false)
+	}
+	if f.Reason != "" {
+		n += field("reason", stringBytes(string(f.Reason)), false)
+	}
+	return n + ownedPathsBytes(f.OwnedPaths, f.OwnedPathsOmitted)
+}
+
+// ownedPathsBytes is the length of an ask's globs and their count as a row or a face encodes them,
+// each where set, neither first.
+func ownedPathsBytes(paths []string, omitted int) int {
+	n := 0
+	if len(paths) > 0 {
+		n += field("owned_paths", stringsBytes(paths), false)
+	}
+	if omitted != 0 {
+		n += field("owned_paths_omitted", intBytes(int64(omitted)), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the ejection's JSON encoding.
+func (e CardEjection) encodedBytes() int {
+	n := 2 + field("reason", stringBytes(string(e.Reason)), true) + field("at", timeBytes(e.At), false)
+	if len(e.Checks) > 0 {
+		n += field("checks", stringsBytes(e.Checks), false)
+	}
+	if e.ChecksMore != 0 {
+		n += field("checks_more", intBytes(int64(e.ChecksMore)), false)
+	}
+	if e.TestedIn != nil {
+		n += field("tested_in", e.TestedIn.encodedBytes(), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the train's JSON encoding.
+func (t EjectionTrain) encodedBytes() int {
+	return 2 + field("candidate_id", stringBytes(t.CandidateID), true) +
+		field("base_oid", stringBytes(t.BaseOID), false) + field("commit_oid", stringBytes(t.CommitOID), false)
 }
 
 // encodedBytes is the length of the readiness's JSON encoding: its list null
@@ -972,7 +1111,11 @@ func (f RevisionFactsRow) encodedBytes() int {
 	if !f.Classes.IsZero() {
 		n += field("classes", f.Classes.encodedBytes(), false)
 	}
-	n += field("node", stringBytes(f.Node), false) + field("owners_digest", stringBytes(f.OwnersDigest), false)
+	n += field("node", stringBytes(f.Node), false)
+	if !f.MeasuredAt.IsZero() {
+		n += field("measured_at", timeBytes(f.MeasuredAt), false)
+	}
+	n += field("owners_digest", stringBytes(f.OwnersDigest), false)
 	if len(f.RequestedOwners) > 0 {
 		owners := 2
 		for i, o := range f.RequestedOwners {
@@ -1030,7 +1173,11 @@ func (r ReviewerRow) encodedBytes() int {
 	if r.Note != "" {
 		n += field("note", stringBytes(r.Note), false)
 	}
-	return n + field("position", positionBytes(r.Position), false)
+	n += field("position", positionBytes(r.Position), false)
+	if !r.At.IsZero() {
+		n += field("at", timeBytes(r.At), false)
+	}
+	return n + ownedPathsBytes(r.OwnedPaths, r.OwnedPathsOmitted)
 }
 
 // encodedBytes is the length of the comment's JSON encoding.
@@ -1175,7 +1322,25 @@ func (f FindingRow) encodedBytes() int {
 	if !f.ResolvedPosition.IsZero() {
 		n += field("resolved_position", positionBytes(f.ResolvedPosition), false)
 	}
-	return n + field("position", positionBytes(f.Position), false)
+	n += field("position", positionBytes(f.Position), false)
+	if !f.RaisedAt.IsZero() {
+		n += field("raised_at", timeBytes(f.RaisedAt), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the group's JSON encoding.
+func (p FindingPathRow) encodedBytes() int {
+	return 2 + field("path", stringBytes(p.Path), true) +
+		field("state", stringBytes(string(p.State)), false) +
+		field("revision", intBytes(p.Revision), false) +
+		field("findings", intBytes(p.Findings), false)
+}
+
+// encodedBytes is the length of the mark's JSON encoding.
+func (r ViewedRow) encodedBytes() int {
+	return 2 + field("path_digest", stringBytes(r.PathDigest), true) +
+		field("file_digest", stringBytes(r.FileDigest), false) + field("at", timeBytes(r.At), false)
 }
 
 // encodedBytes is the length of the anchor's JSON encoding.
@@ -1241,6 +1406,18 @@ func (n CommandCounts) encodedBytes() int {
 	return size
 }
 
+// changeBytes is what the row's change and its count add to its encoding: none where it names no change.
+func (row PushRow) changeBytes() int {
+	n := 0
+	if row.Change != nil {
+		n += field("change", row.Change.encodedBytes(), false)
+	}
+	if row.ChangesMore != 0 {
+		n += field("changes_more", intBytes(int64(row.ChangesMore)), false)
+	}
+	return n
+}
+
 // encodedBytes is the length of the push row's JSON encoding, given the
 // length of its commands' encoding — which a row read from the store has
 // already, as the column it was decoded from: the stored commands ARE
@@ -1267,6 +1444,7 @@ func (row PushRow) encodedBytes(commands int) int {
 		n += field("atomic", trueBytes, false)
 	}
 	n += field("commands", commands, false)
+	n += row.changeBytes()
 	if row.Omitted != (CommandCounts{}) {
 		n += field("omitted", row.Omitted.encodedBytes(), false)
 	}
@@ -1281,6 +1459,9 @@ func (row PushRow) encodedBytes(commands int) int {
 	}
 	if row.IntroducedCount != 0 {
 		n += field("introduced_count", intBytes(int64(row.IntroducedCount)), false)
+	}
+	if row.Offered != 0 {
+		n += field("offered", intBytes(int64(row.Offered)), false)
 	}
 	return n + field("received_at", timeBytes(row.ReceivedAt), false)
 }

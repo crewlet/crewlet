@@ -483,6 +483,10 @@ var cacheWriters = []writerRow{
 			"made for its first file, a swap's and a rebuild's links of the files the record of the copy it " +
 			"replaces names — every segment and tip map itself staged in tmp/ and renamed in through durable.go, " +
 			"and retired through layout.go's toTrash", []cache.DerivedName{cache.DerivedCodeIndex}},
+	{"internal/gitlet/cache/tags.go", kindOS,
+		"the tag index, the cache's own derived file under the incarnation's crewlet/: the directory made for " +
+			"it, the file staged in tmp/ with no fsync and renamed in through durable.go, and a staged file not " +
+			"placed removed", []cache.DerivedName{cache.DerivedTags}},
 	{"internal/gitlet/cache/memo.go", kindOS,
 		"the memo of answers by object id, the cache's own derived file under the incarnation's crewlet/memo: " +
 			"each answer staged in tmp/ — with no sync, since every read holds an entry to its digest — " +
@@ -582,6 +586,11 @@ var cacheWriters = []writerRow{
 			"write read less the target's tip — in the copy, whose only arguments not spelled as literals are the " +
 			"count, formatted from gitlet.MaxRebaseCommits, and the two whole commit ids the write named and the " +
 			"copy's for-each-ref read: no --output can be among them", nil},
+	{"internal/gitlet/host/download.go", kindGit + " archive",
+		"a download's ZIP: the only arguments not spelled as literals are the prefix, built from the " +
+			"repository's validated name and seven hex digits, and the commit's whole id; " +
+			"host.TestADownloadReachesGitOnlyAsData holds the list to its template, so no --output or -o can " +
+			"be added unseen", nil},
 	{"internal/gitlet/host/relay.go", kindOS,
 		"the hook relay's private socket directory under TMPDIR, made at Start and removed at Stop: no " +
 			"path of the cache's", nil},
@@ -625,6 +634,10 @@ var cacheWriters = []writerRow{
 			"the records it admits reach diff-pairs on its standard input), and " +
 			"query.TestAPathReachesGitOnlyAsData holds every argument list to its template, so no " +
 			"--output can be added unseen", nil},
+	{"internal/gitlet/query/excerpts.go", kindGit + " diff-tree",
+		"a finding's excerpt's rename walk: `-z -r --raw -M` of two whole commit ids a read resolved, its " +
+			"records matched in Go; a path never reaches the command line, and query.TestAPathReachesGitOnlyAsData " +
+			"holds the argument list to its template, so no --output can be added unseen", nil},
 	{"internal/gitlet/query/compare.go", kindGit + " rev-list",
 		"a seat's comparison of two commits: `--left-right --count <base>...<head>` over two whole commit " +
 			"ids a read resolved; query.TestAPathReachesGitOnlyAsData holds the argument list to its " +
@@ -660,6 +673,12 @@ var cacheWriters = []writerRow{
 			"spells (`blame <id> -- --output=x` answers that no such path exists, measured on 2.56.0); " +
 			"query.TestAPathReachesGitOnlyAsData holds the argument list to its template, so no --output can be " +
 			"added unseen", nil},
+	{"internal/gitlet/query/treecommits.go", kindGit + " log",
+		"a directory's last commits: the only arguments not spelled as literals are the log formats, constants, " +
+			"the whole commit ids a read checked or its walks printed and, after `--`, the directory or entries " +
+			"of it as literal pathspecs, which git reads as paths whatever they spell; " +
+			"query.TestAPathReachesGitOnlyAsData holds every argument list to its template, so no --output can " +
+			"be added unseen", nil},
 }
 
 type writerKey struct{ file, kind string }
@@ -683,7 +702,8 @@ var syscallMutators = setOf("Rename", "Renameat", "Renameat2", "Unlink", "Unlink
 
 // gitReader is a git subcommand that never writes the repository it runs in,
 // given the pool's fixed configuration — unless handed writes, the one
-// option that makes it a writer, always a long option. Every spelling git
+// option that makes it a writer, always a long option, or short, its
+// one-letter spelling where git has one. Every spelling git
 // may accept of it is refused (spellsOption): its name — what comes before
 // any "=" — whole or an unambiguous prefix of it, with the value attached or
 // as the next argument. fsck's option parser takes a prefix (`fsck --lost`
@@ -692,13 +712,13 @@ var syscallMutators = setOf("Rename", "Renameat", "Renameat2", "Unlink", "Unlink
 // itself refuses costs nothing and one rule cannot then be the wrong one for
 // a reader. Beside a writing option, an argument the walk cannot read is
 // refused too: it may spell the option.
-type gitReader struct{ writes, why string }
+type gitReader struct{ writes, short, why string }
 
 // gitReaders is the CLOSED set of git subcommands judged to read; every
 // other is a writer until argued here.
 var gitReaders = map[string]gitReader{
 	"cat-file": {why: "reads objects by id"},
-	"grep": {writes: "--open-files-in-pager", why: "searches a tree's files by id for a pattern, reading " +
+	"grep": {writes: "--open-files-in-pager", short: "-O", why: "searches a tree's files by id for a pattern, reading " +
 		"only the object database; --open-files-in-pager (-O) runs a program on the files it found"},
 	"fsck":        {writes: "--lost-found", why: "checks objects and connectivity; --lost-found writes lost-found/"},
 	"version":     {why: "prints the binary's version and opens no repository"},
@@ -722,6 +742,8 @@ var gitReaders = map[string]gitReader{
 	"log": {writes: "--output", why: "lists a path's history by id; --output, a diff option its revision walker " +
 		"takes, creates the file it names in the directory git runs in (2.56.0 and 2.55.0: `log --output=f -1` " +
 		"exits 0 and leaves f behind)"},
+	"archive": {writes: "--output", short: "-o", why: "writes a commit's files as an archive to its standard " +
+		"output from the object database; --output (-o) writes it to the file it names"},
 	"blame": {writes: "--output", why: "annotates a file's lines by id, reading only the object database; " +
 		"--output, a diff option its revision parser takes, creates the file it names (2.56.0 and 2.55.0: " +
 		"`blame --output=f <id> -- file` exits 0 and leaves f behind)"},
@@ -740,7 +762,7 @@ var gitWriterWords = setOf("index-pack", "multi-pack-index", "commit-graph", "re
 	"fast-import", "config", "maintenance", "replace", "notes", "tag", "branch", "commit", "merge", "init",
 	"clone", "worktree", "merge-tree", "pack-objects", "hash-object", "mktag", "mktree", "commit-tree",
 	"write-tree", "update-index", "read-tree", "checkout", "reset", "am", "apply", "cherry-pick", "revert",
-	"rebase", "stash", "pull", "push", "reflog", "bundle", "http-backend", "archive")
+	"rebase", "stash", "pull", "push", "reflog", "bundle", "http-backend")
 
 func setOf(names ...string) map[string]bool {
 	out := make(map[string]bool, len(names))
@@ -1367,7 +1389,7 @@ func (m *writerMatch) judgeCmd(lit *ast.CompositeLit) {
 	argv := append(slices.Clone(list.Elts[1:]), rest...)
 	for _, a := range argv {
 		s, ok := stringLit(a)
-		if !ok || spellsOption(reader.writes, s) {
+		if !ok || spellsOption(reader.writes, s) || spellsShort(reader.short, s) {
 			// An argument the walk cannot read beside an option that
 			// writes, or that option in a spelling git may accept.
 			m.hit(args.Pos(), kindGit+" "+word, word+" "+reader.writes)
@@ -1383,6 +1405,14 @@ func (m *writerMatch) judgeCmd(lit *ast.CompositeLit) {
 func spellsOption(option, arg string) bool {
 	name, _, _ := strings.Cut(arg, "=")
 	return len(name) > len("--") && strings.HasPrefix(option, name)
+}
+
+// spellsShort reports whether arg may spell the one-letter option short ("-o"):
+// a one-dash argument holding its letter, alone, with its value attached or
+// in a cluster of short flags.
+func spellsShort(short, arg string) bool {
+	return short != "" && strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") &&
+		strings.Contains(arg[1:], short[1:])
 }
 
 // handoff judges one call: every Cmd it is handed is one spelled in it.
@@ -1678,6 +1708,10 @@ func controlWriters(t *testing.T) {
 			t.Errorf("gitReaders[%q] writes with %q, which is no long option: spellsOption reads a long "+
 				"option's spellings and nothing else", word, r.writes)
 		}
+		if r.short != "" && (len(r.short) != 2 || r.short[0] != '-' || r.short[1] == '-' || r.writes == "") {
+			t.Errorf("gitReaders[%q] has the short spelling %q, which is no dash and one letter beside a "+
+				"long option: spellsShort reads one letter", word, r.short)
+		}
 	}
 	gp := strconv.Quote(gitprocPath)
 	files := map[string]string{
@@ -1712,6 +1746,14 @@ func controlWriters(t *testing.T) {
 			"\t_ = g.Cmd{Args: []string{\"rev-list\", \"--output\", \"x\", \"HEAD\"}}\n" +
 			"\t_ = g.Cmd{Args: append([]string{\"rev-list\", \"HEAD\"}, args...)}\n" +
 			"\t_ = g.Cmd{Args: []string{\"rev-list\", \"--objects\", \"--output-indicator-new=+\", \"HEAD\"}}\n" +
+			"\t_ = g.Cmd{Args: []string{\"archive\", \"-o\", \"f\", \"HEAD\"}}\n" +
+			"\t_ = g.Cmd{Args: []string{\"archive\", \"-of\", \"HEAD\"}}\n" +
+			"\t_ = g.Cmd{Args: []string{\"archive\", \"-vo\", \"f\", \"HEAD\"}}\n" +
+			"\t_ = g.Cmd{Args: []string{\"archive\", \"-o\", r}}\n" +
+			"\t_ = g.Cmd{Args: []string{\"grep\", \"-O\", \"x\", \"HEAD\"}}\n" +
+			"\t_ = g.Cmd{Args: []string{\"grep\", \"-nO\", \"x\", \"HEAD\"}}\n" +
+			"\t_ = g.Cmd{Args: []string{\"archive\", \"--worktree-attributes\", \"--format=zip\", \"HEAD\"}}\n" +
+			"\t_ = g.Cmd{Args: []string{\"grep\", \"-n\", \"-e\", \"x\", \"HEAD\"}}\n" +
 			"\t_ = g.Cmd{Args: args}\n" +
 			"\t_ = g.Cmd{Args: append([]string{\"merge-tree\", \"--write-tree\"}, args...)}\n" +
 			"\t_ = []g.Cmd{{Args: []string{\"verify-pack\", \"x.idx\"}}}\n" +
@@ -1960,7 +2002,13 @@ var _ = Cmd{Args: []string{"version"}}
 	want := []string{
 		"internal/gitlet/a/dot.go os os, imported with a dot: its calls carry no qualifier to judge",
 		"internal/gitlet/a/git.go git (arguments built at run time) arguments built at run time",
+		"internal/gitlet/a/git.go git archive archive --output",
+		"internal/gitlet/a/git.go git archive archive --output",
+		"internal/gitlet/a/git.go git archive archive --output",
+		"internal/gitlet/a/git.go git archive archive --output",
 		"internal/gitlet/a/git.go git commit-graph commit-graph",
+		"internal/gitlet/a/git.go git grep grep --open-files-in-pager",
+		"internal/gitlet/a/git.go git grep grep --open-files-in-pager",
 		"internal/gitlet/a/git.go git fsck fsck --lost-found",
 		"internal/gitlet/a/git.go git merge-tree merge-tree",
 		"internal/gitlet/a/git.go git rev-list rev-list --output",

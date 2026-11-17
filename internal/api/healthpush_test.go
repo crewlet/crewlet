@@ -133,7 +133,8 @@ func TestTheHealthPushIsTheWholeEnvelope(t *testing.T) {
 // COUNTS, NEVER ROWS — the envelope is public.
 //
 // GET /health is a probe and unguarded, so what it says about the fleet and
-// the alarm table is a number and one name: the longest-standing alarm's kind.
+// the alarm table is a number and one name: the longest-standing alarm's kind,
+// with its title.
 // Which nodes hold what, which logs an alarm stands on and what each alarm
 // measured are the `fleet` and `work_retention` answers, each an admin's.
 //
@@ -155,9 +156,9 @@ func TestAnAnonymousHealthReadCarriesCountsOnly(t *testing.T) {
 	}
 	alarms, _ := body["alarms"].(map[string]any)
 	if got := slices.Sorted(maps.Keys(alarms)); !slices.Equal(got,
-		[]string{"count", "worst"}) {
+		[]string{"count", "worst", "worst_title"}) {
 		t.Errorf("an anonymous read's alarms carry %v, want only the count and "+
-			"the worst's name", got)
+			"the worst's name and title", got)
 	}
 }
 
@@ -200,7 +201,8 @@ func TestTheNodeCountIsAbsentWhenPresenceCannotBeRead(t *testing.T) {
 // The runtime hands the envelope the evaluation the gauge and the log were
 // fed, longest-standing first, one entry per kind however many logs it stands
 // on (the engine half of this is `engine.TestTheHealthAlarmsAreTheRetentionAlarms`).
-// Here: the count is its length, the worst is its head, and a node that has not
+// Here: the count is its length, the worst is its head, named in its kind's
+// title for a person, and a node that has not
 // evaluated its table says nothing rather than `{count: 0}`, which a health
 // card reads as healthy.
 //
@@ -218,9 +220,11 @@ func TestTheAlarmCountIsTheStandingAlarms(t *testing.T) {
 			map[string]any{"count": float64(0)}},
 		{"two firing, the longest-standing first", []statelog.Kind{
 			statelog.KindTrimBlocked, statelog.KindWALLarge,
-		}, map[string]any{"count": float64(2), "worst": "trim_blocked"}},
+		}, map[string]any{"count": float64(2), "worst": "trim_blocked",
+			"worst_title": titleOf(t, statelog.KindTrimBlocked)}},
 		{"one firing", []statelog.Kind{statelog.KindHistoryPartial},
-			map[string]any{"count": float64(1), "worst": "history_partial"}},
+			map[string]any{"count": float64(1), "worst": "history_partial",
+				"worst_title": titleOf(t, statelog.KindHistoryPartial)}},
 	} {
 		a := newApp(t, api.Options{Runtime: &fakeRuntime{
 			state: api.RuntimeState{Posture: "serve"},
@@ -235,6 +239,16 @@ func TestTheAlarmCountIsTheStandingAlarms(t *testing.T) {
 			t.Errorf("%s: alarms = %v, want %v", tc.what, got, tc.want)
 		}
 	}
+}
+
+// titleOf is kind's title in the alarm table, failing the test where it has none.
+func titleOf(t *testing.T, kind statelog.Kind) string {
+	t.Helper()
+	title, _, ok := statelog.PersonWords(kind)
+	if !ok || title == "" {
+		t.Fatalf("%s has no title in the alarm table", kind)
+	}
+	return title
 }
 
 // A WEDGED PRESENCE READ COSTS THE LIVENESS PROBE ONE BUDGET, NOT A HANG.

@@ -922,8 +922,15 @@ func (t *codeReportCheck) Parameters() map[string]any {
 			"tail":             map[string]any{"type": "string", "description": "The run's last output."},
 			"failures":         map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
 			"failures_omitted": map[string]any{"type": "integer"},
-			"duration_ms":      map[string]any{"type": "integer"},
-			"url":              map[string]any{"type": "string", "description": "The CI's page of the run."},
+			"tests": map[string]any{"type": "object", "required": []string{"total"},
+				"properties": map[string]any{"total": map[string]any{"type": "integer"},
+					"failed": map[string]any{"type": "integer"}, "skipped": map[string]any{"type": "integer"}},
+				"description": "Your JUnit report's counts: how many tests ran, failed and were skipped."},
+			"log_lines": map[string]any{"type": "integer",
+				"description": "How many lines the run's whole output has, with tail its last ones."},
+			"tail_cut":    map[string]any{"type": "boolean", "description": "Whether tail begins inside a line."},
+			"duration_ms": map[string]any{"type": "integer"},
+			"url":         map[string]any{"type": "string", "description": "The CI's page of the run."},
 		},
 		"required": []string{"name", "status"},
 	})
@@ -956,7 +963,12 @@ func (t *codeReportCheck) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	report := gitlet.CheckReported{State: gitlet.CheckState(strings.TrimSpace(argString(args, "status"))),
 		Summary: argString(args, "summary"), Tail: argString(args, "tail"),
 		FailuresOmitted: argInt(args, "failures_omitted", 0), DurationMs: int64(argInt(args, "duration_ms", 0)),
+		LogLines: argInt(args, "log_lines", 0), TailCut: argBool(args, "tail_cut"),
 		URL: strings.TrimSpace(argString(args, "url"))}
+	if tests, ok := argval.Object(args["tests"]); ok {
+		report.Tests = &gitlet.CheckTests{Total: argInt(tests, "total", 0), Failed: argInt(tests, "failed", 0),
+			Skipped: argInt(tests, "skipped", 0)}
+	}
 	raw, _ := argval.List(args["failures"])
 	for _, item := range raw {
 		m, _ := item.(map[string]any)

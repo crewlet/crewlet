@@ -41,7 +41,9 @@ import {
   IconButton,
   Input,
   Popover,
+  PresetChips,
   returnFocus,
+  SettingForm,
   Text,
   useToast,
 } from "@crewlethq/ui";
@@ -64,7 +66,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrgWriteAccess, type OrgTarget } from "~/lib/useWriteAccess.ts";
 import { useWaiting } from "~/lib/waiting.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
-import { warningWords } from "~/protocol/configAnswer.ts";
+import { brings, ConfigWarnings } from "~/components/ConfigWarnings.tsx";
 import { refuse, useAssistantDraft, useDraftState, writeTo } from "~/app/assistant/draft.ts";
 import { remedyOffer, scopeRemedy } from "~/lib/remedy.ts";
 
@@ -130,25 +132,19 @@ function WriteStatus({ write, onReload }: { write: CeilingWrite; onReload: () =>
       {state.kind === "checking" && <span className="t-caption">Checking with the engine…</span>}
       {state.kind === "saving" && <span className="t-caption">Saving…</span>}
       {state.kind === "unchanged" && <span className="t-caption">Already the limit.</span>}
-      {state.kind === "warned" && (
-        <Callout variant="warning">
-          <ul className="ceiling-warnings">
-            {state.warnings.map((w) => (
-              <li key={`${w.path}:${w.message}`}>{warningWords(w)}</li>
-            ))}
-          </ul>
-        </Callout>
-      )}
+      {state.kind === "warned" && <ConfigWarnings warnings={state.warnings} title={brings} />}
       {state.kind === "refused" && (
-        <Callout variant="danger">
-          <span>{state.message}</span>
-          {state.reload && (
-            <div className="row gap-2">
+        <Callout
+          variant="danger"
+          action={
+            state.reload && (
               <Button size="small" variant="secondary" onClick={onReload}>
                 Reload
               </Button>
-            </div>
-          )}
+            )
+          }
+        >
+          {state.message}
         </Callout>
       )}
     </div>
@@ -286,6 +282,12 @@ export function CeilingEditor({
     queueMicrotask(() => returnFocus(pencil.current));
   }
 
+  function type(next: string) {
+    setText(next);
+    setError(undefined);
+    if (write.state.kind !== "idle" && !write.busy) write.reset();
+  }
+
   function submit(event?: FormEvent) {
     event?.preventDefault();
     if (write.busy) return;
@@ -384,7 +386,7 @@ export function CeilingEditor({
       <Popover
         label={`${who} · ${adjective} token ceiling`}
         align="start"
-        className="ceiling-pop"
+        height="layer"
         open={editing}
         onOpenChange={(next) => (next ? open() : close())}
         trigger={(isOpen, toggle) => (
@@ -401,60 +403,53 @@ export function CeilingEditor({
           />
         )}
       >
-        <form className="ceiling-edit" onSubmit={submit} noValidate>
-          {/* WHOSE IT IS STANDS ABOVE THE FIELD: in its label a long name ran to
-              three lines, with the label's note floating apart from them. */}
-          <p className="ceiling-edit-who">{who}</p>
-          <FormField
-            htmlFor={fieldId}
-            label={`${periodTitle(period)} token ceiling`}
-            optional
-            error={error}
-            helper={
-              w
-                ? `${fmtCount(w.used)} spent ${PERIOD_WORDS[period]}. ${CEILING_TYPING}`
-                : CEILING_TYPING
-            }
-          >
-            <Input
-              id={fieldId}
-              value={text}
-              autoFocus
-              placeholder="No ceiling"
-              autoComplete="off"
-              spellCheck={false}
-              error={Boolean(error)}
-              disabled={write.busy}
-              onChange={(event) => {
-                setText(event.target.value);
-                setError(undefined);
-                if (write.state.kind !== "idle" && !write.busy) write.reset();
+        <SettingForm
+          subject={who}
+          label={`${periodTitle(period)} token ceiling`}
+          htmlFor={fieldId}
+          hint={w ? `${fmtCount(w.used)} spent ${PERIOD_WORDS[period]}` : undefined}
+          error={error}
+          status={
+            <WriteStatus
+              write={write}
+              onReload={() => {
+                onApplied();
+                write.reset();
+                setText(ceilingText(limit, period));
               }}
             />
-          </FormField>
-          <WriteStatus
-            write={write}
-            onReload={() => {
-              onApplied();
-              write.reset();
-              setText(ceilingText(limit, period));
-            }}
-          />
-          <div className="ceiling-actions">
-            <Button type="button" size="small" variant="ghost" onClick={close}>
-              Cancel
-            </Button>
-            <Button
-              type={write.state.kind === "warned" ? "button" : "submit"}
-              size="small"
-              variant="primary"
-              loading={write.busy}
-              onClick={write.state.kind === "warned" ? write.confirm : undefined}
-            >
-              {write.state.kind === "warned" ? "Save anyway" : "Save"}
-            </Button>
-          </div>
-        </form>
+          }
+          saving={write.busy}
+          saveLabel={write.state.kind === "warned" ? "Save anyway" : undefined}
+          onSave={submit}
+          onCancel={close}
+        >
+          {(field) => (
+            <div className="col gap-2">
+              <Input
+                id={fieldId}
+                aria-describedby={field.describedBy}
+                value={text}
+                autoFocus
+                placeholder="No ceiling"
+                trailing="tokens"
+                autoComplete="off"
+                spellCheck={false}
+                error={Boolean(error)}
+                disabled={write.busy}
+                onChange={(event) => type(event.target.value)}
+              />
+              {/* THE ONE COMMON VALUE: no ceiling, which an emptied field also is. */}
+              <PresetChips
+                label="Common values"
+                options={[{ value: "", label: "No ceiling" }]}
+                value={text.trim()}
+                disabled={write.busy}
+                onPick={type}
+              />
+            </div>
+          )}
+        </SettingForm>
       </Popover>
     </span>
   );

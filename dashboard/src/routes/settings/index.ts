@@ -7,6 +7,7 @@ export { ConfigScreen, RevisionPeek } from "./Config.tsx";
 export { Diagnostics } from "./Diagnostics.tsx";
 export { Advisor } from "./Advisor.tsx";
 export { FileStoragePage } from "./FileStorage.tsx";
+export { GeneralSettings } from "./General.tsx";
 export { Fleet, NodePeek } from "./Fleet.tsx";
 export { GitletSettings } from "./Gitlet.tsx";
 export { Principles } from "./principles/Principles.tsx";

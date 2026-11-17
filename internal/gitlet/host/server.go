@@ -264,13 +264,14 @@ type Options struct {
 	// surface's audit, which outlives the request.
 	Audit func(ctx context.Context, e types.OperatorActed)
 	// Fetched records one fetch of a `visibility: unit` repository whose
-	// answer carried a pack (fetch.go), before the response ends — filed by
-	// the engine in the node's reads ledger (internal/gitlet/readaudit), which
-	// publishes every reader's reads of a flush as one record into the
-	// node's event log, from which the usage domain derives who read it. It
-	// returns at once, so no fetch's answer waits on the broker for its own
-	// record, and the record outlives the request: a client that hung up
-	// after its pack still read the repository.
+	// answer carried a pack (fetch.go), and every download of one whose answer
+	// began or that was answered 304 (download.go), before the response ends —
+	// filed by the engine in the node's reads ledger
+	// (internal/gitlet/readaudit), which publishes every reader's reads of a
+	// flush as one record into the node's event log, from which the usage
+	// domain derives who read it. It returns at once, so no fetch's answer
+	// waits on the broker for its own record, and the record outlives the
+	// request: a client that hung up after its pack still read the repository.
 	Fetched func(ctx context.Context, e types.CodeFetched)
 	// Limits is the CURRENT epoch's code.limits.
 	Limits func() gitlet.Limits
@@ -421,6 +422,18 @@ type Server struct {
 	chainPack    time.Duration
 	chainObjects int64
 
+	// archives are the node's archive places and the principals making a
+	// ZIP (download.go); the rest are the archive's bounds, fields so the
+	// suite can scale them (export_test.go).
+	archives          *archivePlaces
+	archiveDeadline   time.Duration
+	archiveFree       int64
+	archiveMaxEntries int64
+	archiveMaxBytes   int64
+	archiveMaxNames   int64
+	archiveMaxName    int64
+	archiveBound      func(treeMeasure) int64
+
 	// runRequests is every executor's requests in flight here, by its
 	// launch, under runsMu (boxlimit.go).
 	runsMu      sync.Mutex
@@ -475,6 +488,11 @@ func New(o Options) (*Server, error) {
 	transfers := o.Git.Slots(gitproc.ClassTransfer)
 	s.heads = newAllowance(RequestMemoryAllowance(transfers))
 	s.spools = newSpools(spoolSizesFor(transfers))
+	s.archives = newArchivePlaces(Archives(o.Git.Slots(gitproc.ClassRead)), gitproc.SlotWait)
+	s.archiveDeadline, s.archiveFree, s.archiveBound = ArchiveDeadline, ArchiveFreeBytes, archiveBound
+	s.archiveMaxEntries, s.archiveMaxBytes, s.archiveMaxNames = MaxArchiveEntries, MaxArchiveTreeBytes,
+		MaxArchiveNameBytes
+	s.archiveMaxName = zipNameMax
 	s.life, s.end = context.WithCancel(context.Background())
 	return s, nil
 }

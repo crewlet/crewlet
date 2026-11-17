@@ -13,14 +13,17 @@ import (
 // failures kept, how many were omitted past the bounds, and the counts a
 // report stated.
 type Reported struct {
-	Kept                   []gitlet.CheckFailure
-	Omitted                int
-	Tests, Failed, Results int
+	Kept                            []gitlet.CheckFailure
+	Omitted                         int
+	Tests, Failed, Skipped, Results int
+	// Counts are the tests an ending carries of the report.
+	Counts *gitlet.CheckTests
 }
 
 // reported is fs as a case reads it.
 func reported(fs *failures) Reported {
-	return Reported{Kept: fs.kept, Omitted: fs.omitted, Tests: fs.tests, Failed: fs.failed, Results: fs.results}
+	return Reported{Kept: fs.kept, Omitted: fs.omitted, Tests: fs.tests, Failed: fs.failed, Skipped: fs.skipped,
+		Results: fs.results, Counts: fs.counts()}
 }
 
 // ReadJUnit reads a JUnit report as a run's ending does.

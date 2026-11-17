@@ -15,16 +15,35 @@ import (
 //
 // # Evolution
 //
-// Additive only, [Protocol] stamped on both halves: an answerer that does not
+// Additive only, a protocol stamped on both halves: an answerer that does not
 // speak a request's protocol answers nothing, which its asker reads as a node
 // that did not answer and asks the runner-up of; an asker drops a reply at a
-// protocol it does not speak. An estate request's shape and no record's, so the
-// code domain's RecordVersion does not move for it; the domain landed on main
-// with it.
+// protocol it does not speak. A request is stamped with the lowest protocol
+// that carries what it asks ([requestProtocol]), so an older answerer still
+// answers every search it can answer whole; a reply carries its request's. An
+// estate request's shape and no record's, so the code domain's RecordVersion
+// does not move for it; the domain landed on main with it.
 
-// Protocol is the version of the request and reply this build writes and
-// reads.
-const Protocol = 1
+// ContextProtocol is the protocol from which a request may ask context lines
+// and a per-file bound; a request asking neither is stamped baseProtocol,
+// which every build speaks.
+const ContextProtocol = 2
+
+// Protocol is the newest protocol this build writes; it reads every one from
+// baseProtocol up.
+const Protocol = ContextProtocol
+
+// baseProtocol is the first protocol.
+const baseProtocol = 1
+
+// requestProtocol is the protocol a request of sq is stamped with: the
+// lowest that carries what it asks.
+func requestProtocol(sq gitlet.SearchQuery) int {
+	if sq.Context > 0 || sq.PerFile > 0 {
+		return ContextProtocol
+	}
+	return baseProtocol
+}
 
 // Channel is the scatter's name among the fleet's signed channels, and so the
 // stem of the two key domains a request and a reply are signed under — its

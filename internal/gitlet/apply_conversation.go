@@ -207,8 +207,9 @@ type conversationCounts struct {
 // row made by the change's first conversation record — and, for a record
 // somebody wrote, its instant to the record's ([spoken]). A record nobody
 // wrote names no instant, so its write rewrites no entry of
-// code_conversations_updated_idx (the driver rewrites an index entry for
-// every column a write names, whatever the value).
+// code_conversations_updated_idx or code_conversations_repo_updated_idx (the
+// driver rewrites an index entry for every column a write names, whatever the
+// value).
 func touchConversation(ctx context.Context, tx *sql.Tx, at applyContext, repoID, changeID string,
 	counts conversationCounts) error {
 
@@ -672,13 +673,13 @@ const (
 		WHERE id = ?`
 	// askReviewersSQL and askReviewersConflictSQL are an ask's reviewers, a
 	// collection store.InsertRows writes, each asked again where the change
-	// held an ask of them in any state.
+	// held an ask of them in any state, and a path owner's globs cleared.
 	askReviewersSQL = `INSERT INTO code_reviewers (change_id, reviewer, reviewer_kind, reason, state, requested_by,
 			requested_by_kind, note, position) VALUES `
 	askReviewersConflictSQL = `ON CONFLICT (change_id, reviewer) DO UPDATE SET
 			reviewer_kind = excluded.reviewer_kind, reason = excluded.reason, state = excluded.state,
 			requested_by = excluded.requested_by, requested_by_kind = excluded.requested_by_kind,
-			note = excluded.note, position = excluded.position`
+			note = excluded.note, position = excluded.position, owned_paths = '', owned_paths_omitted = 0`
 	// moveAsksSQL moves a change's asks named in a list from one state to
 	// another, driven from the list, one seek of the reviewers' key a handle
 	// — the key NAMED ([reviewersKey] says why) — as supersedeFindingsSQL

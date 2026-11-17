@@ -179,7 +179,7 @@ func startJoined(ns *server.Server) <-chan struct{} {
 // break. Mutation: dial with listenTimeout and it goes red.
 func TestAnExternalDialKeepsItsOwnHandshakeBudget(t *testing.T) {
 	t.Parallel()
-	opts, _, err := dialOptions(Config{})
+	opts, _, err := dialOptions(Config{}, nil)
 	if err != nil {
 		t.Fatalf("dialOptions: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestAnExternalDialKeepsItsOwnHandshakeBudget(t *testing.T) {
 // Write.
 func TestAnExternalDialGivesEveryWriteTheLargestWritesCrossing(t *testing.T) {
 	t.Parallel()
-	opts, _, err := dialOptions(Config{})
+	opts, _, err := dialOptions(Config{}, nil)
 	if err != nil {
 		t.Fatalf("dialOptions: %v", err)
 	}

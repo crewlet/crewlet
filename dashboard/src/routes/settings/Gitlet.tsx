@@ -35,15 +35,15 @@
 
 import { useState } from "react";
 import { Button, Card, Disclosure, EmptyState, InlineCode, SettingsTable } from "@crewlethq/ui";
-import { BellGlyph, CodeGlyph, SettingsGlyph, ShieldGlyph } from "@crewlethq/icons/glyphs";
+import { BellGlyph, GitBranchGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { alarmKindTitle } from "~/lib/alarms.ts";
+import { alarmTitle } from "~/lib/alarms.ts";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { CODE_ALARM_KINDS } from "~/contract/code.ts";
 import { LimitSetting } from "~/components/LimitSetting.tsx";
 import { TextSetting } from "~/components/TextSetting.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { plural, relTime } from "~/lib/format.ts";
+import { plural } from "~/lib/format.ts";
 import { gateLine, pushRuleLine, ruleSourceLine } from "~/lib/protection.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
@@ -60,6 +60,7 @@ import type {
 import { FLEET_POLL_MS } from "./Fleet.tsx";
 import { LogRow, useRetentionReport } from "./Retention.tsx";
 import "~/styles/gitlet.css";
+import { ago } from "~/lib/ago.ts";
 
 /** The state log Gitlet keeps its rows on (`gitlet.Domain`). */
 export const CODE_DOMAIN = "code";
@@ -118,7 +119,6 @@ export function BranchProtection() {
   return (
     <Card padding="none">
       <Card.Header
-        icon={<ShieldGlyph size="sm" />}
         count={paged.more ? undefined : protectedRepos.length}
         subtitle="The rules on each repository's branches, and what a merge into each must meet"
         actions={
@@ -270,7 +270,6 @@ function CodeLog({ log, answered }: { log: RetentionDomain | undefined; answered
   return (
     <Card padding="none">
       <Card.Header
-        icon={<CodeGlyph size="sm" />}
         subtitle="Its ceiling, what it holds, and the six checks its trim waits on"
         actions={
           <a className="t-link" href={href(["settings", "backups"])}>
@@ -358,11 +357,13 @@ function CodeAlarms({ fleet }: { fleet: FleetAnswer }) {
           <ul className="col gap-1" aria-label="Code alarms firing">
             {firing.map((a) => (
               <li key={`${a.node}\u0000${a.kind}`}>
-                {alarmKindTitle(a.kind)} on{" "}
+                {alarmTitle(a)} on{" "}
                 <a className="t-link prose-link mono" href={href(["settings", "nodes", a.node])}>
                   {a.node}
                 </a>
-                {a.since && <span className="muted">, since {relTime(a.since, now)}</span>}
+                {a.since && (
+                  <span className="muted">, since {ago(a.since, now, { since: true })}</span>
+                )}
               </li>
             ))}
           </ul>
@@ -402,7 +403,8 @@ export function CodePolicy() {
   return (
     <Card padding="none">
       <Card.Header
-        icon={<SettingsGlyph size="sm" />}
+        icon={<GitBranchGlyph size="sm" />}
+        count={rows.length + (domain ? 1 : 0)}
         subtitle="What the configuration's code block sets"
         actions={
           <a className="t-link" href={href(["settings", "config"])}>
@@ -437,7 +439,7 @@ export function CodePolicy() {
               area="Gitlet"
               reread="Reload to see the code policy as it is now."
               onApplied={refetch}
-              helper="The domain the engine's own commits are addressed in: engine@ and each seat's handle @ it, for a seat with no email of its own. Empty is the default."
+              hint="Commits are addressed engine@ and handle@ it, for a seat with no email."
             />
           )}
         </SettingsTable>

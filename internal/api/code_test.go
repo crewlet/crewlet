@@ -198,6 +198,8 @@ func served(what string) http.Handler {
 func (fakeGitRoutes) InfoRefs() http.Handler       { return served("info/refs") }
 func (fakeGitRoutes) UploadPack() http.Handler     { return served("upload-pack") }
 func (fakeGitRoutes) ReceivePack() http.Handler    { return served("receive-pack") }
+func (fakeGitRoutes) Raw() http.Handler            { return served("raw") }
+func (fakeGitRoutes) Archive() http.Handler        { return served("archive") }
 func (fakeGitRoutes) BoxInfoRefs() http.Handler    { return served("box-info/refs") }
 func (fakeGitRoutes) BoxUploadPack() http.Handler  { return served("box-upload-pack") }
 func (fakeGitRoutes) BoxReceivePack() http.Handler { return served("box-receive-pack") }
@@ -353,6 +355,8 @@ var gitRequests = []struct{ method, path string }{
 	{http.MethodGet, "/git/web.git/info/refs?service=git-upload-pack"},
 	{http.MethodPost, "/git/web.git/git-upload-pack"},
 	{http.MethodPost, "/git/web.git/git-receive-pack"},
+	{http.MethodGet, "/git/web/-/raw?rev=" + strings.Repeat("a", 40) + "&path=README.md"},
+	{http.MethodGet, "/git/web/-/archive.zip?rev=" + strings.Repeat("a", 40)},
 }
 
 // boxRequests is one request of each coding box's git route, as git sends
@@ -599,8 +603,8 @@ type codeQuestion struct {
 // repository, which reads the repository's row by name before its readers,
 // a change's four — the changes, one change (its revisions with its detail,
 // asked of no part), whom its records reached and one reviewer's reviews — a
-// repository's content, and its merge queues, its checks and the marks of a
-// history page's commits.
+// repository's content, its merge queues, its checks and the marks of a
+// history page's commits, and Gitlet's section counts.
 var codeQuestions = []codeQuestion{
 	{"code_repos", "GET /gitlet/repos", gitlet.ReadRepos, "", nil},
 	{"code_repo", "GET /gitlet/repos/{name}", gitlet.ReadRepo, "web", nil},
@@ -622,8 +626,10 @@ var codeQuestions = []codeQuestion{
 	{"code_blob", "GET /gitlet/repos/{name}/blob", "", "web", []string{gitlet.HeadRef}},
 	{"code_log", "GET /gitlet/repos/{name}/log", "", "web", []string{gitlet.HeadRef}},
 	{"code_blame", "GET /gitlet/repos/{name}/blame", "", "web", []string{gitlet.HeadRef}},
+	{"code_tree_commits", "GET /gitlet/repos/{name}/tree-commits", "", "web", []string{gitlet.HeadRef}},
 	{"code_diff", "GET /gitlet/repos/{name}/diff", "", "web", []string{gitlet.HeadRef}},
 	{"code_tips", "GET /gitlet/repos/{name}/tips", "", "web", []string{gitlet.HeadRef}},
+	{"code_tags", "GET /gitlet/repos/{name}/tags", gitlet.ReadRepo, "web", nil},
 	{"code_compare", "GET /gitlet/repos/{name}/compare", "", "web", []string{gitlet.HeadRef}},
 	{"code_commit", "GET /gitlet/repos/{name}/commits/{sha}", gitlet.ReadCommit, "web", nil},
 	// AND ITS MERGE QUEUES AND ITS CHECKS: the queues and the attempts listed
@@ -635,6 +641,7 @@ var codeQuestions = []codeQuestion{
 	{"code_check", "GET /gitlet/repos/{name}/checks/{oid}/{check}/{attempt}", gitlet.ReadCheck, "web", nil},
 	{"code_check_log", "GET /gitlet/repos/{name}/checks/{oid}/{check}/{attempt}/log", gitlet.ReadCheck, "web", nil},
 	{"code_commit_marks", "GET /gitlet/repos/{name}/commit-marks", gitlet.ReadCommitMarks, "web", nil},
+	{"code_counts", "GET /gitlet/counts", gitlet.ReadCounts, "", nil},
 }
 
 // codeSearchQuestion is the code search: a question of its own beside
@@ -1550,6 +1557,16 @@ func TestCodeReadsAreAlwaysGuarded(t *testing.T) {
 		!strings.HasPrefix(rec.Header().Get("Content-Type"), "text/plain") {
 		t.Errorf("a clone with no credential answered %d %v, want git's Basic challenge", rec.Code, rec.Header())
 	}
+	// A DOWNLOAD IS NEVER CHALLENGED: a browser would open its password prompt.
+	for _, path := range []string{"/git/web/-/raw?rev=" + strings.Repeat("a", 40) + "&path=a",
+		"/git/web/-/archive.zip?rev=" + strings.Repeat("a", 40)} {
+		rec := ask(t, a, http.MethodGet, path, false)
+		if rec.Code != http.StatusUnauthorized || rec.Header().Get("WWW-Authenticate") != "" ||
+			!strings.HasPrefix(rec.Header().Get("Content-Type"), "text/plain") {
+			t.Errorf("GET %s with no credential answered %d %v, want a text/plain 401 with no challenge", path,
+				rec.Code, rec.Header())
+		}
+	}
 }
 
 // A VERIFY IS AN OPERATION: begun with 202 and read until it ends. The check
@@ -1792,6 +1809,82 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 		if status, v := read(path); status != http.StatusNotFound || v.Error != "not_found" ||
 			!strings.Contains(v.Detail, "keeps no verify") {
 			t.Errorf("GET %s read %d %+v, want 404 not_found saying this node keeps none", path, status, v)
+		}
+	}
+}
+
+// whoGitRoutes is fakeGitRoutes whose downloads answer whom the request
+// resolved to.
+type whoGitRoutes struct{ fakeGitRoutes }
+
+func (whoGitRoutes) Raw() http.Handler     { return whoServed("raw") }
+func (whoGitRoutes) Archive() http.Handler { return whoServed("archive") }
+
+// whoServed is a handler writing what it stands for and the person's id
+// the guard resolved, or 500 where it resolved nobody.
+func whoServed(what string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, how := iam.From(r.Context())
+		if how != iam.Resolved {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = io.WriteString(w, "served "+what+" to "+p.ID.String())
+	})
+}
+
+// A DOWNLOAD ADMITS THE SESSION COOKIE, under the git routes' one policy: a
+// signed-in person holding gitlet is served as themselves, a person without it
+// is refused in one line, an ended session is a 401 with no challenge, and a
+// bearer and a Basic token are served as they are on git's own routes.
+//
+// Mutation: mount the downloads on the plain mux, and the person without
+// gitlet is served.
+func TestADownloadAdmitsTheSessionCookie(t *testing.T) {
+	t.Parallel()
+	b := closedPosture()
+	b.API.ExternalURL = "http://127.0.0.1:8080"
+	cookies := newCookieArm(t, &b)
+	holder := cookies.personIssued(t, []iam.Grant{iam.GrantGitlet}, clock, clock)
+	without := cookies.person(t, []iam.Grant{}, clock)
+	ended := cookies.ended(t)
+	a := newApp(t, api.Options{Bootstrap: &b, Sessions: cookies.arm,
+		Code: fixedCode{git: whoGitRoutes{}, reads: &fakeCodeReads{}}})
+	rev := strings.Repeat("a", 40)
+	for what, path := range map[string]string{"raw": "/git/web/-/raw?rev=" + rev + "&path=a",
+		"archive": "/git/web/-/archive.zip?rev=" + rev} {
+		send := func(cookie *http.Cookie, header string) *httptest.ResponseRecorder {
+			r := httptest.NewRequest(http.MethodGet, path, nil)
+			if cookie != nil {
+				r.AddCookie(cookie)
+			}
+			if header != "" {
+				r.Header.Set("Authorization", header)
+			}
+			rec := httptest.NewRecorder()
+			a.ServeHTTP(rec, r)
+			return rec
+		}
+		if rec := send(holder.cookie, ""); rec.Code != http.StatusOK ||
+			rec.Body.String() != "served "+what+" to "+holder.person {
+			t.Errorf("%s by a signed-in holder of gitlet answered %d %q, want it served to them", what, rec.Code,
+				rec.Body.String())
+		}
+		if rec := send(without, ""); rec.Code != http.StatusForbidden ||
+			!strings.HasPrefix(rec.Header().Get("Content-Type"), "text/plain") ||
+			strings.Count(rec.Body.String(), "\n") != 1 {
+			t.Errorf("%s by a person without gitlet answered %d %q, want a one-line 403", what, rec.Code,
+				rec.Body.String())
+		}
+		if rec := send(ended, ""); rec.Code != http.StatusUnauthorized || rec.Header().Get("WWW-Authenticate") != "" {
+			t.Errorf("%s by an ended session answered %d %v, want a 401 with no challenge", what, rec.Code,
+				rec.Header())
+		}
+		for _, header := range []string{"Bearer secret", "Basic " + basicAuth("", "secret")} {
+			if rec := send(nil, header); rec.Code != http.StatusOK || !strings.HasPrefix(rec.Body.String(),
+				"served "+what+" to ") {
+				t.Errorf("%s with %q answered %d %q, want it served", what, header, rec.Code, rec.Body.String())
+			}
 		}
 	}
 }

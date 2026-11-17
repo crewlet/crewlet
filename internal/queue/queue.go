@@ -155,7 +155,8 @@ const MaxPayloadBytes = 8 << 20
 // Four can fill an answer up to [MaxPayloadBytes]: the fleet turn-detail
 // scatter (internal/eventfan), the memory read (internal/learning/memread),
 // a box's read back by its host (internal/engine's sandbox host, whose result
-// is cut to the first of the carries the broker takes) and the estate
+// is cut to the first of the carries the broker takes, and which makes at most
+// sixty-four at once whatever its registration's width) and the estate
 // router's answers (internal/estate) — whose paged usage reads are cut at a
 // quarter of the message, so one reaches the cap only by one oversized
 // record. One of those at the cap, every answer at the ceiling, is

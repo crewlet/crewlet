@@ -674,6 +674,31 @@ func TestACodeReadIsJudgedAsItsCaller(t *testing.T) {
 	}
 }
 
+// EVERY FILE'S PATCH IS ASKED BY ITS ARGUMENT: `patches` sets the diff's Patches, and beside
+// `file` it is refused before Gitlet is asked a git read.
+//
+// Mutation: drop Patches from code_diff's query → red.
+func TestCodeDiffAsksEveryPatchByItsArgument(t *testing.T) {
+	t.Parallel()
+	host := newGitletHost()
+	reg := codeRegistry(t, codeDeps(host))
+	turn := codeTurn(t)
+	callCode(t, reg, turn, builtin.CodeDiffTool, map[string]any{"repo": "site", "base": mainOID,
+		"head": featureOID, "patches": true})
+	_, _, gits := host.asked()
+	if len(gits) != 1 || gits[0].Diff == nil || !gits[0].Diff.Patches {
+		t.Fatalf("code_diff with patches asked %+v, want one diff of every file's patch", gits)
+	}
+	got := refusedCode(t, reg, turn, builtin.CodeDiffTool, map[string]any{"repo": "site", "base": mainOID,
+		"head": featureOID, "patches": true, "file": "a.txt"})
+	if !strings.Contains(got.Output, "patches") {
+		t.Errorf("code_diff with patches and file answered %q, want the refusal naming patches", got.Output)
+	}
+	if _, _, gits = host.asked(); len(gits) != 1 {
+		t.Errorf("a refused code_diff asked Gitlet a git read: %+v", gits[1:])
+	}
+}
+
 // mustActor is the actor the operator surface writes ctx's principal down as.
 func mustActor(ctx context.Context, t *testing.T) builtin.Actor {
 	t.Helper()
@@ -2051,7 +2076,8 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // once in the tool's — the cost codeReadsCatalogueBudget pays too, since
 // every seat carries it; ~6% headroom again. And code_log took `until` and
 // `pushed_by` within it, deliberately, with their measured cost: 41 167 →
-// 41 556, 389 bytes (~97 tokens).
+// 41 556, 389 bytes (~97 tokens). And code_search took `context` and
+// `per_file` and named its `matches`: 41 888 → 42 235, 347 bytes (~87 tokens).
 const codeCatalogueBudget = 57_500
 
 // codeReadsCatalogueBudget is the most bytes the thirteen code reads'
@@ -2076,7 +2102,9 @@ const codeCatalogueBudget = 57_500
 // 1 796 bytes (~449 tokens), its grammar said once in `query`'s description
 // and its answer's shape once in its own; ~6% headroom again. And code_log
 // took `until` and `pushed_by` within it, deliberately, with their measured
-// cost: 17 097 → 17 486 (~4 372 tokens), 389 bytes (~97 tokens).
+// cost: 17 097 → 17 486 (~4 372 tokens), 389 bytes (~97 tokens). And
+// code_search took `context` and `per_file` and named its `matches`: 17 818 →
+// 18 165 (~4 542 tokens), 347 bytes (~87 tokens).
 const codeReadsCatalogueBudget = 22_100
 
 // codeReviewCatalogueBudget is the most bytes a review seat's code tools may
@@ -2091,8 +2119,11 @@ const codeReadsCatalogueBudget = 22_100
 // above the thirteen reads' 16 954 as the session serves them now — so ~6%
 // headroom, the rule [codeCatalogueBudget] states. And code_log took `until`
 // and `pushed_by` within it, deliberately, with their measured cost: 21 375 →
-// 21 764 (~5 441 tokens), 389 bytes (~97 tokens), ~3% headroom left.
-const codeReviewCatalogueBudget = 22_500
+// 21 764 (~5 441 tokens), 389 bytes (~97 tokens), ~3% headroom left. And
+// code_search took `context` and `per_file` and named its `matches`,
+// deliberately, with their measured cost: 22 096 → 22 443 (~5 611 tokens),
+// 347 bytes (~87 tokens); raised to ~6% headroom again.
+const codeReviewCatalogueBudget = 23_800
 
 // THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET. A seat of a company hosting
 // code is offered the thirteen reads on every run of every turn, a review seat
@@ -2317,4 +2348,32 @@ func TestACodeReadInATurnAPersonWithoutGitletWokeIsRefused(t *testing.T) {
 	control := codeTurn(t)
 	control.Requester, control.Senders = "founder", []types.CanonicalIdentity{{Handle: "founder"}}
 	callCode(t, reg, control, builtin.CodeListReposTool, map[string]any{})
+}
+
+// A CODE_LOG ANSWER NAMES ITS COMMITS' TAGS where the node's index holds them.
+//
+// Mutation: clear Tagged in the tool's answer → red.
+func TestACodeLogAnswerNamesItsCommitsTags(t *testing.T) {
+	t.Parallel()
+	marks := &gitlet.TagMarks{Commits: map[string]gitlet.CommitTags{mainOID: {Refs: []string{"refs/tags/v1"},
+		More: 2}}}
+	for _, tagged := range []*gitlet.TagMarks{marks, nil} {
+		host := newGitletHost()
+		host.git = func(q gitlet.GitQuery) gitlet.GitAnswer {
+			return gitlet.GitAnswer{Kind: gitlet.GitLog, RepoID: q.RepoID, Rev: mainOID, Tagged: tagged,
+				Log: &gitlet.LogAnswer{Scanned: 1, Commits: []gitlet.LogCommit{{OID: mainOID, Subject: "one"}}}}
+		}
+		_, answer := callCode(t, codeRegistry(t, codeDeps(host)), codeTurn(t), builtin.CodeLogTool,
+			map[string]any{"repo": "site", "rev": mainOID})
+		got, carried := answer["tagged"].(map[string]any)
+		switch {
+		case tagged == nil && carried:
+			t.Errorf("a page from a node keeping no tag index carries tagged %v", got)
+		case tagged != nil:
+			commit, _ := got["commits"].(map[string]any)[mainOID].(map[string]any)
+			if refs, _ := commit["refs"].([]any); len(refs) != 1 || refs[0] != "refs/tags/v1" || commit["more"] != 2.0 {
+				t.Errorf("the page carries tagged %v, want v1 and 2 more for the commit", answer["tagged"])
+			}
+		}
+	}
 }

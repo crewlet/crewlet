@@ -96,6 +96,15 @@ func (apiArtifacts) List(context.Context, artifactsdomain.Viewer, artifactsdomai
 	return artifactsdomain.ListPage{}, nil
 }
 
+func (apiArtifacts) Inbox(_ context.Context, q artifactsdomain.InboxQuery) (artifactsdomain.InboxPage, error) {
+	return artifactsdomain.InboxPage{Handle: q.Handle, Notices: []artifactsdomain.InboxNotice{}}, nil
+}
+
+func (apiArtifacts) NoticeThreads(_ context.Context, refs []artifactsdomain.ThreadRef, _ statelog.Freshness) (
+	[]*artifactsdomain.NoticeThread, error) {
+	return make([]*artifactsdomain.NoticeThread, len(refs)), nil
+}
+
 func (apiArtifacts) Trail(context.Context, artifactsdomain.TrailQuery) (artifactsdomain.TrailPage, error) {
 	return artifactsdomain.TrailPage{Entries: []artifactsdomain.TrailEntry{{Artifact: apiPage,
 		HistoryEntry: artifactsdomain.HistoryEntry{Op: string(artifactsdomain.OpReadElevated)}}}}, nil
@@ -205,7 +214,7 @@ func TestTheArtifactsRoutesAndQuestionsShareOneMux(t *testing.T) {
 		t.Fatal(err)
 	}
 	surface, err := artifactsapi.New(artifactsapi.Options{Gate: gate, Reads: estate, Writes: estate,
-		Objects: estate, Ready: ready, Uploads: func() (artifactsapi.Pipeline, error) {
+		Objects: estate, Ready: ready, Comments: noComments{}, Uploads: func() (artifactsapi.Pipeline, error) {
 			return nil, artifactupload.ErrInvalid
 		},
 		WorkItems: func() (artifactsapi.WorkItems, error) { return nil, artifactsapi.ErrWorkletNotUp }})

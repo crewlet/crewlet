@@ -35,7 +35,6 @@
 import { useMemo } from "react";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { Card, EmptyValue, InlineCode, Skeleton, Tag, TableTextCell } from "@crewlethq/ui";
-import { ServerGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 
 import { href } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -170,7 +169,7 @@ export function DomainScreen({ name }: { name: string }) {
               <DomainRefusals domain={domain} />
 
               <Card>
-                <Card.Header icon={<LayersGlyph size="sm" />}>
+                <Card.Header>
                   <Card.Title>What the trim may remove</Card.Title>
                 </Card.Header>
                 {/* THE SIX CHECKS, the same block the log's row draws on the
@@ -180,11 +179,7 @@ export function DomainScreen({ name }: { name: string }) {
               </Card>
 
               <Card padding="none">
-                <Card.Header
-                  icon={<ServerGlyph size="sm" />}
-                  count={positions.length}
-                  subtitle="The lowest row holds the floor"
-                >
+                <Card.Header count={positions.length} subtitle="The lowest row holds the floor">
                   <Card.Title>Where each node is</Card.Title>
                 </Card.Header>
                 <DataGrid
@@ -285,7 +280,7 @@ export function DomainScreen({ name }: { name: string }) {
             // would be a confident claim about a subsystem this node does not
             // run.
             <Card>
-              <Card.Header icon={<LayersGlyph size="sm" />}>
+              <Card.Header>
                 <Card.Title>No such log</Card.Title>
               </Card.Header>
               <p className="t-body">

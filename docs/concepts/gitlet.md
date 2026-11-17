@@ -448,7 +448,9 @@ change](#recorded-on-the-change)), which its repository's home does for every
 live change ([The home's change work](#the-homes-change-work)), whether a
 push opened it ([A change a push opens](#a-change-a-push-opens)) or a tool
 did ([Opening, editing and closing a
-change](#opening-editing-and-closing-a-change)). It
+change](#opening-editing-and-closing-a-change)). The ask names the owner's
+globs that the revision touched ([Recorded on the
+change](#recorded-on-the-change)). It
 **grants nothing**. A seat named a path owner reads
 and pushes the repository by its [grant](#who-may-read-and-push) exactly as it
 did before — owning `deploy/**` lets no seat push there that could not, and a
@@ -1144,6 +1146,42 @@ A first page can also count the branches other than the default branch that
 moved since an instant (`active_since`), the Overview's "Active branches"; it
 counts up to 1 000 and says when there were more.
 
+### Listing repositories
+
+The repositories are listed a page at a time by name, or by last push
+(`sort=pushed`): newest first, the repositories pushed at one instant by name,
+highest first, then those never pushed, by name. Only the repositories in use
+(importing, active and archived) are listed by last push. `kind=project` or
+`kind=scratch` lists one kind, each read as one range of an index of its own
+kind, so a company's scratch repositories cost its Projects tab nothing.
+Neither a kind nor the order by last push combines with a prefix or with the
+protected repositories.
+
+Asked for its facts (`repo_facts=true`), each row also says:
+
+- **Whether it is a push mirror**: its home pushes it to another host.
+- **Who pushed last**: the newest push of its history that was no expiry, with
+  what became of its commands; a command refused beside those that landed
+  counts as refused. It is known while the push history keeps that push (181
+  days) and while no more than about a hundred expiries followed it, and its
+  instant is always the repository's last push.
+- **Where its default branch's checks stand**: each check's latest attempt at
+  the branch's head for that branch, judged as the merge gate judges.
+
+A first page asked for its facts also carries the whole listing's count and
+live size, all its pages together, where it is narrowed by nothing but its
+kind and statuses. The size is left out where the company holds more than
+10 000 repositories of the listing's kinds and statuses, whatever the reader
+may read, so its walk stays bounded; the count is always exact.
+
+Gitlet also counts the repositories: `code_counts` part `repos` answers every
+repository the reader may read, by kind and by status (importing, active,
+archived, deleted, purging, and `live`, the first three together). The counts
+are kept as repositories are created, change owner, visibility or state, and
+are purged, tallied by owner and visibility as the change counts are
+([Counting changes](#counting-changes)), and recounted at the first boot of a
+build that changes how.
+
 ---
 
 ## Compaction
@@ -1812,16 +1850,18 @@ answer that holds every record the code log had committed when it was asked.
   do, and ask for the identity it resolves to, while an identity (a Worklet
   task's id, bare or under `native:`) is listed as named, with no read of the
   tracker — a **state**, a **reviewer**, **what its changes wait on** or a
-  **window** they moved in, and may narrow further by an **owner** (a
+  **window** they moved in (or **where their merge stands**, below), and may
+  narrow further by an **owner** (a
   seat by its handle, or a person by the human seat they hold) and by
   whichever of the others it did not name. One that names none of them is
   refused: no index holds every change the company has, and an owner's
   changes are kept by state, so an owner's are listed in a state, or in a
   repository, or on a work item. A repository's changes are listed by
   number; a reviewer's by the change's id, which is minted as the change is
-  opened; a window's, where nothing else leads it, by when each change last
-  moved; every other listing — a live state's in a window among them — in
-  the order the records that opened its changes landed on the code log. Every change it lists says how many of its
+  opened; a window's, where nothing else leads it, and a live state's asked
+  for by when its changes moved (`sort=updated`), by when each change last
+  moved; every other listing, a live state's in a window among them, in the
+  order the records that opened its changes landed on the code log. Every change it lists says how many of its
   findings stand open — none of its authors has answered them — and **when it
   last moved**.
 - **When a change last moved** is the later of two instants, one a subject it
@@ -1844,7 +1884,10 @@ answer that holds every record the code log had committed when it was asked.
   live changes, where the window's hold every change that moved, the merged
   among them: in a company that merges far more changes than it keeps open,
   the open changes of a month's window walked by the window would cost a page
-  for every few that are kept.
+  for every few that are kept. Asked for by when its changes last moved
+  (`sort=updated`), a live state walks its own changes by their lifecycle's
+  last move and the conversations by when somebody last spoke, together,
+  newest first, each change once.
 - **The changes waiting on a reviewer** are a listing that names a
   `reviewer` — the changes whose ask of that reviewer still **waits** — or
   `needs=review`, the **live** ones alone, the asker's own where it names no
@@ -1884,6 +1927,10 @@ answer that holds every record the code log had committed when it was asked.
   or merged stores no answer, so it is never read here.
 - A need lists **live** changes alone, and is refused beside a closed or
   merged state.
+- **Where a change's merge stands** is `readiness=`: `ready`, `approval`,
+  `checks` or `blockers` ([Changes by where their merge
+  stands](#changes-by-where-their-merge-stands)). It lists open changes alone,
+  and is refused beside a draft, closed or merged state.
 - **One change**, by its number on its repository — `web!42` — with its row
   (title, state, branches, head and revision, version, owner, the work item it
   carries, when it was opened, closed or merged and how), its description and
@@ -1898,9 +1945,21 @@ answer that holds every record the code log had committed when it was asked.
   changes is judged by the chart whoever asks — a person's too — and a data
   node that holds none yet refuses it as a node that is not serving, which
   the next data node answers.
+- **A listing's rows carry their cards where asked** (`cards=true`): each
+  change's comments (comments alone, never its reviews), its reviews, how many
+  reviewers' standing verdict asks for changes, up to eight reviewers' faces
+  (each reviewer's standing verdict and the revision it judged, whether an ask
+  of them waits and why, and, for a path owner's ask that waits, was answered
+  or ended, the globs it is for and how many more; asks for changes first,
+  then waiting asks, then approvals; a reviewer who has only commented draws
+  none) with how many more, where its head's checks stand for its target (each check's latest
+  attempt, counted by state, the required ones passed of all required, and the
+  failing ones named, required or not), and, for a live change its merge queue
+  put out within the last day, why and when. A card is read only when asked,
+  so a seat's listing and a change's readiness do not grow.
 
 **A listing reads the one index its filters lead with** — the changes whose
-stored readiness waits on a person; a reviewer's
+stored readiness waits on a person, or is ready; a reviewer's
 standing asks; a work item's changes; an owner's in a state, which is also
 what `needs=fix` reads; a repository's in a state; a repository's; the
 company's in a state — so a repository's open changes are read without its
@@ -1908,7 +1967,8 @@ closed and merged history, however long that grows. A filter that index does
 not hold — a repository beside a work item, an owner or a reviewer, a state
 beside a work item or a reviewer, an owner beside a repository with no state,
 a work item beside a reviewer, whether a change waits on its owner's fix,
-which its conversation's counters say, and whether it waits on a person,
+which its conversation's counters say, and whether it waits on a person or
+where its merge stands,
 which its readiness says — is tested on each change the page
 read, never by reading further: a page is the changes it
 **read**, not the changes it kept, so it can be short, or empty with a cursor,
@@ -1916,13 +1976,32 @@ and a reader pages until no cursor comes back. A page reads 50 changes unless
 asked for fewer or more, 200 at most; a change's revisions come 200 a page,
 1 000 at most.
 
+**A live state by when its changes last moved** (`sort=updated` beside
+`state=draft` or `state=open`, and optionally a repository, an owner, a work
+item or a window) reads two indexes in step: its own changes by their
+lifecycle's last move, which hold the live changes alone, and the
+conversations by when somebody last spoke in them, which hold every change
+anybody ever discussed, the merged and closed among them, which the walk steps
+over. It reads no conversation spoken before the oldest live change a full
+page read, or before the window's start where one is named and the page read
+fewer, none once a page has read every live change left (unless a window is
+named), and at most 1 000 a page, so where many ended changes were discussed
+after the live ones last moved a page can be short, or empty with a cursor. An
+owner and a work item are tested on the changes the page read. `sort=opened`
+is the order every listing but a window's own reads in, and a window nothing
+else leads, already by last move, refuses it; `sort=updated` is refused beside
+a reviewer or what the changes wait on, whose walks keep their own order, and
+where neither a live state nor such a window is named. The instant is the one
+a row says it last moved.
+
 **Every read of changes is held to the reader's grant** on the change's
 repository, as the repository's own reads are ([Who may read and
 push](#who-may-read-and-push)):
 
 - A listing that names no repository lists the changes of every repository
-  the reader may read — and of an active or archived one only: a deleted
-  repository's changes are no work anybody can do until it is restored.
+  the reader may read, and of one in use only (importing, active or
+  archived): a deleted repository's changes are no work anybody can do until
+  it is restored.
 - A listing that names a repository, and a read of one change, are refused
   `not_permitted` where the reader may not read the repository, naming the
   visibility and who does read it — a number in it too, which is never
@@ -1956,6 +2035,93 @@ the revision asked about ([Where lines are in another
 revision](#where-lines-are-in-another-revision)), its reviews and its
 comments — each page cut whole-row at one tool answer and resumed after the
 last row it kept.
+
+### Changes by where their merge stands
+
+A listing of changes narrowed by `readiness=` keeps the open changes whose
+merge stands in one bucket:
+
+| `readiness=` | Lists the open changes |
+|---|---|
+| `ready` | whose every precondition is met, whoever merges them |
+| `approval` | standing at an approval: a counted one, a person's, or the path owners' |
+| `checks` | standing at the checks their target requires: one failed, queued or running |
+| `blockers` | standing at a blocker that stands |
+
+**A change stands in one bucket**: the one its first unmet precondition
+names, in the order a change moves through, else its first `computing`
+one's ([Merge readiness](#merge-readiness)). So no change is in two buckets.
+The merge authority is set aside: it is the one precondition that depends
+on who asks, so a bucket lists the same changes whoever asks, each still
+held to the reader's grant. For a reader who may merge the change, the
+sentence its readiness leads with matches the bucket it is listed under.
+For one who may not, an unmet merge authority comes before a check still
+queued or running, so the readiness can lead with who merges the change
+while it is listed under `checks`, and a ready change it may not merge is
+listed as ready, its readiness naming who merges it.
+
+**Some open changes stand in none**: a draft, a change whose facts its home
+has not recorded yet, one that does not merge cleanly, and one its target's
+merge queue holds, which is merging rather than waiting. A queued change
+whose head's checks still run stands at `checks`. Waiting on a person is
+`needs=person` ([Reading changes](#reading-changes)), which `readiness=`
+combines with, as it does with every other filter.
+
+**`ready` reads the stored answer**: the changes whose stored readiness is
+ready, newest first, each kept only where the readiness the read judges is
+still ready. A change that became ready since its last record (an approval,
+a check that passed, a configuration that changed who may approve it) is
+listed once its home refreshes it, at the home's next pass: a minute later
+at the most. A change that is no longer ready (a blocker raised, a check
+that failed) is left out at once. A change that closed or merged stores no
+answer, so it is never read here. Beside a reviewer or a need, and under
+`sort=updated`, `ready` reads as the other three do.
+
+**`approval`, `checks` and `blockers` read the open changes** the other
+filters choose (a repository's, an owner's, a work item's, a reviewer's, a
+need's, or the company's), in that walk's order and with any sort and
+window, and keep those whose judged readiness stands in the bucket. They
+store nothing, so they are never stale; and a page is the changes it read,
+so it can be short, or empty with a cursor, and a reader pages until no
+cursor comes back.
+
+**A bucket lists open changes alone**: a listing that names it and no state
+reads `state=open`, and one beside `draft`, `closed` or `merged` is refused.
+**Every page a bucket narrows says so** (`narrowed_to`, the bucket), an empty
+page included. A data node of an older build that does not read `readiness`
+is never asked to: the read moves on to one that does. So a page without
+`narrowed_to` was not narrowed, and a client says the filter is not
+available yet rather than drawing the unnarrowed listing under the bucket's
+name.
+
+### Counting changes
+
+Gitlet answers how many changes a scope holds in each state: draft, open,
+closed and merged, and `live`, the draft and the open together. The scope is
+the company's, every repository in use the reader may read, or one
+repository named, whatever its state, as a listing naming it lists it. A
+count is never narrowed by a listing's other filters: it is the section's
+total, not a page's.
+
+The counts are kept, never walked. Each repository's row counts its changes
+by state, moved by every record that opens a change, moves its state or
+purges it. The company's are tallied by owner and visibility, which are what
+decides who may read a repository, so a count sums the tallies the reader's
+grant reads and costs the same however many changes the company holds. A
+build that changes how they are counted recounts them from the changes at
+its first boot, on every data node.
+
+The `queue` part counts the live entries, waiting or testing, of the scope's
+merge queues. It is counted when read, at most 10 000 entries, and says when
+it stopped there.
+
+A deleted repository's changes leave the company's count, and a restore
+brings them back under the owner it returns with. A count is exact at the
+position it is read at, so a `session` read after a write includes it. A
+listing of repositories and one repository's detail answer each one's counts
+and their card ([Listing repositories](#listing-repositories)) where
+`repo_facts=true` asks
+([`GET /gitlet/counts`](../reference/api-endpoints.md#the-code-reads)).
 
 ---
 
@@ -2021,7 +2187,7 @@ behind their batches and contend with every push to the repository.
 | Table | A row for | What it holds |
 |---|---|---|
 | `code_conversations` | each change that has been discussed | Its counters — its comments, its reviews, its open findings, its standing blockers and how many reviewers' standing verdict asks for changes — what its comments, reviews and findings weigh, the version and position of its last record, and the version of what its [readiness](#merge-readiness) reads: one more for each ask for review, review, answer to findings, revision's facts and settling of its asks — and how many of its asks wait and how many its end left, which its [home](#the-homes-change-work) finds a change to settle by |
-| `code_reviewers` | each reviewer it has asked | A seat, or a person by the human seat they hold; why — asked by name, or as a [path owner](#recorded-on-the-change) a revision's facts asked — whether the ask waits (`requested`), was answered by the reviewer's review (`reviewed`), was ended by the change's close or merge (`ended`) or was withdrawn (`withdrawn`) — each kept, so the change says who was once asked — who asked, nobody for a path owner, and the note they asked with, at most 1 KiB |
+| `code_reviewers` | each reviewer it has asked | A seat, or a person by the human seat they hold; why — asked by name, or as a [path owner](#recorded-on-the-change) a revision's facts asked — whether the ask waits (`requested`), was answered by the reviewer's review (`reviewed`), was ended by the change's close or merge (`ended`) or was withdrawn (`withdrawn`) — each kept, so the change says who was once asked — who asked, nobody for a path owner, and the note they asked with, at most 1 KiB, or for a path owner the globs the ask is for, at most 32 and 1 KiB of them, with how many more |
 | `code_participants` | everybody who takes part in it | Each reviewer asked or reviewing and each author of a comment, by handle and kind, and a reviewer's **standing verdict**: the latest of their reviews that approves or asks for changes, and the revision it judged |
 | `code_comments` | each comment | Its thread, its parent or the finding it replies to, who said it — a seat, or a person with the credential they used — the line it points at, whether its thread is resolved and by whom, the turn that said it, and its body, at most 32 KiB |
 | `code_reviews` | each review | The revision it judged, who reviewed — a seat, or a person with the credential they used — its verdict, how many findings it raised, the turn and the model that reviewed, and its summary, at most 4 KiB |
@@ -2044,6 +2210,11 @@ changes](#reading-changes)).
   findings, its standing blockers and its requests for changes, and the
   version and position of its last record — the floor a read of its parts is
   asked at, so a comment just written is read back with the change.
+- **The detail names its participants**: everyone who takes part in its
+  conversation (each reviewer asked, each author of a comment, each reviewer
+  who reviewed and everyone a record mentioned), by handle, with each one's
+  standing verdict and the revision it judged; 32 at most, with how many
+  more. The change's opener and pushers are its authors.
 - **Comments come a thread at a time**: a thread's first comment and then its
   replies in the order they were said, threads in the order they started; a
   page holds 50 unless asked for fewer or more, 200 at most, and ends at the
@@ -2052,15 +2223,20 @@ changes](#reading-changes)).
   person and the credential they used — the line a thread's first comment
   points at, and whether its thread is resolved and by whom.
 - **Reviewers come by handle**, a withdrawn ask among them, 200 a page and
-  1 000 at most: who was asked, by whom, with what note, and whether the ask
-  stands.
+  1 000 at most: who was asked, by whom, with what note, whether the ask
+  stands, and, for a path owner's ask, the globs it is for, with how many
+  more. Each row says when the record that last moved it landed, read from
+  that record's notices on the change: known while one of them is kept (a
+  person's inbox horizon, a seat's thirty days) and unknown after, which the
+  page words "asked earlier". Two data nodes may answer differently close to
+  that horizon, since each sweeps its own notices.
 - **Reviews come in the order they were given**, 50 a page and 200 at most:
   the revision each judged, who reviewed, its verdict, its summary and how
   many findings it raised.
 - **Findings come by id** — the order the reviews that raised them were given
   — each with its text and its suggestion, its state and its last answer, 50
   a page and 200 at most, ending at the reply's byte budget first where
-  suggestions are long.
+  suggestions are long, each with when the review that raised it landed.
 - **Standing findings are the reader's own**, by id, paged as findings are:
   every finding they raised that still stands — open, resolved, won't fix or
   disputed — which is exactly what a review of theirs carries or, of a later
@@ -2068,6 +2244,18 @@ changes](#reading-changes)).
   to no seat. It is what a review dialog reads to its last page before it
   sends, where the findings part, oldest first, would have left a reviewer's
   newest standing findings past its first page.
+- **A change's findings by path** (`finding_paths`): how many of its findings
+  stand in each state on each path, by the revision they were raised on, in
+  path order, 500 a page and 1 000 at most: what a changed file's badge
+  counts. It is asked by a key of its own, never as a part, so a data node
+  that predates it refuses it and another answers.
+- **The reader's viewed files** (`viewed`): the files they marked viewed on the
+  change, each as two digests under its repository's viewed key (`path_digest`
+  of the path, `file_digest` of the path with the object id and mode it was
+  marked at) and when, with the key beside a page that holds one, 500 a page
+  and 1 000 at most; none for a seat, a credential bound to no seat, or a
+  change that ended ([Viewed files](#viewed-files)). It is asked by a key of
+  its own, so a data node that predates it refuses it and another answers.
 
 ### Asking for review
 
@@ -2225,6 +2413,16 @@ answer, and what each answer does:
   `not_raiser`. An answer that asks for what every finding already says
   changes nothing and appends nothing.
 
+**A finding's excerpt** is the lines of the blob it points at around its
+range, three either side unless the reader asks for up to ten, marked as the
+change's Files changed tab marks that file: added, deleted or kept, the deleted lines
+of the old side shown between the new side's, and a file the revision renamed
+diffed against where it was. An excerpt holds at most 40 lines, so a longer
+range shows its first, and each line up to 1 KiB; a longer line is described
+by its size. A finding on a revision whose facts its home has not recorded
+has no excerpt yet. The excerpt is read on the repository's Gitlet node by
+object ids and kept there, so a page of findings read again costs no git.
+
 A write of a conversation that is refused appends nothing, and says why in one
 sentence:
 
@@ -2257,6 +2455,50 @@ sentence:
 `crewlet.code.conversation.writes` counts every write of a conversation a
 node's change writer was asked to decide, by its write and what became of it
 (the [metrics reference](../reference/metrics.md)).
+
+### Viewed files
+
+A person marks the files of a change **viewed**, one gesture at a time: the
+Viewed toggle on a change's files, or `code_mark_viewed` from their own
+assistant. The marks are their own record, kept on the code log beside their
+inbox's marks; a seat, a credential bound to no seat and anybody marking
+another person's files are refused. A seat reviews a change whole and keeps
+none.
+
+- **A mark is a file at a state.** Each file is marked at the object id and
+  mode the revision the person read gives it, or with neither for a file the
+  change deletes. A mark is current while the revision shown gives the file
+  that object id and that mode, so it survives a revision that leaves the file
+  alone, and the file reads unviewed once a revision changes either; marking it
+  again marks the new ones. A revision that only moves the base under a file
+  leaves its mark.
+- **A mark keeps no path, object id or mode.** It keeps two HMAC-SHA256
+  digests under a key of its repository's own, 32 random bytes recorded on the
+  repository the first time any of its files is marked: one of the path, and
+  one of the path with the object id and the mode. A screen digests the files
+  it shows under the same key and compares; the read answers the key to the
+  person beside their marks, and never to Ask Crewlet. A repository's purge
+  deletes its key, after which its changes' marks, which are each person's and
+  no purge removes, name no file to anybody once the code log is trimmed past
+  the key's record, which it keeps as it keeps the repository's other records
+  ([Deletion and purge](#deletion-and-purge)).
+- **Only a draft or open change takes marks.** A closed or merged change reads
+  none and refuses new ones, and the person's next mark forgets them; a change
+  reopened before then shows its old marks again, each current only where its
+  file is unchanged. A purged change's marks are left to the cap.
+- **A gesture names at most 32 files, and a person holds at most 2 000 marks**,
+  the oldest dropped past them. Marking a file again at a new object id or
+  mode makes its mark the newest; marking it again as it stands changes
+  nothing, unless the same gesture changes another mark, which makes both the
+  newest.
+- **A mark is decided by a data node holding nothing of the change's
+  repository back**, so a change opened or reopened a moment ago is never
+  refused as ended by a node behind it; the mark waits for the position its
+  change was read at.
+- **During an upgrade** a data node of an older build holds viewed records
+  back, and the key record of a repository first marked during it with that
+  repository's later records behind it, until it is upgraded; the router asks
+  a current node meanwhile.
 
 ---
 
@@ -2429,7 +2671,7 @@ one head share theirs: the same commit, judged by the same file.
 |---|---|
 | `check_queued` | An attempt is queued on a commit: what it is for (a change's head, a merge queue's candidate, a protected branch's tip, a bisection), the branch it is checked for, the checks file it was read from and its definition whole — so it runs under the definition it was queued with, whatever the file says by the time a box starts — whether that branch requires it, and why it was queued: dispatched, run again by a seat or a person, or queued again after its runner was lost — a person's own CI queues nothing, its report being the claim and the ending below. Or the attempt is recorded `skipped`: its change touched none of its `paths` |
 | `check_started` | A runner claims the attempt — and, once it has made one, names its box — or a person's CI reports its run started, placed `external` |
-| `check_finished` | The attempt ended: its state and why, its exit status, how long it ran, its summary (at most 4 KiB), the last 16 KiB of its output, the failures its reports named (at most 200, weighing at most 64 KiB, the rest counted), the link a person's CI reported, and the log a failed run kept |
+| `check_finished` | The attempt ended: its state and why, its exit status, how long it ran, its summary (at most 4 KiB), the last 16 KiB of its output, how many tests its JUnit report says ran, failed and were skipped, how many lines its whole output has and whether that last 16 KiB begins inside one, the failures its reports named (at most 200, weighing at most 64 KiB, the rest counted), the link a person's CI reported, and the log a failed run kept |
 | `checks_sweep` | The rows that ended before an instant are removed — the `code-retention` duty's, for a repository whose checks stopped ending, swept back to the 30 days once a row of it outlived them by a day ([How long a check is kept](#how-long-a-check-is-kept)) |
 | `check_dispatched` | The home read a target's checks file at its tip — or found none there — and **dispatched** the heads it names under it: the checks it queues at them for that target ride the record — each queued, skipped or errored as a `check_queued` record would set it — so a head's checks and its dispatch land together; with no heads, a moved target's reading refreshed ([How a head's checks are dispatched](#how-a-heads-checks-are-dispatched)) |
 
@@ -2460,6 +2702,15 @@ it in, and every record's apply is a **join**:
 A failed run's **log** is one object in the [object store](object-store.md),
 named by a `code_check_logs` row: a live reference, audited and carried by
 every backup, since nothing builds it again.
+
+**An ending's counts.** A run's tests are its JUnit report's, on a run that
+passed or failed. A failed run's output lines are counted in its box, over the
+bytes its tail ends at, so the tail is numbered: its first line is that count
+less the tail's own lines, plus one, and the ending says whether that first
+line began before the 16 KiB. A person's CI reports its own. The counts are
+kept only by data nodes of this build: one of an earlier build holds back each
+ending that carries them, and every later record of its repository's checks,
+until it is upgraded ([Which records an upgrade holds back](../guides/replication.md#which-records-an-upgrade-holds-back)).
 
 ### Who records a check
 
@@ -2694,8 +2945,9 @@ grant on the repository as every other read of it is:
   it: its head's, or a commit it names, checked for its own target, by name
   and attempt; one commit's, for every branch it was checked for; or — naming
   no repository — every repository's the reader may read whose attempts ended
-  since a moment, newest ended first. Each is a page of at most 200 attempts
-  (50 unless asked), resuming exactly where the page before ended;
+  since a moment, newest ended first; or, asked, where each check stands
+  ([Where a check stands](#where-a-check-stands)). Each is a page of at most
+  200 attempts (50 unless asked), resuming exactly where the page before ended;
 - **`check`**: one attempt whole, named by its commit, its target branch, its
   check and its number — its row, the definition it ran under, the last of
   its output, the failures its ending named and its kept log;
@@ -2779,6 +3031,34 @@ keeps no snapshot of it:
 - a person's reason for merging past the gate, where one did.
 
 A push's merge has no gate: who pushed it is the push's.
+
+### Where a check stands
+
+A `checks` read asked where each check stands (`standing`) lists each
+check's latest attempt for a branch, of a live subject: the head of an open
+or draft change, the newest queue entry of such a change, tested by the
+candidate the queue last tested it in, or a protected branch's tip. An
+attempt a later one reran, a head the change moved on from, a branch it no
+longer merges into, a tip the branch moved past and a bisection never stand.
+A head's attempt judges the live change at that head, whichever change's
+dispatch queued it.
+
+It lists in one of two orders: `recent`, what runs now and what waits first,
+then every ending newest first; or `failing`, the failures, the errors, what
+runs, what waits, the cancellations, the passes and the skips, each newest
+ended first. Running and queued attempts are listed beside the ended ones,
+across every repository too. A check's name narrows the listing, and so does
+a state, any of the seven, queued and running in the window too. A page is the attempts it read, so one may be
+short, or empty with a cursor, where the grant or a dead subject kept none.
+
+It reads one repository or every repository the reader may read, within a
+window that starts at a moment and ends now; an attempt not yet ended is in
+every window. Its first page counts the standing attempts by state, by a
+check's name where one narrows it and never by a state, each state counted
+among its newest 128 places and saying when it stopped there. Each row names
+the change it judges, that change's branch and the head it was checked at:
+the entry's head for a candidate, which was checked merged onto its branch.
+A data node of an older build refuses `standing`, and another answers.
 
 ### Check boxes
 
@@ -2952,9 +3232,9 @@ box's lifetime, and reads the attempt's row:
 
 | What happens | How the attempt ends |
 |---|---|
-| The command exits 0 | `passed`, its summary alone |
-| The command exits non-zero | `failed`, with the failures its reports name, the last 16 KiB of its output and its kept log |
-| The command runs past its timeout — the file's `timeout_seconds`, held to `code.checks.max_timeout_seconds`, from the command's start | `failed` `timed_out`, with its tail and its log, its box closed: the timeout is the check's own, so running past it measured the commit |
+| The command exits 0 | `passed`, its summary and its report's test counts |
+| The command exits non-zero | `failed`, with the failures its reports name, the last 16 KiB of its output, how many lines that output has, its kept log and its report's test counts |
+| The command runs past its timeout — the file's `timeout_seconds`, held to `code.checks.max_timeout_seconds`, from the command's start | `failed` `timed_out`, with its tail, how many lines its output had then, and its log, its box closed: the timeout is the check's own, so running past it measured the commit |
 | The box could not be made, or stopped answering for four polls in a row | `errored` `box_failed` |
 | A setup step failed — the git floor, the checkout — or a named secret resolved to nothing | `errored` `setup_failed` |
 | The file names a cell the company does not allow, or a secret it does not declare | `errored` `defs_invalid`, with no box |
@@ -3112,8 +3392,9 @@ repository, never by a node's own sweep:
   handle, or the engine on its own account (`system`, for [the ref
   lifecycle](#the-ref-lifecycle)'s deletions) — how the push's pack was built
   (`git`, sent by a client's git, `engine`, built by the engine itself,
-  `merge`, landed by a merge, or `expiry`, the ref lifecycle's deletion of
-  idle seat branches), and for a seat's push the turn that
+  `merge`, landed by a merge, `expiry`, the ref lifecycle's deletion of
+  idle seat branches, or `queue`, a merge queue's landing, `import` and
+  `mirror`, Gitlet's own), and for a seat's push the turn that
   made it, the work item that turn was charged to and the model it ran on —
   and for a push the seat's coding box made, the executor that pushed and the
   harness it ran, which is how the engine reads back what a run
@@ -3183,6 +3464,87 @@ retirement; a node last brought up to date before its removal reads the
 repository whole at its next sync, as after a forgotten deletion, and
 downloads nothing again.
 
+### Counting pushes
+
+A repository's pushes are counted by day and by who pushed, so a screen draws
+a repository's recent activity and who pushes to it without walking its push
+history:
+
+- every push row is counted on its UTC day, by the quarter-hour its record
+  landed in, the ref lifecycle's expiries too, and a push a rule refused whole
+  (an attempt), as the push history lists them;
+- who pushed is counted per UTC day: a seat by its handle, a person by the
+  human seat they hold whichever credential they pushed with, and Gitlet for a
+  merge, a merge queue's landing, an import and a pull mirror's sync, never the
+  person or seat who merged or queued. The ref lifecycle's expiry is counted in
+  the day series and as nobody's push;
+- a reader's days are the boundaries its client sends, its own midnights:
+  every UTC offset in use is a whole quarter-hour, so each of its days is
+  counted exactly in any zone, across a clock change too;
+- who pushed is counted on the whole UTC days that begin within those days, so
+  its window can sit up to a day off the reader's own;
+- both are kept as the history is (181 days), and a first boundary older than
+  the history keeps whole, 181 days less two hours for the clocks it is kept
+  by, is refused rather than counted short;
+- they are kept, never walked: each push, each expiry of the history and each
+  purge step moves them, and a build that changes how they are counted
+  recounts them from the push history at its first boot, on every data node;
+- a deleted repository keeps them until its purge takes its pushes.
+
+They are asked with `day_bounds` beside `repo_facts=true` on a listing of
+repositories or one repository's detail, or on a push history
+(`GET /gitlet/repos/{name}/pushes`); see [the code
+reads](../reference/api-endpoints.md#the-code-reads).
+
+### Narrowing a push history
+
+A repository's push history can be narrowed to one pusher, to a window of
+time, or to both:
+
+- a pusher is named as its pushes are counted ([Counting
+  pushes](#counting-pushes)): a seat by its handle, a person by the human seat
+  they hold whichever credential they pushed with, or Gitlet, whose pushes are
+  merges, merge queue landings, imports and pull mirror syncs. A seat's merges
+  are Gitlet's, and the ref lifecycle's expiries are nobody's;
+- a window runs from `since` (inclusive) to `until` (exclusive), judged on each
+  push's own instant;
+- the narrowed history stays in the order its pushes landed.
+
+No index of who pushed is kept. One would cost every push about a hundred
+bytes on every data node for its 181 days (some 4.5 GB at 250 000 pushes a
+day), and one of people's pushes alone as much for each of theirs. So a
+narrowed read scans the history newest first, at most 5 000 pushes and
+4 MiB of their rows a page, and answers the pushes it keeps up to its limit.
+A page can hold fewer, or none, beside a cursor, and `push_scan` says how far
+back it has looked.
+
+Narrowed to a pusher, the read takes the repository's counts of who pushed on
+each UTC day: it skips the days the pusher did not push on, leaves a day once
+it has met that day's pushes, and ends once it has met them all. Narrowed to a
+window, it skips what was pushed after the window and stops past its start.
+
+Skipping and stopping rest on the clocks. A record's instant can stand before
+the instant of a record that landed earlier, when the stream's leader changes;
+the engine assumes it stands at most two hours before, two broker members each
+assumed within an hour of the fleet's clock (the `clock_skew` alarm watches
+only the member leading the position register, and an external NATS cluster's
+servers are the operator's to keep, see [Deployment § Every machine's
+clock](../guides/deployment.md#every-machines-clock)). So a narrowed read reads
+two hours past each end of a day or window it skips to or stops at, and a push
+stamped further out of order can be left out of a narrowed page, while the
+unnarrowed history lists it.
+
+`day_bounds` beside a pusher is refused, since the days count every pusher's
+pushes; beside a window, every bound lies inside it.
+
+Each push also names the change its own record merged on a branch it set
+("Gitlet merged web!41 into main"): a merge's, a merge queue landing's, or one
+a push merged by setting the change's target to its head, with how many more
+it merged. A change the repository's home Gitlet node found merged after a
+push moved its target past the change's head is named on no push, since no row
+keeps which push did it. See [the code
+reads](../reference/api-endpoints.md#the-code-reads).
+
 ### Deletion and purge
 
 A repository removed from `code.repos` is **deleted**, softly: its rows and
@@ -3209,7 +3571,7 @@ asks of a live repository's unreachable objects
   ([A scratch repository's idle expiry](#a-scratch-repositorys-idle-expiry));
 - each purge is a sequence of bounded **steps**, each one record removing a
   bounded part of the repository's rows — its push history, its refs, its
-  packs and the ones a compaction retired, its
+  packs and the ones a compaction retired, what its pushes are counted by, its
   [ref drops](#retention-and-history), then its [changes](#changes), each
   whole: a change's revisions, authors, [conversation](#reviews-and-findings)
   and description, then its row — then its [checks](#checks), each with its
@@ -3251,6 +3613,8 @@ asks of a live repository's unreachable objects
   with a current node; on a fleet whose only worker data node is stuck, every
   purge waits for its apply to succeed.
 
+The last step also deletes the repository's [viewed key](#viewed-files).
+
 A push to a repository that is not there to take it is refused
 `repo_deleted`, and what follows the code says which of four states the
 committer found, because each has its own remedy:
@@ -3269,6 +3633,13 @@ later. The code log itself is trimmed like every other log (see
 [Retention](../guides/retention.md)), and a node whose copy of it is out of
 service declines the duty rather than purge from rows the fleet may not agree
 with.
+
+A person's viewed marks on a purged repository's changes are the person's, not
+the repository's: no purge removes them, and they hold each file's path, object
+id and mode only as digests under the key the purge deleted, so they name no
+file once the code log is trimmed past the key's record; they are never answered once the change is gone, and leave
+with the person's oldest marks past their cap ([Viewed files](#viewed-files)).
+Nothing sweeps the marks of a person who marks nothing more.
 
 ### The ref lifecycle
 
@@ -3625,7 +3996,7 @@ the copy keeps for seats' reads go too, since one may quote what was purged,
 and so does a node's tip over a published chain; the multi-pack index and the
 published layers stay, never having covered the dropping packs.
 
-**What the cache writes beside the packs.** Six kinds of file in a
+**What the cache writes beside the packs.** Eight kinds of file in a
 repository's cache are derived on the Gitlet nodes rather than named by the
 rows: the multi-pack index — a full read's, written before it answers once
 the repository holds 256 packs, and the background indexing's, with its
@@ -3634,7 +4005,9 @@ each commit ([Which push landed a commit](#which-push-landed-a-commit)), the
 answers of seats' reads by object id ([The memo](#the-memo)), and an
 installed published chain's multi-pack-index layers with their bitmaps and
 its commit-graph layers, each half with the chain file the node writes over
-it ([Published layers](#published-layers)). Each lives
+it ([Published layers](#published-layers)), the trigram index of a
+repository searched by index, and the index of its tags
+([Tags by their date](#tags-by-their-date)). Each lives
 inside the repository's own directory, so it counts against the budget and
 leaves with the repository when it is evicted. The multi-pack index and the
 commit-graph are written again over a rebuild's packs, and each is dropped
@@ -3657,11 +4030,14 @@ of pushes is built from the push rows rather than the packs, and the memo's
 answers are about objects rather than packs, so a pack leaving changes nothing
 of either: a rebuild or a move to the next directory links the index of pushes
 into it and moves the memo there whole, in one rename however many answers it
-holds, and a log restored or recreated under the node drops both. One the node
+holds, and a log restored or recreated under the node drops both. The tag
+index is a function of the refs and of objects that never change, so a pack
+leaving changes nothing of it either: a move to the next directory links it,
+and a rebuild's whole read writes it again. One the node
 has not written since it started is held to its
 checksum before it serves — git's for the first two and a chain's layers,
 the layers installed for its chain files, the run's own for the
-index of pushes — and every file of a copy is checked again behind the
+index of pushes — and the tag index by the sync that reads it whole, and every file of a copy is checked again behind the
 serving; a memo's answer is checked by every read of it instead. Anything else in the directory that is neither one of them nor the
 repository's own files is moved aside the next time the node reads the
 repository whole — and so is a symbolic link, or anything but a regular file,
@@ -3675,7 +4051,7 @@ that text climbs back out of `refs/`, as the file it leads to.
 `crewlet gitlet verify` names any of them. Each is declared once in the engine,
 and this table is that list; the steps are what
 `code_cache_maintenance_refused` and its counter name when the node's memory
-refuses one — never `provenance`, `memo`, `layer` or `codeindex`, which the engine's own
+refuses one — never `provenance`, `memo`, `layer`, `codeindex` or `tags`, which the engine's own
 code writes, holding no git slot and charged against no memory budget. The
 `layers` and `graph-layers` files are git's own, written once by the
 repository's maintainer and installed byte for byte from the object store
@@ -3694,6 +4070,7 @@ written again at once.
 | `provenance`, the index of which push introduced each commit | `crewlet/provenance.<n>` | a sync, before it answers: `provenance`; the backfill: `provenance` | kept | kept | kept |
 | `memo`, the answers of seats' reads by object id — a directory, one file an answer | `crewlet/memo` | a seat's read by object id: `memo` | kept | dropped first | kept |
 | `codeindex`, the trigram index of the default branch's tip of a repository searched by index, on the first two Gitlet nodes of its git order — its segments, keyed by blob, and its tip map | `crewlet/codeindex/seg.<n>`, `crewlet/codeindex/tip.<n>` | the indexer of code indexes: `codeindex` | kept | dropped first | kept |
+| `tags`, the index of the copy's tags by their date and by the commit each names | `crewlet/tags` | a sync, before it answers: `tags` | kept | kept | kept |
 | `layers`, the installed published multi-pack-index chain — each layer's index and bitmap, and the chain file the node writes from the rows | `objects/pack/multi-pack-index.d/multi-pack-index-chain`, `objects/pack/multi-pack-index.d/multi-pack-index-<checksum>.midx`, `objects/pack/multi-pack-index.d/multi-pack-index-<checksum>.bitmap` | the install of the maintainer's published layers: `layer` | cut first, below the layer that names it | kept, no layer naming a pack an expunge drops | cut first, below the layer that names it |
 | `graph-layers`, the installed published commit-graph layers, one a layer, the node's tip over them, and their chain file | `objects/info/commit-graphs/commit-graph-chain`, `objects/info/commit-graphs/graph-<checksum>.graph` | the install of the maintainer's published layers: `layer`; the background indexing: `tip-graph` | cut first, below the layer that names it | kept, but for the node's tip, dropped first | cut first, below the layer that names it |
 
@@ -4109,8 +4486,10 @@ and place — `crewlet.code.publish.refusals` by `reason` on a maintainer —
 `publish`) names, any other reason logged as `code_publication_refused` — and
 `crewlet.code.cache.memo.lookups` by `outcome` beside
 `crewlet.code.cache.memo.bytes`: misses climbing while the memo sits at its
-sixteenth of the budget is a memo too small for the pages seats ask for again,
-and `corrupt` at all a disk damaging what the cache holds
+sixteenth of the budget is a memo too small for the pages seats ask for again
+(`probe_hit` and `probe_miss` count the windows of a directory's last commits
+a walk probes for, which say how often a new commit's read is derived), and
+`corrupt` at all a disk damaging what the cache holds
 ([metrics reference](../reference/metrics.md)).
 
 ### Published layers
@@ -4482,7 +4861,10 @@ audit ([ADR-0085](https://github.com/crewlet/crewlet/blob/main/adr/0085-a-person
   repository is the company's source. The token may arrive as git's Basic
   password on `/git/` and on no other route. Neither prefix is ever on the
   [public listener](../reference/api-endpoints.md#which-listener-serves-what) —
-  it serves outside parties, who hold no token of the company's.
+  it serves outside parties, who hold no token of the company's. The
+  [downloads](#downloading-a-file-or-a-commit) under `/git/` also take the
+  dashboard's session cookie, as every guarded route does, and are never
+  challenged for Basic.
 
 git is served by every node whose `node.roles` name `gitlet` (an undeclared node
 has every role), once the company sets `code.backend: gitlet`: the node builds Gitlet
@@ -4494,6 +4876,102 @@ Gitlet's REST reads
 (`GET /gitlet/repos…`, [API Endpoints](../reference/api-endpoints.md#gitlet-git-and-gitlet)).
 The [Hosting Code on Gitlet](../guides/gitlet.md) guide walks through turning
 it on, declaring a repository, binding a token and the first push.
+
+### Downloading a file or a commit
+
+Beside git's smart HTTP, a Gitlet node answers two downloads of a commit, by
+its whole id (a tag of one peels to it; an abbreviation, a ref, a tree or a
+blob is refused `400`):
+
+- `GET /git/<name>/-/raw?rev=<commit>&path=<path>[&download=1]` is one file's
+  bytes exactly, as `git cat-file blob` writes them.
+- `GET /git/<name>/-/archive.zip?rev=<commit>` is every file of the commit as
+  a ZIP, in a folder `<name>-<first seven digits>/`.
+
+A query names only the route's keys, each once: any other key, or one given
+twice, is refused `400`, so a parameter a later build adds reaches an older
+node as a refusal rather than being ignored. The [API
+reference](../reference/api-endpoints.md#a-files-bytes-and-a-commits-zip)
+lists every answer.
+
+**What is served, and how.** The bytes are somebody's content on the origin
+that holds every person's session, so they are served inert
+([ADR-0153](https://github.com/crewlet/crewlet/blob/main/adr/0153-a-repositorys-bytes-are-served-inert-on-the-dashboards-origin.md)):
+a text file (no NUL in its first 8 000 bytes, git's own rule) not asked to
+download is `text/plain; charset=utf-8`, inline, and every other answer is an
+attachment, `application/octet-stream` for a file and `application/zip` for a
+ZIP. No type is ever read from a file's name. Every answer carries
+`nosniff`, a sandboxed policy that loads nothing and is framed nowhere,
+`Cross-Origin-Resource-Policy: same-origin` and `Cache-Control: private,
+no-store`. A file's strong `ETag` is its blob's id, and a request naming it in
+`If-None-Match` is answered `304` without reading the file: the lookup still
+runs.
+
+**A ZIP is the commit's files exactly as stored**, as `git archive
+--worktree-attributes --format=zip` writes them in a bare clone with no
+global, system or `info/attributes` file: no `.gitattributes` rule is applied,
+so an `export-ignore`d file is in it, an `export-subst` or `ident` placeholder
+is as committed, and no line ending or encoding is converted. git applies
+those rules in memory as it writes, so a pushed attribute could make one
+download hold gigabytes; served as stored, each file costs git its blob and
+nothing more. A symbolic link is a link, a submodule an empty folder, and the
+commit's id is the ZIP's comment.
+
+**Who may download.** Whoever may fetch: the Gitlet permission, then the
+repository's grant once the node has read it. The request may carry the
+dashboard's session cookie, a bearer token, or a token as the Basic password
+sent with the request. A download is never challenged: a request presenting
+no credential is `401` in one line with no `WWW-Authenticate`, since a browser
+answers a challenge with its own password prompt. So a client that sends Basic
+only after a challenge sends nothing here; send the token up front. A renamed
+repository's old name is served as the repository, under its current name; a
+deleted one is `404`; an archived one, one being imported and a pull mirror
+are served.
+
+**What it costs.** A download is served from the node's own copy, where it
+lands. Its lookup (one `cat-file --batch-check`) and a ZIP's measure (one
+`ls-tree -r -t -l`) run in the read lane and take no unit of the seat git-work
+share; the bytes stream in a [transfer slot](#fair-share) under the
+credential's share, paced as a clone is and cut past its deadline. A large ZIP
+is the one transfer that spends a core for as long as its client reads fast:
+git inflates every file and deflates it again, about 0.06 s of CPU a MiB of
+files. So:
+
+- **A large ZIP holds one of the node's archive places**: one for every four
+  read slots (cores), and never fewer than two. A ZIP whose output can be no
+  more than 64 MiB takes none, so most repositories' ZIPs never wait. A large
+  ZIP waits up to 10 s for a place, then is `503` with `Retry-After: 10`.
+- **One ZIP at a time for each principal** of the transfer share (a person by
+  seat, a credential bound to no seat by its name), from its measure to its
+  last byte: a second is `429` at once.
+- **A commit is measured before a byte is sent**, exactly, and refused `400`
+  past any of 1 000 000 entries, 4 GiB of files or 64 MiB of entry names, or
+  where a path with its folder passes the 65 535 bytes a ZIP entry's name can
+  hold. Each refusal names the bound and the remedy, `git clone --depth 1`.
+  The counts also size the output's bound (each file stored at most whole,
+  each name written twice, each entry's headers), and an answer past it is
+  cut.
+- **A large ZIP runs for at most an hour**, or less where its size at the
+  floor pace says so. A client that slow holds its place that long, so two
+  such clients hold a small node's two places, and its other large ZIPs are
+  refused meanwhile.
+
+Measured by `BenchmarkDownload` (`internal/gitlet/host`, 12 cores, git
+2.56.0): a 32 MiB file costs git 0.0014 s of CPU a MiB, a ZIP of 10 000
+incompressible files 0.062 s a MiB, and a clone of the same files 0.080 s a
+MiB of the node's git.
+
+**When it ends early.** A download that fails after its first byte is cut,
+never ended cleanly: a file or a ZIP has no way to say it is short, and a
+cleanly ended answer would be taken as whole. A draining node refuses a new
+download `503` and finishes one it began. A download is recorded on a
+`visibility: unit` repository ([Who read it](#who-read-it)) once its first
+byte is written, with the bytes it was sent.
+
+**An older Gitlet node** answers `404 no_route` for both routes, and its
+classifier calls the request a push. `HEAD` of either route is the probe that
+tells the two apart: this build answers `405` with `Allow: GET` before it reads
+any repository or runs any git.
 
 ---
 
@@ -4754,7 +5232,8 @@ token is the guard's `401`, as any credential it does not know is.
 **What is recorded.** A box's push is no `operator_acted` event — no person
 acted — and its push row is its record: the seat as an agent, the run that
 made it (its turn, its launch, its work item, its model and its harness),
-received over git. A refused one is its `code_box_refused` or `code_push` line.
+received over git. A refused one is its `code_box_refused` or `code_push` line,
+and one a rule refused whole is an attempt on the push history too.
 Those rows are also how the seat learns what its run delivered here: when the
 run is collected, the engine reads the pushes made under its launch to the
 repositories it was given — one linearizable read a run, its later pages at
@@ -5022,7 +5501,9 @@ every such push to, whichever way it came.
   **unrecorded**: nothing of it is decided and no record carries it, because a
   refusal recorded for every push of a runaway seat would cost the log the
   record a push the quota exists to bound. Its sentence names the instant the
-  count starts again, the company's next midnight. A person's pushes are never
+  count starts again, the company's next midnight. A push a rule refused whole
+  ([an attempt](#a-push-end-to-end)) counts too, and one past the bound is
+  told its rule and not recorded. A person's pushes are never
   counted. A push the quota refuses has already stored its pack; nothing names
   it, and the [object collector](object-store.md#collection-and-audit) deletes
   it a day later — the quota bounds what a seat costs the log, not its git
@@ -5293,11 +5774,14 @@ which, the commits each has that the other lacks, and what one changed since
 the merge base), a path's history ([A path's history](#a-paths-history)),
 a file found by its name in a commit's tree ([Finding a file](#finding-a-file)),
 which commit last changed each line of a file
-([Who changed a line](#who-changed-a-line)), whether a commit landed in a
+([Who changed a line](#who-changed-a-line)), the commit that last changed each
+entry of a directory ([A directory's last commits](#a-directorys-last-commits)),
+whether a commit landed in a
 branch and which push landed it (`landed_in`,
 [Which push landed a commit](#which-push-landed-a-commit)), many branch heads
 and tags at once, each with the commit it names and how far it is from a base
-([Many tips at once](#many-tips-at-once)), and what a change's
+([Many tips at once](#many-tips-at-once)), a repository's tags newest first by
+their own date ([Tags by their date](#tags-by-their-date)), and what a change's
 revisions are: a revision's facts against its target, where lines anchored in
 one revision are in another, and what the change changed between two
 ([A revision's facts](#a-revisions-facts)), and which lines of a commit a
@@ -5305,7 +5789,8 @@ code search matches ([A search of one repository](#a-search-of-one-repository)).
 It answers each with real git over its own
 [cache](#the-cache-on-a-gitlet-node), in the cache's read lane, from the copy it
 holds, and names in every answer the push that introduced each commit the
-answer names, with what its index of pushes holds.
+answer names, with what its index of pushes holds, and on a history's page the
+tags naming each commit.
 
 **Who asks them** is a seat, through its code tools, and a person through
 their own assistant, which the operator catalogue serves the same tools to:
@@ -5341,10 +5826,12 @@ that two objects begin with is refused, asking for more of its digits.
 **A path is data.** A path a read names reaches git on a batch command's
 standard input, where it resolves to the id of the tree or file it names, and
 every git process the read runs is handed ids, fixed options and numbers the
-node formats alone — or, for a history and a blame, whose git reads no path on
-its standard input, the path as the ONE argument after `--`, which git reads as
-a path and never as an option, a history's as a literal pathspec: so no path
-can be read as an option, and a path named `--output=x` is the path
+node formats alone — or, for a history, a blame and a directory's last
+commits, whose git reads no path on its standard input, as arguments after
+`--`, which git reads as paths and never as options: a history's and a blame's
+path as the ONE argument there, a history's as a literal pathspec, and a
+directory walk's directory or entries as one or more literal pathspecs: so no
+path can be read as an option, and a path named `--output=x` is the path
 `--output=x`. A diff's stat is filtered by the paths a read names after git has
 answered, never by a pathspec, and so is an interdiff by the paths its
 revisions touch.
@@ -5358,6 +5845,14 @@ than a page is served in pieces at character boundaries that concatenate to the
 line; a line of a patch longer than a page is refused, naming the file's lines
 to read instead. A binary file is answered by its size, as git calls one
 binary: a NUL in its first 8 000 bytes.
+
+**Every file's patch, page by page.** A diff's or an interdiff's `patches` are
+each file's patch in the stat's order, whole lines a page: a file's patch may
+begin on one page and go on on the next, and every page carries the stat's
+totals. A page starts at any file without diffing the files before it, and a
+read cuts the page it was asked for and up to sixteen after it, which the node
+keeps. A file's patch holding a line longer than one answer stops before that
+line, marked `rest_omitted`, and the pages go on at the next file.
 
 **Who may read** is judged by the Gitlet node that answers, from its own chart,
 by the rules of [Who may read and push](#who-may-read-and-push): a person
@@ -5481,6 +5976,46 @@ it and 20 annotated tags, a screen of all 100 read cold takes 1.4 s at the
 median and 2.0 s at the slowest, some 14 ms a tip, inside the read's ten seconds
 of git; read again it takes 5.5 ms.
 
+### Tags by their date
+
+`code_tags` lists a repository's tags newest first by their own date, the
+order `git for-each-ref --sort=-creatordate refs/tags/` gives: an annotated
+tag by its tagger's date, a lightweight tag by its commit's committer date, two
+of one date by name, and a tag with no date (a lightweight tag of a tree or a
+blob, an annotated tag naming no tagger) as dated at the epoch, after every
+later tag. A date past the year 9999 is
+answered in seconds as `date_unix` and listed where git lists it. Each row is
+the tag's ref, its object and that object's type (`tag` for an annotated tag),
+what it peels to and that object's type, and its date; the first row of the
+first page is the newest, which a repository's page calls Latest. An imported
+or mirrored tag keeps its own date. A page holds up to 100 tags (25 unless
+asked) within 56 KiB, its cursor the last tag's date and name, so a tag pushed
+or deleted between two pages puts no other tag on both or on neither. The
+listing is read at the repository's own last record, so it holds every tag the
+repository's row counts.
+
+**From the node's own index of its tags.** Every Gitlet node keeps, beside its
+copy's refs, an index of the copy's tags in the listing's order and by the
+commit each names. The sync that moves a tag merges it with the refs, reading
+only the tags that moved, and puts both in place together; a listing reads it
+with no git. It is the same on every node at a position, kept when packs are
+compacted or expunged, and written again when a rebuild or a log restored
+under the node reads the repository whole. A sync that fails to write it sets
+it aside rather than serve it behind the refs, and the next read of the tags
+past a minute has a sync write it again; meanwhile another node answers a
+listing.
+
+**Tags on a history.** A history's page names each listed commit's tags
+(`tagged`), up to 8 a commit newest first with how many more, and
+`code_commit` its commit's, as do a seat's `code_log` answers. A page from a
+node keeping no index it can read carries no `tagged`, which says nothing,
+where an empty `tagged` says no listed commit is tagged. Measured over 100 000
+tags, a sync moving one tag spends 58 ms on the index, within the 65 ms the
+same node's sync of one push takes at that many refs, and 125 ms with every
+name at 245 bytes; a sync reading the repository whole and finding the index
+level spends 98 ms on it, and one writing it whole about a second; a page of
+the listing takes 38 µs and a commit's tags on a history's page 41 µs.
+
 ### A path's history
 
 `code_log` asks for the commits that changed a file or a directory — or every
@@ -5569,6 +6104,64 @@ answered absent, beside their size (`subject_bytes`, `author_bytes`,
 past 64 (`parent_count`): so the widest commit, and the widest line with its
 commit, always fit a page, and no page carries half a field read as the whole.
 
+### A directory's last commits
+
+`code_tree_commits` asks which commit last changed each entry of a directory at
+a commit, as `git log -1 -- <entry>` names it: the column a file table shows
+beside the listing. A page begins where the listing's own page does (its
+cursor is `code_tree`'s, `e:<n>`) and holds up to a hundred entries, each with
+its commit, and each commit they name once, as a history lists it, so the
+column fills beside the listing a page at a time.
+
+**Git's rule, per entry.** An entry's history follows, at a merge, the side
+whose files it kept, the first such parent where several did, and is the
+merge itself where it kept neither side's: a conflict resolved by hand, or a
+merge's own edit. One walk of the directory as a whole would follow the
+directory's own history instead, and would name another commit for about a fifth
+of the entries of histories with merges. The rule reads files: a commit that
+only adds an empty directory changes nothing, so a directory that never held
+a file has no last commit, and one whose files a commit removed is answered
+that commit.
+
+**How it is read.** One walk goes down the directory's first-parent line,
+`git log --first-parent --name-status` with the directory as a literal
+pathspec, and each commit it reads answers the entries it changed. An entry a
+merge changed against its first parent is left there and walked alone by git
+from the merge (`log -1 <merge> -- <entry>`), which is git's own answer for
+it. Where a long history leaves a few entries untouched (at most 64 after the
+first 1 024 commits), the walk ends and they go on together in walks narrowed
+to their own paths, at most 32 entries and 64 KiB of pathspecs a walk (two
+walks for ordinary names), which the copy's changed-path filters serve for many
+paths at once.
+
+**Kept, and derived for a new commit.** The page is kept in the
+[memo](#the-memo), and beside it windows of answers, cut where an entry's name
+hashes to a boundary so an entry added or removed moves no other window, kept
+under the last commit that changed the directory (the walk's first record).
+Every commit after that one until the
+directory next changes has the same answers, so a read at a new commit probes
+for them as it walks and finds them at its second commit: a push is answered
+by a walk of two commits. A window is trusted only for the names it holds.
+
+**A page cut short.** The walks leave a tenth of the read's ten seconds of git
+for the log of the page's commits. A page the time ran out on holds the
+entries it answered and goes on from the first it did not; where that is its
+first entry, it answers it `out_of_time` alone and goes on past it. Such a page
+is marked `out_of_time`, never kept, and answered bare rather than immutable.
+Once the page's own entries are answered, the walks left only complete windows
+for the memo: the budget, a busy read lane or the answer falling due ends them
+without failing the page, which is answered and kept.
+
+**Measured** (`BenchmarkTreeCommits`, 100 000 commits on twelve vCPUs, a linear
+history): a cold first page of a root of 40 entries untouched since the first
+commit took 2.1 s with a commit-graph and 4.9 s without, in six processes; of
+`src/`, 400 busy files, 132 and 152 ms; of a directory four levels down, 151
+and 256 ms; and a page at a new commit derived from its parent's windows 21 to
+32 ms, in four processes. Where two thirds of the changes come in through
+merges, the root took 1.0 s with a commit-graph and 2.4 s without, `src/` and
+the deep directory 0.5 to 0.7 s in about a hundred processes, most of them
+entries a merge changed, each walked alone, and a derived page 22 to 31 ms.
+
 ### A search of one repository
 
 A code search of one repository asks its Gitlet nodes in their order, as every
@@ -5579,6 +6172,15 @@ matches, a line at a time, whichever way the node reads them, in the order of
 the files' paths and then of their lines: at most 500 of them, each line cut
 to its first 256 bytes, with the file's path, the line's number and the id of
 the file's object.
+
+Each line also names where the expression matched in the text answered, at
+most 32 matches. Asked, a search answers up to three lines of the file on
+each side of each line, a line two near lines share answered once; a search
+asking them answers at most 100 lines. Asked to answer at most so many lines
+of one file, it answers how many lines of each file matched. Through git grep
+the lines around are read from the file once git grep is done, under the
+read's own time rather than the search's five seconds, so a search those
+seconds cut still answers its lines with the lines around them.
 
 - **Through the index**, where the node keeps the repository's code index
   (`codeindex`, [The cache on a Gitlet node](#the-cache-on-a-gitlet-node)) and it
@@ -5691,9 +6293,12 @@ sequenceDiagram
   repositories through the same reads a seat's tools make, judging the
   asker's grant to each from its own chart. So the request is signed under
   the fleet's keyring in key domains of the search's own, bound to an id and
-  a deadline that a node takes once: a request the fleet did not sign, or one
-  replayed, is answered by nobody, and one signed under a key a node does not
-  hold is answered with the sentence naming the keys it holds.
+  a deadline: a request the fleet did not sign is answered by nobody, and one
+  signed under a key a node does not hold is answered with the sentence naming
+  the keys it holds. A node refuses an id it has taken for as long as that
+  deadline could still admit the request; a node that restarted inside that
+  window has forgotten the ids it took, and answers a replay there again, as
+  the asker the request names and with only what that asker may read.
 - **A runner-up, once.** A repository whose node did not answer it — silent,
   busy, behind, or building its index — is asked once more of the next node
   of its order (an indexed repository's second index holder) in a second
@@ -5717,7 +6322,9 @@ sequenceDiagram
 - **Exact.** Each node keeps the first lines of its repositories by
   repository name, path and line, at most the search's limit, and the asker
   keeps the first of all of them, so the answer is the same whichever node
-  answers first, and a limit cuts the first lines of the whole search. A
+  answers first, and a limit cuts the first lines of the whole search. Each
+  line keeps the matches, the lines around it and the file's total its node
+  answered. A
   repository whose search stopped early — its answer full, or its five
   seconds spent — answered its first lines up to its last, so the asker keeps
   no line of any repository past that last: every line of the search before
@@ -5738,6 +6345,11 @@ sequenceDiagram
   repositories named before the next one, that one cannot reach the answer
   and is not read — a search for a common word reads the repositories that
   fill its limit rather than every repository in the company.
+- **A newer protocol only where it is needed.** A search asking context lines
+  or a per-file bound is asked at a newer protocol of the request, which a
+  Gitlet node of an earlier build does not answer, so its repositories are
+  asked of the next node of their order and, if none answers, named under
+  `not_answering`; any other search is answered by every build.
 
 Every answer carries its **coverage**, so a search that could not reach part
 of the company never reads as one that found nothing there. Each repository
@@ -5799,8 +6411,13 @@ blaming a range page by page blames it once. A comparison is kept whole; a
 history's page is its walk's own, kept where the walk ended it and never where
 the read's ten seconds of git did; a tips read is kept a tip at a time rather
 than as a page ([Many tips at once](#many-tips-at-once)); whether a commit
-landed in a branch never is, since its answer moves with the branch. A read that misses a page another read on the node is
-cutting waits for it and is answered from what that read kept, so the seats a
+landed in a branch never is, since its answer moves with the branch. A
+directory's last commits keep each page, and apart from it each window of
+answers under the last commit that changed the directory (its walk's first
+record): every commit after that one until
+the directory next changes has the same answers, so a page at a new commit
+probes for them at its walk's records and finds them at its second. A read
+that misses a page another read on the node is cutting waits for it and is answered from what that read kept, so the seats a
 push's review reaches, all asking for the same diff at once, cost the node one
 git process rather than one each.
 
@@ -5938,6 +6555,7 @@ recorded from that activation on.
 | A read of the repository | Recorded | As |
 |---|---|---|
 | A clone or a fetch whose answer carried a pack | yes, `via: git` | one read, and the bytes of the answer the reader was sent |
+| A [download](#downloading-a-file-or-a-commit) of a file's bytes or a commit's ZIP whose answer began, or a file's `304` | yes, `via: git` | one read, and the bytes it was sent (0 for a `304`), a download cut part way included |
 | A fetch's negotiation round that ended with no pack, an `ls-refs`, the advertisement | no | — |
 | A fetch the node ended before its answer did — a deadline, a stop | no | — |
 | A server-side read that answered — a tree, a file's lines, a diff, a comparison, `landed_in`, a path's [history](#a-paths-history) and a file's blame, a [merge preview](#a-merge-preview), and a change's [revision reads](#a-revisions-facts): its facts, where its anchored lines are, an interdiff — a page from the [memo](#the-memo) included | yes, `via: tool` | one read, and the bytes of the answer |
@@ -5954,8 +6572,9 @@ repository exists and what its branches point at are no secret
 machine token (`pat:<credential id>`), a signed-in session
 (`session:<lineage>`), a Tier A token (`token:<id>`, with no seat unless the
 identity directory binds it to one) — or a seat, by its handle, each with how
-it read (`git` or `tool`). The answer sums each reader's reads, bytes and
-newest read over every node and every day of the range:
+it read (`git` or `tool`; a download reads as `git`). The answer sums each
+reader's reads, bytes and newest read over every node and every day of the
+range:
 
 ```json
 {
@@ -5983,19 +6602,19 @@ and the last page carries none.
 
 **How it is kept.** The serving node files each read as it answers it, and
 every fifteen seconds publishes **one `code_fetched` event per reader** of
-each repository — one per credential or seat, way and, for a server-side read,
-kind — counting its reads and the bytes they were sent, into its own event log,
-kept out of the activity feed: a CI token fetching on every build would bury
-it there. So a CI token fetching every few seconds is one record a flush, not
-one a fetch, and no read waits for the event stream to take its record: a
-clone completes, and a code tool answers, at the speed of its own work while
-the stream elects a leader or is short of its quorum. A record the stream
-refuses is published again by the next flush, and the node keeps up to 4 096
-of them through an outage, the oldest dropped past that and logged
-(`code_fetched_dropped`, with the reads it held). The node's usage publisher
-derives each day of them, every fifteen seconds, into one record per
-repository naming every reader that day: the `repo_read` kind of the usage
-log, kept [181 days](../guides/retention.md) like the rest of it
+each repository — one per credential or seat, way and, for a server-side read
+or a download, kind (`raw` or `archive` for a download) — counting its reads
+and the bytes they were sent, into its own event log, kept out of the activity
+feed: a CI token fetching on every build would bury it there. So a CI token
+fetching every few seconds is one record a flush, not one a fetch, and no read
+waits for the event stream to take its record: a clone completes, and a code
+tool answers, at the speed of its own work while the stream elects a leader or
+is short of its quorum. A record the stream refuses is published again by the
+next flush, and the node keeps up to 4 096 of them through an outage, the oldest
+dropped past that and logged (`code_fetched_dropped`, with the reads it held).
+The node's usage publisher derives each day of them, every fifteen seconds, into
+one record per repository naming every reader that day: the `repo_read` kind of
+the usage log, kept [181 days](../guides/retention.md) like the rest of it
 ([ADR-0020](https://github.com/crewlet/crewlet/blob/main/adr/0020-a-nodes-own-day-is-a-compacted-domain.md)).
 A read is in the answer within about thirty seconds — the node's flush, then
 the publisher's tick. A node stopped in an orderly way publishes its last
@@ -6239,7 +6858,7 @@ was past its bound.
 
 | Table | A row for | What it holds |
 |---|---|---|
-| `code_revision_facts` | each revision of a change its home read | The target branch, the tip read and the position of the record that moved the branch there; the base and the trees of the base and the head; the `patch_id` or that none was taken; the files touched or that it touches all, and their [classes](#change-classes); the Gitlet node that recorded them; and its path-owner match — the digest of the owners matched against, those matched and those asked no review of, with why |
+| `code_revision_facts` | each revision of a change its home read | The target branch, the tip read and the position of the record that moved the branch there; the base and the trees of the base and the head; the `patch_id` or that none was taken; the files touched or that it touches all, and their [classes](#change-classes); the Gitlet node that recorded them; and its path-owner match — the digest of the owners matched against, those matched, each with the first of its globs the revision touched and how many more, and those asked no review of, with why; and when its home read them |
 
 - **Facts are of the change's head revision against its target now.** A
   revise is decided only while they still are: facts of a revision a push has
@@ -6250,6 +6869,11 @@ was past its bound.
   recorded nowhere, for the home's next pass. Facts of a later tip of the
   same branch replace the row, and so do the facts of a retargeted change's
   new branch: one row a revision.
+- **The facts keep when they were read.** Each records the instant its home
+  read them, by the home's clock, to the microsecond (`measured_at`),
+  answered with the revision's facts: facts that replace them carry their
+  own, a write refused `superseded` leaves it, and facts a home of an earlier
+  build recorded carry none.
 - **A head its target holds has no facts.** Whatever moved the target there
   merged the change, so there is nothing of it left to measure or review; the
   home records the merge itself, and a revise naming its head as its own base
@@ -6258,8 +6882,17 @@ was past its bound.
   [path owner](#path-owners) one of whose globs matches a touched path — every
   owner, where the revision touches all — is asked to review the change: a
   unit of its effective lead, a seat of itself, the ask's reason `path_owner`
-  and naming no asker. The HOME matches the globs, up to 64 owners' 32 globs
-  each against up to 1 000 paths, which no decide pays on every round it may
+  and naming no asker. The home names each matched owner's globs that
+  matched, none where the revision touches all, every glob then matching, and
+  each ask names the globs it is for: every such glob of every owner resolving
+  to its seat, sorted, at most 32 and 1 KiB of them, with how many more, kept
+  on the reviewer's row in place of a note. The facts keep each owner's first
+  glob and how many more, which the merge gate's sentence names, and no
+  answer names which globs each owner matched: a revision's facts answer its
+  owners alone. An ask that later facts find held keeps its globs through
+  every state it moves to; asking the reviewer again by name makes the ask
+  the asker's and drops them. The HOME matches the globs, up to 64 owners' 32
+  globs each against up to 1 000 paths, which no decide pays on every round it may
   take, and sends the digest of the owners it matched against; the decide
   holds it to the digest its own snapshot's repository row carries, written
   beside the owners by every change of them, and facts matched against owners
@@ -6296,6 +6929,18 @@ A write of facts that is refused appends nothing: `superseded` is the home's
 alone, answered to no person and no seat, and a closed or merged change takes
 no facts (`change_closed`, `change_merged`). `crewlet.code.conversation.writes`
 counts them under `op` `revise`, beside the conversation's other writes.
+
+During a rolling upgrade a home of this build sends when it read the facts
+and the globs each owner matched, which a data node of an earlier build
+refuses unread, so the next one is asked: a home's facts wait while no data
+node of its build serves them, which only a roll that upgrades the homes
+before the data nodes meets. A data node of an earlier build holds back each
+revise that carries them, and every later record of its repository, until it
+is upgraded, and past the deferral grace takes its copy of the code log out
+of service ([Which records an upgrade holds
+back](../guides/replication.md#which-records-an-upgrade-holds-back)): a roll
+that upgrades every data node before any Gitlet node holds none back, and any
+other finishes inside the grace.
 
 ### Change classes
 
@@ -6615,7 +7260,9 @@ records: what a merge counts is the change's own reviews and findings.
   gate](#the-merge-gate)) — else the first that is `computing`, else that the
   change is ready. A change whose first unmet precondition waits on persons
   alone **waits on a person**, which `needs=person` lists ([Reading
-  changes](#reading-changes)).
+  changes](#reading-changes)). The precondition it stands at places it in one
+  bucket, which `readiness=` lists ([Changes by where their merge
+  stands](#changes-by-where-their-merge-stands)).
 
 **Judged on every read, stored by its home.** A read of a change, and each
 row of a listing, judges the readiness again from the read's own snapshot.
@@ -6624,7 +7271,7 @@ own snapshot, with the merge it records — and stores whether the change was
 ready and whether it waited on a person, beside the versions of the change's
 row and of what the readiness reads that it was judged at, and the position of
 its head's checks. That stored answer is what a wake that a change became
-ready reads, and what `needs=person` seeks. When either version moves past
+ready reads, and what `needs=person` and `readiness=ready` seek. When either version moves past
 it — a review, an ask for review, an answer to a finding, a revision's facts,
 an edit, a retarget, a draft flag — or an attempt of its head's checks is
 queued or ends past that position
@@ -6701,7 +7348,9 @@ merged by somebody, and landed by its queue:
   repository's owners digest to another value than the match recorded —
   owners added or removed since — `owners_approval` is `computing` until the
   home matches the paths again, which the change is due at the home's next
-  pass.
+  pass. Its sentence names each touched owner with the first of its globs the
+  revision touched and how many more, which the facts keep beside the owner,
+  and at most eight owners.
 - **No human path's glob is matched in a judgment either.** A branch's human
   paths are every matching rule's — up to 64 rules of 32 each, and the
   checks' directory — and the home matches them against the touched paths
@@ -6803,7 +7452,10 @@ change as whoever enqueued it.
   or not. A branch holds one train: a candidate abandons the one before it,
   whose candidates are removed and whose entries wait again.
 - An **eject** puts live entries of one branch out — `check_failed` (naming
-  the checks), `conflict` (naming up to 100 paths), `gate_unmet`,
+  the checks, and for a bisected culprit the train they failed on: its
+  candidate, the commit it was merged onto and the commit they ran on, kept on
+  the entry since the train's rows go with it), `conflict` (naming up to 100
+  paths), `gate_unmet`,
   `head_moved`, `not_fast_forward` or `repo_mirrored` (the repository is a
   [pull mirror](#mirrors-and-imports), which nothing merges into: its home
   ejects every live entry rather than build a train) — and abandons the train
@@ -6954,7 +7606,8 @@ holds.
   between the last known good (the train's base where no commit passed) and
   the first known red is queued the failed checks (`purpose: bisect`), until
   the first red commit follows a good one. Its entry is the culprit, ejected
-  `check_failed` naming the checks; the eject abandons the train, and the
+  `check_failed` naming the checks and the commit they failed on, the train's
+  merge onto the branch at its base; the eject abandons the train, and the
   next turn builds it again without that change. A batch of `batch` changes
   finds its culprit in log₂ `batch` more rounds, and while it does nothing
   behind it lands, since every later candidate holds the culprit too. That
@@ -6964,6 +7617,10 @@ holds.
   and 12 at eight, while a queue that never batches falls further behind
   with every red candidate. A larger batch spends a few fewer check runs a
   landed change (0.98 at two, 0.95 at four, 0.94 at eight) for that wait.
+  A data node of an earlier build holds back an ejection that names its
+  train, and every later record of its repository, until it is upgraded
+  ([Which records an upgrade holds
+  back](../guides/replication.md#which-records-an-upgrade-holds-back)).
 - **Cancel what a given-up train still runs.** An eject, a dequeue, a person
   moving the branch and a new train each give the branch's train up, and
   its candidates' and probes' checks still queued or running measure commits
@@ -7072,6 +7729,26 @@ so a rising share of `bisected` is changes queued red; and
 `crewlet.code.queue.ejected` counts what it put out, by reason.
 `crewlet.code.queue.round.duration` is each landed round, timed from the
 same two instants the alarm prices a round at.
+
+#### Reading every queue at once
+
+A queue read names each entry's change by its number, title and source
+branch, and only for the repositories the reader may read.
+
+Naming no repository, a read with `trains=true` also answers the trains
+testing the branches its page reaches, and, on its first page, what every
+queue the reader may read put out in the last day: the newest 50, and their
+total, counted up to 10 000 and marked as a floor past that. Past that bound
+the newest 50 are taken from the ejections counted, so the rows and the total
+cover the same ejections. A read of one
+repository answers its trains and ejections unasked, and `trains=true` adds
+their total. Each ejection says how its entry was to land, its merge method
+and whether it deletes its source branch and closes its work item, which is
+what a re-queue sends again.
+
+A data node of a build that does not read `trains` refuses the read unread,
+and another node answers it, so no answer leaves the trains out silently
+([`GET /gitlet/queue`](../reference/api-endpoints.md#merge-queues-and-checks)).
 
 ### Tip checks and code_green
 
@@ -7260,9 +7937,10 @@ The **interdiff** of two revisions is the diff of their heads kept to the
 files either revision's change touches, as their facts list them: a rebase
 between the two brought in what the target changed meanwhile, and the files
 neither revision touches differ between the heads without being anything the
-change did. It is read as a diff is — its stat a page at a time, or one file's
-patch — and a file is kept by its whole name, so the touched path `a*` keeps
-the file `a*` and never `ab`. The paths are never handed to git as a pathspec
+change did. It is read as a diff is (its stat a page at a time, one file's
+patch, or every file's patch page by page), and a file is kept by its whole
+name, so the touched path `a*` keeps the file `a*` and never `ab`. The
+paths are never handed to git as a pathspec
 ([A path is data](#server-side-reads)): each touched path is looked up at both
 heads, one lookup on git's standard input for them all, and only the files
 whose two entries differ are diffed — so an interdiff costs git two lookups a
@@ -7582,9 +8260,11 @@ options together to 1 MiB before receive-pack reads either, and refuses a
 push past it — far past the 33 KiB a change's options take at their longest.
 
 **Checked before it is stored.** A push naming more than 1 000 refs, a credential
-bound to no seat, an archived or deleted repository, a deletion or a direct
-push a protection refuses — each is refused before receive-pack runs, and
-nothing is stored. A forced update of a ref a protection keeps from forcing,
+bound to no seat, and an archived or deleted repository are each refused
+before receive-pack runs, and nothing is stored. A deletion or a direct push a
+protection refuses is refused too, and nothing of it is stored, but it is
+received in its scratch so its commits can be counted and it can be recorded
+(below). A forced update of a ref a protection keeps from forcing,
 and a blob larger than `code.limits.max_blob_bytes`, are known only once the
 objects are, so the hook checks them — and refuses the push before uploading
 anything. A ref keeps the first refusal it meets: a force-push of a protected
@@ -7612,6 +8292,22 @@ engine, which the repository does not already hold, is refused
 pack are read before its upload begins, never beside it.
 Only a push that passes every check is uploaded, as **one** object: its pack
 with the indexes the receiving git wrote.
+
+**A push a rule refuses is recorded.** A push git received every ref of which
+is refused, one at least by a protection, the grant, the default branch, a
+moved tag or a reserved ref, is an *attempt*: it is recorded moving nothing,
+with no pack and no commit introduced, so the push history says who tried
+what. A stale push, one too large, and one the repository's state or the fleet
+refuses are not recorded, and neither is a write the engine refuses, which its
+tool call answers. A seat's attempt counts against its day's pushes, and a seat
+past its day is told the rule and nothing is recorded. Its pusher is told the
+rule whatever becomes of the record: one no data node takes is a logged line.
+The commits it offered that the repository lacks are counted in the scratch it
+was received in, by the listing every landed push takes, and recorded as its
+`offered`; a listing that fails leaves the attempt recorded with no count. The
+count is kept only by data nodes of a build that reads it: one of an earlier
+build holds back each record that carries one
+([Which records an upgrade holds back](../guides/replication.md#which-records-an-upgrade-holds-back)).
 
 **A clock that is behind.** git walks a repository's commits newest first by
 date wherever it has no generation number to stop on, so a commit dated before
@@ -8411,12 +9107,12 @@ repository's whatever the node.
 
 ## Fair share
 
-Every clone, fetch and push runs its git in one of the node's **transfer
-slots** — four a core, and no more than its memory backs — and a slot is held
-for as long as the client takes, so one credential can hold every slot: a CI
-system checking out behind one token, a mirror catching up, a blobless
-clone's lazy fetches one blob at a time. In arrival order, a person's clone
-behind sixty-four of them would wait for sixty-four of them. So when every
+Every clone, fetch, push and download runs its git in one of the node's
+**transfer slots** — four a core, and no more than its memory backs — and a
+slot is held for as long as the client takes, so one credential can hold every
+slot: a CI system checking out behind one token, a mirror catching up, a
+blobless clone's lazy fetches one blob at a time. In arrival order, a person's
+clone behind sixty-four of them would wait for sixty-four of them. So when every
 slot is held, the node hands the next one released by **share**:
 
 | Who asked | Class | Weight | One principal is |
@@ -8614,11 +9310,11 @@ words, since git does not read the header.
 | The push was recorded and every node dropped it | `(not_applied: the push was durable at <position> and applied nowhere; re-run git push)` | Run the push again; nothing landed ([what a refusal names](#a-push-end-to-end)). |
 | The repository is taking pushes faster than its committer commits them | `(busy: <n> pushes are queued for this repository on this node, the most it holds)`, or the same of the bytes queued for it or held across the node's repositories; `(busy: the push's asker stops waiting in <t>, and a batch started now may take 30s and its answer 1s more; run git push again)`, or `(busy: the push waited <t> behind this repository's earlier pushes on this node, …)`; or `(busy: the repository kept changing for every round the write may take; run git push again)` | Run the push again; nothing of it landed. One repository's pushes meet at one node, which commits them a batch at a time ([The committer](#the-committer)). A full queue, a node at its whole bound, or a push that waited in the queue until its asker could wait no longer raises `code_commit_busy` on that node for fifteen minutes, naming the repository with the most refusals; a push that reached the committer with too little of its asker's attempt left raises nothing. |
 | A push carrying objects into a repository holding the most live packs one may until a compaction merges them — 2 048 ([Limits](#limits)) | `(compaction_behind: <repo> holds <n> live packs, and a push adds none past 2048 until compaction catches up: nothing was decided; run git push again in a minute)` | Nothing of the push was decided, and no row names anything it uploaded; it lands once the repository's home Gitlet node has merged its packs, which the home tries every minute ([Compaction](#compaction)) — run the push again a minute later. A push carrying none — deletions, refs moved onto commits the repository already holds — still lands. Refused for longer, the home's `code_compaction_behind` alarm stands and its log says what keeps the merge from landing. |
-| A seat's push past the pushes one seat may land in a day on the company's calendar, every repository together — `code.limits.pushes_per_seat_day`, 1 000 unless set ([A seat's push](#a-seats-push)) | `(push_quota: seat <handle> has landed <n> pushes since <day> began on the company's calendar, and code.limits.pushes_per_seat_day lets a seat land <limit> pushes a day: nothing was decided; the count starts again at <the company's next midnight>)` | Nothing of the push was decided and no record carries it; run it again once the instant named has passed. A seat that meets it is pushing in a loop: look at what its turns are doing before raising the bound. A pack the push stored is named by no row, and the [object collector](object-store.md#collection-and-audit) deletes it a day later. A person's pushes are never counted. |
+| A seat's push past the pushes one seat may record in a day on the company's calendar, its refused attempts among them, every repository together — `code.limits.pushes_per_seat_day`, 1 000 unless set ([A seat's push](#a-seats-push)) | `(push_quota: seat <handle> has made <n> pushes, refused attempts included, since <day> began on the company's calendar, and code.limits.pushes_per_seat_day lets a seat make <limit> pushes a day: nothing was decided; the count starts again at <the company's next midnight>)` | Nothing of the push was decided and no record carries it; run it again once the instant named has passed. A seat that meets it is pushing in a loop: look at what its turns are doing before raising the bound. A pack the push stored is named by no row, and the [object collector](object-store.md#collection-and-audit) deletes it a day later. A person's pushes are never counted. |
 | A push moving the branches of more open changes than one record can carry beside its own refs — hundreds of change branches force-pushed at once ([Revisions](#revisions)) — or a person's push landing on hundreds of protected branches, each landing a row and its green row ([The merge queue](#the-merge-queue)) | `(too_many_changes: this push moves <n> live changes[ and lands on <m> protected branches], and their rows beside its own would take its record to <rows> of the 4000 rows one record may write: nothing was decided; push their branches in fewer pushes)` | Push the branches in groups: each group's revisions are written in its own record. Nothing of the push was decided. A push whose changes fit a record of its own, but not beside the pushes batched before it, is never refused: the committer decides it first in its next record. |
 | A push its node checked against the repository just before an [expunge](#expunge) of the repository's unreachable objects began | `(expunging: an expunge of <repo>'s unreachable objects began after this push was checked against it (drop epoch <n>, now <m>): nothing was decided; run git push again)` | Run the push again: nothing of it was decided, and its node checks it again against the repository as the expunge left it. A pack it uploaded is named by no row, and the [object collector](object-store.md#collection-and-audit) deletes it a day later. |
 | Nothing took the push | `(unavailable: no data node took push <id>: …)` | Nothing landed; push again, or once the fleet has a data node serving. |
-| The object store has no room — the fleet's NATS bucket holds as many bytes as it [reserves](object-store.md#its-byte-reservation), or an S3-compatible bucket's provider [refuses the write for room](object-store.md#an-s3-bucket--s3) | `(store_full: the object store has no room for the <size> this push stores, and nothing was stored; it lands only once <room>)`, the room the store names: on NATS, `an operator makes room — moves the files to a bucket (crewlet objects migrate -to s3), raises the bucket's byte reservation on an external broker, or lets the collector remove what nothing names`; on S3, `an operator makes room in the bucket — frees space on the storage its provider keeps it on, or raises the quota the provider holds it to — or lets the collector remove what nothing names` | Nothing was stored, and pushing again is refused the same until room is made: tell an operator. The node logs `code_push_store_full` at `WARN` with the store's own answer; on NATS, the [`objects_bucket_near_ceiling`](object-store.md#alarms) alarm says how full the bucket is. |
+| The object store has no room — the fleet's NATS bucket holds as many bytes as it [reserves](object-store.md#its-byte-reservation), or an S3-compatible bucket's provider [refuses the write for room](object-store.md#an-s3-bucket--s3) | `(store_full: the object store has no room for the <size> this push stores, and nothing was stored; it lands only once <room>)`, the room the store names: on NATS, `an operator makes room: raises store.objects.nats_max_bytes and restarts a data node, moves the files to a bucket (crewlet objects migrate -to s3), or lets the collector remove what nothing names`; on S3, `an operator makes room in the bucket — frees space on the storage its provider keeps it on, or raises the quota the provider holds it to — or lets the collector remove what nothing names` | Nothing was stored, and pushing again is refused the same until room is made: tell an operator. The node logs `code_push_store_full` at `WARN` with the store's own answer; on NATS, the [`objects_bucket_near_ceiling`](object-store.md#alarms) alarm says how full the bucket is. |
 | The object store failed | `(unavailable: object store unavailable: …)` | Nothing was stored; push again. |
 | The engine stopped mid-push | `crewlet: the engine went away during this push; its outcome is unknown …` | Fetch, then push again. |
 | The engine could not finish checking the push | `crewlet: the engine could not check this push: <why>` | Nothing landed; push again, or against another node. The node logs `code_push_unchecked`. |
@@ -8722,6 +9418,12 @@ revised is one click from the terminal that pushed it.
 | `code_git_signal_withheld`, `code_git_signal_failed` | `WARN` | The node could not read the kernel's record of a git process's group, so sent it no signal rather than risk signalling a stranger; or sending one failed. |
 | `code_git_cpu_unread` | `WARN` | Ending a git process, the node could not read every process record under `/proc` for what its group had spent (a `/proc` mounted `hidepid=1` hides other users' records), so the run's `crewlet.code.git.cpu` is short by whatever a record it could not read held. |
 | `code_git_protocol_dropped` | `DEBUG` | A client's `Git-Protocol` header was not one the node passes to git, and git ran without it. |
+| `code_download` | `INFO` for a ZIP, `DEBUG` for a file | A [download](#downloading-a-file-or-a-commit) answered `304`, or `200` once its first byte was written, whole or cut (a cut one also logs its failure line): the `repo`, its `kind` (`raw`, `archive`), `status`, `commit`, the `bytes` sent, `took_ms`, git's `cpu_ms`, the `operator_id` and `seat`, and the request's fetch metadata, `sec_fetch_site` (`same-origin`, `same-site`, `cross-site`, `none`) and `sec_fetch_user` (`?1`), empty where absent and `other` for any other value. A download a link on another site started reads `cross-site` and `?1`; one the dashboard started `same-origin`. No path is logged. |
+| `code_download_failed` | `WARN` | git failed serving a download, as `code_fetch_failed` says of a fetch's (`reason`: `deadline`, `stall`, `output`, `git`); after the first byte the connection was cut, with `sent` the bytes the client had been written. |
+| `code_download_retried` | `INFO` | git found this node's cache damaged during a download's lookup, measure or stream before its first byte, as `code_fetch_retried` says of a fetch's; the cache was repaired and git run again. |
+| `code_archive_busy` | `INFO` | A ZIP was refused for the places: `reason` `principal`, its principal already making one here (`429`), or `places`, every archive place stayed busy for the wait (`503`); `held` and `places` say how many of the node's places were in use. |
+| `code_archive_too_large` | `INFO` | A ZIP was refused `400` before its first byte: its commit passed the measure's `bound` (`entries`, `bytes`, `names`, or `name` for one path a ZIP cannot carry), with the counts measured. |
+| `code_archive_past_bound` | `WARN` | git wrote a ZIP past the output bound its measure set, and the connection was cut at it: the measure and git disagree, which is worth a report with the `repo`, `commit` and `bound`. |
 | `code_git_abandoned` | `DEBUG` | A git request ended because its client hung up (`by`: `client`), answered nothing, or because the node is stopping (`by`: `stop`), answered 503 — never the code log failing. A push abandoned after its proposal is recorded as its session concluded it (`unknown`, `applied`). |
 | `code_pack_missing` | `WARN` | A git request failed because a pack the rows name is gone from the object store or damaged there (`damaged`), answered 503 naming the pack. The [cache](#the-cache-on-a-gitlet-node) logs the same line once for the sync that found it (below); the alarm is [`objects_missing`](object-store.md#alarms). |
 | `code_pack_checksum_mismatch`, `code_bad_snapshot` | `ERROR` | A git request failed because a downloaded bundle is not the one its row describes — the cache logs that line too, once for the sync (below) — or the rows cannot be read into a cache: an operator's problem, answered 500 with no `Retry-After`, since no retry ends it. |
@@ -8749,7 +9451,10 @@ revised is one click from the terminal that pushed it.
 | `code_compaction_invalid`, `code_publication_invalid`, `code_compaction_unanswerable` | `ERROR` | Under the component `gitlet.compact`: the node that built a compaction or a publication found it breaking a rule its committer holds it to before storing any of it — a bug in that node's build, so nothing was stored or proposed. Otherwise a repository's committer refused a compaction before its record because its outputs hold more objects than the packs it replaces — or a publication, a compaction carrying a published multi-pack-index layer, because the chain it leaves would hold more than 32 layers or its layer names a pack or the id of a layer below it — a bug in the build of the Gitlet node that made it (`node`), never the repository's: nothing was recorded, and what it stored, named by no row, is removed by the object collector after its grace; or a compaction's record applied and this node's rows do not hold the outputs or the layer it added (`missing`) — a bug in the build that wrote the record, answered `unknown`, so the node that built it adopts nothing. Each with the `repo` and the `compaction_id`. Report any of these lines. |
 | `code_layer_not_applied` | `WARN` | Under the component `gitlet.apply`: a publication's record applied as nothing on this node, because the layers it replaces are not the top of the repository's published chain or its base is not the layer below them (`chain`, `base`, `replaces`) — a record no correct committer forms, which every node applies alike, so the chain stays as it was. With the `repo`, the `layer` and the record's `position`. Report it. |
 | `code_pack_adopt_failed` | `WARN` | The receiving node could not link a push's pack into its cache once its row applied; its next sync downloads it instead. |
+| `code_push_attempt_invalid` | `ERROR` | The engine's own check refused the proposal of an attempt, a push a rule refused whole, before it was recorded: a bug. Keys `repo`, `push_id` and `error`. The pusher is still told the rule that refused the push, and nothing is recorded. |
+| `code_push_attempt_unrecorded` | `WARN` | No data node recorded an attempt, a push a rule refused whole: its committer could not be asked or refused it (keys `repo`, `push_id`, `refusal`, `error`). The pusher is still told the rule; the attempt is missing from the push history and the seat's day. |
 | `code_push_blob_path` | `WARN` | The path of a blob over the limit could not be found; the refusal names the blob without it. |
+| `code_push_offered_uncounted` | `WARN` | An attempt's count of the commits it offered failed or ran out of its budget (keys `repo`, `push_id`, `error`), so the attempt is recorded with no count and reads as a push to its refs alone. |
 | `code_push_store_full` | `WARN` | A push's bundle was refused by the object store because it has no room: the fleet's NATS bucket holds as many bytes as it [reserves](object-store.md#its-byte-reservation), or an S3-compatible bucket's provider refused the write for room (MinIO's `XMinioStorageFull`, a quota spent). The push's `bytes`, and the store's own answer naming its bucket (`error`). The push is refused `store_full` and recorded `refused`, and nothing was stored or proposed; every push that stores a pack is refused the same until an operator makes room. |
 | `code_push_unchecked` | `WARN` | The engine could not finish its own work on a push once receive-pack had written its pack: a git process over the push's objects on this node failed or ran past its deadline (the force check's merge-base, the blob scan, the listing of the commits it introduces), or the push's pack could not be read. The push fails — git prints the `words`, the push is recorded `failed` — and nothing is proposed. Its bundle may already be stored, since the listing runs beside the upload: named by no row, the object collector removes it after its grace. `DEBUG` when the push's request ended under it — its client gone, the node stopping, receive-pack ended — which `code_git_abandoned` or `code_push_failed` records. |
 | `code_hook_accept_failed` | `WARN` | The hook socket failed to accept a connection; it goes on accepting. |
@@ -8830,6 +9535,8 @@ A Gitlet node's [cache](#the-cache-on-a-gitlet-node) logs under the component `g
 | `code_cache_backfill_unpaced` | `WARN` | The backfill could not count the fleet's live git and data nodes to pace its next page (`error`), so it waits five seconds, doubling to five minutes, and counts again rather than reading on a guess. |
 | `code_cache_round_index_held` | `INFO` | A cold sync of a repository with many packs answered without writing its index first, because the background work in flight left the node's memory no room for it (`estimate` against the `budget`). Slower, never wrong; the background index follows. |
 | `code_cache_round_index_skipped` | `WARN` | A cold sync of a repository with many packs answered without writing its index first: the node's git reads were all busy, or the write failed. Slower, never wrong; the background index follows. |
+| `code_cache_tags_failed` | `WARN` | A sync could not bring a repository's index of its tags level with its refs (`error`), so it set the index aside rather than serve it behind them: that node answers its tag listing unavailable, and the next read of it past a minute has a sync write it again. |
+| `code_cache_tags_unreadable` | `WARN` | The node found a repository's index of its tags not as it wrote it (`error`): a sync wrote it again from git, or a read set it aside, asked a scrub of the copy and had a sync write it again. Recurring, the disk is damaging files: verify the repository's copy. |
 | `code_cache_trash_failed` | `WARN` | Something the cache had finished with could not be moved aside or removed. It stays on the disk until a later pass or the next boot removes it; recurring, the disk is refusing work. |
 | `code_cache_held_unmeasured`, `code_cache_scratch_unmeasured` | `WARN` | At boot, or at a pass of the cache's own housekeeping, a file in the cache could not be measured, so the cache counts less than it holds on the disk. Fix the disk or the file's permissions. |
 | `code_cache_use_unrecorded` | `WARN` | A repository's last use could not be written to the disk, so after a restart it may be evicted sooner than its use says. |

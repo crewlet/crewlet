@@ -293,10 +293,10 @@ type ExecutorCollected struct {
 	HarnessVersion string `json:"harness_version,omitempty"`
 	// SessionTakenBytes is the size of the sealed session the read that
 	// collected the launch took out of its box to keep, where it took one:
-	// its upload and its record are made after the read, off it, and how
-	// they came out is stamped on the run's record and logged
-	// (executor_session_kept, executor_session_not_kept). SessionNotKept is
-	// why the read took none, or refused the one it took — a pack that
+	// its upload and its record are made off the read, from the moment the
+	// take spooled it, and how they came out is stamped on the run's record
+	// and logged (executor_session_kept, executor_session_not_kept).
+	// SessionNotKept is why the read took none, or refused the one it took — a pack that
 	// failed, a session past its bounds, secrets the box was handed that
 	// could not be read back — redacted, and cut to a KiB, marked `…`, as
 	// the executor log holds the same reason. Both absent where nothing was

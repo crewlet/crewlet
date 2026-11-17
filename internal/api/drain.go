@@ -79,6 +79,9 @@ const DrainRetryAfter = 30 * time.Second
 //     the host would serve as a push. A box's git, under
 //     [auth.BoxGitPrefix], is classified as a person's and drained by these
 //     same two rules.
+//   - A DOWNLOAD (a file's bytes or a commit's ZIP under /git/) is REFUSED:
+//     new work on the transfer lane, as a fetch's advertisement is; one begun
+//     before the drain is finished before the listener closes ([App.DrainGit]).
 //   - Every other read is SERVED: the probes, the dashboard, the REST reads, a
 //     check's box's reads of its commit ([auth.BoxGitletPrefix]) and the live
 //     socket. A read starts nothing, and it is how an operator watches the
@@ -119,7 +122,7 @@ func servedWhileDraining(r *http.Request, git auth.GitOp) bool {
 		return true
 	case git == auth.GitFetch:
 		return !auth.GitAdvertisement(r)
-	case git == auth.GitPush:
+	case git == auth.GitPush, git == auth.GitDownload:
 		return false
 	default:
 		return auth.IsRead(r.Method)
@@ -154,8 +157,12 @@ func (a *App) drainGate(next http.Handler) http.Handler {
 		if git != auth.GitNone {
 			// In git's form: git prints a text/plain refusal as
 			// `remote: …` and the API's JSON as nothing at all.
+			what := "fetch or push"
+			if git == auth.GitDownload {
+				what = "download"
+			}
 			auth.GitText(w, http.StatusServiceUnavailable, "this node is draining for a shutdown "+
-				"and begins no new fetch or push: retry in "+retryAfter+" s, against another "+
+				"and begins no new "+what+": retry in "+retryAfter+" s, against another "+
 				"node or once it has restarted")
 			return
 		}
@@ -216,15 +223,15 @@ func (a *App) draining() bool { return a.runtime != nil && a.runtime.ShuttingDow
 // read, and would cut every transfer longer than five seconds.
 //
 // WHAT IT WAITS FOR. Every git request the drain gate let through before the
-// wait's last look — a push or a fetch begun before the drain, and a fetch's
-// upload RPC served during it — and then the quiet an exchange's next request
-// would break: git's smart HTTP keeps no state between an exchange's requests,
-// so "nothing running" alone would close the listener between two rounds of
-// one fetch ([gitExchangeGap]). Nothing else: a request the gate refused
-// started nothing, and every other request the listener is serving — a
-// dashboard's socket, an executor's bridge session — is the listener's grace
-// to end, as is an upload RPC let through in the instant after the wait ended
-// and before the listener closed.
+// wait's last look — a push, a fetch or a download begun before the drain, and
+// a fetch's upload RPC served during it — and then the quiet an exchange's
+// next request would break: git's smart HTTP keeps no state between an
+// exchange's requests, so "nothing running" alone would close the listener
+// between two rounds of one fetch ([gitExchangeGap]). Nothing else: a request
+// the gate refused started nothing, and every other request the listener is
+// serving — a dashboard's socket, an executor's bridge session — is the
+// listener's grace to end, as is an upload RPC let through in the instant
+// after the wait ended and before the listener closed.
 //
 // WHEN IT ENDS. From the drain's first moment the gate begins no fetch or push
 // here — a fetch's advertisement and every request of a push are refused — but

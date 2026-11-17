@@ -315,6 +315,24 @@ func TestAMediaMarkNeedsABlocksType(t *testing.T) {
 	wantBound(t, got, 1050+cntCharge(call))
 }
 
+// A MEDIA MARK IS READ OFF A LINE'S BYTES: a call's input holding a key whose
+// name ends, through an escaped quote, in a block's type and whose value is
+// image, `"x\"type":"image"` as JSON.stringify writes it, holds the mark's
+// bytes exactly, and marks the count as an image does. The mark errs that way
+// by design: a line's bytes are what the count reads, and a name a decode
+// reads otherwise is no reason to read less of them.
+//
+// Mutation: read the mark off a decode's names and values rather than the
+// line's bytes (a mark's bytes after a backslash passed over), and the count
+// reads as a bound.
+func TestAMediaMarkIsReadOffALinesBytes(t *testing.T) {
+	t.Parallel()
+	call := cntReply("u2", "u3", "m2", "claude-sonnet-4-5", "",
+		`[{"type":"tool_use","id":"toolu_1","name":"run","input":{"x\"type":"image"}}]`)
+	wantMark(t, cntCount(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50), call),
+		sandbox.CountMedia)
+}
+
 // A PDF READ AFTER THE ANCHOR MARKS THE COUNT: the harness counts one at 3,000
 // tokens a page, which no line's bytes bound.
 //
@@ -499,25 +517,80 @@ func cntArchive(t *testing.T, body string, members ...tarMember) []byte {
 		Typeflag: tar.TypeReg}, body: body}}, members...))
 }
 
-// THE METER'S FLOOR FIGURE KEEPS ITS RULE: the last main-thread reply's input
-// side, read off each whole line as every capture's figure has been, the figure
-// before a compaction with no request since among it, while the count beside it
-// reads the same thread by the harness's rule.
+// THE METER'S FLOOR FIGURE IS WHAT THE LAYER READS OF A REPLY: the input side
+// of the last main-thread reply whose usage the layer reads, the figure before a
+// compaction with no request since among it, while the count beside it reads the
+// same thread by the harness's rule. A reply the layer reads otherwise than
+// encoding/json read its whole line gives no figure, the reply before it
+// standing: its counts' keys in another case, a usage written twice whose last
+// names no input, a null count, a negative one, iterations Claude Code counts in
+// the usage's place with other counts, a record that does not say it is a
+// sidechain and one that names an agent; and a sidechain's reply, as ever. And a
+// reply whose line encoding/json refused whole for a key of another kind that
+// the layer reads by its last value, or not at all, gives its figure: a `Type`
+// that is no string, an earlier `isSidechain` that is no boolean, an earlier
+// `message` that is no object.
 //
-// Mutation: take the floor's figure from the count's anchor, and this goes red.
-func TestTheMetersFloorFigureKeepsItsRule(t *testing.T) {
+// Mutation: read the figure by encoding/json where the layer reads none, the
+// whole rule or its case-folding or its merge alone, or take a reply for the main
+// thread's by its `isSidechain` alone, and a case goes red; read it by
+// encoding/json alone, and a line it refused gives no figure.
+func TestTheMetersFloorFigureIsWhatTheLayerReadsOfAReply(t *testing.T) {
 	t.Parallel()
-	body := cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 100, 20, 1000, 50),
-		cntBoundary("b1"), cntUser("b1", "u4", `"the summary"`))
-	figure, count, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, body)), ctSession,
-		"2.1.310")
-	if err != nil {
-		t.Fatalf("meterArchive: %v", err)
+	meter := func(t *testing.T, body string) (int64, *sandbox.ResumedCount) {
+		t.Helper()
+		figure, count, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, body)), ctSession,
+			"2.1.310")
+		if err != nil {
+			t.Fatalf("meterArchive: %v", err)
+		}
+		return figure, count
 	}
+	brief, anchor := cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 100, 20, 1000, 50)
+	figure, count := meter(t, cntThread(brief, anchor, cntBoundary("b1"), cntUser("b1", "u4", `"the summary"`)))
 	if figure != 1120 {
 		t.Errorf("the floor's figure is %d, want the last reply's input side, 1,120", figure)
 	}
 	wantMark(t, count, sandbox.CountCompacted)
+
+	// reply is a later main-thread reply whose input side is 4,300; as is reply
+	// with from, which it holds once, written as to.
+	reply := cntAnchor("u2", "u3", "m2", 300, 0, 4000, 60)
+	as := func(from, to string) string {
+		t.Helper()
+		if strings.Count(reply, from) != 1 {
+			t.Fatalf("the reply holds %q %d times, want once", from, strings.Count(reply, from))
+		}
+		return strings.Replace(reply, from, to, 1)
+	}
+	for _, tc := range []struct {
+		name  string
+		reply string
+		want  int64
+	}{
+		{"a reply the layer reads", reply, 4300},
+		{"its counts' keys in another case", cntReply("u2", "u3", "m2", "claude-sonnet-4-5",
+			`{"Input_Tokens":300,"Cache_Creation_Input_Tokens":0,"Cache_Read_Input_Tokens":4000,`+
+				`"output_tokens":60}`, cntText), 1120},
+		{"a usage written twice whose last names no input",
+			as(`"output_tokens":60}`, `"output_tokens":60},"usage":{"output_tokens":60}`), 1120},
+		{"a null count", as(`"input_tokens":300`, `"input_tokens":null`), 1120},
+		{"a negative count", as(`"input_tokens":300`, `"input_tokens":-300`), 1120},
+		{"iterations counted with other counts", as(`"output_tokens":60}`, `"output_tokens":60,"iterations":[`+
+			`{"type":"message","input_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,`+
+			`"output_tokens":1}]}`), 1120},
+		{"a sidechain's reply", as(`"isSidechain":false`, `"isSidechain":true`), 1120},
+		{"a record that does not say it is a sidechain", as(`"isSidechain":false,`, ``), 1120},
+		{"a record that names an agent", as(`"isSidechain":false,`, `"isSidechain":false,"agentId":"a1",`), 1120},
+		{"a Type that is no string", as(`"type":"assistant"`, `"Type":0,"type":"assistant"`), 4300},
+		{"an earlier isSidechain that is no boolean", as(`"isSidechain":false`, `"isSidechain":20,"isSidechain":false`),
+			4300},
+		{"an earlier message that is no object", as(`"message":{`, `"message":0,"message":{`), 4300},
+	} {
+		if got, _ := meter(t, cntThread(brief, anchor, tc.reply)); got != tc.want {
+			t.Errorf("%s: the floor's figure is %d, want %d", tc.name, got, tc.want)
+		}
+	}
 }
 
 // THE CAPTURE COUNTS THE SESSION IT KEEPS: the take's meter counts the archive's
@@ -722,8 +795,8 @@ func (c cancelling) end(bool, error)          {}
 // two lines its body handed at once ends there, and the thread is not read whole,
 // so its count names no restart, not even the one its first line is.
 //
-// Mutation: leave the context unchecked between lines, or name the restart read
-// before the cut, and this goes red.
+// Mutation: leave the context unchecked between lines (the line reader's Next
+// asking none), or name the restart read before the cut, and this goes red.
 func TestAReadCutShortBetweenLinesLeavesNoCount(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())

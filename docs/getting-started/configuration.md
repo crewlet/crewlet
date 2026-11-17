@@ -302,7 +302,7 @@ timezone: America/Los_Angeles            # an IANA zone name; absent is UTC
 
 It is a clock for **authored instants and calendar boundaries only**. No duration — a lease, a timeout, a retention horizon — is measured against it, because a duration measured on a wall clock changes length twice a year. And there is only one: the tracker and the scheduler take no zone of their own, because a company whose board, whose people's days and whose standups each kept a clock had one "today" per subsystem. A schedule's own `timezone` is that one piece of work's wall clock — the Tokyo team's 09:30 standup — and nothing else is cut on it.
 
-The value must be a real IANA name (`Europe/Berlin`, `America/New_York`, `UTC`), and `Local` and `localtime` are refused: each is whatever zone the host reading it is set to, so two nodes would cut two different days from it. The [`org` projection](../reference/api-endpoints.md) carries the resolved clock to every reader (`UTC` where none is written), so the dashboard cuts its days where the engine does. An apply that changes it moves the next answer, the next scheduler tick and the next tool call; a turn already running keeps the clock of the epoch it started on. A write that moves it is answered with a warning naming both zones (the dry run's too), since every budget window and every schedule without a zone of its own moves with it; the dashboard changes it on Company › Budgets, under **Company clock**, and asks for **Save anyway** on that warning.
+The value must be a real IANA name (`Europe/Berlin`, `America/New_York`, `UTC`), and `Local` and `localtime` are refused: each is whatever zone the host reading it is set to, so two nodes would cut two different days from it. The [`org` projection](../reference/api-endpoints.md) carries the resolved clock to every reader (`UTC` where none is written), so the dashboard cuts its days where the engine does. An apply that changes it moves the next answer, the next scheduler tick and the next tool call; a turn already running keeps the clock of the epoch it started on. A write that moves it is answered with a warning naming both zones (the dry run's too), since every budget window and every schedule without a zone of its own moves with it; the dashboard changes it on Settings › General, under **Company clock**, and asks for **Save anyway** on that warning.
 
 ### Token budgets
 
@@ -561,6 +561,11 @@ providers:
                                         #   breach is a retryable `timeout`. An executor run is
                                         #   not on this clock: its rounds are capped only where
                                         #   providers.sandbox.default_max_turns sets a cap
+      effort: high                      # optional: reasoning effort, in the harness's own levels
+                                        #   (claude-code: low | medium | high | xhigh | max). Absent
+                                        #   passes none, so the harness runs at its default. Refused
+                                        #   on a harness with no such setting or a level it does not
+                                        #   take. See LLM Backends, "Reasoning effort"
       max_concurrent: 4                 # optional — live harness processes on this host at once
                                         #   (default 4). Each is a 200-400 MB runtime that holds
                                         #   its slot for its whole run, and subscription plans
@@ -1577,11 +1582,13 @@ store:
                                     #   the broker, 1 GiB..64 TiB. Unset
                                     #   derives the smaller of a quarter of the
                                     #   broker's limit and what its state logs'
-                                    #   half and a 1 GiB coordination floor
-                                    #   leave. A full bucket refuses uploads,
-                                    #   never the fleet's leases. An existing
-                                    #   bucket keeps the reservation it was
-                                    #   created with. REFUSED with backend s3
+                                    #   five eighths and a 1 GiB coordination
+                                    #   floor leave. A full bucket refuses
+                                    #   uploads, never the fleet's leases. A
+                                    #   data node raises an existing bucket to
+                                    #   a larger figure at boot where the
+                                    #   broker has room, and never lowers it.
+                                    #   REFUSED with backend s3
   #   s3:                           #   REFUSED unless backend is s3
   #     endpoint: ""                #   the S3 API's base URL; empty is Amazon
                                     #   S3's own for the region. R2, MinIO,
@@ -2584,12 +2591,12 @@ code:
 
 **Changes and their reviews take no block of their own.** A repository's [changes](../concepts/gitlet.md#changes) — a branch proposed into another, opened by a push or a tool, reviewed, discussed and answered ([Review a change](../guides/gitlet.md#review-a-change)) — come with `code.backend: gitlet`, and what shapes them is set where the repository is: `path_owners` names whom a change touching a path asks for a review, a `protect` rule's merge gate what a merge into its branch needs, and the top-level [`inbox.retention_days`](#a-persons-inbox) how long a person keeps the notices a change's records leave them ([Who a change wakes](../concepts/gitlet.md#who-a-change-wakes)). Who may review is every person, and a seat whose grant on the repository reaches `review` — what the chart gives it, capped by its [`code.access`](#role-fields-summary) ([Who may read and push](../concepts/gitlet.md#who-may-read-and-push)).
 
-`code.limits` is what one push and one repository may hold, and how many pushes one seat may land in a day, and it is read off the **current** revision at every decision, so a change takes effect at its activation, with no restart. The three sizes nest: a file inside a push, a push inside a repository. A revision that turns Gitlet off must drop `code.limits` with it (below), and a node that keeps serving Gitlet until its restart goes on holding pushes to the limits of the last revision that hosted code, not to the defaults.
+`code.limits` is what one push and one repository may hold, and how many pushes one seat may make in a day, and it is read off the **current** revision at every decision, so a change takes effect at its activation, with no restart. The three sizes nest: a file inside a push, a push inside a repository. A revision that turns Gitlet off must drop `code.limits` with it (below), and a node that keeps serving Gitlet until its restart goes on holding pushes to the limits of the last revision that hosted code, not to the defaults.
 
 - **`max_push_bytes`** — the largest pack one push may send. Unset is 1 GiB, which is also the most it may be: a person's first push of an existing project is its whole history, and a larger one is imported in parts.
 - **`max_blob_bytes`** — the largest single file a push may carry. Unset is 50 MiB, and it is what sizes git's own memory on a node serving the repository, so a larger binary belongs in [Worklet's project files](../concepts/object-store.md) rather than in a repository.
 - **`repo_max_bytes`** — the most packed bytes one repository may hold. Unset is 20 GiB. It is per **node** as much as per repository: every node that serves a repository keeps a whole copy of it. It counts the packs as the pushes stored them, so a history [imported](../reference/cli.md#crewlet-gitlet-import) in steps counts for more than one pack of it — about twice as much in eleven steps, measured ([Limits](../concepts/gitlet.md#limits)). A seat outside a repository's owning unit is held to half of it, and to half of the refs a repository may hold, so the owners always keep the other half ([A seat's push](../concepts/gitlet.md#a-seats-push)).
-- **`pushes_per_seat_day`** — how many pushes one **seat** may land in one day on the company's [calendar](#the-companys-clock), every repository together: 1 to 100 000, and unset is 1 000, some thirty-three times what a seat of the reference company pushes. It bounds what a seat pushing in a loop costs the code log rather than budgeting a seat's work, so a push past it is refused `push_quota` whole and recorded nowhere, and its sentence says when the company's next day begins and the count with it. A person's pushes are never counted. A seat pushing to several repositories at one instant may land past it by its pushes in flight then, less one — each repository's committer counts what its own node has applied — and never again that day, on a data node whose clock has not reached the company's midnight yet included, while no two data nodes' clocks stand a day apart ([A seat's push](../concepts/gitlet.md#a-seats-push)).
+- **`pushes_per_seat_day`** — how many pushes one **seat** may make in one day on the company's [calendar](#the-companys-clock), every repository together, a push a rule on its refs refused whole (recorded as an attempt) among them: 1 to 100 000, and unset is 1 000, some thirty-three times what a seat of the reference company pushes. It bounds what a seat pushing in a loop costs the code log rather than budgeting a seat's work, so a push past it is refused `push_quota` whole and recorded nowhere, and its sentence says when the company's next day begins and the count with it. An attempt past it is told its own refusal and is not recorded either. A person's pushes are never counted. A seat pushing to several repositories at one instant may land past it by its pushes in flight then, less one — each repository's committer counts what its own node has applied — and never again that day, on a data node whose clock has not reached the company's midnight yet included, while no two data nodes' clocks stand a day apart ([A seat's push](../concepts/gitlet.md#a-seats-push)).
 
 The order is checked on what a push is actually held to, the defaults included: `max_push_bytes: 10485760` set alone is refused, because the default `max_blob_bytes` (50 MiB) is larger, and the refusal names the default it met — set both. `code.limits` on a company that does not set `code.backend: gitlet` is refused: it would read as live and limit nothing.
 

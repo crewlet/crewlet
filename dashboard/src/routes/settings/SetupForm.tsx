@@ -57,7 +57,7 @@ import {
   ValueField,
   type ValueFieldKind,
 } from "@crewlethq/ui";
-import { CopyGlyph, FileTextGlyph, LinkGlyph, ShieldGlyph } from "@crewlethq/icons/glyphs";
+import { CopyGlyph, FileTextGlyph } from "@crewlethq/icons/glyphs";
 import { marked, paths, Problems, withProblems } from "~/ui/Problems.tsx";
 import { VerdictResult } from "./VerdictResult.tsx";
 import { pathSegment, rest, RestError } from "~/protocol/index.ts";
@@ -1212,12 +1212,7 @@ export function SetupForm({
               </p>
             ))}
             {cautions.map((caution) => (
-              <Callout
-                key={caution.title}
-                variant="warning"
-                title={caution.title}
-                icon={<ShieldGlyph size="md" />}
-              >
+              <Callout key={caution.title} variant="warning" title={caution.title}>
                 {caution.body}
               </Callout>
             ))}
@@ -1237,7 +1232,7 @@ export function SetupForm({
               // THE LINK MARK RATHER THAN THE NEUTRAL TONE'S INFO GLYPH: what this
               // strip carries IS an address, and the glyph is the half of the
               // sentence a reader sees first.
-              <Callout key={sectionKey(section)} variant="neutral" icon={<LinkGlyph size="md" />}>
+              <Callout key={sectionKey(section)} variant="neutral">
                 <span>
                   Add <InlineCode>{section.tool.public_url}</InlineCode> to {section.name}’s webhook
                   settings.

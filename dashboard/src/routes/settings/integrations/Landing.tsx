@@ -39,7 +39,7 @@ import { VendorMark } from "@crewlethq/icons";
 import { PlugGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { plural, relTime } from "~/lib/format.ts";
+import { plural } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { IntegrationRow } from "~/contract/integrations.ts";
 import { CATALOG, deliveryEvent, type Entry } from "./catalogue.tsx";
@@ -54,6 +54,7 @@ import {
   serviceStatus,
 } from "./parts.tsx";
 import { homeFacts, type InUse } from "./home.ts";
+import { ago } from "~/lib/ago.ts";
 
 /** How many lines the activity shows: a glance, with each app one press away. */
 const ACTIVITY_LINES = 5;
@@ -260,7 +261,7 @@ function figureOf(tool: Tool, model: Model, now: number): string {
   }
   if (!model.trafficKnown) return "";
   const last = lastDelivery(tool, model.rows);
-  return last ? `Last delivery ${relTime(last, now)}` : "Nothing delivered yet";
+  return last ? `Last delivery ${ago(last, now)}` : "Nothing delivered yet";
 }
 
 /** One line of the activity: a delivery, or an app's latest pass. */

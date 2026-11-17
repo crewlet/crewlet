@@ -11,8 +11,8 @@ import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { MAX_COMPARE_LINES, MAX_EDITS } from "~/lib/lineDiff.ts";
-import { changedRuns } from "~/lib/wordDiff.ts";
-import { sheetRules } from "~/test/sheets.ts";
+import { changedRuns, type DiffSpan } from "~/lib/wordDiff.ts";
+import { sheetRules, splitSelectors } from "~/test/sheets.ts";
 import { DiffView, WINDOW_BLOCK_ROWS, WINDOW_FROM_ROWS, type DiffHunk } from "./DiffView.tsx";
 
 // THE UNDERLINE'S READING, WATCHED: a pass-through, so every case below draws
@@ -578,28 +578,201 @@ describe("a diff a host writes on", () => {
   });
 });
 
-// NO HUE. The design system's diffs paint an added line in the success
-// state's tint and a removed one in the danger state's; here colour carries
-// state, and a diff is not one. Every rule that can reach what the diff draws
-// is read, so a rule added later for any class it carries is held too. The
-// accent is not in the list: it says where the reader is (a focus ring, a
-// range they picked), which is never a line's kind.
+// THE CODE HUE IS A CLASS ON THE ROOT AND NOTHING ELSE: the same rows, marks,
+// words and runs either way. Mutation: draw the run or the mark differently
+// under the hue, or drop the class, and this fails.
+describe("in Gitlet", () => {
+  test("a diff Gitlet reads as code takes the code hue on its root, and draws the same lines", () => {
+    const hunks: DiffHunk[] = [
+      {
+        skipped: 4,
+        lines: [
+          same(5, 5, "keep"),
+          removed(6, "paid in any order"),
+          added(6, "paid in join order"),
+        ],
+      },
+    ];
+    const read = (root: HTMLElement) => ({
+      lines: lines(root),
+      runs: runs(root),
+      marks: [...root.querySelectorAll(".diff-view__mark")].map((m) => m.textContent),
+      skips: [...root.querySelectorAll(".diff-view__skip")].map((m) => m.textContent),
+    });
+    const plain = render(<DiffView hunks={hunks} />);
+    const before = read(plain.container);
+    expect(plain.container.querySelector(".diff-view")?.classList.contains("diff-view--code")).toBe(
+      false,
+    );
+    plain.unmount();
+    const coded = render(<DiffView hunks={hunks} hue="code" />);
+    expect(coded.container.querySelector(".diff-view")?.classList.contains("diff-view--code")).toBe(
+      true,
+    );
+    expect(read(coded.container)).toEqual(before);
+    expect(before.skips).toHaveLength(1);
+    expect(before.runs.length).toBeGreaterThan(0);
+    // A host with no spans for a line draws exactly the uncoloured line.
+    const html = coded.container.innerHTML;
+    coded.unmount();
+    const spanless = render(<DiffView hunks={hunks} hue="code" tokens={() => null} />);
+    expect(spanless.container.innerHTML).toBe(html);
+  });
+
+  /** A Go line's spans as a grammar would cut them: the keyword, then plain. */
+  const GO: DiffHunk[] = [
+    {
+      skipped: 0,
+      lines: [
+        same(1, 1, "defer close(ch)"),
+        removed(2, "func Get(id int) {"),
+        added(2, "func Find(id int) {"),
+      ],
+    },
+  ];
+  const goSpans = (text: string): DiffSpan[] => {
+    const word = text.indexOf(" ");
+    return [
+      { end: word, className: "code-syn-keyword" },
+      { end: word + 1, className: null },
+      { end: text.indexOf("("), className: "code-syn-function" },
+      { end: text.length, className: null },
+    ];
+  };
+  /** Each side's text by number, the way a host reads its blobs. */
+  const SIDES = {
+    before: ["defer close(ch)", "func Get(id int) {"],
+    after: ["defer close(ch)", "func Find(id int) {"],
+  };
+  const classed = (root: ParentNode) =>
+    [...root.querySelectorAll<HTMLElement>(".diff-view__text [class]")].map((el) => [
+      el.closest<HTMLElement>(".diff-view__line")?.dataset.kind,
+      el.className,
+      el.textContent,
+    ]);
+
+  // Mutation: asking a removed line on the `after` side fails this case.
+  test.each(["unified", "split"] as const)(
+    "a %s code diff draws its host's spans around the changed run, and the run stays the code's own text",
+    (layout) => {
+      const asked: string[] = [];
+      const tokens = vi.fn((side: "before" | "after", n: number) => {
+        asked.push(`${side} ${n}`);
+        return goSpans(SIDES[side][n - 1]!);
+      });
+      const plain = render(<DiffView hunks={GO} hue="code" layout={layout} />);
+      const texts = lines(plain.container);
+      plain.unmount();
+      const { container } = render(
+        <DiffView hunks={GO} hue="code" layout={layout} tokens={tokens} />,
+      );
+      expect(lines(container)).toEqual(texts);
+      // THE RUN IS ONE ELEMENT HOLDING ITS TEXT, never a span of syntax.
+      expect(runs(container)).toEqual([
+        ["remove", "Get"],
+        ["add", "Find"],
+      ]);
+      for (const run of container.querySelectorAll(".diff-view__run")) {
+        expect(run.childElementCount).toBe(0);
+      }
+      expect(classed(container)).toEqual(
+        layout === "unified"
+          ? [
+              ["same", "code-syn-keyword", "defer"],
+              ["same", "code-syn-function", "close"],
+              ["remove", "code-syn-keyword", "func"],
+              ["remove", "diff-view__run", "Get"],
+              ["add", "code-syn-keyword", "func"],
+              ["add", "diff-view__run", "Find"],
+            ]
+          : [
+              ["same", "code-syn-keyword", "defer"],
+              ["same", "code-syn-function", "close"],
+              ["same", "code-syn-keyword", "defer"],
+              ["same", "code-syn-function", "close"],
+              ["remove", "code-syn-keyword", "func"],
+              ["remove", "diff-view__run", "Get"],
+              ["add", "code-syn-keyword", "func"],
+              ["add", "diff-view__run", "Find"],
+            ],
+      );
+      // A REMOVED LINE IS THE OLDER BLOB'S, an added the newer's; an unchanged
+      // one the newer's, but on a split's left the older's.
+      expect(asked.sort()).toEqual(
+        layout === "unified"
+          ? ["after 1", "after 2", "before 2"]
+          : ["after 1", "after 2", "before 1", "before 2"],
+      );
+    },
+  );
+
+  // Mutation: dropping the hue check fails this case.
+  test("spans are drawn only under the code hue", () => {
+    const tokens = vi.fn((side: "before" | "after", n: number) => goSpans(SIDES[side][n - 1]!));
+    const { container } = render(<DiffView hunks={GO} tokens={tokens} />);
+    expect(container.querySelector(".code-syn-keyword")).toBeNull();
+    expect(tokens).not.toHaveBeenCalled();
+  });
+});
+
+// ONE PICK, ONE LOOK ACROSS GITLET: a coloured diff's pick and a file's take the
+// selected tint and the accent edge. Mutation: tint the file's pick with another
+// surface, or rule it in the border's ink, and this fails.
+test("a pick in a coloured diff and in a Gitlet file take one tint and one edge", () => {
+  const ruleOf = (selector: string) =>
+    sheetRules().find((r) => splitSelectors(r.selector).includes(selector))?.body ?? "";
+  const diff = ruleOf(".diff-view--code .diff-view__line[data-kind][data-picked]");
+  const file = ruleOf(".code-source__line[data-picked]");
+  const tint = (body: string) => /background(?:-color)?:\s*var\((--[\w-]+)\)/.exec(body)?.[1];
+  expect(tint(diff)).toBe("--color-surface-selected");
+  expect(tint(file)).toBe(tint(diff));
+  expect(ruleOf(".code-blame tr[data-picked]")).toBe(file);
+  for (const body of [diff, file]) expect(body).toMatch(/box-shadow:[^;]*--color-brand-accent\)/);
+});
+
+// NO HUE OUTSIDE GITLET: no rule that reaches what a diff draws spends a state's
+// hue, and in Gitlet only the code hue's own rules do. The accent is not listed:
+// it marks where the reader is, never a line's kind.
 describe("what a diff draws", () => {
-  test("is reached by no rule that spends a state's, a series' or an identity's hue", () => {
-    const { container } = render(<DiffView {...EDIT} layout="split" against="rev 4" />);
+  /** The sheet rules one of whose selectors names only classes `root` draws. */
+  const reaching = (root: ParentNode) => {
     const classes = new Set(
-      [...container.querySelectorAll("[class]")].flatMap((el) => [...el.classList]),
+      [...root.querySelectorAll("[class]")].flatMap((el) => [...el.classList]),
     );
     expect(classes.has("diff-view__line")).toBe(true);
-    const reaching = sheetRules().filter((rule) =>
-      [...classes].some((name) => new RegExp(`\\.${name}(?![\\w-])`).test(rule.selector)),
+    const rules = sheetRules().filter((rule) =>
+      splitSelectors(rule.selector).some((selector) => {
+        const named = [...selector.matchAll(/\.([\w-]+)/g)].map((m) => m[1]!);
+        return named.some((n) => n.startsWith("diff-view")) && named.every((n) => classes.has(n));
+      }),
     );
-    // A VACUITY FLOOR: a walk that found no rule for the diff checked nothing.
-    expect(reaching.length).toBeGreaterThan(10);
-    const hued = reaching.filter((rule) => /--color-(?:feedback|data|node)-/.test(rule.body));
-    expect(hued.map((rule) => `${rule.selector} { ${rule.body.trim()} }`)).toEqual([]);
     // AND NONE OF THE PACKAGE'S DIFFS IS IN IT.
     expect([...classes].filter((name) => name.startsWith("crewlet-diff"))).toEqual([]);
+    return rules;
+  };
+  const shown = (rules: { selector: string; body: string }[]) =>
+    rules.map((rule) => `${rule.selector} { ${rule.body.trim()} }`);
+
+  test("is reached by no rule that spends a state's, a series' or an identity's hue", () => {
+    const { container, unmount } = render(<DiffView {...EDIT} layout="split" against="rev 4" />);
+    const plain = reaching(container);
+    // A VACUITY FLOOR: a walk that found no rule for the diff checked nothing.
+    expect(plain.length).toBeGreaterThan(10);
+    const hued = plain.filter((rule) =>
+      /--color-(?:feedback|data|node|diff|syntax|change-(?:open|merged|closed|draft)|code|file)-/.test(
+        rule.body,
+      ),
+    );
+    expect(shown(hued)).toEqual([]);
+    unmount();
+    // IN GITLET the diff colours reach it, and still no state, series or identity.
+    const coded = reaching(
+      render(<DiffView {...EDIT} hue="code" layout="split" against="rev 4" />).container,
+    );
+    expect(coded.some((rule) => /--color-diff-/.test(rule.body))).toBe(true);
+    expect(
+      shown(coded.filter((rule) => /--color-(?:feedback|data|node)-/.test(rule.body))),
+    ).toEqual([]);
   });
 
   // THE TWO STEPS AND THEIR GROUND are read from the sheet and matched to what
@@ -790,6 +963,37 @@ describe("a long diff", () => {
       observer.say([{ block: 0, near: true }]);
       expect(read).toHaveBeenCalledTimes(3 * pairsABlock);
       expect(runs(container)).toHaveLength(2 * 3 * pairsABlock);
+    } finally {
+      restore();
+    }
+  });
+
+  // Mutation: computing spans for every line in DiffView's render fails this case.
+  test("asks for the spans of the rows it draws, and once a mounted line", () => {
+    const restore = installObserver();
+    try {
+      const calls = new Map<number, number>();
+      const tokens = vi.fn((_: "before" | "after", n: number) => {
+        calls.set(n, (calls.get(n) ?? 0) + 1);
+        return [{ end: 4, className: "code-syn-keyword" }];
+      });
+      const { container } = render(
+        <DiffView hunks={longDiff(30 * WINDOW_BLOCK_ROWS)} hue="code" tokens={tokens} />,
+      );
+      expect(container.querySelectorAll(".code-syn-keyword")).toHaveLength(WINDOW_BLOCK_ROWS);
+      expect([...calls.keys()].sort((a, b) => a - b)).toEqual(
+        Array.from({ length: WINDOW_BLOCK_ROWS }, (_, i) => i + 1),
+      );
+      const observer = Observer.made[0]!;
+      observer.say([
+        { block: 0, near: true, height: 2400 },
+        { block: 7, near: true },
+      ]);
+      // THE WINDOW REDRAWS THE BLOCK IT KEPT, which asks its lines nothing again.
+      expect(calls.size).toBe(2 * WINDOW_BLOCK_ROWS);
+      expect(calls.has(7 * WINDOW_BLOCK_ROWS + 1)).toBe(true);
+      expect([...calls.values()].every((n) => n === 1)).toBe(true);
+      expect(container.querySelectorAll(".code-syn-keyword")).toHaveLength(2 * WINDOW_BLOCK_ROWS);
     } finally {
       restore();
     }

@@ -97,7 +97,7 @@ async function save(form: HTMLElement) {
 
 test("the page draws the assistant block as the document writes it", async () => {
   await show();
-  expect(within(screen.getByRole("row", { name: /Turned on/ })).getByText("On")).toBeTruthy();
+  expect(within(screen.getByRole("row", { name: /^Ask Crewlet/ })).getByText("On")).toBeTruthy();
   expect(
     within(screen.getByRole("row", { name: /^Models/ })).getByText("ask-sonnet, then ask-haiku"),
   ).toBeTruthy();

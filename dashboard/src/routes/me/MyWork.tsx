@@ -87,12 +87,15 @@
  * on the list.
  */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import type { MeSection } from "~/app/routes.ts";
 import { useServicesAsk } from "~/lib/services.ts";
 import { ChangeList } from "~/routes/gitlet/ChangeList.tsx";
+import { changeObject } from "~/routes/gitlet/paths.ts";
+import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
+import type { CodeChangeSummary } from "~/protocol/index.ts";
 import { QueryState } from "~/components/common.tsx";
 import { UnboundRemedy } from "~/components/people.tsx";
 import { usePageCoverage, usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
@@ -112,7 +115,7 @@ import { KeyGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, leadsInLine, seatResolvers, type OrgIndex, type Seat } from "~/lib/seats.ts";
-import { plural, relTime } from "~/lib/format.ts";
+import { plural } from "~/lib/format.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { HoldWrites } from "~/lib/useWriteAccess.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -135,6 +138,7 @@ import type {
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PriorityQueue } from "./Priorities.tsx";
 import { listTotal, useOwnQueueCount, useQueueCountRead } from "~/lib/useQueueCount.ts";
+import { ago } from "~/lib/ago.ts";
 
 /**
  * What the Queue OPENS on, as the list's own parameters.
@@ -729,10 +733,23 @@ export function MyWork({ section }: { section: MeSection }) {
  * takes a seat's handle as a reviewer and an owner, and refuses anything else.
  */
 function DayReviews({ whose, they }: { whose: string; they: string }) {
+  // ONE PEEK ORDER ACROSS THE TWO LISTS: the reviews owed, then the fixes, each change once.
+  const [reviews, setReviews] = useState<readonly CodeChangeSummary[]>([]);
+  const [fixes, setFixes] = useState<readonly CodeChangeSummary[]>([]);
+  const order = useMemo(() => {
+    const seen = new Set<string>();
+    return [...reviews, ...fixes]
+      .filter((c) => !seen.has(c.id) && Boolean(seen.add(c.id)))
+      .map((c) => changeObject(c.repo, c.number));
+  }, [reviews, fixes]);
+  usePeekNeighbours(order);
   return (
     <div className="col gap-4">
       <ChangeList
         params={{ needs: "review", reviewer: whose }}
+        name="Waiting on review"
+        neighbours={false}
+        onRows={setReviews}
         label={<h3 className="t-label">Waiting on {they === "you" ? "your" : "their"} review</h3>}
         empty={{
           title: "No review waiting",
@@ -741,6 +758,9 @@ function DayReviews({ whose, they }: { whose: string; they: string }) {
       />
       <ChangeList
         params={{ needs: "fix", owner: whose }}
+        name="Waiting on a fix"
+        neighbours={false}
+        onRows={setFixes}
         label={
           <h3 className="t-label">{they === "you" ? "Your" : "Their"} changes waiting on a fix</h3>
         }
@@ -813,14 +833,18 @@ function OrderStamp({
 }) {
   if (!setByName) return null;
   return (
-    <Callout variant="info">
+    <Callout
+      variant="info"
+      action={
+        onPriorities && (
+          <button type="button" className="t-link" onClick={onPriorities}>
+            Priorities
+          </button>
+        )
+      }
+    >
       Order set by {setByName}
-      {stamp?.priorities_set_at ? ` ${relTime(stamp.priorities_set_at, now)}` : ""}.{" "}
-      {onPriorities && (
-        <button type="button" className="t-link" onClick={onPriorities}>
-          Priorities →
-        </button>
-      )}
+      {stamp?.priorities_set_at ? ` ${ago(stamp.priorities_set_at, now)}` : ""}.
     </Callout>
   );
 }

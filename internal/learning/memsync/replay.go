@@ -62,6 +62,40 @@ import (
 //     on and whatever each said — behind, gone, refusing its pulls, never
 //     pulled, losing a delivery — is refused ([tableReplay.behind]).
 //
+// # What silence is
+//
+// ACROSS A LINK, THE LINK'S. A replay's words cross a link behind whatever
+// else the link carries — the node's own downloads, an event or a fleet
+// record of megabytes, which no window bounds — and neither the broker nor
+// the client sees any of a message until its last byte is in, so a replay
+// held behind a message of eight MiB at the floor hears nothing for four
+// minutes from a copy that answered at once. Only the link itself tells that
+// from a copy or a link that stopped answering: the meter of its socket
+// ([Config.Link]). So at the end of a pull's stall with nothing heard
+// ([tableReplay.judge]):
+//
+//   - a link that did not move over the stall — or none metered, a member's
+//     connection among them — is SILENCE, and refuses the seat as above;
+//   - a link that moved holds the replay, judged again every [quietWait] —
+//     over the stall before each judgment, its consumer asked about itself
+//     before each, as a quiet replay's is — so a link that falls still ends
+//     the wait within a stall and a second of its last byte;
+//   - once it has read [Syncer.quietBytes] since the replay last heard
+//     anything — one message at the transport's bound and a pull, the most
+//     a word waits behind — the replay is placed again ([placedQuiet]),
+//     which the behind clock neither arms nor reads, since the link it waits
+//     on may hold a word past a minute;
+//   - and once the replay has heard nothing from any copy for
+//     [Syncer.quietCap] — one pull at the transport's bound's stall — the
+//     seat is refused, whatever the link does ([tableReplay.creeping]).
+//
+// Every request a hydration hedges is held the same way while the link moves
+// ([Syncer.waits]). The one case slower than refusing at the stall is a copy
+// that answers nothing at all on a link that other traffic keeps moving,
+// which waits for the caps; a consumer that is gone or never got its pull
+// still answers the replay's probe behind that traffic, and is placed again
+// sooner.
+//
 // # The end: a barrier at or past the hydration's, then an end barrier
 //
 // A replay reads until it has received a barrier at or past the hydration's
@@ -186,6 +220,26 @@ type Config struct {
 	// Clustered says the broker is a cluster, which is what a create's
 	// term branches on ([jsprovision.AskTerm]).
 	Clustered bool
+	// Link is the meter of the link the node's connection crosses
+	// (internal/queue/jetstream's LinkMeter), read with AcrossLink alone:
+	// what tells a replay held behind the link's other traffic from one
+	// whose copy or link stopped answering ("What silence is"). Nil reads
+	// no link, and time alone refuses a quiet replay, as it does on a
+	// member, whose connection crosses none; a Link without AcrossLink is
+	// refused, since a member has no link to meter.
+	Link Link
+}
+
+// Link is a node's link to the changelog as its meter reads it, at the
+// link's own socket (internal/queue/jetstream's LinkMeter).
+type Link interface {
+	// Moving reports whether the link carried, in either direction, what a
+	// link busy at the floor carries, over the last d.
+	Moving(d time.Duration) bool
+	// Carried is the bytes the far end acknowledged of what the node wrote
+	// to the link, and the bytes the node read from it, since the meter was
+	// made.
+	Carried() (acked, read uint64)
 }
 
 // copies is where a replay's consumers are made and deleted: the changelog's
@@ -278,9 +332,11 @@ func (p namedPulls) RequestBatch() int { return p.batch }
 // silence the server keeps ([jsprovision.LookupBudget]) and the same crossing
 // ([Syncer.createBudget]): a clustered create asks twice inside it, at none
 // and at sixteen seconds, and a solo one once. Never shorter than the one
-// request that had the rest of a fifteen-second hydration.
+// request that had the rest of a fifteen-second hydration. Across a metered
+// link that ceiling runs only while the link is still ([Syncer.waits]): a
+// reply queued behind the link's other traffic is waited for while it moves.
 func (s *Syncer) createConsumer(ctx context.Context, cfg jetstream.ConsumerConfig) (jetstream.Consumer, error) {
-	ctx, cancel := context.WithTimeout(ctx, s.createBudget())
+	ctx, cancel := s.waits(0).Ceiling(ctx, s.createBudget())
 	defer cancel()
 	var cons jetstream.Consumer
 	err := jsprovision.Ask(ctx, s.timing.AskTerm+jsapi.Sending(apiBytes, s.pace),
@@ -405,6 +461,41 @@ func (s *Syncer) pullBound() int {
 // ([Syncer.pullBound]). A test holds it to the terms' own constants.
 const pullWindow = int(int64(jsapi.WindowCrossing) * objstore.MiB / int64(objstore.MiBPace))
 
+// quietBytes is what a metered link carries to this node past which a replay
+// that heard nothing meanwhile is placed again ([placedQuiet]): one message at
+// the transport's bound ([Syncer.pullBytes]) and one of the replay's own
+// pulls ([Syncer.pullBound]).
+//
+// A CHOICE, NOT A BOUND on what the link may carry ahead of a word: a replay
+// keeps one pull out at a time ([tableReplay.pull]), so its own bytes ahead
+// of a word are one pull's at most, and the figure allows one other message
+// at the transport's bound beside them. Nothing bounds the rest — any number
+// of events and records may be ahead of a word, and the object store's
+// transfers ride the same connection, unwindowed — so once the link has read
+// that much since the replay last heard anything, a copy afresh is judged
+// cheaper than waiting on: 8.9 MB at the shipped lease, under a second at
+// 100 Mbit/s. A word queued behind more is placed again needlessly, and the
+// placement, which the behind clock does not read ([tableReplay.again]),
+// costs the seat a consumer; at worst the replay is refused at its time cap
+// ([Syncer.quietCap]), where it was refused at its stall before the link was
+// read at all.
+func (s *Syncer) quietBytes() int {
+	return s.pullBytes() + s.pullBound()
+}
+
+// quietCap is how long a replay may hear nothing from its copies, since its
+// last word and across placements, while its metered link moves below
+// [Syncer.quietBytes]: the stall of one pull at the transport's bound
+// ([Syncer.stall]), 253 s across a link at the floor. A link that moves for
+// that long without carrying one message at the transport's bound and a
+// window creeps below the floor every link is promised, or carries this
+// node's own traffic ahead of the replay's request, and either holds the
+// replay — and the placement pass it runs in — no longer than one such
+// message would.
+func (s *Syncer) quietCap() time.Duration {
+	return s.stall(s.pullBytes())
+}
+
 // stall is how long a replay pull of maxBytes may go without a word before
 // the seat is refused: the client's request term (its DefaultTimeout), and
 // what that many bytes take to reach this node whole, handled in the engine's
@@ -430,9 +521,48 @@ func (s *Syncer) stall(maxBytes int) time.Duration {
 // a transaction the store holds longer — finds its consumer gone, and is
 // placed again past what it received ([placedGone]); a reader that died
 // leaves its consumer that long, which costs the broker one idle consumer.
+// Across a metered link the end barrier is held while the link moves
+// ([Syncer.waits]), and the threshold carries that too: 774 s across a link
+// at the shipped lease. It outlasts the longest a replay waits for a word on a
+// moving link as well ([Syncer.quietCap], 253 s), since a pull the replay is
+// still waiting on ended at its expiry.
 func (s *Syncer) reapAfter() time.Duration {
 	n := s.pullBytes()
-	return s.timing.Arriving(s.endBarrierArrival(n)).Lookup + jsapi.Delivering(n, s.pace)
+	barrier := s.waits(s.endBarrierArrival(n))
+	return barrier.Longest(barrier.Lookup) + jsapi.Delivering(n, s.pace)
+}
+
+// waits is the timing of one of a hydration's requests whose answer takes
+// arrival to reach this node ([jsprovision.Timing.Arriving]): s's own, and
+// across a metered link one whose ceilings run only while the link is still,
+// held past them while it moves by what one message at the transport's bound
+// takes to cross it at the floor ([Syncer.heldBehind]), the most one reply
+// waits behind on it ("What silence is").
+func (s *Syncer) waits(arrival time.Duration) jsprovision.Timing {
+	t := s.timing.Arriving(arrival)
+	if s.link != nil {
+		t = t.Following(s.link, s.heldBehind())
+	}
+	return t
+}
+
+// heldBehind is what one message at the transport's bound takes to reach this
+// node across its link at the floor ([Syncer.pullBytes], [jsapi.Delivering]):
+// 248 s at the transport's 8 MiB, the most a word or a reply can be held
+// behind on the link by one other message.
+func (s *Syncer) heldBehind() time.Duration {
+	return jsapi.Delivering(s.pullBytes(), s.pace)
+}
+
+// heldFor says how long a request asked at t under a ceiling of d was asked
+// for, for a refusal: d, and across a metered link, d of the link standing
+// still or d and what it may be held past it while the link moved.
+func (s *Syncer) heldFor(t jsprovision.Timing, d time.Duration) string {
+	if t.Progress == nil {
+		return d.String()
+	}
+	return fmt.Sprintf("%v of this node's link carrying nothing at the floor, or %v while it moved",
+		d, t.Longest(d))
 }
 
 // endBarrierArrival is how long a table's end barrier's acknowledgement takes
@@ -469,12 +599,16 @@ const (
 	placedUnpulled placeCause = "unpulled"
 	// placedGap is a delivery the link lost ([jsapi.ErrDeliveryLost]).
 	placedGap placeCause = "gap"
+	// placedQuiet is a replay that heard nothing while its link carried
+	// more than a word can be held behind ([Syncer.quietBytes]): its copy's
+	// words were lost on the way, or never sent ("What silence is").
+	placedQuiet placeCause = "quiet"
 )
 
 // Valid reports whether c is one of the reasons a replay is placed again.
 func (c placeCause) Valid() bool {
 	switch c {
-	case placedBehind, placedGone, placedUnpulled, placedGap:
+	case placedBehind, placedGone, placedUnpulled, placedGap, placedQuiet:
 		return true
 	}
 	return false
@@ -502,6 +636,7 @@ func (p placeAgain) told() string {
 		placedGone:     "the broker refused its pull or no longer had its consumer",
 		placedUnpulled: "its consumer never got its pull",
 		placedGap:      "the link lost a delivery",
+		placedQuiet:    "nothing arrived for it while its link carried more than a word waits behind",
 	}[p.why]
 	if p.detail != "" {
 		said += " (" + p.detail + ")"
@@ -574,6 +709,11 @@ type cursor struct {
 	// transport says the next pull asks one message at the transport's
 	// bound, for a row past the window ([Syncer.pullBound]).
 	transport bool
+	// word is when the replay last heard a word from a copy — a delivery,
+	// a heartbeat, a status — or was first placed, before any: what a quiet
+	// replay on a moving link is held to across placements
+	// ([Syncer.quietCap]).
+	word time.Time
 }
 
 // tableReplay is one table's replay of a seat's memory.
@@ -710,7 +850,8 @@ func (s *Syncer) replay(ctx context.Context, run *hydrationRun, handle string, r
 
 // again places the replay again for a, once the behind clock allows it: armed
 // here where nothing armed it since the replay's last delivery, and refusing
-// the seat once nothing has been delivered for [behindWait] ([tableReplay.behind]).
+// the seat once nothing has been delivered for [behindWait] ([tableReplay.behind]),
+// for every cause but [placedQuiet], which the behind clock does not read.
 //
 // PACED: a placement that delivered nothing is followed by the next no sooner
 // than [copyBehindWait] after it was made, raft's heartbeat, by which a member
@@ -720,12 +861,20 @@ func (s *Syncer) replay(ctx context.Context, run *hydrationRun, handle string, r
 // and a broker that refuses every pull at once was asked for them as fast as it
 // answered.
 func (r *tableReplay) again(ctx context.Context, a placeAgain) error {
-	now := time.Now()
-	if r.at.behindSince.IsZero() {
-		r.at.behindSince = now
-	}
-	if now.Sub(r.at.behindSince) >= behindWait {
-		return r.behind(ctx, a)
+	// A REPLAY HEARD NOTHING FROM WHILE ITS LINK MOVES is no copy that
+	// held nothing for it: the link it waits on carries other traffic, which
+	// may hold its words longer than a minute ("What silence is"). Its
+	// placement neither arms the behind clock nor is refused by it, and its
+	// time cap, since its last word across placements, alone refuses it
+	// ([Syncer.quietCap]).
+	if a.why != placedQuiet {
+		now := time.Now()
+		if r.at.behindSince.IsZero() {
+			r.at.behindSince = now
+		}
+		if now.Sub(r.at.behindSince) >= behindWait {
+			return r.behind(ctx, a)
+		}
 	}
 	if r.at.delivered == 0 {
 		if wait := time.Until(r.at.placedAt.Add(copyBehindWait)); wait > 0 {
@@ -775,7 +924,8 @@ func (r *tableReplay) place(ctx context.Context, a placeAgain) error {
 	switch {
 	case err != nil && jsprovision.Unanswered(ctx, err):
 		return fmt.Errorf("memsync: open a replay of %s's %s at sequence %d: the broker made no "+
-			"consumer for it in %v: %w", r.handle, r.spec.name, r.at.reached+1, r.s.createBudget(), err)
+			"consumer for it in %s: %w", r.handle, r.spec.name, r.at.reached+1,
+			r.s.heldFor(r.s.waits(0), r.s.createBudget()), err)
 	case err != nil:
 		return fmt.Errorf("memsync: open a replay of %s's %s at sequence %d: %w", r.handle, r.spec.name,
 			r.at.reached+1, err)
@@ -784,6 +934,9 @@ func (r *tableReplay) place(ctx context.Context, a placeAgain) error {
 	r.at.placements++
 	r.run.placements++
 	r.at.placedAt, r.at.delivered = time.Now(), 0
+	if r.at.word.IsZero() {
+		r.at.word = r.at.placedAt
+	}
 	if a.why != "" {
 		r.s.info(ctx, "memory_replay_placed_again", "seat", r.handle, "table", r.spec.name,
 			"why", string(a.why), "detail", a.detail, "reached", r.at.reached, "target", r.target(),
@@ -833,19 +986,31 @@ func (r *tableReplay) pull(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	stall := r.s.stall(p.maxBytes)
-	heard := time.Now()
+	clock := r.listen(stall)
 	for {
 		r.s.slow(ctx, r.run, r.spec.name, len(r.staged))
-		ev, err := r.next(ctx, p, heard.Add(stall), stall)
+		ev, err := r.next(ctx, p, &clock)
 		switch {
 		case errors.Is(err, errQuiet):
-			if qerr := r.quiet(ctx, p, heard.Add(stall)); qerr != nil {
+			if qerr := r.quiet(ctx, p, clock.until); qerr != nil {
+				return false, qerr
+			}
+			continue
+		case errors.Is(err, errHeld):
+			// HELD, AND ASKED ABOUT ITSELF until the next judgment, as a
+			// quiet replay is before its stall: a consumer gone or never
+			// pulled says so behind the link's traffic, and is placed
+			// again sooner than the caps.
+			if qerr := r.quiet(ctx, p, clock.until); qerr != nil {
 				return false, qerr
 			}
 			continue
 		case err != nil:
 			return false, err
 		}
+		// A WORD, whatever it says and whatever it ends: what a quiet
+		// replay on a moving link is held to since ([Syncer.quietCap]).
+		r.at.word = time.Now()
 		switch ev.Kind {
 		case jsapi.Delivered:
 			done, err := r.receive(ctx, ev, p)
@@ -883,8 +1048,74 @@ func (r *tableReplay) pull(ctx context.Context) (bool, error) {
 		// HEARD ONCE THE WORD IS TAKEN, a delivery's end barrier included:
 		// the publish holds the replay from its inbox, and what arrives
 		// meanwhile is no silence of the copy's.
-		heard = time.Now()
+		r.at.word = time.Now()
+		clock = r.listen(stall)
 	}
+}
+
+// quietClock is a pull's silence clock: when the replay last heard its inbox
+// or sent the pull, what its link had carried by then, and when the replay is
+// next judged for what it has not heard since ([tableReplay.judge]).
+type quietClock struct {
+	stall       time.Duration
+	heard       time.Time
+	acked, read uint64
+	until       time.Time
+}
+
+// listen starts a pull's silence clock now, with stall the pull's: judged a
+// stall from now, and across a metered link no later than the time cap since
+// the replay's last word ([Syncer.quietCap]).
+func (r *tableReplay) listen(stall time.Duration) quietClock {
+	now := time.Now()
+	c := quietClock{stall: stall, heard: now, until: now.Add(stall)}
+	if r.s.link != nil {
+		c.acked, c.read = r.s.link.Carried()
+		c.until = earliest(c.until, r.at.word.Add(r.s.quietCap()))
+	}
+	return c
+}
+
+// earliest is the earlier of a and b.
+func earliest(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
+}
+
+// errHeld is a replay that heard nothing for its stall while its link moved:
+// its silence clock runs on, to the next judgment a [quietWait] later
+// ([tableReplay.judge]), its consumer asked about itself meanwhile.
+var errHeld = errors.New("memsync: the replay has heard nothing while its link moves")
+
+// judge decides a pull nothing has been heard of since c.heard, at c.until,
+// with nothing on its inbox ("What silence is"):
+//
+//   - across no metered link, or one that did not move over the pull's
+//     stall, it is SILENCE, and the seat is refused ([tableReplay.silence]);
+//   - across a link that moved, nothing heard since the replay's last word
+//     for [Syncer.quietCap] refuses the seat ([tableReplay.creeping]);
+//   - and past [Syncer.quietBytes] read off the link since c.heard, the
+//     replay is placed again ([placedQuiet]);
+//   - otherwise the replay waits on, and is judged again a [quietWait]
+//     later, or at the time cap where that comes first ([errHeld]): a link
+//     that falls still is refused within a stall and a second of its last
+//     byte, where a judgment a stall later let it run up to two.
+func (r *tableReplay) judge(ctx context.Context, p *replayPull, c *quietClock) error {
+	if r.s.link == nil || !r.s.link.Moving(c.stall) {
+		return r.silence(ctx, p, c)
+	}
+	now := time.Now()
+	if now.Sub(r.at.word) >= r.s.quietCap() {
+		return r.creeping(ctx, c)
+	}
+	if _, read := r.s.link.Carried(); read-c.read >= uint64(r.s.quietBytes()) {
+		return placeAgain{why: placedQuiet, detail: fmt.Sprintf("%d bytes crossed the link to this "+
+			"node in the %v since the replay last heard it", read-c.read, now.Sub(c.heard))}
+	}
+	c.until = earliest(now.Add(quietWait), r.at.word.Add(r.s.quietCap()))
+	return errHeld
 }
 
 // errQuiet is a replay that has heard nothing for [quietWait], with its
@@ -892,15 +1123,14 @@ func (r *tableReplay) pull(ctx context.Context) (bool, error) {
 var errQuiet = errors.New("memsync: the replay has heard nothing for a while")
 
 // next is the next word on the replay's inbox for its pull p: waited for up
-// to [quietWait] and never past until, the end of the pull's silence, and
-// [errQuiet] where the quiet wait passes first. Once until has passed, the
-// word the inbox already holds, if any ([jsapi.Pulls.Ready]): the replay's own
-// requests — its end barrier, a probe of its consumer — hold it from its inbox,
-// and what arrived meanwhile is heard before the pull is called silent
-// ([tableReplay.silence]).
-func (r *tableReplay) next(ctx context.Context, p *replayPull, until time.Time,
-	stall time.Duration) (jsapi.Event, error) {
-
+// to [quietWait] and never past c.until, when the pull's silence clock is
+// next judged, and [errQuiet] where the quiet wait passes first. Once c.until
+// has passed, the word the inbox already holds, if any
+// ([jsapi.Pulls.Ready]): the replay's own requests — its end barrier, a probe
+// of its consumer — hold it from its inbox, and what arrived meanwhile is
+// heard before the pull is judged ([tableReplay.judge]).
+func (r *tableReplay) next(ctx context.Context, p *replayPull, c *quietClock) (jsapi.Event, error) {
+	until := c.until
 	if wait := min(quietWait, time.Until(until)); wait > 0 {
 		waiting, cancel := context.WithTimeout(ctx, wait)
 		ev, err := r.cons.Next(waiting)
@@ -921,7 +1151,7 @@ func (r *tableReplay) next(ctx context.Context, p *replayPull, until time.Time,
 	case err != nil:
 		return ev, r.unread(err)
 	case !ok:
-		return ev, r.silence(ctx, p, stall)
+		return ev, r.judge(ctx, p, c)
 	}
 	return ev, nil
 }
@@ -1101,14 +1331,22 @@ func (r *tableReplay) write(ctx context.Context) error {
 }
 
 // silence refuses the seat for a pull of p's that nothing was heard of for
-// its stall: the rows it received are written first, and said.
-func (r *tableReplay) silence(ctx context.Context, p *replayPull, stall time.Duration) error {
+// its stall, across no link that moved meanwhile: the rows it received are
+// written first, and said, and so is what a metered link carried.
+func (r *tableReplay) silence(ctx context.Context, p *replayPull, c *quietClock) error {
 	if err := r.write(ctx); err != nil {
 		return err
 	}
 	where := "in this node's own process"
 	if r.s.pace > 0 {
 		where = fmt.Sprintf("across this node's link at the floor of %v a MiB", objstore.MiBPace)
+	}
+	if r.s.link != nil {
+		acked, read := r.s.link.Carried()
+		where += fmt.Sprintf(", over which the link carried nothing at the floor (it read %d bytes, and "+
+			"the far end acknowledged %d of what this node wrote, in the %v since the replay last "+
+			"heard its copy or sent its pull)", read-c.read, acked-c.acked,
+			time.Since(c.heard).Round(time.Millisecond))
 	}
 	held := "had not delivered the barrier"
 	if r.at.counted {
@@ -1120,9 +1358,32 @@ func (r *tableReplay) silence(ctx context.Context, p *replayPull, stall time.Dur
 		"to is at sequence %d; %s for the table. The member serving the replay, or the link to "+
 		"it, stopped answering: look at that member and this node's connection to the broker. "+
 		"The seat is taken again at the next placement sweep, from the start of its memory",
-		r.handle, r.spec.name, stall, r.s.js.Options().DefaultTimeout,
+		r.handle, r.spec.name, c.stall, r.s.js.Options().DefaultTimeout,
 		jsapi.Delivering(p.maxBytes, r.s.pace), p.maxBytes, where, r.at.reached, r.carried, held,
 		r.target(), consumersMade(r.at.placements))
+}
+
+// creeping refuses the seat for a replay its copies sent no word to for
+// [Syncer.quietCap] since its last, while its link kept moving below what
+// would place it again ([Syncer.quietBytes]): the rows it received are
+// written first, and said.
+func (r *tableReplay) creeping(ctx context.Context, c *quietClock) error {
+	if err := r.write(ctx); err != nil {
+		return err
+	}
+	_, read := r.s.link.Carried()
+	return fmt.Errorf("memsync: replay %s's %s: no copy said anything to it for %v, what one pull at "+
+		"the transport's bound of %d bytes takes to arrive across this node's link at the floor of %v "+
+		"a MiB, while the link kept moving: it read %d bytes since the replay's last pull went out, "+
+		"short of the %d past which every word behind one message at the transport's bound and the "+
+		"replay's window has crossed. The copies had delivered the table's messages to sequence %d "+
+		"(%d rows carried); the barrier this replay reads to is at sequence %d; %s for the table. "+
+		"The link carries this node's other traffic too slowly for the replay's words to cross, or "+
+		"the member serving the replay stopped answering behind it: look at what else this node "+
+		"sends and receives across its link, and at that member. The seat is taken again at the "+
+		"next placement sweep, from the start of its memory",
+		r.handle, r.spec.name, r.s.quietCap(), r.s.pullBytes(), objstore.MiBPace, read-c.read,
+		r.s.quietBytes(), r.at.reached, r.carried, r.target(), consumersMade(r.at.placements))
 }
 
 // behind refuses the seat for a replay its copies delivered nothing to for

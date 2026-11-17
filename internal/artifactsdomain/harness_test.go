@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/objstore"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
@@ -55,6 +56,13 @@ type node struct {
 	mu       sync.Mutex
 	consumed uint64
 	moved    []artifactsdomain.Moved
+	inboxed  []inbox.Movement
+
+	// applyNow and epoch are the batch instant and configuration every apply
+	// is handed: the record's own broker instant and none unless a case sets
+	// them.
+	applyNow time.Time
+	epoch    map[string]any
 }
 
 // seatKinds is the chart every harness resolves a transfer's new owner
@@ -189,7 +197,7 @@ func newNode(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle, nodeID 
 		reader: reader, waiter: waiter, verifier: verifier}
 	n.applier = artifactsdomain.NewApplier(nodeID, func(moved []artifactsdomain.Moved) {
 		n.moved = append(n.moved, moved...)
-	})
+	}, func(moved []inbox.Movement) { n.inboxed = append(n.inboxed, moved...) })
 	waiter.advance = n.drain
 	return n
 }
@@ -244,8 +252,12 @@ func (n *node) applyBody(spec statelog.StreamSpec, seq uint64, body []byte, stor
 			return err
 		}
 		if !gated {
+			now := storedAt
+			if !n.applyNow.IsZero() {
+				now = n.applyNow
+			}
 			if _, err := n.applier.Apply(n.t.Context(), tx, record, statelog.ApplyOptions{
-				Now: monday, StoredAt: storedAt, MaxVariables: 999,
+				Now: now, StoredAt: storedAt, MaxVariables: 999, Epoch: n.epoch,
 			}); err != nil {
 				return err
 			}

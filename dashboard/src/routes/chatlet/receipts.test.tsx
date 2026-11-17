@@ -1,5 +1,5 @@
 /**
- * Whom a person's message reached and who answered, under its words: the
+ * Whom a person's message reached and who answered, after its words: the
  * engine's own routing as it kept it, worded here and drawn with uilet's
  * `DeliveryReceipt`.
  */
@@ -67,6 +67,22 @@ describe("the words", () => {
     ]);
   });
 
+  test("say when each seat answered, in the caller's clock", () => {
+    const got = reachRecipients(
+      {
+        recipients: [
+          { handle: "pm", reason: "answerer" },
+          { handle: "qa", reason: "mention" },
+        ],
+      },
+      [{ handle: "pm", message_id: "m-2", at: "2026-01-01T00:01:00Z" }],
+      (handle) => handle,
+      (at) => `at ${at.slice(11, 16)}`,
+    );
+    expect(got[0]).toMatchObject({ answered: true, answeredAt: "at 00:01" });
+    expect(got[1]).not.toHaveProperty("answeredAt");
+  });
+
   // "REACHED NO AGENT" ONLY WHERE THE WORDS ASKED ONE. Mutation: show it for
   // every empty reach in a named room and a room of people warns under every
   // line.
@@ -126,7 +142,7 @@ describe("the words", () => {
   });
 });
 
-describe("under a person's message", () => {
+describe("on a person's message", () => {
   function mount(view: Record<string, unknown>) {
     const answers: Partial<Record<QueryName, unknown>> = {
       chat_channel: { ...served, channel, revision: 3, message_seq: 1, member: true, members: [] },
@@ -139,8 +155,8 @@ describe("under a person's message", () => {
     );
   }
 
-  // ONE SENTENCE THAT NAMES THE SEAT ONCE: "Reached pm, who answered", never
-  // "Reached pm · pm answered" with a screen reader's full stop beside the dot.
+  // A MARK, NOT A SENTENCE: the facts are the receipt's name and its tooltip,
+  // and nothing of them is printed under the message. Mutation: print it.
   test("says whom it reached and that it answered, naming it once", async () => {
     mount({
       message: said({ reach: { recipients: [{ handle: "pm", reason: "answerer" }] } }),
@@ -149,10 +165,11 @@ describe("under a person's message", () => {
       answered: [{ handle: "pm", message_id: "m-2", at: "2026-01-01T00:01:00Z" }],
       delivery: "answered",
     });
-    const receipt = await screen.findByText("Reached pm, who answered");
-    expect(receipt.closest(".crewlet-delivery-receipt")!.textContent).toBe(
-      "Reached pm, who answered",
+    const receipt = await screen.findByRole("button", { name: /^Reached pm, who answered\. / });
+    expect(receipt.getAttribute("aria-label")).toMatch(
+      /^Reached pm, who answered\. Answered pm, \S+\. Sent \S+$/,
     );
+    expect(receipt.closest(".crewlet-delivery-receipt")!.textContent).toBe("");
   });
 
   test("names who answered and who it still waits on, each once", async () => {
@@ -170,7 +187,9 @@ describe("under a person's message", () => {
       answered: [{ handle: "qa", message_id: "m-2", at: "2026-01-01T00:01:00Z" }],
       delivery: "partly_answered",
     });
-    expect(await screen.findByText("qa answered, waiting on pm")).toBeTruthy();
+    expect(
+      await screen.findByRole("button", { name: /^qa answered, waiting on pm\./ }),
+    ).toBeTruthy();
   });
 
   // A MESSAGE STORED BEFORE MESSAGES RECORDED THEIR REACH says nothing, rather
@@ -194,7 +213,7 @@ describe("under a person's message", () => {
       position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 1 },
       delivery: "no_agent",
     });
-    expect(await screen.findByText("Reached no agent")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /^Reached no agent\./ })).toBeTruthy();
   });
 
   test("draws nothing under a post in a room no agent answers", async () => {

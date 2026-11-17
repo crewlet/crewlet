@@ -4,10 +4,9 @@
  * person's day — each one listing the engine answers for a filter the screen
  * fixes, drawn as Gitlet › Changes draws its rows.
  *
- * ONE GRID FOR EVERY LISTING OF CHANGES. Gitlet › Changes' own grid
- * (`ChangesGrid`), never a second rendering of a change: a change read on a
- * seat's page and on the Changes listing says the same reference, readiness,
- * owner and blockers, and opens the same peek.
+ * ONE ROW FOR EVERY LISTING OF CHANGES: Gitlet's (`ChangeRows`), asked with its
+ * card, never a second rendering of a change, so a change reads the same and
+ * opens the same peek wherever it is listed.
  *
  * THE FILTER IS THE SCREEN'S, AND FIXED. The screen that mounts a listing
  * decides what it IS — this work item's changes, this owner's — so there is no
@@ -16,7 +15,7 @@
  * all is that listing, narrowed the same way, where the reader can widen it.
  */
 
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import {
   EmptyValue,
   Skeleton,
@@ -41,7 +40,7 @@ import type {
   CodeReviewRow,
   CodeReviewsAnswer,
 } from "~/protocol/index.ts";
-import { ChangesGrid } from "./Changes.tsx";
+import { ChangeRows, type ChangeFact } from "./ChangeRow.tsx";
 import { changesHref } from "./paths.ts";
 
 /**
@@ -66,59 +65,85 @@ export interface ListEmpty {
 }
 
 /**
- * The changes one `code_changes` question lists — the parameters are the
- * screen's, fixed — paged, in the engine's order, each row opening its change
- * in the peek.
+ * The changes one `code_changes` question lists (the parameters are the
+ * screen's, fixed), with their cards, paged, in the engine's order, each row
+ * opening its change in the peek.
  */
 export function ChangeList({
   params,
   empty,
   enabled = true,
   label,
+  name = "Changes",
+  omit,
+  density,
+  limit,
+  neighbours,
+  onRows,
 }: {
   params: CodeParams;
   empty: ListEmpty;
   enabled?: boolean;
-  /** A line above the grid saying what it lists, where the screen has none. */
+  /** A line above the list saying what it lists, where the screen has none. */
   label?: ReactNode;
+  /** What the list is called to assistive technology. */
+  name?: string;
+  /** A fact the host fixes, left out of every row. */
+  omit?: readonly ChangeFact[];
+  density?: "default" | "compact";
+  /** Each page's rows, where the host draws a few. */
+  limit?: number;
+  /** False where the host publishes one peek order across its lists (`onRows`). */
+  neighbours?: boolean;
+  onRows?: (rows: readonly CodeChangeSummary[]) => void;
 }) {
   // ASKED ONCE THE COMPANY IS KNOWN TO HOST CODE (`useServicesAsk`): a
   // screen drawn on a cold load before the org projection lands asks nothing
   // the engine may refuse as a question it does not answer.
   const ask = useServicesAsk();
-  const first = useCodeQuery("code_changes", params, {
+  const asked: CodeParams = { ...params, cards: true, ...(limit ? { limit } : {}) };
+  const first = useCodeQuery("code_changes", asked, {
     enabled: enabled && ask.code,
     pollMs: CODE_LIST_POLL_MS,
+    fill: limit ?? 1,
   });
   const paged = usePaged(
     first,
-    params,
-    (cursor) => codeRest.query("code_changes", { ...params, cursor }),
+    asked,
+    (cursor) => codeRest.query("code_changes", { ...asked, cursor }),
     changesOf,
     changeIdOf,
     nextOf,
   );
   const rows = paged.items;
+  useEffect(() => onRows?.(rows), [onRows, rows]);
   return (
     <div className="col gap-2">
       {label}
-      {paged.loading && rows.length === 0 && (
-        <Skeleton variant="text" rows={4} label="Loading changes" />
-      )}
-      <QueryState
-        error={paged.error}
-        refusal={paged.refusal}
-        detail={first.detail}
-        loading={paged.loading}
-        empty={rows.length > 0 || paged.more ? undefined : empty}
-      >
-        <ChangesGrid
-          rows={rows}
-          onLoadMore={paged.more ? paged.next : undefined}
-          loadedNote={loadedNote(paged.more, rows.length, "change")}
-        />
-      </QueryState>
-      {paged.pageError && <PageFailed error={paged.pageError} />}
+      <ChangeRows
+        rows={rows}
+        label={name}
+        omit={omit}
+        density={density}
+        neighbours={neighbours}
+        paged={paged}
+        moreLabel="Load more changes"
+        foot={loadedNote(paged.more, rows.length, "change")}
+        placeholder={
+          rows.length > 0 ? undefined : (
+            <>
+              {paged.loading && <Skeleton variant="text" rows={4} label="Loading changes" />}
+              <QueryState
+                error={paged.error}
+                refusal={paged.refusal}
+                detail={first.detail}
+                loading={paged.loading}
+                empty={paged.more ? undefined : empty}
+              />
+            </>
+          )
+        }
+      />
     </div>
   );
 }

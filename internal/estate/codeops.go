@@ -295,7 +295,9 @@ var opCodeConversation = define("code.conversation", opIdempotentWrite, codeDoma
 // asker to the handle by the principal alone (a person whose seat is the
 // handle), so a node behind the company's configuration decides a mark as a
 // current one would, and refusing it there would only send a person's
-// gesture round the walk for nothing.
+// gesture round the walk for nothing. The same op carries a person's gesture
+// over the files of one change they read (gitlet.MarkWrite.Files), on the
+// same terms.
 var opCodeMark = define("code.mark", opIdempotentWrite, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, w gitlet.MarkWrite) (gitlet.MarkResult, error) {
 		if b.Code == nil {
@@ -444,11 +446,12 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 // target's landings above its green and a repository's green rows, each held to
 // the grant on its repository; and a repository's push mirror with the green
 // rows it publishes, read in one snapshot by the home that pushes it
-// (mirror_push). A seat's read on a node that holds no chart is that node's
-// gitlet.ErrNotServing — it ran nothing — so the walk asks the next. The queue
-// work a repository's home owes is no kind of it: its home carries what it
-// reads on, so it is read whole or refused, by an operation of its own
-// ([opCodeQueueDue]).
+// (mirror_push); and a scope's changes counted by state (counts), the company's
+// or one repository's, held to the grant alike. A seat's read on a node that
+// holds no chart is that node's gitlet.ErrNotServing (it ran nothing), so the
+// walk asks the next. The queue work a repository's home owes is no kind of it:
+// its home carries what it reads on, so it is read whole or refused, by an
+// operation of its own ([opCodeQueueDue]).
 //
 // A SEAT'S READ JUDGES ITS GRANT from the serving node's chart (which
 // repositories it lists, and whether it reads one: gitlet.JudgeRead) — and the

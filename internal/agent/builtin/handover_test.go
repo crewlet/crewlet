@@ -23,6 +23,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/commentanchor"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/codesearch"
@@ -75,6 +77,7 @@ var handsOverWords = map[string]string{
 	builtin.GetPageTool:              "TestEveryUntrustedReadIsFenced/get_page",
 	builtin.GetWorkItemTool:          "TestEveryUntrustedReadIsFenced/get_work_item",
 	builtin.ListArtifactsTool:        "TestEveryArtifactToolResultIsFenced/list_artifacts",
+	builtin.ListArtifactCommentsTool: "TestAThreadsWordsReachAModelFenced",
 	builtin.ListChannelsTool:         "TestEveryUntrustedReadIsFenced/list_channels",
 	builtin.ListPagesTool:            "TestEveryUntrustedReadIsFenced/list_pages",
 	builtin.ListSessionsTool:         "TestEveryUntrustedReadIsFenced/list_sessions",
@@ -394,6 +397,8 @@ func newSweepRig(t *testing.T) *sweepRig {
 	poison(t, reflect.ValueOf(&held).Elem(), words)
 	arts.heads[h.ID] = held
 	arts.mu.Unlock()
+	// A THREAD ON IT, its quote and its remark the sweep's words.
+	thread := arts.comment(h.ID, commentanchor.Whole(), words, remark("founder", iam.ActorHuman, words))
 	// A FOLDER EVERYBODY MAY FILE IN, so filing and making a subfolder reach
 	// their answers.
 	arts.folder("f-marketing", "", "Marketing", "founder", iam.ActorHuman, companyShare)
@@ -424,7 +429,9 @@ func newSweepRig(t *testing.T) *sweepRig {
 	host := sweepGitletHost(t, words)
 	codeWire := writeDeps(host, sweepCodeWrites(words))
 	codeWire.Searcher = &codeSearches{answer: func(int, codesearch.Query) (codesearch.Answer, error) {
-		return codesearch.Answer{Hits: []codesearch.Hit{searchHit(host.detail.Name, "a.txt", 1, words)}}, nil
+		hit := searchHit(host.detail.Name, "a.txt", 2, words)
+		hit.Before, hit.After = []string{words}, []string{words}
+		return codesearch.Answer{Hits: []codesearch.Hit{hit}}, nil
 	}}
 	codeWire.Logs = &checkLogs{text: words}
 	codeWire.Placement = purgePlacement{}
@@ -506,6 +513,7 @@ func newSweepRig(t *testing.T) *sweepRig {
 	}
 
 	args := sweepArgs(h.ID.String())
+	maps.Copy(args, commentSweepArgs(h.ID.String(), thread))
 	args[builtin.ReadSessionTool] = map[string]any{"turn_id": sweepSessionTurn}
 	maps.Copy(args, everyWriteCall)
 	maps.Copy(args, codeSweepArgs())
@@ -547,6 +555,18 @@ func (r *sweepRig) call(t *testing.T, c sweepCall) (tools.Result, error) {
 	return entry.Tool.Call(ctx, c.args)
 }
 
+// commentSweepArgs are the comment tools' calls, on the sweep's thread.
+func commentSweepArgs(artifact string, th artifactsdomain.CommentThread) map[string]map[string]any {
+	ref := map[string]any{"artifact": artifact, "thread": th.ID.String(), "remark": th.Remarks[0].ID.String()}
+	return map[string]map[string]any{
+		builtin.ListArtifactCommentsTool:   {"artifact": artifact, "status": "all"},
+		builtin.CommentOnArtifactTool:      {"artifact": artifact, "body": "plain", "asks": false},
+		builtin.ResolveArtifactCommentTool: {"artifact": artifact, "thread": th.ID.String(), "version": 2},
+		builtin.EditArtifactCommentTool:    {"artifact": ref["artifact"], "thread": ref["thread"], "remark": ref["remark"], "body": "plain"},
+		builtin.RemoveArtifactCommentTool:  ref,
+	}
+}
+
 // sweepArgs is what each tool the write table does not cover is called with:
 // plain words, so whatever an answer carries of the sweep's came from a store.
 func sweepArgs(artifact string) map[string]map[string]any {
@@ -555,6 +575,7 @@ func sweepArgs(artifact string) map[string]map[string]any {
 		builtin.AnswerKnowledgeTool:      {"q": "how do we deploy"},
 		builtin.AnswerExecutorTool:       {"turn_id": "turn-1", "launch_id": "launch-turn-1", "answer": "yes"},
 		builtin.ArtifactFormatTool:       {"kind": "doc"},
+		builtin.ArtifactMarkInboxTool:    {"read": []any{"r-1"}},
 		builtin.AtlasGetTool:             {"name": "crewlet.acme.example"},
 		builtin.AtlasTraceTool:           {"name": "crewlet.acme.example", "direction": "down"},
 		builtin.CreateArtifactTool:       {"kind": "html", "title": "Plain title", "content": "<p>plain</p>"},
@@ -626,6 +647,8 @@ func codeSweepArgs() map[string]map[string]any {
 		"name": "lint", "status": "failed", "summary": "2 lint errors", "url": "https://ci.example.com/runs/1"}
 	out[builtin.CodePurgeUnreachableTool] = map[string]any{"repo": repo}
 	out[builtin.CodeMarkInboxTool] = map[string]any{"read": []any{"r-1"}}
+	out[builtin.CodeMarkViewedTool] = map[string]any{"repo": repo, "change": "7",
+		"viewed": []any{map[string]any{"path": "a.txt", "blob_oid": mainOID, "mode": "100644"}}}
 	out[builtin.CodeRepoReadersTool] = map[string]any{"repo": repo}
 	out[builtin.FleetHealthTool] = map[string]any{}
 	out[builtin.CodeStatusTool] = map[string]any{}

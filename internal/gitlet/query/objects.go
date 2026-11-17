@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/gitlet"
@@ -68,7 +67,8 @@ type found struct {
 	// placed is, for a re-anchoring, the object at each anchor's path in the
 	// commit its side names, in the query's order — absent where the path
 	// names nothing there, which places the anchor nowhere (gone) rather than
-	// refusing the read.
+	// refusing the read. For an excerpts read it is each anchor's other side
+	// (excerptOthersAt), absent where there is none.
 	placed []object
 }
 
@@ -101,6 +101,8 @@ func revsOf(q gitlet.GitQuery) []string {
 		revs = []string{q.Log.Rev}
 	case gitlet.GitBlame:
 		revs = []string{q.Blame.Rev}
+	case gitlet.GitTreeCommits:
+		revs = []string{q.TreeCommits.Rev}
 	case gitlet.GitChecksFile:
 		revs = []string{q.ChecksFile.Commit}
 	case gitlet.GitCodeFiles:
@@ -115,6 +117,14 @@ func revsOf(q gitlet.GitQuery) []string {
 		for _, a := range q.Reanchor.Anchors {
 			if !slices.Contains(revs, a.BlobOID) {
 				revs = append(revs, a.BlobOID)
+			}
+		}
+	case gitlet.GitExcerpts:
+		for _, a := range q.Excerpts.Anchors {
+			for _, id := range []string{a.Head, a.Base, a.BlobOID} {
+				if id != "" && !slices.Contains(revs, id) {
+					revs = append(revs, id)
+				}
 			}
 		}
 	}
@@ -137,9 +147,30 @@ func placedAt(q *gitlet.ReanchorQuery, whole map[string]string) []string {
 	return lines
 }
 
-// pathOf is the path a tree, a file or a blame read names, decoded (validated
-// already, by gitlet.GitQuery.Validate) — the object the batch looks up at the
-// read's revision. A log's path is no such object: a history names the
+// excerptOthersAt is, for an excerpts read, the batch's line of each anchor's other side: the
+// object at its path in the base for a new-side anchor, in the head for an old-side one. of
+// is each anchor's line, -1 for a new-side anchor with no base.
+func excerptOthersAt(q *gitlet.ExcerptsQuery, whole map[string]string) (lines []string, of []int) {
+	of = make([]int, len(q.Anchors))
+	for i, a := range q.Anchors {
+		at := whole[a.Base]
+		if a.Side == gitlet.SideOld {
+			at = whole[a.Head]
+		}
+		of[i] = -1
+		if a.Base == "" {
+			continue
+		}
+		p, _ := gitlet.GitPath("path", a.Path, a.PathB64, false)
+		of[i] = len(lines)
+		lines = append(lines, at+":"+p)
+	}
+	return lines, of
+}
+
+// pathOf is the path a tree, a file, a blame or a directory's last commits'
+// read names, decoded (validated already, by gitlet.GitQuery.Validate): the
+// object the batch looks up at the read's revision. A log's path is no such object: a history names the
 // commits that changed a path, which its revision need not hold.
 func pathOf(q gitlet.GitQuery) string {
 	var p string
@@ -150,6 +181,8 @@ func pathOf(q gitlet.GitQuery) string {
 		p, _ = gitlet.GitPath("blob.path", q.Blob.Path, q.Blob.PathB64, true)
 	case gitlet.GitBlame:
 		p, _ = gitlet.GitPath("blame.path", q.Blame.Path, q.Blame.PathB64, false)
+	case gitlet.GitTreeCommits:
+		p, _ = gitlet.GitPath("tree_commits.path", q.TreeCommits.Path, q.TreeCommits.PathB64, true)
 	case gitlet.GitChecksFile:
 		p = gitlet.ChecksFilePath
 	case gitlet.GitCodeFiles:
@@ -159,14 +192,15 @@ func pathOf(q gitlet.GitQuery) string {
 }
 
 // lookedUp reports whether a read of q's kind looks its path up in the batch:
-// a tree's, a file's, a blame's and a checks file's, the one deploy or
-// dependency file a code files read names (its listing names none), and a
-// find's root tree, which its path, none, names (`<id>^{tree}`): the tree
-// whose listing it reads by that tree's own id.
+// a tree's, a file's, a blame's, a directory's last commits' (the tree they
+// list) and a checks file's, the one deploy or dependency file a code files
+// read names (its listing names none), and a find's root tree, which its path,
+// none, names (`<id>^{tree}`): the tree whose listing it reads by that tree's
+// own id.
 func lookedUp(q gitlet.GitQuery) bool {
 	return q.Kind == gitlet.GitTree || q.Kind == gitlet.GitBlob || q.Kind == gitlet.GitBlame ||
-		q.Kind == gitlet.GitChecksFile || (q.Kind == gitlet.GitCodeFiles && q.CodeFiles.File != "") ||
-		q.Kind == gitlet.GitFind
+		q.Kind == gitlet.GitTreeCommits || q.Kind == gitlet.GitChecksFile ||
+		(q.Kind == gitlet.GitCodeFiles && q.CodeFiles.File != "") || q.Kind == gitlet.GitFind
 }
 
 // find is step 7: what every revision and the path name, or the first
@@ -215,8 +249,14 @@ func (r *read) find(ctx context.Context) (objs found, absent string, err error) 
 		}
 	}
 	placedLine := len(in)
-	if r.q.Kind == gitlet.GitReanchor {
+	var others []int
+	switch r.q.Kind {
+	case gitlet.GitReanchor:
 		in = append(in, placedAt(r.q.Reanchor, whole)...)
+	case gitlet.GitExcerpts:
+		var lines []string
+		lines, others = excerptOthersAt(r.q.Excerpts, whole)
+		in = append(in, lines...)
 	}
 	got, err := r.check(ctx, in)
 	if err != nil {
@@ -237,8 +277,16 @@ func (r *read) find(ctx context.Context) (objs found, absent string, err error) 
 	if pathLine >= 0 {
 		objs.target = got[pathLine]
 	}
-	if r.q.Kind == gitlet.GitReanchor {
+	switch r.q.Kind {
+	case gitlet.GitReanchor:
 		objs.placed = got[placedLine:]
+	case gitlet.GitExcerpts:
+		objs.placed = make([]object, len(others))
+		for i, at := range others {
+			if at >= 0 {
+				objs.placed[i] = got[placedLine+at]
+			}
+		}
 	}
 	return objs, "", nil
 }
@@ -321,11 +369,11 @@ func (r *read) check(ctx context.Context, in []string) ([]object, error) {
 			out = append(out, object{})
 			return nil
 		}
-		o, ok := parseCheck(rec)
+		o, ok := gitproc.ParseCheck(rec)
 		if long || !ok {
 			return fmt.Errorf("query: cat-file answered %q for %q, which is no object", rec, in[i])
 		}
-		out = append(out, o)
+		out = append(out, object{id: o.ID, kind: o.Type, size: o.Size})
 		return nil
 	})
 	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
@@ -343,21 +391,4 @@ func (r *read) check(ctx context.Context, in []string) ([]object, error) {
 		return nil, fmt.Errorf("query: cat-file answered %d records for %d lines", len(out), len(in))
 	}
 	return out, nil
-}
-
-// parseCheck reads one --batch-check record: "<id> <type> <size>".
-func parseCheck(rec []byte) (object, bool) {
-	fields := strings.Fields(string(rec))
-	if len(fields) != 3 || !gitref.ValidOID(fields[0]) {
-		return object{}, false
-	}
-	size, err := strconv.ParseInt(fields[2], 10, 64)
-	if err != nil || size < 0 {
-		return object{}, false
-	}
-	switch fields[1] {
-	case "commit", "tree", "blob", "tag":
-		return object{id: fields[0], kind: fields[1], size: size}, true
-	}
-	return object{}, false
 }

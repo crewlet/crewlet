@@ -76,7 +76,7 @@ import (
 //     of which [threadLine.Message] keeps, more call ids than the model of
 //     Claude Code's resume files ([threadChainMaxCalls]), so its reading is
 //     no reading, reported as its read metric 0; and one of the smallest
-//     blocks of a kind no reader names, each of which it keeps a kind of;
+//     blocks of a kind no reader names, which it counts and keeps nothing of;
 //   - two shapes of ids the call-id rule refuses, each of which a reading
 //     held live before it kept no such id: 96 Agent calls each under an id of
 //     a mebibyte, and [holdingsMaxAgents] metadata each naming its call by an

@@ -51,16 +51,20 @@ func BoxCredentialWarnings(c *config.Company) []config.Warning {
 			if !signsIn {
 				continue
 			}
-			out = append(out, config.SeatAdvisory(append(slices.Clone(path), "integrations"), handle, fmt.Sprintf(
+			w := config.BoxSignInAdvice.On(config.SeatAdvisory(append(slices.Clone(path), "integrations"), handle, fmt.Sprintf(
 				"%s is how providers.llm.%s, which runs this agent's executor, signs in to its model, so "+
 					"Crewlet does not put the agent's own %s credential there and its box has no %s. Give "+
 					"this agent the %s MCP server, or run its executor on an entry that does not sign in by %s",
 				name, key, env[name], name, env[name], name)))
+			w.Item = name
+			out = append(out, w)
 		}
 		ignored := func(here config.Path, what, kind string) {
-			out = append(out, config.SeatAdvisory(here, handle, fmt.Sprintf(
+			w := config.BoxLineIgnoredAdvice.On(config.SeatAdvisory(here, handle, fmt.Sprintf(
 				"%s is on at %s, so Crewlet sets %s in its box to the agent's own credential, and this "+
 					"line is ignored there: remove it", handle, kind, what)))
+			w.Item = what
+			out = append(out, w)
 		}
 		if box := role.Sandbox; box != nil {
 			for _, key := range slices.Sorted(maps.Keys(box.Env)) {
@@ -90,10 +94,12 @@ func BoxCredentialWarnings(c *config.Company) []config.Warning {
 	}
 	for _, id := range slices.Sorted(maps.Keys(common)) {
 		s := common[id]
-		out = append(out, config.SeatAdvisory(s.path, s.seats[0], fmt.Sprintf(
+		w := config.BoxSharedLineIgnoredAdvice.On(config.SeatAdvisory(s.path, s.seats[0], fmt.Sprintf(
 			"Crewlet sets %s in the box of %s to each agent's own credential, so this line is ignored "+
 				"for %s: keep it for the seats that are not on at that integration, or remove it",
 			s.what, asWritten(s.seats), plural(s.seats, "that seat", "those seats"))))
+		w.Item = s.what
+		out = append(out, w)
 	}
 	return out
 }

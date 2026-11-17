@@ -521,8 +521,14 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// means one thing in both places, signed in by the login or the key of
 	// the provider it names. A launch passes over every other harness's entry,
 	// so none reaches here.
+	// THE EFFORT RIDES THE MODEL as its variant, `provider/model#variant`: OpenCode
+	// 2 has no flag for it.
 	if req.Model != "" {
-		run = append(run, "--model", sandbox.ShellQuote(req.Model))
+		model := req.Model
+		if req.Effort != "" {
+			model += "#" + req.Effort
+		}
+		run = append(run, "--model", sandbox.ShellQuote(model))
 	}
 
 	var b strings.Builder

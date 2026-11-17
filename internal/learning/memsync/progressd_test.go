@@ -277,7 +277,9 @@ func TestTheHydrationLinesSayWhatItTook(t *testing.T) {
 // the quiet wait; the behind bound the object store's stall; and on either
 // topology a replay's consumer kept by the broker past the last bytes
 // of a pull at the transport's bound and an end barrier asked to its ceiling
-// behind them, the longest a live replay goes between two pulls.
+// behind them, the longest a live replay goes between two pulls; across a
+// metered link, that end barrier held past its ceiling while the link moves,
+// and past the longest a replay waits for a word.
 func TestTheReplaysKnobsHoldTheirReasons(t *testing.T) {
 	t.Parallel()
 	agentID := func(string) string { return seat.AgentID }
@@ -290,6 +292,26 @@ func TestTheReplaysKnobsHoldTheirReasons(t *testing.T) {
 			t.Errorf("a replay's consumer is reaped %v after its last word, before the %v a live "+
 				"replay may take to ask its next pull (pace %v)", reap, between, s.pace)
 		}
+	}
+	// ACROSS A METERED LINK, every hold capped by one message at the
+	// transport's bound crossing at the floor — the figure the docs state —
+	// and the reap outlasting the longest a replay waits for a word as well
+	// as an end barrier held to its cap.
+	linked, _ := meteredSyncer(t, openStore(t), newFakeCopies(newFakeChangelog()),
+		fakeLink{moving: func() bool { return false }, read: func() uint64 { return 0 }})
+	if held := linked.heldBehind(); held != jsapi.Delivering(linked.pullBytes(), linked.pace) ||
+		held.Round(time.Second) != 248*time.Second {
+		t.Errorf("a reply across a metered link is held %v past its ceiling at most, want what one "+
+			"message at the transport's bound takes to cross at the floor, 248 s", held)
+	}
+	n := linked.pullBytes()
+	barrier := linked.waits(linked.endBarrierArrival(n))
+	reap := linked.reapAfter()
+	if reap <= linked.quietCap() || reap < barrier.Longest(barrier.Lookup)+jsapi.Delivering(n, linked.pace) ||
+		reap.Round(time.Second) != 774*time.Second {
+		t.Errorf("a replay's consumer across a metered link is reaped %v after its last word, want "+
+			"past the %v a replay waits for a word and the %v an end barrier is held, 774 s", reap,
+			linked.quietCap(), barrier.Longest(barrier.Lookup))
 	}
 	if 2*pullHeartbeat > pullExpiry {
 		t.Errorf("a pull's heartbeat of %v is more than half its expiry of %v", pullHeartbeat, pullExpiry)

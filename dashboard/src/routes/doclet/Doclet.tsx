@@ -5,9 +5,9 @@
  *
  * The approved Doclet layout leads with the spaces in one row at the top
  * (`SpacesRow`), then TILES SIZED BY WHAT EACH IS WORTH, on one screen: the
- * newest change across the company in the big tile, open to read (the page,
- * what each save said, the lines the newest save changed and the page's
- * opening); every other page saved, commented on or written lately down the
+ * newest change across the company in the big tile, said first (the page, its
+ * note, who, when and how much) and then read as the page reads, with the
+ * page's earlier saves; every other page saved, commented on or written lately down the
  * right, one row each (Recent activity); and four small tiles, for the pages a person read last (Continue
  * reading), starred (Pinned) and follows (Watching), and the agents' own two
  * places. The search sits in the page bar of this screen and a space's
@@ -39,21 +39,23 @@ import {
   ButtonLink,
   Callout,
   Card,
+  Disclosure,
   Document,
   DocumentTitle,
   EmptyState,
   FilterPill,
   Highlight,
+  highlightTerms,
+  InlineCode,
   KeyChip,
+  Link,
   List,
   ListItem,
   Menu,
+  NoticeList,
   SegmentedControl,
   Skeleton,
   Text,
-  highlightTerms,
-  InlineCode,
-  firstChangedLines,
 } from "@crewlethq/ui";
 import {
   ArrowUpRightGlyph,
@@ -81,13 +83,20 @@ import { CONTAINER_KEY_MAX, CONTAINER_KEY_PATTERN } from "~/contract/config.ts";
 import { SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 import { useOwnStar } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { DiffView } from "~/components/DiffView.tsx";
+import { ProseDiff } from "~/components/ProseDiff.tsx";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import { useNow } from "~/lib/clock.ts";
-import { fmtDateCompact, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
-import { compareLines, notComparedReason } from "~/lib/lineDiff.ts";
+import { fmtDateCompact, fmtDateTime, openSentence, plural, relTime, tsKey } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { plainText } from "~/lib/markdownText.ts";
+import {
+  compareProse,
+  documentWords,
+  placesOf,
+  previewOf,
+  proseUncomparedReason,
+  type ProseComparison,
+} from "~/lib/proseDiff.ts";
 import { useRecents } from "~/lib/recents.ts";
 import {
   SEARCH_MODES,
@@ -107,13 +116,14 @@ import type {
   KnowledgeAnswer,
   KnowledgeHit,
   LogRefusal,
-  PageChange,
   PageDetail,
+  PageRevision,
   PageStatus,
   QueryRefusal,
 } from "~/protocol/index.ts";
 import {
   changeAuthor,
+  changeWords,
   Face,
   DocletBar,
   NewPageButton,
@@ -129,6 +139,7 @@ import {
 } from "./parts.tsx";
 import {
   byDay,
+  changeSize,
   dayOf,
   foldRuns,
   leadOf,
@@ -138,6 +149,7 @@ import {
   type Run,
 } from "./landing.ts";
 import { openingOf, withoutRepeatedTitle } from "./page/body.ts";
+import { ago } from "~/lib/ago.ts";
 
 /** How often the landing's tiles are read again. */
 const LANDING_POLL_MS = 60_000;
@@ -166,13 +178,20 @@ const WRITTEN_READ = 40;
 const TILE_ROWS = 3;
 
 /**
- * How much of the newest change the big tile draws: the notes of its saves,
- * the lines its newest save changed, and the page's first lines. Each is a
- * preview with the rest one press away (the page, and the save in its
- * History), so the tile stays on the screen beside the others.
+ * A change shown open: three changed blocks and sixty words read at a glance.
+ * A longer one is folded behind "Show the change", so the tile still says
+ * which page, who and how much before it says everything.
  */
-const LATEST_NOTES = 3;
-const LATEST_DIFF_LINES = 6;
+const OPEN_BLOCKS = 3;
+const OPEN_WORDS = 60;
+
+/** Changed blocks a change shows before it points at the whole save in History. */
+const LATEST_CHANGES = 8;
+
+/** Earlier saves listed under the newest change: the rest are the page's History. */
+const EARLIER_SAVES = 3;
+
+/** A new page's first lines, which are its change. */
 const LATEST_OPENING_LINES = 8;
 
 /** The kinds the landing's changes are about: writing, not housekeeping. */
@@ -348,12 +367,13 @@ function Tiles() {
 }
 
 /**
- * THE NEWEST CHANGE, OPEN TO READ: the page, who changed it and when, what
- * each save said, the lines the newest save changed and the page's opening.
+ * THE NEWEST CHANGE, answering "what changed on our pages lately, and does it
+ * matter to me": which page, the writer's note, who and when, how much
+ * changed, then the change itself as the page reads, and the page's earlier
+ * saves in the same form.
  *
- * ONE PAGE READ, of this page alone, and the revision before the save for its
- * diff. Every other tile names pages; this is the one that reads what a page
- * says.
+ * ONE PAGE READ, of this page alone, and the revisions its saves are compared
+ * between.
  */
 function Latest({ run, state }: { run: Run | undefined; state: FeedState }) {
   const id = run?.[0].page_id ?? "";
@@ -393,158 +413,315 @@ function LatestChange({ run, detail }: { run: Run; detail: PageDetail | null }) 
   const who = usePeople();
   const now = useNow();
   const zone = useOrg()?.timezone;
+  const { spaces } = useSpaces();
   const change = run[0];
+  const id = change.page_id;
+  const title = detail?.page.title ?? change.title ?? "";
+  const container = detail?.page.container ?? change.container ?? "";
+  const space = spaces.find((s) => s.key === container);
+  const history = detail?.history ?? [];
+  const revs = saveRevisions(change, history);
+  const save = useSaveComparison(
+    id,
+    title,
+    revs?.made,
+    revs?.before,
+    revs?.current ? (detail?.page.body ?? "") : undefined,
+  );
+  const created = change.kind === "created" && detail ? (detail.page.body ?? "") : null;
+  // A SAVE'S NOTE OR A COMMENT'S WORDS: a new page's excerpt is its opening,
+  // drawn below, and a rename's is its title.
+  const note = change.kind === "saved" || change.kind === "comment" ? changeNote(change) : "";
   const by = changedBy(change);
+  const size =
+    change.kind === "saved"
+      ? sizeOf(save)
+      : created !== null
+        ? plural(documentWords(withoutRepeatedTitle(created, title)), "word")
+        : "";
+  // THE PAGE'S OTHER SAVES: those before the newest one, or its newest saves
+  // when the lead is a comment or a rename. A new page has none.
+  const madeAt = revs ? history.indexOf(revs.made) : -1;
+  const earlier = change.kind === "created" ? [] : history.slice(madeAt + 1);
   return (
     <>
-      <PageHead
-        id={change.page_id}
-        container={detail?.page.container ?? change.container}
-        folder={detail?.folder}
-        status={detail?.page.status}
-        skill={detail?.skill}
-        onboarding={detail?.onboarding}
-      />
-      <DocumentTitle as="h2">{detail?.page.title ?? change.title}</DocumentTitle>
+      <header className="knowledge-latest-head">
+        <p className="knowledge-latest-where">
+          <span>{space?.name || container}</span>
+          <PageTags
+            status={detail?.page.status}
+            skill={detail?.skill}
+            onboarding={detail?.onboarding}
+          />
+        </p>
+        <DocumentTitle as="h2">
+          <Link variant="plain" size="inherit" href={href(pagePath(id))}>
+            {title}
+          </Link>
+        </DocumentTitle>
+      </header>
+      {note && (
+        <p className="knowledge-latest-note">{change.kind === "comment" ? `“${note}”` : note}</p>
+      )}
       <p className="knowledge-latest-who">
         <Face handle={by} who={who} />
         <span>
-          <b>{changeAuthor(change, who)}</b> {runPhrase(run)}
+          <b>{changeAuthor(change, who)}</b> {changeWords(change.kind).phrase}
         </span>
-        <span className="spacer" />
-        <time dateTime={change.at} title={`${relTime(change.at, now)}, ${fmtDateTime(change.at)}`}>
-          {dayOf(change.at, now, zone)} {clockIn(tsKey(change.at), zone)}
-        </time>
+        <span className="knowledge-latest-facts">
+          <time
+            dateTime={change.at}
+            title={`${relTime(change.at, now)}, ${fmtDateTime(change.at)}`}
+          >
+            {dayOf(change.at, now, zone)} {clockIn(tsKey(change.at), zone)}
+          </time>
+          {size && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span>{size}</span>
+            </>
+          )}
+        </span>
       </p>
-      <LatestNotes run={run} zone={zone} />
-      {detail && <SaveDiff change={change} detail={detail} />}
-      {detail && <Opening detail={detail} />}
-    </>
-  );
-}
-
-/**
- * What each change of the newest row said, newest first, on the clock its day
- * is cut on: a save's note, a comment's words. A new page and a rename have
- * nothing to add here, since the page's own first lines are drawn below.
- */
-function LatestNotes({ run, zone }: { run: Run; zone: string | undefined }) {
-  const kind = run[0].kind;
-  if (kind !== "saved" && kind !== "comment") return null;
-  const shown = run.slice(0, LATEST_NOTES);
-  const more = run.length - shown.length;
-  // A TIME ONLY TELLS SAVES APART: the line above already says when the
-  // newest change was, so one comment or one save carried "Today 23:46" and
-  // then "23:46" again.
-  const timed = run.length > 1;
-  return (
-    <>
-      <ol className="knowledge-latest-notes">
-        {shown.map((change) => {
-          const note = changeNote(change);
-          return (
-            <li key={change.id} className="knowledge-latest-note">
-              {timed && (
-                <time dateTime={change.at} title={fmtDateTime(change.at)}>
-                  {clockIn(tsKey(change.at), zone)}
-                </time>
-              )}
-              {note ? (
-                <span>{kind === "comment" ? `“${note}”` : note}</span>
-              ) : (
-                <span className="knowledge-note">No note</span>
-              )}
-            </li>
-          );
-        })}
-      </ol>
-      {more > 0 && <p className="knowledge-note">{plural(more, "earlier save")} that day</p>}
-    </>
-  );
-}
-
-/**
- * The lines the newest save changed, drawn as the page's History draws them
- * and cut to a preview, with the count of the rest and the way to the whole
- * save. Nothing for a save this node no longer holds the revisions of, or one
- * that left the body as it was.
- *
- * A SAVE THE LINE DIFF DID NOT COMPARE is said to be one, with the way to it,
- * as History says it: a preview of a comparison that was not made would list
- * the page's first lines as removed by a save that never touched them.
- */
-function SaveDiff({ change, detail }: { change: PageChange; detail: PageDetail }) {
-  const id = detail.page.id;
-  const revs = useMemo(() => saveRevisions(change, detail.history ?? []), [change, detail.history]);
-  // THE BODY THE SAVE MADE is the page's own while no later save has landed,
-  // and a read of that revision otherwise.
-  const made = useQuery(
-    "page_revision",
-    { page: id, version: revs?.made.version ?? 0 },
-    { enabled: revs !== null && !revs.current },
-  );
-  const before = useQuery(
-    "page_revision",
-    { page: id, version: revs?.before.version ?? 0 },
-    { enabled: revs !== null },
-  );
-  // AN ANSWER FOR THESE VERSIONS, never the last pair's: a newer save to the
-  // same page moves both, and a read keeps its old answer until the new one
-  // lands, so for a moment the two halves of a diff belonged to two saves.
-  const after = revs?.current
-    ? (detail.page.body ?? "")
-    : made.data?.version === revs?.made.version
-      ? made.data?.body
-      : undefined;
-  const prior = before.data?.version === revs?.before.version ? before.data?.body : undefined;
-  const compared = useMemo(
-    () => (after === undefined || prior === undefined ? null : compareLines(prior, after, 0)),
-    [prior, after],
-  );
-  const preview = useMemo(
-    () =>
-      compared?.kind === "compared"
-        ? firstChangedLines(compared.hunks, LATEST_DIFF_LINES)
-        : { sections: [], more: 0 },
-    [compared],
-  );
-  if (!revs || !compared) return null;
-  const save = (
-    <a className="prose-link" href={href(pagePath(id), { version: String(revs.made.version) })}>
-      this save
-    </a>
-  );
-  if (compared.kind !== "compared") {
-    return (
-      <p className="knowledge-note">
-        The save was not compared line by line: {notComparedReason(compared)}. Open {save} to read
-        it.
-      </p>
-    );
-  }
-  if (preview.sections.length === 0) return null;
-  return (
-    <>
-      <DiffView hunks={preview.sections} aria-label="Latest change" />
-      {preview.more > 0 && (
-        <p className="knowledge-note">
-          {plural(preview.more, "more changed line")} in {save}
-        </p>
+      {change.kind === "saved" && revs && (
+        <SaveChange id={id} version={revs.made.version} save={save} open="auto" />
+      )}
+      {created !== null && <Opening body={created} title={title} />}
+      {earlier.length > 0 && (
+        <EarlierSaves
+          id={id}
+          title={title}
+          history={earlier}
+          current={madeAt < 0 ? (detail?.page.body ?? "") : undefined}
+          heading={revs ? "Earlier saves" : "Recent saves"}
+        />
       )}
     </>
   );
 }
 
-/** The page's opening: what it says before it is opened, its title said once. */
-function Opening({ detail }: { detail: PageDetail }) {
-  const opening = useMemo(
-    () => openingOf(detail.page.body ?? "", detail.page.title, LATEST_OPENING_LINES).trim(),
-    [detail.page.body, detail.page.title],
+/** A save compared with the version before it, or why it is not. */
+type SaveComparison =
+  | { kind: "reading" }
+  /** This node no longer keeps the version before the save. */
+  | { kind: "unknown" }
+  /** The page's first version: everything it says is new. */
+  | { kind: "first"; words: number }
+  | ProseComparison;
+
+/**
+ * The save that made `made` against `before`, by block and word. `current` is
+ * the page's body when `made` is still its newest version, which saves a read.
+ */
+function useSaveComparison(
+  page: string,
+  title: string,
+  made: PageRevision | undefined,
+  before: PageRevision | undefined,
+  current: string | undefined,
+): SaveComparison {
+  const first = made !== undefined && before === undefined && made.version === 1;
+  const madeRead = useQuery(
+    "page_revision",
+    { page, version: made?.version ?? 0 },
+    { enabled: made !== undefined && current === undefined },
   );
+  const beforeRead = useQuery(
+    "page_revision",
+    { page, version: before?.version ?? 0 },
+    { enabled: before !== undefined },
+  );
+  // AN ANSWER FOR THESE VERSIONS, never the last pair's: a newer save moves
+  // both, and a read keeps its old answer until the new one lands.
+  const after =
+    current ?? (madeRead.data?.version === made?.version ? madeRead.data?.body : undefined);
+  const prior = first
+    ? ""
+    : beforeRead.data?.version === before?.version
+      ? beforeRead.data?.body
+      : undefined;
+  return useMemo((): SaveComparison => {
+    if (!made || (!before && !first)) return { kind: "unknown" };
+    if (after === undefined || prior === undefined) return { kind: "reading" };
+    const now = withoutRepeatedTitle(after, title);
+    if (first) return { kind: "first", words: documentWords(now) };
+    return compareProse(withoutRepeatedTitle(prior, title), now);
+  }, [made, before, first, after, prior, title]);
+}
+
+/** How much a save changed, in words, or "" while it is read or when it cannot be said. */
+function sizeOf(save: SaveComparison): string {
+  if (save.kind === "first") return plural(save.words, "word");
+  if (save.kind !== "compared") return "";
+  return changeSize(save.added, save.removed, placesOf(save.blocks));
+}
+
+/**
+ * The change a save made, drawn as the page reads. Open when it reads at a
+ * glance, else behind "Show the change"; past [LATEST_CHANGES] changed blocks
+ * it points at the whole save in the page's History.
+ */
+function SaveChange({
+  id,
+  version,
+  save,
+  open,
+}: {
+  id: string;
+  version: number;
+  save: SaveComparison;
+  open: "auto" | "folded";
+}) {
+  const preview = useMemo(
+    () => (save.kind === "compared" ? previewOf(save.blocks, LATEST_CHANGES) : null),
+    [save],
+  );
+  const whole = (
+    <a className="prose-link" href={href(pagePath(id), { version: String(version) })}>
+      the whole save
+    </a>
+  );
+  if (save.kind === "reading") {
+    return open === "auto" ? <Skeleton variant="text" rows={3} label="Reading the change" /> : null;
+  }
+  if (save.kind === "too-large" || save.kind === "too-different") {
+    return (
+      <p className="knowledge-note">
+        This save is too large to compare here: {proseUncomparedReason(save)}. Open {whole} to read
+        it.
+      </p>
+    );
+  }
+  if (!preview || preview.entries.length === 0) return null;
+  const diff = (
+    <>
+      <ProseDiff entries={preview.entries} aria-label="What this save changed" />
+      {preview.more > 0 && (
+        <p className="knowledge-note">
+          {plural(preview.more, "more change")} in {whole}.
+        </p>
+      )}
+    </>
+  );
+  const changed = preview.entries.filter((e) => e.kind === "block" && e.block.change !== "same");
+  const glance =
+    save.kind === "compared" &&
+    changed.length <= OPEN_BLOCKS &&
+    save.added + save.removed <= OPEN_WORDS &&
+    preview.more === 0;
+  if (open === "auto" && glance) return diff;
+  return (
+    <Disclosure title="Show the change" size="compact" headingLevel="none" flush lazy>
+      {diff}
+    </Disclosure>
+  );
+}
+
+/**
+ * The page's earlier saves, newest first, each as the newest is summed up:
+ * its note, who and when, and how much it changed, with its change one press
+ * away.
+ */
+function EarlierSaves({
+  id,
+  title,
+  history,
+  current,
+  heading,
+}: {
+  id: string;
+  title: string;
+  history: readonly PageRevision[];
+  /** The page's body, when the first of `history` is its newest version. */
+  current: string | undefined;
+  /** "Earlier saves" under a save, "Recent saves" under a comment or a rename. */
+  heading: string;
+}) {
+  const rows = history.slice(0, EARLIER_SAVES);
+  const more = history.length - rows.length;
+  return (
+    <section className="knowledge-latest-earlier" aria-label={heading}>
+      <h3 className="knowledge-day knowledge-latest-earlier-title">{heading}</h3>
+      <ol className="knowledge-latest-saves">
+        {rows.map((rev, i) => (
+          <EarlierSave
+            key={rev.version}
+            id={id}
+            title={title}
+            made={rev}
+            before={history[i + 1]}
+            current={i === 0 ? current : undefined}
+          />
+        ))}
+      </ol>
+      {more > 0 && (
+        <p className="knowledge-note">
+          {plural(more, "earlier save")} in the page&rsquo;s{" "}
+          <a
+            className="prose-link"
+            href={href(pagePath(id), { version: String(history[rows.length]!.version) })}
+          >
+            History
+          </a>
+          .
+        </p>
+      )}
+    </section>
+  );
+}
+
+function EarlierSave({
+  id,
+  title,
+  made,
+  before,
+  current,
+}: {
+  id: string;
+  title: string;
+  made: PageRevision;
+  before: PageRevision | undefined;
+  current: string | undefined;
+}) {
+  const who = usePeople();
+  const now = useNow();
+  const zone = useOrg()?.timezone;
+  const save = useSaveComparison(id, title, made, before, current);
+  const size = sizeOf(save);
+  const author = made.author ?? "";
+  const note = plainText(made.message ?? "");
+  return (
+    <li className="knowledge-latest-save">
+      <p className="knowledge-latest-save-note">
+        {note || (save.kind === "first" ? "Wrote the page" : "No note")}
+      </p>
+      <p className="knowledge-latest-save-meta">
+        {author ? who(author).name : "The engine"}
+        <span aria-hidden="true">·</span>
+        <time dateTime={made.created_at} title={fmtDateTime(made.created_at)}>
+          {dayOf(made.created_at, now, zone)} {clockIn(tsKey(made.created_at), zone)}
+        </time>
+        {size && (
+          <>
+            <span aria-hidden="true">·</span>
+            <span>{size}</span>
+          </>
+        )}
+      </p>
+      {save.kind === "compared" && (
+        <SaveChange id={id} version={made.version} save={save} open="folded" />
+      )}
+    </li>
+  );
+}
+
+/** A new page's opening: what it says, its title said once. */
+function Opening({ body, title }: { body: string; title: string }) {
+  const opening = useMemo(() => openingOf(body, title, LATEST_OPENING_LINES).trim(), [body, title]);
   if (!opening) return null;
   return (
     <Document size="sm" measure="none" className="knowledge-latest-opening">
-      {renderMarkdown(opening)}
+      {renderMarkdown(opening, { headings: "text" })}
     </Document>
   );
 }
@@ -805,7 +982,7 @@ function ForTheAgents() {
             ) : memory.data ? (
               <span className="knowledge-tile-meta">
                 {plural(seats.length, "agent")}
-                {newest ? ` · newest ${relTime(newest, now)}` : ""}
+                {newest ? ` · newest ${ago(newest, now)}` : ""}
               </span>
             ) : undefined
           }
@@ -923,7 +1100,7 @@ function PageRow({
  */
 function lastSaved(at: string | undefined, by: string, who: Who, now: number): string {
   if (tsKey(at) <= 0) return "";
-  return `Last saved ${relTime(at, now)} by ${by ? who(by).name : "the engine"}`;
+  return `Last saved ${ago(at, now)} by ${by ? who(by).name : "the engine"}`;
 }
 
 /**
@@ -975,16 +1152,13 @@ export function Unavailable({ answer }: { answer: KnowledgeAnswer }) {
     // THE READER'S ACCESS, not the company's search: said in the words every
     // lock uses, with nothing to configure.
     return (
-      <Callout variant="neutral" icon={<BookOpenGlyph size="md" />}>
+      <Callout variant="neutral">
         <span>{needsWords("Search", [DOCLET])}</span>
       </Callout>
     );
   }
   return (
-    <Callout
-      variant={building ? "warning" : "neutral"}
-      icon={building ? <ClockGlyph size="md" /> : <BookOpenGlyph size="md" />}
-    >
+    <Callout variant={building ? "warning" : "neutral"}>
       {/* NOT A MISCONFIGURATION: this node joined recently and is still
           indexing what it holds. Nothing is lost and nothing needs fixing. */}
       {building ? (
@@ -1100,16 +1274,13 @@ function KnowledgeResults({ phrase }: { phrase: string }) {
       {partial && (
         <Callout variant="warning">
           {partial.sentence}
-          {partial.nodes.length > 0 && (
-            <ul className="coverage-nodes">
-              {partial.nodes.map((n) => (
-                <li key={n.id}>
-                  <InlineCode>{n.id}</InlineCode>
-                  {n.error ? `: ${n.error}` : ""}
-                </li>
-              ))}
-            </ul>
-          )}
+          <NoticeList
+            notices={partial.nodes.map((n) => ({
+              key: n.id,
+              subject: <InlineCode>{n.id}</InlineCode>,
+              title: n.error || "did not answer",
+            }))}
+          />
         </Callout>
       )}
       <QueryState
@@ -1295,11 +1466,15 @@ function ResultPreview({ hit, terms }: { hit: KnowledgeHit; terms: readonly stri
   const detail = page.data;
   if (hit.url) {
     return (
-      <Callout variant="neutral" icon={<ExternalLinkGlyph size="md" />}>
-        <a className="prose-link" href={hit.url} target="_blank" rel="noreferrer">
-          Open this result in the wiki
-        </a>
-        .
+      <Callout
+        variant="neutral"
+        action={
+          <a className="t-link" href={hit.url} target="_blank" rel="noreferrer">
+            Open in the wiki
+          </a>
+        }
+      >
+        This result is a page in the wiki, so it is read there.
       </Callout>
     );
   }
@@ -1340,7 +1515,8 @@ function ResultPreview({ hit, terms }: { hit: KnowledgeHit; terms: readonly stri
           <dd>
             {last ? (
               <span title={`Revision ${last.version}`}>
-                {relTime(last.created_at, now)} by {saver ? who(saver).name : "the engine"}
+                {openSentence(ago(last.created_at, now))} by{" "}
+                {saver ? who(saver).name : "the engine"}
               </span>
             ) : (
               "Not saved over since it was written"

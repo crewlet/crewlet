@@ -537,7 +537,7 @@ test("a live log seeded without a node names it", async () => {
     },
   });
   expect(screen.getByText("node-c")).toBeTruthy();
-  expect(screen.getByText(/This log is missing 1 node\./)).toBeTruthy();
+  expect(screen.getByText("This log is missing 1 node")).toBeTruthy();
   location.hash = "#/";
 });
 
@@ -556,7 +556,7 @@ test("a log missing a node names it", async () => {
       : { bucket: "hour", bars: [], total: 0, failed: 0, by_category: {}, coverage },
   );
   expect(screen.getByText("node-b")).toBeTruthy();
-  expect(screen.getByText(/This log is missing 1 node\./)).toBeTruthy();
+  expect(screen.getByText("This log is missing 1 node")).toBeTruthy();
   location.hash = "#/";
 });
 

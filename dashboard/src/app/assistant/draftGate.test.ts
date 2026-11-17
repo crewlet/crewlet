@@ -100,6 +100,8 @@ const EDITING_ELEMENTS = new Set([
   // uilet's labelled value (FormField with its control), which every
   // configuration form and the dialogs that hold a value draw.
   "ValueField",
+  // uilet's one-setting panel, which every setting's pencil opens.
+  "SettingForm",
   "Textarea",
 ]);
 
@@ -177,6 +179,10 @@ const PART_OF: Readonly<Record<string, { screen: readonly string[]; why: string 
   "routes/gitlet/change/Conversation.tsx": {
     screen: ["routes/gitlet/change/ChangePage.tsx"],
     why: "the comment on a change and each thread's reply box, fields of the change page's one draft",
+  },
+  "routes/gitlet/change/Description.tsx": {
+    screen: ["routes/gitlet/change/ChangePage.tsx"],
+    why: "a change's title and description being edited, fields of the change page's one draft",
   },
   "routes/gitlet/change/Files.tsx": {
     screen: ["routes/gitlet/change/ChangePage.tsx"],

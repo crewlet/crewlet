@@ -47,6 +47,9 @@ type Cache interface {
 	// MemoGet is the page the pinned copy's memo keeps under a key, or false
 	// (step 6).
 	MemoGet(s cache.Synced, k cache.MemoKey) ([]byte, bool)
+	// MemoProbe is MemoGet for a part of an answer a read looks for under
+	// several keys, counted apart (cache's MemoProbe).
+	MemoProbe(s cache.Synced, k cache.MemoKey) ([]byte, bool)
 	// Memo is a batch of the pages a run cuts, to memoize in the pinned copy
 	// once its git has answered whole (step 8) — nil where it keeps none.
 	Memo(s cache.Synced) *cache.MemoBatch
@@ -61,6 +64,9 @@ type Cache interface {
 	// while s is held — or false, which a search answers with git grep; one
 	// it cannot read it drops, under ctx's values.
 	CodeIndex(ctx context.Context, s cache.Synced) (*cache.CodeIndexView, bool)
+	// Tags is the pinned copy's tag index, open for one read, which the read closes;
+	// false where it keeps none a read can trust (tags.go).
+	Tags(s cache.Synced) (*cache.TagIndex, bool)
 }
 
 // Pool runs git. *gitproc.Pool satisfies it.
@@ -137,8 +143,10 @@ type Server struct {
 	// patchBytes the diff its patch-id is taken of (MaxPatchIDDiffBytes), and
 	// classedBlob and classedBytes the Go its classification lexes, a
 	// version and in all (gitlet.MaxClassedBlobBytes, gitlet.MaxClassedBytes),
-	// and searchBudget what one search may spend (gitlet.SearchBudget) —
-	// fields so this package's tests can scale them (export_test.go).
+	// and searchBudget what one search may spend (gitlet.SearchBudget), and
+	// treeWalk the bounds of a directory's last commits' walks
+	// (treecommits.go): fields so this package's tests can scale them
+	// (export_test.go).
 	syncWait     time.Duration
 	searchBudget time.Duration
 	gitBudget    time.Duration
@@ -149,6 +157,7 @@ type Server struct {
 	patchBytes   int64
 	classedBlob  int64
 	classedBytes int64
+	treeWalk     treeWalkBounds
 	// flights is every page a read of this node is cutting that its copy's
 	// memo held none of, by repository and the page's memo key: a read that
 	// misses the same page waits for that read's run and asks the memo again,
@@ -229,7 +238,7 @@ func New(o Options) (*Server, error) {
 	return &Server{o: o, life: life, end: end, syncWait: statelog.ReadBudget, gitBudget: gitproc.ReadDeadline,
 		pageBytes: gitlet.MaxGitAnswerBytes, probes: MaxLandedProbes, touchedPaths: gitlet.MaxTouchedPaths,
 		touchedBytes: gitlet.MaxTouchedBytes, patchBytes: MaxPatchIDDiffBytes, classedBlob: gitlet.MaxClassedBlobBytes,
-		classedBytes: gitlet.MaxClassedBytes, searchBudget: gitlet.SearchBudget,
+		classedBytes: gitlet.MaxClassedBytes, searchBudget: gitlet.SearchBudget, treeWalk: defaultTreeWalk,
 		patchSpools: make(chan struct{}, MaxPatchSpools), patchSpoolWait: gitlet.GitShareWait}, nil
 }
 
@@ -312,6 +321,8 @@ func New(o Options) (*Server, error) {
 //     a page itself finds, into that commit's cost, so a page cut against it
 //     fits with them. A copy whose index cannot be read yet is answered
 //     without either: an index decorates an answer, and no read waits on it.
+//     A history's page also names the tags naming each commit
+//     (gitlet.GitAnswer.Tagged), from the copy's tag index, measured the same way.
 //  10. A read this node answered as the repository's home (gitlet.GitQuery.Home)
 //     marks the repository's history wanted (cache.Cache.WantHistory): the one
 //     node a walk asks first reads it back, once per fleet, and only for a
@@ -445,6 +456,7 @@ func (s *Server) serve(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer
 	// THE PIN IS THE READ'S, released whatever it answers: every Synced a
 	// sync or a re-sync handed out goes back through r.synced.
 	defer func() { r.synced.Release() }()
+	defer r.closeTags()
 	if err = r.sync(ctx, r.fresh()); err != nil {
 		return gitlet.GitAnswer{}, err
 	}
@@ -470,6 +482,12 @@ func (s *Server) serve(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer
 		if a, ok, err = r.recallTips(ctx, at); err != nil {
 			return gitlet.GitAnswer{}, err
 		}
+	} else if q.Kind == gitlet.GitTags {
+		// THE COPY'S TAGS, from its tag index with no git (tags.go).
+		if a, err = r.tagsRead(ctx); err != nil {
+			return gitlet.GitAnswer{}, err
+		}
+		ok = true
 	} else if a, ok, err = r.recallWhole(ctx, at); err != nil {
 		return gitlet.GitAnswer{}, err
 	}
@@ -580,7 +598,12 @@ func (r *read) index(commits []string) {
 		}
 	}
 	r.indexRead = true
+	r.openTags()
 	r.pushedBy, r.named = nil, nil
+	r.tagged = nil
+	if r.tagIndex != nil {
+		r.tagged = &gitlet.TagMarks{}
+	}
 	for _, id := range commits {
 		r.decorate(id)
 	}
@@ -592,6 +615,7 @@ func (r *read) index(commits []string) {
 // memo is decorated by what the index holds when it is read.
 func (r *read) decorate(id string) {
 	r.named = append(r.named, id)
+	r.markTags(id)
 	if !r.prov.Indexed() {
 		return
 	}
@@ -644,6 +668,15 @@ type read struct {
 	filter *pathFilter
 	// tips is what a tips read holds of its facts and counts (recallTips).
 	tips *tipsWarm
+	// tagIndex is the copy's tag index a history's read opened under the pin
+	// tagsDir and tagsAt name (index); tagged the tags naming each commit decorated.
+	tagIndex  *cache.TagIndex
+	tagsDir   string
+	tagsAt    statelog.Position
+	tagsTried bool
+	tagged    *gitlet.TagMarks
+	// tagsOf is each commit's lookup, kept between its cost and its naming.
+	tagsOf map[string]gitlet.CommitTags
 }
 
 // judgeable refuses a seat's read on a node that cannot judge a seat (step 2).
@@ -907,10 +940,14 @@ func (r *read) answer(ctx context.Context, objs found, at cursor) (gitlet.GitAns
 		return r.logRead(ctx, objs, at, m)
 	case gitlet.GitBlame:
 		return r.blameRead(ctx, objs, at, m)
+	case gitlet.GitTreeCommits:
+		return r.treeCommitsRead(ctx, objs, at, m)
 	case gitlet.GitChecksFile:
 		return r.checksFileRead(ctx, objs)
 	case gitlet.GitCodeFiles:
 		return r.codeFilesRead(ctx, objs)
+	case gitlet.GitExcerpts:
+		return r.excerptsRead(ctx, objs, at, m)
 	}
 	return r.compareRead(ctx, objs, m)
 }
@@ -1011,11 +1048,17 @@ func cursorOf(q gitlet.GitQuery) (cursor, error) {
 		// an entry's.
 		return parseCursor(q.Cursor, q.Kind, map[byte]int{'l': 1, 'b': 2, 'e': 1})
 	case gitlet.GitDiff:
+		if q.Diff.Patches {
+			return parseCursor(q.Cursor, q.Kind, map[byte]int{'w': 2})
+		}
 		if q.Diff.File != "" || q.Diff.FileB64 != "" {
 			return parseCursor(q.Cursor, q.Kind, map[byte]int{'p': 1})
 		}
 		return parseCursor(q.Cursor, q.Kind, map[byte]int{'f': 1})
 	case gitlet.GitInterdiff:
+		if q.Interdiff.Patches {
+			return parseCursor(q.Cursor, q.Kind, map[byte]int{'w': 2})
+		}
 		if q.Interdiff.File != "" || q.Interdiff.FileB64 != "" {
 			return parseCursor(q.Cursor, q.Kind, map[byte]int{'p': 1})
 		}
@@ -1027,8 +1070,22 @@ func cursorOf(q gitlet.GitQuery) (cursor, error) {
 	case gitlet.GitTips:
 		// A page of tips begins at the n-th tip the query names.
 		return parseCursor(q.Cursor, q.Kind, map[byte]int{'t': 1})
+	case gitlet.GitTags:
+		// A tags page begins past the key the last page ended at.
+		_, err := parseTagsCursor(q.Cursor)
+		return cursor{}, err
 	case gitlet.GitBlame:
 		return parseCursor(q.Cursor, q.Kind, map[byte]int{'l': 1})
+	case gitlet.GitTreeCommits:
+		// A directory's last commits begin at its listing's n-th entry.
+		return parseCursor(q.Cursor, q.Kind, map[byte]int{'e': 1})
+	case gitlet.GitExcerpts:
+		// A page of excerpts begins at the n-th anchor, one the query names.
+		c, err := parseCursor(q.Cursor, q.Kind, map[byte]int{'x': 1})
+		if err == nil && c.a >= len(q.Excerpts.Anchors) {
+			return cursor{}, errBadCursor(q.Cursor, q.Kind, "an anchor of the read")
+		}
+		return c, err
 	}
 	// A comparison answers its first page of files and no more — a diff of
 	// its merge base and head reads the rest — a landed-in read one answer

@@ -84,8 +84,10 @@ export const SESSION_QUERIES = {
     "code_blob",
     "code_log",
     "code_blame",
+    "code_tree_commits",
     "code_diff",
     "code_tips",
+    "code_tags",
     "code_compare",
     "code_commit",
     "code_queue",
@@ -93,6 +95,10 @@ export const SESSION_QUERIES = {
     "code_check",
     "code_check_log",
     "code_commit_marks",
+    "code_counts",
     "inbox",
   ],
+  // THE ARTIFACTS LOG'S HALF OF THE INBOX: a mark of an artifact notice lands
+  // there, and the composed inbox reads it back at that floor.
+  artifacts: ["inbox"],
 } as const;

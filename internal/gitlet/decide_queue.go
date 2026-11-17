@@ -72,15 +72,16 @@ func ejectDecidedRows(n int) int { return n + trainRows + 1 + queueHorizonRows }
 // landDecidedRows is the most rows a land of n entries makes its apply touch
 // of its OWN, beside the pushes it lands: each entry's change merged, its
 // stored readiness cleared ([clearReadiness]), its entry landed and its
-// landing row; the target's green row and its row of tip work; its train's
-// landed candidates; and the queue's horizon.
-func landDecidedRows(n int) int { return 4*n + 2 + MaxQueueDepth + queueHorizonRows }
+// landing row; the target's green row and its row of tip work; the tally row
+// its merges move (apply_counts.go); its train's landed candidates; and the
+// queue's horizon.
+func landDecidedRows(n int) int { return 4*n + 2 + tallyRows + MaxQueueDepth + queueHorizonRows }
 
 // landPushRows is the most rows a land's n pushes write before the changes
-// they move ([entryRows]): each its push row, the target's move and its
-// source's deletion — the ref, its tombstone and the object it leaves — and
-// the first its pack.
-func landPushRows(n int) int { return n*(1+1+3) + 1 }
+// they move ([entryRows]): each its push row, the target's move, its source's
+// deletion (the ref, its tombstone and the object it leaves) and Gitlet's
+// pusher day ([pusherDayRows]), and the first its pack.
+func landPushRows(n int) int { return n*(1+1+3+pusherDayRows) + 1 }
 
 // landRecordRows is a land record's rows but the changes its pushes move,
 // which its decide counts ([decideLand]): what the committer charges it.
@@ -137,7 +138,8 @@ func decideCandidate(ctx context.Context, tx *sql.Tx, c Candidate, repo pushRepo
 // decideEject is an eject's rules over the rows tx holds: an ejection naming
 // its repository a pull mirror on one that is not (stale), every entry live in
 // its queue, and all of them one target's, whose train it abandons
-// (not_queued).
+// (not_queued), and every train an ejection names the one the rows test its
+// entry in (stale).
 func decideEject(ctx context.Context, tx *sql.Tx, e Eject, repo pushRepo, d queueDecision) (queueDecision,
 	error) {
 
@@ -168,6 +170,14 @@ func decideEject(ctx context.Context, tx *sql.Tx, e Eject, repo pushRepo, d queu
 			return d.refuse(MergeRefusalNotQueued, fmt.Sprintf("entry %s of %s's queues %s: an eject puts "+
 				"one target's live entries out", x.EntryID, repo.name, why))
 		}
+	}
+	stale, err := testedInStale(ctx, tx, e, entries, target)
+	if err != nil {
+		return queueDecision{}, err
+	}
+	if stale != "" {
+		return d.refuse(MergeRefusalStale, fmt.Sprintf("%s of %s's queues: read its queue again", stale,
+			repo.name))
 	}
 	// WHOM IT CONCERNS, a routing an entry's change: its authors and its
 	// enqueuer told it left the queue — its authors that its merge
@@ -209,6 +219,37 @@ func decideEject(ctx context.Context, tx *sql.Tx, e Eject, repo pushRepo, d queu
 	}
 	d.payload = e
 	return d, nil
+}
+
+// testedInStale is why the first train an ejection of e names is not the one the rows hold its
+// entry testing in (that candidate, at that commit, merged onto that base), or "" where every named
+// train is. It reads target's train once, and only where an ejection names one.
+func testedInStale(ctx context.Context, tx *sql.Tx, e Eject, entries map[string]queueEntry,
+	target string) (string, error) {
+
+	if !slices.ContainsFunc(e.Entries, func(x Ejection) bool { return x.TestedIn != nil }) {
+		return "", nil
+	}
+	train, err := trainsOf(ctx, tx, e.RepoID, target)
+	if err != nil {
+		return "", err
+	}
+	for _, x := range e.Entries {
+		t := x.TestedIn
+		if t == nil {
+			continue
+		}
+		entry := entries[x.EntryID]
+		held := slices.ContainsFunc(train, func(c CandidateRow) bool {
+			return c.CandidateID == t.CandidateID && c.BaseOID == t.BaseOID
+		})
+		if !held || entry.State != QueueTesting || entry.CandidateID != t.CandidateID ||
+			entry.CommitOID != t.CommitOID {
+			return fmt.Sprintf("entry %s is not testing in candidate %s merged onto %s at %s", x.EntryID,
+				t.CandidateID, short(t.BaseOID), short(t.CommitOID)), nil
+		}
+	}
+	return "", nil
 }
 
 // decideLand is a landing's rules over the rows tx holds, in their order:
@@ -403,7 +444,7 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 		book.move(e)
 		own += entryRows(e)
 	}
-	total := recordRows(own + book.rowCount())
+	total := recordRows(own + book.decidedRows())
 	if total > MaxRecordRows {
 		return d.refuse(MergeRefusalRecordFull, fmt.Sprintf("landing %d entries on %s writes up to %d rows with "+
 			"the live changes its pushes move, past MaxRecordRows (%d): land fewer at once", len(pushes),
@@ -1173,15 +1214,16 @@ func (c *Committer) publishBroken(ctx context.Context, when time.Time, b Broken,
 }
 
 // ejectedDetail is an ejection's detail as code_queue.ejected keeps it: its
-// checks and its paths, JSON, "" for an ejection naming neither.
+// checks, its paths and the train it failed on, JSON, "" for an ejection naming none.
 func ejectedDetail(x Ejection) (string, error) {
-	if len(x.Checks) == 0 && len(x.Paths) == 0 {
+	if len(x.Checks) == 0 && len(x.Paths) == 0 && x.TestedIn == nil {
 		return "", nil
 	}
 	encoded, err := json.Marshal(struct {
-		Checks []string `json:"checks,omitempty"`
-		Paths  []string `json:"paths,omitempty"`
-	}{x.Checks, x.Paths})
+		Checks   []string       `json:"checks,omitempty"`
+		Paths    []string       `json:"paths,omitempty"`
+		TestedIn *EjectionTrain `json:"tested_in,omitempty"`
+	}{x.Checks, x.Paths, x.TestedIn})
 	return string(encoded), err
 }
 

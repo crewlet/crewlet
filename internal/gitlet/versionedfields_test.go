@@ -15,11 +15,20 @@ import (
 //
 // Mutation: a field joining version 2 — a fifth row at gitlet.WorkingForVersion
 // — red.
+//
+// The versions are keyed by their constants, so two record pieces that claim
+// one version do not compile together.
 func TestAClosedCodeRecordVersionGainsNoField(t *testing.T) {
 	t.Parallel()
 	closed := map[int][]string{
-		2: {"ChangeRouting.WorkingFor", "Mutation.WorkingFor", "PushEntry.Routing.WorkingFor",
-			"PushEntry.WorkingFor"},
+		gitlet.WorkingForVersion: {"ChangeRouting.WorkingFor", "Mutation.WorkingFor",
+			"PushEntry.Routing.WorkingFor", "PushEntry.WorkingFor"},
+		gitlet.OwnedPathsVersion: {"MatchedOwner.Paths", "OwnerAsk.Paths", "OwnerAsk.PathsOmitted",
+			"Revise.MeasuredAt"},
+		gitlet.ViewedVersion:      {"RecordEnvelope.Op viewed", "RecordEnvelope.Op viewed_key"},
+		gitlet.OfferedVersion:     {"PushEntry.Offered"},
+		gitlet.CheckCountsVersion: {"CheckFinished.LogLines", "CheckFinished.TailCut", "CheckFinished.Tests"},
+		gitlet.TestedInVersion:    {"Ejection.TestedIn"},
 	}
 	got := map[int][]string{}
 	for _, field := range gitlet.VersionedFields() {

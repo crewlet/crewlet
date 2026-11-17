@@ -25,13 +25,7 @@ import {
   Tooltip,
   VisuallyHidden,
 } from "@crewlethq/ui";
-import {
-  ActivityGlyph,
-  CoinsGlyph,
-  CpuGlyph,
-  PlusGlyph,
-  TriangleAlertGlyph,
-} from "@crewlethq/icons/glyphs";
+import { CpuGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { href } from "~/app/router.tsx";
@@ -296,7 +290,6 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
         <Card padding="none">
           <StatGroup columns={admin ? 4 : 3}>
             <StatCard
-              icon={<CpuGlyph size="xs" />}
               label="Models"
               value={models.length}
               sub={unused ? `${unused} not used by any seat or Ask Crewlet` : "every one in use"}
@@ -304,7 +297,6 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
             {/* A COUNT OF THE FEW, NOT "3 OF 4" (QA Minor 14): the tile names how
                 many answer and, under it, exactly how many do not. */}
             <StatCard
-              icon={<ActivityGlyph size="xs" />}
               label="Ready"
               value={ready}
               unit={`of ${models.length}`}
@@ -315,7 +307,6 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
               }
             />
             <StatCard
-              icon={<TriangleAlertGlyph size="xs" />}
               label="Sitting out or refused"
               value={sitting + refused}
               sub={
@@ -330,7 +321,6 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
             />
             {admin ? (
               <StatCard
-                icon={<CoinsGlyph size="xs" />}
                 label="Tokens, 7 days"
                 value={fmtCount(usage.tokens)}
                 // WHICH CALLS: every call made, refused and failed ones included,
@@ -350,10 +340,6 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
       ) : null}
 
       <Card padding="none">
-        {/* NO COUNT ON THE HEAD: the Models tile above says how many (QA Minor 14). */}
-        <Card.Header icon={<CpuGlyph size="sm" />}>
-          <Card.Title>Models</Card.Title>
-        </Card.Header>
         {models.length === 0 ? (
           <EmptyState
             size="compact"
@@ -363,13 +349,6 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
               admin
                 ? "Add one to give the agents a model to run on."
                 : "An admin adds the models the agents run on."
-            }
-            action={
-              admin ? (
-                <Button variant="primary" size="small" onClick={add}>
-                  Add model
-                </Button>
-              ) : undefined
             }
           />
         ) : (

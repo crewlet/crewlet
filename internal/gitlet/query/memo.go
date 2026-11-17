@@ -61,10 +61,14 @@ import (
 // range, as a file's does; a history's page is its walk's own — the walk ends
 // where the page does, since its cost is the walk — memoized where the walk
 // ended it, and never where the read's budget or its due instant did, which
-// is the machine's and the moment's; and a landed-in read, a revision's facts
+// is the machine's and the moment's; a directory's last commits' page is kept
+// as its read cut it, and its windows of answers apart, under the last commit
+// that changed the directory, its walk's first record (treecommits.go); and a landed-in read, a revision's facts
 // and a re-anchoring never (memoizable says why). A history's and a blame's
 // key carries the measure their pages were cut with (costModel), since a
-// fence they are measured with is a build's.
+// fence they are measured with is a build's, and so does a diff's patches'.
+// A diff's patches, which git can begin at any file, are cut to
+// maxPatchesRunPages past the asked page (patches.go).
 //
 // # A page fits whatever it is stamped with
 //
@@ -88,7 +92,7 @@ import (
 // TestAMemoEntryHoldsEveryFieldOfItsAnswer holds the encoding to the answers'
 // fields, and TestAnAnswersShapeIsItsMemoFormat holds this name to a
 // fingerprint of them, so a change to either fails until this moves with it.
-const memoFormat = "page/5"
+const memoFormat = "page/10"
 
 // memoPage is one page as the memo keeps it.
 type memoPage struct {
@@ -152,9 +156,12 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 	case gitlet.GitDiff:
 		file, _ := gitlet.GitPath("diff.file", q.Diff.File, q.Diff.FileB64, true)
 		paths := slices.Compact(slices.Sorted(slices.Values(q.Diff.Paths)))
-		parts = append(parts, whole[q.Diff.Base], whole[q.Diff.Head], strconv.FormatBool(q.Diff.Renames), file,
-			strconv.Itoa(len(paths)))
+		parts = append(parts, whole[q.Diff.Base], whole[q.Diff.Head], strconv.FormatBool(q.Diff.Renames),
+			strconv.FormatBool(q.Diff.Patches), file, strconv.Itoa(len(paths)))
 		parts = append(parts, paths...)
+		if q.Diff.Patches {
+			parts = append(parts, costModel)
+		}
 	case gitlet.GitCompare:
 		parts = append(parts, whole[q.Compare.Base], whole[q.Compare.Head])
 	case gitlet.GitInterdiff:
@@ -165,8 +172,11 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 		file, _ := gitlet.GitPath("interdiff.file", q.Interdiff.File, q.Interdiff.FileB64, true)
 		f := r.interdiffFilter()
 		parts = append(parts, whole[q.Interdiff.FromHead], whole[q.Interdiff.ToHead], file,
-			strconv.FormatBool(f.filters()), strconv.Itoa(len(f.paths)))
+			strconv.FormatBool(q.Interdiff.Patches), strconv.FormatBool(f.filters()), strconv.Itoa(len(f.paths)))
 		parts = append(parts, f.paths...)
+		if q.Interdiff.Patches {
+			parts = append(parts, costModel)
+		}
 	case gitlet.GitLog:
 		// Since as the second its walk stops before, Until as the last
 		// second it keeps, the limit as the page applies it, and the cost the
@@ -184,6 +194,9 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 	case gitlet.GitBlame:
 		start, end := q.Blame.Range()
 		parts = append(parts, whole[q.Blame.Rev], pathOf(q), strconv.Itoa(start), strconv.Itoa(end), costModel)
+	case gitlet.GitTreeCommits:
+		// The span bounds the page's entries.
+		parts = append(parts, whole[q.TreeCommits.Rev], pathOf(q), strconv.Itoa(r.s.treeWalk.span))
 	case gitlet.GitSearch:
 		// The commit read and the ref that named it, then the query's every
 		// part: whichever path cut the page, its hits are the same lines.
@@ -198,9 +211,19 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 		}
 		paths := slices.Compact(slices.Sorted(slices.Values(s.Paths)))
 		parts = append(parts, whole[searchTipKey], whole[searchRefKey], string(s.Mode),
-			strconv.FormatBool(s.IgnoreCase), s.Text, strconv.Itoa(s.Hits()), after, strconv.Itoa(afterLine),
-			strconv.Itoa(len(paths)))
+			strconv.FormatBool(s.IgnoreCase), s.Text, strconv.Itoa(s.Hits()), strconv.Itoa(s.Context),
+			strconv.Itoa(s.PerFile), after, strconv.Itoa(afterLine), strconv.Itoa(len(paths)))
 		parts = append(parts, paths...)
+	case gitlet.GitExcerpts:
+		// The context as applied, then every anchor whole: its revision, its blob, its path's
+		// bytes, its side and its range.
+		e := q.Excerpts
+		parts = append(parts, strconv.Itoa(e.ContextOf()), strconv.Itoa(len(e.Anchors)))
+		for _, a := range e.Anchors {
+			p, _ := gitlet.GitPath("path", a.Path, a.PathB64, false)
+			parts = append(parts, a.ID, whole[a.Base], whole[a.Head], a.BlobOID, p, string(a.Side),
+				strconv.Itoa(a.Start), strconv.Itoa(a.End))
+		}
 	}
 	return cache.NewMemoKey(append(parts, formatCursor(at))...)
 }
@@ -227,6 +250,9 @@ func memoizable(q gitlet.GitQuery) bool {
 		return false
 	case gitlet.GitTips:
 		// Kept a tip at a time under tipsMemoFormat (tips.go), never as a page.
+		return false
+	case gitlet.GitTags:
+		// Read from the copy's tag index, never a page of the memo (tags.go).
 		return false
 	}
 	return true
@@ -500,6 +526,16 @@ func encodePage(p memoPage) []byte {
 		for _, f := range d.Files {
 			appendFile(&w, f, false)
 		}
+		w.int(len(d.Patches))
+		for _, p := range d.Patches {
+			w.int(p.File)
+			w.str(p.Path)
+			w.str(p.PathB64)
+			w.str(p.Status)
+			w.str(p.Patch)
+			w.flag(p.Continues)
+			w.flag(p.RestOmitted)
+		}
 	case gitlet.GitCompare:
 		c := a.Compare
 		w.str(c.Base)
@@ -560,6 +596,26 @@ func encodePage(p memoPage) []byte {
 			w.str(c.Subject)
 			w.int(c.SubjectBytes)
 		}
+	case gitlet.GitTreeCommits:
+		t := a.TreeCommits
+		w.str(t.Tree)
+		w.str(t.Path)
+		w.str(t.PathB64)
+		w.int(len(t.Entries))
+		for _, e := range t.Entries {
+			w.str(e.Path)
+			w.str(e.PathB64)
+			w.str(e.Commit)
+			w.flag(e.OutOfTime)
+		}
+		w.int(len(t.Commits))
+		for _, c := range t.Commits {
+			appendLogCommit(&w, c)
+		}
+		w.int(t.Total)
+		// Never set on a page the memo keeps (Cut), and written all the same:
+		// an entry holds every field of its answer.
+		w.flag(t.OutOfTime)
 	case gitlet.GitSearch:
 		s := a.Search
 		w.str(s.Tip)
@@ -574,6 +630,34 @@ func encodePage(p memoPage) []byte {
 			w.int(h.Line)
 			w.str(h.Text)
 			w.str(h.Blob)
+			w.int(len(h.Matches))
+			for _, m := range h.Matches {
+				w.int(m[0])
+				w.int(m[1])
+			}
+			for _, lines := range [][]string{h.Before, h.After} {
+				w.int(len(lines))
+				for _, l := range lines {
+					w.str(l)
+				}
+			}
+			w.int(h.FileMatches)
+		}
+	case gitlet.GitExcerpts:
+		w.int(len(a.Excerpts.Excerpts))
+		for _, e := range a.Excerpts.Excerpts {
+			w.str(e.ID)
+			w.str(e.Status)
+			w.flag(e.Binary)
+			w.flag(e.More)
+			w.int(len(e.Lines))
+			for _, l := range e.Lines {
+				w.str(l.Mark)
+				w.int(l.Old)
+				w.int(l.New)
+				w.str(l.Text)
+				w.int(l.TextBytes)
+			}
 		}
 	}
 	return w
@@ -695,6 +779,20 @@ func (r *pageReader) count() int {
 	return n
 }
 
+// strs reads a list of strings, nil where it is empty, as an answer that
+// omits an empty list holds it.
+func (r *pageReader) strs() []string {
+	n := r.count()
+	if r.err != nil || n == 0 {
+		return nil
+	}
+	out := make([]string, n)
+	for i := range out {
+		out[i] = r.str()
+	}
+	return out
+}
+
 func (r *pageReader) str() string {
 	n := r.int()
 	if r.err != nil || n > len(r.s) {
@@ -796,6 +894,14 @@ func decodePage(body []byte) (memoPage, error) {
 				d.Files[i] = readFile(r, false)
 			}
 		}
+		// A stat's page holds no patch, and reads back with none.
+		if n := r.count(); r.err == nil && n > 0 {
+			d.Patches = make([]gitlet.FilePatch, n)
+			for i := range d.Patches {
+				d.Patches[i] = gitlet.FilePatch{File: r.int(), Path: r.str(), PathB64: r.str(), Status: r.str(),
+					Patch: r.str(), Continues: r.flag(), RestOmitted: r.flag()}
+			}
+		}
 		if n := r.count(); r.err == nil && n != len(d.Files) {
 			r.err = errMemoPage
 		}
@@ -848,17 +954,66 @@ func decodePage(body []byte) (memoPage, error) {
 			}
 		}
 		a.Blame = b
+	case gitlet.GitTreeCommits:
+		t := &gitlet.TreeCommitsAnswer{Tree: r.str(), Path: r.str(), PathB64: r.str(), Entries: []gitlet.TreeCommit{},
+			Commits: []gitlet.LogCommit{}}
+		if n := r.count(); r.err == nil {
+			t.Entries = make([]gitlet.TreeCommit, n)
+			for i := range t.Entries {
+				t.Entries[i] = gitlet.TreeCommit{Path: r.str(), PathB64: r.str(), Commit: r.str(), OutOfTime: r.flag()}
+			}
+		}
+		if n := r.count(); r.err == nil {
+			seen := map[string]bool{}
+			t.Commits = make([]gitlet.LogCommit, n)
+			for i := range t.Commits {
+				t.Commits[i] = readLogCommit(r)
+				if seen[t.Commits[i].OID] {
+					r.err = errMemoPage // a commit twice: no page this build writes
+				}
+				seen[t.Commits[i].OID] = true
+			}
+		}
+		t.Total, t.OutOfTime = r.int(), r.flag()
+		a.TreeCommits = t
 	case gitlet.GitSearch:
 		s := &gitlet.SearchAnswer{Tip: r.str(), Ref: r.str(), Via: gitlet.SearchVia(r.str()), SkippedFiles: r.int(),
 			Truncated: r.flag(), Hits: []gitlet.SearchHit{}}
 		if n := r.count(); r.err == nil {
 			s.Hits = make([]gitlet.SearchHit, n)
 			for i := range s.Hits {
-				s.Hits[i] = gitlet.SearchHit{Path: r.str(), PathB64: r.str(), Line: r.int(), Text: r.str(),
+				h := gitlet.SearchHit{Path: r.str(), PathB64: r.str(), Line: r.int(), Text: r.str(),
 					Blob: r.str()}
+				if n := r.count(); n > 0 && r.err == nil {
+					h.Matches = make([][2]int, n)
+					for j := range h.Matches {
+						h.Matches[j] = [2]int{r.int(), r.int()}
+					}
+				}
+				h.Before, h.After = r.strs(), r.strs()
+				h.FileMatches = r.int()
+				s.Hits[i] = h
 			}
 		}
 		a.Search = s
+	case gitlet.GitExcerpts:
+		x := &gitlet.ExcerptsAnswer{Excerpts: []gitlet.Excerpt{}}
+		if n := r.count(); r.err == nil {
+			x.Excerpts = make([]gitlet.Excerpt, n)
+			for i := range x.Excerpts {
+				e := gitlet.Excerpt{ID: r.str(), Status: r.str(), Binary: r.flag(), More: r.flag(),
+					Lines: []gitlet.ExcerptLine{}}
+				if m := r.count(); r.err == nil {
+					e.Lines = make([]gitlet.ExcerptLine, m)
+					for j := range e.Lines {
+						e.Lines[j] = gitlet.ExcerptLine{Mark: r.str(), Old: r.int(), New: r.int(), Text: r.str(),
+							TextBytes: r.int()}
+					}
+				}
+				x.Excerpts[i] = e
+			}
+		}
+		a.Excerpts = x
 	default:
 		return memoPage{}, errMemoPage
 	}
@@ -889,7 +1044,7 @@ func readLogCommit(r *pageReader) gitlet.LogCommit {
 }
 
 // appendLogCommit writes one commit as readLogCommit reads it: a history
-// page's and a tip's alike.
+// page's, a tip's and a directory's last commits' alike.
 func appendLogCommit(w *pageWriter, c gitlet.LogCommit) {
 	w.str(c.OID)
 	w.int(len(c.Parents))

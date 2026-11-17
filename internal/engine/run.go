@@ -1224,6 +1224,11 @@ type Engine struct {
 	// ([builtin.FolderTurns]).
 	folderTurns *builtin.FolderTurns
 
+	// renderState is render_artifact's renderer, built at its first use,
+	// and this node's tally of each turn segment's renders. See
+	// artifactrender.go.
+	renderState
+
 	// memoryReads answers a seat's memory from the node holding it, and
 	// stopMemoryServe withdraws this node as one of its answerers. See
 	// memoryread.go.
@@ -1926,6 +1931,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		leads:               leads,
 		dataTurns:           builtin.NewDataTurns(nil),
 		folderTurns:         builtin.NewFolderTurns(nil),
+		renderState:         renderState{renderTurns: builtin.NewRenderTurns(nil)},
 		mcpRetryBase:        opts.mcpRetryBase,
 		mcpRelistBase:       opts.mcpRelistBase,
 		sandboxOtel:         otel,
@@ -2275,6 +2281,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	} else {
 		e.startRoutedDirectory(ctx)
 	}
+	// AFTER THE LOGS, so a raise of the bucket is weighed against every
+	// reservation they hold and never takes one a log being created needed.
+	e.raiseObjectsAtBoot(ctx, opts.Bootstrap, incarnation)
 	// THE BOUNDARY: everything above is what this node holds, recovered;
 	// everything below is what its company configures. See
 	// [Options.Recovered]. Logged, because it is the line a deployment sizes
@@ -2545,16 +2554,15 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// THE SEAT'S DERIVED ID, never a roster lookup, so a seat a revision
 	// removed still flushes on release ([memoryAgentID]).
 	//
-	// ACROSS A LINK OR NOT ([acrossLink]), and on the stream's topology
-	// ([clusteredStream]): what each of a hydration's requests is given, and
-	// whether its pulls are windowed so a request sent behind one on the link
-	// is still answered inside its term (memsync.Config).
-	e.memory = memsync.New(backends.Store, backends.CoordinationJetStream(),
+	// HOW IT REACHES THE CHANGELOG ([memoryConfig]): across a link or not,
+	// on the stream's topology, and reading the link's meter where it
+	// crosses one.
+	e.memory, err = memsync.New(backends.Store, backends.CoordinationJetStream(),
 		func(handle string) string { return memoryAgentID(e.Company(), handle) },
-		memsync.Config{
-			AcrossLink: acrossLink(opts.Bootstrap),
-			Clustered:  clusteredStream(opts.Bootstrap),
-		})
+		memoryConfig(opts.Bootstrap, backends))
+	if err != nil {
+		return nil, fmt.Errorf("engine: memory sync: %w", err)
+	}
 	// ARMED HERE, STARTED IN Start. The watchdog stands down permanently
 	// the first time no watched duty is live, and the host is not live
 	// until node.Start runs it — so building it here and starting it there

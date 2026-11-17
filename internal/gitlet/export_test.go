@@ -2,11 +2,14 @@ package gitlet
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // Quiet is quiet, for this package's external benchmarks.
@@ -29,6 +32,9 @@ func ChangeCeilingRefusal(c *WriteCeiling, asker Principal, repo RepoRef, own bo
 // GitShareWait — so a case waits it out in milliseconds.
 func SetShareWait(s *GitShare, d time.Duration) { s.wait = d }
 
+// SummaryBytes is a repository summary's computed size, as a page of them is measured.
+func SummaryBytes(s RepoSummary) int { return s.encodedBytes() }
+
 // SetPageLimits has r end every page at rows rows or bytes of encoded rows —
 // the cases that read a snapshot across several pages without seeding tens of
 // thousands of rows. The shipped limits are MaxSnapshotItems and MaxPageBytes.
@@ -41,10 +47,29 @@ func SetRefScanBounds(r *Reader, scanned, active int) {
 	r.refsScanned, r.activeCounted = scanned, active
 }
 
+// SetPushScanBound has r read at most n pushes a page of a narrowed push history: MaxPushesScanned as shipped.
+func SetPushScanBound(r *Reader, n int) { r.pushesScanned = n }
+
+// CountedCommands is n with c counted in by what became of it, as a push row's are.
+func CountedCommands(n CommandCounts, c Command) CommandCounts {
+	n.add(c)
+	return n
+}
+
+// SetRepoListingBounds has r sum at most sized repositories' size into a listing's total and walk
+// at most walk push rows for a card's last push: MaxReposSized and MaxLastPushWalk as shipped.
+func SetRepoListingBounds(r *Reader, sized, walk int) { r.reposSized, r.lastPushWalk = sized, walk }
+
 // SetTipWindow has r read at most landings landings above a target's green
 // for its tip work — the cases that reach a window's bound without landing
 // MaxTipLandings pushes.
 func SetTipWindow(r *Reader, landings int) { r.tipWindow = landings }
+
+// SetSpokenScanBound has r read at most n conversations a page of a live state by last move.
+func SetSpokenScanBound(r *Reader, n int) { r.spokenScanned = n }
+
+// SetQueueCountBound has r walk at most n entries a queue count: MaxQueueCounted as shipped.
+func SetQueueCountBound(r *Reader, n int) { r.queueCounted = n }
 
 // SetRetentionPace has r measure and pace its steps by clock and sleep, take
 // steps for budget, and read the listing page repositories at a time, rather
@@ -355,6 +380,50 @@ const WidestComponent = widestComponent
 // ReconcileInFlight is how many repositories a reconcile decides at once.
 const ReconcileInFlight = reconcileInFlight
 
+// ReconcileRecordRows is the most rows one record a reconcile writes touches.
+const ReconcileRecordRows = reconcileRecordRows
+
+// RecountChanges re-derives db's derived rows, the change counts and the push activity among them,
+// as an upgraded node's first boot does, for a case that seeds rows by hand.
+func RecountChanges(t testing.TB, db store.ReplicatedHandle) {
+	t.Helper()
+	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := NewApplier(nil).Rederive(t.Context(), tx, statelog.ApplyOptions{})
+		return err
+	}); err != nil {
+		t.Fatalf("re-derive the change counts: %v", err)
+	}
+}
+
+// CountsAsks reports whether q asks a part, as the reader's refusal of a query naming none reads it.
+func CountsAsks(q CountsQuery) bool { return q.asks() }
+
+// ChangeCountsDrift names the first difference between db's change counts and its rows, "" for none.
+func ChangeCountsDrift(t testing.TB, db store.ReplicatedHandle) string {
+	t.Helper()
+	var drift string
+	if err := db.Reader().Read(t.Context(), func(tx *sql.Tx) (err error) {
+		drift, err = changeCountsDrift(t.Context(), tx)
+		return err
+	}); err != nil {
+		t.Fatalf("read the change counts: %v", err)
+	}
+	return drift
+}
+
+// ActivityDrift names the first difference between db's push activity and its push rows, "" for none.
+func ActivityDrift(t testing.TB, db store.ReplicatedHandle) string {
+	t.Helper()
+	var drift string
+	if err := db.Reader().Read(t.Context(), func(tx *sql.Tx) (err error) {
+		drift, err = activityDrift(t.Context(), tx)
+		return err
+	}); err != nil {
+		t.Fatalf("read the push activity: %v", err)
+	}
+	return drift
+}
+
 // DecideEach is the reconcile's closed loop of decisions.
 var DecideEach = decideEach
 
@@ -375,3 +444,6 @@ func LayerCut(sections [3]int64, i int) (start, size int64, runs [][3]int64) {
 	}
 	return cut.start, cut.size, runs
 }
+
+// SetStandingCountBound has r count at most n places a state: MaxStandingCounted as shipped.
+func SetStandingCountBound(r *Reader, n int) { r.standingCounted = n }

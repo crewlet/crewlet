@@ -640,10 +640,18 @@ var droppingViewers = []struct{ file, word, why string }{
 		"object an expunge is dropping among it, by its id"},
 	{"internal/gitlet/host/advertise.go", "upload-pack", "the advertisement of the fetch after it, run as that " +
 		"fetch runs"},
+	{"internal/gitlet/host/download.go", "cat-file", "a download's lookup and its file's bytes, as the copy " +
+		"serves them"},
+	{"internal/gitlet/host/download.go", "ls-tree", "an archive's measure of the commit it serves"},
+	{"internal/gitlet/host/download.go", "archive", "an archive of a commit the copy serves"},
 	{"internal/gitlet/cache/missing.go", "cat-file", "which of a fetch's wants the copy lacks: a dropping object " +
 		"is one the fetch's upload-pack serves, never one a sync could bring"},
 	{"internal/gitlet/cache/refs.go", "cat-file", "a round's peel of the tags it sets, through the view the " +
 		"directory holds (heldView): a ref may reach a dropping tag between an expunge's begin and its commit"},
+	{"internal/gitlet/cache/tags.go", "cat-file", "a round's tag step: the types and dates of the tags it " +
+		"levels, through the view the directory holds (heldView), as the peel reads them"},
+	{"internal/gitlet/cache/tags.go", "log", "a round's tag step: the committer dates of its lightweight tags' " +
+		"commits, through the view the directory holds (heldView)"},
 	{"internal/gitlet/cache/layers.go", "rev-list", "a placement's canary, a bitmapped walk of what the refs " +
 		"reach, through the view the directory holds (heldView)"},
 	{"internal/gitlet/cache/verify.go", "fsck", "Verify's connectivity check of what the copy serves, through " +
@@ -661,6 +669,8 @@ var droppingViewers = []struct{ file, word, why string }{
 	{"internal/gitlet/query/compare.go", "rev-list", queryServes},
 	{"internal/gitlet/query/diff.go", "diff-tree", queryServes},
 	{"internal/gitlet/query/diff.go", "diff-pairs", queryServes},
+	{"internal/gitlet/query/excerpts.go", "diff-tree", queryServes},
+	{"internal/gitlet/query/excerpts.go", "diff-pairs", queryServes},
 	{"internal/gitlet/query/facts.go", "diff-tree", queryServes},
 	{"internal/gitlet/query/facts.go", "patch-id", queryServes},
 	{"internal/gitlet/query/facts.go", "cat-file", queryServes},
@@ -669,6 +679,7 @@ var droppingViewers = []struct{ file, word, why string }{
 	{"internal/gitlet/query/log.go", "log", queryServes},
 	{"internal/gitlet/query/objects.go", "rev-parse", queryServes},
 	{"internal/gitlet/query/objects.go", "cat-file", queryServes},
+	{"internal/gitlet/query/patches.go", "diff-pairs", queryServes},
 	{"internal/gitlet/query/search.go", "rev-parse", queryServes},
 	{"internal/gitlet/query/search.go", "ls-tree", queryServes},
 	{"internal/gitlet/query/search.go", "grep", queryServes},
@@ -676,6 +687,8 @@ var droppingViewers = []struct{ file, word, why string }{
 	{"internal/gitlet/query/tips.go", "cat-file", queryServes},
 	{"internal/gitlet/query/tips.go", "log", queryServes},
 	{"internal/gitlet/query/tree.go", "ls-tree", queryServes},
+	{"internal/gitlet/query/treecommits.go", "log", queryServes},
+	{"internal/gitlet/query/treecommits.go", "ls-tree", queryServes},
 }
 
 // A CHECK IS CHARGED FOR THE DROPPING VIEW IT WALKS. Verify's connectivity

@@ -101,7 +101,7 @@ export function PhaseChart({
                 }
               : {
                   title: "No model calls in this window",
-                  hint: "Widen the window.",
+                  hint: "Widen the window, or check back once agents have worked.",
                 }
             : undefined
         }

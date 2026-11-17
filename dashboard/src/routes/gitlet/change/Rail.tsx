@@ -5,9 +5,9 @@
  * target — each section a heading and its rows.
  *
  * READ FROM THE CHANGE'S OWN PARTS: the detail the page holds, its revisions,
- * the reviews the conversation read, and the one part this rail asks of its
- * own, its reviewers (`code_change`, `part=reviewers`), asked again when the
- * change or its conversation moves (`reads.ts`). A reviewer's standing is the
+ * the reviews the conversation read, and its reviewers (`code_change`,
+ * `part=reviewers`), which the conversation reads once for its timeline and
+ * this rail, asked again when the change or its conversation moves. A reviewer's standing is the
  * verdict of their latest review among the pages the conversation loaded, or
  * that they are asked and have not answered.
  */
@@ -16,10 +16,16 @@ import { Button, EmptyValue, Tag } from "@crewlethq/ui";
 import { PageFailed } from "~/components/common.tsx";
 import { refName, verdictWord } from "~/lib/code.ts";
 import { plural } from "~/lib/format.ts";
-import type { CodeChangeDetail, CodeReviewRow, CodeRevisionRow } from "~/protocol/index.ts";
+import type { Paged } from "~/lib/usePaged.ts";
+import type {
+  CodeChangeAnswer,
+  CodeChangeDetail,
+  CodeReviewRow,
+  CodeReviewerRow,
+  CodeRevisionRow,
+} from "~/protocol/index.ts";
 import { changesHref, commitHref } from "../paths.ts";
-import { Face, ShaChip, useWhoName } from "../ui.tsx";
-import { usePagedReviewers } from "./reads.ts";
+import { BranchChip, Face, ShaChip, useWhoName } from "../ui.tsx";
 import "~/styles/gitlet.css";
 
 /** A section of the rail: its heading, then its rows. */
@@ -40,14 +46,13 @@ function standingOf(latest: CodeReviewRow | undefined, withdrawn: boolean): stri
 
 /** Whom the change asked for a review, each with where they stand. */
 function Reviewers({
-  change,
   reviews,
+  asked,
 }: {
-  change: CodeChangeDetail;
   reviews: readonly CodeReviewRow[];
+  asked: Paged<CodeReviewerRow, CodeChangeAnswer>;
 }) {
   const whoName = useWhoName();
-  const asked = usePagedReviewers(change);
   // EACH REVIEWER'S LATEST VERDICT, from every review page loaded: the pages
   // are oldest first, so the last one met is the newest.
   const latest = new Map<string, CodeReviewRow>();
@@ -160,10 +165,13 @@ export function ChangeRail({
   change,
   revisions,
   reviews,
+  asked,
 }: {
   change: CodeChangeDetail;
   revisions: readonly CodeRevisionRow[];
   reviews: readonly CodeReviewRow[];
+  /** Whom it asked, read once by the conversation for its timeline and this rail. */
+  asked: Paged<CodeReviewerRow, CodeChangeAnswer>;
 }) {
   const whoName = useWhoName();
   const work = change.work_item;
@@ -171,7 +179,7 @@ export function ChangeRail({
   return (
     <div className="code-rail">
       <RailSection title="Reviewers">
-        <Reviewers change={change} reviews={reviews} />
+        <Reviewers reviews={reviews} asked={asked} />
       </RailSection>
       <RailSection title="Owner">
         <p className="code-rail__row">
@@ -211,9 +219,9 @@ export function ChangeRail({
       </RailSection>
       <RailSection title="Branches">
         <p className="code-rail__branches">
-          <span className="mono">{refName(change.source_ref).name}</span>
-          <span className="code-rail__note">into</span>
-          <span className="mono">{refName(change.target_ref).name}</span>
+          <BranchChip name={refName(change.source_ref).name} />{" "}
+          <span className="code-rail__note">into</span>{" "}
+          <BranchChip name={refName(change.target_ref).name} />
         </p>
       </RailSection>
       <RailSection title="Head">

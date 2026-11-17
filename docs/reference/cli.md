@@ -16,7 +16,7 @@ subcommand below is served by it.
 | `crewlet backup -dir PATH [config]` | Copy a running node's store files **and** its stream estate into one verified directory on the *engine's* host — the only way to copy either, since the store is locked to that process and the embedded broker binds no socket. The token takes `admin`. See [Backups & Restore](../guides/backup.md) |
 | `crewlet retention status [config]` | Every `retention` command that talks to a node takes `admin`, the reads included. What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every data node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
 | `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
-| `crewlet retention ack -stream NAME -position N` | Publish an operator backup floor, for `backup_floor: operator`. It exists because the engine cannot see a copy that has left the host |
+| `crewlet retention ack -stream NAME -position N -taken-at TIME` | Publish an operator backup floor, for `backup_floor: operator`, recording when the copy was taken. It exists because the engine cannot see a copy that has left the host |
 | `crewlet retention evict <node> -confirm <node> [-op-id ID] [-force]` | Stop a node's records applying on every log the trim counts nodes on — the tracker's, the knowledge base's, the identity estate's, the artifacts log's, the artifact datastore's, Ask Crewlet's, chat's, the executor log's and the code log's — so the trim can pass a floor an absent machine is pinning. Refused, with nothing written, while the node still holds a live presence lease, or while its lease cannot be read (`-force` overrides both). Prints one line per log with its outcome and the watermark before and after; **exits non-zero when not every log holds the record**, printing under each unfinished log what finishes it — the command with `-op-id` where running it again can, and what to do instead where it cannot |
 | `crewlet retention readmit <node> -confirm <node> [-op-id ID]` | The inverse commit, on the same logs. Refused while the node has not applied every record up to the one just before the higher of the trim floor and the first surviving sequence of any one of those logs, and the refusal prints the numbers. Nothing is written to any log on a refusal; a partial readmission is finished like an eviction |
 | `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling, up or down. Runs inside a fleet-wide maintenance window and costs three restarts, because a log's Tier A ceiling is only the value its stream is created with. A raise the broker has no room for is refused **before** the window opens, and one it refuses at the apply is reported as a refusal rather than as an unknown outcome |
@@ -1205,8 +1205,11 @@ hold more entries than the prose output has lines. The prose output prints
 that message once, led by every path it applies to.
 
 Each warning is `{"kind", "ref", "path", "segments", "seat", "unit", "from",
-"to", "message"}`, every field always present, and it is one of two kinds
-here:
+"to", "message"}`, every field always present, with `title`, `person` and
+`item` (what it is about in a few words, the same said for a person, and the
+one thing within its seat or unit) and an advisory's `class` where they are
+set, as a [write's answer](api-endpoints.md#what-a-write-answers) carries
+them. It is one of two kinds here:
 
 - **`dangling_reference`** — a reference that resolves to nothing: a unit
   `lead`, a root seat's `unit`, a `manages` entry.
@@ -2830,14 +2833,21 @@ skip a healthy node takes, so it is never published as one.
 ### `crewlet retention ack`
 
 ```
-crewlet retention ack -stream CREWLET_TRACKER_LOG -position 918100000
+crewlet retention ack -stream CREWLET_TRACKER_LOG -position 918100000 -taken-at 2026-11-17T03:00:00Z
 ```
 
 Publishes an operator backup floor. Under `backup_floor: operator` the trim
 follows this rather than the engine's own copies, because a backup is not a
-backup until it leaves the host and the engine cannot see that it has. Both
-flags are required: an acknowledgement moves the floor the trim deletes
+backup until it leaves the host and the engine cannot see that it has. All
+three flags are required: an acknowledgement moves the floor the trim deletes
 against, so there is no value to guess.
+
+`-taken-at` is when the copy was taken, as an RFC 3339 instant, and it is what
+the acknowledgement records: `backup_age` and the backup check age the copy
+from it, never from when you acknowledged it, so acknowledging a copy taken
+three days ago reads as a backup three days old. An instant later than the
+node's clock is refused (`taken_at_in_future`, naming what the node's clock
+reads), because no copy can be younger than now.
 
 One acknowledgement covers the one log it names, and is kept per log:
 acknowledging the next log leaves this one standing, and each log's trim reads

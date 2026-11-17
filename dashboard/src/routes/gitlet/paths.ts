@@ -28,7 +28,10 @@ export type RepoTab = (typeof REPO_TABS)[number];
  * Where on a repository's page an address points, by its query keys: the tab,
  * and on Code and Commits the revision (`ref`, a branch, a tag, a whole ref
  * or a commit id; none is the default branch) and the path; on Code the lens
- * (`blame`) and the lines picked (`12`, `12-20`).
+ * (`blame`) and the lines picked (`12`, `12-20`); on Commits who pushed (`by`,
+ * a seat), from when (`when`) and words in a message (`q`); on Code at the root
+ * the document shown under the files (`doc`, the README where none); on
+ * Branches its tags (`view`).
  */
 export interface RepoAt {
   tab?: RepoTab;
@@ -36,6 +39,11 @@ export interface RepoAt {
   path?: string;
   lens?: "blame";
   lines?: string;
+  doc?: "license";
+  view?: "tags" | "all";
+  by?: string;
+  when?: "today" | "7d" | "30d" | "90d";
+  q?: string;
 }
 
 /**
@@ -79,11 +87,35 @@ export function compareHref(
 }
 
 /**
- * A change's own page opened on its diff: the Files tab, every file its head
- * revision changes with each one's patch (`ChangePage`'s `tab=files`).
+ * A change's own page opened on its diff: the Files changed tab, every file
+ * its head revision changes with each one's patch (`ChangePage`'s `tab=files`).
  */
 export function changeDiffHref(repo: string, number: number): string {
-  return href(changePath(repo, number), { tab: "files" });
+  return changeHref(repo, number, { tab: "files" });
+}
+
+/** A change page's tabs, the conversation first, in the order the digits take them. */
+export const CHANGE_TABS = ["conversation", "revisions", "checks", "files", "more"] as const;
+export type ChangeTab = (typeof CHANGE_TABS)[number];
+
+/** Where on a change's page an address points: its tab, and on Files changed the revision, file and thread. */
+export interface ChangeAt {
+  tab?: ChangeTab;
+  rev?: number;
+  since?: number;
+  file?: string;
+  thread?: string;
+}
+
+/** A change's page at `at`; the landing tab is never spelled. */
+export function changeHref(repo: string, number: number, at: ChangeAt = {}): string {
+  const query: Record<string, string> = {};
+  for (const [key, value] of Object.entries(at)) {
+    if (value !== undefined && value !== "" && !(key === "tab" && value === "conversation")) {
+      query[key] = String(value);
+    }
+  }
+  return href(changePath(repo, number), query);
 }
 
 /**

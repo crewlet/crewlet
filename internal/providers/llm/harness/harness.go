@@ -69,6 +69,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,6 +98,9 @@ type Config struct {
 	// Model is passed to the harness's model flag. Empty means the harness's own
 	// default, and a profile with no model flag requires it to be empty.
 	Model string
+	// Effort is the reasoning effort passed through the profile's effort args.
+	// Empty passes none, and the harness runs at its own default.
+	Effort string
 	// Harness names the built-in profile.
 	Harness string
 	// StateDir is the resolved state directory. The harness keeps its login and
@@ -143,6 +147,7 @@ type Config struct {
 type Provider struct {
 	key     string
 	model   string
+	effort  string
 	harness string
 	profile harnessprofile.Profile
 	ws      *Workspace
@@ -249,6 +254,7 @@ func New(cfg Config) (*Provider, error) {
 		bundle:           cfg.CredentialBundle,
 		bundleConfigured: cfg.CredentialBundleConfigured,
 		model:            cfg.Model,
+		effort:           cfg.Effort,
 		harness:          cfg.Harness,
 		profile:          profile,
 		ws:               ws,
@@ -283,6 +289,10 @@ func (p *Provider) Key() string { return p.key }
 // to the harness ([harnessprofile.Profile.ModelArgument]) — what the executor's run of
 // the same harness in a box is handed too, so the two name one model.
 func (p *Provider) ModelArgument() string { return p.profile.ModelArgument(p.model) }
+
+// Effort is the entry's reasoning effort, empty for the harness's default. An
+// executor run of the same harness in a box is handed it too.
+func (p *Provider) Effort() string { return p.effort }
 
 // Profile is the resolved profile, for `crewlet llm doctor`.
 func (p *Provider) Profile() harnessprofile.Profile { return p.profile }
@@ -453,7 +463,7 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 		binary:  p.profile.Binary,
 		args:    p.argv(req.Tools != nil),
 		dir:     checkout.Work,
-		env:     buildEnv(p.profile, checkout, p.env, p.auth),
+		env:     buildEnv(p.profile, checkout, p.callEnv(), p.auth),
 		timeout: p.timeout,
 		grace:   p.termGrace,
 		failOn:  p.profile.FailureMarkers,
@@ -728,23 +738,36 @@ func newSessionID() string {
 	return hex.EncodeToString(raw[:])
 }
 
-// argv is the invocation's arguments: the profile's completion argv — its tool
-// route's in place of it for a run with tools, where the route declares one,
-// rendered by [Provider.serveTools] — then the model, then (in argv mode) the
-// prompt, which the caller appends.
+// argv is the invocation's arguments: the profile's completion argv (its tool
+// route's for a run with tools, rendered by [Provider.serveTools]), then the
+// model and its effort, then in argv mode the prompt, which the caller appends.
 func (p *Provider) argv(tools bool) []string {
 	complete := p.profile.CompleteArgs
 	if m := p.profile.MCP; tools && m != nil && len(m.CompleteArgs) > 0 {
 		complete = m.CompleteArgs
 	}
 	args := append([]string(nil), complete...)
-	if p.model == "" {
-		return args
+	if p.model != "" {
+		model := p.profile.EffortModel(p.model, p.effort)
+		for _, arg := range p.profile.ModelArgs {
+			args = append(args, strings.ReplaceAll(arg, "{model}", model))
+		}
 	}
-	for _, arg := range p.profile.ModelArgs {
-		args = append(args, strings.ReplaceAll(arg, "{model}", p.model))
+	return append(args, p.profile.EffortArgs(p.effort)...)
+}
+
+// callEnv is the operator's env for a call, with the effort's variables over it.
+func (p *Provider) callEnv() map[string]string {
+	effort := p.profile.EffortEnv(p.effort)
+	if len(effort) == 0 {
+		return p.env
 	}
-	return args
+	out := maps.Clone(p.env)
+	if out == nil {
+		out = make(map[string]string, len(effort))
+	}
+	maps.Copy(out, effort)
+	return out
 }
 
 // completion turns a finished invocation into an answer or a classified

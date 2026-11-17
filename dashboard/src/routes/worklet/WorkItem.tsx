@@ -66,9 +66,7 @@ import {
   ActivityGlyph,
   EllipsisGlyph,
   PackageGlyph,
-  PauseGlyph,
   SquareKanbanGlyph,
-  TrashGlyph,
 } from "@crewlethq/icons/glyphs";
 import { heldReason, heldSetting, itemHold } from "~/lib/heldConversation.ts";
 import { ADVISOR_POLL_MS } from "~/lib/useAttention.ts";
@@ -94,7 +92,6 @@ import {
 } from "~/lib/seats.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { AdvisorNotice } from "~/protocol/advisor.ts";
-import { relTime } from "~/lib/format.ts";
 import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { useNow } from "~/lib/clock.ts";
 import {
@@ -129,6 +126,7 @@ import type {
   WorkSummary,
   WorkTombstone,
 } from "~/protocol/index.ts";
+import { ago } from "~/lib/ago.ts";
 
 /** How often a task and its sub-tasks are asked again: nothing pushes either. */
 const ITEM_POLL_MS = 15_000;
@@ -173,7 +171,7 @@ export function itemFlags(detail: WorkItemDetail) {
  */
 export function HeldNote({ hold }: { hold: AdvisorNotice }) {
   return (
-    <Callout variant="info" icon={<PauseGlyph size="md" />}>
+    <Callout variant="info">
       <span>
         <strong>Held by the engine:</strong> {heldReason(hold)}. Writing on it, or changing the
         agent's {heldSetting(hold)}, releases it.
@@ -212,10 +210,10 @@ export function RemovedNote({
 }) {
   const by = tomb.by ? (seatName?.(tomb.by) ?? tomb.by) : "";
   return (
-    <Callout variant="warning" icon={<TrashGlyph size="md" />}>
+    <Callout variant="warning">
       <span>
         <strong>In the trash.</strong>
-        {` Moved to the trash${by ? ` by ${by}` : ""} ${relTime(tomb.at, now)}`}
+        {` Moved to the trash${by ? ` by ${by}` : ""} ${ago(tomb.at, now, { clock: true })}`}
         {tomb.removed_with ? (
           <>
             {" "}
@@ -568,6 +566,7 @@ export function WorkItem({ id }: { id: string }) {
                           still open. */}
                       <ChangeList
                         params={{ work: changeWorkRef(item.id) }}
+                        omit={["work"]}
                         empty={{
                           title: "No changes",
                           hint: "A change that names this task as its work item is listed here.",

@@ -2,6 +2,7 @@ package gitlet_test
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -217,6 +218,7 @@ func TestALandingReprovesEveryEntrysGate(t *testing.T) {
 	if main := n.target(repo, mainRef); main != oidOf("M") {
 		t.Fatalf("main is at %q after its landing, want the train's tip", main)
 	}
+	n.activityHolds()
 	if m := n.mergedChange(change); m.state != string(gitlet.ChangeStateMerged) || m.via != string(gitlet.MergedViaQueue) ||
 		m.mergeOID != oidOf("M") || m.by != "founder" || m.byKind != string(gitlet.PartyPerson) ||
 		m.operator != "pat:ada" {
@@ -1556,4 +1558,265 @@ func TestTheHomesQueueWorkSaysWhomEachEntryWasEnqueuedFor(t *testing.T) {
 			}
 		})
 	}
+}
+
+// queuedTwo is a repository named name, its main a queue target ([queueGate]) at A, holding
+// dev's two ready changes into main, from feature at B and from release at R, each queued by
+// ada: the repository and the two entries, in queue order.
+func queuedTwo(t *testing.T, n *node, c *gitlet.Committer, w *gitlet.ChangeWriter,
+	name string) (repo string, entries [2]string) {
+
+	t.Helper()
+	s := suiteSettings()
+	s.Owner = gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Engineering"}
+	s.Protections[0].Gate = queueGate()
+	repo = n.ensure(name, s, t1).RepoID
+	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, gitlet.ZeroOID, oidOf("A")),
+		set(featureRef, gitlet.ZeroOID, oidOf("B")), set(releaseRef, gitlet.ZeroOID, oidOf("R"))))
+	for i, source := range []struct{ ref, head string }{{featureRef, oidOf("B")}, {releaseRef, oidOf("R")}} {
+		opened, err := c.ProposeChange(t.Context(), opening(repo, source.ref, mainRef, dev))
+		requireChanged(t, opened, err)
+		converse(t, w, n.revising(repo, opened.ChangeID, 1, source.head, mainRef, nil))
+		converse(t, w, reviewing(repo, opened.ChangeID, platLead, 1, gitlet.VerdictApprove, nil))
+		n.passed(repo, source.head, mainRef, "unit")
+		enqueue := enqueueing(repo, opened.ChangeID, ada, source.head)
+		res, err := c.ProposeQueue(t.Context(), enqueue)
+		requireQueued(t, res, err, gitlet.QueueWaiting, i+1)
+		entries[i] = enqueue.Enqueue.EntryID
+	}
+	return repo, entries
+}
+
+// batchOfTwo is a train on main onto A of ONE candidate merging both entries, the first as M1
+// and the second as M2, its tip: the proposal and the candidate's id.
+func batchOfTwo(repo string, entries [2]string) (gitlet.QueueProposal, string) {
+	opID := statelog.NewOpID(time.Now(), "code_queue")
+	train := gitlet.QueueTrainID(opID)
+	candidate := gitlet.QueueCandidateID(train, 1)
+	return gitlet.QueueProposal{OpID: opID, Candidate: &gitlet.Candidate{RepoID: repo, TargetRef: mainRef,
+		Train: train, BaseOID: oidOf("A"), Pack: queuedPack(train), Candidates: []gitlet.TrainCandidate{{
+			CandidateID: candidate, Ordinal: 1, TipOID: oidOf("M2"), Entries: []gitlet.CandidateEntry{
+				{EntryID: entries[0], Commit: oidOf("M1")}, {EntryID: entries[1], Commit: oidOf("M2")}}}}}}, candidate
+}
+
+// failedOn is an eject of entry check_failed naming e2e and the train t.
+func failedOn(repo, entry string, t *gitlet.EjectionTrain) gitlet.QueueProposal {
+	return queueRecord(func(p *gitlet.QueueProposal) {
+		p.Eject = &gitlet.Eject{RepoID: repo, Entries: []gitlet.Ejection{{EntryID: entry,
+			Reason: gitlet.EjectCheckFailed, Checks: []string{"e2e"}, TestedIn: t}}}
+	})
+}
+
+// AN EJECTION KEEPS THE TRAIN IT FAILED ON: two changes batched into one candidate onto A,
+// the first merged as M1 and the second as M2, its tip; the first ejected check_failed naming
+// the train, candidate, base A and M1, the commit e2e failed on. The eject abandons the
+// train, its candidate's rows gone, the second entry waiting in no candidate, and the first's
+// row keeps the train in its ejection, weighed by its bytes; the queue read's ejection and the
+// change's card answer it, and the record is stamped [gitlet.TestedInVersion].
+//
+// Mutations: leave the train out of ejectedDetail (the row, the read and the card name none,
+// red); weigh the row by the detail without the train (ejected_bytes is not its length, red).
+func TestAnEjectionKeepsTheTrainItFailedOn(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	repo, entries := queuedTwo(t, n, c, w, "web")
+	train, candidate := batchOfTwo(repo, entries)
+	res, err := c.ProposeQueue(t.Context(), train)
+	requireRecorded(t, res, err)
+
+	want := gitlet.EjectionTrain{CandidateID: candidate, BaseOID: oidOf("A"), CommitOID: oidOf("M1")}
+	tested := want
+	res, err = c.ProposeQueue(t.Context(), failedOn(repo, entries[0], &tested))
+	at := requireRecorded(t, res, err)
+	if v := n.recordAt(at).V; v != gitlet.TestedInVersion {
+		t.Errorf("the eject naming its train is stamped %d, want %d (TestedInVersion)", v, gitlet.TestedInVersion)
+	}
+	if left := n.count(`SELECT COUNT(*) FROM code_candidates WHERE repo_id = ?`, repo); left != 0 {
+		t.Fatalf("%d candidates outlive the train their entry was ejected from", left)
+	}
+	if state, _ := n.entryState(repo, entries[1]); state != gitlet.QueueWaiting ||
+		n.count(`SELECT COUNT(*) FROM code_queue WHERE repo_id = ? AND entry_id = ? AND candidate_id = ''`,
+			repo, entries[1]) != 1 {
+		t.Fatalf("the entry batched behind the culprit is %s or still in a candidate, want waiting in none", state)
+	}
+	if kept := n.count(`SELECT COUNT(*) FROM code_queue WHERE repo_id = ? AND entry_id = ?
+		AND state = 'ejected' AND ejected ->> '$.tested_in.candidate_id' = ?
+		AND ejected ->> '$.tested_in.base_oid' = ? AND ejected ->> '$.tested_in.commit_oid' = ?
+		AND ejected_bytes = length(CAST(ejected AS BLOB))`,
+		repo, entries[0], want.CandidateID, want.BaseOID, want.CommitOID); kept != 1 {
+		t.Fatalf("the ejected entry's row does not keep the train %+v weighed by its bytes", want)
+	}
+
+	var endedMicros int64
+	if err := n.db.Reader().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `SELECT ended_at FROM code_queue WHERE repo_id = ? AND entry_id = ?`,
+			repo, entries[0]).Scan(&endedMicros)
+	}); err != nil {
+		t.Fatalf("read the ejection's instant: %v", err)
+	}
+	soon := time.UnixMicro(endedMicros).UTC().Add(time.Hour)
+	n.readAt.Store(&soon)
+	answer, err := n.reader.Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadQueue, Asker: ada, Repo: "web"})
+	if err != nil {
+		t.Fatalf("read the queue: %v", err)
+	}
+	if len(answer.Ejected) != 1 || answer.Ejected[0].TestedIn == nil || *answer.Ejected[0].TestedIn != want {
+		t.Fatalf("the queue read answers the ejections %+v, want the first entry's naming %+v", answer.Ejected, want)
+	}
+	if got := cardOf(t, n, 1).Ejected; got == nil || got.TestedIn == nil || *got.TestedIn != want {
+		t.Fatalf("the ejected change's card carries %+v, want the train %+v", got, want)
+	}
+}
+
+// AN EJECTION'S TRAIN IS HELD TO THE ROWS: a train its entry is not testing in, as its rows
+// hold it, is refused stale and appends nothing: one named while the entry only waits; one
+// whose candidate a newer train replaced; one naming the second entry's commit for the first;
+// and one naming another base. On a train of two candidates, one entry each, the second
+// entry naming the first candidate onto the first's base, and its own candidate onto the
+// first's base. The train the rows hold is recorded, on each train.
+//
+// Mutations: skip testedInStale in decideEject (each is recorded, red); drop its check of the
+// entry's candidate (the first candidate is recorded, red); drop the candidate from its match
+// of the train's rows (its own candidate onto the first's base is recorded, red).
+func TestAnEjectionsTrainIsHeldToTheRows(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	repo, entries := queuedTwo(t, n, c, w, "web")
+	refused := func(what, entry string, tested gitlet.EjectionTrain) {
+		t.Helper()
+		before := n.end()
+		res, err := c.ProposeQueue(t.Context(), failedOn(repo, entry, &tested))
+		if res.Refusal != gitlet.MergeRefusalStale {
+			t.Errorf("an ejection naming %s answered %+v, %v, want refused stale", what, res, err)
+			return
+		}
+		requireQueueRefused(t, n, before, res, err, gitlet.MergeRefusalStale, "read its queue again")
+	}
+
+	first, replaced := batchOfTwo(repo, entries)
+	refused("a train while its entry waits", entries[0], gitlet.EjectionTrain{CandidateID: replaced,
+		BaseOID: oidOf("A"), CommitOID: oidOf("M1")})
+	res, err := c.ProposeQueue(t.Context(), first)
+	requireRecorded(t, res, err)
+	second, candidate := batchOfTwo(repo, entries)
+	res, err = c.ProposeQueue(t.Context(), second)
+	requireRecorded(t, res, err)
+	refused("the candidate a newer train replaced", entries[0], gitlet.EjectionTrain{CandidateID: replaced,
+		BaseOID: oidOf("A"), CommitOID: oidOf("M1")})
+	refused("the next entry's commit", entries[0], gitlet.EjectionTrain{CandidateID: candidate,
+		BaseOID: oidOf("A"), CommitOID: oidOf("M2")})
+	refused("another base", entries[0], gitlet.EjectionTrain{CandidateID: candidate, BaseOID: oidOf("Z"),
+		CommitOID: oidOf("M1")})
+	res, err = c.ProposeQueue(t.Context(), failedOn(repo, entries[0], &gitlet.EjectionTrain{
+		CandidateID: candidate, BaseOID: oidOf("A"), CommitOID: oidOf("M1")}))
+	requireRecorded(t, res, err)
+
+	// Two candidates: the first merges entry one onto A as M1, the second entry two onto M1 as M2.
+	repo, entries = queuedTwo(t, n, c, w, "api")
+	pair := trainOf(repo, oidOf("A"), gitlet.CandidateEntry{EntryID: entries[0], Commit: oidOf("M1")},
+		gitlet.CandidateEntry{EntryID: entries[1], Commit: oidOf("M2")})
+	res, err = c.ProposeQueue(t.Context(), pair)
+	requireRecorded(t, res, err)
+	one, two := pair.Candidate.Candidates[0].CandidateID, pair.Candidate.Candidates[1].CandidateID
+	refused("the candidate before its own, onto that one's base", entries[1], gitlet.EjectionTrain{
+		CandidateID: one, BaseOID: oidOf("A"), CommitOID: oidOf("M2")})
+	refused("its candidate onto the one before's base", entries[1], gitlet.EjectionTrain{CandidateID: two,
+		BaseOID: oidOf("A"), CommitOID: oidOf("M2")})
+	res, err = c.ProposeQueue(t.Context(), failedOn(repo, entries[1], &gitlet.EjectionTrain{
+		CandidateID: two, BaseOID: oidOf("M1"), CommitOID: oidOf("M2")}))
+	requireRecorded(t, res, err)
+}
+
+// ONLY A FAILED CHECK'S EJECTION NAMES ITS TRAIN, whole: a train beside a conflict, beside
+// no checks, under a candidate that is no UUIDv7, onto a base that is no whole object id, or
+// at the base itself is refused naming the ejection's tested_in; a whole one is valid.
+//
+// Mutation: drop any of Eject.validate's train rules (that case is valid, red).
+func TestOnlyAFailedChecksEjectionNamesItsTrain(t *testing.T) {
+	t.Parallel()
+	const entryID = "0190f3c4-0000-7000-8000-0000000000e1"
+	whole := gitlet.EjectionTrain{CandidateID: gitlet.QueueCandidateID(statelog.NewOpID(time.Now(), ""), 1),
+		BaseOID: oidOf("A"), CommitOID: oidOf("M")}
+	eject := func(x gitlet.Ejection) gitlet.QueueProposal {
+		return queueRecord(func(p *gitlet.QueueProposal) {
+			p.Eject = &gitlet.Eject{RepoID: "0190f3c4-0000-7000-8000-00000000c0de", Entries: []gitlet.Ejection{x}}
+		})
+	}
+	with := func(set func(*gitlet.EjectionTrain)) *gitlet.EjectionTrain {
+		tr := whole
+		set(&tr)
+		return &tr
+	}
+	if err := eject(gitlet.Ejection{EntryID: entryID, Reason: gitlet.EjectCheckFailed, Checks: []string{"e2e"},
+		TestedIn: &whole}).Validate(); err != nil {
+		t.Fatalf("a failed check's ejection naming its whole train is refused: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		x    gitlet.Ejection
+		says string
+	}{
+		"a conflict's": {gitlet.Ejection{Reason: gitlet.EjectConflict, TestedIn: &whole},
+			"only a failed check's ejection names the train"},
+		"one naming no checks": {gitlet.Ejection{Reason: gitlet.EjectCheckFailed, TestedIn: &whole},
+			"names the checks that failed on its train"},
+		"a candidate that is no UUIDv7": {gitlet.Ejection{Reason: gitlet.EjectCheckFailed, Checks: []string{"e2e"},
+			TestedIn: with(func(tr *gitlet.EjectionTrain) { tr.CandidateID = "candidate-1" })},
+			"tested_in.candidate_id"},
+		"a short base": {gitlet.Ejection{Reason: gitlet.EjectCheckFailed, Checks: []string{"e2e"},
+			TestedIn: with(func(tr *gitlet.EjectionTrain) { tr.BaseOID = "abc123" })}, "tested_in.base_oid"},
+		"a zero commit": {gitlet.Ejection{Reason: gitlet.EjectCheckFailed, Checks: []string{"e2e"},
+			TestedIn: with(func(tr *gitlet.EjectionTrain) { tr.CommitOID = gitlet.ZeroOID })},
+			"tested_in.commit_oid"},
+		"the base as its commit": {gitlet.Ejection{Reason: gitlet.EjectCheckFailed, Checks: []string{"e2e"},
+			TestedIn: with(func(tr *gitlet.EjectionTrain) { tr.CommitOID = tr.BaseOID })},
+			"is not " + oidOf("A")[:7] + " itself"},
+	} {
+		tc.x.EntryID = entryID
+		err := eject(tc.x).Validate()
+		if !errors.Is(err, gitlet.ErrInvalidProposal) || !strings.Contains(err.Error(), "eject.entries[0].tested_in") ||
+			!strings.Contains(err.Error(), tc.says) {
+			t.Errorf("%s train is answered %v, want it refused naming eject.entries[0].tested_in: %q", name, err,
+				tc.says)
+		}
+	}
+}
+
+// ONLY AN EJECTION NAMING ITS TRAIN STAMPS ITS RECORD: of the ejects a queue lands, the one
+// naming its train is stamped [gitlet.TestedInVersion]; a failed check's naming none and a
+// conflict's are base format, 1.
+//
+// Mutations: drop the Ejection.TestedIn row (stamped 1, red); tag the field without
+// omitempty (every eject stamped 7, red).
+func TestOnlyAnEjectionNamingItsTrainStampsItsRecord(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	repo, entries := queuedTwo(t, n, c, w, "web")
+	train, candidate := batchOfTwo(repo, entries)
+	res, err := c.ProposeQueue(t.Context(), train)
+	requireRecorded(t, res, err)
+
+	stamped := func(what string, p gitlet.QueueProposal, want int) {
+		t.Helper()
+		got, proposeErr := c.ProposeQueue(t.Context(), p)
+		if v := n.recordAt(requireRecorded(t, got, proposeErr)).V; v != want {
+			t.Errorf("%s is stamped %d, want %d", what, v, want)
+		}
+	}
+	stamped("a culprit's eject naming its train", failedOn(repo, entries[0], &gitlet.EjectionTrain{
+		CandidateID: candidate, BaseOID: oidOf("A"), CommitOID: oidOf("M1")}), gitlet.TestedInVersion)
+	stamped("a failed check's eject naming no train", failedOn(repo, entries[1], nil), 1)
+	repo, entries = queuedTwo(t, n, c, w, "api")
+	stamped("a conflict's eject", queueRecord(func(p *gitlet.QueueProposal) {
+		p.Eject = &gitlet.Eject{RepoID: repo, Entries: []gitlet.Ejection{{EntryID: entries[0],
+			Reason: gitlet.EjectConflict, Paths: []string{"go.mod"}}}}
+	}), 1)
 }

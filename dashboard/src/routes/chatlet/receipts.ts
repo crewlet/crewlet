@@ -1,7 +1,7 @@
 /**
- * Whom a person's message reached, and who answered: the words a receipt
- * under a message and the reach line over the composer draw with uilet's
- * `DeliveryReceipt`.
+ * Whom a person's message reached, and who answered and when: what a receipt
+ * ending a message, the composer's draft receipt and a thread's reply receipt
+ * hand uilet's `DeliveryReceipt`, which draws them as a mark and a tooltip.
  *
  * THE ENGINE DECIDES, THIS FILE WORDS. Whom a message reached is the post's
  * own routing, written onto the message (`message.reach`); who answered is
@@ -27,19 +27,24 @@ const REASON_NOTES: Record<string, string> = {
   follow: "following the thread",
 };
 
-/** The seats a reach names, as the receipt draws them, answered or not. */
+/** The seats a reach names, as the receipt draws them, answered or not, and when. */
 export function reachRecipients(
   reach: ChatReach | undefined,
   answered: readonly ChatAnswer[] | undefined,
   nameOf: (handle: string) => string,
+  timeOf?: (at: string) => string,
 ): DeliveryReceiptRecipient[] {
-  const done = new Set((answered ?? []).map((a) => a.handle));
-  return (reach?.recipients ?? []).map((r) => ({
-    id: r.handle,
-    name: nameOf(r.handle),
-    reason: REASON_NOTES[r.reason],
-    answered: done.has(r.handle),
-  }));
+  const done = new Map((answered ?? []).map((a) => [a.handle, a.at]));
+  return (reach?.recipients ?? []).map((r) => {
+    const at = done.get(r.handle);
+    return {
+      id: r.handle,
+      name: nameOf(r.handle),
+      reason: REASON_NOTES[r.reason],
+      answered: at !== undefined,
+      ...(at !== undefined && timeOf ? { answeredAt: timeOf(at) } : {}),
+    };
+  });
 }
 
 /**

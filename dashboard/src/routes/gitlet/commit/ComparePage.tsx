@@ -34,7 +34,9 @@ import {
   Checkbox,
   EmptyState,
   FormField,
+  InlineCode,
   Input,
+  NoticeList,
   Skeleton,
   Stack,
   Tag,
@@ -60,7 +62,7 @@ import type {
 import { ReviewerPicker } from "../ReviewerPicker.tsx";
 import { repoHref } from "../paths.ts";
 import { subjectOf } from "../repo/History.tsx";
-import { RefPicker, revisionWord, useRevisions } from "../repo/refs.tsx";
+import { RefPicker, revisionWord } from "../repo/refs.tsx";
 import { DiffFiles } from "./DiffFiles.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import "~/styles/gitlet.css";
@@ -76,10 +78,6 @@ export function ComparePage({ repo }: { repo: string }) {
   const read = useCodeQuery("code_repo", { name: repo }, { enabled: named });
   const [base, setBase] = useParam("base", "", "filter");
   const [head, setHead] = useParam("head", "", "filter");
-  // ONE READ OF THE BRANCHES AND TAGS FOR BOTH PICKERS (`refs.tsx`'s
-  // useRevisions), under the repository's current name.
-  const current = read.data?.repo?.name ?? "";
-  const revisions = useRevisions(current, current !== "");
   if (!named) {
     return (
       <EmptyState
@@ -103,20 +101,20 @@ export function ComparePage({ repo }: { repo: string }) {
       <PageToolbar>
         <RefPicker
           repo={detail}
-          revisions={revisions}
           value={base}
           onChoose={setBase}
           label="Base"
+          title="Choose the base"
         />
         <span className="muted" aria-hidden="true">
           ←
         </span>
         <RefPicker
           repo={detail}
-          revisions={revisions}
           value={head}
           onChoose={setHead}
           label="Compared"
+          title="Choose what to compare"
           unset="Choose what to compare"
         />
         <Button
@@ -295,20 +293,26 @@ function Relation({
         </a>
       </p>
       {preview.state === "conflict" ? (
-        <Callout variant="neutral">
-          <Stack gap={1}>
-            <span>{`Merging ${head} into ${base} conflicts in:`}</span>
-            <ul className="code-rules">
-              {(preview.conflicts ?? []).map((p) => (
-                <li key={p} className="mono">
-                  {p}
-                </li>
-              ))}
-            </ul>
-            {(preview.conflicts_omitted ?? 0) > 0 && (
-              <span className="t-caption">{`and ${plural(preview.conflicts_omitted ?? 0, "more path")}`}</span>
-            )}
-          </Stack>
+        <Callout
+          variant="neutral"
+          title={`Merging ${head} into ${base} conflicts in ${plural((preview.conflicts?.length ?? 0) + (preview.conflicts_omitted ?? 0), "path")}`}
+        >
+          <NoticeList
+            notices={[
+              ...(preview.conflicts ?? []).map((p) => ({
+                key: p,
+                title: <InlineCode>{p}</InlineCode>,
+              })),
+              ...((preview.conflicts_omitted ?? 0) > 0
+                ? [
+                    {
+                      key: "omitted",
+                      title: `${plural(preview.conflicts_omitted ?? 0, "more path")} not listed`,
+                    },
+                  ]
+                : []),
+            ]}
+          />
         </Callout>
       ) : preview.state === "unknown" ? (
         <p className="muted">

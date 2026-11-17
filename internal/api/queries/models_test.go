@@ -19,6 +19,7 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/modelcatalog"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -394,6 +395,13 @@ func TestAModelStepIsOfferedTheCataloguesModels(t *testing.T) {
 	}) {
 		t.Errorf("claude-code = %+v", got)
 	}
+	// AN ALIAS SAYS WHAT IT RESOLVES TO, as the harness's profile records it.
+	profile, _ := harnessprofile.Builtin("claude-code")
+	for i, a := range profile.ModelAliases {
+		if row := got.Aliases[i]; row.Model != a.Model || row.Version != a.Version || row.Version == "" {
+			t.Errorf("alias %s = %+v, want the profile's model %q and version %q", a.ID, row, a.Model, a.Version)
+		}
+	}
 	got = answer(t, s, "llm_models", map[string]any{"harness": "opencode",
 		"provider": "openrouter"}).(queries.ModelsAnswer)
 	if got.Models[0].ID != "openrouter/m-1" {
@@ -402,7 +410,22 @@ func TestAModelStepIsOfferedTheCataloguesModels(t *testing.T) {
 
 	r := queries.NewRegistry()
 	queries.Register(r, s)
-	for _, params := range []map[string]any{{"harness": "gemini-cli"}, {"harness": "opencode"}, {}} {
+	// EVERY BUILT-IN HARNESS IS ANSWERED: its own page and aliases, a catalogue
+	// where one provider serves it, and Pi's provider's models in its grammar.
+	got = answer(t, s, "llm_models", map[string]any{"harness": "gemini-cli"}).(queries.ModelsAnswer)
+	if got.Provider != "google" || len(got.Models) != 1 {
+		t.Errorf("gemini-cli = %+v", got)
+	}
+	got = answer(t, s, "llm_models", map[string]any{"harness": "cursor-agent"}).(queries.ModelsAnswer)
+	if got.Source != "none" || got.Provider != "" || len(got.Models) != 0 || got.Reason == "" {
+		t.Errorf("cursor-agent = %+v, want no catalogue and a reason", got)
+	}
+	got = answer(t, s, "llm_models", map[string]any{"harness": "pi", "provider": "anthropic"}).(queries.ModelsAnswer)
+	if got.Models[0].ID != "anthropic/m-1" {
+		t.Errorf("pi's model id = %q, want <provider>/<id>", got.Models[0].ID)
+	}
+	for _, params := range []map[string]any{{"harness": "custom"}, {"harness": "nope"},
+		{"harness": "opencode"}, {"harness": "pi"}, {}} {
 		if _, err := r.Answer(everyGrant(t), "llm_models", params); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("%v = %v, want bad params", params, err)
 		}

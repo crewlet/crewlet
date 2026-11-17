@@ -322,32 +322,52 @@ func SignInWeakens(next, prior *Company) []Warning {
 	was, now := prior.SignIn.Policy(), next.SignIn.Policy()
 	var out []Warning
 	if was.SecondFactor == iam.SecondFactorRequired && now.SecondFactor == iam.SecondFactorOptional {
-		out = append(out, advisory(field(SignInSecondFactorKey), "This lets people sign in with "+
+		out = append(out, passwordAloneAdvice.raise(field(SignInSecondFactorKey), "This lets people sign in with "+
 			"a password alone. Anyone who learns a password can then act as that person."))
 	}
 	if now.MinPasswordLength < was.MinPasswordLength {
-		out = append(out, advisory(field(SignInPasswordKey), fmt.Sprintf("This lets people set "+
-			"passwords of %s instead of %s, which are easier to guess.",
-			words.Count(now.MinPasswordLength, "character", "characters"),
-			words.Count(was.MinPasswordLength, "character", "characters"))))
+		from := words.Count(was.MinPasswordLength, "character", "characters")
+		to := words.Count(now.MinPasswordLength, "character", "characters")
+		w := shorterPasswordsAdvice.raise(field(SignInPasswordKey), fmt.Sprintf("This lets people set "+
+			"passwords of %s instead of %s, which are easier to guess.", to, from))
+		w.Item = from + " to " + to
+		out = append(out, w)
 	}
-	longer := func(key string, was, now time.Duration, what string) {
+	longer := func(a advice, key string, was, now time.Duration, what string) {
 		if now > was {
-			out = append(out, advisory(field(key), fmt.Sprintf(what,
-				DurationWords(now), DurationWords(was))))
+			w := a.raise(field(key), fmt.Sprintf(what, DurationWords(now), DurationWords(was)))
+			w.Item = DurationWords(was) + " to " + DurationWords(now)
+			out = append(out, w)
 		}
 	}
-	longer(SignInSessionLifetimeKey, was.SessionLifetime, now.SessionLifetime,
+	longer(longerSessionAdvice, SignInSessionLifetimeKey, was.SessionLifetime, now.SessionLifetime,
 		"This lets a session last %s instead of %s, so a stolen session works for longer. "+
 			"Sessions open now keep their shorter lifetime.")
-	longer(SignInIdleTimeoutKey, was.IdleTimeout, now.IdleTimeout,
+	longer(longerIdleAdvice, SignInIdleTimeoutKey, was.IdleTimeout, now.IdleTimeout,
 		"This keeps an unused session signed in for %s instead of %s, so a computer left "+
 			"open stays signed in for longer. Sessions open now keep their shorter limit.")
-	longer(SignInStepUpKey, was.StepUp, now.StepUp,
+	longer(longerStepUpAdvice, SignInStepUpKey, was.StepUp, now.StepUp,
 		"This lets one proof of identity authorise sensitive changes for %s instead of %s, "+
 			"so a session left open can make them for longer.")
 	return out
 }
+
+// The words of [SignInWeakens], one per value it weakens; each warning's
+// Item is the value it moves from and the one it moves to.
+var (
+	passwordAloneAdvice = says("A password alone is enough to sign in",
+		"People can sign in with a password alone, so anyone who learns a password can act as "+
+			"that person.")
+	shorterPasswordsAdvice = says("Shorter passwords are allowed",
+		"People can choose shorter passwords, which are easier to guess.")
+	longerSessionAdvice = says("Sessions last longer",
+		"A stolen session works for longer. Sessions open now keep their shorter lifetime.")
+	longerIdleAdvice = says("Idle sessions stay signed in longer",
+		"A computer left open stays signed in for longer. Sessions open now keep their shorter limit.")
+	longerStepUpAdvice = says("Sensitive changes need proof less often",
+		"One proof of identity covers sensitive changes for longer, so a session left open can "+
+			"make them for longer.")
+)
 
 // validateLimits checks the operator's limits against the engine's bounds.
 func (l SignInLimits) validate(path Path) error {

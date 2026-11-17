@@ -203,6 +203,9 @@ func (a *Applier) removeAsset(ctx context.Context, tx *sql.Tx, c applyContext, a
 // AN ELEVATED READ IS HISTORY (D09): the artifact's owner and editors see that
 // the admin path opened it.
 func (a *Applier) applyReader(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
+	if c.record.Op == OpInboxMarks {
+		return a.applyMarks(ctx, tx, c)
+	}
 	payload, err := DecodeMutation(c.record)
 	if err != nil {
 		return 0, err

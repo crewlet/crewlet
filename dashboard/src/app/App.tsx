@@ -93,12 +93,12 @@ const WorkSearch = lazyScreen("worklet", (m) => m.WorkSearch);
 const Project = lazyScreen("worklet", (m) => m.Project);
 const WorkItem = lazyScreen("worklet", (m) => m.WorkItem);
 const Changes = lazyScreen("gitlet", (m) => m.Changes);
-const ChangePage = lazyScreen("gitlet", (m) => m.ChangePage);
+const ChangePage = lazyScreen("gitlet-change", (m) => m.ChangePage);
 const Repositories = lazyScreen("gitlet", (m) => m.Repositories);
 const CodeSearch = lazyScreen("gitlet", (m) => m.Search);
-const RepositoryPage = lazyScreen("gitlet", (m) => m.RepositoryPage);
-const CommitPage = lazyScreen("gitlet", (m) => m.CommitPage);
-const ComparePage = lazyScreen("gitlet", (m) => m.ComparePage);
+const RepositoryPage = lazyScreen("gitlet-repo", (m) => m.RepositoryPage);
+const CommitPage = lazyScreen("gitlet-repo", (m) => m.CommitPage);
+const ComparePage = lazyScreen("gitlet-repo", (m) => m.ComparePage);
 const Pushes = lazyScreen("gitlet", (m) => m.Pushes);
 const Queue = lazyScreen("gitlet", (m) => m.Queue);
 const Checks = lazyScreen("gitlet", (m) => m.Checks);
@@ -149,6 +149,7 @@ const AtlasEntry = lazyScreen("atlas", (m) => m.EntryPage);
 const AtlasChanges = lazyScreen("atlas", (m) => m.ChangesPage);
 const AtlasReview = lazyScreen("atlas", (m) => m.Review);
 const AtlasSources = lazyScreen("atlas", (m) => m.SourcesPage);
+const GeneralSettings = lazyScreen("settings", (m) => m.GeneralSettings);
 const Models = lazyScreen("settings", (m) => m.Models);
 const McpTools = lazyScreen("settings", (m) => m.McpTools);
 const Secrets = lazyScreen("settings", (m) => m.Secrets);
@@ -332,6 +333,8 @@ export function screenFor(route: Resolved): ReactNode {
       );
     case "secrets":
       return <Secrets key={route.name ?? ""} name={route.name} />;
+    case "general":
+      return <GeneralSettings />;
     case "limits":
       return <Limits />;
     case "ask-crewlet":

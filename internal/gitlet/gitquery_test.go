@@ -81,6 +81,13 @@ func TestAGitQueryIsRefusedByField(t *testing.T) {
 			Blob: &gitlet.BlobQuery{Rev: id, Path: "a", StartLine: -1}}, "blob.start_line", gitlet.ErrInvalid},
 		{"a file and paths", gitlet.GitQuery{Kind: gitlet.GitDiff, RepoID: repo, Asker: asker,
 			Diff: &gitlet.DiffQuery{Base: id, Head: id, Paths: []string{"a"}, File: "a"}}, "diff.file", gitlet.ErrInvalid},
+		{"every patch under paths", gitlet.GitQuery{Kind: gitlet.GitDiff, RepoID: repo, Asker: asker,
+			Diff: &gitlet.DiffQuery{Base: id, Head: id, Paths: []string{"a"}, Patches: true}}, "", nil},
+		{"every patch and a file", gitlet.GitQuery{Kind: gitlet.GitDiff, RepoID: repo, Asker: asker,
+			Diff: &gitlet.DiffQuery{Base: id, Head: id, File: "a", Patches: true}}, "diff.patches", gitlet.ErrInvalid},
+		{"every patch and a file's bytes", gitlet.GitQuery{Kind: gitlet.GitDiff, RepoID: repo, Asker: asker,
+			Diff: &gitlet.DiffQuery{Base: id, Head: id, FileB64: "YQ==", Patches: true}}, "diff.patches",
+			gitlet.ErrInvalid},
 		{"too many paths", gitlet.GitQuery{Kind: gitlet.GitDiff, RepoID: repo, Asker: asker,
 			Diff: &gitlet.DiffQuery{Base: id, Head: id, Paths: make([]string, gitlet.MaxDiffPaths+1)}}, "diff.paths",
 			gitlet.ErrInvalid},
@@ -90,7 +97,7 @@ func TestAGitQueryIsRefusedByField(t *testing.T) {
 			Compare: &gitlet.CompareQuery{Base: id, Head: "HEAD"}}, "compare.head", gitlet.ErrInvalid},
 		{"a cursor longer than any", func() gitlet.GitQuery {
 			q := tree(func(*gitlet.TreeQuery) {})
-			q.Cursor = strings.Repeat("9", 65)
+			q.Cursor = strings.Repeat("9", 385)
 			return q
 		}(), "cursor", gitlet.ErrBadCursor},
 		// ONLY A SEAT READS FOR ANOTHER SEAT, named by its handle: a person's
@@ -296,6 +303,20 @@ func TestAReadOfAChangesRevisionsIsRefusedByField(t *testing.T) {
 		m(q.Interdiff)
 		return q
 	}
+	excerpts := func(m func(q *gitlet.ExcerptsQuery)) gitlet.GitQuery {
+		q := gitlet.GitQuery{Kind: gitlet.GitExcerpts, RepoID: repo, Asker: asker,
+			Excerpts: &gitlet.ExcerptsQuery{Anchors: []gitlet.ExcerptAnchor{{LineAnchor: anchor, Base: a, Head: b}}}}
+		m(q.Excerpts)
+		return q
+	}
+	excerpted := func(n int) []gitlet.ExcerptAnchor {
+		out := make([]gitlet.ExcerptAnchor, n)
+		for i := range out {
+			out[i] = gitlet.ExcerptAnchor{LineAnchor: anchor, Head: b}
+			out[i].ID = fmt.Sprintf("f-%d", i)
+		}
+		return out
+	}
 	many := func(n int) []gitlet.LineAnchor {
 		out := make([]gitlet.LineAnchor, n)
 		for i := range out {
@@ -369,6 +390,55 @@ func TestAReadOfAChangesRevisionsIsRefusedByField(t *testing.T) {
 		{"an abbreviated head", interdiff(func(q *gitlet.InterdiffQuery) { q.ToHead = a[:12] }), "interdiff.to_head"},
 		{"a file", interdiff(func(q *gitlet.InterdiffQuery) { q.File = "a*" }), ""},
 		{"a file from the work tree", interdiff(func(q *gitlet.InterdiffQuery) { q.File = "./a" }), "interdiff.file"},
+		{"every patch", interdiff(func(q *gitlet.InterdiffQuery) { q.Patches = true }), ""},
+		{"every patch and a file", interdiff(func(q *gitlet.InterdiffQuery) { q.Patches, q.File = true, "a*" }),
+			"interdiff.patches"},
+		{"an excerpt", excerpts(func(*gitlet.ExcerptsQuery) {}), ""},
+		{"an excerpt of a revision with no base", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors[0].Base = "" }),
+			""},
+		{"the most excerpts at the widest context", excerpts(func(q *gitlet.ExcerptsQuery) {
+			q.Anchors, q.Context = excerpted(gitlet.MaxExcerptAnchors), new(gitlet.MaxExcerptContext)
+		}), ""},
+		{"no excerpt", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors = nil }), "excerpts.anchors"},
+		{"an excerpt too many", excerpts(func(q *gitlet.ExcerptsQuery) {
+			q.Anchors = excerpted(gitlet.MaxExcerptAnchors + 1)
+		}), "excerpts.anchors"},
+		{"one excerpt id twice", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors = append(q.Anchors, q.Anchors[0]) }),
+			"excerpts.anchors[1].id"},
+		{"an excerpt id past its bytes", excerpts(func(q *gitlet.ExcerptsQuery) {
+			q.Anchors[0].ID = strings.Repeat("x", 65)
+		}), "excerpts.anchors[0].id"},
+		{"an old side excerpt with no base", excerpts(func(q *gitlet.ExcerptsQuery) {
+			q.Anchors[0].Side, q.Anchors[0].Base = gitlet.SideOld, ""
+		}), "excerpts.anchors[0].side"},
+		{"an excerpt of an abbreviated head", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors[0].Head = b[:7] }),
+			"excerpts.anchors[0].head"},
+		{"an excerpt of an abbreviated base", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors[0].Base = a[:7] }),
+			"excerpts.anchors[0].base"},
+		{"an excerpt of the zero blob", excerpts(func(q *gitlet.ExcerptsQuery) {
+			q.Anchors[0].BlobOID = gitlet.ZeroOID
+		}), "excerpts.anchors[0].blob_oid"},
+		{"an excerpt from line zero", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors[0].Start = 0 }),
+			"excerpts.anchors[0]"},
+		{"a backwards excerpt", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors[0].End = 2 }),
+			"excerpts.anchors[0]"},
+		{"an excerpt of an unclean path", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors[0].Path = "./a" }),
+			"excerpts.anchors[0].path"},
+		{"no context", excerpts(func(q *gitlet.ExcerptsQuery) { q.Context = new(0) }), ""},
+		{"a context below none", excerpts(func(q *gitlet.ExcerptsQuery) { q.Context = new(-1) }), "excerpts.context"},
+		{"a context past the widest", excerpts(func(q *gitlet.ExcerptsQuery) {
+			q.Context = new(gitlet.MaxExcerptContext + 1)
+		}), "excerpts.context"},
+		{"an excerpts read carrying a re-anchoring", func() gitlet.GitQuery {
+			q := excerpts(func(*gitlet.ExcerptsQuery) {})
+			q.Reanchor = &gitlet.ReanchorQuery{Head: a, Anchors: []gitlet.LineAnchor{anchor}}
+			return q
+		}(), "reanchor"},
+		{"an unstamped excerpts read", func() gitlet.GitQuery {
+			q := excerpts(func(*gitlet.ExcerptsQuery) {})
+			q.Unstamped = true
+			return q
+		}(), "unstamped"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -402,5 +472,45 @@ func TestAPathThatIsNoUTF8IsCarriedAsItsBytes(t *testing.T) {
 		case err != nil || back != p:
 			t.Errorf("WirePath(%q)'s bytes read back as %q (%v), want the path", p, back, err)
 		}
+	}
+}
+
+// A SEARCH'S BOUNDS ARE REFUSED BY FIELD before anything is read: a context
+// past gitlet.MaxSearchContext or below none, a per-file bound past
+// gitlet.MaxSearchHits or below none, and a limit past
+// gitlet.MaxSearchContextHits beside context, which a limit alone may pass.
+//
+// Mutation: drop the context bound (ValidateBounds), red.
+func TestASearchsBoundsAreRefused(t *testing.T) {
+	t.Parallel()
+	asker := gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "token:ci"}
+	search := func(s gitlet.SearchQuery) gitlet.GitQuery {
+		s.Text, s.Mode = "needle", "literal"
+		return gitlet.GitQuery{Kind: gitlet.GitSearch, RepoID: "01920000-0000-7000-8000-000000000001",
+			Asker: asker, Search: &s}
+	}
+	for _, tc := range []struct {
+		q     gitlet.SearchQuery
+		field string // "" is a valid search
+	}{
+		{gitlet.SearchQuery{Context: -1}, "search.context"},
+		{gitlet.SearchQuery{Context: gitlet.MaxSearchContext + 1}, "search.context"},
+		{gitlet.SearchQuery{PerFile: -1}, "search.per_file"},
+		{gitlet.SearchQuery{PerFile: gitlet.MaxSearchHits + 1}, "search.per_file"},
+		{gitlet.SearchQuery{Limit: gitlet.MaxSearchContextHits + 1, Context: 1}, "search.limit"},
+		{gitlet.SearchQuery{Limit: gitlet.MaxSearchContextHits + 1}, ""},
+		{gitlet.SearchQuery{Limit: gitlet.MaxSearchContextHits, Context: gitlet.MaxSearchContext,
+			PerFile: gitlet.MaxSearchHits}, ""},
+	} {
+		err := search(tc.q).Validate()
+		switch {
+		case tc.field == "" && err != nil:
+			t.Errorf("%+v refused: %v", tc.q, err)
+		case tc.field != "" && (!errors.Is(err, gitlet.ErrInvalid) || !strings.Contains(fmt.Sprint(err), tc.field+":")):
+			t.Errorf("%+v answered %v, want invalid naming %s", tc.q, err, tc.field)
+		}
+	}
+	if got := (gitlet.SearchQuery{Context: 1}).Hits(); got != gitlet.MaxSearchContextHits {
+		t.Errorf("a search asking context with no limit answers %d hits, want %d", got, gitlet.MaxSearchContextHits)
 	}
 }

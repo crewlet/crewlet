@@ -29,7 +29,7 @@
  * git's empty tree. The diff is read by both whole ids, so it is immutable.
  */
 
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { Card, Copyable, EmptyState, EmptyValue, Skeleton, Stack } from "@crewlethq/ui";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
@@ -41,7 +41,6 @@ import {
   commitPath,
   isRepoName,
   parseChangeRef,
-  refName,
   repoPath,
   shortOID,
 } from "~/lib/code.ts";
@@ -51,9 +50,9 @@ import { useNow } from "~/lib/clock.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type { CodeChangeName, CodeCommitAnswer, CodePushRun } from "~/protocol/index.ts";
 import { subjectOf } from "../repo/History.tsx";
-import { ChangeStateTag } from "../Changes.tsx";
+import { ChangeStateTag } from "../ChangeRow.tsx";
 import { CodeNotFound } from "../NotFound.tsx";
-import { Byline } from "../ui.tsx";
+import { Byline, RefName } from "../ui.tsx";
 import { CommitWrites } from "./CommitWrites.tsx";
 import { DiffFiles } from "./DiffFiles.tsx";
 import "~/styles/gitlet.css";
@@ -281,8 +280,13 @@ function Pushed({ answer }: { answer: CodeCommitAnswer }) {
                     {
                       label: "Refs it moved",
                       value: (
-                        <span className="mono">
-                          {moved.map((cmd) => refName(cmd.ref).name).join(", ")}
+                        <span>
+                          {moved.map((cmd, i) => (
+                            <Fragment key={cmd.ref}>
+                              {i > 0 && ", "}
+                              <RefName gitRef={cmd.ref} />
+                            </Fragment>
+                          ))}
                         </span>
                       ),
                     },

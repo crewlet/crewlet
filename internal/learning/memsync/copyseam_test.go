@@ -11,15 +11,24 @@ import (
 )
 
 // newSyncer is [New] for a node in its broker's own process, which a case
-// over a real broker's own connection is.
+// over a real broker's own connection is: answered whole, since New refuses
+// only a meter handed to a node that crosses no link.
 func newSyncer(db *store.DB, js jetstream.JetStream, agentID AgentIDFor) *Syncer {
-	return New(db, js, agentID, Config{})
+	return mustNew(db, js, agentID, Config{})
 }
 
 // newSyncerAcross is [New] for a node across a link from its changelog, a
-// leaf's.
+// leaf's, unmetered.
 func newSyncerAcross(db *store.DB, js jetstream.JetStream, agentID AgentIDFor) *Syncer {
-	return New(db, js, agentID, Config{AcrossLink: true})
+	return mustNew(db, js, agentID, Config{AcrossLink: true})
+}
+
+func mustNew(db *store.DB, js jetstream.JetStream, agentID AgentIDFor, cfg Config) *Syncer {
+	s, err := New(db, js, agentID, cfg)
+	if err != nil {
+		panic(err)
+	}
+	return s
 }
 
 // bubbleSyncer is a syncer of the seat over db whose changelog is the model

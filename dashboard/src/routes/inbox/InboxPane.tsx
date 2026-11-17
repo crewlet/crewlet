@@ -41,6 +41,7 @@ import {
   Stack,
   Stepper,
   InlineRef,
+  Tag,
   Text,
   peekClickHandler,
   type StepperStep,
@@ -95,8 +96,9 @@ import { describeFollowUp, detailItem, itemAddress, labelAfterKey } from "~/lib/
 import { changeLive } from "~/lib/code.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useLatestChecks } from "~/lib/useLatestChecks.ts";
-import { ChangeStateTag } from "../gitlet/Changes.tsx";
+import { ChangeStateTag } from "../gitlet/ChangeRow.tsx";
 import type {
+  ArtifactInboxNotice,
   CodeChangeState,
   CodeInboxNotice,
   AnsweredDecision,
@@ -111,6 +113,9 @@ import {
   answerWords,
   answeredQuestion,
   answeredTexts,
+  artifactCard,
+  artifactHeadline,
+  artifactWords,
   askContext,
   askHeadline,
   askIsItsTask,
@@ -142,16 +147,12 @@ import {
 import { Badge } from "./InboxColumn.tsx";
 import { NoticeActions } from "./NoticeActions.tsx";
 import { TaskLink } from "./TaskLink.tsx";
+import { ArtifactLink, artifactHref } from "~/components/ArtifactLink.tsx";
 import { Thread, type ThreadOf } from "./Thread.tsx";
 import { questionWithheld } from "~/lib/access.ts";
 
 interface PaneProps {
   row: InboxRow | null;
-  /**
-   * What the pane says with no row open, where the default ("New updates
-   * open here") would promise what the company's services cannot send.
-   */
-  empty?: { title: string; description: string } | undefined;
   /**
    * The list beside the pane is empty and says so in its own empty state. The
    * pane then says no second "All clear": it holds one quiet line, the place a
@@ -195,7 +196,7 @@ export function InboxPane(props: PaneProps) {
   if (!props.row && props.loading) {
     return <div className="inbox-pane inbox-pane-empty" aria-busy="true" />;
   }
-  if (!props.row && props.listEmpty && !props.empty) {
+  if (!props.row && props.listEmpty) {
     return (
       <div className="inbox-pane inbox-pane-empty">
         <Text variant="caption">New updates open here.</Text>
@@ -207,8 +208,8 @@ export function InboxPane(props: PaneProps) {
       <div className="inbox-pane inbox-pane-empty">
         <EmptyState
           icon={<CircleCheckGlyph size={28} />}
-          title={props.empty?.title ?? "All clear"}
-          description={props.empty?.description ?? "New updates open here."}
+          title="All clear"
+          description="New updates open here."
         />
       </div>
     );
@@ -369,6 +370,18 @@ function OpenPane({
           onSettled={onSettled}
         />
       );
+    case "artifact":
+      return (
+        <ArtifactNoticePane
+          notice={row.notice}
+          frame={frame}
+          index={index}
+          now={now}
+          zone={zone}
+          maxSnoozeAhead={maxSnoozeAhead}
+          onSettled={onSettled}
+        />
+      );
   }
   return null;
 }
@@ -510,6 +523,89 @@ function ChangeNoticePane({
         onSettled={() => onSettled(null)}
       />
     </ReadingPane>
+  );
+}
+
+/** A comment on an artifact as a card shaped like a Worklet notice's ([artifactCard]), its thread
+ *  one press away; every word is the notice's, so the list asks nothing per card. */
+function ArtifactNoticePane({
+  notice,
+  frame,
+  index,
+  now,
+  zone,
+  maxSnoozeAhead,
+  onSettled,
+}: {
+  notice: ArtifactInboxNotice;
+  frame: Frame;
+  index: OrgIndex;
+  now: number;
+  zone: string | undefined;
+  maxSnoozeAhead: number | undefined;
+  onSettled: (label: string | null) => void;
+}) {
+  const words = artifactWords(notice);
+  const card = artifactCard(notice, index);
+  const thread = card.thread;
+  return (
+    <>
+      {frame.byline(
+        <>
+          <strong>{frame.name}</strong> on{" "}
+          <ArtifactLink
+            id={notice.artifact}
+            known={artifactHeadline(notice)}
+            to={artifactHref(notice.artifact)}
+            words={notice.title || "an artifact"}
+            fallback={<strong>{notice.title || "an artifact"}</strong>}
+            quiet
+          />
+        </>,
+        card.why,
+      )}
+      <ReadingPaneTitle>{words.heading}</ReadingPaneTitle>
+      {words.excerpt && (
+        <ReadingPaneQuote>
+          <p>{words.excerpt}</p>
+        </ReadingPaneQuote>
+      )}
+      {thread?.quote && (
+        <ReadingPaneSection label="On the text">
+          <ReadingPaneQuote>
+            <p>{thread.quote}</p>
+          </ReadingPaneQuote>
+        </ReadingPaneSection>
+      )}
+      {thread && (
+        <ReadingPaneSection label="Where the thread stands">
+          <Stack gap={2}>
+            <span>
+              {thread.resolved ? (
+                <Tag variant="success">{thread.status}</Tag>
+              ) : (
+                <Tag appearance="outline">{thread.status}</Tag>
+              )}
+            </span>
+            <Text variant="caption">{thread.facts}</Text>
+          </Stack>
+        </ReadingPaneSection>
+      )}
+      <span>
+        <ButtonLink variant="secondary" size="small" href={card.href}>
+          Open the thread
+        </ButtonLink>
+      </span>
+      <NoticeActions
+        notice={notice}
+        source="artifacts"
+        seen={noticeFloor([notice])}
+        now={now}
+        zone={zone}
+        maxSnoozeAhead={maxSnoozeAhead}
+        onSettled={() => onSettled(null)}
+      />
+    </>
   );
 }
 

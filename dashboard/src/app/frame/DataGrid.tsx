@@ -96,8 +96,17 @@ export interface GridProps<T> extends Omit<
   name?: string;
   /** Which column set `cols=` names, where that is not `name`. */
   colsName?: string;
-  /** What an empty grid says; its mark is named, as every screen names it. */
-  empty?: { title: ReactNode; hint?: ReactNode; icon?: GlyphName; action?: ReactNode };
+  /**
+   * What an empty grid says; its mark is named, as every screen names it.
+   * `inline` is for a grid that is one part of a full page: no mark, the words beside the action.
+   */
+  empty?: {
+    title: ReactNode;
+    hint?: ReactNode;
+    icon?: GlyphName;
+    action?: ReactNode;
+    size?: "compact" | "inline";
+  };
 }
 
 /**
@@ -122,7 +131,7 @@ const readers = new Map<string, number>();
  * Registers the keys a mounted grid reads, and reports a key a grid already
  * mounted reads too: two grids on one key re-sort (or re-column) each other.
  */
-function useOneReaderPerKey(keys: readonly string[]): void {
+export function useOneReaderPerKey(keys: readonly string[]): void {
   const joined = keys.join(" ");
   useEffect(() => {
     const held = joined.split(" ");
@@ -218,6 +227,7 @@ export function DataGrid<T>({
           hint: empty.hint,
           action: empty.action,
           icon: empty.icon && <NamedGlyph name={empty.icon} size={32} />,
+          size: empty.size,
         }
       }
     />

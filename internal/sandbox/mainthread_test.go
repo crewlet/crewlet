@@ -227,8 +227,8 @@ func TestTheMainThreadIsReadBeforeTheTakeWithinItsWait(t *testing.T) {
 // that asked it would leave a Claude Code collection no more than it, and its
 // case goes red. The figures the docs state are held too: twenty seconds more
 // than another harness's collection, and in all the budget's own terms with the
-// read's wait among them, about 4,680 s for a turn with no cap and about
-// 5,954 s for one with a cap at today's bounds, composed rather than pinned
+// read's wait among them, about 4,720 s for a turn with no cap and about
+// 5,994 s for one with a cap at today's bounds, composed rather than pinned
 // because one of their terms, the slowest node's crossing of a change of the
 // run's row (coord.MaxValueCrossing), is a figure of the store's.
 //
@@ -265,7 +265,7 @@ func TestTheBoxReadBudgetHoldsTheMainThreadRead(t *testing.T) {
 	if got := BoxReadBudget(claude, BoxReadCollect) - BoxReadBudget(open, BoxReadCollect); got != 20*time.Second {
 		t.Errorf("an uncapped Claude Code collection waits %v more than an OpenCode one, want 20s", got)
 	}
-	held := SessionTakeBudget + sessionRecordBudget + 2*discardGrace + boxReadChanges*coord.MaxValueCrossing +
+	held := SessionTakeBudget + sessionRecordBudget + 3*discardGrace + boxReadChanges*coord.MaxValueCrossing +
 		MainThreadReadWait
 	for name, tc := range map[string]struct {
 		run  PendingRun

@@ -746,10 +746,10 @@ func TestAResumeUnsetsWhatMovesWhatItHandsItsModel(t *testing.T) {
 }
 
 // usageHarness is a stand-in `claude` that files a session whose transcript
-// records two requests' usage on its main thread, then one on a subagent's
-// sidechain and a later assistant message that recorded none — each after the
-// main thread's last — and a person's message quoting the words a usage line
-// is found by.
+// records two requests' usage on its main thread, each record saying it is no
+// sidechain as Claude Code's own do, then one on a subagent's sidechain and a
+// later assistant message that recorded none, each after the main thread's
+// last, and a person's message quoting the words "usage" and "assistant".
 func usageHarness() string {
 	return `#!/bin/sh
 if [ "$1" = --version ]; then echo '2.1.310 (Claude Code)'; exit 0; fi
@@ -757,12 +757,12 @@ s= prev=; for a; do case "$prev" in --session-id|--resume) s=$a;; esac; prev=$a;
 p=$CLAUDE_CONFIG_DIR/projects/$CLAUDE_CODE_PROJECT_DIR_NAME
 mkdir -p "$p"
 cat >> "$p/$s.jsonl" <<'EOF'
-{"type":"user","message":{"content":"begin"}}
-{"type":"assistant","message":{"usage":{"input_tokens":10,"cache_creation_input_tokens":200,"cache_read_input_tokens":3000,"output_tokens":7}}}
-{"type":"user","message":{"content":"a tool's answer quoting \"usage\" and \"assistant\""}}
-{"type":"assistant","message":{"usage":{"input_tokens":20,"cache_creation_input_tokens":300,"cache_read_input_tokens":4000,"output_tokens":9}}}
+{"type":"user","isSidechain":false,"message":{"content":"begin"}}
+{"type":"assistant","isSidechain":false,"message":{"usage":{"input_tokens":10,"cache_creation_input_tokens":200,"cache_read_input_tokens":3000,"output_tokens":7}}}
+{"type":"user","isSidechain":false,"message":{"content":"a tool's answer quoting \"usage\" and \"assistant\""}}
+{"type":"assistant","isSidechain":false,"message":{"usage":{"input_tokens":20,"cache_creation_input_tokens":300,"cache_read_input_tokens":4000,"output_tokens":9}}}
 {"type":"assistant","isSidechain":true,"message":{"usage":{"input_tokens":99999,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}
-{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}
+{"type":"assistant","isSidechain":false,"message":{"content":[{"type":"text","text":"done"}]}}
 EOF
 printf '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"%s"}\n' "$s"
 `

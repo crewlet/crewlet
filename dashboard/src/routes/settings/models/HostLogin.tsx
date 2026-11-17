@@ -11,12 +11,13 @@
  */
 
 import { useState } from "react";
-import { Button, Copyable, RelativeTime, StatusDot, Text, useToast } from "@crewlethq/ui";
+import { Button, Copyable, StatusDot, Text, useToast } from "@crewlethq/ui";
 import { listed } from "~/lib/format.ts";
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
 import { isAbort } from "~/protocol/rest.ts";
 import type { HostLoginAnswer, ModelHostLogin } from "~/protocol/models.ts";
 import { checkHostLogin } from "./api.ts";
+import { AgoTime } from "~/components/AgoTime.tsx";
 
 type Tone = "success" | "danger" | "neutral";
 
@@ -102,7 +103,7 @@ export function HostLogin({
                 <StatusDot tone={words.tone}>{words.label}</StatusDot>
                 {login.checked_at ? (
                   <Text as="span" variant="caption" tone="tertiary">
-                    Checked <RelativeTime value={login.checked_at} />.
+                    Checked <AgoTime value={login.checked_at} />.
                   </Text>
                 ) : null}
                 {login.state !== "signed_in" ? (

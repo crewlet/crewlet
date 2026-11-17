@@ -3,8 +3,10 @@
     "held": [
       {
         "kind": "backup_age",
+        "title": "No recent backup",
+        "person": "Without a recent verified backup, data logs are not cleaned up and grow until they refuse changes. Take a backup now.",
         "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1950 record(s) older than its 24h replay window",
-        "remedy": "Run `crewlet backup` against any node, whatever its roles, and check whatever was meant to run it; under `backup_floor: operator`, acknowledge each named log's off-host copy with `crewlet retention ack -stream \u003cits stream\u003e -position \u003cn\u003e`, n being the sequence the copy reaches. The trim does not advance a log past a backup older than the policy, and does not advance it at all until there is one.",
+        "remedy": "Run `crewlet backup` against any node, whatever its roles, and check whatever was meant to run it; under `backup_floor: operator`, acknowledge each named log's off-host copy with `crewlet retention ack -stream \u003cits stream\u003e -position \u003cn\u003e -taken-at \u003ct\u003e`, n being the sequence the copy reaches and t the instant the copy was taken. The trim does not advance a log past a backup older than the policy, and does not advance it at all until there is one.",
         "domains": [
           {
             "domains": [
@@ -116,8 +118,10 @@
     "held_beside_a_blocked_trim": [
       {
         "kind": "backup_age",
+        "title": "No recent backup",
+        "person": "Without a recent verified backup, data logs are not cleaned up and grow until they refuse changes. Take a backup now.",
         "detail": "no verified backup has been recorded, and the policy asks for one every 24h; the trim has not advanced for 46h, and the log is keeping up to 1950 record(s) older than its 24h replay window",
-        "remedy": "Run `crewlet backup` against any node, whatever its roles, and check whatever was meant to run it; under `backup_floor: operator`, acknowledge each named log's off-host copy with `crewlet retention ack -stream \u003cits stream\u003e -position \u003cn\u003e`, n being the sequence the copy reaches. The trim does not advance a log past a backup older than the policy, and does not advance it at all until there is one.",
+        "remedy": "Run `crewlet backup` against any node, whatever its roles, and check whatever was meant to run it; under `backup_floor: operator`, acknowledge each named log's off-host copy with `crewlet retention ack -stream \u003cits stream\u003e -position \u003cn\u003e -taken-at \u003ct\u003e`, n being the sequence the copy reaches and t the instant the copy was taken. The trim does not advance a log past a backup older than the policy, and does not advance it at all until there is one.",
         "domains": [
           {
             "domains": [
@@ -219,6 +223,8 @@
       },
       {
         "kind": "trim_blocked",
+        "title": "Log cleanup is stuck",
+        "person": "A data log's cleanup has stalled, so the log keeps growing toward its size limit. Fix what is holding it.",
         "detail": "the trim has not advanced for 46h, and the log is keeping up to 1650 record(s) older than its 24h replay window",
         "remedy": "The term holding each log names what to fix, and `crewlet retention status` prints it with what it has and what it wants. Until it is fixed the log grows toward its ceiling by a day of records every day.",
         "domains": [
@@ -236,8 +242,10 @@
     "stale": [
       {
         "kind": "backup_age",
+        "title": "No recent backup",
+        "person": "Without a recent verified backup, data logs are not cleaned up and grow until they refuse changes. Take a backup now.",
         "detail": "the newest verified backup is 30h old, and the policy asks for 24h",
-        "remedy": "Run `crewlet backup` against any node, whatever its roles, and check whatever was meant to run it; under `backup_floor: operator`, acknowledge each named log's off-host copy with `crewlet retention ack -stream \u003cits stream\u003e -position \u003cn\u003e`, n being the sequence the copy reaches. The trim does not advance a log past a backup older than the policy, and does not advance it at all until there is one.",
+        "remedy": "Run `crewlet backup` against any node, whatever its roles, and check whatever was meant to run it; under `backup_floor: operator`, acknowledge each named log's off-host copy with `crewlet retention ack -stream \u003cits stream\u003e -position \u003cn\u003e -taken-at \u003ct\u003e`, n being the sequence the copy reaches and t the instant the copy was taken. The trim does not advance a log past a backup older than the policy, and does not advance it at all until there is one.",
         "domains": [
           {
             "domains": [
@@ -251,8 +259,10 @@
     "young": [
       {
         "kind": "backup_age",
+        "title": "No recent backup",
+        "person": "Without a recent verified backup, data logs are not cleaned up and grow until they refuse changes. Take a backup now.",
         "detail": "no verified backup has been recorded, and the policy asks for one every 24h",
-        "remedy": "Run `crewlet backup` against any node, whatever its roles, and check whatever was meant to run it; under `backup_floor: operator`, acknowledge each named log's off-host copy with `crewlet retention ack -stream \u003cits stream\u003e -position \u003cn\u003e`, n being the sequence the copy reaches. The trim does not advance a log past a backup older than the policy, and does not advance it at all until there is one.",
+        "remedy": "Run `crewlet backup` against any node, whatever its roles, and check whatever was meant to run it; under `backup_floor: operator`, acknowledge each named log's off-host copy with `crewlet retention ack -stream \u003cits stream\u003e -position \u003cn\u003e -taken-at \u003ct\u003e`, n being the sequence the copy reaches and t the instant the copy was taken. The trim does not advance a log past a backup older than the policy, and does not advance it at all until there is one.",
         "domains": [
           {
             "domains": [

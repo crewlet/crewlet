@@ -240,12 +240,12 @@ describe("Activity", () => {
     ]);
   });
 
-  test("Unread only asks the engine for the unread rows", async () => {
+  test("the Unread filter asks the engine for the unread rows", async () => {
     const { socket } = mount(<ActivityView />, "#/chatlet/activity", {
       chat_activity: FEED,
       chat_message: { ...SERVED, channel_kind: "public", view: view("m-2", "bo") },
     });
-    fireEvent.click(await screen.findByRole("switch", { name: /unread only/i }));
+    fireEvent.click(await screen.findByRole("button", { name: "Unread" }));
     await waitFor(() =>
       expect(
         socket.query.mock.calls.some(

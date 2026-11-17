@@ -16,13 +16,18 @@
  */
 
 import type { CHECK_PURPOSES, CHECK_STATES, QUEUE_STATES } from "~/contract/checks.ts";
+import { ago } from "~/lib/ago.ts";
+import { plural } from "~/lib/format.ts";
 import type {
   CodeCandidateRow,
+  CodeCheckRollup,
   CodeCheckRow,
+  CodeCommitMark,
   CodeEjectedRow,
   CodeQueueRow,
   CodeReadiness,
   CodeRevisionFacts,
+  CodeTargetChecks,
 } from "~/protocol/index.ts";
 
 type CheckState = (typeof CHECK_STATES)[number];
@@ -295,4 +300,70 @@ export function humanPathsAsking(
  */
 export function gatedByChecks(readiness: CodeReadiness | undefined): boolean {
   return Boolean(readiness?.preconditions.some((p) => p.kind === "check"));
+}
+
+/** How many days the engine keeps a check's attempts (`gitlet.CheckHistory`). */
+export const CHECK_HISTORY_DAYS = 30;
+
+/** A commit's rollup for the branch read, else for the default branch, else its first. */
+export function rollupFor(
+  mark: CodeCommitMark | null | undefined,
+  branch: string,
+  defaultRef: string,
+): CodeTargetChecks | undefined {
+  const checks = mark?.checks ?? [];
+  return (
+    checks.find((c) => c.target === branch) ??
+    checks.find((c) => c.target === defaultRef) ??
+    checks[0]
+  );
+}
+
+const ROLLUP_WORDS: Readonly<Record<string, string>> = {
+  passed: "Passed",
+  running: "Running",
+  pending: "Pending",
+  cancelled: "Cancelled",
+};
+
+/** A rollup in a word or a few: "Passed", "e2e failed", "e2e and 1 more failed"; another state as sent. */
+export function rollupWord(r: CodeCheckRollup): string {
+  if (r.state !== "failing") return ROLLUP_WORDS[r.state] ?? r.state;
+  const failing = r.failing ?? [];
+  const first = failing[0];
+  if (!first) return "Failed";
+  const others = failing.length - 1 + (r.failing_more ?? 0);
+  const verb = failing.every((f) => f.state === first.state)
+    ? checkStateWord(first.state)
+    : "failed";
+  return others > 0 ? `${first.name} and ${others} more ${verb}` : `${first.name} ${verb}`;
+}
+
+const COUNT_ORDER = [
+  "passed",
+  "failed",
+  "errored",
+  "running",
+  "queued",
+  "cancelled",
+  "skipped",
+  "other",
+] as const;
+
+/** A rollup in sentences: its counts, its required checks, and when one last ended or began running. */
+export function rollupTitle(r: CodeTargetChecks, branch: string, now: number): string {
+  const counts = COUNT_ORDER.map((state) => [state, r.counts[state] ?? 0] as const).filter(
+    ([, n]) => n > 0,
+  );
+  const total = counts.reduce((sum, [, n]) => sum + n, 0);
+  const target = r.target === branch ? "" : ` for ${r.target.replace(/^refs\/heads\//, "")}`;
+  const parts = counts.map(
+    ([state, n]) => `${n} ${state === "other" ? "in another state" : state}`,
+  );
+  const out = [`${plural(total, "check")}${target}: ${parts.join(", ") || "none ended"}.`];
+  if (r.required > 0) out.push(`${r.required_passed} of ${r.required} required passed.`);
+  if (r.running_since) out.push(`Running since ${ago(r.running_since, now, { since: true })}.`);
+  if (r.last_ended) out.push(`Last ended ${ago(r.last_ended, now)}.`);
+  if (r.more) out.push("Counted over the checks one read holds.");
+  return out.join(" ");
 }

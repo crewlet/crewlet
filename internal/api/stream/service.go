@@ -790,6 +790,11 @@ type InboxChange struct {
 	// told ([InboxChange.ForReader]). NEVER ON THE FRAME: [InboxChange.Source]
 	// already says whose half it is.
 	App iam.Grant `json:"-"`
+
+	// Relational is a half no app gates, each of its notices held by the read
+	// to its object's relation (the artifacts' comments): every watcher is
+	// told it moved, and none which object, which the frame cannot decide.
+	Relational bool `json:"-"`
 }
 
 // ForReader is the movement as one watcher of the seat may receive it: whole
@@ -802,10 +807,14 @@ type InboxChange struct {
 // decided as a read of the person's inbox ([watching]), which no app decides,
 // since the halves are several apps' news.
 //
-// A MOVEMENT NAMING NO APP REACHES NOBODY. Every domain that keeps an inbox
-// names its app where its movements are pushed, so one naming none is a
-// producer's mistake, and delivered to every watcher it would be a leak.
+// A MOVEMENT NAMING NO APP REACHES NOBODY, unless its half is relational
+// ([InboxChange.Relational]), which reaches every watcher with no subject: a
+// domain that keeps an inbox names one or the other where it is pushed.
 func (c InboxChange) ForReader(r Reader) (string, any, bool) {
+	if c.Relational {
+		c.Subject = ""
+		return "", c, true
+	}
 	if !c.App.IsApp() || !r.Audience.Has(c.App) {
 		return "", nil, false
 	}
@@ -844,11 +853,11 @@ func (s *Service) InboxChanged(change InboxChange) {
 // socket would have rebuilt every tab's whole snapshot to refresh one list.
 //
 // NEVER BLOCKS, for [Service.InboxChanged]'s reason.
-func (s *Service) InboxReread(source string, app iam.Grant) {
+func (s *Service) InboxReread(source string, app iam.Grant, relational bool) {
 	now := s.now()
 	for _, seat := range s.hub.WatchedSeats() {
 		s.hub.Broadcast(PushSeat(KindInboxChanged, seat,
-			InboxChange{Source: source, Handle: seat, App: app}, now))
+			InboxChange{Source: source, Handle: seat, App: app, Relational: relational}, now))
 	}
 }
 

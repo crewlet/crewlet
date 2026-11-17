@@ -6,6 +6,11 @@
 
 import { expect, test } from "vitest";
 import {
+  durationUnits,
+  limitBounds,
+  limitDraft,
+  limitHint,
+  limitPresets,
   documentLimit,
   limitPatch,
   limitPlan,
@@ -229,5 +234,90 @@ test("a bound the node's operator set says so", () => {
   expect(readLimit(p, "12")).toEqual({
     ok: false,
     error: "From 14 to 256. This node’s operator allows no less.",
+  });
+});
+
+// THE LINE UNDER A FIELD IS ITS BOUNDS, short, in the cap's unit: never how to
+// type it, which the control says. Mutation: say the range as a sentence and
+// this fails.
+test("a cap's bounds are said short under its field", () => {
+  expect(limitHint(row({ key: "c", range: { min: 1, max: 10 } }))).toBe("1 to 10");
+  expect(limitHint(row({ key: "c", range: { min: 12, max: 256 } }), undefined, "characters")).toBe(
+    "12 to 256 characters",
+  );
+  expect(limitHint(row({ key: "c", range: { min: 1 } }))).toBe("At least 1");
+  expect(limitHint(row({ key: "d", unit: "seconds", range: { min: 300, max: 2_592_000 } }))).toBe(
+    "5 minutes to 30 days",
+  );
+  expect(
+    limitHint(
+      row({ key: "h", unit: "days", range: { min: 30, max: 3650, or_zero: true } }),
+      "0 to keep them for ever",
+    ),
+  ).toBe("30 to 3,650 days, or 0 to keep them for ever");
+  expect(limitHint({ ...SHARE, range: { min: 0, min_exclusive: true, max: 1 } })).toBe(
+    "More than 0%, up to 100%",
+  );
+  expect(limitHint(row({ key: "c", range: { min: 1, max: 5, operator_max: true } }))).toBe(
+    "1 to 5 (this node’s limit)",
+  );
+  expect(limitHint(row({ key: "c" }))).toBeUndefined();
+});
+
+// A STEPPER IS HELD WHERE THE ENGINE HOLDS THE VALUE, in the field's unit: a
+// share in percent, an exclusive least a step above it, a hole's 0 reachable.
+test("a cap's field steps within the engine's range, in the unit it is typed in", () => {
+  expect(limitBounds(row({ key: "c", range: { min: 1, max: 10 } }))).toEqual({ min: 1, max: 10 });
+  expect(limitBounds({ ...SHARE, range: { min: 0, min_exclusive: true, max: 1 } })).toEqual({
+    min: 1,
+    max: 100,
+  });
+  expect(
+    limitBounds(row({ key: "h", unit: "days", range: { min: 30, max: 3650, or_zero: true } })),
+  ).toEqual({
+    min: 0,
+    max: 3650,
+  });
+});
+
+// COMMON VALUES NEAR THE DEFAULT, inside the range: four of a ladder, never
+// the default itself (its own chip leads them), and none for a bare count.
+test("a cap offers common values near its default that its range admits", () => {
+  const idle = row({
+    key: "i",
+    unit: "seconds",
+    value: 43_200,
+    default: 43_200,
+    range: { min: 900, max: 2_592_000 },
+  });
+  expect(limitPresets(idle)).toEqual([7_200, 21_600, 86_400, 259_200]);
+  expect(limitPresets({ ...SHARE, range: { min: 0, min_exclusive: true, max: 1 } })).toEqual([
+    0.1, 0.25, 0.5, 0.75,
+  ]);
+  expect(limitPresets(row({ key: "c", range: { min: 1, max: 10 } }))).toEqual([]);
+});
+
+// A DURATION OPENS AS AN AMOUNT AND A UNIT the range can hold, its default
+// empty in the default's unit, and reads back to seconds.
+test("a duration's field offers the units its range holds, and opens in the largest whole one", () => {
+  const step = row({
+    key: "s",
+    unit: "seconds",
+    value: 7_200,
+    default: 3_600,
+    range: { min: 300, max: 86_400 },
+  });
+  expect(durationUnits(step)).toEqual(["days", "hours", "minutes"]);
+  expect(limitDraft(step)).toEqual({ amount: "2", unit: "hours" });
+  expect(limitDraft({ ...step, value: 3_600 })).toEqual({ amount: "", unit: "hours" });
+  expect(readLimit(step, { amount: "90", unit: "minutes" })).toEqual({ ok: true, value: 5_400 });
+  expect(readLimit(step, { amount: "", unit: "hours" })).toEqual({ ok: true, value: null });
+  expect(readLimit(step, { amount: "soon", unit: "hours" })).toEqual({
+    ok: false,
+    error: "“soon” is not a number.",
+  });
+  expect(readLimit(step, { amount: "2", unit: "days" })).toEqual({
+    ok: false,
+    error: "From 5 minutes to 1 day.",
   });
 });

@@ -607,7 +607,7 @@ describe("arriving for the alarms", () => {
     expect(scrolled.map((el) => el.id)).toEqual(["retention-alarms"]);
     // Its rows say the kind in words and what was measured as a sentence,
     // with no dash between them.
-    expect(screen.getByText("Backup age")).toBeTruthy();
+    expect(screen.getByText("No recent backup")).toBeTruthy();
     expect(screen.getByText(headline).textContent).not.toMatch(/\u2014/);
     // EVERY LOG IS NAMED, each a way to its own page.
     const alarms = document.getElementById("retention-alarms") as HTMLElement;

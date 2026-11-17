@@ -248,7 +248,7 @@ A share names an **audience** and a **role**:
 | Role | Adds |
 |---|---|
 | `viewer` | Reads the artifact, its versions and its history; appears in the room |
-| `commenter` | Comments (comments arrive in a later release) |
+| `commenter` | Comments, replies to comments, and resolves and reopens threads ([Comments](#comments)) |
 | `contributor` | Writes data the collection rules admit, and never the page itself |
 | `editor` | Publishes versions and changes the schema, beside the `artifacts` app |
 | `owner` | Shares, unshares, trashes, restores and transfers. Never shared: it moves only by transfer |
@@ -318,6 +318,67 @@ newcomer's state, empty and kept by that host for the frame alone, so a page
 that remembers each viewer's choices draws as somebody opening it for the
 first time sees it. The reader's own state is never read for a preview, and
 nothing a preview sets is kept.
+
+---
+
+## Comments
+
+A reader with `commenter` or above comments on an artifact from the dashboard:
+on a **part** of it, or on the **whole version** on show. The artifact's owner
+answers, and when it is an agent that is the point: the comment wakes it, it
+changes the artifact in a new version, and it resolves the thread citing that
+version.
+
+- **Anchored by kind** ([ADR-0042](../../adr/0042-a-kind-is-native-or-framed.md),
+  [ADR-0154](../../adr/0154-a-comment-is-a-thread-of-its-own-and-its-place-is-found-again-in-each-version.md)).
+  On an `html` page, a section the page names (`data-crewlet-anchor`, see
+  [the runtime](../reference/artifact-runtime.md#comments)), else a point on
+  the page; on `slides`, an element of a slide, by the slide's id and the
+  element's path from its `<section>`; on a `design`, a point on an artboard,
+  in the board's own pixels. Every kind takes comments on the whole version,
+  and a `doc`, a `dashboard` and a `sheet` take only those in this release.
+- **A thread remembers where and when it was made**: its anchor, the version
+  it was made on, the section's words as the commenter saw them (up to 1 KiB)
+  and, if they chose, a picture of that part as they saw it, with the page
+  and any element in it scrolled where they left it (up to 64 KiB). It never stores
+  where it is on a later version: that is **found again** on every version a
+  reader opens, by the anchor's content. A section is found by its name, an
+  element by its path and, if the slide was rearranged, by its tag and words,
+  an artboard point by its board. A publish therefore moves every thread at
+  once.
+- **Outdated, never dropped.** A thread whose part is not on the version on
+  show (the section was removed, the slide deleted) is listed as outdated,
+  with the version it was made on, and can still be answered and resolved.
+- **Resolve and reopen.** Anybody who may comment resolves or reopens a
+  thread. An agent resolving names the version that addressed it, which the
+  thread shows ("Resolved in v5"). A remark is edited only by its author and
+  removed by its author or an administrator; a removed remark keeps its place.
+- **What a remark may hold**: Markdown up to 16 KiB, read as text everywhere
+  (the dashboard renders no HTML from it, and an agent reads it fenced as its
+  writer's words). A remark that carries a credential is refused, as a page
+  that carries one is at publish.
+- **Who is told.** The artifact's owner when it is an agent, the agent
+  assigned to each work item the artifact is linked to, agents mentioned, and
+  agents already in the thread when a person replies, are woken the way a
+  work-item comment wakes them. People are told in their inbox: a person
+  owner of a new thread, the people in a thread of a reply, a resolve or a
+  reopen, and anybody mentioned, never of what they wrote themselves. Each
+  notice is shown only while its reader may open the artifact, keeps the
+  first 600 bytes of the remark until its author removes it, is marked with
+  `artifact_mark_inbox` and goes with the artifact's purge (see [How a person
+  learns they have work](humans-in-the-org.md#how-a-person-learns-they-have-work)).
+- **Bounded.** Each node takes at most 30 comment writes a minute from one
+  person or agent on one artifact, and 120 on one artifact, refusing the rest
+  with when to try again.
+- **An agent answers on the artifact.** A comment wakes the agent with the
+  thread in its prompt: who wrote it, on which artifact and version, where
+  (the thread's label) and the quoted text, each fenced as somebody else's
+  words. The agent reads the thread with `list_artifact_comments`, publishes a
+  new version with `publish_artifact` on the current head, answers with
+  `comment_on_artifact` and resolves the thread with
+  `resolve_artifact_comment` citing the version that addressed it. A comment
+  and a resolve count as answering the person who woke it. A burst of comments
+  on one artifact is one turn.
 
 ---
 
@@ -495,6 +556,33 @@ sequenceDiagram
 The raw bytes of a version are also downloadable from the API, always as an
 attachment and text as `text/plain`, never rendered.
 
+### Rendering a page for its author
+
+An agent checks its own page before anybody reviews it, and its box holds no
+credential a frame can be opened with, so the engine renders the page for it
+(`render_artifact`). It drives a headless Chromium the deployment runs
+(`artifacts.render.browser_url`, [Serving
+artifacts](../guides/artifacts-serving.md#the-render-browser)) over the
+DevTools protocol, and serves it exactly what a viewer's browser gets:
+
+- **The same frame.** The frame is minted as a viewer's is, with the version's
+  grant, and embedded by a host page on the dashboard's own origin, so its
+  `frame-ancestors` admit it, with the `sandbox` and `allow` the engine
+  computes and the fragment the dashboard writes. The host answers the page's
+  hello and its reads as the agent, under the requester ceiling, and refuses
+  every write.
+- **The same bytes.** Every request the page makes is paused in the browser and
+  answered by the node's own artifact handler, in process: the runtime, the
+  nonce, the policy, the kit and the brand are a viewer's. Anything on another
+  site is refused, so the browser needs no network and the engine fetches
+  nothing a page names.
+- **No credential anywhere else.** The ticket names a render credential that
+  only the render's own resolver knows, for the render's length, and every
+  document is decided again as the agent; the artifact listener answers that
+  credential as ended.
+- **Nothing written.** No open is recorded and nobody sees the agent in the
+  room. The screenshots go to the agent's own box.
+
 ---
 
 ## The datastore
@@ -645,6 +733,7 @@ for the authority verb it asks:
 |---|---|
 | `list_artifacts` | Lists what the seat may open: its own, shared with it, company-wide, its reports'; one folder's level by `prefix` and `delimiter`, as S3 lists a bucket |
 | `get_artifact` | Reads a head, its versions and its files, a page at a time |
+| `render_artifact` | Renders a page or a design's artboard in the engine's browser as a viewer sees it, and reports what is broken; a seat's alone (see [Rendering a page for its author](#rendering-a-page-for-its-author)) |
 | `get_company_brand` | Reads the company's adopted brand: colours, typefaces, logos, the brand slide theme, the kit version to link and the fenced voice |
 | `create_artifact` | Creates an artifact from inline files, the turn's sandbox, a project file or the brand's logos and faces (`from_brand`), or a deck from a `starter` plan; `folder` files it |
 | `publish_artifact` | Publishes a version against a base, with whole files or edits |
@@ -653,6 +742,10 @@ for the authority verb it asks:
 | `upload_artifact_asset` | Adds an asset, when the head declares `assets` |
 | `create_artifact_folder` | Creates a folder, or a chain of them, inside a folder that exists |
 | `move_artifact` | Files up to 25 artifacts in a folder, or takes them to the top level, each decided on its own |
+| `list_artifact_comments` | Reads the comment threads, each placed on the current version with its label, quote and the element's source |
+| `comment_on_artifact` | Opens a thread, on the whole version or an anchor, or replies in one; states `asks` |
+| `resolve_artifact_comment` | Resolves a thread citing the version that addressed it, or reopens one |
+| `edit_artifact_comment`, `remove_artifact_comment` | Edits or removes the seat's own remark |
 | `read_artifact_data`, `query_artifact_data` | Reads a store's documents |
 | `write_artifact_data` | Writes a batch of ops |
 | `set_artifact_schema` | Declares collections and columns |
@@ -710,7 +803,8 @@ the turn somebody woke.
 | Existence of private artifacts | A caller with no share gets the same `404` as for an unknown id |
 | Bytes swapped after a check | The engine mints every key, a direct upload is bound to its digest and `if-none-match: *`, and finalize reads every object back |
 | Bytes nobody names filling the store | Reservations before transfer, bounded per principal and per company |
-| An agent persuaded by content it reads | Provenance fences, the requester ceiling, `humans_only` columns, human-only verbs, no company-wide share by an agent |
+| An agent persuaded by content it reads | Provenance fences, the requester ceiling, `humans_only` columns, human-only verbs, no company-wide share by an agent. A render's screenshots show a page's words as pixels, which no fence labels; the answer says to read them as content |
+| A render that reaches past its page | Every request it makes is answered by the engine and nothing else, its ticket's credential resolves nowhere but in the render, and it is bounded in time, shots and bytes |
 | A forged presence frame | Frames are sealed under the fleet keyring |
 
 ---
@@ -747,6 +841,7 @@ them.
 | `api.artifacts.host`, `api.artifacts.port` | A | Bind the artifact listener on an ingress node; port `0` (the default) serves no artifacts on this node |
 | `api.artifacts.external_url` | A | Where browsers reach artifacts: a wildcard template for an origin per artifact, or one plain origin for opaque origins. See [Serving artifacts](../guides/artifacts-serving.md) |
 | `artifacts.limits.*` | A | The plan quotas above |
+| `artifacts.render.browser_url` | A | The headless Chromium this node renders pages in for `render_artifact`: an `http://` DevTools origin or the `ws://` address it prints. Unset renders nothing |
 | `stream.artifacts_log_max_bytes`, `stream.artifact_data_log_max_bytes` | A | The two logs' ceilings |
 | `store.objects.nats_max_bytes` | A | The `nats` object bucket's reservation on the broker |
 | `artifacts.agents_manage_others` | B | Let agents publish over, update and reshare artifacts they do not own (default `false`) |
@@ -916,10 +1011,9 @@ has the format.
   canvas places them, the cover board titled, never a screenshot.
 - **Where a reader is** on a design is their presence region `board:<path>`,
   the board that holds their pointer.
-- **A comment on a design will point at an artboard point**: the board's path
+- **A comment on a design points at an artboard point**: the board's path
   and a point in the board's own coordinates (`canvasformat.Anchor`), so it
-  stays on its spot however the board is moved. The shape is fixed now;
-  comments arrive in a later release.
+  stays on its spot however the board is moved ([Comments](#comments)).
 
 ---
 
@@ -1010,7 +1104,8 @@ one, agents included, and many may exist.
 
 ## What this release does not do
 
-Comments, mentions and reviews; watches that wake an agent when data changes;
+Comments anchored inside a doc, a dashboard or a sheet (those kinds take
+comments on the whole version), and reviews; watches that wake an agent when data changes;
 decisions inside a sheet; a design's live board layer of shapes, connectors
 and images; a dashboard dataset an agent refreshes on a schedule, and
 integration sources a viewer's own connector answers; slide builds, magic moves, live
@@ -1020,5 +1115,5 @@ a page; a page asking a model a question; viewer uploads and device features;
 public links outside the company; moving idle stores to object storage;
 point-in-time recovery from a log archive; concurrent co-editing of long text;
 and time travel by replay. The shapes in this release leave room for each
-(an audience kind for links, a reserved subject for comments, a store digest
+(an audience kind for links, an anchor kind for each native kind, a store digest
 for tiering) without promising when.

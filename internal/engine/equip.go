@@ -117,6 +117,9 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// artifacts half and add only the datastore, the turn guardrail and
 	// the presence hub.
 	deps.ArtifactData = ArtifactDataToolDeps(e)
+	// AND THE RENDER, a seat's alone: the page as a viewer sees it, in the
+	// browser Tier A names, its screenshots into the run's own box.
+	deps.Render = RenderToolDeps(e)
 	// AND THE CODE TOOLS, where this node's running runtime serves
 	// Gitlet — read after the runtime this apply starts, as
 	// the native halves are: the same deps the operator catalogue builds

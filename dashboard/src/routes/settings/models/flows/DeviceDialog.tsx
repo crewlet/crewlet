@@ -20,7 +20,6 @@ import {
   ButtonLink,
   Callout,
   Copyable,
-  RelativeTime,
   Spinner,
   StatusDot,
   Text,
@@ -35,6 +34,7 @@ import type { ModelDevice } from "~/protocol/models.ts";
 import { cancelDeviceSignIn, startDeviceSignIn } from "../api.ts";
 import type { ModelView } from "../data.ts";
 import { DEVICE } from "../words.ts";
+import { AgoTime } from "~/components/AgoTime.tsx";
 
 /**
  * How often the page asks whether the code was approved: a person types an
@@ -300,7 +300,7 @@ export function DeviceDialog({
                 </Text>
               )}
               <Text as="p" variant="caption" tone="tertiary">
-                It expires <RelativeTime value={session.expires_at} />.
+                It expires <AgoTime value={session.expires_at} />.
               </Text>
             </li>
           </ol>

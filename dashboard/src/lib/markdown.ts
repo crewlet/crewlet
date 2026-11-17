@@ -409,11 +409,18 @@ export interface RenderOptions {
    */
   scoped?: boolean;
   /**
+   * Draws each run of a block's inline text in place of [renderInline], in
+   * [inlineRuns]' order: a change marks the words it added and removed.
+   */
+  inline?: (text: string, key: string, options: InlineOptions) => ReactNode;
+  /**
    * `block` (the default): a fenced sample is the dashboard's `md-code`.
    * `copy`: the kit's `CodeBlock` with its copy control in the corner, for a
    * sample set inside a conversation's words.
    */
   code?: "block" | "copy";
+  /** A fenced block drawn by the caller from its text and info string, or null to leave it to `md-code`. */
+  fence?: (text: string, lang: string, key: string) => ReactNode;
 }
 
 /** What the inline walk needs of [RenderOptions]. */
@@ -706,6 +713,45 @@ interface Rendering extends RenderOptions {
   headingShift?: number;
 }
 
+function inlineOf(options: RenderOptions): NonNullable<RenderOptions["inline"]> {
+  return options.inline ?? renderInline;
+}
+
+/**
+ * A block's runs of inline text in the order [renderBlock] draws them, which
+ * is the order [RenderOptions.inline] is called in.
+ */
+export function inlineRuns(block: MarkdownBlock): string[] {
+  switch (block.kind) {
+    case "heading":
+    case "paragraph":
+      return [block.text];
+    case "quote":
+    case "callout":
+      return block.blocks.flatMap(inlineRuns);
+    case "list":
+      return block.items.flatMap((item) => item.blocks.flatMap(inlineRuns));
+    case "table":
+      return [...block.head, ...block.rows.flat()];
+    case "code":
+    case "rule":
+      return [];
+  }
+}
+
+/**
+ * Blocks already parsed, drawn as [renderMarkdown] draws a document's, for a
+ * host that chose which blocks to draw. No anchors and no heading shift: both
+ * are read off the whole source.
+ */
+export function renderBlocks(
+  blocks: readonly MarkdownBlock[],
+  options: RenderOptions = {},
+  keyPrefix = "b",
+): ReactNode[] {
+  return blocks.map((block, i) => renderBlock(block, `${keyPrefix}${i}`, options));
+}
+
 function renderBlock(
   block: MarkdownBlock,
   key: string,
@@ -722,7 +768,7 @@ function renderBlock(
         return createElement(
           "p",
           { key, className: "md-heading" },
-          renderInline(block.text, key, opening(options)),
+          inlineOf(options)(block.text, key, opening(options)),
         );
       }
       // CLAMPED TO h2–h6. A page's own title is the h1 on the screen around
@@ -731,10 +777,10 @@ function renderBlock(
       return createElement(
         `h${Math.max(2, Math.min(6, block.level + (options.headingShift ?? 1)))}`,
         anchor ? { key, id: anchor } : { key },
-        renderInline(block.text, key, opening(options)),
+        inlineOf(options)(block.text, key, opening(options)),
       );
     case "paragraph":
-      return createElement("p", { key }, renderInline(block.text, key, opening(options)));
+      return createElement("p", { key }, inlineOf(options)(block.text, key, opening(options)));
     case "code":
       // `md-code`, in the same family as `md-table`, `md-tasks` and
       // `md-task-body`. It was `code plain`, two generic names (a table
@@ -747,6 +793,10 @@ function renderBlock(
       // the class gate could not see it either, because it read a `className`
       // ATTRIBUTE and this is a property in a props object — which is the
       // other half of why it stayed silent, and is fixed in that gate.
+      if (options.fence) {
+        const drawn = options.fence(block.text, block.lang, key);
+        if (drawn !== null) return drawn;
+      }
       if (options.code === "copy") {
         return createElement(CodeBlock, {
           key,
@@ -862,7 +912,7 @@ function renderBlock(
                 createElement(
                   "th",
                   { key: i, style: { textAlign: block.align[i] ?? "left" } },
-                  renderInline(cell, `${key}-h${i}`, opening(options)),
+                  inlineOf(options)(cell, `${key}-h${i}`, opening(options)),
                 ),
               ),
             ),
@@ -878,7 +928,7 @@ function renderBlock(
                   createElement(
                     "td",
                     { key: c, style: { textAlign: block.align[c] ?? "left" } },
-                    renderInline(cell, `${key}-${r}-${c}`, opening(options)),
+                    inlineOf(options)(cell, `${key}-${r}-${c}`, opening(options)),
                   ),
                 ),
               ),

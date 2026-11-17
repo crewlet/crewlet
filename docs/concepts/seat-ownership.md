@@ -35,6 +35,8 @@ Three properties carry everything above it:
 
 Beside them the record remembers **when its tenure began**. `acquired_at` is the coordination store's own timestamp on the write that won the lease, stamped when the epoch is minted and carried unchanged by every renewal — so it moves exactly when the epoch does, and "node-2 · since 08:02" in the **Since** column of Settings › Nodes means the seat has not moved since 08:02. A heartbeat restamping it would report every seat as "since a few seconds ago". It is on the store's clock for the reason `expires_at` is, and nothing decides ownership by it: it is a fact for a person, and the fence is still the epoch. Every lease carries one, and a renewal never restamps it — the moment it would stamp is the renewal's, not the claim's.
 
+**A renewal is one round trip, and a pass sends them together.** A renewal used to read its record and then write it at the revision it read — two round trips a seat — and the heartbeat renewed its seats one after another, so a pass's length was the seat count times both: across a link whose round trip is 100 ms, twenty seats filled the 4-second renew period of the [15-second floor TTL](coordination.md#the-lease-ttl-bounds-seats-and-presence-only), and seventy-five outran the TTL itself, so their leases lapsed between renewals. Now the store keeps the record it last wrote of each lease it holds and the revision the broker gave that write, and renews with one write at that revision, which lands only while the record is still exactly that write — so nothing a read would have told it is missing ([Coordination](coordination.md#a-renewal-of-its-own-write-is-one-round-trip)). And the heartbeat sends a pass's renewals together, up to 64 at once, with the presence's claim beside them: a pass over N seats is ⌈N/64⌉ round trips — 100 seats at a 100 ms round trip in 0.2 s — and on the slowest link the engine allows, at the [object store's floor](object-store.md#the-fleets-own-bucket--nats-the-default) and a 0.6 s satellite round trip, the link sets the pace and not the bound, since it carries about 36 renewals at once. Each renewal is still stamped at the instant it was sent, and the answers are applied one at a time in the same order as before, so what a pass decides about a seat never depends on which renewal the store answered first.
+
 ## Placement
 
 Placement is deliberately dumb, and lives in `internal/seat`:
@@ -339,12 +341,13 @@ the end), and a delivery the link lost. A placement that delivered nothing is
 followed by the next a second after it, so a broker that refuses every pull is
 asked for a consumer once a second, not as fast as it answers. Each placement
 after a table's first logs `memory_replay_placed_again`, with the reason
-(`behind`, `gone`, `unpulled` or `gap`) and what the broker or the link said
-(`detail`: a refusal's status line, a lost delivery's counts). A replay that
-nothing has been delivered to for a minute, across every placement and
-whatever each ended with, refuses the seat, until the next sweep, rather than
-admitting it without its newest memory, and names what ended its last
-placement. A pull asks no more messages than the consumer it was given takes:
+(`behind`, `gone`, `unpulled`, `gap`, or `quiet` across a link, below) and what
+the broker or the link said (`detail`: a refusal's status line, a lost
+delivery's counts, what the link carried). A replay that nothing has been
+delivered to for a minute, across every placement and whatever each ended
+with but `quiet`, which neither starts nor reads that minute (below), refuses
+the seat, until the next sweep, rather than admitting it without its newest
+memory, and names what ended its last placement. A pull asks no more messages than the consumer it was given takes:
 a server whose JetStream limits set `max_request_batch` gives every consumer
 that limit, and refuses a pull asking more.
 
@@ -407,7 +410,60 @@ to thirty seconds and its pull's arrival, each consumer's creation is asked as
 a write, for up to thirty seconds, and a deletion is hygiene, one request of
 five seconds, whose failure leaves the consumer for the broker to reap once it
 has had no pull for longer than a live replay goes between two (46 seconds in
-a member's own process, about nine minutes across a link).
+a member's own process, about thirteen minutes across a link). Across a link,
+each of those bounds runs only while the link is still (below).
+
+**Across a link, silence is the link's.** A node whose connection crosses a
+link (a satellite's leaf link, or a dial to an external cluster) meters it at
+its own socket: the bytes it read, and the bytes the far end acknowledged of
+what it wrote ([what a satellite still needs](../guides/satellite-nodes.md#what-a-satellite-still-needs)).
+Neither the broker nor the client sees a message cross until its last byte is
+in, so a replay whose rows wait on the link behind the node's own download, or
+behind an event of megabytes, hears nothing for as long as that takes, and
+only the link says whether anything is crossing. So a replay that hears
+nothing for its stall is refused for **silence** only where its link carried
+less than seven tenths of the floor over that stall, in either direction; the
+error says what the link carried. While the link moves, the replay waits, and
+is judged again every second, over the stall before each judgment, its
+consumer asked about itself before each as before the stall; a link that falls
+still ends the wait within a stall and a second of its last byte. Two caps
+hold the wait:
+
+- **Placed again past one message and a window.** Once the link has read one
+  message at the broker's limit and one of the replay's pulls since the replay
+  last heard anything (8.9 MB at the shipped lease), the replay is placed
+  again on a copy the broker chooses afresh (`memory_replay_placed_again`,
+  `why=quiet`): on a link of 100 Mbit/s, under a second's worth. The figure is
+  a choice, not a bound on what the link may carry ahead of a word: the
+  replay's own bytes ahead of it are one pull's, since it keeps one pull out
+  at a time, and the cap allows one other message at the broker's limit; any
+  number of other messages may be ahead, and the object store's transfers
+  ride the same connection. Behind more, the replay is placed again
+  needlessly, which costs the seat a consumer, and at worst is refused at the
+  cap below. Such a placement starts no minute of the replay being behind
+  (above), since the link it waits on carries other traffic, which may hold
+  its words longer than a minute.
+- **Refused at one pull at the broker's limit.** A replay that hears nothing
+  for the stall of one pull at the broker's limit since its last word, across
+  every placement (about 253 seconds at the floor), while its link moves too
+  slowly to reach the first cap, is refused: the link carries the node's other
+  traffic too slowly for the replay's words to cross, or the copy stopped
+  answering behind it.
+
+The identity reads, the barriers and each consumer's creation are held the same
+way: each is refused at its bound only where the link did not move over that
+bound, and is held past it while the link moves, by one message at the
+broker's limit crossing at the floor at most (about 248 seconds), asking
+nothing more past its bound and waiting for the requests already out. A
+member crosses no link and has no meter, and time alone refuses its
+hydrations. Where a link carries a hydration nothing (a dead link, a member
+that stopped answering on a quiet link), the seat is refused at the same
+stall as before; where it moves, a hydration that used to be refused behind a
+download or a large event completes. One case is slower than it was: a copy
+that stops answering altogether on a link saturated at the floor, which waits
+for the caps rather than its stall. A consumer that is gone, or a pull it
+never got, still answers the replay's probe behind the traffic and places it
+again sooner.
 
 Its fixed cost is round trips. Two read the changelog's identity, before the
 barrier and after the last table, and one publishes the barrier; each of the
@@ -424,9 +480,20 @@ another (at most four a pass), so the rest of that pass waits for it, and so
 does the next pass, with the releases it would make: a seat whose role was
 removed, a re-pin, a shed for capacity. So does anything else that takes that
 seat's lock, a sandbox apply preparing the held seats among them, and a seats
-node's first `/ready`, which waits for its first pass. None of it touches
-ownership: the seat's lease is renewed throughout, and a lost lease, a drain or
-a stop cuts the hydration rather than waiting for it (above).
+node's first `/ready`, which waits for its first pass. Across a moving link
+those waits are the longer ones above: a replay that hears nothing waits up to
+its 253-second cap, where its stall used to refuse it at 20.5 seconds, and its
+identity reads, barriers and consumer creations up to 248 seconds past their
+bounds, about 278 seconds where they ended at 30 (294 for an end barrier,
+where it ended at 45.5). That is
+the price of not refusing a seat behind traffic that is crossing, and only a
+copy or a link that stops answering while other traffic keeps the link moving
+pays it in full; a link that falls still ends the wait within a stall and a
+second of its last byte, and a request's within its bound and a quarter of a
+second. None of
+it touches ownership: the seat's lease is renewed throughout, and a lost
+lease, a drain or a stop cuts the hydration rather than waiting for it
+(above).
 
 **A replay holds one pull of rows at a time, bounded in messages and in
 bytes.** A pull asks for at most 1024 messages, which sets how many round
@@ -930,7 +997,7 @@ So every node runs a **watchdog**: each duty stamps a beat as it turns, a separa
 - **The exit is the crudest possible one** — `os.Exit`, which runs no deferred function, rather than a panic, a signal, or a graceful shutdown. The duty that stalled is the one that would have to run the shutdown, so anything waiting on it hangs; trying is how a watchdog ends up wedged too. The notice — which duty stopped, how long it went without a beat, the lease TTL that blew and the exit code — goes straight to stderr rather than through the logger for the same reason: a configured handler may batch, format, or ship lines somewhere — a [log file](../guides/deployment.md#the-log-file) among them — which is more machinery than a wedged process has earned. **So this notice is not in `logging.file`**, only on stderr. That is exactly why [`logging.stderr: false`](../guides/deployment.md#turning-stderr-off) silences the ordinary log stream and not the stream itself — a node that handed its whole log to a file would otherwise lose the one line explaining its own death. A deployment that discards stderr at the shell or the unit instead (`2>/dev/null`, `StandardError=null`) does lose it, and its only remaining evidence is the orchestrator's exit code 75. Exit code **75** is distinct from any ordinary failure, and from the code a [broker that declares itself dead](#a-broker-that-declares-itself-dead) leaves with, so an orchestrator's restart log says what happened.
 - **It is disarmed for the whole of a normal shutdown.** Teardown is the one part of the process that legitimately blocks the loop — reaping MCP subprocesses, joining threads, tearing sandboxes down — and exiting through the middle of it would abandon the seat release that makes a drain graceful. A shutdown that hangs is a `SIGKILL` away; a shutdown that exits without releasing costs every peer a full TTL of dark seats.
 - **The beat cadence is scaled to the threshold, not set independently.** A beat slower than the threshold makes a perfectly healthy node shoot itself, so both the stamp interval and the poll interval are ceilings derived from it.
-- **A heartbeat pass stamps the beat as it asks each renew, not once it has asked them all.** A renew the coordination store leaves unanswered is held to its read's whole bound — five seconds, where nothing set a deadline — so a node that cannot reach its store spends that bound on every seat it renews, doing what an unreachable store asks of it: keeping each seat until its own lease's TTL, and then dropping it. Stamped only at the end of the pass, the beat read that as a wedge once the bounds summed past the TTL — ten seats at the default — and the watchdog ended a process that was turning. A renew that hangs still freezes the beat, which is the wedge the watchdog is for.
+- **A heartbeat pass stamps the beat as it asks each renew, as each answers and as it applies each answer, not once it has asked them all.** A renew the coordination store leaves unanswered is held to its read's whole bound — five seconds, where nothing set a deadline — so a node that cannot reach its store spends that bound on every batch of seats it renews, doing what an unreachable store asks of it: keeping each seat until its own lease's TTL, and then dropping it. Stamped only at the end of the pass, the beat read that as a wedge once the bounds summed past the TTL — ten seats at the default, when the renewals went one at a time — and the watchdog ended a process that was turning. Applying an answer can run a seat's release hook, which may wait out its own bound (a lost seat's teardown, an undead seat's retried one), and the renews answer long before the pass has applied them all, so the pass stamps the beat as it applies each too: a pass that drops ten seats at the default TTL is not a wedge either. A renew that hangs still freezes the beat, once the renews beside it have answered, since the pass applies the answers in order: that is the wedge the watchdog is for.
 - **A duty that is *gone* is not a duty that is *wedged*.** From the watcher the two are indistinguishable — the beat simply stops refreshing — and they are opposite situations. A wedged duty is still alive inside a live process: still sitting on a fetched batch, and still able to act on a seat it no longer owns. A duty that has finished took its work with it, so there is nothing left holding anything. The watchdog therefore stands down when nothing it watches is live any more, rather than exiting. Without that check, every engine abandoned rather than stopped arms a suicide timer that fires one TTL later on a perfectly healthy process — which is not hypothetical: it killed this repository's own test suite at 63%, exit 75, with zero test failures.
 
 Single node or fleet, it is armed the same way. With one node no peer is waiting on anything the wedged process still holds, but a wedged engine is a dead engine either way, and leaving is what lets a supervisor notice.
@@ -1054,7 +1121,7 @@ Three consequences worth stating plainly:
 
 **What the gate costs does not grow with the fleet.** "Is any live presence or seat lease held at a lower protocol" is a question about every such lease in the fleet, and the lower-protocol builds it is for say their protocol nowhere but inside each lease record — so it used to be answered by reading every lease, twice per claim. A node converging from cold claims its seats one after another, so its claims cost the square of the seats: on a three-member cluster with about 9,300 seats held a claim took 0.3–0.5 s, and a hundred nodes claiming ten thousand seats took the brokers out of quorum. A node now keeps a *view* of the seat lease bucket while it is claiming — a watch that takes in every write to it — and judges the gate from it, after reading the bucket's last write from its leader and waiting for the view to reach it, so the answer is the one a full read would have given. A claim costs the same with ten leases held as with ten thousand (measured on one member: about 1 ms, where it was 6 ms and 230 ms). The view stops a minute after the node last judged a gate, so a node that is not claiming does not pay for the fleet's heartbeats reaching it — and a claim on a seat a peer holds judges no gate at all, because a refusal names the rule that made it (the peer's hold or the protocol gate). So a node with room for one more seat and nothing free to take — the steady state of most of a fleet whose seats do not divide evenly — reads no protocol floor and keeps no view: it used to read the floor after every sweep that took nothing, which kept its view running and took in every lease write the fleet made (measured with 2,000 seats a peer renewed at the ten-thousand-seat heartbeat rate: 7,426 messages to the idle node per five-second sweep, now 4,010). The floor is read only after the gate has refused one of a pass's claims, when the claim has just judged the same view, and a gate refusal ends the pass, since every other claim in it would be refused the same way.
 
-**A node with room and nothing free tries no seat at all.** It used to learn that nothing was free by trying every seat it may run — a read of each seat's lease from its stream's leader, plus a walk of the epochs bucket to order them — every sweep, which was the rest of that cost: measured with 2,001 seats and a peer holding 1,001 of them, 4,021 messages to the idle node per sweep. Every node now advertises how many seat leases it holds (`seats_held`, the seats it runs and the ones whose teardown it could not prove, counting only seats some live node may run) on its presence row, which each sweep already lists to size its share; when those counts together cover every seat some live node may run, the pass claims nothing and says so (`FleetFull` on the sweep's record) — 10 messages per sweep on the same fleet. Nothing is claimed on the counts, so a wrong reading costs time or reads and never a seat held twice, and they err toward trying: a count a row does not carry readably reads as zero and adds nothing to the sum, a node whose presence lapsed is not listed, so its seats read as free the moment it goes, and a roster the pass could not read concludes nothing. A lease on a seat that is not placeable — a stuck seat whose role is gone, or whose placement no live node now matches — is left out of the count, because the sum is compared with the placeable seats: counted, it stood in for a free one, and every node read the fleet as full for as long as the teardown kept failing. A node that takes seats advertises its new count at the end of that pass, and one that gives a seat back advertises it in the release itself, whichever path releases it — so a seat given back is taken at the next sweep rather than after the giver's next heartbeat.
+**A node with room and nothing free tries no seat at all.** It used to learn that nothing was free by trying every seat it may run — a read of each seat's lease from its stream's leader, plus a walk of the epochs bucket to order them — every sweep, which was the rest of that cost: measured with 2,001 seats and a peer holding 1,001 of them, 4,021 messages to the idle node per sweep. Every node now advertises how many seat leases it holds (`seats_held`, the seats it runs and the ones whose teardown it could not prove, counting only seats some live node may run) on its presence row, which each sweep already lists to size its share; when those counts together cover every seat some live node may run, the pass claims nothing and says so (`FleetFull` on the sweep's record) — 10 messages per sweep on the same fleet. Nothing is claimed on the counts, so a wrong reading costs time or reads and never a seat held twice, and they err toward trying: a count a row does not carry readably reads as zero and adds nothing to the sum, a node whose presence lapsed is not listed, so its seats read as free the moment it goes, and a roster the pass could not read concludes nothing. A lease on a seat that is not placeable — a stuck seat whose role is gone, or whose placement no live node now matches — is left out of the count, because the sum is compared with the placeable seats: counted, it stood in for a free one, and every node read the fleet as full for as long as the teardown kept failing. A node that takes seats advertises its new count at the end of that pass, and one that gives a seat back advertises it in the release itself, whichever path releases it — a heartbeat pass that loses a seat, or finally releases one whose teardown it could not prove, renews the presence once more before it returns, since the presence's own renewal went beside that pass's seats and may have counted the seat — so a seat given back is taken at the next sweep rather than after the giver's next heartbeat.
 
 The current protocol is **1**: no build that held a lease to another meaning was ever released. It is raised only when holding a lease comes to *mean* something a build at the previous protocol could not honour — never for a new field — because two builds side by side would then each be individually correct and jointly wrong. At 1, holding a seat lease — keyed on the seat's id — means three things:
 

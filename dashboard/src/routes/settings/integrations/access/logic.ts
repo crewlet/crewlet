@@ -24,12 +24,13 @@ import type {
   AccessStep,
   GitHubAccess,
 } from "~/contract/access.ts";
-import { inTime, plural, relTime } from "~/lib/format.ts";
+import { inTime, plural } from "~/lib/format.ts";
 import { andList } from "~/lib/words.ts";
 import { grantEntry, grantReach } from "~/lib/grants.ts";
 import { integrationDocHref } from "../docs.ts";
 import type { AccessDraft } from "./api.ts";
 import { GITHUB_ACCESS_NAMES, laneWords, type LaneWords } from "./words.ts";
+import { ago } from "~/lib/ago.ts";
 
 type Tone = "success" | "neutral" | "warning" | "danger" | "info";
 
@@ -707,7 +708,7 @@ export function credentialNote(
   if (providedExternally(lane, o)) return ", provided externally";
   if (o.credential?.source === "issued")
     return words.issued ? `, issued for ${words.issued} at a time, at use` : ", issued at use";
-  return o.credential?.minted_at ? `, minted ${relTime(o.credential.minted_at, now)}` : "";
+  return o.credential?.minted_at ? `, minted ${ago(o.credential.minted_at, now)}` : "";
 }
 
 /** The details' "Set by Crewlet" value: the settings, and the lane's note on them, or null. */
@@ -768,11 +769,11 @@ export function clockValue(saved: AccessSeatLane, now: number): string {
   const applied = !s
     ? "never applied"
     : s.outcome === "failed"
-      ? `refused ${relTime(s.at, now)}`
+      ? `refused ${ago(s.at, now)}`
       : s.outcome === "waiting"
-        ? `waiting on a person since ${relTime(s.at, now)}`
-        : `last applied ${relTime(s.at, now)}`;
-  if (saved.observed_at) return `Checked ${relTime(saved.observed_at, now)}, ${applied}`;
+        ? `waiting on a person since ${ago(s.at, now, { since: true })}`
+        : `last applied ${ago(s.at, now)}`;
+  if (saved.observed_at) return `Checked ${ago(saved.observed_at, now)}, ${applied}`;
   return s ? applied.charAt(0).toUpperCase() + applied.slice(1) : "Not checked yet";
 }
 

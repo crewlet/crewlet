@@ -11,7 +11,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { render, within } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
-import { SLIDE_ICON_GLYPH_PERCENT } from "~/contract/artifactsworkspace.ts";
+import {
+  SLIDE_ELEMENTS,
+  SLIDE_ICON_GLYPH_PERCENT,
+  SLIDE_SVG_ELEMENTS,
+} from "~/contract/artifactsworkspace.ts";
 import type { ArtifactDeck, DeckSlide, SlideNode } from "~/protocol/index.ts";
 import { nodeAt, renderSlide, slideSource, slideStyle, titleOf, withText } from "./slides.tsx";
 
@@ -160,6 +164,66 @@ describe("drawing a slide", () => {
     expect(p.style.zIndex).toBe("");
     expect(p.style.color).toBe("rgb(18, 52, 86)");
     expect(container.textContent).toContain("alert(1)");
+  });
+
+  // A COMMENT IS ANCHORED BY AN ELEMENT'S PATH: every element drawn says
+  // its own, so the element under the pointer names the node it draws, and a
+  // pin finds the element a thread names.
+  test("every element drawn carries its path in the tree, and a Fragment none", () => {
+    /** Each element's path, as the engine indexes a slide, that is drawn as an element. */
+    const drawn = (n: SlideNode, path: string, svg: boolean, out: string[]) => {
+      if (n.tag === undefined) return;
+      const shown = svg
+        ? (SLIDE_SVG_ELEMENTS as readonly string[]).includes(n.tag)
+        : (SLIDE_ELEMENTS as readonly string[]).includes(n.tag) &&
+          (n.tag !== "a" || /^https:\/\//.test(n.attrs?.href ?? ""));
+      if (svg && !shown) return;
+      if (shown) out.push(path);
+      (n.children ?? []).forEach((c, i) => drawn(c, `${path}/${i}`, svg || n.tag === "svg", out));
+    };
+    for (const s of slides) {
+      const want: string[] = [];
+      (s.root.children ?? []).forEach((c, i) => drawn(c, String(i), false, want));
+      const { container, unmount } = render(<>{renderSlide(s, ctx)}</>);
+      const got = [...container.querySelectorAll("[data-node]")].map((el) =>
+        el.getAttribute("data-node")!,
+      );
+      expect(got.sort()).toEqual(want.sort());
+      for (const path of got) expect(nodeAt(s.root, path)?.tag).toBeTruthy();
+      unmount();
+    }
+  });
+
+  test("an element drawn as nothing of its own takes no path, and its children keep theirs", () => {
+    const slideOf = (children: SlideNode[]): DeckSlide => ({
+      id: "x",
+      path: "slides/x.html",
+      title: "x",
+      root: { tag: "section", children },
+    });
+    const { container } = render(
+      <>
+        {renderSlide(
+          slideOf([
+            { tag: "script", children: [{ text: "alert(1)" }] },
+            { tag: "a", attrs: { href: "javascript:x()" }, children: [{ tag: "b", children: [] }] },
+            {
+              tag: "svg",
+              children: [
+                { tag: "foreignObject", children: [] },
+                { tag: "g", children: [{ tag: "circle" }] },
+              ],
+            },
+          ]),
+          ctx,
+        )}
+      </>,
+    );
+    const paths = [...container.querySelectorAll("[data-node]")].map((el) =>
+      el.getAttribute("data-node"),
+    );
+    expect(paths).toEqual(["1/0", "2", "2/1", "2/1/0"]);
+    expect(container.querySelector('[data-node="2/1/0"]')?.tagName.toLowerCase()).toBe("circle");
   });
 
   test("a style is held to the subset again, a vendor property camelCased", () => {

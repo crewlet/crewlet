@@ -580,7 +580,7 @@ func sendBudget(n int64) time.Duration { return callBudget + objstore.PaceFor(n)
 // to the budget is a part that keeps MOVING below its share of the floor, one
 // the bucket keeps THROTTLING (a throttle is never given up: the gate slows
 // the node instead), and one whose connection's unacknowledged count cannot
-// be read, which its watch never ends ([errUncountable]; no connection on the
+// be read, which its watch never ends (internal/sockcount's ErrUncountable; no connection on the
 // platforms the engine builds for).
 func partBudget(size int64) time.Duration { return sendBudget(size * partsInFlight) }
 

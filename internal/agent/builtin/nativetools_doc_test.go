@@ -185,7 +185,7 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 	for _, name := range append([]string{builtin.AnswerExecutorTool, builtin.PauseSeatTool,
 		builtin.ResumeSeatTool, builtin.SteerTurnTool, builtin.AnswerKnowledgeTool,
 		builtin.AtlasRefreshTool, builtin.RunScheduleTool, builtin.CodeRepoReadersTool,
-		builtin.CodeMarkInboxTool}, append(chatlet.OperatorOnlyTools(),
+		builtin.CodeMarkInboxTool, builtin.CodeMarkViewedTool}, append(chatlet.OperatorOnlyTools(),
 		builtin.AtlasWriteTools...)...) {
 		if !slices.Contains(only, name) {
 			t.Fatalf("the operator surface with every seam wired does not serve %s "+
@@ -271,13 +271,13 @@ func operatorCandidates(t *testing.T) int {
 	return count
 }
 
-// numberWords spells the counts these pages state. Past twenty-nine a page
-// would be better served by a table than a sentence, and this fails loudly.
+// numberWords spells the counts these pages state. Past thirty a page would be
+// better served by a table than a sentence, and this fails loudly.
 var numberWords = []string{"zero", "one", "two", "three", "four", "five", "six",
 	"seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen",
 	"fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty",
 	"twenty-one", "twenty-two", "twenty-three", "twenty-four", "twenty-five",
-	"twenty-six", "twenty-seven", "twenty-eight", "twenty-nine"}
+	"twenty-six", "twenty-seven", "twenty-eight", "twenty-nine", "thirty"}
 
 func spelled(t *testing.T, n int) string {
 	t.Helper()
@@ -445,7 +445,7 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 	for _, want := range []string{
 		title(spelled(t, art+data)) + " more, registered on every node that takes " +
 			"artifact uploads",
-		spelled(t, art) + " for artifacts, their folders and the company's brand, and " +
+		spelled(t, art) + " for artifacts, their comments, their folders and the company's brand, and " +
 			spelled(t, data) + " for an artifact's datastore",
 		"the operator catalogue serves the same " + spelled(t, art+data),
 	} {

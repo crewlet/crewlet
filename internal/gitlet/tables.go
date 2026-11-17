@@ -22,6 +22,15 @@ var ReproducibleTables = []string{
 	"code_repos", "code_names", "code_refs", "code_packs", "code_pushes",
 	"code_protections", "code_path_owners",
 
+	// A repository's viewed key, the 32 random bytes its persons' viewed marks digest each path and
+	// file under: written once by the viewed_key record on its own subject, and removed with the
+	// repository by its purge.
+	"code_viewed_keys",
+
+	// A repository's pushes by UTC day and quarter-hour and by pusher and UTC day: kept with
+	// code_pushes' rows by the applies and re-derived by the applier (apply_activity.go).
+	"code_push_days", "code_pusher_days",
+
 	// The packs a record retired, each kept from the collector until a
 	// retire_sweep record removes it past RetireGrace — every node derives
 	// the same rows from the same records, so they are state a replay
@@ -87,6 +96,14 @@ var ReproducibleTables = []string{
 	// replay rebuilds it from those records alone.
 	"code_repo_kinds",
 
+	// The changes of the repositories in use by state, a row for each owner and visibility:
+	// kept with code_changes by the applies and re-derived by the applier (apply_counts.go).
+	"code_change_tallies",
+
+	// The repositories by owner, visibility, kind and status: kept by the lifecycle applies and
+	// re-derived by the applier (apply_repotallies.go).
+	"code_repo_tallies",
+
 	// A person's marks over their code notices — how far they have read on
 	// this log, what they marked out of order or put off, which reasons are
 	// theirs — written by the records on the person's own subject alone,
@@ -94,6 +111,11 @@ var ReproducibleTables = []string{
 	// record's broker instant (marks.go): state a replay rebuilds like any
 	// other. Not a repository's, so no purge removes it.
 	"code_person_marks",
+
+	// The files a person marked viewed on a change, by keyed digests: written by the viewed records on
+	// their own subject alone (viewed.go). Not a repository's, so no purge removes them; its purge
+	// deletes the key, after which they name no file once the log is trimmed past the key's record.
+	"code_viewed_files",
 
 	// The activation fence: the configuration activation every
 	// config-managed record is held to.

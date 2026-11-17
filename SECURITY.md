@@ -357,8 +357,12 @@ A few things worth knowing when deploying Crewlet:
   under anybody's name. So are the frames a node broadcasts for its peers to
   show: who is in a room, and an Ask Crewlet turn as it streams, which is also
   encrypted under the keyring because it carries the person's conversation.
-  Each request is bound to an id and a deadline inside its signature, so one
-  captured off the wire is not carried out twice. A frame under a key the
+  Each request is bound to an id and a deadline inside its signature, and a
+  node refuses an id it has taken for as long as the request's deadline, with
+  the allowance its channel gives two machines' clocks, could still admit it;
+  a node that restarted inside that window has forgotten the ids it took, so
+  what keeps a replay harmless there is the channel's own receiver: a box read
+  is made only where the run's record licenses it. A frame under a key the
   receiver does not hold is not applied, or not run; one that fails under a key
   it holds is refused and logged. Neither the admission nor the signing
   encrypts: the records, the event stream and the coordination store cross the

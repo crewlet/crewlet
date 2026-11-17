@@ -648,6 +648,9 @@ describe("the frame's layout", () => {
       [".list-row", "components.css"],
       [".feed-row", "screens.css"],
       [".thread-entry", "screens.css"],
+      [".code-list__row", "gitlet.css"],
+      [".code-entries td", "gitlet.css"],
+      [".code-refs__table td", "gitlet.css"],
     ] as const;
     for (const [row, file] of ROWS) {
       expect(block(sheet(file), row), `${row} writes its own inset`).toMatch(
@@ -789,7 +792,7 @@ describe("the frame's layout", () => {
     expect(sheet("screens.css")).not.toMatch(/\.crewlet-tabs--pill\s*\{/);
   });
 
-  // AND THE ONE TABLE LEFT IN THE PRODUCT STACKS THERE TOO.
+  // AND EVERY TABLE LEFT IN THE PRODUCT STACKS THERE TOO.
   //
   // The retention screen's per-domain terms are a real `<table>` — a block
   // that already titled itself, with no header row and nothing to sort — and
@@ -797,12 +800,13 @@ describe("the frame's layout", () => {
   // Measured at 536px wide inside a 390px page, with no scroller anywhere
   // above it, so 146px of every remedy was simply gone: on the one screen
   // whose subject is "what is blocking the trim and what do I do about it".
+  // Gitlet's branches and tags are tables too, stacked by the page's container.
   //
   // A `<table>` IGNORES ITS CHILDREN'S DISPLAY unless the table itself stops
   // being one — blocking only the rows leaves the anonymous table box in place
-  // and the columns come straight back — which is why all four levels are
+  // and the columns come straight back, which is why every level is
   // asserted rather than just the row.
-  test("the one remaining table stacks on a phone", () => {
+  test("every table left in the product stacks on a phone", () => {
     const css = sheet("components.css");
     const narrow = css.slice(css.indexOf(PHONE));
     expect(narrow, "components.css has no phone breakpoint").toContain(".table");
@@ -814,6 +818,17 @@ describe("the frame's layout", () => {
     // A RULE BETWEEN TERMS, since a row is no longer a line. Between rather
     // than under, so the last term does not draw one against the block's edge.
     expect(block(narrow, ".table tr + tr")).toMatch(/border-top:/);
+    expect(tableStacks(sheet("gitlet.css"), ".code-refs__table")).toEqual([]);
+    // IT CAN TELL: a sheet blocking only the rows, with no rule between them.
+    const rowsOnly = `${PAGE_PHONE} { .code-refs__table tr { display: block; } }`;
+    expect(tableStacks(rowsOnly, ".code-refs__table")).toEqual([
+      ".code-refs__table still lays out as a table on a phone",
+      ".code-refs__table thead still lays out as a table on a phone",
+      ".code-refs__table tbody still lays out as a table on a phone",
+      ".code-refs__table th still lays out as a table on a phone",
+      ".code-refs__table td still lays out as a table on a phone",
+      ".code-refs__table draws no rule between its rows",
+    ]);
   });
 
   test("the page bar wraps by what it holds, a phone's included, and folds there into More", () => {
@@ -1010,6 +1025,121 @@ describe("a page toolbar's rhythm", () => {
       /--toolbar-h:\s*calc\(var\(--size-control-sm\) \+ var\(--spacing-2\) \* 2\)/,
     );
   });
+});
+
+/** The page container's phone query, as Gitlet's sheet writes it. */
+const PAGE_PHONE = `@container page (width < ${PHONE_BREAKPOINT}px)`;
+
+/** The declaration blocks whose selector list names `selector` exactly, none where none does. */
+function declared(css: string, selector: string): string[] {
+  const out: string[] = [];
+  for (const m of css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (m[1]!.split(",").some((name) => name.trim() === selector)) out.push(m[2]!);
+  }
+  return out;
+}
+
+/** What keeps a table of Gitlet's from stacking on a phone: a level laid out as a table, or no rule between rows. */
+function tableStacks(css: string, table: string): string[] {
+  const narrow: string[] = [];
+  for (let at = css.indexOf(PAGE_PHONE); at >= 0; at = css.indexOf(PAGE_PHONE, at + 1)) {
+    narrow.push(atRuleBody(css.slice(at), PAGE_PHONE));
+  }
+  const out: string[] = [];
+  for (const level of ["", " thead", " tbody", " tr", " th", " td"]) {
+    const blocks = narrow.flatMap((body) => declared(body, table + level));
+    if (!blocks.some((b) => /display:\s*block/.test(b))) {
+      out.push(`${table}${level} still lays out as a table on a phone`);
+    }
+  }
+  if (!declared(css, `${table} tr + tr`).some((b) => /border-(top|block-start):/.test(b))) {
+    out.push(`${table} draws no rule between its rows`);
+  }
+  return out;
+}
+
+/** Which at-rules other than the page container's phone query name `.code-refs`. */
+function refsAtOtherWidths(css: string): string[] {
+  const out: string[] = [];
+  for (const m of css.matchAll(/@(?:container|media)[^{]*/g)) {
+    const prelude = m[0].trim();
+    const body = atRuleBody(css.slice(m.index), prelude);
+    if (prelude !== PAGE_PHONE && /\.code-refs(?![\w-])|\.code-refs[_-]/.test(body)) {
+      out.push(`${prelude} names the branch tables`);
+    }
+  }
+  return out;
+}
+
+// GITLET'S BRANCH TABLES STACK WITH THE PHONE ALONE, by the page's container,
+// as its code list folds: a second width would be a second phone.
+test("a branch table stacks at the phone's width, and at no other", () => {
+  expect(refsAtOtherWidths(sheet("gitlet.css"))).toEqual([]);
+  // IT CAN TELL: a stack at another width is reported.
+  const at720 = "@container page (width < 720px) { .code-refs__table { display: block; } }";
+  expect(refsAtOtherWidths(at720)).toEqual([
+    "@container page (width < 720px) names the branch tables",
+  ]);
+});
+
+/** The one wider fold: a change row's, whose facts would leave its words under about 400 px. */
+const CHANGE_ROW_FOLD = 820;
+
+/**
+ * What is wrong with where a sheet folds Gitlet's code list: at the phone's width of its own,
+ * and at CHANGE_ROW_FOLD for the rows holding a change's facts alone.
+ */
+function codeListFolds(css: string): string[] {
+  const phone = `@container code-list (width < ${PHONE_BREAKPOINT}px)`;
+  const changes = `@container code-list (width < ${CHANGE_ROW_FOLD}px)`;
+  const out: string[] = [];
+  let folds = false;
+  for (const m of css.matchAll(/@(?:container|media)[^{]*/g)) {
+    const prelude = m[0].trim();
+    const body = atRuleBody(css.slice(m.index), prelude);
+    if (prelude === phone) {
+      if (/\.code-list__row\s*\{[^}]*grid-template-areas:/.test(body)) folds = true;
+    } else if (prelude === changes) {
+      for (const rule of body.matchAll(/([^{}]+)\{/g)) {
+        for (const selector of rule[1]!.split(",").map((x) => x.trim())) {
+          if (/\.code-list/.test(selector) && !/:has\([^)]*\.code-change-facts/.test(selector)) {
+            out.push(`${prelude} names ${selector}, which holds no change's facts`);
+          }
+        }
+      }
+    } else if (/\.code-list(?![\w-])|\.code-list[_-]/.test(body)) {
+      out.push(`${prelude} names the code list`);
+    }
+  }
+  if (!folds) out.push(`no ${phone} block folds .code-list__row's areas`);
+  if (!/\.code-list\s*\{[^}]*container:\s*code-list\s*\/\s*inline-size/.test(css)) {
+    out.push(".code-list is not the code-list inline-size container");
+  }
+  return out;
+}
+
+// GITLET'S CODE LIST FOLDS WITH THE PHONE BY ITS OWN WIDTH, so a list in a narrow card
+// (Home's code card) or beside a peek folds too; only a change row folds wider.
+test("a code list folds at the phone's width of its own, and a change row at its own", () => {
+  expect(codeListFolds(sheet("gitlet.css"))).toEqual([]);
+  // IT CAN TELL: the change rows' width folding any other row is reported.
+  const wide = `.code-list { container: code-list / inline-size; } @container code-list (width < ${PHONE_BREAKPOINT}px) { .code-list__row { grid-template-areas: 'body'; } } @container code-list (width < ${CHANGE_ROW_FOLD}px) { .code-list__row:has(.code-change-facts), .code-list__row { grid-template-areas: 'body'; } }`;
+  expect(codeListFolds(wide)).toEqual([
+    `@container code-list (width < ${CHANGE_ROW_FOLD}px) names .code-list__row, which holds no change's facts`,
+  ]);
+  // IT CAN TELL: a fold at another width, or on the page's container, is reported.
+  const own = ".code-list { container: code-list / inline-size; }";
+  const at720 = `${own} @container code-list (width < 720px) { .code-list__row { grid-template-areas: 'body'; } }`;
+  expect(codeListFolds(at720)).toEqual([
+    "@container code-list (width < 720px) names the code list",
+    `no @container code-list (width < ${PHONE_BREAKPOINT}px) block folds .code-list__row's areas`,
+  ]);
+  const page = `@container page (width < ${PHONE_BREAKPOINT}px) { .code-list__row { grid-template-areas: 'body'; } }`;
+  expect(codeListFolds(page)).toEqual([
+    `@container page (width < ${PHONE_BREAKPOINT}px) names the code list`,
+    `no @container code-list (width < ${PHONE_BREAKPOINT}px) block folds .code-list__row's areas`,
+    ".code-list is not the code-list inline-size container",
+  ]);
 });
 
 test("no stylesheet negates a var() with a unary minus", () => {

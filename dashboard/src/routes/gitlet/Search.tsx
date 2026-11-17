@@ -44,6 +44,11 @@
  *
  * See `lib/codeSearch.ts`: the coverage is a Callout above the lines, never hidden,
  * and a warning where any repository was left unanswered or the lines cut.
+ *
+ * # Coloured by kind, a line alone
+ *
+ * Each hit is tokenized on its own in its file's language; no blob is read, so a
+ * hit inside a block comment may read as code.
  */
 
 import { memo, useMemo, useRef } from "react";
@@ -53,6 +58,7 @@ import {
   EmptyState,
   FormField,
   Input,
+  NoticeList,
   SegmentedControl,
   Skeleton,
 } from "@crewlethq/ui";
@@ -66,6 +72,7 @@ import { plural } from "~/lib/format.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { repoHref } from "./paths.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
+import { Painted, tokensOf, useGrammar } from "./syntax.tsx";
 import { coverageNotes, groupHits, hitAt, type FileHits, type RepoHits } from "~/lib/codeSearch.ts";
 import "~/styles/gitlet.css";
 
@@ -230,13 +237,7 @@ export function SearchCoverage({ coverage }: { coverage: Parameters<typeof cover
   const notes = coverageNotes(coverage);
   return (
     <Callout variant={notes.variant} title={notes.lead}>
-      {notes.notes.length > 0 && (
-        <ul className="code-search-coverage">
-          {notes.notes.map((n) => (
-            <li key={n}>{n}</li>
-          ))}
-        </ul>
-      )}
+      <NoticeList notices={notes.notes.map((n) => ({ key: n, title: n }))} />
     </Callout>
   );
 }
@@ -274,6 +275,7 @@ function fileOnly(at: Record<string, string>): Record<string, string> {
 
 function FileResult({ repo, tip, file }: { repo: string; tip?: string; file: FileHits }) {
   const first = hitAt(tip, file, file.lines[0]?.line ?? 1);
+  const grammar = useGrammar(file.path);
   return (
     <div className="code-search-file">
       <div className="code-search-file__path mono">
@@ -299,7 +301,9 @@ function FileResult({ repo, tip, file }: { repo: string; tip?: string; file: Fil
               ) : (
                 <span className="code-search-line__number mono">{hit.line}</span>
               )}
-              <code className="code-search-line__text">{hit.text}</code>
+              <code className="code-search-line__text">
+                <Painted text={hit.text} tokens={tokensOf(grammar, hit.text, "")} />
+              </code>
             </li>
           );
         })}

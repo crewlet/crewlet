@@ -279,6 +279,7 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/artifacts/{id}/assets", what: "artifact_assets", path: map[string]string{"id": "id"}},
 	{method: "GET", pattern: "/artifacts/{id}/seen-by", what: "artifact_seen_by", path: map[string]string{"id": "id"}},
 	{method: "GET", pattern: "/artifacts/{id}/access", what: "artifact_access", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/artifacts/{id}/comments", what: "artifact_comments", path: map[string]string{"id": "id"}},
 	// THE FOLDER TREE, under a root of its own: `/artifacts/folders` would
 	// meet `/artifacts/{id}/pin`'s wildcard at `/artifacts/folders/pin`,
 	// which the mux refuses to register.
@@ -332,18 +333,21 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/gitlet/repos/{name}/changes/{n}/routing", what: "code_change_routing", path: map[string]string{"name": "name", "n": "change"}},
 	{method: "GET", pattern: "/gitlet/reviews", what: "code_reviews"},
 	// AND A REPOSITORY'S CONTENT: its refs, a directory, a file found by its
-	// name, a file, a path's history, a file's blame, a diff, many tips at
-	// once, a comparison with its merge preview and one commit with the
-	// changes it belongs to — each read by object id of the repository's home
-	// Gitlet node, and decided per repository as the rows are.
+	// name, a file, a path's history, a file's blame, the last commit of each
+	// entry of a directory, a diff, many tips at once, its tags by their date,
+	// a comparison with its merge preview and one commit with the changes it
+	// belongs to: each read by object id of the repository's home Gitlet node,
+	// and decided per repository as the rows are.
 	{method: "GET", pattern: "/gitlet/repos/{name}/refs", what: "code_refs", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/tree", what: "code_tree", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/find", what: "code_find", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/blob", what: "code_blob", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/log", what: "code_log", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/blame", what: "code_blame", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/gitlet/repos/{name}/tree-commits", what: "code_tree_commits", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/diff", what: "code_diff", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/tips", what: "code_tips", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/gitlet/repos/{name}/tags", what: "code_tags", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/compare", what: "code_compare", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/commits/{sha}", what: "code_commit", path: map[string]string{"name": "name", "sha": "sha"}},
 	// AND ITS MERGE QUEUES AND ITS CHECKS: the live queues, the attempts of
@@ -358,6 +362,8 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/gitlet/repos/{name}/checks/{oid}/{check}/{attempt}", what: "code_check", path: map[string]string{"name": "name", "oid": "oid", "check": "check", "attempt": "attempt"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/checks/{oid}/{check}/{attempt}/log", what: "code_check_log", path: map[string]string{"name": "name", "oid": "oid", "check": "check", "attempt": "attempt"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/commit-marks", what: "code_commit_marks", path: map[string]string{"name": "name"}},
+	// AND GITLET'S SECTION COUNTS: a scope's changes by state, every readable repository's or `?repo=`'s.
+	{method: "GET", pattern: "/gitlet/counts", what: "code_counts"},
 	// AND A SEARCH OF THEIR LINES, across every repository the caller may
 	// read or the ones its repo: filters name, each decided per repository
 	// by the Gitlet node that answers it.

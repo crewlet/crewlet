@@ -127,7 +127,11 @@ func TestANodesReplaysPullTheWindowItsBrokerKindCallsFor(t *testing.T) {
 			t.Fatal(err)
 		}
 		db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "node.db"), store.Options{})
-		return memsync.New(db, js, func(handle string) string { return handle }, cfg).Window()
+		s, err := memsync.New(db, js, func(handle string) string { return handle }, cfg)
+		if err != nil {
+			t.Fatalf("memsync.New with %+v: %v", cfg, err)
+		}
+		return s.Window()
 	}
 	url := externalBroker(t)
 	across := reference(t, url, memsync.Config{AcrossLink: true})

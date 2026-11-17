@@ -30,6 +30,7 @@ import {
   EMPTY_VALUE,
   EmptyValue,
   InlineCode,
+  SettingsTable,
   Skeleton,
   StatCard,
   StatGroup,
@@ -38,14 +39,7 @@ import {
   TableDateCell,
   TableStatusCell,
 } from "@crewlethq/ui";
-import {
-  ClockGlyph,
-  DatabaseGlyph,
-  RotateCcwGlyph,
-  PlusGlyph,
-  ShieldGlyph,
-  UserGlyph,
-} from "@crewlethq/icons/glyphs";
+import { DatabaseGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { CoverageNote, missingFrom } from "~/components/CoverageNote.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -67,7 +61,6 @@ import {
   OUTCOME_WORDS,
   OWNER_KIND_WORDS,
   POLICY_LABELS,
-  POLICY_WORDS,
   suggestDir,
 } from "~/lib/backups.ts";
 
@@ -201,9 +194,8 @@ export function BackupRecord({
   return (
     <>
       <Card padding="none">
-        <StatGroup columns={owner === undefined ? 3 : 4}>
+        <StatGroup columns={2}>
           <StatCard
-            icon={<ClockGlyph size="xs" />}
             // THE OLDEST POINT ANY LOG'S TRIM READS, not the newest: each log
             // is trimmed against the newest counted backup that covers it, so
             // there is one such point per log under `operator`, and the one
@@ -221,16 +213,6 @@ export function BackupRecord({
             }
           />
           <StatCard
-            icon={<ShieldGlyph size="xs" />}
-            // WHICH BACKUPS COUNT, in words: the field's own name and value
-            // (`backup_floor`, `engine`) read as the configuration file rather
-            // than as an answer, and the sentence under them was what said it.
-            label="Backups that count"
-            value={POLICY_LABELS[answer.policy] ?? answer.policy}
-            sub={POLICY_WORDS[answer.policy]}
-          />
-          <StatCard
-            icon={<RotateCcwGlyph size="xs" />}
             label="Requested"
             value={requested}
             // THE SPAN THE COUNT ACTUALLY COVERS. A history that filled its
@@ -240,28 +222,29 @@ export function BackupRecord({
               answer.more ? `in the newest ${answer.history.length}` : `in ${span}`
             }`}
           />
-          {owner !== undefined && (
-            <StatCard
-              icon={<UserGlyph size="xs" />}
-              label="Backup owner"
-              value={owner || "Nobody named"}
-              // WHERE THEY ARE NAMED, in words: the dashboard cannot name them
-              // (it is the node's own file), and "set retention.backup_owner"
-              // under "Not set" read as an instruction with nowhere to act.
-              sub={
-                owner
-                  ? "named in the node configuration file"
-                  : "name whose job backups are in the node configuration file"
-              }
-            />
-          )}
         </StatGroup>
+      </Card>
+
+      <Card padding="none">
+        <Card.Header icon={<DatabaseGlyph size="sm" />} count={owner === undefined ? 1 : 2}>
+          <Card.Title id="backup-policy">Backup policy</Card.Title>
+        </Card.Header>
+        <SettingsTable aria-labelledby="backup-policy">
+          <SettingsTable.Row label="Backups that count" source="Node configuration file">
+            {POLICY_LABELS[answer.policy] ?? answer.policy}
+          </SettingsTable.Row>
+          {owner !== undefined && (
+            <SettingsTable.Row label="Backup owner" source="Node configuration file">
+              {owner || "Not named"}
+            </SettingsTable.Row>
+          )}
+        </SettingsTable>
       </Card>
 
       {!nothingYet && (
         <>
           <Card padding="none">
-            <Card.Header icon={<DatabaseGlyph size="sm" />} count={answer.points.length}>
+            <Card.Header count={answer.points.length}>
               <Card.Title>Newest per node and log</Card.Title>
             </Card.Header>
             <DataGrid<BackupPointRow>
@@ -357,11 +340,7 @@ export function BackupRecord({
           </Card>
 
           <Card padding="none">
-            <Card.Header
-              icon={<RotateCcwGlyph size="sm" />}
-              count={answer.history.length}
-              subtitle="Newest first"
-            >
+            <Card.Header count={answer.history.length} subtitle="Newest first">
               <Card.Title>Backup history</Card.Title>
             </Card.Header>
             <CoverageNote
@@ -384,9 +363,9 @@ export function BackupRecord({
                   : undefined
               }
               empty={{
+                size: "inline",
                 title: `No backup was asked for in ${span}`,
                 hint: "Older backups still count above.",
-                icon: "rotate-ccw",
               }}
               columns={[
                 {

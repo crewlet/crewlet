@@ -85,8 +85,9 @@
 // the tip the home read; or matches the touched paths against the path owners
 // (gitlet.MatchOwners) and asks the change writer to record the facts — the
 // trees of the base and the head and the touched paths' classes among them,
-// as the Gitlet node read them — the owners matched and the digest of the owners
-// matched against. Only FINAL facts are recorded
+// as the Gitlet node read them — the owners matched, each with the globs of its
+// that matched, the digest of the owners matched against, and the instant it
+// read them, to the microsecond. Only FINAL facts are recorded
 // (gitlet.RevisionFactsAnswer.Final): a Gitlet node that ran its read's budget out
 // before the patch id or the classes says so apart from a bound's omission,
 // and such facts measure the node's moment, not the commits — recorded, they
@@ -158,13 +159,13 @@
 // node builds ([Chains]) and one candidate record; a standing train's tips
 // queued the required checks the train's BASE defines; its longest green
 // prefix LANDED in one land record; a red first candidate BISECTED over its
-// entries' commits and its culprit ejected. Nothing of a train lives in the
-// worker: a home that takes a repository over resumes its queue from the
-// rows. Each landed entry that asked it has its work item closed as its
-// enqueuer, for whom its enqueue was made as the entry's row keeps it
-// ([TaskClose.WorkingFor]), through [Tasks] — the engine's tracker, which this
-// package does not import, and which decides the close within that
-// requester's apps. queue.go has the rules of each step.
+// entries' commits and its culprit ejected naming the train it failed on.
+// Nothing of a train lives in the worker: a home that takes a repository over
+// resumes its queue from the rows. Each landed entry that asked it has its
+// work item closed as its enqueuer, for whom its enqueue was made as the
+// entry's row keeps it ([TaskClose.WorkingFor]), through [Tasks] — the
+// engine's tracker, which this package does not import, and which decides the
+// close within that requester's apps. queue.go has the rules of each step.
 //
 // # Merge previews, beside the loop
 //

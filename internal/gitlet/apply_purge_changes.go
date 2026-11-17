@@ -15,7 +15,10 @@ import (
 // beside its own, each counted to the part's bound, in the order a cut takes
 // them ([purgeChangeWalkSQL]).
 type purgedChange struct {
-	id              string
+	id string
+	// state is the change's state, which taking it whole counts out of its
+	// repository's counts (apply_counts.go).
+	state           ChangeState
 	bodyBytes, text int64
 	// revisions, authors, reviewers, participants and findings are the
 	// narrow rows a cut takes first, in this order, and then its notices;
@@ -143,11 +146,13 @@ func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, at applyContext,
 	left := budget
 	var cut purgedChange
 	var byText bool
-	// counted is the notices of the changes taken whole, by their counts.
+	// counted is the notices of the changes taken whole, by their counts,
+	// and gone the changes themselves by state.
 	counted := 0
+	var gone ChangeCounts
 	for weighed < PurgePartBytes && rows.Next() {
 		var c purgedChange
-		if err = rows.Scan(&c.id, &c.bodyBytes, &c.text, &c.notices, &c.revisions, &c.authors, &c.reviewers,
+		if err = rows.Scan(&c.id, &c.state, &c.bodyBytes, &c.text, &c.notices, &c.revisions, &c.authors, &c.reviewers,
 			&c.participants, &c.findings, &c.comments, &c.findingTexts, &c.reviews, &c.facts, &c.body,
 			&c.mergeability, &c.conversation); err != nil {
 			_ = rows.Close()
@@ -166,6 +171,7 @@ func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, at applyContext,
 			whole = append(whole, c.id)
 			left -= c.rows()
 			counted += c.notices
+			gone.add(c.state, 1)
 			weighed += c.bodyBytes + c.text
 			continue
 		}
@@ -197,6 +203,13 @@ func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, at applyContext,
 			done.spent += int(n)
 			done.deleted += int(n)
 		}
+		// COUNTED OUT OF THE REPOSITORY'S CHANGES, in the row the part counts
+		// already: never spent, which decides the part's later steps on every node.
+		tallied, err := countChanges(ctx, tx, repoID, gone.negated())
+		if err != nil {
+			return changesPurged{}, err
+		}
+		done.deleted += tallied
 		// AND THEIR NOTICES, charged by their counts: as many as this node
 		// holds, which is never more.
 		removed, err := a.removeNotices(ctx, tx, at, whole)
@@ -347,7 +360,7 @@ const (
 	// never read, so the walk never touches a wide row's overflow pages: what
 	// they weigh is read off the narrow rows of the change and its
 	// conversation.
-	purgeChangeWalkSQL = `SELECT c.id, c.body_bytes,
+	purgeChangeWalkSQL = `SELECT c.id, c.state, c.body_bytes,
 		COALESCE((SELECT text_bytes FROM code_conversations WHERE change_id = c.id), 0), c.notices,
 		(SELECT COUNT(*) FROM (SELECT 1 FROM code_revisions WHERE change_id = c.id LIMIT ?2)),
 		(SELECT COUNT(*) FROM (SELECT 1 FROM code_change_authors WHERE change_id = c.id LIMIT ?2)),

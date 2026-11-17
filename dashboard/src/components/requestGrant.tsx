@@ -133,13 +133,18 @@ export function RequestGrantDialog({
           </Callout>
         )}
         {entry?.unavailable && (
-          <Callout variant="warning" title="The company's own credential has to hold it first">
-            {`${entry.unavailable}. Add ${(entry.missing ?? [entry.name]).join(", ")} to it, then grant.`}{" "}
-            {entry.action_url && (
-              <Link href={entry.action_url} external>
-                Open the API tokens page
-              </Link>
-            )}
+          <Callout
+            variant="warning"
+            title="The company's own credential has to hold it first"
+            action={
+              entry.action_url && (
+                <Link href={entry.action_url} external>
+                  Open the API tokens page
+                </Link>
+              )
+            }
+          >
+            {`${entry.unavailable}. Add ${(entry.missing ?? [entry.name]).join(", ")} to it, then grant.`}
           </Callout>
         )}
         {refusal}

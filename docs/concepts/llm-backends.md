@@ -307,6 +307,9 @@ providers:
                                      #   works; one that resolves to nothing is refused
                                      #   when the entry is built, naming the variable,
                                      #   rather than run on a model nobody chose
+      effort: high                   # optional: reasoning effort in the harness's own
+                                     #   levels; absent = the harness's default. See
+                                     #   "Reasoning effort"
       run_in: ""                     # where a seat's executor runs on this entry (claude-code
                                      #   and opencode only): direct | container | e2b. Empty
                                      #   = providers.sandbox.default_run_in — see "Where the
@@ -509,6 +512,50 @@ both, or through `auth`. A profile's `env` may not name its `token_env` or
 entry's `env` and `auth` are both layered over the profile's, so whether a value
 there reached the harness would turn on the mode and the secret store rather
 than on anything the profile says.
+
+### Reasoning effort
+
+`effort` sets how hard the entry's model reasons, in the harness's own words for
+it. Absent, the engine passes nothing and the harness runs at its own default,
+which is how every entry ran before the field existed. Set, it reaches every run
+on the entry: the phases on this host (the reviewer, workers, onboarding, side
+passes, Ask Crewlet's questions and its Think harder chain, a model check) and an
+executor run in a box, Ask Crewlet's deep work included.
+
+The levels are each harness's own rather than one vocabulary of the engine's,
+because the harnesses do not agree: Claude Code has no `none` or `minimal`, Pi
+says `off` where Codex says `none`, and OpenCode's are the variants of each model.
+A level is checked on every write against the harness the entry drives, and a
+harness with no setting the engine can pass refuses the field rather than
+dropping it. The check is an admission rule, like the model grammar: a write is
+refused, and a revision being applied is warned about.
+
+| Harness | Levels | Passed as | Where the model decides |
+|---|---|---|---|
+| `claude-code` | `low` `medium` `high` `xhigh` `max` | `--effort` | Refused on the models Claude Code runs without effort (Claude 3, Opus 4 and 4.1, Sonnet 4 and 4.5, Haiku 4.5); Opus 4.5 takes up to `high`, Opus and Sonnet 4.6 skip `xhigh`. An alias takes every level, though on a cloud provider or gateway `haiku` can name Haiku 4.5, which runs without effort. |
+| `codex` | `none` `minimal` `low` `medium` `high` `xhigh` `max` | `-c model_reasoning_effort` | The model's API refuses a level it lacks. |
+| `opencode` | `none` `minimal` `low` `medium` `high` `xhigh` `max` | the model's variant, `provider/model#level` | Variants are each model's, from models.dev; a run on one the model lacks fails with OpenCode's "Variant unavailable". |
+| `copilot` | `none` `minimal` `low` `medium` `high` `xhigh` `max` | `--reasoning-effort` | A level the model lacks is logged and the run uses the model's default. |
+| `grok` | `none` `minimal` `low` `medium` `high` `xhigh` `max` | `--reasoning-effort` | A level the model's menu lacks is refused by name. |
+| `muse-code` | `minimal` `low` `medium` `high` `xhigh` `max` | `--reasoning-effort` | Per model. |
+| `hermes` | `none` `minimal` `low` `medium` `high` `xhigh` `max` | `--reasoning` | Lowered to the nearest level the route takes. |
+| `pi` | `off` `minimal` `low` `medium` `high` `xhigh` `max` | `--thinking` | Clamped to the model's levels. |
+| `kimi-code` | `low` `medium` `high` `xhigh` `max` | `KIMI_MODEL_THINKING_EFFORT` | Kimi's provider refuses a level the model lacks. |
+| `gemini-cli` | none | | Read only from its settings file, per model family. |
+| `qwen-code` | none | | Read only from its settings file. |
+| `cursor-agent` | none | | Part of the model id: name a variant `cursor-agent --list-models` prints, such as `gpt-5.5-high`. |
+| `custom` | none | | Declare `overrides.effort`. |
+
+The levels are the profile's `effort` field (see [Profile fields](#profile-fields)),
+read from each harness at the release its profile was written for. A release
+that adds a level is an override, not a Crewlet release:
+
+```yaml
+overrides:
+  effort:
+    args: ["--effort", "{effort}"]
+    levels: [low, medium, high, xhigh, max, ultra]
+```
 
 ---
 
@@ -3818,7 +3865,7 @@ no refresh file and sidesteps all of this.
 | `muse-code` | `muse` | Muse Code subscription (Everyday / High / Power Usage), or pay-as-you-go | `muse login` / `muse logout`; the browser sign-in stores `~/.config/muse/auth.json`, which `-from-host` adopts. **No status command** — this harness has none. Mints no headless token: `META_API_KEY` is a *metered* Model API key, reached through `auth.mode: api-key`. Runs `muse exec --json`, denies its tools through a seeded `run.toolset`, and puts the prompt in a **file** rather than on argv. Reports its token counts once, for the whole run (`run.usage`). A seat's and a side pass's system prompt alike follow the harness's own instructions, through `TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE`, an undocumented variable ([Which harnesses actually have one](#which-harnesses-actually-have-one)). Written for 1.4.x: 1.0.x refuses `--disable-reminders`, which an operator there drops from `overrides.complete_args`. |
 | `kimi-code` | `kimi` | Kimi Code OAuth (Moonshot) | **MoonshotAI's own harness**, `@moonshot-ai/kimi-code` — not the unscoped `kimi-code` package on npm, which wraps Claude Code behind a proxy and installs its own `kimi` (a `1.0.x` version is the other one). `kimi login` runs a device-code flow; there is no logout or status subcommand. Runs `--output-format stream-json`, because the default `text` output prefixes every line with `• ` and re-wraps it, which no profile can read an answer back out of. Its tools are denied in the **agent file** that also carries the system prompt — measured, that is 25 tools down to `FetchURL` (and `WebSearch` where a Moonshot search service is configured). A seat's agent file puts its text ahead of Kimi's own prompt (`${base_prompt}`), and lists the seat's tools (`mcp__crewlet__*`); a side pass's replaces it. A text function's counts are estimated; a run with tools reads them from its wire log. |
 | `hermes` | `hermes` | Nous Portal, or any of 30+ providers it fronts | `hermes auth` for the credential wizard, `hermes status` for state; `hermes auth logout` needs a provider name, so no logout is declared. Runs `hermes -z`, whose contract is the final response text and nothing else — so the tokens come from `--usage-file` instead. Tools are denied with `--toolsets web` on argv, which replaces the run's enabled set — `--toolsets web,crewlet` on a run with tools, whose server is declared in the home's `config.yaml` with the run's relay and socket in its environment; **`-p` selects a profile on this harness**, not a prompt. No system-prompt channel: the seat's text rides the transcript, under the vendor's own prompt. A provider key (`OPENROUTER_API_KEY`, …) goes in `env`, and `doctor` counts it — see [A provider key in `env`](#6-a-provider-key-in-env-opencode-hermes-pi). |
-| `pi` | `pi` | Claude Pro/Max, ChatGPT Plus/Pro, GitHub Copilot — whichever it is logged into | `@earendil-works/pi-harness`. **No headless login**: `/login` is a slash command, so `crewlet llm login` starts its TUI in the credential directory and you type it there. Denies every tool with `--no-tools`, which is honest here because its built-in set ships no web tool at all; a run with tools loads the seat's server as an extension and offers only its tools (`--tools mcp__crewlet__*`). Prompt on stdin; the system prompt in a file on both channels — `--append-system-prompt` for a seat, which keeps pi's prompt, `--system-prompt` for a side pass. `--no-context-files`, because its `AGENTS.md` walk goes up to `/` past the `.git` marker. A text function's tokens are estimated, a run with tools reads them from its session file — see [Token accounting](#token-accounting). A provider key goes in `env` under that provider's own variable, and `doctor` counts it. |
+| `pi` | `pi` | Claude Pro/Max, ChatGPT Plus/Pro, GitHub Copilot — whichever it is logged into | `@earendil-works/pi-coding-agent`. **No headless login**: `/login` is a slash command, so `crewlet llm login` starts its TUI in the credential directory and you type it there. Denies every tool with `--no-tools`, which is honest here because its built-in set ships no web tool at all; a run with tools loads the seat's server as an extension and offers only its tools (`--tools mcp__crewlet__*`). Prompt on stdin; the system prompt in a file on both channels — `--append-system-prompt` for a seat, which keeps pi's prompt, `--system-prompt` for a side pass. `--no-context-files`, because its `AGENTS.md` walk goes up to `/` past the `.git` marker. A text function's tokens are estimated, a run with tools reads them from its session file — see [Token accounting](#token-accounting). A provider key goes in `env` under that provider's own variable, and `doctor` counts it. |
 | `custom` | — | — | Ships nothing; declare everything under `overrides`. |
 
 **The binary has to be on the engine host.** A harness is a process the engine
@@ -4032,6 +4079,8 @@ it runs on.
 | `api_key_env` | The variable a metered key goes in (`auth.api_key`, or this variable itself, under `auth.mode: api-key`). An environment variable name, and refused otherwise ([above](#configuration-reference)). |
 | `api_key_env_shared` | `api_key_env` is a generic name other vendors' keys are kept under too (`qwen-code`'s `OPENAI_API_KEY`): an `api-key` entry must name its key as `auth.api_key`, the variable is never read in its place from the secret store or the engine's environment, and `inherit-env`, which forwards the engine's own, is refused. |
 | `model_names_provider` | The harness reads its model as `<provider>/<model>`, split at the first slash, so a `model` with nothing before or after that slash (as the harness is handed it, through `model_args`) is refused on a write. Declared by `opencode` only — measured from its source; `hermes` and `pi` document a `provider/id` model but are not known to refuse a bare one. |
+| `effort` | How the harness takes an entry's reasoning `effort`, and which levels it takes: `args` (after the model's), `model_suffix` (added to the model, as OpenCode's `#variant`) or `env`, each carrying `{effort}`; `levels`, every level the harness accepts in its own spelling; and `models`, rules (`match`, a regular expression over the model argument, and the `levels` it narrows to; none means that model runs with no effort) for the models the harness restricts. See [Reasoning effort](#reasoning-effort). |
+| `effort_note` | On a profile with no `effort`, why the harness has none the engine passes, said in the refusal of an entry's `effort`. |
 | `env_sign_in` | The harness reads its model provider's key from its own environment, so a [credential-named](#6-a-provider-key-in-env-opencode-hermes-pi) variable in the entry's `env` signs it in. |
 | `credential_paths` | The login files, relative to the seat home: each must name a file inside it (not the home itself, not a path ending in a separator), no two may share a file name, and none may be named `crewlet-bundle.json` (a bundle's manifest, naming the harness it was exported from) or, beside a `credential_store`, `exported-credentials` (the store's document): the shared directory and a bundle keep each file under its name. |
 | `volatile_paths` | Sessions, transcripts and history, deleted whenever none of the seat's calls is in flight — as its generation opens and as it closes. Each must stay inside the seat home; a directory is fine. The home's `tmp`, where `TMPDIR` points, is pruned with them whatever the list says. |
@@ -4056,7 +4105,7 @@ it runs on.
 | `device_code_patterns` | `{url, code, lifetime}`: regular expressions, each with a capture group, that read the address, the code and the code's lifetime in minutes out of what `device_login_args` prints, with colour stripped. `url` and `code` are required. |
 | `status_text_args` | The `status_args` command in words, for `crewlet llm status`, where `status_args` prints JSON for the engine to read. Absent, `crewlet llm status` shows what `status_args` prints. |
 | `status_fields` | `{method, account}`: where in the JSON `status_args` prints the sign-in method and the account are, each a list of paths of which the first holding a string wins. Absent, a status reads the exit code alone (0 signed in, 1 signed out). |
-| `model_aliases` | `{id, name, detail}`: model names the harness resolves itself (`opus`, `sonnet`, `haiku`), which no catalogue lists. |
+| `model_aliases` | `{id, name, detail, model, version}`: model names the harness resolves itself (`opus`, `sonnet`, `haiku`), which no catalogue lists. `model` and `version` are what the alias resolves to on the vendor's own service for the builds `written_for` names (`claude-opus-5-5`, `5.5`), set together or not at all; the version must be the model id's own. When the vendor ships a model an alias moves to, re-read `models_docs` and update both. |
 | `models_docs` | The vendor's own page of the models the harness takes; an `https` address. |
 | `marker_scope` | Where markers match: `answer-and-stderr` (default), `stderr`, or `events` (the class in the harness's own failure events, compared by equality; `jsonl` only, and stderr is not searched). |
 | `marker_events` | Under `marker_scope: events`, the event kinds (read through `event_type_path`) the harness reports a failure in. Refused beside any other scope. |
@@ -4097,9 +4146,23 @@ it. Every member opens the page; every change on it is an admin's.
 
 **Adding and editing a model is one wizard**, which writes the model and every
 use it is given as one revision: the name and the harness (both fixed once
-the model exists), how it signs in, the model, where it runs a seat's executor
+the model exists), how it signs in, the model and its reasoning effort, where it runs a seat's executor
 (only for a harness with a runner), what it is used for, its limits, a test call, and a review
-of exactly what changes. *Use it for* offers the work a person tells apart
+of exactly what changes.
+
+**Every built-in harness can be added**, each with the sign-ins the engine runs
+for it: a key in the harness's own variable (`api-key`), or for OpenCode, Hermes
+and Pi a provider's key in `env`; a login made on the engine host with
+`crewlet llm login`, or for Gemini CLI and Grok one made with the harness and
+adopted with `-from-host`; Claude Code's headless token and cloud providers;
+and Codex's device code. Qwen Code takes its key and its OpenAI-compatible
+endpoint. The effort control offers only the levels the harness takes on the
+chosen model, or says why it has none ([Reasoning effort](#reasoning-effort)).
+A harness with no box runner says it runs a seat's turns on the host, and the
+web tools switch and Ask Crewlet are offered only where the engine allows them.
+A `custom` harness is written in Configuration, since it needs a profile of its
+own. What the wizard knows of each harness is held to its profile by
+`internal/config.TestTheModelsScreenKnowsEveryHarnessAsItsProfileReads`. *Use it for* offers the work a person tells apart
 rather than the engine's five fields, and each choice writes every field it
 covers:
 
@@ -4194,7 +4257,10 @@ revision ([the route](../reference/api-endpoints.md#delete-configllm-providersid
 vendor offers from the public [models.dev](https://models.dev) catalogue, the
 harness's own aliases and the vendor's model page; nothing typed on the page is sent
 anywhere to list them, and any model name is still accepted as text. A node that
-cannot reach the catalogue offers the aliases, the page and free text.
+cannot reach the catalogue offers the aliases, the page and free text. An alias
+shows the version it resolves to today (Opus 5.5) where its harness profile
+records one and the model signs in to the vendor's own service; on a cloud
+account, a gateway or an unchanged sign-in it shows none.
 
 **The model alarms** (`llm_credential_expiring` at 30 days,
 `llm_credential_expires_soon` at 7, `llm_sign_in_refused`, `llm_limit`, and

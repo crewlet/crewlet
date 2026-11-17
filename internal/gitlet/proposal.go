@@ -50,10 +50,13 @@ type Proposal struct {
 	// refused carry ResultNG and their reason, the rest no result yet.
 	Commands []Command `json:"commands"`
 	// Pack is the bundle the push stored, nil when it carried no objects.
-	Pack            *PackRef  `json:"pack,omitempty"`
-	Introduced      []string  `json:"introduced,omitempty"`
-	IntroducedCount int       `json:"introduced_count,omitempty"`
-	ReceivedAt      time.Time `json:"received_at"`
+	Pack            *PackRef `json:"pack,omitempty"`
+	Introduced      []string `json:"introduced,omitempty"`
+	IntroducedCount int      `json:"introduced_count,omitempty"`
+	// Offered is an attempt's count of the commits its refused commands offered, made by its
+	// receiver ([PushEntry.Offered]); 0 on every other proposal.
+	Offered    int       `json:"offered,omitempty"`
+	ReceivedAt time.Time `json:"received_at"`
 	// Seen is the code log's position the receiving node checked the push
 	// against — its linearizable sync before receive-pack ran, the state the
 	// client's commands were formed from and the thin pack's bases were read
@@ -119,9 +122,10 @@ type Proposal struct {
 
 // ProposeResult is what became of one proposal.
 type ProposeResult struct {
-	// Outcome is applied, pending or unknown for a push in a record, and
-	// empty for one answered with no record of its own: every command noop
-	// or ng, or a refusal of the whole push. A push answered from the row an
+	// Outcome is applied, pending or unknown for a push in a record, an
+	// attempt's among them ([Attempted]), and empty for one answered with no
+	// record of its own: every command noop or ng and no attempt, or a
+	// refusal of the whole push. A push answered from the row an
 	// earlier record applied it as is applied, and its Answer says
 	// Collapsed.
 	Outcome statelog.Outcome `json:"outcome,omitempty"`
@@ -546,6 +550,27 @@ func (p Proposal) validFields() error {
 			return fmt.Errorf("%w: introduced[%d]: %q is not an object id", ErrInvalidProposal, i, oid)
 		}
 	}
+	return p.validOffered()
+}
+
+// validOffered holds a count of the commits offered to an attempt's proposal: a push git received
+// that its receiver refused whole, by a rule, storing and opening nothing.
+func (p Proposal) validOffered() error {
+	switch {
+	case p.Offered < 0:
+		return fmt.Errorf("%w: offered: %d is no count of commits", ErrInvalidProposal, p.Offered)
+	case p.Offered == 0:
+		return nil
+	case p.Via != ViaGit:
+		return fmt.Errorf("%w: offered: only a push git received is an attempt", ErrInvalidProposal)
+	case !Attempted(p.Commands):
+		return fmt.Errorf("%w: offered: only a push its receiver refused whole, by a rule, carries the "+
+			"commits it offered", ErrInvalidProposal)
+	case p.Pack != nil || len(p.Introduced) > 0 || p.IntroducedCount > 0:
+		return fmt.Errorf("%w: offered: an attempt stores and introduces nothing", ErrInvalidProposal)
+	case p.Change != nil:
+		return fmt.Errorf("%w: offered: an attempt opens no change", ErrInvalidProposal)
+	}
 	return nil
 }
 
@@ -669,7 +694,7 @@ func (p Proposal) entryWith(cmds []Command, day string) PushEntry {
 	e := PushEntry{
 		PushID: p.PushID, Principal: p.Principal, Via: p.Via, Node: p.Node, Atomic: p.Atomic,
 		Commands: stored, Pack: p.Pack, Introduced: p.Introduced,
-		IntroducedCount: p.IntroducedCount, ReceivedAt: p.ReceivedAt,
+		IntroducedCount: p.IntroducedCount, Offered: p.Offered, ReceivedAt: p.ReceivedAt,
 	}
 	if p.Principal.Kind == PrincipalAgent {
 		e.Day, e.WorkingFor = day, p.WrittenFor.Carrier()
@@ -723,7 +748,8 @@ func entryBound(p Proposal) (int, error) {
 }
 
 // rowBound is the most rows p's entry can make its record's apply touch of what
-// its proposal alone says: its push row, its pack, [commandRows] for every
+// its proposal alone says: its push row, its pack, its pusher's day but an
+// expiry's ([pusherDayRows]), [commandRows] for every
 // command the receiver did not refuse, and for a SEAT'S push the
 // [seatDayRows] its day's count takes. What only the repository's rows say —
 // the live changes its commands move ([changeBook]) and the landings it makes
@@ -764,6 +790,9 @@ func rowBound(p Proposal) int {
 	if p.Principal.Kind == PrincipalAgent {
 		rows += seatDayRows
 	}
+	if p.Via != ViaExpiry {
+		rows += pusherDayRows
+	}
 	return rows
 }
 
@@ -799,7 +828,8 @@ func measuredLandings(principal Principal, cmds []Command) []PushLanding {
 func lands(c Command) bool { return strings.HasPrefix(c.Ref, branchPrefix) && c.New != ZeroOID }
 
 // entryRows is the most rows a DECIDED entry makes its record's apply touch
-// besides the changes its commands move: its push row, [commandRows] for every
+// besides the changes its commands move: its push row, its pusher's day but an
+// expiry's ([pusherDayRows]), [commandRows] for every
 // command that applies, its pack, and for a seat's entry the [seatDayRows]
 // its day's count takes — [rowBound] of the commands its decide found ok —
 // and [landingRows] for each landing its decide stamped, which the decide
@@ -816,6 +846,9 @@ func entryRows(e PushEntry) int {
 	}
 	if e.Principal.Kind == PrincipalAgent {
 		rows += seatDayRows
+	}
+	if e.Via != ViaExpiry {
+		rows += pusherDayRows
 	}
 	return rows + landingRows*len(e.Landings)
 }
@@ -856,10 +889,11 @@ func commandRows(c Command) int {
 // recordRows is the row bound of a record carrying a batch whose entries
 // bound rows rows between them ([rowBound], the tombstone sweep's room for the
 // entries' own deletions among them): those, the repository's counters, the
-// push history's share of the horizon and the tombstone mark. Whatever else
+// day row its pushes are counted in (apply_activity.go), the push history's
+// share of the horizon and the tombstone mark. Whatever else
 // the record leaves the sweep takes for tombstones past their horizon, and
 // the removal of the ref drops past PruneGrace what the sweep leaves.
-func recordRows(rows int) int { return rows + 1 + HorizonDeletesPerRecord + 1 }
+func recordRows(rows int) int { return rows + 1 + pushDayRows + HorizonDeletesPerRecord + 1 }
 
 // refuseAll is p answered with a refusal of the whole push: every command the
 // receiver did not already refuse becomes ng under code with detail, and

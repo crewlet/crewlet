@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -508,8 +509,9 @@ func TestAStopOfARunWhoseBoxIsOnAnotherHostIsReadThere(t *testing.T) {
 // box, which only that node reclaims, and only once it is back. So the stop is
 // kept — its session closed, nothing charged, nothing announced — and asked
 // again until the host answers, which charges what it read; only a host silent
-// for the box timeout since the stop, the bound the fleet's waiter takes a
-// launch node for gone by, ends the run with nothing read.
+// for the box timeout since this node first asked the host, the bound the
+// fleet's waiter takes a launch node for gone by, ends the run with nothing
+// read.
 //
 // Mutation: read a silent host as nothing spent, and the stop finishes on the
 // first retry with its spend lost; drop the bound, and a host that never comes
@@ -877,5 +879,309 @@ func TestThePollLeavesARunWhoseEndingIsDecided(t *testing.T) {
 	}
 	if after := keepalives(); after != before {
 		t.Fatalf("the poll kept alive the box of a run whose ending is decided (%d keepalives)", after-before)
+	}
+}
+
+// A box's host gives no account of a stopped run's box in three ways, as a
+// node's BoxReader reports them: it did not answer an ask that reached the
+// broker, it answered that it was busy, or this node could not put the ask to
+// it at all.
+var (
+	errHostSilent   = fmt.Errorf("asking node-a: %w", ErrBoxHostSilent)
+	errHostBusy     = fmt.Errorf("%w: node node-a", ErrBoxHostBusy)
+	errHostNotAsked = fmt.Errorf("%w: node-a: the broker is unreachable", ErrBoxNotAsked)
+)
+
+// stopIsKept reports whether the stop of t1 is still kept, unread: decided on
+// the row, nothing charged through counters, nothing announced on queue.
+func stopIsKept(t *testing.T, rig *coordRig, counters *ledgerSpy) bool {
+	t.Helper()
+	run, found, err := rig.pending.Get(t.Context(), "t1")
+	if err != nil {
+		t.Fatalf("reading the stopped run: %v", err)
+	}
+	if !found {
+		return false
+	}
+	if run.Ending == nil || run.Stop == nil || run.Stop.Collected {
+		t.Fatalf("the stop reads ending %+v stop %+v; want it kept, unread", run.Ending, run.Stop)
+	}
+	if counters.asked() != 0 || len(rig.stopAnnouncements()) != 0 {
+		t.Fatal("the kept stop charged or announced")
+	}
+	return true
+}
+
+// stopWrittenOff fails the case unless the stop of t1 ended with nothing read:
+// its row gone, nothing charged through counters, announced once.
+func stopWrittenOff(t *testing.T, rig *coordRig, counters *ledgerSpy) {
+	t.Helper()
+	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+		t.Fatal("the stop was not ended")
+	}
+	if got := counters.total(); got != 0 {
+		t.Fatalf("charged %d tokens for a host that never answered, want none", got)
+	}
+	if got := len(rig.stopAnnouncements()); got != 1 {
+		t.Fatalf("announced the stop %d times, want once", got)
+	}
+}
+
+// nextHolder is the seat's next holder, node-c: a coordinator of its own over
+// rig's store, broker and manager, whose clock reads *now and which asks the
+// box's host through asks, having recovered the seat under a newer lease.
+func nextHolder(t *testing.T, rig *coordRig, now *time.Time, asks BoxReader) *coordRig {
+	t.Helper()
+	next := newCoordRigWith(t, func(o *CoordinatorOptions) {
+		o.Pending, o.Queue, o.Manager = rig.pending, rig.queue, rig.manager
+		o.Now = func() time.Time { return *now }
+	})
+	watchStops(next)
+	next.onNode(t, "node-c", asks, &nudges{})
+	if err := next.recoverSeat(t.Context(), "node-c:1", 2); err != nil {
+		t.Fatalf("RecoverSeat: %v", err)
+	}
+	return next
+}
+
+// A STOP GIVES A SILENT HOST UP ON THE ASKING NODE'S OWN CLOCK. The stop's
+// decision is dated by the clock of the node that decided it, and the node
+// asking the box's host may stand hours from it; read as an age here, the
+// decision gave the host up on a node ahead at its first ask, and never on a
+// node behind. So the bound is this node's silence: the box timeout from the
+// start of its first ask that reached the broker and came back with nothing,
+// on its own clock. An ask it could not make says nothing of the host and
+// neither starts nor advances it; a host that answered busy is there, and its
+// silence starts again.
+//
+// Mutation: age the decision's instant ((a) never ends: it lies in this node's
+// future); count each ask alone, with no memory ((a) never ends); count from the
+// ask's end ((b) is kept); count an ask not made as silence, or from the
+// series' first attempt ((c) ends early); leave the silence standing over a
+// busy answer ((d) ends early).
+func TestAStopGivesASilentHostUpOnTheAskingNodesOwnClock(t *testing.T) {
+	t.Parallel()
+	timeout := DefaultBoxTimeout
+	// step is one ask of the box's host: at, from the first ask, this node's
+	// clock reads; the host answers err; the ask itself lasts lasts on this
+	// node's clock; and the stop is ended with nothing read as it returns,
+	// or kept.
+	type step struct {
+		at    time.Duration
+		err   error
+		lasts time.Duration
+		ended bool
+	}
+	for _, tc := range []struct {
+		name string
+		// ahead is how far the deciding node's clock stands ahead of this
+		// node's.
+		ahead time.Duration
+		steps []step
+	}{
+		{"(a) a decider ahead by the box timeout and an hour", timeout + time.Hour, []step{
+			{at: 0, err: errHostSilent},
+			{at: timeout - time.Second, err: errHostSilent},
+			{at: timeout, err: errHostSilent, ended: true},
+		}},
+		{"(b) one ask as long as the box timeout", 0, []step{
+			{at: 0, err: errHostSilent, lasts: timeout, ended: true},
+		}},
+		{"(c) asks this node could not make, then silence", 0, []step{
+			{at: 0, err: errHostNotAsked},
+			{at: timeout, err: errHostNotAsked},
+			{at: timeout, err: errHostSilent},
+			{at: 2*timeout - time.Second, err: errHostSilent},
+			{at: 2 * timeout, err: errHostSilent, ended: true},
+		}},
+		{"(d) a busy answer between silences", 0, []step{
+			{at: 0, err: errHostSilent},
+			{at: timeout / 2, err: errHostBusy},
+			{at: timeout, err: errHostSilent},
+			{at: 2*timeout - time.Second, err: errHostSilent},
+			{at: 2 * timeout, err: errHostSilent, ended: true},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			asks := &boxAsks{}
+			rig.onNode(t, "node-b", asks, &nudges{})
+			rig.launchedBy("t1", "node-a")
+			// THE DECIDER'S CLOCK, the store handle's that dates the stop.
+			rig.pending.WithClock(func() time.Time { return rig.now.Add(tc.ahead) })
+			rig.stop(t)
+			first := rig.now
+			for i, s := range tc.steps {
+				rig.now = first.Add(s.at)
+				asks.answer(Result{}, s.err)
+				asks.during = func() { rig.now = rig.now.Add(s.lasts) }
+				rig.fireRetries()
+				if s.ended {
+					stopWrittenOff(t, rig, rig.accountant)
+					if got := len(asks.reads()); got != i+1 {
+						t.Fatalf("the host was asked %d times, want %d", got, i+1)
+					}
+					return
+				}
+				if !stopIsKept(t, rig, rig.accountant) {
+					t.Fatalf("ask %d (at +%v, %v) wrote the stop off; want it kept", i, s.at, s.err)
+				}
+			}
+			t.Fatal("no step ended the stop")
+		})
+	}
+}
+
+// A STOP'S RETRY ON A NODE AHEAD OF ITS DECIDER STILL ASKS ITS HOST. The seat
+// moved after the stop was decided, to a node whose clock reads the decision
+// more than the box timeout old. That node has heard nothing from the host for
+// no time at all: it asks, keeps the stop while the host is silent, and charges
+// what the host reads once it answers — where it wrote the run's spend off on
+// its very first ask.
+//
+// Mutation: give the host up by the decision's age, and the next holder writes
+// the spend off at its first ask.
+func TestAStopsRetryOnANodeAheadOfItsDeciderStillAsksItsHost(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	asks := &boxAsks{err: errHostSilent}
+	rig.onNode(t, "node-b", asks, &nudges{})
+	rig.launchedBy("t1", "node-a")
+	rig.stop(t)
+	rig.fireRetries()
+	if !stopIsKept(t, rig, rig.accountant) {
+		t.Fatal("the deciding node wrote the stop off at its first silent ask")
+	}
+
+	// THE SEAT MOVES, to a node whose clock stands ahead of the decider's.
+	rig.coordinator.lease = notLeased
+	later := rig.now.Add(DefaultBoxTimeout + time.Hour)
+	nextAsks := &boxAsks{err: errHostSilent}
+	next := nextHolder(t, rig, &later, nextAsks)
+	next.fireRetries()
+
+	if got := nextAsks.reads(); !slices.Equal(got, []BoxRead{BoxReadStop}) {
+		t.Fatalf("the next holder asked the box's host %v; want one stop's read", got)
+	}
+	if !stopIsKept(t, rig, next.accountant) {
+		t.Fatal("the next holder wrote the stop's spend off at its first ask of a silent host")
+	}
+
+	nextAsks.answer(Result{Text: "halfway", InputTokens: 4000}, nil)
+	next.fireRetries()
+
+	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+		t.Fatal("the stop was not finished once the host answered")
+	}
+	if got := next.accountant.total(); got != 4000 {
+		t.Fatalf("charged %d tokens, want the 4000 the host read", got)
+	}
+	if got := len(rig.stopAnnouncements()); got != 1 {
+		t.Fatalf("announced the stop %d times, want once", got)
+	}
+}
+
+// A STOP IS GIVEN UP BY ITS ABSOLUTE BOUND WHERE NO FRAME COUNTS ITS SILENCE. A
+// seat's retirement finishes its runs on its own frame, each tick asking the
+// host for no longer than the tick's budget, and its release drops every series
+// of the seat, so silence alone would never give a dead host up there: the run
+// record and the mailbox would be kept for good. The stop the box timeout and
+// twice the assumed clock skew old by the retiring node's clock is given up —
+// the one reading of another node's instant that never comes before the box
+// timeout in real time — and not a second before.
+//
+// Mutation: drop the absolute bound, and neither row ever ends; drop the skew
+// from it, or read a frame with no series as silent since the decision, and the
+// younger row ends at its first tick.
+func TestAStopIsGivenUpByItsAbsoluteBoundWhereNoFrameCountsItsSilence(t *testing.T) {
+	t.Parallel()
+	bound := DefaultBoxTimeout + 2*objstore.AssumedClockSkew
+	for _, tc := range []struct {
+		name string
+		old  time.Duration
+		// ticks is how many retirement ticks, two seconds apart, end it.
+		ticks int
+	}{
+		{"(a) a second past the bound", bound + time.Second, 1},
+		{"(b) a second short of the bound", bound - time.Second, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			asks := &boxAsks{err: errHostSilent}
+			rig.onNode(t, "node-b", asks, &nudges{})
+			rig.launchedBy("t1", "node-a")
+			rig.stop(t)
+			// THE SEAT LEFT THE CHART, and its host released it: no series
+			// of the stop's is left on any node.
+			rig.coordinator.ReleaseSeat("swe")
+			rig.now = rig.now.Add(tc.old)
+			for tick := 1; ; tick++ {
+				_, err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "node-a:1", 3)
+				if tick == tc.ticks {
+					if err != nil {
+						t.Fatalf("tick %d: RetireSeat = %v; want the stop ended", tick, err)
+					}
+					stopWrittenOff(t, rig, rig.accountant)
+					return
+				}
+				if err == nil {
+					t.Fatalf("tick %d ended the stop; want it kept until tick %d", tick, tc.ticks)
+				}
+				if !stopIsKept(t, rig, rig.accountant) {
+					t.Fatalf("tick %d wrote the stop off and answered %v", tick, err)
+				}
+				rig.now = rig.now.Add(2 * time.Second)
+			}
+		})
+	}
+}
+
+// AN ASK THAT OUTLIVES ITS SEAT WRITES NOTHING OFF SHORT OF THE BOX TIMEOUT.
+// The seat moved while this node's ask of the box's host was out, and its
+// release dropped the stop's series: the ask came back silent with nothing on
+// this node remembering when the host was first asked. What it measured is its
+// own silence, and that was short of the box timeout, so the stop is kept — for
+// the next holder, which this node's next retry leaves it to, and which charges
+// what the host reads.
+//
+// Mutation: read an ask with no series as a host given up, and the run's spend
+// is written off as the ask returns.
+func TestAnAskThatOutlivesItsSeatWritesNothingOffShortOfTheBoxTimeout(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	asks := &boxAsks{err: errHostSilent}
+	rig.onNode(t, "node-b", asks, &nudges{})
+	rig.launchedBy("t1", "node-a")
+	rig.stop(t)
+	asks.during = func() {
+		rig.coordinator.ReleaseSeat("swe")
+		rig.coordinator.lease = notLeased
+		rig.now = rig.now.Add(DefaultBoxTimeout - time.Minute)
+	}
+	rig.fireRetries()
+	if !stopIsKept(t, rig, rig.accountant) {
+		t.Fatal("an ask whose seat moved under it wrote the stop's spend off")
+	}
+
+	asks.during = nil
+	rig.fireRetries()
+	if got := len(asks.reads()); got != 1 {
+		t.Fatalf("this node asked the host %d times; once its seat moved it asks no more", got)
+	}
+
+	nextAsks := &boxAsks{result: Result{Text: "halfway", InputTokens: 4000}}
+	now := rig.now
+	next := nextHolder(t, rig, &now, nextAsks)
+	next.fireRetries()
+	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+		t.Fatal("the next holder did not finish the stop")
+	}
+	if got := next.accountant.total(); got != 4000 {
+		t.Fatalf("charged %d tokens, want the 4000 the host read", got)
+	}
+	if got := len(rig.stopAnnouncements()); got != 1 {
+		t.Fatalf("announced the stop %d times, want once", got)
 	}
 }

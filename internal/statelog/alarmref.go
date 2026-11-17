@@ -38,14 +38,14 @@ func AlarmReference() string {
 		fmt.Fprintf(&b, perServerNote, saidKinds(perServer),
 			spoken(MCPOutageGrace), spoken(MCPWaitingGrace), spoken(MCPApprovalGrace))
 	}
-	b.WriteString("\n## Every alarm\n\n| Alarm | What it means | What to do |\n")
-	b.WriteString("|---|---|---|\n")
+	b.WriteString("\n## Every alarm\n\n| Alarm | In plain words | What it means | What to do |\n")
+	b.WriteString("|---|---|---|---|\n")
 	for _, rule := range table {
 		// The DETAIL is per-reading and belongs in the log line; what the
-		// page carries is the condition in words and the remedy, which
-		// are the two things that do not change between firings.
-		fmt.Fprintf(&b, "| `%s` | %s | %s |\n",
-			rule.kind, alarmMeaning[rule.kind], rule.remedy)
+		// page carries is what does not change between firings: the
+		// owner's words, the condition and the remedy.
+		fmt.Fprintf(&b, "| `%s` | **%s.** %s | %s | %s |\n",
+			rule.kind, rule.title, rule.person, alarmMeaning[rule.kind], rule.remedy)
 	}
 	b.WriteString(alarmFooter)
 	return b.String()
@@ -201,6 +201,10 @@ var alarmMeaning = map[Kind]string{
 	KindObjectsBucketNearCeiling: "The fleet's own object bucket on the broker holds " +
 		"more than four fifths of the bytes it reserves. A full bucket refuses every " +
 		"upload, though nothing else on the broker is affected.",
+	KindObjectsBucketRaiseRefused: "This node's `store.objects.nats_max_bytes` is larger " +
+		"than the reservation the fleet's object bucket holds, and its boot did not raise " +
+		"the bucket to it, so uploads stay held to the smaller reservation. The decision " +
+		"is taken again at the node's next boot.",
 	KindObjectiveBurn: "A service objective this node measures (publishing, serving a " +
 		"document, a frame becoming ready in a viewer's browser, a datastore verdict, " +
 		"a committed change reaching the sockets watching it, a wake leaving the " +
@@ -221,17 +225,18 @@ var alarmMeaning = map[Kind]string{
 	KindLLMLimitWaiting: "A seat has been parked for fifteen minutes or more on a chain " +
 		"naming a model that sits out a limit, with nothing to fall back to. It replaces " +
 		"`llm_limit` for that model.",
-	KindClockSkew: "A clock stands further from the fleet's than the hour the object " +
-		"store's deletions assume: this node's own, or the clock of the broker member " +
-		"leading the coordination store's position register, and the alarm says which. " +
+	KindClockSkew: "A clock stands further from the fleet's than the hour every rule " +
+		"comparing two machines' clocks assumes: this node's own, or the clock of the " +
+		"broker member leading the coordination store's position register, and the alarm " +
+		"says which. " +
 		"The fleet's clock is the median of the data nodes' clocks, measured on this " +
 		"node's position heartbeat off the register: each node's row carries the instant " +
 		"the node stamped on it and the instant the broker stored it. A node whose own " +
 		"clock moved raises it about itself; a member whose clock moved is raised about " +
-		"by every node. The object collector's grace and Gitlet's retired-pack " +
-		"sweep each judge an instant one machine stamped by another machine's clock, and " +
-		"both hold only while every node and that member keep within that hour of the " +
-		"fleet's clock.",
+		"by every node. Each rule that judges an instant one machine stamped by another " +
+		"machine's clock, the object collector's grace and Gitlet's retired-pack sweep " +
+		"among them, holds only while every node and that member keep within that hour " +
+		"of the fleet's clock.",
 	KindCodeMaintenanceRefused: "This node's git cache cannot write the bitmap " +
 		"of some repositories, because a bitmap over each (about 600 bytes " +
 		"an object, with room for a clone of the repository beside it) needs " +
@@ -348,10 +353,11 @@ An alarm reaches you four ways, and they are the same table evaluated once: a
 ` + "`crewlet.alarm.active{kind}`" + ` gauge your collector scrapes, a named ` + "`WARN`" + `
 line when it starts and another when it clears, carrying how long it was up,
 a count on the node's health envelope (` + "`GET /health`" + ` and the
-dashboard's health push carry ` + "`alarms: {count, worst}`" + `, where ` + "`worst`" + `
-is the alarm that has been firing longest), and the node's row on the fleet
-view: each node's presence heartbeat carries every alarm firing on it with when
-it was raised, and ` + "`GET /fleet`" + ` lists them per node (` + "`alarms`" + `), so
+dashboard's health push carry ` + "`alarms: {count, worst, worst_title}`" + `, where
+` + "`worst`" + ` is the alarm that has been firing longest and ` + "`worst_title`" + ` its
+title), and the node's row on the fleet view: each node's presence heartbeat
+carries every alarm firing on it with when it was raised, and ` + "`GET /fleet`" + `
+lists them per node (` + "`alarms`" + `, each with its ` + "`title`" + ` and ` + "`person`" + `), so
 one read covers every node. And it wakes the agents that may read the
 deployment's health: each time an alarm fires or clears on a node (a restart
 is neither: a node keeps the alarms it had up and says only what changed while
@@ -369,6 +375,12 @@ threshold is %s is raised within a beat of passing it.
 The log line is the one to read first. It carries the measurement that raised
 the alarm, in the units of the thing measured, and the remedy from the table
 below.
+
+Every alarm the API answers, and the administrators' notice it raises, also
+carries a ` + "`title`" + ` and a ` + "`person`" + ` sentence: what is wrong, what it
+affects and what to do, in words for a company owner rather than an operator,
+the same each time its kind fires. The dashboard shows those; ` + "`detail`" + ` and
+` + "`remedy`" + ` stay the operator's.
 
 ## An alarm that comes back
 

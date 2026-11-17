@@ -23,7 +23,8 @@ type MemoryKill struct {
 }
 
 // sandboxOutOfMemory is one finding per agent with [minOutOfMemory] runs or
-// more stopped for memory, naming the ceiling they hit.
+// more stopped for memory, in words every such agent's finding shares: how
+// many runs and the ceiling they hit are its Item.
 func sandboxOutOfMemory(ev Evidence, _ func(string) SeatKind) []Finding {
 	runs := map[string]int{}
 	ceiling := map[string]int64{}
@@ -37,17 +38,18 @@ func sandboxOutOfMemory(ev Evidence, _ func(string) SeatKind) []Finding {
 		if n < minOutOfMemory {
 			continue
 		}
-		at := ""
+		item := fmt.Sprintf("%d runs stopped", n)
 		if c := ceiling[seat]; c > 0 {
-			at = " at its " + gigabytes(c) + " ceiling"
+			item += " at its " + gigabytes(c) + " ceiling"
 		}
 		out = append(out, Finding{
 			Class: ClassSandboxOutOfMemory, Severity: SeverityCosts, Actor: ActorOwner,
 			Source: SourceEvidence, Area: AreaSetup, Subject: Subject{Kind: SubjectSeat, Seat: seat},
-			Title: fmt.Sprintf("%s's sandbox ran out of memory %d times this week.", seat, n),
-			Why: fmt.Sprintf("In the last 7 days the kernel stopped %d of %s's runs%s, so their "+
-				"work was lost and started again. A second one in a row on a conversation holds "+
-				"it until the sandbox changes.", n, seat, at),
+			Title: "Agent sandboxes ran out of memory this week.",
+			Why: "In the last 7 days the kernel stopped the agent's runs at its sandbox's memory " +
+				"ceiling, so their work was lost and started again. A second one in a row on a " +
+				"conversation holds it until the sandbox changes.",
+			Item:     item,
 			Evidence: []Fact{{Key: "runs", Value: int64(n)}, {Key: "memory_bytes", Value: ceiling[seat]}},
 			Fix: Fix{Kind: FixOpenSetting, Setting: "providers.sandbox", Options: []Option{},
 				Sentence: "Give the sandbox more memory, such as a larger --memory in its run " +

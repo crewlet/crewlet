@@ -120,7 +120,10 @@ import (
 // restart continues a capture whose record the log took before that read
 // rather than starting fresh beside it; and a capture whose record was sent
 // and never answered is asked again under its own operation, as the turn's end
-// asks it ([Coordinator.settleUnresolved]): one that lands is continued. A
+// asks it ([Coordinator.settleUnresolved]): one that lands is continued. Each
+// settle the wait decides is written in its own room past the wait, as this
+// node's own write ([Coordinator.awaitCapture]); an ask that leaves the record
+// unanswered writes nothing. A
 // record the log takes only after the settle's read — one its taker had handed
 // on before its lease's window closed — lands beside a stamp that says refused
 // (session.go, "WHAT THE FENCE CANNOT REACH"): the log keeps it, and the
@@ -326,11 +329,12 @@ func followedCapture(run PendingRun, follows int64) (SessionCapture, string) {
 // capture REFUSED: a stamp decided with its record's landing out of its sight
 // — a record its taker had already handed on before its lease's window closed,
 // which the log took only after another node's settle had read the row
-// (session.go, "WHAT THE FENCE CANNOT REACH"), or one sent and never answered,
-// refused unasked once its object was past objstore.RecordWithin
-// ([Coordinator.settleCapture]). The row's place is that capture's: the log
-// takes a turn's captures only in the order of their places, and the record
-// holds one take at each ([stampOnto]).
+// (session.go, "WHAT THE FENCE CANNOT REACH"). One sent and never answered is
+// no such stamp: its ask goes to the log whatever its object's age
+// ([Coordinator.settleCapture]), and is stamped landed where the log holds it.
+// The row's place is that capture's: the log takes a turn's captures only in
+// the order of their places, and the record holds one take at each
+// ([stampOnto]).
 //
 // THE LOG KEEPS IT, AND NO RELAUNCH OF THAT JOB CONTINUES IT. A relaunch
 // continues only a capture its run's record keeps, and the record keeps no
@@ -610,7 +614,8 @@ type ReadContinuity struct {
 // not name beside it. Once the turn has said, the row is decided on what it
 // said, its review included. now is the reader's clock, against which a begun
 // capture is in flight ([captureInFlight]) and an unanswered one's object
-// within the window a record may name it in ([pastRecordWithin]).
+// within the window a record may name it in as any node's clock may read it
+// ([pastRecordWithin]).
 //
 // As far as the engine can know before a box is chosen: whether the box a
 // launch gets runs a harness release that takes the session up, and whether
@@ -909,8 +914,9 @@ func jobWorking(run PendingRun) bool {
 
 // captureAwaitsAnswer reports whether run's newest capture is one of the job a
 // relaunch would follow whose record was sent and never answered, which an ask
-// may still land: its object not past objstore.RecordWithin
-// ([pastRecordWithin]), past which the ask refuses it unasked. A relaunch asks
+// may still land: its object not past objstore.RecordWithin and twice
+// objstore.AssumedClockSkew ([pastRecordWithin]), past which no node's clock
+// can read the record as one the log may still take. A relaunch asks
 // that record again under its own operation before it decides what it
 // continues ([Coordinator.settleUnresolved]) and continues the capture where
 // it landed ([Coordinator.ContinuedCapture]), so until then no reader can say
@@ -1074,8 +1080,8 @@ type ContinuedSession struct {
 // applied within the publisher's five-second wait
 // (statelog.DefaultResolveBudget). Three times that is room for a store having
 // a slow moment; a keep past it is one a slow upload of a large session, an
-// outage or a stopped node is holding, whose own budget runs to minutes
-// ([SessionCaptureBudget]) — which the frame does not wait out.
+// outage or a stopped node is holding, whose own life runs past an hour at the
+// floor ([captureLife]) — which the frame does not wait out.
 const relaunchCaptureWait = 15 * time.Second
 
 // ContinuedCapture is the session a relaunch of turnID continues — the kept
@@ -1095,7 +1101,15 @@ const relaunchCaptureWait = 15 * time.Second
 // followed job's capture whose record was never answered, asked again under
 // its own operation ([Coordinator.settleUnresolved]) — asked by the turn's end
 // alone, it left a relaunch reading a record the log had taken as one never
-// answered, and starting a session of its own beside it.
+// answered, and starting a session of its own beside it. THE WAIT BOUNDS THE
+// WAITING, AND THE READS AND THE ASK IT MAKES, never the settles it decides:
+// each is this node's own write to the run's record, given its own room past
+// the wait, a record's budget and this node's crossing of the row
+// ([Coordinator.settleContext]). Cut where the wait ended, a settle decided in
+// its last seconds was not applied, and a capture whose taker was gone read as
+// one still being kept, or one the ask had landed went unstamped on the row.
+// So a relaunch may spend that room past its fifteen seconds, and only where
+// the store is that slow to take a write.
 //
 // ASKED BY THE LAUNCH'S CALLER before it builds the run's surface and briefs,
 // so what the run is offered and told is the session's; the launch takes up
@@ -1118,7 +1132,9 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 		return ContinuedSession{}, "the turn has no run record"
 	}
 	// ONE WAIT FOR ALL OF IT, on the frame that relaunches: what the wait
-	// below leaves of it is what an ask of an unanswered record gets.
+	// below leaves of it is what an ask of an unanswered record gets. The
+	// settles it decides are this node's own writes, each in its own room
+	// past it.
 	settleBy := time.Now().Add(c.relaunchWait)
 	run, found, err = c.awaitCapture(ctx, run, c.relaunchWait)
 	if !found {
@@ -1145,7 +1161,7 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 		if newest := run.Capture; newest != nil && newest.State == CaptureUnresolved &&
 			newest.LaunchSeq == run.LaunchSeq {
 			ask, cancel := context.WithDeadline(ctx, settleBy)
-			run = c.settleUnresolved(ask, settleBy, run)
+			run = c.settleUnresolved(ask, run)
 			cancel()
 		}
 		_, why = followedCapture(run, run.LaunchSeq)

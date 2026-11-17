@@ -294,6 +294,7 @@ var contract = []Entry{
 	{"DEFAULT_HARNESS_MAX_CONCURRENT", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"MODEL_KEY_PATTERN", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"HARNESS_PRODUCTS", ReadLiteral, "internal/config.TestEveryBuiltInHarnessHasAProductName"},
+	{"HARNESS_FACTS", ReadLiteral, "internal/config.TestTheModelsScreenKnowsEveryHarnessAsItsProfileReads"},
 	{"ModelJob", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"RunnerCellName", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"SEAT_JOB_FIELDS", ReadLiteral, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
@@ -495,6 +496,8 @@ var contract = []Entry{
 	// code.ts
 	{"REPO_STATUSES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryRepositoryState"},
 	{"REPO_SEARCH_MODES", ReadLiteral, "internal/gitlet.TestTheDashboardOffersEverySearchModeOfARepository"},
+	{"REPO_KINDS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryKindOfRepository"},
+	{"REPO_SORTS", ReadLiteral, "internal/gitlet.TestTheDashboardSortsRepositoriesAsTheEngineDoes"},
 	{"CODE_PATH_CLASSES", ReadLiteral, "internal/gitlet.TestTheDashboardOffersEveryPathClassAGateExempts"},
 	{"CODE_MAX_QUEUE_DEPTH", ReadScalar, "internal/gitlet.TestTheDashboardBoundsALandingAsTheEngineDoes"},
 	{"CODE_MAX_QUEUE_BATCH", ReadScalar, "internal/gitlet.TestTheDashboardBoundsALandingAsTheEngineDoes"},
@@ -506,8 +509,10 @@ var contract = []Entry{
 	{"CHANGE_STATES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryStateOfAChange"},
 	{"CHANGE_NEEDS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryNeedOfAListingOfChanges"},
 	{"CHANGE_WINDOWS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryWindowOfAListingOfChanges"},
+	{"CHANGE_SORTS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEverySortOfAListingOfChanges"},
 	{"PRECONDITION_KINDS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryPreconditionOfAChange"},
 	{"PRECONDITION_STATES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryPreconditionOfAChange"},
+	{"PUSHER_KINDS", ReadLiteral, "internal/gitlet.TestTheDashboardCountsEveryPusherKind"},
 	{"FINDING_SEVERITIES", ReadLiteral, "internal/gitlet.TestTheDashboardRaisesFindingsInTheEnginesWords"},
 	{"FINDING_CATEGORIES", ReadLiteral, "internal/gitlet.TestTheDashboardRaisesFindingsInTheEnginesWords"},
 	{"CODE_PHRASES", ReadLiteral, "internal/gitlet.TestEveryCodeReasonReadsAsEnglishOnTheClient"},
@@ -775,6 +780,10 @@ var contract = []Entry{
 	{"ARTIFACT_LIST_MAX", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 
 	// artifactsworkspace.ts: what only the artifacts workspace reads
+	{"ARTIFACT_COMMENT_QUOTE_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
+	{"ARTIFACT_COMMENT_CROP_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
+	{"ARTIFACT_COMMENT_CROP_MAX_SIDE", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
+	{"ARTIFACT_COMMENT_ANCHOR_NAME", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"ARTIFACT_KIND_SPECS", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardDrawsEachKindAsTheKindTableSays"},
 	{"SLIDE_ELEMENTS", ReadLiteral, "internal/api/artifactsapi.TestTheRendererDrawsTheSlideSubset"},
 	{"SLIDE_STYLE_PROPERTIES", ReadLiteral, "internal/api/artifactsapi.TestTheRendererDrawsTheSlideSubset"},

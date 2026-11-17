@@ -141,6 +141,11 @@ export const STORAGE_KEYS = {
    * (`lib/delegation.ts`).
    */
   delegatedNotices: "crewlet.delegated.notices",
+  /**
+   * The PREFIX of whether a page's standing warnings are open, `open` or
+   * `closed` (`components/ConfigWarnings.tsx`): the surface's name follows it.
+   */
+  warningsOpen: "crewlet.warnings.open/",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

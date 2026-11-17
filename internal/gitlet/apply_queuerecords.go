@@ -216,6 +216,8 @@ func (a *Applier) applyEject(ctx context.Context, tx *sql.Tx, at applyContext, e
 //     for — read off the entry's row in this apply, which the land record
 //     does not carry ([Land.pushes]) — and what it introduced, the
 //     repository's counters, and the horizons.
+//  6. Their merges counted in the repository's changes by state and their
+//     tally ([countChanges]), after the pushes, as a merge's is.
 func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l Land) (int, error) {
 	named := make([]string, len(l.Entries))
 	for i, e := range l.Entries {
@@ -351,7 +353,17 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 	if err != nil {
 		return 0, err
 	}
-	return rows + pushed, nil
+
+	// 6 THEIR MERGES COUNTED.
+	var landedCounts ChangeCounts
+	for _, row := range changes {
+		landedCounts.move(row.state, ChangeStateMerged)
+	}
+	tallied, err := countChanges(ctx, tx, l.RepoID, landedCounts)
+	if err != nil {
+		return 0, fmt.Errorf("%w (the landing at %s)", err, at.position)
+	}
+	return rows + pushed + tallied, nil
 }
 
 // closeOpOf is the operation a landed entry's work item is closed under

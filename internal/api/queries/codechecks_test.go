@@ -3,6 +3,7 @@ package queries_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -162,15 +163,17 @@ func TestAnAttemptIsNamedBesideItsBranch(t *testing.T) {
 
 // A CHECKS LISTING HANDS THE READER ITS NARROWING AS ASKED: the repository,
 // a change's number, a commit and the branch it was checked for, each
-// check's latest attempt alone, the window's two bounds, a check's name and
-// a state, each on the read the reader holds to the grant — and a state that
-// is no check's, a bound that is no instant, or a `latest` that is neither
-// true nor false is refused before it is asked.
+// check's latest attempt alone, the window's two bounds, a check's name, a
+// state and where each check stands, each on the read the reader holds to the
+// grant; and a state that is no check's, a bound that is no instant, or a
+// `latest` that is neither true nor false is refused before it is asked,
+// while an order the reader does not know comes back as its refusal.
 //
 // Mutations: drop `state` from the narrowing → the reader is asked for every
 // state, red; drop `latest` → the reader is asked for every attempt, red;
 // drop `target` → the reader is asked for every branch's, red; drop
-// `until` → the window is asked with no end, red.
+// `until` → the window is asked with no end, red; drop `standing` → the
+// window is asked for its plain listing, red.
 func TestAChecksListingNamesItsNarrowing(t *testing.T) {
 	t.Parallel()
 	stub := &stubCode{}
@@ -198,6 +201,28 @@ func TestAChecksListingNamesItsNarrowing(t *testing.T) {
 		stub.last().Checks == nil || !stub.last().Checks.Since.Equal(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)) ||
 		!stub.last().Checks.Until.Equal(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)) {
 		t.Errorf("the window asked %+v (%v), want every repository's on 2026-10-01", stub.last(), err)
+	}
+	if _, err := askNative(t, queries.Sources{Code: stub}, "code_checks", map[string]any{"standing": "failing",
+		"since": "2026-10-01T00:00:00Z"}); err != nil || stub.last().Checks == nil ||
+		stub.last().Checks.Standing != gitlet.StandingFailing || stub.last().Repo != "" {
+		t.Errorf("a standing window asked %+v (%v), want every repository's in the failing-first order", stub.last(),
+			err)
+	}
+	if _, err := askNative(t, queries.Sources{Code: stub}, "code_checks", map[string]any{"repo": "web",
+		"standing": " "}); err != nil || stub.last().Checks != nil {
+		t.Errorf("an empty standing asked %+v (%v), want web's whole listing", stub.last().Checks, err)
+	}
+	refusing := &stubCode{answer: func(q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
+		if q.Checks == nil || q.Checks.Standing != "sideways" {
+			return gitlet.ReadAnswer{}, nil
+		}
+		return gitlet.ReadAnswer{}, fmt.Errorf("%w: checks.standing: %q is not one of \"recent\" or \"failing\"",
+			gitlet.ErrInvalid, q.Checks.Standing)
+	}}
+	if _, err := askNative(t, queries.Sources{Code: refusing}, "code_checks", map[string]any{
+		"standing": "sideways"}); !errors.Is(err, queries.ErrBadParams) || len(refusing.asked) != 1 {
+		t.Errorf("an unknown order answered %v after %d asks, want the reader's refusal as bad_params",
+			err, len(refusing.asked))
 	}
 	for name, args := range map[string]map[string]any{
 		"a state that is no check's":  {"state": "green"},

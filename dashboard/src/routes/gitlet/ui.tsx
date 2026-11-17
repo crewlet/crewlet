@@ -1,7 +1,6 @@
 /**
- * The marks every Gitlet screen draws the same way: a commit's id, who did
- * something and when, what a directory entry is, and how a repository is
- * cloned.
+ * The marks every Gitlet screen draws the same way: a commit's id, a branch,
+ * who did something and when, what a directory entry is; a check's verdict, a tag.
  *
  * # Why they are one module
  *
@@ -11,32 +10,40 @@
  * the blame another, and a seat was a face on one screen and a bare name on
  * the next. So each mark is written here, once, and every screen draws it.
  *
- * NONE OF THEM IS COLOURED. A seat's face is its own profile icon (the one
- * rule's third exception), a person's their initials on the neutral badge;
- * a directory and a file are glyphs, told apart by their drawing and their
- * name, never by a hue (`docs/reference/dashboard-design.md`, "The one
- * rule").
+ * ONLY A BRANCH IS COLOURED, in the kit's code-ref chip (the seventh
+ * exception); faces, directories and files are told apart by drawing and name,
+ * never by hue (`docs/reference/dashboard-design.md`, "The one rule").
  */
 
 import "~/styles/gitlet.css";
 
-import type { ReactNode } from "react";
-import { Button, Copyable, InlineCode, Popover } from "@crewlethq/ui";
+import type { ComponentType, ReactNode } from "react";
+import { Copyable, Spinner, Tag, VisuallyHidden, type AvatarVerdict } from "@crewlethq/ui";
+import { ProductMark } from "@crewlethq/icons/product-mark";
 import {
   BookOpenGlyph,
+  CircleCheckGlyph,
+  CircleDashedGlyph,
+  CircleStopGlyph,
+  CircleXGlyph,
   FileCodeGlyph,
   FileTextGlyph,
   FolderGlyph,
+  GitBranchGlyph,
   LinkGlyph,
   PackageGlyph,
   SquareTerminalGlyph,
+  TagGlyph,
+  type GlyphProps,
 } from "@crewlethq/icons/glyphs";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
-import { shortOID } from "~/lib/code.ts";
+import { refName, shortOID } from "~/lib/code.ts";
 import { ago } from "~/lib/ago.ts";
+import { rollupWord } from "~/lib/checks.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
-import type { CodeTreeEntry } from "~/protocol/index.ts";
+import type { CodeCheckRollup, CodeTreeEntry } from "~/protocol/index.ts";
+import { repoHref } from "./paths.ts";
 
 /**
  * A commit's id: its first characters, and a press that copies the whole of
@@ -56,37 +63,66 @@ export function ShaChip({ oid }: { oid: string }) {
   );
 }
 
+/** Gitlet itself as a writer: a merge commit it built, a branch it moved. */
+export const GITLET = Object.freeze({ product: "gitlet" as const });
+
+/** Who did something: a seat's handle, a name, or Gitlet itself. */
+export type Who = string | typeof GITLET;
+
+/** The product mark's size at each face's: the kit avatar's 20, 26 and 32 px, or the words'. */
+const MARK_SIZE = { xs: 20, sm: 26, md: 32, text: "1.15em" } as const;
+
 /**
  * Who someone is, as a face: a seat by its handle or its name, off the chart —
  * an agent as its own character, a person as initials on the neutral badge —
  * or, for a name the chart does not hold (a git author line written by
- * somebody's own git), that name's initials. Decorative: the name is always
- * printed beside it.
+ * somebody's own git), that name's initials; Gitlet, its product mark.
+ * Decorative: the name is always printed beside it.
  */
 export function Face({
   who,
   size = "xs",
+  verdict,
+  ring,
 }: {
-  who: string;
+  who: Who;
   /** A step, or `text`: a face inside a line of code or prose, sized by the words around it. */
   size?: "xs" | "sm" | "md" | "text";
+  /** A reviewer's verdict on the kit's corner, in a change's row alone. */
+  verdict?: AvatarVerdict | undefined;
+  /** The reader's own face. */
+  ring?: "brand" | undefined;
 }) {
-  const badge = useSeatBadgeOf()(who);
+  const badge = useSeatBadgeOf();
+  if (typeof who !== "string") {
+    return (
+      <span className="code-face" aria-hidden="true">
+        <ProductMark
+          product={who.product}
+          size={MARK_SIZE[size]}
+          drawing={size === "text" ? "small" : "auto"}
+        />
+      </span>
+    );
+  }
+  const seat = badge(who);
   return (
     <SeatAvatar
-      name={badge.name || who}
+      name={seat.name || who}
       size={size}
-      kind={badge.kind === "human" ? "human" : "agent"}
-      avatar={badge.avatar}
+      kind={seat.kind === "human" ? "human" : "agent"}
+      avatar={seat.avatar}
+      verdict={verdict}
+      ring={ring}
       decorative
     />
   );
 }
 
-/** A seat's name off the chart, or the words it was given where the chart has none. */
-export function useWhoName(): (who: string) => string {
+/** A seat's name off the chart, the words it was given where the chart has none, or "Gitlet". */
+export function useWhoName(): (who: Who) => string {
   const badge = useSeatBadgeOf();
-  return (who) => badge(who).name || who;
+  return (who) => (typeof who === "string" ? badge(who).name || who : "Gitlet");
 }
 
 /**
@@ -101,7 +137,7 @@ export function Byline({
   now,
   children,
 }: {
-  who: string;
+  who: Who;
   verb?: ReactNode;
   at?: string | undefined;
   now: number;
@@ -142,6 +178,16 @@ export function entryKind(e: Pick<CodeTreeEntry, "mode">): string {
 /** The names a README goes by, the one a reader writes first first. */
 export const README_NAMES = ["readme.md", "readme.markdown", "readme", "readme.txt"];
 
+/** The names a licence goes by, in the order a root is searched for one. */
+export const LICENSE_NAMES = [
+  "license",
+  "license.md",
+  "license.txt",
+  "licence",
+  "licence.md",
+  "copying",
+];
+
 /** Prose a reader reads rather than runs: a README, a licence, a change log, a note. */
 const PROSE_FILE =
   /(^|\/)(readme|licen[cs]e|copying|changelog|notice|authors)(\.[^/]*)?$|\.(md|markdown|txt|rst|adoc)$/i;
@@ -174,48 +220,100 @@ export function EntryGlyph({ entry }: { entry: Pick<CodeTreeEntry, "mode" | "pat
 }
 
 /**
- * The address a person clones a repository from: the API's own origin — the
- * one this dashboard is served from, since the engine serves `/git/` beside
- * it and never on the public listener — and `/git/{name}.git`.
+ * A branch as Gitlet names it: the kit's code-ref chip with its glyph (the
+ * seventh exception), a link where the host gives one, which keeps `.prose-link`.
  */
-export function cloneURL(repo: string, origin: string = location.origin): string {
-  return `${origin}/git/${repo}.git`;
+export function BranchChip({ name, href }: { name: string; href?: string | undefined }) {
+  const inner = (
+    <>
+      <GitBranchGlyph size="xs" />
+      {name}
+    </>
+  );
+  return href ? (
+    <a className="code-branch-chip prose-link" href={href}>
+      {inner}
+    </a>
+  ) : (
+    <span className="code-branch-chip">{inner}</span>
+  );
 }
 
 /**
- * Clone: the repository's HTTPS address with its copy, and what git asks for
- * — the person's own token as the password, minted by `crewlet iam token
- * -login`, which `crewlet gitlet credential` hands git from the environment.
- * The clone is git's, from the reader's own machine: nothing here writes.
+ * A ref by its short name: a branch as its chip, a tag or any other ref in
+ * the code face.
  */
-export function CloneButton({ repo }: { repo: string }) {
-  const url = cloneURL(repo);
+export function RefName({ gitRef }: { gitRef: string }) {
+  const ref = refName(gitRef);
+  return ref.kind === "branch" ? (
+    <BranchChip name={ref.name} />
+  ) : (
+    <span className="mono">{ref.name}</span>
+  );
+}
+
+/** Each rollup state's glyph and ink: a cross only for a failure, never for an absence. */
+export const ROLLUP_LOOK: Readonly<
+  Record<string, { glyph: ComponentType<GlyphProps> | "spinner"; tone: string }>
+> = {
+  passed: { glyph: CircleCheckGlyph, tone: "success" },
+  failing: { glyph: CircleXGlyph, tone: "danger" },
+  running: { glyph: "spinner", tone: "info" },
+  pending: { glyph: CircleDashedGlyph, tone: "neutral" },
+  cancelled: { glyph: CircleStopGlyph, tone: "neutral" },
+};
+
+/**
+ * Where a commit's checks stand: a glyph and a word, toned by the rollup's state.
+ * `of` adds the required count to a pass: "Passed 2 of 2"; `bare` draws the glyph alone.
+ */
+export function CheckRollupMark({
+  rollup,
+  title,
+  of = false,
+  bare = false,
+}: {
+  rollup: CodeCheckRollup;
+  title: string;
+  of?: boolean;
+  bare?: boolean;
+}) {
+  const look = ROLLUP_LOOK[rollup.state];
+  const Glyph = look?.glyph;
+  const count =
+    of && rollup.state === "passed" && rollup.required > 0
+      ? ` ${rollup.required_passed} of ${rollup.required}`
+      : "";
   return (
-    <Popover
-      label={`Clone ${repo}`}
-      align="end"
-      trigger={(open, toggle) => (
-        <Button size="small" variant="primary" aria-expanded={open} onClick={toggle}>
-          Clone
-        </Button>
+    <span className="code-check-mark" data-tone={look?.tone ?? "neutral"} title={title}>
+      {Glyph === "spinner" ? <Spinner size="sm" /> : Glyph && <Glyph size="sm" aria-hidden />}
+      {bare ? (
+        <VisuallyHidden>{rollupWord(rollup)}</VisuallyHidden>
+      ) : (
+        <span className="code-check-mark__word">
+          {rollupWord(rollup)}
+          {count}
+        </span>
       )}
+    </span>
+  );
+}
+
+/**
+ * A tag naming a commit: its glyph and name on the neutral outline, opening the
+ * repository's files at its whole ref, which no branch of the same name can shadow.
+ */
+export function TagChip({ repo, gitRef }: { repo: string; gitRef: string }) {
+  const name = refName(gitRef).name;
+  return (
+    <a
+      className="code-tag-chip"
+      href={repoHref(repo, { ref: gitRef })}
+      title={`Browse the files at ${name}`}
     >
-      <div className="code-clone">
-        <p className="code-clone__head">Clone with HTTPS</p>
-        <Copyable
-          className="code-clone__url"
-          value={url}
-          variant="block"
-          monospace
-          ariaLabel={`Copy ${url}`}
-          title="Copy the address"
-        />
-        <p className="code-clone__note">
-          git asks for a password: give it your own token, which{" "}
-          <InlineCode>crewlet iam token -login</InlineCode> mints. To have git never ask, make{" "}
-          <InlineCode>crewlet gitlet credential</InlineCode> its credential helper.
-        </p>
-      </div>
-    </Popover>
+      <Tag appearance="outline" size="xs" leadingIcon={<TagGlyph size="xs" />}>
+        {name}
+      </Tag>
+    </a>
   );
 }

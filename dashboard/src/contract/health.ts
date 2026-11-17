@@ -17,6 +17,8 @@ interface HealthAlarms {
    * own. Absent when nothing is firing.
    */
   worst?: string;
+  /** That alarm's title in a company owner's words; absent beside an absent `worst`. */
+  worst_title?: string;
 }
 
 /**

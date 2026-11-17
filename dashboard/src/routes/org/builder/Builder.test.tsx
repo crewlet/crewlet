@@ -741,8 +741,9 @@ describe("checking the draft", () => {
     expect(banner.className).toContain("warning");
     expect(banner.className).not.toContain("danger");
     expect(banner.getAttribute("role")).toBe("group");
-    expect(within(banner).getByText(/The engine runs this company, with 1 warning/)).toBeDefined();
+    expect(within(banner).getByText("1 configuration warning")).toBeDefined();
     expect(within(banner).getByText(/runs as the engine/).textContent).toMatch(/^A /);
+    fireEvent.click(within(banner).getByRole("button", { name: "1 configuration warning Review" }));
     expect(within(banner).getByRole("link", { name: "Open Models" }).getAttribute("href")).toBe(
       href(["settings", "models"]),
     );
@@ -806,13 +807,21 @@ describe("checking the draft", () => {
     const lines = (list: HTMLElement) =>
       within(list)
         .getAllByRole("listitem")
-        .map((li) => li.textContent);
+        .map((li) =>
+          [
+            li.querySelector(".crewlet-notice-list__toggle")!.textContent,
+            ...[...li.querySelectorAll(".crewlet-notice-list__panel p")].map((p) => p.textContent),
+            ...[...li.querySelectorAll("a")].map((a) => a.textContent),
+          ].join(" / "),
+        );
     const said = [
-      "Agents run their work directly on the engine's own server. Open Models",
-      "2 agents: Reflection and summaries run on the same model as the agent's own work. Open Models",
+      "Agents run their work directly on the engine's own server. / Open Models",
+      "Reflection and summaries run on the same model as the agent's own work. 2 agents / CEO, Designer / Open Models",
     ];
     const banner = await screen.findByRole("group", { name: "Warnings about the configuration" });
-    expect(within(banner).getByText(/The engine runs this company, with 2 warnings/)).toBeDefined();
+    fireEvent.click(
+      within(banner).getByRole("button", { name: "2 configuration warnings Review" }),
+    );
     expect(lines(banner)).toEqual(said);
     expect(banner.textContent).not.toMatch(/providers|llm_|direct`|container`/);
 
@@ -821,7 +830,7 @@ describe("checking the draft", () => {
     await screen.findByText("Configuration OK");
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
     const dialog = await screen.findByRole("dialog", { name: "Review and save" });
-    const warnings = within(dialog).getByRole("region", { name: "Warnings" });
+    const warnings = within(dialog).getByRole("group", { name: "Warnings" });
     expect(warnings.textContent).toContain("The engine will run this, with 2 warnings");
     expect(lines(warnings)).toEqual(said);
   });
@@ -918,16 +927,17 @@ test("a company with no model provider is told so, and one with a provider is no
   mountBuilder({ engine });
   // The engine applies the company and holds its agents' work, so the
   // caution says the agents cannot work rather than claiming nothing is applied.
-  const caution = (
-    await screen.findByText(/No model provider is set, so agents can’t work\./)
-  ).closest(".crewlet-callout") as HTMLElement;
+  const caution = (await screen.findByText("No model provider is set")).closest(
+    ".crewlet-callout",
+  ) as HTMLElement;
+  expect(caution.textContent).toContain("Agents can’t work until one is added");
   // It sends the reader to Settings › Models to add one, signed in and tested.
-  expect(within(caution).getByRole("link", { name: "Settings, Models" }).getAttribute("href")).toBe(
+  expect(within(caution).getByRole("link", { name: "Add a model" }).getAttribute("href")).toBe(
     "#/settings/models?flow=add",
   );
   // And it gives the steps that add one from a terminal, the card's own: the
   // declaration the engine walks from a company only the store holds.
-  fireEvent.click(within(caution).getByRole("button", { name: "The steps" }));
+  fireEvent.click(within(caution).getByRole("button", { name: "From a terminal" }));
   expect(within(caution).getByText(/crewlet config export > company\.yaml/).textContent).toBe(
     PROVIDER_STEPS,
   );
@@ -1487,13 +1497,13 @@ describe("a document another system manages", () => {
       const without = company();
       delete without.providers;
       mountBuilder({ engine: new Engine(without), viewer: () => viewer });
-      const caution = (
-        await screen.findByText(/No model provider is set, so agents can’t work\./)
-      ).closest(".crewlet-callout") as HTMLElement;
+      const caution = (await screen.findByText("No model provider is set")).closest(
+        ".crewlet-callout",
+      ) as HTMLElement;
       expect(caution.textContent).toContain(
         "The company’s configuration is managed by gitops, so the model is added there.",
       );
-      expect(within(caution).queryByRole("button", { name: "The steps" })).toBeNull();
+      expect(within(caution).queryByRole("button", { name: "From a terminal" })).toBeNull();
       expect(document.body.textContent).not.toContain("crewlet config");
       expect(document.body.textContent).not.toContain("crewlet llm");
     },

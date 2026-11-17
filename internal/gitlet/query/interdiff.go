@@ -63,7 +63,7 @@ func (r *read) interdiffRead(ctx context.Context, objs found, at cursor, m *memo
 	}
 	file, _ := gitlet.GitPath("interdiff.file", q.File, q.FileB64, true)
 	return r.diffPages(ctx, diffAsk{kind: gitlet.GitInterdiff, base: from.peeled, head: to.peeled, file: file,
-		filter: r.interdiffFilter(), narrowing: "read its files one at a time"}, at, m)
+		patches: q.Patches, filter: r.interdiffFilter(), narrowing: "read its files one at a time"}, at, m)
 }
 
 // interdiffFilter is the files the read's interdiff keeps to: every file where
