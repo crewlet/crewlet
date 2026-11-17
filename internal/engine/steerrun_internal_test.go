@@ -2979,13 +2979,14 @@ func (f providerFunc) Complete(ctx context.Context, req llm.Request) (*llm.Compl
 func TestAnEndingReportsAHookServedNoteAtItsServe(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	fleet := coordmem.NewFleet()
+	store := sandbox.NewCoordStore(fleet)
 	runs, p := steersOver(t, steerRing, store)
 	launch := workingRun(t, store, runs, "run-1")
 	for _, id := range []string{"n-live", "n-lost"} {
 		fileSealed(t, runs, "run-1", steer.Note{ID: id, Text: "the note " + id, By: "founder"})
 	}
-	fileItemFor(t, runs, store, "run-1", "i-1", launch)
+	placeItemFor(t, runs, fleet, "run-1", "i-1", launch)
 	serve := func(take string, call int, boundary types.SteerBoundary, iteration int, ids ...string) {
 		t.Helper()
 		if _, err := store.ServeHook(ctx, "run-1", sandbox.HookServe{IDs: ids, Launch: launch,
@@ -3095,13 +3096,14 @@ func TestAnEndingReportsAHookServedNoteAMarkedTakeReadAtItsServe(t *testing.T) {
 func TestAnItemForAJobNeverLeavesIt(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	fleet := coordmem.NewFleet()
+	store := sandbox.NewCoordStore(fleet)
 	runs, p := steersOver(t, steerRing, store)
 	launch := workingRun(t, store, runs, "run-1")
-	// THE ITEMS FILED FIRST, so the record of a confirmation that took one
-	// would be published ahead of the person's note's.
-	fileItemFor(t, runs, store, "run-1", "i-read", launch)
-	fileItemFor(t, runs, store, "run-1", "i-waiting", launch)
+	// THE ITEMS ON THE RECORD FIRST, so the record of a confirmation that took
+	// one would be published ahead of the person's note's.
+	placeItemFor(t, runs, fleet, "run-1", "i-read", launch)
+	placeItemFor(t, runs, fleet, "run-1", "i-waiting", launch)
 	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
 	inbox := boundInbox(t, runs, store, "run-1", launch)
 	viewHolds(t, inbox, 3)

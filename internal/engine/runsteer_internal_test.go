@@ -1081,9 +1081,14 @@ func TestANoteAtItsWorstFitsWhatARunsRowKeepsOfOne(t *testing.T) {
 	t.Logf("a note at its worst seals to %d bytes of the %d", len(note.Sealed), sandbox.MaxNoteSealedBytes)
 }
 
-// fileItemFor seals an item for job as a note is sealed, and files it on
-// turnID's record under the turn's bounds.
-func fileItemFor(t *testing.T, runs *runSteers, store sandbox.PendingStore, turnID, id, job string) {
+// placeItemFor puts an item for job on turnID's record, sealed as a note is
+// sealed, waiting and served to nobody, numbered after every note the record
+// holds, as the store's own write of the record files one.
+//
+// ONTO THE RECORDS THE STORE IS BUILT ON, because no filer may file one
+// (sandbox.ErrNoteKind) and this build's store files none: what every reader
+// does with an item a record holds is the subject here, whoever put it there.
+func placeItemFor(t *testing.T, runs *runSteers, records coord.SandboxRuns, turnID, id, job string) {
 	t.Helper()
 	n, err := runs.seal(turnID, steer.Note{ID: id, Text: "item for the job " + id, By: "founder",
 		ByKind: iam.ActorHuman})
@@ -1091,10 +1096,18 @@ func fileItemFor(t *testing.T, runs *runSteers, store sandbox.PendingStore, turn
 		t.Fatal(err)
 	}
 	n.For = job
-	filed, _, err := store.FileNote(t.Context(), turnID, sandbox.NoteFiling{Note: n,
-		MaxWaiting: steer.MaxPendingNotes, MaxNotes: steer.MaxTurnNotes})
-	if err != nil || filed != sandbox.NoteAccepted {
-		t.Fatalf("file item %s = %s, %v", id, filed, err)
+	if _, ok, err := records.MutateSandboxRun(t.Context(), turnID, func(current coord.Record) (coord.SandboxRunChange, error) {
+		var row sandbox.PendingRun
+		if err := json.Unmarshal(current.Value, &row); err != nil {
+			return coord.SandboxRunChange{}, err
+		}
+		row.Steer.Seq++
+		n.Seq = row.Steer.Seq
+		row.Steer.Notes = append(row.Steer.Notes, n)
+		raw, err := json.Marshal(row)
+		return coord.SandboxRunChange{Put: raw}, err
+	}); err != nil || !ok {
+		t.Fatalf("put item %s for job %s on %s: %v %v", id, job, turnID, ok, err)
 	}
 }
 
@@ -1138,11 +1151,12 @@ func TestEveryReaderOfWaitingNotesNamesItsJob(t *testing.T) {
 	t.Run("the run inbox hands its job its item", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
-		store := sandbox.NewCoordStore(coordmem.NewFleet())
+		fleet := coordmem.NewFleet()
+		store := sandbox.NewCoordStore(fleet)
 		runs, _ := steersOver(t, steerRing, store)
 		launch := workingRun(t, store, runs, "run-1")
 		fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
-		fileItemFor(t, runs, store, "run-1", "i-1", launch)
+		placeItemFor(t, runs, fleet, "run-1", "i-1", launch)
 		inbox := boundInbox(t, runs, store, "run-1", launch)
 		viewHolds(t, inbox, 2)
 		if answer := inbox.Take(ctx, mcpbridge.SteerEventToolBatch); !strings.Contains(answer, "use staging") ||
@@ -1150,7 +1164,7 @@ func TestEveryReaderOfWaitingNotesNamesItsJob(t *testing.T) {
 			t.Errorf("the batch's hook was answered %q, want the person's note and the job's own item", answer)
 		}
 		fileSealed(t, runs, "run-1", steer.Note{ID: "n-2", Text: "and tag it", By: "founder"})
-		fileItemFor(t, runs, store, "run-1", "i-2", launch)
+		placeItemFor(t, runs, fleet, "run-1", "i-2", launch)
 		if answer := inbox.Take(ctx, mcpbridge.SteerEventFinish); !strings.Contains(answer, "and tag it") ||
 			!strings.Contains(answer, "item for the job i-2") {
 			t.Errorf("the finish's hook was answered %q, want the person's note and the job's own item", answer)
@@ -1195,10 +1209,11 @@ func TestEveryReaderOfWaitingNotesNamesItsJob(t *testing.T) {
 	t.Run("the review and a brief take no item", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
-		store := sandbox.NewCoordStore(coordmem.NewFleet())
+		fleet := coordmem.NewFleet()
+		store := sandbox.NewCoordStore(fleet)
 		runs, _ := steersOver(t, steerRing, store)
 		launch := workingRun(t, store, runs, "run-1")
-		fileItemFor(t, runs, store, "run-1", "i-1", launch)
+		placeItemFor(t, runs, fleet, "run-1", "i-1", launch)
 		source := claimedSource(t, store, runs, launch)
 		eventually(t, "the segment's view to hold the item", func() bool {
 			view, opened, _ := source.watch.snapshot()
