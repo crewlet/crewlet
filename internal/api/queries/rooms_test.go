@@ -511,8 +511,8 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // Changes and its peek those of `code_changes` and `code_change`, a change's
 // page its routing's, `code_change_routing`, a repository's own page those of
 // `code_repo` (which `crewlet gitlet status -repo` reads too) and of its
-// content, `code_refs`, `code_tree`, `code_blob`, `code_log` and
-// `code_blame`, and a commit's page and a comparison those of `code_commit`,
+// content, `code_refs`, `code_tree`, `code_blob`, `code_log`, `code_blame`
+// and `code_find`, and a commit's page and a comparison those of `code_commit`,
 // `code_diff` and `code_compare`, a seat's Code tab and My work's Reviews
 // that of `code_reviews`, and Gitlet › Queue, Gitlet › Checks and the checks
 // tabs those of a repository's merge queues and its checks, `code_queue`,
@@ -530,9 +530,6 @@ var readOutsideTheDashboard = map[string]string{
 	"research_page":     "Ask Crewlet's fetch_web_page, over GET /research/page (ADR-0151)",
 	"research_search":   "Ask Crewlet's search_web, over GET /research/search (ADR-0151)",
 	"code_repo_readers": "an admin's script: GET /gitlet/repos/{name}/readers, as docs/guides/gitlet.md prints it",
-	// A FILE FOUND BY ITS NAME, read over REST on the path the reference
-	// prints until a finder reads it: its line goes when one does.
-	"code_find": "a script: GET /gitlet/repos/{name}/find, as docs/reference/api-endpoints.md prints it",
 	// THE TRACKER'S OWN INBOX, which the dashboard's Inbox reads composed
 	// with Gitlet's through `inbox` since that question landed: it
 	// stays the tracker's question and its tool's (`work_inbox`, a seat's and

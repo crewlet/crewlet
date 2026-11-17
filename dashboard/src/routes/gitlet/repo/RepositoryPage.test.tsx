@@ -481,12 +481,49 @@ function stubEngine(
           return json({ position: POSITION, level: "session" });
         case "/query/code_commit_marks":
           return json({ commit_marks: [], position: POSITION, level: "session" });
+        case "/query/code_find":
+          return json({
+            repo: "web",
+            kind: "find",
+            find: {
+              tree: OTHER,
+              matches: p.get("q") === "zzz" ? [] : FOUND,
+              total: p.get("q") === "zzz" ? 0 : 43,
+              files: 1204,
+            },
+          });
       }
       return json({}, 404);
     }),
   );
   return asked;
 }
+
+/** The engine, with `what` answered by `answer`; every request kept. */
+function stubAnswering(
+  what: string,
+  answer: (url: URL) => Response,
+  repo: Record<string, unknown> = detail(),
+) {
+  const asked = stubEngine(repo);
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname !== `/query/${what}`) return engine(input, init);
+      asked.push(url);
+      return answer(url);
+    }),
+  );
+  return asked;
+}
+
+/** What Go to file finds for any query but `zzz`: the best two of 43. */
+const FOUND = [
+  { path: "cmd/web/main.go", oid: OTHER, mode: "100644", spans: [[8, 12]] },
+  { path: "src/main_test.go", oid: OTHER, mode: "100644", spans: [[4, 8]] },
+];
 
 /** One write the page sent, as `POST /operator/act/{tool}` carried it. */
 interface Acted {
@@ -2476,4 +2513,105 @@ test("a README's fence is coloured by its info string", async () => {
   );
   expect(fences[2]!.querySelector("[class^='code-syn-']")).toBeNull();
   expect(fences[3]!.querySelector("[class^='code-syn-']")).toBeNull();
+});
+
+// GO TO FILE ASKS ONCE TYPING RESTS, at the commit the listing resolved, and opens a file at
+// the address's revision. Mutation: ask per keystroke, or at the branch, and this fails.
+test("Go to file finds a file at the listing's commit and opens it at the address's revision", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const asked = stubEngine();
+  mount("#/gitlet/repos/web?ref=feature");
+  const field = await screen.findByRole("combobox", { name: "Go to file" });
+  await screen.findByRole("link", { name: "Start the storefront" });
+  for (const typed of ["m", "ma", "mai", "main"])
+    fireEvent.change(field, { target: { value: typed } });
+  await act(async () => {
+    vi.advanceTimersByTime(200);
+    await afterMicrotasks();
+  });
+  const finds = reads(asked, "code_find");
+  expect(finds.map((u) => u.searchParams.get("q"))).toEqual(["main"]);
+  expect(finds[0]!.searchParams.get("ref")).toBe(HEAD);
+  expect(finds[0]!.searchParams.get("limit")).toBe("20");
+  const list = await screen.findByRole("listbox", { name: "Files" });
+  const rows = within(list).getAllByRole("option");
+  expect(rows.map((r) => r.textContent)).toEqual([
+    "cmd/web/main.go",
+    "src/main_test.go",
+    "The best 2 of 43 files: type more to narrow",
+  ]);
+  expect([...rows[0]!.querySelectorAll(".code-find__hit")].map((h) => h.textContent)).toEqual([
+    "main",
+  ]);
+  fireEvent.mouseDown(rows[0]!);
+  await waitFor(() =>
+    expect(location.hash).toBe("#/gitlet/repos/web?path=cmd%2Fweb%2Fmain.go&ref=feature"),
+  );
+});
+
+test("Go to file says when no path holds the query, and an engine's refusal in its own words", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  stubEngine();
+  mount("#/gitlet/repos/web");
+  const field = await screen.findByRole("combobox", { name: "Go to file" });
+  await screen.findByRole("link", { name: "Start the storefront" });
+  fireEvent.change(field, { target: { value: "zzz" } });
+  await act(async () => {
+    vi.advanceTimersByTime(200);
+    await afterMicrotasks();
+  });
+  expect(await screen.findByText("No file's path holds “zzz”, among 1,204 files")).toBeTruthy();
+
+  cleanup();
+  stubAnswering("code_find", () =>
+    engineJson({ error: "unavailable", detail: "this node does not find files yet" }, 503),
+  );
+  mount("#/gitlet/repos/web");
+  const again = await screen.findByRole("combobox", { name: "Go to file" });
+  await screen.findByRole("link", { name: "Start the storefront" });
+  fireEvent.change(again, { target: { value: "main" } });
+  await act(async () => {
+    vi.advanceTimersByTime(200);
+    await afterMicrotasks();
+  });
+  expect(
+    await screen.findByText("Finding a file is unavailable: this node does not find files yet"),
+  ).toBeTruthy();
+});
+
+// A QUERY PAST THE ENGINE'S 256 BYTES IS ASKED CUT at a code point, and its answer drawn.
+// Mutation: ask nothing past the bound, and the list says "Looking for" forever.
+test("Go to file asks a query past 256 bytes cut to them", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const asked = stubEngine();
+  mount("#/gitlet/repos/web");
+  const field = await screen.findByRole("combobox", { name: "Go to file" });
+  await screen.findByRole("link", { name: "Start the storefront" });
+  fireEvent.change(field, { target: { value: "界".repeat(90) } });
+  await act(async () => {
+    vi.advanceTimersByTime(200);
+    await afterMicrotasks();
+  });
+  const list = await screen.findByRole("listbox", { name: "Files" });
+  expect(await within(list).findByText("cmd/web/")).toBeTruthy();
+  expect(reads(asked, "code_find").map((u) => u.searchParams.get("q"))).toEqual(["界".repeat(85)]);
+});
+
+// t IS GO TO FILE, never typed into the field it focuses; inside a field it is a letter, and g
+// then t is still Chatlet's. Mutation: bind t while typing, and this fails.
+test("t focuses Go to file; a t typed into a field stays a letter", async () => {
+  stubEngine();
+  mount("#/gitlet/repos/web");
+  const field = await screen.findByRole("combobox", { name: "Go to file" });
+  const t = new KeyboardEvent("keydown", { key: "t", bubbles: true, cancelable: true });
+  act(() => {
+    window.dispatchEvent(t);
+  });
+  expect(document.activeElement).toBe(field);
+  expect(t.defaultPrevented).toBe(true);
+  const typed = new KeyboardEvent("keydown", { key: "t", bubbles: true, cancelable: true });
+  act(() => {
+    field.dispatchEvent(typed);
+  });
+  expect(typed.defaultPrevented).toBe(false);
 });

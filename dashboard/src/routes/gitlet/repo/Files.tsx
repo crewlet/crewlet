@@ -136,6 +136,7 @@ import {
   targetOf,
   type CommitTarget,
 } from "./FileWrites.tsx";
+import { GoToFile } from "./GoToFile.tsx";
 import "~/styles/gitlet.css";
 
 /** What one page of a path read holds: a listing's entries, or one page of a file. */
@@ -218,6 +219,7 @@ function RootListing({ repo, revisions, rev, path, onRev }: Place) {
         path={path}
         onRev={onRev}
         target={targetOf(rev, first.data)}
+        commit={commit}
         dir
       />
       <Card padding="none" className="code-browser">
@@ -286,6 +288,7 @@ function PathView({
         path={path}
         onRev={onRev}
         target={target}
+        commit={commit}
         dir={dir}
       />
       {file ? (
@@ -591,10 +594,10 @@ function FileLines({
 }
 
 /**
- * The bar above the code: the revision, the path back up to the root — the
- * repository's name first, every directory a link — and, at a directory, a
- * new file in it and, at the root, the clone. What a reader does with a file
- * is on the file's own card ([FileCard]).
+ * The bar above the code: the revision, the path back up to the root (the
+ * repository's name first, every directory a link) and, at a directory, Go
+ * to file and a new file in it and, at the root, the clone. What a reader
+ * does with a file is on the file's own card ([FileCard]).
  */
 function FilesBar({
   repo,
@@ -603,10 +606,13 @@ function FilesBar({
   path,
   onRev,
   target,
+  commit,
   dir = false,
 }: Place & {
   /** Where a commit from here lands ([targetOf]). */
   target: CommitTarget;
+  /** The commit the path's read resolved, whole, or none while it is read. */
+  commit: string;
   /** The path is a directory (or the root), which takes a new file. */
   dir?: boolean;
 }) {
@@ -651,6 +657,7 @@ function FilesBar({
         </nav>
       )}
       <span className="code-bar-end">
+        {dir && <GoToFile repo={repo.name} rev={rev} commit={commit} />}
         {dir && <NewFileButton repo={repo} target={target} dir={path} />}
         {path === "" && <CloneButton repo={repo.name} />}
       </span>

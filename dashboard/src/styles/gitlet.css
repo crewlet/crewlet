@@ -1813,3 +1813,41 @@
 .code-search-line__text {
   white-space: pre;
 }
+
+/* GO TO FILE in the bar's end group; a phone gives it a line of its own. */
+.code-find {
+  flex: 0 1 calc(9 * var(--size-control-sm));
+}
+@container page (width < 640px) {
+  .code-find {
+    flex: 1 1 100%;
+  }
+}
+
+/* A FOUND FILE: its glyph, then its path with the matched runs strong. */
+.code-find__row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.code-find__path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-find__dir {
+  color: var(--color-text-secondary);
+}
+
+.code-find__base {
+  color: var(--color-text-primary);
+}
+
+.code-find__hit {
+  font-weight: var(--font-weight-semibold);
+}

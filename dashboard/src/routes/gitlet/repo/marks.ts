@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { codeRest } from "~/lib/useCodeQuery.ts";
+import type { QueryResult } from "~/lib/useQuery.ts";
 import { QueryError, type CodeCommitMark } from "~/protocol/index.ts";
 
 /** How often a page holding a running or pending rollup is asked again: the code log's minute. */
@@ -14,6 +15,22 @@ export const MARKS_POLL_MS = 60_000;
 interface PageMarks {
   marks?: CodeCommitMark[];
   failed?: MarksFailure;
+}
+
+/** The codes that refuse a read for good (an older fleet, a key it lacks): said, never retried. */
+export const REFUSED_CODES: ReadonlySet<string> = new Set([
+  "unavailable",
+  "bad_params",
+  "not_found",
+  "unauthorized",
+]);
+
+/** The engine's sentence for a refused read, where it wrote one. */
+export function refusalSentence(
+  r: Pick<QueryResult<unknown>, "detail" | "refusal">,
+): string | null {
+  const refusal = r.refusal as { detail?: string | null } | null;
+  return r.detail ?? refusal?.detail ?? null;
 }
 
 /** Why the marks were not read: the refusal's code and the engine's sentence, where it wrote one. */

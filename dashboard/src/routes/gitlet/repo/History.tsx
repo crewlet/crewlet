@@ -89,7 +89,7 @@ import {
   useWhoName,
   type Who,
 } from "../ui.tsx";
-import { useCommitMarks, type MarksFailure } from "./marks.ts";
+import { REFUSED_CODES, useCommitMarks, type MarksFailure } from "./marks.ts";
 import { DeleteBranchButton, NewBranchButton } from "./BranchWrites.tsx";
 import { ProtectButton } from "./Protect.tsx";
 import { RefPicker, revisionWord, type Revisions } from "./refs.tsx";
@@ -541,9 +541,6 @@ function MarksNote({ failed, retry }: { failed: MarksFailure; retry: () => void 
     </p>
   );
 }
-
-/** The refusals a retry does not change: the engine said no, or this fleet answers no marks yet. */
-const REFUSED_CODES = new Set(["unavailable", "bad_params", "not_found", "unauthorized"]);
 
 /** The commit's files, browsed at it. */
 function BrowseAt({ repo, oid }: { repo: string; oid: string }) {
