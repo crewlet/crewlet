@@ -239,6 +239,7 @@ func codeReadQuery(kind gitlet.ReadKind, asker gitlet.Principal, p Params) (gitl
 		q.Repo, q.State, q.Owner = p.String("repo"), gitlet.ChangeState(p.String("state")), p.String("owner")
 		q.Work, q.Reviewer, q.Needs = p.String("work"), p.String("reviewer"), gitlet.Need(p.String("needs"))
 		q.Window, q.ChangeSort = gitlet.ChangeWindow(p.String("window")), gitlet.ChangeSort(p.String("sort"))
+		q.Readiness = gitlet.ReadinessBucket(p.String("readiness"))
 	case gitlet.ReadReviews:
 		q.Reviewer = p.String("reviewer")
 	case gitlet.ReadQueue:
@@ -342,6 +343,10 @@ func codeReadQuery(kind gitlet.ReadKind, asker gitlet.Principal, p Params) (gitl
 	}
 	// A LISTING'S CARDS are asked, `cards=true`; the reader refuses them on any other read.
 	if q.Cards, err = askedFor(p, "cards"); err != nil {
+		return gitlet.ReadQuery{}, err
+	}
+	// EVERY REPOSITORY'S TRAINS AND EJECTIONS on a queue read are asked, `trains=true`; the reader refuses them on any other read.
+	if q.Trains, err = askedFor(p, "trains"); err != nil {
 		return gitlet.ReadQuery{}, err
 	}
 	for v := range strings.SplitSeq(p.String("status"), ",") {

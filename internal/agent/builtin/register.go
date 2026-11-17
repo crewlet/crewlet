@@ -568,7 +568,7 @@ func annotationsFor(name string) tools.Annotations {
 		// lookup was refused it as a write to a surface a human reads
 		// while list_work_items beside it was admitted.
 		return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}
-	case worklet.MarkInboxTool, worklet.SetPinsTool, CodeMarkInboxTool, ArtifactMarkInboxTool:
+	case worklet.MarkInboxTool, worklet.SetPinsTool, CodeMarkInboxTool, CodeMarkViewedTool, ArtifactMarkInboxTool:
 		// A PERSON'S OWN STATE IS NOT A SHARED SURFACE, and saying so
 		// takes an explicit `OpenWorld: No` — these two fell to the
 		// default arm, whose `ReadOnly: No` with OpenWorld UNSET is

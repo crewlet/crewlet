@@ -88,7 +88,8 @@ import (
 // records ([ReadinessRows.With]), and STAMPS the answer on the record, which
 // the applier stores (code_mergeability.ready and waits_person) beside the
 // versions of the inputs it was judged at and the activation of the chart
-// that judged it: what a wake that a change became ready reads, and what the
+// that judged it: what a wake that a change became ready reads, what the
+// readiness=ready listing seeks ([ReadinessBucket]), and what the
 // needs=person listing seeks. A change whose inputs moved since — its row
 // (code_changes.version), its conversation's readiness inputs
 // (code_conversations.readiness_version), its head's checks, or the chart, a

@@ -38,7 +38,11 @@ func stampOf(t *testing.T, body []byte) int {
 // A CODE RECORD IS STAMPED WITH THE LOWEST VERSION THAT READS IT — the
 // tracker's rule: a set version below that is refused, and the base version
 // is what everything carrying nothing new gets, through the production encoder
-// as much as under a stand-in table.
+// as much as under a stand-in table. A new op is its own versioned field, so a
+// viewed record and a viewed key's are stamped ViewedVersion, never the base.
+//
+// Mutation: drop either op's versionedFields row and it is stamped the base,
+// red.
 func TestACodeRecordIsStampedWithTheLowestVersionThatReadsIt(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -66,10 +70,18 @@ func TestACodeRecordIsStampedWithTheLowestVersionThatReadsIt(t *testing.T) {
 		!strings.Contains(err.Error(), "PushBatch.Novel (version 2)") {
 		t.Fatalf("a push stamped 1 carrying a version-2 field encoded: %v", err)
 	}
+	versioned := map[OpKind]int{OpViewed: ViewedVersion, OpViewedKey: ViewedVersion}
 	for _, op := range OpKinds {
 		body, err := Encode(stampRecord(0, op, `{}`))
 		if err != nil {
 			t.Fatalf("the production encoder on a %s: %v", op, err)
+		}
+		if want, isNew := versioned[op]; isNew {
+			if got := stampOf(t, body); got != want {
+				t.Fatalf("the production encoder stamped a %s %d, want %d: a new op is its own versioned field",
+					op, got, want)
+			}
+			continue
 		}
 		if got := stampOf(t, body); got != baseRecordVersion {
 			t.Fatalf("the production encoder stamped a %s carrying no versioned field %d, want the base %d — "+

@@ -60,3 +60,25 @@ func TestACountsQuestionAsksItsScopeAndParts(t *testing.T) {
 		t.Errorf("repo_facts=yes answered %v having read %d, want bad_params", err, len(none.asked))
 	}
 }
+
+// THE QUEUE PART IS ASKED BY NAME, alone or beside another: `parts=queue` asks the queue's
+// live entries and nothing else, `parts=changes,queue` both.
+// Mutation: map `queue` onto another key, or drop it from CountsQuery.Ask.
+func TestTheQueuePartIsAskedByName(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		parts string
+		want  gitlet.CountsQuery
+	}{
+		{"queue", gitlet.CountsQuery{Queue: true}},
+		{"changes,queue", gitlet.CountsQuery{Changes: true, Queue: true}},
+	} {
+		stub := &stubCode{}
+		if _, err := askNative(t, queries.Sources{Code: stub}, "code_counts", map[string]any{"parts": tc.parts}); err != nil {
+			t.Fatalf("parts=%s: %v", tc.parts, err)
+		}
+		if asked := stub.last(); asked.Kind != gitlet.ReadCounts || asked.Counts == nil || *asked.Counts != tc.want {
+			t.Errorf("parts=%s asked %+v, want the parts %+v", tc.parts, asked.Counts, tc.want)
+		}
+	}
+}

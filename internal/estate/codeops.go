@@ -295,7 +295,9 @@ var opCodeConversation = define("code.conversation", opIdempotentWrite, codeDoma
 // asker to the handle by the principal alone (a person whose seat is the
 // handle), so a node behind the company's configuration decides a mark as a
 // current one would, and refusing it there would only send a person's
-// gesture round the walk for nothing.
+// gesture round the walk for nothing. The same op carries a person's gesture
+// over the files of one change they read (gitlet.MarkWrite.Files), on the
+// same terms.
 var opCodeMark = define("code.mark", opIdempotentWrite, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, w gitlet.MarkWrite) (gitlet.MarkResult, error) {
 		if b.Code == nil {

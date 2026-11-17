@@ -155,6 +155,9 @@ const (
 	// own log (internal/inbox), so each domain's are written by a verb of
 	// its own.
 	ActionCodeMarkInbox Action = "code_mark_inbox"
+	// ActionCodeMarkViewed is a person's marks over the files of a change they review: the
+	// operator tool `code_mark_viewed`, kept on the code log beside their inbox's marks.
+	ActionCodeMarkViewed Action = "code_mark_viewed"
 	// ActionArtifactMarkInbox is a person's gesture over their own COMMENT
 	// notices, the artifacts log's half (the operator tool
 	// `artifact_mark_inbox`), under no app: a comment is a relation.
@@ -1415,8 +1418,11 @@ var rules = map[Action]rule{
 	// asked a lead to make. HUMAN-ONLY, since a seat has no inbox to mark —
 	// it is woken, never shown a list — and THE GITLET APP, as Worklet's half
 	// takes the worklet app: a person without it reaches no repository
-	// (ADR-0110), so no code notice is theirs to list, count or mark.
+	// (ADR-0110), so no code notice is theirs to list, count or mark. AND THE
+	// FILES A PERSON MARKED VIEWED, on the same terms.
 	ActionCodeMarkInbox: {class: ClassOwnRecord, app: iam.GrantGitlet, humanOnly: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeMarkViewed: {class: ClassOwnRecord, app: iam.GrantGitlet, humanOnly: true,
 		recency: iam.RecencyAny, assist: AssistApprove},
 	ActionArtifactMarkInbox: {class: ClassOwnRecord, humanOnly: true, recency: iam.RecencyAny,
 		assist: AssistApprove},
