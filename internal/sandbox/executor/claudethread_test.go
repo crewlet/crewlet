@@ -968,16 +968,19 @@ func fewestAllocations(read func()) uint64 {
 	return fewest
 }
 
-// fewestCalls: under -race sync.Pool drops a quarter of puts and a decode makes
-// about five pool round trips, so about one call in four costs only its own
-// objects. The calls are not independent, though: of three hundred measures of
-// one decode under -race, each the fewest of twenty calls, about one in sixty
-// came out one to three objects over the floor, where independent calls would
-// give one in 250. So the fewest of 200 is far likelier than not to reach the
-// floor, but no claim compares two such counts exactly: it allows the measure
-// what the race detector can add, and asks for less than the cost of what it
-// refutes.
-const fewestCalls = 200
+// fewestCalls: under -race sync.Pool drops a quarter of puts, so a call costs
+// only its own objects where none of its pool round trips was dropped, and a
+// line's decode into its facts ([decodeThreadLine]) makes about nineteen: of
+// 5,000 calls of the one TestALineThatIsNoRecordSaysHowTheLoadReadsIt
+// measures, 22 cost only its own 39 objects, one in 230, and 23 more cost one
+// to three over them. So the fewest of 2,000 misses the floor about once in
+// 7,000 measures (e^-8.8), and comes out three or more over it about e^-18 of
+// the time: forty measures of 2,000, of each of the three that test takes,
+// all came out at the floor, where of forty of 200 the decode's reached it in
+// eleven and came out up to six over it. Still, no claim compares two such
+// counts exactly: it allows the measure what the race detector can add, and
+// asks for less than the cost of what it refutes.
+const fewestCalls = 2000
 
 // A LINE THAT IS NO RECORD SAYS HOW THE LOAD READS IT: a line whose JSON fails
 // before any whole value (a record a later write tore into, a line of white
