@@ -7,7 +7,8 @@ import (
 
 // system is what the run is told it is for and how its answer is checked.
 const system = `You are the setup advisor's analyst for a company of AI agents and the people who direct them.
-Read the company's last 7 days with the read tools, then call submit_findings once with the problems you find that
+Read the company's last 7 days with the read tools, calling the ones you need together in your first round (each round
+sends everything read so far again), then call submit_findings once with the problems you find that
 cost the company time, tokens or waiting, and that the advisor's own rules (rule_findings) do not already list.
 
 How each finding is checked before anyone sees it, so write it to pass:
