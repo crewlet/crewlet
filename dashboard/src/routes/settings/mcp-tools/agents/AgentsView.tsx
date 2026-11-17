@@ -29,6 +29,7 @@ import {
   Text,
   Tooltip,
   type DataGridColumn,
+  TableEntityCell,
 } from "@crewlethq/ui";
 import type {
   McpAgentServer,
@@ -42,9 +43,10 @@ import { href, useParam } from "~/app/router.tsx";
 import { listed, plural } from "~/lib/format.ts";
 import { useRest } from "~/lib/useRest.ts";
 import { readServer } from "../api.ts";
-import type { McpData } from "../data.ts";
+import type { McpData, McpView } from "../data.ts";
 import { ServerMark } from "../parts.tsx";
 import { LEVEL, REASON, STATE } from "../words.ts";
+import { plainSeat } from "~/app/frame/cells.tsx";
 
 const accessHref = (server: string) =>
   href(["settings", "mcp-tools", "servers", server], { tab: "access" });
@@ -125,8 +127,11 @@ function AgentsGrid({
   agents,
   servers,
   budget,
+  seat,
 }: {
   agents: readonly McpAgentTools[];
+  /** An agent's badge off the chart, for its face. */
+  seat: McpView["seat"];
   servers: readonly McpMemberServerStatus[];
   /** The engine's budget, for the over-budget mark; whether an agent is over it is the engine's flag. */
   budget: number;
@@ -139,11 +144,7 @@ function AgentsGrid({
       floor: "9rem",
       phoneLead: true,
       sortValue: (a) => a.name,
-      cell: (a) => (
-        <Text as="span" variant="inherit" truncate>
-          {a.name}
-        </Text>
-      ),
+      cell: (a) => <TableEntityCell {...plainSeat({ ...seat(a.seat), name: a.name })} />,
     },
     ...servers.map((s): DataGridColumn<McpAgentTools> => ({
       key: s.name,
@@ -220,7 +221,12 @@ export function AgentsView({ data }: { data: McpData }) {
           <Card.Title>Agents by server</Card.Title>
         </Card.Header>
         {answer.agents.length > 0 ? (
-          <AgentsGrid agents={answer.agents} servers={data.servers} budget={answer.tool_budget} />
+          <AgentsGrid
+            agents={answer.agents}
+            servers={data.servers}
+            budget={answer.tool_budget}
+            seat={data.seat}
+          />
         ) : (
           <Card.Body>
             <Text as="p" variant="body" tone="secondary">

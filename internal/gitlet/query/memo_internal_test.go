@@ -92,6 +92,10 @@ func filled(v reflect.Value, path string, n *int) {
 			filled(s.Index(i), fmt.Sprintf("%s[%d]", path, i), n)
 		}
 		v.Set(s)
+	case reflect.Array:
+		for i := range v.Len() {
+			filled(v.Index(i), fmt.Sprintf("%s[%d]", path, i), n)
+		}
 	case reflect.Map:
 		m := reflect.MakeMap(v.Type())
 		for i := range 2 {
@@ -275,10 +279,10 @@ func spell(ty reflect.Type) string {
 }
 
 // memoShapes is the shape of the answers each memoFormat this build reads was
-// written over: a format names one shape, for ever. page/9 adds a diff's
-// every file's patch to page/8's answers.
+// written over: a format names one shape, for ever. page/10 adds a search
+// hit's matches, context lines and file total to page/9's answers.
 var memoShapes = map[string]string{
-	"page/9": "bbc0015057f6907a",
+	"page/10": "98c7992ac3dd8965",
 }
 
 // AN ANSWER'S SHAPE IS ITS MEMO FORMAT. An entry a node keeps outlives the

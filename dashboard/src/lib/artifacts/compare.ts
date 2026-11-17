@@ -9,8 +9,8 @@
  * a file the engine carried from one version to the next keeps its digest, so
  * two files with one digest are the same bytes whatever else changed.
  *
- * A text file's LINES are compared by the dashboard's one line diff,
- * `lib/lineDiff.ts`, which every diff the dashboard draws compares with; what
+ * A text file's LINES are compared by the design system's `compareLines`,
+ * which every diff the dashboard draws compares with; what
  * stays here is how much of a file is read for it ([MAX_COMPARE_BYTES]).
  */
 

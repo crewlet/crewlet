@@ -27,16 +27,17 @@ import (
 // report cannot grow past its bytes as it is read.
 
 // readJUnit reads the JUnit report r into fs: its failed cases, and the counts
-// its suites state. A report that is no XML, or no JUnit, is an error naming
-// what is wrong, and fs keeps what it named before it.
+// its suites state, its skipped tests among them. A report that is no XML, or
+// no JUnit, is an error naming what is wrong, and fs keeps what it named
+// before it.
 func readJUnit(r io.Reader, fs *failures) error {
 	d := xml.NewDecoder(r)
 	d.Strict = true
 	var (
-		tests, failed int
-		suites        int
-		inCase        bool
-		tc            testCase
+		tests, failed, skipped int
+		suites                 int
+		inCase                 bool
+		tc                     testCase
 	)
 	for {
 		tok, err := d.Token()
@@ -66,6 +67,7 @@ func readJUnit(r io.Reader, fs *failures) error {
 			suites++
 			tests += intAttr(el, "tests")
 			failed += intAttr(el, "failures") + intAttr(el, "errors")
+			skipped += intAttr(el, "skipped")
 		case "testcase":
 			inCase = true
 			tc = testCase{class: attr(el, "classname"), name: attr(el, "name"), file: attr(el, "file"),
@@ -84,7 +86,7 @@ func readJUnit(r io.Reader, fs *failures) error {
 	if suites == 0 {
 		return errors.New("the JUnit report holds no <testsuite>")
 	}
-	fs.tests, fs.failed = tests, failed
+	fs.tests, fs.failed, fs.skipped = tests, failed, skipped
 	return nil
 }
 

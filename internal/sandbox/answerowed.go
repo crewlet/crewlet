@@ -668,9 +668,24 @@ type answerRetry struct {
 	// ([Coordinator.suspectClaim]). Nil for every other series.
 	revive *revival
 
+	// silent is when this node first asked the box's host of the stopped run
+	// this series ends, under that ending, and heard nothing — by this node's
+	// own clock; zero until then, and cleared where the host answers busy (it
+	// is there) ([Coordinator.hostSilence]). Not carried to the seat's next
+	// holder, which counts from its own first unanswered ask, as the fleet's
+	// waiter counts a launch node's absence from its own first sight.
+	silent silence
+
 	// stop cancels the pending attempt, reporting whether it had not yet
 	// started.
 	stop func() bool
+}
+
+// silence is a box's host heard nothing from since an instant of this node's
+// clock, under one ending of the run ([answerRetry.silent]).
+type silence struct {
+	ending string
+	since  time.Time
 }
 
 // revival is a claim an owed answer's series revives, and on what terms.

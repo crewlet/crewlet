@@ -332,10 +332,61 @@ const RecordWithin = 12 * time.Hour
 // member leading the coordination store's position register, may stand from
 // the fleet's — the median of the data nodes' clocks: what the engine's
 // `clock_skew` alarm raises past, and the bound under every rule that judges
-// an instant one machine stamped by another machine's clock — the collector's
-// grace against [RecordWithin], and a retired reference's grace against the
-// longest read of what its row names, each pinned by
-// internal/objstore/references.
+// an instant one machine stamped by another machine's clock:
+//
+//   - the collector's grace (collect.PendingGrace) against [RecordWithin]: a
+//     key one node minted, judged a day old by the collector's clock while a
+//     write may name it for twelve hours by the deciding node's; pinned by
+//     internal/objstore/references;
+//   - a retired reference's grace (gitlet.RetireGrace) against the longest
+//     read of what its row names: the broker's instant on the retirement,
+//     judged by the code-retention duty holder's clock; pinned there too;
+//   - the idle times past which a turn's hold is also recorded
+//     (gitlet.HoldRecordAfter on a scratch repository, gitlet.RefHoldRecordAfter
+//     on a seat's branch): the holding node's clock and the retention pass's,
+//     each against the same broker-stamped activity; pinned there too;
+//   - a ref drop's grace (gitlet.PruneGrace): the broker's instant on the push
+//     that dropped it, judged by the clock of the node expunging the
+//     repository; a policy's edge rather than a margin under a read, so no
+//     inequality pins it, and its doc says what the bound moves it by;
+//   - a seat's push days (the push apply's day rule, internal/gitlet's
+//     apply_push.go): a day forgotten only once a committer's clock has reached
+//     a day beginning a whole company day after it ended, so a committer still
+//     deciding on it stands more than a day behind another; argued at the rule;
+//   - a push history's day series (gitlet.PushDaysKept): the history deletes a
+//     push by the broker's instant on it, and a read's first bound is held to
+//     the history less twice this by the reading node's clock, so a bound the
+//     deletion may have reached is refused rather than counted short;
+//   - a narrowed push history's page (gitlet.PushInstantSkew): a push's
+//     instant, stamped by whichever broker member led the stream, read past
+//     each end of a window it skips to or stops at by twice this, so a push
+//     stamped before one that landed earlier is still met; argued there;
+//   - a capture's and a standby's age (sandbox.SessionCaptureBudget and
+//     standbyBudget): the instant the taking or the standing node's clock
+//     stamped on the run's row, read as still being kept or still standing by
+//     any node until the life or the window and twice this have passed by its
+//     own clock; no wait holds that long on that reading alone, since a turn's
+//     end and a standby count from the moment they first see it, on their own
+//     clocks; argued at each;
+//   - a capture's record still to be answered (sandbox's pastRecordWithin):
+//     the object's key, minted by the clock of the node that spooled it,
+//     refused by the executor log past RecordWithin by its deciding node's
+//     clock, so a reader waits on the record's answer until RecordWithin and
+//     twice this have passed by its own; argued at the rule;
+//   - a box read's admission (sandbox.BoxReadClockAllowance): the asking
+//     node's deadline, stamped by its clock, admitted by the box's host until
+//     twice this past it by the host's own, so a host ahead of its asker by
+//     less than that still takes the read; argued at the allowance;
+//   - a stop's give-up of a silent host (sandbox's Coordinator.hostGivenUp):
+//     the stop's decision, dated by the deciding node's clock, given up by the
+//     node asking the box's host once it is the box timeout and twice this old
+//     by that node's own clock, so it never comes before the box timeout has
+//     passed in real time; argued at the rule.
+//
+// One rule reads this machine's clock against itself: a node's sweep of its
+// spools (sandbox's Coordinator.sweepSpools) ages a spool an hour past the
+// longest a keep may wait to open it, since NTP may step this machine's clock
+// forward by up to this to correct it.
 //
 // # Two readings, and every rule takes the second
 //
@@ -347,19 +398,36 @@ const RecordWithin = 12 * time.Hour
 // fleet's clock disagree by at most this, and any TWO such machines by up to
 // TWICE it — two nodes, or a node and a broker member stamping some other
 // log's records, which on an embedded fleet is a data node the alarm holds
-// too. Every rule bounded here compares two such machines — the node deciding
-// a write against the node running the collector, the node sweeping a retired
-// row against the member that stamped its retirement — so each is held to
-// twice it. The servers of an external NATS cluster are not nodes, and
-// nothing measures them but the one leading the register: their clocks are
-// the operator's to keep (docs/guides/deployment.md).
+// too. Every rule bounded here compares two machines — the node deciding a
+// write against the node running the collector, the node sweeping a retired
+// row against the member that stamped its retirement, the node holding a
+// repository against the node passing over it, one committer against another,
+// a push history's reader against the broker's members, the node reading a
+// capture against the node that took it or stood by for it, the node asking a
+// box read against the box's host, the node asking a stopped run's host
+// against the node that decided the stop — so each is held to twice it. Not
+// every one of them is a machine the alarm holds: a rule judged on the clock
+// of a node that runs seats, a turn's hold on a repository, a capture's or a
+// standby's age, a box read's admission or a stop's give-up, rests on a clock
+// the alarm measures only where that node holds data too, since a node without
+// the data role writes no row to the register. The servers of an external NATS
+// cluster are not nodes, and nothing measures them but the one leading the
+// register. Those clocks are the operator's to keep, so NTP runs on every node
+// and every server, not only on the machines the alarm watches
+// (docs/guides/deployment.md).
 //
 // AN HOUR: NTP keeps every machine within milliseconds, so a node an hour off
 // is one whose clock nothing keeps — a host with no NTP client, a virtual
 // machine restored from a snapshot — and the hour, doubled for two machines,
 // still fits inside each rule's margin: the collector's grace exceeds
-// RecordWithin by twelve hours, and a retired pack's grace the longest read of
-// the largest bundle a row names by two hours and thirty-nine minutes.
+// RecordWithin by twelve hours, a retired pack's grace the longest read of the
+// largest bundle a row names by two hours and thirty-nine minutes, each hold
+// threshold falls short of the idle window it is defined from by exactly the
+// two hours, and a seat's push days leave a whole day against those two hours;
+// a ref drop's fourteen days, a policy's edge, move by at most them; and a
+// push history's day series and narrowed pages, a capture's and a standby's
+// age, a capture's record still to be answered, a box read's admission and a
+// stop's give-up allow exactly the two hours, the spool sweep the one.
 const AssumedClockSkew = time.Hour
 
 // identifier is what a declared table or column may be spelled as, since each

@@ -18,14 +18,22 @@
  */
 
 import { useMemo } from "react";
-import { Card, EmptyValue, TableDateCell, TableKeyCell, TableTextCell } from "@crewlethq/ui";
+import {
+  Card,
+  EmptyValue,
+  TableDateCell,
+  TableKeyCell,
+  TableTextCell,
+  TableEntityCell,
+} from "@crewlethq/ui";
 import { TrashGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { indexOrg } from "~/lib/seats.ts";
+import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { plainText } from "~/lib/markdownText.ts";
 import { pageCount } from "~/lib/work.ts";
 import type { WorkActivityAnswer, WorkActivityRecord } from "~/protocol/index.ts";
+import { plainSeat } from "~/app/frame/cells.tsx";
 
 /**
  * What was PURGED, which is the half of the trash with no rows.
@@ -119,13 +127,12 @@ export function PurgeBand({
             header: "Who",
             shrink: true,
             drop: 1,
-            cell: (record) => (
-              <TableTextCell>
-                {record.actor
-                  ? (index.byHandle.get(record.actor)?.name ?? record.actor)
-                  : "the engine"}
-              </TableTextCell>
-            ),
+            cell: (record) =>
+              record.actor ? (
+                <TableEntityCell {...plainSeat(seatLookup(index)(record.actor))} />
+              ) : (
+                <TableTextCell>the engine</TableTextCell>
+              ),
           },
         ]}
       />

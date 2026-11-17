@@ -50,9 +50,9 @@ import { useNow } from "~/lib/clock.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type { CodeChangeName, CodeCommitAnswer, CodePushRun } from "~/protocol/index.ts";
 import { subjectOf } from "../repo/History.tsx";
-import { ChangeStateTag } from "../Changes.tsx";
+import { ChangeStateTag } from "../ChangeRow.tsx";
 import { CodeNotFound } from "../NotFound.tsx";
-import { Byline, RefName } from "../ui.tsx";
+import { Byline, Face, RefName } from "../ui.tsx";
 import { CommitWrites } from "./CommitWrites.tsx";
 import { DiffFiles } from "./DiffFiles.tsx";
 import "~/styles/gitlet.css";
@@ -232,6 +232,7 @@ function Pushed({ answer }: { answer: CodeCommitAnswer }) {
                 label: "Pushed by",
                 value: (
                   <>
+                    {seat && <Face who={seat} size="text" />}{" "}
                     {seat ? seatBadge(seat).name : (by.principal.operator_id ?? "")}
                     {by.principal.operator_id && seat && (
                       <span className="muted mono"> via {by.principal.operator_id}</span>

@@ -9,14 +9,15 @@
  */
 
 import { useState } from "react";
-import { Button, Text, useToast } from "@crewlethq/ui";
+import { Button, Card, Text, useToast } from "@crewlethq/ui";
 import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import type { McpMemberServerStatus } from "~/contract/mcp.ts";
 import { setEnabled, restartServer } from "../api.ts";
 import { useServerDetail, type McpData } from "../data.ts";
 import type { useFlow } from "../parts.tsx";
 import { writeRefusalWords } from "../words.ts";
-import { HeldCalls } from "../server/OverviewTab.tsx";
+import { useKeptCalls } from "../server/OverviewTab.tsx";
+import { ApprovalRow } from "./ApprovalCard.tsx";
 import { DriftDialog } from "./DriftDialog.tsx";
 import { RemoveDialog } from "./RemoveDialog.tsx";
 import { RevokeDialog, SignInDialog } from "./SignInDialog.tsx";
@@ -130,10 +131,12 @@ function WaitingCalls({
   onClose: () => void;
 }) {
   const detail = useServerDetail(server.name);
+  const kept = useKeptCalls(server, data);
   const waiting =
     data.answer?.reading === "admin"
       ? data.answer.approvals.filter((a) => a.server === server.name && a.status === "waiting")
       : [];
+  const tools = detail.data?.tools;
   return (
     <Modal
       open
@@ -146,7 +149,23 @@ function WaitingCalls({
         {waiting.length === 0 ? (
           <Text as="p">Nothing on {server.title} is waiting for an answer.</Text>
         ) : null}
-        {detail.data ? <HeldCalls server={server} detail={detail.data} data={data} /> : null}
+        {/* ONE LIST, AND NO CARD TITLE: the dialog's title says what the rows are. */}
+        {tools && kept.length > 0 ? (
+          <Card padding="none">
+            <ul className="decision-list">
+              {kept.map((a) => (
+                <ApprovalRow
+                  key={a.id}
+                  approval={a}
+                  server={server}
+                  tool={tools.find((t) => t.name === a.tool) ?? null}
+                  seatName={data.seatName}
+                  onAnswered={() => data.reload()}
+                />
+              ))}
+            </ul>
+          </Card>
+        ) : null}
       </div>
     </Modal>
   );

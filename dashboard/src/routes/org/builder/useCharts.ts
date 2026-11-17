@@ -15,6 +15,7 @@ import { useNavigator } from "~/app/router.tsx";
 import { chartInputs, reporting, structure, type Reporting, type Structure } from "./chartModel.ts";
 import type { BuilderState } from "./model/reducer.ts";
 import type { OpenScreen } from "./nodeActions.tsx";
+import { useServedLook } from "../structureLive.tsx";
 
 /**
  * The structure chart of the current draft. A reading of the draft, the saved
@@ -23,18 +24,20 @@ import type { OpenScreen } from "./nodeActions.tsx";
  */
 export function useStructure(state: BuilderState): Structure {
   const { draft, baseDraft, check, generation } = state;
+  const served = useServedLook();
   return useMemo(
-    () => structure(chartInputs({ draft, baseDraft, check, generation })),
-    [draft, baseDraft, check, generation],
+    () => structure(chartInputs({ draft, baseDraft, check, generation }, served)),
+    [draft, baseDraft, check, generation, served],
   );
 }
 
 /** The reporting chart of the current draft, on the same terms as [useStructure]. */
 export function useReporting(state: BuilderState): Reporting {
   const { draft, baseDraft, check, generation } = state;
+  const served = useServedLook();
   return useMemo(
-    () => reporting(chartInputs({ draft, baseDraft, check, generation })),
-    [draft, baseDraft, check, generation],
+    () => reporting(chartInputs({ draft, baseDraft, check, generation }, served)),
+    [draft, baseDraft, check, generation, served],
   );
 }
 

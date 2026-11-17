@@ -96,6 +96,25 @@ type NodeGate interface {
 // ([coord.BackupPointKey]), so acknowledging another log leaves this one
 // standing: under `backup_floor: operator` the procedure is one of these per
 // log, and each log's trim reads its own.
+//
+// `?taken_at=` IS WHEN THE COPY WAS TAKEN, an RFC 3339 instant, and it is what
+// the point records as [coord.BackupPoint.At]. The acknowledgement is given
+// after the copy reached wherever it was going, often hours later, and the
+// backup-age alarm and the no-verified-backup notice age the COPY: stamped
+// with the time of the call, an acknowledgement of a copy days old cleared
+// both as though it were fresh. So the instant has no default, and one later
+// than this node's clock is refused rather than recorded, with no allowance
+// for a clock that runs ahead: an instant past now is a copy younger than any
+// could be, which overstates the one thing the field exists to state, and an
+// operator whose own clock leads can give the instant by this node's, which
+// the refusal reads out. The zero instant is refused with a missing one: it
+// says nothing about any copy, and the register would refuse it anyway.
+//
+// AN OLDER COPY MAY REPLACE A NEWER ONE. The point under this log is the
+// operator's newest ASSERTION, and an operator who finds the newer copy bad
+// has to be able to fall back to an older one. Either way the record states
+// the copy the operator vouches for, and moving it back is the conservative
+// direction: the trim deletes less, and the backup's age reads older.
 func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 	stream := r.URL.Query().Get("stream")
 	position, err := strconv.ParseUint(r.URL.Query().Get("position"), 10, 64)
@@ -104,6 +123,28 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 			"detail": "name the stream and the sequence your copy reaches. An " +
 				"acknowledgement moves the floor the trim deletes against, so " +
 				"there's no value to guess",
+		})
+		return
+	}
+	raw := r.URL.Query().Get("taken_at")
+	takenAt, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil || takenAt.IsZero() {
+		// THE VALUE AS RECEIVED, because the commonest way to send a valid
+		// instant and have it refused is an offset's '+' left unescaped in
+		// the query, which arrives as a space.
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeTakenAtRequired, map[string]string{
+			"detail": fmt.Sprintf("name when your copy was taken in taken_at, as an RFC 3339 "+
+				"instant such as 2026-11-17T03:00:00Z (received %q; an offset's + is sent as %%2B). "+
+				"The backup's age is measured from it, so there's no value to guess", raw),
+		})
+		return
+	}
+	takenAt = takenAt.UTC()
+	if now := a.now().UTC(); takenAt.After(now) {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeTakenAtInFuture, map[string]string{
+			"detail": fmt.Sprintf("taken_at %s is later than this node's clock, which reads %s. "+
+				"Give when the copy was taken, by this node's clock",
+				takenAt.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)),
 		})
 		return
 	}
@@ -130,7 +171,7 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 	by := iam.ActorFor(caller)
 	point := coord.BackupPoint{
 		Owner: coord.OperatorBackupOwner,
-		At:    time.Now().UTC(),
+		At:    takenAt,
 		Streams: map[string]coord.Position{
 			stream: {Stream: stream, Generation: generation, Seq: position},
 		},
@@ -145,9 +186,9 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Info("retention_acknowledged", "by", by.Name, "operator", by.OperatorID,
-		"stream", stream, "position", position, "generation", generation)
+		"stream", stream, "position", position, "generation", generation, "taken_at", takenAt)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"stream": stream, "position": position, "generation": generation,
+		"stream": stream, "position": position, "generation": generation, "taken_at": takenAt,
 	})
 }
 

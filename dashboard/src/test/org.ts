@@ -15,6 +15,9 @@
  * `lead:` names, as the engine reads it. A suite whose subject IS a reporting
  * line, an inherited lead or a `unit:` placement writes its `derived` block
  * out in full, as `test/orgchart.ts` does.
+ *
+ * AN AGENT IS SERVED A LOOK, as the engine serves every agent seat one: a
+ * fixture agent that names none is given [SERVED_LOOK].
  */
 
 import type { Derived, DerivedSeat, DerivedUnit, OrgSeat, OrgUnit } from "~/protocol/types.ts";
@@ -25,10 +28,29 @@ interface Tree {
   derived?: Derived;
 }
 
+/** The look a fixture agent that names none is served. */
+export const SERVED_LOOK = { character: "crewlet", color: "purple" } as const;
+
+/** The tree with a look on every agent seat that names none. */
+function served<T extends Tree>(org: T): T {
+  const role = (raw: OrgSeat): OrgSeat =>
+    raw.kind === "human" || raw.avatar ? raw : { ...raw, avatar: { ...SERVED_LOOK } };
+  const unit = (raw: OrgUnit): OrgUnit => ({
+    ...raw,
+    ...(raw.roles ? { roles: raw.roles.map(role) } : {}),
+    ...(raw.children ? { children: raw.children.map(unit) } : {}),
+  });
+  return {
+    ...org,
+    ...(org.roles ? { roles: org.roles.map(role) } : {}),
+    ...(org.units ? { units: org.units.map(unit) } : {}),
+  };
+}
+
 /** The fixture with its derived block; one that writes its own keeps it. */
 export function withDerived<T>(fixture: T): T & { derived: Derived } {
-  const org = fixture as Tree;
-  if (org.derived) return fixture as T & { derived: Derived };
+  const org = served(fixture as Tree);
+  if (org.derived) return org as T & { derived: Derived };
   const seats: DerivedSeat[] = [];
   const units: DerivedUnit[] = [];
   const handles = new Set<string>();

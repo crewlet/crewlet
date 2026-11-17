@@ -8,6 +8,9 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, expect, test, vi } from "vitest";
 import type { AssistantCardEvent, AssistantTableCard } from "~/contract/assistant.ts";
 import { Router } from "~/app/router.tsx";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
+import { withDerived } from "~/test/org.ts";
 import { CardBlock, type CardHandlers } from "./blocks.tsx";
 import { Answer, TableRows } from "./reads.tsx";
 import { sourcesOf } from "./sources.tsx";
@@ -77,22 +80,46 @@ const waiting = event({
   },
 });
 
+/** The chart a read's seat chip draws its face from: `qa` is an agent with a look. */
+function chart() {
+  const store = new Store();
+  store.applyOrg(
+    withDerived({
+      name: "Nimbus",
+      roles: [{ name: "QA", handle: "qa", avatar: { character: "flasklet", color: "amber" } }],
+    }),
+  );
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: () => Promise<unknown> }).query = () => Promise.resolve({});
+  return { store, socket };
+}
+
 function draw(text: string, cards: AssistantCardEvent[], on = handlers()) {
   render(
-    <Router>
-      <Answer
-        text={text}
-        dimmed={false}
-        cards={cards}
-        card={(e) => (
-          <CardBlock key={e.card_id} event={e} local={undefined} on={on} opened={false} />
-        )}
-        on={on}
-      />
-    </Router>,
+    <ClientContext.Provider value={chart()}>
+      <Router>
+        <Answer
+          text={text}
+          dimmed={false}
+          cards={cards}
+          card={(e) => (
+            <CardBlock key={e.card_id} event={e} local={undefined} on={on} opened={false} />
+          )}
+          on={on}
+        />
+      </Router>
+    </ClientContext.Provider>,
   );
   return on;
 }
+
+// A SEAT'S RECORD IS ITS FACE: an agent's character, never one glyph for every seat.
+test("a seat's record chip wears the seat's face", () => {
+  draw("**QA** is idle.", [qa]);
+  const face = document.querySelector(".crewlet-avatar");
+  expect(face?.classList.contains("crewlet-avatar--character")).toBe(true);
+  expect(face?.classList.contains("crewlet-avatar--hue-amber")).toBe(true);
+});
 
 test("the first mention of a read record is its chip, and later ones stay words", () => {
   draw("**GOP-11** is QA asking whether to hold the beta. Hold GOP-11 if unsure.", [crash(), qa]);

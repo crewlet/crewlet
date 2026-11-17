@@ -25,6 +25,7 @@ import {
 import { peelPunctuation } from "@crewlethq/ui";
 import { ACTIONS } from "~/contract/actions.ts";
 import { AGENT_TABS, SECTION_TABS } from "~/routes/agents/seat/profile.ts";
+import { CHANGE_TABS } from "~/routes/gitlet/paths.ts";
 import { FRAMELESS, WORKSPACES } from "./nav.ts";
 import { resolves } from "./routes.ts";
 
@@ -1130,6 +1131,59 @@ test("the seat-tab reading sees both link spellings", () => {
   ).toEqual(["cost"]);
   // Another object's tab is not a seat's.
   expect(read('href(["worklet", key], { tab: "turns" });')).toEqual([]);
+});
+
+/** Each `tab` literal a change link names: `changeHref(r, n, { tab })` or `href(changePath(…), { tab })`. */
+function changeTabLinks(text: string, lang: Lang): { tab: string; at: number }[] {
+  const out: { tab: string; at: number }[] = [];
+  const tabOf = (node: Node | undefined): void => {
+    if (node?.type !== "ObjectExpression") return;
+    for (const prop of node.properties as Node[]) {
+      if (prop.type !== "Property") continue;
+      const key = prop.key as Node;
+      const name = key.type === "Identifier" ? String(key.name) : stringValue(key);
+      const value = stringValue(prop.value as Node);
+      if (name === "tab" && value !== null) out.push({ tab: value, at: prop.start });
+    }
+  };
+  const named = (node: Node | undefined, name: string) =>
+    node?.type === "CallExpression" &&
+    (node.callee as Node).type === "Identifier" &&
+    (node.callee as Node).name === name;
+  walk(parse(text, lang), (n) => {
+    if (n.type !== "CallExpression") return;
+    const args = n.arguments as Node[];
+    if (named(n, "changeHref")) tabOf(args[2]);
+    if (named(n, "href") && named(args[0], "changePath")) tabOf(args[1]);
+  });
+  return out;
+}
+
+// A CHANGE'S PAGE LANDS AN UNKNOWN TAB ON ITS CONVERSATION (`useTab`), so a stale key is silent.
+test("every link to a change names a tab its page has", () => {
+  const tabs = new Set<string>(CHANGE_TABS);
+  const stale: string[] = [];
+  let links = 0;
+  for (const mod of modules()) {
+    if (mod.lang === "dts") continue;
+    const line = lineOf(mod.text);
+    for (const link of changeTabLinks(mod.text, mod.lang)) {
+      links++;
+      if (!tabs.has(link.tab)) stale.push(`${mod.path}:${line(link.at)}: tab=${link.tab}`);
+    }
+  }
+  expect(stale, "these links open a tab no change has, which lands on Conversation").toEqual([]);
+  // NOT VACUOUS: changes are linked to on a named tab somewhere.
+  expect(links).toBeGreaterThan(0);
+});
+
+test("the change-tab reading sees both link spellings", () => {
+  const read = (text: string) => changeTabLinks(text, "tsx").map((l) => l.tab);
+  expect(read('changeHref(repo, n, { tab: "files", rev: 2 });')).toEqual(["files"]);
+  expect(read('href(changePath(repo, n), { tab: "commits" });')).toEqual(["commits"]);
+  // A repository's tab is not a change's.
+  expect(read('repoHref(repo, { tab: "commits" });')).toEqual([]);
+  expect(read('href(repoPath(repo), { tab: "commits" });')).toEqual([]);
 });
 
 // THE PAGE BAR'S CONTROLS ARE ONE SIZE. Invite person, Add service account

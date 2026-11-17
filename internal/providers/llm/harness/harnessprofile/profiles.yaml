@@ -4095,7 +4095,7 @@ hermes:
 
 pi:
   binary: pi
-  # `@earendil-works/pi-harness`. The project moved from Mario Zechner's
+  # `@earendil-works/pi-coding-agent`. The project moved from Mario Zechner's
   # `@mariozechner` scope to Earendil Works, so the older package name is a
   # different, frozen thing.
   #

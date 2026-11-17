@@ -20,9 +20,10 @@
  * component renders rather than about how it is spelled.
  */
 
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
-import { ScreenLink } from "./dialogParts.tsx";
+import { NodeProblems, ScreenLink } from "./dialogParts.tsx";
+import type { PlacedProblem } from "./model/problems.ts";
 
 afterEach(cleanup);
 
@@ -66,5 +67,50 @@ describe("ScreenLink", () => {
     // pass just as well.
     const { container } = render(<ScreenLink to="integrations">Open Integrations</ScreenLink>);
     expect(container.querySelector("a")!.getAttribute("href")).toContain("integrations");
+  });
+});
+
+describe("NodeProblems", () => {
+  const placed = (severity: PlacedProblem["severity"], message: string): PlacedProblem =>
+    ({
+      severity,
+      kind: "advisory",
+      message,
+      node: null,
+      field: [],
+      link: "schedules",
+      source: {},
+    }) as unknown as PlacedProblem;
+
+  test("warnings are an advisory: quiet, one line each with its link", () => {
+    const { container } = render(
+      <NodeProblems problems={[placed("warning", "Runs 24 times a day")]} />,
+    );
+    const callout = container.querySelector(".crewlet-callout")!;
+    expect(callout.className).toContain("crewlet-callout--quiet");
+    expect(callout.querySelector(".crewlet-notice-list--compact")).not.toBeNull();
+    expect(callout.querySelector("a")!.textContent).toBe("Open Schedules");
+  });
+
+  test("a titled warning is its short title, with the engine's sentence opened under it", () => {
+    const warning = {
+      ...placed("warning", "Learning runs on the same model as the agent's own work."),
+      source: { title: "Agents that learn on their main model" },
+    } as unknown as PlacedProblem;
+    const { getByRole, getByText } = render(<NodeProblems problems={[warning]} />);
+    const row = getByRole("button", { name: "Agents that learn on their main model" });
+    expect(getByText(/Learning runs on/).closest("[hidden]")).not.toBeNull();
+    fireEvent.click(row);
+    expect(getByText(/Learning runs on/).closest("[hidden]")).toBeNull();
+  });
+
+  test("a refusal stays loud: tinted, announced and in full", () => {
+    const { container } = render(
+      <NodeProblems problems={[placed("problem", "Cron is not valid")]} />,
+    );
+    const callout = container.querySelector(".crewlet-callout")!;
+    expect(callout.className).not.toContain("crewlet-callout--quiet");
+    expect(callout.getAttribute("role")).toBe("alert");
+    expect(callout.querySelector(".crewlet-notice-list--compact")).toBeNull();
   });
 });

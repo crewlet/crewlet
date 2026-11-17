@@ -32,8 +32,13 @@ import type { WorkFieldDef, WorkProjectTag, WorkTypeDef } from "~/protocol/index
 afterEach(cleanup);
 
 const SEATS = [
-  { handle: "ada", name: "Ada Okonkwo" },
-  { handle: "rui", name: "Rui Santos" },
+  {
+    handle: "ada",
+    name: "Ada Okonkwo",
+    kind: "agent" as const,
+    avatar: { character: "foxlet", color: "amber" } as const,
+  },
+  { handle: "rui", name: "Rui Santos", kind: "human" as const, avatar: null },
 ];
 
 const TYPES: WorkTypeDef[] = [
@@ -432,4 +437,17 @@ test("finding a field narrows the list, and says so when nothing matches", () =>
   fireEvent.change(find, { target: { value: "nothing by that name" } });
   expect(offered()).toEqual([]);
   expect(screen.getByText("No field by that name.")).toBeTruthy();
+});
+
+// A FILTER BY PERSON SHOWS WHO: each seat beside its face as it is served, an
+// agent its character and a person their initials, and Unassigned the empty mark.
+test("the assignee rows draw each seat's face and Unassigned the empty mark", () => {
+  openMenu();
+  fireEvent.click(row("Assignee"));
+  expect(row("Unassigned").querySelector(".seat-nobody")).not.toBeNull();
+  const agent = row("Ada Okonkwo").querySelector(".crewlet-avatar")!;
+  expect(agent.classList.contains("crewlet-avatar--character")).toBe(true);
+  const person = row("Rui Santos").querySelector(".crewlet-avatar")!;
+  expect(person.classList.contains("crewlet-avatar--character")).toBe(false);
+  expect(person.textContent).toBe("RS");
 });

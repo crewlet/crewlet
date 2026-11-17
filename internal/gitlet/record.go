@@ -74,7 +74,11 @@ import (
 //   - 4: a person's viewed marks on a change's files, and the key a
 //     repository's are digested under ([OpViewed], [OpViewedKey],
 //     [ViewedVersion]).
-const RecordVersion = ViewedVersion
+//   - 5: how many commits a push a rule refused offered ([OfferedVersion]).
+//   - 6: a check's test counts, its output's lines and whether its tail
+//     begins inside one ([CheckCountsVersion]).
+//   - 7: the train a failed check's ejection failed on ([TestedInVersion]).
+const RecordVersion = TestedInVersion
 
 // WorkingForVersion is the version from which a record carries whom an
 // agent's write was made for — on a routing beside its actor, or beside none
@@ -95,6 +99,18 @@ const OwnedPathsVersion = 3
 // ViewedVersion is the version from which a code record may be a person's viewed marks ([OpViewed])
 // or the key a repository's are digested under ([OpViewedKey]).
 const ViewedVersion = 4
+
+// OfferedVersion is the version from which a push's attempt carries how many commits it offered
+// (code_pushes.offered); a record below it keeps no count.
+const OfferedVersion = 5
+
+// CheckCountsVersion is the version from which a check's ending carries its test counts and its
+// output's lines (code_checks.tests_*, log_lines, tail_cut); an ending below it keeps none.
+const CheckCountsVersion = 6
+
+// TestedInVersion is the version from which a failed check's ejection names the train it failed on
+// (code_queue.ejected's tested_in); an ejection below it names none.
+const TestedInVersion = 7
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped
@@ -135,6 +151,16 @@ const GateRecordVersion = 1
 //
 // A PERSON'S VIEWED MARKS AND A REPOSITORY'S VIEWED KEY are new ops, so each
 // row names `op` and its value.
+//
+// THE COMMITS AN ATTEMPT OFFERED are version 5 on a push alone, at `mutation.pushes.offered`; an
+// attempt that offered none carries nothing new and stays at 1.
+//
+// A CHECK'S COUNTS are version 6 on an ending alone: its JUnit report's tests at `mutation.tests`,
+// its output's lines at `mutation.log_lines` and its tail's cut at `mutation.tail_cut`, each a row
+// of its own, a field's version being the field's.
+//
+// THE TRAIN AN EJECTION FAILED ON is version 7, on an eject alone, at `mutation.entries.tested_in`,
+// stamped by the home.
 var versionedFields = statelog.RecordFields{
 	{Name: "ChangeRouting.WorkingFor", Since: WorkingForVersion,
 		Path: []string{"mutation", "routing", "working_for"}},
@@ -153,6 +179,16 @@ var versionedFields = statelog.RecordFields{
 		Path: []string{"mutation", "asked", "paths_omitted"}},
 	{Name: "RecordEnvelope.Op viewed", Since: ViewedVersion, Path: []string{"op"}, Equals: string(OpViewed)},
 	{Name: "RecordEnvelope.Op viewed_key", Since: ViewedVersion, Path: []string{"op"}, Equals: string(OpViewedKey)},
+	{Name: "PushEntry.Offered", Since: OfferedVersion, Op: string(OpPush),
+		Path: []string{"mutation", "pushes", "offered"}},
+	{Name: "CheckFinished.Tests", Since: CheckCountsVersion, Op: string(OpCheckFinished),
+		Path: []string{"mutation", "tests"}},
+	{Name: "CheckFinished.LogLines", Since: CheckCountsVersion, Op: string(OpCheckFinished),
+		Path: []string{"mutation", "log_lines"}},
+	{Name: "CheckFinished.TailCut", Since: CheckCountsVersion, Op: string(OpCheckFinished),
+		Path: []string{"mutation", "tail_cut"}},
+	{Name: "Ejection.TestedIn", Since: TestedInVersion, Op: string(OpEject),
+		Path: []string{"mutation", "entries", "tested_in"}},
 }
 
 // VersionedFields is the table, for the conformance suite.

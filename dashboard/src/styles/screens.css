@@ -4831,11 +4831,9 @@ span.list-position-step {
   color: var(--color-feedback-danger-ink);
   font-weight: var(--font-weight-medium);
 }
-/* NOBODY IS A STATE, and the one worth seeing: an unassigned item routes to
-   the project's lead, and a project with no lead routes to nobody at all. A
-   dashed empty square rather than a blank, so a column of unclaimed work
-   reads as unclaimed rather than as a rendering that failed. */
-.work-nobody {
+/* NOBODY AS A FACE (`NobodyFace`): a dashed empty square the size of the
+   smallest badge, on an unassigned task and a picker's "Nobody" choice. */
+.seat-nobody {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -9974,7 +9972,7 @@ a.live-row:hover {
 
 /* The History tab's comparison of two versions (uilet's VersionCompare, which
    lays the two sides out itself), across both columns, and the files lens
-   inside it, whose diffs are `components/DiffView.tsx`'s. */
+   inside it, whose diffs are the kit's `DiffView`. */
 .artifact-compare-row {
   grid-column: 1 / -1;
   min-width: 0;

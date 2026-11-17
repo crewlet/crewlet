@@ -38,10 +38,10 @@
  * of those writes: it takes no change but its restore. Every write is confirmed, never
  * optimistic: the page is redrawn from the read the write's floor brings.
  * The header's state pill says `importing` while an import runs, and the
- * About rail how far it went and where its mirrors stand.
+ * rail's About how far it went; its Mirror where its mirrors stand.
  */
 
-import { Fragment, useId, type ReactNode } from "react";
+import { Fragment, useId, useState, type ReactNode } from "react";
 import {
   AsideLayout,
   ButtonLink,
@@ -89,18 +89,20 @@ import {
   purgeStanding,
   pushMirrorStanding,
 } from "~/lib/repoWrites.ts";
-import type { CodeOwner, CodeRepoDetail } from "~/protocol/index.ts";
+import type { QueryResult } from "~/lib/useQuery.ts";
+import type { CodeCountsAnswer, CodeOwner, CodeRepoDetail } from "~/protocol/index.ts";
 import { ChangeList } from "../ChangeList.tsx";
 import { CodeNotFound } from "../NotFound.tsx";
 import { PushHistory } from "../Pushes.tsx";
 import { RepoChecks } from "../checks/RepoChecks.tsx";
 import { REPO_TABS, changesHref, compareHref, repoHref, type RepoTab } from "../paths.ts";
-import { About, managedWord, readByWord, searchWord } from "./About.tsx";
+import { RootDocs, managedWord, readByWord, searchWord } from "./About.tsx";
 import { Files } from "./Files.tsx";
 import { Branches } from "./Branches.tsx";
 import { Commits } from "./History.tsx";
 import { AddPathOwnerButton, PathOwnerControls } from "./PathOwners.tsx";
 import { ProtectButton, RuleControls } from "./Protect.tsx";
+import { RepoRail } from "./Rail.tsx";
 import { DeleteRepoControl, DeletedNotice } from "./RepoLife.tsx";
 import {
   ArchiveControl,
@@ -111,8 +113,8 @@ import {
   SearchModeControl,
 } from "./RepoWrites.tsx";
 import { useDefaultChecks } from "./marks.ts";
-import { useRevisions } from "./refs.tsx";
 import "~/styles/gitlet.css";
+import { Face } from "../ui.tsx";
 
 /**
  * How often the repository's row is read again while its page is open: a
@@ -149,12 +151,7 @@ export function RepositoryPage({ repo }: { repo: string }) {
   const named = isRepoName(repo);
   const read = useCodeQuery("code_repo", { name: repo }, { enabled: named, pollMs: REPO_POLL_MS });
   const [tab, setTab] = useTab<RepoTab>("tab", REPO_TABS);
-  // THE BRANCHES AND TAGS ITS PICKERS LIST, read here — once, under the
-  // repository's current name — while a tab that draws a picker is open, so a
-  // move between the root and a path, or between Code and Commits, asks
-  // neither listing again (`refs.tsx`'s useRevisions).
   const current = read.data?.repo?.name ?? "";
-  const revisions = useRevisions(current, current !== "" && (tab === "code" || tab === "commits"));
   // CHANGES' COUNT AND CHECKS' MARKER on every tab: the live changes, and the default head's verdict.
   const counts = useCodeQuery(
     "code_counts",
@@ -235,9 +232,9 @@ export function RepositoryPage({ repo }: { repo: string }) {
         aria-labelledby={tabId(panelId, tab)}
         tabIndex={0}
       >
-        {tab === "code" && <Code repo={detail} revisions={revisions} />}
+        {tab === "code" && <Code repo={detail} cloneURL={read.data?.clone_url} counts={counts} />}
         {tab === "changes" && <RepoChanges repo={detail} />}
-        {tab === "commits" && <Commits repo={detail} revisions={revisions} />}
+        {tab === "commits" && <Commits repo={detail} />}
         {tab === "branches" && <Branches repo={detail} />}
         {tab === "pushes" && <PushHistory repo={detail.name} />}
         {tab === "checks" && <RepoChecks repo={detail.name} />}
@@ -432,29 +429,33 @@ function RepoHeader({ repo }: { repo: CodeRepoDetail }) {
 
 /**
  * The CODE tab: the files at the revision the address names. At the
- * repository's root they stand beside the About rail, as a code host's
+ * repository's root they stand beside its rail (`Rail.tsx`), as a code host's
  * landing does; under a path — a directory or a file, read wide — the files
  * take the page's width.
  */
 function Code({
   repo,
-  revisions,
+  cloneURL,
+  counts,
 }: {
   repo: CodeRepoDetail;
-  revisions: ReturnType<typeof useRevisions>;
+  cloneURL: string | undefined;
+  counts: QueryResult<CodeCountsAnswer>;
 }) {
-  const ownerName = useOwnerName();
   const [path] = useParam("path", "", "filter");
-  const files = <Files repo={repo} revisions={revisions} />;
+  const [docs, setDocs] = useState("");
+  const files = <Files repo={repo} cloneURL={cloneURL} />;
   if (path !== "") return files;
   return (
-    <AsideLayout
-      fit="page"
-      asideLabel="About this repository"
-      aside={<About repo={repo} ownerName={ownerName} />}
-    >
-      {files}
-    </AsideLayout>
+    <RootDocs.Provider value={setDocs}>
+      <AsideLayout
+        fit="page"
+        asideLabel="About this repository"
+        aside={<RepoRail repo={repo} counts={counts} docs={docs} pollMs={REPO_POLL_MS} />}
+      >
+        {files}
+      </AsideLayout>
+    </RootDocs.Provider>
   );
 }
 
@@ -463,7 +464,7 @@ const REPO_CHANGE_STATES = CHANGE_STATE_FILTERS;
 
 /**
  * The changes proposed to this repository: Gitlet › Changes narrowed to it,
- * in the grid every listing of changes draws — open until the reader picks
+ * in Gitlet's change row, open until the reader picks
  * another state, and every state offered, since the repository narrows the
  * engine's walk.
  */
@@ -619,7 +620,15 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
                   label: "Default branch",
                   value: <span className="mono">{repo.default_branch}</span>,
                 },
-                { label: "Owner", value: ownerName(repo.owner) },
+                {
+                  label: "Owner",
+                  value: (
+                    <>
+                      {repo.owner.kind === "seat" && <Face who={repo.owner.ref} size="text" />}{" "}
+                      {ownerName(repo.owner)}
+                    </>
+                  ),
+                },
                 { label: "Read by", value: readByWord(repo.visibility) },
                 { label: "Search", value: searchWord(repo.search) },
                 { label: "Managed by", value: managedWord(repo.managed_by) },
@@ -675,7 +684,10 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
             {owners.map((p) => (
               <li key={`${p.owner.kind}:${p.owner.ref}`}>
                 <span className="code-rules__what">
-                  <span>{ownerName(p.owner)}</span>
+                  <span>
+                    {p.owner.kind === "seat" && <Face who={p.owner.ref} size="text" />}{" "}
+                    {ownerName(p.owner)}
+                  </span>
                   <span className="muted mono">{p.paths.join(", ")}</span>
                 </span>
                 {!gone && (

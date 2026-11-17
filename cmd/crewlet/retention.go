@@ -723,36 +723,51 @@ func retentionSnapshots(environ config.Source, args []string, stdout, stderr io.
 //
 // It exists because the engine cannot see a copy that has left the host, and
 // `backup_floor: operator` is the policy that says only such a copy counts.
+//
+// -taken-at is required, for the route's reason: the acknowledgement is given
+// after the copy left, and the backup's age is measured from when the copy was
+// taken, never from when somebody said so.
 func retentionAck(environ config.Source, args []string, stdout, stderr io.Writer) error {
-	var stream *string
+	var stream, taken *string
 	var position *uint64
 	client, err := nodeClientFor(environ, args, "retention ack", stderr, func(fs *flag.FlagSet) {
 		stream = fs.String("stream", "",
 			"the log this acknowledgement is about; required")
 		position = fs.Uint64("position", 0,
 			"the sequence your copy reaches; required")
+		taken = fs.String("taken-at", "",
+			"when your copy was taken, as an RFC 3339 instant (2026-11-17T03:00:00Z); required")
 	})
 	if err != nil {
 		return err
 	}
+	const usage = "usage: crewlet retention ack -stream <name> -position <n> -taken-at <RFC 3339 instant>"
 	if strings.TrimSpace(*stream) == "" || *position == 0 {
-		fmt.Fprintln(stderr,
-			"usage: crewlet retention ack -stream <name> -position <n>")
+		fmt.Fprintln(stderr, usage)
 		return fmt.Errorf("an acknowledgement moves the floor the trim deletes " +
 			"against, so both the log and the sequence have to be named")
 	}
+	takenAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(*taken))
+	if err != nil {
+		fmt.Fprintln(stderr, usage)
+		return fmt.Errorf("-taken-at must say when your copy was taken, as an RFC 3339 "+
+			"instant such as 2026-11-17T03:00:00Z: the backup's age is measured from it, "+
+			"so it has no default (%q: %w)", *taken, err)
+	}
 	var answer struct {
-		Stream     string `json:"stream"`
-		Position   uint64 `json:"position"`
-		Generation uint32 `json:"generation"`
+		Stream     string    `json:"stream"`
+		Position   uint64    `json:"position"`
+		Generation uint32    `json:"generation"`
+		TakenAt    time.Time `json:"taken_at"`
 	}
 	path := "/worklet/retention/ack?stream=" + url.QueryEscape(*stream) +
-		"&position=" + strconv.FormatUint(*position, 10)
+		"&position=" + strconv.FormatUint(*position, 10) +
+		"&taken_at=" + url.QueryEscape(takenAt.UTC().Format(time.RFC3339Nano))
 	if err := client.post(context.Background(), path, &answer); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "acknowledged %s through %d at generation %d\n",
-		answer.Stream, answer.Position, answer.Generation)
+	fmt.Fprintf(stdout, "acknowledged %s through %d at generation %d, a copy taken %s\n",
+		answer.Stream, answer.Position, answer.Generation, answer.TakenAt.UTC().Format(time.RFC3339))
 	return nil
 }
 

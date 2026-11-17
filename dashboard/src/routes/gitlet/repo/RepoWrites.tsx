@@ -14,7 +14,7 @@
  * too.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Button, FormField, Input, Select, Stack } from "@crewlethq/ui";
 import { useNavigator } from "~/app/router.tsx";
 import { ConfirmModal, Modal } from "~/components/Modal.tsx";
@@ -45,6 +45,7 @@ import { useAct } from "~/lib/useAct.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { CodeRepoDetail } from "~/protocol/index.ts";
 import { REPO_SEARCH_MODES } from "~/contract/code.ts";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 /**
  * "Edit details": the repository's description, default branch, owner and who
@@ -94,16 +95,18 @@ function DetailsDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () =>
       ? formHeld("Reading its branches…")
       : detailsFormHeld(repo, { description, defaultBranch, owner, visibility }, branches);
   const blocked = holdReason(hold);
-  const ownerOptions = units.map((u) => ({
+  const ownerOptions: { value: string; label: string; leading?: ReactNode }[] = units.map((u) => ({
     value: ownerKey({ kind: "unit", ref: u.id }),
     label: u.name,
   }));
   if (!ownerOptions.some((o) => o.value === ownerKey(repo.owner))) {
     // AN OWNER THE PICKER DOES NOT LIST (a seat's repository) stays its own
     // choice, so the form never moves it unasked.
+    const seat = repo.owner.kind === "seat" ? seatBadge(repo.owner.ref) : null;
     ownerOptions.unshift({
       value: ownerKey(repo.owner),
-      label: repo.owner.kind === "seat" ? seatBadge(repo.owner.ref).name : repo.owner.ref,
+      label: seat ? seat.name : repo.owner.ref,
+      ...(seat ? { leading: <ChoiceFace seat={seat} /> } : {}),
     });
   }
   const branchOptions = branches.map((b) => ({ value: b, label: b }));

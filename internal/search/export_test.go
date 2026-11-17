@@ -166,3 +166,35 @@ var (
 // MaxPostingScan is [maxPostingScan], for the gate that holds which postings a
 // frequent chat term keeps.
 const MaxPostingScan = maxPostingScan
+
+// The change index's statements and builders, for its plan gate.
+var (
+	ChangeStateStatement          = changeStateStatement
+	ChangeAdvanceStatement        = changeAdvanceStatement
+	ChangeSeenStatement           = changeSeenStatement
+	ChangeBeginRebuildStatement   = changeBeginRebuildStatement
+	ChangeRecordInstanceStatement = changeRecordInstanceStatement
+	ChangeRebuiltStatement        = changeRebuiltStatement
+	ChangeHeldDocStatement        = changeHeldDocStatement
+	ChangeDocInsertStatement      = changeDocInsertStatement
+	ChangeDocRewriteStatement     = changeDocRewriteStatement
+	ChangeDocStateStatement       = changeDocStateStatement
+	ChangeRemoveDocStatement      = changeRemoveDocStatement
+	ChangeClearPostingsStatement  = changeClearPostingsStatement
+	ChangeNextRepoStatement       = changeNextRepoStatement
+	ChangeRepoDocsStatement       = changeRepoDocsStatement
+	ChangeDropBatchStatement      = changeDropBatchStatement
+	ChangeRebuiltDropStatement    = changeRebuiltDropStatement
+	ChangeTermCountStatement      = changeTermCountStatement
+	ChangeTermFloorStatement      = changeTermFloorStatement
+	ChangeScopeCountStatement     = changeScopeCountStatement
+	ChangeScopeFloorStatement     = changeScopeFloorStatement
+	ChangeHeldByTermStatement     = changeHeldByTermStatement
+	ChangeHeldByScopeStatement    = changeHeldByScopeStatement
+	ChangeScopes                  = changeScopes
+	ChangePostingsInsert          = changePostingsInsert
+)
+
+// SetChangeTextScan bounds what one search of x reads of what it drives on, for the cases that
+// reach the bound with a small corpus.
+func SetChangeTextScan(x *ChangeIndexer, n int) { x.scan = n }

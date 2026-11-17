@@ -60,6 +60,7 @@ import {
 import { JOB_WORDS, seatName } from "./places.ts";
 import { ROUTE, RUN_IN, WINDOW, product } from "./words.ts";
 import { AgoTime } from "~/components/AgoTime.tsx";
+import { seatBadge } from "~/ui/SeatAvatar.tsx";
 
 type Open = (flow: Flow, at?: WizardAt) => void;
 
@@ -161,9 +162,8 @@ function SeatChip({ seats, on }: { seats: readonly Seat[]; on: SeatOnCategory })
   return (
     <li className="models-who__seat">
       <EntityChip
-        name={name}
+        {...seatBadge(name, seat?.kind, seat?.avatar)}
         title={name}
-        kind={seat?.kind === "human" ? "human" : "agent"}
         size="xs"
         href={href(["company", "org", "seats", on.seat])}
       />

@@ -106,44 +106,128 @@ until it ends
 ### Every machine's clock
 
 **Keep every machine's clock synchronised** — every node's, and every server's
-of an external NATS cluster. Two of the engine's deletions judge an instant
-one machine stamped by another machine's clock, and both assume every
-machine's clock keeps within an hour of the fleet's. The
-[object collector](../concepts/object-store.md#collection-and-audit) deletes an
-object no row names only once its key, minted by the node that uploaded it,
-and the store's own record of when it was written are both more than a day old
-by the clock of the node running the collector; and Gitlet's
-`code-retention` duty removes a
-[retired pack's](../concepts/object-store.md#live-retired-and-derived-references) row
-once the instant the broker stamped on its retirement is a day old by the
-clock of the node holding the duty. Each day leaves a margin past the longest
-upload or read it has to outlast — twelve hours for the collector, two hours
-and thirty-nine minutes for a retired pack — and a clock running ahead of the
-other by more than that deletes an object a write or a read still needs. NTP
-keeps machines within milliseconds of each other; a host without it drifts,
+of an external NATS cluster. Several of the engine's rules judge an instant
+one machine stamped by another machine's clock, and every one assumes every
+machine's clock keeps within an hour of the fleet's, so any two within two
+hours of each other:
+
+- The [object collector](../concepts/object-store.md#collection-and-audit)
+  deletes an object no row names only once its key, minted by the node that
+  uploaded it, and the store's own record of when it was written are both more
+  than a day old by the clock of the node running the collector, while a write
+  may still name a key twelve hours old by the clock of the node deciding it.
+  That leaves twelve hours, and a collector's clock running further ahead of
+  the writer's than that deletes an object a write still names.
+- Gitlet's `code-retention` duty removes a
+  [retired pack's](../concepts/object-store.md#live-retired-and-derived-references)
+  row once the instant the broker stamped on its retirement is a day old by the
+  clock of the node holding the duty: two hours and thirty-nine minutes past
+  the longest read of the largest pack, so a duty holder's clock running
+  further ahead of the broker's than that deletes a pack a clone is still
+  reading.
+- A turn's hold on a
+  [scratch repository](../concepts/gitlet.md#a-scratch-repositorys-idle-expiry)
+  or on a seat's branch ([the ref lifecycle](../concepts/gitlet.md#the-ref-lifecycle))
+  is recorded on the repository only once it has gone 22 hours without
+  activity, or the branch 334 hours unset, by the clock of the node running the
+  turn, while the `code-retention` pass judges the same broker-stamped activity
+  by its own clock against a day at the shortest, or the branch's fourteen
+  days. The two hours between them are all the margin there is, so a turn's
+  node whose clock runs further behind the duty holder's than that can lose a
+  scratch repository, or a seat's branch, that a live turn still holds.
+- A ref drop, the commit a force-push or a deletion moved a branch or tag off,
+  is kept fourteen days after the broker's instant on that push, judged by the
+  clock of the node expunging the repository
+  ([retention and history](../concepts/gitlet.md#retention-and-history)). That
+  is a policy's edge rather than a margin: a clock past the bound moves it by
+  the clock's error, and history force-pushed away can go that much before or
+  after its fortnight.
+- A seat's [daily push count](../concepts/gitlet.md#a-seats-push) is kept by
+  each repository's committer on the day its own clock reads, and a seat's
+  older day is forgotten only once a committer has counted the seat on a day
+  beginning a whole day after it ended. That leaves a day, so a committer whose
+  clock runs more than a day behind another's counts a seat's pushes on a day
+  already forgotten, from nothing, and can land them past
+  `code.limits.pushes_per_seat_day`.
+- A repository's [pushes by day](../concepts/gitlet.md#counting-pushes) are
+  kept as long as its push history, which drops a push once the broker's
+  instant on it is 181 days old, so a read's first day is refused once it is
+  181 days less two hours old by the clock of the node reading it. A reader
+  whose clock runs further behind the broker's than that is counted short for
+  the days the history already dropped.
+- A [narrowed push history](../concepts/gitlet.md#narrowing-a-push-history)
+  reads two hours past each end of a day or window it skips to or stops at,
+  since a push's instant, stamped by whichever broker member led the stream,
+  can stand before that of a push that landed earlier. A push stamped further
+  out of order than that can be left out of a narrowed page, while the
+  unnarrowed history lists it.
+- A [kept session's](../concepts/code-sandbox.md#each-launchs-session-kept)
+  capture is stamped on the run's record by the clock of the node taking it,
+  and any other node reads it as still being kept until its life and two
+  hours have passed by its own clock, about three hours and twelve minutes; a
+  read standing by beside it is read as standing until its window and two
+  hours have passed, about four hours and ten and a half minutes. Neither
+  wait holds that long on that reading alone: a turn's end holds each capture
+  for its life, and each standby for its window and its takeover's life, from
+  the moment it first sees it, on its own clock. A reader whose clock runs
+  further ahead of the taker's than the two hours can read a capture still
+  being kept as abandoned, or a read still standing by as gone.
+- A capture's record still to be answered names an object whose key the
+  spooling node's clock minted, and the executor log refuses it once it is
+  twelve hours old by the clock of the node deciding the record, so a reader
+  waits on the record's answer until the key is twelve hours and two hours
+  old by its own. A reader whose clock runs further ahead of the log's than
+  that stops waiting on a record the log may still take.
+- A read of a [box on another node's host](../concepts/code-sandbox.md#local-sandboxes)
+  carries how long its asker waits, which the host counts on its own clock,
+  and the host takes it until the asker's deadline, by the asker's clock, and
+  two hours more by its own. A host whose clock runs ahead of its asker's by
+  more than those two hours and the read's wait refuses every such read, and
+  its asker hears a host that did not answer: a collection is handed back and
+  asked again, and a stop waits for the host.
+- A person's stop of a run whose box is on another node's host is given up
+  with nothing read once that host has been silent for the box timeout by the
+  clock of the node asking it, or once the stop is the box timeout and two
+  hours old by that clock, judged against the instant the deciding node's clock
+  stamped on it. The two hours keep the second from ever coming before the box
+  timeout has passed in real time, so a node whose clock runs further ahead of
+  the decider's than that gives a host up early, and writes off the stopped
+  run's spend while the host may still be restarting.
+
+NTP keeps machines within milliseconds of each other; a host without it drifts,
 and a virtual machine restored from a snapshot can come back hours off.
 
+The same hour bounds one step of a single machine's own clock: a node removes
+a session spool a crash left behind only once it is an hour older than the
+longest a keep may wait to open it, by that machine's clock, so NTP stepping
+the clock forward by up to an hour to correct it never removes a spool a keep
+is still about to upload.
+
 Every data node reads the fleet's clocks on its position heartbeat, every ten
-seconds, off the position register in the coordination store, which it reads
-on that beat anyway. Each data node's row there carries the instant the node
-stamped on it and the instant the broker stored it at, so each row says how
-far that node's clock stands from the one broker member leading the register,
-which stores every row, and the median of them is the **fleet's clock**: the
-median of every data node's. A node whose own clock stands more than an hour
-from the fleet's raises [`clock_skew`](../reference/alarms.md) about itself,
-and every node raises it about the broker member once that member's clock does
-— on an embedded broker one of the data nodes, which then raises it about its
-own clock too; on an external NATS cluster the server leading the register's
-stream. So while no node raises it, every data node and that member keep
-within an hour of the fleet's clock, and any two of them — every member of an
-embedded broker among them — within two hours of each other, inside both
-margins. With two data nodes neither clock outvotes the other, so both are
-named once they stand more than two hours apart. The alarm names a clock that
-has already drifted rather than keeping one from drifting, and it cannot see
-the other servers of an external NATS cluster disagree with the one it reads,
-so run an NTP client (chrony, systemd-timesyncd) everywhere the engine or its
-broker runs. [Watching a fleet](fleet.md#watching-a-fleet) says how to read the
-alarm across the nodes.
+seconds, off the position register in the coordination store, which it reads on
+that beat anyway. Each data node's row there carries the instant the node
+stamped on it and the instant the broker stored it at, so each row says how far
+that node's clock stands from the one broker member leading the register, which
+stores every row, and the median of them is the **fleet's clock**: the median
+of every data node's. A node whose own clock stands more than an hour from the
+fleet's raises [`clock_skew`](../reference/alarms.md) about itself, and every
+node raises it about the broker member once that member's clock does — on an
+embedded broker one of the data nodes, which then raises it about its own clock
+too; on an external NATS cluster the server leading the register's stream. So
+while no node raises it, every data node and that member keep within an hour of
+the fleet's clock, and any two of them — every member of an embedded broker
+among them — within two hours of each other, inside every margin above. A rule
+judged on the clock of a node that runs seats, a turn's hold, a capture's or a
+standby's age, a box read's admission or a stop's give-up above, rests on a
+clock the alarm measures only where that node holds data too: a node without
+the `data` role writes no row to the register, so nothing measures its clock,
+and NTP on it is all that keeps it inside the bound. With two data nodes
+neither clock outvotes the other, so both are named once they stand more than
+two hours apart. The alarm names a clock that has already drifted rather than
+keeping one from drifting, and it cannot see the other servers of an external
+NATS cluster disagree with the one it reads, so run an NTP client (chrony,
+systemd-timesyncd) everywhere the engine or its broker runs. [Watching a
+fleet](fleet.md#watching-a-fleet) says how to read the alarm across the nodes.
 
 ### The room the stream's volume needs
 
@@ -803,15 +887,46 @@ entire point of that distinction. The coordination KV rides this same
 connection on purpose — one connection, one fate. An outage that outlasts the
 lease TTL (45 s unless `coordination.lease_ttl_seconds` says otherwise) does
 hand this node's seats to a peer, and that is the intended behaviour rather
-than something a reconnect policy should paper over. Each attempt gets **2
-seconds** to connect, and 2 more for TLS and the NATS handshake, not the
-embedded member's listener budget: the loop tries the URLs in turn, and a
-member that silently drops packets holds every attempt at it for that long
-before a member that answers is asked, which is time the node spends not
-renewing its leases. A URL whose name resolves to several addresses — a
-headless Kubernetes service naming every pod of the cluster — shares those 2
-seconds among them, tried in a random order so a fleet's connections spread
-across the members, rather than taking 2 seconds for each.
+than something a reconnect policy should paper over. Each attempt gets **5
+seconds** to connect, and 5 more for TLS and the NATS handshake — a request's
+term, because the handshake's packets queue at the link's bottleneck like any
+request's, and a bottleneck the engine supports may hold four seconds of the
+link's rate; at the 2 seconds an attempt was once given, a node whose
+connection dropped behind a deep queue could not dial again while other
+traffic kept it deep. It is not the embedded member's listener budget either:
+the loop tries the URLs in turn, and a member that silently drops packets
+holds every attempt at it for that long before a member that answers is
+asked (a member that takes the connection and then never answers holds it
+for the handshake's 5 seconds instead, and one slow at both for up to 10),
+which is time the node spends not renewing its leases. A pool of three with
+two members down ahead of the live one reaches it 10 seconds after the drop,
+and up to 20 where both take the connection and hang, where the 2-second
+terms took 4 and 8. At the default 45-second lease that is far inside the
+TTL. At the floor, a 15-second lease renewed every 5 seconds, a drop just
+before a renewal leaves 10 seconds of the TTL, which two dead members ahead
+of the live one use up, and the node's seats are handed to a peer: a fleet
+at the floor lease on an external cluster keeps its `stream.url` to members
+that are up, or its lease above the floor. A URL whose name resolves to
+several addresses — a headless Kubernetes service naming every pod of the
+cluster — shares those 5 seconds among them, tried in a random order so a
+fleet's connections spread across the members, rather than taking 5 seconds
+for each.
+
+**The servers must wait as long for a node's CONNECT.** A NATS server cuts a
+connection whose CONNECT has not arrived within its authorization timeout,
+2 seconds by default, counted from when it took the connection; the CONNECT
+crosses the link after the server's INFO has crossed the other way, so
+behind a deep queue it arrives later than that, and a node whose connection
+dropped there is cut before it can authenticate, every time. Set
+`authorization { timeout: 5 }` in every server's configuration.
+
+**Nothing on the way may terminate TCP.** The node reads its own sockets to
+tell a link that is still carrying a large message from one that carries
+nothing — what it read, and what the server's kernel acknowledged — so a
+proxy that buffers between the node and the servers, a service mesh's
+sidecar among them, acknowledges for the servers and hides which one it is.
+Exclude the servers' client port from mesh capture, as a
+[satellite's leaf link](satellite-nodes.md#what-a-satellite-still-needs) does.
 
 **A connection the client gives up on is a node restart.** Reconnecting for
 ever covers a server that goes away and comes back. It does not cover the
@@ -868,9 +983,10 @@ domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
 `CREWLET_ARTIFACT_DATA_LOG`, `CREWLET_ASSISTANT_LOG`, `CREWLET_CHAT_LOG`,
 `CREWLET_EXECUTOR_LOG`, `CREWLET_ACCESS_LOG`, `CREWLET_ATLAS_LOG`), a stream per extra subject namespace a company
 publishes under, two durable consumers per seat mailbox (the inbox and its
-priority lane, each an ordinary API call, measured at 1.7 ms), the twenty-two `crewlet_*` KV buckets:
+priority lane, each an ordinary API call, measured at 1.7 ms), the twenty-seven `crewlet_*` KV buckets
+([listed with what each holds](../concepts/architecture.md#5-where-state-lives)):
 three in the lease store, holding the seat and presence leases, the duty
-leases and the fencing epochs, and nineteen in the fleet store holding the
+leases and the fencing epochs, and twenty-four in the fleet store holding the
 shared records — the object store's backend record and its collector's report
 among them — and, on the default `nats` object store, the `crewlet_files`
 object store bucket (its stream is `OBJ_crewlet_files`). A credential

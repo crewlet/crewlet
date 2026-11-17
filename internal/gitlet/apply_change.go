@@ -533,9 +533,9 @@ func changeNotApplied(ctx context.Context, at applyContext, repoID, changeID, wh
 // of saying when a change last moved, which no column already said.
 // A move of a live change also rewrites its two entries in the live indexes by
 // last move (replicated "A live change is listed by when it last moved"), so a
-// live change's head move rewrites four entries where it rewrote one.
+// live change's head move rewrites five, code_changes_position_idx included.
 // TestAChangeWriteRewritesOnlyTheIndexesItMoves holds each kind to the
-// indexes its plan rewrites, and the push apply's head moves to those four: an
+// indexes its plan rewrites, and the push apply's head moves to those five: an
 // index added on a column a write sets — the head's above all — is a decision
 // that test makes somebody take, never a cost nobody saw.
 type changeWrite string

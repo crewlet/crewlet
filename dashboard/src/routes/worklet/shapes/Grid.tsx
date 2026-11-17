@@ -105,6 +105,7 @@ import {
   type DataGridSelection,
 } from "@crewlethq/ui";
 import { linkedSeat } from "~/app/frame/cells.tsx";
+import type { SeatChoice } from "~/lib/seats.ts";
 import { Assignee, DayMark, DueMark, TypeIcon, type RowChrome } from "~/components/work.tsx";
 import { LIST_GIVES_WAY, givingWay, workListColumns } from "~/components/workGrid.tsx";
 import { GroupMark, headingOf } from "./group.tsx";
@@ -203,7 +204,7 @@ interface ColumnContext {
    *  [blockedBy]. The list's title cell names what holds a task up. */
   keyOf?: (id: string) => string | undefined;
   /** Who can hold a task, for a writer's inline assignee picker. */
-  seats?: readonly { handle: string; name: string; human?: boolean }[];
+  seats?: readonly SeatChoice[];
   /**
    * Every row is held by one person the screen already names (My work's
    * Queue), so the Assignee column would repeat them on every row: it is a
@@ -576,7 +577,7 @@ export function WorkGrid({
    */
   foot?: string;
   /** Who can hold a task, for a writer's inline assignee picker. */
-  seats?: readonly { handle: string; name: string; human?: boolean }[];
+  seats?: readonly SeatChoice[];
   /** Every row is held by the one person the screen names: see [ColumnContext]. */
   assigneeFixed?: boolean;
   /**

@@ -197,10 +197,14 @@ func TestATimingWithAnyFieldUnsetIsRefused(t *testing.T) {
 		"ReadBack":       func(tm *Timing) { tm.ReadBack = 0 },
 		"ReadTerm":       func(tm *Timing) { tm.ReadTerm = 0 },
 		"PlacementRetry": func(tm *Timing) { tm.PlacementRetry = -time.Second },
+		// A LINK FOLLOWED WITH NOTHING BEYOND IT: a ceiling held while the
+		// link moves and capped at nothing past its span.
+		"Beyond": func(tm *Timing) { tm.Progress, tm.Beyond = stillLink, 0 },
 	}
-	// EVERY FIELD, so a field added to Timing and to nothing here fails
-	// rather than going unchecked.
-	if fields := reflect.TypeFor[Timing]().NumField(); len(unset) != fields {
+	// EVERY FIELD BUT Progress, whose zero is a setting (a read on time
+	// alone), so a field added to Timing and to nothing here fails rather
+	// than going unchecked.
+	if fields := reflect.TypeFor[Timing]().NumField(); len(unset)+1 != fields {
 		t.Fatalf("Timing has %d fields and this case unsets %d", fields, len(unset))
 	}
 	for field, take := range unset {

@@ -117,13 +117,15 @@ export async function blobAnswer(
 
 /** A drawn diff line of `kind` whose text is `text`, as its pieces: `class:text`, `[run]` or plain. */
 export function inkedLine(kind: string, text: string): string[] {
-  const line = [...document.querySelectorAll<HTMLElement>(`.diff-view__line[data-kind="${kind}"]`)]
-    .map((l) => l.querySelector<HTMLElement>(".diff-view__text")!)
+  const line = [
+    ...document.querySelectorAll<HTMLElement>(`.crewlet-diff-view__line[data-kind="${kind}"]`),
+  ]
+    .map((l) => l.querySelector<HTMLElement>(".crewlet-diff-view__text")!)
     .find((t) => t.textContent === text);
   if (!line) throw new Error(`no ${kind} line reads “${text}”`);
   return [...line.childNodes].map((node) => {
     if (!(node instanceof HTMLElement)) return node.textContent ?? "";
-    if (node.className === "diff-view__run") return `[${node.textContent}]`;
+    if (node.className === "crewlet-diff-view__run") return `[${node.textContent}]`;
     return `${node.className}:${node.textContent}`;
   });
 }

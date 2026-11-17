@@ -96,7 +96,7 @@ import { describeFollowUp, detailItem, itemAddress, labelAfterKey } from "~/lib/
 import { changeLive } from "~/lib/code.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useLatestChecks } from "~/lib/useLatestChecks.ts";
-import { ChangeStateTag } from "../gitlet/Changes.tsx";
+import { ChangeStateTag } from "../gitlet/ChangeRow.tsx";
 import type {
   ArtifactInboxNotice,
   CodeChangeState,

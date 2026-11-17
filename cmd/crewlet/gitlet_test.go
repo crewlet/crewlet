@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -653,6 +654,11 @@ func TestTheCodePagesFitOneAnswer(t *testing.T) {
 			RunID: "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", Harness: runField},
 		Node: strings.Repeat("n", 128), Atomic: true, PackID: strings.Repeat("k", 36), PackBytes: 1 << 40,
 		IntroducedCount: 1 << 30, ReceivedAt: stamp}
+	// THE CHANGE IT LANDED at its widest: the longest repository name, the widest number and the longest title.
+	repoName := strings.Repeat("n", gitref.MaxRepoNameBytes)
+	push.Change = &gitlet.ChangeName{Repo: repoName, Ref: gitlet.ChangeRef(repoName, math.MaxInt64),
+		Title: strings.Repeat("<", gitlet.MaxChangeTitleBytes), State: gitlet.ChangeStateMerged}
+	push.ChangesMore = gitlet.MaxPushMerges
 	var longest gitlet.Refusal
 	for _, r := range gitlet.Refusals() {
 		if len(r) > len(longest) {
@@ -680,7 +686,8 @@ func TestTheCodePagesFitOneAnswer(t *testing.T) {
 	// encoded is the length of a page of rows rows that add appends, with the
 	// longest cursor a page carries.
 	encoded := func(rows int, add func(*gitlet.ReadAnswer)) int {
-		page := gitlet.ReadAnswer{Next: strings.Repeat("c", 256), Position: pos, Level: statelog.ReadLinearizable}
+		page := gitlet.ReadAnswer{Next: strings.Repeat("c", 256), Position: pos, Level: statelog.ReadLinearizable,
+			PushScan: &gitlet.PushScan{To: stamp}}
 		for range rows {
 			add(&page)
 		}
@@ -728,7 +735,8 @@ func TestTheCodePagesFitOneAnswer(t *testing.T) {
 		}
 		// AND A PAGE THE READER SERVES: maximal rows until one crosses the
 		// budget, as page.add closes it.
-		page := gitlet.ReadAnswer{Next: strings.Repeat("c", 256), Position: pos, Level: statelog.ReadLinearizable}
+		page := gitlet.ReadAnswer{Next: strings.Repeat("c", 256), Position: pos, Level: statelog.ReadLinearizable,
+			PushScan: &gitlet.PushScan{To: stamp}}
 		for filled := 0; filled < gitlet.MaxPageBytes; filled += row {
 			kind.add(&page)
 		}

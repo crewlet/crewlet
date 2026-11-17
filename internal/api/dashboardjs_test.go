@@ -1477,7 +1477,9 @@ const (
 	// The clear controls, Doclet changes, Settings polish and notices train, on kit 0.144.0: 422.2 KiB: 423 KiB, 2.31 seconds.
 	// Gitlet's commits as a timeline on one list, on kit 0.144.0: 423.1 KiB: 424 KiB, 2.32 seconds.
 	// Setting editors and SettingsTable on DataGrid's anatomy, on kit 0.150.0, whose one sheet adds their rules: 424.4 KiB: 425 KiB, 2.32 seconds.
-	initialBudget = 425 << 10
+	// Configuration warnings as one quiet line, on kit 0.151.0, whose one sheet adds the collapsible
+	// callout's and compact list's rules: 425.1 KiB: 426 KiB, 2.33 seconds.
+	initialBudget = 426 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2699,7 +2701,25 @@ const (
 	// (6,836,450 bytes), 14,136 over main: 6677 KiB.
 	// The setting editors, artifact references, chat receipts and Gitlet repository home train,
 	// on kit 0.150.1: 6700.2 KiB (6,861,017 bytes), 38,703 over main: 6701 KiB.
-	treeBudget = 5<<20 + 1581<<10
+	// Configuration warnings as one quiet line with compact rows, on kit 0.151.0: 6706.0 KiB
+	// (6,866,978 bytes), 5,961 over main: 6707 KiB.
+	// A branch and tag picker in a panel and a repository's Code menu: 6711.5 KiB (6,872,599 bytes),
+	// 11,582 over main: 6712 KiB.
+	// A repository's rail: its open changes, pushers, push spark, mirror and newest tag, on kit
+	// 0.150.1: 6728.1 KiB (6,889,605 bytes), 17,006 over the picker's: 6729 KiB.
+	// The quiet configuration warnings, inline delivery receipt, Code menu and repository rail
+	// train, on kit 0.151.0: 6734.2 KiB (6,895,802 bytes), 34,785 over main: 6735 KiB.
+	// Gitlet's repositories as rows with their changes, checks and pushes by day: 6740.8 KiB
+	// (6,902,550 bytes), 6,748 over the train's: 6741 KiB.
+	// A file beside its repository's tree, with raw, download, copy and line actions: 6755.8 KiB
+	// (6,917,984 bytes), 22,182 over main: 6756 KiB.
+	// The Gitlet repository rows and file beside its tree train, on kit 0.151.0: 6762.4 KiB
+	// (6,924,733 bytes), 28,931 over main: 6763 KiB.
+	// Gitlet's changes as code-host rows wherever they are listed, with their cards, state totals
+	// and sort: 6780.7 KiB (6,943,394 bytes), 18,661 over main: 6781 KiB.
+	// A change's conversation as a timeline with finding excerpts: 6801.9 KiB (6,965,137 bytes),
+	// 21,743 over main: 6802 KiB.
+	treeBudget = 5<<20 + 1684<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

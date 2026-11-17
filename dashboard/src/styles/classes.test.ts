@@ -990,9 +990,7 @@ describe("every class the dashboard names", () => {
 // the Gitlet workspace's (a repository's code, history and settings, a
 // change's conversation and files, the listings), which every module drawing
 // a `code-` class imports — Home's changes waiting on a person and Settings ›
-// Gitlet among them — and `diff.css`, the one diff's, which every screen
-// drawing a diff reaches through `components/DiffView.tsx`; and
-// `gitlet-code.css`, code coloured by kind in Gitlet, which
+// Gitlet among them; and `gitlet-code.css`, code coloured by kind in Gitlet, which
 // `routes/gitlet/syntax.tsx` imports. Each is appended after the entry's sheets, so
 // each of its rules must select a class of the screen it arrives with, or a
 // tie it wins would change other screens from the moment a reader first
@@ -1049,10 +1047,6 @@ const LAZY_SHEETS: Readonly<Record<string, { importer: string; owns: RegExp }>> 
   "atlas.css": {
     importer: "routes/atlas/parts.tsx",
     owns: /\.atlas-[a-z_-]+\b/,
-  },
-  "diff.css": {
-    importer: "components/DiffView.tsx",
-    owns: /\.diff-view(?:__[a-z]+|--[a-z]+)?(?![\w-])/,
   },
   "gitlet.css": {
     importer: "routes/gitlet/ui.tsx",

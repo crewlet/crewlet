@@ -449,18 +449,28 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
         />
       )}
       {(!thread || thread.replies === 0) && answeringLine}
-      {/* WHOM A PERSON'S MESSAGE REACHED, AND WHO ANSWERED AND WHEN, as the
-          kit's mark and tooltip under its words: the post's own routing as
-          the engine kept it. */}
-      {showsReceipt(message, isAgent, view.answered) && (
-        <DeliveryReceipt
-          recipients={reachRecipients(message.reach, view.answered, names.nameOf, timeOf)}
-          truncated={message.reach?.truncated}
-          sentAt={timeOf(message.created_at)}
-        />
-      )}
     </>
   );
+
+  // WHOM A PERSON'S MESSAGE REACHED, AND WHO ANSWERED AND WHEN: the kit's mark
+  // and tooltip, ending the words' last line as "(edited)" does.
+  const receipt = showsReceipt(message, isAgent, view.answered) ? (
+    <DeliveryReceipt
+      className="chat-receipt"
+      recipients={reachRecipients(message.reach, view.answered, names.nameOf, timeOf)}
+      truncated={message.reach?.truncated}
+      sentAt={timeOf(message.created_at)}
+    />
+  ) : null;
+  const edited = message.edited_at ? (
+    // A STOP AMONG THE ROW'S OWN CONTROLS, as the row's times are, so a
+    // keyboard reader can read when it was edited.
+    <Tooltip content={`Edited ${fmtDateTimeFull(message.edited_at)}`}>
+      <span className="chat-edited" tabIndex={0}>
+        (edited)
+      </span>
+    </Tooltip>
+  ) : null;
 
   return (
     <ChatMessage
@@ -526,14 +536,11 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
           nameOf={names.nameOf}
           onPerson={(handle) => nav.openPane({ kind: "profile", handle })}
           after={
-            message.edited_at ? (
-              // A STOP AMONG THE ROW'S OWN CONTROLS, as the row's times are, so
-              // a keyboard reader can read when it was edited.
-              <Tooltip content={`Edited ${fmtDateTimeFull(message.edited_at)}`}>
-                <span className="chat-edited" tabIndex={0}>
-                  (edited)
-                </span>
-              </Tooltip>
+            edited || receipt ? (
+              <>
+                {edited}
+                {receipt}
+              </>
             ) : null
           }
         />

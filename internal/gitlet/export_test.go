@@ -47,6 +47,9 @@ func SetRefScanBounds(r *Reader, scanned, active int) {
 	r.refsScanned, r.activeCounted = scanned, active
 }
 
+// SetPushScanBound has r read at most n pushes a page of a narrowed push history: MaxPushesScanned as shipped.
+func SetPushScanBound(r *Reader, n int) { r.pushesScanned = n }
+
 // CountedCommands is n with c counted in by what became of it, as a push row's are.
 func CountedCommands(n CommandCounts, c Command) CommandCounts {
 	n.add(c)
@@ -64,6 +67,13 @@ func SetTipWindow(r *Reader, landings int) { r.tipWindow = landings }
 
 // SetSpokenScanBound has r read at most n conversations a page of a live state by last move.
 func SetSpokenScanBound(r *Reader, n int) { r.spokenScanned = n }
+
+// SetQueueCountBound has r walk at most n entries a queue count: MaxQueueCounted as shipped.
+func SetQueueCountBound(r *Reader, n int) { r.queueCounted = n }
+
+// SetWordsBounds has r read at most candidates matches from its index of changes' words and judge at
+// most tail changes moved past it: MaxChangeTextCandidates and MaxChangeTextTail as shipped.
+func SetWordsBounds(r *Reader, candidates, tail int) { r.textCandidates, r.textTail = candidates, tail }
 
 // SetRetentionPace has r measure and pace its steps by clock and sleep, take
 // steps for budget, and read the listing page repositories at a time, rather
@@ -438,3 +448,6 @@ func LayerCut(sections [3]int64, i int) (start, size int64, runs [][3]int64) {
 	}
 	return cut.start, cut.size, runs
 }
+
+// SetStandingCountBound has r count at most n places a state: MaxStandingCounted as shipped.
+func SetStandingCountBound(r *Reader, n int) { r.standingCounted = n }

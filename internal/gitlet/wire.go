@@ -403,6 +403,11 @@ type PushRow struct {
 	Node     string        `json:"node,omitempty"`
 	Atomic   bool          `json:"atomic,omitempty"`
 	Commands []Command     `json:"commands"`
+	// Change is the change this push's own record merged on a branch one of its commands set: a merge's or a
+	// queue landing's, or else the lowest-numbered a push merged; ChangesMore counts the others. Answered on
+	// a push history's rows ([Reader.pushes]); nil where its record merged none.
+	Change      *ChangeName `json:"change,omitempty"`
+	ChangesMore int         `json:"changes_more,omitempty"`
 	// Omitted is the commands a row read IN BRIEF ([ReadQuery.Brief]) leaves
 	// out of Commands, counted by what became of each — so Commands and
 	// Omitted together are every command the push carried, and a reader says
@@ -414,7 +419,10 @@ type PushRow struct {
 	PackBytes       int64         `json:"pack_bytes,omitempty"`
 	Introduced      []string      `json:"introduced,omitempty"`
 	IntroducedCount int           `json:"introduced_count,omitempty"`
-	ReceivedAt      time.Time     `json:"received_at"`
+	// Offered is an attempt's commits offered ([PushEntry.Offered]); absent on every other row, on an
+	// attempt that offered none or was not counted, and on rows recorded before [OfferedVersion].
+	Offered    int       `json:"offered,omitempty"`
+	ReceivedAt time.Time `json:"received_at"`
 }
 
 // CommandCounts is commands of a push counted by what became of each, in the
@@ -1292,6 +1300,9 @@ type ReadQuery struct {
 	// versionedFields row. The domain landed on main with it
 	// ([RecordVersion]).
 	Push string `json:"push,omitempty"`
+	// PushFilter narrows a push history to one pusher's pushes and a window of their instants ([PushFilter]);
+	// refused on every other kind and beside Push. A request field, so an older build refuses it unread.
+	PushFilter *PushFilter `json:"push_filter,omitempty"`
 	// Commit is the commit a `commit` read names the changes of, its whole
 	// id; refused on every other kind. A field only that kind reads, which a
 	// build that predates the kind refuses whole ([ReadKinds]).
@@ -1390,6 +1401,14 @@ type ReadQuery struct {
 	// ChangeSort orders a `changes` listing ([ChangeSort]); "" is its walk's own order. A request
 	// field, so an older build refuses it unread and the router asks the next node.
 	ChangeSort ChangeSort `json:"change_sort,omitempty"`
+	// Readiness narrows a `changes` listing to the open changes standing in one bucket
+	// ([Readiness.Bucket]); refused on every other kind. A request field, so an older build
+	// refuses it unread and the router asks the next node.
+	Readiness ReadinessBucket `json:"readiness,omitempty"`
+	// Text narrows a `changes` listing to the changes in whose title or description every word of it
+	// appears (changetext.go); refused on every other kind. A request field, so an older build refuses
+	// it unread and the router asks the next node.
+	Text string `json:"text,omitempty"`
 	// Part is the list a `change` read pages beside the change — its
 	// revisions, which "" names too, its reviewers, its comments, its
 	// reviews, its findings or the asker's own standing findings
@@ -1550,6 +1569,10 @@ type ReadQuery struct {
 	// versionedFields row: a node of a build that predates the kinds refuses
 	// the read as a kind it does not know.
 	Target string `json:"target,omitempty"`
+	// Trains asks a `queue` read for its trains and ejections across every repository it
+	// lists, and any queue read for EjectedTotal ([ReadAnswer.EjectedTotal]); refused on every
+	// other kind. A request field, so an older build refuses it unread and the router asks the next.
+	Trains bool `json:"trains,omitempty"`
 
 	// Inbox is an `inbox` read's question: whose inbox, and how it is
 	// narrowed ([InboxQuery]). Only that kind reads it.
@@ -1596,7 +1619,9 @@ type ReadQuery struct {
 	// as a listing of changes — and the engine's own two reads of pushes in
 	// log order, introduced and run_pushes, 1..MaxSnapshotItems (0 = the
 	// most) — run_pushes' the pushes of its run's repositories a page READS,
-	// whatever few of them name the run; checks 1..200 (0 = 50), the rows a
+	// whatever few of them name the run; a push history narrowed by PushFilter, the
+	// pushes a page KEEPS, reading at most MaxPushesScanned pushes and MaxPageBytes
+	// of their rows; checks 1..200 (0 = 50), the rows a
 	// page READS, as a listing of changes; checks_queued 1..MaxSnapshotItems
 	// (0 = the most), the attempts a runner's claim walk reads a page; a page
 	// of a duty listing —
@@ -1623,6 +1648,8 @@ type ReadAnswer struct {
 	// executor's pushes, oldest first — each repository the run was given
 	// in its query's order, and each one's pushes in log order.
 	Pushes []PushRow `json:"pushes,omitempty"`
+	// PushScan is on every page of a narrowed push history ([ReadQuery.PushFilter]), and nil on every other.
+	PushScan *PushScan `json:"push_scan,omitempty"`
 	// PushDays is the repository's pushes on each of the asker's days, oldest first, zeros included:
 	// answered on a push history asked with [ReadQuery.DayBounds], whatever the page holds.
 	PushDays []int64  `json:"push_days,omitempty"`
@@ -1643,6 +1670,12 @@ type ReadAnswer struct {
 	// versionedFields row. The domain landed on main with it, as with
 	// [ReadQuery.Brief].
 	ChangeBrief *ChangeSummary `json:"change_brief,omitempty"`
+	// NarrowedTo is, on every page of a `changes` listing narrowed by [ReadQuery.Readiness], the
+	// bucket it was narrowed to: a page without it was read with no such narrowing.
+	NarrowedTo ReadinessBucket `json:"narrowed_to,omitempty"`
+	// ChangesText is on every page of a `changes` listing narrowed by [ReadQuery.Text], `{}` where the
+	// search was whole: a page without it was read with no such narrowing.
+	ChangesText *ChangesText `json:"changes_text,omitempty"`
 	// Resolved is the repository the read's name resolved to, on a read that
 	// asks for it ([ReadQuery.Resolve]): its row as a `repo` read resolves
 	// it, at the answer's checkpoint, naming the name it redirects from where
@@ -1722,6 +1755,8 @@ type ReadAnswer struct {
 	// none the repositories holding one in DueRepos.
 	Checks []CheckRow   `json:"checks,omitempty"`
 	Check  *CheckDetail `json:"check,omitempty"`
+	// StandingCounts is a standing listing's first page's attempts by state ([CheckQuery.Standing]).
+	StandingCounts *StandingCounts `json:"standing_counts,omitempty"`
 	// Runnable is a page of a `checks_queued` read: the attempts waiting for
 	// a runner, oldest queued first.
 	Runnable []RunnableCheck `json:"runnable,omitempty"`
@@ -1737,15 +1772,20 @@ type ReadAnswer struct {
 	BranchChanges []BranchChange `json:"branch_changes,omitempty"`
 	// Queue is a page of a `queue` read's live entries, in queue order;
 	// Trains a `queue` read's candidates of the trains testing the targets
-	// its page reaches; Ejected, on a named repository's first page, the
-	// entries its queues put out lately ([EjectedRow]), newest first;
-	// Landings a page of a `landings` read; and Green the target's green
-	// row a `landings` read starts above, or a `green` read's rows.
+	// its page reaches, a named repository's always and every repository's
+	// where [ReadQuery.Trains] asks; Ejected, on a first page, the entries a
+	// named repository's queues put out lately, or every repository's where
+	// Trains asks ([EjectedRow]), newest first; Landings a page of a
+	// `landings` read; and Green the target's green row a `landings` read
+	// starts above, or a `green` read's rows.
 	Queue    []QueueRow     `json:"queue,omitempty"`
 	Trains   []CandidateRow `json:"trains,omitempty"`
 	Ejected  []EjectedRow   `json:"ejected,omitempty"`
 	Landings []LandingRow   `json:"landings,omitempty"`
 	Green    []GreenRow     `json:"green,omitempty"`
+	// EjectedTotal counts what Ejected is the newest of, on a first page asked with
+	// [ReadQuery.Trains]; nil where not asked.
+	EjectedTotal *EjectedTotal `json:"ejected_total,omitempty"`
 	// Commit is a `commit` read's changes of its commit, beside Repo.
 	Commit *CommitChanges `json:"commit,omitempty"`
 	// Inbox is an `inbox` read's page: the person's notices and their marks.
@@ -2372,6 +2412,11 @@ type CheckRow struct {
 	Revision    int    `json:"revision,omitempty"`
 	CandidateID string `json:"candidate_id,omitempty"`
 	EntryID     string `json:"entry_id,omitempty"`
+	// Change, SourceRef and ChangeHead are the change the attempt judges, on a standing listing
+	// alone: the live change at a head's commit, or a candidate's entry's, at its enqueued head.
+	Change     *ChangeName `json:"change,omitempty"`
+	SourceRef  string      `json:"source_ref,omitempty"`
+	ChangeHead string      `json:"change_head,omitempty"`
 	// Base is what its diff is read against, and DefsOID the checks file its
 	// definition came from — the file of the branch it is checked for, its
 	// key's Target.
@@ -2411,14 +2456,21 @@ type CheckRow struct {
 
 // CheckDetail is one attempt read whole ([ReadCheck]): its row, the
 // definition it ran under, its output's tail, the failures its ending named,
-// and the log a failed run kept — each nil or empty where the attempt carries
-// none.
+// the log a failed run kept, its test counts and its output's lines — each
+// nil or empty where the attempt carries none.
 type CheckDetail struct {
 	CheckRow
-	Def      *CheckDef      `json:"def,omitempty"`
-	Tail     string         `json:"tail,omitempty"`
-	Failures []CheckFailure `json:"failures,omitempty"`
-	Log      *CheckLog      `json:"log,omitempty"`
+	Def  *CheckDef `json:"def,omitempty"`
+	Tail string    `json:"tail,omitempty"`
+	// Tests, LogLines and TailCut are its ending's ([CheckFinished]); TailFirstLine is the number of
+	// Tail's first line in the whole output ([TailFirstLine]), 0 where its lines were not counted.
+	// Each is absent from an ending before [CheckCountsVersion].
+	Tests         *CheckTests    `json:"tests,omitempty"`
+	LogLines      int            `json:"log_lines,omitempty"`
+	TailFirstLine int            `json:"tail_first_line,omitempty"`
+	TailCut       bool           `json:"tail_cut,omitempty"`
+	Failures      []CheckFailure `json:"failures,omitempty"`
+	Log           *CheckLog      `json:"log,omitempty"`
 }
 
 // CheckQuery narrows a `checks` read to one change's attempts or one
@@ -2502,6 +2554,10 @@ type CheckQuery struct {
 	// AN ESTATE REQUEST'S FIELD, as State is: the domain landed on main with
 	// it ([RecordVersion]).
 	Until time.Time `json:"until,omitzero"`
+	// Standing lists where each check stands, in its order ([StandingOrder]): each key's latest
+	// attempt of a live change's head, its newest queue entry or a branch's tip, running ones
+	// included; "" is the listing above. A request field, so an older build refuses it unread.
+	Standing StandingOrder `json:"standing,omitempty"`
 }
 
 // ChecksDueQuery is a `checks_due` read's question, REQUIRED as a

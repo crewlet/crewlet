@@ -49,7 +49,9 @@
 // budget — answered its first lines up to its last, and the lines after that
 // are unread, so the asker keeps no line of any repository past that last
 // (prefixEnd, from the outcome each node answers for each repository): every
-// line of the search before the answer's last is in the answer.
+// line of the search before the answer's last is in the answer. A line keeps
+// the matches, context lines and file total its node answered, since one node
+// answers a repository a round.
 //
 // # A page continues after its key
 //

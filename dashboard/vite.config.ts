@@ -497,6 +497,9 @@ export default defineConfig({
       // Gitlet's questions, asked on the query registry's generic REST
       // form rather than the socket (lib/useCodeQuery.ts).
       "/query": { target: "http://localhost:8000" },
+      // A commit's ZIP and the probe that asks whether this fleet serves it
+      // (routes/gitlet/repo/downloads.ts).
+      "/git": { target: "http://localhost:8000" },
       // The Dashboard Assistant: its conversations, a turn's stream of
       // server-sent events, a stop, an approval and a table card's export
       // (protocol/assistant.ts).
