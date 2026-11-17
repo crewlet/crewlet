@@ -41,7 +41,7 @@ import {
   Textarea,
   VisuallyHidden,
 } from "@crewlethq/ui";
-import { PencilGlyph } from "@crewlethq/icons/glyphs";
+import { PencilGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import { Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { baseName, isWholeOID, refName, shortOID } from "~/lib/code.ts";
@@ -93,16 +93,19 @@ export function targetHeld(target: CommitTarget): string | undefined {
   return undefined;
 }
 
-/** "New file", in a directory's bar: a file added under it. */
+/** "New file", in a directory's bar, or a plus at a file's tree: a file added under it. */
 export function NewFileButton({
   repo,
   target,
   dir,
+  compact = false,
 }: {
   repo: CodeRepoDetail;
   target: CommitTarget;
   /** The directory on screen, "" for the root. */
   dir: string;
+  /** A plus with no words, at the head of a file's tree. */
+  compact?: boolean;
 }) {
   const write = useAct("code_commit_files");
   const viewer = useViewer();
@@ -112,11 +115,17 @@ export function NewFileButton({
       <WriteButton
         write={write}
         size="small"
-        variant="secondary"
+        variant={compact ? "ghost" : "secondary"}
         blocked={branchWriteHeld(repo, viewer) ?? targetHeld(target)}
         onPress={() => setOpen(true)}
+        {...(compact
+          ? {
+              "aria-label": `Add a file to ${dir || repo.name}`,
+              leadingIcon: <PlusGlyph size="sm" />,
+            }
+          : {})}
       >
-        New file
+        {compact ? <VisuallyHidden>New file</VisuallyHidden> : "New file"}
       </WriteButton>
       {open && target.branch && (
         <CommitDialog

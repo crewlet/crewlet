@@ -1,13 +1,14 @@
 /**
  * GITLET'S PAGES, LAID OUT: a comparison's title stays clear of the files'
  * sticky toolbar under it, the revision picker and the clone panel stay inside
- * the viewport, and code coloured by kind keeps the box it had plain.
+ * the viewport, code coloured by kind keeps the box it had plain, and a file's
+ * tree scrolls alone beside it.
  */
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { page } from "vitest/browser";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
-import { InertWebSocket, LayoutClient } from "~/test/layout.tsx";
+import { InertWebSocket, LayoutClient, overflowing, sidewaysScrollers } from "~/test/layout.tsx";
 import { eventually } from "~/test/settle.ts";
 import { DiffView, type DiffHunk } from "~/components/DiffView.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -16,6 +17,8 @@ import { ChangesGrid } from "./Changes.tsx";
 import { BranchChip } from "./ui.tsx";
 import { ComparePage } from "./commit/ComparePage.tsx";
 import { RepositoryPage } from "./repo/RepositoryPage.tsx";
+import { forgetTreeChoice } from "./repo/FileView.tsx";
+import { forgetTrees } from "./repo/tree.ts";
 import { SYNTAX_CLASS } from "./syntax.tsx";
 
 const POSITION = { stream: "CREWLET_CODE_LOG", generation: 1, seq: 12 };
@@ -145,11 +148,15 @@ function answer(url: URL): Response {
         kind: "tree",
         tree: {
           tree: BASE,
-          entries: [
-            { mode: "040000", type: "tree", oid: HEAD, path: "cmd" },
-            { mode: "100644", type: "blob", oid: HEAD, path: "go.mod", size: 1200 },
-          ],
-          total: 2,
+          // THE ROOT, and `cmd` for the file view's tree.
+          entries:
+            url.searchParams.get("path") === "cmd"
+              ? [{ mode: "100644", type: "blob", oid: HEAD, path: "cmd/main.go", size: 120 }]
+              : [
+                  { mode: "040000", type: "tree", oid: HEAD, path: "cmd" },
+                  { mode: "100644", type: "blob", oid: HEAD, path: "go.mod", size: 1200 },
+                ],
+          total: url.searchParams.get("path") === "cmd" ? 1 : 2,
         },
         position: POSITION,
         level: "session",
@@ -186,6 +193,8 @@ afterEach(() => {
   host?.remove();
   root = null;
   host = null;
+  forgetTrees();
+  forgetTreeChoice();
   vi.unstubAllGlobals();
   location.hash = "";
 });
@@ -1029,3 +1038,226 @@ for (const [viewport, column] of [
     expect(box.right).toBeLessThanOrEqual(window.innerWidth);
   });
 }
+
+/** The shell's scroller at `height` holding the content column, so `100cqb` and the sticky pane resolve. */
+function mountScrolled(node: React.ReactNode, width: number, height: number) {
+  host = document.createElement("div");
+  host.className = "app";
+  host.innerHTML = `<main class="crewlet-app-shell__main" style="display:block;block-size:${height}px;overflow-y:auto"><div class="crewlet-app-shell__content" style="display:flex;flex-direction:column;width:${width}px"></div></main>`;
+  document.body.append(host);
+  root = createRoot(host.querySelector(".crewlet-app-shell__content")!);
+  flushSync(() =>
+    root!.render(
+      <LayoutClient answers={{}} org={ORG}>
+        {node}
+      </LayoutClient>,
+    ),
+  );
+  return host.querySelector<HTMLElement>("main")!;
+}
+
+const LONG_NAME = "a-file-named-past-any-pane-".padEnd(120, "x") + ".go";
+
+/** A root of 60 entries, one named past the pane, and cmd/web/main.go of 400 lines, line 3 wide. */
+function withFileView() {
+  const blob = (path: string) => ({ mode: "100644", type: "blob", oid: HEAD, path, size: 10 });
+  const levels: Record<string, unknown[]> = {
+    "": [
+      { mode: "040000", type: "tree", oid: HEAD, path: "cmd" },
+      blob(LONG_NAME),
+      ...Array.from({ length: 58 }, (_, i) => blob(`file-${String(i).padStart(2, "0")}.go`)),
+    ],
+    cmd: [{ mode: "040000", type: "tree", oid: HEAD, path: "cmd/web" }],
+    "cmd/web": [blob("cmd/web/main.go")],
+  };
+  const lines = Array.from({ length: 400 }, (_, i) =>
+    i === 2 ? `var wide = "${"w".repeat(300)}"` : `// line ${i + 1}`,
+  );
+  const resolved = { ref: { ref: "refs/heads/main", oid: BASE } };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), location.origin);
+      const p = url.searchParams;
+      switch (url.pathname) {
+        case "/query/code_tree": {
+          const entries = levels[p.get("path") ?? ""] ?? [];
+          return json({
+            repo: "web",
+            kind: "tree",
+            tree: { tree: BASE, entries, total: entries.length },
+            resolved,
+          });
+        }
+        case "/query/code_blob":
+          if (p.get("path") !== "cmd/web/main.go") break;
+          return json({
+            repo: "web",
+            kind: "blob",
+            blob: {
+              path: "cmd/web/main.go",
+              oid: HEAD,
+              size: lines.join("\n").length + 1,
+              lines: lines.length,
+              start_line: 1,
+              end_line: lines.length,
+              text: lines.join("\n") + "\n",
+            },
+            resolved,
+          });
+        case "/query/code_log":
+          return json({
+            repo: "web",
+            kind: "log",
+            log: {
+              commits: [
+                {
+                  oid: BASE,
+                  author: "Jane Founder",
+                  authored_at: "2026-11-15T10:00:00Z",
+                  committed_at: "2026-11-15T10:00:00Z",
+                  subject: "server: wait for requests in flight before exiting",
+                },
+              ],
+              scanned: 1,
+            },
+          });
+        case "/query/code_find":
+          return json({
+            repo: "web",
+            kind: "find",
+            find: {
+              tree: BASE,
+              matches: [{ path: "cmd/web/main.go", oid: HEAD, mode: "100644", spans: [[8, 12]] }],
+              total: 1,
+              files: 60,
+            },
+          });
+      }
+      return answer(url);
+    }),
+  );
+}
+
+/** The file view of cmd/web/main.go in a scroller of `height`, once its tree has drawn. */
+async function fileView(viewport: number, column: number, height: number) {
+  await page.viewport(viewport, height);
+  withFileView();
+  location.hash = "#/gitlet/repos/web?path=cmd%2Fweb%2Fmain.go";
+  const main = mountScrolled(<RepositoryPage repo="web" />, column, height);
+  await eventually(() => {
+    expect(document.querySelector("#L400")).toBeTruthy();
+    expect(document.querySelector(".code-latest__subject")).toBeTruthy();
+  });
+  return main;
+}
+
+const treeDrawn = () =>
+  eventually(() => {
+    const list = document.querySelector<HTMLElement>(".code-tree__scroll");
+    expect(list?.querySelector('[aria-current="page"]')).toBeTruthy();
+    return list!;
+  });
+
+// A FILE'S TREE SCROLLS ALONE BESIDE THE FILE, sticky in the page's scroller. Mutation: drop the
+// list's `min-block-size: 0` (the pane grows past the view), or `position: sticky`, and this fails.
+test("a file's tree scrolls alone beside the file, at 1440px", async () => {
+  const main = await fileView(1440, 1150, 700);
+  const list = await treeDrawn();
+  const pane = document.querySelector<HTMLElement>(".code-tree")!;
+  expect(list.scrollHeight).toBeGreaterThan(list.clientHeight);
+  const current = list.querySelector('[aria-current="page"]')!.getBoundingClientRect();
+  const view = list.getBoundingClientRect();
+  expect(current.top).toBeGreaterThanOrEqual(view.top - 0.5);
+  expect(current.bottom).toBeLessThanOrEqual(view.bottom + 0.5);
+
+  const card = document.querySelector<HTMLElement>(".code-blob")!;
+  const cardTop = card.getBoundingClientRect().top;
+  main.scrollTop = 2000;
+  await eventually(() => expect(card.getBoundingClientRect().top).toBeLessThan(cardTop - 1000));
+  const step =
+    parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--spacing-4")) || 16;
+  expect(
+    Math.abs(pane.getBoundingClientRect().top - main.getBoundingClientRect().top),
+  ).toBeLessThanOrEqual(step + 1);
+  // STUCK, THE PANE ENDS INSIDE THE VIEW: its list, not the pane, holds the rest.
+  expect(pane.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    main.getBoundingClientRect().bottom + 0.5,
+  );
+
+  const at = main.scrollTop;
+  list.scrollTop = 300;
+  list.dispatchEvent(new Event("scroll"));
+  expect(list.scrollTop).toBeGreaterThan(0);
+  expect(main.scrollTop).toBe(at);
+});
+
+// A FILE'S VIEW HOLDS ITS WIDTH: only the code scrolls sideways, a long name ellipses in its row,
+// and a phone hides the pane until asked, then draws it above the file at half the view. Mutation:
+// the row's name without `min-width: 0`, the phone rule dropped, or the pane drawn unmeasured.
+for (const [viewport, column] of [
+  [640, 608],
+  [1440, 1150],
+] as const) {
+  test(`a file's view holds its width at ${viewport}px`, async () => {
+    const main = await fileView(viewport, column, 800);
+    const view = document.querySelector<HTMLElement>(".code-file-view")!;
+    const card = document.querySelector<HTMLElement>(".code-blob")!;
+    const check = () => {
+      expect(overflowing(view)).toEqual([]);
+      const content = document.querySelector(".crewlet-app-shell__content")!;
+      expect(view.getBoundingClientRect().right).toBeLessThanOrEqual(
+        content.getBoundingClientRect().right + 0.5,
+      );
+      expect(sidewaysScrollers(card.querySelector(".code-source")!)).toEqual([
+        expect.stringContaining("code-source"),
+      ]);
+      expect(sidewaysScrollers(card)).toEqual([]);
+      const frame = card.getBoundingClientRect();
+      for (const el of card.querySelectorAll<HTMLElement>(".code-blob__actions > *")) {
+        expect(el.getBoundingClientRect().right).toBeLessThanOrEqual(frame.right + 0.5);
+      }
+    };
+    if (viewport === 1440) {
+      const list = await treeDrawn();
+      const long = [...list.querySelectorAll<HTMLElement>(".code-ftree__name")].find((n) =>
+        n.textContent?.startsWith("a-file-named"),
+      )!;
+      expect(long.scrollWidth).toBeGreaterThan(long.clientWidth);
+      expect(long.getClientRects()).toHaveLength(1);
+      check();
+      return;
+    }
+    expect(document.querySelector(".code-tree")).toBeNull();
+    // A HIDDEN PANE NEVER MOUNTED, so it asked for no directory.
+    const treeReads = vi
+      .mocked(fetch)
+      .mock.calls.filter(([u]) => String(u).includes("/query/code_tree?"));
+    expect(treeReads).toEqual([]);
+    check();
+    await page.getByRole("button", { name: "Show the file tree" }).click();
+    const list = await treeDrawn();
+    expect(list.clientHeight).toBeLessThanOrEqual(main.clientHeight / 2 + 1);
+    const pane = document.querySelector<HTMLElement>(".code-tree")!;
+    expect(pane.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      card.getBoundingClientRect().top,
+    );
+    check();
+  });
+}
+
+// GO TO FILE'S LIST STAYS IN THE VIEWPORT from the pane too. Mutation: a fixed width on the
+// pane's field, and this fails.
+test("Go to file's list stays inside the viewport from a file's tree at 1440px", async () => {
+  await fileView(1440, 1150, 800);
+  await treeDrawn();
+  await page.getByRole("combobox", { name: "Go to file" }).fill("main");
+  const list = await eventually(() => {
+    const found = document.querySelector<HTMLElement>("[role=listbox]");
+    expect(found?.textContent).toContain("cmd/web/main.go");
+    return found!;
+  });
+  const box = list.getBoundingClientRect();
+  expect(box.left).toBeGreaterThanOrEqual(0);
+  expect(box.right).toBeLessThanOrEqual(window.innerWidth);
+});

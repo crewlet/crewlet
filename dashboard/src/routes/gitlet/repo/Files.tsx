@@ -4,9 +4,9 @@
  * code host draws them. A directory is one card: the latest commit that
  * touched it across its head, then its entries, each with the commit that last
  * changed it and when; at the root its README and LICENSE follow as tabs of
- * one card under the files. A file is one card: its name, its size and its
- * lines across its head, with the switch between its lines and its blame and
- * what a reader does with it, then its lines.
+ * one card under the files. A file is read beside the repository's tree
+ * (`FileView.tsx`): over it, its crumbs and its latest commit; then its card,
+ * its lines or its blame under a head of what a reader does with it.
  *
  * # The address is the place
  *
@@ -143,6 +143,7 @@ import {
 } from "./FileWrites.tsx";
 import { CloneAddress, CodeMenu, NO_CLONE_ADDRESS } from "./CodeMenu.tsx";
 import { GoToFile } from "./GoToFile.tsx";
+import { FileView } from "./FileView.tsx";
 import "~/styles/gitlet.css";
 
 /** What one page of a path read holds: a listing's entries, or one page of a file. */
@@ -304,6 +305,99 @@ function PathView({
   const commit = commitOf(rev, first.data);
   const target = targetOf(rev, first.data);
   const dir = Boolean(first.data?.tree);
+  // A PATH NOT ANSWERED YET keeps the last kind drawn, so moving between files keeps
+  // the pane; a first one is a file where the address picks lines or the blame.
+  const [kind, setKind] = useState<"file" | "dir" | null>(null);
+  const now = file ? "file" : dir ? "dir" : null;
+  if (now && now !== kind) setKind(now);
+  const guess = kind ?? (picked || blame ? "file" : null);
+  if (now === "file" || (now === null && guess === "file")) {
+    return (
+      <FileView
+        repo={repo}
+        rev={rev}
+        path={path}
+        commit={commit}
+        target={target}
+        onRev={onRev}
+        latest={
+          <Card padding="none" className="code-latest--card">
+            <LatestCommit
+              repo={repo}
+              rev={rev}
+              path={path}
+              commit={commit}
+              resolved={first.data?.resolved?.ref?.ref ?? ""}
+              by={first.data?.pushed_by?.[commit]}
+              history={false}
+            />
+          </Card>
+        }
+      >
+        {file ? (
+          <FileCard
+            repo={repo}
+            rev={rev}
+            path={path}
+            commit={commit}
+            file={file}
+            blame={blame}
+            onLens={onLens}
+            picked={picked}
+            target={target}
+          >
+            {blame ? (
+              // THE BLAME IS READ AT THE COMMIT THE FILE WAS, where the file's
+              // read resolved one: the lines it attributes are the lines on
+              // screen.
+              <Blame
+                repo={repo}
+                rev={commit || rev}
+                path={path}
+                blob={file}
+                total={file.lines}
+                picked={picked}
+                onPick={onPick}
+              />
+            ) : !file.binary && file.lines > 0 ? (
+              <FileLines
+                repo={repo.name}
+                rev={rev}
+                path={path}
+                params={base}
+                opened={start}
+                opening={first}
+                paged={paged}
+                total={file.lines}
+                picked={picked}
+                onPick={onPick}
+              />
+            ) : (
+              <PathBody
+                repo={repo}
+                rev={rev}
+                path={path}
+                commit={commit}
+                first={first}
+                paged={paged}
+              />
+            )}
+          </FileCard>
+        ) : (
+          <Card padding="none" className="code-blob">
+            <PathBody
+              repo={repo}
+              rev={rev}
+              path={path}
+              commit={commit}
+              first={first}
+              paged={paged}
+            />
+          </Card>
+        )}
+      </FileView>
+    );
+  }
   return (
     <Stack gap={4}>
       <FilesBar
@@ -316,68 +410,17 @@ function PathView({
         commit={commit}
         dir={dir}
       />
-      {file ? (
-        <FileCard
+      <Card padding="none" className="code-browser">
+        <LatestCommit
           repo={repo}
           rev={rev}
           path={path}
           commit={commit}
-          file={file}
-          blame={blame}
-          onLens={onLens}
-          picked={picked}
-          target={target}
-        >
-          {blame ? (
-            // THE BLAME IS READ AT THE COMMIT THE FILE WAS, where the file's
-            // read resolved one: the lines it attributes are the lines on
-            // screen.
-            <Blame
-              repo={repo}
-              rev={commit || rev}
-              path={path}
-              blob={file}
-              total={file.lines}
-              picked={picked}
-              onPick={onPick}
-            />
-          ) : !file.binary && file.lines > 0 ? (
-            <FileLines
-              repo={repo.name}
-              rev={rev}
-              path={path}
-              params={base}
-              opened={start}
-              opening={first}
-              paged={paged}
-              total={file.lines}
-              picked={picked}
-              onPick={onPick}
-            />
-          ) : (
-            <PathBody
-              repo={repo}
-              rev={rev}
-              path={path}
-              commit={commit}
-              first={first}
-              paged={paged}
-            />
-          )}
-        </FileCard>
-      ) : (
-        <Card padding="none" className="code-browser">
-          <LatestCommit
-            repo={repo}
-            rev={rev}
-            path={path}
-            commit={commit}
-            resolved={first.data?.resolved?.ref?.ref ?? ""}
-            by={first.data?.pushed_by?.[commit]}
-          />
-          <PathBody repo={repo} rev={rev} path={path} commit={commit} first={first} paged={paged} />
-        </Card>
-      )}
+          resolved={first.data?.resolved?.ref?.ref ?? ""}
+          by={first.data?.pushed_by?.[commit]}
+        />
+        <PathBody repo={repo} rev={rev} path={path} commit={commit} first={first} paged={paged} />
+      </Card>
     </Stack>
   );
 }
@@ -746,6 +789,7 @@ function LatestCommit({
   commit,
   resolved,
   by,
+  history = true,
 }: {
   repo: CodeRepoDetail;
   rev: string;
@@ -756,6 +800,8 @@ function LatestCommit({
   resolved: string;
   /** The push that introduced `commit`, where the listing's read names one. */
   by: CodePushedBy | undefined;
+  /** Its History link; a file's is in its crumbs' row. */
+  history?: boolean;
 }) {
   const now = useNow();
   const whoName = useWhoName();
@@ -767,7 +813,7 @@ function LatestCommit({
   const latest = read.data?.log?.commits?.[0];
   const pages = useMemo(() => (latest ? [[latest.oid]] : []), [latest]);
   const marks = useCommitMarks(repo.name, pages);
-  const history = repoHref(repo.name, { tab: "commits", ref: rev, path });
+  const historyHref = repoHref(repo.name, { tab: "commits", ref: rev, path });
   if (!latest) {
     return (
       <div className="code-latest">
@@ -830,14 +876,16 @@ function LatestCommit({
         <time className="code-latest__when" dateTime={at} title={fmtDateTime(at)}>
           {relTime(at, now)}
         </time>
-        <ButtonLink
-          size="small"
-          variant="ghost"
-          href={history}
-          leadingIcon={<RotateCcwClockGlyph size="sm" />}
-        >
-          History
-        </ButtonLink>
+        {history && (
+          <ButtonLink
+            size="small"
+            variant="ghost"
+            href={historyHref}
+            leadingIcon={<RotateCcwClockGlyph size="sm" />}
+          >
+            History
+          </ButtonLink>
+        )}
       </span>
     </div>
   );
@@ -939,14 +987,6 @@ function FileCard({
               ]}
             />
           )}
-          <ButtonLink
-            size="small"
-            variant="ghost"
-            href={repoHref(repo.name, { tab: "commits", ref: rev, path })}
-            leadingIcon={<RotateCcwClockGlyph size="sm" />}
-          >
-            History
-          </ButtonLink>
           {commit && (
             <ButtonLink
               size="small"

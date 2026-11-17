@@ -12,9 +12,12 @@
  *
  * THE STATUS IS A LETTER AND THE COUNTS ARE WORDS, in the tertiary ink, each
  * with its word in the title (`dashboard-design.md#the-gitlet-workspace`).
+ *
+ * Its row ([TreeRow]) is drawn by both trees, the diff's and the repository's
+ * (`repo/RepoTree.tsx`).
  */
 
-import { useMemo } from "react";
+import { useMemo, type CSSProperties, type ReactNode } from "react";
 import { FolderGlyph } from "@crewlethq/icons/glyphs";
 import { baseName } from "~/lib/code.ts";
 import { fmtCount } from "~/lib/format.ts";
@@ -80,6 +83,33 @@ function fold(dir: Dir): Dir {
   return { ...dir, dirs };
 }
 
+/** One row of a tree: its depth, an optional chevron, its glyph, its name and what ends it. */
+export function TreeRow({
+  depth = 0,
+  chevron,
+  glyph,
+  name,
+  end,
+}: {
+  depth?: number;
+  chevron?: ReactNode;
+  glyph: ReactNode;
+  name: ReactNode;
+  end?: ReactNode;
+}) {
+  return (
+    <span
+      className="code-ftree__row"
+      style={depth ? ({ "--code-depth": depth } as CSSProperties) : undefined}
+    >
+      {chevron}
+      {glyph}
+      <span className="code-ftree__name">{name}</span>
+      {end !== undefined && <span className="code-ftree__end">{end}</span>}
+    </span>
+  );
+}
+
 /** A file's row: its status letter, its name and its counts, a press that opens it. */
 function FileRow({
   file,
@@ -104,13 +134,19 @@ function FileRow({
       disabled={Boolean(file.path_b64)}
       onClick={() => onOpen(file)}
     >
-      <span className="code-ftree__status" aria-hidden="true">
-        {file.status}
-      </span>
-      <span className="code-ftree__name">{baseName(file.path)}</span>
-      <span className="code-ftree__counts" aria-hidden="true">
-        {counts}
-      </span>
+      <TreeRow
+        glyph={
+          <span className="code-ftree__status" aria-hidden="true">
+            {file.status}
+          </span>
+        }
+        name={baseName(file.path)}
+        end={
+          <span className="code-ftree__counts" aria-hidden="true">
+            {counts}
+          </span>
+        }
+      />
     </button>
   );
 }
