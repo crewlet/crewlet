@@ -1054,11 +1054,13 @@ func (r *Reader) check(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 	key := CheckKey{RepoID: repo.ref.ID, OID: q.Checks.OID, Target: q.Checks.Target, Name: q.Checks.Name,
 		Attempt: q.Checks.Attempt}
 	var (
-		d                   CheckDetail
-		def, failures, tail string
+		d                                   CheckDetail
+		def, failures, tail                 string
+		testsTotal                          sql.NullInt64
+		testsFailed, testsSkipped, logLines int
 	)
 	d.CheckRow, err = scanCheck(tx.QueryRowContext(ctx, checkWholeSQL, key.RepoID, key.OID, key.Target, key.Name,
-		key.Attempt).Scan, &def, &failures, &tail)
+		key.Attempt).Scan, &def, &failures, &tail, &testsTotal, &testsFailed, &testsSkipped, &logLines, &d.TailCut)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return fmt.Errorf("%w: %s holds no attempt %d of check %s of %s for %s", ErrCheckNotFound,
@@ -1068,6 +1070,10 @@ func (r *Reader) check(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 	}
 	d.Repo = repo.ref.Name
 	d.Tail = tail
+	if testsTotal.Valid {
+		d.Tests = &CheckTests{Total: int(testsTotal.Int64), Failed: testsFailed, Skipped: testsSkipped}
+	}
+	d.LogLines, d.TailFirstLine = logLines, TailFirstLine(logLines, tail)
 	if def != "" {
 		d.Def = &CheckDef{}
 		if err := json.Unmarshal([]byte(def), d.Def); err != nil {
@@ -1544,7 +1550,8 @@ func cutWindowCursor(s string) (int64, string, string, string, string, int, bool
 const (
 	checkRowSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY ` + checksKey + `
 		WHERE repo_id = ? AND commit_oid = ? AND target_ref = ? AND name = ? AND attempt = ?`
-	checkWholeSQL = `SELECT ` + checkColumns + `, def, failures, tail FROM code_checks INDEXED BY ` + checksKey + `
+	checkWholeSQL = `SELECT ` + checkColumns + `, def, failures, tail, tests_total, tests_failed, tests_skipped,
+		log_lines, tail_cut FROM code_checks INDEXED BY ` + checksKey + `
 		WHERE repo_id = ? AND commit_oid = ? AND target_ref = ? AND name = ? AND attempt = ?`
 	checkLogSQL = `SELECT object, hash, size FROM code_check_logs
 		WHERE repo_id = ? AND commit_oid = ? AND target_ref = ? AND name = ? AND attempt = ?`

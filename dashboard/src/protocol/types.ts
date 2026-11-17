@@ -10021,6 +10021,12 @@ export interface CodeCheckFailure {
 export interface CodeCheckDetail extends CodeCheckRow {
   def?: { name: string; run: string; timeout_seconds: number; paths?: string[]; run_in?: string };
   tail?: string;
+  /** Its JUnit report's counts; absent where none was read or from an older build. */
+  tests?: { total: number; failed?: number; skipped?: number };
+  /** Lines of the whole output, the tail's first line's number in it, and whether the tail begins inside that line; absent where uncounted. */
+  log_lines?: number;
+  tail_first_line?: number;
+  tail_cut?: boolean;
   failures?: CodeCheckFailure[];
   log?: { object: string; hash: string; size: number };
 }

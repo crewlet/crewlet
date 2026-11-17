@@ -62,7 +62,8 @@ var suiteAt = time.Unix(1_700_000_000, 0).UTC()
 // subject carrying one of gitlet.OwnedPathsVersion's fields alone. A new op's
 // row is a record of it: founder's viewed marks on their own subject, and a
 // repository's viewed key on its own. And the seat's push as an attempt, its
-// one command refused by a protection, carrying the one commit it offered.
+// one command refused by a protection, carrying the one commit it offered. And
+// a check's ending on its repository's checks subject carrying one count.
 func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 	const repo = "0190f3c4-0000-7000-8000-00000000c0de"
 	founder := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}
@@ -133,6 +134,22 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		entry.Commands[0].Result, entry.Commands[0].Reason = gitlet.ResultNG, gitlet.RefusalProtectedDirect
 		entry.Via, entry.Offered = gitlet.ViaGit, 1
 		op, payload = gitlet.OpPush, gitlet.PushBatch{RepoID: repo, Pushes: []gitlet.PushEntry{entry}}
+	case "CheckFinished.Tests", "CheckFinished.LogLines", "CheckFinished.TailCut":
+		exit := 1
+		ended := gitlet.CheckFinished{CheckKey: gitlet.CheckKey{RepoID: repo, OID: oidOf("B"), Target: mainRef,
+			Name: "unit", Attempt: 1}, State: gitlet.CheckStateFailed, Reason: gitlet.CheckReasonExit,
+			ExitCode: &exit, FinishedAt: suiteAt}
+		switch field.Name {
+		case "CheckFinished.Tests":
+			exit = 0
+			ended.State, ended.Tests = gitlet.CheckStatePassed, &gitlet.CheckTests{Total: 214}
+		case "CheckFinished.LogLines":
+			ended.Tail, ended.LogLines = "FAIL\n", 1201
+		default:
+			ended.Tail, ended.TailCut = "...ed\n", true
+		}
+		op, payload = gitlet.OpCheckFinished, ended
+		subject, scope = gitlet.ChecksSubject(repo), gitlet.Scope{gitlet.ChecksPath(repo)}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}

@@ -75,7 +75,9 @@ import (
 //     repository's are digested under ([OpViewed], [OpViewedKey],
 //     [ViewedVersion]).
 //   - 5: how many commits a push a rule refused offered ([OfferedVersion]).
-const RecordVersion = OfferedVersion
+//   - 6: a check's test counts, its output's lines and whether its tail
+//     begins inside one ([CheckCountsVersion]).
+const RecordVersion = CheckCountsVersion
 
 // WorkingForVersion is the version from which a record carries whom an
 // agent's write was made for — on a routing beside its actor, or beside none
@@ -100,6 +102,10 @@ const ViewedVersion = 4
 // OfferedVersion is the version from which a push's attempt carries how many commits it offered
 // (code_pushes.offered); a record below it keeps no count.
 const OfferedVersion = 5
+
+// CheckCountsVersion is the version from which a check's ending carries its test counts and its
+// output's lines (code_checks.tests_*, log_lines, tail_cut); an ending below it keeps none.
+const CheckCountsVersion = 6
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped
@@ -143,6 +149,10 @@ const GateRecordVersion = 1
 //
 // THE COMMITS AN ATTEMPT OFFERED are version 5 on a push alone, at `mutation.pushes.offered`; an
 // attempt that offered none carries nothing new and stays at 1.
+//
+// A CHECK'S COUNTS are version 6 on an ending alone: its JUnit report's tests at `mutation.tests`,
+// its output's lines at `mutation.log_lines` and its tail's cut at `mutation.tail_cut`, each a row
+// of its own, a field's version being the field's.
 var versionedFields = statelog.RecordFields{
 	{Name: "ChangeRouting.WorkingFor", Since: WorkingForVersion,
 		Path: []string{"mutation", "routing", "working_for"}},
@@ -163,6 +173,12 @@ var versionedFields = statelog.RecordFields{
 	{Name: "RecordEnvelope.Op viewed_key", Since: ViewedVersion, Path: []string{"op"}, Equals: string(OpViewedKey)},
 	{Name: "PushEntry.Offered", Since: OfferedVersion, Op: string(OpPush),
 		Path: []string{"mutation", "pushes", "offered"}},
+	{Name: "CheckFinished.Tests", Since: CheckCountsVersion, Op: string(OpCheckFinished),
+		Path: []string{"mutation", "tests"}},
+	{Name: "CheckFinished.LogLines", Since: CheckCountsVersion, Op: string(OpCheckFinished),
+		Path: []string{"mutation", "log_lines"}},
+	{Name: "CheckFinished.TailCut", Since: CheckCountsVersion, Op: string(OpCheckFinished),
+		Path: []string{"mutation", "tail_cut"}},
 }
 
 // VersionedFields is the table, for the conformance suite.

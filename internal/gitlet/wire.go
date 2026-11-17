@@ -2437,14 +2437,21 @@ type CheckRow struct {
 
 // CheckDetail is one attempt read whole ([ReadCheck]): its row, the
 // definition it ran under, its output's tail, the failures its ending named,
-// and the log a failed run kept — each nil or empty where the attempt carries
-// none.
+// the log a failed run kept, its test counts and its output's lines — each
+// nil or empty where the attempt carries none.
 type CheckDetail struct {
 	CheckRow
-	Def      *CheckDef      `json:"def,omitempty"`
-	Tail     string         `json:"tail,omitempty"`
-	Failures []CheckFailure `json:"failures,omitempty"`
-	Log      *CheckLog      `json:"log,omitempty"`
+	Def  *CheckDef `json:"def,omitempty"`
+	Tail string    `json:"tail,omitempty"`
+	// Tests, LogLines and TailCut are its ending's ([CheckFinished]); TailFirstLine is the number of
+	// Tail's first line in the whole output ([TailFirstLine]), 0 where its lines were not counted.
+	// Each is absent from an ending before [CheckCountsVersion].
+	Tests         *CheckTests    `json:"tests,omitempty"`
+	LogLines      int            `json:"log_lines,omitempty"`
+	TailFirstLine int            `json:"tail_first_line,omitempty"`
+	TailCut       bool           `json:"tail_cut,omitempty"`
+	Failures      []CheckFailure `json:"failures,omitempty"`
+	Log           *CheckLog      `json:"log,omitempty"`
 }
 
 // CheckQuery narrows a `checks` read to one change's attempts or one
