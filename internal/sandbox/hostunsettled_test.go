@@ -452,6 +452,56 @@ func TestASeatLetGoOfForgetsTheClockOnItsHostsStore(t *testing.T) {
 	}
 }
 
+// NO PARTY BUT THIS NODE ENDS A RUN WHOSE HOST'S STORE IT CLOCKS WHILE IT HOLDS
+// THE SEAT, which is what lets the clock go only where this node settles the
+// run, or at the seat's release ([Coordinator.hostClocked]): every ending is
+// decided by a coordinator's own [Coordinator.endRun], which drops the clock on
+// the node that decides it, under a license fenced to the seat's lease. The
+// collection that started the clock claimed the job under this node's lease,
+// stamping its epoch on the row, so the seat's earlier holder, a person's stop
+// reaching it while it still takes itself for the seat's holder, is outranked
+// and ends nothing; and once it knows it lost the seat it refuses the stop up
+// front. Ended there, the clock here would have outlived the run, and every
+// delivery of its completion would have been handed back and renewed for as
+// long as this node held the seat.
+//
+// Mutation: let a decision under an older lease than the row's land, and the
+// earlier holder's stop ends the run under this node's clock.
+func TestNoOtherPartyEndsARunWhoseHostThisNodeClocks(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	unsettledHost(t, rig)
+	here := Fence{Owner: "node-b:1", Epoch: rigLease.Epoch + 1}
+	rig.coordinator.lease = leased(here)
+	handedBackUnsettled(t, rig, "the host's store did not answer")
+	if !clocked(rig) {
+		t.Fatal("the premise: no clock was started on the host whose store did not answer")
+	}
+	if got := rig.get("t1"); got.OwnerEpoch != here.Epoch {
+		t.Fatalf("the premise: the collection's claim left the row at epoch %d, want this node's %d",
+			got.OwnerEpoch, here.Epoch)
+	}
+	earlier := rig.hostOn(t, "node-a", rig.pending)
+	for _, step := range []struct {
+		name  string
+		lease func(string) (Fence, bool)
+	}{
+		{"still taking itself for the seat's holder", leased(rigLease)},
+		{"knowing it lost the seat", notLeased},
+	} {
+		earlier.lease = step.lease
+		err := earlier.StopSeat(t.Context(), "swe", stopper)
+		got := rig.get("t1")
+		if got.Ending != nil || got.Status != StatusRunning {
+			t.Fatalf("the seat's earlier holder %s ended the run (%s, ending %+v, stop answered %v) while this "+
+				"node holds the seat and clocks its host's store", step.name, got.Status, got.Ending, err)
+		}
+	}
+	if !clocked(rig) {
+		t.Fatal("the clock on the host's store went though nothing settled the run")
+	}
+}
+
 // A CLOCK ON A HOST'S STORE IS KEPT UNTIL ITS RUN SETTLES, and goes there,
 // whatever that comes to. It is this node's, kept in memory per job to bound a
 // collection the box's host keeps handing back unread, and while it runs the

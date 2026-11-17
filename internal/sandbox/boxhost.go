@@ -619,6 +619,23 @@ func (c *Coordinator) hostUnsettledFor(run PendingRun, cause error, now time.Tim
 // else since. While it does, the host's waiter, which reads the run's row
 // through that store, announces nothing, and every hand-back of the job's
 // completion is renewed (renew.go).
+//
+// NO RUN ANOTHER PARTY ENDS OUTLIVES IT WHILE THIS NODE HOLDS THE SEAT, so it
+// goes only where this node settles the run ([hostUnsettled]) or lets the seat
+// go, and never has to hear of an ending decided elsewhere. Every ending is
+// decided by a coordinator's own [Coordinator.endRun], the one caller of
+// [PendingStore.DecideEnding], which drops the clock on the node that decides
+// it ([Coordinator.runSettled]); the decision's license is fenced to the
+// deciding node's seat lease ([outranked]); and the collection that started the
+// clock claimed the job under this node's lease, which stamps that lease's epoch
+// on the row ([PendingStore.ClaimForResume]). So the seat's earlier holder is
+// outranked, or refuses the write up front once it knows it lost the seat
+// ([CoordinatorOptions.Lease]), and a later holder exists only once this node's
+// lease is gone, whose release ([Coordinator.ReleaseSeat]) drops the clock with
+// the seat, renewals made before this node notices reaching the new holder. A
+// job its host's waiter records lost ([PendingStore.MarkLost]) is no ending,
+// and the clock is kept for it on purpose ([hostUnsettled]).
+// TestNoOtherPartyEndsARunWhoseHostThisNodeClocks holds the fence this rests on.
 func (c *Coordinator) hostClocked(turnID, launch string) bool {
 	_, clocked := c.hostClockedSince(turnID, launch)
 	return clocked
