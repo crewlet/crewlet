@@ -2435,3 +2435,45 @@ test("a line past 4,000 code units draws plain and the next line is still colour
   expect(painted(textOf(1)!)).toHaveLength(0);
   expect(textOf(1)!.textContent).toBe(long);
 });
+
+// A README'S FENCE IS COLOURED BY ITS INFO STRING, its bytes unchanged; an unknown or
+// absent one stays plain `md-code`. Mutation: drop the README's fence hook, and this fails.
+test("a README's fence is coloured by its info string", async () => {
+  const text = [
+    "# web",
+    "",
+    "```sh",
+    "make dev   # the server on :8080",
+    "```",
+    "",
+    "```go",
+    "package main",
+    "```",
+    "",
+    "```diff",
+    "-a",
+    "```",
+    "",
+    "```",
+    "plain words",
+    "```",
+    "",
+  ].join("\n");
+  stubEngine(detail(), [], { "README.md": { oid: OTHER, text } });
+  mount("#/gitlet/repos/web");
+  const readme = await screen.findByRole("region", { name: "README.md" });
+  await waitFor(() => expect(readme.querySelector(".code-syn-comment")).toBeTruthy());
+  const fences = [...readme.querySelectorAll<HTMLElement>("pre.md-code")];
+  expect(fences.map((f) => f.textContent)).toEqual([
+    "make dev   # the server on :8080",
+    "package main",
+    "-a",
+    "plain words",
+  ]);
+  expect(fences[0]!.querySelector(".code-syn-comment")!.textContent).toBe("# the server on :8080");
+  await waitFor(() =>
+    expect(fences[1]!.querySelector(".code-syn-keyword")?.textContent).toBe("package"),
+  );
+  expect(fences[2]!.querySelector("[class^='code-syn-']")).toBeNull();
+  expect(fences[3]!.querySelector("[class^='code-syn-']")).toBeNull();
+});

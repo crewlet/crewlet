@@ -419,6 +419,8 @@ export interface RenderOptions {
    * sample set inside a conversation's words.
    */
   code?: "block" | "copy";
+  /** A fenced block drawn by the caller from its text and info string, or null to leave it to `md-code`. */
+  fence?: (text: string, lang: string, key: string) => ReactNode;
 }
 
 /** What the inline walk needs of [RenderOptions]. */
@@ -791,6 +793,10 @@ function renderBlock(
       // the class gate could not see it either, because it read a `className`
       // ATTRIBUTE and this is a property in a props object — which is the
       // other half of why it stayed silent, and is fixed in that gate.
+      if (options.fence) {
+        const drawn = options.fence(block.text, block.lang, key);
+        if (drawn !== null) return drawn;
+      }
       if (options.code === "copy") {
         return createElement(CodeBlock, {
           key,

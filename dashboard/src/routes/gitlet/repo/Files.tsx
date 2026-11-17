@@ -125,7 +125,7 @@ import {
   entryKind,
   useWhoName,
 } from "../ui.tsx";
-import { Painted, tokensOf, useGrammar, useLineStates } from "../syntax.tsx";
+import { Painted, paintFence, tokensOf, useGrammar, useLineStates } from "../syntax.tsx";
 import { subjectOf } from "./History.tsx";
 import { RefPicker, revisionWord, type Revisions } from "./refs.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
@@ -1444,7 +1444,7 @@ function Readme({
         ) : blob?.binary ? (
           <p className="muted">It is a binary file.</p>
         ) : /\.(md|markdown)$/i.test(entry.path) ? (
-          <div className="prose md">{renderMarkdown(blob?.text ?? "")}</div>
+          <div className="prose md">{renderMarkdown(blob?.text ?? "", { fence: paintFence })}</div>
         ) : (
           <pre className="code-readme__text">{blob?.text ?? ""}</pre>
         )}
