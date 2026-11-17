@@ -2577,7 +2577,11 @@ function DocumentProblems({
           <NoticeList label="Problems" notices={refused} />
         </Callout>
       )}
-      <BuilderWarnings draft={warnings} label="Warnings about the configuration" />
+      <BuilderWarnings
+        draft={warnings}
+        label="Warnings about the configuration"
+        surface="org-structure"
+      />
     </>
   );
 }
