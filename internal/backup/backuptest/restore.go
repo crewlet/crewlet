@@ -21,18 +21,19 @@
 // configuration handed back changed is a restore every node refuses as a
 // recreated log.
 //
-// # A restored stream's duplicate window is its broker's NEXT START
+// # A restored stream's duplicate window is rebuilt AT THE RESTORE
 //
 // Every record keeps its headers through a restore, the operation id a state
 // log appends under (Nats-Msg-Id) among them, and a stream rebuilds its
-// duplicate window from those ids — but nats-server (2.15.0, measured) does so
-// when it RECOVERS a stream from its store, not at the restore: a stream just
-// restored collapses no repeated operation until the broker holding it starts
-// again. So a suite that relies on the window restarts the broker on what it
-// restored before relying on it, as a node does — the runbook restores the
-// embedded broker on a node started for that purpose and then starts the
-// fleet. TestARestoredStreamHoldsWhatWasSnapshotted pins both halves, so this
-// paragraph fails the day the server rebuilds the window at the restore.
+// duplicate window from those ids. nats-server 2.15.3 does so when the restore
+// ends, before it answers it, and again whenever it recovers the stream from
+// its store: a stream just restored collapses an operation repeated inside the
+// window onto the record it landed as, with no restart of its broker between
+// (2.15.0 rebuilt it only at the broker's next start). So nothing a suite or
+// the runbook does after a restore exists to give the restored stream its
+// window. TestARestoredStreamHoldsWhatWasSnapshotted pins both halves, the
+// window at the restore and across the broker's next start, so this paragraph
+// fails the day the server stops rebuilding it at the restore.
 //
 // Test support: nothing in production imports it.
 package backuptest
@@ -98,8 +99,8 @@ func Skip(streams ...string) Option {
 // restored stream that does not end at the sequence its snapshot ended at,
 // which is the one figure the manifest records that any restore must keep.
 //
-// A restored stream's duplicate window is empty until conn's broker starts
-// again on what it restored (package doc).
+// A restored stream's duplicate window holds its records' operation ids as
+// soon as RestoreStreams returns (package doc).
 func RestoreStreams(ctx context.Context, conn *nats.Conn, api jsapi.API, dir string, m backup.Manifest,
 	opts ...Option) error {
 

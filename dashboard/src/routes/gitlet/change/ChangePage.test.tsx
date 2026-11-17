@@ -346,7 +346,13 @@ test("Approve is one review of the head carrying the drafts and the standing fin
 
   await review("Approve");
   const dialog = await screen.findByRole("dialog");
-  expect(within(dialog).getByText(/1 drafted finding on revision 2/)).toBeTruthy();
+  // THE REVISION IS NAMED ONCE, by the subtitle; the drafts are "on this revision".
+  expect(within(dialog).getByText(/1 drafted finding on this revision/)).toBeTruthy();
+  expect(
+    within(dialog)
+      .getAllByText(/revision 2/i)
+      .map((e) => e.textContent),
+  ).toEqual(["Revision 2"]);
   await within(dialog).findByText("The retry never stops");
   fireEvent.click(within(dialog).getByRole("button", { name: "Approve" }));
 
@@ -1499,7 +1505,7 @@ test("a review's findings are cards under it, each with its excerpt marked at it
   const excerpt = await within(card).findByRole("group", {
     name: "Lines 18 to 20 of internal/server/routes.go at revision 1, line 19 marked",
   });
-  const marked = [...excerpt.querySelectorAll("[data-picked]")];
+  const marked = [...excerpt.querySelectorAll(".crewlet-diff-view__line--picked")];
   expect(marked).toHaveLength(1);
   expect(marked[0]!.textContent).toContain('r.Stream("product")');
   expect(
@@ -2928,11 +2934,10 @@ test("a hunk opens with git's header and Expand reveals hidden lines from the ne
     end_line: "13",
   });
   expect(ranged[0]!.searchParams.has("path")).toBe(false);
-  const first = [...routes.querySelectorAll(".diff-view__line")][0]!;
-  expect([...first.querySelectorAll(".diff-view__number")].map((n) => n.textContent)).toEqual([
-    "1",
-    "1",
-  ]);
+  const first = [...routes.querySelectorAll(".crewlet-diff-view__line")][0]!;
+  expect(
+    [...first.querySelectorAll(".crewlet-diff-view__number")].map((n) => n.textContent),
+  ).toEqual(["1", "1"]);
   BIG_BLOBS.delete("n3");
 });
 
@@ -3170,16 +3175,18 @@ test("a finding on a line suggests its change as a diff of its own lines, and it
   expect(
     [...diff.querySelectorAll("[data-kind]")].map((r) => [
       r.getAttribute("data-kind"),
-      r.querySelector(".diff-view__text")?.textContent,
+      r.querySelector(".crewlet-diff-view__text")?.textContent,
     ]),
   ).toEqual([
     ["remove", "new15"],
     ["add", "fixed15"],
   ]);
-  const marked = [...routes.querySelectorAll(":scope .diff-view__line[data-picked]")].filter(
+  const marked = [...routes.querySelectorAll(":scope .crewlet-diff-view__line--picked")].filter(
     (l) => !card.contains(l),
   );
-  expect(marked.map((l) => l.querySelector(".diff-view__text")?.textContent)).toEqual(["new15"]);
+  expect(marked.map((l) => l.querySelector(".crewlet-diff-view__text")?.textContent)).toEqual([
+    "new15",
+  ]);
 });
 
 /** The findings counted by path: one open on routes.go, one on stream.go raised on revision 1, two dismissed. */

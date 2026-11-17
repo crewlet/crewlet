@@ -114,6 +114,7 @@ import {
 } from "./RepoWrites.tsx";
 import { useDefaultChecks } from "./marks.ts";
 import "~/styles/gitlet.css";
+import { Face } from "../ui.tsx";
 
 /**
  * How often the repository's row is read again while its page is open: a
@@ -619,7 +620,15 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
                   label: "Default branch",
                   value: <span className="mono">{repo.default_branch}</span>,
                 },
-                { label: "Owner", value: ownerName(repo.owner) },
+                {
+                  label: "Owner",
+                  value: (
+                    <>
+                      {repo.owner.kind === "seat" && <Face who={repo.owner.ref} size="text" />}{" "}
+                      {ownerName(repo.owner)}
+                    </>
+                  ),
+                },
                 { label: "Read by", value: readByWord(repo.visibility) },
                 { label: "Search", value: searchWord(repo.search) },
                 { label: "Managed by", value: managedWord(repo.managed_by) },
@@ -675,7 +684,10 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
             {owners.map((p) => (
               <li key={`${p.owner.kind}:${p.owner.ref}`}>
                 <span className="code-rules__what">
-                  <span>{ownerName(p.owner)}</span>
+                  <span>
+                    {p.owner.kind === "seat" && <Face who={p.owner.ref} size="text" />}{" "}
+                    {ownerName(p.owner)}
+                  </span>
                   <span className="muted mono">{p.paths.join(", ")}</span>
                 </span>
                 {!gone && (

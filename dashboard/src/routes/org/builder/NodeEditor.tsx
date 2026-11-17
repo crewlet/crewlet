@@ -49,7 +49,7 @@
  * rather than drawn as a field's error (see `placeOnFields`).
  */
 
-import { useId, useRef, useState, type ReactNode } from "react";
+import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLeaveGuard } from "~/app/router.tsx";
 import type { CompanyDocument, ConfigRole, ConfigUnit } from "~/protocol/index.ts";
 import { readCeiling } from "~/lib/budget.ts";
@@ -125,6 +125,7 @@ import {
   unitIdOf,
   type DraftSeat,
   type DraftUnit,
+  suggestAvatar,
 } from "./model/draft.ts";
 import { mintHandle } from "./model/identity.ts";
 import { getPath, isRecord, jsonEqual } from "./model/json.ts";
@@ -151,6 +152,7 @@ import {
   nameOfHandle,
   providerOrder,
   readsCodeAccess,
+  seatFaces,
   seatLabels,
   takenIdentities,
   toolCredentialNames,
@@ -178,6 +180,8 @@ import {
 import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import type { TagsInputOption } from "@crewlethq/ui";
 import { withProblems } from "~/ui/Problems.tsx";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
+import { useServedLook } from "../structureLive.tsx";
 
 export function NodeEditor({
   nodeKey,
@@ -882,6 +886,7 @@ function UnitEditor({
 }) {
   const api = useBuilder();
   const { state } = api;
+  const served = useServedLook();
   const key = unit.key;
   const { initial, form, set, dirty } = useForm<UnitForm>(
     () => unitForm(unit.data),
@@ -911,6 +916,7 @@ function UnitEditor({
   // seat of stays on offer as what it is, or the choice would show nothing
   // and the first change of the form would silently clear it.
   const labels = seatLabels(state.draft);
+  const faces = seatFaces(state.draft, served);
   const leadChoices: FieldChoice[] = [
     {
       value: "",
@@ -919,7 +925,10 @@ function UnitEditor({
           ? `No one (inherits ${inheritedLead} from ${parent.data.name})`
           : "No one",
     },
-    ...[...labels].map(([handle, label]) => ({ value: handle, label })),
+    ...[...labels].map(([handle, label]) => {
+      const face = faces.get(handle);
+      return { value: handle, label, ...(face ? { leading: <ChoiceFace seat={face} /> } : {}) };
+    }),
     ...(initial.lead !== "" && !labels.has(initial.lead)
       ? [{ value: initial.lead, label: `@${initial.lead} (names no seat)` }]
       : []),
@@ -1187,10 +1196,18 @@ function SeatEditor({
   const minted = isMintedKey(key);
   const human = kindOf(data) === "human";
   const handle = handleOf(seat);
+  const served = useServedLook();
   const { initial, form, set, dirty } = useForm<SeatForm>(
-    () => seatForm(data, gitLabAccessLevel(company, handle)),
+    () => seatForm(data, gitLabAccessLevel(company, handle), served(handle)),
     presetProject(preset),
   );
+  // AN AGENT NOTHING DRAWS YET (not saved, no look written) opens on the
+  // builder's suggestion, which a pick writes whole.
+  const suggested = useMemo(
+    () => (human ? null : suggestAvatar(state.draft, served)),
+    [human, state.draft, served],
+  );
+  const look = form.avatar ?? suggested;
   const { refusal, apply } = useApply(api, key, onClose);
   const { errorFor, rest } = placeOnFields(
     placedOn(api, key),
@@ -1275,7 +1292,7 @@ function SeatEditor({
           },
         ]}
       />
-      {form.avatar && (
+      {look && (
         <FormField
           label="Profile icon"
           error={
@@ -1288,7 +1305,7 @@ function SeatEditor({
             <AvatarPicker
               name={form.name || "this seat"}
               size="md"
-              value={{ character: form.avatar.character, hue: form.avatar.color }}
+              value={{ character: look.character, hue: look.color }}
               onChange={(next) =>
                 set({ avatar: { character: next.character as AvatarCharacter, color: next.hue } })
               }
@@ -1296,8 +1313,7 @@ function SeatEditor({
               disabled={disabled}
             />
             <span>
-              {CREWLET_CHARACTER_GEOMETRY[form.avatar.character].name} ·{" "}
-              {NODE_HUE_NAMES[form.avatar.color]}
+              {CREWLET_CHARACTER_GEOMETRY[look.character].name} · {NODE_HUE_NAMES[look.color]}
             </span>
           </div>
         </FormField>
@@ -1585,10 +1601,10 @@ function SeatEditor({
       title={form.name.trim() || (human ? "Person" : "Agent")}
       subtitle={subtitle}
       icon={
-        form.avatar ? (
+        look ? (
           <AvatarPicker
             name={form.name || "this seat"}
-            value={{ character: form.avatar.character, hue: form.avatar.color }}
+            value={{ character: look.character, hue: look.color }}
             onChange={(next) =>
               set({ avatar: { character: next.character as AvatarCharacter, color: next.hue } })
             }
@@ -1796,10 +1812,20 @@ function Reports({
   // nothing of stays on offer as what it is, so it reads as written and the
   // form does not drop it on the next Apply.
   const labels = seatLabels(state.draft);
+  const served = useServedLook();
+  const faces = seatFaces(state.draft, served);
   const self = handleOf(seat);
   const options: TagsInputOption[] = [];
   for (const [handle, label] of labels) {
-    if (handle !== self) options.push({ value: handle, label, group: "Seats" });
+    const face = faces.get(handle);
+    if (handle !== self) {
+      options.push({
+        value: handle,
+        label,
+        group: "Seats",
+        ...(face ? { leading: <ChoiceFace seat={face} /> } : {}),
+      });
+    }
   }
   for (const { unit } of allUnits(state.draft)) {
     const key = unitIdOf(unit);

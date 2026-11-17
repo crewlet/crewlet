@@ -305,6 +305,11 @@ func leaderAnswered(name string, info *jetstream.StreamInfo) error {
 // name, where checking only the fields each method reads let it run on a
 // deadline that had expired before it began and report that as the broker's
 // answer.
+//
+// THE ONE FIELD WHOSE ZERO IS A SETTING is Progress: nil is a read whose
+// ceilings run on time alone, which is every read but one that crosses a
+// link its caller meters ([Timing.Following]); Beyond is refused unset only
+// beside a Progress, the one thing it is read with.
 type Timing struct {
 	// Budget bounds one create — see [Budget].
 	Budget time.Duration
@@ -329,6 +334,16 @@ type Timing struct {
 	// PlacementRetry is how often an answered refusal is asked again — see
 	// [PlacementRetry].
 	PlacementRetry time.Duration
+
+	// Progress, when set, is the link a read crosses, whose movement holds
+	// the read's ceilings past their spans ([Timing.Ceiling]), by Beyond at
+	// most — see [Timing.Following]. Nil for a read that crosses none, or
+	// whose ceilings run on time alone: every timing [Clustered.Timing]
+	// builds, and every one its caller does not hand a link.
+	Progress Progress
+	// Beyond is the most a moving link holds a ceiling past its span — see
+	// [Timing.Following]. Required with Progress, and read with nothing else.
+	Beyond time.Duration
 }
 
 // Timing is every provisioning duration for a broker of this topology.
@@ -355,10 +370,13 @@ type span struct {
 // unset is the refusal every method gives a [Timing] with any field left
 // unset — see [Timing]'s doc for why a method refuses fields it does not read.
 func (t Timing) unset() error {
-	return refuseUnset(span{"Budget", t.Budget}, span{"Sequence", t.Sequence},
+	if err := refuseUnset(span{"Budget", t.Budget}, span{"Sequence", t.Sequence},
 		span{"Lookup", t.Lookup}, span{"AskTerm", t.AskTerm},
 		span{"ReAsk", t.ReAsk}, span{"ReadBack", t.ReadBack},
-		span{"ReadTerm", t.ReadTerm}, span{"PlacementRetry", t.PlacementRetry})
+		span{"ReadTerm", t.ReadTerm}, span{"PlacementRetry", t.PlacementRetry}); err != nil {
+		return err
+	}
+	return t.unfollowed()
 }
 
 // Arriving is t for a read whose answer takes arrival to reach its reader
@@ -519,7 +537,7 @@ func SettleWith[T any](ctx context.Context, t Timing, ask func(context.Context) 
 		// it never comes back here while the window is open — the hedge
 		// re-asks it at a destroyed request's own interval ([ReAsk]),
 		// and reports the silence only once the window closes.
-		v, err := hedge(window, t, ask, nil)
+		v, err := hedge(window, t, 0, ask, nil)
 		switch {
 		case err == nil:
 			return v, nil

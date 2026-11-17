@@ -8837,6 +8837,15 @@ export interface CodeReviewerFace {
   owned_paths_omitted?: number;
 }
 
+/** The train an ejection's checks failed on (`gitlet.EjectionTrain`). */
+export interface CodeEjectionTrain {
+  candidate_id: string;
+  /** The commit the candidate was merged onto: the branch's tip, for a train's first. */
+  base_oid: string;
+  /** The commit the checks failed on, the candidate's merge up to the entry. */
+  commit_oid: string;
+}
+
 /** Why and when a queue last put a live change out (`gitlet.CardEjection`). */
 export interface CodeCardEjection {
   reason: string;
@@ -8844,6 +8853,8 @@ export interface CodeCardEjection {
   /** The required checks that failed, at most 8, and how many more. */
   checks?: string[];
   checks_more?: number;
+  /** The train they failed on, where its ejection names one. */
+  tested_in?: CodeEjectionTrain;
 }
 
 /** What a listing's row draws beside its readiness (`gitlet.ChangeCard`). */
@@ -8860,16 +8871,26 @@ export interface CodeChangeCard {
   ejected?: CodeCardEjection;
 }
 
+/** How wholly a listing narrowed by its words (`text`) searched; on every such page, `{}` where whole. */
+export interface CodeChangesText {
+  /** The answering node's index of changes' words was behind its rows: a match may be missing. */
+  building?: boolean;
+  /** More changes may hold the words than one search reads: the page is drawn from the newest. */
+  truncated?: boolean;
+}
+
 /**
  * `code_changes`: the changes a listing's filters name — a page READ, not
  * kept, so one can be short or empty with a cursor — in the order the index
- * its filters lead walks.
+ * its filters lead walks; a page its words lead is served full.
  */
 export interface CodeChangesAnswer extends CodePage {
   /** Absent on a page that holds none. */
   changes?: CodeChangeSummary[];
   /** The bucket a `readiness=` page was narrowed to, on every such page; absent where it was not narrowed, as an older node answers. */
   narrowed_to?: string;
+  /** On every page a `text=` listing narrowed; absent where it was not narrowed, as an older node answers. */
+  changes_text?: CodeChangesText;
 }
 
 /** One author of a change (`gitlet.ChangeAuthor`), from the revision they first wrote. */
@@ -9948,7 +9969,7 @@ export interface CodeCandidateRow {
 /**
  * One entry a queue put out lately (`gitlet.EjectedRow`): the change, who
  * enqueued it, why, and the required checks that failed on what it was tested
- * in or the paths its merge conflicted on.
+ * in, and the train they failed on, or the paths its merge conflicted on.
  */
 export interface CodeEjectedRow {
   repo_id: string;
@@ -9971,6 +9992,11 @@ export interface CodeEjectedRow {
   paths?: string[];
   enqueued_at: string;
   ejected_at: string;
+  /**
+   * The train its checks failed on: its run is code_check at commit_oid for
+   * target_ref. Absent on every other ejection and from an older build.
+   */
+  tested_in?: CodeEjectionTrain;
 }
 
 /**

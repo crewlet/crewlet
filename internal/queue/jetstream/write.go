@@ -49,18 +49,24 @@ type link struct {
 	// else runs is paced, and holds no leaf link the engine knows of
 	// ([Queue.leaderCarries]).
 	leaf bool
+	// meter reads what the link carries each way at its sockets
+	// ([LinkMeter]): a leaf's tunnel's, or the one every connection the
+	// queue dials to an external broker counts into; nil on a member's own
+	// connection, which crosses nothing ([Queue.LinkMeter]).
+	meter *LinkMeter
 }
 
 // linkOf is what stands between a queue's connection, made through embedded,
 // and the streams it reaches: a dial to a broker somebody else runs is paced
-// at the floor; a leaf's own connection is paced at the floor and crosses the
-// leaf's link; a member's own connection crosses nothing.
-func linkOf(embedded *embeddedServer) link {
+// at the floor, and metered by dialled, the meter its dials count into; a
+// leaf's own connection is paced at the floor, crosses the leaf's link, and
+// is metered by the leaf's tunnel; a member's own connection crosses nothing.
+func linkOf(embedded *embeddedServer, dialled *LinkMeter) link {
 	switch {
 	case embedded == nil:
-		return link{pace: objstore.MiBPace}
+		return link{pace: objstore.MiBPace, meter: dialled}
 	case embedded.leaf:
-		return link{pace: objstore.MiBPace, leaf: true}
+		return link{pace: objstore.MiBPace, leaf: true, meter: embedded.linkMeter()}
 	}
 	return link{}
 }

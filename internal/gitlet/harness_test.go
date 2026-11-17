@@ -131,6 +131,9 @@ type node struct {
 	// is admitted through — its writes', and a barrier's ([node.barrier]).
 	reserve *statelog.Reserve
 
+	// nodeDB is the node's own file beside the estate, where an index of its own is kept.
+	nodeDB *store.DB
+
 	// barriersHeld has the drain REACH a barrier and commit none
 	// ([node.holdBarrierCommits]).
 	barriersHeld atomic.Bool
@@ -281,7 +284,7 @@ func nodeOn(t testing.TB, log *js.DomainLog, id string) *node {
 	}
 	n := &node{
 		t: t, id: id, db: db, log: log, records: records, applier: gitlet.NewApplier(nil), pub: pub,
-		waiter: waiter, authority: authority, reserve: reserve,
+		waiter: waiter, authority: authority, reserve: reserve, nodeDB: dbNode,
 		scratch: gitlet.ScratchOf(config.Code{RemoteCredentials: forgeCredentials}),
 		people:  &directory{grants: map[string][]iam.Grant{}},
 	}

@@ -12,6 +12,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import {
@@ -26,6 +27,7 @@ import {
   Tag,
   Textarea,
   VisuallyHidden,
+  cx,
   useClipboard,
   useToast,
 } from "@crewlethq/ui";
@@ -692,7 +694,7 @@ const FileSection = memo(function FileSection({
     });
   };
 
-  const expand = (gap: DiffGap): ReactNode => {
+  const gapControls = (gap: DiffGap): ReactNode => {
     const original =
       gap.hunk < expanded.gaps.length ? expanded.gaps[gap.hunk]! : (hunks?.length ?? 0);
     const failed = gapFailed.get(original);
@@ -761,6 +763,29 @@ const FileSection = memo(function FileSection({
       </>
     );
   };
+  // THE NUMBERS' GUTTER IS AS WIDE AS THE DIFF'S LONGEST NUMBER, as the kit draws it.
+  const digits = useMemo(() => {
+    let most = 1;
+    for (const h of expanded.hunks)
+      for (const l of h.lines) most = Math.max(most, l.before ?? 0, l.after ?? 0);
+    return String(most).length;
+  }, [expanded.hunks]);
+  // A GAP'S ROW: its controls in the numbers' gutter, git's hunk line in the code's column.
+  const expand = (gap: DiffGap): ReactNode => (
+    <div
+      className={cx(
+        "code-gap",
+        gap.hunk === 0 && "code-gap--lead",
+        gap.hunk >= expanded.hunks.length && "code-gap--trail",
+      )}
+      data-gap=""
+      data-split={layout === "split" || undefined}
+      style={{ "--code-gap-digits": digits } as CSSProperties}
+    >
+      <span className="code-gap__controls">{gapControls(gap)}</span>
+      {gap.header && <span className="code-gap__header">{gap.header}</span>}
+    </div>
+  );
 
   const { findings, placed, comments, drafts, thread } = notes;
   const { placedHere, outdated } = useMemo(() => {
@@ -1018,7 +1043,7 @@ const FileSection = memo(function FileSection({
           </div>
         )}
         <DiffView
-          hue="code"
+          className="code-file__diff"
           tokens={tokens}
           hunks={expanded.hunks}
           layout={layout}

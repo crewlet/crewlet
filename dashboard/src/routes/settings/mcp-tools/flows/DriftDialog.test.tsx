@@ -77,7 +77,48 @@ test("a change that claims less risk is shown first, flagged, with what moved", 
   expect(within(dialog).getByText("Description")).toBeDefined();
   expect(within(dialog).getByText("Hints")).toBeDefined();
   expect(within(dialog).getAllByText("Destructive").length).toBeGreaterThan(0);
-  expect(within(dialog).getByText(/the tool it holds asks for approval/)).toBeDefined();
+  expect(
+    within(dialog).getByText("1 of the 2 tools asks for approval until you decide."),
+  ).toBeDefined();
+});
+
+// THE REVIEW SAYS EACH THING ONCE: no count under the heading, the tool named
+// by the rail alone and each part by its label alone. Mutation: put back the
+// count, the name over the diff or the rail's description, and this is red.
+test("the review says each thing once", () => {
+  const [moved] = LINEAR_CHANGES;
+  detail = {
+    ...LINEAR_DETAIL,
+    changes: [{ ...moved!, kinds: ["annotations"], loosened: false }],
+  };
+  mount();
+  const dialog = screen.getByRole("dialog");
+  const said = document.getElementById(dialog.getAttribute("aria-describedby") ?? "");
+  expect(said?.textContent).toBe("The tool asks for approval until you decide.");
+  expect(dialog.textContent).not.toContain("to review");
+  expect(dialog.textContent?.match(/hints/gi)).toEqual(["Hints"]);
+  const diff = within(dialog).getByRole("group", { name: "delete_issue hints, before and after" });
+  expect(diff.closest(".mcp-drift")?.textContent).not.toContain("delete_issue");
+  expect(
+    within(dialog).getByRole("button", { name: "delete_issue", current: "page" }),
+  ).toBeDefined();
+});
+
+// A NEW TOOL IS SAID TO BE NEW ONCE, as the label over what it says and takes,
+// now that the rail's row is its name alone. Mutation: drop the label, and
+// this is red.
+test("a new tool is labelled new once, over what it says and takes", () => {
+  const [moved] = LINEAR_CHANGES;
+  detail = {
+    ...LINEAR_DETAIL,
+    changes: [{ ...moved!, kinds: ["added"], before: null, loosened: false }],
+  };
+  mount();
+  const dialog = screen.getByRole("dialog");
+  expect(within(dialog).getAllByText("New tool")).toHaveLength(1);
+  expect(dialog.textContent).toContain("Archive an issue, which can be restored");
+  expect(dialog.textContent).toContain("Arguments: issue. It asks first until you accept it.");
+  expect(within(dialog).getByRole("button", { name: "Accept the new tool" })).toBeDefined();
 });
 
 // A DECISION NAMES THE DEFINITION REVIEWED: accepting sends the change's
@@ -187,14 +228,18 @@ test("a part that moved and cannot be shown is said, never drawn as unchanged", 
   };
   mount();
   let dialog = screen.getByRole("dialog");
-  expect(dialog.textContent).toContain("the engine keeps no whole copy of it");
+  expect(dialog.textContent).toContain(
+    "DescriptionThis part changed, but the engine keeps no whole copy of it",
+  );
   expect(dialog.textContent).not.toContain("Nothing changed");
   cleanup();
 
   detail = { ...LINEAR_DETAIL, tools: LINEAR_READ_TOOLS, changes: [cut] };
   mount();
   dialog = screen.getByRole("dialog");
-  expect(dialog.textContent).toContain("The description changed, but this review cannot show how.");
+  expect(dialog.textContent).toContain(
+    "DescriptionThis part changed, but the review cannot show how.",
+  );
   expect(dialog.textContent).not.toContain("Nothing changed");
 });
 

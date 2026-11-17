@@ -24,6 +24,9 @@ type spyCopies struct {
 	// beforeNext, when set, is called before each word a replay reads off
 	// its inbox.
 	beforeNext func()
+	// heard, when set, is called with each word a replay is handed off its
+	// inbox, as it is handed over.
+	heard func(filter string, ev jsapi.Event)
 	// behindThrough, when above 0, is where the FIRST consumer of each
 	// table's replay stands as a copy behind: it hands the replay nothing
 	// past this stream sequence, as a copy that has applied the changelog
@@ -145,6 +148,7 @@ func (p *spyPulls) Next(ctx context.Context) (jsapi.Event, error) {
 		}
 		ev, err := p.replayPulls.Next(ctx)
 		if ev, shown := p.watch(ev, err); shown {
+			p.told(ev, err)
 			return ev, err
 		}
 	}
@@ -157,8 +161,16 @@ func (p *spyPulls) Ready() (jsapi.Event, bool, error) {
 			return ev, ok, err
 		}
 		if ev, shown := p.watch(ev, err); shown {
+			p.told(ev, err)
 			return ev, ok, err
 		}
+	}
+}
+
+// told hands the case's heard hook a word the replay is handed.
+func (p *spyPulls) told(ev jsapi.Event, err error) {
+	if err == nil && p.c.heard != nil {
+		p.c.heard(p.filter, ev)
 	}
 }
 

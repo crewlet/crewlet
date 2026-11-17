@@ -767,7 +767,7 @@ jobs:
           node-version: latest
       # THE MAKEFILE IS THE COMMAND, rather than a copy of it. Every other job
       # here inlines its own, and CLAUDE.md's rule that "the Makefile is the
-      # same command CI runs, or it is a lie" was therefore held by hand —
+      # command CI runs" was therefore held by hand —
       # by nothing, since internal/version/makefile_test.go was dropped. The
       # test jobs call `make` so that for them it is true by construction:
       # TEST_SHARD, TEST_WEIGHTS and TEST_TIMINGS are the Makefile's own knobs,

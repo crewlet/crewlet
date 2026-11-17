@@ -230,18 +230,18 @@ func stream(ctx context.Context, t *testing.T, conn *nats.Conn, name string) *je
 
 // A RESTORED STREAM HOLDS WHAT WAS SNAPSHOTTED — every record at its own
 // sequence with its own subject, headers, body and storage instant, the
-// duplicate window those headers rebuild once its broker starts again, the
-// stream's identity, a durable reader at its own position, and a bucket's
-// revisions.
+// duplicate window those headers rebuild at the restore and keep across its
+// broker's next start, the stream's identity, a durable reader at its own
+// position, and a bucket's revisions.
 //
 // Each is something a restored node stands on. Its rows name records by
 // sequence and its checkpoint names the record it stands on by the broker's
 // instant for it. A state log publishes every append under its operation id
 // (Nats-Msg-Id), and a stream rebuilds its duplicate window from those headers
 // — what collapses an append repeated inside the window onto the record it
-// already landed as; the server rebuilds it when it recovers a stream from its
-// store, NOT at the restore (package doc), and a node's broker starts again on
-// what was restored before the node serves from it. Every row is keyed to the
+// already landed as; the server rebuilds it at the restore itself, and again
+// when it recovers the stream from its store at its next start (package doc).
+// Every row is keyed to the
 // stream's identity, which the broker does NOT keep — it dates a restored
 // stream to the restore — so it is read as the instant the stream's creator
 // stamped, carried in the configuration the restore hands back. A mailbox is a
@@ -286,22 +286,27 @@ func TestARestoredStreamHoldsWhatWasSnapshotted(t *testing.T) {
 	}
 	sameRecords(ctx, t, client(t, src), client(t, dst), before.State.LastSeq)
 
-	// THE DUPLICATE WINDOW IS NOT REBUILT AT THE RESTORE: an operation the
-	// restored log holds, repeated now, is appended again. A fact about the
-	// server pinned here because the package doc and the runbook's restart
-	// rest on it — the day it stops holding, both can say less.
+	// THE DUPLICATE WINDOW IS REBUILT AT THE RESTORE: an operation the
+	// restored log holds, repeated before its broker has started again,
+	// collapses onto the record it landed as. A fact about the server
+	// (nats-server 2.15.3 rebuilds it when the restore ends; 2.15.0 did not
+	// until the broker next started) pinned here because the package doc and
+	// the runbook's paragraph on the window rest on it: the day it stops
+	// holding, both have to say a restored stream serves without a window
+	// until its broker starts again.
 	probe := publishOp(ctx, t, dst, opID(records-1))
-	if probe.Duplicate {
-		t.Fatalf("operation %s repeated on the stream just restored was collapsed onto "+
-			"sequence %d — the server now rebuilds a restored stream's duplicate window "+
-			"at the restore, so the package doc's paragraph saying it does not is stale",
-			opID(records-1), probe.Sequence)
+	if !probe.Duplicate || probe.Sequence != records {
+		t.Fatalf("operation %s repeated on the stream just restored answered sequence %d "+
+			"(duplicate %v), want the duplicate at %d — the server no longer rebuilds a "+
+			"restored stream's duplicate window at the restore, so the package doc and the "+
+			"runbook's paragraph saying it does are stale", opID(records-1), probe.Sequence,
+			probe.Duplicate, records)
 	}
 
-	// AND IT IS ONCE THE BROKER STARTS AGAIN on what it restored, as a node's
-	// does: an operation repeated inside the window collapses onto the record
-	// it landed as, the identity is the one the restore kept, and a new
-	// operation is appended where the log ends.
+	// AND IT IS STILL THERE ONCE THE BROKER STARTS AGAIN on what it restored,
+	// as a node's does: an operation repeated inside the window collapses onto
+	// the record it landed as, the identity is the one the restore kept, and a
+	// new operation is appended where the log ends.
 	restored.stop()
 	restored = brokerIn(t, "restored", dstDir)
 	dst = restored.conn
@@ -312,9 +317,9 @@ func TestARestoredStreamHoldsWhatWasSnapshotted(t *testing.T) {
 			"duplicate window over the records it holds, so an append repeated "+
 			"inside it lands twice", opID(retried), ack.Sequence, ack.Duplicate, retried+1)
 	}
-	if ack := publishOp(ctx, t, dst, opID(records)); ack.Duplicate || ack.Sequence != probe.Sequence+1 {
+	if ack := publishOp(ctx, t, dst, opID(records)); ack.Duplicate || ack.Sequence != records+1 {
 		t.Fatalf("a new operation on the restored log answered sequence %d (duplicate "+
-			"%v), want %d", ack.Sequence, ack.Duplicate, probe.Sequence+1)
+			"%v), want %d", ack.Sequence, ack.Duplicate, records+1)
 	}
 	if again, err := statelog.StreamCreatedAt(stream(ctx, t, dst, logStream)); err != nil ||
 		!again.Equal(original) {

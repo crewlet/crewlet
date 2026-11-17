@@ -4,7 +4,7 @@
  */
 import { cleanup } from "@testing-library/react";
 import { expect, test } from "vitest";
-import { WINDOW_FROM_ROWS } from "~/components/DiffView.tsx";
+import { WINDOW_FROM_ROWS } from "@crewlethq/ui";
 import type { CodeChangeDetail, CodeDiffFile } from "~/protocol/index.ts";
 import { CODE_POSITION, jsonAnswer, mountCode, stubCodeEngine } from "~/test/codeScreens.tsx";
 import { afterMicrotasks } from "~/test/settle.ts";
@@ -65,7 +65,9 @@ const stackOf = (last: number, plain = false) =>
 
 /** The engine: the walk in one page, and each blob whole. */
 function answer(files: ReturnType<typeof stackOf>) {
-  const blobs = new Map(files.flatMap((f, i) => [[`o${i}`, f] as const, [`n${i}`, f] as const]));
+  const blobs = new Map<string, (typeof files)[number]>(
+    files.flatMap((f, i) => [[`o${i}`, f] as const, [`n${i}`, f] as const]),
+  );
   stubCodeEngine({
     "/query/code_change": () =>
       jsonAnswer({
@@ -127,7 +129,7 @@ async function draw(files: ReturnType<typeof stackOf>, coloured: boolean) {
     />,
   );
   const done = () =>
-    document.querySelectorAll(".code-file .diff-view").length === 5 &&
+    document.querySelectorAll(".code-file .code-file__diff").length === 5 &&
     (!coloured || document.querySelectorAll(".code-file [class*='code-syn-']").length > 0);
   for (let pass = 0; !done(); pass++) {
     if (pass > 500) throw new Error("the stack never drew its five files");
@@ -145,7 +147,7 @@ test("the real stack of five files, plain and coloured, and with one file at the
   expect(800 * 1.25).toBe(WINDOW_FROM_ROWS);
   expect(800 / 2).toBe(FOLD_FROM_LINES);
   await draw(small, true);
-  expect(document.querySelectorAll(".code-file .diff-view")).toHaveLength(5);
+  expect(document.querySelectorAll(".code-file .code-file__diff")).toHaveLength(5);
   cleanup();
 
   await bench("plain", async () => {

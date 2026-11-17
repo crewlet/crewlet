@@ -36,6 +36,8 @@ import { createContext, useCallback, useContext, useMemo, useState, type ReactNo
 import { ConflictNote, EmptyValue, Menu } from "@crewlethq/ui";
 import { RefusalNote } from "~/components/WriteButton.tsx";
 import { Assignee, PriorityMark, StatusBadge, type RowChrome } from "~/components/work.tsx";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
+import type { SeatChoice } from "~/lib/seats.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { humanize } from "~/lib/format.ts";
@@ -176,7 +178,8 @@ function CellPicker({
 }: {
   label: string;
   value: string;
-  options: readonly { value: string; label: string }[];
+  /** `icon` is drawn before the label: a seat's face in the assignee picker. */
+  options: readonly { value: string; label: string; icon?: ReactNode }[];
   trigger: ReactNode;
   onPick: (value: string) => void;
   busy: boolean;
@@ -198,6 +201,7 @@ function CellPicker({
         items={options.map((option) => ({
           key: option.value || "-",
           label: option.label,
+          icon: option.icon,
           checked: option.value === value,
           disabled: busy,
           onSelect: () => {
@@ -274,7 +278,7 @@ export function AssigneeCell({
   row: WorkSummary;
   chrome: RowChrome;
   /** Everybody who can hold a task, in the chart's order. */
-  seats: readonly { handle: string; name: string; human?: boolean }[];
+  seats: readonly SeatChoice[];
   /** The table prints the name; the list draws the badge alone. */
   named?: boolean;
   /** What a reader who cannot change it sees. */
@@ -288,8 +292,12 @@ export function AssigneeCell({
       label={`Assignee of ${row.key}`}
       value={current}
       options={[
-        { value: NOBODY, label: "Nobody" },
-        ...seats.map((st) => ({ value: st.handle, label: st.name })),
+        { value: NOBODY, label: "Nobody", icon: <ChoiceFace seat={null} /> },
+        ...seats.map((st) => ({
+          value: st.handle,
+          label: st.name,
+          icon: <ChoiceFace seat={st} />,
+        })),
       ]}
       busy={edits.busy}
       trigger={

@@ -765,11 +765,14 @@ leaves out. Then:
   writes off work that never ran, which is why the embedded topology's
   one-directory, one-instant copy is the paved path. A restored log's
   **duplicate window** — the broker collapsing an operation id appended twice
-  ([replication](replication.md)) — is rebuilt from its records' ids when its
-  broker next starts, not by the restore itself (nats-server 2.15.0, solo
-  restore, measured): the embedded path starts its broker again with the node,
-  and a stream restored into a running external cluster may serve without one
-  until its servers restart. That matters only for a backup restored inside the
+  ([replication](replication.md)) — is rebuilt from its records' ids by the
+  restore itself, before the restore is answered (nats-server 2.15.3, solo
+  restore, measured), and again whenever its broker starts on it, so a restored
+  log collapses a repeated operation from the moment its restore ends, with no
+  restart in between. An external cluster's servers are the operator's own
+  build: one older than 2.15.3 rebuilds the window only when it next starts, so
+  a stream restored into such a cluster while it runs serves without one until
+  its servers restart. That matters only for a backup restored inside the
   window (two minutes) of being taken, since the window holds only records the
   broker stored that recently. On an external NATS
   cluster, `nats stream backup` / `nats account backup` against the cluster

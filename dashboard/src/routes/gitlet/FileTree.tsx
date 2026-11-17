@@ -29,6 +29,16 @@ import { EntryGlyph } from "./ui.tsx";
 import "~/styles/gitlet.css";
 
 /** What git's status letter says of a file, in a word. */
+/** `+207 −51`: lines added and removed, each figure in its diff ink. */
+export function DiffCounts({ added, deleted }: { added: number; deleted: number }) {
+  return (
+    <>
+      <span className="code-diffstat__added">+{fmtCount(added)}</span>{" "}
+      <span className="code-diffstat__removed">−{fmtCount(deleted)}</span>
+    </>
+  );
+}
+
 export function statusWord(f: Pick<CodeDiffFile, "status" | "old_path">): string {
   switch (f.status) {
     case "A":
@@ -287,8 +297,12 @@ export function FileTree({
                       "binary"
                     ) : (
                       <>
-                        {f.added > 0 && <span data-sign="+">+{fmtCount(f.added)}</span>}
-                        {f.deleted > 0 && <span data-sign="−">−{fmtCount(f.deleted)}</span>}
+                        {f.added > 0 && (
+                          <span className="code-diffstat__added">+{fmtCount(f.added)}</span>
+                        )}
+                        {f.deleted > 0 && (
+                          <span className="code-diffstat__removed">−{fmtCount(f.deleted)}</span>
+                        )}
                       </>
                     )}
                   </span>
@@ -325,7 +339,12 @@ export function DiffHead({
       {file && (
         <span className="code-diff-head__facts">
           {statusWord(file)}
-          {!file.binary && ` · +${fmtCount(file.added)} −${fmtCount(file.deleted)}`}
+          {!file.binary && (
+            <>
+              {" · "}
+              <DiffCounts added={file.added} deleted={file.deleted} />
+            </>
+          )}
         </span>
       )}
       {viewHref && file?.status !== "D" && (

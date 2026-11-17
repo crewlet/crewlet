@@ -174,11 +174,6 @@ interface SheetSite {
 
 const ACCENT_RULES: SheetSite[] = [
   {
-    file: "diff.css",
-    selector: ".diff-view--code .diff-view__skip",
-    why: "The hunk row of code read in Gitlet, on the kit's hunk tint, the accent's soft step: where a hunk opens, never an action.",
-  },
-  {
     file: "gitlet.css",
     selector: '.code-state[data-state="merged"]',
     why: "A merged change on the kit's merged pill, the accent under its label, beside its glyph and word: a kind of change, never an action.",
@@ -192,6 +187,11 @@ const ACCENT_RULES: SheetSite[] = [
     file: "gitlet.css",
     selector: ".code-branch-chip",
     why: "A branch on the kit's code-ref chip, the accent's soft step and ink, beside its glyph: a kind in Gitlet's code, never an action.",
+  },
+  {
+    file: "gitlet.css",
+    selector: ".code-gap",
+    why: "A diff's gap row on the diff family's hunk row, as the kit's DiffView draws its skipped lines: a place in a diff, never an action.",
   },
   {
     file: "gitlet-code.css",

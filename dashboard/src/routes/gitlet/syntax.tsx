@@ -25,8 +25,7 @@ import {
 } from "~/lib/syntax/index.ts";
 import { KINDS, type Grammar, type Kind, type State, type Token } from "~/lib/syntax/types.ts";
 import { codeRest } from "~/lib/useCodeQuery.ts";
-import type { DiffSpan } from "~/lib/wordDiff.ts";
-import type { DiffHunk } from "~/components/DiffView.tsx";
+import type { DiffHunk, DiffSpan } from "~/components/DiffView.tsx";
 import { QueryError, type CodeBlobAnswer, type CodeDiffFile } from "~/protocol/index.ts";
 import "~/styles/gitlet-code.css";
 

@@ -11,8 +11,8 @@
  *   dashboard's one [DiffView]: the files as a diff KEYED by path, a changed
  *   file being its old facts removed and its new ones added (the digest
  *   among them, since a file can change and keep its type and size), and the
- *   lines numbered in both versions, compared by the dashboard's one line
- *   diff (`lib/lineDiff.ts`) or said in words not to have been.
+ *   lines numbered in both versions, compared by the design system's line
+ *   diff (`compareLines`) or said in words not to have been.
  * - SIDE BY SIDE: both versions drawn, a page in two frames or a document
  *   rendered twice. Data is live and not versioned with the page, so both
  *   show today's data, and the pane says so. A kind compared ITEM BY ITEM
@@ -29,7 +29,14 @@
  */
 
 import { useMemo, useState, type ReactNode } from "react";
-import { Select, Skeleton, VersionCompare } from "@crewlethq/ui";
+import {
+  compareLines,
+  notComparedReason,
+  Select,
+  Skeleton,
+  VersionCompare,
+  type LineComparison,
+} from "@crewlethq/ui";
 import type { ArtifactDetail, ArtifactEntry } from "~/protocol/index.ts";
 import { QueryState } from "~/components/common.tsx";
 import { DiffView, type DiffHunk } from "~/components/DiffView.tsx";
@@ -43,7 +50,6 @@ import {
   isComparableText,
   type FileChange,
 } from "~/lib/artifacts/compare.ts";
-import { compareLines, notComparedReason, type LineComparison } from "~/lib/lineDiff.ts";
 import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
 import { contentIsData, dataBesideVersions } from "~/lib/artifacts/kinds.ts";
@@ -217,6 +223,7 @@ function SourceCompare({
                 newer={newer}
                 from={picked.from}
                 to={picked.to}
+                named={texts.length === 1}
               />
             </>
           )}
@@ -274,12 +281,15 @@ function LineCompare({
   newer,
   from,
   to,
+  named,
 }: {
   detail: ArtifactDetail;
   older: number;
   newer: number;
   from: ArtifactEntry;
   to: ArtifactEntry;
+  /** Whether the heading names the file: false where the picker above it does. */
+  named: boolean;
 }) {
   const tooBig = from.object.size > MAX_COMPARE_BYTES || to.object.size > MAX_COMPARE_BYTES;
   const answer = useRest<LineComparison>(
@@ -298,7 +308,7 @@ function LineCompare({
   );
   // Built with the answer, for the reason `fileDiff` is.
   const lineDiff = useMemo(
-    () => (answer.data?.kind === "compared" ? answer.data.hunks.slice(0, SHOWN_HUNKS) : []),
+    () => (answer.data?.kind === "compared" ? answer.data.sections.slice(0, SHOWN_HUNKS) : []),
     [answer.data],
   );
   if (tooBig) {
@@ -329,7 +339,8 @@ function LineCompare({
       return (
         <div className="artifact-compare-lines">
           <h3 className="artifact-compare-heading">
-            {to.path}: {plural(result.hunks.length, "change")}
+            {named ? `${to.path}: ` : ""}
+            {plural(result.sections.length, "change")}
           </h3>
           <DiffView
             hunks={lineDiff}
@@ -340,9 +351,9 @@ function LineCompare({
               </p>
             }
           />
-          {result.hunks.length > SHOWN_HUNKS && (
+          {result.sections.length > SHOWN_HUNKS && (
             <p className="artifact-note">
-              {plural(result.hunks.length - SHOWN_HUNKS, "more change")} not shown.
+              {plural(result.sections.length - SHOWN_HUNKS, "more change")} not shown.
             </p>
           )}
         </div>

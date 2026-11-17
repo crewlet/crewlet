@@ -169,7 +169,14 @@ const STACK = [
   "internal/server/routes.go",
   `web/src/product/${"deeply/nested/".repeat(6)}Page.tsx`,
   "web/src/product/Shell.tsx",
-].map((path) => ({ path, status: "A", added: 40, deleted: 0 }));
+].map(
+  (path): { path: string; status: string; added: number; deleted: number; old_path?: string } => ({
+    path,
+    status: "A",
+    added: 40,
+    deleted: 0,
+  }),
+);
 // THE LAST FILE IS A RENAME from a long path, for the heads' phone case.
 STACK[4] = {
   ...STACK[4]!,
@@ -244,7 +251,7 @@ function mount(width: number, hash = "#/gitlet/repos/web/changes/42", height = 0
 /** The page once its timeline holds the finding's excerpt. */
 async function drawn(): Promise<HTMLElement> {
   return eventually(() => {
-    const excerpt = host!.querySelector<HTMLElement>(".code-excerpt .diff-view");
+    const excerpt = host!.querySelector<HTMLElement>(".code-excerpt .crewlet-diff-view");
     expect(excerpt).not.toBeNull();
     return host!.querySelector<HTMLElement>(".crewlet-app-shell__content")!;
   });
@@ -303,7 +310,7 @@ async function stacked(): Promise<HTMLElement> {
   return eventually(() => {
     const sections = host!.querySelectorAll(".code-stack > .code-file");
     expect(sections.length).toBe(5);
-    for (const s of sections) expect(s.querySelector(".diff-view")).not.toBeNull();
+    for (const s of sections) expect(s.querySelector(".code-file__diff")).not.toBeNull();
     return host!.querySelector<HTMLElement>(".crewlet-app-shell__content")!;
   });
 }

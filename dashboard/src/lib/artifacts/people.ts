@@ -13,7 +13,6 @@ import { useMemo } from "react";
 import {
   PRESENCE_LABELS,
   assignPresenceHues,
-  isNodeHue,
   type NodeHue,
   type PresenceMember,
   type Principal,
@@ -23,6 +22,7 @@ import {
 import type { ArtifactAudience, RoomMember, OrgProjection } from "~/protocol/index.ts";
 import type { BridgePerson } from "~/runtime/bridge.ts";
 import { loginKind, tierATokenOf } from "../login.ts";
+import { faceOf } from "../avatar.ts";
 import { indexOrg, nameOfIn, principalOfSeat, type OrgIndex, type Unit } from "../seats.ts";
 import { useOrg } from "../store-hooks.ts";
 import { plural } from "../format.ts";
@@ -100,9 +100,8 @@ export function artifactPeople(org: OrgProjection | null | undefined): ArtifactP
       kind: kind ?? (seat?.kind === "agent" ? "agent" : "human"),
       displayName: handle ? nameOf(handle) : "Somebody",
     };
-    if (seat?.kind === "agent" && seat.avatar) {
-      person.avatar = { character: seat.avatar.character, hue: seat.avatar.color };
-    }
+    const face = faceOf(seat?.kind === "agent" ? "agent" : "human", seat?.avatar);
+    if (face.character && face.hue) person.avatar = { character: face.character, hue: face.hue };
     return person;
   };
   return {
@@ -127,14 +126,12 @@ export function artifactPeople(org: OrgProjection | null | undefined): ArtifactP
       return principalOfSeat(seat, handle);
     },
     unitPrincipal: (key) => principalOfUnit(units.get(key), key),
-    sheetPeople: index.seats.map((seat) => {
-      const person: SheetPerson = { id: seat.handle, name: seat.name, kind: seat.kind };
-      if (seat.kind === "agent" && seat.avatar) {
-        person.character = seat.avatar.character;
-        if (isNodeHue(seat.avatar.color)) person.hue = seat.avatar.color;
-      }
-      return person;
-    }),
+    sheetPeople: index.seats.map((seat): SheetPerson => ({
+      id: seat.handle,
+      name: seat.name,
+      kind: seat.kind,
+      ...faceOf(seat.kind, seat.avatar),
+    })),
     pagePerson,
     pagePeople: index.seats.map((seat) => pagePerson(seat.handle)),
   };
@@ -271,10 +268,7 @@ export function presenceMembers(
       kind,
       activity: m.activity,
     };
-    if (kind === "agent" && seat?.avatar) {
-      out.character = seat.avatar.character;
-      if (isNodeHue(seat.avatar.color)) out.hue = seat.avatar.color;
-    }
+    Object.assign(out, faceOf(kind, seat?.avatar));
     // THE WHOLE PHRASE, VERB FIRST, which is what uilet's `PresenceMember.location`
     // means: the People rail prints it in place of the activity, and the
     // presence stack reads it out in place of the activity too.

@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/objstore"
 )
 
 // STOPPING A SEAT'S RUNNING WORK, when a person asks for it.
@@ -57,8 +60,10 @@ import (
 // reads it ([Coordinator.ReadHostedBox]), licensed by the stop the run's row
 // records and nothing else; the rest is finished here ([Coordinator.endRun]).
 // A silent host is no verdict about the box, and its spend is not written off
-// for it: only a box found gone, or a host silent for as long as the fleet
-// waits before it takes a launch node for gone, is ended with nothing read
+// for it: only a box found gone, a host silent for as long as the fleet waits
+// before it takes a launch node for gone — the box timeout, by the retrying
+// node's own clock, since it first asked the host — or a stop that old and two
+// hours more by that clock, is ended with nothing read
 // ([Coordinator.readStopped]).
 //
 // # Not the seat fence
@@ -301,14 +306,42 @@ func (c *Coordinator) collectStopped(ctx context.Context, run PendingRun) (Pendi
 // on this node's own host that fails to be read is reclaimed next by this very
 // ending, which a stop must not hold up while the job in it still works.
 //
-// NOT YET, where the box's host did not answer ([ErrBoxHostSilent]). That is no
-// failure of the box — only its host reclaims it, and only after it is back —
-// so the ending is kept and this node asks again on the hand-back's spacing
-// ([Coordinator.oweEnding]), as a collection hands its claim back uncounted for
-// the same answer. For as long as the fleet's waiter waits before it judges a
-// silent launch node gone: the box timeout ([Manager.BoxTimeout]), from the
-// stop's decision. Past it, the host is taken for gone and the run's spend is
-// unknowable, which the log says.
+// NOT YET, where the box's host gave no account of it ([ErrBoxHostSilent]).
+// That is no failure of the box — only its host reclaims it, and only after it
+// is back — so the ending is kept and this node asks again on the hand-back's
+// spacing ([Coordinator.oweEnding]), as a collection hands its claim back
+// uncounted for the same answer. Until either bound below holds, judged as each
+// such ask returns ([Coordinator.hostGivenUp]); past one, the host is taken for
+// gone and the run's spend is unknowable, which the log says.
+//
+//   - THE HOST SILENT FOR THE BOX TIMEOUT ([Manager.BoxTimeout]), as the fleet's
+//     waiter waits before it judges a silent launch node gone, measured on ONE
+//     clock: this node's, from the start of the first ask under this ending
+//     that reached the broker and came back with nothing
+//     ([Coordinator.hostSilence]). Never from the stop's decision, which the
+//     deciding node's store handle dated by that node's clock
+//     ([RecordedEnding.At]): a seat's next holder whose clock ran ahead of the
+//     decider's by more than the box timeout gave the host up on its very first
+//     ask and wrote the run's spend off, and one behind waited past the bound.
+//     A host that answered busy ([ErrBoxHostBusy]) is there, and its silence
+//     starts again; an ask this node could not make ([ErrBoxNotAsked]) is no
+//     evidence about the host, and neither starts nor advances it. The
+//     silence is kept on the stop's retry series, so the seat's next holder,
+//     which has a series of its own, counts again from its own first silent
+//     ask, as the fleet's waiter counts a launch node's absence again from its
+//     own first sight once its duty moves; a frame with no series — a seat's
+//     retirement, or an ask whose series was dropped while it ran because the
+//     seat moved — counts the silence of its own ask, which is what it
+//     measured.
+//   - THE STOP THE BOX TIMEOUT AND TWICE [objstore.AssumedClockSkew] OLD by this
+//     node's clock, on any ask that brought no account — silent, busy or not
+//     asked. The decision's instant is another node's clock, and this is the
+//     one reading of it that holds on any two clocks within the bound the
+//     engine assumes: it never fires before the stop is the box timeout old in
+//     real time, and it ends the wait across every seat move, restart and
+//     retirement tick, none of which carries the silence over. A retirement
+//     needs it most: each of its ticks asks for at most its own budget and
+//     ReleaseSeat drops every series, so silence alone would never end there.
 //
 // The result is the run's own, as a collection reads it — floored, held to the
 // record's bound — and marked as a run that did not finish: never a success,
@@ -319,37 +352,110 @@ func (c *Coordinator) readStopped(ctx context.Context, run PendingRun) (Result, 
 	}
 	// READ WHERE THE BOX IS — here, or on the node whose host it is on
 	// ([Coordinator.boxResult]) — and fitted here, under the turn it closes.
+	// Its start is what a silence it finds is counted from: the whole ask
+	// went unanswered, and a stop's ask can outlast the box timeout alone.
+	asked := c.now()
 	result, _, err := c.boxResult(ctx, run, BoxReadStop)
 	silent := errors.Is(err, ErrBoxHostSilent)
+	var since time.Time
 	switch {
 	case err == nil:
 		return stoppedResult(c.fitText(ctx, run, result)), true, nil
-	case silent && !c.hostGivenUp(run):
-		log.InfoContext(ctx, "sandbox_stop_read_waits", "turn_id", run.TurnID,
-			"sandbox_id", run.SandboxID, "node", run.LaunchNode,
-			"detail", "the node whose host the stopped run's box is on did not answer; the stop "+
-				"is kept, with its session closed, and its box asked again until that node is "+
-				"back or the box timeout since the stop has passed")
-		return Result{}, false, fmt.Errorf("sandbox: reading what stopped run %s had spent: %w",
-			run.TurnID, err)
+	case silent:
+		since = c.hostSilence(run, asked, err)
+		if !c.hostGivenUp(run, since) {
+			log.InfoContext(ctx, "sandbox_stop_read_waits", "turn_id", run.TurnID,
+				"sandbox_id", run.SandboxID, "node", run.LaunchNode,
+				"busy", errors.Is(err, ErrBoxHostBusy), "not_asked", errors.Is(err, ErrBoxNotAsked),
+				"detail", "the node whose host the stopped run's box is on gave no account of it; "+
+					"the stop is kept, with its session closed, and its box asked again until that "+
+					"node answers, has been silent for the box timeout by this node's own clock "+
+					"since this node first asked it, or the stop is the box timeout and two hours "+
+					"old by this node's clock")
+			return Result{}, false, fmt.Errorf("sandbox: reading what stopped run %s had spent: %w",
+				run.TurnID, err)
+		}
 	}
-	log.WarnContext(ctx, "sandbox_stop_unread", "turn_id", run.TurnID,
-		"sandbox_id", run.SandboxID, "gone", errors.Is(err, ErrBoxGone), "host_silent", silent,
-		"error", err.Error(),
-		"detail", "what the stopped run had spent could not be read off its box, so none "+
-			"of it is charged; the run is ended all the same")
+	attrs := []any{"turn_id", run.TurnID, "sandbox_id", run.SandboxID,
+		"gone", errors.Is(err, ErrBoxGone), "host_silent", silent, "error", err.Error()}
+	if silent {
+		// WHAT GAVE IT UP, by this node's clock: the silence it measured, if
+		// any, and the stop's age.
+		now := c.now()
+		if !since.IsZero() {
+			attrs = append(attrs, "silent_s", now.Sub(since).Seconds())
+		}
+		if run.Ending != nil {
+			attrs = append(attrs, "stop_age_s", now.Sub(run.Ending.At).Seconds())
+		}
+	}
+	attrs = append(attrs, "detail", "what the stopped run had spent could not be read off its box, "+
+		"so none of it is charged; the run is ended all the same")
+	log.WarnContext(ctx, "sandbox_stop_unread", attrs...)
 	return Result{}, false, nil
 }
 
-// hostGivenUp reports whether a stopped run's silent host has been waited for
-// as long as a silent launch node is before the fleet takes it for gone: the box
-// timeout, from the stop's decision ([Coordinator.readStopped]).
-func (c *Coordinator) hostGivenUp(run PendingRun) bool {
+// hostSilence is since when this node has heard nothing from the host of a
+// stopped run's box, by this node's own clock, given that the ask it started at
+// asked came back with err, which gave no account of the box: zero where
+// nothing it has seen counts as silence ([Coordinator.readStopped]).
+//
+// KEPT ON THE STOP'S RETRY SERIES ([answerRetry.silent]), under the ending it
+// was measured for, and so only for as long as this node drives the stop:
+//
+//   - a host that answered BUSY is there: the silence is cleared, and none is
+//     answered;
+//   - an ask this node could NOT MAKE says nothing of the host: whatever silence
+//     the series holds stands, neither started nor advanced;
+//   - a host that did not answer an ask that reached the broker starts the
+//     silence at that ask's start, where the series holds none for this ending,
+//     and the series' own is answered otherwise;
+//   - with no series — a seat's retirement, which runs on its own frame, or an
+//     ask whose series the seat's move dropped while it ran — the silence is
+//     that ask's alone, the only one this frame measured.
+func (c *Coordinator) hostSilence(run PendingRun, asked time.Time, err error) time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	r := c.retries[run.TurnID]
+	var id string
+	if run.Ending != nil {
+		id = run.Ending.ID
+	}
+	switch {
+	case errors.Is(err, ErrBoxHostBusy):
+		if r != nil {
+			r.silent = silence{}
+		}
+		return time.Time{}
+	case errors.Is(err, ErrBoxNotAsked):
+		if r != nil && r.silent.ending == id {
+			return r.silent.since
+		}
+		return time.Time{}
+	case r == nil:
+		return asked
+	}
+	if r.silent.ending != id || r.silent.since.IsZero() {
+		r.silent = silence{ending: id, since: asked}
+	}
+	return r.silent.since
+}
+
+// hostGivenUp reports whether a stopped run's host, which gave no account of
+// its box, is taken for gone ([Coordinator.readStopped]): silent since since
+// for the box timeout, as the fleet waits on a silent launch node before it
+// takes it for gone, both by this node's clock; or the stop the box timeout and
+// twice [objstore.AssumedClockSkew] old by this node's clock, the one reading
+// of the decision's instant — another node's clock — that never comes before
+// the stop is the box timeout old in real time, on clocks within that bound.
+func (c *Coordinator) hostGivenUp(run PendingRun, since time.Time) bool {
 	m := c.mgr()
 	if m == nil || run.Ending == nil {
 		return true
 	}
-	return c.now().Sub(run.Ending.At) >= m.BoxTimeout()
+	now, timeout := c.now(), m.BoxTimeout()
+	return (!since.IsZero() && now.Sub(since) >= timeout) ||
+		now.Sub(run.Ending.At) >= timeout+2*objstore.AssumedClockSkew
 }
 
 // launchStop is a stop decided on a run of this node's while it was still

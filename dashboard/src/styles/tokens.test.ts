@@ -56,14 +56,9 @@ const SCRIPT_DECLARED: { name: string; by: string; why: string }[] = [
     why: "TRACKS, the one track list the company's budget row and the seats' table are both handed, set on .budget-row",
   },
   {
-    name: "--diff-digits",
-    by: "components/DiffView.tsx",
-    why: "the digits of the widest line number a diff draws, set on .diff-view, so every row of every window block takes the same number tracks",
-  },
-  {
-    name: "--diff-path",
-    by: "components/DiffView.tsx",
-    why: "the characters of the longest path a keyed diff draws, set on .diff-view, the path track's content width",
+    name: "--code-gap-digits",
+    by: "routes/gitlet/change/FileStack.tsx",
+    why: "the digits of a diff's longest line number, set on .code-gap so its controls fill the numbers' gutter the kit's DiffView draws",
   },
 ];
 

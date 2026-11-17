@@ -97,12 +97,12 @@ func (s *stateLog) estateReplaced() {
 }
 
 // estateReplaced is what this node does once its replicated estate was replaced
-// under it: the chat index, whose walk only moves forward over the
-// transcript's own versions, drops what it holds and walks the rows it now has
-// ([search.ChatIndexer.RequestRebuild]) — a document indexed from the copy the
-// adoption replaced would otherwise answer searches for as long as the
-// deployment lived. The knowledge base's lexical index needs nothing: its walk
-// laps by id and repairs a drifted row where it finds one.
+// under it: the chat index and the index of changes' words, both walking only
+// forward, drop what they hold and walk the rows they now have
+// ([search.ChatIndexer.RequestRebuild], [search.ChangeIndexer.RequestRebuild]):
+// a document indexed from the copy the adoption replaced would otherwise answer
+// searches for as long as the deployment lived. The knowledge base's lexical
+// index laps by id and repairs drift itself.
 //
 // THE NUDGE, NOT THE GUARANTEE: the request lives in this process, and the
 // adopter has already named the file it installed a new copy of the estate
@@ -111,10 +111,17 @@ func (s *stateLog) estateReplaced() {
 // sweep still has its index rebuilt. What this call adds is that a search
 // stops trusting the index from now rather than from that sweep.
 //
-// A NODE THAT HAS MET NO COMPANY, or one whose chat is not the engine's own,
-// holds no chat index and has nothing to rebuild.
+// A NODE THAT HAS MET NO COMPANY, or one whose chat is not the engine's own and
+// which hosts no code, holds neither index and has nothing to rebuild.
 func (e *Engine) estateReplaced() {
-	if n := e.native.Load(); n != nil && n.chatIndex != nil {
+	n := e.native.Load()
+	if n == nil {
+		return
+	}
+	if n.chatIndex != nil {
 		n.chatIndex.RequestRebuild()
+	}
+	if n.changeIndex != nil {
+		n.changeIndex.RequestRebuild()
 	}
 }

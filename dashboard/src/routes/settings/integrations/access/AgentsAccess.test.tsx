@@ -294,7 +294,7 @@ test("a change is a draft, and the review shows the engine's plan and saves agai
 });
 
 // THE REVIEW IS ONE CARD PER AGENT: the change as labels and values in one
-// grid, so "On Datadog" and "Role at Datadog" line up, then the next sync's
+// grid, its turning on said by the tag alone, then the next sync's
 // steps as a timeline whose rail keeps the order, each node a glyph rather
 // than a number and no lead-in sentence above them. Crewlet's own steps carry
 // no mark at all. Mutation: draw the steps as a numbered list again and the
@@ -327,9 +327,10 @@ test("the review is a card per agent, its change as labels and values, then its 
   expect(within(review).getByText("Turned on")).toBeTruthy();
   const change = review.querySelector(".crewlet-change-list")!;
   expect(change.className).not.toContain("crewlet-change-list--inline");
+  // TURNED ON IS SAID ONCE, by the tag: no "On Datadog: Off to On" row repeats it.
   expect(
     [...change.querySelectorAll(".crewlet-change-list__label")].map((l) => l.textContent),
-  ).toEqual(["On Datadog", "Role at Datadog"]);
+  ).toEqual(["Role at Datadog"]);
   expect(screen.queryByText(/the next sync will:/)).toBeNull();
 });
 
@@ -413,6 +414,7 @@ test("several agents are several cards, and the one turned off is drawn as dange
     [...card.querySelectorAll(".crewlet-timeline__item")].map((i) => i.getAttribute("data-state"));
   const [pm, qa, sre] = cards as [HTMLElement, HTMLElement, HTMLElement];
   expect(word(pm)).toBe("Turned off");
+  expect(pm.querySelector(".crewlet-change-list")).toBeNull();
   expect(pm.className).toContain("crewlet-card--rail-danger");
   expect(states(pm)).toEqual(["danger", "danger"]);
   expect(within(pm).getByText(/Crewlet disables the service account/)).toBeTruthy();

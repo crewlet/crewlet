@@ -49,9 +49,9 @@ import {
   EmptyValue,
   FilePickButton,
   TableDateCell,
-  TableTextCell,
   useToast,
   type PickedFile,
+  TableEntityCell,
 } from "@crewlethq/ui";
 import { ConfirmModal } from "~/components/Modal.tsx";
 import { FileTextGlyph, UploadGlyph } from "@crewlethq/icons/glyphs";
@@ -69,7 +69,8 @@ import { session } from "~/protocol/session.ts";
 import { PROJECT_FILE_MAX_BYTES } from "~/contract/work.ts";
 import { keyedWrite, type KeyedAnswer, type KeyedRequest } from "~/lib/keyedWrite.ts";
 import { useWriteAccess } from "~/lib/useWriteAccess.ts";
-import { seatResolvers, useOrgIndex } from "~/lib/seats.ts";
+import { seatLookup, useOrgIndex } from "~/lib/seats.ts";
+import { plainSeat } from "~/app/frame/cells.tsx";
 
 /** The name a download is saved under: the path's last segment. */
 export function fileName(path: string): string {
@@ -289,7 +290,7 @@ function FileGrid({
   // WHO WROTE A FILE BY THE NAME THE CHART GIVES THEM: the row records the
   // seat's handle, which printed "jane-founder" beside rows elsewhere that say
   // "Jane Founder".
-  const { seatName } = seatResolvers(useOrgIndex());
+  const seat = seatLookup(useOrgIndex());
   const [busy, setBusy] = useState("");
   const [refusals, setRefusals] = useState<Record<string, string>>({});
   const [removing, setRemoving] = useState<WorkFile | null>(null);
@@ -399,7 +400,7 @@ function FileGrid({
             drop: 1,
             cell: (file) =>
               file.updated_by ? (
-                <TableTextCell>{seatName(file.updated_by)}</TableTextCell>
+                <TableEntityCell {...plainSeat(seat(file.updated_by))} />
               ) : (
                 <EmptyValue label="Nobody recorded" />
               ),

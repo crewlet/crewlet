@@ -22,10 +22,10 @@ export function Diffstat({
     >
       {/* A SIDE WITH NO LINES is left out beside one with some: "+118". */}
       {(added > 0 || deleted === 0) && (
-        <span className="code-diffstat__plus">+{fmtCount(added)}</span>
+        <span className="code-diffstat__added">+{fmtCount(added)}</span>
       )}
       {(deleted > 0 || added === 0) && (
-        <span className="code-diffstat__minus">−{fmtCount(deleted)}</span>
+        <span className="code-diffstat__removed">−{fmtCount(deleted)}</span>
       )}
       {lines > 0 && (
         <span className="code-diffstat__squares">

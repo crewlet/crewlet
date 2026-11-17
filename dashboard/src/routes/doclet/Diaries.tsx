@@ -60,7 +60,7 @@ import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { DiaryCard, EpisodesCard, heldWords } from "~/components/memory.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { handleLabel, indexOrg, type OrgIndex } from "~/lib/seats.ts";
+import { handleLabel, indexOrg, seatLookup, type OrgIndex } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { plural, tsKey, fmtCount } from "~/lib/format.ts";
 import type { MemoryOverviewSeat } from "~/contract/memory.ts";
@@ -150,8 +150,8 @@ export function Diaries() {
                 cell: (r) => (
                   <TableEntityCell
                     {...plainSeat({
+                      ...seatLookup(index)(r.handle),
                       name: nameOf(index, r.handle),
-                      kind: index.byHandle.get(r.handle)?.kind,
                     })}
                   />
                 ),

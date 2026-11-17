@@ -73,6 +73,7 @@ import { RUNS_POLL_MS, runAskTexts, unanswerable } from "~/lib/runs.ts";
 import { RunQuestion } from "./RunQuestion.tsx";
 import { HeldCallButtons } from "./HeldCallButtons.tsx";
 import { TokenScope } from "./InlineToken.tsx";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 import type { ExecutorRow } from "~/protocol/index.ts";
 import { useServicesRun } from "~/lib/services.ts";
 
@@ -163,10 +164,16 @@ function AssignDialog({
   const [reason, setReason] = useState("");
   const options = useMemo<SelectOption[]>(
     () => [
-      { value: NOBODY, label: "Nobody", description: "Take it off everybody's queue" },
+      {
+        value: NOBODY,
+        label: "Nobody",
+        description: "Take it off everybody's queue",
+        leading: <ChoiceFace seat={null} />,
+      },
       ...index.seats.map((seat) => ({
         value: seat.handle,
         label: seat.name,
+        leading: <ChoiceFace seat={seat} />,
         description: handleLabel(seat.handle),
         text: `${seat.name} ${seat.handle}`,
         group: seat.kind === "human" ? "People" : "Agents",
@@ -490,13 +497,14 @@ function EditProjectDialog({
   // THE SEAT HELD NOW STAYS A CHOICE even where the chart no longer has it,
   // under its handle, so opening the dialog never reads as a change of it.
   const assigneeOptions: SelectOption[] = [
-    { value: "", label: "Nobody: the lead triages it" },
+    { value: "", label: "Nobody: the lead triages it", leading: <ChoiceFace seat={null} /> },
     ...(was.assignee && !seats.some((s) => s.handle === was.assignee)
       ? [{ value: was.assignee, label: handleLabel(was.assignee) }]
       : []),
     ...seats.map((s) => ({
       value: s.handle,
       label: s.name,
+      leading: <ChoiceFace seat={s} />,
       hint: `${handleLabel(s.handle)} · ${s.kind === "human" ? "person" : "agent"}`,
     })),
   ];

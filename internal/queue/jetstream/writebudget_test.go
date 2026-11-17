@@ -137,8 +137,8 @@ func TestEachWriteIsBudgetedForTheBytesItSends(t *testing.T) {
 		name string
 		pace time.Duration
 	}{
-		{"on a member's own connection", linkOf(&embeddedServer{}).pace},
-		{"across a leaf's link", linkOf(&embeddedServer{leaf: true}).pace},
+		{"on a member's own connection", linkOf(&embeddedServer{}, nil).pace},
+		{"across a leaf's link", linkOf(&embeddedServer{leaf: true}, nil).pace},
 	} {
 		for _, w := range everyWrite() {
 			t.Run(w.name+" "+link.name, func(t *testing.T) {
@@ -207,7 +207,7 @@ func TestAWriteSentAgainIsGivenItsOwnCrossing(t *testing.T) {
 				t.Parallel()
 				synctest.Test(t, func(t *testing.T) {
 					js := &sendsJS{answers: []error{c.err}}
-					q := budgetedQueue(t, js, linkOf(&embeddedServer{leaf: true}).pace)
+					q := budgetedQueue(t, js, linkOf(&embeddedServer{leaf: true}, nil).pace)
 					if err := w.write(context.Background(), q); err != nil {
 						t.Fatalf("the write sent again: %v", err)
 					}

@@ -67,8 +67,9 @@ func TestAChangeWriteRewritesOnlyTheIndexesItMoves(t *testing.T) {
 		moved = "code_changes_updated_idx"
 	)
 	// movedLive is every index keyed by when the change last moved: the
-	// company's and, for the live states, by state alone and by repository.
-	movedLive := []string{moved, changesLiveMovedKey, changesRepoLiveMovedKey}
+	// company's and, for the live states, by state alone and by repository;
+	// and the position of the record that moved it.
+	movedLive := []string{moved, changesLiveMovedKey, changesRepoLiveMovedKey, changesPositionKey}
 	// EVERY INDEX THE STATE IS IN, by its key or by its predicate — the open
 	// and target indexes partial on the live states, the three listings
 	// keyed by it, and the two live ones by last move.

@@ -117,7 +117,7 @@ type CandidateRow struct {
 // ([QueueEndReason]: check_failed, conflict, gate_unmet, head_moved,
 // not_fast_forward) and what of it a person reads first — the required checks
 // that failed on what it was tested in, or the paths its merge conflicted on —
-// and when.
+// and when, and the train its checks failed on.
 //
 // AN ANSWER'S ROW, NOT A RECORD'S, so it takes no versionedFields row. The
 // domain landed on main with it ([RecordVersion]), so every build that answers
@@ -145,6 +145,9 @@ type EjectedRow struct {
 	Paths        []string       `json:"paths,omitempty"`
 	EnqueuedAt   time.Time      `json:"enqueued_at"`
 	EjectedAt    time.Time      `json:"ejected_at"`
+	// TestedIn is the train its checks failed on, where its ejection names one ([Ejection.TestedIn]):
+	// its run is `check` at CommitOID for TargetRef. Absent before [TestedInVersion].
+	TestedIn *EjectionTrain `json:"tested_in,omitempty"`
 }
 
 // QueueEjectionsShown is how far back a `queue` read of a repository answers
@@ -355,13 +358,14 @@ func ejectedRow(e queueEntry, repo string, label changeLabel, detail string) (Ej
 		return row, nil
 	}
 	var x struct {
-		Checks []string `json:"checks"`
-		Paths  []string `json:"paths"`
+		Checks   []string       `json:"checks"`
+		Paths    []string       `json:"paths"`
+		TestedIn *EjectionTrain `json:"tested_in"`
 	}
 	if err := json.Unmarshal([]byte(detail), &x); err != nil {
 		return EjectedRow{}, fmt.Errorf("gitlet: read entry %s's ejection: %w", e.EntryID, err)
 	}
-	row.Checks, row.Paths = x.Checks, x.Paths
+	row.Checks, row.Paths, row.TestedIn = x.Checks, x.Paths, x.TestedIn
 	return row, nil
 }
 
