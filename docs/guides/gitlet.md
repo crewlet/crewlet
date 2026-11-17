@@ -125,6 +125,10 @@ could, so owning `deploy/**` lets no seat push there that could not before
 
 ### Or make one in the dashboard
 
+**Gitlet › Repositories** lists the most recently pushed first, with each
+repository's open changes, its default branch's checks and two weeks of
+pushes; Projects and Scratch narrow it.
+
 A project the document does not declare is made in the dashboard too: **New
 repository** on **Gitlet › Repositories** (`code_create_repo`) takes its name,
 the unit that owns it and, where you say them, a description, a default

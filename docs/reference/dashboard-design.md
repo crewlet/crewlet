@@ -1475,7 +1475,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/worklet/{KEY}` | **Project**: one project as Worklet's scope: its Tasks lens, About, History and Files | `lens=about\|history\|files` (Tasks, the first, takes no key) · the same view strip and filter grammar, scoped to the project |
 | `#/worklet/{KEY}-{n}` · `#/worklet/{id}` | **Task**: description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost; and, where the company hosts code and a change names the task as its work item, a **Changes** tab listing every such change | `tab=task\|changes` (the strip is drawn only once a change is found) · `activity=all\|comments\|turns\|changes` · `list=` |
 | `#/gitlet` | **Gitlet › Changes**, Gitlet's landing: the changes proposed to the company's repositories, a page at a time in the order of the engine's index its filters lead — each change a row as a code host lists it — its title, then its reference (`web!42`), when it was opened and by whom (their face and name), the branch it proposes into which and its revision once it has had more than one — its state, its readiness (a Meter of the preconditions met, titled by the engine's sentence of the first that is not), its work item, its open findings and when it last moved — and above them the **Needs a person** band, the first five changes whose readiness waits on persons alone, with Show all. A row opens the change in the peek *(the whole of Gitlet needs Gitlet access; hidden where the company hosts no code; see [The Gitlet workspace](#the-gitlet-workspace))* | `state=draft\|open\|closed\|merged\|all` (none is open; `all` only beside a repository, a work item, a reviewer, a need or a window) · `needs=me\|review\|fix\|person` · `repo=` · `owner=` · `reviewer=` · `work=<backend>:<id>` · `window=24h\|7d\|30d` · `peek=change:{repo}!{n}` |
-| `#/gitlet/repos` | **Gitlet › Repositories**: every repository the engine hosts that the reader may read, by name — each row a repository as a code host lists one: its glyph, its name, its marks (its state where it is not active, scratch, a pull mirror, read by its unit) and its description, then its owner, default branch and head, last push, pushes, size and protection — a page at a time, each row opening its page | `status=importing\|active\|archived\|deleted\|purging` (none is importing, active and archived) |
+| `#/gitlet/repos` | **Gitlet › Repositories**: every repository the engine hosts that the reader may read, by last push or by name, each row a repository as a code host lists one: its tile, its name, its marks (its state where it is not active, scratch, a pull mirror, a push mirror, read by its unit) and its description, then a line of its owner, default branch, size, pushes and last push, and at its end its live changes, its default branch's checks and its pushes over the reader's last 14 days, a page at a time, each row opening its page; the footer counts the whole listing and its size | `status=importing\|active\|archived\|deleted\|purging` (none is importing, active and archived) · `kind=project\|scratch` · `sort=name` |
 | `#/gitlet/repos/{name}` | **A repository**, laid out as a code host lays one out: its header (its owner's path and its name, its marks: its state where it is not active, scratch, a pull mirror, who reads it, a push mirror; and its description) and tabs **Code**, where it lands (the files at a revision: at a directory the latest commit that touched it across the head of a card of its entries, each with its glyph and its last commit, and at the root its README and LICENSE as tabs of one card and its rail beside them: **About** as sentences, **Open changes**, **Who pushes here**, **Pushes** over 14 days, its **Mirror** and its newest **Tag**; at a file one card of its numbered lines, the lines picked ruled, switched to its **Blame**, with its **History** and a **Permalink** at the commit the revision resolved to; the branches and tags beside the revision picker at the root, **Go to file** (`t`), and **Code**, its clone address, command and ZIP), **Changes** (the changes proposed to it, in the grid every listing of changes draws, by state), **Commits** (the history at a revision, of a path or of every path, as a timeline of the reader's days, each commit with who wrote it, how it reached its branch, its checks, the change it landed with and its tags, its id with its copy and its files), **Branches** (its branches by when each moved, with who moved it, checks, drift and change, and its tags by date), **Pushes** (its push history), **Checks** (every attempt it keeps, newest ended first, each opening in the check pane) and **Settings** (its settings, rules, merge gates and path owners, a card each, shown and never edited here where the repository is declared: those lead to Settings › Configuration) *(hidden where the company hosts no code)*. A name no repository can have is said in place. Its page bar's **Compare** opens a comparison | `tab=code\|changes\|commits\|branches\|pushes\|checks\|settings` (`code` is never spelled: it is the landing) · on Code and Commits, `ref=` (a branch, a tag's whole ref or a commit; none is the default branch) and `path=` (from the root) · on Code, `lens=blame`, `lines=` (`12`, or `12-20`) and `doc=license` · on Commits, `by=` (a seat), `when=` (`today\|7d\|30d\|90d`) and `q=` (words in a message) · on Changes, `state=` · on Branches, `view=active\|stale\|all\|tags` and `q=` (a find) |
 | `#/gitlet/repos/{name}/commits/{sha}` | **A commit**, by its whole id: its header (subject, short id, repository, author, when it was authored and committed, its parents), who pushed it — the seat or the credential, when and how, and the turn, executor and work item behind a seat's push, as the engine recorded them — the changes it belongs to (those it merged, and those whose revision it heads), and what it changed against its first parent (a root commit's from git's empty tree) in the one `DiffView` *(hidden where the company hosts no code)*. An abbreviated id is Not Found | `file=` (a path) · `line=` (as on a comparison) · `layout=unified\|split` |
 | `#/gitlet/repos/{name}/compare` | **A comparison** of two revisions: how they relate (ahead, behind, their merge base), what merging the compared into the base would do (merges cleanly, or conflicts in which paths), what it changed since the two parted in the one `DiffView`, and the page bar's **Open change**, which proposes the compared branch into the base branch, prefilled with its head's subject and the work item its push was charged to *(hidden where the company hosts no code)* | `base=` (none is the default branch) · `head=` (none asks for it) · `file=` · `line=` (a line of `file=`'s newer side, marked and scrolled to, the patch read on to the page holding it; opening another file drops it; a failed check links one) · `layout=unified\|split` |
@@ -8839,23 +8839,28 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   held both ways to `gitlet.Reasons`; `short` is the reader's own, for a notice
   of theirs), and, where none is listed, whether nobody was told or the
   notices were swept with the turn detail they named.
-- **Repositories** is the engine's listing, `code_repos`, by name and a page
-  at a time. A page is what the engine SCANNED, not what it kept, so one can
-  be short, or empty with a cursor, and the grid pages with Load more until no
-  cursor comes back, its first page kept live and joined to the pages loaded
+- **Repositories** is the engine's listing, `code_repos`, by last push (or by
+  name, `sort=name`) and a page at a time, narrowed by kind (`kind=`, All,
+  Projects or Scratch, each with its count from `code_counts`) and by state. A
+  page is what the engine SCANNED, not what it kept, so one can be short, or
+  empty with a cursor, and the list pages with Load more until no cursor comes
+  back, its first page kept live and joined to the pages loaded
   ([A log is an axis, then its rows](#a-log-is-an-axis-then-its-rows)); the
   order is the engine's and no head re-sorts the pages held. A row is a
-  repository as a code host lists one: its glyph, its name and its marks —
-  its state where it is not active (archived, deleted, being purged), a
-  seat's scratch repository, a pull mirror, and a repository only its
-  owner's seats read (every person reads every repository) — each outlined,
-  since none is a fault, and an active repository carrying none; its
-  description under them; then who owns it (a unit by its name, a seat by its
-  badge), its default branch and the commit it stands at, its last push, its
-  pushes, its size and how many protection rules it carries. `status=` is the
-  engine's own filter (`REPO_STATUSES`, held to `gitlet.RepoStatuses`). A row
-  opens the repository's page. A declared repository's settings are the
-  company document's `code.repos`, and an empty listing offers the
+  repository as a code host lists one: its tile, its name and its marks, each
+  outlined since none is a fault (its state where it is not active, a seat's
+  scratch repository, a pull mirror, a push mirror, and a repository only its
+  owner's seats read, as every person reads every repository), an active
+  project carrying none; its description under them; then a line of who owns
+  it, its default branch, size, pushes and last push in words (Gitlet for a
+  merge), and at its end its live changes, its default branch's checks and its
+  pushes over the reader's last 14 days, each drawn only where the engine
+  answered it. The footer counts the whole listing and its size across its
+  pages (`repos_total`); **New repository** and **Import a repository** are in
+  the page bar. `status=`, `kind=` and `sort=` are the engine's own
+  (`REPO_STATUSES`, `REPO_KINDS` and `REPO_SORTS`, each held to the engine's
+  set). A row opens the repository's page. A declared repository's settings are
+  the company document's `code.repos`, and an empty listing offers the
   configuration to a reader who may open it. The listing makes two writes.
   **New repository** (`code_create_repo`) makes an empty project: its name in
   the engine's grammar, the unit that owns it picked from the chart, and,
