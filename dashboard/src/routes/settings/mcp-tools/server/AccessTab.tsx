@@ -32,7 +32,6 @@ import {
   useToast,
   type DataGridColumn,
 } from "@crewlethq/ui";
-import { UsersGlyph } from "@crewlethq/icons/glyphs";
 import type { McpMemberServerStatus, McpReach, McpServerAnswer } from "~/contract/mcp.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { href } from "~/app/router.tsx";
@@ -172,7 +171,7 @@ export function AccessTab({
         ) : null
       ) : null}
       <Card padding="none">
-        <Card.Header icon={<UsersGlyph size="sm" />} count={detail.reaches.length || undefined}>
+        <Card.Header count={detail.reaches.length || undefined}>
           <Card.Title>What each agent can call</Card.Title>
         </Card.Header>
         <DataGrid<ReachRow>
@@ -224,7 +223,7 @@ function GrantForm({
   };
   return (
     <Card padding="none">
-      <Card.Header icon={<UsersGlyph size="sm" />}>
+      <Card.Header>
         <Card.Title>Who gets it</Card.Title>
       </Card.Header>
       <Card.Body>

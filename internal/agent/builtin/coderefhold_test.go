@@ -127,6 +127,8 @@ var notRefArgs = map[string]string{
 	"renames":            "how a diff pairs files",
 	"grep":               "a message filter",
 	"since":              "an instant",
+	"until":              "an instant",
+	"pushed_by":          "a seat's handle, judged against the index of pushes: no ref",
 	"cursor":             "a page's place",
 	"query":              "a search's text after its filters; a ref: among them is held as `ref` is",
 	"mode":               "how a search's text is read",

@@ -109,6 +109,7 @@ import {
   yourTime,
   zoneWords,
 } from "./scheduleClock.ts";
+import { ago } from "~/lib/ago.ts";
 
 /** Where the company document a schedule is written in is read. */
 const CONFIG_PATH = ["settings", "config"];
@@ -923,7 +924,11 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
             icon={<ClockGlyph size="xs" />}
             label="Firing within the hour"
             value={due.length}
-            sub={soonest ? `the soonest ${inTime(soonest.next_run, now)}` : "nothing due soon"}
+            sub={
+              soonest
+                ? `the soonest ${ago(soonest.next_run, now, { due: true })}`
+                : "nothing due soon"
+            }
           />
           <StatCard
             icon={<CircleAlertGlyph size="xs" />}

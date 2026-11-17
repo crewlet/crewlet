@@ -39,6 +39,12 @@
 // dashboard's own policy names that origin as the one thing it may frame
 // ([DashboardFor]). One package, so every policy this engine writes can be
 // read side by side.
+//
+// # And a repository's bytes on the dashboard's origin
+//
+// A file's bytes and a commit's ZIP, served under /git/ beside git, are
+// somebody's content on the session's origin, so they are served inert
+// ([Download], ADR-0153): text or an attachment, sandboxed, never framed.
 package pagepolicy
 
 import (
@@ -114,6 +120,16 @@ const Dashboard = "default-src 'self'; script-src 'self'; style-src 'self'; " +
 // rendered anyway (an error body opened in a tab, a JSON document with markup
 // in a string) cannot run or fetch anything.
 const API = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+
+// Inert is the policy of a response nothing may run in, load from or frame.
+const Inert = "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; sandbox"
+
+// Download sets the headers of a repository's bytes served on this origin
+// (ADR-0153).
+func Download(h http.Header) {
+	Set(h, Inert)
+	h.Set("Cross-Origin-Resource-Policy", "same-origin")
+}
 
 // Set writes the security headers for one response, with the given
 // Content-Security-Policy. Call it before anything writes the status.

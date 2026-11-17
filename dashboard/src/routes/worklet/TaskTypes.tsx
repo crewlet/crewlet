@@ -224,30 +224,33 @@ export function TaskTypesDialog({ onClose }: { onClose: () => void }) {
                   </form>
                 )}
                 {editing?.kind === "archive" && editing.type.slug === type.slug && (
-                  <Callout variant="warning" title={`Archive the type ${type.name}?`}>
-                    <p>
-                      No new task can be filed as it. Tasks already filed as it keep it, and you can
-                      restore it here.
-                    </p>
-                    <div className="row gap-2">
-                      <Button
-                        size="small"
-                        variant="danger"
-                        loading={write.busy}
-                        disabledReason={blocked}
-                        onClick={() =>
-                          void send(
-                            { kind: "archive", slug: type.slug },
-                            `Archived the type “${type.name}”`,
-                          )
-                        }
-                      >
-                        Archive type
-                      </Button>
-                      <Button size="small" variant="ghost" onClick={() => open(null)}>
-                        Cancel
-                      </Button>
-                    </div>
+                  <Callout
+                    variant="warning"
+                    title={`Archive the type ${type.name}?`}
+                    action={
+                      <>
+                        <Button
+                          size="small"
+                          variant="danger"
+                          loading={write.busy}
+                          disabledReason={blocked}
+                          onClick={() =>
+                            void send(
+                              { kind: "archive", slug: type.slug },
+                              `Archived the type “${type.name}”`,
+                            )
+                          }
+                        >
+                          Archive type
+                        </Button>
+                        <Button size="small" variant="ghost" onClick={() => open(null)}>
+                          Cancel
+                        </Button>
+                      </>
+                    }
+                  >
+                    No new task can be filed as it. Tasks already filed keep it, and you can restore
+                    it here.
                   </Callout>
                 )}
               </li>

@@ -833,6 +833,42 @@ func (r *Reader) History(ctx context.Context, id artifacts.ID, cursor string, li
 	return page, err
 }
 
+// MaxLinkedWorkItems bounds the work items [Reader.WorkItems] answers: a
+// comment's routing reads each one's assignee, so an artifact made for more
+// items than this is told to the first of them in key order.
+const MaxLinkedWorkItems = 32
+
+// WorkItems answers the work items an artifact was linked to or written for,
+// as its applied history rows name them, sorted and at most
+// [MaxLinkedWorkItems]: who a comment on it wakes is read from them.
+func (r *Reader) WorkItems(ctx context.Context, id artifacts.ID) ([]string, error) {
+	var out []string
+	_, err := r.log.Read(ctx, staleFresh(statelog.Freshness{}).Query(
+		ArtifactScope(id.String()), true), func(tx *sql.Tx) error {
+		if _, err := mustHead(ctx, tx, id.String()); err != nil {
+			return err
+		}
+		rows, err := tx.QueryContext(ctx, `
+			SELECT DISTINCT work_item FROM artifact_history
+			WHERE artifact_id = ? AND work_item != '' AND outcome = ?
+			ORDER BY work_item LIMIT ?`, id.String(), string(OutcomeApplied), MaxLinkedWorkItems)
+		if err != nil {
+			return fmt.Errorf("artifactsdomain: read %s's work items: %w", id, err)
+		}
+		defer func() { _ = rows.Close() }()
+		out = []string{}
+		for rows.Next() {
+			var item string
+			if err := rows.Scan(&item); err != nil {
+				return fmt.Errorf("artifactsdomain: read %s's work items: %w", id, err)
+			}
+			out = append(out, item)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
 // historyColumns are the columns of one history row every history read
 // selects, in the order [scanHistory] reads them.
 const historyColumns = `position, op_id, op, outcome, reason, number, actor, actor_kind,

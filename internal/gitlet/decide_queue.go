@@ -72,15 +72,16 @@ func ejectDecidedRows(n int) int { return n + trainRows + 1 + queueHorizonRows }
 // landDecidedRows is the most rows a land of n entries makes its apply touch
 // of its OWN, beside the pushes it lands: each entry's change merged, its
 // stored readiness cleared ([clearReadiness]), its entry landed and its
-// landing row; the target's green row and its row of tip work; its train's
-// landed candidates; and the queue's horizon.
-func landDecidedRows(n int) int { return 4*n + 2 + MaxQueueDepth + queueHorizonRows }
+// landing row; the target's green row and its row of tip work; the tally row
+// its merges move (apply_counts.go); its train's landed candidates; and the
+// queue's horizon.
+func landDecidedRows(n int) int { return 4*n + 2 + tallyRows + MaxQueueDepth + queueHorizonRows }
 
 // landPushRows is the most rows a land's n pushes write before the changes
-// they move ([entryRows]): each its push row, the target's move and its
-// source's deletion — the ref, its tombstone and the object it leaves — and
-// the first its pack.
-func landPushRows(n int) int { return n*(1+1+3) + 1 }
+// they move ([entryRows]): each its push row, the target's move, its source's
+// deletion (the ref, its tombstone and the object it leaves) and Gitlet's
+// pusher day ([pusherDayRows]), and the first its pack.
+func landPushRows(n int) int { return n*(1+1+3+pusherDayRows) + 1 }
 
 // landRecordRows is a land record's rows but the changes its pushes move,
 // which its decide counts ([decideLand]): what the committer charges it.
@@ -403,7 +404,7 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 		book.move(e)
 		own += entryRows(e)
 	}
-	total := recordRows(own + book.rowCount())
+	total := recordRows(own + book.decidedRows())
 	if total > MaxRecordRows {
 		return d.refuse(MergeRefusalRecordFull, fmt.Sprintf("landing %d entries on %s writes up to %d rows with "+
 			"the live changes its pushes move, past MaxRecordRows (%d): land fewer at once", len(pushes),

@@ -19,13 +19,14 @@ import { artifactFolderPath } from "~/app/routes.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import type { ArtifactPlace } from "~/lib/artifacts/folders.ts";
 import { useNow } from "~/lib/clock.ts";
-import { fmtDate, relTime } from "~/lib/format.ts";
+import { fmtDate, openSentence } from "~/lib/format.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
 import { KIND_WORDS, ROLE_WORDS } from "~/lib/artifacts/words.ts";
 import type { ArtifactDetail } from "~/protocol/index.ts";
 import { BrandFact } from "~/components/brand.tsx";
 import { copyAddress } from "./parts.tsx";
 import { MoveDialog } from "./MoveDialog.tsx";
+import { ago } from "~/lib/ago.ts";
 
 export function DetailsPanel({
   detail,
@@ -92,7 +93,7 @@ export function DetailsPanel({
         <dt>Updated</dt>
         <dd>
           <time dateTime={detail.updated_at} title={fmtDate(detail.updated_at)}>
-            {relTime(detail.updated_at, now)}
+            {openSentence(ago(detail.updated_at, now))}
           </time>{" "}
           by {updater}
         </dd>

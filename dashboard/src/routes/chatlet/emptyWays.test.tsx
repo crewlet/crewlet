@@ -1,6 +1,6 @@
 /**
  * A filter that empties a Chatlet list offers the way back as a control: the
- * search narrowed to a room or a person, and Activity's Unread only.
+ * search narrowed to a room or a person, and Activity's Unread filter.
  */
 
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
@@ -47,7 +47,7 @@ test("a narrowed search with no match offers Search every room, which widens it"
   await waitFor(() => expect(asked.at(-1)?.channel_id).toBeUndefined());
 });
 
-test("Activity filtered to Unread only and empty offers Show everything", async () => {
+test("Activity filtered to Unread and empty offers Show everything", async () => {
   const asked: Record<string, unknown>[] = [];
   mountScreen({
     hash: "#/chatlet/activity",
@@ -72,12 +72,10 @@ test("Activity filtered to Unread only and empty offers Show everything", async 
       return {};
     },
   });
-  fireEvent.click(await screen.findByRole("switch", { name: "Unread only" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Unread" }));
   const all = await screen.findByRole("button", { name: "Show everything" });
   await waitFor(() => expect(asked.at(-1)).toMatchObject({ unread: true }));
   fireEvent.click(all);
   await waitFor(() => expect(asked.at(-1)?.unread).toBeUndefined());
-  expect((screen.getByRole("switch", { name: "Unread only" }) as HTMLInputElement).checked).toBe(
-    false,
-  );
+  expect(screen.getByRole("button", { name: "Unread" }).getAttribute("aria-pressed")).toBe("false");
 });

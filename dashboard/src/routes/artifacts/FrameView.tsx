@@ -15,6 +15,9 @@
  * ONE FRAME, ONE DOCUMENT. A page's frame opens its entry; a design's frame
  * opens the one artboard it names (`document`), under a ticket minted for that
  * board alone, so every board on a canvas is a frame of its own.
+ *
+ * THE COMMENT LAYER (`comments`): a page's pins are drawn over its frame from what it reports,
+ * and a design's board lends its host to the design's layer for a point's picture.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -46,6 +49,8 @@ import { useArtifactPeople } from "~/lib/artifacts/people.ts";
 import { rowID, type ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
 import type { BridgeViewer } from "~/runtime/bridge.ts";
 import { PageHost } from "./host.ts";
+import { PagePins } from "./comments/PagePins.tsx";
+import { useComments } from "./comments/state.tsx";
 import { pageRoster, pageSelf, pageViewer } from "./pageIdentity.ts";
 import type { PresenceReport } from "./presence.ts";
 
@@ -100,6 +105,7 @@ export function FrameView({
   onReady,
   className,
   dataNote = true,
+  comments,
 }: {
   detail: ArtifactDetail;
   version: number;
@@ -117,6 +123,8 @@ export function FrameView({
   className?: string | undefined;
   /** Says under an old version that its data is today's; off where the caller says it once for two. */
   dataNote?: boolean;
+  /** Its part in the comments: `page` draws the page's pins over it, `board` lends its host. */
+  comments?: "page" | "board" | undefined;
 }) {
   const [attempt, setAttempt] = useState(0);
   const frame = useRest<ArtifactFrame>(`${detail.id}:${version}:${document ?? ""}:${attempt}`, () =>
@@ -214,6 +222,13 @@ export function FrameView({
   );
   useEffect(() => host?.setRoster(roster), [host, roster]);
 
+  // A BOARD LENDS ITS PAGE to the design's comment layer, by the document it shows.
+  const lendPage = useComments()?.lendPage;
+  useEffect(() => {
+    if (comments !== "board" || !host || !lendPage) return undefined;
+    return lendPage(document ?? "", host);
+  }, [comments, host, lendPage, document]);
+
   const [mode] = useTheme();
   const [palette] = usePalette();
   const [density] = useDensity();
@@ -261,32 +276,43 @@ export function FrameView({
     reported.current = minted.frame_url;
     reportReady(minted.frame_url, outcome, performance.now() - handed.current);
   };
+  const sandboxed = (
+    <SandboxedFrame
+      className="artifact-frame"
+      src={minted.frame_url}
+      origin={minted.origin}
+      mode={minted.mode}
+      sandbox={minted.sandbox}
+      allow={minted.allow}
+      title={name}
+      theme={theme}
+      nonce={minted.nonce}
+      onReady={(port) => {
+        report("ready");
+        host.attach(port);
+        onReady?.();
+      }}
+      onMessage={(data, port) => void host.receive(data, port)}
+      onOpenLink={(url) => setLink({ url, answer: () => {} })}
+      onStateChange={(next) => {
+        setState(next);
+        if (next === "failed" || next === "refused" || next === "outdated") report("failed");
+        if (next !== "ready") host.detach();
+      }}
+      onReload={() => setAttempt((n) => n + 1)}
+    />
+  );
   return (
     <div className={box}>
-      <SandboxedFrame
-        className="artifact-frame"
-        src={minted.frame_url}
-        origin={minted.origin}
-        mode={minted.mode}
-        sandbox={minted.sandbox}
-        allow={minted.allow}
-        title={name}
-        theme={theme}
-        nonce={minted.nonce}
-        onReady={(port) => {
-          report("ready");
-          host.attach(port);
-          onReady?.();
-        }}
-        onMessage={(data, port) => void host.receive(data, port)}
-        onOpenLink={(url) => setLink({ url, answer: () => {} })}
-        onStateChange={(next) => {
-          setState(next);
-          if (next === "failed" || next === "refused" || next === "outdated") report("failed");
-          if (next !== "ready") host.detach();
-        }}
-        onReload={() => setAttempt((n) => n + 1)}
-      />
+      {comments === "page" ? (
+        // THE PINS STAND OVER THE FRAME ALONE, in its own box.
+        <div className="artifact-frame-stage">
+          {sandboxed}
+          <PagePins host={host} page={minted.document} />
+        </div>
+      ) : (
+        sandboxed
+      )}
       {dataNote && needsData && state === "ready" && version !== detail.head_number && (
         <p className="artifact-note">Every version shows today's data.</p>
       )}

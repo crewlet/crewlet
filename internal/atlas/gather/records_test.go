@@ -32,6 +32,7 @@ var (
 	_ gather.ToolServers       = (*kv.FleetStore)(nil)
 	_ gather.ServerTests       = (*kv.FleetStore)(nil)
 	_ gather.Nodes             = (*kv.Store)(nil)
+	_ gather.NodeStatuses      = (*kv.FleetStore)(nil)
 	_ gather.AccessLog         = (*accessdomain.Reader)(nil)
 	_ gather.Usage             = usage.Reader{}
 )
@@ -58,22 +59,34 @@ func (f fakeTools) ListMCPListings(context.Context) ([]coord.MCPListing, error) 
 }
 func (f fakeTools) ListMCPGrants(context.Context) ([]coord.MCPGrant, error) { return f.grants, nil }
 
-type fakeNodes []coord.NodeStatus
+// fakeNodes is live nodes n0, n1, … at presence epoch 1, each with the status
+// record given at that epoch.
+type fakeNodes []coord.NodeStatusRecord
 
-// ListLive answers each status as a lease carries it: under the status key,
-// through the JSON the broker stores it as.
+// ListLive answers each node's presence lease.
 func (f fakeNodes) ListLive(context.Context, coord.Class) ([]coord.Lease, error) {
 	out := make([]coord.Lease, 0, len(f))
-	for i, s := range f {
-		raw, err := json.Marshal(map[string]any{coord.StatusKey: s.Meta()})
+	for i := range f {
+		out = append(out, coord.Lease{Resource: coord.NodeResource(fmt.Sprintf("n%d", i)), Epoch: 1})
+	}
+	return out, nil
+}
+
+// NodeStatusRecords answers each node's record through the bytes a store keeps
+// it as.
+func (f fakeNodes) NodeStatusRecords(context.Context) ([]coord.NodeStatusRecord, error) {
+	out := make([]coord.NodeStatusRecord, 0, len(f))
+	for i, r := range f {
+		r.Node, r.Epoch = fmt.Sprintf("n%d", i), 1
+		raw, err := r.Encode()
 		if err != nil {
 			return nil, err
 		}
-		var meta map[string]any
-		if err := json.Unmarshal(raw, &meta); err != nil {
+		stored, err := coord.DecodeNodeStatusRecord(r.Node, raw)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, coord.Lease{Resource: coord.NodeResource(fmt.Sprintf("n%d", i)), Epoch: 1, Meta: meta})
+		out = append(out, stored)
 	}
 	return out, nil
 }
@@ -137,6 +150,12 @@ func hostDigest(t *testing.T, c *config.Company, id string) string {
 // email address where the real record can, to prove none is read.
 func records(t *testing.T, c *config.Company) gather.Sources {
 	expiry, failed := now.Add(3*24*time.Hour), now.Add(-time.Hour)
+	nodes := fakeNodes{{
+		MCP: []coord.MCPServerStatus{{Server: "files", Failed: 1, DownSince: failed, Error: "atlas-error-canary"}},
+		Models: []coord.ModelStatus{{Key: "main", LastAnswer: now.Add(-2 * time.Hour),
+			LastFailure: &coord.ModelFailure{At: failed, Said: "atlas-said-canary"},
+			HostLogin:   &coord.HostLogin{Account: "owner@acme.example"}}},
+	}}
 	return gather.Sources{
 		Log:    fakeLog{},
 		Gitlet: &fakeGitlet{page: 10},
@@ -161,12 +180,7 @@ func records(t *testing.T, c *config.Company) gather.Sources {
 			grants: []coord.MCPGrant{{Server: "tickets", Issuer: "https://auth.tickets.example", Expiry: &expiry,
 				By: "ops@acme.example"}},
 		},
-		Nodes: fakeNodes{{
-			MCP: []coord.MCPServerStatus{{Server: "files", Failed: 1, DownSince: failed, Error: "atlas-error-canary"}},
-			Models: []coord.ModelStatus{{Key: "main", LastAnswer: now.Add(-2 * time.Hour),
-				LastFailure: &coord.ModelFailure{At: failed, Said: "atlas-said-canary"},
-				HostLogin:   &coord.HostLogin{Account: "owner@acme.example"}}},
-		}},
+		Nodes: nodes, NodeStatuses: nodes,
 		ServerTests: fakeTests{
 			{Host: "db-1", HostDigest: hostDigest(t, c, "db-1"), At: failed, OK: false, By: "ops@acme.example"},
 			{Host: "web-1", HostDigest: "a-digest-of-settings-since-changed", At: failed, OK: false},
@@ -275,6 +289,74 @@ func TestRecordsJoinTheEntryTheyAreAbout(t *testing.T) {
 	for _, cov := range a.Coverage {
 		if !cov.Complete {
 			t.Errorf("%s was not read in full: %s", cov.Source, cov.Reason)
+		}
+	}
+}
+
+// staleNodes is fakeNodes whose records were written at another presence
+// epoch than the one each node holds now: a node that restarted and has not
+// written its record yet.
+type staleNodes struct{ fakeNodes }
+
+func (s staleNodes) NodeStatusRecords(ctx context.Context) ([]coord.NodeStatusRecord, error) {
+	records, err := s.fakeNodes.NodeStatusRecords(ctx)
+	for i := range records {
+		records[i].Epoch++
+	}
+	return records, err
+}
+
+// unreadNodes is fakeNodes whose status records cannot be read.
+type unreadNodes struct{ fakeNodes }
+
+func (unreadNodes) NodeStatusRecords(context.Context) ([]coord.NodeStatusRecord, error) {
+	return nil, errors.New("records unavailable")
+}
+
+// A NODE'S STATUS RECORD COUNTS ONLY AT ITS PRESENCE'S EPOCH, AND ONE NOT READ
+// IS SAID. What a node says of its tools and its models joins the entries only
+// while the node holds its presence at the epoch the record was written under:
+// an earlier incarnation's record — a failed tool server, a failing model —
+// raises nothing, though the node is still drawn from its presence. And records
+// the store could not answer leave the same entries unjudged and the nodes'
+// source said to be read in part, never whole.
+//
+// Mutations: join the records by node alone, or drop the records' read error,
+// and this is red.
+func TestANodesRecordCountsOnlyAtItsEpochAndAnUnreadOneIsSaid(t *testing.T) {
+	t.Parallel()
+	c := company()
+	base := records(t, c)
+	nodes := base.NodeStatuses.(fakeNodes)
+	for name, statuses := range map[string]gather.NodeStatuses{
+		"an earlier epoch's record": staleNodes{nodes}, "unreadable records": unreadNodes{nodes},
+	} {
+		src := base
+		src.NodeStatuses = statuses
+		a := read(t, c, src)
+		for _, key := range []struct {
+			kind atlas.Kind
+			key  string
+		}{{atlas.KindToolServer, "mcp/files"}, {atlas.KindModel, "llm/main"}} {
+			e, ok := a.View.Find(atlas.MustRef(key.kind, key.key).ID())
+			if !ok {
+				t.Fatalf("%s: %s is not in the atlas", name, key.key)
+			}
+			for _, s := range e.Signals {
+				if s.Kind == atlas.SignalToolServerDown || s.Kind == atlas.SignalModelFailing {
+					t.Errorf("%s: %s raised %s off a record no reader counts", name, key.key, s.Kind)
+				}
+			}
+		}
+		if _, ok := a.View.Find(atlas.MustRef(atlas.KindHost, "crewlet/n0").ID()); !ok {
+			t.Errorf("%s: the live node is not drawn from its presence", name)
+		}
+		i := slices.IndexFunc(a.Coverage, func(c gather.Coverage) bool { return c.Source == gather.SourceNodes })
+		unread := name == "unreadable records"
+		if i < 0 || a.Coverage[i].Complete == unread {
+			t.Errorf("%s: the nodes' source reads %+v, want complete %v", name, a.Coverage, !unread)
+		} else if unread && !strings.Contains(a.Coverage[i].Reason, "records unavailable") {
+			t.Errorf("%s: the nodes' source says %q, want the records' error", name, a.Coverage[i].Reason)
 		}
 	}
 }
@@ -400,8 +482,8 @@ func realistic(tb testing.TB) (*config.Company, gather.Sources) {
 	}
 	source := &fakeGitlet{repos: repos, page: 500, checksPerRepo: 4}
 	return c, gather.Sources{Gitlet: source, Integrations: fakeIntegrations{}, SeatAccess: ledger, ToolServers: tools,
-		Nodes: fakeNodes{{MCP: health}}, ServerTests: fakeTests{}, AccessLog: fakeAccess{use: hostUse},
-		Usage: fakeUsage{spend: spend, calls: calls}}
+		Nodes: fakeNodes{{MCP: health}}, NodeStatuses: fakeNodes{{MCP: health}}, ServerTests: fakeTests{},
+		AccessLog: fakeAccess{use: hostUse}, Usage: fakeUsage{spend: spend, calls: calls}}
 }
 
 // fakeLog is the atlas's own log: the claims it answers, or its error.

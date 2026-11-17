@@ -30,14 +30,19 @@ import (
 // AND A CHANGE'S ROWS AND ITS ROUTING (codechange.go): `code_changes`,
 // `code_change`, `code_change_routing` and `code_reviews`, decided per
 // repository alike; AND A REPOSITORY'S CONTENT (codegit.go): `code_refs`,
-// `code_tree`, `code_blob`, `code_log`, `code_blame`, `code_diff`,
-// `code_compare` and `code_commit`, decided per repository alike — the Gitlet
-// node that answers judges the grant again; AND ITS MERGE QUEUES AND ITS CHECKS
-// (codechecks.go): `code_queue`, `code_checks`, `code_check` and
-// `code_check_log`, decided per repository alike; AND A SEARCH OF ITS LINES
+// `code_tree`, `code_find`, `code_blob`, `code_log`, `code_blame`,
+// `code_tree_commits`, `code_diff`, `code_tips`, `code_tags`, `code_compare`
+// and `code_commit`, decided per repository alike — the Gitlet node that
+// answers judges the grant again; AND ITS MERGE QUEUES AND ITS CHECKS
+// (codechecks.go): `code_queue`, `code_checks`, `code_check`,
+// `code_check_log` and `code_commit_marks`, the marks a history page's
+// commits carry (their checks and the changes they landed with), decided per
+// repository alike; AND A SEARCH OF ITS LINES
 // (codesearch.go): `code_search`, decided per repository alike by every Gitlet
 // node that answers a part of it, and read back at no session floor, since it
-// answers at the tip it names.
+// answers at the tip it names; AND GITLET'S SECTION COUNTS (codecounts.go):
+// `code_counts`, a scope's changes by state, the company's or one
+// repository's, decided per repository alike.
 //
 // AND WHO READ A UNIT'S REPOSITORY, `code_repo_readers`: the operator tool's
 // one answer (builtin.ReadersOf) — the repository read by name as the asker,
@@ -154,30 +159,41 @@ type CodeSource interface {
 // answered in this surface's vocabulary ([codeRefusal]).
 func (s Sources) codeRead(kind gitlet.ReadKind, what string) Answer {
 	return func(ctx context.Context, p Params) (any, error) {
-		reads, err := s.Code.CodeReads()
+		answer, err := s.readCode(ctx, kind, what, p)
 		if err != nil {
 			return nil, err
-		}
-		// A CODE READ IS HELD TO WHO ASKS, so one asked for nobody is never
-		// judged as somebody: the registry refuses an anonymous question and
-		// one this node could not tell before any answer runs
-		// ([Registry.AnswerWith]), [caller] holds the same rule for whatever
-		// reaches this answer without it, and the reader refuses an asker no
-		// principal can be.
-		principal, err := caller(ctx, what)
-		if err != nil {
-			return nil, err
-		}
-		q, err := codeReadQuery(kind, codeAsker(principal), p)
-		if err != nil {
-			return nil, err
-		}
-		answer, err := reads.Read(ctx, q)
-		if err != nil {
-			return nil, codeRefusal(q.Repo, err)
 		}
 		return answer, nil
 	}
+}
+
+// readCode is [Sources.codeRead]'s read, its answer as the reader gave it.
+func (s Sources) readCode(ctx context.Context, kind gitlet.ReadKind, what string, p Params) (gitlet.ReadAnswer,
+	error) {
+
+	reads, err := s.Code.CodeReads()
+	if err != nil {
+		return gitlet.ReadAnswer{}, err
+	}
+	// A CODE READ IS HELD TO WHO ASKS, so one asked for nobody is never
+	// judged as somebody: the registry refuses an anonymous question and
+	// one this node could not tell before any answer runs
+	// ([Registry.AnswerWith]), [caller] holds the same rule for whatever
+	// reaches this answer without it, and the reader refuses an asker no
+	// principal can be.
+	principal, err := caller(ctx, what)
+	if err != nil {
+		return gitlet.ReadAnswer{}, err
+	}
+	q, err := codeReadQuery(kind, codeAsker(principal), p)
+	if err != nil {
+		return gitlet.ReadAnswer{}, err
+	}
+	answer, err := reads.Read(ctx, q)
+	if err != nil {
+		return gitlet.ReadAnswer{}, codeRefusal(q.Repo, err)
+	}
+	return answer, nil
 }
 
 // codeAsker is who a code question asks as: the principal the guard resolved,
@@ -217,10 +233,12 @@ func codeReadQuery(kind gitlet.ReadKind, asker gitlet.Principal, p Params) (gitl
 	// reviews are listed across repositories, by the reviewer they name.
 	switch kind {
 	case gitlet.ReadRepos:
+		// ONE KIND, AND AN ORDER: the reader refuses a value it does not know.
+		q.RepoKind, q.RepoSort = gitlet.RepoKind(p.String("kind")), gitlet.RepoSort(p.String("sort"))
 	case gitlet.ReadChanges:
 		q.Repo, q.State, q.Owner = p.String("repo"), gitlet.ChangeState(p.String("state")), p.String("owner")
 		q.Work, q.Reviewer, q.Needs = p.String("work"), p.String("reviewer"), gitlet.Need(p.String("needs"))
-		q.Window = gitlet.ChangeWindow(p.String("window"))
+		q.Window, q.ChangeSort = gitlet.ChangeWindow(p.String("window")), gitlet.ChangeSort(p.String("sort"))
 	case gitlet.ReadReviews:
 		q.Reviewer = p.String("reviewer")
 	case gitlet.ReadQueue:
@@ -242,6 +260,12 @@ func codeReadQuery(kind gitlet.ReadKind, asker gitlet.Principal, p Params) (gitl
 		if q.Checks, err = checkAttempt(p); err != nil {
 			return gitlet.ReadQuery{}, err
 		}
+	case gitlet.ReadCounts:
+		// A SCOPE AND ITS PARTS: one repository by name, or none for every one the caller reads.
+		q.Repo = p.String("repo")
+		if q.Counts, err = countsParams(p); err != nil {
+			return gitlet.ReadQuery{}, err
+		}
 	default:
 		q.Repo = p.String("name")
 	}
@@ -250,6 +274,12 @@ func codeReadQuery(kind gitlet.ReadKind, asker gitlet.Principal, p Params) (gitl
 	// reader's to refuse where it is none it lists under.
 	if kind == gitlet.ReadRefs || kind == gitlet.ReadRepos {
 		q.Prefix = strings.TrimSpace(p.String("prefix"))
+	}
+	// A REFS LISTING'S ORDER, WINDOW, FIND AND DETAIL, each the reader's to refuse.
+	if kind == gitlet.ReadRefs {
+		if q.RefListing, err = refListingParams(p); err != nil {
+			return gitlet.ReadQuery{}, err
+		}
 	}
 	// A CHANGE IS THE PATH'S TOO, by its number on the repository — web!42's
 	// 42 — on the reads of one change.
@@ -260,6 +290,23 @@ func codeReadQuery(kind gitlet.ReadKind, asker gitlet.Principal, p Params) (gitl
 				"its changes from 1", ErrBadParams, p.String("change"))
 		}
 		q.Change = n
+	}
+	// A HISTORY PAGE'S COMMITS are the request's `commits`: comma-separated
+	// in a query string, or a list of strings off a socket frame, each the
+	// reader's to refuse (a whole id, once, at most gitlet.MaxCommitMarks).
+	if kind == gitlet.ReadCommitMarks {
+		listed, ok := p.List("commits")
+		if !ok {
+			return gitlet.ReadQuery{}, fmt.Errorf("%w: the commits parameter is whole commit ids, "+
+				"comma-separated", ErrBadParams)
+		}
+		for _, v := range listed {
+			for oid := range strings.SplitSeq(v, ",") {
+				if oid = strings.TrimSpace(oid); oid != "" {
+					q.CommitMarks = append(q.CommitMarks, oid)
+				}
+			}
+		}
 	}
 	// WHO OWNS A REPOSITORY'S PATHS AND ITS RULES' MERGE GATES are answered
 	// to a question that ASKS for them, `path_owners=true` and `gates=true`
@@ -289,6 +336,14 @@ func codeReadQuery(kind gitlet.ReadKind, asker gitlet.Principal, p Params) (gitl
 	if q.Protected, err = askedFor(p, "protected"); err != nil {
 		return gitlet.ReadQuery{}, err
 	}
+	// A REPOSITORY'S FACTS, asked for: the reader refuses them on any read but a listing and a detail.
+	if q.RepoFacts, err = askedFor(p, "repo_facts"); err != nil {
+		return gitlet.ReadQuery{}, err
+	}
+	// A LISTING'S CARDS are asked, `cards=true`; the reader refuses them on any other read.
+	if q.Cards, err = askedFor(p, "cards"); err != nil {
+		return gitlet.ReadQuery{}, err
+	}
 	for v := range strings.SplitSeq(p.String("status"), ",") {
 		if v = strings.TrimSpace(v); v == "" {
 			continue
@@ -299,6 +354,10 @@ func codeReadQuery(kind gitlet.ReadKind, asker gitlet.Principal, p Params) (gitl
 				v, words.Or(gitlet.RepoStatuses()))
 		}
 		q.Status = append(q.Status, status)
+	}
+	// THE ASKER'S DAYS, which the reader refuses on any read that counts no pushes by day.
+	if q.DayBounds, err = dayBoundsParams(p); err != nil {
+		return gitlet.ReadQuery{}, err
 	}
 	if p.Has("limit") {
 		n, whole := p.WholeInt("limit")
@@ -464,7 +523,7 @@ func (s Sources) codeRepoReaders(ctx context.Context, p Params) (any, error) {
 func registerCode(r *Registry, s Sources) {
 	gated := Requires(iam.GrantGitlet)
 	r.Register("code_repos", gated, s.codeRead(gitlet.ReadRepos, "code_repos"))
-	r.Register("code_repo", gated, s.codeRead(gitlet.ReadRepo, "code_repo"))
+	r.Register("code_repo", gated, s.codeRepo())
 	r.Register("code_pushes", gated, s.codeRead(gitlet.ReadPushes, "code_pushes"))
 	r.Register("code_repo_readers", DecidedBy(authz.ActionCodeRepoReaders), s.codeRepoReaders)
 	r.Register("code_changes", gated, s.codeRead(gitlet.ReadChanges, "code_changes"))
@@ -474,15 +533,21 @@ func registerCode(r *Registry, s Sources) {
 	r.Register("code_reviews", gated, s.codeRead(gitlet.ReadReviews, "code_reviews"))
 	r.Register("code_refs", gated, s.codeRead(gitlet.ReadRefs, "code_refs"))
 	r.Register("code_tree", gated, s.codeTree)
+	r.Register("code_find", gated, s.codeFind)
 	r.Register("code_blob", gated, s.codeBlob)
 	r.Register("code_log", gated, s.codeLog)
 	r.Register("code_blame", gated, s.codeBlame)
+	r.Register("code_tree_commits", gated, s.codeTreeCommits)
 	r.Register("code_diff", gated, s.codeDiff)
+	r.Register("code_tips", gated, s.codeTips)
+	r.Register("code_tags", gated, s.codeTags)
 	r.Register("code_compare", gated, s.codeCompare)
 	r.Register("code_commit", gated, s.codeCommit)
 	r.Register("code_queue", gated, s.codeRead(gitlet.ReadQueue, "code_queue"))
 	r.Register("code_checks", gated, s.codeRead(gitlet.ReadChecks, "code_checks"))
 	r.Register("code_check", gated, s.codeRead(gitlet.ReadCheck, "code_check"))
 	r.Register("code_check_log", gated, s.codeCheckLog)
+	r.Register("code_commit_marks", gated, s.codeRead(gitlet.ReadCommitMarks, "code_commit_marks"))
+	r.Register("code_counts", gated, s.codeRead(gitlet.ReadCounts, "code_counts"))
 	r.Register("code_search", gated, s.codeSearch)
 }

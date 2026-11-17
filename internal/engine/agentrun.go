@@ -498,6 +498,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		HomePaths:   run.homePaths,
 		Skills:      req.Skills.Box(),
 		Model:       run.model,
+		Effort:      run.effort,
 		ProviderKey: member.Key,
 		// THE SIGN-IN THE JOB'S HARNESS IS HANDED, on the job's record: what
 		// its collection compares the entry's against ([Engine.signInReplaced]).

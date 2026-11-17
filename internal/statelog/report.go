@@ -1363,7 +1363,7 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 			if !seen {
 				slot = len(out)
 				at[a.Kind] = slot
-				out = append(out, Alarm{Kind: a.Kind, Remedy: a.Remedy})
+				out = append(out, Alarm{Kind: a.Kind, Title: a.Title, Person: a.Person, Remedy: a.Remedy})
 			}
 			out[slot].Domains = withEntry(out[slot].Domains, entry)
 			if current, has := lead[a.Kind]; !has || morePressing(a.Kind, perDomain, current) {

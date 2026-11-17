@@ -1,7 +1,6 @@
 package coord_test
 
 import (
-	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -9,27 +8,19 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// A SUMMARY READS BACK AS IT WAS WRITTEN, through the JSON a presence row is
-// stored as, and a row that carries none says so rather than reading as a
-// node with nothing to say.
-func TestANodesInfraSummaryRoundTripsThroughItsPresenceRow(t *testing.T) {
+// A SUMMARY READS BACK AS IT WAS WRITTEN, through the bytes a node's status
+// record is stored as, and a record that carries none reads back as a node
+// saying nothing: a zero summary, never one with an address of "".
+func TestANodesInfraSummaryRoundTripsThroughItsStatusRecord(t *testing.T) {
 	t.Parallel()
 	want := coord.NodeInfra{Address: "10.0.0.4", Cluster: "acme", BrokerServers: []string{"nats-1.internal", "nats-2.internal"},
 		ObjectsBackend: "s3", Bucket: "acme-files", Region: "eu-west-1", Endpoint: "s3.eu-west-1.amazonaws.com"}
-	raw, err := json.Marshal(map[string]any{coord.InfraKey: want.Meta()})
-	if err != nil {
-		t.Fatal(err)
+	got := recorded(t, coord.NodeStatusRecord{Node: "n1", Epoch: 1, Infra: want})
+	if !reflect.DeepEqual(got.Infra, want) {
+		t.Errorf("summary read back as %+v, want %+v", got.Infra, want)
 	}
-	var meta map[string]any
-	if err = json.Unmarshal(raw, &meta); err != nil {
-		t.Fatal(err)
-	}
-	got, ok := coord.InfraFromMeta(meta)
-	if !ok || !reflect.DeepEqual(got, want) {
-		t.Errorf("summary read back as %+v (%v), want %+v", got, ok, want)
-	}
-	if _, ok = coord.InfraFromMeta(map[string]any{"roles": []any{"data"}}); ok {
-		t.Error("a row with no summary read as one")
+	if _, sent := wireOf(t, coord.NodeStatusRecord{Node: "n1", Epoch: 1})["infra"]; sent {
+		t.Error("a node that says nothing of what it runs on writes a summary")
 	}
 	if (coord.NodeInfra{}).Meta() != nil {
 		t.Error("a node that says nothing writes a summary")

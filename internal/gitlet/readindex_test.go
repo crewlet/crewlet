@@ -295,6 +295,12 @@ var scanOK = map[string]string{
 	// rows as the fleet has had evictions, whatever its repositories hold —
 	// and the trim reads every one of them each pass.
 	"code_evictions": "one row a node an operator evicted from the code log, whatever its repositories hold",
+	// A COMPANY'S COUNTS ([ReadCounts]): every tally row, judged a row at a time.
+	"code_change_tallies": "one row an owner and visibility of the repositories in use holding a change: at " +
+		"most one a repository in use, whatever any repository holds",
+	// AND THE REPOSITORIES BY KIND AND STATUS ([CountRepos], a first page's total).
+	"code_repo_tallies": "one row a kind of each owner and visibility holding a repository: at most one a " +
+		"repository, whatever any repository holds",
 }
 
 // planSchema is what a plan is judged against: every table and every index

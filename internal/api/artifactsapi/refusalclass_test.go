@@ -74,10 +74,16 @@ func TestEveryArtifactRefusalIsOneClassOnBothSurfaces(t *testing.T) {
 		"ErrFolderDepth":     {err: artifactsdomain.ErrFolderDepth},
 		"FolderAmbiguous": {err: &artifactsdomain.FolderAmbiguous{Path: "Drafts",
 			Candidates: []artifactsdomain.Folder{{ID: "f-1"}, {ID: "f-2"}}}},
-		"ErrBrandContrast":   {why: brandAdoption},
-		"ErrBrandIncomplete": {why: brandAdoption},
-		"BrandContrast":      {why: brandAdoption},
-		"BrandIncomplete":    {why: brandAdoption},
+		// A COMMENT's, which the comment routes answer through the same
+		// table a publish does.
+		"ErrCommentNotFound":   {err: artifactsdomain.ErrCommentNotFound},
+		"ErrCommentLimit":      {err: artifactsdomain.ErrCommentLimit},
+		"ErrNotTheAuthor":      {err: artifactsdomain.ErrNotTheAuthor},
+		"ErrCommentCredential": {err: artifactsdomain.ErrCommentCredential},
+		"ErrBrandContrast":     {why: brandAdoption},
+		"ErrBrandIncomplete":   {why: brandAdoption},
+		"BrandContrast":        {why: brandAdoption},
+		"BrandIncomplete":      {why: brandAdoption},
 
 		"ErrBadCursor": {why: "a read's refusal, answered by the listing routes, never a write's"},
 		"ErrNotInTrash": {why: "the trash reaper's own purge, made as the engine, never a " +

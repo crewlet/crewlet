@@ -22,6 +22,7 @@ import {
   AvatarStack,
   Button,
   EmptyState,
+  FilterChip,
   IconButton,
   InboxGroup,
   InboxList,
@@ -31,8 +32,6 @@ import {
   ListDetailBack,
   MessageAction,
   MessageActions,
-  Switch,
-  Tooltip,
 } from "@crewlethq/ui";
 import {
   CheckGlyph,
@@ -59,11 +58,7 @@ import { roomTitle, unreadIn } from "./rooms.ts";
 import { RoomScopeProvider } from "./scope.tsx";
 import { focusRow } from "./Views.tsx";
 
-/**
- * Under this width of the list's own column, a row's date takes its short
- * form and the Unreads switch drops its word (still its name and hint), so
- * the head keeps New message in view.
- */
+/** Under this width of the list's own column, a row's date takes its short form. */
 export const DMS_NARROW_PX = 384;
 
 /** Whether a conversation's title holds what was typed in the find field. */
@@ -116,41 +111,35 @@ export function DirectMessagesView() {
       {/* THE HEAD AND THE FIND FIELD STAY while the conversations scroll under them. */}
       <div className="chat-dms-top">
         <div className="chat-dms-head">
-          {/* NO TITLE OF ITS OWN: the page trail names the list, and the top
-              bar's Messages switcher, right above it, is already a control
-              called "Direct messages". A second one of that name here, a
-              menu of New message and Mark all as read, read as one control
-              drawn twice. What it held is these two buttons. */}
-          <Tooltip content="Unreads" disabled={!narrow}>
-            <Switch
-              label="Unreads"
-              size="sm"
-              labelHidden={narrow}
-              checked={unreadOnly}
-              onCheckedChange={setUnreadOnly}
-            />
-          </Tooltip>
+          {/* A filter is a chip, counting the conversations it would leave. */}
+          <FilterChip
+            pressed={unreadOnly}
+            onPressedChange={setUnreadOnly}
+            count={waiting.length > 0 ? waiting.length : undefined}
+          >
+            Unread
+          </FilterChip>
           <span className="chat-dms-tools">
-            <IconButton
-              label="Mark all as read"
-              size="md"
+            <Button
+              size="small"
               variant="ghost"
-              icon={<CheckGlyph />}
+              leadingIcon={<CheckGlyph size="sm" />}
               tooltip
               disabledReason={waiting.length === 0 ? "No conversation is unread." : undefined}
               onClick={() => {
                 for (const row of waiting) frame.markRead(row.channel.id);
               }}
+            >
+              Mark all read
+            </Button>
+            <IconButton
+              label="New message"
+              size="md"
+              variant="ghost"
+              icon={<SquarePenGlyph />}
+              tooltip
+              onClick={() => nav.go({ kind: "new" })}
             />
-            <Tooltip content="New message">
-              <IconButton
-                label="New message"
-                size="md"
-                variant="ghost"
-                icon={<SquarePenGlyph />}
-                onClick={() => nav.go({ kind: "new" })}
-              />
-            </Tooltip>
           </span>
         </div>
         <div className="chat-dms-find">
@@ -367,15 +356,14 @@ function Conversation({
           <h2 className="chat-dms-open__title">{title}</h2>
           <span className="chat-dms-open__actions">
             <RoomActions tight />
-            <Tooltip content="Close">
-              <IconButton
-                label="Close"
-                size="header"
-                variant="ghost"
-                icon={<XGlyph />}
-                onClick={onClose}
-              />
-            </Tooltip>
+            <IconButton
+              label="Close"
+              size="header"
+              variant="ghost"
+              icon={<XGlyph />}
+              tooltip
+              onClick={onClose}
+            />
           </span>
         </header>
         <Room key={row.channel.id} channelID={row.channel.id} />

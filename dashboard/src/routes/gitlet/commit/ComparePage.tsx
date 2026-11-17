@@ -34,7 +34,9 @@ import {
   Checkbox,
   EmptyState,
   FormField,
+  InlineCode,
   Input,
+  NoticeList,
   Skeleton,
   Stack,
   Tag,
@@ -295,20 +297,26 @@ function Relation({
         </a>
       </p>
       {preview.state === "conflict" ? (
-        <Callout variant="neutral">
-          <Stack gap={1}>
-            <span>{`Merging ${head} into ${base} conflicts in:`}</span>
-            <ul className="code-rules">
-              {(preview.conflicts ?? []).map((p) => (
-                <li key={p} className="mono">
-                  {p}
-                </li>
-              ))}
-            </ul>
-            {(preview.conflicts_omitted ?? 0) > 0 && (
-              <span className="t-caption">{`and ${plural(preview.conflicts_omitted ?? 0, "more path")}`}</span>
-            )}
-          </Stack>
+        <Callout
+          variant="neutral"
+          title={`Merging ${head} into ${base} conflicts in ${plural((preview.conflicts?.length ?? 0) + (preview.conflicts_omitted ?? 0), "path")}`}
+        >
+          <NoticeList
+            notices={[
+              ...(preview.conflicts ?? []).map((p) => ({
+                key: p,
+                title: <InlineCode>{p}</InlineCode>,
+              })),
+              ...((preview.conflicts_omitted ?? 0) > 0
+                ? [
+                    {
+                      key: "omitted",
+                      title: `${plural(preview.conflicts_omitted ?? 0, "more path")} not listed`,
+                    },
+                  ]
+                : []),
+            ]}
+          />
         </Callout>
       ) : preview.state === "unknown" ? (
         <p className="muted">

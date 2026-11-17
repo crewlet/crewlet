@@ -37,6 +37,7 @@ import {
   FileTextGlyph,
   FolderGlyph,
   FolderKanbanGlyph,
+  GlobeGlyph,
   LayersGlyph,
   ListFilterGlyph,
   MapGlyph,
@@ -59,6 +60,7 @@ import { href as hrefOf } from "../../router.tsx";
 import { recordWord } from "../brief.ts";
 import { cellText, factText, ProseBlock, ReplyProse, type CardHandlers } from "./blocks.tsx";
 import { mentionsOf, readsOf, type Mention, type Read } from "./mentions.ts";
+import { Sources, sourcesOf } from "./sources.tsx";
 import { openInApp } from "./openInApp.ts";
 
 type EntityKind = NonNullable<AssistantEntityCard["kind"]>;
@@ -78,6 +80,7 @@ const KIND_GLYPH: Record<EntityKind, () => ReactNode> = {
   view: () => <ListFilterGlyph size="xs" />,
   room: () => <MessageSquareGlyph size="xs" />,
   atlas_entry: () => <MapGlyph size="xs" />,
+  web_page: () => <GlobeGlyph size="xs" />,
 };
 
 /** What a record's kind is called, at the head of its peek: "Task", "Agent". */
@@ -437,10 +440,15 @@ export function Answer({
       text.trim() === "" ? [] : renderMarkdown(text, { ...ASSISTANT_WORDS, prose: mentions.prose });
     return { nodes: rendered, named: mentions.named };
   }, [text, reads, handlers]);
-  const unnamed = reads.filter((read) => !named.has(read.id));
+  // A WEB PAGE IS CITED under Sources, never also on the Also looked up line.
+  const sources = useMemo(() => sourcesOf(cards), [cards]);
+  const unnamed = reads.filter(
+    (read) => !named.has(read.id) && read.event.card.entity?.kind !== "web_page",
+  );
   return (
     <Stack gap={3}>
       {nodes.length > 0 ? <ProseBlock dimmed={dimmed}>{nodes}</ProseBlock> : null}
+      <Sources sources={sources} />
       {unnamed.length > 0 ? (
         <RecordChipList label="Also looked up">
           {unnamed.map((read) => (

@@ -10,7 +10,6 @@
 
 import { useState } from "react";
 import { Card } from "@crewlethq/ui";
-import { HandGlyph } from "@crewlethq/icons/glyphs";
 import { HeldCallRow, type HeldCall } from "~/components/DecisionRow.tsx";
 import type { McpApproval, McpMemberServerStatus, McpToolView } from "~/contract/mcp.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -59,7 +58,7 @@ export function ApprovalCard({
   const [answered, setAnswered] = useState(approval.status === "answered");
   return (
     <Card padding="none">
-      <Card.Header icon={<HandGlyph size="sm" />}>
+      <Card.Header>
         <Card.Title>{answered ? "Approval answered" : "Waiting for your approval"}</Card.Title>
       </Card.Header>
       <ul className="decision-list">

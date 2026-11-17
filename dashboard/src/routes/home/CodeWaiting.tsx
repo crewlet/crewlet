@@ -41,7 +41,7 @@
  * and the kit still decides what an empty half says.
  */
 
-import { Card, Tag } from "@crewlethq/ui";
+import { Card } from "@crewlethq/ui";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { GITLET, needsWords } from "~/lib/access.ts";
@@ -50,6 +50,7 @@ import { useServicesAsk } from "~/lib/services.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { CodeChangeSummary } from "~/protocol/index.ts";
 import { CODE_LIST_POLL_MS } from "~/routes/gitlet/ChangeList.tsx";
+import { ChangeStateTag } from "~/routes/gitlet/Changes.tsx";
 import { changeObject, changesHref } from "~/routes/gitlet/paths.ts";
 import { WidgetQuery } from "./board/kit.tsx";
 import "~/styles/gitlet.css";
@@ -208,14 +209,8 @@ function WaitingRows({
           >
             {c.ref}
           </a>{" "}
-          {c.title}
+          {c.title} <ChangeStateTag state={c.state} />
           {c.readiness && <span className="muted"> · {c.readiness.first}</span>}
-          {c.state === "draft" && (
-            <>
-              {" "}
-              <Tag appearance="outline">Draft</Tag>
-            </>
-          )}
         </li>
       ))}
     </ul>

@@ -242,7 +242,7 @@ test("the properties name the seat the author wrote as, and the last save with i
   expect(props.textContent).toContain("Jane Founder");
   expect(props.textContent).not.toMatch(/\bjane\b/);
   const saved = within(props as HTMLElement).getByTitle("Revision 14: “Name the switch”");
-  expect(saved.textContent).toMatch(/^2h ago by SWE/);
+  expect(saved.textContent).toMatch(/^2 hours ago by SWE/);
   expect(props.textContent).not.toContain("Kind");
 });
 
@@ -525,11 +525,11 @@ test("History reads the newest revision, lists the others, and shows the page's 
 });
 
 // THE WATCH IS THE PERSON'S OWN, as a save of nothing but the watch.
-test("the eye watches and unwatches as the person, and a mute is not a watch", async () => {
+test("Watch and Unwatch say what they do, act as the person, and a mute is not a watch", async () => {
   mount(<PageView id={ID} />, { page: detail(), page_reads: reads() });
   await settle();
-  const eye = screen.getByRole("button", { name: "Stop watching this page" });
-  expect(eye.getAttribute("aria-pressed")).toBe("true");
+  const eye = screen.getByRole("button", { name: "Unwatch" });
+  expect(eye.textContent).toBe("Unwatch");
   fireEvent.click(eye);
   await settle();
   expect(posted).toEqual([
@@ -543,7 +543,7 @@ test("the eye watches and unwatches as the person, and a mute is not a watch", a
     page_reads: reads(),
   });
   await settle();
-  fireEvent.click(screen.getByRole("button", { name: "Watch this page" }));
+  fireEvent.click(screen.getByRole("button", { name: "Watch" }));
   await settle();
   expect(posted).toEqual([
     { tool: "save_page", args: { page: ID, base_version: 14, watch: true } },
@@ -563,7 +563,7 @@ test("the watchers count is named by the number it shows, then by who watches", 
   await settle();
   const count = screen.getByRole("button", { name: /^2 watching/ });
   expect(count.hasAttribute("aria-label")).toBe(false);
-  expect(count.textContent?.startsWith("2")).toBe(true);
+  expect(count.textContent?.startsWith("2 watching")).toBe(true);
   expect(count.textContent).toContain("you");
 });
 
@@ -777,9 +777,7 @@ test("a page in the trash holds Edit, the watch and a sub-page with one reason, 
   const edit = screen.getByRole("button", { name: "Edit" });
   expect(held(edit)).toBe(true);
   expect(edit.getAttribute("title")).toBe("It is in the trash. Restore it first.");
-  expect(held(screen.getByRole("button", { name: /watching this page$|^Watch this page/i }))).toBe(
-    true,
-  );
+  expect(held(screen.getByRole("button", { name: /^(Watch|Unwatch)$/ }))).toBe(true);
   // THE THREAD READS, and takes no comment: no field to type into.
   expect(screen.queryByRole("textbox", { name: /Comment/ })).toBeNull();
   expect(screen.queryByRole("button", { name: "Comment" })).toBeNull();
@@ -847,9 +845,9 @@ test("Move files the page under another page of its space, never under itself", 
 });
 
 // A WATCH IS FILED UNDER A SEAT, and a credential bound to none subscribes
-// nobody (`internal/doclet` `Actor.subscriber`): the eye says so rather than
+// nobody (`internal/doclet` `Actor.subscriber`): Watch says so rather than
 // offering a press the engine answers by moving nothing.
-test("the eye is held, with its reason, for a credential bound to no seat", async () => {
+test("Watch is held, with its reason, for a credential bound to no seat", async () => {
   const unbound = {
     login: "svc:docs",
     grants: ["doclet"],
@@ -865,8 +863,7 @@ test("the eye is held, with its reason, for a credential bound to no seat", asyn
     page_reads: reads(),
   });
   await settle();
-  const eye = screen.getByRole("button", { name: "Watch this page" });
-  expect(eye.getAttribute("aria-pressed")).toBe("false");
+  const eye = screen.getByRole("button", { name: "Watch" });
   expect(eye.getAttribute("aria-disabled")).toBe("true");
   fireEvent.click(eye);
   await settle();
@@ -1297,14 +1294,8 @@ test.each([
     { page: detail(), page_reads: reads(), viewer },
   );
   await settle();
-  // THE EYE IS NAMED FOR THE READER'S OWN WATCH, which a bound person has.
-  for (const name of [
-    "Edit",
-    "Comment",
-    "Publish",
-    "Save as draft",
-    /^(Watch|Stop watching) this page$/,
-  ]) {
+  // WATCH IS NAMED FOR THE READER'S OWN WATCH, which a bound person has.
+  for (const name of ["Edit", "Comment", "Publish", "Save as draft", /^(Watch|Unwatch)$/]) {
     const button = screen.getByRole("button", { name });
     expect(button.getAttribute("aria-disabled"), String(name)).toBe("true");
     expect(reasonOf(button), String(name)).toContain(reason);

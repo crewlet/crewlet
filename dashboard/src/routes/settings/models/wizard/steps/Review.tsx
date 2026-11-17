@@ -11,7 +11,7 @@
  */
 
 import { useMemo, type ReactNode } from "react";
-import { Callout, DescriptionList, Disclosure, Link, Text } from "@crewlethq/ui";
+import { Callout, DescriptionList, Disclosure, Link, NoticeList, Text } from "@crewlethq/ui";
 import {
   DEFAULT_HARNESS_MAX_CONCURRENT,
   DEFAULT_HARNESS_TIMEOUT_SECONDS,
@@ -31,6 +31,7 @@ import {
   STEP_LABELS,
   canExecute,
   credentialValues,
+  factsOf,
   fieldOf,
   messageOf,
   modelId,
@@ -38,9 +39,11 @@ import {
   type Draft,
 } from "../draft.ts";
 import type { WizardStep } from "../../parts.tsx";
+import { methodWords } from "./SignInStep.tsx";
 import { Waiting } from "../../Waiting.tsx";
 import { webToolsWords } from "./LimitsStep.tsx";
 import { seatChangesOf, summaryOf } from "./UseItFor.tsx";
+import { ConfigWarnings } from "~/components/ConfigWarnings.tsx";
 
 /** The write of a save that is running: the credential's seal, then the document. */
 export type SaveStage = "credential" | "document";
@@ -213,7 +216,7 @@ export function Review({
       </>
     );
   const method = {
-    "api-key": stored("API key"),
+    "api-key": stored(methodWords(draft.harness, "api-key").label),
     token: stored("Subscription token"),
     cloud: CLOUD_FIELDS[draft.cloud].label,
     "host-login": editing
@@ -232,11 +235,10 @@ export function Review({
           sign-in moved two seats, and said so only inside a summary line. */}
       {changes.length > 0 ? (
         <Callout variant="warning" title="Who uses a model changes from today">
-          <ul className="models-changes" aria-label="Seats that change model">
-            {changes.map((line) => (
-              <li key={line}>{line}</li>
-            ))}
-          </ul>
+          <NoticeList
+            label="Seats that change model"
+            notices={changes.map((line) => ({ key: line, title: line }))}
+          />
         </Callout>
       ) : editing ? (
         <Text as="p" variant="caption" tone="secondary">
@@ -264,6 +266,12 @@ export function Review({
         dense
         items={[
           ["Method", method] as const,
+          ...(factsOf(draft.harness).efforts.length > 0
+            ? [["Reasoning effort", draft.effort || "Harness default"] as const]
+            : []),
+          ...(draft.harness === "qwen-code" && draft.endpoint.trim()
+            ? [["Endpoint", draft.endpoint.trim()] as const]
+            : []),
           ...(canExecute(draft)
             ? [
                 [
@@ -305,21 +313,21 @@ export function Review({
           variant="danger"
           title={`${problems.length} ${problems.length === 1 ? "problem" : "problems"} to fix first`}
         >
-          <ul className="models-problems">
-            {problems.map((p, i) => {
+          <NoticeList
+            notices={problems.map((p, i) => {
               const step = stepOf(p, draft.key);
-              return (
-                <li key={`${p.path}-${i}`} className="models-problems__line">
-                  <span>
-                    <strong>{fieldOf(p, draft.key)}:</strong> {messageOf(p)}
-                  </span>
+              return {
+                key: `${p.path}-${i}`,
+                subject: fieldOf(p, draft.key),
+                title: messageOf(p),
+                action: (
                   <button type="button" className="t-link" onClick={() => onGo(step, p)}>
                     Fix in {STEP_LABELS[step]}
                   </button>
-                </li>
-              );
+                ),
+              };
             })}
-          </ul>
+          />
         </Callout>
       ) : saving ? (
         // A SAVE SAYS WHICH OF ITS WRITES IS RUNNING: the button's spinner
@@ -340,17 +348,19 @@ export function Review({
           {check.message}
         </Callout>
       ) : check.kind === "ready" ? (
-        <Callout variant="success" title="The engine accepts this change">
-          {editing ? "Saving" : "Creating"} it makes one revision, applied at once on every node
-          with no restart.
-          {check.warnings.length > 0 ? (
-            <ul className="models-problems">
-              {check.warnings.map((w, i) => (
-                <li key={`${w.path}-${i}`}>{messageOf(w)}</li>
-              ))}
-            </ul>
-          ) : null}
-        </Callout>
+        <>
+          <Callout variant="success" title="The engine accepts this change">
+            {editing ? "Saving" : "Creating"} it makes one revision, applied at once on every node
+            with no restart.
+          </Callout>
+          <ConfigWarnings
+            warnings={check.warnings}
+            seat={(h) => {
+              const s = data.seats.find((x) => x.handle === h);
+              return s && { name: s.name || h, agent: s.kind !== "human" };
+            }}
+          />
+        </>
       ) : null}
 
       {orphans.length > 0 ? (

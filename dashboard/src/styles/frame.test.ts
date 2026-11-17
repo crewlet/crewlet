@@ -648,6 +648,7 @@ describe("the frame's layout", () => {
       [".list-row", "components.css"],
       [".feed-row", "screens.css"],
       [".thread-entry", "screens.css"],
+      [".code-list__row", "gitlet.css"],
     ] as const;
     for (const [row, file] of ROWS) {
       expect(block(sheet(file), row), `${row} writes its own inset`).toMatch(
@@ -1010,6 +1011,37 @@ describe("a page toolbar's rhythm", () => {
       /--toolbar-h:\s*calc\(var\(--size-control-sm\) \+ var\(--spacing-2\) \* 2\)/,
     );
   });
+});
+
+/** What is wrong with where a sheet folds Gitlet's code list: at the phone's width, and at no other. */
+function codeListFolds(css: string): string[] {
+  const phone = `@container page (width < ${PHONE_BREAKPOINT}px)`;
+  const out: string[] = [];
+  let folds = false;
+  for (const m of css.matchAll(/@(?:container|media)[^{]*/g)) {
+    const prelude = m[0].trim();
+    const body = atRuleBody(css.slice(m.index), prelude);
+    if (prelude === phone) {
+      if (/\.code-list__row\s*\{[^}]*grid-template-areas:/.test(body)) folds = true;
+    } else if (/\.code-list(?![\w-])|\.code-list[_-]/.test(body)) {
+      out.push(`${prelude} names the code list`);
+    }
+  }
+  if (!folds) out.push(`no ${phone} block folds .code-list__row's areas`);
+  return out;
+}
+
+// GITLET'S CODE LIST FOLDS WITH THE PHONE, by the page's own container, so a
+// list narrowed by a peek folds too; one second width would be a second phone.
+test("a code list folds at the phone's width, and at no other", () => {
+  expect(codeListFolds(sheet("gitlet.css"))).toEqual([]);
+  // IT CAN TELL: a fold at another width is reported, and so is a missing one.
+  const at720 =
+    "@container page (width < 720px) { .code-list__row { grid-template-areas: 'body'; } }";
+  expect(codeListFolds(at720)).toEqual([
+    "@container page (width < 720px) names the code list",
+    `no @container page (width < ${PHONE_BREAKPOINT}px) block folds .code-list__row's areas`,
+  ]);
 });
 
 test("no stylesheet negates a var() with a unary minus", () => {

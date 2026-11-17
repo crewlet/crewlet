@@ -18,6 +18,7 @@ import {
   FormField,
   Input,
   KeyValueRows,
+  NoticeList,
   Select,
   TableTwoLineCell,
   Text,
@@ -468,17 +469,21 @@ function IntegrationNote({ draft }: { draft: Draft }) {
     .filter((i) => i.from_integration)
     .map((i) => i.name);
   return (
-    <Callout variant="info" title={`${entry.title} decides which agents get it`}>
+    <Callout
+      variant="info"
+      title={`${entry.title} decides which agents get it`}
+      action={
+        <a
+          className="t-link"
+          href={href(["company", "integrations", entry.integration], { open: "agents" })}
+        >
+          Open its Agents tab
+        </a>
+      }
+    >
       Each agent turned on at the {entry.title} integration gets its own instance, signed in as
       itself{keys.length > 0 ? ` with the ${listed(keys)} the integration keeps for it` : ""}.
-      Nothing is stored here. Change who has it on the{" "}
-      <a
-        className="t-link prose-link"
-        href={href(["company", "integrations", entry.integration], { open: "agents" })}
-      >
-        {entry.title} integration's Agents tab
-      </a>
-      .
+      Nothing is stored here.
     </Callout>
   );
 }
@@ -873,15 +878,19 @@ export function TestStep({
           as an agent it has turned on, so with none on there is nobody to
           test it as, and the fix is on the integration. */}
       {!draft.shared && bound && agents !== null && testers.length === 0 ? (
-        <Callout variant="warning" title={`No agent has ${title} on`}>
-          Turn {title} on for an agent first, on its{" "}
-          <a
-            className="t-link prose-link"
-            href={href(["company", "integrations", bound], { open: "agents" })}
-          >
-            Agents tab
-          </a>
-          , then test it as that agent.
+        <Callout
+          variant="warning"
+          title={`No agent has ${title} on`}
+          action={
+            <a
+              className="t-link"
+              href={href(["company", "integrations", bound], { open: "agents" })}
+            >
+              Open its Agents tab
+            </a>
+          }
+        >
+          Turn {title} on for an agent first, then test it as that agent.
         </Callout>
       ) : null}
       {!draft.shared && !bound && testers.length === 0 ? (
@@ -913,23 +922,22 @@ export function AccessStep({ draft, set }: { draft: Draft; set: Set }) {
   if (draft.signIn === "integration") {
     const title = entry?.title ?? "The integration";
     return (
-      <Callout variant="info" title={`${title} decides which agents get it`}>
-        Each agent turned on at the {title} integration, with the access it has there, gets its own
-        instance of this server.{" "}
-        {entry?.integration ? (
-          <>
-            Change who has it on the{" "}
+      <Callout
+        variant="info"
+        title={`${title} decides which agents get it`}
+        action={
+          entry?.integration && (
             <a
-              className="t-link prose-link"
+              className="t-link"
               href={href(["company", "integrations", entry.integration], { open: "agents" })}
             >
-              integration's Agents tab
+              Open its Agents tab
             </a>
-            .
-          </>
-        ) : (
-          "Change who has it on the integration's Agents tab."
-        )}
+          )
+        }
+      >
+        Each agent turned on at the {title} integration, with the access it has there, gets its own
+        instance of this server. Who has it is changed on the integration&apos;s Agents tab.
       </Callout>
     );
   }
@@ -1166,11 +1174,12 @@ export function ReviewStep({
       />
       {check.kind === "problems" && problems.length > 0 ? (
         <Callout variant="danger" title="The engine refused this">
-          <ul className="mcp-list">
-            {problems.map((p) => (
-              <li key={`${p.path}:${p.message}`}>{p.said || p.message}</li>
-            ))}
-          </ul>
+          <NoticeList
+            notices={problems.map((p) => ({
+              key: `${p.path}:${p.message}`,
+              title: p.said || p.message,
+            }))}
+          />
         </Callout>
       ) : null}
       {check.kind === "blocked" ? (

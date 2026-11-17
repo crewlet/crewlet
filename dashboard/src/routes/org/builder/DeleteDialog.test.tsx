@@ -301,12 +301,12 @@ describe("before the seats go", () => {
       { id: "2", agent_id: "2", role: "SRE", handle: "sre", activity: "working" },
     ];
     open(keyedState(fixtureCompany()), "unit:engineering", { agents });
-    const notes = screen.getAllByText(/is working now/);
-    expect(notes.map((n) => n.textContent?.split(" is working")[0])).toEqual([
-      "VP Engineering",
-      "SRE",
-    ]);
-    expect(notes.every((n) => n.tagName === "LI")).toBe(true);
+    // SAID ONCE for every seat it applies to, the seats listed under it.
+    const note = screen.getByText(/Working now$/).closest(".crewlet-notice-list__item")!;
+    expect(note.querySelector(".crewlet-notice-list__subject")?.textContent).toBe("2 seats");
+    expect(note.querySelector(".crewlet-notice-list__line")?.textContent).toBe(
+      "VP Engineering, SRE",
+    );
   });
 
   test("removing more than half the saved company's seats is acknowledged first", () => {

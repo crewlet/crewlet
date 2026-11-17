@@ -95,6 +95,11 @@ type Fleet struct {
 	uploadLedger versioned
 	uploads      map[string]versioned
 
+	// nodeStatuses is each node's status record as the KV keeps it, its
+	// bytes, by node id: decoded on every read, so a reader meets what a
+	// real store hands back.
+	nodeStatuses map[string][]byte
+
 	pauses      map[uuid.UUID]coord.SeatPause
 	positions   map[string]coord.NodePositions
 	holds       map[string]coord.TrimHold
@@ -217,6 +222,7 @@ func NewFleet() *Fleet {
 		mailboxes:         map[uuid.UUID]coord.MailboxRecord{},
 		pauses:            map[uuid.UUID]coord.SeatPause{},
 		uploads:           map[string]versioned{},
+		nodeStatuses:      map[string][]byte{},
 		retries:           newRetryRecords(),
 		signIns:           newSignInRecords(),
 		modelChecks:       newModelCheckRecords(),

@@ -210,6 +210,14 @@ func TestFleetContract(t *testing.T) {
 	})
 }
 
+// The nodes' status records, over the twin's lease store and its fleet store,
+// as a single-node company runs both.
+func TestNodeStatusRecordContract(t *testing.T) {
+	coordtest.RunNodeStatusRecords(t, func(*testing.T) (coord.Backend, coord.NodeStatusRecords) {
+		return memory.New(), memory.NewFleet()
+	})
+}
+
 // The memory twin, held mid-mint through its epoch counter.
 func TestMintingContract(t *testing.T) {
 	coordtest.RunMinting(t, func(t *testing.T, hold coordtest.MintHold) coord.Backend {

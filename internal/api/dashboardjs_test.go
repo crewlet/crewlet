@@ -1469,7 +1469,14 @@ const (
 	// punctuation peel a marked chip now takes among it, in the shared chunk.
 	// So it moved to 418 KiB, 2.28 seconds.
 	// Delegated decisions made readable, on kit 0.134.0: 418.0 KiB, 508 bytes over main: 419 KiB, 2.29 seconds.
-	initialBudget = 419 << 10
+	// Code host glyphs, colours and kit marks, on kit 0.137.0: 419.8 KiB, 1,511 bytes over main: 420 KiB, 2.29 seconds.
+	// The model wizard as a chunk of its own, every harness and reasoning effort, on kit 0.137.0: 421.5 KiB,
+	// the kit's shared modules regrouped around the new chunk: 422 KiB, 2.30 seconds.
+	// Doclet's newest change read as the page reads, on kit 0.141.1, whose one sheet adds its new parts: 420.3 KiB: 421 KiB, 2.30 seconds.
+	// The Settings polish, on kit 0.143.0: 420.2 KiB, the kit's shared chunk most of it: 421 KiB, 2.30 seconds.
+	// The clear controls, Doclet changes, Settings polish and notices train, on kit 0.144.0: 422.2 KiB: 423 KiB, 2.31 seconds.
+	// Gitlet's commits as a timeline on one list, on kit 0.144.0: 423.1 KiB: 424 KiB, 2.32 seconds.
+	initialBudget = 424 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2641,7 +2648,36 @@ const (
 	// The Ask Crewlet, sign-in policy, settings and Delegated decisions train,
 	// on kit 0.134.0, measures 6342.3 KiB (6,494,479 bytes), 29,554 bytes over
 	// main's 6313.4 KiB: 6343 KiB.
-	treeBudget = 5<<20 + 1223<<10
+	// Saying a time inside Gitlet's sentences in words added 742 bytes and
+	// took it to 6314.1 KiB (6,465,667 bytes): 6315 KiB.
+	// Code host glyphs, colours and kit marks, on kit 0.137.0: 6350.7 KiB, 8,666 bytes over main: 6351 KiB.
+	// The Gitlet history, tips, branches, committers and file finder train, on
+	// kit 0.137.0, measures 6351.5 KiB (6,503,931 bytes), 9,452 bytes over main: 6352 KiB.
+	// The Ask Crewlet reads train, on kit 0.137.0: 6354.3 KiB (6,506,836 bytes): 6355 KiB.
+	// The Gitlet tags and times in words train, on kit 0.137.0: 6355.5 KiB (6,508,053 bytes), 1,217 over main: 6356 KiB.
+	// Every harness in the model wizard, its own chunk, and reasoning effort, on kit 0.137.0: 6370.6 KiB: 6371 KiB.
+	// The model effort and every harness train, on kit 0.137.0: 6371.8 KiB (6,524,759 bytes), 16,686 over main: 6372 KiB.
+	// Gitlet's code host colours (diffs, change states, branches), on kit 0.137.0:
+	// 6358.5 KiB (6,511,153 bytes), 3,100 bytes over main: 6359 KiB.
+	// The Gitlet code host colours train, on kit 0.137.0: 6374.8 KiB (6,527,838 bytes), 3,079 over main: 6375 KiB.
+	// Doclet's newest change read as the page reads, on kit 0.141.1: 6505.7 KiB (6,661,846 bytes), 153,793 over main,
+	// 133,990 of them the kit's coding-harness vendor marks in the icons chunk: 6506 KiB.
+	// The Settings polish, on kit 0.143.0: 6491.8 KiB (6,647,648 bytes), 119,810 over main, the
+	// kit's newer components most of it: 6492 KiB.
+	// One notice system, on kit 0.142.0: 6511.6 KiB (6,667,924 bytes), 140,086 over main, about
+	// 134 KiB of it the coding harness marks kit 0.139.0 added to the vendor mark chunk: 6512 KiB.
+	// The clear controls, Doclet changes, Settings polish and notices train, on kit 0.144.0:
+	// 6521.2 KiB (6,677,673 bytes), 149,862 over main: 6522 KiB.
+	// Anchored comments on kit 0.139.0: 6523.1 KiB (6,679,624 bytes); its vendor marks are 130.8 KiB: 6524 KiB.
+	// The artifacts' half of a person's inbox: 6525.6 KiB (6,682,224 bytes): 6526 KiB.
+	// Gitlet's code coloured by kind in its file view and blame, on kit 0.137.0:
+	// 6410.9 KiB (6,564,755 bytes), 36,917 bytes over main: 6411 KiB.
+	// The artifact comments, their inbox, Gitlet syntax and harness marks train, on kit 0.144.0:
+	// 6595.4 KiB (6,753,705 bytes), 76,032 over main: 6596 KiB.
+	// Gitlet's diffs and search hits coloured by kind: 6598.0 KiB (6,756,345 bytes), 2,640 over main: 6598 KiB.
+	// Gitlet's commits as a timeline on one list, Gitlet split into three chunks:
+	// 6615.3 KiB (6,774,070 bytes), 17,725 over main: 6616 KiB.
+	treeBudget = 5<<20 + 1496<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
@@ -2747,6 +2783,34 @@ func TestTheDashboardFitsItsBudget(t *testing.T) {
 	if tree > treeBudget {
 		t.Errorf("static/dashboard is %s, over its %s: every engine binary and image carries "+
 			"it, opened or not", kib(tree), kib(treeBudget))
+	}
+}
+
+// TestGitletIsThreeChunks holds Gitlet to three lazy chunks, by address (app/lazyScreen.ts): its
+// section pages, a repository's and a change's, each named by Rolldown after its index.ts's
+// directory. One that folded back would grow the first click into Gitlet.
+func TestGitletIsThreeChunks(t *testing.T) {
+	t.Parallel()
+	c := embeddedDashboard.crawl
+	initial := initialLoad(c)
+	named := regexp.MustCompile(`^/static/dashboard/assets/(gitlet|repo|change)-[A-Za-z0-9_-]{8}\.js$`)
+	found := map[string][]string{}
+	for _, f := range c.files {
+		m := named.FindStringSubmatch(f.url)
+		if m == nil {
+			continue
+		}
+		found[m[1]] = append(found[m[1]], f.url)
+		if initial[f.url] {
+			t.Errorf("%s is in the initial load; Gitlet's chunks are fetched by its screens", f.url)
+		}
+		t.Logf("%s: %s gzipped", f.url, kib(servedSize(t, embeddedDashboard.app, f.url)))
+	}
+	for _, chunk := range []string{"gitlet", "repo", "change"} {
+		if len(found[chunk]) != 1 {
+			t.Errorf("the crawl reached %d %s-*.js chunks, want exactly one: %v",
+				len(found[chunk]), chunk, found[chunk])
+		}
 	}
 }
 

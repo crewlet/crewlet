@@ -31,7 +31,7 @@ import (
 //
 // They used to be log lines alone (`tool_name_collision`, `mcp_tool_refused`),
 // which nobody reading the server's settings ever saw. Each is now a fact the
-// heartbeat carries per server and the status answer per server across the
+// node's status record carries per server and the status answer per server across the
 // fleet, worded by [NameRefusal.Sentence] and [ShadowSentence].
 
 // NameRefusal is why a tool a server lists is not offered under its name.

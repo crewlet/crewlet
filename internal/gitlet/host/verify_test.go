@@ -57,6 +57,13 @@ func (c *steppedClock) now() time.Time {
 	return at
 }
 
+// setStep moves the clock on by step at every later reading.
+func (c *steppedClock) setStep(step time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.step = step
+}
+
 // holdMaintainerOff admits a check of the case's repository of its own and
 // holds the maintainer off the repository with it until release, or the case's
 // end: the copy a case checks was just pushed and holds no commit-graph, so

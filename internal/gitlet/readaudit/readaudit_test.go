@@ -149,6 +149,31 @@ func TestEveryReaderWayKindAndDayIsARecordOfItsOwn(t *testing.T) {
 	}
 }
 
+// A DOWNLOAD IS A RECORD OF ITS OWN BESIDE A FETCH: one reader's raw file,
+// ZIP and fetch of one repository in a flush are three records, each its own
+// kind, since all three are filed via git.
+//
+// Mutation: drop the kind from the key, and the three are one record.
+func TestADownloadIsARecordOfItsOwnBesideAFetch(t *testing.T) {
+	t.Parallel()
+	pub := &recorder{}
+	l := readaudit.New(pub)
+	raw, archive := fetch(0, 10), fetch(time.Second, 20)
+	raw.Fetched.Kind, archive.Fetched.Kind = types.FetchedRaw, types.FetchedArchive
+	l.Add(raw)
+	l.Add(archive)
+	l.Add(fetch(2*time.Second, 30))
+	l.Flush(t.Context())
+	got, _ := pub.records(t)
+	kinds := map[string]int64{}
+	for _, r := range got {
+		kinds[r.Kind] = r.Bytes
+	}
+	if len(got) != 3 || kinds[types.FetchedRaw] != 10 || kinds[types.FetchedArchive] != 20 || kinds[""] != 30 {
+		t.Errorf("records = %+v, want a raw read, a ZIP and a fetch, one record each", got)
+	}
+}
+
 // A SEAT'S READS ARE SOURCED TO THE SEAT, as every event of a seat's is, and a
 // credential's to nobody: its reader is the record's own principal.
 func TestASeatsReadsAreSourcedToTheSeat(t *testing.T) {

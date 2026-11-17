@@ -31,6 +31,7 @@ import {
   Button,
   ChipField,
   EmptyState,
+  FilterChip,
   IconButton,
   InboxGroup,
   InboxList,
@@ -41,11 +42,9 @@ import {
   MessageActions,
   PersonRow,
   Skeleton,
-  Switch,
   TabPanel,
   Tabs,
   Tag,
-  Tooltip,
 } from "@crewlethq/ui";
 import {
   ArrowUpRightGlyph,
@@ -99,7 +98,8 @@ import { RoomScopeProvider, useRoomScope } from "./scope.tsx";
 import { reportFor } from "./start.ts";
 import { StartNote } from "./StartNote.tsx";
 import { ThreadPane } from "./Thread.tsx";
-import { ViewHead, useViewBarTight } from "./ViewHead.tsx";
+import { ViewHead } from "./ViewHead.tsx";
+import { ago } from "~/lib/ago.ts";
 
 /** How many rows a view's page holds: the reader's views are short lists. */
 const VIEW_PAGE = 20;
@@ -313,7 +313,6 @@ export function ActivityView() {
   const listBox = useRef<HTMLDivElement>(null);
   const [filter, setFilter] = useState<ActivityFilter>("all");
   const [unreadOnly, setUnreadOnly] = useState(false);
-  const tight = useViewBarTight();
   const params = {
     ...(filter === "all" ? {} : { kind: filter }),
     ...(unreadOnly ? { unread: true } : {}),
@@ -333,7 +332,7 @@ export function ActivityView() {
   const items = feed.items;
 
   // THE OPEN ITEM OUTLIVES THE LIST'S FILTER: opened, it stays open while a
-  // tab or Unread only hides it, or reading it takes it out of an unread
+  // tab or the Unread filter hides it, or reading it takes it out of an unread
   // list. Only the list stops drawing it. A reload finds it in the list.
   const wanted = nav.place.kind === "activity" ? (nav.place.item ?? "") : "";
   const [held, setHeld] = useState<ChatActivityItem | null>(null);
@@ -443,17 +442,9 @@ export function ActivityView() {
       }}
     >
       <ViewHead>
-        {/* A TIGHT BAR DRAWS THE TRACK ALONE, still named by its label and
-            hinted by the tooltip; the one element across both keeps its focus. */}
-        <Tooltip content="Unread only" disabled={!tight}>
-          <Switch
-            label="Unread only"
-            size="sm"
-            labelHidden={tight}
-            checked={unreadOnly}
-            onCheckedChange={setUnreadOnly}
-          />
-        </Tooltip>
+        <FilterChip pressed={unreadOnly} onPressedChange={setUnreadOnly}>
+          Unread
+        </FilterChip>
       </ViewHead>
       <Tabs
         className="chat-view-tabs"
@@ -780,7 +771,7 @@ export function ThreadsView() {
                     <RoomName room={room} />
                     <span className="chat-muted-text">
                       · {replies} {replies === 1 ? "reply" : "replies"} · last{" "}
-                      {relTime(summary?.last_reply_at ?? root.message.created_at, now)}
+                      {ago(summary?.last_reply_at ?? root.message.created_at, now)}
                     </span>
                   </span>
                   <WriteButton

@@ -1,0 +1,17 @@
+/** Protocol Buffers; a state carries an open block comment. */
+import { clike } from "./scan.ts";
+import type { Grammar } from "./types.ts";
+
+export const proto: Grammar = clike({
+  keywords:
+    "syntax edition package import option message enum service rpc returns stream oneof map reserved extensions extend optional repeated required public weak to max",
+  constants: "true false",
+  types:
+    "double float int32 int64 uint32 uint64 sint32 sint64 fixed32 fixed64 sfixed32 sfixed64 bool string bytes",
+  typeAfter: "message enum service extend",
+  functionAfter: "rpc",
+  capitalTypes: true,
+  line: ["//"],
+  block: ["/*", "*/"],
+  quotes: `"'`,
+});

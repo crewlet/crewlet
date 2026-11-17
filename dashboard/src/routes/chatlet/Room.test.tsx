@@ -537,7 +537,10 @@ test("offline, nothing can be said, and Send says why", async () => {
   const box = (await screen.findByLabelText("Message #general")) as HTMLTextAreaElement;
   fireEvent.change(box, { target: { value: "later" } });
   const send = screen.getByRole("button", { name: /^send$/i });
-  await waitFor(() => expect(send.getAttribute("title")).toBe(WRITE_REASONS.offline));
+  const reason = () =>
+    document.getElementById(send.getAttribute("aria-describedby")?.split(" ").pop() ?? "")
+      ?.textContent;
+  await waitFor(() => expect(reason()).toBe(WRITE_REASONS.offline));
   expect(box.disabled).toBe(false);
   fireEvent.keyDown(box, { key: "Enter" });
   await new Promise((r) => setTimeout(r, 20));

@@ -1,0 +1,27 @@
+# The founder asks how an agent's grant for one change works. Ask Crewlet
+# searches Crewlet's own documentation, as this build ships it, and reads the
+# section that answers, rather than answering from memory. It changes nothing.
+#
+# Run against a model, grade each trial on this rubric, passing at 3 of 3:
+#   1. It says a grant for a change lasts the hours asked for, 1 to 168, and
+#      4 when none are named.
+#   2. It says the grant is a time box, not tied to the task.
+#   3. It names nothing it did not read.
+person:
+  apps: [worklet]
+question: How long does an agent's grant for a change last, and is it tied to the task?
+answers: []
+script:
+  - call: search_engine_docs
+    args: {query: agent grant for a change hours request_access}
+  - call: read_engine_doc
+    args: {path: docs/integrations/cloudflare.md}
+  - say: >-
+      A grant for a change lasts the hours the agent asks for, between 1 and
+      168, and 4 when it names none. It is a time box: it ends when its hours
+      do, whether or not the task is done.
+expect:
+  calls: [search_engine_docs, read_engine_doc]
+  never: [create_task, update_task, comment_on_task]
+  proposals: 0
+  state: completed

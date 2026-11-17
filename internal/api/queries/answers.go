@@ -102,6 +102,11 @@ type Sources struct {
 	// existed.
 	Company func() (*config.Company, *org.Organization)
 
+	// Research reads the web pages Ask Crewlet may read (ADR-0151), and
+	// Searcher searches them.
+	Research ResearchReader
+	Searcher ResearchSearcher
+
 	// AwaitingRestart is which of Crewlet's own services the company it is
 	// handed turns on that this node serves only once restarted, by the org
 	// projection's keys for them (`engine.Engine.AwaitingRestart`); nil names
@@ -226,6 +231,12 @@ type Sources struct {
 	// Coord is the lease table: the fleet's one shared answer to "which
 	// node holds what". Nil leaves the fleet question unregistered.
 	Coord coord.Backend
+
+	// NodeStatuses is the fleet's node status records: each node's MCP,
+	// model and runner rows, counted against the lease table's presence
+	// ([coord.LiveNodeStatuses]). Nil, or a nil Coord, leaves the questions
+	// that draw those rows unregistered.
+	NodeStatuses NodeStatusReader
 
 	// Builtins is the engine's own tools as this node's revision offers its
 	// seats them ([BuiltinOffer]): `mcp_servers_status`'s built-in groups, and
@@ -801,18 +812,21 @@ func Register(r *Registry, s Sources) {
 		// other control of the deployment is — `retention` and `backups`
 		// included — rather than everybody's overview.
 		r.Register("fleet", Requires(iam.GrantAdmin), s.fleet)
-		// WHAT EACH MCP SERVER DID ON EACH NODE, off the same lease
-		// table: every node re-publishes its starts on its presence
-		// heartbeat, so one listing answers for the fleet. Everybody's,
-		// in two readings, as `llm_entries` is: the configuration's
-		// reader reads every server's launch command and the first line
-		// of each failure, which `/config` shows the same reader, and
+	}
+	if s.Coord != nil && s.NodeStatuses != nil {
+		// WHAT EACH MCP SERVER DID ON EACH NODE, off the nodes' status
+		// records counted against the same lease table: every node
+		// re-publishes its starts on its record, so one listing of each
+		// answers for the fleet. Everybody's, in two readings, as
+		// `llm_entries` is: the configuration's reader reads every
+		// server's launch command and the first line of each failure,
+		// which `/config` shows the same reader, and
 		// anybody else each server's condition with none of that. The
 		// routes beside it (internal/api/mcpapi) are `tools.read`, which
 		// admits exactly whom this posture does. See
 		// [Sources.mcpServersStatus].
 		r.Register("mcp_servers_status", Everybody(), s.mcpServersStatus)
-		// WHAT EACH MODEL IS DOING, from the same heartbeats: everybody's,
+		// WHAT EACH MODEL IS DOING, from the same records: everybody's,
 		// in two readings (see [Sources.llmEntries]), and the runners'
 		// readiness the admin's, as the configuration is.
 		if s.Models != nil {
@@ -1046,14 +1060,19 @@ func Register(r *Registry, s Sources) {
 	if s.Work != nil || s.Pages != nil || s.Usage != nil {
 		r.Register("company_feed", Everybody(), s.companyFeed)
 	}
+	if s.Research != nil && s.Company != nil {
+		r.Register("research_page", Everybody(), s.researchPage)
+	}
+	if s.Searcher != nil {
+		r.Register("research_search", Everybody(), s.researchSearch)
+	}
 	if s.Work != nil || s.Sandbox != nil {
 		r.Register("decisions", Everybody(), s.decisions)
 	}
-	// ONE INBOX FROM EVERY NATIVE DOMAIN, registered wherever either half
-	// is wired: whose inbox is the composed question's own verb, own or
-	// lead WITH NO APP, and each half is read under its own permission —
-	// see [Sources.composedInbox].
-	if s.Work != nil || s.Code != nil {
+	// ONE INBOX FROM EVERY NATIVE DOMAIN, registered wherever any half is
+	// wired, own or lead WITH NO APP; each half is read under its own
+	// permission ([Sources.composedInbox]).
+	if s.Work != nil || s.Code != nil || s.Artifacts != nil {
 		r.Register("inbox", DecidedBy(authz.ActionInbox), s.composedInbox)
 	}
 	// WHAT A PERSON DECIDED LATELY, the other half of `decisions` and

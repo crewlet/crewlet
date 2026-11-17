@@ -80,4 +80,7 @@
 // own, not the SDK's. Nothing outside here should have to know which SDK the
 // engine speaks MCP with, and the SDK's typed surface is lossy in one place
 // that matters (again: annotations.go).
+//
+// A first-party tool may answer with images ([Result.Images], [CheckImages]);
+// an image cannot be fenced (ADR-0040), so its text says whose it is.
 package mcp

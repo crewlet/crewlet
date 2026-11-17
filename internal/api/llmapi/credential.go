@@ -535,45 +535,48 @@ func entriesReading(company *config.Company, names []string) []string {
 	return out
 }
 
-// sittingOutHere is which of keys THIS node's latest beat reports sitting
+// sittingOutHere is which of keys THIS node's status record reports sitting
 // out: the entries whose previous sign-in a new credential replaces, and so
-// starts clean.
+// starts clean. Its record counts only at its live presence's epoch
+// ([coord.LiveNodeStatuses]), so an earlier incarnation's sit-out is never
+// reported as this one's.
 func (s *Service) sittingOutHere(ctx context.Context, keys []string) ([]string, error) {
 	leases, err := s.leases.ListLive(ctx, coord.ClassNode)
 	if err != nil {
 		return nil, err
 	}
+	records, err := s.records.NodeStatusRecords(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := []string{}
 	now := s.now()
-	for _, lease := range leases {
-		if coord.NodeResource(s.node) != lease.Resource {
-			continue
-		}
-		status, ok := coord.StatusFromMeta(lease.Meta)
-		if !ok {
-			break
-		}
-		for _, m := range status.Models {
-			if m.SittingOut != nil && m.SittingOut.Until.After(now) && slices.Contains(keys, m.Key) {
-				out = append(out, m.Key)
-			}
+	for _, m := range coord.LiveNodeStatuses(records, leases)[s.node].Models {
+		if m.SittingOut != nil && m.SittingOut.Until.After(now) && slices.Contains(keys, m.Key) {
+			out = append(out, m.Key)
 		}
 	}
 	slices.Sort(out)
 	return out, nil
 }
 
+// harnessProducts is each built-in harness as a person reads it, as the
+// dashboard's HARNESS_PRODUCTS names it.
+var harnessProducts = map[config.Harness]string{
+	config.HarnessClaudeCode: "Claude Code", config.HarnessCodex: "Codex",
+	config.HarnessGeminiCLI: "Gemini CLI", config.HarnessQwenCode: "Qwen Code",
+	config.HarnessOpenCode: "OpenCode", config.HarnessCursorAgent: "Cursor",
+	config.HarnessCopilot: "GitHub Copilot", config.HarnessGrok: "Grok",
+	config.HarnessMuseCode: "Muse Code", config.HarnessKimiCode: "Kimi Code",
+	config.HarnessHermes: "Hermes", config.HarnessPi: "Pi",
+}
+
 // agentName is an entry's harness in a sentence.
 func agentName(entry *config.LLMProvider) string {
-	switch entry.Harness {
-	case "", "claude-code":
-		return "Claude Code"
-	case "codex":
-		return "Codex"
-	case "opencode":
-		return "OpenCode"
+	if name, ok := harnessProducts[config.Harness(entry.HarnessName())]; ok {
+		return name
 	}
-	return string(entry.Harness)
+	return entry.HarnessName()
 }
 
 func plural(n int, one, many string) string {

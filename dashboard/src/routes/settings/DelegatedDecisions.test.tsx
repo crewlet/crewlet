@@ -304,7 +304,9 @@ test("with no rules, the card says people decide every request", () => {
   answer.data = { ...ANSWER, rules: [] };
   mount();
   expect(screen.getByText("No rules yet")).toBeTruthy();
-  expect(screen.getByText(/Until then, people decide every request\./)).toBeTruthy();
+  expect(
+    screen.getByText("Until a rule names a kind of request, people decide every one."),
+  ).toBeTruthy();
 });
 
 // A MERGE'S VERDICT names no server, and says the absence as its own.
@@ -347,7 +349,7 @@ test("the digest lists each decision: the seat, what and where, the verdict, who
   // THE FOOT SAYS HOW MUCH IS SHOWN, and that the log held more.
   expect(screen.getByText("Showing 3 of 3. The log holds more than this page.")).toBeTruthy();
   expect(screen.getByRole("table", { name: "Spot-checks" })).toBeTruthy();
-  expect(screen.getByText("No agent flagged a request as harmful this week.")).toBeTruthy();
+  expect(screen.getByText("No flagged denials this week")).toBeTruthy();
 });
 
 test("the toolbar narrows every list, and the foot counts what it shows", () => {
@@ -394,7 +396,7 @@ test("the page opens on today so far, and pages back but not past today", () => 
 test("a running day nothing was decided on yet says so", () => {
   answer.data = { ...ANSWER, decided: [], decided_more: false };
   mount();
-  expect(screen.getByText("No request has been decided yet today.")).toBeTruthy();
+  expect(screen.getByText("No decisions yet today")).toBeTruthy();
 });
 
 test("off, it says every request goes to people and keeps the rules", () => {

@@ -10,8 +10,10 @@
  * true, not the only guard.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { act, cleanup, render, screen } from "@testing-library/react";
+import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { ScreenBoundary } from "~/app/boundaries.tsx";
+import { loadChunk } from "~/app/lazyScreen.ts";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
 import { TestClient } from "~/test/client.tsx";
@@ -123,18 +125,28 @@ function writeControls(): string[] {
   return found;
 }
 
-function mountAt(address: { hash: string; id?: string }) {
+async function mountAt(address: { hash: string; id?: string }) {
   location.hash = address.hash;
-  render(
-    <TestClient>
-      <LayerHost>
-        <Router>
-          <Models {...(address.id ? { id: address.id } : {})} />
-        </Router>
-      </LayerHost>
-    </TestClient>,
-  );
+  // AWAITED: the wizard is a chunk of its own, drawn once its region has read it.
+  await act(async () => {
+    render(
+      <TestClient>
+        <LayerHost>
+          <Router>
+            <ScreenBoundary resetKey="models">
+              <Models {...(address.id ? { id: address.id } : {})} />
+            </ScreenBoundary>
+          </Router>
+        </LayerHost>
+      </TestClient>,
+    );
+  });
 }
+
+// THE WIZARD IS A CHUNK OF ITS OWN, in memory before a case draws it, as the idle prefetch leaves it.
+beforeAll(async () => {
+  await loadChunk("model-wizard");
+});
 
 beforeEach(() => {
   vi.useFakeTimers({ now: MODELS_NOW, toFake: ["Date"] });
@@ -146,10 +158,10 @@ afterEach(() => {
   location.hash = "";
 });
 
-test("a member meets no write control at any address, a flow's included", () => {
+test("a member meets no write control at any address, a flow's included", async () => {
   current = company(false);
   for (const address of ADDRESSES) {
-    mountAt(address);
+    await mountAt(address);
     expect(writeControls(), address.hash).toEqual([]);
     cleanup();
   }
@@ -157,10 +169,10 @@ test("a member meets no write control at any address, a flow's included", () => 
 
 // THE OTHER SIDE, so the reading above cannot pass by finding nothing at all:
 // the same addresses draw an admin's controls.
-test("an admin meets the controls and the flows at the same addresses", () => {
+test("an admin meets the controls and the flows at the same addresses", async () => {
   current = company(true);
   for (const address of ADDRESSES) {
-    mountAt(address);
+    await mountAt(address);
     expect(writeControls().length, address.hash).toBeGreaterThan(0);
     cleanup();
   }
@@ -169,7 +181,7 @@ test("an admin meets the controls and the flows at the same addresses", () => {
 // A FLOW IS A CLAIM ABOUT THE MODEL: a stale or hand-edited link that asks to
 // retry a model that is not sitting out, or to sign a Claude model in with a
 // Codex device code, opens nothing, leaves the address, and says why.
-test("a flow the model does not fit is dropped from the address with its reason, not drawn", () => {
+test("a flow the model does not fit is dropped from the address with its reason, not drawn", async () => {
   current = company(true);
   const misfits = [
     { hash: "#/settings/models?flow=retry&entry=haiku", says: /haiku is not sitting out/ },
@@ -198,6 +210,6 @@ test("a flow the model does not fit is dropped from the address with its reason,
     cleanup();
   }
   // The same address on a model it fits still opens its dialog.
-  mountAt({ hash: "#/settings/models?flow=retry&entry=default" });
+  await mountAt({ hash: "#/settings/models?flow=retry&entry=default" });
   expect(screen.getByRole("dialog")).toBeTruthy();
 });

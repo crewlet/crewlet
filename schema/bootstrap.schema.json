@@ -424,11 +424,32 @@
         "null"
       ]
     },
+    "ArtifactRender": {
+      "additionalProperties": false,
+      "properties": {
+        "browser_url": {
+          "description": "A headless Chromium's DevTools endpoint this node renders artifact pages in, for a seat checking its own page before review: http://host:port (its /json/version is read) or the ws:// address it prints. It needs no network of its own: the engine answers every request a render makes. Unset renders nothing.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Artifacts": {
       "additionalProperties": false,
       "properties": {
         "limits": {
           "$ref": "#/$defs/ArtifactLimits"
+        },
+        "render": {
+          "$ref": "#/$defs/ArtifactRender"
         }
       },
       "type": [
@@ -802,7 +823,8 @@
               "null"
             ]
           },
-          "description": "Free-form node facts a seat's placement selector matches on.",
+          "description": "Free-form node facts a seat's placement selector matches on: at most 16, each value at most 64 bytes of printable text.",
+          "maxProperties": 16,
           "type": [
             "object",
             "null"

@@ -307,6 +307,9 @@ providers:
                                      #   works; one that resolves to nothing is refused
                                      #   when the entry is built, naming the variable,
                                      #   rather than run on a model nobody chose
+      effort: high                   # optional: reasoning effort in the harness's own
+                                     #   levels; absent = the harness's default. See
+                                     #   "Reasoning effort"
       run_in: ""                     # where a seat's executor runs on this entry (claude-code
                                      #   and opencode only): direct | container | e2b. Empty
                                      #   = providers.sandbox.default_run_in — see "Where the
@@ -509,6 +512,50 @@ both, or through `auth`. A profile's `env` may not name its `token_env` or
 entry's `env` and `auth` are both layered over the profile's, so whether a value
 there reached the harness would turn on the mode and the secret store rather
 than on anything the profile says.
+
+### Reasoning effort
+
+`effort` sets how hard the entry's model reasons, in the harness's own words for
+it. Absent, the engine passes nothing and the harness runs at its own default,
+which is how every entry ran before the field existed. Set, it reaches every run
+on the entry: the phases on this host (the reviewer, workers, onboarding, side
+passes, Ask Crewlet's questions and its Think harder chain, a model check) and an
+executor run in a box, Ask Crewlet's deep work included.
+
+The levels are each harness's own rather than one vocabulary of the engine's,
+because the harnesses do not agree: Claude Code has no `none` or `minimal`, Pi
+says `off` where Codex says `none`, and OpenCode's are the variants of each model.
+A level is checked on every write against the harness the entry drives, and a
+harness with no setting the engine can pass refuses the field rather than
+dropping it. The check is an admission rule, like the model grammar: a write is
+refused, and a revision being applied is warned about.
+
+| Harness | Levels | Passed as | Where the model decides |
+|---|---|---|---|
+| `claude-code` | `low` `medium` `high` `xhigh` `max` | `--effort` | Refused on the models Claude Code runs without effort (Claude 3, Opus 4 and 4.1, Sonnet 4 and 4.5, Haiku 4.5); Opus 4.5 takes up to `high`, Opus and Sonnet 4.6 skip `xhigh`. An alias takes every level, though on a cloud provider or gateway `haiku` can name Haiku 4.5, which runs without effort. |
+| `codex` | `none` `minimal` `low` `medium` `high` `xhigh` `max` | `-c model_reasoning_effort` | The model's API refuses a level it lacks. |
+| `opencode` | `none` `minimal` `low` `medium` `high` `xhigh` `max` | the model's variant, `provider/model#level` | Variants are each model's, from models.dev; a run on one the model lacks fails with OpenCode's "Variant unavailable". |
+| `copilot` | `none` `minimal` `low` `medium` `high` `xhigh` `max` | `--reasoning-effort` | A level the model lacks is logged and the run uses the model's default. |
+| `grok` | `none` `minimal` `low` `medium` `high` `xhigh` `max` | `--reasoning-effort` | A level the model's menu lacks is refused by name. |
+| `muse-code` | `minimal` `low` `medium` `high` `xhigh` `max` | `--reasoning-effort` | Per model. |
+| `hermes` | `none` `minimal` `low` `medium` `high` `xhigh` `max` | `--reasoning` | Lowered to the nearest level the route takes. |
+| `pi` | `off` `minimal` `low` `medium` `high` `xhigh` `max` | `--thinking` | Clamped to the model's levels. |
+| `kimi-code` | `low` `medium` `high` `xhigh` `max` | `KIMI_MODEL_THINKING_EFFORT` | Kimi's provider refuses a level the model lacks. |
+| `gemini-cli` | none | | Read only from its settings file, per model family. |
+| `qwen-code` | none | | Read only from its settings file. |
+| `cursor-agent` | none | | Part of the model id: name a variant `cursor-agent --list-models` prints, such as `gpt-5.5-high`. |
+| `custom` | none | | Declare `overrides.effort`. |
+
+The levels are the profile's `effort` field (see [Profile fields](#profile-fields)),
+read from each harness at the release its profile was written for. A release
+that adds a level is an override, not a Crewlet release:
+
+```yaml
+overrides:
+  effort:
+    args: ["--effort", "{effort}"]
+    levels: [low, medium, high, xhigh, max, ultra]
+```
 
 ---
 
@@ -4032,6 +4079,8 @@ it runs on.
 | `api_key_env` | The variable a metered key goes in (`auth.api_key`, or this variable itself, under `auth.mode: api-key`). An environment variable name, and refused otherwise ([above](#configuration-reference)). |
 | `api_key_env_shared` | `api_key_env` is a generic name other vendors' keys are kept under too (`qwen-code`'s `OPENAI_API_KEY`): an `api-key` entry must name its key as `auth.api_key`, the variable is never read in its place from the secret store or the engine's environment, and `inherit-env`, which forwards the engine's own, is refused. |
 | `model_names_provider` | The harness reads its model as `<provider>/<model>`, split at the first slash, so a `model` with nothing before or after that slash (as the harness is handed it, through `model_args`) is refused on a write. Declared by `opencode` only — measured from its source; `hermes` and `pi` document a `provider/id` model but are not known to refuse a bare one. |
+| `effort` | How the harness takes an entry's reasoning `effort`, and which levels it takes: `args` (after the model's), `model_suffix` (added to the model, as OpenCode's `#variant`) or `env`, each carrying `{effort}`; `levels`, every level the harness accepts in its own spelling; and `models`, rules (`match`, a regular expression over the model argument, and the `levels` it narrows to; none means that model runs with no effort) for the models the harness restricts. See [Reasoning effort](#reasoning-effort). |
+| `effort_note` | On a profile with no `effort`, why the harness has none the engine passes, said in the refusal of an entry's `effort`. |
 | `env_sign_in` | The harness reads its model provider's key from its own environment, so a [credential-named](#6-a-provider-key-in-env-opencode-hermes-pi) variable in the entry's `env` signs it in. |
 | `credential_paths` | The login files, relative to the seat home: each must name a file inside it (not the home itself, not a path ending in a separator), no two may share a file name, and none may be named `crewlet-bundle.json` (a bundle's manifest, naming the harness it was exported from) or, beside a `credential_store`, `exported-credentials` (the store's document): the shared directory and a bundle keep each file under its name. |
 | `volatile_paths` | Sessions, transcripts and history, deleted whenever none of the seat's calls is in flight — as its generation opens and as it closes. Each must stay inside the seat home; a directory is fine. The home's `tmp`, where `TMPDIR` points, is pruned with them whatever the list says. |
@@ -4097,9 +4146,23 @@ it. Every member opens the page; every change on it is an admin's.
 
 **Adding and editing a model is one wizard**, which writes the model and every
 use it is given as one revision: the name and the harness (both fixed once
-the model exists), how it signs in, the model, where it runs a seat's executor
+the model exists), how it signs in, the model and its reasoning effort, where it runs a seat's executor
 (only for a harness with a runner), what it is used for, its limits, a test call, and a review
-of exactly what changes. *Use it for* offers the work a person tells apart
+of exactly what changes.
+
+**Every built-in harness can be added**, each with the sign-ins the engine runs
+for it: a key in the harness's own variable (`api-key`), or for OpenCode, Hermes
+and Pi a provider's key in `env`; a login made on the engine host with
+`crewlet llm login`, or for Gemini CLI and Grok one made with the harness and
+adopted with `-from-host`; Claude Code's headless token and cloud providers;
+and Codex's device code. Qwen Code takes its key and its OpenAI-compatible
+endpoint. The effort control offers only the levels the harness takes on the
+chosen model, or says why it has none ([Reasoning effort](#reasoning-effort)).
+A harness with no box runner says it runs a seat's turns on the host, and the
+web tools switch and Ask Crewlet are offered only where the engine allows them.
+A `custom` harness is written in Configuration, since it needs a profile of its
+own. What the wizard knows of each harness is held to its profile by
+`internal/config.TestTheModelsScreenKnowsEveryHarnessAsItsProfileReads`. *Use it for* offers the work a person tells apart
 rather than the engine's five fields, and each choice writes every field it
 covers:
 
@@ -4128,7 +4191,7 @@ model chosen is not a fast one, and never refuses it. A model
 Ask Crewlet already runs on keeps it until another model is chosen for
 Ask Crewlet.
 
-**Status comes from every node's heartbeat.** Each node publishes, per model,
+**Status comes from every node's status record.** Each node publishes, per model,
 how it signs in there, whether it sits out a vendor's limit and until when,
 when it last answered and last failed, the seats parked on it and, for a model
 signed in with a harness login, that login's state on its disk. The page joins them:
@@ -4136,7 +4199,8 @@ a model is `sitting_out` while any live node sits it out, `no_sign_in` when
 nothing signs it in on the node answering, `rejected` after a refusal newer than
 its last answer or past its credential's expiry, `expiring` within seven days of
 that expiry, `untested` before anything said whether it works, and `ready`
-otherwise. A node whose beat carried no report is shown as one that did not say,
+otherwise. A live node with no [status record](coordination.md#its-status-record)
+counted is shown as one that did not say,
 never as a node where nothing happened. Members read every model's condition;
 only an admin reads the credential's name, its hint, who stored it and when, the
 account a login names and the vendor's own sentence.

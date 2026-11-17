@@ -59,7 +59,8 @@ func TestABatchNamesTheChangeItsEarlierPushOpened(t *testing.T) {
 	if want := (&ChangeAnswer{ChangeID: opened}); !reflect.DeepEqual(answers[1].change, want) {
 		t.Fatalf("the second push's change answered %+v, want it to name %+v", answers[1].change, want)
 	}
-	if rows != 4 {
-		t.Fatalf("the record writes %d rows of changes, want 4: the change, its author and two revisions", rows)
+	if rows != 4+tallyRows {
+		t.Fatalf("the record is held to %d rows of changes, want %d: the change, its author, two revisions and "+
+			"the tally row its open moves", rows, 4+tallyRows)
 	}
 }

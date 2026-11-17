@@ -52,6 +52,10 @@ import (
 // reanchor's generation are pinned at version 1, and [Encode] refuses one that
 // carries a versioned field.
 //
+// Rows that are a pure function of rows every data node holds alike take no
+// [versionedFields] row: the applier re-derives them ([DerivationVersion]), and
+// what they add to a record stays out of the rows its horizons are given.
+//
 // A field of an estate request or answer is no record's and takes no row: what
 // an older build makes of one is the estate wire's to decide (internal/estate,
 // wirerule.go).

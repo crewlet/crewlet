@@ -9,18 +9,13 @@ import {
   Card,
   Checkbox,
   EmptyState,
+  ListInput,
   PageNote,
   Select,
   SettingsTable,
   Switch,
+  withDraft,
 } from "@crewlethq/ui";
-import {
-  BrainGlyph,
-  GaugeGlyph,
-  WandSparklesGlyph,
-  SquareTerminalGlyph,
-  WrenchGlyph,
-} from "@crewlethq/icons/glyphs";
 import type { ReactNode } from "react";
 import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -75,6 +70,32 @@ export const TOOL_FAMILIES: readonly { key: string; label: string; description: 
   },
 ];
 
+/** The most hosts `assistant.research.hosts` takes (the engine's MaxResearchHosts). */
+export const MAX_RESEARCH_HOSTS = 50;
+
+// The engine's own test of a listed host (config.researchHost); its dry run still decides.
+const RESEARCH_HOST = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+
+/** The research hosts being edited: the list, and the text typed but not yet added. */
+export interface HostList {
+  hosts: string[];
+  draft: string;
+}
+
+/** The hosts a save writes: the list with the typed text, each in lower case. */
+export function hostsOf(value: HostList): string[] {
+  return withDraft(value.hosts, value.draft).map((h) => h.trim().toLowerCase());
+}
+
+/** Why the host at `index` cannot be saved, or null. */
+export function hostProblem(hosts: readonly string[], index: number): string | null {
+  const host = hosts[index]!;
+  if (!RESEARCH_HOST.test(host)) {
+    return `${host} is not a host name. Write the host alone, with no scheme, port, path or wildcard, such as docs.example.com.`;
+  }
+  return hosts.indexOf(host) < index ? `${host} is listed twice.` : null;
+}
+
 /** The merge patch that writes `value` at a dotted `key`, or removes it for null. */
 export function patchAt(key: string, value: unknown): Record<string, unknown> {
   let patch: unknown = value;
@@ -101,6 +122,7 @@ function DocumentSetting<V>({
   label,
   current,
   fallback,
+  normal = (value) => value,
   words,
   helper,
   check,
@@ -115,6 +137,8 @@ function DocumentSetting<V>({
   current: V;
   /** The value an unwritten key means. */
   fallback: V;
+  /** What two values are compared by, where an edit holds more than it saves. */
+  normal?: (value: V) => unknown;
   words: (value: V) => string;
   helper: ReactNode;
   /** Why a value cannot be saved, or null. */
@@ -124,7 +148,7 @@ function DocumentSetting<V>({
   field: (props: { id: string; value: V; set: (next: V) => void; busy: boolean }) => ReactNode;
   onApplied: () => void;
 }) {
-  const same = (a: V, b: V) => JSON.stringify(a) === JSON.stringify(b);
+  const same = (a: V, b: V) => JSON.stringify(normal(a)) === JSON.stringify(normal(b));
   return (
     <SettingEditor<V, V>
       label={label}
@@ -239,6 +263,10 @@ export function AssistantSettings() {
   const chain = chainOf(read("assistant.llm"));
   const strong = chainOf(read("assistant.deliberate.llm"));
   const deny = chainOf(read("assistant.tools.deny"));
+  const research = read("assistant.research");
+  const hosts = chainOf(
+    research && typeof research === "object" ? (research as { hosts?: unknown }).hosts : [],
+  );
   const deep =
     typeof read("assistant.deep_work.llm") === "string"
       ? (read("assistant.deep_work.llm") as string)
@@ -259,19 +287,16 @@ export function AssistantSettings() {
         ) : (
           <>
             <Card padding="none">
-              <Card.Header
-                icon={<WandSparklesGlyph size="sm" />}
-                subtitle="Who answers, and on which models"
-              >
+              <Card.Header subtitle="On or off for everybody, and the models it answers on">
                 <Card.Title as="h3" id="assistant-models">
-                  Ask Crewlet
+                  Quick answers
                 </Card.Title>
               </Card.Header>
               <SettingsTable aria-labelledby="assistant-models">
                 <DocumentSetting<boolean>
                   doc={doc}
                   settingKey="assistant.enabled"
-                  label="Turned on"
+                  label="Ask Crewlet"
                   current={enabled}
                   fallback={false}
                   words={onOff}
@@ -324,10 +349,7 @@ export function AssistantSettings() {
             </Card>
 
             <Card padding="none">
-              <Card.Header
-                icon={<BrainGlyph size="sm" />}
-                subtitle="Think harder, one question at a time"
-              >
+              <Card.Header subtitle="Think harder, one question at a time">
                 <Card.Title as="h3" id="assistant-deliberate">
                   A stronger model for hard questions
                 </Card.Title>
@@ -379,7 +401,7 @@ export function AssistantSettings() {
             </Card>
 
             <Card padding="none">
-              <Card.Header icon={<GaugeGlyph size="sm" />} subtitle="What one turn may take">
+              <Card.Header subtitle="What one turn may take">
                 <Card.Title as="h3" id="assistant-turns">
                   Turns
                 </Card.Title>
@@ -399,10 +421,7 @@ export function AssistantSettings() {
             </Card>
 
             <Card padding="none">
-              <Card.Header
-                icon={<WrenchGlyph size="sm" />}
-                subtitle="It only narrows what each person's permissions offer"
-              >
+              <Card.Header subtitle="It only narrows what each person's permissions offer">
                 <Card.Title as="h3" id="assistant-tools">
                   Tools turned off
                 </Card.Title>
@@ -449,10 +468,62 @@ export function AssistantSettings() {
             </Card>
 
             <Card padding="none">
-              <Card.Header
-                icon={<SquareTerminalGlyph size="sm" />}
-                subtitle="A large task, handed to a run with its own tools"
-              >
+              <Card.Header subtitle="Vendor documentation, read through the engine">
+                <Card.Title as="h3" id="assistant-research">
+                  Web research
+                </Card.Title>
+              </Card.Header>
+              <SettingsTable aria-labelledby="assistant-research">
+                <DocumentSetting<HostList>
+                  doc={doc}
+                  settingKey="assistant.research"
+                  label="Hosts it may read"
+                  current={{ hosts, draft: "" }}
+                  fallback={{ hosts: [], draft: "" }}
+                  normal={hostsOf}
+                  words={(value) => {
+                    const list = hostsOf(value);
+                    return list.length === 0 ? "None" : listed(list);
+                  }}
+                  helper="A page's text is the site's words, never an instruction. List only documentation hosts you trust; none turns web research off."
+                  check={(value) => {
+                    const list = hostsOf(value);
+                    if (list.length > MAX_RESEARCH_HOSTS) {
+                      return `List at most ${MAX_RESEARCH_HOSTS} hosts.`;
+                    }
+                    return list.map((_, i) => hostProblem(list, i)).find((p) => p !== null) ?? null;
+                  }}
+                  write={(value) => {
+                    const list = hostsOf(value);
+                    return list.length === 0 ? null : { hosts: list };
+                  }}
+                  onApplied={refetch}
+                  field={({ id, value, set, busy }) => (
+                    <div id={id}>
+                      <ListInput
+                        label="Hosts Ask Crewlet may read"
+                        hideLabel
+                        itemName="host"
+                        placeholder="docs.example.com"
+                        value={value.hosts}
+                        draft={value.draft}
+                        onDraftChange={(draft) => set({ ...value, draft })}
+                        onChange={(next) => set({ ...value, hosts: next })}
+                        maxItems={MAX_RESEARCH_HOSTS}
+                        itemError={(index) => {
+                          const list = value.hosts.map((h) => h.trim().toLowerCase());
+                          return hostProblem(list, index);
+                        }}
+                        disabled={busy}
+                      />
+                    </div>
+                  )}
+                />
+              </SettingsTable>
+            </Card>
+
+            <Card padding="none">
+              <Card.Header subtitle="A large task, handed to a run with its own tools">
                 <Card.Title as="h3" id="assistant-deep">
                   Deep work
                 </Card.Title>
@@ -460,7 +531,9 @@ export function AssistantSettings() {
               <Card.Body padding="md">
                 <Callout variant="warning">
                   A deep-work run's harness keeps its own web tools, so it can reach any web host.
-                  Quick answers reach none.
+                  {hosts.length > 0
+                    ? " Quick answers read only the hosts under Web research, through the engine."
+                    : " Quick answers reach none."}
                 </Callout>
               </Card.Body>
               <SettingsTable aria-labelledby="assistant-deep">
@@ -470,8 +543,8 @@ export function AssistantSettings() {
                   label="Model"
                   current={deep}
                   fallback=""
-                  words={(key) => key || "Off"}
-                  helper="A Claude Code model. Off answers in quick mode only."
+                  words={(key) => key || "None"}
+                  helper="A Claude Code model. With none, Ask answers in quick mode only."
                   write={(key) => (key ? key : null)}
                   onApplied={refetch}
                   field={({ id, value, set, busy }) => (

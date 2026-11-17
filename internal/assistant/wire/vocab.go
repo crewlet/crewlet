@@ -529,7 +529,8 @@ var errorSentences = map[ErrorCode]string{
 	ErrorBriefInvalid: "The brief could not be written. Ask for it again.",
 }
 
-// ResourceKind is what a page context's resource or selection names.
+// ResourceKind is what a page context's resource or selection names, or an
+// entity card's record.
 type ResourceKind string
 
 // The kinds a screen can name, each the dashboard's own object kind.
@@ -553,17 +554,24 @@ const (
 	// named by the id its kind and key derive: the frame's `atlas` object,
 	// under the name the authority table knows it by.
 	ResourceAtlasEntry ResourceKind = "atlas_entry"
+	// ResourceWebPage is a web page the engine read (ADR-0151): a card's
+	// record only, which no screen has open.
+	ResourceWebPage ResourceKind = "web_page"
 )
 
-// ResourceKinds are the thirteen, in declaration order.
+// ResourceKinds are the fourteen, in declaration order.
 var ResourceKinds = []ResourceKind{
 	ResourceTask, ResourceProject, ResourceSeat, ResourceUnit, ResourcePage,
 	ResourceContainer, ResourceArtifact, ResourceTurn, ResourceRun,
-	ResourceSchedule, ResourceView, ResourceRoom, ResourceAtlasEntry,
+	ResourceSchedule, ResourceView, ResourceRoom, ResourceAtlasEntry, ResourceWebPage,
 }
 
 // Valid reports whether k is a kind this build knows.
 func (k ResourceKind) Valid() bool { return slices.Contains(ResourceKinds, k) }
+
+// ScreenKinds are the kinds a page context may name: every kind but a web page.
+var ScreenKinds = slices.DeleteFunc(slices.Clone(ResourceKinds),
+	func(k ResourceKind) bool { return k == ResourceWebPage })
 
 // Keyed reports whether a record of kind k is written in prose by a short key
 // of its own (a task's "GOP-11", a project's "GOP", a room's name with its

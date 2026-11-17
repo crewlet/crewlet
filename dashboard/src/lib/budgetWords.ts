@@ -7,8 +7,9 @@
  */
 
 import type { BudgetWindow } from "~/protocol/types.ts";
-import { companyDateLabel, companyMonthLabel, relTime } from "./format.ts";
+import { companyDateLabel, companyMonthLabel } from "./format.ts";
 import { dayLabelIn } from "./companyDay.ts";
+import { ago } from "./ago.ts";
 
 /** A window's heading, over its figure or its bar: "Today", "This week". */
 export const PERIOD_HEADING: Readonly<Record<BudgetWindow["period"], string>> = {
@@ -38,9 +39,7 @@ export function windowName(w: BudgetWindow): string {
  * has refused nothing yet says it is full.
  */
 export function refusedWords(w: BudgetWindow, now: number): string {
-  return w.refused_at
-    ? `Last refused a call ${relTime(w.refused_at, now)}`
-    : "No further charge fits";
+  return w.refused_at ? `Last refused a call ${ago(w.refused_at, now)}` : "No further charge fits";
 }
 
 /**

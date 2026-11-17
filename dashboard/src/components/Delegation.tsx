@@ -28,7 +28,6 @@ import {
   Text,
   type DescriptionListEntry,
 } from "@crewlethq/ui";
-import { BotGlyph, UsersGlyph } from "@crewlethq/icons/glyphs";
 import type { HeldDelegation } from "~/contract/delegated.ts";
 import { shortOID } from "~/lib/code.ts";
 import {
@@ -63,7 +62,7 @@ export function EscalationNote({ delegation, name }: { delegation: HeldDelegatio
     <Callout
       variant="warning"
       appearance="quiet"
-      icon={<UsersGlyph size="md" />}
+
       title={escalatedByWords(delegation, name)}
     >
       <Stack gap={2}>
@@ -134,7 +133,7 @@ export function EscalationNote({ delegation, name }: { delegation: HeldDelegatio
  */
 export function DelegateWaitNote({ delegation, name }: { delegation: HeldDelegation; name: Name }) {
   return (
-    <Callout variant="info" icon={<BotGlyph size="md" />}>
+    <Callout variant="info">
       {withDelegateWords(delegation, name)}. It reaches people only if{" "}
       {delegation.delegates.length > 1 ? "a delegate escalates it" : "the delegate escalates it"} or
       does not answer in time.

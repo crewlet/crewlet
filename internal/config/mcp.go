@@ -274,7 +274,7 @@ const MaxMCPDescription = 200
 // its children, by an executor's box, and by the org projection when it tells a
 // reader which servers a seat can reach, so none of them can answer
 // differently. What it describes is the GRANT: whether the server actually
-// started is the heartbeat's report, not this.
+// started is the node status record's report, not this.
 func (m *MCPServer) Grants(seat *org.Role) bool {
 	if !m.IsEnabled() {
 		return false

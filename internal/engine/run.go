@@ -68,6 +68,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/research"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
@@ -406,7 +407,7 @@ type Engine struct {
 	pauses seatPauses
 
 	// runners is this node's executor-cell readiness and the loop that
-	// keeps it ([runnerProbe]), published on the heartbeat.
+	// keeps it ([runnerProbe]), published on the node's status record.
 	runners runnerProbe
 
 	// hostLogins is what each model entry's harness says of its login on this
@@ -428,6 +429,11 @@ type Engine struct {
 	// listings is this node's published MCP listings and its watched copy
 	// of every node's ([mcpListings]).
 	listings mcpListings
+
+	// statusRecords is this node's status record writer: its MCP, model and
+	// runner rows and its infra summary, beside its presence
+	// (nodestatusrecord.go).
+	statusRecords statusRecords
 
 	// reviews is this node's watched copy of the definitions the fleet's
 	// MCP tools' levels were decided on ([mcpReviews]).
@@ -946,6 +952,10 @@ type Engine struct {
 	// engine rather than one per epoch: the children are processes, and an
 	// apply that replaced the bridge would orphan every one of them.
 	mcp *mcp.Bridge
+	// research is this node's research instance of the company's search server
+	// (ADR-0151), on a bridge of its own; made at its first search.
+	research     *research.Searcher
+	researchOnce sync.Once
 
 	// mcpFileMu serialises filing the shared bridge's catalogue into an
 	// epoch's registry outside an apply's own build: what the bridge's
@@ -986,8 +996,9 @@ type Engine struct {
 	//
 	// mcpShared and mcpSeats are what each start of a server concluded —
 	// the shared servers per apply, the per-role children per pass over a
-	// seat — for the heartbeat's [coord.NodeStatus.MCP]. Under mcpMu too,
-	// because a seat's outcomes are replaced and forgotten with its bridge.
+	// seat — for the node's status record ([coord.NodeStatusRecord.MCP]).
+	// Under mcpMu too, because a seat's outcomes are replaced and forgotten
+	// with its bridge.
 	mcpMu     sync.Mutex
 	seatMCP   map[string]*seatChildren
 	seatTools map[string]*tools.Registry
@@ -1212,6 +1223,11 @@ type Engine struct {
 	// turn segment writes, shared by every registry it builds
 	// ([builtin.FolderTurns]).
 	folderTurns *builtin.FolderTurns
+
+	// renderState is render_artifact's renderer, built at its first use,
+	// and this node's tally of each turn segment's renders. See
+	// artifactrender.go.
+	renderState
 
 	// memoryReads answers a seat's memory from the node holding it, and
 	// stopMemoryServe withdraws this node as one of its answerers. See
@@ -1915,6 +1931,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		leads:               leads,
 		dataTurns:           builtin.NewDataTurns(nil),
 		folderTurns:         builtin.NewFolderTurns(nil),
+		renderState:         renderState{renderTurns: builtin.NewRenderTurns(nil)},
 		mcpRetryBase:        opts.mcpRetryBase,
 		mcpRelistBase:       opts.mcpRelistBase,
 		sandboxOtel:         otel,
@@ -2264,6 +2281,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	} else {
 		e.startRoutedDirectory(ctx)
 	}
+	// AFTER THE LOGS, so a raise of the bucket is weighed against every
+	// reservation they hold and never takes one a log being created needed.
+	e.raiseObjectsAtBoot(ctx, opts.Bootstrap, incarnation)
 	// THE BOUNDARY: everything above is what this node holds, recovered;
 	// everything below is what its company configures. See
 	// [Options.Recovered]. Logged, because it is the line a deployment sizes
@@ -2457,14 +2477,16 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// so a beat whose status read overran must still say it — and,
 		// from memory, nothing can overrun it ([Engine.gitBackground]).
 		GitBackground: e.gitBackground(),
-		// AND WHAT THIS NODE RUNS ON, hosts and names read once from its own
-		// file, which the atlas draws the fleet from ([NodeInfra]).
-		Infra: NodeInfra(e.boot).Meta(),
 		// WHICH ROLES THE COMPANY NEEDS, off the current epoch: git only
 		// where it hosts code, so a fleet that declared its roles without
 		// git is never told nobody serves it until it would matter.
 		RoleNeeded: e.roleNeeded,
-		Turn:       e.mailboxTurn,
+		// AND EACH NEW EPOCH ITS PRESENCE IS CLAIMED AT, on which this
+		// node's status record is written at once rather than on the
+		// writer's next tick: until it is, every reader counts nothing of
+		// this node's ([Engine.statusRecordClaimed]).
+		PresenceClaimed: e.statusRecordClaimed,
+		Turn:            e.mailboxTurn,
 		// Before the mailbox opens and after it closes — see node.Config.
 		// A seat mid-detached-run must have its runs recovered and its mail
 		// parked before anything can deliver to it.
@@ -2662,8 +2684,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// handed meets a node that already knows. Bounded: past its budget the
 	// watch keeps trying and the screening defers until it answers.
 	e.startSeatPauses(ctx)
-	// WHERE THIS NODE CAN START A BOX, probed now and kept: what the
-	// heartbeat tells the Models page.
+	// WHERE THIS NODE CAN START A BOX, probed now and kept: what its
+	// status record tells the Models page.
 	e.startRunnerProbe(ctx)
 	e.startHostLogins(ctx)
 	// THE RETRIES PEOPLE ASKED FOR, applied as every node hears them.
@@ -2674,6 +2696,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// WHAT THIS NODE'S MCP SERVERS LIST, published, and every node's,
 	// watched: the catalogue a per-agent server's tools reach.
 	e.startMCPListings(ctx)
+	// AND WHAT THIS NODE SAYS OF ITS SERVERS, ITS MODELS, ITS RUNNERS AND
+	// WHAT IT RUNS ON, its status record beside its presence.
+	e.startStatusRecords(ctx)
 	// AND HOW EACH OF THEM IS, answered to a server's page on any node; and
 	// THE RESTARTS PEOPLE ASKED FOR, applied as every node hears them.
 	e.startMCPInstances(ctx)
@@ -3221,8 +3246,10 @@ func (e *Engine) Stop(ctx context.Context) {
 
 // stopping is the allowance this node's stop gives its leases back on — the
 // presence and seat leases, the sandbox coordinator's taker lease
-// ([Engine.stopSandbox]), the duties it releases, and the holds its loops
-// give back as the teardown ends them ([Engine.tearingDown]) — built once, by
+// ([Engine.stopSandbox]), the duties it releases, the holds its loops give
+// back as the teardown ends them ([Engine.tearingDown]), and the removals of
+// its MCP listings and its status record after them
+// ([Engine.removeMCPListings], [Engine.removeStatusRecord]) — built once, by
 // the drain or by a failed boot's teardown, whichever comes first. See
 // [seat.StopBudget] for why one allowance and not one per step. Its size is
 // the stop allowance of this node's own lease TTL ([seat.StopAllowance], one
@@ -3476,9 +3503,12 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopRunnerProbe()
 	e.stopHostLogins()
 	e.stopModelRetries()
-	// AND THIS NODE'S MCP LISTINGS, removed now that its servers are down,
-	// and its instances no longer answered.
-	e.stopMCPListings(ctx)
+	// AND THIS NODE'S MCP LISTINGS' PUBLISHER, now that its servers are
+	// down, and its STATUS RECORD'S WRITER, whose rows describe those
+	// servers — what each wrote is removed once the seats are given back,
+	// below — and its instances no longer answered.
+	e.stopStatusRecords()
+	e.stopMCPListings()
 	e.stopMCPInstances(ctx)
 	e.stopMCPChecks(ctx)
 	e.stopMCPRestarts()
@@ -3585,6 +3615,16 @@ func (e *Engine) teardown(ctx context.Context) {
 	// the seat holders, and a holder that stops answering first costs a pass
 	// its expiry. See codeholds.go.
 	e.stopCodeHolds(ctx)
+	// AND WHAT THIS NODE PUBLISHED OF ITSELF — its MCP listings and its
+	// status record — removed together on what the give-backs above left of
+	// the stop's allowance: nothing counts either since the presence went,
+	// and a removal that runs out of it leaves them to the sweep and to the
+	// bucket's age ([Engine.removeMCPListings], [Engine.removeStatusRecord]).
+	// Together, so the two are charged once for the time they overlap.
+	var removals sync.WaitGroup
+	removals.Go(func() { e.removeMCPListings(ctx) })
+	removals.Go(func() { e.removeStatusRecord(ctx) })
+	removals.Wait()
 	// AFTER the seats are released, so a per-role child is normally
 	// already gone with its seat. This is the backstop for the ones that
 	// were not: a stdio server is a process TREE holding a seat's
@@ -4260,7 +4300,9 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 	return res, err
 }
 
-// nodeStatus is what this node advertises about itself on every heartbeat.
+// nodeStatus is what this node advertises about itself on every heartbeat:
+// the live core its presence carries. Its MCP, model and runner rows and what
+// it runs on ride its status record instead ([Engine.statusRecordRows]).
 //
 // Read LIVE, per beat, rather than cached: a cached in-flight count is a
 // node reporting work it finished a minute ago, and the whole value of
@@ -4272,12 +4314,9 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 // rather than by the beat's clock after this returns: only this frame knows
 // which of its reads a dead context could have cut short.
 func (e *Engine) nodeStatus(ctx context.Context) (coord.NodeStatus, error) {
-	// The MCP rows are this process's own record of what it started, read
-	// under a lock and never from a child.
 	status := coord.NodeStatus{
 		StartedAt: e.startedAt, AdminPosture: e.adminPosture, Build: version.String(),
-		MCP: e.mcpStatus(ctx), Runners: e.runnerStatus(),
-		Models: e.modelStatus(ctx), ParkedStateVersion: execstate.Version,
+		ParkedStateVersion: execstate.Version,
 	}
 	if b := e.backends; b != nil && b.Queue != nil {
 		status.InFlight = b.Queue.InFlightCount()

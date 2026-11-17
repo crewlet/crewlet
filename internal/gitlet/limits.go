@@ -290,16 +290,19 @@ const (
 	// handle its routing tells and each change's count of them
 	// (noticeWrites): at their widest — a push whose routing fills what its
 	// own rows leave, 3 904 notices — they hold the lane 143 ms (doc.go's
-	// measured section).
+	// measured section). A record's change tallies and push activity come on top
+	// of it where its horizons fill it: they are given what an older build's rows
+	// leave them (record.go).
 	MaxRecordRows = statelog.ApplyTxRowBudget
 
 	// MaxCommandsPerPush is the most ref updates one push carries. A push's
-	// apply then writes at most 2 003 rows — its refs, the object each forced
-	// update or deletion left (code_ref_drops), its pack, its push row and the
-	// counters — and its record's row bound counts each command by the rows
-	// it may make the record touch (rowBound: a deletion three, for its
-	// tombstone, the old tombstone the sweep may take for it and its drop; a
-	// forced update two; any other one), so three maximal pushes of
+	// apply then writes at most 2 005 rows (its refs, the object each forced
+	// update or deletion left (code_ref_drops), its pack, its push row, the
+	// counters and the day and pusher rows it is counted in), and its record's
+	// row bound counts each command by the rows it may make the record touch
+	// (rowBound: a deletion three, for its tombstone, the old tombstone the
+	// sweep may take for it and its drop; a forced update two; any other one),
+	// so three maximal pushes of
 	// fast-forward updates fit one record's row budget, one of forced updates
 	// or of deletions, and two of either its byte budget (about 410 KiB each
 	// with plain refs at MaxRefNameBytes); an import chunks its refs at this

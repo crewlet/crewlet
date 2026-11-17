@@ -133,8 +133,9 @@ func TestTheAdvisorNoticesTheFleetsAlarms(t *testing.T) {
 		t.Error("node-c has not evaluated its alarms, and the fleet's read as known")
 	}
 	got := notice.Read(nil, fleet, nil, since.Add(notice.AlarmAfter))
+	title, person, _ := statelog.PersonWords(statelog.KindApplyLag)
 	want := []notice.Notice{{Class: notice.ClassAlarm, Subject: advisor.Subject{Kind: notice.SubjectAlarm, Name: "apply_lag"},
-		Since: since, Nodes: []string{"node-a", "node-b"}}}
+		Since: since, Nodes: []string{"node-a", "node-b"}, Title: title, Person: person}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the fleet's notices are\n%+v\nwant\n%+v", got, want)
 	}

@@ -92,7 +92,7 @@ type MCPAgentServer struct {
 // an outage moves no agent across the budget. A PER-AGENT SERVER IS COUNTED AT
 // ITS WHOLE LISTING for every agent it reaches: its children each list what
 // their own seat's credential reaches, which no record the fleet shares says
-// seat by seat (the heartbeat carries nothing a seat count multiplies, and an
+// seat by seat (a node's status record carries nothing a seat count multiplies, and an
 // instance is read only where it runs), and the whole listing is the most an
 // agent of it is offered, so the budget errs toward flagging, never toward
 // missing an agent past it.

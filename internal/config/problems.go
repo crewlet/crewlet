@@ -485,28 +485,33 @@ type Warning struct {
 	To       string `json:"to"`
 	Message  string `json:"message"`
 	// Class is what an advisory is about, for a reader that acts on it
-	// ([AdvisoryClass]); empty on every other kind and on most advisories.
+	// ([AdvisoryClass]): the closed set the setup advisor builds a fix for,
+	// so empty on every other kind and on most advisories.
 	Class AdvisoryClass `json:"class,omitempty"`
+	// Title is what the warning is about in a few words, the heading of a
+	// list of every warning its rule raises ([advice]). Set on every advisory
+	// and dangling reference; empty on an admission warning.
+	Title string `json:"title,omitempty"`
 	// Person is the warning in the words of the person who owns the company,
-	// beside Message, which is the operator's: what it risks and what to do,
-	// naming no document key, no field and no cell. Every classed advisory
-	// carries it ([classed]) and no other warning does, so a screen drawing a
-	// warning for that person draws Person where it is set and Message where
-	// it is not.
+	// beside Message, which is the operator's: what is wrong and what it
+	// costs, then the fix, naming no document key, no field and no cell.
+	// Every advisory and dangling reference carries its rule's ([advice]); an
+	// admission warning carries the words its rule wrote for a person
+	// (Problem.Said), where it wrote some. A screen draws Person where it is
+	// set and Message where it is not.
 	//
-	// THE SAME WORDS FOR EVERY WARNING OF ONE CLASS ABOUT ANOTHER SUBJECT
-	// where the subject is a seat or a unit named apart (Seat, Unit): seven
-	// agents learning on their own model are one thing to know about seven
-	// agents, and a screen that groups by Person says it once with a count.
-	// A warning whose words must name their subject (a schedule's name and how
-	// often it runs) says it in Person itself.
+	// THE SAME WORDS FOR EVERY WARNING ONE RULE RAISES, whatever it is about:
+	// the subject is named apart (Seat, Unit, Item), so seven agents learning
+	// on their own model are one thing to know, and a screen that groups by
+	// Title and Person says it once and lists what it is about.
 	//
-	// TWO PHRASINGS ON ONE VALUE, written together where the warning is
-	// raised, for the reason a caveat carries two (ADR-0060): a code a client
-	// words by itself puts every sentence in two languages with nothing
-	// holding them together, and a class the client has not learned is drawn
-	// as nothing at all.
+	// TWO PHRASINGS ON ONE VALUE, written together where the warning is raised
+	// (ADR-0060): a client wording a code itself would draw an unknown class as nothing.
 	Person string `json:"person,omitempty"`
+	// Item is the one thing within the seat or unit the warning is about, as
+	// a person reads it in a list: a schedule's name and how often it runs,
+	// a repository, a server, a variable. Empty where Seat or Unit says it all.
+	Item string `json:"item,omitempty"`
 }
 
 // WarningDanglingReference is the kind of a [Warning] about a reference that
@@ -530,6 +535,64 @@ func advisory(path Path, message string) Warning {
 		Kind: WarningAdvisory, Path: path.String(), Segments: segmentsOf(path),
 		Message: message,
 	}
+}
+
+// advice is one rule's words for the person who owns the company: its
+// [Warning.Title] and [Warning.Person], the same on every warning it raises,
+// whose subject and item are named apart.
+type advice struct{ title, person string }
+
+// advices is every rule's advice, each declared through [says], so a test
+// holds every one to a person's words whether or not a fixture raises it.
+var advices []advice
+
+// says declares one rule's advice.
+func says(title, person string) advice {
+	a := advice{title: title, person: person}
+	advices = append(advices, a)
+	return a
+}
+
+// Elsewhere is one rule's words for an advisory another package raises,
+// declared here so they are held to every other rule's.
+type Elsewhere struct{ a advice }
+
+// On is w carrying the rule's words.
+func (e Elsewhere) On(w Warning) Warning { return e.a.on(w) }
+
+// raisedElsewhere is the rules another package raises.
+var raisedElsewhere = map[advice]bool{}
+
+// saysElsewhere declares the words of a rule another package raises.
+func saysElsewhere(title, person string) Elsewhere {
+	a := says(title, person)
+	raisedElsewhere[a] = true
+	return Elsewhere{a}
+}
+
+// The engine's advisories about the credentials an integration puts in a
+// seat's box (engine.BoxCredentialWarnings).
+var (
+	BoxSignInAdvice = saysElsewhere("Credentials a model sign-in keeps out",
+		"This agent's model signs in with a variable an integration also fills, so its box gets "+
+			"no credential from that integration. Give the agent the integration's MCP server instead.")
+	BoxLineIgnoredAdvice = saysElsewhere("Box settings an integration replaces",
+		"An integration sets this in the agent's box to the agent's own credential, so this line "+
+			"is ignored there. Remove it.")
+	BoxSharedLineIgnoredAdvice = saysElsewhere("Shared box settings some integrations replace",
+		"Agents on that integration get their own credential here, so this line is ignored for "+
+			"them. Keep it for the other agents or remove it.")
+)
+
+// raise is a's advisory at path, message the operator's sentence.
+func (a advice) raise(path Path, message string) Warning {
+	return a.on(advisory(path, message))
+}
+
+// on is w carrying a's words.
+func (a advice) on(w Warning) Warning {
+	w.Title, w.Person = a.title, a.person
+	return w
 }
 
 // AdvisoryAt is [advisory] at a dotted field path, for an advisory whose
@@ -570,8 +633,9 @@ func (c *Company) Warnings() []Warning {
 // Built from those problems rather than beside them, so the two cannot place
 // one violation differently: one warning per entity it is about (a duplicated
 // name is a warning beside each seat or unit holding it), each carrying that
-// problem's path, segments, seat, unit and message. Ref, From and To are
-// empty, because an admission rule names no reference.
+// problem's path, segments, seat, unit and message, and its words for a
+// person (Said) as Person. Ref, From and To are empty, because an admission
+// rule names no reference.
 func (c *Company) AdmissionWarnings() []Warning {
 	return append(warningsOf(c.ValidateAdmission()), c.CharterWarnings()...)
 }
@@ -583,7 +647,7 @@ func warningsOf(err error) []Warning {
 	for _, p := range problems {
 		out = append(out, Warning{
 			Kind: WarningAdmission, Path: p.Path, Segments: p.Segments,
-			Seat: p.Seat, Unit: p.Unit, Message: p.Message,
+			Seat: p.Seat, Unit: p.Unit, Message: p.Message, Person: p.Said,
 		})
 	}
 	return out
@@ -592,7 +656,8 @@ func warningsOf(err error) []Warning {
 // ReferenceWarnings is every reference this revision resolves to nothing
 // ([Company.DanglingRefs]), located in the document: a unit's lead at its
 // `lead`, a root seat's unit at its `unit`, a manages entry at the index it
-// was written at.
+// was written at. Each names what it holds apart (Seat, Unit) and the name
+// that resolves to nothing as its Item.
 func (c *Company) ReferenceWarnings() []Warning {
 	o, x := c.organization()
 	refs := o.DanglingRefs()
@@ -600,21 +665,24 @@ func (c *Company) ReferenceWarnings() []Warning {
 	for _, ref := range refs {
 		w := Warning{
 			Kind: WarningDanglingReference, Ref: string(ref.Kind),
-			From: ref.From, To: ref.To, Message: ref.Message(),
+			From: ref.From, To: ref.To, Message: ref.Message(), Item: ref.To,
 		}
 		var path Path
 		switch {
 		case ref.Unit != nil:
 			path = at(x.units[ref.Unit], "lead")
+			w = danglingLeadAdvice.on(w)
 			w.Unit = ref.Unit.Name
 		case ref.Seat != nil && ref.Kind == org.RefUnit:
 			path = at(x.seats[ref.Seat], "unit")
+			w = danglingUnitAdvice.on(w)
 			w.Seat = ref.Seat.Handle()
 		case ref.Seat != nil && ref.Kind == org.RefManages:
 			path = at(x.seats[ref.Seat], "manages")
 			if i := slices.Index(x.authored[ref.Seat].Manages, ref.To); i >= 0 {
 				path = idx(path, i)
 			}
+			w = danglingManagesAdvice.on(w)
 			w.Seat = ref.Seat.Handle()
 		}
 		w.Path, w.Segments = path.String(), segmentsOf(path)
@@ -622,6 +690,20 @@ func (c *Company) ReferenceWarnings() []Warning {
 	}
 	return out
 }
+
+// The words of a reference that resolves to nothing, one per kind of
+// reference ([org.RefKind]).
+var (
+	danglingLeadAdvice = says("Team leads not in the org chart",
+		"This team's lead names no seat, so the team and the teams under it run with no "+
+			"lead. Pick a lead from the chart.")
+	danglingUnitAdvice = says("Seats in a missing team",
+		"This seat names a team the chart does not have, so it sits at the top of the "+
+			"chart. Choose its team again.")
+	danglingManagesAdvice = says("Seats managing someone not in the chart",
+		"This seat manages a name that matches no seat or team, so that entry manages "+
+			"nobody. Correct it or remove it.")
+)
 
 // AdvisoryWarnings is everything valid about this company that its author
 // should still know: answered by `crewlet validate` and a `/config` write, and
@@ -666,14 +748,16 @@ func (c *Company) AdvisoryWarnings() []Warning {
 	if local := c.Providers.Sandbox.localBlock(); local != nil {
 		args := field("providers.sandbox.local.run_args")
 		for _, unsupplied := range local.unsuppliedEnvArgs() {
-			out = append(out, advisory(idx(args, unsupplied.at), fmt.Sprintf(
+			w := unsuppliedEnvAdvice.raise(idx(args, unsupplied.at), fmt.Sprintf(
 				"`-e %[1]s` copies %[1]s from the container runtime's own environment, "+
 					"which is its fixed allowlist plus providers.sandbox.local.runtime_env "+
 					"and never the engine's, and neither carries %[1]s, so the box gets "+
 					"nothing for it. Put what a box needs in role.sandbox.env or a setup "+
 					"step's env, which reach the box directly; or declare "+
 					"`%[1]s: \"${%[1]s}\"` under runtime_env to have the runtime pass the "+
-					"host's value on", unsupplied.name)))
+					"host's value on", unsupplied.name))
+			w.Item = unsupplied.name
+			out = append(out, w)
 		}
 	}
 	out = append(out, c.peoplelessWarnings()...)
@@ -689,6 +773,12 @@ func (c *Company) AdvisoryWarnings() []Warning {
 	out = append(out, c.scheduleWarnings()...)
 	return append(out, c.channelAdvisories()...)
 }
+
+// unsuppliedEnvAdvice is a bare `-e NAME` in the local sandbox's run_args
+// that nothing supplies ([Company.AdvisoryWarnings]).
+var unsuppliedEnvAdvice = says("Sandbox variables nothing sets",
+	"The local sandbox asks for a variable that nothing gives a value, so agents start "+
+		"without it. Set it in the sandbox settings.")
 
 // channelAdvisories is what this company's unit channels say about each
 // other: a room two units both claim on a vendor surface, and a Chatlet
@@ -751,13 +841,13 @@ func (c *Company) channelAdvisories() []Warning {
 		if len(others) == 0 {
 			continue
 		}
-		w := advisory(at(x.units[u], "channel"), fmt.Sprintf(
+		w := sharedRoomAdvice.raise(at(x.units[u], "channel"), fmt.Sprintf(
 			"unit %q shares its channel %q with %s. Everything scoped to one "+
 				"of them lands in the other's room, and every seat in both is "+
 				"told that channel is its team's own. Give one of them a "+
 				"channel of its own, or leave the child's empty and let it "+
 				"inherit", u.Name, u.DeclaredChannel, words.And(others)))
-		w.Unit = u.Name
+		w.Unit, w.Item = u.Name, u.DeclaredChannel
 		out = append(out, w)
 	}
 
@@ -778,7 +868,7 @@ func (c *Company) channelAdvisories() []Warning {
 	// at the FIRST unit's `channel`, which is the line an author adds it to;
 	// the sentence says it is about all of them, because the path cannot.
 	if c.ChatBackendFor() == ChatChatlet && first != nil && len(declared) == 0 {
-		w := advisory(at(x.units[first], "channel"), fmt.Sprintf(
+		w := noUnitRoomsAdvice.raise(at(x.units[first], "channel"), fmt.Sprintf(
 			"no unit in this company declares a `channel`. In Chatlet, "+
 				"each channel a unit names gets a room whose members follow the "+
 				"org chart. Without one, a team only has a room if someone opens "+
@@ -789,6 +879,17 @@ func (c *Company) channelAdvisories() []Warning {
 	}
 	return out
 }
+
+// The words of [Company.channelAdvisories]: a room two units claim on a vendor
+// surface, and a Chatlet company that gives no team a room.
+var (
+	sharedRoomAdvice = says("Teams sharing one chat room",
+		"Messages meant for one team land in a room another team shares, and both treat it "+
+			"as their own. Give each team its own room.")
+	noUnitRoomsAdvice = says("No team has a chat room",
+		"No team has a room that follows the org chart, so each room is made and filled by "+
+			"hand. Give your teams rooms.")
+)
 
 // peoplelessWarnings is the one warning a company declaring no human seat
 // carries: nobody can be invited into it or created in it.
@@ -811,10 +912,15 @@ func (c *Company) peoplelessWarnings() []Warning {
 			return nil
 		}
 	}
-	return []Warning{advisory(field("roles"), "this company has no "+
+	return []Warning{peoplelessAdvice.raise(field("roles"), "this company has no "+
 		"`kind: human` seats, so nobody can be invited. That's fine if agents "+
 		"run it alone. Otherwise add a human seat for each person")}
 }
+
+// peoplelessAdvice is [Company.peoplelessWarnings]' one warning.
+var peoplelessAdvice = says("Nobody can join this company",
+	"The company has no seat for a person, so nobody can be invited. Add a seat for each "+
+		"teammate, unless agents run it alone.")
 
 // unreachableWarnings is every human seat with no account on the vendor chat
 // surfaces this company talks on: nothing addressed to it there reaches
@@ -868,15 +974,21 @@ func (c *Company) unreachableWarnings() []Warning {
 			continue
 		}
 		handle := role.IdentityKey()
-		w := advisory(at(path, "contact"), fmt.Sprintf("the human seat %q has no "+
+		w := unreachableAdvice.raise(at(path, "contact"), fmt.Sprintf("the human seat %q has no "+
 			"account on %s, so chat messages to it there reach nobody. Add a %s to "+
 			"its `contact`, or leave it if they only use the dashboard",
 			handle, words.Or(titles), words.Or(keys)))
-		w.Seat = handle
+		w.Seat, w.Item = handle, words.Or(titles)
 		out = append(out, w)
 	}
 	return out
 }
+
+// unreachableAdvice is a human seat with no account on the vendor chat the
+// company talks on; the warning's Item names the surfaces.
+var unreachableAdvice = says("People with no chat account",
+	"Chat messages to this person reach nobody, because their seat has no chat account. "+
+		"Add one, unless they only use the dashboard.")
 
 // reachableOn reports whether a human seat's contact names an account on any
 // of surfaces. A ${VAR} reference counts, as [org.HumanContact.IsEmpty]
@@ -1330,7 +1442,7 @@ func tierWarnings(boot *Bootstrap, company *Company, cache CacheBudget) []Warnin
 	// whichever store is chosen.
 	if company.CodeBackendFor() == CodeGitlet && boot.Store.Objects.BackendOrDefault() == ObjectBackendNATS &&
 		(boot.declaresFleet() || boot.BrokerKind() == placement.BrokerClient) {
-		out = append(out, advisory(field("store.objects.backend"),
+		out = append(out, objectsOnBrokerAdvice.raise(field("store.objects.backend"),
 			"every broker member holding a copy of the files bucket holds every pack "+
 				"of every repository; a company whose code outgrows a member's disk "+
 				"takes store.objects.backend: s3"))
@@ -1348,7 +1460,7 @@ func tierWarnings(boot *Bootstrap, company *Company, cache CacheBudget) []Warnin
 				budget = fmt.Sprintf("this node's budget (%d, derived from gitlet.cache_dir's "+
 					"volume because gitlet.cache_max_bytes is unset)", cache.Bytes)
 			}
-			out = append(out, advisory(field("gitlet.cache_max_bytes"), fmt.Sprintf(
+			out = append(out, cacheBelowRepoAdvice.raise(field("gitlet.cache_max_bytes"), fmt.Sprintf(
 				"a repository at its size limit (code.limits.repo_max_bytes, %d) cannot "+
 					"be cached within %s: it is served, and evicted as soon as it is idle, "+
 					"so every busy period after is a cold sync of the whole repository",
@@ -1358,6 +1470,17 @@ func tierWarnings(boot *Bootstrap, company *Company, cache CacheBudget) []Warnin
 
 	return out
 }
+
+// The words of [tierWarnings]: code packs on the broker's own disks, and a
+// cache smaller than the largest repository the company admits.
+var (
+	objectsOnBrokerAdvice = says("Every server keeps all the code",
+		"Each server keeping the company's files holds a copy of all its code, which can "+
+			"fill its disk. Store code in S3 as it grows.")
+	cacheBelowRepoAdvice = says("Code cache smaller than a repository",
+		"A repository at its size limit does not fit this server's code cache, so each busy "+
+			"period downloads it again. Raise the cache or lower the limit.")
+)
 
 // writerWarnings are the company_writers settings that are valid and almost
 // certainly not what their author meant.

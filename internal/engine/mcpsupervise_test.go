@@ -22,7 +22,7 @@ import (
 // that die: the bridge restarts them (internal/mcp has those cases), and
 // what is the engine's is that a seat's turns reach the server again, that a
 // shared server whose start failed reaches every seat once the bridge brings
-// it up — with no config apply in between — and that the heartbeat says what
+// it up — with no config apply in between — and that the status record says what
 // the server is doing now rather than what its start concluded.
 
 // withServerEnv adds variables to every `env:` block of an mcpCompany
@@ -42,7 +42,7 @@ func withServerEnv(doc string, env map[string]string) string {
 	return strings.ReplaceAll(doc, "    env:\n", "    env:\n"+lines.String())
 }
 
-// statusOf is the heartbeat's row for one server, if it has one.
+// statusOf is the status record's row for one server, if it has one.
 func statusOf(e *engine.Engine, server string) (coord.MCPServerStatus, bool) {
 	for _, row := range engine.MCPStatus(e) {
 		if row.Server == server {
@@ -83,10 +83,10 @@ func call(t *testing.T, e *engine.Engine, handle, tool string) tools.Result {
 
 // A SHARED SERVER THAT DIES IS BROUGHT BACK, with nobody editing the config.
 // While it is down, every seat that calls it is refused in the engine's own
-// words, classed unavailable — never a broken pipe — and the heartbeat says
+// words, classed unavailable — never a broken pipe — and the status record says
 // it failed, with the child's exit status; once it is back the seats' calls
 // work again through the very tool objects their registries already hold, and
-// the heartbeat says it started.
+// the status record says it started.
 func TestASharedServerThatDiesIsBroughtBackAndReportedWhileDown(t *testing.T) {
 	t.Parallel()
 	starts := t.TempDir()
@@ -109,7 +109,7 @@ func TestASharedServerThatDiesIsBroughtBackAndReportedWhileDown(t *testing.T) {
 	}
 
 	crash := "exit status " + strconv.Itoa(toolServerCrashCode)
-	within(t, "the heartbeat to report the server down", func() bool {
+	within(t, "the status record to report the server down", func() bool {
 		row, ok := statusOf(e, "tracker")
 		return ok && row.Failed == 1 && row.Started == 0 && strings.Contains(row.Error, crash)
 	})
@@ -132,7 +132,7 @@ func TestASharedServerThatDiesIsBroughtBackAndReportedWhileDown(t *testing.T) {
 		t.Errorf("the server was started %d times, want the first, two that failed and one that came up", n)
 	}
 	if row, _ := statusOf(e, "tracker"); row.Started != 1 || row.Failed != 0 || row.Tools != 1 {
-		t.Errorf("heartbeat after the restart = %+v, want one started instance serving its tool", row)
+		t.Errorf("status record after the restart = %+v, want one started instance serving its tool", row)
 	}
 	if now, _ := e.ToolsFor("cto").Lookup("tracker_probe"); now.Tool != held.Tool {
 		t.Error("the restart replaced a tool whose listing did not change")
@@ -198,7 +198,7 @@ roles:
 		engine.Options{Company: parsedCompany(t, doc)}, 100*time.Millisecond))
 
 	if row, ok := statusOf(e, "search"); !ok || row.Failed != 1 || !strings.Contains(row.Error, "would not start") {
-		t.Fatalf("heartbeat after the failed start = %+v, want it failed with why", row)
+		t.Fatalf("status record after the failed start = %+v, want it failed with why", row)
 	}
 	claimed(t, e, 2)
 	if names := surfaceOf(t, e, "ceo"); slices.Contains(names, "search_probe") ||
@@ -227,7 +227,7 @@ roles:
 		t.Errorf("the retried server's tool does not answer: %q", res.Output)
 	}
 	if row, _ := statusOf(e, "search"); row.Started != 1 || row.Failed != 0 {
-		t.Errorf("heartbeat after the retry = %+v, want it started", row)
+		t.Errorf("status record after the retry = %+v, want it started", row)
 	}
 }
 

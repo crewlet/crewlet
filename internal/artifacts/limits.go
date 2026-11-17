@@ -166,6 +166,19 @@ const (
 	MaxMovesPerCall = 25
 )
 
+// Comment bounds (ADR-0154). The writer holds every one from its snapshot; the
+// thread and remark counts are also stamped into the record, so the applier
+// enforces the bound a record was decided under.
+const (
+	MaxCommentBytes       = 16 * kiB // one remark's Markdown: a long review note, never a pasted file
+	MaxCommentQuoteBytes  = 1 * kiB  // the selected text a thread quotes, enough to find it again by eye
+	MaxCommentCropBytes   = 64 * kiB // the picture of the region a thread opened on, kept on its row
+	MaxCommentCropSide    = 800      // the crop's longer side in pixels, what a side panel draws at twice its width
+	MaxCommentMentions    = 32       // seats one remark names, each one a wake
+	MaxThreadsPerArtifact = 2000     // threads one artifact keeps, the whole list read at once by the panel
+	MaxRemarksPerThread   = 500      // remarks in one thread, a conversation rather than a log
+)
+
 // Retention.
 const (
 	// VersionsKeptUnlabelled is how many unlabelled versions an artifact
@@ -363,4 +376,72 @@ const (
 	// PushFrameMaxBytes is the largest data push sent inline; past it a push
 	// names the documents and the client re-reads.
 	PushFrameMaxBytes = 64 * kiB
+)
+
+// Render bounds: what one render_artifact call may cost the browser it drives
+// and the box it writes its screenshots to (internal/artifactrender).
+const (
+	// TurnRenders bounds a turn segment's renders: about one per publish on
+	// an artifact, and a looping turn holds the browser for a bounded time.
+	TurnRenders = 8
+
+	// RenderTimeout bounds one render: four loads and twelve shots take under
+	// thirty seconds beside the engine, and three times that covers a busy
+	// pool, well under the bridge's call floor.
+	RenderTimeout = 90 * time.Second
+
+	// RenderConcurrency is how many renders a node drives at once, and
+	// RenderQueueWait how long a further one waits before it is refused as
+	// busy: every node's seats share one browser pool.
+	RenderConcurrency = 2
+	RenderQueueWait   = 20 * time.Second
+
+	// RenderLoadTimeout bounds one load of the page: its frame's hello and
+	// the document's own load. A version is served from the engine itself,
+	// so a load slower than this is a page that never finishes loading.
+	RenderLoadTimeout = 20 * time.Second
+
+	// RenderQuiet is how long the engine waits with no request of the page
+	// in flight before a shot, and RenderSettleTimeout the most it waits
+	// for that quiet: a page that never stops requesting is shot as it is.
+	RenderQuiet         = 300 * time.Millisecond
+	RenderSettleTimeout = 5 * time.Second
+
+	// RenderShots bounds the screenshots one render takes: two widths, two
+	// themes and three scroll positions, the review a charter asks for.
+	RenderShots = 12
+
+	// RenderMinWidth and RenderMaxWidth bound a shot's width in CSS pixels:
+	// the narrowest phone a page is laid out for, and a wide desktop.
+	RenderMinWidth = 320
+	RenderMaxWidth = 1920
+
+	// RenderPhoneBelow is the width under which a render lays the page out
+	// as a phone does (its viewport meta honoured), at RenderPhoneHeight;
+	// at or above it, at RenderDesktopHeight. Common devices' CSS heights.
+	RenderPhoneBelow    = 600
+	RenderPhoneHeight   = 844
+	RenderDesktopHeight = 900
+
+	// RenderActions bounds the clicks and keys one render plays before its
+	// shots: a menu opened, a tab chosen, a dialog shown.
+	RenderActions = 10
+
+	// RenderShotBytes bounds one screenshot, a PNG of at most 1920 by 900
+	// CSS pixels: a photograph-heavy page measures under 4 MiB there.
+	RenderShotBytes = 8 * miB
+
+	// RenderBoxBytes bounds what one render writes into the calling run's
+	// box: twelve shots at a busy page's size.
+	RenderBoxBytes = 48 * miB
+
+	// RenderServedBytes bounds what one render is served across its loads: a
+	// whole version's bytes. A page that asks for more is reading without
+	// end, and the render stops.
+	RenderServedBytes = MaxVersionBytes
+
+	// RenderFindings bounds the lines of one kind a render reports (console
+	// lines, failed requests, unresolved properties, links): what a reader
+	// fixes in one pass; the rest are counted.
+	RenderFindings = 50
 )

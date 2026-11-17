@@ -3,9 +3,9 @@
  *
  * `panel=` names the one open at the artifact's side, so a link opens on it
  * and Back closes it: opening one is a SECTION (it pushes), because the reader
- * called it. The keys that belong to a panel (`expand=`, and History's
- * `against=` and `lens=`) leave with it, so closing History does not leave a
- * comparison in the address for the next time it opens.
+ * called it. The keys that belong to a panel (`expand=`, History's `against=`
+ * and `lens=`, Comments' `thread=` and `filter=`) leave with it, so closing
+ * History does not leave a comparison in the address for the next time.
  *
  * THE ADDRESSES THE TABS HAD STILL OPEN. The page drew View, Data, History
  * and Settings as tabs (`tab=`) and the people as a rail (`rail=people`), and
@@ -17,7 +17,15 @@
 import type { ArtifactPanelSize } from "@crewlethq/ui";
 
 /** Every panel, in the bar's order. */
-export const PANELS = ["details", "history", "data", "files", "people", "settings"] as const;
+export const PANELS = [
+  "details",
+  "history",
+  "comments",
+  "data",
+  "files",
+  "people",
+  "settings",
+] as const;
 export type PanelName = (typeof PANELS)[number];
 
 /**
@@ -29,6 +37,7 @@ export const PANEL_SPECS: Readonly<Record<PanelName, { title: string; size: Arti
   {
     details: { title: "Details", size: "md" },
     history: { title: "Versions and history", size: "md" },
+    comments: { title: "Comments", size: "md" },
     data: { title: "Data", size: "lg" },
     files: { title: "Files", size: "md" },
     people: { title: "People here", size: "md" },
@@ -44,7 +53,7 @@ export function panelTitle(panel: PanelName, versioned: boolean): string {
 }
 
 /** The keys a panel owns besides `panel=` itself. */
-const PANEL_KEYS = ["expand", "against", "lens"] as const;
+const PANEL_KEYS = ["expand", "against", "lens", "thread", "filter"] as const;
 
 /** The keys the tabs and the rail were addressed by. */
 const LEGACY_KEYS = ["tab", "rail"] as const;

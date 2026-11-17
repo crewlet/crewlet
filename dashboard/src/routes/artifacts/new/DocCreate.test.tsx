@@ -87,7 +87,9 @@ const sent = () => write.mock.calls[0]![0].body as Record<string, unknown>;
 test("opens on the title, offers the templates and holds Create for a title", () => {
   mount();
   expect(document.activeElement).toBe(title());
-  const starts = screen.getByRole("radiogroup", { name: "Start from a template" });
+  // THE ROW SAYS WHAT ITS CHIPS DO, in words drawn before them.
+  const starts = screen.getByRole("radiogroup", { name: "Start from" });
+  expect(starts.querySelector(".crewlet-filter-chip-group__label")?.textContent).toBe("Start from");
   expect([...starts.querySelectorAll('[role="radio"]')].map((r) => r.textContent)).toEqual(
     DOC_TEMPLATES.map((t) => t.label),
   );

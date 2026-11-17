@@ -20,32 +20,32 @@ import (
 // across the fleet, which the alarm table judges at the owner's fixed
 // thresholds ([statelog.KindLLMCredentialExpiring] and the four beside it).
 //
-// MOSTLY FLEET-WIDE: the live leases' model rows (a limit met on one node, a
+// MOSTLY FLEET-WIDE: the live nodes' status records' model rows (a limit met on one node, a
 // refusal on another) and the secret store's write instants are the fleet's,
 // as `backup_age` reads the fleet's one backup register, so a refusal, a limit,
 // a wait and a stored credential's age read the same whichever node a person
 // asks. Two inputs are this node's own reading, and say so: whether anything
 // signs an entry in here, and its harness's token lifetime.
 //
-// A READ THAT FAILS CARRIES THE LAST GOOD ONE. The lease table and the secret
+// A READ THAT FAILS CARRIES THE LAST GOOD ONE. The status records and the secret
 // store are read on every evaluation, and a blip in either must not read as
 // "no model sits out" or "no token expires": that cleared every standing model
 // alarm on the blip and raised each again on the next tick, two log lines per
 // entry per blip, and a health count that flickered. So each input that cannot
 // be read is the last one that could, and the failure is logged. Only a node
-// that has never read the leases judges nothing about models.
+// that has never read the records judges nothing about models.
 //
-// ONE LISTING OF THE LEASES FEEDS THE MCP ALARMS TOO ([mcpConditions]), read
+// ONE LISTING OF THE RECORDS FEEDS THE MCP ALARMS TOO ([mcpConditions]), read
 // here once per evaluation, so a model's and a server's conditions are judged
-// on the same beat of every node, and a blip carries both on the last good
+// on the same records of every node, and a blip carries both on the last good
 // listing.
 
 // entryInputs is the last good read of each fleet-wide input the per-entry
 // alarms judge.
 type entryInputs struct {
 	mu sync.Mutex
-	// statuses is every live node's heartbeat, by node id.
-	statuses map[string]coord.NodeStatus
+	// statuses is every live node's status record, by node id.
+	statuses map[string]coord.NodeStatusRecord
 	// stored is when the secret store last wrote each secret, by name.
 	stored map[string]time.Time
 	// grants are the MCP servers' OAuth grants, by server.
@@ -63,11 +63,11 @@ func (e *Engine) entriesReading(ctx context.Context, now time.Time, out *statelo
 		return
 	}
 	in := &e.entryInputs
-	statuses, err := e.liveStatuses(ctx)
+	statuses, err := e.liveStatusRecords(ctx)
 	in.mu.Lock()
 	if err != nil {
-		log.WarnContext(ctx, "entry_alarms_leases_unread", "error", err,
-			"detail", "the model and MCP alarms are judged on the last heartbeats this node read")
+		log.WarnContext(ctx, "entry_alarms_status_unread", "error", err,
+			"detail", "the model and MCP alarms are judged on the last status records this node read")
 		statuses = in.statuses
 	} else {
 		in.statuses = statuses
@@ -78,9 +78,10 @@ func (e *Engine) entriesReading(ctx context.Context, now time.Time, out *statelo
 	}
 	statuses = maps.Clone(statuses)
 	if _, reported := statuses[e.selfNode()]; !reported {
-		// THIS NODE'S OWN ROWS, read now where its lease did not carry
-		// them yet (a node in its first beat).
-		statuses[e.selfNode()] = coord.NodeStatus{Models: e.modelStatus(ctx), MCP: e.mcpStatus(ctx)}
+		// THIS NODE'S OWN ROWS, read now where no record of its counts
+		// yet (a node before its first write at its presence epoch).
+		statuses[e.selfNode()] = coord.NodeStatusRecord{Node: e.selfNode(),
+			Models: e.modelStatus(ctx), MCP: e.mcpStatus(ctx)}
 	}
 	if len(c.Config.Providers.LLM) > 0 {
 		e.modelsReading(ctx, c, statuses, now, out)
@@ -94,7 +95,7 @@ func (e *Engine) entriesReading(ctx context.Context, now time.Time, out *statelo
 }
 
 // heldRuns is the fleet's active runs, for the calls they hold for a person's
-// approval: the last good read where this one fails, as the heartbeats are,
+// approval: the last good read where this one fails, as the status records are,
 // so a blip neither clears a standing `mcp_approval_waiting` nor raises it
 // again on the next tick.
 func (e *Engine) heldRuns(ctx context.Context) []sandbox.PendingRun {
@@ -114,9 +115,9 @@ func (e *Engine) heldRuns(ctx context.Context) []sandbox.PendingRun {
 	return runs
 }
 
-// modelsReading fills the model half of an alarm reading from the heartbeats
-// [Engine.entriesReading] read.
-func (e *Engine) modelsReading(ctx context.Context, c *Company, statuses map[string]coord.NodeStatus,
+// modelsReading fills the model half of an alarm reading from the status
+// records [Engine.entriesReading] read.
+func (e *Engine) modelsReading(ctx context.Context, c *Company, statuses map[string]coord.NodeStatusRecord,
 	now time.Time, out *statelog.Reading) {
 
 	nodes := make(map[string][]coord.ModelStatus, len(statuses))

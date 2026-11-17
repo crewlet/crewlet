@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -271,6 +272,95 @@ func TestAnUnprovenTeardownIsRetriedAndRecovers(t *testing.T) {
 	// And the lease is gone, so the fleet can run the seat again.
 	if lease := f.leaseOf(seatResource("ceo")); lease != nil {
 		t.Fatalf("the recovered seat is still leased: %+v", lease)
+	}
+}
+
+// countReader is a store that, once armed, says when the presence's claim has
+// been sent — by then the claim has read the count it advertises — and, with
+// loseSeats, answers every seat's renewal false, as once a peer holds them.
+type countReader struct {
+	coord.Backend
+	armed     atomic.Bool
+	loseSeats bool
+	once      sync.Once
+	sent      chan struct{}
+}
+
+func (b *countReader) TryAcquire(ctx context.Context, resource string,
+	opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
+
+	if b.armed.Load() && coord.IsNodeResource(resource) {
+		b.once.Do(func() { close(b.sent) })
+	}
+	return b.Backend.TryAcquire(ctx, resource, opts)
+}
+
+func (b *countReader) Renew(ctx context.Context, resource, owner string, epoch int64,
+	ttl time.Duration) (bool, error) {
+
+	if b.armed.Load() && b.loseSeats && coord.IsSeatResource(resource) {
+		return false, nil
+	}
+	return b.Backend.Renew(ctx, resource, owner, epoch, ttl)
+}
+
+// A PASS THAT TAKES A SEAT OUT OF THE COUNT ADVERTISES THE COUNT IT LEAVES, by
+// the time it returns: an undead seat whose retried teardown succeeds, or a
+// seat a peer took.
+//
+// The presence's claim goes beside the seats' renewals, so it can read the
+// count before the pass has applied a single answer — and here it does, since
+// each seat's teardown waits for the claim to be sent. Advertised only at the
+// next pass, the seat stayed in this node's `seats_held` for a renew period,
+// and a peer with room read the fleet as full and left the seat unclaimed: the
+// bug finishRelease renews the presence for on every other path a seat is
+// given back by.
+//
+// Mutation: renew the presence only beside the seats (one seat held, still).
+func TestAPassAdvertisesTheCountItLeaves(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// lose answers the seat's renewals false; otherwise the seat is
+		// made undead first and its retried teardown succeeds.
+		lose bool
+	}{
+		{name: "an undead seat released", lose: false},
+		{name: "a seat a peer took", lose: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFleet(t)
+			store := &countReader{Backend: f.store, loseSeats: tc.lose, sent: make(chan struct{})}
+			hooks := &hookLog{releaseErr: func(string, ReleaseReason, int) error {
+				if !store.armed.Load() {
+					return errors.New("the consumer would not close")
+				}
+				select {
+				case <-store.sent:
+				case <-f.ctx.Done():
+				}
+				return nil
+			}}
+			h := f.newHost("node-a", Config{Backend: store, Seats: seatsNamed("ceo"), Hooks: hooks})
+			h.renewNodePresence(f.ctx)
+			h.Sweep(f.ctx)
+			if !tc.lose {
+				h.Release(f.ctx, "ceo", ReasonPlacement)
+				wantStrings(t, h.Unproven(), []string{"ceo"}, "unproven")
+			}
+
+			store.armed.Store(true)
+			h.Heartbeat(f.ctx)
+
+			wantHeld(t, h)
+			wantStrings(t, h.Unproven(), nil, "unproven after the pass")
+			profile, ok := placement.FromLease(presenceOf(t, f, "node-a"))
+			if !ok || profile.Held != 0 {
+				t.Fatalf("the presence advertises %d seat(s) held (readable %v) once the pass "+
+					"that took the only one out of the count returned, want 0", profile.Held, ok)
+			}
+		})
 	}
 }
 

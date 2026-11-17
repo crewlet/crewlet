@@ -72,12 +72,16 @@ func (historyCopy) Provenance(cache.Synced) (cache.Provenance, error) {
 }
 func (historyCopy) WantHistory(string)                                 {}
 func (historyCopy) MemoGet(cache.Synced, cache.MemoKey) ([]byte, bool) { return nil, false }
-func (historyCopy) Memo(cache.Synced) *cache.MemoBatch                 { return nil }
-func (historyCopy) Spool() (*os.File, error)                           { return nil, os.ErrInvalid }
-func (historyCopy) IndexTip(cache.Synced) (cache.IndexedTip, bool)     { return cache.IndexedTip{}, false }
+func (historyCopy) MemoProbe(cache.Synced, cache.MemoKey) ([]byte, bool) {
+	return nil, false
+}
+func (historyCopy) Memo(cache.Synced) *cache.MemoBatch             { return nil }
+func (historyCopy) Spool() (*os.File, error)                       { return nil, os.ErrInvalid }
+func (historyCopy) IndexTip(cache.Synced) (cache.IndexedTip, bool) { return cache.IndexedTip{}, false }
 func (historyCopy) CodeIndex(context.Context, cache.Synced) (*cache.CodeIndexView, bool) {
 	return nil, false
 }
+func (historyCopy) Tags(cache.Synced) (*cache.TagIndex, bool) { return nil, false }
 
 // commitID is the stand-in's i-th commit's id.
 func commitID(i int) string { return fmt.Sprintf("%040x", i+1) }
@@ -110,8 +114,8 @@ func (n historyNode) Run(_ context.Context, c gitproc.Cmd) (gitproc.Result, erro
 			}
 		}
 		for i := skip; i < n.commits; i++ {
-			record := strings.Join([]string{commitID(i), commitID(i + 1), "Ana", "ana@example.com", "1700000000",
-				"1700000000", n.subject}, "\x00") + "\x00\x00"
+			record := strings.Join([]string{commitID(i), commitID(i + 1), "Ana", "ana@example.com", "Crewlet",
+				"engine@seats.example", "1700000000", "1700000000", n.subject}, "\x00") + "\x00\x00"
 			if _, err := c.Stdout.Write([]byte(record)); err != nil {
 				return gitproc.Result{}, fmt.Errorf("%w: git log: %w", gitproc.ErrOutput, err)
 			}
@@ -122,7 +126,9 @@ func (n historyNode) Run(_ context.Context, c gitproc.Cmd) (gitproc.Result, erro
 		last, _ := strconv.Atoi(to)
 		for line := first; line <= min(last, n.lines); line++ {
 			group := fmt.Sprintf("%s %d %d 1\nauthor Ana\nauthor-mail <ana@example.com>\nauthor-time 1700000000\n"+
-				"author-tz +0000\nsummary %s\nfilename f.txt\n\t%s\n", commitID(line), line, line, n.subject, n.text)
+				"author-tz +0000\ncommitter Crewlet\ncommitter-mail <engine@seats.example>\n"+
+				"committer-time 1700000000\ncommitter-tz +0000\nsummary %s\nfilename f.txt\n\t%s\n", commitID(line),
+				line, line, n.subject, n.text)
 			if _, err := c.Stdout.Write([]byte(group)); err != nil {
 				return gitproc.Result{}, fmt.Errorf("%w: git blame: %w", gitproc.ErrOutput, err)
 			}

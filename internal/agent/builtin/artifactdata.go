@@ -75,6 +75,8 @@ type ArtifactDataStore interface {
 	Query(ctx context.Context, id artifacts.ID, rd artifactdata.Reading, collection string,
 		q query.Query) (artifactdata.DocPage, error)
 	Schema(ctx context.Context, id artifacts.ID) ([]artifacts.Collection, error)
+	// State is every per-viewer state key the reading's record keeps.
+	State(ctx context.Context, id artifacts.ID, rd artifactdata.Reading) ([]artifactdata.StateEntry, error)
 	// CarriedSchema is the schema read_artifact_data hands a model, which
 	// set_artifact_schema tells to send it back with its change: read whole
 	// or refused where this node's build would drop part of it (estate's

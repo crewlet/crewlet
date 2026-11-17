@@ -29,6 +29,9 @@ func TestTheDeadlinesAreTheirFormulas(t *testing.T) {
 		if got, want := gitproc.UploadPackDeadline(n), objstore.ReadBase+objstore.PaceFor(n)+gitproc.PackWorkDeadline(n); got != want {
 			t.Errorf("UploadPackDeadline(%d) = %v, want %v", n, got, want)
 		}
+		if got, want := gitproc.DownloadDeadline(n), objstore.ReadBase+objstore.PaceFor(n)+gitproc.PackWorkDeadline(n); got != want {
+			t.Errorf("DownloadDeadline(%d) = %v, want %v", n, got, want)
+		}
 	}
 	if up, budget := gitproc.UploadPackDeadline(1<<30), objstore.ReadBudget(1<<30); up >= budget {
 		t.Errorf("UploadPackDeadline(1 GiB) = %v is not under objstore.ReadBudget's %v: it paces a second network leg a fetch from a cache does not have", up, budget)

@@ -905,18 +905,11 @@ func undecided(cmds []gitlet.Command) bool {
 // (repo_deleted, the domain's own sentence for the state — which names the
 // purge by the CURRENT epoch's retention, so a method), archived
 // (repo_archived), being imported (repo_importing) or a pull mirror
-// (repo_mirrored) — each in the domain's one sentence for it, the one its
-// push decide refuses with from the rows.
+// (repo_mirrored), each by the domain's one rule for the state
+// ([gitlet.RepoStateRefusal]), the one its push decide refuses with from the rows.
 func (s *Server) statusRefusal(repo gitlet.RepoRef) (gitlet.Refusal, string) {
-	switch {
-	case gone(repo.Status):
+	if gone(repo.Status) {
 		return gitlet.RefusalRepoDeleted, s.goneSentence(repo)
-	case repo.Status == gitlet.RepoStatusArchived:
-		return gitlet.RefusalRepoArchived, gitlet.ArchivedDetail(repo.Name, repo.ManagedBy)
-	case repo.Status == gitlet.RepoStatusImporting:
-		return gitlet.RefusalRepoImporting, gitlet.ImportingDetail(repo.Name)
-	case repo.Mirrored:
-		return gitlet.RefusalRepoMirrored, gitlet.MirroredDetail(repo.Name, repo.ManagedBy)
 	}
-	return "", ""
+	return gitlet.RepoStateRefusal(repo)
 }

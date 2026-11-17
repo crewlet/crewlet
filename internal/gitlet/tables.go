@@ -22,6 +22,10 @@ var ReproducibleTables = []string{
 	"code_repos", "code_names", "code_refs", "code_packs", "code_pushes",
 	"code_protections", "code_path_owners",
 
+	// A repository's pushes by UTC day and quarter-hour and by pusher and UTC day: kept with
+	// code_pushes' rows by the applies and re-derived by the applier (apply_activity.go).
+	"code_push_days", "code_pusher_days",
+
 	// The packs a record retired, each kept from the collector until a
 	// retire_sweep record removes it past RetireGrace — every node derives
 	// the same rows from the same records, so they are state a replay
@@ -86,6 +90,14 @@ var ReproducibleTables = []string{
 	// by a create's apply and out by the purge's that removes the row, so a
 	// replay rebuilds it from those records alone.
 	"code_repo_kinds",
+
+	// The changes of the repositories in use by state, a row for each owner and visibility:
+	// kept with code_changes by the applies and re-derived by the applier (apply_counts.go).
+	"code_change_tallies",
+
+	// The repositories by owner, visibility, kind and status: kept by the lifecycle applies and
+	// re-derived by the applier (apply_repotallies.go).
+	"code_repo_tallies",
 
 	// A person's marks over their code notices — how far they have read on
 	// this log, what they marked out of order or put off, which reasons are

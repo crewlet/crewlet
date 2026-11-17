@@ -56,7 +56,14 @@
  * the list, which is where a reader decides what to open next.
  */
 
-import { useMemo } from "react";
+import { useMemo, type ComponentType } from "react";
+import {
+  GitMergeGlyph,
+  GitPullRequestClosedGlyph,
+  GitPullRequestDraftGlyph,
+  GitPullRequestGlyph,
+  type GlyphProps,
+} from "@crewlethq/icons/glyphs";
 import {
   Button,
   EmptyState,
@@ -86,9 +93,12 @@ import {
   isChangeNeed,
   isChangeWindow,
   isRepoName,
+  knownChangeState,
   refName,
+  type KnownChangeState,
 } from "~/lib/code.ts";
-import { fmtCount, fmtDateTime, plural, relTime } from "~/lib/format.ts";
+import { ago } from "~/lib/ago.ts";
+import { fmtCount, fmtDateTime, plural } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { codeRest, useCodeQuery, type CodeParams } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
@@ -97,7 +107,7 @@ import { REPO_PARAM, changeObject } from "./paths.ts";
 import { readinessCount, readinessNext } from "./readinessWords.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
-import { Face, useWhoName } from "./ui.tsx";
+import { BranchChip, Face, useWhoName } from "./ui.tsx";
 import "~/styles/gitlet.css";
 
 /**
@@ -410,7 +420,7 @@ function ChangeCell({ change, now }: { change: CodeChangeSummary; now: number })
         <span>
           opened{" "}
           <time dateTime={change.opened_at} title={fmtDateTime(change.opened_at)}>
-            {relTime(change.opened_at, now)}
+            {ago(change.opened_at, now)}
           </time>{" "}
           by
         </span>
@@ -418,8 +428,10 @@ function ChangeCell({ change, now }: { change: CodeChangeSummary; now: number })
           <Face who={change.owner} />
           <span>{whoName(change.owner)}</span>
         </span>
-        <span className="mono code-change-cell__branches">
-          {refName(change.source_ref).name} → {refName(change.target_ref).name}
+        <span className="code-change-cell__branches">
+          <BranchChip name={refName(change.source_ref).name} />
+          {" → "}
+          <BranchChip name={refName(change.target_ref).name} />
         </span>
         {change.revision > 1 && <span>revision {change.revision}</span>}
       </span>
@@ -427,17 +439,27 @@ function ChangeCell({ change, now }: { change: CodeChangeSummary; now: number })
   );
 }
 
+/** Each state's glyph, the code host's own. */
+const STATE_GLYPHS: Readonly<Record<KnownChangeState, ComponentType<GlyphProps>>> = {
+  draft: GitPullRequestDraftGlyph,
+  open: GitPullRequestGlyph,
+  closed: GitPullRequestClosedGlyph,
+  merged: GitMergeGlyph,
+};
+
 /**
- * A change's state as its row marks it. COLOUR IS STATE, and only the two that
- * are an outcome carry one: merged, which reached its target, and closed,
- * which will not — neutral, since closing is no fault. A live change is
- * outlined: it is still moving.
+ * A change's state: the kit's change colours on its pill, with the state's
+ * glyph and word (the seventh exception); a state this build does not know is
+ * its word on the neutral outline.
  */
 export function ChangeStateTag({ state }: { state: CodeChangeState }) {
-  const word = changeStateWord(state);
-  if (state === "merged") return <Tag variant="success">{word}</Tag>;
-  if (state === "closed") return <Tag variant="neutral">{word}</Tag>;
-  return <Tag appearance="outline">{word}</Tag>;
+  if (!knownChangeState(state)) return <Tag appearance="outline">{state}</Tag>;
+  const Glyph = STATE_GLYPHS[state];
+  return (
+    <Tag className="code-state" data-state={state} leadingIcon={<Glyph size="xs" />}>
+      {changeStateWord(state)}
+    </Tag>
+  );
 }
 
 /**

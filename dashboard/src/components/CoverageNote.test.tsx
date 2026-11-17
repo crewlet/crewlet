@@ -44,6 +44,16 @@ test("an unread roster says so rather than naming nobody", () => {
   expect(container.querySelector("a")!.getAttribute("href")).toMatch(/#\/settings\/nodes$/);
 });
 
+/** The title, the cost sentence and each missing node, as the callout draws them. */
+const read = (c: HTMLElement) => ({
+  title: c.querySelector(".crewlet-callout__title")?.textContent,
+  cost: [...c.querySelector(".crewlet-callout__content")!.childNodes]
+    .filter((n) => n.nodeType === Node.TEXT_NODE)
+    .map((n) => n.textContent)
+    .join(""),
+  nodes: [...c.querySelectorAll(".crewlet-notice-list__title")].map((e) => e.textContent),
+});
+
 // THE COST IS ITS OWN SENTENCE, and it points back at the nodes, so its form
 // follows the count: "it" for one node, "they" for several.
 test("one missing node is counted, named and costed in the singular", () => {
@@ -53,9 +63,11 @@ test("one missing node is counted, named and costed in the singular", () => {
       what="this list"
     />,
   );
-  expect(container.textContent).toBe(
-    "This list is missing 1 node. What it published is not here:b: a newer build",
-  );
+  expect(read(container)).toEqual({
+    title: "This list is missing 1 node",
+    cost: "What it published is not here.",
+    nodes: ["b: a newer build"],
+  });
 });
 
 test("several missing nodes are costed in the plural", () => {
@@ -65,9 +77,11 @@ test("several missing nodes are costed in the plural", () => {
       what="this list"
     />,
   );
-  expect(container.textContent).toBe(
-    "This list is missing 2 nodes. What they published is not here:bc",
-  );
+  expect(read(container)).toEqual({
+    title: "This list is missing 2 nodes",
+    cost: "What they published is not here.",
+    nodes: ["b: did not answer", "c: did not answer"],
+  });
 });
 
 test("a caller's own cost takes the form that matches the count", () => {
@@ -79,11 +93,7 @@ test("a caller's own cost takes the form that matches the count", () => {
   const { container, rerender } = render(
     <CoverageNote coverage={missing(["c"])} what="Diaries" lost={lost} />,
   );
-  expect(container.textContent).toBe(
-    "Diaries is missing 1 node. Its agents are listed without counts:c",
-  );
+  expect(read(container).cost).toBe("Its agents are listed without counts.");
   rerender(<CoverageNote coverage={missing(["c", "d"])} what="Diaries" lost={lost} />);
-  expect(container.textContent).toBe(
-    "Diaries is missing 2 nodes. Their agents are listed without counts:cd",
-  );
+  expect(read(container).cost).toBe("Their agents are listed without counts.");
 });

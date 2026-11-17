@@ -181,6 +181,10 @@
             "null"
           ]
         },
+        "research": {
+          "$ref": "#/$defs/AssistantResearch",
+          "description": "Web research: Ask Crewlet reads pages, through the engine, from the hosts listed here. Absent: it reads no web page."
+        },
         "retention_days": {
           "description": "How long a person's Ask Crewlet conversations are kept, 1..365 days. Absent: 30.",
           "maximum": 365,
@@ -293,6 +297,34 @@
             }
           ],
           "description": "providers.llm keys a question asked to think harder runs on, a fallback chain held to assistant.llm's rules: each an entry whose harness's local tools are denied and, through overrides.web_tools, its web tools. Required."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AssistantResearch": {
+      "additionalProperties": false,
+      "properties": {
+        "hosts": {
+          "description": "The hosts Ask Crewlet may read pages from over https, each a host name alone (docs.example.com), at most 50. Required.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "search": {
+          "$ref": "#/$defs/ResearchSearch",
+          "description": "Web search over the listed hosts, through the company's own search tool server. Absent: Ask Crewlet reads pages it is given but searches none."
         }
       },
       "type": [
@@ -2905,6 +2937,15 @@
         "auth": {
           "$ref": "#/$defs/HarnessAuth"
         },
+        "effort": {
+          "description": "Reasoning effort, in the harness's own levels (claude-code: low, medium, high, xhigh, max). Refused on a harness with no such setting, or a level it does not take. Absent: the harness's default.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
         "env": {
           "additionalProperties": {
             "type": [
@@ -3802,6 +3843,24 @@
           "type": [
             "boolean",
             "string",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "ResearchSearch": {
+      "additionalProperties": false,
+      "properties": {
+        "mcp_server": {
+          "description": "The mcp_servers entry Ask Crewlet searches through: a shared, enabled entry the curated catalogue recognises as Tavily, whose tavily_search is not blocked. Each node serving the API runs its own instance of it for research alone. Required.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
             "null"
           ]
         }
@@ -4993,7 +5052,8 @@
               "null"
             ]
           },
-          "description": "Node labels that must all match.",
+          "description": "Node labels that must all match: at most 16, each value at most 64 bytes of printable text.",
+          "maxProperties": 16,
           "type": [
             "object",
             "null"

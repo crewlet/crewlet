@@ -17,7 +17,7 @@
  * carries.
  *
  * KEPT CURRENT three ways, because each misses what the others catch: every
- * 15 seconds while the page is open (the heartbeat's cadence), when the fleet
+ * 15 seconds while the page is open (the status records' reconcile cadence), when the fleet
  * applies a new configuration (a server added, changed or removed by anyone),
  * and when the engine's alarms move (a server that just went down).
  */

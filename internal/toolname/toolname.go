@@ -204,6 +204,9 @@ const (
 	CreateArtifact = "create_artifact"
 	// ListDashboardSources lists the engine sources a dashboard may read.
 	ListDashboardSources = "list_dashboard_sources"
+	// RenderArtifact renders a page as a viewer sees it, which the render
+	// package below the tool's owner names in what it reports.
+	RenderArtifact = "render_artifact"
 )
 
 // LookupColleague resolves a name to a seat. The roster and the human

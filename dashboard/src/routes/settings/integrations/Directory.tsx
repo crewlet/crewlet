@@ -53,7 +53,7 @@ import {
 } from "@crewlethq/ui";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { VendorMark } from "@crewlethq/icons";
-import { ChevronLeftGlyph, KeyGlyph, ShieldGlyph } from "@crewlethq/icons/glyphs";
+import { ChevronLeftGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
 import { href, useParam } from "~/app/router.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
@@ -111,13 +111,9 @@ function AdminPage({ kind }: { kind?: string | undefined }) {
   if (model.loading) return <Skeleton variant="text" rows={8} label="Loading integrations" />;
   return (
     <>
-      {model.managed !== null && (
-        <Callout variant="neutral" icon={<ShieldGlyph size="md" />}>
-          {model.managed}
-        </Callout>
-      )}
+      {model.managed !== null && <Callout variant="neutral">{model.managed}</Callout>}
       {model.guarded && (
-        <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
+        <Callout variant="neutral">
           {authorityWords("Reading the integrations' setup state", model.refused)}
         </Callout>
       )}
@@ -276,7 +272,7 @@ function AdminNote() {
   return (
     <Callout
       variant="neutral"
-      icon={<ShieldGlyph size="md" />}
+
       title="Admins connect and manage apps"
       action={
         viewer.anonymous ? (

@@ -153,3 +153,58 @@ test("asks nothing until a phrase is there", async () => {
   await waitFor(() => expect(asked.some((u) => u.pathname === "/query/code_repos")).toBe(true));
   expect(asked.some((u) => u.pathname === "/query/code_search")).toBe(false);
 });
+
+/** A hit line's pieces: `class:text` for a coloured one, its text for a plain one. */
+const pieces = (text: Element) =>
+  [...text.childNodes].map((n) =>
+    n instanceof HTMLElement ? `${n.className}:${n.textContent}` : (n.textContent ?? ""),
+  );
+
+// EACH HIT IS ITS OWN LINE, from "": no state runs from one hit to the next,
+// which may be lines apart. Mutation: carry state from one hit line to the next.
+test("each hit line is coloured by its file's language, on its own", async () => {
+  const go = "func (s *Store) ListOrders(ctx context.Context) {";
+  stub({
+    hits: [
+      { repo: "web", path: "store.go", line: 3, text: "/* opened", blob: "1".repeat(40) },
+      { repo: "web", path: "store.go", line: 9, text: go, blob: "1".repeat(40) },
+      { repo: "web", path: "notes.txt", line: 2, text: "func ListOrders", blob: "2".repeat(40) },
+    ],
+    tips: { web: TIP },
+    coverage,
+  });
+  mountCode("#/gitlet/search?q=ListOrders", <Search />);
+
+  const line = (n: string) =>
+    screen.getByRole("link", { name: n }).closest("li")!.querySelector(".code-search-line__text")!;
+  await screen.findByRole("link", { name: "9" });
+  await waitFor(() => expect(pieces(line("9"))).toContain("code-syn-keyword:func"));
+  expect(pieces(line("9"))).toContain("code-syn-function:ListOrders");
+  expect(line("9").textContent).toBe(go);
+  expect(pieces(line("3"))).toEqual(["code-syn-comment:/* opened"]);
+  expect(line("2").textContent).toBe("func ListOrders");
+  expect(line("2").querySelector("[class]")).toBeNull();
+});
+
+// Mutation: draw the hit's text as markup.
+test("a hit's text is text, never elements", async () => {
+  stub({
+    hits: [
+      {
+        repo: "web",
+        path: "page.html",
+        line: 4,
+        text: "<img src=x onerror=alert(1)>",
+        blob: "1".repeat(40),
+      },
+    ],
+    tips: { web: TIP },
+    coverage,
+  });
+  mountCode("#/gitlet/search?q=img", <Search />);
+  await screen.findByRole("link", { name: "4" });
+  const text = document.querySelector(".code-search-line__text")!;
+  await waitFor(() => expect(text.querySelector("[class]")).not.toBeNull());
+  expect(text.querySelector("img")).toBeNull();
+  expect(text.textContent).toBe("<img src=x onerror=alert(1)>");
+});

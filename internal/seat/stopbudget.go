@@ -9,7 +9,10 @@ import (
 // StopBudget is the one allowance a stopping node's lease give-backs share:
 // the presence and seat leases it hands back, the taker lease its sandbox
 // coordinator gives back once its last keep has ended, the duties it releases
-// and the holds its loops give back as they are stopped.
+// and the holds its loops give back as they are stopped — and, after them,
+// its removals of the MCP listings and the status record it published, which
+// no reader counts once its presence has gone and whose fallbacks are the
+// maintenance sweep and the record bucket's age.
 //
 // # Why one allowance rather than one per step
 //

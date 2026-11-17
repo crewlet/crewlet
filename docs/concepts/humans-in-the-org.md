@@ -550,12 +550,13 @@ sequenceDiagram
     D->>S: inbox (within half a second)
 ```
 
-- **Every data node applies every tracker and code record**, and every node that
+- **Every data node applies every tracker, code and artifacts record**, and every node that
   serves sockets is a data node (`ingress` requires `data`), so each hears
   every movement from its own applier, after the batch commits,
   and tells the sockets it holds. A person's browser can be connected to any
   of them. Each frame names the domain whose notices moved (`source`, the
-  tracker's being `tracker` and Gitlet's `code`), because the inbox's
+  tracker's being `tracker`, Gitlet's `code` and the artifacts' comments
+  `artifacts`), because the inbox's
   rules — what a mark, a snooze and "read through here" mean — are one set
   every domain that keeps a person's notices shares, while each keeps its
   notices and marks on its own log. Whichever domain a frame names, the
@@ -595,7 +596,10 @@ sequenceDiagram
   the half that moved: it reaches the sockets whose watch of the seat was
   allowed and whose reader holds `worklet` for a `tracker` frame or `gitlet`
   for a `code` one, so a frame never tells a reader of a notice their inbox
-  does not list them. A watch
+  does not list them. An `artifacts` frame asks no app, since commenting is a
+  relation to an artifact rather than an app, and so it names no subject: it
+  reaches every watcher, and the inbox read decides which comment notices
+  each may see. A watch
   this node cannot decide — it runs no company yet — is not installed,
   and the dashboard asks again when the refusal's `retry_after` says it may
   have changed — never, on a timer, when that is `0` (a log waiting will not
@@ -616,7 +620,8 @@ is a place on ONE log, so "read through here" on the tracker's says nothing
 about Gitlet's. The rules are one set every domain shares (a mark is
 one gesture, never the lists; a snooze is at most a year ahead; reading
 through a position never moves it backwards), and each domain has its tool:
-`mark_inbox` marks the tracker's notices, `code_mark_inbox` Gitlet's —
+`mark_inbox` marks the tracker's notices, `code_mark_inbox` Gitlet's and
+`artifact_mark_inbox` the comments on artifacts —
 your own record only, written as the person who holds the seat, and refused
 for anybody else whatever their authority, since marking somebody's mail read
 is a gesture nobody asked a lead to make. A code mark names the `record_id` a
@@ -624,12 +629,28 @@ code notice carries — the record and the change it told you about, since one
 record can tell you about several changes — and is refused naming it when
 that notice is somebody else's; its `read_through` is a position on the code log
 (`CREWLET_CODE_LOG@<generation>:<sequence>`). The dashboard's **Mark all
-read** sends both, each reading its own domain through the newest of its
-notices on the page (Worklet's alone to a reader without Gitlet, who is
-listed no code notice to mark).
+read** sends one mark per domain the page read, each reading its own domain
+through the newest of its notices on the page (no code mark to a reader
+without Gitlet, who is listed no code notice to mark).
 
-A page of the composed inbox is fifty notices, newest first across both
-domains, and its `next_cursor` carries one position per domain — where that
+**Comments on artifacts reach you here too.** A comment record carries whom it
+tells, worked out when it was written ([Comments](artifacts.md#comments)), and
+the artifacts' applier writes you a notice when a thread is opened on an
+artifact you own, when somebody replies in, resolves or reopens a thread you
+are in, and when a remark mentions you; never for what you wrote yourself.
+The notice keeps the first 600 bytes of the remark, and loses them the moment
+its author removes the remark; an artifact's purge takes its notices with it.
+Each comment notice is shown only while you may still open its artifact: one
+whose share was withdrawn, or which went to the trash, drops out of your
+inbox, title and words and all, and comes back if you can open it again. A
+comment you are mentioned in, one on an artifact you own, and one on an
+artifact made for your work item are your primary half by default; a reply in
+a thread you are in is context. The card of a comment notice draws the thread
+as it stands, its quote, whether it is resolved and how many remarks it
+holds, and opens the artifact's comments on that thread.
+
+A page of the composed inbox is fifty notices, newest first across every
+domain, and its `next_cursor` carries one position per domain — where that
 domain's notices on the page ended — so the next page resumes each exactly
 where it stopped. Each code notice carries what its change says at the read:
 its title and state and the work item it implements. A list you open a

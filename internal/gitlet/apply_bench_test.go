@@ -79,6 +79,7 @@ func (e *estate) seedWide(b *testing.B, id string, n int) {
 	}); err != nil {
 		b.Fatalf("seed %s's wide pushes: %v", id, err)
 	}
+	e.recountActivity(id)
 }
 
 // seedNarrow writes n push rows of a repository of about a kilobyte each,
@@ -93,6 +94,19 @@ func (e *estate) seedNarrow(id string, n int) {
 			received_at, row_bytes)
 		SELECT printf('%s-narrow-%06d', ?, i), ?, i + 1, i, 'seed', 'operator', 'git', ?, 0, ? FROM k`,
 		n, id, id, commands, len(commands))
+	e.recountActivity(id)
+}
+
+// seedSpread writes n narrow push rows of a repository stamped at the epoch's days, the i-th on day
+// i % days, each by a person of its own, and counts them: the activity's widest keys a row.
+func (e *estate) seedSpread(id string, n, days int) {
+	e.t.Helper()
+	e.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
+		INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, actor_seat, via, commands,
+			received_at, row_bytes)
+		SELECT printf('%s-spread-%06d', ?, i), ?, i + 1, (i % ?) * ?, printf('pat:%06d', i), 'operator',
+			printf('person-%06d', i), 'git', '[]', 0, 2 FROM k`, n, id, id, days, dayMicros)
+	e.recountActivity(id)
 }
 
 // seedChangeRows writes changes of a repository, numbered from 1, each with
@@ -123,6 +137,8 @@ func (e *estate) seedChangeRows(id string, changes, revisions, authors, body int
 			SELECT printf('%s-change-%06d', ?, i / ?), printf('seat-%05d', i % ?), 'agent', 1, 1 FROM k`,
 			changes*authors, id, authors, authors)
 	}
+	// THE COUNTS THE SEEDED ROWS IMPLY, as an upgraded node re-derives them.
+	e.rederive()
 }
 
 // seedNotices writes perChange notices of each of a repository's first
@@ -294,9 +310,10 @@ func (e *estate) applyTimed(b *testing.B, a *Applier, r built, rows int) {
 // fullest is the pushes of the record the committer forms with the most
 // commands of one kind: pushes of MaxCommandsPerPush commands, each with its
 // pack, and a last push of whatever room the record's row bound leaves —
-// held, by [rowBound] and [recordRows] themselves, to fill the bound exactly,
-// so a shape priced or applied here is one the committer admits and the
-// largest of its kind. command is the c-th command of push p.
+// held, by [rowBound] and [recordRows] themselves, to leave the bound no
+// room for another command, so a shape priced or applied here is one the
+// committer admits and the largest of its kind. command is the c-th command
+// of push p.
 func fullest(tb testing.TB, prefix string, i int, command func(p, c int) Command) []PushEntry {
 	tb.Helper()
 	var entries []PushEntry
@@ -316,9 +333,10 @@ func fullest(tb testing.TB, prefix string, i int, command func(p, c int) Command
 		entries = append(entries, e)
 		rows += rowBound(Proposal{Commands: e.Commands, Pack: e.Pack})
 	}
-	if recordRows(rows) != MaxRecordRows {
-		tb.Fatalf("the fullest record of %s bounds %d rows, not MaxRecordRows (%d)", prefix,
-			recordRows(rows), MaxRecordRows)
+	// FULL: no further command of the kind fits what the bound leaves.
+	if left := MaxRecordRows - recordRows(rows); left < 0 || left >= commandRows(command(len(entries), 0)) {
+		tb.Fatalf("the fullest record of %s bounds %d rows, %d short of MaxRecordRows (%d)", prefix,
+			recordRows(rows), left, MaxRecordRows)
 	}
 	return entries
 }
@@ -331,23 +349,26 @@ func fullest(tb testing.TB, prefix string, i int, command func(p, c int) Command
 // committer forms and the ones the horizons make longest:
 //
 //   - maximal: the most ref creations a record the committer forms carries —
-//     three pushes of MaxCommandsPerPush and a fourth of the 926 the row
-//     bound leaves, 3 935 rows — with nothing left for the sweep, since it
-//     makes no tombstone;
+//     three pushes of MaxCommandsPerPush and a fourth of the 921 the row
+//     bound leaves, 3 930 rows and the day and pusher rows they are counted
+//     in, with nothing left for the sweep, since it makes no tombstone;
 //   - maximal+history: that, with HorizonDeletesPerRecord expired push rows
 //     waiting, each at the widest a row can be — the history's removal is
 //     bounded by HorizonBytesPerRecord and takes three of them;
 //   - group: MaxPushesPerRecord pushes of one command each, what group commit
 //     turns a CI's burst of tag pushes into;
+//   - group+pushers: that, each push by a seat of its own: a pusher day each;
 //   - one: one push of one command, the common case;
+//   - one+history: that, with HorizonDeletesPerRecord expired push rows each on
+//     a day and by a pusher of its own: the activity's widest move;
 //   - sweep: one push of one command whose record sweeps every expired
 //     tombstone its row budget leaves room for — 3 995;
 //   - deletions: the most ref deletions a record the committer forms carries
-//     — a push of MaxCommandsPerPush and one of the 310 left, each deletion
+//     (a push of MaxCommandsPerPush and one of the 309 left), each deletion
 //     counted three times in the bound (rowBound: its tombstone, the sweep's
-//     room for one and the object it left) — at a repository holding
-//     MaxTombstonesPerRepo expired tombstones, so the record writes 1 310
-//     tombstones and as many ref drops and sweeps the 1 374 its rows leave:
+//     room for one and the object it left), at a repository holding
+//     MaxTombstonesPerRepo expired tombstones, so the record writes 1 309
+//     tombstones and as many ref drops and sweeps the 1 376 its rows leave:
 //     the most rows a record can both write and delete;
 //   - deletions+history: that, with the widest expired push rows waiting too
 //     — the longest shape of a record that moves no live change;
@@ -368,7 +389,7 @@ func fullest(tb testing.TB, prefix string, i int, command func(p, c int) Command
 //     heads of MaxCommandsPerPush of them by a pusher already their author,
 //     which costs each change its row and its revision beside its ref, then
 //     one deleting the sources of as many more as the record's rows leave,
-//     which closes them (rebasingChanges) — 1 232 changes, each row
+//     which closes them (rebasingChanges): 1 231 changes, each row
 //     rewritten, the bulk rebase a bot's force-push of every change it
 //     rebased makes;
 //   - group+changes: MaxPushesPerRecord pushes of one command each, each
@@ -415,6 +436,14 @@ func BenchmarkApplyAPushRecord(b *testing.B) {
 	}
 	one := func(i int) []PushEntry {
 		return []PushEntry{pushEntry(fmt.Sprint("one-", i), move("refs/heads/main", ZeroOID, oid("main")))}
+	}
+	// A GROUP BY AS MANY SEATS, each its own pusher day.
+	pushers := func(i int) []PushEntry {
+		entries := group(i)
+		for p := range entries {
+			entries[p].Principal = Principal{Kind: PrincipalAgent, Seat: fmt.Sprint("seat-", p)}
+		}
+		return entries
 	}
 	// THE FORCED UPDATES OF e.seed's refs, one maximal push of them.
 	forcing := func(i int) []PushEntry {
@@ -522,7 +551,14 @@ func BenchmarkApplyAPushRecord(b *testing.B) {
 		{name: "maximal", entries: maximal, rows: written(maximal(0))},
 		{name: "maximal+history", entries: maximal, history: true, rows: written(maximal(0))},
 		{name: "group", entries: group, rows: 2 * MaxPushesPerRecord},
+		// THE ACTIVITY AT ITS WIDEST: a pusher day an entry, and one move of every expired row's day and
+		// pusher day down beside the push's up.
+		{name: "group+pushers", entries: pushers, rows: 2*MaxPushesPerRecord + 1 + MaxPushesPerRecord},
 		{name: "one", entries: one, rows: 3},
+		{name: "one+history", entries: one, seed: func(e *estate, repo string) {
+			e.seed(repo, 0, 10_000, 0)
+			e.seedSpread(repo, HorizonDeletesPerRecord, HorizonDeletesPerRecord)
+		}, rows: 3 + HorizonDeletesPerRecord + 2 + 2*HorizonDeletesPerRecord},
 		{name: "sweep", entries: one, seed: func(e *estate, repo string) {
 			e.seedTombstones(repo, MaxRecordRows, expired)
 		}, rows: MaxRecordRows},
@@ -627,6 +663,10 @@ func BenchmarkApplyAPushRecord(b *testing.B) {
 //
 //   - narrow: PurgePartRows push rows of about a kilobyte, which the row
 //     bound stops at;
+//   - pushers: PurgePartRows push rows over 182 days, each by its own pusher,
+//     so the part moves their days and pusher days on top of its rows;
+//   - left: PurgePartRows pusher days no push stands for, which a part finding
+//     no push takes;
 //   - wide: a hundred push rows at the widest a row can be, which the byte
 //     bound stops at — about seventy-two of them, PurgePartBytes and at most
 //     one row past it;
@@ -710,6 +750,15 @@ func BenchmarkApplyAPurgePart(b *testing.B) {
 	}{
 		{"narrow", func(e *estate, repo string) { e.seedNarrow(repo, PurgePartRows+500) },
 			false, PurgePartRows, 500, 0},
+		// THE ACTIVITY ON TOP: a part's pushes over every day the history keeps, each by its own pusher,
+		// and a part taking what is left of it once no push is.
+		{"pushers", func(e *estate, repo string) { e.seedSpread(repo, PurgePartRows+500, 182) },
+			false, PurgePartRows + 182 + PurgePartRows, 500, 0},
+		{"left", func(e *estate, repo string) {
+			e.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
+				INSERT INTO code_pusher_days (repo_id, day, pusher_kind, pusher, pushes)
+				SELECT ?, 0, 'person', printf('person-%06d', i), 1 FROM k`, PurgePartRows, repo)
+		}, false, PurgePartRows, 0, 0},
 		{"wide", func(e *estate, repo string) { e.seedWide(b, repo, 100) },
 			false, (PurgePartBytes + width - 1) / width, 100 - (PurgePartBytes+width-1)/width, 0},
 		{"wide+refs", func(e *estate, repo string) {

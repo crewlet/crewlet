@@ -90,7 +90,7 @@ func TestAGitQueryIsRefusedByField(t *testing.T) {
 			Compare: &gitlet.CompareQuery{Base: id, Head: "HEAD"}}, "compare.head", gitlet.ErrInvalid},
 		{"a cursor longer than any", func() gitlet.GitQuery {
 			q := tree(func(*gitlet.TreeQuery) {})
-			q.Cursor = strings.Repeat("9", 65)
+			q.Cursor = strings.Repeat("9", 385)
 			return q
 		}(), "cursor", gitlet.ErrBadCursor},
 		// ONLY A SEAT READS FOR ANOTHER SEAT, named by its handle: a person's
@@ -147,11 +147,15 @@ func TestAGitQueryIsRefusedByField(t *testing.T) {
 // clean path or none (every commit), a literal of at most MaxLogGrepBytes that
 // is UTF-8 holding no NUL, a page of up to MaxLogLimit commits (none the
 // default), and a Since no earlier than the first instant a commit's date can
-// name and no later than a day past the node's clock — a year typed wrong is
-// told so rather than answered an empty history. A blame names a commit, a
-// file (never the root), and a range of at most MaxBlameLines lines counted
-// from 1, its end at or after its start; a start with no end is a range all
-// the same, however far out. Each refusal names its field.
+// name and no later than a day past the node's clock (a year typed wrong is
+// told so rather than answered an empty history). An Until is after the epoch,
+// after a Since and no later than a day ahead, and a PushedBy is a seat's
+// handle, whether a Since is set or not. A blame names a commit, a file (never
+// the root), and a range of at most MaxBlameLines lines counted from 1, its end
+// at or after its start; a start with no end is a range all the same, however
+// far out. Each refusal names its field.
+//
+// Mutation: the Until and PushedBy arms inside the Since switch → accepted with no since, red.
 func TestAHistoryAndABlameAreRefusedByField(t *testing.T) {
 	t.Parallel()
 	const id = "0123456789abcdef0123456789abcdef01234567"
@@ -182,6 +186,12 @@ func TestAHistoryAndABlameAreRefusedByField(t *testing.T) {
 		{"the most commits", history(func(q *gitlet.LogQuery) { q.Limit = gitlet.MaxLogLimit }), ""},
 		{"since the epoch", history(func(q *gitlet.LogQuery) { q.Since = time.Unix(0, 0) }), ""},
 		{"since later today", history(func(q *gitlet.LogQuery) { q.Since = time.Now().Add(12 * time.Hour) }), ""},
+		{"until a second after the epoch", history(func(q *gitlet.LogQuery) { q.Until = time.Unix(1, 0) }), ""},
+		{"until later today", history(func(q *gitlet.LogQuery) { q.Until = time.Now().Add(12 * time.Hour) }), ""},
+		{"a window", history(func(q *gitlet.LogQuery) {
+			q.Since, q.Until = time.Unix(1_700_000_000, 0), time.Unix(1_700_000_000, 1)
+		}), ""},
+		{"a seat's handle", history(func(q *gitlet.LogQuery) { q.PushedBy = "ceo" }), ""},
 		{"a ref", history(func(q *gitlet.LogQuery) { q.Rev = "main" }), "log.rev"},
 		{"a path up", history(func(q *gitlet.LogQuery) { q.Path = "../a" }), "log.path"},
 		{"a literal past its bound", history(func(q *gitlet.LogQuery) {
@@ -194,6 +204,21 @@ func TestAHistoryAndABlameAreRefusedByField(t *testing.T) {
 		{"since before 1970", history(func(q *gitlet.LogQuery) { q.Since = time.Unix(-1, 0) }), "log.since"},
 		{"since a year not yet", history(func(q *gitlet.LogQuery) { q.Since = time.Now().AddDate(1, 0, 0) }),
 			"log.since"},
+		{"until at the epoch", history(func(q *gitlet.LogQuery) { q.Until = time.Unix(0, 0) }), "log.until"},
+		{"until before 1970", history(func(q *gitlet.LogQuery) { q.Until = time.Unix(-1, 0) }), "log.until"},
+		{"until a year not yet", history(func(q *gitlet.LogQuery) { q.Until = time.Now().AddDate(1, 0, 0) }),
+			"log.until"},
+		{"until at since", history(func(q *gitlet.LogQuery) {
+			q.Since, q.Until = time.Unix(1_700_000_000, 0), time.Unix(1_700_000_000, 0)
+		}), "log.until"},
+		{"until before since", history(func(q *gitlet.LogQuery) {
+			q.Since, q.Until = time.Unix(1_700_000_000, 0), time.Unix(1_600_000_000, 0)
+		}), "log.until"},
+		{"a pushed_by that is no handle", history(func(q *gitlet.LogQuery) { q.PushedBy = "Not A Seat" }),
+			"log.pushed_by"},
+		{"a pushed_by that is no handle, beside a since", history(func(q *gitlet.LogQuery) {
+			q.Since, q.PushedBy = time.Unix(1_700_000_000, 0), "Not A Seat"
+		}), "log.pushed_by"},
 		{"a blame beside it", func() gitlet.GitQuery {
 			q := history(func(*gitlet.LogQuery) {})
 			q.Blame = &gitlet.BlameQuery{Rev: id, Path: "a"}
@@ -271,6 +296,20 @@ func TestAReadOfAChangesRevisionsIsRefusedByField(t *testing.T) {
 		m(q.Interdiff)
 		return q
 	}
+	excerpts := func(m func(q *gitlet.ExcerptsQuery)) gitlet.GitQuery {
+		q := gitlet.GitQuery{Kind: gitlet.GitExcerpts, RepoID: repo, Asker: asker,
+			Excerpts: &gitlet.ExcerptsQuery{Anchors: []gitlet.ExcerptAnchor{{LineAnchor: anchor, Base: a, Head: b}}}}
+		m(q.Excerpts)
+		return q
+	}
+	excerpted := func(n int) []gitlet.ExcerptAnchor {
+		out := make([]gitlet.ExcerptAnchor, n)
+		for i := range out {
+			out[i] = gitlet.ExcerptAnchor{LineAnchor: anchor, Head: b}
+			out[i].ID = fmt.Sprintf("f-%d", i)
+		}
+		return out
+	}
 	many := func(n int) []gitlet.LineAnchor {
 		out := make([]gitlet.LineAnchor, n)
 		for i := range out {
@@ -344,6 +383,52 @@ func TestAReadOfAChangesRevisionsIsRefusedByField(t *testing.T) {
 		{"an abbreviated head", interdiff(func(q *gitlet.InterdiffQuery) { q.ToHead = a[:12] }), "interdiff.to_head"},
 		{"a file", interdiff(func(q *gitlet.InterdiffQuery) { q.File = "a*" }), ""},
 		{"a file from the work tree", interdiff(func(q *gitlet.InterdiffQuery) { q.File = "./a" }), "interdiff.file"},
+		{"an excerpt", excerpts(func(*gitlet.ExcerptsQuery) {}), ""},
+		{"an excerpt of a revision with no base", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors[0].Base = "" }),
+			""},
+		{"the most excerpts at the widest context", excerpts(func(q *gitlet.ExcerptsQuery) {
+			q.Anchors, q.Context = excerpted(gitlet.MaxExcerptAnchors), new(gitlet.MaxExcerptContext)
+		}), ""},
+		{"no excerpt", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors = nil }), "excerpts.anchors"},
+		{"an excerpt too many", excerpts(func(q *gitlet.ExcerptsQuery) {
+			q.Anchors = excerpted(gitlet.MaxExcerptAnchors + 1)
+		}), "excerpts.anchors"},
+		{"one excerpt id twice", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors = append(q.Anchors, q.Anchors[0]) }),
+			"excerpts.anchors[1].id"},
+		{"an excerpt id past its bytes", excerpts(func(q *gitlet.ExcerptsQuery) {
+			q.Anchors[0].ID = strings.Repeat("x", 65)
+		}), "excerpts.anchors[0].id"},
+		{"an old side excerpt with no base", excerpts(func(q *gitlet.ExcerptsQuery) {
+			q.Anchors[0].Side, q.Anchors[0].Base = gitlet.SideOld, ""
+		}), "excerpts.anchors[0].side"},
+		{"an excerpt of an abbreviated head", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors[0].Head = b[:7] }),
+			"excerpts.anchors[0].head"},
+		{"an excerpt of an abbreviated base", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors[0].Base = a[:7] }),
+			"excerpts.anchors[0].base"},
+		{"an excerpt of the zero blob", excerpts(func(q *gitlet.ExcerptsQuery) {
+			q.Anchors[0].BlobOID = gitlet.ZeroOID
+		}), "excerpts.anchors[0].blob_oid"},
+		{"an excerpt from line zero", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors[0].Start = 0 }),
+			"excerpts.anchors[0]"},
+		{"a backwards excerpt", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors[0].End = 2 }),
+			"excerpts.anchors[0]"},
+		{"an excerpt of an unclean path", excerpts(func(q *gitlet.ExcerptsQuery) { q.Anchors[0].Path = "./a" }),
+			"excerpts.anchors[0].path"},
+		{"no context", excerpts(func(q *gitlet.ExcerptsQuery) { q.Context = new(0) }), ""},
+		{"a context below none", excerpts(func(q *gitlet.ExcerptsQuery) { q.Context = new(-1) }), "excerpts.context"},
+		{"a context past the widest", excerpts(func(q *gitlet.ExcerptsQuery) {
+			q.Context = new(gitlet.MaxExcerptContext + 1)
+		}), "excerpts.context"},
+		{"an excerpts read carrying a re-anchoring", func() gitlet.GitQuery {
+			q := excerpts(func(*gitlet.ExcerptsQuery) {})
+			q.Reanchor = &gitlet.ReanchorQuery{Head: a, Anchors: []gitlet.LineAnchor{anchor}}
+			return q
+		}(), "reanchor"},
+		{"an unstamped excerpts read", func() gitlet.GitQuery {
+			q := excerpts(func(*gitlet.ExcerptsQuery) {})
+			q.Unstamped = true
+			return q
+		}(), "unstamped"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
