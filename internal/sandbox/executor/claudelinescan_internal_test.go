@@ -15,6 +15,9 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
+	"unsafe"
+
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // THE DIFFERENTIAL: a line read in one scanner pass ([scanReader]) answers
@@ -23,9 +26,9 @@ import (
 // error is errNotOneRecord (a refused head's in its own words), the byte facts,
 // and for a record its head, every fact the line's accessors read and every
 // answer each accessor gives, an error by its text and a list by what it
-// replays. A value is read at any length here: the bound a value is kept
-// within is raised ([scanReader.valueMax]), since the whole decode has none,
-// and the bound's own claims are [TestALateFaultBeatsWhatTheLineSaidBeforeIt]'s.
+// replays. Values and facts are read at any length here: both bounds are
+// raised ([scanReader.valueMax], [scanReader.meterMax]), since the whole
+// decode has neither; [TestALinesFactsAreHeldToTheBound] holds them.
 // Where the pass passes a frame over for the type a line wrote before it and
 // the line's last type reads it, the reading ends there, which the whole
 // decode, reading the line whole, never needs: the differential models it
@@ -225,20 +228,20 @@ func scanReading(ctx context.Context, r *scanReader) []string {
 }
 
 // checkScanReadsAsDecode reads text, split at its breaks, with a [scanReader]
-// taking at most chunk bytes of it at a time, its bound on a value raised,
-// and holds each line it reads to what the whole decode reads of the same
-// line ([scanWant]): the same answer ([scanAnswer]), or the same end of the
-// reading where the pass passes over a frame the line's type reads. The
-// lines are read as one member up to each line that ends a reading, the
-// lines after it as the next member of the same reader ([scanReader.Reset]);
-// and the last member's end is torn exactly where a piece with no break ends
-// it.
+// taking at most chunk bytes of it at a time, its bounds on a value and on a
+// line's facts raised, and holds each line it reads to what the whole decode
+// reads of the same line ([scanWant]): the same answer ([scanAnswer]), or the
+// same end of the reading where the pass passes over a frame the line's type
+// reads. The lines are read as one member up to each line that ends a
+// reading, the lines after it as the next member of the same reader
+// ([scanReader.Reset]); and the last member's end is torn exactly where a
+// piece with no break ends it.
 func checkScanReadsAsDecode(t testing.TB, text []byte, chunk int) {
 	t.Helper()
 	pieces := bytes.Split(text, []byte("\n"))
 	lines, rest := pieces[:len(pieces)-1], pieces[len(pieces)-1]
 	r := newScanReaderSize(bytes.NewReader(nil), 0, chunk)
-	r.valueMax = math.MaxInt
+	r.valueMax, r.meterMax = math.MaxInt, math.MaxInt
 	for from := 0; ; {
 		// The member: the lines up to the first a reading ends at, or to the
 		// last, and then what follows the last break.
@@ -1271,5 +1274,422 @@ func TestAResetReaderOnTheScannerReadsAsAFreshOne(t *testing.T) {
 		t.Errorf("one reader reading a member after another allocates %d bytes a member, where a fresh reader's "+
 			"buffers take %d; want those at least %d, and a member under an eighth of them", each, buffers,
 			2*lineChunkBytes)
+	}
+}
+
+// scanPart is one stretch of a line a test generates as it is read
+// ([scanGenerated]): text, times over.
+type scanPart struct {
+	text  string
+	times int
+}
+
+// scanLit is text, once.
+func scanLit(text string) []scanPart { return []scanPart{{text, 1}} }
+
+// scanRun is n bytes of b.
+func scanRun(b byte, n int) []scanPart {
+	piece := strings.Repeat(string(b), 4096)
+	return []scanPart{{piece, n / len(piece)}, {piece[:n%len(piece)], 1}}
+}
+
+// scanList is a JSON list of n copies of element, n at least one.
+func scanList(element string, n int) []scanPart {
+	return slices.Concat(scanLit("["+element), []scanPart{{"," + element, n - 1}}, scanLit("]"))
+}
+
+// scanLine is the line parts make, its break after it.
+func scanLine(parts ...[]scanPart) []scanPart { return slices.Concat(append(parts, scanLit("\n"))...) }
+
+// scanLength is how many bytes parts make.
+func scanLength(parts []scanPart) int64 {
+	var n int64
+	for _, p := range parts {
+		n += int64(len(p.text)) * int64(p.times)
+	}
+	return n
+}
+
+// scanGenerated is a member made of parts, generated as it is read and never
+// held whole, by the test or by its reader.
+type scanGenerated struct {
+	parts []scanPart
+	// part is the part being handed, done how many of its copies were handed,
+	// and at how much of the copy being handed.
+	part, done, at int
+}
+
+// Read hands the member's next bytes.
+func (g *scanGenerated) Read(p []byte) (int, error) {
+	n := 0
+	for n < len(p) && g.part < len(g.parts) {
+		part := g.parts[g.part]
+		if g.done == part.times || part.text == "" {
+			g.part, g.done, g.at = g.part+1, 0, 0
+			continue
+		}
+		m := copy(p[n:], part.text[g.at:])
+		n += m
+		if g.at += m; g.at == len(part.text) {
+			g.done, g.at = g.done+1, 0
+		}
+	}
+	if n == 0 && g.part == len(g.parts) {
+		return 0, io.EOF
+	}
+	return n, nil
+}
+
+// scanRead is what a fresh reader reads of the line parts make.
+func scanRead(ctx context.Context, parts []scanPart) (threadLine, error) {
+	return newScanReader(&scanGenerated{parts: parts}, threadPlainMax).Next(ctx)
+}
+
+// scanAllocated is the fewest bytes a reading in one pass allocates from its
+// Next to its return reading the line parts make, of runs readings, and what
+// the last answered. Each is a fresh reader's, warmed first on the line warm
+// makes, so neither its buffers nor its scratch growing to a first line
+// count, and what one reading keeps across lines counts in every reading.
+// GOMAXPROCS is one meanwhile, as [allocationsOf]'s is.
+func scanAllocated(ctx context.Context, warm, parts []scanPart, runs int) (uint64, threadLine, error) {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	fewest := uint64(math.MaxUint64)
+	var (
+		line          threadLine
+		err           error
+		before, after runtime.MemStats
+	)
+	for range runs {
+		r := newScanReader(&scanGenerated{parts: warm}, threadPlainMax)
+		if _, err = r.Next(ctx); err != nil {
+			return 0, threadLine{}, fmt.Errorf("the line it was warmed on: %w", err)
+		}
+		r.Reset(&scanGenerated{parts: parts}, threadPlainMax)
+		runtime.ReadMemStats(&before)
+		line, err = r.Next(ctx)
+		runtime.ReadMemStats(&after)
+		fewest = min(fewest, after.TotalAlloc-before.TotalAlloc)
+	}
+	return fewest, line, err
+}
+
+// scanCallsHeld is how many calls a line's facts hold within [threadLineMax]
+// where each call's strings are each bytes long and the record's head holds
+// head bytes of strings, by the meter's rule ([lineMeter]): each call's
+// strings charged as the call is read, the array of calls grown by doubling
+// from one, each array charged whole before it is made and none larger than
+// what is left, and the head's strings charged at the line's end. WRITTEN
+// FROM THE RULE, never through the meter, so a charge the pass skips or makes
+// otherwise moves the boundary a test reads off it.
+func scanCallsHeld(each, head int) int {
+	size := int(unsafe.Sizeof(threadCall{}))
+	left, capacity := threadLineMax, 0
+	for n := 0; ; n++ {
+		// Whether a line of n+1 calls is held, n being.
+		if each > left {
+			return n
+		}
+		left -= each
+		if n == capacity {
+			grown := min(max(2*capacity, 1), left/size)
+			if grown <= n {
+				return n
+			}
+			left, capacity = left-grown*size, grown
+		}
+		if head > left {
+			return n
+		}
+	}
+}
+
+// A LINE'S FACTS ARE HELD TO THE BOUND, IN SUM: a line of calls is read to the
+// most the meter's rule holds ([scanCallsHeld]), the calls the smallest
+// results (held within a quarter more than the bound), results past 4 KiB,
+// sends each to a 64-byte agent or results read before an assistant's type,
+// and one call more fails it closed; a line writing `message` twice, each
+// fitting, fails; a value of [threadValueMax] bytes reads and one byte more
+// fails; and a line past either bound is still classed by a later fault or
+// by its head. Not parallel: what a line holds is read off the heap.
+//
+// Mutation: charge an array by its header, or a call without its strings, its
+// target, or before its type; refund a replaced frame; drop the value bound.
+func TestALinesFactsAreHeldToTheBound(t *testing.T) {
+	ctx := t.Context()
+	small := `{"type":"tool_result","tool_use_id":"a"}`
+	target := strings.Repeat("a", claudeAgentMaxBytes)
+	results := func(extra, block, after string) func(n int) []scanPart {
+		return func(n int) []scanPart {
+			return scanLine(scanLit(`{"type":"user",`+extra+`"message":{"content":`), scanList(block, n),
+				scanLit(`}}`+after))
+		}
+	}
+	every := func(n int) int { return n }
+	for _, tc := range []struct {
+		name string
+		line func(n int) []scanPart
+		// each is the bytes of each call's strings, and head the head's.
+		each, head int
+		// held is how many calls a line of n blocks hands its reader.
+		held func(n int) int
+		to   string
+	}{
+		{"the smallest results", results("", small, ""), 1, len(recordUser), every, ""},
+		{"results of more than 4 KiB each", results("", `{"type":"tool_result","tool_use_id":"a","content":"`+
+			strings.Repeat("x", sandbox.MaxBridgeOutputBytes+1)+`"}`, ""), 1, len(recordUser), every, ""},
+		{"sends, each to a 64-byte agent", func(n int) []scanPart {
+			return scanLine(scanLit(`{"type":"assistant","message":{"content":`),
+				scanList(`{"type":"tool_use","id":"a","name":"S","input":{"to":"`+target+`"}}`, n), scanLit(`}}`))
+		}, 1 + 1 + len(target), len(recordAssistant), every, target},
+		{"results an assistant's message holds before its type", func(n int) []scanPart {
+			return scanLine(scanLit(`{"message":{"content":`), scanList(small, n), scanLit(`},"type":"assistant"}`))
+		}, 1, len(recordAssistant), func(int) int { return 0 }, ""},
+	} {
+		n := scanCallsHeld(tc.each, tc.head)
+		line, err := scanRead(ctx, tc.line(n))
+		if err != nil {
+			t.Fatalf("%s: a line of %d, the most the meter holds, reads as %v; want a record", tc.name, n, err)
+		}
+		m, err := line.Message()
+		if calls := m.Calls(); err != nil || len(calls) != tc.held(n) ||
+			(len(calls) > 0 && calls[len(calls)-1].To != tc.to) {
+			t.Fatalf("%s: a line of %d hands %d calls, %v; want %d, each to %q", tc.name, n, len(calls), err,
+				tc.held(n), tc.to)
+		}
+		if _, err = scanRead(ctx, tc.line(n+1)); !errors.Is(err, errThreadBound) ||
+			!strings.Contains(err.Error(), "facts run past") {
+			t.Errorf("%s: a line of %d, one more than the meter holds, reads as %v; want %v, its facts past it",
+				tc.name, n+1, err, errThreadBound)
+		}
+	}
+
+	n := scanCallsHeld(1, len(recordUser))
+	if held := heldBy(func() any {
+		line, _ := scanRead(ctx, results("", small, "")(n))
+		return line
+	}); held > threadLineMax*5/4+64<<10 {
+		t.Errorf("a line of %d of the smallest results holds %d bytes; want at most %d", n, held,
+			threadLineMax*5/4+64<<10)
+	}
+	twice := scanLine(scanLit(`{"type":"user","message":{"content":`), scanList(small, n),
+		scanLit(`},"message":{"content":`), scanList(small, n), scanLit(`}}`))
+	if _, err := scanRead(ctx, twice); !errors.Is(err, errThreadBound) {
+		t.Errorf("a line writing a message of %d results twice reads as %v; want %v", n, err, errThreadBound)
+	}
+
+	pad := func(n int) string { return strings.Repeat("u", n) }
+	usage := `{"input_tokens":1,"pad":""}`
+	for _, tc := range []struct {
+		name, key string
+		// line is the line whose value is n bytes as written.
+		line func(n int) string
+		// read reports whether the line's reader is handed the value whole.
+		read func(l threadLine) bool
+	}{
+		{"a uuid", "uuid", func(n int) string { return `{"type":"user","uuid":"` + pad(n-2) + `"}` },
+			func(l threadLine) bool { return len(l.facts().uuid) == threadValueMax }},
+		{"a call's id", "message.content.id", func(n int) string {
+			return `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"` + pad(n-2) + `","name":"S"}]}}`
+		}, func(l threadLine) bool {
+			m, err := l.Message()
+			return err == nil && len(m.Calls()) == 1 && len(m.Calls()[0].ID) == threadValueMax-2
+		}},
+		{"a reply's usage", "message.usage", func(n int) string {
+			return `{"type":"assistant","message":{"content":[],"usage":{"input_tokens":1,"pad":"` +
+				pad(n-len(usage)) + `"}}}`
+		}, func(l threadLine) bool { return len(l.facts().message.usage) == threadValueMax }},
+	} {
+		if line, err := scanRead(ctx, scanLine(scanLit(tc.line(threadValueMax)))); err != nil || !tc.read(line) {
+			t.Errorf("%s of %d bytes as written reads as %v, handed whole %t; want it read", tc.name,
+				threadValueMax, err, err == nil && tc.read(line))
+		}
+		if _, err := scanRead(ctx, scanLine(scanLit(tc.line(threadValueMax+1)))); !errors.Is(err, errThreadBound) ||
+			!strings.Contains(err.Error(), tc.key+" runs past") {
+			t.Errorf("%s of %d bytes as written reads as %v; want %v naming %s", tc.name, threadValueMax+1, err,
+				errThreadBound, tc.key)
+		}
+	}
+
+	for name, tc := range map[string]struct {
+		line  []scanPart
+		fault lineFault
+		kind  recordKind
+	}{
+		"facts past the bound, then data after the value": {results("", small, " x")(n + 1), faultTrailing, ""},
+		"facts past the bound, and a refused head": {results(`"isSidechain":1,`, small, "")(n + 1), faultHead,
+			recordUser},
+		"a value past its bound, then data after the value": {scanLine(scanLit(`{"type":"user","uuid":"` +
+			pad(threadValueMax-1) + `"} x`)), faultTrailing, ""},
+		"a value past its bound, and a refused head": {scanLine(scanLit(`{"type":"user","isSidechain":1,"uuid":"` +
+			pad(threadValueMax-1) + `"}`)), faultHead, recordUser},
+	} {
+		_, err := scanRead(ctx, tc.line)
+		var broken *threadLineError
+		if !errors.As(err, &broken) || broken.Fault != tc.fault || broken.Type != tc.kind {
+			t.Errorf("%s: read as %v; want fault %q, type %q", name, err, tc.fault, tc.kind)
+		}
+	}
+}
+
+// A BOOKKEEPING RECORD'S MESSAGE IS PASSED OVER, as is every gated frame
+// ([gates]) after a type that does not read it: an api-request-blob whose
+// frame holds a MiB of what a reader would keep costs at most 16 KiB more
+// than one holding one element. A line whose last type reads a frame passed
+// over for the type before it fails closed, and a frame met before any type
+// is read as where the type comes first. Not parallel: the allocation count
+// is the process's.
+//
+// Mutation: read every gated frame; trust the type a frame was passed over
+// for; pass over a frame met before any type.
+func TestABookkeepingRecordsMessageIsPassedOver(t *testing.T) {
+	ctx := t.Context()
+	many := func(element string) string {
+		n := (1 << 20) / (len(element) + 1)
+		return "[" + strings.Repeat(element+",", n-1) + element + "]"
+	}
+	uuid := `"` + ctUUID(7) + `"`
+	for _, tc := range []struct {
+		key, reads, subtype string
+		// big is the frame holding a MiB, small one element of it.
+		big, small string
+		// read is what the frame's accessor answers, as text.
+		read func(l threadLine) string
+	}{
+		{"message", recordAssistant, "", `{"content":` + many(`{"type":"tool_use","id":"a","name":"b"}`) + `}`,
+			`{"content":[{"type":"tool_use","id":"a","name":"b"}]}`, func(l threadLine) string {
+				m, err := l.Message()
+				return fmt.Sprint(len(m.Calls()), err)
+			}},
+		{"toolUseResult", recordUser, "", `{"handback":1,"stdout":"` + strings.Repeat("x", 1<<20) + `"}`,
+			`{"handback":1}`, func(l threadLine) string { return fmt.Sprint(l.HandsBack()) }},
+		{"attachment", recordAttachment, "",
+			`{"type":"x","entries":` + many(`{"path":"p","displayPath":"d","why":"denied"}`) + `}`, `{"type":"x"}`,
+			func(l threadLine) string { return fmt.Sprint(l.AttachmentType()) }},
+		{"compactMetadata", recordSystem, subtypeCompactBoundary,
+			`{"preservedMessages":{"anchorUuid":` + uuid + `,"uuids":` + many(uuid) + `}}`,
+			`{"preservedMessages":{"anchorUuid":` + uuid + `,"uuids":[` + uuid + `]}}`, func(l threadLine) string {
+				p, err := l.Preserved()
+				return fmt.Sprint(p.Named, p.Listed, err)
+			}},
+		{"retractedMessageUuids", recordUser, "", many(uuid), "[" + uuid + "]", func(l threadLine) string {
+			r, err := l.Retracted()
+			return fmt.Sprint(r.Entries, err)
+		}},
+		{"replacements", recordContentReplacement, "", many(`{"kind":"tool-result","toolUseId":"a"}`),
+			`[{"kind":"tool-result","toolUseId":"a"}]`, func(l threadLine) string {
+				var ids []string
+				err := l.ReplacedResults(func(id string) { ids = append(ids, id) })
+				return fmt.Sprint(ids, err)
+			}},
+		{"batchToolUses", recordAssistant, "", many(`{"id":"a"}`), `[{"id":"a"}]`, func(l threadLine) string {
+			var ids []string
+			batch, err := l.BatchToolUses(func(id string) { ids = append(ids, id) })
+			return fmt.Sprint(ids, batch, err)
+		}},
+	} {
+		blob := func(value string) []scanPart {
+			return scanLine(scanLit(`{"type":"api-request-blob","` + tc.key + `":` + value + `}`))
+		}
+		bigCost, _, bigErr := scanAllocated(ctx, blob(tc.small), blob(tc.big), 3)
+		smallCost, _, smallErr := scanAllocated(ctx, blob(tc.small), blob(tc.small), 3)
+		if bigErr != nil || smallErr != nil || bigCost > smallCost+16<<10 {
+			t.Errorf("an api-request-blob whose %s holds a MiB costs its reader %d bytes, %v; want at most 16 KiB "+
+				"more than one holding one element, %d bytes, %v", tc.key, bigCost, bigErr, smallCost, smallErr)
+		}
+
+		typed := `"type":"` + tc.reads + `"`
+		if tc.subtype != "" {
+			typed += `,"subtype":"` + tc.subtype + `"`
+		}
+		turned := `{"type":"api-request-blob","` + tc.key + `":` + tc.small + `,` + typed + `}`
+		if _, err := scanRead(ctx, scanLine(scanLit(turned))); !errors.Is(err, errThreadBound) ||
+			!strings.Contains(err.Error(), tc.key+" came before") {
+			t.Errorf("a record of type %s whose %s came after an api-request-blob's type reads as %v; want %v naming it",
+				tc.reads, tc.key, err, errThreadBound)
+		}
+
+		none, noneErr := scanRead(ctx, scanLine(scanLit(`{`+typed+`}`)))
+		after, afterErr := scanRead(ctx, scanLine(scanLit(`{`+typed+`,"`+tc.key+`":`+tc.small+`}`)))
+		before, beforeErr := scanRead(ctx, scanLine(scanLit(`{"`+tc.key+`":`+tc.small+`,`+typed+`}`)))
+		if noneErr != nil || afterErr != nil || beforeErr != nil || tc.read(before) != tc.read(after) ||
+			tc.read(after) == tc.read(none) {
+			t.Errorf("a record of type %s whose %s comes before its type reads %q, %v; want %q, %v, as where its type "+
+				"comes first, and not %q, %v, as one without it", tc.reads, tc.key, tc.read(before), beforeErr,
+				tc.read(after), afterErr, tc.read(none), noneErr)
+		}
+	}
+}
+
+// A LINE NO READER READS COSTS ITS READER NOTHING: a whole-PDF Read (its
+// document's base64 and the tool's copy 27,962,028 bytes each, as one of
+// 55,924,056 bytes holds them), a 64 MiB prompt, queue operation's content,
+// Write's input and api-request-blob's message, each generated as it is read,
+// reads as its short twin does but for its length, the PDF marked a document,
+// costing from Next to its return at most 16 KiB more than the twin, the
+// fewest of two readings. Not parallel: the allocation count is the
+// process's.
+//
+// Mutation: capture a value the pass passes over, or keep a prompt as it is
+// read for what it says.
+func TestALineNoReaderReadsCostsItsReaderNothing(t *testing.T) {
+	ctx := t.Context()
+	const pdf, long = 27_962_028, 64 << 20
+	head := `{"parentUuid":"` + ctUUID(1) + `","isSidechain":false,`
+	stamped := `"uuid":"` + ctUUID(2) + `","timestamp":"` + ctStamp + `",`
+	for _, tc := range []struct {
+		name string
+		line func(n int) []scanPart
+		n    int
+	}{
+		{"a whole PDF read", func(n int) []scanPart {
+			return scanLine(scanLit(head+`"type":"user",`+stamped+`"message":{"role":"user","content":`+
+				`[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"document","source":`+
+				`{"type":"base64","media_type":"application/pdf","data":"`), scanRun('A', n),
+				scanLit(`"}}]}]},"toolUseResult":{"type":"pdf","file":{"base64":"`), scanRun('A', n),
+				scanLit(`","filePath":"/w/x.pdf","originalSize":20971520}}}`))
+		}, pdf},
+		{"a prompt", func(n int) []scanPart {
+			return scanLine(scanLit(head+`"type":"user",`+stamped+`"message":{"role":"user","content":"`),
+				scanRun('x', n), scanLit(`"}}`))
+		}, long},
+		{"a queue operation's content", func(n int) []scanPart {
+			return scanLine(scanLit(`{"type":"queue-operation","operation":"enqueue","timestamp":"`+ctStamp+
+				`","sessionId":"`+ctSession+`","content":"`), scanRun('x', n), scanLit(`"}`))
+		}, long},
+		{"a Write's input", func(n int) []scanPart {
+			return scanLine(scanLit(head+`"type":"assistant",`+stamped+`"message":{"id":"msg_1","content":`+
+				`[{"type":"tool_use","id":"toolu_1","name":"Write","input":{"file_path":"/w/x","content":"`),
+				scanRun('x', n), scanLit(`"}}]}}`))
+		}, long},
+		{"an api-request-blob's message", func(n int) []scanPart {
+			return scanLine(scanLit(`{"type":"api-request-blob","sessionId":"`+ctSession+
+				`","hash":"b1b1b1b1","message":{"role":"user","content":"`), scanRun('x', n), scanLit(`"}}`))
+		}, long},
+	} {
+		twin, parts := tc.line(1), tc.line(tc.n)
+		twinCost, twinLine, twinErr := scanAllocated(ctx, twin, twin, 3)
+		cost, line, err := scanAllocated(ctx, twin, parts, 2)
+		if twinErr != nil || err != nil {
+			t.Fatalf("%s: the line reads as %v, its twin as %v; want both records", tc.name, err, twinErr)
+		}
+		if int64(line.Size) != scanLength(parts) {
+			t.Errorf("%s: a line of %d bytes, its break among them, is read as %d", tc.name, scanLength(parts),
+				line.Size)
+		}
+		facts := func(l threadLine) string {
+			l.Size, l.Bytes.n = 0, 0
+			return scanAnswer(l, nil)
+		}
+		if got, want := facts(line), facts(twinLine); got != want {
+			t.Errorf("%s: the line of %d bytes reads as\n%swant it read as its twin, but its length\n%s", tc.name,
+				line.Size, got, want)
+		}
+		if tc.n == pdf && line.Bytes.marks&markDocument == 0 {
+			t.Errorf("%s: the line holds no document's mark; want it marked as its readers mark it", tc.name)
+		}
+		if cost > twinCost+16<<10 {
+			t.Errorf("%s: the line of %d bytes costs its reader %d bytes; want at most 16 KiB more than its twin, "+
+				"%d bytes", tc.name, line.Size, cost, twinCost)
+		}
 	}
 }

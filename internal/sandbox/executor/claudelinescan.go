@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/crewlet/crewlet/internal/jsonscan"
 )
@@ -153,9 +155,10 @@ type scanReader struct {
 	scan *jsonscan.Scanner
 	// dec is the pass's own scratch, kept across lines and members.
 	dec lineDecoder
-	// valueMax is [threadValueMax]; the differential raises it to compare the
-	// two readings' facts at any length (claudelinescan_internal_test.go).
-	valueMax int
+	// valueMax is [threadValueMax] and meterMax [threadLineMax]; the
+	// differential raises both to compare the two readings' facts at any
+	// length (claudelinescan_internal_test.go).
+	valueMax, meterMax int
 }
 
 // newScanReader reads r, one member, a line at a time, as [newThreadReader]
@@ -173,7 +176,7 @@ func newScanReaderSize(r io.Reader, maxBytes int64, chunk int) *scanReader {
 	// Built over no reader and then reset onto r: bufio.NewReaderSize hands
 	// back r itself where r is a *bufio.Reader of the size, and a later Reset
 	// would then reset the caller's reader.
-	t := &scanReader{r: bufio.NewReaderSize(nil, chunk), valueMax: threadValueMax}
+	t := &scanReader{r: bufio.NewReaderSize(nil, chunk), valueMax: threadValueMax, meterMax: threadLineMax}
 	t.scan = jsonscan.New(&t.src)
 	t.Reset(r, maxBytes)
 	return t
@@ -197,9 +200,9 @@ func (t *scanReader) Reset(r io.Reader, maxBytes int64) {
 //     [scanReader.Torn] says it was there.
 //   - errThreadBound once the member runs past the reader's bound, EVEN
 //     WHERE THE BOUND FALLS RIGHT AFTER A LINE BREAK, once a value the line
-//     keeps runs past [threadValueMax], or once a line's type reads a frame
-//     the pass passed over for the type the line wrote before it. The
-//     reading is over, and stays over.
+//     keeps runs past [threadValueMax] or its facts past [threadLineMax],
+//     or once a line's type reads a frame the pass passed over for the type
+//     the line wrote before it. The reading is over, and stays over.
 //   - a *threadLineError for a whole line that is not one record, classed as
 //     Claude Code's load reads it ([scanReader.commit]): the reader stays
 //     usable.
@@ -215,7 +218,7 @@ func (t *scanReader) Next(ctx context.Context) (threadLine, error) {
 	t.src.reset(ctx, t.r, t.left)
 	facts := new(lineFacts)
 	t.scan.Reset(&t.src)
-	t.dec.reset(t.valueMax)
+	t.dec.reset(t.valueMax, t.meterMax)
 	scanned := t.dec.line(t.scan, facts)
 	// A FAULT STOPS THE SCANNER BEFORE THE BREAK: the rest of the line is read
 	// through the meter and the tee, holding nothing, so a refused line's
@@ -260,8 +263,8 @@ func (t *scanReader) Torn() bool { return t.torn }
 //  3. A head the head's rule refuses ([headOf]), judged on each key's last
 //     occurrence and under the last `type`: faultHead, its Type the kind of
 //     record that `type` names ([kindOf]).
-//  4. A value the line keeps past [threadValueMax], or a frame the record's
-//     type reads that the pass passed over for the type written before it
+//  4. A value past [threadValueMax], facts past [threadLineMax] ([lineMeter]),
+//     or a frame the record's type reads passed over for the type before it
 //     ([lineDecoder.passedOver]): errThreadBound, and the reading is over.
 //  5. Else the record, each frame settled to its type
 //     ([settle]).
@@ -295,9 +298,21 @@ func (t *scanReader) commit(scanned error, facts *lineFacts) (threadLine, error)
 	if err != nil {
 		return refused(err, faultHead, kindOf(keys.typ.raw))
 	}
-	if t.dec.over != "" {
+	// THE HEAD'S STRINGS ARE THE LINE'S TOO, decoded by its rule just now,
+	// and its parent as written is copied for the line below.
+	charge := len(head.Type) + len(head.Subtype) + len(head.AgentID)
+	if keys.parent.kind == '"' {
+		charge += len(head.Parent)
+	}
+	t.dec.meter.take(charge)
+	switch {
+	case t.dec.over != "":
 		t.end = fmt.Errorf("%w: line %d's %s runs past the %d bytes a value is read whole within", errThreadBound,
 			t.n, t.dec.over, t.valueMax)
+		return threadLine{}, t.end
+	case t.dec.meter.over:
+		t.end = fmt.Errorf("%w: line %d's facts run past the %d bytes a line's facts are held within",
+			errThreadBound, t.n, t.meterMax)
 		return threadLine{}, t.end
 	}
 	if frame := t.dec.passedOver(head); frame != "" {
@@ -471,11 +486,61 @@ var recordRaws = [...]struct {
 	{"sourceToolAssistantUUID", func(f *lineFacts) *json.RawMessage { return &f.sourceToolAssistantUUID }},
 }
 
+// lineMeter is what one line's facts may still take of [threadLineMax], a
+// bound in sum, since a bound on each value lets a line of a million tiny
+// calls hold a million calls: left, the bytes the pass may still allocate
+// for them; over, whether a charge found too few left, after which every
+// charge is refused and the pass holds nothing more of the line. EVERY
+// ALLOCATION FOR THE FACTS IS CHARGED as it is made: a kept raw or string by
+// its length (a string right after its decode, so the meter passes its bound
+// by one value's decode at most), an array a list grows through by its
+// capacity times its element's size, before it is made ([grow]). NOTHING IS
+// REFUNDED: what an occurrence a later one replaced allocated stays charged,
+// so the meter bounds what a line allocates, and so what it holds. Not
+// charged: the facts' own struct and the reader's buffers, kept across lines.
+type lineMeter struct {
+	left int
+	over bool
+}
+
+// take charges n bytes, reporting whether they were left: false, and the
+// meter over, where they were not, or where it was over before.
+func (m *lineMeter) take(n int) bool {
+	if m.over || n > m.left {
+		m.over = true
+		return false
+	}
+	m.left -= n
+	return true
+}
+
+// grow is s with room for one element more: s itself where it has room, else
+// a copy of it in a new array of twice its capacity, or one, but of no more
+// than most elements and no more than the meter has left, the whole array
+// charged before it is made. ok false, s as it is and the meter over, where
+// not one element more is left.
+func grow[S ~[]E, E any](m *lineMeter, s S, most int) (S, bool) {
+	if len(s) < cap(s) {
+		return s, true
+	}
+	size := int(unsafe.Sizeof(*new(E)))
+	n := min(max(2*cap(s), 1), most, m.left/size)
+	if n <= len(s) || !m.take(n*size) {
+		m.over = true
+		return s, false
+	}
+	grown := make(S, len(s), n)
+	copy(grown, s)
+	return grown, true
+}
+
 // lineDecoder is the one pass's own state ([lineDecoder.line]): what it reads
 // of a line before the line commits, in buffers a reader keeps across lines.
 type lineDecoder struct {
-	// valueMax is the most of a value the pass captures whole.
+	// valueMax is the most of a value the pass captures whole, and meter what
+	// the line's facts may still take ([lineMeter]).
 	valueMax int
+	meter    lineMeter
 	// name is the current member's decoded name.
 	name [lineNameBytes]byte
 	// object is whether the line's first token opened an object.
@@ -654,9 +719,9 @@ type scannedKey struct {
 }
 
 // reset makes d a pass over a line not yet read, capturing at most valueMax
-// bytes of a value.
-func (d *lineDecoder) reset(valueMax int) {
-	d.valueMax, d.object, d.over = valueMax, false, ""
+// bytes of a value and holding at most meterMax bytes of facts.
+func (d *lineDecoder) reset(valueMax, meterMax int) {
+	d.valueMax, d.meter, d.object, d.over = valueMax, lineMeter{left: meterMax}, false, ""
 	for i := range d.head {
 		d.head[i] = scannedKey{raw: d.head[i].raw[:0]}
 	}
@@ -924,7 +989,9 @@ func (d *lineDecoder) contentText(scan *jsonscan.Scanner, c *threadMessage) erro
 	}
 	d.notice.end()
 	*c = threadMessage{isText: true, saysAny: d.says.any, namesHandback: d.handback.named}
-	c.notification.agent, c.notification.leg, c.notification.ok = d.notice.notice()
+	if agent, leg, ok := d.notice.notice(); d.meter.take(len(agent) + len(leg)) {
+		c.notification = taskNotice{agent: agent, leg: leg, ok: ok}
+	}
 	return nil
 }
 
@@ -970,7 +1037,7 @@ func (d *lineDecoder) blocks(scan *jsonscan.Scanner, m *messageFacts) error {
 		}
 		c.blocks.add(call.Kind)
 		if call.Kind == blockToolUse || call.Kind == blockToolResult {
-			c.calls = append(c.calls, call)
+			d.keepCall(c, call)
 		}
 		// A block the rule took is an object, so what its text said is its
 		// own.
@@ -978,6 +1045,19 @@ func (d *lineDecoder) blocks(scan *jsonscan.Scanner, m *messageFacts) error {
 			c.saysAny = true
 			c.saysText = c.saysText || call.Kind == blockText
 		}
+	}
+}
+
+// keepCall keeps call, of either kind, among c's calls, its strings charged
+// as the rule just made them and the array it joins before it grows; none
+// where the line's facts have no room left ([lineMeter]).
+func (d *lineDecoder) keepCall(c *threadMessage, call threadCall) {
+	if !d.meter.take(len(call.ID) + len(call.Name) + len(call.To)) {
+		return
+	}
+	var ok bool
+	if c.calls, ok = grow(&d.meter, c.calls, math.MaxInt); ok {
+		c.calls = append(c.calls, call)
 	}
 }
 
@@ -1153,6 +1233,9 @@ func (d *lineDecoder) toolResult(scan *jsonscan.Scanner, k jsonscan.Kind, r *too
 		return err
 	}
 	r.completed, r.agent, r.refused = answerOf(present(*status), present(*agent), present(*success))
+	if !d.meter.take(len(r.agent)) {
+		r.agent = ""
+	}
 	return nil
 }
 
@@ -1368,7 +1451,14 @@ func (d *lineDecoder) preservedMessages(scan *jsonscan.Scanner, k jsonscan.Kind,
 				if err != nil {
 					return err
 				}
-				c.list.list(uuidBytes(opening))
+				u, canonical := uuidBytes(opening)
+				if canonical && len(c.list.UUIDs) < threadChainMaxRecords {
+					var room bool
+					if c.list.UUIDs, room = grow(&d.meter, c.list.UUIDs, threadChainMaxRecords); !room {
+						return nil
+					}
+				}
+				c.list.list(u, canonical)
 				return nil
 			})
 			if !list {
@@ -1386,7 +1476,7 @@ func (d *lineDecoder) preservedMessages(scan *jsonscan.Scanner, k jsonscan.Kind,
 		c.list, c.listErr = threadPreserved{}, err
 	case uuids != nil:
 		c.listErr = fmt.Errorf("compactMetadata.preservedMessages.uuids: %w", uuids)
-	default:
+	case d.meter.take(len(named)):
 		c.list.Named, c.list.Kept, c.list.Anchor = true, c.list.Listed > 0, named
 	}
 	return nil
@@ -1410,7 +1500,14 @@ func (d *lineDecoder) retracted(scan *jsonscan.Scanner, k jsonscan.Kind, f *line
 		if err != nil {
 			return err
 		}
-		f.retracted.entry(chainPrefix(opening))
+		p, canonical := chainPrefix(opening)
+		if canonical && len(f.retracted.prefixes) < threadChainMaxRecords {
+			var room bool
+			if f.retracted.prefixes, room = grow(&d.meter, f.retracted.prefixes, threadChainMaxRecords); !room {
+				return nil
+			}
+		}
+		f.retracted.entry(p, canonical)
 		return nil
 	})
 	if !list {
@@ -1455,7 +1552,7 @@ func (d *lineDecoder) replacements(scan *jsonscan.Scanner, k jsonscan.Kind, r *r
 		case refused != nil:
 			r.err = refused
 		case replaced:
-			r.ids = append(r.ids, id)
+			r.ids = d.keepID(r.ids, id)
 		}
 		return nil
 	})
@@ -1492,7 +1589,7 @@ func (d *lineDecoder) batch(scan *jsonscan.Scanner, k jsonscan.Kind, b *batchFac
 		case refused != nil:
 			b.err = refused
 		default:
-			b.ids = append(b.ids, kept)
+			b.ids = d.keepID(b.ids, kept)
 		}
 		return nil
 	})
@@ -1500,6 +1597,20 @@ func (d *lineDecoder) batch(scan *jsonscan.Scanner, k jsonscan.Kind, b *batchFac
 		b.err = fmt.Errorf("is %s, not a list", scannedKind(k))
 	}
 	return err
+}
+
+// keepID is ids with id after them, id charged as its rule just made it and
+// the array before it grows; ids as they are where the line's facts have no
+// room left ([lineMeter]).
+func (d *lineDecoder) keepID(ids []string, id string) []string {
+	if !d.meter.take(len(id)) {
+		return ids
+	}
+	ids, ok := grow(&d.meter, ids, math.MaxInt)
+	if !ok {
+		return ids
+	}
+	return append(ids, id)
 }
 
 // elements reads the value whose first token, k, the scanner stands at, as a
@@ -1545,11 +1656,13 @@ func (d *lineDecoder) opening(scan *jsonscan.Scanner, n int) ([]byte, error) {
 }
 
 // keep is the value the scanner stands at, of kind k, the value of key, as
-// written, in a copy of its own for the line's facts to hold: nil where it
-// runs past d's bound, which marks the line ([lineDecoder.capture]).
+// written, in a copy of its own for the line's facts to hold, charged before
+// it is made: nil where it runs past d's bound, which marks the line
+// ([lineDecoder.capture]), or where the line's facts have no room left for
+// it ([lineMeter]).
 func (d *lineDecoder) keep(scan *jsonscan.Scanner, k jsonscan.Kind, key string) (json.RawMessage, error) {
 	raw, _, err := d.capture(scan, k, key)
-	if raw == nil {
+	if raw == nil || !d.meter.take(len(raw)) {
 		return nil, err
 	}
 	return append(json.RawMessage(nil), raw...), err
