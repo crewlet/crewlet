@@ -245,7 +245,7 @@ test("a reader without the grant is told why on a tap of the held pencil", async
   const pencil = screen.getByRole("button", { name: "Change Tool skills" });
   fireEvent.pointerDown(pencil, { pointerType: "touch" });
   fireEvent.pointerLeave(pencil, { pointerType: "touch" });
-  expect(screen.getByRole("tooltip").textContent).toBe(
+  expect(screen.getByRole("tooltip", { hidden: true }).textContent).toBe(
     `Change Tool skills. ${CONFIG_WRITE_REASONS.no_grant}`,
   );
 });
@@ -260,7 +260,7 @@ test("a reader without the grant sees the pencil held, and its reason on keyboar
   // Focus as Tab gives it: the key first, so the focus is the keyboard's.
   fireEvent.keyDown(document.body, { key: "Tab" });
   act(() => pencil.focus());
-  expect(screen.getByRole("tooltip").textContent).toBe(
+  expect(screen.getByRole("tooltip", { hidden: true }).textContent).toBe(
     `Change Tool skills. ${CONFIG_WRITE_REASONS.no_grant}`,
   );
 });

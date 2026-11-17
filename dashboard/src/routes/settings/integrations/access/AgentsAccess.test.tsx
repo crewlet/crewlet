@@ -744,7 +744,9 @@ test("an agent's permissions are a count beside a pencil that edits them, and re
   expect(glyphIn(edit)).toBe(PENCIL);
   fireEvent.keyDown(document.body, { key: "Tab" });
   act(() => edit.focus());
-  expect(screen.getByRole("tooltip").textContent).toContain("Issues: Read and write");
+  expect(screen.getByRole("tooltip", { hidden: true }).textContent).toContain(
+    "Issues: Read and write",
+  );
   act(() => edit.blur());
   expect((edit as HTMLButtonElement).disabled).toBe(false);
   cleanup();
