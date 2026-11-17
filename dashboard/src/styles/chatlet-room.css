@@ -384,9 +384,8 @@
   max-width: none;
 }
 
-/* "(edited)" and the delivery receipt end the last paragraph's line rather
-   than taking one of their own: only a body that carries them runs the
-   paragraph before them inline, and the block before that keeps the gap an
+/* "(edited)" and the receipt end the last paragraph's line: a body carrying
+   them runs that paragraph inline, and the block before it keeps the gap an
    inline paragraph cannot take (two block margins collapse to one). */
 .chat-body.has-after > p:nth-last-child(2) {
   display: inline;

@@ -1,9 +1,7 @@
 /**
- * THE MARKS AFTER A MESSAGE'S WORDS ("(edited)", the delivery receipt) END ITS
- * LAST LINE, measured: they share the line box of the last line while it has
- * room, the receipt centred on the lower-case letters with its count on the
- * words' baseline, and they take the next line, inside the column, only when
- * the last line is full. They add no height of their own to any message.
+ * The marks after a message's words ("(edited)", the delivery receipt) share its
+ * last line while it has room, the receipt centred on the lower-case letters, and
+ * take the next line only when it is full. They add no height of their own.
  */
 import "~/test/layout.tsx";
 import "~/styles/chatlet-frame.css";
