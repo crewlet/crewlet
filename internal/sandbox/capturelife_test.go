@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1111,5 +1112,330 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 			within(t, "the collection's stamp of what came of it", to.Sub(from), captureLife,
 				captureLife-takeLife)
 		})
+	})
+}
+
+// settleLate is how long into its room [lateSettles] answers a settle a wait
+// decided: past a relaunch's whole wait ([relaunchCaptureWait]), inside the
+// room a write of the run's row is given in the store's own process
+// ([sessionRecordBudget]).
+const settleLate = 20 * time.Second
+
+// lateSettles is a run store slow to take the writes a wait decides: each one
+// [lateSettles.answer] names is answered only once that has let it, and one it
+// cuts first is not applied. A read made under a context that has ended
+// fails, as a store's read past its caller's deadline does. Every write of a
+// capture's stamp it is asked is noted. Every other call is the store
+// underneath's.
+type lateSettles struct {
+	PendingStore
+	answer func(ctx context.Context, write string) error
+
+	mu     sync.Mutex
+	writes []string
+}
+
+func (s *lateSettles) note(write string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.writes = append(s.writes, write)
+}
+
+// written is every write of a capture's stamp the store was asked, by name.
+func (s *lateSettles) written() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.writes...)
+}
+
+func (s *lateSettles) StampCapture(ctx context.Context, turnID string, stamp SessionCapture) (bool, error) {
+	s.note("StampCapture")
+	if err := s.answer(ctx, "StampCapture"); err != nil {
+		return false, err
+	}
+	return s.PendingStore.StampCapture(ctx, turnID, stamp)
+}
+
+func (s *lateSettles) SettleBegun(ctx context.Context, turnID string, stamp SessionCapture) (bool, error) {
+	s.note("SettleBegun")
+	if err := s.answer(ctx, "SettleBegun"); err != nil {
+		return false, err
+	}
+	return s.PendingStore.SettleBegun(ctx, turnID, stamp)
+}
+
+func (s *lateSettles) StandDown(ctx context.Context, turnID string, standby SessionCapture) (bool, error) {
+	s.note("StandDown")
+	if err := s.answer(ctx, "StandDown"); err != nil {
+		return false, err
+	}
+	return s.PendingStore.StandDown(ctx, turnID, standby)
+}
+
+func (s *lateSettles) Get(ctx context.Context, turnID string) (PendingRun, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return PendingRun{}, false, err
+	}
+	return s.PendingStore.Get(ctx, turnID)
+}
+
+// answeredLate answers write, when it is one of late, [settleLate] after it
+// was asked, and any other at once; a write whose context ends first is
+// answered with that context's end.
+//
+//fixedwait:bubble
+func answeredLate(late ...string) func(ctx context.Context, write string) error {
+	return func(ctx context.Context, write string) error {
+		if !slices.Contains(late, write) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(settleLate):
+			return nil
+		}
+	}
+}
+
+// settledOnRelaunch is a kept turn ([keptTurnBy]) taken under this process's
+// taker lease in a store of the case's, where node-a's process may take the
+// newest capture or stand by for it, with production's patience for a
+// relaunch and room for a write of the run's row: the rig, the turn's row on
+// the log, its kept capture and the lease store.
+//
+// Built on [keepingRig], and so only in a bubble ([inBubble]).
+//
+//fixedwait:bubble
+func settledOnRelaunch(t *testing.T) (*coordRig, *keptRestore, SessionCapture, *takerStore) {
+	t.Helper()
+	store := newTakerStore()
+	rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
+	rig.coordinator.relaunchWait, rig.coordinator.recordBudget = relaunchCaptureWait, sessionRecordBudget
+	return rig, restore, kept, store
+}
+
+// A WAIT'S SETTLE IS WRITTEN IN ITS OWN ROOM PAST THE WAIT. A wait for a
+// capture bounds its waiting, and the reads and asks it makes, by its own
+// patience; each settle write it decides is this node's own, given a record's
+// budget and this node's crossing of the run's row, as every stamp made off a
+// read is. So a store that takes a settle only once the wait has ended still
+// takes it, and the wait answers what it settled:
+//
+//   - a relaunch's settle of a capture whose taker is gone, which the log
+//     names landed: the store holds it landed, and the relaunch continues it;
+//   - a relaunch's withdrawal of a read standing by whose taker is gone: the
+//     store holds it withdrawn, and the relaunch does not read the capture as
+//     still being kept;
+//   - the stamp of a capture a relaunch's ask of its unanswered record landed,
+//     the ask answered within the wait: the store holds it landed;
+//   - a turn's end settling, at the end of a round of its wait, a capture whose
+//     taker's lease lapsed then: the end's wait answers it landed.
+//
+// Each settle is answered twenty seconds into its room, past the relaunch's
+// fifteen and past the end's round. Exact, in a bubble.
+//
+// Mutation: hold a settle's write to the wait's own deadline, as it was, and
+// each row's settle is cut unapplied: the capture is read as still being kept
+// or the store never holds what the ask landed; or leave a withdrawal the store
+// took off the wait's copy where the row cannot be read back after it, and the
+// relaunch still reads the standby as standing.
+func TestAWaitsSettleIsWrittenInItsOwnRoomPastTheWait(t *testing.T) {
+	t.Parallel()
+	if settleLate <= relaunchCaptureWait || settleLate >= sessionRecordBudget {
+		t.Fatalf("the premise: a settle answered %s into its room, want past the relaunch's %s and inside a "+
+			"write's %s", settleLate, relaunchCaptureWait, sessionRecordBudget)
+	}
+	t.Run("a relaunch's settle of a gone taker's capture", func(t *testing.T) {
+		t.Parallel()
+		inBubble(t, func(t *testing.T) {
+			rig, restore, kept, store := settledOnRelaunch(t)
+			lease := claimTaker(t, store, takingProcess)
+			begun := takenBy(t, rig, kept, takingProcess, lease.Epoch)
+			onTheLog(restore, landedRow(t, begun))
+			lapse(store)
+			late := &lateSettles{PendingStore: rig.coordinator.pending, answer: answeredLate("SettleBegun")}
+			rig.coordinator.pending = late
+
+			started := time.Now()
+			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+			if waited := time.Since(started); waited <= relaunchCaptureWait {
+				t.Fatalf("the premise: the relaunch returned %s after it began, want its settle answered past "+
+					"its %s", waited, relaunchCaptureWait)
+			}
+			if c := rig.get("t1").Capture; c == nil || !c.sameTake(begun) || c.State != CaptureLanded {
+				t.Errorf("the row holds %+v, want the gone taker's capture settled landed past the wait", c)
+			}
+			if why != "" || !continued.Capture.samePlace(begun) || continued.Capture.State != CaptureLanded {
+				t.Errorf("the relaunch continues %+v (%q), want the capture its wait settled landed", continued,
+					why)
+			}
+		})
+	})
+	t.Run("a relaunch's withdrawal of a gone standby", func(t *testing.T) {
+		t.Parallel()
+		inBubble(t, func(t *testing.T) {
+			rig, _, kept, store := settledOnRelaunch(t)
+			refused := takenBy(t, rig, kept, thisProcess, 1)
+			refused.State, refused.Reason = CaptureRefused, "the session could not be uploaded"
+			if took, err := rig.pending.StampCapture(t.Context(), "t1", refused); err != nil || !took {
+				t.Fatalf("refusing the capture = %v, %v", took, err)
+			}
+			lease := claimTaker(t, store, takingProcess)
+			standby := refused
+			standby.State, standby.Reason, standby.At = CaptureBegun, "", refused.At.Add(time.Second)
+			standby.Taker, standby.TakerEpoch = takingProcess, lease.Epoch
+			if stood, err := rig.pending.StandBy(t.Context(), "t1", standby); err != nil || !stood {
+				t.Fatalf("standing by = %v, %v", stood, err)
+			}
+			lapse(store)
+			late := &lateSettles{PendingStore: rig.coordinator.pending, answer: answeredLate("StandDown")}
+			rig.coordinator.pending = late
+
+			_, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+			if c := rig.get("t1").Capture; c == nil || !c.sameTake(refused) || !c.StandbyAt.IsZero() {
+				t.Errorf("the row holds %+v, want the gone standby withdrawn past the wait", c)
+			}
+			if strings.Contains(why, "still being kept") {
+				t.Errorf("the relaunch answered %q, want the capture whose standby its wait withdrew not read as "+
+					"still being kept", why)
+			}
+		})
+	})
+	t.Run("a relaunch's stamp of what its ask landed", func(t *testing.T) {
+		t.Parallel()
+		inBubble(t, func(t *testing.T) {
+			rig, writes, _ := keepingRig(t)
+			rig.runner.Carries = true
+			rig.launchKept(t, "t1")
+			session := rig.runner.Session
+			writes.answer(errors.New("estate: the write was sent to a data node that did not answer"))
+			rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
+				Captured: &session.Archive})
+			collectHeld(t, rig, "t1")
+			unresolved := rig.get("t1").Capture
+			if unresolved == nil || unresolved.State != CaptureUnresolved {
+				t.Fatalf("the premise: the row holds %+v, want its capture unresolved", unresolved)
+			}
+			writes.answer(nil)
+			rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{
+				"t1": keptRow(t, *unresolved)}}
+			rig.coordinator.relaunchWait, rig.coordinator.recordBudget = relaunchCaptureWait, sessionRecordBudget
+			late := &lateSettles{PendingStore: rig.coordinator.pending, answer: answeredLate("StampCapture")}
+			rig.coordinator.pending = late
+
+			continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+			if why != "" || !continued.Capture.samePlace(*unresolved) || continued.Capture.State != CaptureLanded {
+				t.Fatalf("the relaunch continues %+v (%q), want the capture its ask landed", continued, why)
+			}
+			run := rig.get("t1")
+			if c := run.Capture; c == nil || !c.sameTake(*unresolved) || c.State != CaptureLanded {
+				t.Errorf("the row holds %+v, want the capture the ask landed stamped landed past the wait", c)
+			}
+			if run.Kept == nil || !run.Kept.samePlace(*unresolved) {
+				t.Errorf("the row keeps %+v, want the capture the ask landed", run.Kept)
+			}
+		})
+	})
+	t.Run("an end's settle at the end of a round of its wait", func(t *testing.T) {
+		t.Parallel()
+		inBubble(t, func(t *testing.T) {
+			store := newTakerStore()
+			// THE LEASES' CLOCK HELD STILL, so node-a's lease holds for as
+			// long as the case says rather than its TTL past its claim.
+			frozen := time.Now()
+			store.Clock = func() time.Time { return frozen }
+			rig, _, _ := keepingRigWith(t, taking(thisProcess, store))
+			rig.coordinator.recordBudget = sessionRecordBudget
+			run := rig.launchKept(t, "t1")
+			lease := claimTaker(t, store, takingProcess)
+			begun := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
+				State: CaptureBegun, Final: true, At: rig.coordinator.now(), Taker: takingProcess,
+				TakerEpoch: lease.Epoch, Harness: "claude-code", SessionID: "s-1"}
+			if took, err := rig.pending.StampCapture(t.Context(), "t1", begun); err != nil || !took {
+				t.Fatalf("stamping node-a's begun capture = %v, %v", took, err)
+			}
+			rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{
+				"t1": landedRow(t, begun)}}
+			late := &lateSettles{PendingStore: rig.coordinator.pending, answer: answeredLate("SettleBegun")}
+			rig.coordinator.pending = late
+
+			type waited struct {
+				run   PendingRun
+				found bool
+				err   error
+			}
+			ended := make(chan waited, 1)
+			row := rig.get("t1")
+			go func() {
+				got, found, err := rig.coordinator.awaitEndCaptures(t.Context(), row)
+				ended <- waited{got, found, err}
+			}()
+			// NODE-A'S LEASE LAPSES five seconds before the end's first round,
+			// a capture's life from first sight, runs out: the wait's next
+			// pass settles it, and the store answers past the round's end.
+			time.Sleep(captureLife - 5*time.Second)
+			lapse(store)
+			end := <-ended
+			if end.err != nil || !end.found {
+				t.Fatalf("the end's wait = %v, %v", end.found, end.err)
+			}
+			if c := end.run.Capture; c == nil || !c.sameTake(begun) || c.State != CaptureLanded {
+				t.Errorf("the end's wait answered %+v, want node-a's capture settled landed past its round", c)
+			}
+			if c := rig.get("t1").Capture; c == nil || !c.sameTake(begun) || c.State != CaptureLanded {
+				t.Errorf("the row holds %+v, want node-a's capture settled landed", c)
+			}
+		})
+	})
+}
+
+// AN ASK THAT LEAVES A RECORD UNANSWERED WRITES NOTHING. A capture whose
+// record was sent and never answered is asked again under its own operation;
+// where the log still gives no answer, the row already holds the capture
+// unresolved, the same take in the same state, so the ask stamps nothing: one
+// more write of the row whole would say what the row says, at a write's whole
+// room. A relaunch's ask that the log leaves unanswered asks the record again,
+// sends the store no write of the capture's stamp, and leaves the row as it
+// stood.
+//
+// Mutation: stamp the unresolved answer as an ask did, and the store is asked
+// a stamp.
+func TestAnAskThatLeavesARecordUnansweredWritesNothing(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		rig, writes, _ := keepingRig(t)
+		rig.runner.Carries = true
+		rig.launchKept(t, "t1")
+		session := rig.runner.Session
+		writes.answer(errors.New("estate: the write was sent to a data node that did not answer"))
+		rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
+			Captured: &session.Archive})
+		collectHeld(t, rig, "t1")
+		unresolved := rig.get("t1").Capture
+		if unresolved == nil || unresolved.State != CaptureUnresolved {
+			t.Fatalf("the premise: the row holds %+v, want its capture unresolved", unresolved)
+		}
+		rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{}}
+		late := &lateSettles{PendingStore: rig.coordinator.pending, answer: answeredLate()}
+		rig.coordinator.pending = late
+		asked := len(writes.captured())
+
+		continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+		if len(writes.captured()) <= asked {
+			t.Fatalf("the log was asked nothing more by the relaunch, want the capture's record asked again")
+		}
+		if written := late.written(); len(written) != 0 {
+			t.Errorf("the store was asked %s, want no write of a capture whose record is still unanswered",
+				strings.Join(written, ", "))
+		}
+		if c := rig.get("t1").Capture; c == nil || !c.sameTake(*unresolved) || c.State != CaptureUnresolved ||
+			c.Reason != unresolved.Reason {
+			t.Errorf("the row holds %+v, want the capture as it stood, %+v", c, unresolved)
+		}
+		if why == "" || continued.Capture.CaptureSeq != 0 {
+			t.Errorf("the relaunch continues %+v (%q), want none of a capture whose record was never answered",
+				continued, why)
+		}
 	})
 }

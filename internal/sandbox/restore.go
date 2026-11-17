@@ -120,7 +120,10 @@ import (
 // restart continues a capture whose record the log took before that read
 // rather than starting fresh beside it; and a capture whose record was sent
 // and never answered is asked again under its own operation, as the turn's end
-// asks it ([Coordinator.settleUnresolved]): one that lands is continued. A
+// asks it ([Coordinator.settleUnresolved]): one that lands is continued. Each
+// settle the wait decides is written in its own room past the wait, as this
+// node's own write ([Coordinator.awaitCapture]); an ask that leaves the record
+// unanswered writes nothing. A
 // record the log takes only after the settle's read — one its taker had handed
 // on before its lease's window closed — lands beside a stamp that says refused
 // (session.go, "WHAT THE FENCE CANNOT REACH"): the log keeps it, and the
@@ -1098,7 +1101,15 @@ const relaunchCaptureWait = 15 * time.Second
 // followed job's capture whose record was never answered, asked again under
 // its own operation ([Coordinator.settleUnresolved]) — asked by the turn's end
 // alone, it left a relaunch reading a record the log had taken as one never
-// answered, and starting a session of its own beside it.
+// answered, and starting a session of its own beside it. THE WAIT BOUNDS THE
+// WAITING, AND THE READS AND THE ASK IT MAKES, never the settles it decides:
+// each is this node's own write to the run's record, given its own room past
+// the wait, a record's budget and this node's crossing of the row
+// ([Coordinator.settleContext]). Cut where the wait ended, a settle decided in
+// its last seconds was not applied, and a capture whose taker was gone read as
+// one still being kept, or one the ask had landed went unstamped on the row.
+// So a relaunch may spend that room past its fifteen seconds, and only where
+// the store is that slow to take a write.
 //
 // ASKED BY THE LAUNCH'S CALLER before it builds the run's surface and briefs,
 // so what the run is offered and told is the session's; the launch takes up
@@ -1121,7 +1132,9 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 		return ContinuedSession{}, "the turn has no run record"
 	}
 	// ONE WAIT FOR ALL OF IT, on the frame that relaunches: what the wait
-	// below leaves of it is what an ask of an unanswered record gets.
+	// below leaves of it is what an ask of an unanswered record gets. The
+	// settles it decides are this node's own writes, each in its own room
+	// past it.
 	settleBy := time.Now().Add(c.relaunchWait)
 	run, found, err = c.awaitCapture(ctx, run, c.relaunchWait)
 	if !found {
@@ -1148,7 +1161,7 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 		if newest := run.Capture; newest != nil && newest.State == CaptureUnresolved &&
 			newest.LaunchSeq == run.LaunchSeq {
 			ask, cancel := context.WithDeadline(ctx, settleBy)
-			run = c.settleUnresolved(ask, settleBy, run)
+			run = c.settleUnresolved(ask, run)
 			cancel()
 		}
 		_, why = followedCapture(run, run.LaunchSeq)

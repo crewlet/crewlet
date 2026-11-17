@@ -162,6 +162,15 @@ import (
 // record was sent and may yet land, and which a wait then asks again under its
 // own operation rather than settle refused.
 //
+// A SETTLE IS THIS NODE'S OWN WRITE. A wait's patience bounds its waiting and
+// every read and ask it makes; each settle write it decides (a gone taker's
+// capture settled, a gone standby withdrawn, the stamp of what an ask of an
+// unanswered record settled) is given its own room past it, a record's budget
+// and this node's crossing of the run's row ([Coordinator.settleContext]), and
+// an ask that leaves a record unanswered writes nothing. Cut where the wait
+// ended, as it was, a settle the store was slow to take was not applied, and
+// the wait answered the capture still being kept.
+//
 // THAT IS WHAT THE FENCE BUYS. A keep checks its own lease before its upload
 // and again before every attempt at its record, from its own renewals rather
 // than a store read: held at the epoch its stamp names, inside the exclusive
@@ -1002,6 +1011,24 @@ func stampOnto(run *PendingRun, capture SessionCapture) bool {
 		run.Kept, took = &kept, true
 	}
 	return took
+}
+
+// standDownOnto withdraws standby, the read standing by for run's newest
+// capture as it stood by ([SessionCapture.standbyOf]), from run as
+// [PendingStore.StandDown] does, and reports whether it changed the row: only
+// where that read stands by for the newest capture, so no read withdraws
+// another's. The store applies it to the row as it stands, and a wait to its
+// copy where the row cannot be read back after a withdrawal the store took
+// ([Coordinator.standDownGone]).
+func standDownOnto(run *PendingRun, standby SessionCapture) bool {
+	newest := run.Capture
+	if newest == nil || !newest.standsBy(standby) {
+		return false
+	}
+	withdrawn := *newest
+	withdrawn.StandbyTaker, withdrawn.StandbyTakerEpoch, withdrawn.StandbyAt = "", 0, time.Time{}
+	run.Capture = &withdrawn
+	return true
 }
 
 // standsBy reports whether take — a read's stamp of the place it stood by at
@@ -2042,7 +2069,7 @@ func (c *Coordinator) awaitStood(ctx context.Context, run PendingRun, standby Se
 			case newest.State == CaptureLanded:
 				return *newest, false, "the capture this read stood by for landed, and keeps the session"
 			case newest.State == CaptureUnresolved:
-				switch settled := c.settleCapture(ctx, time.Time{}, current, *newest); settled.State {
+				switch settled := c.settleCapture(ctx, current, *newest); settled.State {
 				case CaptureLanded:
 					return settled, false, "the capture this read stood by for landed once its record was " +
 						"asked again, and keeps the session"
@@ -2052,7 +2079,7 @@ func (c *Coordinator) awaitStood(ctx context.Context, run PendingRun, standby Se
 			case newest.State != CaptureBegun || !newest.keeping(c.now()):
 				return *newest, true, ""
 			}
-			if _, found = c.settleGoneTaker(ctx, time.Time{}, current); !found {
+			if _, found = c.settleGoneTaker(ctx, current); !found {
 				return SessionCapture{}, false, "the run's record is gone"
 			}
 		}
@@ -3081,9 +3108,18 @@ func (c *Coordinator) askRecord(ctx context.Context, what, turn string, budget t
 }
 
 // settleCapture asks again, under its own operation, a capture whose record was
-// sent and not answered, and stamps what the log answers: landed, refused, or
-// still unresolved — the stamp never past by, where a caller's own wait bounds
-// it (zero for none: [Coordinator.settleContext]).
+// sent and not answered, and answers what the log answers: landed, refused, or
+// still unresolved. The ask is held to ctx, a caller's own wait where it has
+// one; the stamp of an answer that settled it, landed or refused, is this
+// node's own write, made in its own room past it ([Coordinator.settleContext])
+// as every settle's is, so an answer the log gave is not lost to the row for
+// want of the wait's last seconds.
+//
+// AN ASK THAT LEAVES THE RECORD UNANSWERED STAMPS NOTHING: the row already holds
+// the capture unresolved, the same take's stamp in the same state, which the
+// row's rule leaves as it stands ([stampOnto]). Stamped all the same, as it
+// was, it was one more write of the row whole, given a record's budget and the
+// row's crossing, to say what the row already said.
 //
 // ASKED WHATEVER ITS KEY'S AGE READS ON THIS NODE'S CLOCK. The key was minted on
 // the clock of the node that spooled the capture, and the log refuses a record
@@ -3096,12 +3132,14 @@ func (c *Coordinator) askRecord(ctx context.Context, what, turn string, budget t
 // one is definite, so it is never asked again; and the collector's grace
 // outlasts the window by more than twice the skew, so the object an ask names
 // is never collected under it.
-func (c *Coordinator) settleCapture(ctx context.Context, by time.Time, run PendingRun,
+func (c *Coordinator) settleCapture(ctx context.Context, run PendingRun,
 	last SessionCapture) SessionCapture {
 
 	last.State, last.Reason, _ = c.recordCapture(ctx, run, last, nil)
 	last.Reason = stampReason(last.Reason)
-	c.stampSettled(ctx, by, run.TurnID, last)
+	if last.State != CaptureUnresolved {
+		c.stampSettled(ctx, time.Time{}, run.TurnID, last)
+	}
 	return last
 }
 
@@ -3118,8 +3156,9 @@ func pastRecordWithin(object string, now time.Time) bool {
 }
 
 // settleUnresolved asks run's newest capture again where its record was sent
-// and never answered ([Coordinator.settleCapture]), never past by, and answers
-// the row as it stands after; run as it was where its newest capture is not
+// and never answered ([Coordinator.settleCapture]), the ask held to ctx and
+// the stamp of what settled it to its own room, and answers the row as it
+// stands after; run as it was where its newest capture is not
 // unresolved. Asked by the turn's end before it records the end
 // ([Coordinator.publishEnd]), and by a relaunch before it decides which
 // session it continues ([Coordinator.ContinuedCapture]).
@@ -3128,12 +3167,12 @@ func pastRecordWithin(object string, now time.Time) bool {
 // stamped on run by the row's own rule ([stampOnto]). Read off the copy as it
 // was, an end named a capture that had just landed as one never answered, and
 // a relaunch would not continue it.
-func (c *Coordinator) settleUnresolved(ctx context.Context, by time.Time, run PendingRun) PendingRun {
+func (c *Coordinator) settleUnresolved(ctx context.Context, run PendingRun) PendingRun {
 	newest := run.Capture
 	if newest == nil || newest.State != CaptureUnresolved {
 		return run
 	}
-	settled := c.settleCapture(ctx, by, run, *newest)
+	settled := c.settleCapture(ctx, run, *newest)
 	if current, found, err := c.pending.Get(ctx, run.TurnID); err == nil && found {
 		return current
 	}
@@ -3173,7 +3212,15 @@ func takerStoppedWhy(taker string) string {
 // refused under it — and so does a newer take's. And once written, the taker's
 // own stamp coming after is refused by the row's rule ([stampOnto]): a place
 // settled is never taken back.
-func (c *Coordinator) settleGoneTaker(ctx context.Context, by time.Time, run PendingRun) (PendingRun, bool) {
+//
+// ITS READS ARE HELD TO ctx, the wait's: the lease, and the turn's row on the
+// log. ITS WRITE IS THIS NODE'S OWN, given its own room past the wait, a
+// record's budget and this node's crossing of the row
+// ([Coordinator.settleContext]): held to the wait, a settle decided in the
+// last seconds of a relaunch's fifteen was cut where the wait ended, before a
+// row at its bound could cross a slow link, and a capture whose taker was gone
+// was read as one still being kept.
+func (c *Coordinator) settleGoneTaker(ctx context.Context, run PendingRun) (PendingRun, bool) {
 	begun := run.Capture
 	if begun == nil || c.restore == nil {
 		return run, true
@@ -3196,7 +3243,7 @@ func (c *Coordinator) settleGoneTaker(ctx context.Context, by time.Time, run Pen
 	} else {
 		settled.State, settled.Reason = CaptureRefused, stampReason(takerStoppedWhy(begun.Taker))
 	}
-	took := c.settleStamp(ctx, by, run.TurnID, settled, c.pending.SettleBegun)
+	took := c.settleStamp(ctx, time.Time{}, run.TurnID, settled, c.pending.SettleBegun)
 	if took {
 		log.InfoContext(ctx, "executor_session_settled", "turn_id", run.TurnID, "agent", run.AgentHandle,
 			"launch_seq", settled.LaunchSeq, "capture_seq", settled.CaptureSeq, "taker", nodeOf(begun.Taker),
@@ -3227,8 +3274,10 @@ func (c *Coordinator) settleGoneTaker(ctx context.Context, by time.Time, run Pen
 // whose taker is: a process that stopped keeps nothing it stood by to keep, so
 // a wait holds for it no longer than its lease's TTL and one read. It answers
 // the row as it then stands, and whether it is still there; a standby whose
-// taker holds, or cannot be asked about, is left as it stands.
-func (c *Coordinator) standDownGone(ctx context.Context, by time.Time, run PendingRun) (PendingRun, bool) {
+// taker holds, or cannot be asked about, is left as it stands. Its reads are
+// held to ctx, the wait's; its withdrawal, this node's own write, to its own
+// room past it ([Coordinator.settleContext]).
+func (c *Coordinator) standDownGone(ctx context.Context, run PendingRun) (PendingRun, bool) {
 	newest := run.Capture
 	if newest == nil || !newest.standing(c.now()) {
 		return run, true
@@ -3237,7 +3286,8 @@ func (c *Coordinator) standDownGone(ctx context.Context, by time.Time, run Pendi
 	if gone, err := c.takerGone(ctx, standby); err != nil || !gone {
 		return run, true
 	}
-	if c.settleStamp(ctx, by, run.TurnID, standby, c.pending.StandDown) {
+	took := c.settleStamp(ctx, time.Time{}, run.TurnID, standby, c.pending.StandDown)
+	if took {
 		log.InfoContext(ctx, "executor_session_stood_down", "turn_id", run.TurnID, "agent", run.AgentHandle,
 			"launch_seq", standby.LaunchSeq, "capture_seq", standby.CaptureSeq, "taker", nodeOf(standby.Taker),
 			"taker_epoch", standby.TakerEpoch, "detail", "the lease the read standing by for the capture was "+
@@ -3246,6 +3296,14 @@ func (c *Coordinator) standDownGone(ctx context.Context, by time.Time, run Pendi
 	current, found, err := c.pending.Get(ctx, run.TurnID)
 	switch {
 	case err != nil:
+		// WHAT THIS WITHDREW, where the row cannot be read back to show it,
+		// as [Coordinator.settleGoneTaker] keeps what it settled: past the
+		// wait's end, where its write may land, the read back is cut, and a
+		// copy still naming the standby held the wait for a read that keeps
+		// nothing.
+		if took {
+			standDownOnto(&run, standby)
+		}
 		return run, true
 	case !found:
 		return PendingRun{}, false
@@ -3298,6 +3356,18 @@ func captureInFlight(run PendingRun, now time.Time) bool {
 // by to keep, so the wait holds for it no longer than its lease's TTL and one
 // read, while one whose lease holds is waited for, by its own age.
 //
+// A SETTLE IS THIS NODE'S OWN WRITE, AND within BOUNDS NONE: within bounds the
+// waiting and every read the wait makes (the run's row, a taker's lease, the
+// turn's row on the log), and each settle write it decides is given its own
+// room past it, a record's budget and this node's crossing of the row
+// ([Coordinator.settleContext]), as every stamp made off a read is. Cut at
+// within, as it was, a settle the store was slow to take was not applied, so
+// the wait answered the capture still begun or the standby still standing,
+// and a relaunch read a capture whose taker was gone as one still being kept
+// and started a session of its own beside it. One that lands past within is
+// kept on the row the wait answers where the row cannot be read back after it
+// ([Coordinator.settleGoneTaker], [Coordinator.standDownGone]).
+//
 // A READ THAT FAILS IS NO ANSWER, and the wait goes on: the capture is still
 // begun on the last row this read, and nothing says it has settled. The wait
 // used to end on it, with that stale row, and the end it was holding back was
@@ -3318,19 +3388,18 @@ func (c *Coordinator) awaitCapture(ctx context.Context, run PendingRun,
 	within time.Duration) (PendingRun, bool, error) {
 
 	// NEVER LONGER THAN within, whatever the stamp's clock says: a stamp whose
-	// node's clock runs ahead is waited out on this one's. And a settle's
-	// stamp is made within it too.
+	// node's clock runs ahead is waited out on this one's. Its reads and the
+	// lease's are held to it; a settle's write is not (see above).
 	wait, cancel := context.WithTimeout(ctx, within)
 	defer cancel()
-	by, _ := wait.Deadline()
 	var unread error
 	for {
 		if unread == nil {
 			var found bool
-			if run, found = c.settleGoneTaker(wait, by, run); !found {
+			if run, found = c.settleGoneTaker(wait, run); !found {
 				return PendingRun{}, false, nil
 			}
-			if run, found = c.standDownGone(wait, by, run); !found {
+			if run, found = c.standDownGone(wait, run); !found {
 				return PendingRun{}, false, nil
 			}
 		}
@@ -3769,7 +3838,7 @@ func (c *Coordinator) publishEnd(ctx context.Context, run PendingRun) (PendingRu
 				"left owed for a node of that build to record, and the run's ending is kept until one does")
 		return run, fmt.Errorf("sandbox: the end turn %s owes was written by a newer build: %s", run.TurnID, why)
 	default:
-		run = c.settleUnresolved(ctx, time.Time{}, run)
+		run = c.settleUnresolved(ctx, run)
 		ending.Unkept, ending.WentOn, ending.LastWord = unkeptOf(run), wentOnPast(run), lastWordOf(run)
 		ending.Exhausted = run.ExhaustedSessions
 		if recordErr := c.recordEnd(ctx, turnEndOf(run, ending)); recordErr != nil {
