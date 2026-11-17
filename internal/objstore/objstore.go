@@ -382,11 +382,12 @@ const RecordWithin = 12 * time.Hour
 // to twice it. Not every one of them is a machine the alarm holds: a rule
 // judged on the clock of a node that runs seats, a turn's hold on a
 // repository, a box read's admission or a stop's give-up, rests on a clock the
-// alarm measures only where that node holds data too, since a node without the data role writes no row to the
-// register. The servers of an external NATS cluster are not nodes, and
-// nothing measures them but the one leading the register. Those clocks are
-// the operator's to keep, so NTP runs on every node and every server, not
-// only on the machines the alarm watches (docs/guides/deployment.md).
+// alarm measures only where that node holds data too, since a node without
+// the data role writes no row to the register. The servers of an external
+// NATS cluster are not nodes, and nothing measures them but the one leading
+// the register. Those clocks are the operator's to keep, so NTP runs on every
+// node and every server, not only on the machines the alarm watches
+// (docs/guides/deployment.md).
 //
 // AN HOUR: NTP keeps every machine within milliseconds, so a node an hour off
 // is one whose clock nothing keeps — a host with no NTP client, a virtual
