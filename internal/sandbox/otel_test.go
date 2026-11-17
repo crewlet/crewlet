@@ -14,13 +14,10 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// What these tests protect.
-//
-// The receiver exists so a box running generated code never holds the
-// telemetry backend's ingest credential. Every failure of that is silent in
-// the same way: the export succeeds, the trace appears, and the credential is
-// somewhere it should not be — or the token check is loose and anybody who
-// can reach the endpoint writes into the company's telemetry.
+// These tests protect the receiver's job: a box running generated code never
+// holds the telemetry backend's ingest credential, and only a run's own token
+// writes into the company's telemetry. Every failure of that is silent: the
+// export succeeds and the trace appears.
 
 // otelTokens is [sandbox.NewOtelTokens] for a keyring a case expects to be
 // usable.
@@ -65,13 +62,9 @@ func runEnvFor(t *testing.T, m *sandbox.Manager, req sandbox.LaunchRequest, box 
 	return env
 }
 
-// A TOKEN MINTED IN ONE PROCESS VERIFIES IN ANOTHER.
-//
-// This is the property the whole design turns on. Minting and verifying
-// happen on different nodes of a fleet, since a box exports to whichever node
-// it can reach, and an in-memory store makes them the same process by
-// assumption: every trace that reached another node would be answered 401,
-// visible only as exporter retry noise inside a sandbox nobody watches.
+// A TOKEN MINTED IN ONE PROCESS VERIFIES IN ANOTHER: a box exports to whichever
+// node it reaches, so a per-process key would answer every trace reaching
+// another node 401, seen only as exporter retries in a sandbox nobody watches.
 func TestAnOtelTokenVerifiesInAnotherProcess(t *testing.T) {
 	t.Parallel()
 	material := runtoken.Material{
@@ -103,12 +96,9 @@ func TestAnOtelTokenVerifiesInAnotherProcess(t *testing.T) {
 		t.Error("the signing key depends on the keyring's order")
 	}
 
-	// A ROTATION DOES NOT INVALIDATE A LIVE RUN'S TOKEN. The operator adds
-	// k3 and flips the active key to it; k2 is still on the ring, and the
-	// token names the key that signed it, so the box exporting right now
-	// keeps working. This is the whole reason the tag exists: derived from
-	// the whole keyring, every one of these three rings produced a
-	// DIFFERENT key and this token died the moment k3 was added.
+	// A ROTATION DOES NOT INVALIDATE A LIVE RUN'S TOKEN: the token names the key
+	// that signed it, the tag's whole reason, and k2 is still on the ring when the
+	// operator adds k3 and makes it active.
 	rotated := runtoken.Material{ActiveID: "k3", Keys: []runtoken.KeyMaterial{
 		{ID: "k1", Material: "material-one"},
 		{ID: "k2", Material: "material-two"},
@@ -306,12 +296,9 @@ func TestAFailingUpstreamNeverRaises(t *testing.T) {
 	receiver.Forward(context.Background(), "traces", []byte("payload"), "")
 }
 
-// THE RUN ENVIRONMENT CARRIES AN ENDPOINT AND NO CREDENTIAL.
-//
-// The headers variable is set EMPTY rather than left unset, because the
-// exporter reads it from the ambient environment otherwise — and a box
-// inherits whatever the engine host exported. Empty is the difference between
-// "no credential" and "the engine's".
+// THE RUN ENVIRONMENT CARRIES AN ENDPOINT AND NO CREDENTIAL. The headers
+// variable is set EMPTY rather than unset, since the exporter otherwise reads
+// the one the box inherited from the engine host.
 func TestTheRunEnvironmentCarriesNoCredential(t *testing.T) {
 	t.Parallel()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
@@ -360,10 +347,8 @@ func TestTheRunEnvironmentCarriesNoCredential(t *testing.T) {
 	}
 }
 
-// A RUN WITH NO TRACE GETS NO ENDPOINT.
-//
-// A token scoped to an empty trace would authenticate every run's export as
-// every other run's, which is the one property the scoping exists for.
+// A RUN WITH NO TRACE GETS NO ENDPOINT: a token scoped to an empty trace would
+// authenticate every run's export as every other run's.
 func TestARunWithNoTraceGetsNoEndpoint(t *testing.T) {
 	t.Parallel()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
@@ -379,10 +364,9 @@ func TestARunWithNoTraceGetsNoEndpoint(t *testing.T) {
 }
 
 // A TRACE NO TOKEN CAN CARRY REDACTED GETS NO ENDPOINT, AND ITS JOB NO START: a
-// trace id holding a dot would be minted into a token internal/redact does
-// not know by its shape, which a box printing its environment would have
-// persisted as printed. The refusal reaches the run's environment and the
-// job's, by name, rather than an endpoint every surface publishes.
+// trace id holding a dot would mint a token internal/redact does not know by
+// its shape, persisted wherever a box prints its environment. The refusal
+// reaches the run's and the job's environment by name, never as an endpoint.
 //
 // Mutation: drop the error on its way out of the receiver, and the run is
 // handed an environment with no endpoint, as though no address reached it.
@@ -432,10 +416,9 @@ func TestAReceiverNeedsAnAddressTheBoxCanReach(t *testing.T) {
 	}
 }
 
-// ONLY THE SIGNALS THIS RECEIVER FORWARDS ARE ACCEPTED.
-//
-// The signal is concatenated into the upstream URL, so an unchecked one lets
-// a caller choose part of the address the engine's OWN credential is sent to.
+// ONLY THE SIGNALS THIS RECEIVER FORWARDS ARE ACCEPTED: the signal is joined
+// into the upstream URL, so an unchecked one lets a caller choose part of the
+// address the engine's OWN credential is sent to.
 func TestOnlyKnownSignalsAreAccepted(t *testing.T) {
 	t.Parallel()
 	for _, good := range []string{"traces", "metrics", "logs"} {
@@ -485,11 +468,9 @@ func TestTheReceiverIsBuiltFromTheEnvironment(t *testing.T) {
 	env[sandbox.OtelUpstreamEndpointVar] = "https://collector.example"
 	env[sandbox.OtelUpstreamHeadersVar] = "api-key=abc"
 
-	// A KEYRING THAT CANNOT SIGN FOR THE FLEET IS REFUSED, not given a key
-	// of this process's own: that key validates at the node that minted
-	// and nowhere else, so a box exporting to any other node would be
-	// refused with its configuration looking complete. Mutation: fall back
-	// to a per-process key and this builds a receiver.
+	// A KEYRING THAT CANNOT SIGN FOR THE FLEET IS REFUSED, not given a key of
+	// this process's own, which validates only at the minting node. Mutation: fall
+	// back to a per-process key and this builds a receiver.
 	if got, err = sandbox.BuildOtelReceiver(lookup, runtoken.Material{}, ""); !errors.Is(err, runtoken.ErrNoKeyring) || got != nil {
 		t.Fatalf("a receiver with no keyring = %v, %v, want the refusal", got, err)
 	}
@@ -505,9 +486,8 @@ func TestTheReceiverIsBuiltFromTheEnvironment(t *testing.T) {
 		t.Error("a configured upstream reports no forwarding")
 	}
 
-	// AND A SET ADDRESS NO EXPORTER CAN USE IS AN ERROR, not a receiver:
-	// built, it minted every run an endpoint with no scheme, and the run's
-	// telemetry went nowhere.
+	// AND A SET ADDRESS NO EXPORTER CAN USE IS AN ERROR, not a receiver that
+	// mints every run an endpoint with no scheme.
 	env[sandbox.OtelReceiverURLVar] = "engine.internal:443"
 	got, err = sandbox.BuildOtelReceiver(lookup, runtoken.OneKey("k1", "material"), "")
 	if err == nil || got != nil {
@@ -519,13 +499,12 @@ func TestTheReceiverIsBuiltFromTheEnvironment(t *testing.T) {
 }
 
 // A BOX ON ITS NODE'S HOST EXPORTS TO THAT NODE, WHERE THE NODE FORWARDS. The
-// node that bound a listener knows where a `direct` box reaches it, as the
-// tool bridge does, so a deployment that sets OTEL_EXPORTER_OTLP_ENDPOINT for
-// the engine's own spans has its direct boxes' telemetry with no receiver
-// address to publish — a seat pool that has none above all. Where this node
-// has no upstream it would drop what it received, so it hands its boxes no
-// endpoint of its own: none at all, or the fleet's address where one is set,
-// whose node may forward. A box off the host dials the fleet's address alone.
+// node knows where a `direct` box reaches its listener, as the tool bridge
+// does, so a deployment setting OTEL_EXPORTER_OTLP_ENDPOINT for the engine's
+// own spans gets its direct boxes' telemetry with no receiver address
+// published. A node with no upstream would drop what it received, so
+// it hands its boxes the fleet's address where one is set, else no endpoint.
+// A box off the host dials the fleet's address alone.
 //
 // Mutation: take the host address whatever the upstream, and "no upstream"
 // builds a receiver that drops every export while "the fleet's address, no
@@ -645,13 +624,9 @@ func TestTheRunsCellPicksTheAddressItExportsTo(t *testing.T) {
 	}
 }
 
-// THE OPERATOR'S OWN ENVIRONMENT WINS.
-//
-// role.sandbox.env is where an operator declares what a box gets, and a
-// deployment that points its harnesses at its own collector directly has
-// said so deliberately. Overriding that silently would be the engine choosing
-// where somebody else's telemetry goes — and the failure is invisible: the
-// spans arrive somewhere, just not where the config said.
+// THE OPERATOR'S OWN ENVIRONMENT WINS: role.sandbox.env is where an operator
+// declares what a box gets, and overriding a collector set there would send
+// somebody's spans somewhere other than the config says, invisibly.
 func TestTheOperatorsTelemetryEnvironmentWins(t *testing.T) {
 	t.Parallel()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
@@ -708,11 +683,10 @@ type aliasedBox struct {
 
 func (b aliasedBox) EngineHost() string { return b.alias }
 
-// THE RECEIVER IS REACHED AS THE BOX DIALS IT. Its base is written in the
-// engine host's network, and on a single-host install that is loopback, which
-// inside a container is the container: every span a containerised run
-// exported went nowhere. An operator's own endpoint is in the box's network
-// already, and is left exactly as written.
+// THE RECEIVER IS REACHED AS THE BOX DIALS IT: its base is written in the
+// engine host's network, whose loopback inside a container is the container.
+// An operator's own endpoint is in the box's network already, and is left
+// exactly as written.
 func TestTheRunsEndpointIsTheReceiverAsTheBoxDialsIt(t *testing.T) {
 	t.Parallel()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{

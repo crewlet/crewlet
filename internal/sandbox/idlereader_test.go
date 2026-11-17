@@ -26,13 +26,9 @@ func (b *blockingReader) Read(p []byte) (int, error) {
 	return 0, io.EOF
 }
 
-// THE IDLE BUDGET IS THE CALLER'S, on every read and not just the first.
-//
-// `newIdleReader` took an `idle` duration, armed the first timer with it, and
-// then reset with the package constant — so a caller asking for anything else
-// got its budget once and ten minutes for the rest of the stream. Nothing
-// noticed because the only caller passes the constant, which is exactly the
-// shape that breaks the day a second one does not.
+// THE IDLE BUDGET IS THE CALLER'S, on every read and not just the first: a
+// reset that reached for the package constant would give a caller its budget
+// once and the constant for the rest of the stream.
 func TestTheIdleReaderKeepsTheBudgetItWasGiven(t *testing.T) {
 	t.Parallel()
 	var cancelled atomic.Bool
@@ -53,14 +49,10 @@ func TestTheIdleReaderKeepsTheBudgetItWasGiven(t *testing.T) {
 		t.Fatal("the request was cancelled while the stream was still delivering")
 	}
 
-	// WAITED FOR rather than sampled, because firing is the direction a slow
-	// machine helps: a single look after a fixed sleep asserted that the
-	// timer's goroutine had been SCHEDULED by then, which is a claim about
-	// the machine, and it went red under a race-enabled suite on a loaded
-	// box with the reader behaving perfectly. The deadline only has to sit
-	// far inside the package constant — minutes — for a reset that reached
-	// for the constant to fail here; how soon inside it the timer fires is
-	// the scheduler's business.
+	// WAITED FOR rather than sampled: firing is the direction a slow machine
+	// helps, and one look after a fixed sleep claims the timer's goroutine
+	// was scheduled by then. The deadline need only sit far inside the
+	// package constant (minutes) for a reset to the constant to fail here.
 	const deadline = 10 * time.Second
 	waited := time.Now()
 	//fixedwait:measure a poll's own deadline: the cancel is asserted after it, and a reset to the package constant fires minutes past it
@@ -74,17 +66,12 @@ func TestTheIdleReaderKeepsTheBudgetItWasGiven(t *testing.T) {
 	}
 }
 
-// AND A DELIVERING STREAM SURVIVES PAST ITS OWN BUDGET, which is the other
-// half of the same claim: the budget bounds the GAP between bytes, not the
-// life of the stream.
+// AND A DELIVERING STREAM SURVIVES PAST ITS OWN BUDGET: the budget bounds the
+// GAP between bytes, not the life of the stream.
 //
-// Driven through a countdown this case owns rather than a real one, because
-// the claim is a NEGATIVE — the stream was not abandoned — and an
-// abandonment that has not happened has no signal to wait on. Against wall
-// time the only way to make it is to sleep between deliveries and hope the
-// budget outlasts the scheduler, which is a claim about the machine: this
-// case slept 10ms against a 40ms budget and went red on a loaded CI box with
-// the reader behaving perfectly. See newIdleReaderOn.
+// Driven through a countdown the case owns (newIdleReaderOn), because the
+// claim is a NEGATIVE: an abandonment that has not happened has no signal to
+// wait on, and against wall time it would rest on the scheduler.
 func TestDeliveringBytesPostponesTheAbandonment(t *testing.T) {
 	t.Parallel()
 	var cancelled atomic.Bool
@@ -158,10 +145,7 @@ func (f *fakeTimer) last() time.Duration {
 	return f.armed
 }
 
-// expire fires the countdown, in the CALLER's goroutine.
-//
-// Synchronous on purpose. A real timer fires on its own goroutine, and
-// reproducing that here would hand the case back the scheduling race it was
-// written to remove — the reader does not care which goroutine calls the
-// callback, so the test does not either.
+// expire fires the countdown synchronously, in the CALLER's goroutine: a
+// timer goroutine would bring back the scheduling race the fake removes, and
+// the reader does not care which goroutine calls the callback.
 func (f *fakeTimer) expire() { f.fire() }

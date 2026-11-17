@@ -19,43 +19,28 @@ import (
 
 // The E2B control plane: minting, reclaiming and keeping a box alive.
 //
-// # A thin typed client rather than a vendor SDK
+// A thin typed client: E2B publishes no Go SDK, and the control plane is a
+// handful of documented JSON endpoints, so the backend stays pure Go.
 //
-// E2B publishes no Go SDK. The control plane is a handful of documented JSON
-// endpoints, so this is a typed client over them — which is what this engine
-// does wherever a vendor ships no Go SDK, and is why the whole backend stays
-// pure Go and cross-compiles with everything else.
-//
-// # Two planes, and they are different hosts
-//
-// The CONTROL plane (here) mints, kills, pauses and re-times boxes. It is the
-// only half that carries the API key.
-//
-// The IN-BOX plane — running commands, reading and writing files — is envd,
-// an agent inside the box, reached on a per-sandbox hostname. See e2b_envd.go.
-// Nothing in this file talks to it, and the split matters: a box whose envd
-// is unreachable is still killable, which is what stops a network blip from
-// leaking a running VM.
+// It is the only half that carries the API key. The in-box plane (commands,
+// files) is envd on a per-box hostname (e2b_envd.go), and nothing here talks
+// to it: a box whose envd is unreachable is still killable, so a network blip
+// cannot leak a running VM.
 
-// The E2B addresses. `domain` is the whole cloud-to-self-hosted switch: the
-// API and the per-box hostnames are both derived from it, so a cluster is one
-// field rather than two that can disagree.
+// The E2B addresses. The domain derives both the API and the per-box
+// hostnames, so a self-hosted cluster is one field, not two that can disagree.
 const (
 	// DefaultE2BDomain is the vendor cloud.
 	DefaultE2BDomain = "e2b.dev"
 
-	// e2bEnvdPort is the port envd listens on inside every box. It is part
-	// of the hostname rather than the path: E2B routes `<port>-<host>` to
-	// that port in the box.
+	// e2bEnvdPort is envd's port in every box, carried in the hostname
+	// (E2B routes `<port>-<host>` to it), not the path.
 	e2bEnvdPort = 49983
 )
 
-// E2BClientTimeout bounds one control-plane request.
-//
-// GENEROUS compared to the notification path's, because minting a VM is a
-// real allocation: a cold template can take several seconds, and a timeout
-// short enough to be tidy would abandon boxes that are about to exist —
-// which is the one failure mode with a running cost attached.
+// E2BClientTimeout bounds one control-plane request. Generous: minting a VM
+// from a cold template takes seconds, and a tighter bound would abandon boxes
+// about to exist, the one failure with a running cost.
 const E2BClientTimeout = 60 * time.Second
 
 // e2bAPI is the control plane for one deployment.
@@ -87,11 +72,8 @@ func newE2BAPI(apiKey, domain string, client *http.Client) *e2bAPI {
 	}
 }
 
-// E2BError is a refusal from the control plane.
-//
-// TYPED, so a caller deciding what a refusal MEANS — 404 is "this box is
-// gone", which for a kill is success — does not substring-match a message the
-// vendor changes freely.
+// E2BError is a refusal from the control plane, typed so a caller reads its
+// status (a 404 to a kill is success) rather than matching vendor text.
 type E2BError struct {
 	Method string
 	Path   string
@@ -112,11 +94,9 @@ func (e *E2BError) Gone() bool {
 	return e.Status == http.StatusNotFound || e.Status == http.StatusGone
 }
 
-// why classes the refusal by its status ([statusWhy]): the company's key
-// refused, the account at a limit, or E2B failing on its side. A status that
-// means something only for the call that met it — a 404 is a box that is gone
-// to a connect and a template E2B does not have to a create — is that call's
-// to class.
+// why classes the refusal by status ([statusWhy]): the key refused, the
+// account at a limit, or E2B failing. A status whose meaning depends on the
+// call (a 404 to a connect or to a create) is that call's to class.
 func (e *E2BError) why() (Why, bool) { return statusWhy(e.Status, true) }
 
 func (a *e2bAPI) do(ctx context.Context, method, path string, in, out any) error {
@@ -132,10 +112,8 @@ func (a *e2bAPI) do(ctx context.Context, method, path string, in, out any) error
 	if err != nil {
 		return fmt.Errorf("e2b: %s: %w", path, err)
 	}
-	// X-API-KEY, not a bearer. E2B accepts a bearer only for a
-	// user-scoped access token, and the key an operator gets from the
-	// dashboard is refused under that scheme — the same credential
-	// rejected purely on which header carried it.
+	// X-API-KEY, not a bearer: E2B takes a bearer only for a user-scoped
+	// access token and refuses the dashboard's key under it.
 	req.Header.Set("X-API-KEY", a.key)
 	req.Header.Set("Accept", "application/json")
 	if in != nil {
@@ -144,10 +122,8 @@ func (a *e2bAPI) do(ctx context.Context, method, path string, in, out any) error
 
 	resp, err := a.http.Do(req)
 	if err != nil {
-		// NO ANSWER AT ALL is E2B not answering, which clears when it
-		// does, unless the configured domain is what failed: see
-		// [transportWhy]. A request the caller cancelled is no class at
-		// all ([unanswered]).
+		// No answer is E2B unavailable unless the domain failed
+		// ([transportWhy]); a caller's cancellation is no class ([unanswered]).
 		failed := fmt.Errorf("e2b: %s: %w", path, err)
 		if cancelledBy(ctx) {
 			return failed
@@ -172,16 +148,12 @@ func (a *e2bAPI) do(ctx context.Context, method, path string, in, out any) error
 	return nil
 }
 
-// transportWhy is what a control-plane request that got no answer means.
-//
-// A DOMAIN THAT DOESN'T RESOLVE, or a certificate the host it resolves to
-// doesn't present for it, is the deployment's providers.sandbox.e2b domain:
-// the request never reached E2B, and no wait changes either. Read as E2B not
-// answering, a mistyped domain (the mistake [newE2BAPI] names as the obvious
-// one) would be told on every call as an outage that clears by itself.
-// Anything else (a timeout, a reset, a refused connection, a resolver
-// that didn't answer) is E2B, or the way to it, not answering, which clears
-// when it does.
+// transportWhy is what a control-plane request that got no answer means. A
+// domain that does not resolve, or a certificate not valid for it, is the
+// providers.sandbox.e2b domain's fault, which no wait changes: read as an
+// outage, a mistyped domain would be reported on every call as one that
+// clears by itself. Anything else (a timeout, a reset, a refused connection,
+// a silent resolver) is E2B, or the route to it, not answering.
 func transportWhy(err error) Why {
 	var dns *net.DNSError
 	if errors.As(err, &dns) && dns.IsNotFound {
@@ -198,35 +170,28 @@ func transportWhy(err error) Why {
 	return WhyProviderUnavailable
 }
 
-// e2bBox is a sandbox as the control plane reports it.
-//
-// THE CLIENT ID IS LOAD-BEARING and is the field most easily mistaken for
-// bookkeeping: a box's envd hostname is `<port>-<sandbox>-<client>`, so a
-// reconnect that kept only the sandbox id can kill the box and can never
-// talk to it again.
+// e2bBox is a sandbox as the control plane reports it. ClientID is
+// load-bearing: the envd hostname is `<port>-<sandbox>-<client>`, so a
+// reconnect that kept only the sandbox id could kill the box but never reach it.
 type e2bBox struct {
 	SandboxID  string `json:"sandboxID"`
 	ClientID   string `json:"clientID"`
 	TemplateID string `json:"templateID"`
-	// EnvdVersion is envd's own version, which E2B bumps independently of
-	// the template. Read so a wire mismatch is visible in a log line
-	// rather than as an unexplained 404 from inside a box.
+	// EnvdVersion, which E2B bumps apart from the template, is read so a wire
+	// mismatch shows in a log line, not as an unexplained 404 from the box.
 	EnvdVersion string `json:"envdVersion"`
 
-	// State is `running` or `paused` — the SandboxState of E2B's own
-	// spec, on its `GET /sandboxes/{sandboxID}` answer only ([getBox]);
-	// a create or a connect answers a running box and does not carry it.
+	// State is `running` or `paused`, answered only by [getBox]'s read; a
+	// create or a connect answers a running box without it.
 	State string `json:"state,omitempty"`
 
-	// EnvdAccessToken is the credential a SECURED box's envd requires on
-	// every request (`X-Access-Token`; see [e2bAPI.createBox]) — and every
-	// box this backend creates is secured. E2B answers it on the create, on
-	// a connect and on a read of the box alike, so every handle this
-	// backend builds carries it whichever of the three reached the box.
-	// NEVER LOGGED OR STORED: it is the box's credential, and every call
-	// that reaches the box hands it back, so nothing here has to keep it.
+	// EnvdAccessToken is the credential a secured box's envd requires on
+	// every request (`X-Access-Token`), and every box this backend creates is
+	// secured ([e2bAPI.createBox]). E2B answers it on a create, a connect and
+	// a read alike, so every handle carries it. Never logged or stored: every
+	// call that reaches the box hands it back.
 	//
-	// Source: the Sandbox and SandboxDetail schemas of E2B's OpenAPI spec,
+	// Source: the Sandbox and SandboxDetail schemas of
 	// https://github.com/e2b-dev/infra/blob/main/spec/openapi.yml.
 	EnvdAccessToken string `json:"envdAccessToken,omitempty"`
 }
@@ -234,11 +199,9 @@ type e2bBox struct {
 // e2bPaused is the [e2bBox.State] of a snapshot.
 const e2bPaused = "paused"
 
-// host is the per-box envd hostname.
-//
-// A box created before E2B split the client id out reports an empty one, and
-// its hostname is the short form. Building the long form unconditionally
-// would produce `49983-abc-.e2b.dev`, which resolves to nothing.
+// host is the per-box envd hostname. A box that reports no client id has the
+// short form; the long form would be `49983-abc-.e2b.dev`, which resolves to
+// nothing.
 func (b e2bBox) host(domain string) string {
 	name := b.SandboxID
 	if b.ClientID != "" {
@@ -247,27 +210,18 @@ func (b e2bBox) host(domain string) string {
 	return fmt.Sprintf("https://%d-%s.%s", e2bEnvdPort, name, domain)
 }
 
-// createBox mints one sandbox.
+// createBox mints one sandbox. The TTL is its kill timer, refreshed by
+// [E2BSandbox.SetTimeout] every poll tick: it bounds how long a box outlives
+// a stopped engine, never how long a job runs.
 //
-// The TTL is the box's own kill timer, refreshed by [E2BSandbox.SetTimeout]
-// on every poll tick — so it bounds how long a box outlives an engine that
-// stopped heart-beating, never how long a job may run.
+// Always `secure: true`, else envd requires no credential and E2B answers no
+// token. Secured, envd requires the create's token ([e2bBox.EnvdAccessToken])
+// on every request but its health check, as E2B's SDKs do since 2.0; E2B
+// refuses a template whose envd is below 0.2.0, saying to rebuild it.
 //
-// ALWAYS SECURED. This endpoint secures a box only when `secure` is true;
-// otherwise its envd requires no credential at all, and E2B answers no access
-// token for it. Secured, envd requires the token the create answers
-// ([e2bBox.EnvdAccessToken]) on every request but its health check — E2B's
-// own SDKs have created every box that way since their 2.0 ("Each call to the
-// sandbox controller must include an additional header X-Access-Token with
-// the access token value returned during sandbox creation"). A template whose
-// envd predates secured access (below 0.2.0) is refused by E2B with a message
-// saying to rebuild it, which is the right place for that to surface.
-//
-// Sources: https://e2b.dev/docs/sandbox/secured-access; the NewSandbox
-// schema in https://github.com/e2b-dev/infra/blob/main/spec/openapi.yml, the
-// create handler that mints a token only for `secure: true`
-// (packages/api/internal/handlers/sandbox_create.go there), and envd's
-// WithAuthorization in packages/envd/internal/api/auth.go.
+// Sources: https://e2b.dev/docs/sandbox/secured-access; in e2b-dev/infra,
+// spec/openapi.yml (NewSandbox), packages/api/internal/handlers/sandbox_create.go
+// and envd's WithAuthorization in packages/envd/internal/api/auth.go.
 func (a *e2bAPI) createBox(ctx context.Context, template string, timeoutSec float64, env map[string]string) (e2bBox, error) {
 	type request struct {
 		TemplateID string            `json:"templateID"`
@@ -282,30 +236,25 @@ func (a *e2bAPI) createBox(ctx context.Context, template string, timeoutSec floa
 		Timeout:    int(timeoutSec),
 		Secure:     true,
 		EnvVars:    env,
-		// STAMPED SO A LEAK IS ATTRIBUTABLE. A box outlives the process
-		// that made it by design, so an operator looking at a running VM
-		// in the E2B dashboard has nothing else to go on.
+		// Stamped so a leaked VM in the E2B dashboard is attributable: a
+		// box outlives the process that made it by design.
 		Metadata: map[string]string{"crewlet": "sandbox"},
 	}, &out)
 	if err != nil {
 		var refused *E2BError
 		if errors.As(err, &refused) && createRefusesTemplate(refused.Status) {
-			// A CREATE E2B REFUSES AS MALFORMED (400, 422), or a template
-			// it doesn't have (404): everything this request carries is
-			// configuration, so each is a person's to change. The
-			// template (providers.sandbox.e2b.template, or the harness's
-			// own) is the likeliest, a missing one or one whose
-			// envd predates secured access, which E2B refuses saying to
-			// rebuild it; the timeout and the seat's run environment ride
-			// the same request, and E2B refuses a malformed one too.
+			// Everything a create carries is configuration, so a 400, 422
+			// or 404 is a person's to change: likeliest the template
+			// (providers.sandbox.e2b.template, or the harness's), missing or
+			// with envd too old for secured access; the timeout and the
+			// seat's run environment ride the same request.
 			return e2bBox{}, Because(WhyConfiguration, err)
 		}
 		return e2bBox{}, err
 	}
 	if out.SandboxID == "" {
-		// A create that answered 200 with no id has left a VM running
-		// that nothing can address — the worst outcome available, since
-		// it cannot be killed either.
+		// A 200 with no id leaves a VM running that nothing can address
+		// or kill.
 		return e2bBox{}, Because(WhyProviderUnavailable, fmt.Errorf(
 			"e2b: the create call succeeded and named no sandbox, so a box "+
 				"may be running that nothing can reach or reclaim — check the "+
@@ -322,23 +271,14 @@ func createRefusesTemplate(status int) bool {
 		status == http.StatusUnprocessableEntity
 }
 
-// connectBox reads one sandbox for a reconnect, resuming it if it was paused.
+// connectBox reads one sandbox for a reconnect, resuming it if paused, in one
+// call: /connect answers 200 for a running box and 201 for a woken one, with
+// the sandbox either way. A GET then the deprecated /resume would take two
+// round trips, race a reaper between them, and refuse "already running" (409).
 //
-// ONE CALL FOR BOTH HALVES. E2B's /connect answers 200 when the box was
-// already running and 201 when it had to be woken, and returns the sandbox
-// either way — so the caller needs neither to know which happened nor to ask
-// first. The pair this replaced (GET the box, then POST /resume) was two round
-// trips on the completion path, raced a reaper between them, and had to map
-// the resume's 409 "already running" onto success by hand.
-//
-// /resume is DEPRECATED in E2B's own spec, which is the other half of the
-// reason: it is the endpoint that cannot express "already running" as anything
-// but an error.
-//
-// A FRESH TTL IS NOT OPTIONAL HERE — the field is required by the API. A
-// snapshot has no kill timer running, so a box woken without one would carry
-// whatever remained of the timer it was paused with, which for a run parked
-// overnight is nothing.
+// The fresh TTL is required: a snapshot runs no kill timer, so a box woken
+// without one keeps what remained when it paused, for a run parked overnight
+// nothing.
 func (a *e2bAPI) connectBox(ctx context.Context, sandboxID string, seconds float64) (e2bBox, error) {
 	type request struct {
 		Timeout int `json:"timeout"`
@@ -355,14 +295,12 @@ func (a *e2bAPI) connectBox(ctx context.Context, sandboxID string, seconds float
 	return out, nil
 }
 
-// getBox reads one sandbox as it is, WITHOUT resuming it or touching its
-// timer: E2B's `GET /sandboxes/{sandboxID}` ("Get a sandbox by id"), whose
-// SandboxDetail answer carries the box's `state` — `running` or `paused` —
-// beside the client id its envd hostname is built from. The read a reader
-// needs, where /connect is the read a resume needs: /connect wakes a paused
-// box ("If the sandbox is paused, it will be resumed") and extends its timer.
+// getBox reads one sandbox as it is, without resuming it or touching its
+// timer: `GET /sandboxes/{sandboxID}`, whose SandboxDetail carries `state`
+// beside the client id. /connect is a resume's read: it wakes a paused box
+// and extends its timer.
 //
-// Source: the SandboxDetail and SandboxState schemas of E2B's OpenAPI spec,
+// Source: the SandboxDetail and SandboxState schemas of
 // https://github.com/e2b-dev/infra/blob/main/spec/openapi.yml.
 func (a *e2bAPI) getBox(ctx context.Context, sandboxID string) (e2bBox, error) {
 	var out e2bBox
@@ -375,22 +313,18 @@ func (a *e2bAPI) getBox(ctx context.Context, sandboxID string) (e2bBox, error) {
 	return out, nil
 }
 
-// listBoxes lists at most limit of the deployment's sandboxes and discards
-// them: the one authenticated read the runner probe makes ([ProbeE2B]), which
-// proves the key and the route without making or waking a box.
-//
-// E2B's `GET /v2/sandboxes` ("List all sandboxes"), with its `limit` query
-// parameter, from the same OpenAPI spec as [e2bAPI.getBox].
+// listBoxes lists at most limit sandboxes (`GET /v2/sandboxes`, the spec
+// [e2bAPI.getBox] cites) and discards them: the runner probe's one
+// authenticated read ([ProbeE2B]), proving the key and the route without
+// making or waking a box.
 func (a *e2bAPI) listBoxes(ctx context.Context, limit int) error {
 	var out []e2bBox
 	return a.do(ctx, http.MethodGet, fmt.Sprintf("/v2/sandboxes?limit=%d", limit), nil, &out)
 }
 
-// killBox terminates a sandbox by id, without resuming it.
-//
-// A PAUSED BOX IS KILLED WHERE IT LIES. The reaper's whole reason to exist is
-// that a paused snapshot bills; resuming it to kill it would boot the VM and
-// bill runtime to pay for a shutdown.
+// killBox terminates a sandbox by id without resuming it: the reaper exists
+// because a paused snapshot bills, and resuming one to kill it would boot the
+// VM for a shutdown.
 func (a *e2bAPI) killBox(ctx context.Context, sandboxID string) error {
 	err := a.do(ctx, http.MethodDelete, "/sandboxes/"+sandboxID, nil, nil)
 	var apiErr *E2BError

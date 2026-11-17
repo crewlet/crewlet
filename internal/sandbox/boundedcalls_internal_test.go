@@ -6,14 +6,12 @@ import (
 )
 
 // A LONG RUN'S LOG KEEPS THE CALLS THAT ENDED IT. Past [MaxBridgeCalls] the log
-// drops from its middle, and it gives up its ordinary calls first: a question
-// the run parked on or a submission it corrected itself with is what the
-// round's record and its reviewer read the run by, so it outlives the reads
-// around it. A log of nothing but such calls is still held to the cap.
+// drops from its middle, ordinary calls first: a question the run parked on or
+// a submission it corrected itself with is what the round's record and its
+// reviewer read the run by. A log of nothing but such calls is still capped.
 //
-// Mutation: drop the middle's oldest call whatever it is, and the ask in the
-// middle is lost; drop only ordinary calls, and the all-submission log grows
-// past its cap.
+// Mutation: drop the middle's oldest call whatever it is, and the ask is lost;
+// drop only ordinary calls, and the all-submission log grows past its cap.
 func TestALongRunsLogKeepsTheCallsThatEndedIt(t *testing.T) {
 	t.Parallel()
 	var (

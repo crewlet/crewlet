@@ -22,10 +22,9 @@ import (
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 )
 
-// trapsUSR1 is a shell line that, sent SIGUSR1, writes "heard" into heard and
-// goes on, and that writes its own pid into pid once its traps are set — a
-// run's script's end protocol in miniature. Sent SIGUSR2, it writes heard's
-// witness instead ([unsignalled]).
+// trapsUSR1 is a shell line that writes its pid into pid once its traps are
+// set, "heard" into heard on SIGUSR1, and heard's witness on SIGUSR2
+// ([unsignalled]): a run's script's end protocol in miniature.
 func trapsUSR1(heard, pid string) string {
 	return `trap 'echo heard > ` + shQuote(heard) + `' USR1; trap 'echo witnessed > ` +
 		shQuote(witnessOf(heard)) + `' USR2; echo $$ > ` + shQuote(pid) + `; while :; do sleep 0.05; done`
@@ -52,9 +51,9 @@ func readPID(t *testing.T, path string) int {
 	return pid
 }
 
-// startStrangerTrapping starts a process in a group of its own — no box's —
-// that writes "heard" into heard when it is sent SIGUSR1, and returns its pid
-// once its trap is set.
+// startStrangerTrapping starts a process in a group of its own, no box's,
+// that writes "heard" into heard on SIGUSR1, and returns its pid once its trap
+// is set.
 func startStrangerTrapping(t *testing.T, dir string) (int, string) {
 	t.Helper()
 	heard, pidFile := filepath.Join(dir, "stranger-heard"), filepath.Join(dir, "stranger.pid")
@@ -71,15 +70,11 @@ func startStrangerTrapping(t *testing.T, dir string) (int, string) {
 }
 
 // unsignalled fails the case if the [trapsUSR1] shell at pid, whose heard
-// file is heard, was sent SIGUSR1 before now. It sends the shell SIGUSR2 and
-// waits for the witness that writes: of two signals pending, the kernel
-// delivers the lower-numbered first, and the shell runs the traps of the
-// signals it caught in the same order, so an end request sent before the
-// witness has written heard by the time the witness is written.
-//
-// NOT A QUIET WINDOW, of any length: a trap that has not run yet is no
-// evidence that nothing was sent, and a loaded runner delays a trap past any
-// window, so a window only sees a signal that is quick to show.
+// file is heard, was sent SIGUSR1 before now. It sends SIGUSR2 and waits for
+// the witness: the kernel delivers the lower-numbered pending signal first and
+// the shell runs its traps in that order, so an earlier SIGUSR1 has written
+// heard by then. Not a quiet window: a loaded runner delays a trap past any
+// window, so no window shows that nothing was sent.
 func unsignalled(t *testing.T, pid int, heard, what string) {
 	t.Helper()
 	witness := witnessOf(heard)
@@ -95,13 +90,11 @@ func unsignalled(t *testing.T, pid int, heard, what string) {
 	}
 }
 
-// A DIRECT BOX ENDS ONLY A PROCESS OF ITS JOB. The pid an end request goes to
-// is the job's own word — its script writes it in the box — and a direct box's
-// job runs on the engine host as the engine's own user, so it could have
-// written any pid of that user's. The request reaches the job's script, a
-// member of the job's recorded group; a process outside the group is refused
-// as no process of the job and sent nothing; and so is a pid below 2, and a
-// handle the box's record does not name.
+// A DIRECT BOX ENDS ONLY A PROCESS OF ITS JOB. The pid is the job's own word,
+// and a direct job runs as the engine's user, so it could name any of that
+// user's processes. The request reaches only a member of the job's recorded
+// group; a process outside it, a pid below 2 and a handle the box's record
+// does not name are [ErrNotJobProcess] and sent nothing.
 //
 // Mutation: signal the pid as it was read, past the group check, and the
 // stranger's trap writes its file.
@@ -140,19 +133,14 @@ func TestADirectBoxEndsOnlyAProcessOfItsJob(t *testing.T) {
 	unsignalled(t, stranger, strangerHeard, "the process outside the job was signalled")
 }
 
-// A DIRECT BOX KILLS EVERY PROCESS OF ITS JOB AND KEEPS THE BOX. The read that
-// follows a kill still reads the box — its result, its session — so the kill
-// is a teardown's signals without the teardown: a member that ignores SIGTERM
-// outlives the grace and is taken by SIGKILL, nothing of the job's group is
-// left running, and the box's files are still there to read.
+// A DIRECT BOX KILLS EVERY PROCESS OF ITS JOB AND KEEPS THE BOX. The read
+// after a kill still reads the box, so the kill is a teardown's signals
+// without the teardown: a member ignoring SIGTERM is taken by SIGKILL past the
+// grace, nothing of the group is left, and the box's files remain.
 //
-// THE GRACE IS THE BUBBLE'S: the kill runs in a synctest bubble, where its
-// wait for the group to go is timers that fire at exactly their times, and at
-// the grace's last instant, the kill waiting on the timer that ends it, the
-// member that ignores SIGTERM is read for a SIGKILL ([killSent]). A floor on
-// how long the kill took on the machine's clock passed a kill that gave a
-// shorter grace, and one that gave none whenever the kernel then took its
-// time to reap the group.
+// The grace is checked in a synctest bubble, at its last instant ([killSent]),
+// not as a floor on the machine's clock, which a slow reap lets a short grace
+// pass.
 //
 // Mutation: kill through Close, and the box's files are gone; drop the
 // SIGKILL, and the member that ignores SIGTERM is left running; send it before
@@ -179,8 +167,7 @@ func TestADirectBoxKillsEveryProcessOfItsJobAndKeepsTheBox(t *testing.T) {
 	inBubble(t, func(t *testing.T) {
 		killed := make(chan error, 1)
 		go func() { killed <- box.KillJob(t.Context(), handle) }()
-		// THE GRACE'S LAST INSTANT, every goroutine of the bubble blocked
-		// again: the kill on the timer that ends the grace.
+		// The grace's last instant, the kill blocked on the timer ending it.
 		time.Sleep(JobStopGrace - time.Nanosecond)
 		synctest.Wait()
 		if killSent(t, stubborn) {
@@ -193,9 +180,8 @@ func TestADirectBoxKillsEveryProcessOfItsJobAndKeepsTheBox(t *testing.T) {
 	if !procgrouptest.AwaitGone(t, stubborn, 5*time.Second) {
 		t.Fatal("the member that ignores SIGTERM outlived the kill")
 	}
-	// THE KERNEL REAPS ON THE MACHINE'S CLOCK, and the kill's wait for it ran
-	// on the bubble's, whose polls may outrun a loaded kernel: the group is
-	// waited for here.
+	// The kernel reaps on the machine's clock, which the bubble's polls may
+	// outrun, so the group is waited for here.
 	waitFor(t, 5*time.Second, func() bool {
 		current, err := job.Current()
 		return err == nil && !current
@@ -206,13 +192,10 @@ func TestADirectBoxKillsEveryProcessOfItsJobAndKeepsTheBox(t *testing.T) {
 	}
 }
 
-// killSent reports whether pid has been sent SIGKILL: it has exited — a
-// zombie, or gone — or a SIGKILL waits on it. Linux keeps a process's pending
-// signals where a test can read them (/proc/<pid>/status), and a SIGKILL sent
-// to its group waits in its shared set from the moment kill(2) returns until
-// it is reaped, so there the answer is the kernel's the instant it is read:
-// never a kill the process has not yet acted on read as none. Elsewhere it is
-// read off whether the process has exited alone.
+// killSent reports whether pid has been sent SIGKILL: it has exited (zombie
+// or gone) or a SIGKILL is pending. On Linux the pending sets in
+// /proc/<pid>/status hold a group SIGKILL from kill(2)'s return until reaping,
+// so a kill not yet acted on still reads as sent; elsewhere only exit counts.
 func killSent(t *testing.T, pid int) bool {
 	t.Helper()
 	proc, found, err := procgroup.Inspect(pid)
@@ -249,9 +232,9 @@ func killSent(t *testing.T, pid int) bool {
 }
 
 // containerRig is a container box driven through a stand-in runtime that runs
-// each `exec` on the engine host as the exec's own session leader — what runc
-// makes an exec's first process (nsexec.c's setsid) — and lists the box's
-// container as running. Every call the runtime is handed is logged in calls.
+// each `exec` on the engine host as its own session leader, as runc does
+// (nsexec.c's setsid), and lists the container as running. calls logs every
+// call the runtime is handed.
 type containerRig struct {
 	box   *containerBox
 	dir   string
@@ -264,9 +247,8 @@ func newContainerRig(t *testing.T) containerRig {
 	calls := filepath.Join(dir, "calls")
 	runtime := filepath.Join(dir, "runtime")
 	name := ContainerPrefix + "box1"
-	// THE EXEC BECOMES ITS COMMAND: runHost starts the runtime in a session
-	// of its own, so the shell exec'd here leads that session, as runc makes
-	// the first process of every `docker exec`.
+	// The exec becomes its command, so the shell leads the session runHost
+	// started the runtime in, as runc's first process of a `docker exec` does.
 	writeExecutable(t, runtime, "#!/bin/sh\necho \"$*\" >> "+shQuote(calls)+"\n"+
 		"case \"$1\" in\n"+
 		"exec) shift; while [ $# -gt 0 ]; do case \"$1\" in -w|--env-file) shift 2;; *) break;; esac; done; "+
@@ -325,13 +307,11 @@ func livingIn(pgid int) ([]int, bool) {
 	return living, true
 }
 
-// A CONTAINER BOX ENDS AND KILLS ITS JOB INSIDE THE CONTAINER. The job's start
-// records, on the engine's side, the process group the exec that started it
-// leads — the whole job, and nothing else of the container's. An end request
-// reaches the job's script by its pid in the container, and one to a pid that
-// is not there is refused as no process of the job; and the kill ends every
-// process of the job's group and spares the container's main process, which
-// the read after the kill still execs beside.
+// A CONTAINER BOX ENDS AND KILLS ITS JOB INSIDE THE CONTAINER. The start
+// records the process group its exec leads: the whole job, nothing else. An
+// end request reaches the script by its pid in the container, a pid not there
+// is [ErrNotJobProcess], and the kill ends the job's group and spares the
+// container's main process, which the read after it still execs beside.
 //
 // Mutation: kill the job's first process alone, past its recorded group, and a
 // member of the job is left running.
@@ -388,16 +368,15 @@ func TestAContainerBoxEndsAndKillsItsJobInsideTheContainer(t *testing.T) {
 	}
 }
 
-// ownGroupEnv makes this test binary, re-executed, a process that leaves its
-// parent's process group for a group of its own — no session's — and then
-// becomes `/bin/sh -c` of the variable's value, its pid kept: a job's first
-// process in a group no exec's own session leads, as a container runtime whose
-// exec makes no session of its own would leave one ([startJobInOwnGroup]).
+// ownGroupEnv makes this test binary, re-executed, move to a process group of
+// its own (no session's) and exec `/bin/sh -c` of the variable's value: a
+// job's first process as a runtime whose exec makes no session leaves it
+// ([startJobInOwnGroup]).
 const ownGroupEnv = "CREWLET_SANDBOX_OWN_GROUP"
 
-// AN init RATHER THAN TestMain's dispatch, which every platform's suite runs:
-// leaving a process group is unix's alone, as this file is. It acts only in a
-// binary re-executed with [ownGroupEnv] set, and never returns there.
+// An init rather than TestMain's dispatch, which every platform runs: leaving
+// a process group is unix's alone, as this file is. It acts only with
+// [ownGroupEnv] set, and never returns there.
 func init() {
 	script, ok := os.LookupEnv(ownGroupEnv)
 	if !ok {
@@ -413,11 +392,10 @@ func init() {
 	os.Exit(2)
 }
 
-// startJobInOwnGroup starts script as a job in rig's container whose first
-// process is in a group of its own that no exec's session leads, and leaves it
-// with no group recorded, as an older build's start left one on such a
-// runtime. It answers the job's handle and pid, and its group — the first
-// process's own pid.
+// startJobInOwnGroup starts script as a job in rig's container, its first
+// process in a group no exec's session leads, with no group recorded, as an
+// older build's start left one on such a runtime. It answers the job's handle
+// and its group, the first process's pid.
 func startJobInOwnGroup(t *testing.T, rig containerRig, script string) (string, int) {
 	t.Helper()
 	self, err := os.Executable()
@@ -477,14 +455,12 @@ func awaitMembers(t *testing.T, group, n int) {
 }
 
 // A CONTAINER JOB THAT RECORDED NO GROUP IS KILLED BY THE GROUP ITS EXEC LEADS.
-// A job an older build started recorded no process group, and its first
-// process is not the job: it is the runner's wrapper, and the run's script and
-// its harness are its children. So the kill reads, off that first process, the
-// group the job's exec leads a session of its own with, and kills every
-// process of it — the container's main process spared.
+// Its first process is the runner's wrapper, the script and harness its
+// children, so the kill reads off it the group its exec's session leads and
+// kills all of it, the container's main process spared.
 //
-// Mutation: signal the first process alone, as the kill of a job with no group
-// recorded once did, and the job's other processes outlive the kill.
+// Mutation: signal the first process alone, and the job's other processes
+// outlive the kill.
 func TestAContainerJobThatRecordedNoGroupIsKilledByTheGroupItsExecLeads(t *testing.T) {
 	t.Parallel()
 	rig := newContainerRig(t)
@@ -505,20 +481,19 @@ func TestAContainerJobThatRecordedNoGroupIsKilledByTheGroupItsExecLeads(t *testi
 	}
 }
 
-// A CONTAINER JOB WHOSE GROUP NO EXEC LEADS IS SIGNALLED NOTHING. A job that
-// recorded no process group, whose first process is in a group no exec's own
-// session leads — what a runtime whose exec makes no session leaves — has no
-// group the box can name as the job's alone, and its first process alone is
-// no kill of it: the kill signals nothing, says so, and the job still reads
-// as running, never as a job that ended.
+// A CONTAINER JOB WHOSE GROUP NO EXEC LEADS IS SIGNALLED NOTHING. With no
+// group recorded and none an exec's session leads, the box can name no group
+// as the job's alone, and its first process alone is no kill of it: the kill
+// signals nothing, says so ([ErrNoJobGroup]), and the job still reads as
+// running.
 //
-// Mutation: signal the first process alone where no group is named, as the
-// kill once did, and the job reads as ended while its other processes run.
+// Mutation: signal the first process alone where no group is named, and the
+// job reads as ended while its other processes run.
 func TestAContainerJobWhoseGroupNoExecLeadsIsSignalledNothing(t *testing.T) {
 	t.Parallel()
 	rig := newContainerRig(t)
-	// TWO PROCESSES THAT STAY, the shell waiting on its child: a member that
-	// exits by itself would read as one the kill signalled.
+	// Two processes that stay: a member exiting by itself would read as one
+	// the kill signalled.
 	handle, pid := startJobInOwnGroup(t, rig, "sleep 300 & wait")
 	awaitMembers(t, pid, 2)
 	members, _ := livingIn(pid)
@@ -537,10 +512,9 @@ func TestAContainerJobWhoseGroupNoExecLeadsIsSignalledNothing(t *testing.T) {
 	}
 }
 
-// boxPollRunner polls a job as internal/sandbox/executor's runner does — the
-// done marker its wrapper writes as the job's script exits, and otherwise the
-// box's own word on the job's first process — and its job's script answers no
-// end request, as an older build's answers none.
+// boxPollRunner polls a job as internal/sandbox/executor's runner does (the
+// wrapper's done marker, else the box's word on the first process), and its
+// script answers no end request, as an older build's does not.
 type boxPollRunner struct {
 	*FakeRunner
 	done string
@@ -553,11 +527,10 @@ func (r boxPollRunner) Poll(ctx context.Context, box Sandbox, handle RunHandle) 
 	return box.Job(ctx, handle.CommandID)
 }
 
-// awaitBeat waits, within the bound the case gives every start, for the file
-// a job's script rewrites every 50 ms to change from what it holds now: the
-// script working. A beat is a fork and a write in the container's shell,
-// which a loaded runner delays and never fakes, so the wait is as long as a
-// beat needs rather than a window one has to land in.
+// awaitBeat waits, within the bound every start is given, for the file a
+// job's script rewrites every 50 ms to change: the script working. A loaded
+// runner delays a beat but never fakes one, so this waits as long as a beat
+// needs rather than for a fixed window.
 func awaitBeat(t *testing.T, path, what string) {
 	t.Helper()
 	before, _ := os.ReadFile(path) //nolint:gosec // the case's own file
@@ -568,19 +541,13 @@ func awaitBeat(t *testing.T, path, what string) {
 }
 
 // A CONTAINER JOB WITH NO GROUP RECORDED IS READ OVER ONLY ONCE IT IS. The read
-// that ends a stopped or lost job whose script answers no request — an older
-// build's, which also recorded no process group in its container — kills it,
-// and takes its session final only where the job is over: killed whole, by the
-// group its exec leads, its script gone with its wrapper; or, where no exec
-// leads its group, signalled nothing, read as still running and taken as it
-// stands, not final — while its script works on, as the log says.
+// ending a job whose script answers no request and recorded no group takes its
+// session final only when the job is over: killed whole by the group its exec
+// leads; or, where no exec leads one, signalled nothing and taken as it
+// stands, not final, while its script works on, as the log says.
 //
-// THE SCRIPT IS READ BY WHAT EACH CLAIM NEEDS. That it works on is a beat
-// awaited within the bound every start is given ([awaitBeat]): read over one
-// fixed window instead, a runner that scheduled no beat in it failed the case
-// though the script ran (CI run 41714027577). That it is gone is the group
-// its exec leads holding no living process: a window with no beat in it is no
-// evidence of that, and the same runner would pass a script that still runs.
+// That the script works on is a beat ([awaitBeat]); that it is gone is its
+// group holding no living process. A window with no beat proves neither.
 //
 // Mutation: kill a job with no group recorded by its first process alone, and
 // the read takes the job for over, final, while its script still runs.
@@ -590,8 +557,8 @@ func TestAContainerJobWithNoGroupRecordedIsReadOverOnlyOnceItIs(t *testing.T) {
 			logs := captureLogs(t)
 			rig := newContainerRig(t)
 			beat, done := filepath.Join(rig.dir, "beat"), filepath.Join(rig.dir, "done")
-			// THE RUNNER'S WRAPPER: the run's script its child, and the done
-			// marker written once the script exits.
+			// The runner's wrapper: the script its child, the done marker
+			// written once the script exits.
 			wrapper := "sh -c " + shQuote("while :; do date +%s%N > "+shQuote(beat)+"; sleep 0.05; done") +
 				"; echo $? > " + shQuote(done)
 			var handle string
@@ -600,8 +567,8 @@ func TestAContainerJobWithNoGroupRecordedIsReadOverOnlyOnceItIs(t *testing.T) {
 				handle, _ = startJobInOwnGroup(t, rig, wrapper)
 			} else {
 				handle, group = startJobWithNoGroupRecorded(t, rig, "sh -c "+shQuote(wrapper))
-				// THE GROUP HOLDS THE JOB, the wrapper and its script, so
-				// the group's being empty after the read is the job's end.
+				// The group holds wrapper and script, so its being empty
+				// after the read is the job's end.
 				awaitMembers(t, group, 2)
 			}
 			awaitBeat(t, beat, "the job's script never beat")

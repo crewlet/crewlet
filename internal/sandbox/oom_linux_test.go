@@ -77,10 +77,9 @@ func TestEveryProcessADirectBoxRunsGoesBeforeItsEngine(t *testing.T) {
 	requireAheadOfTheEngine(t, "the detached job", string(leader))
 }
 
-// A confined box is raised BEFORE its confinement starts: Landlock leaves a
-// confined box nothing to write but its home, /proc included, so a raise
-// made inside it would fail. The helper here only reports what it was started
-// at and becomes the command, as the real ones do once they have confined it.
+// A confined box is raised BEFORE its confinement starts: Landlock leaves it
+// nothing writable but its home, so a raise inside would fail. The helper here
+// reports what it was started at and becomes the command, as the real ones do.
 func TestAConfinedBoxIsRaisedBeforeItsConfinementStarts(t *testing.T) {
 	t.Parallel()
 	box := mustCreate(t, newDirect(t), Spec{})
