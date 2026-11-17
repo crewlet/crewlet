@@ -448,25 +448,41 @@ func (r *Reader) changeReviewers(ctx context.Context, tx *sql.Tx, q ReadQuery, n
 	}
 	defer func() { _ = rows.Close() }()
 	pg := page{maxRows: limit, maxB: r.pageBytes}
+	base, packed := len(out.Reviewers), []int64(nil)
 	for rows.Next() {
 		var (
 			rv                          ReviewerRow
 			kind, reason, state, byKind string
 			position                    int64
 		)
-		if err := rows.Scan(&rv.Reviewer, &kind, &reason, &state, &rv.RequestedBy, &byKind, &rv.Note,
-			&position); err != nil {
-			return fmt.Errorf("gitlet: read the reviewers of %s: %w", named, err)
+		if scanErr := rows.Scan(&rv.Reviewer, &kind, &reason, &state, &rv.RequestedBy, &byKind, &rv.Note,
+			&position); scanErr != nil {
+			return fmt.Errorf("gitlet: read the reviewers of %s: %w", named, scanErr)
 		}
 		rv.Kind, rv.Reason, rv.State = PartyKind(kind), ReviewerReason(reason), ReviewerState(state)
-		rv.RequestedByKind, rv.Position = PartyKind(byKind), unpacked(position)
+		// Costed at its widest instant, which is read after the page is cut.
+		rv.RequestedByKind, rv.Position, rv.At = PartyKind(byKind), unpacked(position), widestInstant
 		out.Reviewers = append(out.Reviewers, rv)
+		packed = append(packed, position)
 		if pg.add(rv.encodedBytes()) {
 			out.Next = rv.Cursor()
 			break
 		}
 	}
-	return rows.Err()
+	if err = rows.Err(); err != nil {
+		return fmt.Errorf("gitlet: read the reviewers of %s: %w", named, err)
+	}
+	if err = rows.Close(); err != nil {
+		return fmt.Errorf("gitlet: read the reviewers of %s: %w", named, err)
+	}
+	moved, err := movedAtIn(ctx, tx, id, packed)
+	if err != nil {
+		return fmt.Errorf("gitlet: read when the reviewers of %s last moved: %w", named, err)
+	}
+	for k, position := range packed {
+		out.Reviewers[base+k].At = moved[position]
+	}
+	return nil
 }
 
 // Cursor is the cursor that resumes a page of a change's reviewers after r:
@@ -765,14 +781,15 @@ func scanFinding(rows *sql.Rows) (FindingRow, error) {
 	var (
 		f                                             FindingRow
 		kind, side, severity, category, state, byKind string
-		resolved, position                            int64
+		resolved, position, raised                    int64
 		suggestion                                    sql.NullString
 	)
 	if err := rows.Scan(&f.ID, &f.ReviewID, &f.Raiser, &kind, &f.Revision, &f.CommitOID, &f.Path, &f.BlobOID,
 		&side, &f.LineStart, &f.LineEnd, &severity, &category, &state, &f.ResolutionNote, &f.ResolvedBy,
-		&byKind, &f.ResolvedCommit, &resolved, &position, &f.Title, &f.Body, &suggestion); err != nil {
+		&byKind, &f.ResolvedCommit, &resolved, &position, &f.Title, &f.Body, &suggestion, &raised); err != nil {
 		return FindingRow{}, err
 	}
+	f.RaisedAt = store.DecodeTime(raised)
 	f.RaiserKind, f.Side, f.Severity, f.Category = PartyKind(kind), Side(side), Severity(severity),
 		Category(category)
 	f.State, f.ResolvedByKind, f.Position = FindingState(state), PartyKind(byKind), unpacked(position)
@@ -819,7 +836,7 @@ const (
 // counters by its key; its reviewers by theirs; its comments in thread order,
 // the >= beside the OR keeping the seek past the thread; its reviews in the
 // order given; and its findings by id, the texts' key walked and each
-// finding's sought by its own.
+// finding's sought by its own, and its review's by its key for when it was raised.
 const (
 	changesAskedSQL = `SELECT change_id FROM code_reviewers INDEXED BY ` + reviewerAsksKey + `
 		WHERE reviewer = ? AND state = 'requested' ORDER BY change_id DESC LIMIT ?`
@@ -865,15 +882,16 @@ const (
 	findingsOfSQL = `SELECT f.id, f.review_id, f.raiser, f.raiser_kind, f.revision, f.commit_oid, f.path,
 			f.blob_oid, f.side, f.line_start, f.line_end, f.severity, f.category, f.state, f.resolution_note,
 			f.resolved_by, f.resolved_by_kind, f.resolved_commit, f.resolved_position, f.position, x.title,
-			x.body, x.suggestion
-		FROM code_finding_texts AS x CROSS JOIN code_findings AS f
-		WHERE x.change_id = ? AND f.id = x.finding_id ORDER BY x.finding_id LIMIT ?`
+			x.body, x.suggestion, v.at
+		FROM code_finding_texts AS x CROSS JOIN code_findings AS f CROSS JOIN code_reviews AS v
+		WHERE x.change_id = ? AND f.id = x.finding_id AND v.id = f.review_id ORDER BY x.finding_id LIMIT ?`
 	findingsOfAfterSQL = `SELECT f.id, f.review_id, f.raiser, f.raiser_kind, f.revision, f.commit_oid, f.path,
 			f.blob_oid, f.side, f.line_start, f.line_end, f.severity, f.category, f.state, f.resolution_note,
 			f.resolved_by, f.resolved_by_kind, f.resolved_commit, f.resolved_position, f.position, x.title,
-			x.body, x.suggestion
-		FROM code_finding_texts AS x CROSS JOIN code_findings AS f
-		WHERE x.change_id = ? AND x.finding_id > ? AND f.id = x.finding_id ORDER BY x.finding_id LIMIT ?`
+			x.body, x.suggestion, v.at
+		FROM code_finding_texts AS x CROSS JOIN code_findings AS f CROSS JOIN code_reviews AS v
+		WHERE x.change_id = ? AND x.finding_id > ? AND f.id = x.finding_id AND v.id = f.review_id
+		ORDER BY x.finding_id LIMIT ?`
 	// findingsNamedSQL is the findings a read names ([ReadQuery.FindingIDs]),
 	// a JSON array of their ids: each one seek of the texts' key — the change
 	// and the id, both — and one of the narrow row's, and no walk of the
@@ -882,9 +900,11 @@ const (
 	findingsNamedSQL = `SELECT f.id, f.review_id, f.raiser, f.raiser_kind, f.revision, f.commit_oid, f.path,
 			f.blob_oid, f.side, f.line_start, f.line_end, f.severity, f.category, f.state, f.resolution_note,
 			f.resolved_by, f.resolved_by_kind, f.resolved_commit, f.resolved_position, f.position, x.title,
-			x.body, x.suggestion
+			x.body, x.suggestion, v.at
 		FROM json_each(?) AS j CROSS JOIN code_finding_texts AS x CROSS JOIN code_findings AS f
-		WHERE x.change_id = ? AND x.finding_id = CAST(j.value AS TEXT) AND f.id = x.finding_id`
+			CROSS JOIN code_reviews AS v
+		WHERE x.change_id = ? AND x.finding_id = CAST(j.value AS TEXT) AND f.id = x.finding_id
+			AND v.id = f.review_id`
 )
 
 // reviewsGiven serves a page of ONE REVIEWER'S REVIEWS — the `reviews`

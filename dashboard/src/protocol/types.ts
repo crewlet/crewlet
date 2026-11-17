@@ -8502,6 +8502,8 @@ export interface CodeRepoSummary {
   pushes: number;
   /** Absent for a repository nobody pushed to. */
   last_push_at?: string;
+  /** Its pushes on each of the asker's days, oldest first, zeros included, where `repo_facts=true` asks with `day_bounds` (`gitlet.RepoSummary.Spark`); absent where not answered. */
+  spark?: number[];
   /** Its changes by state, where `repo_facts=true` asks (`gitlet.RepoSummary.ChangeCounts`). */
   change_counts?: CodeChangeCounts;
   /** Its card, where `repo_facts=true` asks (`gitlet.RepoSummary.Card`); absent is not answered. */
@@ -8658,6 +8660,8 @@ export interface CodeReposAnswer extends CodePage {
 export interface CodePushesAnswer extends CodePage {
   /** Absent on a page that holds none. */
   pushes?: CodePushRow[];
+  /** The repository's pushes on each of the asker's days, oldest first, zeros included, where `day_bounds` asks (`gitlet.ReadAnswer.PushDays`); absent where not answered, as an older node answers. */
+  push_days?: number[];
 }
 
 /**
@@ -8885,6 +8889,8 @@ export interface CodeChangeDetail extends CodeChangeSummary {
   conversation?: CodeConversationRow;
   /** Absent for a change its home has merged no revision of yet. */
   mergeability?: CodeMergeabilityRow;
+  /** Who takes part in its conversation, by handle (`gitlet.ParticipantList`); absent where not answered. */
+  participants?: CodeParticipantList;
 }
 
 /** A revision's facts, as its home Gitlet node recorded them (`gitlet.RevisionFactsRow`). */
@@ -8938,6 +8944,8 @@ export interface CodeReviewerRow {
   requested_by_kind: CodePartyKind;
   note?: string;
   position: LogPosition;
+  /** When the record at `position` landed; absent past the notices' horizon or for a record that told nobody. */
+  at?: string;
 }
 
 /** A verdict a review gives (`gitlet.Verdicts`). */
@@ -9019,6 +9027,8 @@ export interface CodeFindingRow {
   resolved_by_kind?: CodePartyKind;
   resolved_commit?: string;
   position: LogPosition;
+  /** When the review that raised it landed. */
+  raised_at?: string;
 }
 
 /**
@@ -9051,7 +9061,21 @@ export interface CodeDiffFile {
   new_oid?: string;
 }
 
-/** A page of a diff's files, or of one file's patch (`gitlet.DiffAnswer`). */
+/** One file's patch, or the part of it a page holds (`gitlet.FilePatch`). */
+export interface CodeFilePatch {
+  /** Its place among the diff's files, from 0, in the stat's order. */
+  file: number;
+  path: string;
+  path_b64?: string;
+  status: string;
+  patch: string;
+  /** The next page goes on with this file's patch. */
+  continues?: boolean;
+  /** The patch stops before a line longer than one answer holds; the rest is left out. */
+  rest_omitted?: boolean;
+}
+
+/** A page of a diff's files, of one file's patch, or of every file's patch (`gitlet.DiffAnswer`). */
 export interface CodeDiffAnswer {
   base: string;
   head: string;
@@ -9061,6 +9085,8 @@ export interface CodeDiffAnswer {
   deleted: number;
   /** One file's patch, as git writes it. */
   patch?: string;
+  /** A page of every file's patch, where `patches=true` asks; `files` is empty on it, and a diff of no file has none. */
+  patches?: CodeFilePatch[];
 }
 
 /**
@@ -9069,8 +9095,10 @@ export interface CodeDiffAnswer {
  * own page beside the change — its reviewers, comments, reviews or findings,
  * or the asker's own standing findings (`standing`, in `findings`);
  * `files` and `diff` a revision's files or one file's patch (`diff`), read by
- * object id on its home Gitlet node; and `findings` placed in the revision asked
- * about (`placed`, by the finding's id).
+ * object id on its home Gitlet node; `findings` placed in the revision asked
+ * about (`placed`, by the finding's id); `finding_paths`, its findings counted
+ * by path, state and revision; and `excerpts`, the lines around each finding of
+ * a findings page as its own revision's diff marks them.
  */
 export interface CodeChangeAnswer extends CodePage {
   change?: CodeChangeDetail;
@@ -9079,12 +9107,61 @@ export interface CodeChangeAnswer extends CodePage {
   comments?: CodeCommentRow[];
   reviews?: CodeReviewRow[];
   findings?: CodeFindingRow[];
+  /** The `finding_paths` part: its findings counted by path, state and revision. */
+  finding_paths?: CodeFindingPathRow[];
   /** The `files` and `diff` parts: the revision read at, and the one read since. */
   revision?: number;
   since_revision?: number;
   diff?: CodeDiffAnswer;
   /** The `findings` part's placing of each finding, by its id. */
   placed?: Record<string, CodeFindingPlace>;
+  /** The `excerpts` part: each finding's excerpt by its id, and the context applied. */
+  excerpts?: Record<string, CodeExcerpt>;
+  context?: number;
+}
+
+/** One line of a finding's excerpt (`gitlet.ExcerptLine`). */
+export interface CodeExcerptLine {
+  /** " " both sides hold it, "+" the revision adds it, "-" it deletes it. */
+  mark: " " | "+" | "-" | (string & {});
+  old?: number;
+  new?: number;
+  text?: string;
+  /** Its size where its text was too long to show. */
+  text_bytes?: number;
+}
+
+/** The lines around a finding's range, marked as its revision's diff marks them (`gitlet.Excerpt`). */
+export interface CodeExcerpt {
+  id: string;
+  /** A, D, M or R as the revision changes the file; absent for a file it leaves as it was. */
+  status?: string;
+  binary?: boolean;
+  lines: CodeExcerptLine[];
+  /** The window held more lines than an excerpt shows. */
+  more?: boolean;
+}
+
+/** One participant of a change's conversation (`gitlet.ParticipantRow`). */
+export interface CodeParticipantRow {
+  handle: string;
+  kind: CodePartyKind;
+  verdict?: CodeVerdict;
+  verdict_revision?: number;
+}
+
+/** A change's participants, at most 32, and how many more (`gitlet.ParticipantList`). */
+export interface CodeParticipantList {
+  rows: CodeParticipantRow[];
+  omitted?: number;
+}
+
+/** How many of a change's findings on one path stand in one state, raised on one revision. */
+export interface CodeFindingPathRow {
+  path: string;
+  state: string;
+  revision: number;
+  findings: number;
 }
 
 /** One handle a record about a change reached (`gitlet.RoutedRecipient`). */
@@ -9176,12 +9253,32 @@ export interface CodeRepoDetail extends CodeRepoSummary {
   path_owners?: CodePathOwner[];
   gates?: CodeRuleGate[];
   rule_sources?: CodeRuleSource[];
+  /** Who pushed to it on the whole UTC days that begin within its `day_bounds`, where `repo_facts=true` asks with them; absent where not answered. */
+  pushers?: CodePushers;
   /** Where its expunges stand (`gitlet.ExpungeState`); absent for one never purged with none asked. */
   expunge?: CodeExpungeState;
   /** Where it stands with other hosts (`gitlet.RemoteState`); absent for none. */
   remotes?: CodeRemoteState;
   /** The record that last moved it (`gitlet.RepoDetail.Version`); absent from an older node. */
   version?: LogPosition;
+}
+
+/** Who pushed to a repository on whole UTC days, from `from` up to `until` (`gitlet.Pushers`). */
+export interface CodePushers {
+  from: string;
+  until: string;
+  /** Most pushes first; absent where nobody pushed. */
+  top?: CodePusher[];
+  /** The pushers past the ones named, and their pushes together; absent at zero. */
+  omitted?: number;
+  omitted_pushes?: number;
+}
+
+/** One pusher (`gitlet.PusherPushes`): a seat by its handle, a person by the human seat they hold, or Gitlet. */
+export interface CodePusher {
+  kind: "agent" | "person" | "gitlet" | (string & {});
+  handle?: string;
+  pushes: number;
 }
 
 /** A repository's expunges (`gitlet.ExpungeState`): the one open, the purge asked, the last committed. */

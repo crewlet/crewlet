@@ -10,7 +10,7 @@ import {
   type CommentRequest,
   type CommentTarget,
 } from "./bridge.ts";
-import { drawRegion, padRegion, pointRegion, type CropRegion } from "./crop.ts";
+import { drawRegion, padRegion, pointRegion, windowAround, type CropRegion } from "./crop.ts";
 import { ARTIFACT_COMMENT_QUOTE_MAX_BYTES } from "../contract/artifactsworkspace.ts";
 
 /** The attribute a part is declared by. */
@@ -190,13 +190,14 @@ export class PageComments {
     if (mode !== "off") this.send("comments.layout", { ...this.layout() });
   }
 
-  /** What moves an anchor: a scroll, a resize, a reflow, an anchor declared or let go. */
+  /** What moves an anchor: a scroll of the page or of any element in it, a resize, a reflow, an anchor declared or let go. */
   private listen(): void {
     const win = this.win;
     const schedule = () => this.schedule();
-    win.addEventListener("scroll", schedule, { passive: true });
+    // CAPTURED, since an element's scroll does not bubble to the window.
+    win.addEventListener("scroll", schedule, { passive: true, capture: true });
     win.addEventListener("resize", schedule);
-    this.stops.push(() => win.removeEventListener("scroll", schedule));
+    this.stops.push(() => win.removeEventListener("scroll", schedule, { capture: true }));
     this.stops.push(() => win.removeEventListener("resize", schedule));
     const Resize = (win as Window & { ResizeObserver?: typeof ResizeObserver }).ResizeObserver;
     if (typeof Resize === "function") {
@@ -263,6 +264,8 @@ export class PageComments {
       this.element(target.name)?.scrollIntoView({ block: "center", behavior });
       return;
     }
+    // A POINT OF THE VIEWPORT is in view already.
+    if ("view" in target) return;
     const { w, h } = this.size();
     this.win.scrollTo({
       left: target.point.x * w - this.win.innerWidth / 2,
@@ -274,6 +277,12 @@ export class PageComments {
   /** The region a request names, in the document's own pixels. */
   regionOf(target: CommentTarget): CropRegion {
     const size = this.size();
+    if ("view" in target) {
+      return windowAround(
+        { x: target.view.x + this.win.scrollX, y: target.view.y + this.win.scrollY },
+        size,
+      );
+    }
     if ("name" in target) {
       const el = this.element(target.name);
       if (el) {

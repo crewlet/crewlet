@@ -66,7 +66,9 @@ import (
 // that changed the directory, its walk's first record (treecommits.go); and a landed-in read, a revision's facts
 // and a re-anchoring never (memoizable says why). A history's and a blame's
 // key carries the measure their pages were cut with (costModel), since a
-// fence they are measured with is a build's.
+// fence they are measured with is a build's, and so does a diff's patches'.
+// A diff's patches, which git can begin at any file, are cut to
+// maxPatchesRunPages past the asked page (patches.go).
 //
 // # A page fits whatever it is stamped with
 //
@@ -90,7 +92,7 @@ import (
 // TestAMemoEntryHoldsEveryFieldOfItsAnswer holds the encoding to the answers'
 // fields, and TestAnAnswersShapeIsItsMemoFormat holds this name to a
 // fingerprint of them, so a change to either fails until this moves with it.
-const memoFormat = "page/6"
+const memoFormat = "page/9"
 
 // memoPage is one page as the memo keeps it.
 type memoPage struct {
@@ -154,9 +156,12 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 	case gitlet.GitDiff:
 		file, _ := gitlet.GitPath("diff.file", q.Diff.File, q.Diff.FileB64, true)
 		paths := slices.Compact(slices.Sorted(slices.Values(q.Diff.Paths)))
-		parts = append(parts, whole[q.Diff.Base], whole[q.Diff.Head], strconv.FormatBool(q.Diff.Renames), file,
-			strconv.Itoa(len(paths)))
+		parts = append(parts, whole[q.Diff.Base], whole[q.Diff.Head], strconv.FormatBool(q.Diff.Renames),
+			strconv.FormatBool(q.Diff.Patches), file, strconv.Itoa(len(paths)))
 		parts = append(parts, paths...)
+		if q.Diff.Patches {
+			parts = append(parts, costModel)
+		}
 	case gitlet.GitCompare:
 		parts = append(parts, whole[q.Compare.Base], whole[q.Compare.Head])
 	case gitlet.GitInterdiff:
@@ -167,8 +172,11 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 		file, _ := gitlet.GitPath("interdiff.file", q.Interdiff.File, q.Interdiff.FileB64, true)
 		f := r.interdiffFilter()
 		parts = append(parts, whole[q.Interdiff.FromHead], whole[q.Interdiff.ToHead], file,
-			strconv.FormatBool(f.filters()), strconv.Itoa(len(f.paths)))
+			strconv.FormatBool(q.Interdiff.Patches), strconv.FormatBool(f.filters()), strconv.Itoa(len(f.paths)))
 		parts = append(parts, f.paths...)
+		if q.Interdiff.Patches {
+			parts = append(parts, costModel)
+		}
 	case gitlet.GitLog:
 		// Since as the second its walk stops before, Until as the last
 		// second it keeps, the limit as the page applies it, and the cost the
@@ -206,6 +214,16 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 			strconv.FormatBool(s.IgnoreCase), s.Text, strconv.Itoa(s.Hits()), after, strconv.Itoa(afterLine),
 			strconv.Itoa(len(paths)))
 		parts = append(parts, paths...)
+	case gitlet.GitExcerpts:
+		// The context as applied, then every anchor whole: its revision, its blob, its path's
+		// bytes, its side and its range.
+		e := q.Excerpts
+		parts = append(parts, strconv.Itoa(e.ContextOf()), strconv.Itoa(len(e.Anchors)))
+		for _, a := range e.Anchors {
+			p, _ := gitlet.GitPath("path", a.Path, a.PathB64, false)
+			parts = append(parts, a.ID, whole[a.Base], whole[a.Head], a.BlobOID, p, string(a.Side),
+				strconv.Itoa(a.Start), strconv.Itoa(a.End))
+		}
 	}
 	return cache.NewMemoKey(append(parts, formatCursor(at))...)
 }
@@ -508,6 +526,16 @@ func encodePage(p memoPage) []byte {
 		for _, f := range d.Files {
 			appendFile(&w, f, false)
 		}
+		w.int(len(d.Patches))
+		for _, p := range d.Patches {
+			w.int(p.File)
+			w.str(p.Path)
+			w.str(p.PathB64)
+			w.str(p.Status)
+			w.str(p.Patch)
+			w.flag(p.Continues)
+			w.flag(p.RestOmitted)
+		}
 	case gitlet.GitCompare:
 		c := a.Compare
 		w.str(c.Base)
@@ -602,6 +630,22 @@ func encodePage(p memoPage) []byte {
 			w.int(h.Line)
 			w.str(h.Text)
 			w.str(h.Blob)
+		}
+	case gitlet.GitExcerpts:
+		w.int(len(a.Excerpts.Excerpts))
+		for _, e := range a.Excerpts.Excerpts {
+			w.str(e.ID)
+			w.str(e.Status)
+			w.flag(e.Binary)
+			w.flag(e.More)
+			w.int(len(e.Lines))
+			for _, l := range e.Lines {
+				w.str(l.Mark)
+				w.int(l.Old)
+				w.int(l.New)
+				w.str(l.Text)
+				w.int(l.TextBytes)
+			}
 		}
 	}
 	return w
@@ -824,6 +868,14 @@ func decodePage(body []byte) (memoPage, error) {
 				d.Files[i] = readFile(r, false)
 			}
 		}
+		// A stat's page holds no patch, and reads back with none.
+		if n := r.count(); r.err == nil && n > 0 {
+			d.Patches = make([]gitlet.FilePatch, n)
+			for i := range d.Patches {
+				d.Patches[i] = gitlet.FilePatch{File: r.int(), Path: r.str(), PathB64: r.str(), Status: r.str(),
+					Patch: r.str(), Continues: r.flag(), RestOmitted: r.flag()}
+			}
+		}
 		if n := r.count(); r.err == nil && n != len(d.Files) {
 			r.err = errMemoPage
 		}
@@ -909,6 +961,24 @@ func decodePage(body []byte) (memoPage, error) {
 			}
 		}
 		a.Search = s
+	case gitlet.GitExcerpts:
+		x := &gitlet.ExcerptsAnswer{Excerpts: []gitlet.Excerpt{}}
+		if n := r.count(); r.err == nil {
+			x.Excerpts = make([]gitlet.Excerpt, n)
+			for i := range x.Excerpts {
+				e := gitlet.Excerpt{ID: r.str(), Status: r.str(), Binary: r.flag(), More: r.flag(),
+					Lines: []gitlet.ExcerptLine{}}
+				if m := r.count(); r.err == nil {
+					e.Lines = make([]gitlet.ExcerptLine, m)
+					for j := range e.Lines {
+						e.Lines[j] = gitlet.ExcerptLine{Mark: r.str(), Old: r.int(), New: r.int(), Text: r.str(),
+							TextBytes: r.int()}
+					}
+				}
+				x.Excerpts[i] = e
+			}
+		}
+		a.Excerpts = x
 	default:
 		return memoPage{}, errMemoPage
 	}

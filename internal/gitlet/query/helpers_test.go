@@ -208,6 +208,11 @@ func interdiffQ(repo string, i gitlet.InterdiffQuery) gitlet.GitQuery {
 	return gitlet.GitQuery{Kind: gitlet.GitInterdiff, RepoID: repo, Asker: person, Home: true, Interdiff: &i}
 }
 
+// excerptsQ is a person's read of the lines around findings' ranges.
+func excerptsQ(repo string, e gitlet.ExcerptsQuery) gitlet.GitQuery {
+	return gitlet.GitQuery{Kind: gitlet.GitExcerpts, RepoID: repo, Asker: person, Home: true, Excerpts: &e}
+}
+
 // branch is the person's work tree on a new branch from at, the branch
 // checked out — what a change's source branch is begun as.
 func (x *fixture) branch(name, at string) {

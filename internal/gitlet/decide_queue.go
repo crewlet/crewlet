@@ -78,10 +78,10 @@ func ejectDecidedRows(n int) int { return n + trainRows + 1 + queueHorizonRows }
 func landDecidedRows(n int) int { return 4*n + 2 + tallyRows + MaxQueueDepth + queueHorizonRows }
 
 // landPushRows is the most rows a land's n pushes write before the changes
-// they move ([entryRows]): each its push row, the target's move and its
-// source's deletion — the ref, its tombstone and the object it leaves — and
-// the first its pack.
-func landPushRows(n int) int { return n*(1+1+3) + 1 }
+// they move ([entryRows]): each its push row, the target's move, its source's
+// deletion (the ref, its tombstone and the object it leaves) and Gitlet's
+// pusher day ([pusherDayRows]), and the first its pack.
+func landPushRows(n int) int { return n*(1+1+3+pusherDayRows) + 1 }
 
 // landRecordRows is a land record's rows but the changes its pushes move,
 // which its decide counts ([decideLand]): what the committer charges it.
