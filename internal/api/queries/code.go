@@ -282,6 +282,12 @@ func codeReadQuery(kind gitlet.ReadKind, asker gitlet.Principal, p Params) (gitl
 			return gitlet.ReadQuery{}, err
 		}
 	}
+	// A PUSH HISTORY NARROWED to one pusher and a window of instants, each the reader's to refuse.
+	if kind == gitlet.ReadPushes {
+		if q.PushFilter, err = pushFilterParams(p); err != nil {
+			return gitlet.ReadQuery{}, err
+		}
+	}
 	// A CHANGE IS THE PATH'S TOO, by its number on the repository — web!42's
 	// 42 — on the reads of one change.
 	if kind == gitlet.ReadChange || kind == gitlet.ReadChangeRouting {
