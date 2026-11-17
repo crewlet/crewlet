@@ -1,44 +1,37 @@
 /**
  * One setting of the company document, drawn and changed where it is read:
- * its name and key, the value in force with the pencil that changes it, and
- * where the value comes from.
+ * its name and key, the value in force, where it comes from, and at the
+ * row's end the pencil that changes it and, while it differs from its
+ * default, the reset that puts the default back.
  *
  * THE ONE EDITOR of such a value, whatever it is. A number (`LimitSetting`),
  * a line of text, a zone, a space or a switch (`TextSetting`) each says only
- * how its value is typed, drawn and planned; the pencil, the panel, the check
- * and the save (`lib/useSettingWrite.ts`), what a refusal or a warning says,
- * and what is drawn while the saved value applies are this, once.
+ * how its value is typed, drawn and planned; the pencil, the panel (the kit's
+ * `SettingForm`), the reset, the check and the save
+ * (`lib/useSettingWrite.ts`), what a refusal or a warning says, and what is
+ * drawn while the saved value applies are this, once.
+ *
+ * A RESET IS A SAVE OF THE DEFAULT on the same path: checked, and where the
+ * engine warns or refuses, the panel opens on the default to say so.
  *
  * WHAT IT SHOWS AFTER A SAVE is the value SAVED, marked as applying, until
- * this node has applied it and the answer the page draws carries it: going
- * back to the served value at once drew the setting being replaced for a beat
- * after the save, which reads as a save that did not take. A node that
- * refused the revision goes on running the value before, so that is what is
- * drawn, marked as refused here.
+ * this node has applied it and the answer the page draws carries it. A node
+ * that refused the revision goes on running the value before.
  *
  * The pencil is always drawn, held with its reason for a reader who may not
  * change it ([SettingPencil]), also where the engine's row is not served ([UnreadSetting]).
  */
 
 import {
-  Button,
-  FormField,
   IconButton,
   Popover,
   returnFocus,
+  SettingForm,
   SettingsTable,
   type IconButtonProps,
 } from "@crewlethq/ui";
 import { PencilGlyph } from "@crewlethq/icons/glyphs";
-import {
-  forwardRef,
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type FormEvent,
-  type ReactNode,
-} from "react";
+import { forwardRef, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { SettingWriteStatus, standingWords } from "~/components/SettingWriteStatus.tsx";
 import type { ConfigProblem } from "~/protocol/types.ts";
 import { useSettingWrite, type SettingPlan } from "~/lib/useSettingWrite.ts";
@@ -59,6 +52,10 @@ export interface Drawn {
 export interface SettingEdit<S, V> {
   /** The field's state as the pencil opens it, from the value in force. */
   readonly open: () => S;
+  /** The field's state that is the default: what a reset saves. */
+  readonly defaultState: S;
+  /** The default in the value column's words, for the reset's question. */
+  readonly defaultWords: string;
   /** What the state holds: a value to save, or the error said under the field. */
   readonly read: (state: S) => Typed<V>;
   /** Whether a value is the one in force already, so Save is held. */
@@ -71,11 +68,12 @@ export interface SettingEdit<S, V> {
   readonly plan: (value: V) => SettingPlan;
   /** Whether the answer the page draws already says the value saved. */
   readonly served: (value: V) => boolean;
-  /** The line under the field. */
-  readonly helper: ReactNode;
-  /** The control, inside the field the editor labels. */
+  /** What the value may be, short, under the field: "1 to 100". */
+  readonly hint?: string | undefined;
+  /** The control, inside the field the panel labels. */
   readonly field: (props: {
     readonly id: string;
+    readonly describedBy: string | undefined;
     readonly state: S;
     readonly set: (next: S) => void;
     readonly error: boolean;
@@ -142,6 +140,8 @@ export function SettingEditor<S, V>({
   const [expected, setExpected] = useState<{ readonly value: V } | null>(null);
   const pencil = useRef<HTMLButtonElement>(null);
   const fieldId = `${useId()}-setting`;
+  // A reset's save, which opens the panel where the engine has more to say.
+  const resetting = useRef(false);
 
   const saved = write.state.kind === "saved" ? write.state : null;
   const standing = saved?.standing;
@@ -178,6 +178,19 @@ export function SettingEditor<S, V>({
     returnFocus(pencil.current);
   }, [editing, saved]);
 
+  // A RESET THE ENGINE WARNS OF OR REFUSES opens the panel on the default, so
+  // the warning's Save anyway or the refusal is read where every save's is.
+  const kind = write.state.kind;
+  useEffect(() => {
+    if (!resetting.current) return;
+    if (kind === "warned" || kind === "refused" || kind === "unchanged") {
+      resetting.current = false;
+      setEditing(true);
+    } else if (kind === "saved" || kind === "idle") {
+      resetting.current = false;
+    }
+  }, [kind]);
+
   function open() {
     write.reset();
     setState(edit.open());
@@ -192,19 +205,27 @@ export function SettingEditor<S, V>({
     queueMicrotask(() => returnFocus(pencil.current));
   }
 
-  function submit(event?: FormEvent) {
-    event?.preventDefault();
+  function submit() {
     if (write.busy) return;
     // ENTER ON A WARNING IS THE SECOND PRESS the warning asked for.
     if (write.state.kind === "warned") {
       write.confirm();
       return;
     }
-    // ENTER SUBMITS THE FORM WITHOUT THE BUTTON, so the hold is checked here
-    // too.
     if (held !== undefined || !read || !read.ok) return;
     setExpected({ value: read.value });
     write.submit(edit.plan(read.value));
+  }
+
+  function resetToDefault() {
+    if (write.busy) return;
+    const back = edit.read(edit.defaultState);
+    if (!back.ok) return;
+    write.reset();
+    setState(edit.defaultState);
+    setExpected({ value: back.value });
+    resetting.current = true;
+    write.submit(edit.plan(back.value));
   }
 
   // THE SAVED VALUE while this node applies it; the served one otherwise.
@@ -218,22 +239,18 @@ export function SettingEditor<S, V>({
       settingKey={settingKey}
       source={shown.source}
       changed={shown.changed}
-    >
-      <span className="ceiling">
-        <span>{shown.value}</span>
-        {mark && (
-          <span className="ceiling-applying t-caption" role="status">
-            {mark}
-          </span>
-        )}
-        {settable && (
+      defaultLabel={edit.defaultWords}
+      onReset={settable && !write.busy && !drawsSaved ? resetToDefault : undefined}
+      resetHeld={access.can ? undefined : access.reason}
+      actions={
+        settable && (
           // A PANEL ANCHORED TO THE PENCIL, not a field in the cell: the
           // engine's refusal of a value is a sentence, and the value column
           // is a quarter of the card wide.
           <Popover
             label={label}
-            align="start"
-            className="ceiling-pop"
+            align="end"
+            height="layer"
             open={editing}
             onOpenChange={(next) => (next ? open() : close())}
             trigger={(isOpen, toggle) => (
@@ -246,52 +263,52 @@ export function SettingEditor<S, V>({
               />
             )}
           >
-            <form className="ceiling-edit" onSubmit={submit} noValidate>
-              <FormField
-                htmlFor={fieldId}
-                label={label}
-                optional
-                error={error}
-                helper={edit.helper}
-              >
-                {state !== null &&
-                  edit.field({
-                    id: fieldId,
-                    state,
-                    set: (next) => {
-                      setState(next);
-                      if (write.state.kind !== "idle" && !write.busy) write.reset();
-                    },
-                    error: Boolean(error),
-                    busy: write.busy,
-                  })}
-              </FormField>
-              <SettingWriteStatus
-                write={write}
-                unchanged={edit.unchangedWords}
-                onReload={() => {
-                  onApplied();
-                  close();
-                }}
-              />
-              <div className="ceiling-actions">
-                <Button type="button" size="small" variant="ghost" onClick={close}>
-                  Cancel
-                </Button>
-                <Button
-                  type={write.state.kind === "warned" ? "button" : "submit"}
-                  size="small"
-                  variant="primary"
-                  loading={write.busy}
-                  disabledReason={held}
-                  title={held}
-                  onClick={write.state.kind === "warned" ? write.confirm : undefined}
-                >
-                  {write.state.kind === "warned" ? "Save anyway" : "Save"}
-                </Button>
-              </div>
-            </form>
+            <SettingForm
+              label={label}
+              htmlFor={fieldId}
+              hint={edit.hint}
+              error={error}
+              status={
+                <SettingWriteStatus
+                  write={write}
+                  unchanged={edit.unchangedWords}
+                  onReload={() => {
+                    onApplied();
+                    close();
+                  }}
+                />
+              }
+              saving={write.busy}
+              saveHeld={held}
+              saveLabel={write.state.kind === "warned" ? "Save anyway" : undefined}
+              onSave={submit}
+              onCancel={close}
+            >
+              {(field) =>
+                state !== null &&
+                edit.field({
+                  id: fieldId,
+                  describedBy: field.describedBy,
+                  state,
+                  set: (next) => {
+                    setState(next);
+                    if (write.state.kind !== "idle" && !write.busy) write.reset();
+                  },
+                  error: Boolean(error),
+                  busy: write.busy,
+                })
+              }
+            </SettingForm>
           </Popover>
+        )
+      }
+    >
+      <span className="setting-value">
+        <span>{shown.value}</span>
+        {mark && (
+          <span className="setting-value-applying t-caption" role="status">
+            {mark}
+          </span>
         )}
       </span>
     </SettingsTable.Row>
@@ -344,11 +361,12 @@ export function UnreadSetting({
 }) {
   const access = useConfigWriteAccess();
   return (
-    <SettingsTable.Row label={label} settingKey={settingKey}>
-      <span className="ceiling">
-        <span>{children}</span>
-        {!access.can && <SettingPencil label={label} held={access.reason} />}
-      </span>
+    <SettingsTable.Row
+      label={label}
+      settingKey={settingKey}
+      actions={!access.can && <SettingPencil label={label} held={access.reason} />}
+    >
+      {children}
     </SettingsTable.Row>
   );
 }

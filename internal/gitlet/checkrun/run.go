@@ -410,9 +410,12 @@ func (a *attempt) exited(ctx context.Context, box sandbox.Sandbox, began time.Ti
 	fs, unread := a.reports(ctx, box)
 	summary := a.summary(ctx, box, status, a.r.now().Sub(began).Round(time.Second), fs, unread)
 	if status == 0 {
-		return a.ended(gitlet.CheckStatePassed, gitlet.CheckReasonExit, &status, summary)
+		f := a.ended(gitlet.CheckStatePassed, gitlet.CheckReasonExit, &status, summary)
+		f.Tests = fs.counts()
+		return f
 	}
 	f := a.ended(gitlet.CheckStateFailed, gitlet.CheckReasonExit, &status, summary)
+	f.Tests = fs.counts()
 	a.failed(ctx, box, f, fs)
 	return f
 }
@@ -421,18 +424,22 @@ func (a *attempt) exited(ctx context.Context, box sandbox.Sandbox, began time.Ti
 // the failures its reports named (fs, nil where none were read), the last
 // CheckTailBytes of its output, and its log — the output's last
 // MaxCheckLogBytes, stored as one object the attempt's code_check_logs row
-// names. A log that could not be stored — the object store full, or failing —
-// is said in the summary, and the ending recorded without it.
+// names; and its output's lines, counted in its box. A log that could not be
+// stored — the object store full, or failing — is said in the summary, and the
+// ending recorded without it.
 func (a *attempt) failed(ctx context.Context, box sandbox.Sandbox, f *gitlet.CheckFinished, fs *failures) {
 	if fs != nil {
 		f.Failures, f.FailuresOmitted = fs.kept, fs.omitted
 	}
-	f.Tail = a.tail(ctx, box)
+	t := a.tail(ctx, box)
+	f.Tail, f.TailCut = t.text, t.cut && t.text != ""
 	log, why := a.keepLog(ctx, box)
 	if why != "" {
 		f.Summary = summaryOf(f.Summary + " (" + why + ")")
 	}
 	f.Log = log
+	// Last, so a slow count never costs the log its share of the ending's bound.
+	f.LogLines = a.lines(ctx, box, t)
 }
 
 // reports reads the copies of the run's JUnit and SARIF reports, each at most
@@ -559,14 +566,65 @@ func (a *attempt) summary(ctx context.Context, box sandbox.Sandbox, status int, 
 	return summaryOf(s)
 }
 
+// outputTail is the end of a run's output as an ending carries it: text, its last CheckTailBytes
+// as valid UTF-8; size, the output's size the read found; and cut, whether text begins inside a line.
+type outputTail struct {
+	text string
+	size int64
+	cut  bool
+}
+
 // tail is the last CheckTailBytes of the command's output, valid UTF-8 — the
-// bytes no character is whole in dropped — "" where it cannot be read.
-func (a *attempt) tail(ctx context.Context, box sandbox.Sandbox) string {
-	t, err := box.ReadTail(ctx, outputFile, gitlet.CheckTailBytes)
+// bytes no character is whole in dropped — and the zero value where it cannot
+// be read. ONE BYTE MORE is read, and dropped, to tell whether the tail's first
+// line began before it.
+func (a *attempt) tail(ctx context.Context, box sandbox.Sandbox) outputTail {
+	t, err := box.ReadTail(ctx, outputFile, gitlet.CheckTailBytes+1)
 	if err != nil {
-		return ""
+		return outputTail{}
 	}
-	return strings.ToValidUTF8(string(t.Data), "")
+	data, cut := t.Data, false
+	if len(data) > gitlet.CheckTailBytes {
+		cut, data = data[0] != '\n', data[1:]
+	}
+	return outputTail{text: strings.ToValidUTF8(string(data), ""), size: t.Size, cut: cut}
+}
+
+// lines is how many lines the run's output had when t was read: its newlines up to t's end,
+// counted in its box, and one for an unterminated last line; 0 where the box could not count them,
+// a count no ending is refused for.
+func (a *attempt) lines(ctx context.Context, box sandbox.Sandbox, t outputTail) int {
+	if t.size <= 0 || t.text == "" {
+		return 0
+	}
+	res, err := box.Exec(ctx, lineCount(outputFile, t.size), sandbox.ExecOptions{})
+	n, convErr := strconv.Atoi(strings.TrimSpace(res.Stdout))
+	if err == nil && res.ExitCode == 0 && convErr == nil && n >= 0 {
+		// THE TAIL'S OWN ENDING, never the output's last byte: an invalid byte the tail dropped
+		// after a newline is no line a reader is shown.
+		if !strings.HasSuffix(t.text, "\n") {
+			n++
+		}
+		if n >= gitlet.TailLines(t.text) {
+			return n
+		}
+	}
+	why := "the count is fewer than the tail's own lines"
+	switch {
+	case err != nil:
+		why = err.Error()
+	case res.ExitCode != 0 || convErr != nil || n < 0:
+		why = fmt.Sprintf("exited %d, saying %q", res.ExitCode, cut(res.Stdout, 64))
+	}
+	a.r.log.DebugContext(ctx, "code_check_lines_uncounted", "repo_id", a.c.RepoID, "check", a.c.Name,
+		"attempt", a.c.Attempt, "error", why)
+	return 0
+}
+
+// lineCount is the box's command counting the newlines in the first size bytes of file: those
+// the tail read ends at, so a command still writing past them is not counted.
+func lineCount(file string, size int64) string {
+	return "head -c " + strconv.FormatInt(size, 10) + " < " + sandbox.ShellQuote(file) + " | wc -l"
 }
 
 // keepLog stores the last MaxCheckLogBytes of the run's output as one object
@@ -609,6 +667,15 @@ func summaryOf(s string) string {
 	return cut(strings.ToValidUTF8(s, ""), gitlet.CheckSummaryBytes)
 }
 
+// counted reports an ending carrying a count of [gitlet.CheckCountsVersion]'s.
+func counted(f gitlet.CheckFinished) bool { return f.Tests != nil || f.LogLines != 0 || f.TailCut }
+
+// uncounted is f without its counts: an ending every data node of an older build reads.
+func uncounted(f gitlet.CheckFinished) gitlet.CheckFinished {
+	f.Tests, f.LogLines, f.TailCut = nil, 0, false
+	return f
+}
+
 // finish records ending f under opID, asked again while the checks writer or
 // the log decided nothing — busy, unavailable, an error — a quarter poll apart
 // for at most FinishPolls polls: past it the attempt stays as the rows hold
@@ -618,6 +685,13 @@ func (r *Runner) finish(ctx context.Context, f gitlet.CheckFinished, opID string
 	for {
 		res, err := r.o.Estate.Checks(ctx, gitlet.ChecksRequest{OpID: opID, Finished: &f})
 		switch {
+		case err != nil && r.o.Unread != nil && r.o.Unread(err) && counted(f):
+			// A DATA NODE REFUSED THE COUNTS and nothing ran the ending: it is sent again without
+			// them under the same operation, rather than left for the sweep.
+			r.log.WarnContext(ctx, "code_check_counts_unread", "repo_id", f.RepoID, "check", f.Name,
+				"attempt", f.Attempt, "error", err.Error())
+			f = uncounted(f)
+			continue
 		case err == nil && (res.Refusal == "" || res.Refusal == gitlet.CheckRefusalNoSuchCheck ||
 			res.Refusal == gitlet.CheckRefusalRepoDeleted):
 			// RECORDED, OR NOTHING TO END: an attempt its repository's purge

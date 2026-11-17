@@ -531,7 +531,7 @@ func (d CodeDeps) runChange(ctx context.Context, turn *turnctx.Turn, c codeCalle
 		return nil, statelog.Position{}, &r
 	}
 	change, at, refusal := (&changeRead{deps: d, turn: turn, tool: tool, c: c, name: repo.Name, repo: repo,
-		number: int64(number)}).row(ctx)
+		number: int64(number)}).row(ctx, statelog.Position{})
 	if refusal != nil {
 		return nil, statelog.Position{}, refusal
 	}

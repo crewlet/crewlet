@@ -28,7 +28,9 @@ import { join } from "node:path";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+import { Suspense } from "react";
 import { MyWork } from "./MyWork.tsx";
+import { PeekHost, PeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { AppAnnouncer } from "~/app/announcer.tsx";
 import { Router } from "~/app/router.tsx";
 import { usePageCoverage, usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
@@ -1778,9 +1780,91 @@ test("Reviews lists the changes waiting on their review and their fix, and asks 
     .map((u) => Object.fromEntries(u.searchParams));
   expect(lists).toContainEqual(expect.objectContaining({ needs: "review", reviewer: "ada" }));
   expect(lists).toContainEqual(expect.objectContaining({ needs: "fix", owner: "ada" }));
+  // GITLET'S ROW, with its card; a reviewer's or a need's listing takes no sort.
+  for (const list of lists) {
+    expect(list.cards).toBe("true");
+    expect(list).not.toHaveProperty("sort");
+  }
   expect(await screen.findByText("No review waiting")).toBeTruthy();
   const tracker = query.mock.calls.map((c) => c[0]).filter((w) => w.startsWith("work_"));
   expect(tracker).toEqual([]);
+});
+
+// REVIEWS PUBLISHES ONE PEEK ORDER across its two lists: ] from the reviews' last row lands on
+// the fixes' first. Mutation: drop DayReviews' order, and ] stops at the reviews' end.
+test("Reviews publishes one peek order across the reviews owed and the fixes", async () => {
+  const position = { stream: "CREWLET_CODE_LOG", generation: 1, seq: 1 };
+  const listed = (repo: string, number: number) => ({
+    id: `id-${repo}-${number}`,
+    repo_id: `repo-${repo}`,
+    number,
+    title: `Change ${number} of ${repo}`,
+    state: "open",
+    source_ref: "refs/heads/feature",
+    target_ref: "refs/heads/main",
+    head: "0123456789abcdef0123456789abcdef01234567",
+    revision: 1,
+    owner: "ada",
+    owner_kind: "person",
+    opened_at: "2026-10-27T10:00:00Z",
+    opened_position: position,
+    open_findings: 0,
+    updated_at: "2026-10-28T10:00:00Z",
+    version: 1,
+    position,
+    repo,
+    ref: `${repo}!${number}`,
+    access: "maintain",
+    card: { comments: 0, reviews: 0, changes_requested: 0 },
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), "http://localhost");
+      const needs = url.searchParams.get("needs");
+      const changes =
+        url.pathname !== "/query/code_changes"
+          ? undefined
+          : needs === "review"
+            ? [listed("web", 42)]
+            : [listed("api", 7)];
+      return new Response(JSON.stringify({ changes, position, level: "session" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }),
+  );
+  serving(
+    { viewer: { ...ada, grants: [] } },
+    {
+      ...flatOrg,
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
+    },
+  );
+  location.hash = "#/?peek=change:web!42";
+  await act(async () => {
+    render(
+      <ViewerProvider>
+        <QueueCountProvider>
+          <Router>
+            <PeekNeighbours>
+              <MyWork section="reviews" />
+              <Suspense fallback={null}>
+                <PeekHost />
+              </Suspense>
+            </PeekNeighbours>
+          </Router>
+        </QueueCountProvider>
+      </ViewerProvider>,
+    );
+  });
+  const first = await screen.findByRole("link", { name: "Change 42 of web" });
+  await screen.findByRole("link", { name: "Change 7 of api" });
+  act(() => first.focus());
+  await act(async () => {
+    fireEvent.keyDown(document.activeElement!, { key: "]" });
+  });
+  await waitFor(() => expect(decodeURIComponent(location.hash)).toContain("peek=change:api!7"));
 });
 
 // AN UNBOUND READER'S OWN REVIEWS ARE A SEAT'S, AND THEY HOLD NONE: a review

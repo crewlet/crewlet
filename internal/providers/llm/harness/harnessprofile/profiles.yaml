@@ -547,10 +547,13 @@ claude-code:
       meaning: unread
     - sentinel: "Please run /login"
     - sentinel: "Failed to authenticate"
+  # model and version: what each alias resolves to on Anthropic's own API, per
+  # models_docs and the 2.1.325 build's first-party table. When a model ships,
+  # re-read models_docs and update both; Bedrock, Vertex and Foundry differ.
   model_aliases:
-    - {id: "opus", name: "Opus", detail: "The harness's latest Opus"}
-    - {id: "sonnet", name: "Sonnet", detail: "The harness's latest Sonnet"}
-    - {id: "haiku", name: "Haiku", detail: "The harness's latest Haiku"}
+    - {id: "opus", name: "Opus", detail: "The harness's latest Opus", model: "claude-opus-5-5", version: "5.5"}
+    - {id: "sonnet", name: "Sonnet", detail: "The harness's latest Sonnet", model: "claude-sonnet-5-5", version: "5.5"}
+    - {id: "haiku", name: "Haiku", detail: "The harness's latest Haiku", model: "claude-haiku-5-5", version: "5.5"}
   models_docs: "https://code.claude.com/docs/en/model-config"
 
 codex:
@@ -4092,7 +4095,7 @@ hermes:
 
 pi:
   binary: pi
-  # `@earendil-works/pi-harness`. The project moved from Mario Zechner's
+  # `@earendil-works/pi-coding-agent`. The project moved from Mario Zechner's
   # `@mariozechner` scope to Earendil Works, so the older package name is a
   # different, frozen thing.
   #

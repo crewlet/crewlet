@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -180,6 +181,17 @@ const (
 	ctMCPUse     = `[{"type":"tool_use","id":"` + ctMCPCall + `","name":"mcp__crewlet__slow","input":{"tag":"m1","seconds":0}}]`
 	ctMCPBlocks  = `[{"type":"text","text":"crewlet m1 done"}]`
 	ctMCPResult  = `[{"tool_use_id":"` + ctMCPCall + `","type":"tool_result","content":` + ctMCPBlocks + `}]`
+)
+
+// The records of a hook's firing the layer reads by no name, beside the two
+// [threadLine.AttachmentWellFormed] reads (hookSuccess and
+// hookAdditionalContext): a system message a firing writes, a firing past its
+// timeout, and the summary a Stop firing ends with, a system record of this
+// subtype.
+const (
+	hookSystemMessage = "hook_system_message"
+	hookCancelled     = "hook_cancelled"
+	hookStopSummary   = "stop_hook_summary"
 )
 
 // The notes' hook records, each its attachment: at a batch (a `hook-<uuid>`
@@ -437,7 +449,7 @@ func ctReadFrom(member io.Reader, maxBytes int64) ctReading {
 	r := newThreadReader(member, maxBytes)
 	var got ctReading
 	for {
-		line, err := r.Next()
+		line, err := r.Next(context.Background())
 		var broken *threadLineError
 		switch {
 		case err == nil:
@@ -446,7 +458,7 @@ func ctReadFrom(member io.Reader, maxBytes int64) ctReading {
 			got.broken = append(got.broken, broken)
 		default:
 			got.end, got.torn = err, r.Torn()
-			_, got.again = r.Next()
+			_, got.again = r.Next(context.Background())
 			return got
 		}
 	}
@@ -480,12 +492,17 @@ func ctTypes(lines []threadLine) []string {
 // as whitespace, and alone it breaks nothing. The member's end is the end:
 // asked again, the reader answers it again. A subagent's metadata, one JSON
 // document with no break after it, is no line at all, only a torn piece: no
-// reader of a thread reads it through this one.
+// reader of a thread reads it through this one. Each line says the bytes it
+// takes, its break included, hands what a reader of its bytes reads of them,
+// its break dropped ([threadBytes]), and reads as the record's whole decode
+// ([decodeThreadLine]).
 //
 // Mutation: hand out the last piece with no break as a line, and the torn
 // record, the padding, a piece a carriage return ends and a subagent's
 // metadata each come back as a line, or a line that is no record, where the
-// member's end belongs.
+// member's end belongs; count a record's size without its break, read its
+// byte facts with the break or without a carriage return before it, or decode
+// a line from bytes other than its record's, and every line says so.
 func TestAThreadIsReadAWholeLineAtATime(t *testing.T) {
 	t.Parallel()
 	brief := ctBrief(ctUUID(1))
@@ -513,11 +530,14 @@ func TestAThreadIsReadAWholeLineAtATime(t *testing.T) {
 			t.Errorf("%s: the lines read are of types %q, want %q", name, strings.Join(types, " "),
 				strings.Join(tc.types, " "))
 		}
+		// records is each whole record the member holds, its break dropped.
+		records := strings.Split(tc.text, "\n")
+		records = records[:len(records)-1]
 		for i, line := range got.lines {
-			if line.N != i+1 || bytes.HasSuffix(line.Raw, []byte("\n")) {
-				t.Errorf("%s: line %d is numbered %d and keeps its break %t", name, i+1, line.N,
-					bytes.HasSuffix(line.Raw, []byte("\n")))
+			if i >= len(records) {
+				break
 			}
+			ctWholeRecord(t, name, i+1, line, records[i])
 		}
 		if !errors.Is(got.end, io.EOF) || got.torn != tc.torn || !errors.Is(got.again, io.EOF) {
 			t.Errorf("%s: the reading ended with %v, torn %t, and then %v; want io.EOF, torn %t, and io.EOF again",
@@ -525,8 +545,30 @@ func TestAThreadIsReadAWholeLineAtATime(t *testing.T) {
 		}
 	}
 	got := ctRead(ctEnqueue+"\r\n"+brief+"\n", threadPlainMax)
-	if len(got.lines) != 2 || string(got.lines[0].Raw) != ctEnqueue+"\r" || string(got.lines[1].Raw) != brief {
-		t.Errorf("a line's bytes are not the record's with its break dropped and its carriage return kept")
+	if len(got.lines) != 2 {
+		t.Fatalf("a member of two records reads as %d lines", len(got.lines))
+	}
+	ctWholeRecord(t, "a record ended by CRLF", 1, got.lines[0], ctEnqueue+"\r")
+	ctWholeRecord(t, "a record ended by a break alone", 2, got.lines[1], brief)
+}
+
+// ctWholeRecord fails t unless line is record, a whole record its break
+// dropped, read as line n of the member it was read from (name): numbered n,
+// taking its record's bytes and its break, handing its record's byte facts
+// and reading, every accessor, as the record's whole decode.
+func ctWholeRecord(t *testing.T, name string, n int, line threadLine, record string) {
+	t.Helper()
+	if line.N != n || line.Size != len(record)+1 || line.Bytes != wholeLineBytes([]byte(record)) {
+		t.Errorf("%s: line %d is numbered %d, says it takes %d bytes and hands byte facts of %d; want %d with "+
+			"its break, and the facts of its bytes but the break", name, n, line.N, line.Size, line.Bytes.Len(),
+			len(record)+1)
+	}
+	decoded, err := decodeThreadLine(n, []byte(record))
+	if err != nil {
+		t.Fatalf("%s: line %d, decoded whole, is no record: %v", name, n, err)
+	}
+	if got, want := ctAll(line), ctAll(decoded); got != want {
+		t.Errorf("%s: line %d reads as\n%s\nwant its record's whole decode\n%s", name, n, got, want)
 	}
 }
 
@@ -650,6 +692,179 @@ func TestAMembersReaderThatFailsEndsTheReadingWithItsError(t *testing.T) {
 				"layer's bound", name, got.end)
 		}
 	}
+}
+
+// ctTrace is what r hands out reading one member to its end with ctx, as
+// text: each line as Next hands it (its place, its size, the bytes it holds
+// and its first ones, and everything its accessors read ([ctAll]), or, where
+// it is no record, its place, fault and size), then what ended the reading,
+// what one more Next answered, and whether the member ended torn.
+func ctTrace(ctx context.Context, r *threadReader) string {
+	var b strings.Builder
+	for {
+		line, err := r.Next(ctx)
+		var broken *threadLineError
+		switch {
+		case err == nil:
+			fmt.Fprintf(&b, "line %d: %d bytes, %d of them its own, beginning %q\n%s", line.N, line.Size,
+				line.Bytes.Len(), line.Bytes.Head(), ctAll(line))
+		case errors.As(err, &broken):
+			fmt.Fprintf(&b, "line %d is no record: fault %q, size %d\n", broken.N, broken.Fault, broken.Size)
+		default:
+			_, again := r.Next(ctx)
+			fmt.Fprintf(&b, "ended by %v, then %v, torn %t\n", err, again, r.Torn())
+			return b.String()
+		}
+	}
+}
+
+// A READING ENDS AT THE LINE ITS CONTEXT ENDED: Next asks its context before
+// each line, so once a caller's context has ended the next Next answers its
+// error and hands no more lines, and the reading stays over, whatever context
+// a later Next is handed. The lines before it were each read whole.
+//
+// Mutation: ask no context in Next, and the line after the end is read; or
+// answer a context's end for its own Next alone, and a later one reads on.
+func TestAReadingEndsAtTheLineItsContextEnded(t *testing.T) {
+	t.Parallel()
+	r := newThreadReader(strings.NewReader(ctThread(ctBrief(ctUUID(1)), ctBrief(ctUUID(2)), ctBrief(ctUUID(3)))),
+		threadPlainMax)
+	ctx, cancel := context.WithCancel(t.Context())
+	if line, err := r.Next(ctx); err != nil || line.N != 1 {
+		t.Fatalf("the first line read as %d, %v; want line 1", line.N, err)
+	}
+	cancel()
+	for _, next := range []context.Context{ctx, t.Context()} {
+		if line, err := r.Next(next); !errors.Is(err, context.Canceled) {
+			t.Errorf("a Next after the reading's context ended handed line %d, %v; want %v", line.N, err,
+				context.Canceled)
+		}
+	}
+	if r.Torn() {
+		t.Errorf("a reading its context ended reads as torn")
+	}
+}
+
+// A RESET READER READS AS A FRESH ONE: one reader reads a session's members one
+// after another ([threadReader.Reset]), so a member read after another reads
+// exactly as a fresh reader reads it, its lines numbered from 1, its bound its
+// own, ended only by what ends it, and torn only where it is, whatever the
+// member before it left: a torn piece, the member's bound, a line that is no
+// record, an error of its reader, or a context that ended. The next member is
+// read to its end, and again within a bound it passes, which ends its reading
+// before its end could say whether it is torn.
+//
+// Mutation: keep any of what a reading leaves across Reset (how it ended, how
+// many lines it read, its torn piece, what of its bound it took), and the
+// member after it reads otherwise.
+func TestAResetReaderReadsAsAFreshOne(t *testing.T) {
+	t.Parallel()
+	brief := ctBrief(ctUUID(1))
+	next := ctThread(ctBrief(ctUUID(2)), "[1]", ctBrief(ctUUID(3)))
+	within := int64(len(next)) + 1
+	ended, cancel := context.WithCancel(t.Context())
+	cancel()
+	// text is a member that hands out body.
+	text := func(body string) func() io.Reader {
+		return func() io.Reader { return strings.NewReader(body) }
+	}
+	for name, tc := range map[string]struct {
+		before   func() io.Reader
+		maxBytes int64
+		ctx      context.Context
+	}{
+		"a torn member":           {text(ctThread(brief, brief) + `{"type":"user"`), threadPlainMax, t.Context()},
+		"a member past its bound": {text(ctThread(brief, brief)), int64(len(brief)) + 3, t.Context()},
+		"a member holding a line that is no record": {text(ctThread(brief, "[1]", brief, brief)), within,
+			t.Context()},
+		"a member whose reader failed": {func() io.Reader {
+			return io.MultiReader(strings.NewReader(ctThread(brief, brief)), iotest.ErrReader(io.ErrUnexpectedEOF))
+		}, within, t.Context()},
+		"a reading whose context ended": {text(ctThread(brief, brief)), within, ended},
+	} {
+		for _, bound := range []int64{within, within - 2} {
+			r := newThreadReader(tc.before(), tc.maxBytes)
+			ctTrace(tc.ctx, r)
+			r.Reset(strings.NewReader(next), bound)
+			got := ctTrace(t.Context(), r)
+			if want := ctTrace(t.Context(), newThreadReader(strings.NewReader(next), bound)); got != want {
+				t.Errorf("after %s, the next member read within %d bytes reads as\n%swant it read as a fresh "+
+					"reader reads it\n%s", name, bound, got, want)
+			}
+		}
+	}
+}
+
+// A HEAD IS REFUSED BY ITS KEYS' KINDS ALONE: each head key, of every kind a
+// JSON value is, refuses the head with the same error whether its reading
+// hands the rule the key's value or only its kind, as a reading that keeps a
+// value too long to keep still knows its kind, and both say what the line's
+// own decode says of the same key on a user record. A boolean's value is its
+// kind, so a head of kinds alone reads `isSidechain` and `replacesSpan` as the
+// whole one does.
+//
+// Mutation: hold a string key, `parentUuid` or a boolean key to its type by
+// its raw value, and a key of the wrong kind whose value was not kept reads
+// as absent, or one of the right kind as of none.
+func TestAHeadIsRefusedByItsKeysKindsAlone(t *testing.T) {
+	t.Parallel()
+	values := []string{`"x"`, `{"a":1}`, `[1]`, `true`, `false`, `null`, `1`}
+	for _, key := range []string{"type", "subtype", "agentId", "parentUuid", "isSidechain", "replacesSpan"} {
+		for _, value := range values {
+			// keys is the head of a user record with key's value raw, kept or
+			// its kind alone.
+			keys := func(kept bool) headKeys {
+				k := headKeys{typ: headKeyOf(json.RawMessage(`"user"`))}
+				v := headKeyOf(json.RawMessage(value))
+				if !kept {
+					v.raw = nil
+				}
+				switch key {
+				case "type":
+					k.typ = v
+				case "subtype":
+					k.subtype = v
+				case "agentId":
+					k.agentID = v
+				case "parentUuid":
+					k.parent = v
+				case "isSidechain":
+					k.sidechain = v
+				case "replacesSpan":
+					k.replacesSpan = v
+				}
+				return k
+			}
+			whole, wholeErr := headOf(keys(true))
+			kinds, kindsErr := headOf(keys(false))
+			line := `{"type":"user","` + key + `":` + value + `}`
+			if key == "type" {
+				line = `{"type":` + value + `}`
+			}
+			_, decodeErr := decodeThreadLine(1, []byte(line))
+			var refused *threadLineError
+			if errors.As(decodeErr, &refused) {
+				decodeErr = refused.Err
+			}
+			if fmt.Sprint(kindsErr) != fmt.Sprint(wholeErr) || fmt.Sprint(wholeErr) != fmt.Sprint(decodeErr) {
+				t.Errorf("%s of %s: its kind alone gives %v, its value %v, and the line's decode %v; want one "+
+					"error", key, value, kindsErr, wholeErr, decodeErr)
+				continue
+			}
+			if wholeErr == nil && (ctSidechain(kinds) != ctSidechain(whole) || kinds.ReplacesSpan != whole.ReplacesSpan) {
+				t.Errorf("%s of %s: its kind alone reads isSidechain %s and replacesSpan %t, its value %s and %t",
+					key, value, ctSidechain(kinds), kinds.ReplacesSpan, ctSidechain(whole), whole.ReplacesSpan)
+			}
+		}
+	}
+}
+
+// ctSidechain is h's `isSidechain` as text: "absent", "true" or "false".
+func ctSidechain(h threadHead) string {
+	if h.Sidechain == nil {
+		return "absent"
+	}
+	return fmt.Sprint(*h.Sidechain)
 }
 
 // EVERY WHOLE LINE IS DECODED INTO ITS HEAD BEFORE ANYTHING READS IT: a line
@@ -777,16 +992,19 @@ func fewestAllocations(read func()) uint64 {
 	return fewest
 }
 
-// fewestCalls: under -race sync.Pool drops a quarter of puts and a decode makes
-// about five pool round trips, so about one call in four costs only its own
-// objects. The calls are not independent, though: of three hundred measures of
-// one decode under -race, each the fewest of twenty calls, about one in sixty
-// came out one to three objects over the floor, where independent calls would
-// give one in 250. So the fewest of 200 is far likelier than not to reach the
-// floor, but no claim compares two such counts exactly: it allows the measure
-// what the race detector can add, and asks for less than the cost of what it
-// refutes.
-const fewestCalls = 200
+// fewestCalls: under -race sync.Pool drops a quarter of puts, so a call costs
+// only its own objects where none of its pool round trips was dropped, and a
+// line's decode into its facts ([decodeThreadLine]) makes about nineteen: of
+// 5,000 calls of the one TestALineThatIsNoRecordSaysHowTheLoadReadsIt
+// measures, 22 cost only its own 39 objects, one in 230, and 23 more cost one
+// to three over them. So the fewest of 2,000 misses the floor about once in
+// 7,000 measures (e^-8.8), and comes out three or more over it about e^-18 of
+// the time: forty measures of 2,000, of each of the three that test takes,
+// all came out at the floor, where of forty of 200 the decode's reached it in
+// eleven and came out up to six over it. Still, no claim compares two such
+// counts exactly: it allows the measure what the race detector can add, and
+// asks for less than the cost of what it refutes.
+const fewestCalls = 2000
 
 // A LINE THAT IS NO RECORD SAYS HOW THE LOAD READS IT: a line whose JSON fails
 // before any whole value (a record a later write tore into, a line of white
@@ -803,7 +1021,8 @@ const fewestCalls = 200
 // decoder's 10,000 levels, which the load may read whole, faultDepth, where
 // one nested 10,000 deep reads as a record. Each says the bytes it takes, its
 // break included, a carriage return before it among them, and hands its
-// reader those bytes but the break, as a record's line does. NO LINE'S
+// reader what a reader of those bytes reads of them but the break
+// ([threadBytes]), as a record's line does. NO LINE'S
 // ACCEPTANCE CHANGES: a line the decode takes is decoded once, at the cost
 // of that one decode and its head, the classifier never run on it.
 //
@@ -815,7 +1034,7 @@ const fewestCalls = 200
 // led by a NUL reads as a syntax error; drop the depth check, and a value
 // nested too deep reads as yielding nothing; hold a refused head's type as
 // written, and a summary's names a kind; count a line's size without its
-// break; hand a refused line's reader none of its bytes, from any one of the
+// break; hand a refused line's reader no byte facts, from any one of the
 // three refusals, and the lines it refuses there hand none; or classify every
 // line, refused or not, and a line the decode takes costs the classifier's
 // decoder too.
@@ -866,9 +1085,9 @@ func TestALineThatIsNoRecordSaysHowTheLoadReadsIt(t *testing.T) {
 			t.Errorf("%s: the load reads it as %q, a record of the kind %q, of %d bytes; want %q, %q and %d", name,
 				e.Fault, e.Type, e.Size, tc.fault, tc.kind, len(tc.line)+1)
 		}
-		if e := got.broken[0]; !bytes.Equal(e.Raw, []byte(tc.line)) {
-			t.Errorf("%s hands its reader %d bytes of it, %.40q; want the line's own %d, its break dropped", name,
-				len(e.Raw), e.Raw, len(tc.line))
+		if e := got.broken[0]; e.Bytes != wholeLineBytes([]byte(tc.line)) {
+			t.Errorf("%s hands its reader the byte facts of %d bytes of it, headed %q; want the line's own %d, its "+
+				"break dropped", name, e.Bytes.Len(), e.Bytes.Head(), len(tc.line))
 		}
 	}
 	if got := ctRead(ctThread(deep(10000)), threadPlainMax); len(got.lines) != 1 || len(got.broken) != 0 {
@@ -884,14 +1103,16 @@ func TestALineThatIsNoRecordSaysHowTheLoadReadsIt(t *testing.T) {
 	// classifier's own decoder over the line ([refusedFault], four objects
 	// with or without the race detector, where a second whole decode is nine),
 	// above the one to three the race detector's pools were measured to add.
-	// A line the decode takes costs less than its one decode and its head
-	// with that second read on top, or it was read again.
+	// A line the decode takes costs less than its one decode, its head and the
+	// facts its accessors read ([factsOf]) with that second read on top, or it
+	// was read again.
 	good := []byte(ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn))
 	read := fewestAllocations(func() { _, _ = decodeThreadLine(1, good) })
 	decode := fewestAllocations(func() {
 		var w threadWire
 		_ = wireDecode(good, &w)
-		_, _ = w.head()
+		h, _ := w.head()
+		_ = factsOf(&w, h)
 	})
 	again := fewestAllocations(func() { _ = refusedFault(good) })
 	if again < 4 {
@@ -937,22 +1158,22 @@ func TestARecordIsTheMainThreadsOnlyWhereItSaysSo(t *testing.T) {
 }
 
 // A KEY ONLY ONE READER READS COSTS THAT READER ALONE: an attachment that is
-// no object leaves the record's head and its message whole and is refused by
-// Hook alone, and an origin that is no object leaves the message and the hooks
-// whole and is refused by OriginKind alone. A reply's stop_reason that is no
+// no object leaves the record's head, its message, its origin and its
+// checkpoint whole and is refused by AttachmentType alone, never read as one
+// of no type, and an origin that is no object leaves the message whole and is
+// refused by OriginKind alone. A reply's stop_reason that is no
 // string, null among them, leaves its message, its report of the edits
-// applied, its usage, its model, its id and its hooks whole, and is refused
+// applied, its usage, its model and its id whole, and is refused
 // by StopReason alone, never read as ""; its report of the edits applied, of
 // the wrong shape, leaves its message, its stop_reason, its usage, its model
 // and its id whole and is refused by ToolResultsCleared alone; its usage of
-// the wrong shape leaves its message, its stop_reason, its report, its model,
-// its id and its hooks whole and is refused by Usage alone; and its model or
+// the wrong shape leaves its message, its stop_reason, its report, its model
+// and its id whole and is refused by Usage alone; and its model or
 // its id of the wrong type, each a key two readers read, leaves its message
 // and its stop_reason whole and is refused by those two alone, Usage and
 // Model, or Usage and MessageID. A reply's mark of an API error that is no
 // boolean leaves its message, its stop_reason, its model and its usage whole
-// and is refused by APIError alone. An attachment that is no object is refused
-// by AttachmentType too, never read as one of no type; a checkpoint whose
+// and is refused by APIError alone. A checkpoint whose
 // leafUuid is neither a string nor null leaves its head whole and is refused
 // by Checkpoint and LeafKeyed alone; and a compaction's metadata of the wrong
 // shape leaves its boundary's head and uuid whole and is refused by Preserved
@@ -971,8 +1192,8 @@ func TestARecordIsTheMainThreadsOnlyWhereItSaysSo(t *testing.T) {
 // (null, a number, an object, a boolean), on the harness's bookkeeping, on a
 // model's call or on a hook's record, leaves everything else the record hands
 // out as it reads with its uuid as written, and is refused by UUID alone. As
-// written, each reads: an origin's kind, and a user record's own
-// toolUseResult, raw, which no other record hands out.
+// written, each reads: an origin's kind, and what a user record's own
+// toolUseResult answers of a subagent's leg, which no other record's answers.
 //
 // Mutation: hold the attachment to an object in the head, and the record whose
 // attachment is not one is no record at all; hold the stop_reason, the report
@@ -985,21 +1206,19 @@ func TestARecordIsTheMainThreadsOnlyWhereItSaysSo(t *testing.T) {
 // retraction list to its type in the head, and the record that reshapes it is
 // no record at all;
 // hold the uuid to its type in the head, and every record here whose uuid is
-// reshaped is no record at all.
+// reshaped is no record at all; read an answer off every record's
+// toolUseResult, and an assistant's answers a leg.
 func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	t.Parallel()
 	attachment := ctLine(t, ctAttachment(ctUUID(1), ctUUID(2), `"hook_success"`, ""))
 	if h := attachment.Head; h.Type != recordAttachment || !h.Chained() || !h.Main() {
 		t.Errorf("a record whose attachment is no object reads with the head %+v", h)
 	}
-	if m, err := attachment.Message(); err != nil || m.Kinds() != nil || m.Calls() != nil {
+	if m, err := attachment.Message(); err != nil || m.IsText() || m.Blocks().Len() != 0 || m.Calls() != nil {
 		t.Errorf("a record whose attachment is no object reads its message as %+v, %v", m, err)
 	}
 	if kind, err := attachment.OriginKind(); kind != "" || err != nil {
 		t.Errorf("a record whose attachment is no object reads its origin as %q, %v", kind, err)
-	}
-	if _, _, err := attachment.Hook(); err == nil {
-		t.Error("an attachment that is no object reads as a hook's record or none, never as one it cannot read")
 	}
 	if kind, err := attachment.AttachmentType(); err == nil {
 		t.Errorf("an attachment that is no object reads as one of the type %q, never as one it cannot read", kind)
@@ -1023,7 +1242,7 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	for name, metadata := range map[string]string{"a string": `"kept"`, "a list": `[]`, "a number": `7`} {
 		line := ctLine(t, ctReplace(t, ctBoundary(ctUUID(5), ctUUID(6), ctUUID(3)), `"compactMetadata":{`,
 			`"compactMetadata":`+metadata+`,"was":{`))
-		if p, err := line.Preserved(func(string) error { return nil }); err == nil {
+		if p, err := line.Preserved(); err == nil {
 			t.Errorf("a boundary whose compactMetadata is %s keeps %+v, want an error", name, p)
 		}
 		if uuid, err := line.UUID(); uuid != ctUUID(5) || err != nil ||
@@ -1035,8 +1254,8 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	for name, list := range map[string]string{"a string": `"` + ctUUID(4) + `"`, "an object": `{}`, "null": `null`} {
 		line := ctLine(t, ctReplace(t, ctRetry(ctUUID(5), ctUUID(6), ctUUID(4)),
 			`"retractedMessageUuids":["`+ctUUID(4)+`"]`, `"retractedMessageUuids":`+list))
-		if err := line.Retracted(func(string) error { return nil }); err == nil {
-			t.Errorf("a retry whose retractedMessageUuids is %s retracts with no error; want one", name)
+		if r, err := line.Retracted(); err == nil {
+			t.Errorf("a retry whose retractedMessageUuids is %s retracts %+v with no error; want one", name, r)
 		}
 		if m, err := line.Message(); err != nil || line.Head.Type != recordUser || !line.Head.Main() {
 			t.Errorf("a retry whose retractedMessageUuids is %s reads with the head %+v and the message %+v, %v",
@@ -1123,49 +1342,6 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 			}
 		}
 	}
-	summary := ctSummary(ctUUID(15), ctUUID(16))
-	for name, record := range map[string]string{
-		"a system message whose content is a list": strings.Replace(ctBatchSystem,
-			`"content":"crewlet: a note reached the run"`, `"content":["crewlet: a note reached the run"]`, 1),
-		"an additional context whose content is a string": strings.Replace(ctBatchContext, `"content":["## A note"]`,
-			`"content":"## A note"`, 1),
-		"an additional context with no content": strings.Replace(ctBatchContext, `"content":["## A note"],`, "", 1),
-		"a success with no stdout":              strings.Replace(ctBatchSuccess, `"stdout":`+ctAnswer+`,`, "", 1),
-		"a success whose stdout is an object":   strings.Replace(ctBatchSuccess, `"stdout":`+ctAnswer, `"stdout":{}`, 1),
-		"a success whose content is a number":   strings.Replace(ctBatchSuccess, `"content":""`, `"content":0`, 1),
-		"a firing that is a number": strings.Replace(ctBatchSystem, `"toolUseID":"`+ctBatchFire+`"`,
-			`"toolUseID":7`, 1),
-		"a firing that names none": strings.Replace(ctBatchSystem, `"toolUseID":"`+ctBatchFire+`"`,
-			`"toolUseID":""`, 1),
-		"a firing with no event": strings.Replace(ctBatchContext, `"hookEvent":"PostToolBatch",`, "", 1),
-		"a firing whose event names none": strings.Replace(ctBatchContext, `"hookEvent":"PostToolBatch"`,
-			`"hookEvent":""`, 1),
-		"a cancellation whose command is a number": strings.Replace(ctCancelled, `"command":"crewlet/steer_take"`,
-			`"command":7`, 1),
-		"an attachment whose type is a number": strings.Replace(ctBatchSystem, `"type":"hook_system_message"`,
-			`"type":7`, 1),
-		"an attachment with no type": strings.Replace(ctBatchSystem, `"type":"hook_system_message",`, "", 1),
-	} {
-		line := ctLine(t, ctAttachment(ctUUID(6), ctUUID(7), record, ""))
-		if hook, isHook, err := line.Hook(); err == nil {
-			t.Errorf("%s reads as the hook %+v (%t), want an error", name, hook, isHook)
-		}
-		if m, err := line.Message(); err != nil || line.Head.Type != recordAttachment || !line.Head.Main() {
-			t.Errorf("%s reads with the head %+v and the message %+v, %v", name, line.Head, m, err)
-		}
-	}
-	for name, record := range map[string]string{
-		"a summary whose firing is a number": strings.Replace(summary, `"toolUseID":"`+ctStopFire+`"`,
-			`"toolUseID":7`, 1),
-		"a summary with no firing": strings.Replace(summary, `"toolUseID":"`+ctStopFire+`",`, "", 1),
-		"a summary whose firing names none": strings.Replace(summary, `"toolUseID":"`+ctStopFire+`"`,
-			`"toolUseID":""`, 1),
-	} {
-		if hook, isHook, err := ctLine(t, record).Hook(); err == nil {
-			t.Errorf("%s reads as the hook %+v (%t), want an error", name, hook, isHook)
-		}
-	}
-
 	call := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
 	for name, reason := range map[string]string{
 		"null":      `null`,
@@ -1181,9 +1357,6 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 		}
 		if cleared, err := line.ToolResultsCleared(); cleared || err != nil {
 			t.Errorf("a reply whose stop_reason is %s reads as cleared %t, %v; want no clearing", name, cleared, err)
-		}
-		if _, isHook, err := line.Hook(); isHook || err != nil {
-			t.Errorf("a reply whose stop_reason is %s reads as a hook's record %t, %v", name, isHook, err)
 		}
 		if usage, ok, err := line.Usage(); !ok || err != nil || usage.ID != "msg_test" || usage.Input != 100 {
 			t.Errorf("a reply whose stop_reason is %s says its request took %+v (%t), %v; want its usage", name,
@@ -1241,9 +1414,6 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 		if cleared, err := line.ToolResultsCleared(); cleared || err != nil {
 			t.Errorf("a reply whose usage is %s reads as cleared %t, %v; want no clearing", name, cleared, err)
 		}
-		if _, isHook, err := line.Hook(); isHook || err != nil {
-			t.Errorf("a reply whose usage is %s reads as a hook's record %t, %v", name, isHook, err)
-		}
 		if model, err := line.Model(); model != "claude-sonnet-4-5" || err != nil {
 			t.Errorf("a reply whose usage is %s was written by %q, %v; want its model", name, model, err)
 		}
@@ -1285,9 +1455,9 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 			t.Errorf("a reply whose mark of an API error is %s reads as a failed request's %t, want an error", name,
 				failed)
 		}
-		if m, err := line.Message(); err != nil || !slices.Equal(m.Kinds(), []string{blockText}) {
-			t.Errorf("a reply whose mark is %s reads the blocks %q, %v; want its text", name,
-				strings.Join(m.Kinds(), " "), err)
+		if m, err := line.Message(); err != nil || ctBlocks(m.Blocks()) != "1 [text]" {
+			t.Errorf("a reply whose mark is %s reads the blocks %s, %v; want its text", name, ctBlocks(m.Blocks()),
+				err)
 		}
 		if reason, err := line.StopReason(); reason != "stop_sequence" || err != nil {
 			t.Errorf("a reply whose mark is %s stopped for %q, %v; want stop_sequence", name, reason, err)
@@ -1329,11 +1499,9 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	origin := ctLine(t, strings.Replace(notification, ctNotificationOrigin, `"origin":"task-notification"`, 1))
 	if m, err := origin.Message(); err != nil {
 		t.Errorf("a notification whose origin is no object reads no message: %v", err)
-	} else if text, isText := m.Text(); !isText || text != ctNotificationText {
-		t.Errorf("a notification whose origin is no object reads its message as %q", text)
-	}
-	if _, isHook, err := origin.Hook(); isHook || err != nil {
-		t.Errorf("a notification whose origin is no object reads as a hook's record %t, %v", isHook, err)
+	} else if agent, leg, ok := m.Notification(); !m.IsText() || !ok || agent != ctAgent || leg != "toolu_test_agent" {
+		t.Errorf("a notification whose origin is no object reads its message as a text %t naming %q's leg %q (%t)",
+			m.IsText(), agent, leg, ok)
 	}
 	if _, err := origin.OriginKind(); err == nil {
 		t.Error("an origin that is no object reads as a kind")
@@ -1356,22 +1524,27 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 		}
 	}
 
-	if got := ctLine(t, ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)).ToolUseResult(); string(got) != ctResultOwn {
-		t.Errorf("a result's own toolUseResult reads as %s, want it as written", got)
-	}
-	if got := ctLine(t, ctResult(ctUUID(9), ctUUID(10), ctMCPResult, ctMCPBlocks)).ToolUseResult(); string(got) != ctMCPBlocks {
-		t.Errorf("an MCP result's own toolUseResult reads as %s, want it as written", got)
-	}
+	answer := `{"status":"completed","agentId":"` + ctAgent + `","handback":"withheld"}`
 	assistant := strings.Replace(ctAssistant(ctUUID(3), ctUUID(4), ctUseContent), `"apiBlockIndex"`,
-		`"toolUseResult":`+ctResultOwn+`,"apiBlockIndex"`, 1)
-	for name, record := range map[string]string{
-		"an assistant's":                   assistant,
-		"a brief's, which has none":        ctBrief(ctUUID(1)),
-		"an attachment's":                  ctAttachment(ctUUID(1), ctUUID(2), ctTokens, ctTokensRendered),
-		"a request blob's, which has none": ctRequestBlob,
+		`"toolUseResult":`+answer+`,"apiBlockIndex"`, 1)
+	for name, tc := range map[string]struct {
+		record  string
+		answers bool
+	}{
+		"a result's that answers a leg":         {record: ctResult(ctUUID(4), ctUUID(5), ctResultBody, answer), answers: true},
+		"a command's result's, its output":      {record: ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)},
+		"an MCP result's, a list of its blocks": {record: ctResult(ctUUID(9), ctUUID(10), ctMCPResult, ctMCPBlocks)},
+		"an assistant's":                        {record: assistant},
+		"a brief's, which has none":             {record: ctBrief(ctUUID(1))},
+		"an attachment's":                       {record: ctAttachment(ctUUID(1), ctUUID(2), ctTokens, ctTokensRendered)},
+		"a request blob's, which has none":      {record: ctRequestBlob},
 	} {
-		if got := ctLine(t, record).ToolUseResult(); got != nil {
-			t.Errorf("%s toolUseResult reads as %s, want none: only a user record's is one", name, got)
+		line := ctLine(t, tc.record)
+		completed, agent, refused := line.AgentAnswer()
+		if handback := line.HandsBack(); completed != tc.answers || (agent == ctAgent) != tc.answers ||
+			(agent != "" && agent != ctAgent) || refused || handback != tc.answers {
+			t.Errorf("%s toolUseResult answers completed %t, agent %q, refused %t, a handback %t; want an answer "+
+				"%t: only a user record's answers", name, completed, agent, refused, handback, tc.answers)
 		}
 	}
 }
@@ -1386,10 +1559,10 @@ func ctReplace(t *testing.T, record, from, to string) string {
 }
 
 // ctAll is everything a line hands out through every accessor, as text: its
-// head, its own uuid, its hook, its message and its calls, its origin's kind,
-// its own toolUseResult, whether it says tool results were cleared, why its
-// reply stopped, whether its harness wrote it for a failed request, the model
-// that wrote it, the reply it is, what its request took, what it says a
+// head, its own uuid, its message and its calls, its origin's kind, what its
+// own toolUseResult answers, whether it says tool results were cleared, why
+// its reply stopped, whether its harness wrote it for a failed request, the
+// model that wrote it, the reply it is, what its request took, what it says a
 // compaction kept, the leaf it says a resume starts from and whether it names
 // one at all, its attachment's type, the records it says its harness took
 // back, the results it says its harness replaced, and whether it is virtual,
@@ -1398,9 +1571,9 @@ func ctReplace(t *testing.T, record, from, to string) string {
 // written, whether it is meta, the reply it names as its results' source, the
 // key of the call its attachment followed, whether its message says
 // anything, whether a resume keeps it as an attachment of its shape, and the
-// release that wrote it, each beside the error it answered. A
-// raw value it hands out is printed by [ctRaw], so an absent one and a null
-// one never read alike.
+// release that wrote it, each beside the error it answered. A raw value it
+// hands out is printed by [ctRaw], so an absent one and a null one never read
+// alike.
 func ctAll(l threadLine) string {
 	uuid, err := l.UUID()
 	return fmt.Sprintf("uuid: %q; %v\n", uuid, err) + ctAllButUUID(l)
@@ -1416,84 +1589,117 @@ func ctAllButUUID(l threadLine) string {
 	}
 	fmt.Fprintf(&b, "head: type %q, subtype %q, parent %s, sidechain %s, agent %q, replaces a span %t\n",
 		h.Type, h.Subtype, ctRaw(h.Parent), side, h.AgentID, h.ReplacesSpan)
-	hook, isHook, err := l.Hook()
-	fmt.Fprintf(&b, "hook %t: record %q, event %q, firing %q, command %q, content %s, stdout %s; %v\n", isHook,
-		hook.Record, hook.Event, hook.Firing, hook.Command, ctRaw(hook.Content), ctRaw(hook.Stdout), err)
 	m, err := l.Message()
-	text, isText := m.Text()
-	fmt.Fprintf(&b, "message: text %q (%t), kinds %q; %v\n", text, isText, strings.Join(m.Kinds(), " "), err)
-	for _, c := range m.Calls() {
-		failed := "absent"
-		if c.IsError != nil {
-			failed = strconv.FormatBool(*c.IsError)
-		}
-		fmt.Fprintf(&b, "call %q: id %q, name %q, input %s, is_error %s, content %s\n", c.Kind, c.ID, c.Name,
-			ctRaw(c.Input), failed, ctRaw(c.Content))
-	}
+	ctMessage(&b, m, err)
 	kind, err := l.OriginKind()
 	fmt.Fprintf(&b, "origin: kind %q; %v\n", kind, err)
-	fmt.Fprintf(&b, "toolUseResult: %s\n", ctRaw(l.ToolUseResult()))
+	ctLegAnswer(&b, l)
+	ctFacts(&b, l, m)
+	return b.String()
+}
+
+// ctMessage writes to b what a message m, read with err, hands out: whether it
+// is one text, the subagent and the leg a task notification's text names,
+// whether it names the handback tool, its blocks ([ctBlocks]), and its calls.
+func ctMessage(b *strings.Builder, m threadMessage, err error) {
+	agent, leg, notice := m.Notification()
+	fmt.Fprintf(b, "message: a text %t, a notification %t of %q's leg %q, naming the handback %t, blocks %s; %v\n",
+		m.IsText(), notice, agent, leg, m.NamesHandback(), ctBlocks(m.Blocks()), err)
+	for _, c := range m.Calls() {
+		ctCallFacts(b, c)
+	}
+}
+
+// ctBlocks is what blocks hand out, as text: how many there are, and each
+// kind among them, the ones the layer names in its order and then "other" for
+// any it does not: "2 [tool_use text]".
+func ctBlocks(blocks threadBlocks) string {
+	var kinds []string
+	for _, k := range []struct {
+		member blockSet
+		name   string
+	}{{blockSetToolUse, blockToolUse}, {blockSetToolResult, blockToolResult}, {blockSetText, blockText},
+		{blockSetThinking, blockThinking}, {blockSetRedactedThinking, blockRedactedThinking},
+		{blockOther, "other"}} {
+		if blocks.seen&k.member != 0 {
+			kinds = append(kinds, k.name)
+		}
+	}
+	return fmt.Sprintf("%d [%s]", blocks.Len(), strings.Join(kinds, " "))
+}
+
+// ctCallFacts writes to b everything a call hands out: its kind, its id, its
+// tool's name, the subagent it sends to, whether its result failed, and its
+// result's text as its length and digests.
+func ctCallFacts(b *strings.Builder, c threadCall) {
+	fmt.Fprintf(b, "call %q: id %q, name %q, sends to %q, failed %t, its result's text %d bytes, opening %x, "+
+		"whole %x\n", c.Kind, c.ID, c.Name, c.To, c.Failed, c.Text.Bytes(), c.Text.Opening, c.Text.Whole)
+}
+
+// ctLegAnswer writes to b what a line's own toolUseResult says: what it answers
+// of a subagent's leg, and whether it carries a handback.
+func ctLegAnswer(b *strings.Builder, l threadLine) {
+	completed, agent, refused := l.AgentAnswer()
+	fmt.Fprintf(b, "its answer: completed %t, agent %q, refused %t, a handback %t\n", completed, agent, refused,
+		l.HandsBack())
+}
+
+// ctFacts writes to b everything [ctAllButUUID] prints after a line's answer
+// ([ctLegAnswer]), its message m among it.
+func ctFacts(b *strings.Builder, l threadLine, m threadMessage) {
 	cleared, err := l.ToolResultsCleared()
-	fmt.Fprintf(&b, "tool results cleared: %t; %v\n", cleared, err)
+	fmt.Fprintf(b, "tool results cleared: %t; %v\n", cleared, err)
 	reason, err := l.StopReason()
-	fmt.Fprintf(&b, "stop reason: %q; %v\n", reason, err)
+	fmt.Fprintf(b, "stop reason: %q; %v\n", reason, err)
 	failed, err := l.APIError()
-	fmt.Fprintf(&b, "a failed request's reply: %t; %v\n", failed, err)
+	fmt.Fprintf(b, "a failed request's reply: %t; %v\n", failed, err)
 	model, err := l.Model()
-	fmt.Fprintf(&b, "model: %q; %v\n", model, err)
+	fmt.Fprintf(b, "model: %q; %v\n", model, err)
 	reply, err := l.MessageID()
-	fmt.Fprintf(&b, "reply: %q; %v\n", reply, err)
+	fmt.Fprintf(b, "reply: %q; %v\n", reply, err)
 	usage, used, err := l.Usage()
-	fmt.Fprintf(&b, "usage %t: id %q, model %q, input %d, cache writes %d, cache reads %d, output %d; %v\n", used,
+	fmt.Fprintf(b, "usage %t: id %q, model %q, input %d, cache writes %d, cache reads %d, output %d; %v\n", used,
 		usage.ID, usage.Model, usage.Input, usage.CacheWrite, usage.CacheRead, usage.Output, err)
-	var listed []string
-	preserved, err := l.Preserved(func(uuid string) error {
-		listed = append(listed, uuid)
-		return nil
-	})
-	fmt.Fprintf(&b, "preserved: %+v, listing %q; %v\n", preserved, strings.Join(listed, " "), err)
+	preserved, err := l.Preserved()
+	fmt.Fprintf(b, "preserved: %+v; %v\n", preserved, err)
 	leaf, marked, err := l.Checkpoint()
-	fmt.Fprintf(&b, "checkpoint: leaf %q, marked %t; %v\n", leaf, marked, err)
+	fmt.Fprintf(b, "checkpoint: leaf %q, marked %t; %v\n", leaf, marked, err)
 	keyed, err := l.LeafKeyed()
-	fmt.Fprintf(&b, "leaf keyed: %t; %v\n", keyed, err)
+	fmt.Fprintf(b, "leaf keyed: %t; %v\n", keyed, err)
 	attached, err := l.AttachmentType()
-	fmt.Fprintf(&b, "attachment type: %q; %v\n", attached, err)
-	var retracted []string
-	err = l.Retracted(func(uuid string) error {
-		retracted = append(retracted, uuid)
-		return nil
-	})
-	fmt.Fprintf(&b, "retracted: %q; %v\n", strings.Join(retracted, " "), err)
+	fmt.Fprintf(b, "attachment type: %q; %v\n", attached, err)
+	retracted, err := l.Retracted()
+	prefixes, all := retracted.Prefixes()
+	fmt.Fprintf(b, "retracted: %d entries, the prefixes %x, all %t; %v\n", retracted.Entries, prefixes, all, err)
 	var replaced []string
 	err = l.ReplacedResults(func(id string) { replaced = append(replaced, id) })
-	fmt.Fprintf(&b, "replaced results: %q; %v\n", strings.Join(replaced, " "), err)
+	fmt.Fprintf(b, "replaced results: %q; %v\n", strings.Join(replaced, " "), err)
 	replacements, err := l.ReplacementCount()
-	fmt.Fprintf(&b, "replacements listed: %d; %v\n", replacements, err)
+	fmt.Fprintf(b, "replacements listed: %d; %v\n", replacements, err)
 	virtual, err := l.IsVirtual()
-	fmt.Fprintf(&b, "virtual: %t; %v\n", virtual, err)
+	fmt.Fprintf(b, "virtual: %t; %v\n", virtual, err)
 	shutdown, err := l.InterruptedByShutdown()
-	fmt.Fprintf(&b, "interrupted by a shutdown: %t; %v\n", shutdown, err)
+	fmt.Fprintf(b, "interrupted by a shutdown: %t; %v\n", shutdown, err)
 	summary, err := l.IsCompactSummary()
-	fmt.Fprintf(&b, "a compaction's summary: %t; %v\n", summary, err)
-	fmt.Fprintf(&b, "a task's delivery: %t\n", l.TaskDelivery())
+	fmt.Fprintf(b, "a compaction's summary: %t; %v\n", summary, err)
+	fmt.Fprintf(b, "a task's delivery: %t\n", l.TaskDelivery())
 	var batch []string
 	batched, err := l.BatchToolUses(func(id string) { batch = append(batch, id) })
-	fmt.Fprintf(&b, "a batch's reply: %t, splitting %q; %v\n", batched, strings.Join(batch, " "), err)
+	fmt.Fprintf(b, "a batch's reply: %t, splitting %q; %v\n", batched, strings.Join(batch, " "), err)
 	ms, stamped, err := l.Timestamp()
-	fmt.Fprintf(&b, "written %t at %d; %v\n", stamped, ms, err)
+	fmt.Fprintf(b, "written %t at %d; %v\n", stamped, ms, err)
 	meta, err := l.IsMeta()
-	fmt.Fprintf(&b, "meta: %t; %v\n", meta, err)
+	fmt.Fprintf(b, "meta: %t; %v\n", meta, err)
 	source, sourced := l.SourceToolAssistantUUID()
-	fmt.Fprintf(&b, "source %t: %x\n", sourced, source)
+	fmt.Fprintf(b, "source %t: %x\n", sourced, source)
 	call, isCall := l.AttachmentToolUseID()
-	fmt.Fprintf(&b, "followed %t: %x\n", isCall, call)
+	fmt.Fprintf(b, "followed %t: %x\n", isCall, call)
 	saysText, saysAny := m.Says()
-	fmt.Fprintf(&b, "says text %t, anything %t\n", saysText, saysAny)
+	fmt.Fprintf(b, "says text %t, anything %t\n", saysText, saysAny)
 	formed, err := l.AttachmentWellFormed()
-	fmt.Fprintf(&b, "kept as well formed: %t; %v\n", formed, err)
+	fmt.Fprintf(b, "kept as well formed: %t; %v\n", formed, err)
 	release, err := l.Version()
-	fmt.Fprintf(&b, "written by %q; %v\n", release, err)
-	return b.String()
+	fmt.Fprintf(b, "written by %q; %v\n", release, err)
 }
 
 // ctRaw is a raw value a line hands out, as text: "absent" where it is nil,
@@ -1512,11 +1718,12 @@ func ctRaw(v json.RawMessage) string {
 // another key, after that one or before it, and alone it leaves that one
 // absent; and a key written twice holds its last value. Every object the layer
 // reads is held so: a line's head and the keys only one reader reads (its own
-// uuid, a message, an attachment, an origin, a firing at the top, a record's
+// uuid, a message, an attachment, an origin, a record's
 // own toolUseResult, a reply's mark of an API error, a checkpoint's leaf and
 // its marks, a compaction's metadata, the uuids a record retracts, a record's
 // replacements, the marks of a record no plain one, a batch's list, its time,
-// its meta mark, a result's source), a hook's attachment, an origin, a
+// its meta mark, a result's source), a hook's attachment (its type, its
+// firing and its content), an origin, a
 // message (its content, its stop_reason, its id, its model and its usage), a
 // message's blocks, its usage's counts and iterations, each iteration's type
 // and counts, its report of the context edits applied, each edit the report
@@ -1603,10 +1810,6 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			to: `,"Attachment":` + strings.Replace(ctBatchSuccess, ctBatchFire, other, 1) + `,"type":"attachment"`},
 		"an origin, then Origin": {record: notification, from: ctNotificationOrigin,
 			to: ctNotificationOrigin + `,"Origin":{"kind":"coordinator"}`},
-		"a summary's firing, then a call's toolUseId": {record: summary, from: `"toolUseID":"` + ctStopFire + `"`,
-			to: `"toolUseID":"` + ctStopFire + `","toolUseId":"` + other + `"`},
-		"a summary's firing spelled ToolUseID alone": {record: ctReplace(t, summary, `"toolUseID":"`+ctStopFire+`",`, ""),
-			from: `"hookCount":1`, to: `"hookCount":1,"ToolUseID":"` + ctStopFire + `"`},
 		"a toolUseResult, then ToolUseResult": {record: result, from: `"toolUseResult":` + ctResultOwn,
 			to: `"toolUseResult":` + ctResultOwn + `,"ToolUseResult":{"stdout":"other"}`},
 		"ToolUseResult null alone": {record: brief, from: `"isSidechain":false`,
@@ -1692,13 +1895,7 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			to: `"hookName":"PostToolBatch","TOOLUSEID":"` + ctBatchFire + `"`},
 		"an attachment's type, then Type": {record: hook, from: `"type":"hook_success"`,
 			to: `"type":"hook_success","Type":"hook_cancelled"`},
-		"an attachment's hookEvent, then HookEvent": {record: hook, from: `"hookEvent":"PostToolBatch"`,
-			to: `"hookEvent":"PostToolBatch","HookEvent":"Stop"`},
-		"an attachment's command, then Command": {record: hook, from: `"command":"crewlet/steer_take"`,
-			to: `"command":"crewlet/steer_take","Command":"crewlet/other"`},
-		"an attachment's content, then Content": {record: hook, from: `"content":""`, to: `"content":"","Content":"other"`},
-		"an attachment's stdout, then Stdout": {record: hook, from: `"stdout":` + ctAnswer,
-			to: `"stdout":` + ctAnswer + `,"Stdout":"other"`},
+		"an attachment's content, then Content": {record: hook, from: `"content":""`, to: `"content":"","Content":7`},
 		// An origin.
 		"an origin's kind, then Kind": {record: notification, from: `"kind":"task-notification"`,
 			to: `"kind":"task-notification","Kind":"coordinator"`},
@@ -1794,15 +1991,272 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 	}
 }
 
+// ctOutcome is how a reader reads record, the one line of a thread: where it
+// is a record, what every accessor reads of it ([ctAll]); where it is none,
+// its fault, the type it names and its error. A line's place and size are left
+// out, so two lines that differ in nothing a reader reads print alike.
+func ctOutcome(t *testing.T, record string) string {
+	t.Helper()
+	got := ctRead(ctThread(record), threadPlainMax)
+	switch {
+	case len(got.broken) == 1 && len(got.lines) == 0 && errors.Is(got.end, io.EOF):
+		b := got.broken[0]
+		return fmt.Sprintf("no record: fault %q, type %q; %v\n", b.Fault, b.Type, b.Err)
+	case len(got.lines) != 1 || len(got.broken) != 0 || !errors.Is(got.end, io.EOF):
+		t.Fatalf("%.120s reads as %d lines and %d broken, ended by %v; want one line", record, len(got.lines),
+			len(got.broken), got.end)
+	}
+	l := got.lines[0]
+	var b strings.Builder
+	h := l.Head
+	side := "absent"
+	if h.Sidechain != nil {
+		side = strconv.FormatBool(*h.Sidechain)
+	}
+	fmt.Fprintf(&b, "head: type %q, subtype %q, parent %s, sidechain %s, agent %q, replaces a span %t\n",
+		h.Type, h.Subtype, ctRaw(h.Parent), side, h.AgentID, h.ReplacesSpan)
+	uuid, err := l.UUID()
+	fmt.Fprintf(&b, "uuid: %q; %v\n", uuid, err)
+	m, err := l.Message()
+	ctMessage(&b, m, err)
+	kind, err := l.OriginKind()
+	fmt.Fprintf(&b, "origin: kind %q; %v\n", kind, err)
+	ctLegAnswer(&b, l)
+	ctFacts(&b, l, m)
+	return b.String()
+}
+
+// ctTwice is a key written twice into a line: in writes the keys it is given
+// into the line, first is the first occurrence, between what lies between the
+// two ("" where nothing does), and last the last.
+type ctTwice struct {
+	in                   func(keys string) string
+	first, between, last string
+}
+
+// ctAt writes keys into record in place of from, which it holds exactly once.
+func ctAt(t *testing.T, record, from string) func(keys string) string {
+	return func(keys string) string { return ctReplace(t, record, from, keys) }
+}
+
+// ctKeys is the keys given, those that are not "", as an object writes them.
+func ctKeys(keys ...string) string {
+	return strings.Join(slices.DeleteFunc(keys, func(k string) bool { return k == "" }), ",")
+}
+
+// A KEY WRITTEN TWICE IS READ WHOLLY BY ITS LAST, as Claude Code's JSON.parse
+// reads it, at every level of a line: the line reads exactly as the line
+// holding only the last occurrence (and what lies between) reads, through
+// every accessor and every reader of a call, a result and an answer, whether
+// that is a record or no record, and whatever the first occurrence held. Each
+// case's first occurrence reads otherwise on its own (a key the last lacks, or
+// another value), so a reader that keeps any of it fails the case:
+//
+//   - a record's message (a call, a reply's id, its model and its usage, then
+//     one text block), its own toolUseResult (a completed answer naming its
+//     agent and carrying a handback, then none), its attachment (a fork's
+//     briefing following a call, then a payload of no type), a boundary's
+//     compactMetadata (the list it kept, then a segment alone), its
+//     replacements and a reply's batch (an entry, then none), and its origin
+//     (a task's notification, then none);
+//   - the head: a key of the wrong type, then one of the right type, is a
+//     record, and the reverse no record, for isSidechain, type, subtype,
+//     agentId and parentUuid; a replacesSpan of the wrong type between an
+//     assistant's type and a user's is no record of the user's type, and
+//     between a user's and an assistant's a record; and a head fault between a
+//     user's type and a type no record carries names no type;
+//   - a message's content (a call, then a text), its usage (an output count,
+//     then none), its report of the context edits applied (a clearing, then
+//     none), its id, its model and its stop reason;
+//   - a block's id, its type (a call's, then a text's), a result's call id
+//     and its failure, a call's input (a target, then none), a result's
+//     content (a text, then none) and a block's text (blank, then said, and
+//     the reverse);
+//   - a result's text block's type and text; an answer's status and a send's
+//     success; an iteration's type and a count of it; an edit's type and its
+//     count; a replacement's kind; a batch entry's id; an attachment's type,
+//     a skill listing's names, a withheld memory's entries and an entry's why;
+//     and a compaction's list (its uuids, then an anchor alone).
+//
+// Mutation: merge a repeated object's members into the earlier occurrence's,
+// or a repeated list's entries into the earlier one's, as a reader that keeps
+// what it read of the first does, and every record-level case reads the first
+// occurrence's fact; read a key written twice by its first value, and every
+// case reads as its first; refuse a key written twice, and every case is no
+// record.
+func TestAKeyWrittenTwiceIsReadWhollyByItsLast(t *testing.T) {
+	t.Parallel()
+	const other = "toolu_test_other"
+	brief, prompt := ctBrief(ctUUID(1)), ctSubagentPrompt(ctUUID(3))
+	call := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
+	result := ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)
+	summary := ctSummary(ctUUID(15), ctUUID(16))
+	compacting := ctBoundary(ctUUID(10), ctUUID(11), ctUUID(3), ctUUID(4))
+	cleared := ctReported(t, ctEdits(ctClearing))
+	said := ctAssistant(ctUUID(3), ctUUID(4), `[{"type":"text","text":"hi"}]`)
+	sent := ctAssistant(ctUUID(3), ctUUID(4), `[{"type":"tool_use","id":"`+ctCall+`","name":"`+
+		claudeToolSendMessage+`","input":{"to":"`+ctAgent+`","message":"continue"}}]`)
+	blocked := ctResult(ctUUID(4), ctUUID(5), `[{"tool_use_id":"`+ctCall+`","type":"tool_result","content":`+
+		`[{"type":"text","text":"x"}]}]`, ctResultOwn)
+	// owned is a result whose own toolUseResult is own.
+	owned := func(own string) string { return ctResult(ctUUID(4), ctUUID(5), ctResultBody, own) }
+	// iteration is the model's call whose usage lists one iteration, of keys.
+	iteration := func(keys string) string {
+		return ctReplace(t, call, `"output_tokens":20}`, `"output_tokens":20,"iterations":[{`+keys+`}]}`)
+	}
+	// batchOf is the model's call whose batch lists one entry, of keys.
+	batchOf := func(keys string) string {
+		return ctReplace(t, call, `"apiBlockIndex"`, `"batchToolUses":[{`+keys+`}],"apiBlockIndex"`)
+	}
+	// attached is an attachment record whose payload is attachment.
+	attached := func(attachment string) string { return ctAttachment(ctUUID(1), ctUUID(2), attachment, "") }
+	member := func(record, key string) string {
+		t.Helper()
+		var found string
+		if err := eachKey(json.RawMessage(record), func(name []byte, value json.RawMessage, _ int) error {
+			if string(name) == key {
+				found = `"` + key + `":` + string(value)
+			}
+			return nil
+		}); err != nil || found == "" {
+			t.Fatalf("%.80s holds no %s: %v", record, key, err)
+		}
+		return found
+	}
+	segment := `"preservedSegment":{"headUuid":"` + ctUUID(20) + `","anchorUuid":"` + ctUUID(21) + `","tailUuid":"` +
+		ctUUID(22) + `"}`
+	withheld := `{"path":"a","why":"denied","displayPath":"a"}`
+	listed := ctListed(ctUUID(11), ctUUID(3), ctUUID(4))[1:]
+	batching := ctReplace(t, call, `"apiBlockIndex"`, `"batchToolUses":[{"id":"`+ctCall+`","name":"Bash"}],"apiBlockIndex"`)
+	for name, tc := range map[string]ctTwice{
+		// A record.
+		"a message": {in: ctAt(t, call, member(call, "message")), first: member(call, "message"),
+			last: `"message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}`},
+		"a toolUseResult": {in: ctAt(t, owned(`{}`), `"toolUseResult":{}`),
+			first: `"toolUseResult":{"status":"completed","agentId":"` + ctAgent + `","handback":{"report":"x"}}`,
+			last:  `"toolUseResult":{}`},
+		"an attachment": {in: ctAt(t, attached(`{}`), `"attachment":{}`),
+			first: `"attachment":{"type":"` + attachmentForkBriefing + `","toolUseID":"` + ctCall + `"}`,
+			last:  `"attachment":{"content":"x"}`},
+		"a compactMetadata": {in: ctAt(t, compacting, member(compacting, "compactMetadata")),
+			first: member(compacting, "compactMetadata"), last: `"compactMetadata":{` + segment + `}`},
+		"a replacements": {in: ctAt(t, ctReplacement("", ctReplaced(ctCall)), `"replacements":[`+ctReplaced(ctCall)+`]`),
+			first: `"replacements":[` + ctReplaced(ctCall) + `]`, last: `"replacements":[]`},
+		"a batchToolUses": {in: ctAt(t, batching, `"batchToolUses":[{"id":"`+ctCall+`","name":"Bash"}]`),
+			first: `"batchToolUses":[{"id":"` + ctCall + `","name":"Bash"}]`, last: `"batchToolUses":[]`},
+		"an origin": {in: ctAt(t, ctNotification(ctUUID(1), ctUUID(3)), ctNotificationOrigin),
+			first: ctNotificationOrigin, last: `"origin":{}`},
+		// The head.
+		"an isSidechain of no boolean, then false": {in: ctAt(t, brief, `"isSidechain":false`),
+			first: `"isSidechain":"x"`, last: `"isSidechain":false`},
+		"an isSidechain false, then of no boolean": {in: ctAt(t, brief, `"isSidechain":false`),
+			first: `"isSidechain":false`, last: `"isSidechain":"x"`},
+		"a type of no string, then user": {in: ctAt(t, brief, `"type":"user"`),
+			first: `"type":7`, last: `"type":"user"`},
+		"a type user, then of no string": {in: ctAt(t, brief, `"type":"user"`),
+			first: `"type":"user"`, last: `"type":7`},
+		"a subtype of no string, then one": {in: ctAt(t, summary, `"subtype":"stop_hook_summary"`),
+			first: `"subtype":7`, last: `"subtype":"stop_hook_summary"`},
+		"a subtype, then of no string": {in: ctAt(t, summary, `"subtype":"stop_hook_summary"`),
+			first: `"subtype":"stop_hook_summary"`, last: `"subtype":7`},
+		"an agentId of no string, then one": {in: ctAt(t, prompt, `"agentId":"`+ctAgent+`"`),
+			first: `"agentId":7`, last: `"agentId":"` + ctAgent + `"`},
+		"an agentId, then of no string": {in: ctAt(t, prompt, `"agentId":"`+ctAgent+`"`),
+			first: `"agentId":"` + ctAgent + `"`, last: `"agentId":7`},
+		"a parentUuid of neither null nor a string, then one": {in: ctAt(t, result, `"parentUuid":"`+ctUUID(4)+`"`),
+			first: `"parentUuid":7`, last: `"parentUuid":"` + ctUUID(4) + `"`},
+		"a parentUuid, then of neither null nor a string": {in: ctAt(t, result, `"parentUuid":"`+ctUUID(4)+`"`),
+			first: `"parentUuid":"` + ctUUID(4) + `"`, last: `"parentUuid":7`},
+		"a replacesSpan of no boolean between an assistant's type and a user's": {in: ctAt(t, brief, `"type":"user"`),
+			first: `"type":"assistant"`, between: `"replacesSpan":"x"`, last: `"type":"user"`},
+		"a replacesSpan of no boolean between a user's type and an assistant's": {in: ctAt(t, brief, `"type":"user"`),
+			first: `"type":"user"`, between: `"replacesSpan":"x"`, last: `"type":"assistant"`},
+		"a head fault between a user's type and one no record carries": {
+			in:    ctAt(t, brief, `"isSidechain":false,"promptId":"`+ctPrompt+`","type":"user"`),
+			first: `"type":"user"`, between: `"isSidechain":1`, last: `"type":"bogus"`},
+		// A message.
+		"a message's content": {in: ctAt(t, call, `"content":`+ctUseContent),
+			first: `"content":` + ctUseContent, last: `"content":"hi"`},
+		"a message's usage": {in: ctAt(t, call, ctUsage), first: ctUsage,
+			last: `"usage":{"input_tokens":100,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}`},
+		"a message's context_management": {in: ctAt(t, cleared, `"context_management":`+ctEdits(ctClearing)),
+			first: `"context_management":` + ctEdits(ctClearing), last: `"context_management":{}`},
+		"a message's id": {in: ctAt(t, call, `"id":"msg_test"`), first: `"id":"msg_other"`, last: `"id":"msg_test"`},
+		"a message's model": {in: ctAt(t, call, `"model":"claude-sonnet-4-5"`), first: `"model":"<synthetic>"`,
+			last: `"model":"claude-sonnet-4-5"`},
+		"a message's stop_reason": {in: ctAt(t, call, `"stop_reason":"tool_use"`), first: `"stop_reason":"refusal"`,
+			last: `"stop_reason":"tool_use"`},
+		// A message's blocks.
+		"a block's id": {in: ctAt(t, call, `"id":"`+ctCall+`"`), first: `"id":"` + other + `"`,
+			last: `"id":"` + ctCall + `"`},
+		"a block's type": {in: ctAt(t, call, `"type":"tool_use"`), first: `"type":"tool_use"`, last: `"type":"text"`},
+		"a block's tool_use_id": {in: ctAt(t, result, `"tool_use_id":"`+ctCall+`"`),
+			first: `"tool_use_id":"` + other + `"`, last: `"tool_use_id":"` + ctCall + `"`},
+		"a block's is_error": {in: ctAt(t, result, `"is_error":false`), first: `"is_error":true`,
+			last: `"is_error":false`},
+		"a block's input": {in: ctAt(t, sent, `"input":{"to":"`+ctAgent+`","message":"continue"}`),
+			first: `"input":{"to":"` + ctAgent + `","message":"continue"}`, last: `"input":{}`},
+		"a block's content": {in: ctAt(t, result, `"content":"b1"`), first: `"content":"b1"`,
+			last: `"content":[]`},
+		"a block's text, blank first": {in: ctAt(t, said, `"text":"hi"`), first: `"text":" "`, last: `"text":"hi"`},
+		"a block's text, blank last":  {in: ctAt(t, said, `"text":"hi"`), first: `"text":"hi"`, last: `"text":" "`},
+		// A result's text block.
+		"a result's block's type": {in: ctAt(t, blocked, `"type":"text"`), first: `"type":"text"`,
+			last: `"type":"image"`},
+		"a result's block's text": {in: ctAt(t, blocked, `"text":"x"`), first: `"text":"y"`, last: `"text":"x"`},
+		// A record's own toolUseResult.
+		"an answer's status": {in: ctAt(t, owned(`{"status":"completed","agentId":"`+ctAgent+`"}`),
+			`"status":"completed"`), first: `"status":"completed"`, last: `"status":"async_launched"`},
+		"a send's success": {in: ctAt(t, owned(`{"success":false}`), `"success":false`), first: `"success":false`,
+			last: `"success":true`},
+		// A usage's iterations.
+		"an iteration's type": {in: iteration, first: `"type":"` + iterationFallback + `"`,
+			between: `"input_tokens":7,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":20`,
+			last:    `"type":"` + iterationAdvisor + `"`},
+		"an iteration's count": {in: iteration, first: `"cache_read_input_tokens":5`,
+			between: `"type":"message","input_tokens":100,"cache_creation_input_tokens":0,"output_tokens":20`,
+			last:    `"cache_read_input_tokens":0`},
+		// An edit the server applied.
+		"an edit's type": {in: ctAt(t, cleared, `"type":"clear_tool_uses_20250919"`),
+			first: `"type":"clear_tool_uses_20250919"`, last: `"type":"clear_thinking_20251015"`},
+		"an edit's count": {in: ctAt(t, cleared, `"cleared_tool_uses":18`), first: `"cleared_tool_uses":18`,
+			last: `"cleared_tool_uses":0`},
+		// A replacement, a batch's entry and an attachment's payload.
+		"a replacement's kind": {in: ctAt(t, ctReplacement("", ctReplaced(ctCall)), `"kind":"tool-result"`),
+			first: `"kind":"tool-result"`, last: `"kind":"image"`},
+		"a batch entry's id": {in: batchOf, first: `"id":"` + other + `"`, last: `"id":"` + ctCall + `","name":"Bash"`},
+		"an attachment's type": {in: ctAt(t, attached(`{"type":"`+attachmentForkBriefing+`"}`),
+			`"type":"`+attachmentForkBriefing+`"`), first: `"type":"` + attachmentForkBriefing + `"`,
+			last: `"type":"hook_success"`},
+		"a skill listing's names": {in: ctAt(t, attached(`{"type":"`+attachmentSkillListing+`","names":["a"]}`),
+			`"names":["a"]`), first: `"names":["a"]`, last: `"names":7`},
+		"a withheld memory's entries": {in: ctAt(t, attached(ctWithheld(withheld)), `"entries":[`+withheld+`]`),
+			first: `"entries":[` + withheld + `]`, last: `"entries":[{"path":1}]`},
+		"a withheld entry's why": {in: ctAt(t, attached(ctWithheld(withheld)), `"why":"denied"`),
+			first: `"why":"denied"`, last: `"why":"bogus"`},
+		// What a compaction says it kept.
+		"a compaction's list": {in: ctAt(t, compacting, listed), first: listed,
+			last: `"preservedMessages":{"anchorUuid":"` + ctUUID(11) + `"}`},
+	} {
+		got := ctOutcome(t, tc.in(ctKeys(tc.first, tc.between, tc.last)))
+		if want := ctOutcome(t, tc.in(ctKeys(tc.between, tc.last))); got != want {
+			t.Errorf("%s reads as\n%swant it read as its last alone\n%s", name, got, want)
+		}
+		if first := ctOutcome(t, tc.in(ctKeys(tc.first, tc.between))); first == got {
+			t.Errorf("%s reads as its first alone reads, so no reader that keeps the first fails it:\n%s", name, got)
+		}
+	}
+}
+
 // A STRING CLAUDE CODE WROTE BROKEN READS AS THE REPLACEMENT CHARACTER, never
 // as no record: a surrogate with no pair, which JSON.stringify writes as a
 // `\udXXX` escape where a text was cut inside a pair (an emoji at a truncation
 // point), and a byte that is no UTF-8 each read as U+FFFD, as encoding/json's
 // own decode reads them, wherever a line holds one: in a text the layer reads
-// (a brief's), in a value it hands out raw (a result's content, as written,
-// which its own decode then reads the same way), in a hook's record, and in a
-// key no reader reads. Each line reads whole. Refused, one such line would
-// cost a reader its whole reading of a thread its harness reads whole.
+// (a brief's, and a result's, whose length and digests are its reading's), in
+// a hook's record, in a result's own output, which its answer is read past,
+// and in a key no reader reads. Each line reads whole. Refused, one such line
+// would cost a reader its whole reading of a thread its harness reads whole.
 //
 // Mutation: drop the option that reads them, and every line here is no
 // record.
@@ -1839,37 +2293,40 @@ func TestAStringClaudeCodeWroteBrokenReadsAsTheReplacementCharacter(t *testing.T
 		if brief, ok := read(ctReplace(t, ctBrief(ctUUID(1)), `"content":"the brief\n"`, `"content":`+tc.written)); ok {
 			if m, err := brief.Message(); err != nil {
 				t.Errorf("%s: a brief holding it reads no message: %v", name, err)
-			} else if text, isText := m.Text(); !isText || text != tc.text {
-				t.Errorf("%s: a brief holding it reads as %q (%t), want %q", name, text, isText, tc.text)
+			} else if _, says := m.Says(); !m.IsText() || !says {
+				t.Errorf("%s: a brief holding it reads as a text %t that says something %t; want both", name,
+					m.IsText(), says)
 			}
 		}
 		if result, ok := read(ctResult(ctUUID(4), ctUUID(5), ctReplace(t, ctResultBody, `"content":"b1"`,
 			`"content":`+tc.written), ctResultOwn)); ok {
 			m, err := result.Message()
-			var text string
 			switch {
 			case err != nil || len(m.Calls()) != 1:
 				t.Errorf("%s: a result holding it hands out the calls %+v, %v", name, m.Calls(), err)
-			case string(m.Calls()[0].Content) != tc.written:
-				t.Errorf("%s: a result holding it hands its content out as %q, want it as written", name,
-					m.Calls()[0].Content)
-			case wireDecode(m.Calls()[0].Content, &text) != nil || text != tc.text:
-				t.Errorf("%s: a result's content holding it reads as %q, want %q", name, text, tc.text)
+			case m.Calls()[0].Text != ltWhole(tc.text).Result:
+				t.Errorf("%s: a result's content holding it reads as the text %+v, want %q's %+v", name,
+					m.Calls()[0].Text, tc.text, ltWhole(tc.text).Result)
 			}
 		}
 		if note, ok := read(ctAttachment(ctUUID(6), ctUUID(7), ctReplace(t, ctBatchSystem,
 			`"content":"crewlet: a note reached the run"`, `"content":`+tc.written), "")); ok {
-			if hook, isHook, err := note.Hook(); !isHook || err != nil || hook.Firing != ctBatchFire ||
-				string(hook.Content) != tc.written {
-				t.Errorf("%s: a hook's record holding it reads as the hook %+v (%t, %v)", name, hook, isHook, err)
+			kind, err := note.AttachmentType()
+			if key, keyed := note.AttachmentToolUseID(); kind != hookSystemMessage || err != nil || !keyed ||
+				key != sha256.Sum256([]byte(ctBatchFire)) {
+				t.Errorf("%s: a hook's record holding it reads as the attachment %q (%v), keyed %t", name, kind, err,
+					keyed)
 			}
 		}
 		if output, ok := read(ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctReplace(t, ctResultOwn, `"stdout":"b1"`,
-			`"stdout":`+tc.written))); ok {
-			if m, err := output.Message(); err != nil || len(m.Calls()) != 1 || m.Calls()[0].ID != ctCall ||
-				!bytes.Contains(output.ToolUseResult(), []byte(tc.written)) {
-				t.Errorf("%s: a result whose own output holds it hands out the calls %+v, %v, and the output %q", name,
-					m.Calls(), err, output.ToolUseResult())
+			`"status":"completed","agentId":"`+ctAgent+`","stdout":`+tc.written))); ok {
+			m, err := output.Message()
+			completed, agent, refused := output.AgentAnswer()
+			if err != nil || len(m.Calls()) != 1 || m.Calls()[0].ID != ctCall || !completed || agent != ctAgent ||
+				refused {
+				t.Errorf("%s: a result whose own output holds it hands out the calls %+v, %v, and the answer "+
+					"completed %t, agent %q, refused %t; want its call, and its answer read past it", name, m.Calls(),
+					err, completed, agent, refused)
 			}
 		}
 	}
@@ -2167,74 +2624,58 @@ type ctID struct {
 	id   string
 }
 
-// A HOOK'S FIRING IS NEVER A CALL'S ID: Hook reads each of the notes' hook
-// records and a Stop's summary, the firing it records and its fields as
-// written, and nothing else; a top-level toolUseID on any record but a summary
-// names no firing; and a skill's PostToolUse hook, whose firing IS the id of
-// the call it followed, hands that id out of Hook alone, never Calls. Over a
-// whole thread, the firings come only from hook records, and the calls only
-// from the model's messages and their results.
+// A HOOK'S FIRING IS NEVER A CALL'S ID: each of the notes' hook records and a
+// Stop's summary hands out no call, and an attachment among them hands its
+// firing out only as a key (AttachmentToolUseID), a summary's firing at the
+// top never; and a skill's PostToolUse hook, whose firing IS the id of the
+// call it followed, hands that id out of Calls never, only as its key. Over a
+// whole thread, the calls come only from the model's messages and their
+// results, and the firings only as the keys of hook attachments.
 //
-// Mutation: read a firing off every record that carries a top-level
-// toolUseID, or hand a hook record's firing out as a call (one accessor of a
-// line's ids), and a record's id comes out of the other accessor.
+// Mutation: hand an attachment's toolUseID out as a call (one accessor of a
+// line's ids), or key a summary's firing at the top, and a record's id comes
+// out where this says it never does.
 func TestAHooksFiringIsNeverACallsID(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		record string
-		want   threadHook
+		kind   string // its attachment's type, or a summary's subtype
+		firing string // what it keys, or "" for nothing
 	}{
-		"a batch's success": {record: ctAttachment(ctUUID(5), ctUUID(6), ctBatchSuccess, ""), want: threadHook{
-			Record: hookSuccess, Event: "PostToolBatch", Firing: ctBatchFire, Command: "crewlet/steer_take",
-			Content: []byte(`""`), Stdout: []byte(ctAnswer)}},
-		"a batch's system message": {record: ctAttachment(ctUUID(6), ctUUID(7), ctBatchSystem, ""), want: threadHook{
-			Record: hookSystemMessage, Event: "PostToolBatch", Firing: ctBatchFire,
-			Content: []byte(`"crewlet: a note reached the run"`)}},
+		"a batch's success": {record: ctAttachment(ctUUID(5), ctUUID(6), ctBatchSuccess, ""), kind: hookSuccess,
+			firing: ctBatchFire},
+		"a batch's system message": {record: ctAttachment(ctUUID(6), ctUUID(7), ctBatchSystem, ""),
+			kind: hookSystemMessage, firing: ctBatchFire},
 		"a batch's additional context": {record: ctAttachment(ctUUID(7), ctUUID(8), ctBatchContext, ctBatchRendered),
-			want: threadHook{Record: hookAdditionalContext, Event: "PostToolBatch", Firing: ctBatchFire,
-				Content: []byte(`["## A note"]`)}},
-		"a firing past its timeout": {record: ctAttachment(ctUUID(10), ctUUID(11), ctCancelled, ""), want: threadHook{
-			Record: hookCancelled, Event: "PostToolBatch", Firing: ctLateFire, Command: "crewlet/steer_take"}},
-		"a Stop's success": {record: ctAttachment(ctUUID(12), ctUUID(13), ctStopSuccess, ""), want: threadHook{
-			Record: hookSuccess, Event: "Stop", Firing: ctStopFire, Command: "crewlet/steer_take",
-			Content: []byte(`""`), Stdout: []byte(ctStopAnswer)}},
-		"a Stop's system message": {record: ctAttachment(ctUUID(13), ctUUID(14), ctStopSystem, ""), want: threadHook{
-			Record: hookSystemMessage, Event: "Stop", Firing: ctStopFire,
-			Content: []byte(`"crewlet: a note reached the run as it was finishing"`)}},
+			kind: hookAdditionalContext, firing: ctBatchFire},
+		"a firing past its timeout": {record: ctAttachment(ctUUID(10), ctUUID(11), ctCancelled, ""),
+			kind: hookCancelled, firing: ctLateFire},
+		"a Stop's success": {record: ctAttachment(ctUUID(12), ctUUID(13), ctStopSuccess, ""), kind: hookSuccess,
+			firing: ctStopFire},
+		"a Stop's system message": {record: ctAttachment(ctUUID(13), ctUUID(14), ctStopSystem, ""),
+			kind: hookSystemMessage, firing: ctStopFire},
 		"a Stop's additional context": {record: ctAttachment(ctUUID(14), ctUUID(15), ctStopContext, ctStopRendered),
-			want: threadHook{Record: hookAdditionalContext, Event: "Stop", Firing: ctStopFire,
-				Content: []byte(`["## A note"]`)}},
-		"a Stop's summary": {record: ctSummary(ctUUID(15), ctUUID(16)), want: threadHook{
-			Record: hookStopSummary, Firing: ctStopFire}},
-		"a skill's PostToolUse success": {record: ctSkillHook(ctUUID(4), ctUUID(5)), want: threadHook{
-			Record: hookSuccess, Event: "PostToolUse", Firing: ctSkillCall, Command: "crewlet/skill_loaded",
-			Content: []byte(`"PostToolUse:Skill completed"`), Stdout: []byte(`""`)}},
+			kind: hookAdditionalContext, firing: ctStopFire},
+		"a Stop's summary":              {record: ctSummary(ctUUID(15), ctUUID(16)), kind: hookStopSummary},
+		"a skill's PostToolUse success": {record: ctSkillHook(ctUUID(4), ctUUID(5)), kind: hookSuccess, firing: ctSkillCall},
 	} {
 		line := ctLine(t, tc.record)
-		got, isHook, err := line.Hook()
-		if !isHook || err != nil || got.Record != tc.want.Record || got.Event != tc.want.Event ||
-			got.Firing != tc.want.Firing || got.Command != tc.want.Command ||
-			!bytes.Equal(got.Content, tc.want.Content) || !bytes.Equal(got.Stdout, tc.want.Stdout) {
-			t.Errorf("%s reads as the hook %+v (%t, %v), want %+v", name, got, isHook, err, tc.want)
+		kind, err := line.AttachmentType()
+		if line.Head.Type == recordSystem {
+			kind = line.Head.Subtype
+		}
+		if kind != tc.kind || err != nil {
+			t.Errorf("%s reads as the record %q, %v; want %q", name, kind, err, tc.kind)
+		}
+		want := [32]byte{}
+		if tc.firing != "" {
+			want = sha256.Sum256([]byte(tc.firing))
+		}
+		if key, keyed := line.AttachmentToolUseID(); keyed != (tc.firing != "") || key != want {
+			t.Errorf("%s keys %x (%t); want the key of %q", name, key, keyed, tc.firing)
 		}
 		if m, err := line.Message(); err != nil || m.Calls() != nil {
 			t.Errorf("%s hands out the calls %+v, %v", name, m.Calls(), err)
-		}
-	}
-
-	result := ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)
-	for name, record := range map[string]string{
-		"a result carrying it": strings.Replace(result, `"toolUseResult":`, `"toolUseID":"`+ctCall+`","toolUseResult":`, 1),
-		"a model's call carrying it": strings.Replace(ctAssistant(ctUUID(3), ctUUID(4), ctUseContent), `"apiBlockIndex"`,
-			`"toolUseID":"`+ctCall+`","apiBlockIndex"`, 1),
-		"an attachment of no hook carrying it": strings.Replace(
-			ctAttachment(ctUUID(1), ctUUID(2), ctTokens, ctTokensRendered), `"type":"attachment"`,
-			`"toolUseID":"`+ctCall+`","type":"attachment"`, 1),
-		"a system record of another subtype": strings.Replace(ctSummary(ctUUID(15), ctUUID(16)),
-			`"subtype":"stop_hook_summary"`, `"subtype":"informational"`, 1),
-	} {
-		if hook, isHook, err := ctLine(t, record).Hook(); isHook || err != nil {
-			t.Errorf("%s reads as the hook %+v (%t, %v), want none", name, hook, isHook, err)
 		}
 	}
 
@@ -2243,12 +2684,18 @@ func TestAHooksFiringIsNeverACallsID(t *testing.T) {
 	if len(got.lines) != len(lines) {
 		t.Fatalf("%d of %d lines read", len(got.lines), len(lines))
 	}
+	firings := map[[32]byte]string{}
+	for _, id := range []string{ctBatchFire, ctLateFire, ctStopFire, ctSkillCall} {
+		firings[sha256.Sum256([]byte(id))] = id
+	}
 	var ids []ctID
 	for _, line := range got.lines {
-		if hook, isHook, err := line.Hook(); err != nil {
-			t.Fatalf("line %d reads no hook: %v", line.N, err)
-		} else if isHook {
-			ids = append(ids, ctID{line.N, "firing", hook.Firing})
+		if key, keyed := line.AttachmentToolUseID(); keyed {
+			id, known := firings[key]
+			if !known {
+				t.Fatalf("line %d keys %x, no firing of the thread's", line.N, key)
+			}
+			ids = append(ids, ctID{line.N, "key", id})
 		}
 		m, err := line.Message()
 		if err != nil {
@@ -2260,10 +2707,10 @@ func TestAHooksFiringIsNeverACallsID(t *testing.T) {
 	}
 	want := []ctID{
 		{8, blockToolUse, ctCall}, {10, blockToolResult, ctCall},
-		{11, "firing", ctBatchFire}, {12, "firing", ctBatchFire}, {13, "firing", ctBatchFire},
-		{16, blockToolUse, ctMCPCall}, {17, blockToolResult, ctMCPCall}, {18, "firing", ctLateFire},
-		{20, "firing", ctStopFire}, {21, "firing", ctStopFire}, {22, "firing", ctStopFire}, {23, "firing", ctStopFire},
-		{26, "firing", ctSkillCall},
+		{11, "key", ctBatchFire}, {12, "key", ctBatchFire}, {13, "key", ctBatchFire},
+		{16, blockToolUse, ctMCPCall}, {17, blockToolResult, ctMCPCall}, {18, "key", ctLateFire},
+		{20, "key", ctStopFire}, {21, "key", ctStopFire}, {22, "key", ctStopFire},
+		{26, "key", ctSkillCall},
 	}
 	if !slices.Equal(ids, want) {
 		t.Errorf("the thread hands out the ids %+v, want %+v", ids, want)
@@ -2271,9 +2718,10 @@ func TestAHooksFiringIsNeverACallsID(t *testing.T) {
 }
 
 // CALLS COME ONLY FROM A USER OR ASSISTANT MESSAGE: an assistant's tool_use
-// blocks and a user's tool_result blocks, each with its id and what it
-// carries raw (a call's input as written, a result's content, its is_error
-// where present), and nothing from any other record, an api-request-blob
+// blocks and a user's tool_result blocks, each with its id and what its
+// readers read of it (the subagent a call's input sends to, whether a result
+// failed, and a result's text as its length and digests, a result of no text
+// saying so), and nothing from any other record, an api-request-blob
 // repeating a result included. A failed call's result says so, as the resume's
 // result for a call it found unanswered and a killed command's do. A call
 // block in the other record, which the Messages API never writes, is a kind
@@ -2293,28 +2741,44 @@ func TestAHooksFiringIsNeverACallsID(t *testing.T) {
 // a call with no id; take either kind of call block in either record, and a
 // result in a model's message, or a call in a user's, is a call; read is_error
 // as false wherever it is present, and a failed call's result reads as a
-// success; hold only a message's first block to its type, and a bad block
-// after an accepted one reads as a block of no kind; name every record with
-// its type after an "a", and a model's reply is "a assistant record".
+// success; read a call's target off its input without the agent rule, and a
+// send to no agent sends to one; read a result of no text as an empty text,
+// and an image reads as a text of no bytes; hold only a message's first block
+// to its type, and a bad block after an accepted one reads as a block of no
+// kind; name every record with its type after an "a", and a model's reply is
+// "a assistant record".
 func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 	t.Parallel()
-	isFalse, isTrue := false, true
-	interrupted := "\"[Tool call interrupted: the session ended before this call's result was recorded, so its " +
-		"outcome is unknown. Check whether it took effect before relying on it or running it again.]\""
+	interrupted := "[Tool call interrupted: the session ended before this call's result was recorded, so its " +
+		"outcome is unknown. Check whether it took effect before relying on it or running it again.]"
+	text := func(s string) threadResultText { return ltWhole(s).Result }
+	none := threadResultText{}
+	send := func(input string) string {
+		return `[{"type":"tool_use","id":"` + ctCall + `","name":"SendMessage","input":` + input + `}]`
+	}
 	for name, tc := range map[string]struct {
 		record string
 		calls  []threadCall
 	}{
 		"a model's call": {record: ctAssistant(ctUUID(3), ctUUID(4), ctUseContent), calls: []threadCall{
-			{Kind: blockToolUse, ID: ctCall, Name: "Bash", Input: []byte(ctUseInput)}}},
+			{Kind: blockToolUse, ID: ctCall, Name: "Bash"}}},
+		"a message sent to a subagent": {record: ctAssistant(ctUUID(3), ctUUID(4),
+			send(`{"to":"`+ctAgent+`","message":"continue"}`)), calls: []threadCall{
+			{Kind: blockToolUse, ID: ctCall, Name: "SendMessage", To: ctAgent}}},
+		"a message sent to no agent": {record: ctAssistant(ctUUID(3), ctUUID(4),
+			send(`{"to":"no agent","message":"continue"}`)), calls: []threadCall{
+			{Kind: blockToolUse, ID: ctCall, Name: "SendMessage"}}},
 		"its result": {record: ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn), calls: []threadCall{
-			{Kind: blockToolResult, ID: ctCall, IsError: &isFalse, Content: []byte(`"b1"`)}}},
+			{Kind: blockToolResult, ID: ctCall, Text: text("b1")}}},
 		"an MCP tool's result, in blocks": {record: ctResult(ctUUID(9), ctUUID(10), ctMCPResult, ctMCPBlocks),
-			calls: []threadCall{{Kind: blockToolResult, ID: ctMCPCall, Content: []byte(ctMCPBlocks)}}},
+			calls: []threadCall{{Kind: blockToolResult, ID: ctMCPCall, Text: text("crewlet m1 done")}}},
+		"a result of no text": {record: ctResult(ctUUID(4), ctUUID(5), ctReplace(t, ctResultBody, `"content":"b1"`,
+			`"content":[{"type":"image","source":{"type":"base64","data":"AA=="}}]`), ctResultOwn),
+			calls: []threadCall{{Kind: blockToolResult, ID: ctCall, Text: none}}},
 		"the result a resume writes for a call it found unanswered": {record: ctInterrupted(ctUUID(4), ctUUID(5)),
-			calls: []threadCall{{Kind: blockToolResult, ID: ctCall, IsError: &isTrue, Content: []byte(interrupted)}}},
+			calls: []threadCall{{Kind: blockToolResult, ID: ctCall, Failed: true, Text: text(interrupted)}}},
 		"a killed command's result": {record: ctKilled(ctUUID(4), ctUUID(5)), calls: []threadCall{
-			{Kind: blockToolResult, ID: ctCall, IsError: &isTrue, Content: []byte(`"Exit code 137"`)}}},
+			{Kind: blockToolResult, ID: ctCall, Failed: true, Text: text("Exit code 137")}}},
 		"a model's text":                    {record: ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."}]`)},
 		"a brief":                           {record: ctBrief(ctUUID(1))},
 		"a request blob repeating a result": {record: ctRequestBlob},
@@ -2332,10 +2796,7 @@ func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 			continue
 		}
 		for i, c := range calls {
-			want := tc.calls[i]
-			if c.Kind != want.Kind || c.ID != want.ID || c.Name != want.Name || !bytes.Equal(c.Input, want.Input) ||
-				!bytes.Equal(c.Content, want.Content) || (c.IsError == nil) != (want.IsError == nil) ||
-				(c.IsError != nil && *c.IsError != *want.IsError) {
+			if want := tc.calls[i]; c != want {
 				t.Errorf("%s hands out the call %+v, want %+v", name, c, want)
 			}
 		}
@@ -2349,9 +2810,9 @@ func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 		"a call in a user's message":    {record: ctResult(ctUUID(4), ctUUID(5), ctUseContent, ctResultOwn), kind: blockToolUse},
 	} {
 		m, err := ctLine(t, tc.record).Message()
-		if err != nil || m.Calls() != nil || !slices.Equal(m.Kinds(), []string{tc.kind}) {
-			t.Errorf("%s reads as the blocks %q and the calls %+v, %v; want a %s and no call", name,
-				strings.Join(m.Kinds(), " "), m.Calls(), err, tc.kind)
+		if err != nil || m.Calls() != nil || ctBlocks(m.Blocks()) != "1 ["+tc.kind+"]" {
+			t.Errorf("%s reads as the blocks %s and the calls %+v, %v; want a %s and no call", name,
+				ctBlocks(m.Blocks()), m.Calls(), err, tc.kind)
 		}
 	}
 
@@ -2393,8 +2854,8 @@ func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 			`","type":"tool_result","content":"m1","is_error":"false"}]},`),
 	} {
 		if m, err := ctLine(t, record).Message(); err == nil || !strings.Contains(err.Error(), "content block 2:") {
-			t.Errorf("%s reads as the blocks %q and the calls %+v, %v; want an error naming block 2", name,
-				strings.Join(m.Kinds(), " "), m.Calls(), err)
+			t.Errorf("%s reads as the blocks %s and the calls %+v, %v; want an error naming block 2", name,
+				ctBlocks(m.Blocks()), m.Calls(), err)
 		}
 	}
 
@@ -2409,40 +2870,75 @@ func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 	}
 }
 
-// A MESSAGE SAYS ITS CONTENT'S SHAPE: content that is one string is Text, with
-// no blocks; content that is a list is each block's type, in order, and no
-// Text, and an empty list is an empty Kinds, never the nil one a content that
-// is no list reads as. Every user and assistant record measured holds one
-// block a record; the API's own messages hold several, which a list of two
-// holds to its order.
+// A MESSAGE SAYS ITS CONTENT'S SHAPE: content that is one string is one text,
+// with no blocks, and what its readers ask of it (the subagent and the leg a
+// task notification names, whether it names the handback tool, wherever the
+// name falls) is read off it; content that is a list is how many blocks it
+// holds and which kinds among them, and no text, a notification's words in a
+// block naming none, and an empty list is a list of no blocks, never the text
+// a content that is no list reads as. Every user and assistant record measured
+// holds one block a record; the API's own messages hold several, which a list
+// of two counts, each kind among them.
 //
 // Mutation: read content as one shape, and a string content is no message;
-// start a list's kinds at nil, and an empty list reads as no list.
+// read an empty list as a text, and it reads as no list; count only a list's
+// first block, or hold only its last kind, and a text and a call read as one
+// block; read a text's notification, or its handback's name, as none, and a
+// notification names no leg, or no handback; stop reading a text once it says
+// something, and a handback named past its first piece is missed; end a
+// text's reading without deciding its last line, and a notification ending at
+// its status names no leg.
 func TestAMessageSaysItsContentsShape(t *testing.T) {
 	t.Parallel()
+	notification := ctNotification(ctUUID(1), ctUUID(3))
+	handback := ctReplace(t, notification, `</task-notification>"`,
+		`<result>`+claudeToolHandback+` delivered the report</result>\n</task-notification>"`)
+	// late names the handback tool past the first piece its text is read in
+	// ([textPieceBytes]), where whether it says anything is long decided.
+	late := ctReplace(t, notification, `</task-notification>"`, `<result>`+strings.Repeat("x", 2*textPieceBytes)+
+		claudeToolHandback+`</result>\n</task-notification>"`)
+	// atStatus ends at its status line, the last line a notification is read
+	// to, which only the text's end decides.
+	atStatus := ctReplace(t, notification, `\n</task-notification>"`, `"`)
+	inBlock := `[{"type":"text","text":"` + strings.ReplaceAll(ctNotificationText, "\n", `\n`) + `"}]`
 	for name, tc := range map[string]struct {
 		record string
-		text   string
-		kinds  []string
+		// notice is whether its text names a leg, the notification's own;
+		// handback whether it names the handback tool.
+		notice, handback bool
+		// blocks is its blocks as [ctBlocks] prints them; "" for a text.
+		blocks string
 	}{
-		"a brief":           {record: ctBrief(ctUUID(1)), text: "the brief\n"},
-		"a notification":    {record: ctNotification(ctUUID(1), ctUUID(3)), text: ctNotificationText},
-		"a model's text":    {record: ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."}]`), kinds: []string{"text"}},
-		"a call's result":   {record: ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn), kinds: []string{blockToolResult}},
-		"a skill's text":    {record: ctSkillText(ctUUID(4), ctUUID(5)), kinds: []string{"text"}},
-		"a text and a call": {record: ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."},`+ctUseContent[1:]), kinds: []string{"text", blockToolUse}},
-		"an empty list":     {record: ctAssistant(ctUUID(2), ctUUID(3), `[]`), kinds: []string{}},
+		"a brief":                      {record: ctBrief(ctUUID(1))},
+		"a notification":               {record: notification, notice: true},
+		"a notification of a handback": {record: handback, notice: true, handback: true},
+		"a notification of a handback named late": {record: late, notice: true, handback: true},
+		"a model's text":                    {record: ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."}]`), blocks: "1 [text]"},
+		"a notification's words in a block": {record: ctAssistant(ctUUID(2), ctUUID(3), inBlock), blocks: "1 [text]"},
+		"a call's result":                   {record: ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn), blocks: "1 [tool_result]"},
+		"a skill's text":                    {record: ctSkillText(ctUUID(4), ctUUID(5)), blocks: "1 [text]"},
+		"a text and a call":                 {record: ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."},`+ctUseContent[1:]), blocks: "2 [tool_use text]"},
+		"an empty list":                     {record: ctAssistant(ctUUID(2), ctUUID(3), `[]`), blocks: "0 []"},
+		"a notification to its status":      {record: atStatus, notice: true},
 	} {
 		m, err := ctLine(t, tc.record).Message()
 		if err != nil {
 			t.Errorf("%s reads no message: %v", name, err)
 			continue
 		}
-		text, isText := m.Text()
-		if isText != (tc.kinds == nil) || text != tc.text || !slices.Equal(m.Kinds(), tc.kinds) ||
-			(tc.kinds == nil) != (m.Kinds() == nil) {
-			t.Errorf("%s reads as the text %q (%t) and the blocks %q, want %q and %q", name, text, isText,
-				strings.Join(m.Kinds(), " "), tc.text, strings.Join(tc.kinds, " "))
+		want := tc.blocks
+		if want == "" {
+			want = "0 []"
+		}
+		if m.IsText() != (tc.blocks == "") || ctBlocks(m.Blocks()) != want {
+			t.Errorf("%s reads as a text %t and the blocks %s, want a text %t and %s", name, m.IsText(),
+				ctBlocks(m.Blocks()), tc.blocks == "", want)
+		}
+		agent, leg, ok := m.Notification()
+		if ok != tc.notice || (ok && (agent != ctAgent || leg != "toolu_test_agent")) || (!ok && agent+leg != "") ||
+			m.NamesHandback() != tc.handback {
+			t.Errorf("%s names %q's leg %q (%t) and the handback %t; want a notification %t, the handback %t", name,
+				agent, leg, ok, m.NamesHandback(), tc.notice, tc.handback)
 		}
 	}
 }
@@ -3094,25 +3590,49 @@ func ctRetry(parent, uuid string, retracted ...string) string {
 		ctQuoted(retracted) + `],` + ctTail("2.1.322") + `}`
 }
 
-// A RECORD SAYS WHICH RECORDS ITS HARNESS TOOK BACK: Retracted hands each
-// entry of a record's retractedMessageUuids, in order and as written, on a
-// refused reply's fallback (a system record of that subtype), on a malformed
-// reply's retry (a meta user record) and on a reply (an assistant record), the
-// records 2.1.322 reads the key on; whatever its length, an entry of 24
-// characters, of 30 and of 23 among them, since the resume cuts each at 24
-// characters itself; nothing where the key is absent, or on a system record of
-// another subtype or an attachment, whatever it carries; and an error where
-// the key holds anything but a list of strings, null among it, on a record it
-// is read on. An error each returns ends the walk as it is.
+// ctPrefix is the canonical prefix an entry beginning with uuid's first 24
+// characters names, read as the uuid package reads uuid: its first 10 bytes.
+func ctPrefix(u string) [chainPrefixBytes]byte {
+	whole := uuid.MustParse(u)
+	return [chainPrefixBytes]byte(whole[:chainPrefixBytes])
+}
+
+// ctRetracting is a refused reply's fallback whose list names n entries, the
+// uuids ctUUID numbers from 1000, then after, as written.
+func ctRetracting(t *testing.T, n int, after string) string {
+	entries := make([]string, n)
+	for i := range entries {
+		entries[i] = ctUUID(1000 + i)
+	}
+	return ctReplace(t, ctFallback(ctUUID(5), ctUUID(6), entries...), `],"refusedUserMessageUuid"`,
+		after+`],"refusedUserMessageUuid"`)
+}
+
+// A RECORD SAYS WHICH RECORDS ITS HARNESS TOOK BACK: Retracted counts each
+// entry of a record's retractedMessageUuids and holds, in order, the first 24
+// characters of each that begins with a canonical uuid's, on a refused reply's
+// fallback (a system record of that subtype), on a malformed reply's retry (a
+// meta user record) and on a reply (an assistant record), the records 2.1.322
+// reads the key on: an entry of 24 characters and one of 30 among them, since
+// the resume cuts each at 24 characters itself, and one of 23, in another
+// form or in uppercase counted and naming none; nothing where the key is
+// absent, or on a system record of another subtype or an attachment, whatever
+// it carries; and an error where the key holds anything but a list of
+// strings, null among it, on a record it is read on, handed with every entry
+// before the first that is no string. It holds threadChainMaxRecords prefixes
+// at most, and says where the list names more, still counting every entry.
 //
 // Mutation: read the key off every record, and a stop hook's summary or an
 // attachment carrying it retracts; read it off a refusal's fallback alone, as
 // 2.1.310 does, and a retry's names nothing; pass an entry that is no string
-// over, as the resume does, and a list the layer refuses reads; read a
-// null list as none, and it reads; drop an entry of 24 characters or fewer, or
-// of fewer than a uuid's 36, and the entries the resume cuts at 24 retract
-// nothing; or walk on past each's error, and the walk hands the entry after
-// it.
+// over, as the resume does, and a list the layer refuses reads; read a null
+// list as none, and it reads; drop an entry of 24 characters or fewer, or of
+// fewer than a uuid's 36, and the entries the resume cuts at 24 retract
+// nothing; count only the entries that name a prefix, and the entries that
+// name none are not counted; hand an error with nothing the list held before
+// it, and the entries before an entry that is no string are lost; or hold
+// prefixes past the bound, or stop counting there, and the list past it says
+// all, or counts short.
 func TestARecordSaysWhichRecordsItsHarnessTookBack(t *testing.T) {
 	t.Parallel()
 	named := []string{ctUUID(4), ctUUID(5)}
@@ -3120,53 +3640,76 @@ func TestARecordSaysWhichRecordsItsHarnessTookBack(t *testing.T) {
 		`"retractedMessageUuids":[`+ctQuoted(named)+`],"type":"assistant"`)
 	cut := []string{ctUUID(7)[:24], ctUUID(8)[:30], ctUUID(9)[:23]}
 	for name, tc := range map[string]struct {
-		record string
-		uuids  []string
+		record  string
+		entries int
+		// named is the uuids whose prefixes the list holds, in order.
+		named []string
 	}{
-		"a refused reply's fallback": {ctFallback(ctUUID(5), ctUUID(6), named...), named},
-		"a malformed reply's retry":  {ctRetry(ctUUID(5), ctUUID(6), named...), named},
-		"a reply":                    {reply, named},
-		"a fallback naming none":     {ctFallback(ctUUID(5), ctUUID(6)), nil},
-		"a fallback naming entries of 24, 30 and 23 characters": {ctFallback(ctUUID(5), ctUUID(6), cut...), cut},
-		"a fallback naming a uuid of another form": {ctFallback(ctUUID(5), ctUUID(6), "not a uuid"),
-			[]string{"not a uuid"}},
-		"a record that names none": {ctAssistant(ctUUID(3), ctUUID(4), ctUseContent), nil},
+		"a refused reply's fallback": {ctFallback(ctUUID(5), ctUUID(6), named...), 2, named},
+		"a malformed reply's retry":  {ctRetry(ctUUID(5), ctUUID(6), named...), 2, named},
+		"a reply":                    {reply, 2, named},
+		"a fallback naming none":     {ctFallback(ctUUID(5), ctUUID(6)), 0, nil},
+		"a fallback naming entries of 24, 30 and 23 characters": {ctFallback(ctUUID(5), ctUUID(6), cut...), 3,
+			[]string{ctUUID(7), ctUUID(8)}},
+		"a fallback naming a uuid of another form": {ctFallback(ctUUID(5), ctUUID(6), "not a uuid"), 1, nil},
+		"a fallback naming a uuid in uppercase": {ctFallback(ctUUID(5), ctUUID(6),
+			strings.ToUpper("abcdef01-0000-4000-8000-000000000001")), 1, nil},
+		"a record that names none": {ctAssistant(ctUUID(3), ctUUID(4), ctUseContent), 0, nil},
 		"a stop hook's summary carrying the key": {ctReplace(t, ctSummary(ctUUID(15), ctUUID(16)),
-			`"hookCount":1`, `"retractedMessageUuids":["`+ctUUID(4)+`"],"hookCount":1`), nil},
+			`"hookCount":1`, `"retractedMessageUuids":["`+ctUUID(4)+`"],"hookCount":1`), 0, nil},
 		"an attachment carrying the key": {ctAttachment(ctUUID(3), ctUUID(4), ctTokens,
-			`"retractedMessageUuids":["`+ctUUID(2)+`"],`), nil},
+			`"retractedMessageUuids":["`+ctUUID(2)+`"],`), 0, nil},
 	} {
-		var got []string
-		err := ctLine(t, tc.record).Retracted(func(uuid string) error {
-			got = append(got, uuid)
-			return nil
-		})
-		if err != nil || !slices.Equal(got, tc.uuids) {
-			t.Errorf("%s retracts %q, %v; want %q", name, strings.Join(got, ","), err, strings.Join(tc.uuids, ","))
+		r, err := ctLine(t, tc.record).Retracted()
+		held, all := r.Prefixes()
+		want := make([][chainPrefixBytes]byte, len(tc.named))
+		for i, u := range tc.named {
+			want[i] = ctPrefix(u)
+		}
+		if err != nil || r.Entries != tc.entries || !slices.Equal(held, want) || !all {
+			t.Errorf("%s retracts %d entries, the prefixes %x (all %t), %v; want %d and %x", name, r.Entries, held,
+				all, err, tc.entries, want)
 		}
 	}
 	fallback := ctFallback(ctUUID(5), ctUUID(6), named...)
 	for name, list := range map[string]string{"null": `null`, "a string": `"` + ctUUID(4) + `"`,
-		"an object": `{"uuid":"` + ctUUID(4) + `"}`, "a list holding a number": `["` + ctUUID(4) + `",7]`,
+		"an object": `{"uuid":"` + ctUUID(4) + `"}`, "a list holding a number": `[7,"` + ctUUID(4) + `"]`,
 		"a list holding null": `[null]`} {
 		for kind, record := range map[string]string{"a refused reply's fallback": fallback,
 			"a malformed reply's retry": ctRetry(ctUUID(5), ctUUID(6), named...)} {
 			line := ctLine(t, ctReplace(t, record, `"retractedMessageUuids":[`+ctQuoted(named)+`]`,
 				`"retractedMessageUuids":`+list))
-			if err := line.Retracted(func(string) error { return nil }); err == nil {
-				t.Errorf("%s whose retractedMessageUuids is %s retracts with no error; want one", kind, name)
+			if r, err := line.Retracted(); err == nil || r.Entries != 0 {
+				t.Errorf("%s whose retractedMessageUuids is %s retracts %d entries, %v; want none and an error",
+					kind, name, r.Entries, err)
 			}
 		}
 	}
-	stop := errors.New("stop")
-	var got []string
-	err := ctLine(t, fallback).Retracted(func(uuid string) error {
-		got = append(got, uuid)
-		return stop
-	})
-	if !errors.Is(err, stop) || !slices.Equal(got, named[:1]) {
-		t.Errorf("a walk each stops at the first uuid answers %v, having handed %q; want each's own error at %q", err,
-			got, named[0])
+	r, err := ctLine(t, ctReplace(t, fallback, `"retractedMessageUuids":[`+ctQuoted(named)+`]`,
+		`"retractedMessageUuids":["x",`+ctQuoted(named)+`,7,"`+ctUUID(9)+`"]`)).Retracted()
+	if held, all := r.Prefixes(); err == nil || r.Entries != 3 || !all ||
+		!slices.Equal(held, [][chainPrefixBytes]byte{ctPrefix(named[0]), ctPrefix(named[1])}) {
+		t.Errorf("a list of three strings, then a number, retracts %d entries, the prefixes %x (all %t), %v; want "+
+			"the three, the two uuids' prefixes and an error", r.Entries, held, all, err)
+	}
+
+	for name, tc := range map[string]struct {
+		record  string
+		entries int
+		all     bool
+	}{
+		"a list of the bound's prefixes and an entry of none": {ctRetracting(t, threadChainMaxRecords, `,"x"`),
+			threadChainMaxRecords + 1, true},
+		"a list of a prefix past the bound": {ctRetracting(t, threadChainMaxRecords+1, ""),
+			threadChainMaxRecords + 1, false},
+	} {
+		r, err := ctLine(t, tc.record).Retracted()
+		held, all := r.Prefixes()
+		if err != nil || r.Entries != tc.entries || all != tc.all || len(held) != threadChainMaxRecords ||
+			held[len(held)-1] != ctPrefix(ctUUID(1000+threadChainMaxRecords-1)) {
+			t.Errorf("%s retracts %d entries, %d prefixes, all %t, %v; want %d, the bound's first %d and %t", name,
+				r.Entries, len(held), all, err, tc.entries, threadChainMaxRecords, tc.all)
+		}
 	}
 }
 
@@ -3177,100 +3720,138 @@ func ctListed(summary string, kept ...string) string {
 	return `,"preservedMessages":{"anchorUuid":"` + summary + `","uuids":[` + ids + `],"allUuids":[` + ids + `]}`
 }
 
+// ctKept is the uuids a boundary lists, each read as the uuid package reads it.
+func ctKept(uuids ...string) [][16]byte {
+	var kept [][16]byte
+	for _, u := range uuids {
+		kept = append(kept, [16]byte(uuid.MustParse(u)))
+	}
+	return kept
+}
+
 // A COMPACTION'S BOUNDARY SAYS WHAT IT KEPT, as a resume relinks a thread by
 // it: Preserved reads a compact_boundary record's preservedMessages where it
-// carries one, its anchor and each uuid it lists handed in order, kept where
-// it lists any; else its preservedSegment, the anchor and the segment's two
-// ends; and nothing where the boundary carries neither, a null for either, or
-// no compactMetadata, null among it, or on a record of another type or
-// subtype, whatever it carries. A boundary that carries either names what it
-// kept, a list of none of no anchor among them, since the resume drops by it
-// every record before the last boundary whatever it keeps. Every other shape,
-// a metadata, a list, an anchor or an end of another type, an entry that is no
-// string, is an error. An error each returns ends the walk as it is.
+// carries one, its anchor, how many entries it lists and each that is a
+// canonical uuid, in order, kept where it lists any, and whether any entry is
+// none; else its preservedSegment, the anchor and the segment's two ends; and
+// nothing where the boundary carries neither, a null for either, or no
+// compactMetadata, null among it, or on a record of another type or subtype,
+// whatever it carries. A boundary that carries either names what it kept, a
+// list of none of no anchor among them, since the resume drops by it every
+// record before the last boundary whatever it keeps. Every other shape, a
+// metadata, a list, an anchor or an end of another type, an entry that is no
+// string, is an error, handed with the entries before it: those before the
+// first that is no string, and none where the anchor fails, which is checked
+// before the list. It holds threadChainMaxRecords uuids at most, and says
+// where the list holds more, still counting every entry.
 //
 // Mutation: read the segment where a list is, and the list's records go
 // unread; take a list of none for one that keeps records, and a boundary that
 // keeps nothing relinks; read a null list as one, and a boundary naming its
 // segment alone is an error; read a null metadata as one, and a boundary
-// that keeps nothing is an error; or read a boundary as naming what it kept
-// only where it keeps records, and a list of none of no anchor names nothing.
+// that keeps nothing is an error; read a boundary as naming what it kept only
+// where it keeps records, and a list of none of no anchor names nothing;
+// count only the entries that are uuids, and a list holding one that is none
+// counts short; hand an error with nothing the list held before it, or walk
+// the list before its anchor is checked, and the entries before the fault are
+// lost, or a list of no anchor counts its entries; or hold uuids past the
+// bound, or stop counting there, and the list past it says it holds no more.
 func TestACompactionsBoundarySaysWhatItKept(t *testing.T) {
 	t.Parallel()
 	kept := []string{ctUUID(3), ctUUID(5), ctUUID(6)}
 	boundary := ctBoundary(ctUUID(7), ctUUID(8), kept...)
 	listed := ctListed(ctUUID(8), kept...)
 	segment := ctReplace(t, boundary, listed, "")
+	listing := func(entries string) string {
+		return ctReplace(t, boundary, listed, `,"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":[`+
+			entries+`]}`)
+	}
 	for name, tc := range map[string]struct {
 		record string
 		want   threadPreserved
-		uuids  []string
 	}{
-		"a boundary listing what it kept beside its segment": {boundary,
-			threadPreserved{Named: true, Kept: true, Anchor: ctUUID(8)}, kept},
+		"a boundary listing what it kept beside its segment": {boundary, threadPreserved{Named: true, Kept: true,
+			Anchor: ctUUID(8), Listed: 3, UUIDs: ctKept(kept...)}},
+		"a boundary listing an entry that is no uuid": {listing(`"` + kept[0] + `","x","` + kept[1] + `"`),
+			threadPreserved{Named: true, Kept: true, Anchor: ctUUID(8), Listed: 3, UUIDs: ctKept(kept[:2]...),
+				Nowhere: true}},
 		"a boundary naming its segment alone": {segment, threadPreserved{Named: true, Kept: true,
-			Anchor: ctUUID(8), Segment: true, Head: ctUUID(3), Tail: ctUUID(6)}, nil},
+			Anchor: ctUUID(8), Segment: true, Head: ctUUID(3), Tail: ctUUID(6)}},
 		"a boundary whose list is null, beside its segment": {ctReplace(t, boundary, listed,
 			`,"preservedMessages":null`), threadPreserved{Named: true, Kept: true, Anchor: ctUUID(8),
-			Segment: true, Head: ctUUID(3), Tail: ctUUID(6)}, nil},
+			Segment: true, Head: ctUUID(3), Tail: ctUUID(6)}},
 		"a boundary listing none": {ctReplace(t, segment, `"compactMetadata":{`,
 			`"compactMetadata":{"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":[]},`),
-			threadPreserved{Named: true, Anchor: ctUUID(8)}, nil},
+			threadPreserved{Named: true, Anchor: ctUUID(8)}},
 		"a boundary listing none of no anchor": {ctReplace(t, segment, `"compactMetadata":{`,
 			`"compactMetadata":{"preservedMessages":{"anchorUuid":"","uuids":[]},`),
-			threadPreserved{Named: true}, nil},
+			threadPreserved{Named: true}},
 		"a boundary keeping nothing": {ctReplace(t, segment, `"preservedSegment":{"headUuid":"`+ctUUID(3)+
-			`","anchorUuid":"`+ctUUID(8)+`","tailUuid":"`+ctUUID(6)+`"},`, ""), threadPreserved{}, nil},
+			`","anchorUuid":"`+ctUUID(8)+`","tailUuid":"`+ctUUID(6)+`"},`, ""), threadPreserved{}},
 		"a boundary whose segment is null": {ctReplace(t, segment, `"preservedSegment":{"headUuid":"`+ctUUID(3)+
 			`","anchorUuid":"`+ctUUID(8)+`","tailUuid":"`+ctUUID(6)+`"}`, `"preservedSegment":null`),
-			threadPreserved{}, nil},
+			threadPreserved{}},
 		"a boundary whose metadata is null": {ctReplace(t, ctReplace(t, boundary, listed, ""),
 			`"compactMetadata":{"trigger":"manual"`, `"compactMetadata":null,"was":{"trigger":"manual"`),
-			threadPreserved{}, nil},
+			threadPreserved{}},
 		"a boundary with no metadata": {ctReplace(t, ctReplace(t, boundary, listed, ""),
-			`"compactMetadata":{"trigger":"manual"`, `"was":{"trigger":"manual"`), threadPreserved{}, nil},
+			`"compactMetadata":{"trigger":"manual"`, `"was":{"trigger":"manual"`), threadPreserved{}},
 		"a microcompaction's boundary carrying a list": {ctReplace(t, boundary, `"subtype":"compact_boundary"`,
-			`"subtype":"microcompact_boundary"`), threadPreserved{}, nil},
+			`"subtype":"microcompact_boundary"`), threadPreserved{}},
 		"a stop hook's summary carrying a list": {ctReplace(t, ctSummary(ctUUID(15), ctUUID(16)), `"hookCount":1`,
 			`"compactMetadata":{"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":["`+ctUUID(3)+`"]}},`+
-				`"hookCount":1`), threadPreserved{}, nil},
+				`"hookCount":1`), threadPreserved{}},
 	} {
-		var got []string
-		p, err := ctLine(t, tc.record).Preserved(func(uuid string) error {
-			got = append(got, uuid)
-			return nil
-		})
-		if err != nil || p != tc.want || !slices.Equal(got, tc.uuids) {
-			t.Errorf("%s keeps %+v, listing %q, %v; want %+v, listing %q", name, p, strings.Join(got, ","), err,
-				tc.want, strings.Join(tc.uuids, ","))
+		p, err := ctLine(t, tc.record).Preserved()
+		if got, want := fmt.Sprintf("%+v", p), fmt.Sprintf("%+v", tc.want); err != nil || got != want {
+			t.Errorf("%s keeps %s, %v; want %s", name, got, err, want)
 		}
 	}
-	for name, record := range map[string]string{
-		"a metadata that is a string": ctReplace(t, ctReplace(t, boundary, listed, ""), `"compactMetadata":{`,
-			`"compactMetadata":"kept","was":{`),
-		"a list that is a string": ctReplace(t, boundary, listed, `,"preservedMessages":"kept"`),
-		"a list's uuids that are a string": ctReplace(t, boundary, listed,
-			`,"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":"`+ctUUID(3)+`"}`),
-		"a list's uuids holding a number": ctReplace(t, boundary, listed,
-			`,"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":["`+ctUUID(3)+`",7]}`),
-		"a list of no anchor": ctReplace(t, boundary, listed,
-			`,"preservedMessages":{"uuids":["`+ctUUID(3)+`"]}`),
-		"a segment whose head is a number": ctReplace(t, segment, `"headUuid":"`+ctUUID(3)+`"`, `"headUuid":3`),
-		"a segment of no tail":             ctReplace(t, segment, `,"tailUuid":"`+ctUUID(6)+`"`, ""),
+	for name, tc := range map[string]struct {
+		record string
+		// held is what the list holds before its fault.
+		held threadPreserved
+	}{
+		"a metadata that is a string": {record: ctReplace(t, ctReplace(t, boundary, listed, ""),
+			`"compactMetadata":{`, `"compactMetadata":"kept","was":{`)},
+		"a list that is a string": {record: ctReplace(t, boundary, listed, `,"preservedMessages":"kept"`)},
+		"a list's uuids that are a string": {record: ctReplace(t, boundary, listed,
+			`,"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":"`+ctUUID(3)+`"}`)},
+		"a list's uuids holding a number after two strings": {record: listing(`"` + ctUUID(3) + `","x",7,"` +
+			ctUUID(5) + `"`), held: threadPreserved{Listed: 2, UUIDs: ctKept(ctUUID(3)), Nowhere: true}},
+		"a list of no anchor": {record: ctReplace(t, boundary, listed,
+			`,"preservedMessages":{"uuids":["`+ctUUID(3)+`"]}`)},
+		"a segment whose head is a number": {record: ctReplace(t, segment, `"headUuid":"`+ctUUID(3)+`"`,
+			`"headUuid":3`)},
+		"a segment of no tail": {record: ctReplace(t, segment, `,"tailUuid":"`+ctUUID(6)+`"`, "")},
 	} {
-		if p, err := ctLine(t, record).Preserved(func(string) error { return nil }); err == nil {
-			t.Errorf("%s keeps %+v with no error; want one", name, p)
+		p, err := ctLine(t, tc.record).Preserved()
+		if got, want := fmt.Sprintf("%+v", p), fmt.Sprintf("%+v", tc.held); err == nil || got != want {
+			t.Errorf("%s keeps %s, %v; want %s and an error", name, got, err, want)
 		}
 	}
-	stop := errors.New("stop")
-	var got []string
-	_, err := ctLine(t, boundary).Preserved(func(uuid string) error {
-		got = append(got, uuid)
-		return stop
-	})
-	if !errors.Is(err, stop) || !slices.Equal(got, kept[:1]) {
-		t.Errorf("a walk each stops at the first uuid answers %v, having handed %q; want each's own error at %q", err,
-			got, kept[0])
+
+	many := make([]string, threadChainMaxRecords+1)
+	for i := range many {
+		many[i] = `"` + ctUUID(1000+i) + `"`
+	}
+	for name, tc := range map[string]struct {
+		entries      string
+		listed       int
+		more, absent bool
+	}{
+		"a list of the bound's uuids and an entry of none": {strings.Join(many[:threadChainMaxRecords], ",") +
+			`,"x"`, threadChainMaxRecords + 1, false, true},
+		"a list of a uuid past the bound": {strings.Join(many, ","), threadChainMaxRecords + 1, true, false},
+	} {
+		p, err := ctLine(t, listing(tc.entries)).Preserved()
+		if err != nil || p.Listed != tc.listed || p.More != tc.more || p.Nowhere != tc.absent ||
+			len(p.UUIDs) != threadChainMaxRecords || p.UUIDs[threadChainMaxRecords-1] !=
+			[16]byte(uuid.MustParse(ctUUID(1000+threadChainMaxRecords-1))) {
+			t.Errorf("%s lists %d, holds %d uuids, more %t, an entry of none %t, %v; want %d, the bound's first "+
+				"%d, %t and %t", name, p.Listed, len(p.UUIDs), p.More, p.Nowhere, err, tc.listed,
+				threadChainMaxRecords, tc.more, tc.absent)
+		}
 	}
 }
 
@@ -3934,7 +4515,8 @@ func TestAReplysIterationsCostItsUsageAnEntryAtATime(t *testing.T) {
 	)
 	usage := func(l threadLine) func() { return func() { _, _, _ = l.Usage() } }
 	one := ctLine(t, head+"1"+tail)
-	long := ctLine(t, ctListRecord(t, head, "1", tail, listBytes))
+	longRecord := ctListRecord(t, head, "1", tail, listBytes)
+	long := ctLine(t, longRecord)
 	for name, l := range map[string]threadLine{"a list of one": one, "a long list": long} {
 		if u, ok, err := l.Usage(); !ok || err != nil || u.Input != 3 {
 			t.Fatalf("%s of entries no harness counts says its request took %+v (%t), %v; want its usage's own", name,
@@ -3945,11 +4527,11 @@ func TestAReplysIterationsCostItsUsageAnEntryAtATime(t *testing.T) {
 	manyObjects, manyBytes := allocationsOf(usage(long))
 	if manyObjects > fewObjects+listSlack {
 		t.Errorf("a usage listing %d bytes of iterations costs %d allocations, and one listing one entry %d",
-			len(long.Raw), manyObjects, fewObjects)
+			len(longRecord), manyObjects, fewObjects)
 	}
-	if manyBytes > fewBytes+listCopies*uint64(len(long.Raw)) {
+	if manyBytes > fewBytes+listCopies*uint64(len(longRecord)) {
 		t.Errorf("a usage listing %d bytes of iterations costs %d bytes, and one listing one entry %d: more than %d "+
-			"copies of the line", len(long.Raw), manyBytes, fewBytes, listCopies)
+			"copies of the line", len(longRecord), manyBytes, fewBytes, listCopies)
 	}
 }
 
@@ -4132,17 +4714,19 @@ func ctKeysRecord(t *testing.T, head string, key func(i int) string, tail string
 // it is read. So a list refused at its first block costs what a list of that
 // block alone costs, however many follow it: no allocation more, and no byte
 // more than the copies of the list its reader makes as it decodes the record
-// around it (Message one, its content's; ToolResultsCleared two, its report's
-// and its edits'), never a header and a copy for each element, nor a slice of
-// them, before the first is checked. A line at the layer's bound holding four
-// million `1`s, or a list of empty objects, shows it. The walk itself, with
+// around it (Message, read as its line is decoded ([factsOf]), two, the
+// message's and its content's; ToolResultsCleared, read off the report its
+// line's facts keep, one, its edits'), never a header and a copy for each
+// element, nor a slice of them, before the first is checked. A line at the
+// layer's bound holding four million `1`s, or a list of empty objects, shows
+// it. The walk itself, with
 // nobody keeping what it hands out, costs the same for a long list as for a
 // list of one, in allocations and in bytes: it never collects the elements.
-// And a list read to its end leaves held what Message says it does, a kind
-// for each block and a call for each call block, and nothing of the list: for
-// a list of the smallest blocks of a kind no reader names, and of the smallest
-// results, each a header for each kind and each call's fields, at most a
-// quarter over for append's growth, and the bytes of each kind and id.
+// And a list read to its end leaves held what Message says it does, a call
+// for each call block and nothing of any other block, nor of the list: for a
+// list of the smallest blocks of a kind no reader names nothing a block, and
+// for one of the smallest results each call's fields, at most a quarter over
+// for append's growth, and the bytes of each id.
 //
 // Not parallel: the counts are the process's, and a parallel test's
 // allocations would be counted with this one's.
@@ -4150,11 +4734,12 @@ func ctKeysRecord(t *testing.T, head string, key func(i int) string, tail string
 // Mutation: decode a message's content, or a reply's edits, whole before its
 // first block is checked, and a list at the bound costs millions of
 // allocations more than a list of one; collect its blocks or its edits before
-// the first is checked, size its kinds from the list's length, or have the
+// the first is checked, size its calls from the list's length, or have the
 // walk collect the list before it hands out the first element, and it costs
 // from several times to tens of times the line more, in a few allocations;
 // keep a copy of the content in the message, and a list read to its end holds
-// that copy beside its kinds.
+// that copy beside its calls; keep a kind for each block, as a list of them,
+// and a list of blocks that are no call holds a header for each.
 func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 	// slack is how many more allocations a list at the bound may cost than a
 	// list of one, though it reads no more of it. The count is the process's,
@@ -4165,38 +4750,57 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 	// detector a pool also drops a quarter of what is put in it. A whole
 	// decode costs millions more.
 	const slack = 64
-	message := func(l threadLine) error {
-		_, err := l.Message()
-		return err
+	// decoded is record, decoded whole as a thread's line ([decodeThreadLine]).
+	decoded := func(record []byte) threadLine {
+		l, err := decodeThreadLine(1, record)
+		if err != nil {
+			t.Fatalf("a line of %d bytes, decoded whole, is no record: %v", len(record)+1, err)
+		}
+		return l
 	}
-	cleared := func(l threadLine) error {
-		_, err := l.ToolResultsCleared()
-		return err
+	// A MESSAGE IS READ AS ITS LINE IS DECODED ([factsOf]): what it costs is
+	// its line's whole decode and then Message.
+	message := func(record []byte) func() error {
+		return func() error {
+			_, err := decoded(record).Message()
+			return err
+		}
+	}
+	// ToolResultsCleared reads the report its line's facts keep: what it
+	// costs is the read alone, of a line decoded before it is measured.
+	cleared := func(record []byte) func() error {
+		l := decoded(record)
+		return func() error {
+			_, err := l.ToolResultsCleared()
+			return err
+		}
 	}
 	user := `{"type":"user","message":{"role":"user","content":[`
 	reply := `{"type":"assistant","message":{"role":"assistant","content":[],"context_management":{"applied_edits":[`
 	for name, tc := range map[string]struct {
 		head, element, tail string
-		read                func(threadLine) error
+		// read is what is measured of a record: its read, from what is
+		// decoded of it before it is measured.
+		read func(record []byte) func() error
 		// copies is how many copies of the list its reader makes as it decodes
-		// the record around it, measured: Message its content's, and
-		// ToolResultsCleared its report's and its edits'. A list may cost
+		// the record around it, measured: Message the message's and its
+		// content's, and ToolResultsCleared its edits'. A list may cost
 		// those and ONE LINE MORE, so a reader that makes a copy more still
 		// passes, where a slice of the list's elements, or a header for each,
 		// costs several lines.
 		copies uint64
 	}{
-		"a message's content of numbers":       {head: user, element: "1", tail: `]}}`, read: message, copies: 1},
-		"a message's content of empty objects": {head: user, element: "{}", tail: `]}}`, read: message, copies: 1},
-		"a reply's applied edits of numbers":   {head: reply, element: "1", tail: `]}}}`, read: cleared, copies: 2},
+		"a message's content of numbers":       {head: user, element: "1", tail: `]}}`, read: message, copies: 2},
+		"a message's content of empty objects": {head: user, element: "{}", tail: `]}}`, read: message, copies: 2},
+		"a reply's applied edits of numbers":   {head: reply, element: "1", tail: `]}}}`, read: cleared, copies: 1},
 	} {
-		one := ctLine(t, tc.head+tc.element+tc.tail)
-		full := ctLine(t, ctListRecord(t, tc.head, tc.element, tc.tail, threadLineMax))
-		if len(full.Raw) != threadLineMax-1 || tc.read(one) == nil || tc.read(full) == nil {
-			t.Fatalf("%s: a line of %d bytes whose first block is none reads with no error", name, len(full.Raw)+1)
+		fullRecord := []byte(ctListRecord(t, tc.head, tc.element, tc.tail, threadLineMax))
+		one, full := tc.read([]byte(tc.head+tc.element+tc.tail)), tc.read(fullRecord)
+		if len(fullRecord) != threadLineMax-1 || one() == nil || full() == nil {
+			t.Fatalf("%s: a line of %d bytes whose first block is none reads with no error", name, len(fullRecord)+1)
 		}
-		fewObjects, fewBytes := allocationsOf(func() { _ = tc.read(one) })
-		manyObjects, manyBytes := allocationsOf(func() { _ = tc.read(full) })
+		fewObjects, fewBytes := allocationsOf(func() { _ = one() })
+		manyObjects, manyBytes := allocationsOf(func() { _ = full() })
 		if manyObjects > fewObjects+slack {
 			t.Errorf("%s: refused at its first block, a list at the line's bound costs %d allocations, and a list "+
 				"of one %d", name, manyObjects, fewObjects)
@@ -4229,42 +4833,41 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 	}
 
 	// heldSlack is how many bytes a message read to its end may hold beyond its
-	// kinds and its calls: the message itself, and whatever else the heap holds
-	// at the second collection that it did not at the first. Measured, a
-	// message held its two arrays and nothing more to within a few dozen
-	// bytes; a copy of the list is the list's size.
+	// calls: the message itself, and whatever else the heap holds at the
+	// second collection that it did not at the first. Measured, a message held
+	// its array of calls and nothing more to within a few dozen bytes; a copy
+	// of the list is the list's size, and a kind's header for each of its
+	// blocks a dozen times the slack.
 	const heldSlack = 64 << 10
 	for name, tc := range map[string]struct {
 		element string
-		// own is how many bytes of its own each block may hold beyond its kind's
-		// header and its call's fields: the text of a kind the layer does not
-		// name, and a call's id. A kind the layer names is its own constant
+		// own is how many bytes of its own each call may hold beyond its
+		// fields: its id. A call's kind is the layer's own constant
 		// (TestAKnownBlockKindIsHeldAsTheLayersOwnString).
 		own   uint64
 		calls bool
 	}{
-		"blocks of a kind no reader names": {element: `{"type":"x"}`, own: 1},
+		"blocks of a kind no reader names": {element: `{"type":"x"}`},
 		"the smallest results":             {element: `{"type":"tool_result","tool_use_id":"a"}`, own: 1, calls: true},
 	} {
-		line := ctLine(t, ctListRecord(t, user, tc.element, `]}}`, listBytes))
+		record := []byte(ctListRecord(t, user, tc.element, `]}}`, listBytes))
 		read := func() any {
-			m, _ := line.Message()
+			m, _ := decoded(record).Message()
 			return m
 		}
-		m, err := line.Message()
-		blocks, calls := uint64(strings.Count(string(line.Raw), tc.element)), uint64(0)
+		m, err := ctLine(t, string(record)).Message()
+		blocks, calls := uint64(strings.Count(string(record), tc.element)), uint64(0)
 		if tc.calls {
 			calls = blocks
 		}
-		if err != nil || uint64(len(m.Kinds())) != blocks || uint64(len(m.Calls())) != calls {
-			t.Fatalf("%s: a list of %d blocks reads as %d kinds and %d calls, %v; want %d and %d", name, blocks,
-				len(m.Kinds()), len(m.Calls()), err, blocks, calls)
+		if err != nil || uint64(m.Blocks().Len()) != blocks || uint64(len(m.Calls())) != calls {
+			t.Fatalf("%s: a list of %d blocks reads as %d blocks and %d calls, %v; want %d and %d", name, blocks,
+				m.Blocks().Len(), len(m.Calls()), err, blocks, calls)
 		}
-		kinds := blocks * (uint64(unsafe.Sizeof("")) + tc.own)
-		fields := calls * uint64(unsafe.Sizeof(threadCall{}))
-		if held, limit := heldBy(read), (kinds+fields)*5/4+heldSlack; held > limit {
-			t.Errorf("%s: a list of %d bytes read to its end holds %d bytes, more than its %d kinds and %d calls "+
-				"take: %d", name, len(line.Raw)+1, held, blocks, calls, limit)
+		fields := calls * (uint64(unsafe.Sizeof(threadCall{})) + tc.own)
+		if held, limit := heldBy(read), fields*5/4+heldSlack; held > limit {
+			t.Errorf("%s: a list of %d bytes read to its end holds %d bytes, more than its %d calls of %d blocks "+
+				"take: %d", name, len(record)+1, held, calls, blocks, limit)
 		}
 	}
 }
@@ -4308,35 +4911,58 @@ func TestAnObjectsWalkCostsWhatOneKeyCosts(t *testing.T) {
 	}
 }
 
-// A KNOWN BLOCK KIND IS HELD AS THE LAYER'S OWN STRING: a block of a kind the
-// layer names (a text, a thinking and a redacted thinking, a call and a
-// result) is held in Kinds as the layer's own constant, so a list of such
-// blocks holds no string of its own for a block's kind, only its place in the
-// list; a kind the layer does not name is held as written.
+// A KNOWN BLOCK KIND IS HELD AS THE LAYER'S OWN STRING: a call's kind (a
+// call's or a result's) is held as the layer's own constant, so a list of
+// calls holds no string of its own for a call's kind; and every block,
+// whatever its kind, is counted in Blocks and held as its kind's member of a
+// set, nothing more: each kind the layer names (a text, a thinking and a
+// redacted thinking, a call and a result) its own, and a kind it does not name
+// one that no reader can ask for, so a reply holding a server's call among its
+// text and thinking is not all of the kinds the layer names, whatever kinds
+// the reader names beside them.
 //
-// Mutation: hold every kind as its decode left it, and each known kind is a
-// string of its own.
+// Mutation: hold a call's kind as its decode left it, and it is a string of
+// its own; read a kind the layer does not name as one it does, or match it by
+// its name, and the reply holding a server's call is all of the named kinds.
 func TestAKnownBlockKindIsHeldAsTheLayersOwnString(t *testing.T) {
 	t.Parallel()
-	reply, err := ctLine(t, ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."},`+
-		`{"type":"thinking","thinking":"the batch","signature":"c2ln"},{"type":"redacted_thinking","data":"ZGF0YQ=="},`+
-		ctUseContent[1:len(ctUseContent)-1]+`,{"type":"server_tool_use","id":"srvtoolu_test","name":"web_search",`+
-		`"input":{}}]`)).Message()
-	if err != nil {
-		t.Fatalf("a reply of every kind reads no message: %v", err)
-	}
-	result, err := ctLine(t, ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)).Message()
-	if err != nil {
-		t.Fatalf("a result reads no message: %v", err)
-	}
-	kinds := append(slices.Clone(reply.Kinds()), result.Kinds()...)
-	want := []string{blockText, blockThinking, blockRedactedThinking, blockToolUse, "server_tool_use", blockToolResult}
-	if !slices.Equal(kinds, want) {
-		t.Fatalf("the blocks read as %q, want %q", strings.Join(kinds, " "), strings.Join(want, " "))
-	}
-	for i, kind := range kinds {
-		if known := i != 4; known != (unsafe.StringData(kind) == unsafe.StringData(want[i])) {
-			t.Errorf("block %d, a %s, is held as the layer's own string %t, want %t", i+1, kind, !known, known)
+	named := `[{"type":"text","text":"batch 1."},{"type":"thinking","thinking":"the batch","signature":"c2ln"},` +
+		`{"type":"redacted_thinking","data":"ZGF0YQ=="},` + ctUseContent[1:len(ctUseContent)-1]
+	server := `{"type":"server_tool_use","id":"srvtoolu_test","name":"web_search","input":{}}`
+	every := []string{blockText, blockThinking, blockRedactedThinking, blockToolUse, blockToolResult}
+	for name, tc := range map[string]struct {
+		record string
+		// blocks is the message's blocks as [ctBlocks] prints them; all
+		// whether they are all of the kinds the layer names.
+		blocks string
+		all    bool
+	}{
+		"a reply of every kind the layer names": {record: ctAssistant(ctUUID(2), ctUUID(3), named+`]`),
+			blocks: "4 [tool_use text thinking redacted_thinking]", all: true},
+		"a reply holding a server's call beside them": {record: ctAssistant(ctUUID(2), ctUUID(3),
+			named+`,`+server+`]`), blocks: "5 [tool_use text thinking redacted_thinking other]"},
+		"a result": {record: ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn),
+			blocks: "1 [tool_result]", all: true},
+	} {
+		m, err := ctLine(t, tc.record).Message()
+		if err != nil {
+			t.Errorf("%s reads no message: %v", name, err)
+			continue
+		}
+		b := m.Blocks()
+		if ctBlocks(b) != tc.blocks || b.All(every...) != tc.all || b.All(append(every, "server_tool_use")...) != tc.all {
+			t.Errorf("%s reads as the blocks %s, all of the named kinds %t, and with the server's call's beside "+
+				"them %t; want %s and %t", name, ctBlocks(b), b.All(every...),
+				b.All(append(every, "server_tool_use")...), tc.blocks, tc.all)
+		}
+		if len(m.Calls()) != 1 {
+			t.Errorf("%s holds the calls %+v; want one", name, m.Calls())
+			continue
+		}
+		kind := m.Calls()[0].Kind
+		if own := map[string]string{blockToolUse: blockToolUse, blockToolResult: blockToolResult}[kind]; own == "" ||
+			unsafe.StringData(kind) != unsafe.StringData(own) {
+			t.Errorf("%s holds a call of the kind %q, not as the layer's own string", name, kind)
 		}
 	}
 }
@@ -4412,8 +5038,8 @@ func TestAServerClearingIsWhatAnAssistantRecordSaysItApplied(t *testing.T) {
 		if cleared, err := line.ToolResultsCleared(); err == nil {
 			t.Errorf("%s reads as cleared %t, want an error", name, cleared)
 		}
-		if m, err := line.Message(); err != nil || !slices.Equal(m.Kinds(), []string{"text"}) {
-			t.Errorf("%s reads its message as the blocks %q, %v; want it whole", name, strings.Join(m.Kinds(), " "), err)
+		if m, err := line.Message(); err != nil || ctBlocks(m.Blocks()) != "1 [text]" {
+			t.Errorf("%s reads its message as the blocks %s, %v; want it whole", name, ctBlocks(m.Blocks()), err)
 		}
 	}
 
@@ -4591,5 +5217,38 @@ func TestASavedCompactionIsNamedByBothNamesClaudeCodeReads(t *testing.T) {
 				t.Errorf("the session %q reads %q as the member %+v", session, name, member)
 			}
 		}
+	}
+}
+
+// A LINE THAT HOLDS NO FACTS READS AS A RECORD OF NO KEYS: every accessor reads
+// a line whose facts are nil, as the zero line's are, exactly as it reads the
+// decode of a record that carries its type and subtype and nothing else,
+// whatever that type, so a helper or a reader that hands out the zero line
+// never hands out one an accessor cannot read.
+//
+// Mutation: read the facts of a line that holds none as they lie, and the
+// first accessor that reads one panics.
+func TestALineThatHoldsNoFactsReadsAsARecordOfNoKeys(t *testing.T) {
+	t.Parallel()
+	for _, head := range []string{
+		`{}`, `{"type":"queue-operation"}`, `{"type":"system","subtype":"compact_boundary"}`,
+		`{"type":"system","subtype":"model_refusal_fallback"}`,
+	} {
+		want := ctLine(t, head)
+		got := threadLine{N: want.N, Head: want.Head}
+		if ctAll(got) != ctAll(want) {
+			t.Errorf("a line of no facts with the head of %s reads as\n%s\nwant\n%s", head, ctAll(got), ctAll(want))
+		}
+	}
+	for _, kind := range recordKinds {
+		head := `{"type":"` + string(kind) + `"}`
+		want := ctLine(t, head)
+		got := threadLine{N: want.N, Head: want.Head}
+		if ctAll(got) != ctAll(want) {
+			t.Errorf("a line of no facts with the head of %s reads as\n%s\nwant\n%s", head, ctAll(got), ctAll(want))
+		}
+	}
+	if got := ctAll(threadLine{}); got != ctAll(threadLine{Head: ctLine(t, `{}`).Head}) {
+		t.Errorf("the zero line reads as\n%s", got)
 	}
 }

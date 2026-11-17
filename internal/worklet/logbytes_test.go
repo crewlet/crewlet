@@ -150,7 +150,7 @@ const (
 	codeChangeOpenBytes           = 3_160
 	codeChangeEditBytes           = 2_770
 	codeReviewersBytes            = 1_240
-	codeReviseBytes               = 1_420
+	codeReviseBytes               = 1_460
 	codeMergeabilityBytes         = 1_030
 	codeMergeabilityRecheckBytes  = 880
 	codeMergeabilityRefreshBytes  = 860
@@ -451,7 +451,7 @@ var codeLogNegligible = map[gitlet.OpKind]string{
 		"tools) — so it records none. That is the whole case for leaving it out, and what rides on " +
 		"it is not small: were each of its 3 000 turns a day to name one, at the most a hold record " +
 		"takes as the engine writes one (896 bytes, codeHoldRecordBytes), they would append 2.69 " +
-		"MB a day, 12 % of the day's least of 22.6 MB — a company whose seats work so reads it in " +
+		"MB a day, 12 % of the day's least of 22.7 MB — a company whose seats work so reads it in " +
 		"its code log's crewlet.statelog.log.bytes_per_day. The window is that long because " +
 		"gitlet.HoldRecordAfter is idle_days' floor, not the idle_days in force; pricing the rate " +
 		"needs a figure from a running company's tool calls, which nobody has, as codeLogManagers " +
@@ -518,6 +518,11 @@ var codeLogNegligible = map[gitlet.OpKind]string{
 		"an Inbox button or an assistant's call, persons only: a person marking their day's " +
 		"notices one at a time writes tens of them, each a gesture and the positions of the " +
 		"notices it names, a few hundred bytes for the one or two a press names",
+	gitlet.OpViewed: "a person's viewed marks on a change's files: one record a press of a file's Viewed " +
+		"toggle or an assistant's call, persons only; a reviewer marking a change's files one at a time " +
+		"writes one a file, each two digests and the ended changes it forgets, a few hundred bytes",
+	gitlet.OpViewedKey: "a repository's viewed key: one record a repository ever, before the first mark of " +
+		"any of its files, about two hundred bytes",
 	// A GESTURE ON A CHANGE beside its open, its reviews and its merge: the
 	// reference company's changes are opened ready, on the target they merge
 	// into, and merged, so its day makes none of them. Each is one record
@@ -883,6 +888,8 @@ var codeLogFields = map[gitlet.OpKind]struct {
 				"seat's direct push — each its command's place and whether it lands green; the measured " +
 				"push, a coding box's moving its branch on, moves none. The queue's history it makes is " +
 				"swept with an idle repository's queue (codeLogNegligible)",
+			"pushes.offered": "an attempt's count of the commits it offered (gitlet.PushEntry.Offered), " +
+				"and the measured push lands",
 		},
 	},
 	gitlet.OpCompact: {
@@ -936,7 +943,7 @@ var codeLogFields = map[gitlet.OpKind]struct {
 		payload: reflect.TypeFor[gitlet.Revise](),
 		carried: []string{"repo_id", "change_id", "n", "head_oid", "target_ref", "target_oid",
 			"target_position", "base_oid", "base_tree", "head_tree", "patch_id", "touched", "node",
-			"owners_digest", "human_paths_digest"},
+			"measured_at", "owners_digest", "human_paths_digest"},
 		absent: absent(
 			map[string]string{
 				"routing": "whom a revision's facts concern — the path owners they ask, the reviewers " +
@@ -1169,8 +1176,12 @@ var codeLogFields = map[gitlet.OpKind]struct {
 				"tail":             "the end of a failing check's output, and the reference checks pass",
 				"failures":         "the failures a failing check's report names, likewise",
 				"failures_omitted": "likewise",
-				"log":              "the object a runner stored a check's whole log in, where it stored one: a key and a hash",
-				"url":              "a link to a check's run outside the engine, where its reporter gave one",
+				"tests": "the counts of a check's JUnit report, three integers, and the reference checks " +
+					"name no report",
+				"log_lines": "a failing check's output lines beside its tail, and the reference checks pass",
+				"tail_cut":  "likewise",
+				"log":       "the object a runner stored a check's whole log in, where it stored one: a key and a hash",
+				"url":       "a link to a check's run outside the engine, where its reporter gave one",
 				"routing": "whom an ending that fails a change's head concerns (gitlet.CheckFinished.Routing): " +
 					"the change's routing, its authors, the head's pusher and whom the head was pushed for — " +
 					"some hundreds of bytes, as a merge's routing is — and the reference checks pass, which " +

@@ -278,11 +278,11 @@ func (q ReadQuery) halfOfMe() (ReadQuery, bool) {
 
 // readByID is one page of a walk of changes by their ids, newest first — the
 // changes whose ask of the walk's reviewer stands, or whose stored readiness
-// waits on a person: at most limit ids by first, or by after past a cursor —
-// each binding the walk's keys, the cursor's id and the limit — and the row
-// of each change they name. EVERY ONE: a change's asks and its mergeability go
-// before its row in a purge, and with it in the final one. what names the walk
-// in a failure's sentence.
+// waits on a person or is ready: at most limit ids by first, or by after past
+// a cursor (each binding the walk's keys, the cursor's id and the limit), and
+// the row of each change they name. EVERY ONE: a change's asks and its
+// mergeability go before its row in a purge, and with it in the final one.
+// what names the walk in a failure's sentence.
 func (w changeWalk) readByID(ctx context.Context, tx *sql.Tx, first, after, cursor string, limit int,
 	what string) ([]changeRow, error) {
 
@@ -451,13 +451,18 @@ func (r *Reader) changeReviewers(ctx context.Context, tx *sql.Tx, q ReadQuery, n
 	base, packed := len(out.Reviewers), []int64(nil)
 	for rows.Next() {
 		var (
-			rv                          ReviewerRow
-			kind, reason, state, byKind string
-			position                    int64
+			rv                                 ReviewerRow
+			kind, reason, state, byKind, owned string
+			position                           int64
 		)
 		if scanErr := rows.Scan(&rv.Reviewer, &kind, &reason, &state, &rv.RequestedBy, &byKind, &rv.Note,
-			&position); scanErr != nil {
+			&position, &owned, &rv.OwnedPathsOmitted); scanErr != nil {
 			return fmt.Errorf("gitlet: read the reviewers of %s: %w", named, scanErr)
+		}
+		if owned != "" {
+			if globsErr := json.Unmarshal([]byte(owned), &rv.OwnedPaths); globsErr != nil {
+				return fmt.Errorf("gitlet: read the reviewers of %s: an ask's globs: %w", named, globsErr)
+			}
 		}
 		rv.Kind, rv.Reason, rv.State = PartyKind(kind), ReviewerReason(reason), ReviewerState(state)
 		// Costed at its widest instant, which is read after the page is cut.
@@ -860,10 +865,10 @@ const (
 			position, updated_at
 		FROM code_conversations WHERE change_id = ?`
 	reviewersOfSQL = `SELECT reviewer, reviewer_kind, reason, state, requested_by, requested_by_kind,
-			note, position
+			note, position, owned_paths, owned_paths_omitted
 		FROM code_reviewers INDEXED BY ` + reviewersKey + ` WHERE change_id = ? ORDER BY reviewer LIMIT ?`
 	reviewersOfAfterSQL = `SELECT reviewer, reviewer_kind, reason, state, requested_by, requested_by_kind,
-			note, position
+			note, position, owned_paths, owned_paths_omitted
 		FROM code_reviewers INDEXED BY ` + reviewersKey + ` WHERE change_id = ? AND reviewer > ?
 		ORDER BY reviewer LIMIT ?`
 	commentsOfSQL = `SELECT id, thread_id, parent_id, author, author_kind, author_operator_id, anchor, resolved,

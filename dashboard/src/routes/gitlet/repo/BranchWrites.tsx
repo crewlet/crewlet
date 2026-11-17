@@ -17,6 +17,7 @@
  * default branch is gone reads as empty while it holds every other branch. It
  * is let go by making another branch the default first, on the Settings tab,
  * after which its row offers Delete like any other.
+ * A listing read in detail also holds Delete with the engine's own sentence.
  *
  * A NEW BRANCH STARTS AT ANY BRANCH, so it is held only for a repository that
  * holds none. One whose default branch holds nothing while others are live
@@ -24,14 +25,15 @@
  */
 
 import { useState } from "react";
-import { Button, FormField, Input, Stack } from "@crewlethq/ui";
+import { Button, FormField, Input, Stack, VisuallyHidden } from "@crewlethq/ui";
+import { TrashGlyph } from "@crewlethq/icons/glyphs";
 import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { refName, shortOID } from "~/lib/code.ts";
 import { branchDeleteHeld, branchFormHeld, branchWriteHeld } from "~/lib/repoWrites.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import type { CodeRefRow, CodeRepoDetail } from "~/protocol/index.ts";
+import type { CodeRefListing, CodeRepoDetail } from "~/protocol/index.ts";
 
 /** "New branch": the Branches tab's button and its dialog. */
 export function NewBranchButton({ repo }: { repo: CodeRepoDetail }) {
@@ -143,11 +145,14 @@ function NewBranchDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () 
   );
 }
 
+/** A branch's row as Delete reads it: its head, and the engine's sentence where it refuses the delete. */
+type DeletedRow = Pick<CodeRefListing, "ref" | "oid"> & { held?: string | undefined };
+
 /**
  * One branch's Delete, confirmed in the page; none on the repository's default
  * branch, which nothing deletes (see the file's doc).
  */
-export function DeleteBranchButton({ repo, row }: { repo: CodeRepoDetail; row: CodeRefRow }) {
+export function DeleteBranchButton({ repo, row }: { repo: CodeRepoDetail; row: DeletedRow }) {
   const name = refName(row.ref).name;
   if (name === repo.default_branch) return null;
   return <DeleteBranch repo={repo} row={row} name={name} />;
@@ -159,7 +164,7 @@ function DeleteBranch({
   name,
 }: {
   repo: CodeRepoDetail;
-  row: CodeRefRow;
+  row: DeletedRow;
   name: string;
 }) {
   const write = useAct("code_delete_branch");
@@ -171,11 +176,12 @@ function DeleteBranch({
         write={write}
         size="small"
         variant="ghost"
-        blocked={branchDeleteHeld(repo, viewer)}
+        blocked={branchDeleteHeld(repo, viewer) ?? row.held}
         aria-label={`Delete ${name}`}
+        leadingIcon={<TrashGlyph size="sm" />}
         onPress={() => setConfirming(true)}
       >
-        Delete
+        <VisuallyHidden>Delete</VisuallyHidden>
       </WriteButton>
       <ConfirmModal
         open={confirming}
@@ -188,7 +194,7 @@ function DeleteBranch({
         submitting={write.busy}
         onConfirm={async () => {
           await write.run(
-            { repo: repo.name, branch: name, expected_head: row.oid ?? "" },
+            { repo: repo.name, branch: name, expected_head: row.oid },
             { done: `Deleted ${name}` },
           );
           setConfirming(false);

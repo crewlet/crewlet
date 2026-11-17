@@ -50,6 +50,7 @@ type codeWrites struct {
 	changes    []gitlet.ChangeProposal
 	converses  []gitlet.ConversationWrite
 	marks      []gitlet.MarkWrite
+	mark       func(w gitlet.MarkWrite) (gitlet.MarkResult, error)
 	checks     []gitlet.ChecksRequest
 	check      func(r gitlet.ChecksRequest) (gitlet.ChecksResult, error)
 	write      func(w gitlet.EngineWrite) (gitlet.EngineWriteResult, error)
@@ -211,11 +212,15 @@ func (c *codeWrites) checksAsked() []gitlet.ChecksRequest {
 	return slices.Clone(c.checks)
 }
 
-// Mark answers a person's mark as applied.
+// Mark answers a person's mark as applied, unless a case answers otherwise.
 func (c *codeWrites) Mark(_ context.Context, w gitlet.MarkWrite) (gitlet.MarkResult, error) {
 	c.mu.Lock()
 	c.marks = append(c.marks, w)
+	answer := c.mark
 	c.mu.Unlock()
+	if answer != nil {
+		return answer(w)
+	}
 	return gitlet.MarkResult{Outcome: statelog.OutcomeApplied, Position: codeAt(17)}, nil
 }
 

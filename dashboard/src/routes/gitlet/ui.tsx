@@ -1,7 +1,6 @@
 /**
  * The marks every Gitlet screen draws the same way: a commit's id, a branch,
- * who did something and when, what a directory entry is, and how a repository
- * is cloned; a check's verdict, a tag.
+ * who did something and when, what a directory entry is; a check's verdict, a tag.
  *
  * # Why they are one module
  *
@@ -19,7 +18,7 @@
 import "~/styles/gitlet.css";
 
 import type { ComponentType, ReactNode } from "react";
-import { Button, Copyable, InlineCode, Popover, Spinner, Tag } from "@crewlethq/ui";
+import { Copyable, Spinner, Tag, VisuallyHidden, type AvatarVerdict } from "@crewlethq/ui";
 import { ProductMark } from "@crewlethq/icons/product-mark";
 import {
   BookOpenGlyph,
@@ -83,10 +82,16 @@ const MARK_SIZE = { xs: 20, sm: 26, md: 32, text: "1.15em" } as const;
 export function Face({
   who,
   size = "xs",
+  verdict,
+  ring,
 }: {
   who: Who;
   /** A step, or `text`: a face inside a line of code or prose, sized by the words around it. */
   size?: "xs" | "sm" | "md" | "text";
+  /** A reviewer's verdict on the kit's corner, in a change's row alone. */
+  verdict?: AvatarVerdict | undefined;
+  /** The reader's own face. */
+  ring?: "brand" | undefined;
 }) {
   const badge = useSeatBadgeOf();
   if (typeof who !== "string") {
@@ -107,6 +112,8 @@ export function Face({
       size={size}
       kind={seat.kind === "human" ? "human" : "agent"}
       avatar={seat.avatar}
+      verdict={verdict}
+      ring={ring}
       decorative
     />
   );
@@ -171,6 +178,16 @@ export function entryKind(e: Pick<CodeTreeEntry, "mode">): string {
 /** The names a README goes by, the one a reader writes first first. */
 export const README_NAMES = ["readme.md", "readme.markdown", "readme", "readme.txt"];
 
+/** The names a licence goes by, in the order a root is searched for one. */
+export const LICENSE_NAMES = [
+  "license",
+  "license.md",
+  "license.txt",
+  "licence",
+  "licence.md",
+  "copying",
+];
+
 /** Prose a reader reads rather than runs: a README, a licence, a change log, a note. */
 const PROSE_FILE =
   /(^|\/)(readme|licen[cs]e|copying|changelog|notice|authors)(\.[^/]*)?$|\.(md|markdown|txt|rst|adoc)$/i;
@@ -199,53 +216,6 @@ export function EntryGlyph({ entry }: { entry: Pick<CodeTreeEntry, "mode" | "pat
     <FileTextGlyph size="sm" className="code-glyph" />
   ) : (
     <FileCodeGlyph size="sm" className="code-glyph" />
-  );
-}
-
-/**
- * The address a person clones a repository from: the API's own origin — the
- * one this dashboard is served from, since the engine serves `/git/` beside
- * it and never on the public listener — and `/git/{name}.git`.
- */
-export function cloneURL(repo: string, origin: string = location.origin): string {
-  return `${origin}/git/${repo}.git`;
-}
-
-/**
- * Clone: the repository's HTTPS address with its copy, and what git asks for
- * — the person's own token as the password, minted by `crewlet iam token
- * -login`, which `crewlet gitlet credential` hands git from the environment.
- * The clone is git's, from the reader's own machine: nothing here writes.
- */
-export function CloneButton({ repo }: { repo: string }) {
-  const url = cloneURL(repo);
-  return (
-    <Popover
-      label={`Clone ${repo}`}
-      align="end"
-      trigger={(open, toggle) => (
-        <Button size="small" variant="primary" aria-expanded={open} onClick={toggle}>
-          Clone
-        </Button>
-      )}
-    >
-      <div className="code-clone">
-        <p className="code-clone__head">Clone with HTTPS</p>
-        <Copyable
-          className="code-clone__url"
-          value={url}
-          variant="block"
-          monospace
-          ariaLabel={`Copy ${url}`}
-          title="Copy the address"
-        />
-        <p className="code-clone__note">
-          git asks for a password: give it your own token, which{" "}
-          <InlineCode>crewlet iam token -login</InlineCode> mints. To have git never ask, make{" "}
-          <InlineCode>crewlet gitlet credential</InlineCode> its credential helper.
-        </p>
-      </div>
-    </Popover>
   );
 }
 
@@ -283,7 +253,7 @@ export function RefName({ gitRef }: { gitRef: string }) {
 }
 
 /** Each rollup state's glyph and ink: a cross only for a failure, never for an absence. */
-const ROLLUP_LOOK: Readonly<
+export const ROLLUP_LOOK: Readonly<
   Record<string, { glyph: ComponentType<GlyphProps> | "spinner"; tone: string }>
 > = {
   passed: { glyph: CircleCheckGlyph, tone: "success" },
@@ -295,16 +265,18 @@ const ROLLUP_LOOK: Readonly<
 
 /**
  * Where a commit's checks stand: a glyph and a word, toned by the rollup's state.
- * `of` adds the required count to a pass: "Passed 2 of 2".
+ * `of` adds the required count to a pass: "Passed 2 of 2"; `bare` draws the glyph alone.
  */
 export function CheckRollupMark({
   rollup,
   title,
   of = false,
+  bare = false,
 }: {
   rollup: CodeCheckRollup;
   title: string;
   of?: boolean;
+  bare?: boolean;
 }) {
   const look = ROLLUP_LOOK[rollup.state];
   const Glyph = look?.glyph;
@@ -315,10 +287,14 @@ export function CheckRollupMark({
   return (
     <span className="code-check-mark" data-tone={look?.tone ?? "neutral"} title={title}>
       {Glyph === "spinner" ? <Spinner size="sm" /> : Glyph && <Glyph size="sm" aria-hidden />}
-      <span className="code-check-mark__word">
-        {rollupWord(rollup)}
-        {count}
-      </span>
+      {bare ? (
+        <VisuallyHidden>{rollupWord(rollup)}</VisuallyHidden>
+      ) : (
+        <span className="code-check-mark__word">
+          {rollupWord(rollup)}
+          {count}
+        </span>
+      )}
     </span>
   );
 }

@@ -2,7 +2,7 @@
  * The listings of changes and reviews a screen outside Gitlet mounts: a task's
  * changes, a seat's Code tab, My work's Reviews and Home's "Code waiting on a
  * person". Each is the engine's own listing over REST with the filter the
- * screen fixes, drawn in Gitlet › Changes' own grid.
+ * screen fixes, asked with its cards and drawn as Gitlet › Changes' own row.
  *
  * The invariants worth breaking a build over: a work item's listing names no
  * state (every state of the item, which the work item lets the engine walk);
@@ -12,7 +12,9 @@
  * usage counters for an agent and none for a person.
  */
 
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { Suspense } from "react";
+import { PeekHost, PeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { onTheRight } from "~/test/codeScreens.tsx";
 import type { ReactElement } from "react";
 import { afterEach, expect, test, vi } from "vitest";
@@ -68,6 +70,10 @@ function change(repo: string, number: number) {
     repo,
     ref: `${repo}!${number}`,
     access: "maintain",
+    open_findings: 0,
+    updated_at: "2026-10-28T10:00:00Z",
+    work_item: { backend: "native", id: "item-1", key: "ENG-1" },
+    card: { comments: 1, reviews: 0, changes_requested: 0 },
   };
 }
 
@@ -126,23 +132,30 @@ function mount(
 const codeAsks = (asked: URL[], what: string) =>
   asked.filter((u) => u.pathname === `/query/${what}`);
 
-// A WORK ITEM'S CHANGES ARE ASKED WITH NO STATE — the engine lists every state
-// of one work item, and refuses `state=all` — in Gitlet › Changes' own grid.
-// Mutation: send a state with the work item, or draw rows in another grid,
-// and this fails.
-test("a work item's listing names the item and no state, drawn in the Changes grid", async () => {
+// A WORK ITEM'S CHANGES ARE ASKED WITH NO STATE (the engine lists every state
+// of one work item, and refuses `state=all`), with their cards, as Gitlet's row.
+// Mutation: send a state with the work item, ask no cards, or name the item on its own tab.
+test("a work item's listing names the item and no state, asks its cards and draws Gitlet's row without the item", async () => {
   const asked = stubFetch((url) =>
     url.pathname === "/query/code_changes"
       ? { changes: [change("web", 42)], position: POSITION, level: "session" }
       : undefined,
   );
-  mount(<ChangeList params={{ work: "native:item-1" }} empty={{ title: "None", hint: "" }} />);
-
-  const grid = await screen.findByRole("table", { name: "Changes" });
-  expect(within(grid).getByText("web!42")).toBeTruthy();
+  mount(
+    <ChangeList
+      params={{ work: "native:item-1" }}
+      omit={["work"]}
+      empty={{ title: "None", hint: "" }}
+    />,
+  );
+  const list = await screen.findByRole("list", { name: "Changes" });
+  expect(within(list).getByRole("link", { name: "Change 42 of web" })).toBeTruthy();
+  expect(within(list).getByText("web!42")).toBeTruthy();
+  expect(within(list).queryByRole("link", { name: "ENG-1" })).toBeNull();
   const ask = codeAsks(asked, "code_changes")[0]!;
   expect(ask.searchParams.get("work")).toBe("native:item-1");
   expect(ask.searchParams.has("state")).toBe(false);
+  expect(ask.searchParams.get("cards")).toBe("true");
 });
 
 // A REVIEW ROW NAMES THE CHANGE IT JUDGED AND OPENS ITS PAGE, the verdict in
@@ -204,8 +217,45 @@ test("Home's card asks a seated reader's reviews and what waits on a person", as
   expect(needs).toContain("person");
   for (const u of codeAsks(asked, "code_changes")) {
     expect(u.searchParams.get("limit")).toBe("3");
+    expect(u.searchParams.get("cards")).toBe("true");
     expect(u.searchParams.has("reviewer")).toBe(false);
   }
+  // GITLET'S ROW, compact: the title a link, the state's glyph, the facts.
+  const mine = screen.getByRole("list", { name: "Asking your review" });
+  expect(within(mine).getByRole("link", { name: "Change 42 of web" })).toBeTruthy();
+  expect(within(mine).getByRole("img", { name: "Open" })).toBeTruthy();
+  expect(mine.querySelector(".code-change-facts")).not.toBeNull();
+  expect(mine.closest(".code-list--compact")).not.toBeNull();
+});
+
+// THE CARD PUBLISHES ONE PEEK ORDER: ] from the asked half's last row lands on the waiting
+// half's first. Mutation: let each half publish its own, and ] stops at the half's end.
+test("Home's card publishes one peek order across its halves", async () => {
+  stubFetch((url) =>
+    url.pathname === "/query/code_changes"
+      ? url.searchParams.get("needs") === "review"
+        ? { changes: [change("web", 42)], position: POSITION, level: "session" }
+        : { changes: [change("api", 7)], position: POSITION, level: "session" }
+      : undefined,
+  );
+  location.hash = "#/?peek=change:web!42";
+  await act(async () => {
+    mount(
+      <PeekNeighbours>
+        <CodeWaiting />
+        <Suspense fallback={null}>
+          <PeekHost />
+        </Suspense>
+      </PeekNeighbours>,
+    );
+  });
+  const first = await screen.findByRole("link", { name: "Change 42 of web" });
+  await screen.findByRole("link", { name: "Change 7 of api" });
+  act(() => first.focus());
+  await act(async () => {
+    fireEvent.keyDown(document.activeElement!, { key: "]" });
+  });
+  await waitFor(() => expect(decodeURIComponent(location.hash)).toContain("peek=change:api!7"));
 });
 
 test("Home's card asks a reader bound to no seat no review of its own, and says why", async () => {
@@ -349,12 +399,12 @@ const ACTIVITY = {
   ],
 };
 
-// A SEAT'S CODE TAB lists its open changes and the reviews it gave, and for
+// A SEAT'S CODE TAB lists its open changes on the owner's own index, and the reviews it gave, and for
 // an AGENT the three counters its usage days carry; a person's openings and
 // reviews count on no seat's day, so a human seat's tab asks none. Mutation:
-// ask the owner's changes in no state (refused), draw the counters for a
-// person, or read them from anything but `seat_activity`, and this fails.
-test("an agent seat's Code tab draws its open changes, its reviews and its code counters", async () => {
+// ask the owner's changes in no state (refused) or by their last move (a scan of the
+// company's), draw the counters for a person, or read them from anything but `seat_activity`.
+test("an agent seat's Code tab lists its open changes as Gitlet's rows, its reviews and its code counters", async () => {
   const asked = stubFetch((url) =>
     url.pathname === "/query/code_changes"
       ? { changes: [change("web", 42)], position: POSITION, level: "session" }
@@ -373,8 +423,30 @@ test("an agent seat's Code tab draws its open changes, its reviews and its code 
   const owned = codeAsks(asked, "code_changes")[0]!;
   expect(owned.searchParams.get("owner")).toBe("dev");
   expect(owned.searchParams.get("state")).toBe("open");
+  expect(owned.searchParams.has("sort")).toBe(false);
+  expect(owned.searchParams.get("cards")).toBe("true");
+  expect(screen.getByRole("list", { name: "Changes" })).toBeTruthy();
   expect(codeAsks(asked, "code_reviews")[0]!.searchParams.get("reviewer")).toBe("dev");
   expect(onSocket.some((q) => q.what === "seat_activity")).toBe(true);
+});
+
+// A SEAT'S LISTING IS FILLED PAST A PAGE THAT KEPT NOTHING before it says none.
+// Mutation: read the first page alone, and "No open change" stands over a change it never read.
+test("a seat's Code tab follows next past a page that kept nothing to its change", async () => {
+  const asked = stubFetch((url) => {
+    if (url.pathname === "/query/code_reviews") return { position: POSITION, level: "session" };
+    if (url.pathname !== "/query/code_changes") return undefined;
+    return url.searchParams.get("cursor") === "more"
+      ? { changes: [change("web", 42)], position: POSITION, level: "session" }
+      : { next: "more", position: POSITION, level: "session" };
+  });
+  mount(<SeatCode seat={seat("dev")} human />);
+  const list = await screen.findByRole("list", { name: "Changes" });
+  expect(within(list).getByRole("link", { name: "Change 42 of web" })).toBeTruthy();
+  expect(screen.queryByText("No open change")).toBeNull();
+  expect(codeAsks(asked, "code_changes").some((u) => u.searchParams.get("cursor") === "more")).toBe(
+    true,
+  );
 });
 
 test("a person's Code tab lists their changes and reviews and draws no counters", async () => {
@@ -391,19 +463,20 @@ test("a person's Code tab lists their changes and reviews and draws no counters"
   expect(onSocket.some((q) => q.what === "seat_activity")).toBe(false);
 });
 
-// A CHANGE'S STATE READS AS GITLET'S PILL WHEREVER ITS ROW IS LISTED, with its
-// glyph, and the listings' rows carry branch chips. Mutation: keep Home's
-// outlined Draft, and this fails.
-test("a change's state reads as Gitlet's pill wherever its row is listed", async () => {
+// A CHANGE'S STATE READS AS GITLET'S GLYPH WHEREVER ITS ROW IS LISTED, in the
+// state's ink, and its branches are chips. Mutation: draw Home's rows another way, and this fails.
+test("a change's state reads as Gitlet's glyph wherever its row is listed", async () => {
   const rows = (states: string[]) => states.map((state, i) => ({ ...change("web", i + 1), state }));
-  const pills = async (states: string[]) => {
+  const glyphs = async (states: string[]) => {
     for (const state of states) {
-      const pill = await waitFor(() => {
-        const found = document.querySelector<HTMLElement>(`.code-state[data-state="${state}"]`);
+      const glyph = await waitFor(() => {
+        const found = document.querySelector<HTMLElement>(
+          `.code-state-glyph[data-state="${state}"]`,
+        );
         expect(found, state).not.toBeNull();
         return found!;
       });
-      expect(pill.querySelector("svg"), state).not.toBeNull();
+      expect(glyph.querySelector("svg"), state).not.toBeNull();
     }
   };
   const listed = ["open", "draft", "merged"];
@@ -416,22 +489,18 @@ test("a change's state reads as Gitlet's pill wherever its row is listed", async
 
   stubFetch(answer(listed));
   mount(<ChangeList params={{ work: "native:item-1" }} empty={{ title: "None", hint: "" }} />);
-  await pills(listed);
-  expect(document.querySelectorAll(".code-change-cell__branches .code-branch-chip")).toHaveLength(
+  await glyphs(listed);
+  expect(document.querySelectorAll(".code-change-branches .code-branch-chip")).toHaveLength(
     listed.length * 2,
   );
   cleanup();
 
   stubFetch(answer(listed));
   mount(<SeatCode seat={seat("dev")} human={false} />, ADMIN_VIEWER, { seat_activity: ACTIVITY });
-  await pills(listed);
-  expect(document.querySelectorAll(".code-change-cell__branches .code-branch-chip")).toHaveLength(
-    listed.length * 2,
-  );
+  await glyphs(listed);
   cleanup();
 
   stubFetch(answer(["open", "draft"]));
   mount(<CodeWaiting />);
-  await pills(["open", "draft"]);
-  expect(document.querySelector(".crewlet-tag--outline")).toBeNull();
+  await glyphs(["open", "draft"]);
 });

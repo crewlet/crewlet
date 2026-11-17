@@ -96,7 +96,7 @@ import { describeFollowUp, detailItem, itemAddress, labelAfterKey } from "~/lib/
 import { changeLive } from "~/lib/code.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useLatestChecks } from "~/lib/useLatestChecks.ts";
-import { ChangeStateTag } from "../gitlet/Changes.tsx";
+import { ChangeStateTag } from "../gitlet/ChangeRow.tsx";
 import type {
   ArtifactInboxNotice,
   CodeChangeState,
@@ -114,6 +114,7 @@ import {
   answeredQuestion,
   answeredTexts,
   artifactCard,
+  artifactHeadline,
   artifactWords,
   askContext,
   askHeadline,
@@ -146,6 +147,7 @@ import {
 import { Badge } from "./InboxColumn.tsx";
 import { NoticeActions } from "./NoticeActions.tsx";
 import { TaskLink } from "./TaskLink.tsx";
+import { ArtifactLink, artifactHref } from "~/components/ArtifactLink.tsx";
 import { Thread, type ThreadOf } from "./Thread.tsx";
 import { questionWithheld } from "~/lib/access.ts";
 
@@ -550,7 +552,15 @@ function ArtifactNoticePane({
     <>
       {frame.byline(
         <>
-          <strong>{frame.name}</strong> on <strong>{notice.title || "an artifact"}</strong>
+          <strong>{frame.name}</strong> on{" "}
+          <ArtifactLink
+            id={notice.artifact}
+            known={artifactHeadline(notice)}
+            to={artifactHref(notice.artifact)}
+            words={notice.title || "an artifact"}
+            fallback={<strong>{notice.title || "an artifact"}</strong>}
+            quiet
+          />
         </>,
         card.why,
       )}

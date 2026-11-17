@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -638,6 +639,25 @@ func (f leafFleet) links(t *testing.T) map[string]uint64 {
 	return ids
 }
 
+// carries reports whether the leaf's link in account carries the member's
+// interest in subject. A link the leaf lists has connected, but the member's
+// subscriptions cross it after that, so a request sent the moment the link is
+// listed can find no responders: a relinked account is up for a request only
+// once its link carries the interest the request needs.
+func (f leafFleet) carries(t *testing.T, account, subject string) bool {
+	t.Helper()
+	leafz, err := f.leaf.Leafz(&server.LeafzOptions{Subscriptions: true, Account: account})
+	if err != nil {
+		t.Fatalf("read the leaf's links in %s: %v", account, err)
+	}
+	for _, l := range leafz.Leafs {
+		if l.Account == account && slices.Contains(l.Subs, subject) {
+			return true
+		}
+	}
+	return false
+}
+
 // answers fails the case unless a request from the leaf's client in account
 // is answered across the link.
 func (f leafFleet) answers(t *testing.T, account string) {
@@ -714,9 +734,9 @@ func TestALinkCutsOneLeafAccountAndCarriesTheOther(t *testing.T) {
 			}
 			f.answers(t, leases)
 			f.link.Mend(server.DEFAULT_GLOBAL_ACCOUNT)
-			eventually(t, "the mended account linked again", func() bool {
+			eventually(t, "the mended account linked again, carrying the member's interest", func() bool {
 				_, up := f.links(t)[server.DEFAULT_GLOBAL_ACCOUNT]
-				return up
+				return up && f.carries(t, server.DEFAULT_GLOBAL_ACCOUNT, "echo")
 			})
 			f.answers(t, server.DEFAULT_GLOBAL_ACCOUNT)
 		})
@@ -735,9 +755,10 @@ func TestADroppedAccountsLinkDialsAgainAndTheOtherStays(t *testing.T) {
 			f := newLeafFleet(t, kind.open, server.CompressionS2Auto)
 			before := f.links(t)
 			f.link.Drop(server.DEFAULT_GLOBAL_ACCOUNT)
-			eventually(t, "the dropped account linked again", func() bool {
+			eventually(t, "the dropped account linked again, carrying the member's interest", func() bool {
 				id, up := f.links(t)[server.DEFAULT_GLOBAL_ACCOUNT]
-				return up && id != before[server.DEFAULT_GLOBAL_ACCOUNT]
+				return up && id != before[server.DEFAULT_GLOBAL_ACCOUNT] &&
+					f.carries(t, server.DEFAULT_GLOBAL_ACCOUNT, "echo")
 			})
 			if got, want := f.links(t)[leases], before[leases]; got != want {
 				t.Fatalf("the %s link is connection %d after the drop, want %d: dropped with the other account",

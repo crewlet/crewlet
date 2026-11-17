@@ -56,6 +56,9 @@ export function isRepoPrefix(prefix: string): boolean {
   return isRepoName(prefix) || isRepoName(`${prefix}0`);
 }
 
+/** How many days the push history keeps who moved a ref (`gitlet.PushHistory`). */
+export const PUSH_HISTORY_DAYS = 181;
+
 /**
  * How many digits of an object id a reader is shown: SEVEN, git's own default
  * abbreviation (`core.abbrev`) and the fewest an abbreviated id the engine

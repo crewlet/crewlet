@@ -803,14 +803,7 @@ func (s *CoordStore) StandDown(ctx context.Context, turnID string, standby Sessi
 		return false, err
 	}
 	_, won, _, err := s.writeFound(ctx, turnID, false, Fence{}, func(run *PendingRun) bool {
-		newest := run.Capture
-		if newest == nil || !newest.standsBy(standby) {
-			return false
-		}
-		withdrawn := *newest
-		withdrawn.StandbyTaker, withdrawn.StandbyTakerEpoch, withdrawn.StandbyAt = "", 0, time.Time{}
-		run.Capture = &withdrawn
-		return true
+		return standDownOnto(run, standby)
 	})
 	if err != nil {
 		return false, err

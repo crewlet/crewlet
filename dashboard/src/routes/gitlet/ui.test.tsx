@@ -12,7 +12,8 @@ import { afterEach, expect, test } from "vitest";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, type CodeCheckRollup } from "~/protocol/index.ts";
 import { CODE_ORG } from "~/test/codeScreens.tsx";
-import { ChangeRefPill } from "./Changes.tsx";
+import { ChangeRefPill } from "./ChangeRow.tsx";
+import { gitletWrote } from "./repo/History.tsx";
 import { CheckRollupMark, Face, GITLET, TagChip, useWhoName } from "./ui.tsx";
 
 afterEach(cleanup);
@@ -84,6 +85,38 @@ test("a check's verdict draws a cross only for a failure, and the ring while run
   expect(marks.filter((m) => m.querySelector("svg")?.innerHTML === cross)).toEqual([marks[4]]);
   expect(marks[3]!.querySelector(".crewlet-spinner")).toBeTruthy();
   expect(marks[4]!.getAttribute("title")).toBe("3 checks");
+});
+
+// A BARE VERDICT is the glyph alone, its word what a screen reader says. Mutation: drop the word.
+test("a bare verdict draws its glyph and says its word only to a screen reader", () => {
+  const { container } = mount(
+    <CheckRollupMark rollup={rollup("passed")} title="unit passed" bare />,
+  );
+  const mark = container.querySelector<HTMLElement>(".code-check-mark")!;
+  expect(mark.querySelector("svg")).toBeTruthy();
+  expect(mark.querySelector(".code-check-mark__word")).toBeNull();
+  expect(mark.textContent).toBe("Passed");
+  expect(mark.getAttribute("title")).toBe("unit passed");
+});
+
+// GITLET WROTE A MERGE its push names, or one its marks name as a landing's merge commit.
+// Mutation: drop the marks' half.
+test("Gitlet wrote a two-parent merge its push or its landing names, and nothing else", () => {
+  const merge = {
+    oid: "c".repeat(40),
+    parent_count: 2,
+    engine_committed: true,
+    authored_at: "",
+    committed_at: "",
+  };
+  const landed = {
+    commit: merge.oid,
+    merged: [{ repo: "web", ref: "web!41", title: "", state: "merged", merge_oid: merge.oid }],
+  };
+  expect(gitletWrote(merge, undefined, landed)).toBe(true);
+  expect(gitletWrote(merge, undefined, { commit: merge.oid, merged: [] })).toBe(false);
+  expect(gitletWrote({ ...merge, parent_count: 1 }, undefined, landed)).toBe(false);
+  expect(gitletWrote({ ...merge, engine_committed: false }, undefined, landed)).toBe(false);
 });
 
 // A TAG OPENS ITS WHOLE REF, which no branch of its name can shadow; a change's pill opens

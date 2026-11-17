@@ -271,6 +271,7 @@ describe("a comment on an artifact", () => {
   test("says what its author did to the artifact, and the remark as plain words", () => {
     expect(artifactWords(artifactExtra("a-1"))).toEqual({
       did: "commented on Q3 plan",
+      on: "commented on",
       heading: "Commented",
       excerpt: "The Q3 numbers look off",
     });
@@ -279,10 +280,12 @@ describe("a comment on an artifact", () => {
     expect(did("comment_reply").did).toBe("commented on Q3 plan");
     expect(did("comment_resolve")).toEqual({
       did: "resolved a comment on Q3 plan",
+      on: "resolved a comment on",
       heading: "Resolved a comment",
     });
     expect(did("comment_reopen")).toEqual({
       did: "reopened a comment on Q3 plan",
+      on: "reopened a comment on",
       heading: "Reopened a comment",
     });
   });

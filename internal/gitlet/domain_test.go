@@ -109,19 +109,25 @@ func covers(path, other string) bool {
 // A SCOPE PATH NESTS SO A DEFERRAL COVERS WHAT IT CONTAINS: a record deferred
 // on the domain blocks every repository, one deferred on a repository blocks
 // that repository and no other, and a name's claim and the activation fence
-// are beside the repositories rather than over them.
+// are beside the repositories rather than over them. A person's viewed marks
+// are beside their inbox's marks, so a build holding back a viewed record
+// holds back none of their inbox.
+//
+// Mutation: put ViewedPath under PersonPath, red.
 func TestAScopePathNestsSoADeferralCoversWhatItContains(t *testing.T) {
 	t.Parallel()
 	repo, neighbour := gitlet.RepoPath("repo-a"), gitlet.RepoPath("repo-b")
 	name := gitlet.NamePath(gitlet.NameToken("app"))
-	for _, path := range []string{repo, neighbour, name, gitlet.ActivationPath()} {
+	inbox, viewed := gitlet.PersonPath("founder"), gitlet.ViewedPath("founder")
+	for _, path := range []string{repo, neighbour, name, gitlet.ActivationPath(), inbox, viewed} {
 		if !covers(gitlet.DomainPath(), path) {
 			t.Fatalf("%q is outside the domain's path %q, so a record whose scope could "+
 				"not be read would not cover it", path, gitlet.DomainPath())
 		}
 	}
 	for _, pair := range [][2]string{{repo, neighbour}, {neighbour, repo}, {name, repo},
-		{repo, name}, {gitlet.ActivationPath(), repo}, {repo, gitlet.ActivationPath()}} {
+		{repo, name}, {gitlet.ActivationPath(), repo}, {repo, gitlet.ActivationPath()}, {inbox, viewed},
+		{viewed, inbox}} {
 		if covers(pair[0], pair[1]) {
 			t.Fatalf("a deferral on %q covers %q — one stuck record would block "+
 				"objects it never touches", pair[0], pair[1])

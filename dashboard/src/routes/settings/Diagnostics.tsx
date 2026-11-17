@@ -371,6 +371,7 @@ function ReportsList({ answer }: { answer: IssueReportsAnswer }) {
           <CodeBlock
             plain
             selectable
+            language="json"
             label="The report, exactly as sent"
             code={pretty(opened.payload)}
           />
@@ -405,7 +406,13 @@ function KeptReport({ payload }: { payload: unknown }) {
           Report privately on GitHub
         </Link>
       </div>
-      <CodeBlock plain selectable label="The report, as it was kept" code={pretty(payload)} />
+      <CodeBlock
+        plain
+        selectable
+        language="json"
+        label="The report, as it was kept"
+        code={pretty(payload)}
+      />
     </div>
   );
 }
@@ -432,6 +439,7 @@ function ReportPreview({ answer }: { answer: IssueReportsAnswer }) {
               <CodeBlock
                 plain
                 selectable
+                language="json"
                 label={`Sample report: ${preview.title}`}
                 code={pretty(preview.payload)}
               />

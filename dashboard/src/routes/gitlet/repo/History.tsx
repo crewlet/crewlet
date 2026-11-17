@@ -1,17 +1,7 @@
 /**
- * A repository's branches, its tags and its history, drawn as a code host
- * draws them: a branch as its chip and its marks; the history by the day each
+ * A repository's history, drawn as a code host draws it: by the day each
  * commit was written, each commit its subject, who wrote it and when, who
  * pushed it and for which work item, and its id with its copy.
- *
- * BRANCHES are the engine's listing of its live refs under `refs/heads/`
- * (`code_refs`), in name order a page at a time — the rows, read at the tab's
- * floor, never git's — each opening its files. TAGS are the same listing
- * under `refs/tags/`, below them, each opening its files at the tag.
- *
- * The tab makes a branch (New branch), and each row deletes its own or opens
- * a protection rule on it (`BranchWrites.tsx`, `Protect.tsx`), every one held
- * with its reason. A branch a rule names already leads to that rule instead.
  *
  * THE HISTORY is git's (`code_log`): the commits that changed the path, or any
  * path, newest first from the revision, a page at a time, each with the push
@@ -31,18 +21,8 @@
  */
 
 import { Fragment, useMemo, type ReactNode } from "react";
+import { AvatarStack, Button, IconButtonLink, Input, Select, Skeleton } from "@crewlethq/ui";
 import {
-  AvatarStack,
-  Button,
-  IconButtonLink,
-  Input,
-  Select,
-  Skeleton,
-  Tag,
-  VisuallyHidden,
-} from "@crewlethq/ui";
-import {
-  BookmarkGlyph,
   BotGlyph,
   CodeGlyph,
   GitCommitVerticalGlyph,
@@ -51,11 +31,10 @@ import {
   UploadGlyph,
   CalendarGlyph,
 } from "@crewlethq/icons/glyphs";
-import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { href, useDraft, useNavigator, useParam } from "~/app/router.tsx";
-import { PageFailed, QueryState } from "~/components/common.tsx";
+import { QueryState } from "~/components/common.tsx";
 import { useClock, useNow } from "~/lib/clock.ts";
-import { changePath, noDefaultHead, parseChangeRef, refName, shortOID } from "~/lib/code.ts";
+import { changePath, noDefaultHead, parseChangeRef, shortOID } from "~/lib/code.ts";
 import { ago } from "~/lib/ago.ts";
 import { CHECK_HISTORY_DAYS, rollupFor, rollupTitle } from "~/lib/checks.ts";
 import { civilAt, civilKey, fmtDate, fmtDateTime, plural, readerDay } from "~/lib/format.ts";
@@ -72,247 +51,16 @@ import type {
   CodeGitAnswer,
   CodeLogCommit,
   CodePushedBy,
-  CodeRefRow,
-  CodeRefsAnswer,
   CodeRepoDetail,
 } from "~/protocol/index.ts";
 import { CodeList, useDayGroups, type ListDay } from "../CodeList.tsx";
-import { commitHref, compareHref, repoHref } from "../paths.ts";
-import { ChangeRefPill } from "../Changes.tsx";
-import {
-  BranchChip,
-  CheckRollupMark,
-  Face,
-  GITLET,
-  ShaChip,
-  TagChip,
-  useWhoName,
-  type Who,
-} from "../ui.tsx";
-import { useCommitMarks, type MarksFailure } from "./marks.ts";
-import { DeleteBranchButton, NewBranchButton } from "./BranchWrites.tsx";
-import { ProtectButton } from "./Protect.tsx";
-import { RefPicker, revisionWord, type Revisions } from "./refs.tsx";
+import { commitHref, repoHref } from "../paths.ts";
+import { ChangeRefPill } from "../ChangeRow.tsx";
+import { CheckRollupMark, Face, GITLET, ShaChip, TagChip, useWhoName, type Who } from "../ui.tsx";
+import { REFUSED_CODES, useCommitMarks, type MarksFailure } from "./marks.ts";
+import { RefPicker, revisionWord } from "./refs.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import "~/styles/gitlet.css";
-
-/** Where a repository's tags are listed (`gitlet.ReadQuery.Prefix`). */
-const TAG_PREFIX = "refs/tags/";
-
-/** The repository's branches, the default first in name order as the engine lists them, each opening its files. */
-export function Branches({ repo }: { repo: CodeRepoDetail }) {
-  const params = useMemo(() => ({ name: repo.name }), [repo.name]);
-  const first = useCodeQuery("code_refs", params);
-  const paged = usePaged(
-    first,
-    params,
-    (cursor) => codeRest.query("code_refs", { ...params, cursor }),
-    (a: CodeRefsAnswer) => a.refs ?? [],
-    (r: CodeRefRow) => r.ref,
-    (a: CodeRefsAnswer) => a.next ?? "",
-  );
-  const rows = paged.items;
-  // THE REFS A RULE NAMES EXACTLY, a branch's own rule; a glob's is drawn in
-  // Settings beside the refs it matches.
-  const protectedRefs = useMemo(
-    () => new Set((repo.protections ?? []).map((p) => p.pattern)),
-    [repo.protections],
-  );
-  return (
-    <>
-      <PageToolbar>
-        <NewBranchButton repo={repo} />
-      </PageToolbar>
-      {paged.loading && rows.length === 0 && (
-        <Skeleton variant="text" rows={6} label={`Loading the branches of ${repo.name}`} />
-      )}
-      <QueryState
-        error={paged.error}
-        refusal={paged.refusal}
-        detail={first.detail}
-        loading={paged.loading}
-        empty={
-          rows.length > 0 || paged.more
-            ? undefined
-            : {
-                title: "No branch yet",
-                hint: "A branch is listed once a push that creates it applies.",
-              }
-        }
-      >
-        <DataGrid<CodeRefRow>
-          rows={rows}
-          rowKey={(r) => r.ref}
-          // THE ENGINE'S ORDER, by name.
-          serverSorted
-          rowHref={(r) => repoHref(repo.name, { ref: branchRev(repo, r) })}
-          onLoadMore={paged.more ? paged.next : undefined}
-          loadedNote={
-            paged.more ? `${plural(rows.length, "branch", "branches")} loaded` : undefined
-          }
-          aria-label={`Branches of ${repo.name}`}
-          columns={[
-            {
-              key: "name",
-              header: "Branch",
-              floor: "12rem",
-              phoneLead: true,
-              cell: (r) => (
-                <span className="code-ref">
-                  <BranchChip name={refName(r.ref).name} />
-                  {refName(r.ref).name === repo.default_branch && (
-                    <Tag appearance="outline">default</Tag>
-                  )}
-                  {protectedRefs.has(r.ref) && <Tag appearance="outline">protected</Tag>}
-                </span>
-              ),
-            },
-            {
-              // A VALUE, not a row action, so a phone names it on a line of its own.
-              key: "head",
-              header: "Head",
-              shrink: true,
-              cell: (r) => (r.oid ? <ShaChip oid={r.oid} /> : null),
-            },
-            {
-              key: "history",
-              header: "History",
-              shrink: true,
-              drop: 1,
-              cell: (r) => (
-                <a
-                  className="t-link"
-                  href={repoHref(repo.name, { tab: "commits", ref: branchRev(repo, r) })}
-                >
-                  Commits →
-                </a>
-              ),
-            },
-            {
-              key: "compare",
-              header: "Compare",
-              shrink: true,
-              drop: 2,
-              // WITH THE DEFAULT BRANCH, which a branch is proposed into
-              // unless a change names another; nothing for the default
-              // branch itself, which compares with nothing here.
-              cell: (r) =>
-                branchRev(repo, r) ? (
-                  <a className="t-link" href={compareHref(repo.name, { head: branchRev(repo, r) })}>
-                    Compare →
-                  </a>
-                ) : null,
-            },
-            {
-              key: "actions",
-              header: <VisuallyHidden>Actions</VisuallyHidden>,
-              action: true,
-              shrink: true,
-              // A RULE ON THIS BRANCH ALONE, and its delete at the head this
-              // row shows. A branch a rule names already is edited where its
-              // rule is drawn whole, gate and all (Settings): a new-rule form
-              // opened here would start from the engine's defaults rather
-              // than from what the rule holds.
-              cell: (r) => (
-                <span className="row gap-1 nowrap">
-                  {protectedRefs.has(r.ref) ? (
-                    <a className="t-link" href={repoHref(repo.name, { tab: "settings" })}>
-                      Protection →
-                    </a>
-                  ) : (
-                    <ProtectButton repo={repo} pattern={r.ref} label="Protect" />
-                  )}
-                  <DeleteBranchButton repo={repo} row={r} />
-                </span>
-              ),
-            },
-          ]}
-        />
-      </QueryState>
-      {paged.pageError && <PageFailed error={paged.pageError} />}
-      <Tags repo={repo} />
-    </>
-  );
-}
-
-/**
- * The repository's tags, under its branches: the engine's listing under
- * `refs/tags/`, by name a page at a time, each opening its files at the tag —
- * named by its whole ref, which no branch of the same name can shadow.
- */
-function Tags({ repo }: { repo: CodeRepoDetail }) {
-  const params = useMemo(() => ({ name: repo.name, prefix: TAG_PREFIX }), [repo.name]);
-  const first = useCodeQuery("code_refs", params);
-  const paged = usePaged(
-    first,
-    params,
-    (cursor) => codeRest.query("code_refs", { ...params, cursor }),
-    (a: CodeRefsAnswer) => a.refs ?? [],
-    (r: CodeRefRow) => r.ref,
-    (a: CodeRefsAnswer) => a.next ?? "",
-  );
-  const rows = paged.items;
-  return (
-    <section className="code-section" aria-labelledby="code-tags-title">
-      <h2 id="code-tags-title" className="code-section__title">
-        Tags
-      </h2>
-      {paged.loading && rows.length === 0 && (
-        <Skeleton variant="text" rows={3} label={`Loading the tags of ${repo.name}`} />
-      )}
-      <QueryState
-        error={paged.error}
-        refusal={paged.refusal}
-        detail={first.detail}
-        loading={paged.loading}
-        empty={
-          rows.length > 0 || paged.more
-            ? undefined
-            : { title: "No tag yet", hint: "A tag is listed once a push that creates it applies." }
-        }
-      >
-        <DataGrid<CodeRefRow>
-          name="tags"
-          rows={rows}
-          rowKey={(r) => r.ref}
-          serverSorted
-          rowHref={(r) => repoHref(repo.name, { ref: r.ref })}
-          onLoadMore={paged.more ? paged.next : undefined}
-          loadedNote={paged.more ? `${plural(rows.length, "tag")} loaded` : undefined}
-          aria-label={`Tags of ${repo.name}`}
-          columns={[
-            {
-              key: "name",
-              header: "Tag",
-              floor: "12rem",
-              phoneLead: true,
-              cell: (r) => (
-                <span className="code-ref">
-                  <BookmarkGlyph size="sm" className="code-glyph" />
-                  <span className="code-ref__name">{refName(r.ref).name}</span>
-                </span>
-              ),
-            },
-            {
-              key: "commit",
-              header: "Commit",
-              shrink: true,
-              action: true,
-              cell: (r) => (r.oid ? <ShaChip oid={r.oid} /> : null),
-            },
-          ]}
-        />
-      </QueryState>
-      {paged.pageError && <PageFailed error={paged.pageError} />}
-    </section>
-  );
-}
-
-/** A branch as an address names it: none for the default branch, its name for any other. */
-function branchRev(repo: CodeRepoDetail, r: CodeRefRow): string {
-  const name = refName(r.ref).name;
-  return name === repo.default_branch ? "" : name;
-}
 
 /** How a commit reached its branch, as its chip says it: a glyph and its words. */
 export interface Provenance {
@@ -360,23 +108,32 @@ export function provenanceOf(
 /** How many parents a commit has, or null where the page says neither. */
 const parentsOf = (c: CodeLogCommit): number | null => c.parent_count ?? c.parents?.length ?? null;
 
+/** The landing whose merge commit this is, as the commit's marks name it. */
+const landingOf = (c: CodeLogCommit, mark: CodeCommitMark | null | undefined) =>
+  mark?.merged?.find((m) => m.merge_oid === c.oid);
+
 /** Gitlet wrote this merge commit: two parents or more, brought by a merge or a queue landing. */
-export function gitletWrote(c: CodeLogCommit, by: CodePushedBy | undefined): boolean {
-  const merged = by?.via === "merge" || by?.via === "queue";
+export function gitletWrote(
+  c: CodeLogCommit,
+  by: CodePushedBy | undefined,
+  mark?: CodeCommitMark | null,
+): boolean {
+  const merged = by?.via === "merge" || by?.via === "queue" || landingOf(c, mark) !== undefined;
   return merged && (parentsOf(c) ?? 0) >= 2 && c.engine_committed !== false;
 }
 
 /** The merge chip's title: which change Gitlet merged or landed, and for whom. */
-function mergeTitle(
+export function mergeTitle(
   c: CodeLogCommit,
-  by: CodePushedBy,
+  by: CodePushedBy | undefined,
   mark: CodeCommitMark | null | undefined,
   whoName: (who: Who) => string,
 ): string {
-  const pusher = by.principal.seat ?? by.principal.operator_id ?? "";
+  const landing = landingOf(c, mark);
+  const pusher = by?.principal.seat ?? by?.principal.operator_id ?? landing?.merged_by ?? "";
   const who = pusher ? whoName(pusher) : "a person";
   const change = mark?.merged?.[0]?.ref ?? mark?.heads?.[0]?.change.ref ?? "a change";
-  if (by.via === "queue") {
+  if ((by?.via ?? (landing?.merged_via === "queue" ? "queue" : "merge")) === "queue") {
     return `Gitlet wrote this commit when ${change} landed from the merge queue, queued by ${who}`;
   }
   const what = (parentsOf(c) ?? 0) >= 2 ? "merge commit" : "commit";
@@ -533,9 +290,6 @@ function MarksNote({ failed, retry }: { failed: MarksFailure; retry: () => void 
   );
 }
 
-/** The refusals a retry does not change: the engine said no, or this fleet answers no marks yet. */
-const REFUSED_CODES = new Set(["unavailable", "bad_params", "not_found", "unauthorized"]);
-
 /** The commit's files, browsed at it. */
 function BrowseAt({ repo, oid }: { repo: string; oid: string }) {
   return (
@@ -639,10 +393,9 @@ function MessageSearch({ q }: { q: string }) {
 
 /**
  * The history at the revision, of the path the address names or of every
- * path, newest first. Its picker lists the branches and tags its page read
- * once ([useRevisions]).
+ * path, newest first.
  */
-export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: Revisions }) {
+export function Commits({ repo }: { repo: CodeRepoDetail }) {
   const now = useNow();
   const [rev, setRev] = useParam("ref", "", "filter");
   const [path, setPath] = useParam("path", "", "filter");
@@ -727,7 +480,7 @@ export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: 
     ) : (
       <>
         <PageToolbar>
-          <RefPicker repo={repo} revisions={revisions} value={rev} onChoose={setRev} />
+          <RefPicker repo={repo} value={rev} onChoose={setRev} />
         </PageToolbar>
         <p className="muted">{noDefaultHead(repo)}</p>
       </>
@@ -736,7 +489,7 @@ export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: 
   return (
     <>
       <PageToolbar>
-        <RefPicker repo={repo} revisions={revisions} value={rev} onChoose={setRev} />
+        <RefPicker repo={repo} value={rev} onChoose={setRev} />
         <Select
           size="sm"
           width="auto"

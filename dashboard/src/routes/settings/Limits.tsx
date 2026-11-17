@@ -48,7 +48,8 @@
  */
 
 import { Card, EmptyState, PageNote, SettingsTable } from "@crewlethq/ui";
-import { GaugeGlyph } from "@crewlethq/icons/glyphs";
+import { BellGlyph, CalendarClockGlyph, GaugeGlyph, NetworkGlyph } from "@crewlethq/icons/glyphs";
+import type { ReactNode } from "react";
 import { QueryState } from "~/components/common.tsx";
 import { LimitSetting } from "~/components/LimitSetting.tsx";
 import type { LimitRow } from "~/lib/limits.ts";
@@ -62,13 +63,18 @@ import { useQuery } from "~/lib/useQuery.ts";
 type PageGroup = "turn" | "delegation" | "notifications" | "schedules";
 
 /** Each group's heading, in the engine's drawing order. */
-const LIMIT_GROUPS: Readonly<Record<PageGroup, { title: string; note?: string }>> = {
-  turn: { title: "Guardrails on every turn" },
-  delegation: { title: "Delegation" },
-  notifications: { title: "Notifications" },
-  // The one cap a schedule overrides, said once over its row.
-  schedules: { title: "Schedules", note: "A schedule can set its own limit" },
-};
+const LIMIT_GROUPS: Readonly<Record<PageGroup, { title: string; note?: string; icon: ReactNode }>> =
+  {
+    turn: { title: "Guardrails on every turn", icon: <GaugeGlyph size="sm" /> },
+    delegation: { title: "Delegation", icon: <NetworkGlyph size="sm" /> },
+    notifications: { title: "Notifications", icon: <BellGlyph size="sm" /> },
+    // The one cap a schedule overrides, said once over its row.
+    schedules: {
+      title: "Schedules",
+      note: "A schedule can set its own limit",
+      icon: <CalendarClockGlyph size="sm" />,
+    },
+  };
 
 /**
  * What each cap is called, by its key in the company document. Words only: a
@@ -134,13 +140,13 @@ function LimitGroupCard({
   caps: LimitRow[];
   onApplied: () => void;
 }) {
-  const { title, note } = LIMIT_GROUPS[group];
+  const { title, note, icon } = LIMIT_GROUPS[group];
   const titleID = `limits-${group}`;
   return (
     // FLUSH, so the table's row rules reach the card's edges under the
     // head's own rule rather than stopping at a body's inset.
     <Card padding="none">
-      <Card.Header subtitle={note}>
+      <Card.Header icon={icon} count={caps.length} subtitle={note}>
         <Card.Title id={titleID}>{title}</Card.Title>
       </Card.Header>
       <SettingsTable aria-labelledby={titleID}>

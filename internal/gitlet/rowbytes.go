@@ -345,10 +345,14 @@ func (r CheckRow) encodedBytes() int {
 		key, value string
 	}{
 		{"candidate_id", r.CandidateID}, {"entry_id", r.EntryID}, {"base", r.Base}, {"defs_oid", r.DefsOID},
+		{"source_ref", r.SourceRef}, {"change_head", r.ChangeHead},
 	} {
 		if s.value != "" {
 			n += field(s.key, stringBytes(s.value), false)
 		}
+	}
+	if r.Change != nil {
+		n += field("change", r.Change.encodedBytes(), false)
 	}
 	if r.Required {
 		n += field("required", trueBytes, false)
@@ -928,6 +932,19 @@ func (f ReviewerFace) encodedBytes() int {
 	if f.Reason != "" {
 		n += field("reason", stringBytes(string(f.Reason)), false)
 	}
+	return n + ownedPathsBytes(f.OwnedPaths, f.OwnedPathsOmitted)
+}
+
+// ownedPathsBytes is the length of an ask's globs and their count as a row or a face encodes them,
+// each where set, neither first.
+func ownedPathsBytes(paths []string, omitted int) int {
+	n := 0
+	if len(paths) > 0 {
+		n += field("owned_paths", stringsBytes(paths), false)
+	}
+	if omitted != 0 {
+		n += field("owned_paths_omitted", intBytes(int64(omitted)), false)
+	}
 	return n
 }
 
@@ -1085,7 +1102,11 @@ func (f RevisionFactsRow) encodedBytes() int {
 	if !f.Classes.IsZero() {
 		n += field("classes", f.Classes.encodedBytes(), false)
 	}
-	n += field("node", stringBytes(f.Node), false) + field("owners_digest", stringBytes(f.OwnersDigest), false)
+	n += field("node", stringBytes(f.Node), false)
+	if !f.MeasuredAt.IsZero() {
+		n += field("measured_at", timeBytes(f.MeasuredAt), false)
+	}
+	n += field("owners_digest", stringBytes(f.OwnersDigest), false)
 	if len(f.RequestedOwners) > 0 {
 		owners := 2
 		for i, o := range f.RequestedOwners {
@@ -1147,7 +1168,7 @@ func (r ReviewerRow) encodedBytes() int {
 	if !r.At.IsZero() {
 		n += field("at", timeBytes(r.At), false)
 	}
-	return n
+	return n + ownedPathsBytes(r.OwnedPaths, r.OwnedPathsOmitted)
 }
 
 // encodedBytes is the length of the comment's JSON encoding.
@@ -1307,6 +1328,12 @@ func (p FindingPathRow) encodedBytes() int {
 		field("findings", intBytes(p.Findings), false)
 }
 
+// encodedBytes is the length of the mark's JSON encoding.
+func (r ViewedRow) encodedBytes() int {
+	return 2 + field("path_digest", stringBytes(r.PathDigest), true) +
+		field("file_digest", stringBytes(r.FileDigest), false) + field("at", timeBytes(r.At), false)
+}
+
 // encodedBytes is the length of the anchor's JSON encoding.
 func (a CommentAnchor) encodedBytes() int {
 	return 2 + field("revision", intBytes(a.Revision), true) +
@@ -1370,6 +1397,18 @@ func (n CommandCounts) encodedBytes() int {
 	return size
 }
 
+// changeBytes is what the row's change and its count add to its encoding: none where it names no change.
+func (row PushRow) changeBytes() int {
+	n := 0
+	if row.Change != nil {
+		n += field("change", row.Change.encodedBytes(), false)
+	}
+	if row.ChangesMore != 0 {
+		n += field("changes_more", intBytes(int64(row.ChangesMore)), false)
+	}
+	return n
+}
+
 // encodedBytes is the length of the push row's JSON encoding, given the
 // length of its commands' encoding — which a row read from the store has
 // already, as the column it was decoded from: the stored commands ARE
@@ -1396,6 +1435,7 @@ func (row PushRow) encodedBytes(commands int) int {
 		n += field("atomic", trueBytes, false)
 	}
 	n += field("commands", commands, false)
+	n += row.changeBytes()
 	if row.Omitted != (CommandCounts{}) {
 		n += field("omitted", row.Omitted.encodedBytes(), false)
 	}
@@ -1410,6 +1450,9 @@ func (row PushRow) encodedBytes(commands int) int {
 	}
 	if row.IntroducedCount != 0 {
 		n += field("introduced_count", intBytes(int64(row.IntroducedCount)), false)
+	}
+	if row.Offered != 0 {
+		n += field("offered", intBytes(int64(row.Offered)), false)
 	}
 	return n + field("received_at", timeBytes(row.ReceivedAt), false)
 }

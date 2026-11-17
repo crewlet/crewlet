@@ -242,31 +242,39 @@ func runsOf(key, piece string, runBytes int) string {
 // its length, 47 to 75 times what [Secrets] costs over 32 KiB in lines of 256
 // bytes. So the whole text is read once ([valueHolds]).
 //
-// A COMPARISON ACROSS SIZES, NOT ACROSS FUNCTIONS: Settled over 32 KiB against
-// eight times Settled over 4 KiB of the same lines, compared by
-// [withinFactor] as the tests above are. This used to compare
-// Settled with Secrets over the same text, but that ratio is a constant factor
-// between two different functions, 0.8 to 2.4 on a quiet machine, and the race
-// detector's overhead on a loaded runner moved it past the three times allowed
-// (3.4 to 3.6 in CI) with nothing quadratic in sight. Against itself, the
-// constant cancels: read once, eight times the bytes cost eight times as much
-// (measured 0.9 to 1.4 times the eight, with the race detector and without,
-// and beside the package's other tests); read once a line, they cost eight
-// times that again. Three times is allowed.
+// COUNTED, NOT TIMED: the bytes Settled hands its readers ([settle]). The
+// keys', the back hold's and the password's rule's each read the text once,
+// and the holds read what the rule hands them, so these groups cost four
+// reads of the text, and six where the keys were read beside the values
+// ([claims]): at least three, so a count that stopped counting fails too, and
+// at most six.
+// This was timed, Settled against [Secrets] over the same text and then
+// against itself over a text eight times smaller ([withinFactor]), and both
+// ratios moved with how busy the runner was: the second read 449ms over 32 KiB
+// against 11ms over 4 KiB in CI's race job, more than the twenty-four times
+// allowed, on a change that touched no Go code (#1346). A count is the same on
+// every runner, with the race detector and without.
 //
-// Mutation: read the holds again in every prefix a line of the text ends, and
-// every group takes 50 to 80 times as long over eight times the bytes, and
-// this fails, with the race detector and without.
+// Mutation: read the holds again in every prefix a line of the text ends, or
+// hand the password's rule the text again there, and every group reads some
+// sixty times its text over 32 KiB in lines of 256 bytes, where Settled as it
+// is reads it four times, and this fails; add nothing to the count, and every
+// group fails as read by nobody.
 func TestALiveViewOfManyPasswordKeysCostsOneRead(t *testing.T) {
 	t.Parallel()
-	read := func(text string) { _ = Settled(text) }
-	const scale = 8
 	for name, group := range passwordKeyGroups {
-		small, large := linesOf(group, 4<<10, 256), linesOf(group, scale*4<<10, 256)
-		if ok, smallCost, largeCost := withinFactor(read, small, large, 3*scale); !ok {
-			t.Errorf("%s: Settled took %v over 32 KiB against %v over 4 KiB, more than %d "+
-				"times as much for %d times the bytes, so it reads the text again for every "+
-				"line it holds", name, largeCost, smallCost, 3*scale, scale)
+		text := linesOf(group, 32<<10, 256)
+		settled, read := settle(text)
+		switch {
+		case settled != Settled(text):
+			t.Errorf("%s: settle settled %d bytes and Settled %d", name, settled, Settled(text))
+		case read < 3*len(text):
+			t.Errorf("%s: Settled handed its readers %d bytes to read over a text of %d, less "+
+				"than three reads of it: the count no longer counts what they read", name, read, len(text))
+		case read > 6*len(text):
+			t.Errorf("%s: Settled handed its readers %d bytes to read over a text of %d, more "+
+				"than six reads of it, so it reads the text again for every line it holds",
+				name, read, len(text))
 		}
 	}
 }

@@ -50,7 +50,7 @@ import { useNow } from "~/lib/clock.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type { CodeChangeName, CodeCommitAnswer, CodePushRun } from "~/protocol/index.ts";
 import { subjectOf } from "../repo/History.tsx";
-import { ChangeStateTag } from "../Changes.tsx";
+import { ChangeStateTag } from "../ChangeRow.tsx";
 import { CodeNotFound } from "../NotFound.tsx";
 import { Byline, RefName } from "../ui.tsx";
 import { CommitWrites } from "./CommitWrites.tsx";

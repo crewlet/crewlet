@@ -2,10 +2,11 @@
  * A repository's files at a revision: a directory's listing, a file's lines
  * with the ones an address picks marked, and the blame of a file — drawn as a
  * code host draws them. A directory is one card: the latest commit that
- * touched it across its head, then its entries, each with its glyph; at the
- * root its README follows in a card of its own. A file is one card: its name,
- * its size and its lines across its head, with the switch between its lines
- * and its blame and what a reader does with it, then its lines.
+ * touched it across its head, then its entries, each with the commit that last
+ * changed it and when; at the root its README and LICENSE follow as tabs of
+ * one card under the files. A file is read beside the repository's tree
+ * (`FileView.tsx`): over it, its crumbs and its latest commit; then its card,
+ * its lines or its blame under a head of what a reader does with it.
  *
  * # The address is the place
  *
@@ -14,7 +15,8 @@
  * `lines=` the lines picked — `12`, or `12-20` — which pressing a line's
  * number sets (Shift extends the run), so a link to a line is the address on
  * screen. Opening a directory or a file is a new place in the history; picking
- * lines and changing the revision or the lens replace it.
+ * lines and changing the revision or the lens replace it. A picked run takes the
+ * selected tint, and its first line holds its actions ([LineActions]).
  *
  * # One read for a directory or a file
  *
@@ -57,35 +59,35 @@
  * from line 1 (`routes/gitlet/syntax.tsx`); a larger one is drawn plain.
  */
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Button,
   ButtonLink,
   Callout,
   Card,
   CodeBlock,
-  Copyable,
-  EmptyValue,
+  IconButton,
+  IconButtonLink,
   SegmentedControl,
   Skeleton,
   Stack,
-  TableNumberCell,
-  VisuallyHidden,
+  Tabs,
+  tabId,
 } from "@crewlethq/ui";
 import {
   BookOpenGlyph,
-  BookmarkGlyph,
-  FileCodeGlyph,
+  ScaleGlyph,
   GitBranchGlyph,
   LinkGlyph,
   RotateCcwClockGlyph,
+  TagGlyph,
 } from "@crewlethq/icons/glyphs";
-import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { useParam } from "~/app/router.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { CODE_MAX_BLAME_LINES } from "~/contract/code.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import { useNow } from "~/lib/clock.ts";
+import { CHECK_HISTORY_DAYS, rollupFor, rollupTitle } from "~/lib/checks.ts";
 import {
   EARLIER_FILE_LINES,
   baseName,
@@ -110,32 +112,42 @@ import {
   type CodeBlameCommit,
   type CodeBlameLine,
   type CodeBlobAnswer,
+  type CodeCommitMark,
   type CodeGitAnswer,
+  type CodePushedBy,
   type CodeRepoDetail,
   type CodeTreeEntry,
 } from "~/protocol/index.ts";
 import { commitHref, repoHref } from "../paths.ts";
 import {
-  CloneButton,
-  EntryGlyph,
+  CheckRollupMark,
   Face,
+  GITLET,
+  LICENSE_NAMES,
   README_NAMES,
   ShaChip,
-  cloneURL,
-  entryKind,
   useWhoName,
 } from "../ui.tsx";
-import { Painted, tokensOf, useGrammar, useLineStates } from "../syntax.tsx";
-import { subjectOf } from "./History.tsx";
-import { RefPicker, revisionWord, type Revisions } from "./refs.tsx";
+import { Painted, paintFence, tokensOf, useGrammar, useLineStates } from "../syntax.tsx";
+import { gitletWrote, mergeTitle, subjectOf } from "./History.tsx";
+import { useReportDocs } from "./About.tsx";
+import { Entries } from "./Entries.tsx";
+import { useCommitMarks } from "./marks.ts";
+import { RefPicker, revisionWord } from "./refs.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import {
-  FileWriteButtons,
+  EditFileButton,
+  FileMoreMenu,
   FirstFileButton,
   NewFileButton,
   targetOf,
   type CommitTarget,
 } from "./FileWrites.tsx";
+import { CloneAddress, CodeMenu, NO_CLONE_ADDRESS } from "./CodeMenu.tsx";
+import { GoToFile } from "./GoToFile.tsx";
+import { FileView } from "./FileView.tsx";
+import { FileBytes, WAITING_FOR_COMMIT } from "./FileActions.tsx";
+import { LineActions } from "./LineActions.tsx";
 import "~/styles/gitlet.css";
 
 /** What one page of a path read holds: a listing's entries, or one page of a file. */
@@ -155,7 +167,14 @@ function commitOf(rev: string, answer: CodeGitAnswer | null, param = "ref"): str
   return answer?.resolved?.[param]?.oid ?? "";
 }
 
-export function Files({ repo, revisions }: { repo: CodeRepoDetail; revisions: Revisions }) {
+export function Files({
+  repo,
+  cloneURL,
+}: {
+  repo: CodeRepoDetail;
+  /** The engine's clone address, absent where the deployment names none. */
+  cloneURL: string | undefined;
+}) {
   const [ref, setRef] = useParam("ref", "", "filter");
   const [path] = useParam("path", "", "filter");
   const [lens, setLens] = useParam("lens", "", "filter");
@@ -165,12 +184,12 @@ export function Files({ repo, revisions }: { repo: CodeRepoDetail; revisions: Re
     // and a repository whose other branches are live while its default
     // branch holds nothing is read from them.
     return repo.branches > 0 ? (
-      <NoDefaultBranch repo={repo} revisions={revisions} onRev={setRef} />
+      <NoDefaultBranch repo={repo} onRev={setRef} />
     ) : (
-      <EmptyRepository repo={repo} />
+      <EmptyRepository repo={repo} cloneURL={cloneURL} />
     );
   }
-  const place = { repo, revisions, rev: ref, path, onRev: setRef };
+  const place = { repo, cloneURL, rev: ref, path, onRev: setRef };
   return path === "" ? (
     <RootListing {...place} />
   ) : (
@@ -186,15 +205,14 @@ export function Files({ repo, revisions }: { repo: CodeRepoDetail; revisions: Re
 
 interface Place {
   repo: CodeRepoDetail;
-  /** The repository's branches and tags, read once by its page ([useRevisions]). */
-  revisions: Revisions;
+  cloneURL: string | undefined;
   rev: string;
   path: string;
   onRev: (rev: string) => void;
 }
 
 /** The repository's root at the revision: its listing. */
-function RootListing({ repo, revisions, rev, path, onRev }: Place) {
+function RootListing({ repo, cloneURL, rev, path, onRev }: Place) {
   const params = useMemo(
     () => ({ name: repo.name, ...(rev ? { ref: rev } : {}) }),
     [repo.name, rev],
@@ -213,20 +231,34 @@ function RootListing({ repo, revisions, rev, path, onRev }: Place) {
     <Stack gap={4}>
       <FilesBar
         repo={repo}
-        revisions={revisions}
+        cloneURL={cloneURL}
         rev={rev}
         path={path}
         onRev={onRev}
         target={targetOf(rev, first.data)}
+        commit={commit}
+        unread={Boolean(first.error)}
         dir
       />
       <Card padding="none" className="code-browser">
-        <LatestCommit repo={repo} rev={rev} path={path} commit={commit} />
-        <PathBody repo={repo} rev={rev} path={path} first={first} paged={paged} />
+        <LatestCommit
+          repo={repo}
+          rev={rev}
+          path={path}
+          commit={commit}
+          resolved={first.data?.resolved?.ref?.ref ?? ""}
+          by={first.data?.pushed_by?.[commit]}
+        />
+        <PathBody repo={repo} rev={rev} path={path} commit={commit} first={first} paged={paged} />
       </Card>
       {/* THE README OF THE REVISION ON SCREEN, read at the commit the
           listing was: the two are one revision. */}
-      <Readme repo={repo} entries={paged.items} commit={commit} />
+      <RepoDocs
+        repo={repo}
+        entries={paged.items}
+        commit={commit}
+        target={targetOf(rev, first.data)}
+      />
     </Stack>
   );
 }
@@ -234,7 +266,7 @@ function RootListing({ repo, revisions, rev, path, onRev }: Place) {
 /** A path under the root: a directory's listing, or a file's lines or its blame. */
 function PathView({
   repo,
-  revisions,
+  cloneURL,
   rev,
   path,
   onRev,
@@ -277,65 +309,132 @@ function PathView({
   const commit = commitOf(rev, first.data);
   const target = targetOf(rev, first.data);
   const dir = Boolean(first.data?.tree);
+  // THE WHOLE TEXT WHERE THE PATH'S OWN PAGES HOLD IT: read from line 1 to its last page.
+  const loaded = useMemo(() => {
+    if (start > 1 || paged.more || !file || file.binary) return null;
+    return paged.items.map((p) => ("mode" in p ? "" : (p.text ?? ""))).join("");
+  }, [start, paged.more, paged.items, file]);
+  // A PATH NOT ANSWERED YET keeps the last kind drawn, so moving between files keeps
+  // the pane; a first one is a file where the address picks lines or the blame.
+  const [kind, setKind] = useState<"file" | "dir" | null>(null);
+  const now = file ? "file" : dir ? "dir" : null;
+  if (now && now !== kind) setKind(now);
+  const guess = kind ?? (picked || blame ? "file" : null);
+  if (now === "file" || (now === null && guess === "file")) {
+    return (
+      <FileView
+        repo={repo}
+        rev={rev}
+        path={path}
+        commit={commit}
+        target={target}
+        onRev={onRev}
+        latest={
+          <Card padding="none" className="code-latest--card">
+            <LatestCommit
+              repo={repo}
+              rev={rev}
+              path={path}
+              commit={commit}
+              resolved={first.data?.resolved?.ref?.ref ?? ""}
+              by={first.data?.pushed_by?.[commit]}
+              history={false}
+            />
+          </Card>
+        }
+      >
+        {file ? (
+          <FileCard
+            repo={repo}
+            rev={rev}
+            path={path}
+            commit={commit}
+            file={file}
+            loaded={loaded}
+            blame={blame}
+            onLens={onLens}
+            picked={picked}
+            target={target}
+          >
+            {blame ? (
+              // THE BLAME IS READ AT THE COMMIT THE FILE WAS, where the file's
+              // read resolved one: the lines it attributes are the lines on
+              // screen.
+              <Blame
+                repo={repo}
+                rev={commit || rev}
+                path={path}
+                commit={commit}
+                blob={file}
+                total={file.lines}
+                picked={picked}
+                onPick={onPick}
+                onLens={onLens}
+              />
+            ) : !file.binary && file.lines > 0 ? (
+              <FileLines
+                repo={repo.name}
+                rev={rev}
+                path={path}
+                params={base}
+                opened={start}
+                opening={first}
+                paged={paged}
+                total={file.lines}
+                picked={picked}
+                onPick={onPick}
+                commit={commit}
+                onLens={onLens}
+              />
+            ) : (
+              <PathBody
+                repo={repo}
+                rev={rev}
+                path={path}
+                commit={commit}
+                first={first}
+                paged={paged}
+              />
+            )}
+          </FileCard>
+        ) : (
+          <Card padding="none" className="code-blob">
+            <PathBody
+              repo={repo}
+              rev={rev}
+              path={path}
+              commit={commit}
+              first={first}
+              paged={paged}
+            />
+          </Card>
+        )}
+      </FileView>
+    );
+  }
   return (
     <Stack gap={4}>
       <FilesBar
         repo={repo}
-        revisions={revisions}
+        cloneURL={cloneURL}
         rev={rev}
         path={path}
         onRev={onRev}
         target={target}
+        commit={commit}
         dir={dir}
       />
-      {file ? (
-        <FileCard
+      <Card padding="none" className="code-browser">
+        <LatestCommit
           repo={repo}
           rev={rev}
           path={path}
           commit={commit}
-          file={file}
-          blame={blame}
-          onLens={onLens}
-          picked={picked}
-          target={target}
-        >
-          {blame ? (
-            // THE BLAME IS READ AT THE COMMIT THE FILE WAS, where the file's
-            // read resolved one: the lines it attributes are the lines on
-            // screen.
-            <Blame
-              repo={repo}
-              rev={commit || rev}
-              path={path}
-              blob={file}
-              total={file.lines}
-              picked={picked}
-              onPick={onPick}
-            />
-          ) : !file.binary && file.lines > 0 ? (
-            <FileLines
-              repo={repo.name}
-              rev={rev}
-              path={path}
-              params={base}
-              opened={start}
-              opening={first}
-              paged={paged}
-              total={file.lines}
-              picked={picked}
-              onPick={onPick}
-            />
-          ) : (
-            <PathBody repo={repo} rev={rev} path={path} first={first} paged={paged} />
-          )}
-        </FileCard>
-      ) : (
-        <Card padding="none" className="code-browser">
-          <LatestCommit repo={repo} rev={rev} path={path} commit={commit} />
-          <PathBody repo={repo} rev={rev} path={path} first={first} paged={paged} />
-        </Card>
-      )}
+          resolved={first.data?.resolved?.ref?.ref ?? ""}
+          by={first.data?.pushed_by?.[commit]}
+        />
+        <PathBody repo={repo} rev={rev} path={path} commit={commit} first={first} paged={paged} />
+      </Card>
     </Stack>
   );
 }
@@ -510,6 +609,8 @@ function FileLines({
   total,
   picked,
   onPick,
+  commit,
+  onLens,
 }: {
   /** The repository's name, which a read of the blob's lines above them names. */
   repo: string;
@@ -523,6 +624,9 @@ function FileLines({
   total: number;
   picked: LineRun | null;
   onPick: (run: LineRun | null) => void;
+  /** The commit the file was read at, whole, which the run's link names. */
+  commit: string;
+  onLens: (blame: boolean) => void;
 }) {
   const place = `${rev}\n${path}\n${opened}`;
   const [from, open] = useOpened(place, opened);
@@ -584,6 +688,8 @@ function FileLines({
         pages={pages}
         picked={picked}
         onPick={onPick}
+        commit={commit}
+        onLens={onLens}
       />
       <Pager paged={more} what="lines" />
     </>
@@ -591,42 +697,39 @@ function FileLines({
 }
 
 /**
- * The bar above the code: the revision, the path back up to the root — the
- * repository's name first, every directory a link — and, at a directory, a
- * new file in it and, at the root, the clone. What a reader does with a file
- * is on the file's own card ([FileCard]).
+ * The bar above the code: the revision, the path back up to the root (the
+ * repository's name first, every directory a link) and, at a directory, Go
+ * to file and a new file in it and, at the root, the Code menu. What a reader
+ * does with a file is on the file's own card ([FileCard]).
  */
 function FilesBar({
   repo,
-  revisions,
+  cloneURL,
   rev,
   path,
   onRev,
   target,
+  commit,
   dir = false,
+  unread = false,
 }: Place & {
   /** Where a commit from here lands ([targetOf]). */
   target: CommitTarget;
+  /** The commit the path's read resolved, whole, or none while it is read. */
+  commit: string;
   /** The path is a directory (or the root), which takes a new file. */
   dir?: boolean;
+  /** The path's read failed, so its commit is not known. */
+  unread?: boolean;
 }) {
   const at = (p: string) => repoHref(repo.name, { ref: rev, path: p });
   return (
     <PageToolbar>
-      <RefPicker repo={repo} revisions={revisions} value={rev} onChoose={onRev} />
+      <RefPicker repo={repo} value={rev} onChoose={onRev} />
       {path === "" ? (
         // AT THE ROOT the path is the repository the header names, so the bar
         // says what the picker picks among instead, each a link to its list.
-        <span className="code-ref-counts">
-          <a className="code-ref-counts__link" href={repoHref(repo.name, { tab: "branches" })}>
-            <GitBranchGlyph size="sm" className="code-glyph" />
-            {plural(repo.branches, "branch", "branches")}
-          </a>
-          <a className="code-ref-counts__link" href={repoHref(repo.name, { tab: "branches" })}>
-            <BookmarkGlyph size="sm" className="code-glyph" />
-            {plural(repo.tags, "tag")}
-          </a>
-        </span>
+        <RefCounts repo={repo} />
       ) : (
         <nav aria-label="Path" className="code-crumbs">
           <a className="code-crumbs__root" href={at("")}>
@@ -651,34 +754,75 @@ function FilesBar({
         </nav>
       )}
       <span className="code-bar-end">
+        {dir && <GoToFile repo={repo.name} rev={rev} commit={commit} />}
         {dir && <NewFileButton repo={repo} target={target} dir={path} />}
-        {path === "" && <CloneButton repo={repo.name} />}
+        {path === "" && (
+          <CodeMenu repo={repo} cloneURL={cloneURL} commit={commit} failed={unread} />
+        )}
       </span>
     </PageToolbar>
   );
 }
 
+/** The branches and tags the picker picks among, each a link to its list on Branches. */
+function RefCounts({ repo, tags = true }: { repo: CodeRepoDetail; tags?: boolean }) {
+  return (
+    <span className="code-ref-counts">
+      <ButtonLink
+        size="small"
+        variant="ghost"
+        href={repoHref(repo.name, { tab: "branches" })}
+        leadingIcon={<GitBranchGlyph size="sm" />}
+      >
+        <span>
+          <strong>{fmtCount(repo.branches)}</strong> {repo.branches === 1 ? "Branch" : "Branches"}
+        </span>
+      </ButtonLink>
+      {tags && (
+        <ButtonLink
+          size="small"
+          variant="ghost"
+          href={repoHref(repo.name, { tab: "branches", view: "tags" })}
+          leadingIcon={<TagGlyph size="sm" />}
+        >
+          <span>
+            <strong>{fmtCount(repo.tags)}</strong> {repo.tags === 1 ? "Tag" : "Tags"}
+          </span>
+        </ButtonLink>
+      )}
+    </span>
+  );
+}
+
 /**
- * The latest commit that touched a directory, across the head of its card,
- * as a code host draws it: who wrote it, its subject — the link to the
- * commit — its id and when, and the way to the whole history of the path.
+ * The latest commit that touched a directory, across the head of its card, as
+ * a code host draws it: who wrote it (Gitlet where it wrote the merge), its
+ * subject as the link to the commit, its check, its id, when, and the history.
  *
  * ONE COMMIT OF THE PATH'S HISTORY (`code_log`, `limit` 1) at the commit the
- * listing was read at, where it resolved one, so the bar and the entries
- * under it are one revision; at a commit's whole id the answer is immutable
- * and the tab keeps it.
+ * listing was read at, and that commit's marks (`code_commit_marks`), so the
+ * row and the entries under it are one revision.
  */
 function LatestCommit({
   repo,
   rev,
   path,
   commit,
+  resolved,
+  by,
+  history = true,
 }: {
   repo: CodeRepoDetail;
   rev: string;
   path: string;
   /** The commit the listing resolved, whole, or none while it is read. */
   commit: string;
+  /** The whole ref the listing's revision resolved, "" for a commit's id. */
+  resolved: string;
+  /** The push that introduced `commit`, where the listing's read names one. */
+  by: CodePushedBy | undefined;
+  /** Its History link; a file's is in its crumbs' row. */
+  history?: boolean;
 }) {
   const now = useNow();
   const whoName = useWhoName();
@@ -688,56 +832,125 @@ function LatestCommit({
   );
   const read = useCodeQuery("code_log", params, { enabled: commit !== "" });
   const latest = read.data?.log?.commits?.[0];
-  const history = repoHref(repo.name, { tab: "commits", ref: rev, path });
+  const pages = useMemo(() => (latest ? [[latest.oid]] : []), [latest]);
+  const marks = useCommitMarks(repo.name, pages);
+  const historyHref = repoHref(repo.name, { tab: "commits", ref: rev, path });
+  if (!latest) {
+    return (
+      <div className="code-latest">
+        {read.loading || commit === "" ? (
+          <Skeleton variant="text" rows={1} label="Reading the latest commit" />
+        ) : read.error ? (
+          <PageFailed error={read.error} />
+        ) : (
+          <span className="muted">
+            No commit of {revisionWord(repo, rev)} changed {path || "it"}.
+          </span>
+        )}
+      </div>
+    );
+  }
+  // THE LATEST'S OWN `by` only: the listing's push decorates the commit it resolved.
+  const pushed = latest.oid === commit ? by : undefined;
+  const mark = marks.failed ? null : marks.of(latest.oid);
+  const mayBeGitlet = (latest.parent_count ?? 0) >= 2 && latest.engine_committed === true;
+  const gitlet = gitletWrote(latest, pushed, mark);
+  const author = latest.author ?? `(${latest.author_bytes ?? 0} bytes)`;
+  const at = gitlet ? latest.committed_at : latest.authored_at;
+  const defaultRef = `refs/heads/${repo.default_branch}`;
+  const branch = resolved.startsWith("refs/heads/") ? resolved : defaultRef;
   return (
     <div className="code-latest">
-      {latest ? (
-        <>
-          <span className="code-latest__who">
-            <Face who={latest.author ?? ""} />
-            <span className="code-latest__author" title={latest.author_email}>
-              {latest.author ? whoName(latest.author) : `(${latest.author_bytes ?? 0} bytes)`}
-            </span>
-          </span>
-          <a className="code-latest__subject" href={commitHref(repo.name, latest.oid)}>
-            {subjectOf(latest)}
-          </a>
-          <span className="code-latest__end">
-            <ShaChip oid={latest.oid} />
-            <time
-              className="code-latest__when"
-              dateTime={latest.authored_at}
-              title={fmtDateTime(latest.authored_at)}
-            >
-              {relTime(latest.authored_at, now)}
-            </time>
-            <ButtonLink
-              size="small"
-              variant="ghost"
-              href={history}
-              leadingIcon={<RotateCcwClockGlyph size="sm" />}
-            >
-              History
-            </ButtonLink>
-          </span>
-        </>
-      ) : read.loading || commit === "" ? (
-        <Skeleton variant="text" rows={1} label="Reading the latest commit" />
-      ) : read.error ? (
-        <PageFailed error={read.error} />
+      {mayBeGitlet && mark === undefined ? (
+        // THE WRITER WAITS FOR THE MARKS where it may be Gitlet, so the name never changes.
+        <span className="code-latest__who">
+          <Skeleton variant="text" rows={1} label="Reading who wrote it" />
+        </span>
       ) : (
-        <span className="muted">
-          No commit of {revisionWord(repo, rev)} changed {path || "it"}.
+        <span
+          className="code-latest__who"
+          title={gitlet ? mergeTitle(latest, pushed, mark, whoName) : latest.author_email}
+        >
+          <Face who={gitlet ? GITLET : author} />
+          <span className="code-latest__author">{whoName(gitlet ? GITLET : author)}</span>
         </span>
       )}
+      <a
+        className="code-latest__subject"
+        href={commitHref(repo.name, latest.oid)}
+        title={subjectOf(latest)}
+      >
+        {subjectOf(latest)}
+      </a>
+      <span className="code-latest__end">
+        <span className="code-latest__check">
+          <LatestCheck
+            mark={mark}
+            failed={marks.failed !== null}
+            by={pushed}
+            branch={branch}
+            defaultRef={defaultRef}
+            now={now}
+          />
+        </span>
+        <ShaChip oid={latest.oid} />
+        <time className="code-latest__when" dateTime={at} title={fmtDateTime(at)}>
+          {relTime(at, now)}
+        </time>
+        {history && (
+          <ButtonLink
+            size="small"
+            variant="ghost"
+            href={historyHref}
+            leadingIcon={<RotateCcwClockGlyph size="sm" />}
+          >
+            History
+          </ButtonLink>
+        )}
+      </span>
     </div>
   );
 }
 
 /**
- * A file, as one card: its name, its size and lines across the head, with the
- * switch between its lines and its blame, its history, the Permalink and the
- * writes a branch takes; then its lines, its blame, or what it has instead.
+ * The latest commit's check as its glyph, or that checks are no longer kept;
+ * nothing until known, and nothing where the marks were refused or failed.
+ */
+function LatestCheck({
+  mark,
+  failed,
+  by,
+  branch,
+  defaultRef,
+  now,
+}: {
+  mark: CodeCommitMark | null | undefined;
+  /** The marks read was refused or failed: the engine said nothing of the checks. */
+  failed: boolean;
+  by: CodePushedBy | undefined;
+  branch: string;
+  defaultRef: string;
+  now: number;
+}) {
+  if (mark === undefined || failed) return null;
+  const rollup = rollupFor(mark, branch, defaultRef);
+  if (rollup) {
+    return <CheckRollupMark bare rollup={rollup} title={rollupTitle(rollup, branch, now)} />;
+  }
+  const pushed = Date.parse(by?.at ?? "");
+  if (!Number.isNaN(pushed) && now - pushed > CHECK_HISTORY_DAYS * 86_400_000) {
+    return (
+      <span className="t-caption" title={`Checks are kept ${CHECK_HISTORY_DAYS} days.`}>
+        Checks no longer kept
+      </span>
+    );
+  }
+  return null;
+}
+
+/**
+ * A file's card: across its head the switch between its lines and its blame, its
+ * lines and size, then Raw, Copy and Download, Edit, the Permalink and More.
  */
 function FileCard({
   repo,
@@ -745,6 +958,7 @@ function FileCard({
   path,
   commit,
   file,
+  loaded,
   blame,
   onLens,
   picked,
@@ -756,6 +970,8 @@ function FileCard({
   path: string;
   commit: string;
   file: CodeBlobAnswer;
+  /** The whole text where every page is loaded, else null. */
+  loaded: string | null;
   blame: boolean;
   onLens: (blame: boolean) => void;
   picked: LineRun | null;
@@ -768,18 +984,12 @@ function FileCard({
   // A PICK THE FILE CANNOT DRAW is said beside its size: a stale link to a
   // line past its end.
   const beyond = picked && !file.binary && picked.start > file.lines;
+  const link = <LinkGlyph />;
+  const permalink = `Permalink: this file at ${commit ? shortOID(commit) : revisionWord(repo, rev)}`;
   return (
     <Card padding="none" className="code-blob">
       <div className="code-blob__head">
-        <span className="code-blob__name">
-          <FileCodeGlyph size="sm" className="code-glyph" />
-          <span className="mono">{baseName(path)}</span>
-          <span className="code-blob__facts">
-            {facts}
-            {beyond ? ` · it has no line ${picked.start}` : ""}
-          </span>
-        </span>
-        <span className="code-blob__actions">
+        <span className="code-blob__lens">
           {!file.binary && file.lines > 0 && (
             <SegmentedControl
               semantics="radio"
@@ -794,31 +1004,38 @@ function FileCard({
               ]}
             />
           )}
-          <ButtonLink
-            size="small"
-            variant="ghost"
-            href={repoHref(repo.name, { tab: "commits", ref: rev, path })}
-            leadingIcon={<RotateCcwClockGlyph size="sm" />}
-          >
-            History
-          </ButtonLink>
-          {commit && (
-            <ButtonLink
-              size="small"
+          <span className="code-blob__facts">
+            {facts}
+            {beyond ? ` · it has no line ${picked.start}` : ""}
+          </span>
+        </span>
+        <span className="code-blob__actions">
+          <FileBytes repo={repo.name} path={path} commit={commit} file={file} loaded={loaded} />
+          <EditFileButton repo={repo} target={target} path={path} file={file} />
+          <span className="code-blob__rule" aria-hidden="true" />
+          {commit ? (
+            <IconButtonLink
+              label={permalink}
+              icon={link}
+              size="sm"
               variant="ghost"
-              title={`The same place at commit ${commit}`}
-              leadingIcon={<LinkGlyph size="sm" />}
               href={repoHref(repo.name, {
                 ref: commit,
                 path,
                 ...(blame ? { lens: "blame" as const } : {}),
                 ...(picked ? { lines: linesValue(picked) } : {}),
               })}
-            >
-              Permalink
-            </ButtonLink>
+            />
+          ) : (
+            <IconButton
+              label={permalink}
+              icon={link}
+              size="sm"
+              variant="ghost"
+              disabledReason={WAITING_FOR_COMMIT}
+            />
           )}
-          <FileWriteButtons repo={repo} target={target} path={path} file={file} />
+          <FileMoreMenu repo={repo} target={target} path={path} />
         </span>
       </div>
       <div className="code-blob__body">{children}</div>
@@ -834,12 +1051,15 @@ function PathBody({
   repo,
   rev,
   path,
+  commit,
   first,
   paged,
 }: {
   repo: CodeRepoDetail;
   rev: string;
   path: string;
+  /** The commit the read resolved, whole, or none while it is read. */
+  commit: string;
   first: QueryResult<CodeGitAnswer>;
   paged: Paged<PathPart, CodeGitAnswer>;
 }) {
@@ -855,6 +1075,7 @@ function PathBody({
     () => paged.items.filter((p): p is CodeTreeEntry => "mode" in p),
     [paged.items],
   );
+  const now = useNow();
   if (first.loading && !first.data) {
     return <Skeleton variant="text" rows={8} label={`Loading ${path || repo.name}`} />;
   }
@@ -869,11 +1090,14 @@ function PathBody({
     return <Source repo={repo.name} path={path} place={path} pages={pages} picked={null} />;
   return (
     <>
-      <Listing
+      <Entries
         repo={repo}
         rev={rev}
+        path={path}
+        commit={commit}
         entries={entries}
         total={first.data.tree?.total ?? entries.length}
+        now={now}
       />
       <Pager paged={paged} what="entries" />
     </>
@@ -908,95 +1132,9 @@ function Pager({
 }
 
 /**
- * A directory's entries, each opening its directory or its file, on the
- * grid every list is drawn with — the card's body, flush under the latest
- * commit. Each entry is its glyph and its name, its kind said to a screen
- * reader beside the name, and a file its size.
- *
- * IN GIT'S ORDER, AND SORTED BY ITS HEADS ONLY ONCE THE WHOLE DIRECTORY IS
- * HERE: the engine pages a long directory, and a sort of the pages loaded
- * would answer a different question from the one the heads ask. Git's order
- * is byte order, so a code host's directories-first is a sort of its own,
- * and the heads offer it once the directory is whole.
- */
-function Listing({
-  repo,
-  rev,
-  entries,
-  total,
-}: {
-  repo: CodeRepoDetail;
-  rev: string;
-  entries: readonly CodeTreeEntry[];
-  total: number;
-}) {
-  const whole = entries.length >= total;
-  const sorts = <K,>(by: (e: CodeTreeEntry) => K) => (whole ? by : undefined);
-  return (
-    <DataGrid<CodeTreeEntry>
-      name="files"
-      flush
-      rows={[...entries]}
-      rowKey={(e) => e.path}
-      serverSorted={!whole}
-      aria-label="Files"
-      loadedNote={
-        whole ? undefined : `${fmtCount(entries.length)} of ${plural(total, "entry", "entries")}`
-      }
-      empty={{ title: "This directory is empty", icon: "folder" }}
-      columns={[
-        {
-          key: "name",
-          header: "Name",
-          floor: "12rem",
-          phoneLead: true,
-          // DIRECTORIES FIRST, then by name: the order a reader scans a
-          // directory in, offered once the whole of it is here.
-          sortValue: sorts((e) => `${e.type === "tree" ? 0 : 1}${baseName(e.path).toLowerCase()}`),
-          cell: (e) => (
-            <span className="code-tree-entry">
-              <EntryGlyph entry={e} />
-              {e.type === "commit" ? (
-                // A SUBMODULE IS ANOTHER REPOSITORY'S COMMIT: nothing of it is
-                // here to open.
-                <span className="code-tree-entry__name" title={`${baseName(e.path)} @ ${e.oid}`}>
-                  {baseName(e.path)} <span className="muted mono">@ {shortOID(e.oid)}</span>
-                </span>
-              ) : (
-                <a
-                  className="code-tree-entry__name"
-                  href={repoHref(repo.name, { ref: rev, path: e.path })}
-                >
-                  {baseName(e.path)}
-                </a>
-              )}
-              <VisuallyHidden>{entryKind(e)}</VisuallyHidden>
-            </span>
-          ),
-        },
-        {
-          key: "size",
-          header: "Size",
-          shrink: true,
-          align: "right",
-          sortValue: sorts((e) => (e.type === "blob" ? (e.size ?? 0) : null)),
-          cell: (e) =>
-            e.type === "blob" ? (
-              <TableNumberCell value={e.size ?? 0} format={fmtBytes} />
-            ) : (
-              <EmptyValue label={entryKind(e) === "Directory" ? "A directory" : "Not a file"} />
-            ),
-        },
-      ]}
-    />
-  );
-}
-
-/**
- * A file's lines, numbered, the ones the address picks ruled — never tinted:
- * a pick is the reader's place, not a state of the line. Pressing a number
- * picks its line, Shift extends the run from the one picked, and pressing the
- * one line picked again lets it go.
+ * A file's lines, numbered, the ones the address picks tinted, the run's first
+ * line holding its actions. Pressing a number picks its line, Shift extends the
+ * run from the one picked, and pressing the one line picked again lets it go.
  */
 function Source({
   repo,
@@ -1005,6 +1143,8 @@ function Source({
   pages,
   picked,
   onPick,
+  commit = "",
+  onLens,
 }: {
   repo: string;
   path: string;
@@ -1013,6 +1153,9 @@ function Source({
   pages: readonly CodeBlobAnswer[];
   picked: LineRun | null;
   onPick?: (run: LineRun | null) => void;
+  commit?: string;
+  /** Where a run can be blamed: the gutter's actions are drawn only with it and `onPick`. */
+  onLens?: (blame: boolean) => void;
 }) {
   const head = pages[0];
   const lines = useMemo(() => {
@@ -1024,6 +1167,7 @@ function Source({
     return split;
   }, [pages]);
   const from = head?.start_line ?? 1;
+  const drawnLines = useMemo(() => ({ from, texts: lines }), [from, lines]);
   const grammar = useGrammar(path);
   const stateOf = useLineStates({ repo, blob: head ?? null, grammar, from, lines });
   usePickInView(place, picked, lines.length);
@@ -1054,12 +1198,19 @@ function Source({
   // them; one it does not have at all is said in the card's head.
   const offLoaded =
     picked !== null && picked.start <= head.lines && (picked.start < from || picked.start > shown);
+  const gutter = Boolean(onPick && onLens);
+  const menuAt = gutter && picked && !offLoaded && picked.start <= shown ? picked.start : 0;
   return (
     <>
       {offLoaded && (
         <p className="code-blob__note">{`Line ${picked.start} is not among the lines loaded.`}</p>
       )}
-      <div className="code-source" role="region" aria-label={`The lines of ${path}`}>
+      <div
+        className="code-source"
+        role="region"
+        aria-label={`The lines of ${path}`}
+        data-gutter={gutter || undefined}
+      >
         {lines.map((text, i) => {
           const n = from + i;
           return (
@@ -1071,6 +1222,20 @@ function Source({
               state={stateOf(n)}
               on={picked !== null && n >= picked.start && n <= picked.end}
               press={press}
+              gutter={gutter}
+              menu={
+                n === menuAt && picked && onLens ? (
+                  <LineActions
+                    repo={repo}
+                    path={path}
+                    commit={commit}
+                    picked={picked}
+                    drawn={drawnLines}
+                    blame={false}
+                    onLens={onLens}
+                  />
+                ) : undefined
+              }
             />
           );
         })}
@@ -1092,6 +1257,8 @@ const SourceLine = memo(function SourceLine({
   state,
   on,
   press,
+  gutter,
+  menu,
 }: {
   n: number;
   text: string;
@@ -1100,11 +1267,15 @@ const SourceLine = memo(function SourceLine({
   state: State | null;
   on: boolean;
   press: (n: number, extend: boolean) => void;
+  /** A track before the number, holding `menu` on the run's first line. */
+  gutter: boolean;
+  menu: React.ReactNode;
 }) {
   // A press redraws the line but tokenizes nothing: its tokens follow its text and state.
   const tokens = useMemo(() => tokensOf(grammar, text, state), [grammar, text, state]);
   return (
     <div id={`L${n}`} className="code-source__line" data-picked={on || undefined}>
+      {gutter && <span className="code-source__gutter">{menu}</span>}
       <button
         type="button"
         className="code-source__number"
@@ -1191,19 +1362,24 @@ function Blame({
   repo,
   rev,
   path,
+  commit,
   blob,
   total,
   picked,
   onPick,
+  onLens,
 }: {
   repo: CodeRepoDetail;
   rev: string;
   path: string;
+  /** The commit the file was read at, whole, which the run's link names. */
+  commit: string;
   /** The file's first page: its blob's id and size, which colouring its lines reads. */
   blob: CodeBlobAnswer;
   total: number;
   picked: LineRun | null;
   onPick: (run: LineRun | null) => void;
+  onLens: (blame: boolean) => void;
 }) {
   const place = `${rev}\n${path}\nblame`;
   // THE FIRST RANGE ASKED HOLDS THE PICKED LINE, decided from the address
@@ -1278,6 +1454,10 @@ function Blame({
   // COLOURED AS THE FILE IS: a line past its bound counts as empty for the walk.
   const grammar = useGrammar(path);
   const texts = useMemo(() => rows.map((l) => l.text ?? ""), [rows]);
+  const drawnLines = useMemo(
+    () => ({ from: rows[0]?.line ?? 1, texts: rows.map((l) => l.text) }),
+    [rows],
+  );
   const stateOf = useLineStates({
     repo: repo.name,
     blob,
@@ -1344,6 +1524,19 @@ function Blame({
                   )}
                 </td>
                 <td className="code-blame__number">
+                  {picked && l.line === picked.start && (
+                    <span className="code-source__gutter">
+                      <LineActions
+                        repo={repo.name}
+                        path={path}
+                        commit={commit}
+                        picked={picked}
+                        drawn={drawnLines}
+                        blame
+                        onLens={onLens}
+                      />
+                    </span>
+                  )}
                   <button
                     type="button"
                     className="code-source__number"
@@ -1381,57 +1574,74 @@ function Blame({
 }
 
 /**
- * The README at the root of the revision on screen, in a card of its own
- * under the files, as a code host draws it: the root's listing names it, and
- * its file is read at the commit that listing resolved, so the two are one
- * revision. Markdown is rendered by the dashboard's own renderer, which
- * builds every element itself, so text a pusher wrote cannot introduce one;
- * any other README is drawn as its text. A root with none says nothing: the
- * files above it are the answer.
+ * The README and LICENSE at the root, tabs of one card under the files
+ * (`doc=license`), read at the listing's commit, markdown by the dashboard's
+ * own renderer with its fences coloured. A root with neither draws nothing.
  */
-function Readme({
+function RepoDocs({
   repo,
   entries,
   commit,
+  target,
 }: {
   repo: CodeRepoDetail;
   /** What the root's listing holds, every page of it read so far. */
   entries: readonly PathPart[];
   /** The commit the listing resolved, whole. */
   commit: string;
+  target: CommitTarget;
 }) {
+  const [doc, setDoc] = useParam("doc", "", "filter");
+  const panelId = useId();
   const files = entries.filter((e): e is CodeTreeEntry => "mode" in e && e.type === "blob");
-  const entry = README_NAMES.map((name) =>
-    files.find((e) => baseName(e.path).toLowerCase() === name),
-  ).find(Boolean);
+  const firstOf = (names: readonly string[]) =>
+    names.map((name) => files.find((e) => baseName(e.path).toLowerCase() === name)).find(Boolean);
+  const docs = [
+    {
+      value: "readme",
+      label: "README",
+      icon: <BookOpenGlyph size="sm" />,
+      entry: firstOf(README_NAMES),
+    },
+    {
+      value: "license",
+      label: "LICENSE",
+      icon: <ScaleGlyph size="sm" />,
+      entry: firstOf(LICENSE_NAMES),
+    },
+  ].filter((d) => d.entry !== undefined);
+  useReportDocs(docs.map((d) => d.value).join(","));
+  const shown = docs.find((d) => d.value === (doc === "license" ? "license" : "readme")) ?? docs[0];
+  const entry = shown?.entry;
   const file = useCodeQuery(
     "code_blob",
     { name: repo.name, path: entry?.path ?? "", ...(commit ? { ref: commit } : {}) },
     { enabled: Boolean(entry) && commit !== "" },
   );
-  if (!entry) return null;
+  if (!shown || !entry) return null;
   const blob = file.data?.blob;
   return (
     <Card padding="none" className="code-readme" as="section" aria-label={baseName(entry.path)}>
-      <Card.Header
-        divided
-        icon={<BookOpenGlyph size="sm" />}
-        subtitle={<span className="mono">at {revisionWord(repo, commit)}</span>}
-        actions={
-          <ButtonLink
-            size="small"
-            variant="ghost"
-            href={repoHref(repo.name, { ref: commit, path: entry.path })}
-          >
-            Open the file
-          </ButtonLink>
-        }
+      <div className="code-docs__head">
+        <Tabs
+          variant="chip"
+          size="sm"
+          ariaLabel="The repository's documents"
+          value={shown.value}
+          onValueChange={(next) => setDoc(next === "license" ? "license" : "")}
+          panelId={panelId}
+          items={docs.map(({ value, label, icon }) => ({ value, label, icon }))}
+        />
+        <EditFileButton repo={repo} target={target} path={entry.path} file={blob} />
+      </div>
+      <div
+        className="code-docs__body"
+        role="tabpanel"
+        id={panelId}
+        aria-labelledby={tabId(panelId, shown.value)}
       >
-        <Card.Title as="h2">{baseName(entry.path)}</Card.Title>
-      </Card.Header>
-      <Card.Body padding="lg">
         {(file.loading && !blob) || commit === "" ? (
-          <Skeleton variant="text" rows={4} label="Loading the README" />
+          <Skeleton variant="text" rows={4} label={`Loading ${baseName(entry.path)}`} />
         ) : file.error ? (
           <QueryState
             error={file.error}
@@ -1444,14 +1654,14 @@ function Readme({
         ) : blob?.binary ? (
           <p className="muted">It is a binary file.</p>
         ) : /\.(md|markdown)$/i.test(entry.path) ? (
-          <div className="prose md">{renderMarkdown(blob?.text ?? "")}</div>
+          <div className="prose md">{renderMarkdown(blob?.text ?? "", { fence: paintFence })}</div>
         ) : (
           <pre className="code-readme__text">{blob?.text ?? ""}</pre>
         )}
         {file.data?.next && (
           <Callout variant="neutral">It runs past one page: open it to read the rest.</Callout>
         )}
-      </Card.Body>
+      </div>
     </Card>
   );
 }
@@ -1463,25 +1673,12 @@ function Readme({
  * pushed: the picker reaches its branches, and its Settings make one of them
  * the default.
  */
-function NoDefaultBranch({
-  repo,
-  revisions,
-  onRev,
-}: {
-  repo: CodeRepoDetail;
-  revisions: Revisions;
-  onRev: (rev: string) => void;
-}) {
+function NoDefaultBranch({ repo, onRev }: { repo: CodeRepoDetail; onRev: (rev: string) => void }) {
   return (
     <Stack gap={3}>
       <PageToolbar>
-        <RefPicker repo={repo} revisions={revisions} value="" onChoose={onRev} />
-        <span className="code-ref-counts">
-          <a className="code-ref-counts__link" href={repoHref(repo.name, { tab: "branches" })}>
-            <GitBranchGlyph size="sm" className="code-glyph" />
-            {plural(repo.branches, "branch", "branches")}
-          </a>
-        </span>
+        <RefPicker repo={repo} value="" onChoose={onRev} />
+        <RefCounts repo={repo} tags={false} />
       </PageToolbar>
       <Card className="code-setup">
         <Card.Header divided>
@@ -1508,8 +1705,13 @@ function NoDefaultBranch({
  * commands that clone it or push a repository a reader already has, each
  * with its copy, as a code host's empty repository offers them.
  */
-function EmptyRepository({ repo }: { repo: CodeRepoDetail }) {
-  const url = cloneURL(repo.name);
+function EmptyRepository({
+  repo,
+  cloneURL,
+}: {
+  repo: CodeRepoDetail;
+  cloneURL: string | undefined;
+}) {
   return (
     <Card className="code-setup">
       <Card.Header divided>
@@ -1526,15 +1728,19 @@ function EmptyRepository({ repo }: { repo: CodeRepoDetail }) {
           </span>
           <Stack gap={2}>
             <h3 className="t-label">Clone it</h3>
-            <Copyable value={url} variant="block" monospace ariaLabel={`Copy ${url}`} />
+            <CloneAddress url={cloneURL} />
           </Stack>
           <Stack gap={2}>
             <h3 className="t-label">Or push a repository you already have</h3>
-            <CodeBlock
-              copyable
-              copyLabel="Copy the commands"
-              code={`git remote add origin ${url}\ngit push -u origin ${repo.default_branch}`}
-            />
+            {cloneURL ? (
+              <CodeBlock
+                copyable
+                copyLabel="Copy the commands"
+                code={`git remote add origin ${cloneURL}\ngit push -u origin ${repo.default_branch}`}
+              />
+            ) : (
+              <p className="muted">{NO_CLONE_ADDRESS}</p>
+            )}
           </Stack>
         </Stack>
       </Card.Body>

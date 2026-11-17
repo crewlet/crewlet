@@ -168,7 +168,7 @@ func (t Timing) valid() bool {
 }
 
 // Options build a [Runner]. Every field but Logs, Nudges, Faults, Metrics,
-// Logger and Now is required, and New refuses a missing one by name.
+// Unread, Logger and Now is required, and New refuses a missing one by name.
 type Options struct {
 	// NodeID is this node: the runner every claim names, and the node a
 	// repository's git order is searched for.
@@ -218,6 +218,10 @@ type Options struct {
 	Metrics *metrics.Recorder
 	Logger  *slog.Logger
 	Now     func() time.Time
+	// Unread reports an error the estate answers where nothing ran a request and a data node
+	// refused a key it carries; an ending so refused is sent again without its counts. Nil sends
+	// no ending again without its counts.
+	Unread func(error) bool
 }
 
 // ErrOptions is an Options value New refuses, wrapped naming every field.

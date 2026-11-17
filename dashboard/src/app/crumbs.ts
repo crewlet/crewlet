@@ -535,6 +535,7 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
       // AN ENTRY'S NAME is its page's answer; until then the trail says
       // "Entry", never the uuid the address bar already carries.
       return [root(row, true), { label: labels[where.id] || "Entry" }];
+    case "general":
     case "spend":
     case "spend-tasks":
     case "limits":

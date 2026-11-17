@@ -3185,7 +3185,7 @@ const CARRYING_CHANGE = {
 };
 
 // A TASK A CHANGE CARRIES OUT HAS A CHANGES TAB, listing every change of the
-// item in Gitlet › Changes' grid — whatever its state, so the listing names the
+// item as Gitlet's rows, without the item itself, whatever its state, so the listing names the
 // task and no state (a work listing that names none lists every one, and the
 // engine refuses the dashboard's "all"). Mutation: never draw the strip, list
 // the tab's changes by anything but the task, or name a state, and this
@@ -3195,14 +3195,17 @@ test("a task a change names has a Changes tab listing the task's changes", async
   mount(<WorkItemPage id="ENG-42" />, { org: CODE_ORG });
   const tab = await screen.findByRole("tab", { name: "Changes" });
   fireEvent.click(tab);
-  const grid = await screen.findByRole("table", { name: "Changes" });
-  expect(within(grid).getByText("web!42")).toBeTruthy();
+  const list = await screen.findByRole("list", { name: "Changes" });
+  expect(within(list).getByRole("link", { name: "Fix the login race" })).toBeTruthy();
+  expect(within(list).getByText("web!42")).toBeTruthy();
+  expect(list.querySelector(".code-change-work")).toBeNull();
   // THE TAB'S OWN LISTING, beside the one-row probe that found the change.
   const listing = codeAsks.filter((u) => u.searchParams.get("limit") !== "1");
   expect(listing.length).toBeGreaterThan(0);
   for (const u of listing) {
     expect(u.searchParams.get("work")).toBe("native:t-1");
     expect(u.searchParams.has("state")).toBe(false);
+    expect(u.searchParams.get("cards")).toBe("true");
   }
 });
 
@@ -3225,7 +3228,7 @@ test("a reader without Gitlet is asked no change, and the task draws no Changes 
   );
   expect(codeAsks).toEqual([]);
   expect(screen.queryByRole("tab", { name: "Changes" })).toBeNull();
-  expect(screen.queryByRole("table", { name: "Changes" })).toBeNull();
+  expect(screen.queryByRole("list", { name: "Changes" })).toBeNull();
 });
 
 // AN ASK NOBODY HAS ANSWERED SAYS WHAT IT ASKS FOR, and its card offers one

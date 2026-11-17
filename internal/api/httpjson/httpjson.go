@@ -830,6 +830,14 @@ const (
 	// or no sequence: it moves the floor the trim deletes against, so
 	// neither has a default.
 	CodePositionRequired Code = "position_required"
+	// CodeTakenAtRequired is a backup acknowledgement that did not say, as
+	// an RFC 3339 instant, when its copy was taken: the backup-age alarm
+	// and the trim's backup term age the copy by it, so it has no default.
+	CodeTakenAtRequired Code = "taken_at_required"
+	// CodeTakenAtInFuture is a backup acknowledgement whose copy was taken
+	// later than the node's own clock reads now. Recorded, it would read as
+	// a copy younger than any could be.
+	CodeTakenAtInFuture Code = "taken_at_in_future"
 	// CodeUnknownStream is a retention or capacity gesture naming a stream
 	// this node does not have. 404 rather than 503, because nothing about
 	// it is transient.
@@ -1537,6 +1545,12 @@ var codes = map[Code]string{
 	CodePositionRequired: "Name the stream and the sequence your copy reaches. " +
 		"An acknowledgement moves what the trim may delete, so neither has a " +
 		"default.",
+	CodeTakenAtRequired: "Say when your copy was taken, as an RFC 3339 instant " +
+		"such as 2026-11-17T03:00:00Z. The backup's age is measured from it, so " +
+		"it has no default.",
+	CodeTakenAtInFuture: "The instant you gave is later than this node's clock. " +
+		"Give when the copy was taken by this node's clock; the detail says what " +
+		"time it reads.",
 	CodeUnknownStream: "This node has no stream by that name. Check it against " +
 		"the retention status.",
 	CodeAckFailed: "The acknowledgement was not recorded, so what the trim may " +

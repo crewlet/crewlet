@@ -92,7 +92,7 @@ import (
 // TestAMemoEntryHoldsEveryFieldOfItsAnswer holds the encoding to the answers'
 // fields, and TestAnAnswersShapeIsItsMemoFormat holds this name to a
 // fingerprint of them, so a change to either fails until this moves with it.
-const memoFormat = "page/9"
+const memoFormat = "page/10"
 
 // memoPage is one page as the memo keeps it.
 type memoPage struct {
@@ -211,8 +211,8 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 		}
 		paths := slices.Compact(slices.Sorted(slices.Values(s.Paths)))
 		parts = append(parts, whole[searchTipKey], whole[searchRefKey], string(s.Mode),
-			strconv.FormatBool(s.IgnoreCase), s.Text, strconv.Itoa(s.Hits()), after, strconv.Itoa(afterLine),
-			strconv.Itoa(len(paths)))
+			strconv.FormatBool(s.IgnoreCase), s.Text, strconv.Itoa(s.Hits()), strconv.Itoa(s.Context),
+			strconv.Itoa(s.PerFile), after, strconv.Itoa(afterLine), strconv.Itoa(len(paths)))
 		parts = append(parts, paths...)
 	case gitlet.GitExcerpts:
 		// The context as applied, then every anchor whole: its revision, its blob, its path's
@@ -630,6 +630,18 @@ func encodePage(p memoPage) []byte {
 			w.int(h.Line)
 			w.str(h.Text)
 			w.str(h.Blob)
+			w.int(len(h.Matches))
+			for _, m := range h.Matches {
+				w.int(m[0])
+				w.int(m[1])
+			}
+			for _, lines := range [][]string{h.Before, h.After} {
+				w.int(len(lines))
+				for _, l := range lines {
+					w.str(l)
+				}
+			}
+			w.int(h.FileMatches)
 		}
 	case gitlet.GitExcerpts:
 		w.int(len(a.Excerpts.Excerpts))
@@ -765,6 +777,20 @@ func (r *pageReader) count() int {
 		return 0
 	}
 	return n
+}
+
+// strs reads a list of strings, nil where it is empty, as an answer that
+// omits an empty list holds it.
+func (r *pageReader) strs() []string {
+	n := r.count()
+	if r.err != nil || n == 0 {
+		return nil
+	}
+	out := make([]string, n)
+	for i := range out {
+		out[i] = r.str()
+	}
+	return out
 }
 
 func (r *pageReader) str() string {
@@ -956,8 +982,17 @@ func decodePage(body []byte) (memoPage, error) {
 		if n := r.count(); r.err == nil {
 			s.Hits = make([]gitlet.SearchHit, n)
 			for i := range s.Hits {
-				s.Hits[i] = gitlet.SearchHit{Path: r.str(), PathB64: r.str(), Line: r.int(), Text: r.str(),
+				h := gitlet.SearchHit{Path: r.str(), PathB64: r.str(), Line: r.int(), Text: r.str(),
 					Blob: r.str()}
+				if n := r.count(); n > 0 && r.err == nil {
+					h.Matches = make([][2]int, n)
+					for j := range h.Matches {
+						h.Matches[j] = [2]int{r.int(), r.int()}
+					}
+				}
+				h.Before, h.After = r.strs(), r.strs()
+				h.FileMatches = r.int()
+				s.Hits[i] = h
 			}
 		}
 		a.Search = s

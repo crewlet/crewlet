@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -223,7 +224,11 @@ func TestThePushDecide(t *testing.T) {
 			if got.Result == ResultNG && got.Detail == "" {
 				t.Error("an ng the decide formed carries no detail")
 			}
-			if inRecord := tc.result == ResultOK; answers[0].inRecord != inRecord || (len(entries) == 1) != inRecord {
+			// A push git received refused whole by a rule on who may move which ref is an attempt.
+			attempt := slices.Contains([]Refusal{RefusalReservedRef, RefusalTagMoved, RefusalProtectedDelete,
+				RefusalProtectedForce, RefusalProtectedDirect}, tc.reason)
+			if inRecord := tc.result == ResultOK || attempt; answers[0].inRecord != inRecord ||
+				(len(entries) == 1) != inRecord {
 				t.Errorf("in the record: %v with %d entries, want %v", answers[0].inRecord, len(entries), inRecord)
 			}
 			for _, e := range entries {

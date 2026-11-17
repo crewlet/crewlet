@@ -386,7 +386,7 @@ type codeReadView struct {
 // [nodeClient.forCodeReads]), never by maxNodeResponseBytes, which a
 // legitimate page carries past: every byte of a ref, a protection pattern and
 // a default branch may be one JSON writes as six (`<`, `>` and `&` are legal
-// in all three), and a history page of such pushes is 5.05 MB, a listing page
+// in all three), and a history page of such pushes is 5.08 MB, a listing page
 // of such repositories 4.20 MB.
 //
 // So a page asks for the MOST rows the reader serves of its kind
@@ -397,9 +397,10 @@ const (
 	// codeRowBytes is the most one row of a code read encodes to: two
 	// mebibytes, above the largest TestTheCodePagesFitOneAnswer builds — a
 	// push of gitlet.MaxCommandsPerPush commands at the longest ref beside
-	// gitlet.MaxIntroduced ids and a seat's run at its bound, each byte of a ref
-	// and of a run field but the executor's UUID one JSON writes as six, at
-	// 1 692 620 bytes (the code domain refuses a push whose record entry is
+	// gitlet.MaxIntroduced ids, a seat's run at its bound and the change it
+	// landed at its longest repository name and title, each byte of a ref, of a
+	// run field but the executor's UUID and of the title one JSON writes as six,
+	// at 1 694 373 bytes (the code domain refuses a push whose record entry is
 	// that wide, so no row reaches it), and a repository at its longest
 	// description and default branch with every rule
 	// gitlet.MaxProtectionsPerRepo allows, all of them escaped, at 107 746.

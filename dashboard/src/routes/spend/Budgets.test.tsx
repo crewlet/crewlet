@@ -122,28 +122,13 @@ const OPERATOR = {
 const READER = { login: "", grants: [], handle: "", owner: "", name: "", kind: "" };
 
 let budgetAsks = 0;
-
-/** The engine's row of the company clock, as the `settings` answer serves it. */
-const CLOCK = {
-  settings: [
-    {
-      key: "timezone",
-      group: "company",
-      kind: "zone",
-      value: "Europe/Berlin",
-      default: "UTC",
-      set: true,
-      off: false,
-      has_off: false,
-    },
-  ],
-};
+/** Every question the page asked, in order. */
+const asked: string[] = [];
 
 function mount(
   budgets: BudgetsAnswer,
   viewer: Record<string, unknown> = OPERATOR,
   hash = "#/company/budgets",
-  settings: unknown = CLOCK,
 ) {
   location.hash = hash;
   budgetAsks = 0;
@@ -152,13 +137,14 @@ function mount(
   store.setConnected(true);
   store.applyOrg(withDerived({ timezone: "UTC", roles: [{ name: "PM", handle: "pm" }] }));
   const socket = new LiveSocket(store);
+  asked.length = 0;
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
+    asked.push(what);
     if (what === "budgets") {
       budgetAsks += 1;
       return Promise.resolve(budgets);
     }
     if (what === "viewer") return Promise.resolve(viewer);
-    if (what === "settings") return Promise.resolve(settings);
     return new Promise(() => {});
   };
   render(
@@ -811,33 +797,14 @@ test("a budget row's sentence is wrapped with no stranded last word", () => {
   expect(rule?.body).toMatch(/text-wrap:\s*pretty/);
 });
 
-// THE COMPANY CLOCK IS SHOWN AND CHANGED WHERE ITS WINDOWS ARE: the engine's
-// row of `timezone`, beside its default, with the pencil that changes it (its
-// writes are `components/TextSetting.test.tsx`'s, the clock-move warning
-// included). A reader who may not read the document is shown the zone the
-// windows were cut on, and the pencil, held with the reason, as every ceiling
-// on the page is for them: a write control is never hidden. Mutation: drop
-// the card, read the zone off a copy of the default, or draw the reader's row
-// with no pencil again, and this fails.
-test("the company clock is the engine's row, beside its default, changed in place", async () => {
+// THE COMPANY CLOCK IS A SETTING OF ITS OWN, on Settings › General: Budgets
+// draws no card of it and asks for no setting row. Mutation: put the card
+// back, and this fails.
+test("the company clock is not drawn or asked for on Budgets", async () => {
   mount(answer());
   await settle();
-  const clock = screen.getByRole("table", { name: "Company clock" });
-  const zone = within(clock).getByRole("row", { name: /Time zone/ });
-  expect(zone.textContent).toContain("Europe/Berlin");
-  expect(within(zone).getByText("Changed")).toBeTruthy();
-  expect(within(zone).getByRole("button", { name: "Change Time zone" })).toBeTruthy();
-  cleanup();
-  mount(answer(), { login: "dee", owner: "dee", grants: [] }, "#/company/budgets", undefined);
-  await settle();
-  const read = within(screen.getByRole("table", { name: "Company clock" })).getByRole("row", {
-    name: /Time zone/,
-  });
-  expect(read.textContent).toContain("UTC");
-  const held = within(read).getByRole("button", { name: "Change Time zone" });
-  expect(held.getAttribute("aria-disabled")).toBe("true");
-  const described = (held.getAttribute("aria-describedby") ?? "")
-    .split(" ")
-    .map((id) => document.getElementById(id)?.textContent);
-  expect(described).toContain(CONFIG_WRITE_REASONS.no_grant);
+  expect(screen.queryByRole("table", { name: "Company clock" })).toBeNull();
+  expect(screen.queryByText("Company clock")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Change Time zone" })).toBeNull();
+  expect(asked).not.toContain("settings");
 });

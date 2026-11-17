@@ -72,12 +72,13 @@ import { principlesEditHref } from "~/routes/settings/principles/edit/address.ts
 /** A company running every service built into Crewlet. */
 const EVERY_SERVICE: ServicesRun = { tracker: true, knowledge: true, chat: true, code: true };
 
-/** Settings' Admin pages: every section but Spend's readings, Models and MCP & tools, which every member reads. */
+/** Settings' Admin pages: every section but Spend's readings, General, Models and MCP & tools, which every member reads. */
 function settingsPaths(): string[][] {
   return workspaceRow("settings")!
     .sections.filter(
       (s) =>
         s.group !== "Spend" &&
+        s.key !== "general" &&
         s.key !== "models" &&
         s.key !== "mcp-tools" &&
         s.key !== "delegated-decisions",
@@ -311,23 +312,25 @@ describe("the navigation grammar", () => {
     expect(words("company")).not.toContain("company name");
     expect(words("company")).not.toContain("timezone");
     expect(words("org")).toContain("company name");
-    expect(words("settings-config")).toContain("timezone");
+    expect(words("settings-config")).not.toContain("timezone");
+    expect(words("settings")).toContain("timezone");
     // ONE ROW FOR THE TWO PAGES IT REPLACED, and their addresses gone with them.
     expect(DESTINATIONS.some((d) => d.label === "Overview" || d.label === "Policies")).toBe(false);
   });
 
-  // SETTINGS IS FOUR GROUPS, in this order, and lists only what lives in it.
-  test("Settings' column is Runtime, Spend, Access and Engine", () => {
+  // SETTINGS IS FIVE GROUPS, in this order, and lists only what lives in it.
+  test("Settings' column is Company, Runtime, Spend, Access and Engine", () => {
     const groups: Record<string, string[]> = {};
     for (const s of workspaceRow("settings")!.sections) (groups[s.group ?? ""] ??= []).push(s.key);
     expect(groups).toEqual({
+      Company: ["general"],
       Runtime: ["models", "ask-crewlet", "mcp-tools", "secrets", "limits", "advisor"],
       Spend: ["spend", "spend-tasks"],
       Access: ["people", "service-accounts", "tokens", "sign-in", "delegated-decisions", "audit"],
       Engine: ["nodes", "config", "backups", "storage", "gitlet", "diagnostics"],
     });
     // IT LANDS ON ITS FIRST SECTION and holds every address under it.
-    expect(workspaceRow("settings")?.path).toEqual(["settings", "models"]);
+    expect(workspaceRow("settings")?.path).toEqual(["settings", "general"]);
     expect(ownedBy(workspaceRow("settings")!)).toEqual(["settings"]);
   });
 
@@ -747,7 +750,7 @@ describe("the resolver", () => {
       ["spend", "budgets"],
       ["company", "people", "pm"],
       ["settings"],
-      ["settings", "general"],
+      ["settings", "overview"],
       ["activity", "turns"],
       ["cost", "budgets"],
       ["admin", "fleet"],
@@ -1205,14 +1208,17 @@ describe("the breadcrumb", () => {
       ),
     };
     const runs = { tracker: true, knowledge: true, chat: true, code: true };
-    expect(landingPath(gated, ["worklet"], runs)).toEqual(["settings", "mcp-tools"]);
+    expect(landingPath(gated, ["worklet"], runs)).toEqual(["settings", "models"]);
     expect(landingPath(gated, ["admin"], runs)).toEqual(gated.path);
     // A reader not read yet: the workspace's own path, as the frame draws a lock only once it knows.
     expect(landingPath(gated, null, runs)).toEqual(gated.path);
     expect(landingPath(settings, ["worklet"], runs)).toEqual(settings.path);
   });
 
-  test("Settings' landing is named Models in the trail", () => {
+  test("Settings' landing is named General in the trail", () => {
+    const landing = crumbsFor(["settings", "general"]);
+    expect(landing.map((c) => c.label)).toEqual(["Settings", "General"]);
+    expect(titleOf(landing)).toBe("General");
     const crumbs = crumbsFor(["settings", "models"]);
     expect(crumbs.map((c) => c.label)).toEqual(["Settings", "Models"]);
     expect(titleOf(crumbs)).toBe("Models");

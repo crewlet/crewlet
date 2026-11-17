@@ -566,6 +566,7 @@ export function WorkItem({ id }: { id: string }) {
                           still open. */}
                       <ChangeList
                         params={{ work: changeWorkRef(item.id) }}
+                        omit={["work"]}
                         empty={{
                           title: "No changes",
                           hint: "A change that names this task as its work item is listed here.",

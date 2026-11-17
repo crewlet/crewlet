@@ -2767,8 +2767,16 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	// THE JOB'S SESSION, TAKEN HERE, on the box's host and before the box is
 	// paused or reclaimed — a paused box cannot be read, and a reclaimed one
 	// is gone — whichever node asked for the read, and spooled sealed on this
-	// node; KEPT after the read has answered, off it (session.go). A stop's
-	// read is the last anything makes of the box.
+	// node; KEPT off the read from the moment its take is spooled (session.go),
+	// never behind what the read does after its take. A collection goes on to
+	// record how its job's harness ended, pause the box and record the pause,
+	// each waiting on a store or a box backend, and a collection of a box this
+	// node hosts reads under its admission, which has no deadline: a keep
+	// started only once the read returned waited on all of it, so no budget of
+	// a capture's could bound its life, and a turn's end could read a capture
+	// still to be kept as abandoned. The keep reads the spool and the claim's
+	// copy of the run, nothing the read writes after its take. A stop's read
+	// is the last anything makes of the box.
 	at := readCapture(read, result, over)
 	// WHETHER IT RAN OUT OF CONTEXT, judged on the run as its collection
 	// records it ([asCollected]): a run its turn's cap ended drops the
@@ -2785,7 +2793,7 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	result.ResumedCount = c.readMainThread(ctx, run, box, runner, read, at, result).Count
 	spooled, kept := c.takeCapture(ctx, run, box, runner, at)
 	result.Kept = kept
-	defer c.keepLater(ctx, spooled)
+	c.keepLater(ctx, spooled)
 	// HOW THE JOB'S HARNESS ENDED, by the line the take was drawn by: carried
 	// back with the result for the claim it collects for, and recorded on the
 	// job's record by a collection's read whether or not the take took or kept
@@ -2805,7 +2813,7 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 		Count: result.ResumedCount})
 	if err := box.Pause(ctx); err != nil {
 		log.WarnContext(ctx, "sandbox_pause_failed", "turn_id", run.TurnID, "error", err.Error())
-	} else if err := c.pending.MarkBoxPaused(ctx, run.TurnID, c.now()); err != nil {
+	} else if err := c.markBoxPaused(ctx, run); err != nil {
 		// WARN RATHER THAN FAIL, because the job is over and refusing a
 		// collected result over a timestamp would throw the whole run
 		// away. What the missing stamp does NOT cost any more is the box:
@@ -2817,6 +2825,24 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 				"expired from its park instead, and one that resumes settles its own box")
 	}
 	return result, ended, nil
+}
+
+// markBoxPaused records on run's row that its box is paused
+// ([PendingStore.MarkBoxPaused]) in the room a read leaves the pause's record
+// ([Coordinator.pauseRoom]): a teardown's grace and the crossing of that one
+// change of the row at this node's connection to the store
+// ([Coordinator.rowContext]).
+//
+// HELD TO ITS ROOM, NEVER TO THE READ'S CONTEXT ALONE: a collection of a box
+// this node hosts reads under its admission, which has no deadline, and the
+// store's contract promises no bound to a caller that sets none, so a store
+// that did not answer the record held the read, and the resume of the turn it
+// collects for, for as long as it did not. A record so cut is the missing
+// stamp the read already warns of.
+func (c *Coordinator) markBoxPaused(ctx context.Context, run PendingRun) error {
+	row, cancel := c.rowContext(ctx, discardGrace)
+	defer cancel()
+	return c.pending.MarkBoxPaused(row, run.TurnID, c.now())
 }
 
 // markEndedAtDeadline records on run's job's record that its collection saw it
@@ -3149,8 +3175,9 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 		// new one did not run — and the harness's release; and what the
 		// read took of it to keep, or why it took none, so the record of a
 		// launch says whether a later one may continue it. Whether the
-		// upload and the record after the read landed is the run's record's
-		// and the log's: they are made off the read.
+		// upload and the record landed is the run's record's and the log's:
+		// they are made off the read, from the moment its take spooled the
+		// session.
 		HarnessSession: session,
 		HarnessVersion: release,
 		// AND WHICH BRIEF THE LAUNCH HANDED IT, beside whether the run did
@@ -5962,7 +5989,7 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk, 
 			if !mayAsk && c.keepsSessions() {
 				return errAskAway
 			}
-			waited, found, err := c.awaitCapture(ctx, run, endCaptureWait)
+			waited, found, err := c.awaitEndCaptures(ctx, run)
 			switch {
 			case err != nil:
 				return fmt.Errorf("sandbox: ending run %s, whose turn's end waits for its capture: %w",

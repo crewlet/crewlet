@@ -119,6 +119,18 @@ describe("what a seat is doing", () => {
     ]);
   });
 
+  // Mutation: let a status win over a verdict, or leave the verdict out of the name, and this fails.
+  test("a reviewer's verdict is the kit's corner, winning over a status, and said in the name of a badge that names itself", () => {
+    const { container } = render(
+      <SeatAvatar name="Code Reviewer" kind="agent" status="working" verdict="approved" />,
+    );
+    expect(container.querySelector(".crewlet-avatar__status--approved")).not.toBeNull();
+    expect(container.querySelector(".crewlet-avatar__status--working")).toBeNull();
+    expect(screen.getByRole("img").getAttribute("aria-label")).toBe(
+      "Code Reviewer avatar, approved",
+    );
+  });
+
   test("an idle seat carries no glyph", () => {
     const { container } = render(<SeatAvatar name="Agent CTO" kind="agent" decorative />);
     expect(container.querySelector(".crewlet-avatar__status")).toBeNull();
@@ -144,4 +156,37 @@ test("no module but this one renders the kit's Avatar", () => {
   };
   walk(root);
   expect(offenders, "render SeatAvatar (or hand OrgLabel seatBadge) instead").toEqual([]);
+});
+
+/** The modules that may hand a badge a verdict: Gitlet's face and the change row that draws it. */
+const VERDICT_HOLDERS = new Set(["routes/gitlet/ui.tsx", "routes/gitlet/ChangeRow.tsx"]);
+
+/** Where a module outside `VERDICT_HOLDERS` hands `SeatAvatar` or `Face` a verdict, as `path`. */
+export function verdictSites(path: string, text: string): string[] {
+  if (VERDICT_HOLDERS.has(path)) return [];
+  return /<(?:SeatAvatar|Face)\b[^>]*\bverdict=/.test(text) ? [path] : [];
+}
+
+// A VERDICT ON A FACE IS GITLET'S, in a change's row: elsewhere a verdict stays words.
+test("only Gitlet's face hands a badge a verdict", () => {
+  const root = join(__dirname, "..");
+  const offenders: string[] = [];
+  const walk = (dir: string) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const at = join(dir, e.name);
+      if (e.isDirectory()) walk(at);
+      else if (/\.tsx$/.test(e.name) && !/\.test\.tsx$/.test(e.name)) {
+        offenders.push(...verdictSites(at.slice(root.length + 1), readFileSync(at, "utf8")));
+      }
+    }
+  };
+  walk(root);
+  expect(offenders).toEqual([]);
+  // IT CAN TELL: a verdict handed anywhere else is reported.
+  expect(verdictSites("routes/me/X.tsx", '<Face who="cto" verdict="approved" />')).toEqual([
+    "routes/me/X.tsx",
+  ]);
+  expect(
+    verdictSites("routes/gitlet/ChangeRow.tsx", '<Face who="cto" verdict="approved" />'),
+  ).toEqual([]);
 });

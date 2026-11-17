@@ -970,8 +970,9 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Check: &gitlet.CheckDetail{CheckRow: gitlet.CheckRow{CheckKey: gitlet.CheckKey{RepoID: ref.ID,
 				OID: "6666666666666666666666666666666666666666", Target: "refs/heads/main", Name: "lint", Attempt: 1},
 				State: gitlet.CheckStatePassed}, Def: &gitlet.CheckDef{Name: "lint", Run: "make lint",
-				TimeoutSeconds: 60}, Tail: "ok", Failures: []gitlet.CheckFailure{{Path: "a.go", Line: 3,
-				TestID: "lint/a", Message: "unused"}},
+				TimeoutSeconds: 60}, Tail: "ok", Tests: &gitlet.CheckTests{Total: 9, Failed: 1, Skipped: 2},
+				LogLines: 40, TailFirstLine: 40, TailCut: true, Failures: []gitlet.CheckFailure{{Path: "a.go",
+					Line: 3, TestID: "lint/a", Message: "unused"}},
 				Log: &gitlet.CheckLog{Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte("l")), Size: 9}},
 			// A MERGE QUEUE'S ENTRIES, ITS TRAINS, A TARGET'S LANDINGS AND ITS
 			// GREEN ROW, every field of each.
@@ -1012,6 +1013,16 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	}
 	if got := d.last(); !reflect.DeepEqual(got, proposal) {
 		t.Errorf("the committer was proposed %+v, want %+v", got, proposal)
+	}
+	// AN ATTEMPT'S, its one command refused by a protection, carrying the commits it offered.
+	tried := proposalTo(ref.ID, "019a0c2e-0000-7000-8000-00000000a11e")
+	tried.Commands[0].Result, tried.Commands[0].Reason = gitlet.ResultNG, gitlet.RefusalProtectedDirect
+	tried.Commands[0].Detail, tried.Offered = "takes no direct push", 2
+	if _, err = seam.Propose(ctx, tried); err != nil {
+		t.Fatalf("propose an attempt: %v", err)
+	}
+	if got := d.last(); !reflect.DeepEqual(got, tried) {
+		t.Errorf("the committer was proposed %+v, want the attempt %+v", got, tried)
 	}
 
 	// A COMPACTION'S PROPOSAL, every field of it and of its answer — a
@@ -1245,13 +1256,16 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			BaseOID: "6666666666666666666666666666666666666666", BaseTree: "3333333333333333333333333333333333333333",
 			HeadTree: "2222222222222222222222222222222222222222", PatchID: "5555555555555555555555555555555555555555",
 			PatchIDOmitted: true, Touched: []string{"upload/retry.go"}, TouchesAll: true,
-			Classes:          gitlet.RevisionClasses{WhitespaceOnly: []int{0}, CommentOnly: []int{1}, Complete: true},
-			Node:             "node-b",
-			RequestedOwners:  []gitlet.Owner{{Kind: gitlet.OwnerUnit, Ref: "Platform"}},
+			Classes:    gitlet.RevisionClasses{WhitespaceOnly: []int{0}, CommentOnly: []int{1}, Complete: true},
+			Node:       "node-b",
+			MeasuredAt: time.Date(2031, 4, 2, 3, 14, 0, 123456000, time.UTC),
+			RequestedOwners: []gitlet.MatchedOwner{{Owner: gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Platform"},
+				Paths: []string{"upload/**"}}},
 			OwnersDigest:     "4444444444444444444444444444444444444444444444444444444444444444",
 			HumanPaths:       gitlet.HumanPathMatch{Held: []int{0}, Waived: []int{2}},
 			HumanPathsDigest: "8888888888888888888888888888888888888888888888888888888888888888",
-			Asked:            []gitlet.Reviewer{{Handle: "plat-lead", Kind: gitlet.PartyAgent}},
+			Asked: []gitlet.OwnerAsk{{Reviewer: gitlet.Reviewer{Handle: "plat-lead", Kind: gitlet.PartyAgent},
+				Paths: []string{"upload/**"}, PathsOmitted: 2}},
 			SkippedOwners: []gitlet.SkippedOwner{{Owner: gitlet.Owner{Kind: gitlet.OwnerSeat, Ref: "reader"},
 				Handle: "reader", Why: gitlet.SkipBelowReview}}}},
 		"a change's mergeability": {Mergeability: &gitlet.Mergeability{RepoID: ref.ID, ChangeID: item.ChangeID,
@@ -1303,6 +1317,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Reason: gitlet.CheckReasonExit, ExitCode: &exit, DurationMs: 61_000, Summary: "2 of 40 failed",
 			Tail: "--- FAIL: TestRetry", Failures: []gitlet.CheckFailure{{Path: "upload/retry_test.go", Line: 12,
 				TestID: "TestRetry", Message: "want 2, got 3"}}, FailuresOmitted: 4,
+			Tests: &gitlet.CheckTests{Total: 40, Failed: 2, Skipped: 1}, LogLines: 1201, TailCut: true,
 			Log: &gitlet.CheckLog{Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte("log")), Size: 900},
 			URL: "https://ci.example.com/run/1", FinishedAt: created}},
 	} {

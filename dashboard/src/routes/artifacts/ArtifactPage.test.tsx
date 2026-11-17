@@ -297,6 +297,22 @@ test("an older version says so, with the way back to the latest", () => {
   expect(screen.queryByText(/an older version/)).toBeNull();
 });
 
+// SHOW LATEST beside an older version's chip, and none beside the latest.
+test("an older version has Show latest beside its chip, which shows the latest", () => {
+  mount(`#/artifacts/${ID}?version=1`);
+  fireEvent.click(screen.getByRole("button", { name: "Show latest" }));
+  expect(location.hash).toBe(`#/artifacts/${ID}`);
+  expect(screen.queryByRole("button", { name: "Show latest" })).toBeNull();
+});
+
+// THE COMMENT TOOL IS DRAWN AS THE PIN IT PLACES, not as a chat bubble.
+test("the Comment tool carries the comment pin's glyph", () => {
+  detail = { ...detail, kind: "html" } as ArtifactDetail;
+  mount(`#/artifacts/${ID}`);
+  const paths = [...tool("Comment").querySelectorAll("svg path")].map((p) => p.getAttribute("d"));
+  expect(paths).toEqual(["M3 21V12a9 9 0 1 1 9 9Z", "M12 8v8M8 12h8"]);
+});
+
 // A READER SIGNED IN WITH NO SEAT saw a People panel of everybody but
 // themselves: "You" was drawn only from a seat.
 test("the People panel starts with the reader, seat or none", () => {

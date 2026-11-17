@@ -1542,8 +1542,8 @@ func (c *Committer) answer(repoID string, p Proposal, d decided, res statelog.Re
 		return answered{carried: true}
 	}
 	if !d.inRecord {
-		// ANSWERED WITH NO RECORD: every command noop or ng, or the whole
-		// push refused.
+		// ANSWERED WITH NO RECORD: every command noop or ng and no attempt
+		// ([Attempted]), or the whole push refused.
 		return answered{res: ProposeResult{Answer: PushAnswer{
 			PushID: p.PushID, Commands: d.commands, Refused: d.refused, Detail: d.detail,
 		}}}

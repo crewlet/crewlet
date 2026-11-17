@@ -495,6 +495,26 @@ func StatelessRefusal(c Command) Refusal {
 	return ""
 }
 
+// Attempted reports a push every command of which is refused, one at least by a rule on who may move
+// which ref ([attemptRefusals]): what is recorded of a push git received nothing of which lands, an
+// ATTEMPT that moves nothing ([PushEntry]).
+func Attempted(cmds []Command) bool {
+	ruled := false
+	for _, c := range cmds {
+		if c.Result != ResultNG {
+			return false
+		}
+		ruled = ruled || slices.Contains(attemptRefusals, c.Reason)
+	}
+	return ruled
+}
+
+// attemptRefusals are the refusals a rule makes of the pusher's own update, each a rule a reader can
+// open; a refusal of the client's view, the content's size, the repository's state or the fleet's is
+// no attempt.
+var attemptRefusals = []Refusal{RefusalProtectedDirect, RefusalProtectedForce, RefusalProtectedDelete,
+	RefusalTagMoved, RefusalReservedRef, RefusalNotPermitted, RefusalDefaultBranch}
+
 // DefaultBranchRefusal is the rule that keeps a repository's default branch,
 // named defaultBranch ("main"), in a repository named repo: a deletion of it is
 // refused default_branch, with its sentence; "" for every other command.

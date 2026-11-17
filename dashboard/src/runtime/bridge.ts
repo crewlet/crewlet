@@ -203,9 +203,17 @@ export interface CommentView {
   y: number;
 }
 
-/** Host to page, on the `comments` topic: the mode, a part to bring into view, or a part to draw. */
+/** The longest placing cursor a page takes: the kit's pin is under 1 KiB. */
+export const COMMENT_CURSOR_MAX = 4096;
+
+/**
+ * Host to page, on the `comments` topic: the mode (with the CSS cursor to
+ * place by), a part to bring into view, or a part to draw.
+ */
 export type CommentRequest =
-  { mode: CommentMode } | { reveal: CommentTarget } | { capture: { id: number } & CommentTarget };
+  | { mode: CommentMode; cursor?: string }
+  | { reveal: CommentTarget }
+  | { capture: { id: number } & CommentTarget };
 
 /** One declared anchor as the page draws it, in CSS pixels of its document. */
 export interface CommentAnchorBox {
@@ -498,9 +506,12 @@ function readTarget(data: Record<string, unknown>): CommentTarget | null {
 export function readCommentRequest(data: Record<string, unknown>): CommentRequest | null {
   if (data["mode"] !== undefined) {
     const mode = data["mode"];
-    return typeof mode === "string" && (COMMENT_MODES as readonly string[]).includes(mode)
-      ? { mode: mode as CommentMode }
-      : null;
+    if (typeof mode !== "string" || !(COMMENT_MODES as readonly string[]).includes(mode))
+      return null;
+    const cursor = data["cursor"];
+    return typeof cursor === "string" && cursor !== "" && cursor.length <= COMMENT_CURSOR_MAX
+      ? { mode: mode as CommentMode, cursor }
+      : { mode: mode as CommentMode };
   }
   const reveal = record(data["reveal"]);
   if (reveal) {

@@ -70,8 +70,9 @@ import (
 //
 // Neither arm is a record of its own: each decides one of the subject's
 // existing records (check_queued, check_started, check_finished), whose
-// fields are in the base format, as the checks subject is (checks.go). The
-// requests are estate requests, and take no versionedFields row.
+// fields are in the base format but an ending's counts ([CheckCountsVersion]),
+// as the checks subject is (checks.go). The requests are estate requests, and
+// take no versionedFields row.
 
 // CheckRerun asks for the attempt after the latest its asker read of a check
 // of a commit for its target — the key's Attempt is the one queued, the
@@ -127,6 +128,11 @@ type CheckReported struct {
 	Tail            string         `json:"tail,omitempty"`
 	Failures        []CheckFailure `json:"failures,omitempty"`
 	FailuresOmitted int            `json:"failures_omitted,omitempty"`
+	// Tests, LogLines and TailCut are what an ending counts ([CheckFinished.Tests]); a running
+	// check says none.
+	Tests    *CheckTests `json:"tests,omitempty"`
+	LogLines int         `json:"log_lines,omitempty"`
+	TailCut  bool        `json:"tail_cut,omitempty"`
 	// DurationMs is how long the CI's run took, where it says.
 	DurationMs int64 `json:"duration_ms,omitempty"`
 	// URL is the CI's own page of the run, at most MaxCheckURLBytes.
@@ -141,7 +147,8 @@ func (r CheckReported) record(reporter Principal, at time.Time) (OpKind, any) {
 	}
 	return OpCheckFinished, CheckFinished{CheckKey: r.CheckKey, State: r.State, Reason: CheckReasonReported,
 		DurationMs: r.DurationMs, Summary: r.Summary, Tail: r.Tail, Failures: r.Failures,
-		FailuresOmitted: r.FailuresOmitted, Reporter: &reporter, URL: r.URL, FinishedAt: at}
+		FailuresOmitted: r.FailuresOmitted, Tests: r.Tests, LogLines: r.LogLines, TailCut: r.TailCut,
+		Reporter: &reporter, URL: r.URL, FinishedAt: at}
 }
 
 // validate refuses a report by reporter no correct asker forms: its
@@ -155,7 +162,7 @@ func (r CheckReported) validate(reporter Principal) error {
 		return checkField("report.state", "%q is not one a CI reports: running, passed, failed, errored or "+
 			"cancelled", r.State)
 	case r.State == CheckStateRunning && (r.Summary != "" || r.Tail != "" || len(r.Failures) > 0 ||
-		r.FailuresOmitted > 0 || r.DurationMs != 0):
+		r.FailuresOmitted > 0 || r.DurationMs != 0 || r.Tests != nil || r.LogLines != 0 || r.TailCut):
 		return checkField("report.summary", "a running check says nothing yet: its ending carries what it said")
 	}
 	if err := reporter.Validate(); err != nil {

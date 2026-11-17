@@ -28,6 +28,18 @@ export const REPO_STATUSES = ["importing", "active", "archived", "deleted", "pur
 export const REPO_SEARCH_MODES = ["indexed", "grep"] as const;
 
 /**
+ * What a repository is for (`gitlet.RepoKinds`): the listing's `kind` filter. HELD BOTH WAYS, in
+ * order, by `internal/gitlet.TestTheDashboardKnowsEveryKindOfRepository`.
+ */
+export const REPO_KINDS = ["project", "scratch"] as const;
+
+/**
+ * The orders a listing of repositories walks (`gitlet.RepoSorts`): its `sort`. HELD BOTH WAYS, in
+ * order, by `internal/gitlet.TestTheDashboardSortsRepositoriesAsTheEngineDoes`.
+ */
+export const REPO_SORTS = ["name", "pushed"] as const;
+
+/**
  * The classes of a path a merge gate exempts a change by (`gitlet.PathClasses`),
  * narrowest first: what a protection rule's form offers for its approvals'
  * exemptions and each human path's. HELD BOTH WAYS, in order, by
@@ -121,8 +133,8 @@ export const CHANGE_STATES = ["draft", "open", "closed", "merged"] as const;
  * What a listing of changes can ask its changes to be waiting on, in the
  * engine's order (`gitlet.Needs`): a review the asker owes, a fix their own
  * change owes, either of the two, or a PERSON — a change whose readiness's
- * first unmet precondition waits on persons alone, which the "Needs a person"
- * band lists. Each lists LIVE changes. HELD BOTH WAYS, in order, by
+ * first unmet precondition waits on persons alone, which Home's code card lists.
+ * Each lists LIVE changes. HELD BOTH WAYS, in order, by
  * `internal/gitlet.TestTheDashboardKnowsEveryNeedOfAListingOfChanges`.
  */
 export const CHANGE_NEEDS = ["review", "fix", "me", "person"] as const;
@@ -136,6 +148,12 @@ export const CHANGE_NEEDS = ["review", "fix", "me", "person"] as const;
  * `internal/gitlet.TestTheDashboardKnowsEveryWindowOfAListingOfChanges`.
  */
 export const CHANGE_WINDOWS = ["24h", "7d", "30d"] as const;
+
+/**
+ * Every order a listing of changes is asked in (`sort=`), as `gitlet.ChangeSorts` says them;
+ * held both ways by `internal/gitlet.TestTheDashboardKnowsEverySortOfAListingOfChanges`.
+ */
+export const CHANGE_SORTS = ["opened", "updated"] as const;
 
 /**
  * Every precondition a live change's readiness judges, ONE A KIND, in the
@@ -159,6 +177,12 @@ export const PRECONDITION_KINDS = [
   "merge_authority",
   "queue",
 ] as const;
+
+/**
+ * Whom a push counts as among a repository's pushers (`gitlet.PusherKinds`): a seat, a person by
+ * the human seat they hold, or Gitlet. HELD BOTH WAYS by `TestTheDashboardCountsEveryPusherKind`.
+ */
+export const PUSHER_KINDS = ["agent", "person", "gitlet"] as const;
 
 /**
  * Where one precondition stands (`gitlet.PreconditionStates`): met; unmet,
@@ -356,6 +380,16 @@ interface CodeSearchHit {
   text: string;
   /** The file's object id, whole. */
   blob: string;
+  /** Where `text` matched: byte offsets [start, end) into its UTF-8, at most 32. */
+  matches?: [number, number][];
+  /**
+   * The file's lines just before and after, where `context` was asked; a
+   * line another hit carries is not repeated.
+   */
+  before?: string[];
+  after?: string[];
+  /** How many lines of the file matched, where `per_file` was asked and the whole file read. */
+  file_matches?: number;
 }
 
 /**

@@ -41,8 +41,9 @@ func TestTheSwitchOffAsksNoHostForALostRunsSession(t *testing.T) {
 	})
 }
 
-// A SPOOL A CRASH LEFT BEHIND IS SWEPT BY THE FIRST TAKE AFTER IT AGES, and by
-// every take after — a younger one, a keep under way, never. Swept once a
+// A SPOOL A CRASH LEFT BEHIND IS SWEPT BY THE FIRST TAKE AFTER IT AGES past the
+// longest a keep may still wait to open its spool, and by every take after — a
+// younger one, a keep under way, never. Swept once a
 // process, a node restarted soon after a crash found that crash's spools young
 // at its first take and never swept again.
 //
@@ -73,10 +74,10 @@ func TestASpoolACrashLeftIsSweptByTheTakesAfterItAges(t *testing.T) {
 		young := plant("under-way", time.Minute)
 		take("t1")
 		if _, err := os.Stat(crashed); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("a spool older than a capture can take was left by the take after it (%v)", err)
+			t.Errorf("a spool older than a keep may wait to open it was left by the take after it (%v)", err)
 		}
 		if _, err := os.Stat(young); err != nil {
-			t.Errorf("a spool younger than a capture can take was swept: %v", err)
+			t.Errorf("a spool younger than a keep may wait to open it was swept: %v", err)
 		}
 		later := plant("crashed-later", 3*SessionCaptureBudget)
 		take("t2")
@@ -291,10 +292,11 @@ func (s *timedStamps) askedUnder(state CaptureState) []time.Time {
 
 // readUntil is a read of a box whose deadline leaves its take two seconds — its
 // own deadline, T — and, after that, the room the read keeps for the take's
-// outcome stamp, up to by, and for its box's pause ([Coordinator.takeContext]).
+// records, a grace for each of the two, up to by, and for its box's pause
+// ([Coordinator.takeContext]).
 func readUntil(t *testing.T) (read context.Context, by time.Time) {
 	t.Helper()
-	read, cancel := context.WithTimeout(t.Context(), 2*discardGrace+2*time.Second)
+	read, cancel := context.WithTimeout(t.Context(), 3*discardGrace+2*time.Second)
 	t.Cleanup(cancel)
 	deadline, _ := read.Deadline()
 	return read, deadline.Add(-discardGrace)
