@@ -12,7 +12,7 @@ import { afterEach, expect, test } from "vitest";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, type CodeCheckRollup } from "~/protocol/index.ts";
 import { CODE_ORG } from "~/test/codeScreens.tsx";
-import { ChangeRefPill } from "./Changes.tsx";
+import { ChangeRefPill } from "./ChangeRow.tsx";
 import { gitletWrote } from "./repo/History.tsx";
 import { CheckRollupMark, Face, GITLET, TagChip, useWhoName } from "./ui.tsx";
 

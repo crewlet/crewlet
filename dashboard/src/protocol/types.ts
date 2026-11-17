@@ -8732,7 +8732,17 @@ export interface CodePrecondition {
   waits_on?: CodeParty[];
   blockers?: CodeBlocker[];
   blockers_omitted?: number;
+  /** A queue precondition's live entry and its place; absent on every other kind. */
+  queue?: CodeQueuedFacts;
   detail: string;
+}
+
+/** A change's live entry in its target's merge queue, and its place (`gitlet.QueuedFacts`). */
+export interface CodeQueuedFacts {
+  entry_id: string;
+  target_ref: string;
+  state: (typeof QUEUE_STATES)[number] | (string & {});
+  place: number;
 }
 
 /**

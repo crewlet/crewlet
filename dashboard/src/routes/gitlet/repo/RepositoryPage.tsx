@@ -463,7 +463,7 @@ const REPO_CHANGE_STATES = CHANGE_STATE_FILTERS;
 
 /**
  * The changes proposed to this repository: Gitlet › Changes narrowed to it,
- * in the grid every listing of changes draws — open until the reader picks
+ * in Gitlet's change row, open until the reader picks
  * another state, and every state offered, since the repository narrows the
  * engine's walk.
  */

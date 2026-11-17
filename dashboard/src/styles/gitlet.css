@@ -11,28 +11,88 @@
    glyphs and their names, a seat by its own face, a picked run by the selected
    tint and the accent edge. */
 
-/* GITLET › CHANGES' "NEEDS A PERSON" BAND: the changes an agent company cannot
-   move on its own, above the grid. A ruled box rather than a callout, since
-   nothing here is a fault: it is a list, read first. */
-.code-person-band {
+/* GITLET › CHANGES' "WAITING ON YOU": what waits on the reader, above the list. The list's
+   own card with its head band, not a callout, since nothing here is a fault. */
+.code-wait {
+  margin-block-end: var(--spacing-4);
+}
+.code-wait__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  inline-size: 100%;
+}
+.code-wait__title {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+.code-wait__count {
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+.code-wait__all {
+  margin-inline-start: auto;
+}
+.code-wait__reason {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+/* IN TRACKS OF THEIR OWN WIDTH, so the meters and the actions line up down the box. */
+.code-wait__facts {
+  display: grid;
+  grid-template-columns: 7.5rem 6rem;
+  align-items: center;
+  justify-items: end;
+  gap: var(--spacing-4);
+}
+.code-wait__fact {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* THE LIST'S HEAD: the state tabs, then the pickers at the end of the line; each wraps. */
+.code-changes-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  inline-size: 100%;
+}
+.code-changes-head__pickers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-inline-start: auto;
+}
+
+/* NEW CHANGE without a repository: which repository's branches to compare. */
+.code-new-change {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
-  margin-block-end: var(--spacing-4);
-  padding: var(--spacing-3) var(--spacing-4);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
+  min-inline-size: 16rem;
+  padding: var(--spacing-3);
+}
+.code-new-change__lab {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
 }
 
-/* A live change's readiness in the Changes grid: a meter of its own width
-   beside its count, since the kit's meter fills its box and has none. */
+/* A live change's readiness: a segment per condition, of its slot's width, beside its count. */
 .code-readiness {
   display: inline-flex;
   align-items: center;
   gap: var(--spacing-2);
 }
-.code-readiness__meter {
-  flex: 0 0 4rem;
+.code-readiness__bar {
+  flex: none;
+  inline-size: 5rem;
 }
 .code-readiness__count {
   font-size: var(--font-size-xs);
@@ -40,7 +100,8 @@
   color: var(--color-text-tertiary);
 }
 
-.code-person-band__list {
+/* A change's authors in its peek, one a line. */
+.code-change-authors {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
@@ -79,6 +140,10 @@
 [role="row"]:is([aria-current="true"], :has([aria-current="true"])) .code-branch-chip {
   background: none;
 }
+/* On the list's current row too. */
+.code-list__row[data-current] .code-branch-chip {
+  background: none;
+}
 
 /* A CHANGE'S STATE: the kit's change colours on the kit's pill, beside the
    state's glyph and word (the seventh exception). */
@@ -106,6 +171,24 @@
    pictured value's words on their baseline. */
 .code-state[data-state] > :last-child {
   align-self: center;
+}
+
+/* A CHANGE'S STATE AS A ROW'S LEAD: its glyph in the state's ink (the seventh exception). */
+.code-state-glyph {
+  display: inline-flex;
+  color: var(--color-text-tertiary);
+}
+.code-state-glyph[data-state="open"] {
+  color: var(--color-change-open-ink);
+}
+.code-state-glyph[data-state="merged"] {
+  color: var(--color-change-merged-ink);
+}
+.code-state-glyph[data-state="closed"] {
+  color: var(--color-change-closed-ink);
+}
+.code-state-glyph[data-state="draft"] {
+  color: var(--color-change-draft-ink);
 }
 
 /* GITLET'S FACE: its product mark in the box a seat's avatar takes. */
@@ -750,45 +833,6 @@
   border-radius: var(--radius-sm);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-/* A CHANGE AS A ROW NAMES IT: its title, then the line that places it. */
-.code-change-cell {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
-  padding-block: var(--spacing-1);
-}
-
-.code-change-cell__title {
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-  overflow-wrap: anywhere;
-}
-
-.code-change-cell__meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-1) var(--spacing-2);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
-.code-change-cell__who {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  color: var(--color-text-secondary);
-}
-
-.code-change-cell__branches {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-1);
-  min-width: 0;
 }
 
 /* PROVENANCE: a label and its value a row, the labels one column. */
@@ -2383,6 +2427,7 @@
 /* ---- A list of rows of sentences (`routes/gitlet/CodeList.tsx`) ---------- */
 
 .code-list {
+  container: code-list / inline-size;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-4);
@@ -2405,6 +2450,29 @@
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
   overflow: clip;
+}
+
+/* A CARD WITH A HEAD: the head and the rows on one surface, the hairline its own. Only the
+   rows clip, so a picker's list in the head can hang past a short card. */
+.code-list__card {
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+.code-list__card > .code-list__head {
+  padding: var(--spacing-2) var(--row-inline);
+}
+
+.code-list__card > .code-list__rows {
+  border: 0;
+  border-block-start: 1px solid var(--color-border-default);
+  border-radius: 0 0 calc(var(--radius-md) - 1px) calc(var(--radius-md) - 1px);
+}
+
+.code-list__card > .code-list__placeholder {
+  padding: var(--spacing-4) var(--row-inline);
+  border-block-start: 1px solid var(--color-border-default);
 }
 
 .code-list__row {
@@ -2514,6 +2582,11 @@
   white-space: nowrap;
 }
 
+/* A CHANGE'S FACTS STAND ON ITS TITLE'S LINE however its meta wraps. */
+.code-list__facts:has(> .code-change-facts) {
+  align-self: start;
+}
+
 /* SPACED BY ITS OWN MARGIN, so a row with nothing below keeps no gap for it. */
 .code-list__below {
   grid-area: below;
@@ -2587,8 +2660,8 @@
   color: var(--color-text-tertiary);
 }
 
-/* THE PHONE: the facts under the words, and the timeline's track given back to them. */
-@container page (width < 640px) {
+/* THE PHONE, BY THE LIST'S OWN WIDTH: the facts under the words, the timeline's track given back. */
+@container code-list (width < 640px) {
   .code-list__row {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas: "body" "facts" "below";
@@ -2616,6 +2689,146 @@
 
   .code-list--timeline .code-list__heading {
     margin-inline-start: 0;
+  }
+}
+
+/* ---- A change's row (`routes/gitlet/ChangeRow.tsx`) ---------------------- */
+
+.code-change-tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1);
+  font-weight: var(--font-weight-regular);
+}
+
+/* THE LINE THAT PLACES A CHANGE: its parts parted by middle dots, each kept on one line with
+   its part's last item, so a dot ends a line it wraps and never stands alone. */
+.code-change-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) 0;
+  min-width: 0;
+}
+.code-change-meta__end {
+  white-space: nowrap;
+}
+.code-change-meta__end > * {
+  white-space: normal;
+}
+.code-change-meta__dot {
+  margin-inline: var(--spacing-2);
+  color: var(--color-text-tertiary);
+}
+
+.code-change-owner,
+.code-change-work {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  color: var(--color-text-secondary);
+}
+
+.code-change-branches {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+/* THE FACTS IN SLOTS OF THEIR OWN WIDTH, so each lines up down the list; updated under them. */
+.code-change-facts {
+  display: grid;
+  grid-template-columns: 3.5rem 7.5rem 5rem 2.75rem;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-3);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+.code-change-fact {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+.code-change-fact--updated {
+  grid-column: 1 / -1;
+  justify-self: end;
+}
+
+.code-change-checks,
+.code-change-comments {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+  text-decoration: none;
+}
+.code-change-checks[data-tone="success"] > :first-child {
+  color: var(--color-feedback-success-ink);
+}
+.code-change-checks[data-tone="danger"] > :first-child {
+  color: var(--color-feedback-danger-ink);
+}
+.code-change-checks[data-tone="info"] > :first-child {
+  color: var(--color-feedback-info-ink);
+}
+.code-change-checks[data-tone="neutral"] > :first-child {
+  color: var(--color-text-tertiary);
+}
+
+.code-change-draft,
+.code-change-updated {
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+.code-change-faces {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.code-change-face {
+  display: inline-flex;
+}
+.code-change-faces__more {
+  margin-inline-start: var(--spacing-1);
+  color: var(--color-text-tertiary);
+}
+
+/* NO REVIEWER ASKED: a person's round face, dashed, holding a person's glyph. */
+.code-change-nobody {
+  display: inline-grid;
+  place-items: center;
+  inline-size: 20px;
+  block-size: 20px;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  color: var(--color-text-tertiary);
+}
+
+/* A CHANGE ROW FOLDS BELOW 820 PX of its list, where its facts would leave its words
+   under about 400 px; the facts then wrap by their own widths under the words. */
+@container code-list (width < 820px) {
+  .code-list--lead .code-list__row:has(.code-change-facts) {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "lead body" "lead facts" "lead below";
+  }
+
+  .code-list__facts:has(> .code-change-facts) {
+    flex-wrap: wrap;
+    margin-block-start: var(--spacing-2);
+    white-space: normal;
+  }
+
+  .code-change-facts {
+    grid-template-columns: repeat(4, auto);
+    justify-content: start;
+  }
+
+  .code-change-fact--updated {
+    justify-self: start;
   }
 }
 
