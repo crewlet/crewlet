@@ -785,7 +785,16 @@ carries. So until it is upgraded an older node retains every code record
 carrying it, and with it every later record whose scope meets one — the same
 repository's or change's — and applies the rest, stamped 1 still: a person's
 push, a change's mergeability and a seat's own work, wherever no such record
-came before them. A release that adds a field to a record gives it the next
+came before them. Its version 3, when a revision's facts were measured and the
+globs each matched path owner and each ask of one is for, rides every
+revision's facts a home of that build records, so an older data node retains
+each of them, and every later record of its repository, within minutes of the
+first such home's pass: a roll that upgrades every data node before any Gitlet
+node holds none back, and any other roll, a fleet whose nodes hold the data
+themselves among them, finishes inside the deferral grace, past which each
+older data node takes its copy of the code log out of service until it is
+upgraded ([What a rolling upgrade blocks](#what-a-rolling-upgrade-blocks)).
+A release that adds a field to a record gives it the next
 version of its domain's table, and from then on an older node holds back the
 records carrying it and every later record whose scope meets one — except a
 gate record, which an older node stops on
@@ -1078,12 +1087,12 @@ what a company whose seats work through changes writes to it**. At the
 reference company — 3 000 pushes a day, every one a seat's, priced as its
 coding box's, 1 667 bytes alone in its record, and 300
 [changes](../concepts/gitlet.md#changes) a day, ten pushes each — the code
-log takes 22.6–100.4 MB a day against the 12.1 MB its tracker writes and its
+log takes 22.7–100.5 MB a day against the 12.1 MB its tracker writes and its
 seats' reads take: nearly twice to about eight times what its
 tracker writes and its seats' reads take a day. Its pushes are 5.0 MB of that, the
 records that [compact](../concepts/gitlet.md#compaction) their packs, publish
 their layers and sweep what each compaction retired 0.6–4.0 MB, its git
-clients' barriers 2.4–5.0 MB, and its changes' records 14.6–86.5 MB: each
+clients' barriers 2.4–5.0 MB, and its changes' records 14.7–86.6 MB: each
 change's open, its ask of a reviewer, a review asking for changes with two
 findings and the answer to them, two comments and a thread resolved, an
 approving review and its merge, and every revision's facts and mergeability
@@ -1091,7 +1100,7 @@ its home records — routed to nobody until the refresh that turns the change
 ready, which goes to whoever may merge it — and, after the ask, the reviews
 and the answer, only the readiness it kept, at their measured sizes (an open
 3 160 bytes, a review asking for changes with two findings 5 070, an approving
-review 2 380, a comment 1 950, a merge 2 040, a revision's facts 1 420, its
+review 2 380, a comment 1 950, a merge 2 040, a revision's facts 1 460, its
 mergeability 1 030) — the most adding a queue entry a change, which its home's
 [merge queue](../concepts/gitlet.md#the-merge-queue) tests in a train of its own,
 its three checks queued on the train's candidate, claimed, their boxes named
@@ -1131,7 +1140,7 @@ log's ceiling with
 log takes a day**, the same two `bytes_per_day` side by side, so a code log
 at half the mutation log's ceiling fills no sooner while a trim is blocked.
 That is only ever a company whose seats open no changes: at the reference
-company the changes' records alone, 14.6 MB a day at their least, are more
+company the changes' records alone, 14.7 MB a day at their least, are more
 than the mutation log's whole day.
 
 **The half is of the ceiling the mutation log is created with, never of what
