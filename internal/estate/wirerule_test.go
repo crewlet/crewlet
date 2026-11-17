@@ -1104,3 +1104,62 @@ func TestEveryAnswerReadWholeIsOneACallerCarriesIntoAnotherRequest(t *testing.T)
 		}
 	}
 }
+
+// A CHANGES LISTING NARROWED BY READINESS IS ASKED OF A BUILD THAT READS IT: a data node whose build
+// declares no readiness refuses the member unread and the walk asks the next; unnarrowed, it serves.
+// Mutation: keep the bucket off the wire (json:"-") and the older node answers the narrowed read.
+func TestAChangesListingNarrowedByReadinessIsAskedOfABuildThatReadsIt(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	nodes, _ := f.placement.Holders()
+	order := f.client.order(opCodeRead.spec, nodes)
+	older, newer := f.nodes[order[0]], f.nodes[order[1]]
+	older.set(func(n *fakeNode) {
+		// AN OLDER BUILD: the member reaches it under a name its build does not declare.
+		n.olderBuild = func(req request) request {
+			var args map[string]json.RawMessage
+			if err := json.Unmarshal(req.Args, &args); err != nil {
+				panic(fmt.Sprintf("the arguments of %s do not decode: %v", req.Op, err))
+			}
+			if bucket, held := args["readiness"]; held {
+				delete(args, "readiness")
+				args["readiness_of_a_later_build"] = bucket
+				raw, err := json.Marshal(args)
+				if err != nil {
+					panic(err)
+				}
+				req.Args = raw
+			}
+			return req
+		}
+	})
+	reads := func(n *fakeNode) int {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		read := 0
+		for _, op := range n.asked {
+			if op == "code.read" {
+				read++
+			}
+		}
+		return read
+	}
+	asker := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"}
+	q := gitlet.ReadQuery{Asker: asker, Kind: gitlet.ReadChanges, State: gitlet.ChangeStateOpen,
+		Fresh: statelog.Freshness{Level: statelog.ReadStale}}
+	if _, err := f.client.Code().Read(t.Context(), q); err != nil {
+		t.Fatalf("the unnarrowed listing: %v", err)
+	}
+	if reads(older) != 1 || reads(newer) != 0 {
+		t.Fatalf("the unnarrowed listing was read %d times by %s and %d by %s, want once by the first",
+			reads(older), older.name, reads(newer), newer.name)
+	}
+	q.Readiness = gitlet.BucketChecks
+	if _, err := f.client.Code().Read(t.Context(), q); err != nil {
+		t.Fatalf("the listing narrowed to checks: %v", err)
+	}
+	if reads(older) != 1 || reads(newer) != 1 {
+		t.Errorf("the narrowed listing was read by %s %d more times and by %s %d, want by %s alone",
+			older.name, reads(older)-1, newer.name, reads(newer), newer.name)
+	}
+}

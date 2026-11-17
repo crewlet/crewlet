@@ -1850,7 +1850,8 @@ answer that holds every record the code log had committed when it was asked.
   do, and ask for the identity it resolves to, while an identity (a Worklet
   task's id, bare or under `native:`) is listed as named, with no read of the
   tracker — a **state**, a **reviewer**, **what its changes wait on** or a
-  **window** they moved in, and may narrow further by an **owner** (a
+  **window** they moved in (or **where their merge stands**, below), and may
+  narrow further by an **owner** (a
   seat by its handle, or a person by the human seat they hold) and by
   whichever of the others it did not name. One that names none of them is
   refused: no index holds every change the company has, and an owner's
@@ -1926,6 +1927,10 @@ answer that holds every record the code log had committed when it was asked.
   or merged stores no answer, so it is never read here.
 - A need lists **live** changes alone, and is refused beside a closed or
   merged state.
+- **Where a change's merge stands** is `readiness=`: `ready`, `approval`,
+  `checks` or `blockers` ([Changes by where their merge
+  stands](#changes-by-where-their-merge-stands)). It lists open changes alone,
+  and is refused beside a draft, closed or merged state.
 - **One change**, by its number on its repository — `web!42` — with its row
   (title, state, branches, head and revision, version, owner, the work item it
   carries, when it was opened, closed or merged and how), its description and
@@ -1954,7 +1959,7 @@ answer that holds every record the code log had committed when it was asked.
   so a seat's listing and a change's readiness do not grow.
 
 **A listing reads the one index its filters lead with** — the changes whose
-stored readiness waits on a person; a reviewer's
+stored readiness waits on a person, or is ready; a reviewer's
 standing asks; a work item's changes; an owner's in a state, which is also
 what `needs=fix` reads; a repository's in a state; a repository's; the
 company's in a state — so a repository's open changes are read without its
@@ -1962,7 +1967,8 @@ closed and merged history, however long that grows. A filter that index does
 not hold — a repository beside a work item, an owner or a reviewer, a state
 beside a work item or a reviewer, an owner beside a repository with no state,
 a work item beside a reviewer, whether a change waits on its owner's fix,
-which its conversation's counters say, and whether it waits on a person,
+which its conversation's counters say, and whether it waits on a person or
+where its merge stands,
 which its readiness says — is tested on each change the page
 read, never by reading further: a page is the changes it
 **read**, not the changes it kept, so it can be short, or empty with a cursor,
@@ -2029,6 +2035,64 @@ the revision asked about ([Where lines are in another
 revision](#where-lines-are-in-another-revision)), its reviews and its
 comments — each page cut whole-row at one tool answer and resumed after the
 last row it kept.
+
+### Changes by where their merge stands
+
+A listing of changes narrowed by `readiness=` keeps the open changes whose
+merge stands in one bucket:
+
+| `readiness=` | Lists the open changes |
+|---|---|
+| `ready` | whose every precondition is met, whoever merges them |
+| `approval` | standing at an approval: a counted one, a person's, or the path owners' |
+| `checks` | standing at the checks their target requires: one failed, queued or running |
+| `blockers` | standing at a blocker that stands |
+
+**A change stands in one bucket**: the one its first unmet precondition
+names, in the order a change moves through, else its first `computing`
+one's ([Merge readiness](#merge-readiness)). So no change is in two buckets.
+The merge authority is set aside: it is the one precondition that depends
+on who asks, so a bucket lists the same changes whoever asks, each still
+held to the reader's grant. For a reader who may merge the change, the
+sentence its readiness leads with matches the bucket it is listed under.
+For one who may not, an unmet merge authority comes before a check still
+queued or running, so the readiness can lead with who merges the change
+while it is listed under `checks`, and a ready change it may not merge is
+listed as ready, its readiness naming who merges it.
+
+**Some open changes stand in none**: a draft, a change whose facts its home
+has not recorded yet, one that does not merge cleanly, and one its target's
+merge queue holds, which is merging rather than waiting. A queued change
+whose head's checks still run stands at `checks`. Waiting on a person is
+`needs=person` ([Reading changes](#reading-changes)), which `readiness=`
+combines with, as it does with every other filter.
+
+**`ready` reads the stored answer**: the changes whose stored readiness is
+ready, newest first, each kept only where the readiness the read judges is
+still ready. A change that became ready since its last record (an approval,
+a check that passed, a configuration that changed who may approve it) is
+listed once its home refreshes it, at the home's next pass: a minute later
+at the most. A change that is no longer ready (a blocker raised, a check
+that failed) is left out at once. A change that closed or merged stores no
+answer, so it is never read here. Beside a reviewer or a need, and under
+`sort=updated`, `ready` reads as the other three do.
+
+**`approval`, `checks` and `blockers` read the open changes** the other
+filters choose (a repository's, an owner's, a work item's, a reviewer's, a
+need's, or the company's), in that walk's order and with any sort and
+window, and keep those whose judged readiness stands in the bucket. They
+store nothing, so they are never stale; and a page is the changes it read,
+so it can be short, or empty with a cursor, and a reader pages until no
+cursor comes back.
+
+**A bucket lists open changes alone**: a listing that names it and no state
+reads `state=open`, and one beside `draft`, `closed` or `merged` is refused.
+**Every page a bucket narrows says so** (`narrowed_to`, the bucket), an empty
+page included. A data node of an older build that does not read `readiness`
+is never asked to: the read moves on to one that does. So a page without
+`narrowed_to` was not narrowed, and a client says the filter is not
+available yet rather than drawing the unnarrowed listing under the bucket's
+name.
 
 ### Counting changes
 
@@ -7082,7 +7146,9 @@ records: what a merge counts is the change's own reviews and findings.
   gate](#the-merge-gate)) — else the first that is `computing`, else that the
   change is ready. A change whose first unmet precondition waits on persons
   alone **waits on a person**, which `needs=person` lists ([Reading
-  changes](#reading-changes)).
+  changes](#reading-changes)). The precondition it stands at places it in one
+  bucket, which `readiness=` lists ([Changes by where their merge
+  stands](#changes-by-where-their-merge-stands)).
 
 **Judged on every read, stored by its home.** A read of a change, and each
 row of a listing, judges the readiness again from the read's own snapshot.
@@ -7091,7 +7157,7 @@ own snapshot, with the merge it records — and stores whether the change was
 ready and whether it waited on a person, beside the versions of the change's
 row and of what the readiness reads that it was judged at, and the position of
 its head's checks. That stored answer is what a wake that a change became
-ready reads, and what `needs=person` seeks. When either version moves past
+ready reads, and what `needs=person` and `readiness=ready` seek. When either version moves past
 it — a review, an ask for review, an answer to a finding, a revision's facts,
 an edit, a retarget, a draft flag — or an attempt of its head's checks is
 queued or ends past that position

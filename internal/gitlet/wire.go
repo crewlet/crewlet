@@ -1390,6 +1390,10 @@ type ReadQuery struct {
 	// ChangeSort orders a `changes` listing ([ChangeSort]); "" is its walk's own order. A request
 	// field, so an older build refuses it unread and the router asks the next node.
 	ChangeSort ChangeSort `json:"change_sort,omitempty"`
+	// Readiness narrows a `changes` listing to the open changes standing in one bucket
+	// ([Readiness.Bucket]); refused on every other kind. A request field, so an older build
+	// refuses it unread and the router asks the next node.
+	Readiness ReadinessBucket `json:"readiness,omitempty"`
 	// Part is the list a `change` read pages beside the change — its
 	// revisions, which "" names too, its reviewers, its comments, its
 	// reviews, its findings or the asker's own standing findings
@@ -1643,6 +1647,9 @@ type ReadAnswer struct {
 	// versionedFields row. The domain landed on main with it, as with
 	// [ReadQuery.Brief].
 	ChangeBrief *ChangeSummary `json:"change_brief,omitempty"`
+	// NarrowedTo is, on every page of a `changes` listing narrowed by [ReadQuery.Readiness], the
+	// bucket it was narrowed to: a page without it was read with no such narrowing.
+	NarrowedTo ReadinessBucket `json:"narrowed_to,omitempty"`
 	// Resolved is the repository the read's name resolved to, on a read that
 	// asks for it ([ReadQuery.Resolve]): its row as a `repo` read resolves
 	// it, at the answer's checkpoint, naming the name it redirects from where

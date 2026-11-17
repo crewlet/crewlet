@@ -177,7 +177,8 @@
 // leaves out the changes of every repository either may not, and of a
 // deleted one. Both carry each live change's readiness, judged in the read's
 // own transaction (readiness.go); and what waits on a person ([NeedPerson])
-// walks the changes whose stored readiness does, keeping those the read
+// walks the changes whose stored readiness does, as the ready bucket
+// ([ReadinessBucket]) walks the ones stored ready, keeping those the read
 // judges still do. What a surface reads of a change's CODE — a revision's
 // files from the base its facts record, what changed between two revisions,
 // where each finding is in the revision asked about, and the floor those
@@ -271,7 +272,8 @@
 // [NeedPerson] seeks — a home refreshing it, merging nothing, once a review,
 // an ask, an answer to findings, facts or the change's own row moves them
 // ([Mergeability.Refresh]). It reads the change's own review objects, never a
-// decision of the tracker's.
+// decision of the tracker's. A listing narrowed to [BucketReady] seeks the
+// stored answer too, as [NeedPerson] does.
 //
 // AND IT IS JUDGED UNDER ITS TARGET'S MERGE GATE (gatejudge.go): every reader
 // and every decide of a merge asks ONE pure [JudgeGate] over the facts one
