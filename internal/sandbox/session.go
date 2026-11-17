@@ -117,9 +117,9 @@ import (
 // again ([Coordinator.settleCapture]), or begun past its budget and not
 // named by the turn's row on the executor log, read once by the standby then
 // ([Coordinator.awaitStood]) — the standby takes the place after it
-// ([PendingStore.TakeOver]) and keeps its own. So a session one read
-// took whole is kept wherever either read could have kept it, where the read
-// that walked away once left a failed place to keep nothing — and that holds of
+// ([PendingStore.TakeOver]) and keeps its own. So a session one read took
+// whole is kept wherever either read could have kept it, where the read that
+// walked away once left a failed place to keep nothing — and that holds of
 // every read that finds its place taken: a stop's, a collection's and a
 // loss's, its reservation refused, found begun, or never answered
 // ([Coordinator.abandonPlace]). A read of the job ENDED beside a capture taken

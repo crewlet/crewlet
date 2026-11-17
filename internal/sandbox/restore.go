@@ -160,19 +160,19 @@ import (
 // and never answered is asked again under its own operation, as the turn's end
 // asks it ([Coordinator.settleUnresolved]): one that lands is continued. And
 // once the wait has run out, a capture of the job it follows still begun under
-// a taker whose lease HOLDS, however long ago it began, is read off the turn's
-// row once more, in a read held to as long again as the wait, and settled
-// landed where the row names its place, never refused: a host whose store
-// answers its leases and not its runs keeps its lease while no stamp of its
-// own reaches the row, for as long as that silence lasts, and the relaunch
-// that follows a job lost with that host continues the capture the log took
-// rather than start fresh beside it. A
-// record the log takes only after the settle's read — one its taker had handed
-// on before its lease's window closed — lands beside a stamp that says refused
-// (session.go, "WHAT THE FENCE CANNOT REACH"): the log keeps it, and the
-// relaunch starts without it, told with the row in hand as a capture the log
-// keeps, and its run named the turn's own as a session it may read
-// ([namedThoughRefused], [ContinuedSession.KeptTurn]).
+// a taker whose lease HOLDS, or that the store cannot say of, however long ago
+// it began, is read off the turn's row once more, in a read held to as long
+// again as the wait, and settled landed where the row names its place, never
+// refused: a host whose store answers its leases and not its runs keeps its
+// lease while no stamp of its own reaches the row, for as long as that silence
+// lasts, and the relaunch that follows a job lost with that host continues the
+// capture the log took rather than start fresh beside it. A record the log
+// takes only after the settle's read — one its taker had handed on before its
+// lease's window closed — lands beside a stamp that says refused (session.go,
+// "WHAT THE FENCE CANNOT REACH"): the log keeps it, and the relaunch starts
+// without it, told with the row in hand as a capture the log keeps, and its
+// run named the turn's own as a session it may read ([namedThoughRefused],
+// [ContinuedSession.KeptTurn]).
 //
 // SO A READER IS TOLD NEITHER AS DECIDED: while a capture or a save under way
 // is still being kept ([relaunchWaitsOn]), or its record awaits the log's
