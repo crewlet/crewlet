@@ -646,7 +646,7 @@ func TestAnAcknowledgementCarriesTheNamedStreamsOwnGeneration(t *testing.T) {
 	}}
 
 	code, body := postAck(t, ackApp(t, register, node),
-		"/worklet/retention/ack?stream=CREWLET_PAGES_LOG&position=918100000")
+		"/worklet/retention/ack?stream=CREWLET_PAGES_LOG&position=918100000&taken_at=2020-01-01T00:00:00Z")
 	if code != http.StatusOK {
 		t.Fatalf("the route answered %d: %v", code, body)
 	}
@@ -679,6 +679,72 @@ func TestAnAcknowledgementCarriesTheNamedStreamsOwnGeneration(t *testing.T) {
 	}
 }
 
+// AN ACKNOWLEDGEMENT RECORDS WHEN ITS COPY WAS TAKEN, NEVER WHEN IT WAS GIVEN.
+//
+// The point's At is what the backup-age alarm and the no-verified-backup
+// notice age, and it is documented as the instant the copy was taken
+// ([coord.BackupPoint.At]). The route stamped it with the time of the call,
+// so acknowledging a copy three days old cleared both as though the copy had
+// just been taken. Here the node's clock is pinned three days after the copy:
+// the point must carry the copy's instant, in UTC, and the answer must echo
+// it. An instant this node's clock has not reached is refused, as is one
+// that is missing or no RFC 3339, and nothing is written for any of them.
+func TestAnAcknowledgementRecordsWhenItsCopyWasTaken(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 17, 9, 0, 0, 0, time.UTC)
+	taken := now.Add(-3 * 24 * time.Hour)
+	node := &fakeStateLog{generations: map[string]uint32{"CREWLET_TRACKER_LOG": 3}}
+	app := func(register *fakeBackupRegister) *api.App {
+		b := closedPosture()
+		return newApp(t, api.Options{Bootstrap: &b, Retention: register, Capacity: node,
+			Now: func() time.Time { return now }})
+	}
+	const path = "/worklet/retention/ack?stream=CREWLET_TRACKER_LOG&position=918100000"
+
+	for _, tc := range []struct {
+		name, takenAt string
+		want          time.Time
+	}{
+		{"a copy three days old", "2026-11-14T09:00:00Z", taken},
+		{"the same instant written at another offset", "2026-11-14T11:00:00%2B02:00", taken},
+		{"a copy taken this very instant", "2026-11-17T09:00:00Z", now},
+	} {
+		register := &fakeBackupRegister{}
+		code, body := postAck(t, app(register), path+"&taken_at="+tc.takenAt)
+		if code != http.StatusOK {
+			t.Fatalf("%s: the route answered %d: %v", tc.name, code, body)
+		}
+		if !register.point.At.Equal(tc.want) || register.point.At.Location() != time.UTC {
+			t.Errorf("%s: the point records the copy as taken at %v, want %v in UTC: the "+
+				"backup's age is measured from it", tc.name, register.point.At, tc.want)
+		}
+		if body["taken_at"] != tc.want.Format(time.RFC3339) {
+			t.Errorf("%s: the answer echoes taken_at %v, want %s", tc.name, body["taken_at"],
+				tc.want.Format(time.RFC3339))
+		}
+	}
+
+	for _, tc := range []struct {
+		name, query string
+		code        httpjson.Code
+	}{
+		{"no instant", "", httpjson.CodeTakenAtRequired},
+		{"an instant that is no RFC 3339", "&taken_at=yesterday", httpjson.CodeTakenAtRequired},
+		{"a date with no time", "&taken_at=2026-11-14", httpjson.CodeTakenAtRequired},
+		{"an instant a second past the node's clock", "&taken_at=2026-11-17T09:00:01Z",
+			httpjson.CodeTakenAtInFuture},
+	} {
+		register := &fakeBackupRegister{}
+		code, body := postAck(t, app(register), path+tc.query)
+		if code != http.StatusBadRequest || body["error"] != string(tc.code) {
+			t.Errorf("%s: the route answered %d %v, want 400 %s", tc.name, code, body["error"], tc.code)
+		}
+		if register.calls != 0 {
+			t.Errorf("%s: a point was written anyway: %+v", tc.name, register.point)
+		}
+	}
+}
+
 // EVERY LOG'S ACKNOWLEDGEMENT STANDS BESIDE THE OTHERS.
 //
 // Under `backup_floor: operator` the procedure is one acknowledgement per
@@ -708,7 +774,7 @@ func TestEveryLogsAcknowledgementStandsBesideTheOthers(t *testing.T) {
 		{"CREWLET_TRACKER_VECTORS", 77000, 1},
 	}
 	for _, ack := range acks {
-		code, body := postAck(t, a, fmt.Sprintf("/worklet/retention/ack?stream=%s&position=%d",
+		code, body := postAck(t, a, fmt.Sprintf("/worklet/retention/ack?stream=%s&position=%d&taken_at=2020-01-01T00:00:00Z",
 			ack.stream, ack.seq))
 		if code != http.StatusOK {
 			t.Fatalf("acknowledging %s answered %d: %v", ack.stream, code, body)
@@ -752,7 +818,7 @@ func TestAnAcknowledgementNamingAnUnknownStreamIsRefused(t *testing.T) {
 	node := &fakeStateLog{generations: map[string]uint32{"CREWLET_TRACKER_LOG": 3}}
 
 	code, body := postAck(t, ackApp(t, register, node),
-		"/worklet/retention/ack?stream=CREWLET_TRAKCER_LOG&position=918100000")
+		"/worklet/retention/ack?stream=CREWLET_TRAKCER_LOG&position=918100000&taken_at=2020-01-01T00:00:00Z")
 	// 404 rather than 503: nothing here is transient, and a 503 tells an
 	// operator who typed the name wrong to send the identical request
 	// again in a minute.
@@ -796,7 +862,7 @@ func TestARetentionRouteTellsItsRefusalAndKeepsItsFaultForTheLog(t *testing.T) {
 		detail             string // the whole detail, or "" to check only that it is clean
 	}{
 		{"an unknown stream on an acknowledgement", http.MethodPost,
-			"/worklet/retention/ack?stream=NOPE&position=9", nil,
+			"/worklet/retention/ack?stream=NOPE&position=9&taken_at=2020-01-01T00:00:00Z", nil,
 			http.StatusNotFound, httpjson.CodeUnknownStream,
 			`"NOPE" isn't a log this node keeps. Use "CREWLET_TRACKER_LOG".`},
 		{"an unknown stream on a reanchor status", http.MethodGet,
@@ -967,7 +1033,7 @@ func TestTheDeploymentControlsRefuseInTheEnvelope(t *testing.T) {
 		{http.MethodPost, "/backup", http.StatusBadRequest, httpjson.CodeNoDestination},
 		{http.MethodPost, "/backup?dir=/tmp/x", http.StatusInternalServerError, httpjson.CodeBackupFailed},
 		{http.MethodPost, "/worklet/retention/ack?stream=CREWLET_TRACKER_LOG", http.StatusBadRequest, httpjson.CodePositionRequired},
-		{http.MethodPost, "/worklet/retention/ack?stream=NOPE&position=9", http.StatusNotFound, httpjson.CodeUnknownStream},
+		{http.MethodPost, "/worklet/retention/ack?stream=NOPE&position=9&taken_at=2020-01-01T00:00:00Z", http.StatusNotFound, httpjson.CodeUnknownStream},
 		{http.MethodPost, "/worklet/retention/evict/node-2", http.StatusBadRequest, httpjson.CodeConfirmRequired},
 		{http.MethodGet, "/worklet/retention/reanchor", http.StatusBadRequest, httpjson.CodeStreamRequired},
 		{http.MethodPost, "/worklet/retention/reanchor?stream=CREWLET_TRACKER_LOG", http.StatusBadRequest, httpjson.CodeConfirmRequired},
@@ -1355,7 +1421,7 @@ func TestTheReanchorStatusTellsAnUnknownStreamFromAnUnreadableOne(t *testing.T) 
 	// THE ACKNOWLEDGEMENT DOES NOT ASK THE BROKER FOR AN INSTANT IT DOES NOT
 	// USE: the generation is the node's own.
 	if code, body := postAck(t, a,
-		"/worklet/retention/ack?stream=CREWLET_PAGES_LOG&position=918100000"); code != http.StatusOK {
+		"/worklet/retention/ack?stream=CREWLET_PAGES_LOG&position=918100000&taken_at=2020-01-01T00:00:00Z"); code != http.StatusOK {
 		t.Fatalf("an acknowledgement while the broker could not answer a status "+
 			"read was refused %d: %v", code, body)
 	}

@@ -1631,8 +1631,9 @@ var table = []rule{
 		remedy: "Run `crewlet backup` against any node, whatever its roles, " +
 			"and check whatever was meant to run it; under `backup_floor: " +
 			"operator`, acknowledge each named log's off-host copy with " +
-			"`crewlet retention ack -stream <its stream> -position <n>`, n " +
-			"being the sequence the copy reaches. The trim does not advance " +
+			"`crewlet retention ack -stream <its stream> -position <n> " +
+			"-taken-at <when>`, n being the sequence the copy reaches and when " +
+			"the instant the copy was taken. The trim does not advance " +
 			"a log past a backup older than the policy, and does not " +
 			"advance it at all until there is one.",
 		perLog: true,
