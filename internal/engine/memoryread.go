@@ -7,21 +7,15 @@ import (
 	"github.com/crewlet/crewlet/internal/learning/memread"
 )
 
-// A seat's memory, read from the node that holds the seat
-// (internal/learning/memread).
-//
-// # Every node serves, in every mode
-//
-// A seat can be held by a node that serves no API, so the answer cannot be the
-// API's to build: every node answers for the seats it holds, from its own
-// store, and every node that serves the API asks. A node in maintenance holds
-// no seat and so is never addressed — and answering is not publishing, so the
-// maintenance gate has nothing here to stop either.
+// A seat's memory is read from the node holding the seat (internal/learning/memread).
+// A seat's holder may serve no API, so every node answers for the seats it
+// holds, from its own store, and every API node asks. A node in maintenance
+// holds no seat, and answering is not publishing, so the maintenance gate has
+// nothing to stop here.
 
-// armMemoryReads builds this node's reader and makes the node an answerer.
-//
-// After the node, whose incarnation is what a seat's lease names and whose
-// attached set is when a seat's memory here is current.
+// armMemoryReads builds this node's reader and makes the node an answerer. It
+// runs after the node is built: a seat's lease names the node's incarnation,
+// and its attached set says when a seat's memory here is current.
 func (e *Engine) armMemoryReads(ctx context.Context) error {
 	if e.backends == nil || e.backends.Store == nil || e.node == nil {
 		return nil
@@ -35,12 +29,11 @@ func (e *Engine) armMemoryReads(ctx context.Context) error {
 		Onboarding: learning.NewOnboarding(db),
 	}
 	owner := e.node.Owner()
-	// BY THE SEAT'S ID, which is how a read names the seat it is about.
+	// Keyed by seat ID, as a read names its seat.
 	attached := e.node.AttachedSeats
 	e.memoryReads = &memread.Reader{Owner: owner, Local: stores}
 	if e.backends.Queue == nil {
-		// A NODE WITH NO BROKER IS THE FLEET, and its store the only copy
-		// of every seat's memory there is.
+		// A node with no broker is the whole fleet: its store is the only copy.
 		return nil
 	}
 	e.memoryReads.Queue = e.backends.Queue
@@ -67,6 +60,6 @@ func (e *Engine) stopMemoryReads(ctx context.Context) {
 	e.stopMemoryServe = nil
 }
 
-// MemoryReads is a seat's memory, answered by the node holding the seat — what
-// the API answers `agent_memory` from. Nil on a node with no store.
+// MemoryReads reads a seat's memory from the node holding the seat; the API
+// answers `agent_memory` from it. Nil on a node with no store.
 func (e *Engine) MemoryReads() *memread.Reader { return e.memoryReads }

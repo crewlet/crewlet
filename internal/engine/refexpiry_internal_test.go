@@ -32,12 +32,10 @@ code:
 }
 
 // THE CODE-RETENTION DUTY EXPIRES A SEAT'S IDLE BRANCH THROUGH THE ROUTER, AND
-// KEEPS ONE A PARKED RUN'S ROW HOLDS — the ref lifecycle as a node wires it:
-// the duty's pass proposes each deletion to the repository's committer through
+// KEEPS ONE A PARKED RUN'S ROW HOLDS: the pass proposes each deletion through
 // the estate router (gitlet.Retention.Propose) under the core's node id
-// (gitlet.Retention.Node), and asks the engine's own reader of the live turns'
-// holds — every run row whatever its status — which branches to keep
-// ([Engine.codeHolds]).
+// (gitlet.Retention.Node), and asks [Engine.codeHolds] — every run row,
+// whatever its status — which branches to keep.
 //
 // Mutations: build the duty with no Propose or no Node → the pass refuses to
 // run, red; hand it a Holds that answers nothing → the held branch is
@@ -79,7 +77,7 @@ func TestTheRetentionDutyExpiresAnIdleSeatBranchNoRunHolds(t *testing.T) {
 	if d.pass.Node == "" || d.pass.Propose == nil {
 		t.Fatalf("the duty's pass names node %q and proposes through %v", d.pass.Node, d.pass.Propose != nil)
 	}
-	// A FORTNIGHT AND AN HOUR ON, by the pass's clock alone: the branches'
+	// A fortnight and an hour on, by the pass's clock alone: the branches'
 	// broker instants cannot be moved.
 	d.pass.Now = func() time.Time { return time.Now().Add(gitlet.RefExpiry + time.Hour) }
 	report, err := d.pass.Pass(t.Context())

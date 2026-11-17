@@ -13,17 +13,11 @@ import (
 )
 
 // A PERSON'S ANSWER ARRIVING MID-TURN IS RECORDED AT ONCE AND RESUMED AS THE
-// SEAT'S NEXT TURN.
-//
-// An answer by turn reaches its run on the seat's control topic, which no
-// mailbox turn waits for, so it can arrive while the seat is in the middle of
-// one. A seat runs one turn at a time ([node.ErrSeatBusy]): the answer is
-// recorded on its run at once, the resume waits for the running turn rather
-// than starting beside it, and the moment that turn is released the resume
-// runs ([node.Config.SeatTurnEnded]), not at the five-minute backstop.
-//
-// This drives the engine's own wiring end to end: its coordinator, its gate,
-// its control topic subscription and the node hook.
+// SEAT'S NEXT TURN. It arrives on the seat's control topic, which no mailbox
+// turn waits for; a seat runs one turn at a time ([node.ErrSeatBusy]), so the
+// resume waits for the running turn and runs once it is released
+// ([node.Config.SeatTurnEnded]), not at the five-minute backstop. Drives the
+// engine's own coordinator, gate, control-topic subscription and node hook.
 //
 // Mutation: map the node's busy refusal to no condition, or drop the hook from
 // the node's config, and the resume waits for the backstop; drop the per-seat
@@ -32,9 +26,8 @@ func TestAnAnswerArrivingMidTurnIsResumedWhenTheTurnEnds(t *testing.T) {
 	t.Parallel()
 	r := newDrainRig(t)
 	e := r.start(t)
-	// A COMPANY WITH A TURN ENGINE, which the rig's has none of: a seat with
-	// no model runs no turn, a resumed one included, and the answer would
-	// wait on that instead of on the seat's turn.
+	// A company with models: the rig's has none, and a seat with no model
+	// runs no turn, so the answer would wait on that instead.
 	withModels := *e.Company()
 	withModels.Models = refusingModels(t)
 	e.epoch.current.Store(&withModels)
@@ -86,10 +79,8 @@ func TestAnAnswerArrivingMidTurnIsResumedWhenTheTurnEnds(t *testing.T) {
 			got.Status, got.UpdatedAt, recorded.UpdatedAt)
 	}
 
-	// THE CLAIM IS THE RESUME STARTING: it writes the row whatever the
-	// resumed turn then does, and this rig's seat has no model with an in-box
-	// runner, so the relaunch the answer carries the run on with is refused
-	// and the turn itself goes no further.
+	// The claim's row write is the resume starting: this seat's model has no
+	// in-box runner, so the relaunch is refused and the turn goes no further.
 	release()
 	eventually(t, "the answer's resume to start once the seat's turn ended", func() bool {
 		run, found, err := sandbox.NewCoordStore(e.backends.Fleet).Get(t.Context(), "t1")

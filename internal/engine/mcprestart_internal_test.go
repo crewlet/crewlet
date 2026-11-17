@@ -79,12 +79,10 @@ func childOf(s *seatChildren, role string) mcp.Health {
 	return h
 }
 
-// A RESTART REQUEST NAMING A SEAT REACHES THE SEAT'S HOLDER ONLY. Every node
-// hears the record, and only the node running the seat's child, which can
-// prove it holds the seat, restarts it: another node's children of the same
-// server are left as they are. A request for every instance restarts each
-// node's own. And a record heard again restarts nothing more: it is a stamp,
-// and the child came up after it.
+// A RESTART REQUEST NAMING A SEAT REACHES THE SEAT'S HOLDER ONLY: another
+// node's children of the same server are left as they are. A request for every
+// instance restarts each node's own, and a record heard again restarts nothing
+// more, since the child came up after its stamp.
 func TestARestartRequestReachesTheSeatsHolderOnly(t *testing.T) {
 	t.Parallel()
 	company := twoSeatCompany(t, nil)
@@ -133,9 +131,9 @@ func TestARestartRequestReachesTheSeatsHolderOnly(t *testing.T) {
 }
 
 // A RESTART TRIES A SEAT'S CHILD WHOSE FIRST START FAILED NOW, AND STARTS ITS
-// SCHEDULE AGAIN. No bridge keeps such a child (the seat's runner retries it),
-// so the request asks the runner for a pass now. The schedule's base here is an
-// hour: a child that comes up within the test came up because it was asked.
+// SCHEDULE AGAIN, through a pass of the seat's runner. The schedule's base is
+// an hour, so a child that comes up within the test came up because it was
+// asked.
 func TestARestartTriesAFailedSeatChildNowAndStartsItsScheduleAgain(t *testing.T) {
 	t.Parallel()
 	ready := filepath.Join(t.TempDir(), "vendor-up")
@@ -157,10 +155,9 @@ func TestARestartTriesAFailedSeatChildNowAndStartsItsScheduleAgain(t *testing.T)
 	pollUntil(t, 30*time.Second, "the child, tried now", func() bool { return childOf(ceo, "CEO").Serving })
 }
 
-// A RESTART IS REFUSED FOR WHAT IT CANNOT RESTART, naming why: a server the
-// configuration does not declare or turns off, a seat named for a shared
-// server, a seat nobody holds, and one the server is not granted to. A request
-// it accepts is recorded with its stamp, for every node to hear.
+// A RESTART IS REFUSED FOR WHAT IT CANNOT RESTART, naming why (each
+// [Engine.RestartMCPServer] error), and nothing is recorded; an accepted one is
+// recorded with its stamp, for every node to hear.
 func TestARestartIsRefusedForWhatItCannotRestart(t *testing.T) {
 	t.Parallel()
 	company := companyFor(t, `
@@ -228,11 +225,9 @@ roles:
 	}
 }
 
-// A RESTART GOES WITH WHAT IT RESTARTED. The record has no age, so without a
-// published company clearing it a removed server's restart would stay for
-// ever: the apply that removes a server, or a seat, deletes the requests
-// naming it. Only the fleet's current company clears one, as it clears a
-// removed seat's pause.
+// A RESTART GOES WITH WHAT IT RESTARTED: the record has no age, so the apply
+// that removes a server or a seat deletes the requests naming it, and only
+// the fleet's current company clears one, as it clears a removed seat's pause.
 func TestARestartGoesWithTheServerOrSeatItNamed(t *testing.T) {
 	t.Parallel()
 	fleet := coordmem.NewFleet()

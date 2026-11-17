@@ -11,15 +11,13 @@ import (
 )
 
 // A TURN READS NO OLDER THAN THE CHANGE THAT WOKE IT: the committing record's
-// position, which a first-party wake carries, is in this node's floors once the
-// turn has begun — so every read the turn routes, to whichever holder answers
-// it, waits for it — and a token this build cannot read costs the turn its
-// floor, never the turn.
+// position a first-party wake carries is in this node's floors once the turn
+// begins, so every read the turn routes waits for it; a token this build cannot
+// read costs the turn its floor, never the turn.
 func TestATurnReadsNoOlderThanTheChangeThatWokeIt(t *testing.T) {
 	t.Parallel()
 	e, _ := spendingEngine(t)
-	// The turn has begun by the time it parks on its executor's launch,
-	// which is as far as this case needs it to go.
+	// The turn has begun once it parks on its executor's launch: far enough.
 	rigRuns(t, e, nil)
 	stream := worklet.Domain{}.Stream().Name
 	at := statelog.Position{Stream: stream, Generation: 2, Seq: 77}

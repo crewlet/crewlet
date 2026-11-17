@@ -91,10 +91,9 @@ func tick(t *testing.T, db *store.DB, seats heldSeats, ids func(string) string,
 
 var fillAt = time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
 
-// ONLY AN ESTABLISHED SEAT THIS NODE HOLDS IS FILLED. A seat still
-// establishing has not hydrated its memory — filling it would embed whatever
-// stale copy this node happens to have — and a seat this node does not hold
-// is its holder's to fill.
+// ONLY AN ESTABLISHED SEAT THIS NODE HOLDS IS FILLED: one still establishing
+// has not hydrated its memory, so filling it would embed a stale copy, and an
+// unheld seat is its holder's to fill.
 func TestTheFillTouchesOnlyEstablishedHeldSeats(t *testing.T) {
 	t.Parallel()
 	db, diary := diaryFixture(t, map[string][]string{
@@ -124,10 +123,9 @@ func TestTheFillTouchesOnlyEstablishedHeldSeats(t *testing.T) {
 	}
 }
 
-// A TICK IS BOUNDED BY WHAT IT SENDS, ACROSS SEATS: a model change leaves every
-// seat's diary in the old space at once, and the budget is what keeps the first
-// tick from sending all of it. The next tick starts at the seat this one ran
-// out at, so the seats behind it are not for ever behind the ones before.
+// A TICK IS BOUNDED BY WHAT IT SENDS, ACROSS SEATS, so a model change does not
+// send every seat's diary at once; the next tick resumes at the seat this one
+// ran out at, so later seats are not for ever behind.
 func TestAFillTickStopsAtItsBudgetAndTheNextResumesWhereItStopped(t *testing.T) {
 	t.Parallel()
 	db, diary := diaryFixture(t, map[string][]string{
@@ -160,9 +158,8 @@ func TestAFillTickStopsAtItsBudgetAndTheNextResumesWhereItStopped(t *testing.T) 
 }
 
 // ONE NOTE THE PROVIDER REFUSES DOES NOT HOLD BACK ITS NEIGHBOURS, AND IS NOT
-// SENT AGAIN ON THE NEXT TICK: a refused call is split until the note is
-// alone, every note the provider takes is filled, and the poison is held back
-// for the hour rather than isolated again every minute.
+// SENT AGAIN ON THE NEXT TICK: the call is split until the note is alone, the
+// rest are filled, and the poison is held back for the hour.
 func TestARefusedNoteIsIsolatedOnceAndNotSentAgainOnTheNextTick(t *testing.T) {
 	t.Parallel()
 	db, diary := diaryFixture(t, map[string][]string{
@@ -198,9 +195,7 @@ func TestARefusedNoteIsIsolatedOnceAndNotSentAgainOnTheNextTick(t *testing.T) {
 }
 
 // A FAILURE THAT IS NOT ABOUT A NOTE ENDS THE TICK FOR EVERY SEAT: a throttled
-// account or a revoked key answers every seat's batch the same way, and each
-// held seat sending its own into it every minute was the burst a throttled
-// account least needs.
+// account or a revoked key answers every seat's batch the same way.
 func TestAProviderFailureEndsTheTickForEverySeat(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -240,12 +235,9 @@ func TestAProviderFailureEndsTheTickForEverySeat(t *testing.T) {
 	}
 }
 
-// A PROVIDER THAT REFUSES ITS CONFIGURATION — every request, whatever it carries
-// — is concluded refused by the tick that meets it, in the refused call and the
-// canary that judges it, and then sent nothing for the pause: where retrying
-// each note alone was one request and one warning per note per seat per minute,
-// and isolating every note before concluding was a hundred and twenty-seven
-// silent refused requests a seat.
+// A PROVIDER THAT REFUSES ITS CONFIGURATION (every request) is concluded
+// refused by the tick that meets it, in the refused call and its canary, and
+// then sent nothing for the pause, rather than isolating every note.
 func TestAProviderRefusingEveryNoteIsBoundedThenLeftAlone(t *testing.T) {
 	t.Parallel()
 	db, _ := diaryFixture(t, map[string][]string{
@@ -294,10 +286,8 @@ func TestAProviderRefusingEveryNoteIsBoundedThenLeftAlone(t *testing.T) {
 }
 
 // A TICK WHOSE REQUESTS WERE REFUSED SAYS SO, even when it filled nothing and
-// named no row: a page in which every row is refused for what it says takes
-// more than one tick to narrow down, and each of those ticks — sixteen refused
-// requests apiece — used to log nothing at all, which read as a fill with
-// nothing to do.
+// named no row: narrowing a page of refused rows takes several ticks, and a
+// silent one reads as a fill with nothing to do.
 func TestATickOfRefusedRequestsThatNamedNoRowSaysSo(t *testing.T) {
 	t.Parallel()
 	db, _ := diaryFixture(t, map[string][]string{"id-a": facts(embeddings.PassBatch, "a")})
@@ -412,13 +402,10 @@ func (s *slowProvider) EmbedBatch(ctx context.Context, texts []string) ([][]floa
 	return s.Fake.EmbedBatch(ctx, texts)
 }
 
-// A ROW LONGER THAN A TICK DOES NOT STOP THE FILL. An episode's ask is stored
-// whole, so one row can need more requests than a tick has time for; sent as
-// one call it failed with the deadline every tick, threw away what it had been
-// answered, and — newest first, so the first row again — stopped every row and
-// every seat after it for good. Sent a request at a time with what each
-// embedded kept, it is finished across ticks, as the vector of its whole text,
-// and the seats behind it are filled.
+// A ROW LONGER THAN A TICK DOES NOT STOP THE FILL: sent a request at a time,
+// with what each embedded kept, it is finished across ticks as the vector of
+// its whole text, and the seats behind it are filled. Sent as one call it would
+// meet the deadline every tick, keep nothing, and block every row after it.
 func TestARowLongerThanATickDoesNotStopTheFill(t *testing.T) {
 	t.Parallel()
 	limits := embeddings.Limits{InputBytes: 64, BatchInputs: 4, BatchBytes: 4096}
@@ -492,15 +479,11 @@ func TestARowLongerThanATickDoesNotStopTheFill(t *testing.T) {
 	}
 }
 
-// A ROW ANSWERED WITH NO DIRECTION DOES NOT STOP THE FILL EITHER. The provider
-// accepted the request and answered one piece of a long row with a vector of
-// zeros, so the row can keep no vector — and forgotten, as it was, the next
-// tick began the row again at its first piece, newest first, and spent the
-// same requests reaching the same piece: a row whose prefix costs a tick took
-// every tick, and the seat behind it was never filled. Held back for the hour,
-// with what was embedded before the piece kept, it costs nothing until its
-// retry, never begins again at its first piece, and the seat behind it is
-// filled on the next tick.
+// A ROW ANSWERED WITH NO DIRECTION DOES NOT STOP THE FILL EITHER: a piece of a
+// long row answered with zeros leaves the row no vector, and it is held back
+// for the hour with the pieces before it kept, so it costs nothing until its
+// retry, never restarts at its first piece, and the seat behind it is filled
+// the next tick. Forgotten, it would spend every tick reaching the same piece.
 func TestARowAnsweredWithNoDirectionDoesNotStopTheFill(t *testing.T) {
 	t.Parallel()
 	limits := embeddings.Limits{InputBytes: 64, BatchInputs: 4, BatchBytes: 4096}
@@ -575,15 +558,10 @@ func TestARowAnsweredWithNoDirectionDoesNotStopTheFill(t *testing.T) {
 }
 
 // THE FILL'S REFUSALS FOLLOW THE PROVIDER'S CONFIGURATION, AS THE CORPUS DUTY'S
-// DO.
-//
-// An apply stores a provider built afresh, and one built the same — an apply
-// that changed nothing about the embeddings, a re-activation that rotated the
-// key — keeps what the fill holds back: a row the provider refused alone, and
-// the pause on a configuration it concluded refused. Keyed on the provider's
-// slot, every apply isolated each held row again and lifted the pause, while
-// the corpus duty beside it on the same node kept both. One configured
-// otherwise starts with nothing held, so a fix is tried at once.
+// DO: a provider an apply rebuilt the same (nothing about the embeddings
+// changed, or only the key) keeps the rows refused alone and the pause on a
+// concluded configuration, rather than isolating them again on every apply;
+// one configured otherwise starts with nothing held, so a fix is tried at once.
 func TestTheFillsRefusalsFollowTheProvidersConfiguration(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNodeOf(t, embeddingDutyCompany)

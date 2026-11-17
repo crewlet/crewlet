@@ -34,8 +34,7 @@ func watchdogEngine(t *testing.T) *Engine {
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	brokertest.StoreIn(&boot.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	SeedStore(t, &boot)
-	// No HTTP surface: this is about the seat host, and binding a port
-	// would make the test fight every other one in the package for it.
+	// No HTTP surface: a bound port would contend with the package's other tests.
 	boot.API.Port = 0
 	company, err := config.ParseCompany([]byte(watchdogCompanyDoc))
 	if err != nil {
@@ -49,19 +48,13 @@ func watchdogEngine(t *testing.T) *Engine {
 	return e
 }
 
-// THE ENGINE ARMS A WATCHDOG AND POINTS IT AT THE SEAT HOST.
+// THE ENGINE ARMS A WATCHDOG AND POINTS IT AT THE SEAT HOST, so a wedged node
+// dies rather than hold its seats' mail unacked after its leases lapse.
 //
-// The regression this exists for: seat.NewWatchdog had no caller outside its
-// own test, so nothing in a running node ever constructed one. A node that
-// wedged neither worked nor died — its leases lapsed and peers took its seats,
-// while the process went on holding their mail unacked and no orchestrator
-// watching for liveness ever restarted it.
-//
-// A beat seen is the discriminator, and it is what makes this catch a
-// MISSING Watch as well as a missing constructor: the watchdog reads as
-// beating only once a watched, live duty has actually stamped a beat. The lag
-// cannot be it: a host on its beat is not behind, so its lag is zero, which
-// is also what a watchdog watching nothing reads.
+// A beat seen is the discriminator, catching a MISSING Watch as well as a
+// missing constructor: the watchdog reads as beating only once a watched, live
+// duty has stamped a beat. The lag cannot be: a host on its beat has zero lag,
+// as does a watchdog watching nothing.
 func TestTheEngineArmsAWatchdogOnTheSeatHost(t *testing.T) {
 	t.Parallel()
 	e := watchdogEngine(t)
@@ -87,14 +80,11 @@ func TestTheEngineArmsAWatchdogOnTheSeatHost(t *testing.T) {
 	}
 }
 
-// A HEALTHY NODE REPORTS NO STALL LAG.
-//
-// The lag reached /health whole, the time since the host's last beat, which
-// on a turning host is never zero, only under a second: every healthy node
-// carried a `stall_lag_seconds` the docs promise only while the duty is
-// behind. A host on its beat reads zero, and the health body omits zero.
-// Polled rather than read once, because the host beats on a real clock and
-// one late tick on a loaded runner is a missed beat that is honestly reported.
+// A HEALTHY NODE REPORTS NO STALL LAG: a host on its beat reads zero, which the
+// health body omits, as the docs promise `stall_lag_seconds` only while a duty
+// is behind; the raw time since the last beat is never zero. Polled, not read
+// once: the host beats on a real clock, and one late tick on a loaded runner
+// is a missed beat honestly reported.
 func TestAHealthyNodeReportsNoStallLag(t *testing.T) {
 	t.Parallel()
 	e := watchdogEngine(t)
@@ -111,12 +101,9 @@ func TestAHealthyNodeReportsNoStallLag(t *testing.T) {
 	}
 }
 
-// THE WATCHDOG IS DISARMED BEFORE THE DRAIN, NOT AFTER IT.
-//
-// Teardown is the one part of the process that legitimately blocks for a long
-// time — reaping MCP process trees, joining goroutines, waiting on in-flight
-// turns indefinitely — and all of it looks to an armed watchdog exactly like
-// the wedge it exists to end. Exiting through the middle of a drain abandons
+// THE WATCHDOG IS DISARMED BEFORE THE DRAIN, NOT AFTER IT: teardown (reaping
+// MCP process trees, joining goroutines, waiting on in-flight turns) blocks
+// long enough to look like the wedge it ends, and exiting mid-drain abandons
 // the seat release that makes it graceful.
 func TestTheWatchdogIsDisarmedBeforeTheDrain(t *testing.T) {
 	t.Parallel()
@@ -127,37 +114,28 @@ func TestTheWatchdogIsDisarmedBeforeTheDrain(t *testing.T) {
 
 	e.Stop(t.Context())
 
-	// A stopped host reports no live duty, so the lag is nothing to report
-	// either way; what this asserts is that Stop returned at all. An
-	// engine that disarmed AFTER the drain would still be correct here,
-	// so the ordering itself is guarded by the drain never being able to
-	// outlive an armed watchdog — see the comment at the call site.
+	// A stopped host reports no live duty, so this asserts only that Stop
+	// returned; the ordering is guarded at the call site, by the drain never
+	// being able to outlive an armed watchdog.
 	if got := e.StallLag(); got != 0 {
 		t.Errorf("lag = %v after a full stop, want none", got)
 	}
-	// Idempotent: the second Stop is what a failed Start's cleanup path
-	// runs after the ordinary one has already been through.
+	// Idempotent: a failed Start's cleanup runs Stop a second time.
 	e.Stop(t.Context())
 }
 
-// THE ENGINE SUPPLIES A ROUND-CAP EXTENSION JUDGE.
-//
-// The regression this exists for: extension.Judge had no implementation
-// anywhere in the tree and RunnerInput.Judge was never set, so
-// extension.Consider rescued with "no_judge" on every exhaustion. The
-// per-phase ceilings, the round step, the enable switch and the llm_judge
-// model role were all configuration that nothing read — a phase running out
-// of rounds while making obvious progress was rescued exactly like one that
-// was thrashing.
+// THE ENGINE SUPPLIES A ROUND-CAP EXTENSION JUDGE: without one,
+// extension.Consider rescues with "no_judge" on every exhaustion, so the
+// per-phase ceilings, round step, enable switch and llm_judge model role go
+// unread and a phase making progress is rescued like one thrashing.
 func TestTheEngineSuppliesAnExtensionJudge(t *testing.T) {
 	t.Parallel()
 	e := watchdogEngine(t)
 	if got := e.judgeFor(e.Company(), "ceo", auxspend.Use{Stage: types.AuxStageTurn}); got == nil {
 		t.Error("no judge for a seat whose company configures a model")
 	}
-	// A handle that is not a seat in this company has no chain to resolve
-	// and no judge — an ordinary answer, which Consider reads as "do not
-	// ask" rather than as a failure.
+	// A handle that is no seat here has no chain and no judge: an ordinary
+	// answer, which Consider reads as "do not ask", not a failure.
 	if got := e.judgeFor(e.Company(), "nobody", auxspend.Use{Stage: types.AuxStageTurn}); got != nil {
 		t.Error("a judge for a handle that is not a seat")
 	}

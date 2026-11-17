@@ -12,9 +12,8 @@ import (
 // Deferral rests on a peer decoding a record's ENVELOPE; a kind an older
 // build's envelope refuses stops that build instead. The heartbeat is the only
 // place a node says which records it reads, and [reportedPositions] the only
-// road from the register to the counted set a writer asks — so a heartbeat
-// that leaves it out, or a read that drops it, is a fleet where every node
-// reads as advertising nothing and a new kind is never published.
+// road to the counted set a writer asks: dropping it in either makes every
+// node advertise nothing, and a new kind is never published.
 func TestEveryHeartbeatAdvertisesTheRecordsItsBuildReads(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)

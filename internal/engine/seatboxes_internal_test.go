@@ -12,20 +12,16 @@ import (
 
 // THE BOXES CONFIG JUDGES ARE THE BOXES THE ENGINE LAUNCHES.
 //
-// [config.Company.SeatBoxes] is a second resolution of where each seat's
-// executor runs and what its box is given, made before anything is built so
-// that validation can refuse a setup file a box would refuse. Its own test
-// holds it to a table; this one holds it to the engine, seat by seat: every
-// cell a launch of the seat can land in — one per member of its executor chain
-// the launch can pick ([executorRunners]), placed through the manager's own
-// default as BuildSpec places it — and the steps the engine's runEnvironment
-// hands the box. A change to any of them here fails this case, where it would
-// otherwise leave validation judging cells and steps no box runs.
+// [config.Company.SeatBoxes] resolves, before anything is built, where each
+// seat's executor runs and what its box gets, so validation refuses what a box
+// would. This holds it to the engine seat by seat: every cell a launch can land
+// in (one per pickable chain member, [executorRunners], placed through the
+// manager's default as BuildSpec does) and the steps runEnvironment hands the
+// box, so validation never judges cells and steps no box runs.
 //
-// The company covers every shape a seat's boxes take: one member falling to the
-// catalogue's default, a chain whose fallback lands in another cell, a chain
-// whose two members share one cell, a mixed chain whose head no box can run,
-// and a person, who runs no turn.
+// The seats cover: a member falling to the catalogue's default, a fallback in
+// another cell, two members sharing a cell, a mixed chain whose head no box
+// can run, and a person, who runs no turn.
 func TestConfigSeatBoxesAreTheBoxesTheEngineLaunches(t *testing.T) {
 	t.Parallel()
 	doc := fmt.Sprintf(`

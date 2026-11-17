@@ -49,13 +49,12 @@ func requireTruncatedRefusal(t *testing.T, err error, peer string) {
 // A NODE WHOSE PEER STANDS PAST A RESTORED LOG'S END REFUSES ITS WRITES UNTIL
 // THE OPERATOR DECIDES — AND THE PEER'S EVICTION IS ONE WAY TO DECIDE.
 //
-// Node B's rows are the restored copy's age, so its own log looks like its own
-// history and nothing refused it: it wrote, and every write was one the
-// restored reanchor of node A — whose rows hold the tail the copy lost — would
-// apply nowhere. B now reads A's position past the log's end off the register,
-// confirms the log holds no record there, and refuses its writes as
-// `log_truncated`, naming A; its reads go on. Evicting A is the one write it
-// still makes, and with A evicted its writes are served again.
+// Node B's rows are the restored copy's age, so its own log looks consistent,
+// yet a reanchor of node A (whose rows hold the tail the copy lost) would
+// discard every write B made. B reads A's position past the log's end off the
+// register, confirms the log holds no record there, and refuses writes as
+// `log_truncated` naming A; reads go on. Evicting A is the one write it still
+// makes, and with A evicted its writes are served again.
 func TestANodeWhosePeerStandsPastARestoredLogRefusesItsWrites(t *testing.T) {
 	t.Parallel()
 	d := stageRestoredBroker(t)
@@ -97,10 +96,9 @@ func TestANodeWhosePeerStandsPastARestoredLogRefusesItsWrites(t *testing.T) {
 
 // A NODE WHOSE PEER SAYS THE LOG DIVERGED FROM ITS ROWS REFUSES ITS WRITES TOO.
 //
-// Once the restored log has been written past node A's checkpoint, A's
-// position is at or below the log's end, where a lagging node's is — so the
-// flag A publishes is the only thing that tells B a write from here is one
-// more the operator's choice would have to throw away.
+// Once the restored log is written past A's checkpoint, A's position sits at
+// or below the log's end like a lagging node's, so the flag A publishes is all
+// that tells B a further write is one the operator's choice would discard.
 func TestANodeWhosePeerSaysTheLogDivergedRefusesItsWrites(t *testing.T) {
 	t.Parallel()
 	d := stageDivergedBroker(t)
@@ -122,12 +120,11 @@ func TestANodeWhosePeerSaysTheLogDivergedRefusesItsWrites(t *testing.T) {
 
 // WHICH PEERS COUNT, ASKED OF THE REGISTER ROWS DIRECTLY.
 //
-// Only a peer on the stream this node's rows are keyed to, in its generation,
-// and either past the log's end — as the log itself confirms, since an end
-// read from a member that has not caught up is below a healthy peer's position
-// too — or saying the log diverged from its rows. A number in another space
-// says nothing about this log, and a record the log holds at a peer's
-// checkpoint says the end was a stale member's.
+// Only a peer on this node's keyed stream, in its generation, and either past
+// the log's end (confirmed against the log, since a lagging member's end is
+// below a healthy peer's position too) or flagging divergence. A position in
+// another space says nothing about this log, and a record at the peer's
+// checkpoint means the end was a stale member's.
 func TestWhichPeersHoldWhatTheLogLost(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
@@ -258,13 +255,12 @@ func (f *heldFleet) last() (uint32, int) {
 
 // A HEARTBEAT IN FLIGHT CANNOT PUT A REANCHORED NODE'S OLD GENERATION BACK.
 //
-// The heartbeat reads the runners and then writes this node's row, and a
-// reanchor publishes the row directly once its transition commits. The
-// register keeps whichever row is written LAST: a beat that read the tracker
-// before the reanchor re-keyed it, and wrote after the reanchor published, put
-// the old generation back — the peers it had just re-anchored past went on
-// serving that generation until the next beat. The publishes are serialized,
-// so the last row written is read after the reanchor.
+// A beat reads the runners then writes this node's row, a reanchor publishes
+// the row once its transition commits, and the register keeps the LAST write.
+// A beat that read before the re-key and wrote after the reanchor's publish
+// would restore the old generation, which re-anchored peers would serve until
+// the next beat; so the publishes are serialized, and the last row written is
+// read after the reanchor.
 func TestAHeartbeatInFlightCannotPutAReanchoredNodesOldGenerationBack(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
@@ -357,13 +353,12 @@ func (f *floorlessFleet) Floor(ctx context.Context, domain string) (coord.TrimFl
 
 // THE TRUNCATION FENCE DOES NOT LIFT BEFORE THE PASSED VERDICT REPLACES IT.
 //
-// The peer whose rows hold what the log lost is very often the peer that then
-// re-anchors past it, and its row moving to the next generation is what takes
-// it out of the truncation's comparison. A beat that read the register but
-// could not establish the fleet's generations judged the truncation anyway:
-// the fence lifted and nothing set the passed verdict, so the node served
-// writes at a generation the fleet had left. The two are judged from one
-// successful reading or not at all.
+// The peer holding what the log lost often re-anchors past it, and its row
+// moving to the next generation takes it out of the truncation's comparison.
+// Judging the truncation on a beat that could not read the fleet's
+// generations would lift the fence with no passed verdict set, serving writes
+// at a generation the fleet left; both are judged from one successful reading
+// or not at all.
 func TestTheTruncationFenceStaysUntilThePassedVerdictReplacesIt(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)

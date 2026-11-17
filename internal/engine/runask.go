@@ -8,14 +8,12 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// runAsks is where `ask_and_wait` records the question an executor's run asks
-// (ADR-0068), and where the run's submission reads whether it has: the run's own
-// row, through the pending-run store of the sandbox runtime this node holds at
-// the moment of the call.
+// runAsks is where `ask_and_wait` records an executor run's question
+// (ADR-0068), and where the run's submission reads whether it asked: the run's
+// own row, in the pending-run store of the node's current sandbox runtime.
 //
-// READ PER CALL, never captured when the epoch is equipped: the runtime is
-// replaced by an apply that changes `providers.sandbox`, and a run asking
-// after that must reach the store the node holds now.
+// READ PER CALL, never captured when the epoch is equipped: an apply that
+// changes `providers.sandbox` replaces the runtime.
 type runAsks struct{ engine *Engine }
 
 var _ builtin.HeldDesk = runAsks{}

@@ -11,11 +11,9 @@ import (
 	"github.com/crewlet/crewlet/internal/signedask"
 )
 
-// THE PRESENCE HUB'S ENGINE WIRING: one hub per node, on EVERY node, over the
-// queue's ephemeral broadcast and the fleet keyring. Every node, because both
-// halves of presence happen everywhere: a node serving the API holds sockets
-// in rooms, and a node running seats holds the agents whose tool calls put
-// them in rooms, and a `seats`-only node is the second without the first.
+// THE PRESENCE HUB'S ENGINE WIRING: one hub on EVERY node, over the queue's
+// ephemeral broadcast and the fleet keyring, because an API node holds sockets
+// in rooms and a seats node holds the agents whose tool calls put them there.
 
 // newPresenceWire is the one-way sealed channel presence frames cross the
 // fleet on, built from the keyring every state-log record is signed under. It
@@ -37,17 +35,14 @@ func (e *Engine) armPresence(ctx context.Context) error {
 		return nil
 	}
 	opts := presence.Options{Queue: e.backends.Queue, Wire: e.presenceWire, Node: e.id,
-		// THE FLEET'S READ BUDGET, the one every scatter a person waits
-		// on is bounded by: a newly opened room waits no longer for its
-		// peers than a history read does.
+		// THE FLEET'S READ BUDGET, bounding every scatter a person waits
+		// on: a new room waits no longer for peers than a history read.
 		AskBudget: eventfan.FleetReadBudget}
-	// A NIL RECORDER STAYS A NIL INTERFACE, for the reason the datastore
-	// writer's does.
+	// A NIL RECORDER STAYS A NIL INTERFACE, as the datastore writer's does.
 	if e.metrics != nil {
 		opts.Metrics = e.metrics
 	}
-	// THE NODE'S OBJECTIVE METER, which presence's joins and moves are
-	// timed into.
+	// THE NODE'S OBJECTIVE METER, timing presence's joins and moves.
 	if e.objectives != nil {
 		opts.Objectives = e.objectives
 	}

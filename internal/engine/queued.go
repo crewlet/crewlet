@@ -7,21 +7,16 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// A PERSON'S MESSAGE WAITING BEHIND A BUSY SEAT IS SHOWN AS QUEUED.
+// A PERSON'S MESSAGE WAITING BEHIND A BUSY SEAT IS SHOWN AS QUEUED, so a busy
+// seat looks different from one that was never told. The message rides the
+// priority lane, so it waits only for a running turn or an executor holding
+// the seat.
 //
-// A person's message rides its seat's priority lane, so it waits only for what
-// the seat is doing when it arrives: a turn running, or an executor holding
-// the seat. Until that ends nothing in the conversation said the message had
-// arrived at all, and a person watching it could not tell a seat that was
-// busy from one that had not been told.
-//
-// The routing node announces each such message on the seat's waiting channel
-// once its wake is durable (notify.WaitingNotice). The node running the seat
-// hears it, and when the seat is busy raises the conversation's indicator in
-// its queued state, saying how many tasks are ahead of it ([notify.Statuses]).
-// The turn that picks the message up joins the same indicator and moves it on
-// to its phase in place, and the dispatch that finishes with the message takes
-// its wait away ([Engine.settleWaiting]). A node that stops running the seat
+// The routing node announces it on the seat's waiting channel once its wake
+// is durable (notify.WaitingNotice); the node running a busy seat raises the
+// conversation's indicator as queued ([notify.Statuses]); the turn that picks
+// it up moves that indicator on in place, and the finishing dispatch takes
+// the wait away ([Engine.settleWaiting]). A node that stops running the seat
 // takes every indicator of it down, queued ones included.
 
 // startWaitingWatch listens on every seat's waiting channel. Best effort: a
@@ -55,9 +50,8 @@ func (e *Engine) stopWaitingWatch(ctx context.Context) {
 }
 
 // heardWaiting is one announcement: queue the person's message on the seat's
-// indicator when this node runs the seat and the seat is busy, and do nothing
-// otherwise. An idle seat picks the message up at once, and a line saying it
-// is queued would only flash before the seat's own working line.
+// indicator only when this node runs the seat and the seat is busy. An idle
+// seat picks it up at once, so a queued line would only flash.
 func (e *Engine) heardWaiting(ctx context.Context, subject string, payload []byte) {
 	seat, ok := topics.SeatFromWaiting(subject)
 	if !ok {
@@ -79,9 +73,8 @@ func (e *Engine) heardWaiting(ctx context.Context, subject string, payload []byt
 }
 
 // seatBusy reports whether a message reaching the seat now waits for what it
-// is already doing: a delivery of it being dispatched on this node, or one of
-// its executors holding it. A seat that is paused or parked is not busy but
-// stopped, which its own state on the Live page says.
+// is already doing: a delivery dispatched on this node, or an executor holding
+// it. A paused or parked seat is stopped, not busy; the Live page says so.
 func (e *Engine) seatBusy(handle string) bool {
 	d := e.dispatch
 	if d == nil {

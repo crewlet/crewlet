@@ -20,40 +20,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// The object store, wired — ADR-0026.
+// The object store, wired (ADR-0026). Every node reads and writes through the
+// [objstore.Store] over its Tier A's backend ([Backends.Objects]); only the
+// COLLECTOR — deleting what no row names, auditing what the backend lost —
+// needs the replicated estate, so it runs on a data node as a fleet duty
+// ([objectCollectorDuty]).
 //
-// # What every node runs, and what one data node does
-//
-// Every node holds the [objstore.Store] over the backend its Tier A names
-// ([Backends.Objects]) and reads and writes objects through it: a stateless
-// node uploads and downloads files exactly as a data node does, and the
-// backend keeps the copies. The one thing left for the engine is the
-// COLLECTOR — deleting what no row names, and auditing what the backend has
-// lost — which needs the replicated estate, so it runs on a data node, as a
-// fleet duty ([objectCollectorDuty]).
-//
-// # A pass keeps the duty it runs under
-//
-// The duty's turn — the read of the fleet's record when the duty has just been
-// taken, and the pass — runs on a KEPT duty ([dutyRenewal.keep]): the lease is
-// renewed four times a [collectorDutyTTL], every 45 seconds, for as long as the
-// pass runs, so a pass may outlive any number of leases. It is stopped the
-// moment a renewal answers that another node holds the duty, and once no
-// renewal has confirmed it for two and a quarter minutes — the lease less one
-// renewal, the longest no other node can have claimed it — while a renewal the
-// store refuses, or holds on to while its leader moves, costs it nothing: the
-// call gives up within one renewal, and the next is asked inside the window.
-//
-// Renewed only between passes, as it was, the lease lapsed under any pass
-// longer than it: an audit asks the store about every object a live row
-// names, which at a large company's two million objects is longer than any
-// lease a dead holder should be allowed to keep the duty dark for. A peer took
-// the duty mid-pass and ran its own beside it, and both wrote the fleet's ONE
-// record of the collector (coord's ObjectStores.RecordObjectCollection), whose
-// contract is one writer at a time — the older pass's report, written last,
-// replacing the new holder's. So a pass that ends without the duty, or unable
-// to say it still holds it, RECORDS NOTHING: the node that holds the duty
-// records its own.
+// A turn (the resume's read and the pass) runs on a KEPT duty
+// ([dutyRenewal.keep]), renewed four times a [collectorDutyTTL], so an audit
+// of millions of objects may outlive any lease. The fleet's ONE record
+// (coord's ObjectStores.RecordObjectCollection) takes one writer at a time,
+// so a pass that ends without the duty, or unable to say it still holds it,
+// RECORDS NOTHING: the holder records its own.
 
 // objectStore is this node's part in the object store.
 type objectStore struct {
@@ -64,17 +42,13 @@ type objectStore struct {
 	raise atomic.Pointer[objectsRaise]
 
 	// collector is the duty's loop, nil until the native runtime starts it
-	// on a data node; collectorMu serialises starting it against stopping
-	// it, and collectorStopped is set, under it, once
-	// [Engine.stopObjectCollector] has run — the loop never starts after
-	// that.
+	// on a data node; collectorStopped is set under collectorMu once
+	// [Engine.stopObjectCollector] has run, and no loop starts after it.
 	//
-	// A LOCK AND NOT AN ATOMIC FLAG, because the check and the start have
-	// to be one step: the native runtime that starts the collector may be
-	// brought up by an apply on its own goroutine, as late as the teardown
-	// itself, and a start that read the flag clear and then lost the
-	// processor to a stop that found nothing to stop would leave a loop
-	// nothing ends.
+	// A LOCK, NOT AN ATOMIC FLAG: the check and the start must be one step.
+	// An apply may start the collector on its own goroutine as late as the
+	// teardown, and a start that read the flag clear, then lost to a stop
+	// that found nothing to stop, would leave a loop nothing ends.
 	collectorMu      sync.Mutex
 	collector        *loop
 	collectorStopped bool
@@ -124,12 +98,9 @@ const collectorPoll = time.Minute
 // renewing it.
 //
 // THREE POLLS, the ratio every other singleton here keeps: one missed claim
-// must not hand the duty to a peer. It no longer has to outlive a PASS, which
-// renews it as it runs ([collectorDuty.renewal]). Sized to outlive one, it was
-// ten minutes, and an audit of a large store outlived that many times over: a
-// peer took the duty mid-audit, ran its own beside it, and the two wrote the
-// fleet's one record in turn. What it bounds now is how long the duty stays
-// dark after its holder dies — three minutes, against a collection due hourly.
+// must not hand the duty to a peer. It need not outlive a pass, which renews
+// it as it runs ([collectorDuty.renewal]); it bounds how long the duty stays
+// dark after its holder dies, against a collection due hourly.
 const collectorDutyTTL = 3 * collectorPoll
 
 // collectorDuty is what the collector's duty remembers between turns.
@@ -259,15 +230,12 @@ func (e *Engine) collectorTurn(ctx context.Context, claim func(context.Context) 
 
 	if _, out := duty.declines.check(ctx, collectorDecline, e.copyOutOfService,
 		duty.decidesFrom); out {
-		// A NODE THAT GAVE THE DUTY BACK IS NO LONGER ITS HOLDER, and
-		// lets go of what only the holder reports — the bucket's gauges,
-		// its near-ceiling alarm and the missing count — exactly as a
-		// claim that answered "not held" does ([Engine.settleCollector]):
-		// kept, they went on describing the bucket from a node that had
-		// stopped reading it, beside the node that took the duty over.
-		// A give-back the store did not answer settles nothing, as an
-		// unknown claim does; it only forgets the resume, since the next
-		// holder may record a newer pass meanwhile.
+		// A NODE THAT GAVE THE DUTY BACK IS NO LONGER ITS HOLDER, and lets
+		// go of what only the holder reports (the bucket's gauges, its
+		// near-ceiling alarm, the missing count) as a "not held" claim does
+		// ([Engine.settleCollector]). A give-back the store did not answer
+		// settles nothing, as an unknown claim; it only forgets the resume,
+		// since the next holder may record a newer pass meanwhile.
 		if duty.declines.giveBack(ctx, collectorDecline, duty.giveBack) {
 			e.settleCollector(duty, false, nil)
 			return
@@ -299,11 +267,9 @@ func (e *Engine) collectorTurn(ctx context.Context, claim func(context.Context) 
 	work, kept := duty.renewal.keep(ctx, claim, asked)
 	ran := e.collectorPass(work, duty, resume)
 	held, err = kept.Stop()
-	// A PASS THAT ENDED WITHOUT THE DUTY RECORDS NOTHING: the fleet's record
-	// has one writer at a time, and a node that lost the duty — or cannot say
-	// it still holds it — writing its report would replace the holder's.
-	// Settled by the same rule as the claim, so the two answers cannot be
-	// read differently.
+	// A PASS THAT ENDED WITHOUT THE DUTY, or unsure of it, RECORDS NOTHING:
+	// its report would replace the holder's. Settled by the claim's own rule,
+	// so the two answers cannot be read differently.
 	mine, _ = e.settleCollector(duty, held, err)
 	if !mine || !ran || ctx.Err() != nil {
 		return
@@ -333,20 +299,16 @@ func (d *collectorDuty) settle(held bool, err error) (mine, resume bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if err != nil {
-		// UNKNOWN IS NEITHER: an answer the store could not give says
-		// nothing about who holds the duty, so this node acts as no
-		// holder — it cannot say the duty is its own — and keeps whatever
-		// it believed before, the alarm its last audit raised included.
-		// Read as "not mine", a two-second store blip would clear an
-		// alarm about lost files on the one node reporting it.
+		// UNKNOWN IS NEITHER: this node acts as no holder yet keeps what it
+		// believed, its last audit's alarm included; read as "not mine", a
+		// store blip would clear an alarm about lost files on the one node
+		// reporting it.
 		//
-		// BUT IT FORGETS THE RESUME. While nobody can say who holds the
-		// duty, another node may take it and record a newer pass — an
-		// audit that found files lost — so the next claim that answers
-		// held reads the fleet's record again rather than run from this
-		// node's own, older status and write those findings out of the
-		// record. Resuming twice costs a read: Restore keeps the newer of
-		// each half.
+		// BUT IT FORGETS THE RESUME: another node may take the duty meanwhile
+		// and record a newer audit, so the next held claim rereads the
+		// fleet's record rather than write those findings out of it from this
+		// node's older status. Resuming twice costs a read (Restore keeps the
+		// newer of each half).
 		d.resumed = false
 		return false, false
 	}
@@ -445,29 +407,17 @@ func (d *collectorDuty) ran(last *time.Time, interval time.Duration, err error) 
 }
 
 // resumeCollector picks the schedule and the findings up from the fleet's
-// record when this node takes the duty, so a duty that moved does not run every
-// pass again at once — the record says when its last holder ran each — and
-// does not forget what the last audit found. It reports whether it read the
-// record: false when the store did not give it up, and the turn then runs no
-// pass.
+// record when this node takes the duty, so a moved duty neither reruns every
+// pass at once nor forgets what the last audit found. It reports whether it
+// read the record; when it did not, the turn runs no pass.
 //
-// ONLY A RECORD OF THIS STORE, read whole ([Backends.ObjectCollection]): a
-// report of another store — left behind by a move of the fleet's files — is
-// none, and both passes are due at once, as on a fleet that never recorded
-// one.
-//
-// AND NO PASS UNTIL THE STORE HAS ANSWERED. A record the store did not give
-// up — the objects bucket's leader moving, a blip — is UNKNOWN (ADR-0005),
-// and says nothing about what the last holder found: run from nothing, the
-// turn collected at once and recorded a status with no audit half, writing
-// the last holder's findings out of the fleet's record and clearing
-// objects_missing until a whole audit of the store found them again, a day
-// later. So the turn runs no pass and records nothing, the resume stays owed,
-// and the next turn — a minute later — reads again, as an unknown claim is
-// settled ([collectorDuty.settle]). A record that DOES NOT DECODE is an
-// answer, and the passes run from nothing over it: waiting on a record that
-// will never decode would skip every pass, where running from nothing costs a
-// pass run early.
+// ONLY A RECORD OF THIS STORE counts ([Backends.ObjectCollection]): another
+// store's leaves both passes due at once. An UNANSWERED read is unknown
+// (ADR-0005): the turn runs no pass and the resume stays owed, as in
+// [collectorDuty.settle], since a pass run from nothing would write the last
+// holder's findings out of the record and clear objects_missing for a day. A
+// record that DOES NOT DECODE is an answer and the passes run from nothing,
+// since waiting on it would skip every pass.
 func (e *Engine) resumeCollector(ctx context.Context, duty *collectorDuty) bool {
 	last, found, err := e.backends.ObjectCollection(ctx)
 	switch {
@@ -672,29 +622,17 @@ func (e *Engine) ObjectsStream() string {
 var errCollectionUnreadable = errors.New("engine: the object collection record is unreadable")
 
 // ObjectCollection is the collector's last report on store, the object store
-// identity a node agreed with the fleet at boot ([openObjects]), as the fleet
-// recorded it — false when no pass on that store has recorded one. It is the
-// record's ONE reader: a node taking the collector's duty resumes from it
-// ([Engine.resumeCollector]) and the status surfaces render it, both through
-// [Backends.ObjectCollection], so the rules below cannot hold for one and not
-// the other.
+// identity a node agreed with the fleet at boot ([openObjects]); false when no
+// pass on it has recorded one. It is the record's ONE reader, for the duty's
+// resume ([Engine.resumeCollector]) and the status surfaces alike.
 //
-// A REPORT OF ANOTHER STORE IS NONE. The record names the store its passes
-// ran on, and it outlives a change of store: a move deletes the backend record
-// beside it and leaves the report, and a restore into a new bucket may bring
-// the bucket back. Resumed, another store's report put the new store's first
-// audit — the one check that its copy is whole — up to a day away, raised the
-// old store's lost files as the new one's, and was written back at the next
-// pass under the new store's name; rendered, it showed every node's /fleet and
-// `crewlet objects status` the OLD store as the one the files are in, with the
-// old store's audit and lost files, until the new store's first pass recorded
-// — and for as long as no data node took the duty. So it answers as a fleet
-// whose collector never reported.
+// A REPORT OF ANOTHER STORE IS NONE: the report outlives a move of the files
+// or a restore into a new bucket, and taken as the new store's it would put
+// off its first audit, raise the old store's lost files as its own, and show
+// the OLD store on /fleet and `crewlet objects status`.
 //
-// READ WHOLE OR NOT AT ALL: JSON fills every field it can before it reports
-// one it could not, so a record that fails to decode answers nothing of it —
-// a partly decoded one would put a pass off on the strength of a timestamp
-// beside a field nobody could read.
+// READ WHOLE OR NOT AT ALL: a partly decoded record could put a pass off on a
+// timestamp beside a field nobody could read.
 func ObjectCollection(ctx context.Context, records CollectionRecords, store string) (CollectionReport, bool, error) {
 	raw, found, err := records.ObjectCollection(ctx)
 	if err != nil || !found {

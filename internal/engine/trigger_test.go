@@ -10,16 +10,9 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// The ask a turn is given is the one string every phase, every prefetch and
-// every model round is built on. It had no test, and what it actually returned
-// for THREE of the four wake types was a stub: "Message from alice: deploy" for
-// a notification whose body was the request, "(a2a_request)" for a colleague's
-// question, "(task_assigned)" for a schedule's task text. Each producer wrote
-// its ask into a place nothing read.
-//
-// So these tests assert CONTAINMENT of the real content rather than an exact
-// rendering: the wording of a brief is free to change, the presence of the ask
-// is not.
+// A turn's ask is the string every phase, prefetch and model round is built on,
+// so these tests assert it CONTAINS the wake's real content, not an exact
+// rendering: a brief's wording may change, the ask's presence may not.
 
 func TestEveryWakeTypeHandsTheTurnItsAsk(t *testing.T) {
 	t.Parallel()
@@ -47,9 +40,8 @@ func TestEveryWakeTypeHandsTheTurnItsAsk(t *testing.T) {
 			want: []string{"Is runbook step 4 wrong?", "CTO"},
 		},
 		{
-			// Both halves: the channel is closed by the time the answer
-			// lands, so a brief without the question leaves the requester
-			// reading a reply with no antecedent.
+			// Both halves: the channel is closed when the answer lands,
+			// so without the question the reply has no antecedent.
 			name: "an A2A answer carries the question it answers",
 			event: events.New(types.A2AMessage{
 				ChannelID: "ch-1", Sender: "sre", SenderRole: "SRE",
@@ -80,10 +72,9 @@ func TestEveryWakeTypeHandsTheTurnItsAsk(t *testing.T) {
 	}
 }
 
-// Every type that runs a turn must be able to state its ask. A new wake type
-// added without a Brief() is one whose seats are woken with a type name, which
-// is precisely the failure this file exists to prevent — and adding the type to
-// the ledger is the step nobody forgets, so the assertion hangs off that list.
+// Every type that runs a turn must state its ask: one without a Brief() wakes
+// its seats with a type name. The assertion hangs off the ledger because adding
+// a type there is the step nobody forgets.
 func TestEveryLedgeredTriggerTypeStatesItsAsk(t *testing.T) {
 	t.Parallel()
 	for _, name := range inbox.LedgeredTypes() {
@@ -100,9 +91,9 @@ func TestEveryLedgeredTriggerTypeStatesItsAsk(t *testing.T) {
 	}
 }
 
-// A coalesced partition is one conversation, and every constituent's ask has to
-// survive the merge: a digest that kept only the first message hands the seat a
-// thread it cannot answer.
+// A coalesced partition is one conversation, so every constituent's ask must
+// survive the merge: keeping only the first hands the seat a thread it cannot
+// answer.
 func TestACoalescedPartitionKeepsEveryConstituentsAsk(t *testing.T) {
 	t.Parallel()
 	first := events.New(types.ExternalNotification{

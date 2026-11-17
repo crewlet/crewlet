@@ -18,32 +18,17 @@ import (
 )
 
 // Changes names each branch a collected run pushed by the live change it
-// heads, and opens the changes the run asked to open — see
-// [sandbox.RunPushes.Changes].
+// heads, and opens the changes the run asked for ([sandbox.RunPushes.Changes]).
 //
-// ONE `branch_changes` READ of every branch the run pushed on the
-// repositories it was given to push to and the branch of each ask to open one,
-// every repository in it — a second only for a run that pushed more branches
-// than one read answers ([branchQueries]) — at SESSION FLOORED AT THE PUSH
-// RECORD'S POSITION ([sandbox.PushRecord.At]): a delivered ref named by no
-// change because a node behind answered is the stale "none" a collection must
-// never say, and the record's linearizable first page already put the floor
-// past every push the run made and every change those pushes opened — so the
-// read answers what a linearizable one would, and the collection pays the
-// record's one barrier on the code log and no second. Its rows are what the
-// repositories hold, not who may read them: the engine names its own run's
-// refs, on repositories the run was given.
+// One `branch_changes` read (two past [branchQueries]' limit) at session
+// floored at the push record's position ([sandbox.PushRecord.At]), which is
+// past every push of the run and every change they opened: it answers as a linearizable read would,
+// never a lagging node's stale "none", for no second barrier. It is unscoped:
+// it names only the run's own refs, on repositories the run was given.
 //
-// AN ASK OPENS ITS CHANGE ONCE A LAUNCH ([openOpID]): from the branch the
-// run's push record says it delivered, as the seat it ran for, carrying the
-// work item the run was charged to and naming the turn and the run that
-// opened it, made for whom the launching turn works for and held to the
-// colleague whose ask woke it, as the box's pushes are ([openCeiling]) — the
-// open a code_open_change of the same turn would make, decided by the
-// repository's committer at or past the read, from its own chart. Asked again
-// by a retried collection, on this node or another, the open is the same
-// operation: the read finds the change it opened and names it opened, or the
-// operation ledger answers the record that landed.
+// Each ask opens once a launch ([openOpID]), so a retried collection on any
+// node finds its change or the ledger's record; the open is the one the
+// launching turn's code_open_change would make ([openOne], [openCeiling]).
 func (p runPushes) Changes(ctx context.Context, run sandbox.PendingRun, record sandbox.PushRecord,
 	open bool) ([]sandbox.PushedRef, []sandbox.OpenedChange, error) {
 
@@ -71,8 +56,7 @@ func (p runPushes) Changes(ctx context.Context, run sandbox.PendingRun, record s
 	if len(branches) == 0 {
 		return pushed, nil, nil
 	}
-	// THE RECORD'S POSITION IS ITS TOKEN, which the sandbox carries from
-	// Pushed to here without reading it ([sandbox.PushRecord.At]).
+	// The record's position is opaque to the sandbox ([sandbox.PushRecord.At]).
 	recordAt, err := statelog.ParsePosition(record.At)
 	switch {
 	case err != nil:
@@ -114,15 +98,11 @@ func (p runPushes) Changes(ctx context.Context, run sandbox.PendingRun, record s
 	if !open {
 		return named, nil, nil
 	}
-	// THE ASKS ARE OPENED AT ONCE, one goroutine an ask, each owned and
-	// awaited here and stopped with ctx: each is its own repository's, under
-	// its own operation (openOpID) and decided by that repository's
-	// committer, so none waits on another, and in turn a collection waits for
-	// its slowest open rather than for the sum of them — a title read by
-	// object id and a committer write that may wait up to statelog.StallGrace
-	// for its record to apply, each, while the run's seat is held for its
-	// collection. Bounded by the run's repositories, sandbox.MaxRunRepos (8)
-	// at most, which a run's grant is held to; one ask a repository.
+	// The asks open concurrently, each goroutine awaited here and stopped by ctx:
+	// each is its own repository's operation ([openOpID]) decided by its own
+	// committer, and each may wait up to statelog.StallGrace for its record while
+	// the run's seat is held, so the collection waits for the slowest, not the sum.
+	// Bounded by sandbox.MaxRunRepos (8), one ask a repository.
 	type ask struct {
 		repo      sandbox.RunRepo
 		delivered int // the index in named of the branch it is opened from, -1 for none
@@ -143,8 +123,7 @@ func (p runPushes) Changes(ctx context.Context, run sandbox.PendingRun, record s
 	opened := make([]sandbox.OpenedChange, len(asks))
 	var wg sync.WaitGroup
 	for i, a := range asks {
-		// A COPY OF THE DELIVERED REF, which the open only reads: named is
-		// written below, once every open has answered.
+		// A copy: named is written below, once every open has answered.
 		var delivered *sandbox.PushedRef
 		if a.delivered >= 0 {
 			ref := named[a.delivered]
@@ -157,8 +136,7 @@ func (p runPushes) Changes(ctx context.Context, run sandbox.PendingRun, record s
 	for i, a := range asks {
 		if o := opened[i]; a.delivered >= 0 && named[a.delivered].Change == "" && o.Opened &&
 			strings.Contains(o.Change, "!") {
-			// THE CHANGE IT OPENED NAMES THE REF IT WAS OPENED FROM, as
-			// every change a delivered ref heads does.
+			// The ref an open came from names its change, as any ref heading one does.
 			named[a.delivered].Change = o.Change
 		}
 	}
@@ -168,14 +146,13 @@ func (p runPushes) Changes(ctx context.Context, run sandbox.PendingRun, record s
 // branchRef is branch as a ref names it, under refs/heads/.
 func branchRef(branch string) string { return "refs/heads/" + branch }
 
-// branchQueries packs the branches of each of repos — branches by repository
-// id — into `branch_changes` queries, in repos' order: as few as hold them,
-// each naming up to gitlet.MaxRefsPerQuery branches across every repository it
-// names. ONE for every run but one that pushed more branches than that: a
-// record holds sandbox.MaxPushedRefs (1 024) refs, beside one branch an ask,
-// so a run that pushed past a thousand branches is read in two, its
-// repository's branches split across them. A query names at most len(repos)
-// repositories — a run's, which gitlet.MaxRunRepos bounds as the read does.
+// branchQueries packs each repository's branches (branches by repository id)
+// into as few `branch_changes` queries as hold them, in repos' order, each
+// naming up to gitlet.MaxRefsPerQuery branches. Only a run that pushed past
+// that many needs two: a record holds sandbox.MaxPushedRefs (1 024) refs plus
+// one branch an ask, a repository's branches split across them. A query names
+// at most len(repos) repositories, which gitlet.MaxRunRepos bounds as the read
+// does.
 func branchQueries(repos []sandbox.RunRepo, branches map[string][]string) []gitlet.BranchChangesQuery {
 	var out []gitlet.BranchChangesQuery
 	var q gitlet.BranchChangesQuery
@@ -197,17 +174,15 @@ func branchQueries(repos []sandbox.RunRepo, branches map[string][]string) []gitl
 }
 
 // openOne is what becomes of run's ask to open a change from repository r's
-// branch: delivered is that branch as the push record says the run left it,
-// nil for a branch it never pushed (or one past the refs the record holds,
-// sandbox.MaxPushedRefs, which a run's own branch — its first push — is
-// not); live the change the branch heads where heading is set, read at at,
-// which the open is decided at or past.
+// branch. delivered is that branch as the push record left it, nil where the
+// run never pushed it or it is past the record's sandbox.MaxPushedRefs (a run's
+// own branch, its first push, never is); live is the change it heads where heading
+// is set, read at at, which the open is decided at or past.
 //
-// A branch heading a change is never opened again: the one the run's own
-// launch opened, found by the id the open derives (a collection retried
-// after its open landed), is named opened, and any other — a `git push -o
-// change` of the run's own, or anybody's — is named as the change the run
-// delivered to.
+// A branch heading a change is never opened again: the change this launch
+// opened (matched by its derived id, after a retried collection) is named
+// opened, and any other, the run's own `git push -o change` or anybody's, is
+// named as the change the run delivered to.
 func (p runPushes) openOne(ctx context.Context, reader pushReader, run sandbox.PendingRun, r sandbox.RunRepo,
 	delivered *sandbox.PushedRef, live gitlet.BranchChange, heading bool, at statelog.Position) sandbox.OpenedChange {
 
@@ -231,39 +206,28 @@ func (p runPushes) openOne(ctx context.Context, reader pushReader, run sandbox.P
 	}
 	var item *types.WorkItem
 	if w := run.WorkItem; w != nil && w.ID != "" {
-		// FITTED, as a change write's item is (the code tools'
-		// workItemArg): another system's labels, copied as they arrived, and
-		// never a reason to leave the change unopened.
+		// Fitted as a change write's item is (the code tools' workItemArg): another
+		// system's labels are never a reason to leave the change unopened.
 		item = &types.WorkItem{Backend: w.Backend, ID: gitlet.FitProvenance(w.ID), Key: gitlet.FitProvenance(w.Key),
 			Project: gitlet.FitProvenance(w.Project)}
 	}
-	// WHOM THE OPEN IS MADE FOR (gitlet.ChangeProposal.WrittenFor): whom the
-	// launching turn works for, as the run's checkout composed it for the
-	// turn's own code writes and the row carries it
-	// (sandbox.PendingRun.CodeWorkingFor) — the open is that turn's write,
-	// made late — and nobody, the seat's own work, for a run that works for
-	// its seat or a row a build before the field wrote. As the row holds it,
-	// a value a newer build wrote included: the committer that decides the
-	// open holds it to its rule and its ceiling, and answers one naming what
-	// its build does not know as a node of another build, which the walk
-	// moves on from. Where every node the walk asks answers so — during a
-	// roll, committers of an older build, which do not declare whom a write
-	// is made for — the open ran nowhere ([ranNowhere]), and so it did where
-	// the committer refused it as no proposal it can decide, as one whose
-	// chart has moved since the checkout may refuse whom the open is made
-	// for.
+	// Made for whom the launching turn works for (sandbox.PendingRun.CodeWorkingFor),
+	// as the open is that turn's write made late; nobody, stated, the seat's own
+	// work, for a run working for its seat or a row from a build before the field. Passed as
+	// the row holds it, even a newer build's value: a committer that cannot read it
+	// answers as another build's node and the walk moves on, and where every one
+	// does (mid-roll), or the committer refuses it on a chart moved since the
+	// checkout, the open ran nowhere ([ranNowhere]).
 	res, err := reader.Change(ctx, gitlet.ChangeProposal{OpID: op,
 		Asker: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: run.AgentHandle}, Seen: at,
 		Ceiling: openCeiling(run), WrittenFor: types.ForTurn(run.CodeWorkingFor),
 		Open: &gitlet.ChangeOpen{RepoID: r.RepoID, ChangeID: id, SourceRef: branchRef(r.Branch),
 			TargetRef: r.Open.Target, Title: title, Draft: r.Open.Draft, WorkItem: item, TurnID: run.TurnID,
 			RunID: run.LaunchID}})
-	// THE FACT ALONE, never an instruction: the run's report is read by the
-	// reviewer as well as the seat, and a step it names ("read it with ...")
-	// would be the engine telling a phase that holds no such tool what to do.
-	// The one act a line here names is the open made again, and it says whose
-	// that is ([ranNowhere]): the seat's, which the reviewer reads as a fact
-	// about the seat and the seat as its own.
+	// The fact alone, never an instruction: the reviewer reads the report as well
+	// as the seat, and a step it named would direct a phase holding no such tool.
+	// The one act a line names is opening again, and it says whose: the seat's
+	// ([ranNowhere]).
 	switch line, nothingRan := ranNowhere(err); {
 	case nothingRan:
 		out.Unopened = line
@@ -275,8 +239,7 @@ func (p runPushes) openOne(ctx context.Context, reader pushReader, run sandbox.P
 		out.Opened = true
 		out.Change = gitlet.ChangeRef(r.Repo, res.Number)
 		if res.Number == 0 {
-			// A PENDING OPEN IS NUMBERED BY ITS APPLY, which none has run
-			// where the answer was formed.
+			// A pending open is numbered by its apply, which had not run when answered.
 			out.Change = "a change of " + r.Repo + " not numbered yet"
 		}
 	default:
@@ -286,13 +249,10 @@ func (p runPushes) openOne(ctx context.Context, reader pushReader, run sandbox.P
 		attrs := []any{"turn_id", run.TurnID, "launch_id", run.LaunchID, "repo", r.Repo, "branch", r.Branch,
 			"detail", out.Unopened}
 		if err != nil {
-			// THE FAILURE IN ITS OWN WORDS, whatever the line says of it: the
-			// line of an open that ran nowhere leaves them out, a refusal's
-			// own sentence aside, and who was asked and what each said — the
-			// keys a build refused and the nodes that refused them, beside
-			// the estate's instruction to finish the upgrade — are the
-			// operator's to read, which neither of the report's readers can
-			// act on.
+			// The failure's own words are logged whatever the line says (a ran-nowhere
+			// line leaves them out): who was asked and what each said (refused keys,
+			// the refusing nodes, the estate's upgrade instruction) are the operator's
+			// to act on, which neither reader of the report can.
 			attrs = append(attrs, "error", err.Error())
 		}
 		log.WarnContext(ctx, "sandbox_change_unopened", attrs...)
@@ -300,33 +260,18 @@ func (p runPushes) openOne(ctx context.Context, reader pushReader, run sandbox.P
 	return out
 }
 
-// ranNowhere is the line of an open the estate's answer says RAN NOWHERE,
-// naming why, and whether it says so: the walk asked the repository's
-// committer and each runner-up after it and found none to run it
-// ([estate.ErrUnserved]), none gone silent — the estate's own claim that
-// nothing ran, on which a caller may write again. Either no node could read
-// it, one at least refusing it for a key its build does not declare
-// ([estate.ErrUnknownKeys], which wraps that walk; [unopenedUnreadable]):
-// during a roll, committers of an older build, which do not declare whom a
-// write is made for (args.written_for), and for a carrier a newer build wrote
-// on the run's row, nodes of this build, which do not know a value it names.
-// Or no committer could take it for any other reason, every one answering
-// that its copy was out of service, could not run it or was behind, which
-// names no build ([unopenedUnserved]). AND A REFUSAL OF THE OPEN AS NO
-// PROPOSAL A COMMITTER CAN DECIDE ([gitlet.ErrInvalidProposal]), which the
-// committer — or this node's own copy of the request, before it asked one —
-// gives before anything of the open is appended, so nothing of it ran either
-// ([unopenedRefused]).
-//
-// AND NO OTHER ANSWER, each of which keeps the failure's own words and says
-// whether it opened is unknown: a walk in which a committer went silent, and
-// an open sent to one never heard from ([estate.ErrOutcomeUnknown]), whatever
-// else stopped the walk, a refusal included — that committer may have opened
-// it; a refusal of keys that wraps no walk, an answer this node's build could
-// not read — the node that gave it ran the open; and a failure of the caller's
-// own. The reading a code tool gives the same answers (internal/agent/builtin's
-// failedWrite), so the seat sent to its code_open_change is told of the run's
-// open what that tool would tell it of its own.
+// ranNowhere is the report line for an open the estate's answer says ran
+// nowhere, and whether it says so. Definite for a walk that found no committer
+// to run it, none gone silent ([estate.ErrUnserved]): [unopenedUnreadable]
+// where one refused a key its build does not declare ([estate.ErrUnknownKeys]:
+// args.written_for to an older build mid-roll, a newer row's value to this
+// one), else [unopenedUnserved]; and for a refusal as no proposal a committer
+// can decide ([gitlet.ErrInvalidProposal]), given before anything is appended
+// ([unopenedRefused]). Any other answer may have run and keeps its own words as
+// unknown: a committer gone silent or never heard from ([estate.ErrOutcomeUnknown]),
+// even beside a refusal; a keys refusal wrapping no walk, which the answering
+// node ran; a caller's own failure. internal/agent/builtin's failedWrite reads
+// them alike, so the seat hears what its own code_open_change would tell it.
 func ranNowhere(err error) (string, bool) {
 	var unserved *estate.ErrUnserved
 	walked := errors.As(err, &unserved)
@@ -343,16 +288,13 @@ func ranNowhere(err error) (string, bool) {
 	return unopenedUnserved, true
 }
 
-// unopenedRefused is the line of an ask whose open was refused as no proposal
-// a committer can decide ([ranNowhere]), in the refusal's own words past its
-// sentinel. DEFINITE: the rule is held before anything of the open is
-// appended, so no change is open, and the commits the run pushed stay on its
-// branch. Reachable without any sender's bug once the open carries whom the
-// launching turn works for: the committer judges that against its own chart,
-// which may have moved since the run's checkout — a person's seat it no longer
-// places, a seat it now holds as an agent's — so the line names the refusal and
-// no act, since whether the seat's own open would be refused the same way is
-// that chart's to say.
+// unopenedRefused is the line for an open refused as no proposal a committer
+// can decide ([ranNowhere]), in the refusal's words past its sentinel.
+// Definite: the rule holds before anything is appended, so no change is open
+// and the run's commits stay on its branch. Reachable without a bug: the
+// committer judges whom the turn works for against its own chart, which may
+// have moved since the checkout, so the line names no act, since whether the
+// seat's own open would be refused too is that chart's to say.
 func unopenedRefused(err error) string {
 	said, ok := builtin.RefusalSentence(err, gitlet.ErrInvalidProposal)
 	if !ok {
@@ -362,52 +304,38 @@ func unopenedRefused(err error) string {
 		"commits the run pushed are kept"
 }
 
-// unopenedUnreadable is what became of an ask whose open no node the estate's
-// walk asked could read, and [unopenedUnserved] of one no committer could take
-// for any other reason ([ranNowhere]). DEFINITE, where an open that may have
-// run says whether it opened is unknown: nothing of the open ran, so no change
-// is open, and the commits the run pushed stay on its branch for the seat to
-// open again — its code_open_change, from the turn the collection resumes,
-// asks the same open of the repository's committer, which for an open no node
-// could read a node of this build decides.
+// unopenedUnreadable is the line for an open no node the walk asked could read,
+// and [unopenedUnserved] for one no committer could take otherwise ([ranNowhere]).
+// Definite, unlike an open that may have run: nothing ran, and the commits stay
+// on the branch for the seat's code_open_change, which for an unreadable open a
+// node of this build decides.
 //
-// NOT ASKED AGAIN within the collection, which holds the run's seat and its
-// box until the turn resumes: asked until a committer took it, the open would
-// hold them for as long as the roll, or the outage, lasts, which the
-// collection refuses a push record Gitlet cannot read for the same reason (the
-// sandbox's readPushes). Resumed at once, the run's reviewer reads that its
-// work was not proposed, and the seat opens it once a committer serves.
+// Not retried within the collection: it holds the run's seat and box until the
+// turn resumes, so retrying would hold them for the whole roll or outage (the
+// sandbox's readPushes refuses an unreadable push record for the same reason).
+// Resumed at once, the reviewer reads that the work was not proposed.
 const unopenedUnreadable = "the node that answered runs a build that cannot read the request, so nothing " +
 	"of the open ran; the commits the run pushed are kept, and the change is the seat's to open again with " +
 	builtin.CodeOpenChangeTool + ", which a node of this build answers"
 
-// unopenedUnserved is what became of an ask whose open no committer the
-// estate's walk asked could take, each answering that its copy was out of
-// service, could not run it or was behind: it names no build, since none
-// refused the open — the rest as [unopenedUnreadable].
+// unopenedUnserved is the line for an open no committer the walk asked could
+// take, each out of service, unable to run it or behind: it names no build,
+// since none refused it; otherwise as [unopenedUnreadable].
 const unopenedUnserved = "no Gitlet node could take it, so nothing of the open ran; the commits the run " +
 	"pushed are kept, and the change is the seat's to open again with " + builtin.CodeOpenChangeTool
 
-// openCeiling is the ceiling the open a run asked for is held to
-// (gitlet.WriteCeiling): the colleague SEAT whose ask woke the launching turn,
-// as the run's row names it (sandbox.PendingRun.CodeCeiling) — the seat the
-// box's admission already holds every push of the run to (gitlet.Grant.Under);
-// NOBODY for a turn a credential acting as no seat woke, as the row's carrier
-// says (sandbox.PendingRun.CodeWorkingFor), which pushes to no repository
-// itself, so its open is the seat's own work or nothing, as the box's pushes
-// are and as the turn's own writes for it are (ADR-0110); and nil for a run
-// nobody bounds: a turn nobody woke, one the seat itself woke, and one a
-// person woke, who bounds nothing.
+// openCeiling is the ceiling the run's open is held to (gitlet.WriteCeiling):
+// the colleague SEAT whose ask woke the launching turn
+// (sandbox.PendingRun.CodeCeiling), which every push of the run is already held
+// to (gitlet.Grant.Under); NOBODY for a turn a credential acting as no seat
+// woke, which pushes nowhere itself, so its open is the seat's own work or
+// nothing (ADR-0110); nil for a turn nobody, the seat itself or a person woke.
 //
-// THE OPEN IS THE TURN'S OWN WRITE, made late: a code_open_change of the same
-// turn carries the same ceiling (internal/agent/builtin's codeCaller), and the
-// committer judges it against its own chart when it decides the open
-// (gitlet.WriteCeiling's changeRefusal) — never the launching node's one
-// resolution of the repositories, which a later activation may have moved —
-// sparing the seat's own work, an open of a branch under its own namespace or
-// in a repository it owns, as it spares the tool's. Left off, a colleague an
-// activation shut out of the repository between the launch and the collection
-// would have a change opened for them that their own ask could no longer make.
+// The open is the turn's own write made late, carrying its code_open_change's
+// ceiling (builtin's codeCaller), judged on the committer's chart when it
+// decides (gitlet's changeRefusal), never the launch's, which an activation may
+// have moved: left off, a colleague shut out since the launch would get a
+// change opened that their own ask could no longer make.
 func openCeiling(run sandbox.PendingRun) *gitlet.WriteCeiling {
 	switch w := run.CodeWorkingFor; {
 	case run.CodeCeiling != "":
@@ -418,13 +346,11 @@ func openCeiling(run sandbox.PendingRun) *gitlet.WriteCeiling {
 	return nil
 }
 
-// deliveredTitle is the title of the change a run's ask opens without naming
-// one: the subject of the commit the run delivered its branch at — what that
-// commit says it does, as a push's options title theirs — read by object id
-// as the seat, at or past the read that found the branch; and, where it cannot
-// be read or is no title, the branch's name and then the commit's id, each
-// made a title (gitlet.DeliveredTitle) — never the name raw, which may hold what
-// a title may not: an ask is never left unopened for its title.
+// deliveredTitle is the title of a change asked without one: the subject of
+// the commit the run delivered its branch at, read by object id as the seat at
+// or past the read that found the branch; failing that, the branch name, then
+// the commit id, each made a title by gitlet.DeliveredTitle (the raw name may
+// hold what a title may not). An ask is never left unopened for its title.
 func (p runPushes) deliveredTitle(ctx context.Context, reader pushReader, run sandbox.PendingRun,
 	r sandbox.RunRepo, head string, at statelog.Position) string {
 
@@ -443,12 +369,10 @@ func (p runPushes) deliveredTitle(ctx context.Context, reader pushReader, run sa
 	return gitlet.DeliveredTitle(subject, r.Branch, head)
 }
 
-// openOpID is the operation id of the open run's launch asks of repository
-// repoID at its collection: a STEP of the launch's own operation
-// (statelog.StepOpID), DERIVED from the launch — its id and the instant it
-// began, both on the run's row — so every collection of one launch, on any
-// node and after any restart, asks the same open, which the operation ledger
-// answers once, while every launch asks its own.
+// openOpID is the operation id of the open run's launch asks of repoID: a step
+// (statelog.StepOpID) of the launch's own operation, derived from the launch's
+// id and start on the run's row, so every collection of one launch, on any node
+// and after any restart, asks the same open, which the ledger answers once.
 func openOpID(run sandbox.PendingRun, repoID string) string {
 	launch := statelog.DeriveOpID(run.Launch.StartedAt, "", "sandbox.launch", run.LaunchID)
 	return statelog.StepOpID(launch, "open-change-"+repoID)

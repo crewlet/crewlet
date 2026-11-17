@@ -9,14 +9,12 @@ import (
 )
 
 // searchCopies is this node's per-domain verdict as a search participant asks
-// it (ADR-0079): the rows a source is indexed from are its own domain's — a
-// page's the knowledge base's, a task's the tracker's — and the vectors are
-// theirs.
+// it (ADR-0079): a source's rows are its own domain's (a page's the knowledge
+// base's, a task's the tracker's) and the vectors are theirs.
 //
-// A SEARCH SLICE IS NOT AN ESTATE OPERATION, so the router's own gate never saw
-// it: a data node whose tracker or knowledge-base copy was wrong answered its
-// bucket range from an index over rows it had stopped serving, and the
-// coordinator merged that answer under complete coverage.
+// A search slice is no estate operation, so the router's gate never sees it:
+// without this verdict a node whose copy is out of service answers its bucket
+// range from rows it stopped serving, merged as complete coverage.
 type searchCopies struct{ local *localEstate }
 
 // sourceDomains is the domain each search source's rows are applied by.

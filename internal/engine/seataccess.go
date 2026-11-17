@@ -21,22 +21,19 @@ import (
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
-// PER-SEAT INTEGRATION ACCESS, run by the engine.
-//
-// Every vendor's half registers itself with internal/seataccess, so nothing
-// here names a vendor: a setup pass runs its integration's company-level work
-// and then [seataccess.Sync] for the integration's seats ([Engine.withSeatAccess]),
-// the access routes run a sync for one seat's action ([Engine.SyncSeatAccess]),
-// and a disconnect turns every seat off, and removes the accounts when asked
+// PER-SEAT INTEGRATION ACCESS, run by the engine. Each vendor registers with
+// internal/seataccess, so nothing here names one: a setup pass runs its
+// company-level work then [seataccess.Sync] ([Engine.withSeatAccess]), an access
+// route syncs one seat's action ([Engine.SyncSeatAccess]), and a disconnect
+// turns every seat off and, when asked, removes the accounts
 // ([Engine.tearDownSeatAccess]).
 //
-// ONE WRITER AT A TIME, through the kind's provisioning lease: a pass holds it
-// already (the loop's worker or [setup.Runner]), and a seat action takes it
-// here. The ledger relies on that ([seataccess.Ledger]).
+// ONE WRITER AT A TIME, through the kind's provisioning lease: a pass already
+// holds it (the loop's worker or [setup.Runner]), a seat action takes it here.
+// The ledger relies on that ([seataccess.Ledger]).
 
-// ErrSeatAccessBusy is a seat action asked while another writer holds the
-// integration: a pass, a disconnect, or another action. The caller answers
-// 409 and the person tries again when the sync finishes.
+// ErrSeatAccessBusy is a seat action asked while another writer (a pass, a
+// disconnect, another action) holds the integration; the caller answers 409.
 var ErrSeatAccessBusy = errors.New("engine: a sync for this integration is running")
 
 // SeatAccessLedger is the fleet's account ledger, or an error on an engine
@@ -91,11 +88,9 @@ func (e *Engine) seatAccessHeld(ctx context.Context, kind integration.Kind) (map
 
 // SyncSeatAccess runs one integration's seat access sync for a person's
 // action on the access routes (save, rotate, remove, restore, retry, done),
-// under the integration's provisioning lease, sealing as by.
-//
-// A writer already holding the lease answers [ErrSeatAccessBusy] rather than
-// waiting: the person's gesture is answered now, and the sync in flight will
-// carry the document's latest setting anyway.
+// under the integration's provisioning lease, sealing as by. A lease already
+// held answers [ErrSeatAccessBusy] rather than waiting: the sync in flight
+// carries the document's latest setting anyway.
 func (e *Engine) SyncSeatAccess(
 	ctx context.Context, kind integration.Kind, by iam.Actor,
 	asks map[string]seataccess.Ask, handles []string,
@@ -154,14 +149,11 @@ func (e *Engine) syncSeatAccess(
 	if company == nil {
 		return seataccess.SyncReport{}, integration.ErrNotConfigured
 	}
-	// EXTERNAL MODE IS BOUND, NEVER MANAGED (D4b). Where the engine does not
-	// hold the authority to create an agent's account, its credentials are
-	// handed in from outside Crewlet, and the sync opens no session and
-	// writes no ledger record: no account is adopted, turned off, removed or
-	// rotated, and each seat's tool reads the credential the seat names
-	// ([config.Company.SeatCredentialMode]). The pass says so once. A
-	// disconnect still runs, because it acts only on the accounts the ledger
-	// records this engine made.
+	// EXTERNAL MODE IS BOUND, NEVER MANAGED (D4b): where the engine lacks the
+	// authority to create an agent's account, the sync opens no session and
+	// writes no ledger record; each seat's tool reads the credential it names
+	// ([config.Company.SeatCredentialMode]). A disconnect still runs: it acts
+	// only on accounts the ledger records this engine made.
 	if !in.disconnect && company.Config.SeatCredentialMode(string(kind), e.companyManaged) !=
 		config.SeatCredentialEngine {
 		return e.externalSeatAccess(company.Config, kind)
@@ -189,16 +181,10 @@ func (e *Engine) syncSeatAccess(
 		Disconnect: in.disconnect,
 		OnDrift:    e.publishDriftRestored,
 		// THE MIGRATION'S GATE: until the document marks the integration
-		// migrated onto per-seat access, its seats say nothing per seat,
-		// and read as off they would have every account turned off.
-		//
-		// A DISCONNECT IS NOT GATED: it turns every seat off by request, and
-		// acts only on accounts the ledger records, never on a document's
-		// unmigrated seats.
-		//
-		// ONLY A CONNECTED INTEGRATION WAITS: one the company does not
-		// connect is not configured, which the session's open answers as
-		// it always has, and reports nothing to wait for.
+		// migrated, its seats say nothing per seat and, read as off, would
+		// have every account turned off. A disconnect is not gated: it acts
+		// only on accounts the ledger records. An unconnected integration is
+		// not configured (the session's open says so) and waits on nothing.
 		Unmigrated:       !in.disconnect && company.Config.SeatAccessPending(string(kind)),
 		UnmigratedReason: e.seatAccessPendingReason(kind),
 		// THE SHARED CREDENTIAL'S TEST, read off the sealed store the
@@ -206,9 +192,8 @@ func (e *Engine) syncSeatAccess(
 		Written: writtenBy(fleetsecrets.New(e.backends.Fleet, e.Cipher())),
 	})
 	if in.sink != nil {
-		// FLUSHED WHATEVER THE SYNC CONCLUDED: every value it recorded is
-		// already durable, and a seat waiting for one must not wait on the
-		// rest of the integration converging.
+		// FLUSHED WHATEVER THE SYNC CONCLUDED: what it recorded is durable,
+		// and a seat waiting for one value must not wait on the rest converging.
 		if ferr := in.sink.Flush(ctx); ferr != nil {
 			err = errors.Join(err, fmt.Errorf("engine: %s access sync: %w", kind, ferr))
 		}
@@ -219,11 +204,9 @@ func (e *Engine) syncSeatAccess(
 // withSeatAccess runs a pass's company-level work and then its integration's
 // seat access sync, and reports both in one finding list.
 //
-// A company-level answer of [integration.ErrNotConfigured] skips the seats:
-// the block is gone, and a removed block forgets the integration's state and
-// touches no vendor (see internal/integration's package doc). A vendor that
-// says it does not provision seats leaves the company-level findings as they
-// are.
+// A company-level [integration.ErrNotConfigured] skips the seats: a removed
+// block touches no vendor (internal/integration's package doc). A vendor that
+// does not provision seats leaves the company-level findings as they are.
 func (e *Engine) withSeatAccess(
 	ctx context.Context, kind integration.Kind, in setup.PassInput,
 	company func(context.Context, setup.PassInput) ([]integration.Finding, error),
@@ -236,9 +219,8 @@ func (e *Engine) withSeatAccess(
 }
 
 // withSeatAccessReads is [Engine.withSeatAccess] for a company half that
-// hands its session what it already read at the vendor, so one pass reads a
-// listing once: Cloudflare's zones and permission groups, which its
-// inspection and its session both need.
+// hands its session what it already read at the vendor, so a pass reads a
+// listing once (Cloudflare's zones and permission groups).
 func (e *Engine) withSeatAccessReads(
 	ctx context.Context, kind integration.Kind, in setup.PassInput,
 	company func(context.Context, setup.PassInput) ([]integration.Finding, seataccess.PassReads, error),
@@ -262,7 +244,7 @@ func (e *Engine) withSeatAccessReads(
 		return nil, fmt.Errorf("engine: %s access sync: %w", kind, err)
 	}
 	// AND THE COMPANY CREDENTIALS A SEAT ONCE SHARED (D12), until each is
-	// replaced: the integration's own finding, which its Agents tab draws.
+	// replaced: the finding the integration's Agents tab draws.
 	shared, err := e.SharedCredentialFindings(ctx, kind, report.Records)
 	if err != nil {
 		return nil, fmt.Errorf("engine: %s shared credentials: %w", kind, err)
@@ -273,10 +255,9 @@ func (e *Engine) withSeatAccessReads(
 
 // externalSeatAccess is a sync's answer for an integration whose agents'
 // credentials are handed in from outside Crewlet: not configured where the
-// company does not connect it, its unfinished migration where that is still
-// pending (the binding waits on it all the same), nothing where no agent is
-// on there, and otherwise the one advisory that its agents' accounts are
-// managed outside Crewlet.
+// company does not connect it, its unfinished migration where pending (the
+// binding waits on it too), nothing where no agent is on there, and otherwise
+// the one advisory that its agents' accounts are managed outside Crewlet.
 func (e *Engine) externalSeatAccess(c *config.Company, kind integration.Kind) (seataccess.SyncReport, error) {
 	var said []integration.Finding
 	switch {
@@ -296,14 +277,11 @@ var errSeatCredentialOwned = errors.New("only the access sync writes an agent's 
 
 // seatCredentialGuard is the sink a pass's company half writes through: sink
 // itself, except that a Record or Forget naming any agent seat's own sealed
-// name at kind is refused with [errSeatCredentialOwned].
-//
-// THE INCIDENT IT CLOSES is two writers of one credential: a vendor's company
-// pass still handed a seat plan and the sink minted and revoked the same key
-// the access sync sealed, so either could undo the other on any pass. With the
-// guard, a company half that reaches for a seat's credential fails its pass
-// loudly instead of racing the sync. A nil sink stays nil: a dry run is a nil
-// sink, and a guard around nothing would read as permission to write.
+// name at kind is refused with [errSeatCredentialOwned]: the access sync is a
+// seat credential's one writer, and a second could undo it on any pass, so a
+// company half reaching for one fails its pass rather than racing the sync. A
+// nil sink stays nil: a dry run is a nil sink, and a guard around nothing would
+// read as permission to write.
 func (e *Engine) seatCredentialGuard(kind integration.Kind, sink provision.TokenSink) provision.TokenSink {
 	vendor, ok := seataccess.Lookup(kind)
 	company := e.Company()
@@ -362,8 +340,8 @@ func (e *Engine) tearDownSeatAccess(
 ) error {
 	if _, ok := seataccess.Lookup(kind); !ok {
 		// NO PER-SEAT ACCESS AT THIS SURFACE: Jira and Confluence are
-		// products of the Atlassian account, which Atlassian's own
-		// disconnect turns off.
+		// products of the Atlassian account, which Atlassian's disconnect
+		// turns off.
 		return nil
 	}
 	ledger, err := e.SeatAccessLedger()
@@ -399,18 +377,16 @@ func (e *Engine) tearDownSeatAccess(
 	case !errors.Is(err, integration.ErrNotConfigured):
 		return fmt.Errorf("engine: %s teardown: %w", kind, err)
 	case remove && held > 0:
-		// REMOVAL WAS ASKED FOR AND CANNOT BE DONE. Answering nil here lets
-		// the block, and with it the only credential that reaches these
-		// accounts, be dropped while every one stays live at the vendor and
-		// the operator is told remove_seats succeeded.
+		// REMOVAL WAS ASKED FOR AND CANNOT BE DONE: nil here would drop the
+		// block, the only credential reaching these accounts, while each stays
+		// live at the vendor and the operator is told remove_seats succeeded.
 		return fmt.Errorf("engine: %s teardown: the ledger records %d agent "+
 			"account(s) to remove and the vendor cannot be reached to remove them: %w; "+
 			"fix the connection, or disconnect without removing accounts and remove "+
 			"them at the vendor by hand", kind, held, err)
 	default:
-		// KEPT AS THEY ARE: a disconnect that removes nothing needs no
-		// vendor, and the ledger keeps every account for a reconnect to
-		// reach.
+		// KEPT AS THEY ARE: removing nothing needs no vendor, and the ledger
+		// keeps every account for a reconnect.
 		if held > 0 {
 			log.WarnContext(ctx, "seat_access_teardown_unreachable",
 				"integration", kind.String(), "accounts", held, "error", err,
@@ -421,14 +397,12 @@ func (e *Engine) tearDownSeatAccess(
 	}
 }
 
-// accountsLeft refuses a disconnect that asked for the agents' accounts to be
-// removed while the ledger still holds one: a removal waiting on a person (an
-// app only a person can delete at the vendor, or one no configuration token
-// can delete) or one the vendor refused. Dropping the block then would drop
-// the only connection that reaches those accounts and the sealed credentials
-// that confirm their removal, with the operator told the removal finished.
-// The loop keeps the surface disconnecting and tries again, and the Agents tab
-// names what each removal waits on.
+// accountsLeft refuses a disconnect that asked for the agents' accounts removed
+// while the ledger still holds one (a removal waiting on a person, or one the
+// vendor refused). Dropping the block then would drop the only connection to
+// those accounts and the sealed credentials that confirm their removal, with
+// the operator told it finished. The loop keeps the surface disconnecting and
+// retries; the Agents tab names what each removal waits on.
 func accountsLeft(ctx context.Context, ledger seataccess.Ledger, kind integration.Kind) error {
 	records, err := ledger.Records(ctx, kind)
 	if err != nil {
@@ -451,9 +425,9 @@ func accountsLeft(ctx context.Context, ledger seataccess.Ledger, kind integratio
 
 // seatAccessPlan is the provisioning plan a seat's tool waits on for kind:
 // every agent seat that is on at one of kind's lanes, with the engine-owned
-// names its credential is sealed under. It is what [seatMinter.seatPlan]
-// answers for every pass that mints a seat's credential, so the name a sync
-// seals and the name a seat's server waits for are one derivation.
+// names its credential is sealed under. [seatMinter.seatPlan] answers it for
+// every pass that mints a seat's credential, so the name a sync seals and the
+// name a seat's server waits for are one derivation.
 func (e *Engine) seatAccessPlan(c *Company, kind integration.Kind) (*provision.Plan, error) {
 	vendor, ok := seataccess.Lookup(kind)
 	if !ok || c == nil || c.Config == nil {
@@ -461,13 +435,11 @@ func (e *Engine) seatAccessPlan(c *Company, kind integration.Kind) (*provision.P
 	}
 	cat := vendor.Catalog()
 	plan := &provision.Plan{}
-	// NOTHING IS ON ITS WAY where the access sync seals nothing: an
-	// integration whose credentials are handed in from outside (D4b), or one
-	// the document has not migrated onto per-seat access, whose sync changes
-	// nothing. A seat's child naming one of its sealed names there waits on
-	// no pass and is reported as the missing secret it is. Nor where every
-	// lane's credential is issued at use, which the issuer declares
-	// ([seatIssuer.variable]).
+	// NOTHING IS ON ITS WAY where the sync seals nothing: credentials handed
+	// in from outside (D4b), an integration not migrated onto per-seat access,
+	// or every lane's credential issued at use ([seatIssuer.variable]). A
+	// seat's child naming a sealed name there waits on no pass and is
+	// reported as the missing secret it is.
 	if c.Config.SeatCredentialMode(string(kind), e.companyManaged) != config.SeatCredentialEngine ||
 		!c.Config.SeatAccessMigratedFor(string(kind)) || len(cat.Credentials) == 0 {
 		return plan, nil
@@ -478,10 +450,10 @@ func (e *Engine) seatAccessPlan(c *Company, kind integration.Kind) (*provision.P
 		}
 		sinks := seataccess.SinkNames(cat, seat.Handle)
 		s := provision.Seat{Handle: seat.Handle, Role: seat.Name, TokenVar: sinks[cat.Credentials[0]]}
-		// EVERY OTHER VALUE THE SEAT'S TOOL READS that this sync seals
-		// beside the credential ([provision.Seat.AlsoVars]): Atlassian's
-		// address, Scaleway's access key. One the engine issues at use,
-		// such as GitHub's installation token, is sealed by nobody.
+		// EVERY OTHER VALUE THE SEAT'S TOOL READS that this sync seals beside
+		// the credential ([provision.Seat.AlsoVars]), such as Atlassian's
+		// address; one issued at use (GitHub's installation token) is sealed
+		// by nobody.
 		for _, field := range config.SeatToolFields(string(kind)) {
 			if name := sinks[field]; name != "" && field != cat.Credentials[0] {
 				s.AlsoVars = append(s.AlsoVars, name)
@@ -510,10 +482,9 @@ func (e *Engine) publishDriftRestored(ctx context.Context, d seataccess.DriftRes
 		}
 	}
 	if err := e.backends.Queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
-		// LOGGED, NOT RAISED: the restore itself landed at the vendor and
-		// in the ledger, whose lane record carries the step; losing the
-		// announcement costs the activity row, and failing the sync over it
-		// would retry a restore that already happened.
+		// LOGGED, NOT RAISED: the restore landed at the vendor and in the
+		// ledger; losing the announcement costs only the activity row, and
+		// failing the sync would retry a restore that already happened.
 		log.WarnContext(ctx, "seat_access_drift_publish_failed",
 			"integration", d.Kind.String(), "lane", d.Lane.String(),
 			"seat", d.Handle, "error", err)

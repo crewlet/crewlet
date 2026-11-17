@@ -42,12 +42,11 @@ import (
 // THE FLOOR IS THE TRIM'S PUBLISHED FLOOR, NOT ITS LAST CONCLUSION, and every
 // branch of reading it is reachable without a fleet.
 //
-// The two differ exactly where a write fence needs the floor most. A blocked
-// tick concludes zero, and a tick whose lowest counted node is below the log —
-// readmitted, restored from an old backup, up on its own history — concludes
-// that node's own position; records earlier ticks licensed removing are gone
-// all the same. Read as the floor, either conclusion cleared that node to
-// publish at an expectation of zero over records it never applied.
+// A blocked tick concludes zero, and a tick whose lowest counted node is below
+// the log (readmitted, restored from a backup, up on its own history)
+// concludes that node's own position, while records earlier ticks licensed
+// removing are gone all the same: read as the floor, either clears that node
+// to publish at an expectation of zero over records it never applied.
 func TestTheFloorIsThePublishedFloorRatherThanTheTicksConclusion(t *testing.T) {
 	t.Parallel()
 	floors := []coord.TrimFloor{
@@ -56,9 +55,8 @@ func TestTheFloorIsThePublishedFloorRatherThanTheTicksConclusion(t *testing.T) {
 		{Domain: "readmitted", Generation: 3, TrimTo: 700, Floor: 3_000},
 		{Domain: "vectors", Generation: 5, TrimTo: 90, Floor: 90},
 	}
-	// ONE READ OF EACH DOMAIN'S KEY, as every reader holds it: each row its
-	// own domain's, one domain asked about and found absent, and one the read
-	// never asked about at all.
+	// ONE READ OF EACH DOMAIN'S KEY, as every reader holds it: a row per
+	// domain, one asked about and found absent, one never asked about.
 	read := publishedFloors{domains: map[string]domainFloor{"other": {}}, at: time.Now()}
 	for _, f := range floors {
 		read.domains[f.Domain] = domainFloor{row: f, found: true}
@@ -90,28 +88,16 @@ func TestTheFloorIsThePublishedFloorRatherThanTheTicksConclusion(t *testing.T) {
 }
 
 // A PUBLISHED FLOOR AHEAD OF THIS NODE REFUSES IT, and says which of two
-// things it is.
-//
-// # The vacuous comparand this replaces
-//
-// The floor every fence, the readiness gate and the join compared against was
-// the minimum over every node's published position — this node's own row
-// included. A minimum that includes the reader can never exceed the reader, so
-// the comparison was decided before it was made: a node genuinely below the
-// fleet's floor kept serving, kept admitting seats, and kept publishing at an
-// expectation of zero over records the trim had removed. This publishes a
-// floor the way the trim does and requires the node to notice.
-//
-// # And the two states below it
+// things it is. The floor is published as the trim does, never a minimum over
+// every node's position: one including this node's row can never exceed it.
 //
 // The trim publishes its floor BEFORE the purge it licenses, so until that
-// purge lands — and for good, if it fails and no later tick licenses as much
-// again — the log still holds what a node below the floor lacks. That node is
-// replaying: its reads are told to come back, it admits no seats until it has
-// caught up, and nothing sends it to adopt a snapshot of records it can read.
-// Only once the purge lands is its next record gone, and only then is it below
-// the log, refused as `below_floor`, its copy taken out of service (its seats
-// stay, and read from another data node), and sent to adopt.
+// purge lands (for good, if it fails) the log still holds what this node
+// lacks: it is replaying, its reads told to come back, admitting no seats
+// until caught up, and never sent to adopt a snapshot of records it can read.
+// Once the purge lands it is below the log: refused as `below_floor`, its copy
+// out of service (its seats stay, reading from another data node), and sent to
+// adopt.
 func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
@@ -138,16 +124,14 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 		t.Fatal("the tracker domain is not running")
 	}
 	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
-	// THIS NODE'S OWN TRIM DUTY PUBLISHES THE SAME FIELD, and it ticks
-	// immediately at boot: its first conclusion is `blocked_by
-	// backup_floor` at zero, which lands on top of the floor published
-	// below and reads back as ok. Stop it first — it waits out an
-	// in-flight tick — so the floor under test is the only one there is.
+	// THIS NODE'S OWN TRIM DUTY PUBLISHES THE SAME FIELD, ticking at boot to
+	// `blocked_by backup_floor` at zero, which overwrites the floor published
+	// below and reads back as ok. Stopped first (it waits out an in-flight
+	// tick), the floor under test is the only one.
 	e.stopRetention()
 
-	// THE HEARTBEAT IS WATCHED RATHER THAN OBEYED: a rejoin it requests is
-	// counted and does nothing, so what is read below is the heartbeat's
-	// own conclusion rather than an adoption racing the next assertion.
+	// THE HEARTBEAT IS WATCHED RATHER THAN OBEYED: a requested rejoin is
+	// counted and does nothing, so no adoption races the assertions.
 	var rejoins atomic.Int64
 	s.rejoinMu.Lock()
 	s.rejoin = func(context.Context) error { rejoins.Add(1); return nil }
@@ -184,18 +168,15 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 			"record, want ok", got)
 	}
 
-	// THE TRIM LICENSES REMOVING RECORDS THIS NODE HAS NOT APPLIED — which
-	// is what a node that was away finds when its peers were counted
-	// without it — and publishes that before it purges them.
+	// THE TRIM LICENSES REMOVING RECORDS THIS NODE HAS NOT APPLIED, as a
+	// node away while its peers were counted finds, and publishes that
+	// before it purges them.
 	//
-	// THE CHECKPOINT IS READ AGAIN ONCE THE APPLIERS HAVE STOPPED, because the
-	// node goes on writing its own log while it runs — a barrier record for
-	// a linearizable read lands on it at boot — and its appliers apply what
-	// lands. Read before the halt, a record that landed and was applied in
-	// between left the node one record further on than the floors and the
-	// purge below are counted from: the purge then removed only a record the
-	// node had applied, and the node was rightly replaying rather than below
-	// (eight runs in thirty, measured).
+	// THE CHECKPOINT IS READ AGAIN ONCE THE APPLIERS HAVE STOPPED: the node
+	// writes its own log while it runs (a linearizable read's barrier lands
+	// at boot), and a record applied between an earlier read and the halt
+	// would leave it one past what the floors and purge are counted from,
+	// rightly replaying rather than below.
 	s.haltAppliers()
 	at = running.runner.Committed()
 	for range 5 {
@@ -224,12 +205,11 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	if e.StateLogHydrated(t.Context()) {
 		t.Fatal("the node admits seats while below the published floor")
 	}
-	// AND IT KEEPS THE SEATS IT HOLDS. Being behind is admission's concern
-	// alone: every record this node lacks is on the log and it is reading
-	// them, so moving its seats would drop work in hand for a state that
-	// clears on its own. A replaying node is necessarily one with records
-	// pending — the floor is at most one past the log's end — so this is
-	// also the case a lag-derived term would get wrong.
+	// AND IT KEEPS THE SEATS IT HOLDS: being behind is admission's concern
+	// alone, since every record it lacks is on the log, and moving its seats
+	// drops work in hand for a state that clears on its own. A replaying node
+	// always has records pending (the floor is at most one past the log's
+	// end), so a lag-derived term would get this case wrong.
 	if ok, domain := e.SeatsServiceable(t.Context()); !ok {
 		t.Fatalf("a node replaying records the log still holds shed its seats "+
 			"(domain %q) — that is being behind, not being wrong", domain)
@@ -241,9 +221,8 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 			"fetch what it could simply replay")
 	}
 	// AND A WRITE AT ZERO IS REFUSED WITH THE SAME WORD: the floor theorem
-	// does not hold until the node has applied up to the floor, so it
-	// refuses — but as a wait, through the fence as the engine wires it,
-	// and never as the snapshot the node does not need.
+	// holds only once the node has applied up to the floor, so the wired
+	// fence refuses it as a wait, never as a snapshot it does not need.
 	requireZeroRefused(t, e, "op-replaying", "node-replaying", statelog.ReasonBehind)
 
 	// AND THE PURGE IT LICENSED LANDS: the next record this node needs is
@@ -263,13 +242,11 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	if e.StateLogHydrated(t.Context()) {
 		t.Fatal("the node admits seats while below the log")
 	}
-	// A COPY WITH A HOLE IN IT GOES OUT OF SERVICE, and the node keeps its
-	// seats: every call they make on the tracker goes to a data node whose
-	// copy is sound — on this node alone there is none, so it is refused as
-	// an estate nobody serves — and moving them would hand them to a peer
-	// asking the same data nodes. ONLY THE TRACKER'S: the knowledge base's
-	// copy has no hole and keeps serving, while the seat copy — which the
-	// tracker is part of — goes with it (ADR-0079).
+	// A COPY WITH A HOLE IN IT GOES OUT OF SERVICE and the node keeps its
+	// seats: their tracker calls go to a data node whose copy is sound (here
+	// none, so refused as an estate nobody serves), and a peer would ask the
+	// same data nodes. ONLY THE TRACKER'S, and the seat copy it is part of;
+	// the knowledge base's keeps serving (ADR-0079).
 	waitUntil(t, 5*time.Second, "the copy below the log to go out of service",
 		func() bool {
 			_, serves := e.local.For(t.Context(), worklet.Domain{}.Name())
@@ -324,15 +301,13 @@ func requireZeroRefused(t *testing.T, e *Engine, opID, nodeID string, want state
 // join's behind test, the running node's heartbeat that requests a rejoin, and
 // the re-check after a transfer.
 //
-// Both sides of the boundary cost something nothing else reports. A node
-// wrongly judged behind asks a fleet for a snapshot of a log it could simply
-// read — halting its appliers to do it, when the heartbeat is the one asking —
-// and on a lone node that ask finds no responders and returns in milliseconds,
-// so the boot's wall clock cannot see it. A node wrongly judged able to replay
-// replays over a hole and reports itself caught up. So each question is put
-// directly, against what JetStream itself reports rather than against numbers
-// typed here: a stream a purge emptied says first = last+1, the zero case the
-// join's own comment once confused with a never-written stream's.
+// Nothing else reports either side of the boundary: a node wrongly judged
+// behind asks for a snapshot of a log it could read (halting its appliers when
+// the heartbeat asks; on a lone node the ask returns in milliseconds, invisible
+// to boot time), and one wrongly judged able to replay replays over a hole.
+// So each question is put against what JetStream reports, not typed numbers:
+// a stream a purge emptied says first = last+1, unlike a never-written
+// stream's zero.
 func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
@@ -381,11 +356,9 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 		}
 		return behind
 	}
-	// THE HEARTBEAT IS WATCHED RATHER THAN OBEYED: a rejoin it requests is
-	// counted and does nothing, so what is read below is the heartbeat's
-	// own conclusion rather than an adoption racing the next assertion.
-	// Installed while the node is healthy, so no rejoin is in flight to be
-	// holding the old one.
+	// THE HEARTBEAT IS WATCHED RATHER THAN OBEYED: a requested rejoin is
+	// counted and does nothing, so no adoption races the assertions.
+	// Installed while healthy, so no rejoin in flight holds the old one.
 	var rejoins atomic.Int64
 	s.rejoinMu.Lock()
 	s.rejoin = func(context.Context) error { rejoins.Add(1); return nil }
@@ -429,13 +402,11 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 		}
 	}
 
-	// THE HEALTH READ asks of the higher of the published floor and the
-	// stream's first sequence, and it is the one that decides whether the
-	// node keeps its seats. With the trim stopped the published floor
-	// cannot move, so the case checks it sits at or below the next record
-	// — and whatever the health read concludes past that is the stream's
-	// `first` alone, the half of the comparison a published floor never
-	// exercises.
+	// THE HEALTH READ, which decides whether the node keeps its seats, asks
+	// of the higher of the published floor and the stream's first sequence.
+	// With the trim stopped the floor cannot move; checked at or below the
+	// next record, it leaves the stream's `first` alone to decide, the half
+	// a published floor never exercises.
 	floorOf := func(checkpoint uint64) statelog.FloorState {
 		t.Helper()
 		h, err := s.health(t.Context(), running, s.readFloors(t.Context()))
@@ -537,14 +508,11 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 // PUBLISHED FLOOR SAYS — the write fence as the engine wires it, on a real
 // stream.
 //
-// The floor is one of two witnesses to what the log has lost, and it cannot
-// see everything: a floor published at another generation reads as zero, and
-// so does one no trim ever wrote. The stream's own first sequence is the other
-// witness, and the fence asks of the higher. Wired with the floor alone —
-// which is how it stood — this node, whose next record had been purged,
-// published an eviction at an expectation of zero over a subject whose history
-// it had never applied: the retry-at-zero the floor theorem forbids below the
-// log.
+// The floor cannot see all the log has lost: one published at another
+// generation reads as zero, as does one no trim wrote. The stream's first
+// sequence is the second witness and the fence asks of the higher; on the
+// floor alone, a node whose next record was purged publishes at an expectation
+// of zero over history it never applied, the retry the floor theorem forbids.
 func TestANodeBelowTheLogIsRefusedZeroWhateverThePublishedFloorSays(t *testing.T) {
 	t.Parallel()
 	e, _, running := trimmedTracker(t)
@@ -604,19 +572,14 @@ func TestANodeBelowTheLogIsRefusedZeroWhateverThePublishedFloorSays(t *testing.T
 
 // A NODE BELOW THE TRIM FLOOR IS NOT READMITTED — through the node gate the
 // readmission route calls, judged against the register, the published floors
-// and the logs as the engine wires them, with nothing written to either log on
-// a refusal.
+// and the logs as the engine wires them, with nothing written to any log on a
+// refusal.
 //
-// The documentation promised this refusal; the writer wrote the inverse record
-// for any node, so an operator readmitting a machine that was still offline
-// put back exactly the pin the eviction had lifted and was told it had worked.
-// Each witness is exercised on its own — the published floor, then the
-// stream's first sequence with the floor at zero — because the fence the node
-// becomes subject to reads the higher of the two, and a readmission judged
-// against either alone clears a node that fence refuses. And every
-// identity-claiming domain is judged — each of them refusing on its own, and
-// each written on the readmission that finally succeeds — while the compacted
-// one is not.
+// Each witness is exercised alone (the published floor, then the stream's
+// first sequence with the floor at zero): the fence the node becomes subject
+// to reads the higher, so a readmission judged on either alone clears a node
+// that fence refuses. Every identity-claiming domain refuses on its own and is
+// written on the readmission that succeeds; the compacted one is not judged.
 func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 	t.Parallel()
 	e, back, running := trimmedTracker(t)
@@ -630,8 +593,7 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 		t.Fatal("the vector domain is not running")
 	}
 	// EVERY IDENTITY-CLAIMING LOG, the tracker's first: the gesture judges
-	// and writes each, and a case naming two of them left the identity
-	// estate's unasked.
+	// and writes each.
 	identity := identityLogs(t, s)
 	if identity[0] != running || len(identity) < 9 {
 		t.Fatalf("the identity-claiming logs are %v, want the tracker's first and "+
@@ -744,11 +706,10 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 	}
 
 	// A LOG THE FLEET RE-ANCHORED PAST THIS NODE: the absent node last ran
-	// the tracker at a later generation than this node does, so this node
-	// can't judge it there, and says so as a condition a node that has
-	// applied the re-anchor clears, writing nothing. It was a plain error,
-	// answered as a 500 fault with that remedy in this node's log alone.
-	// Mutation: drop the mapping in Readmissible and this fails.
+	// the tracker at a later generation, so this node can't judge it and
+	// says so as a condition a node past the re-anchor clears, never a
+	// fault, writing nothing. Mutation: drop the mapping in Readmissible and
+	// this fails.
 	reportIn(at.Generation+1, 1)
 	before := end()
 	_, behindErr := gate.Readmit(t.Context(), readmit)
@@ -815,14 +776,12 @@ func logFirstOf(t *testing.T, r *runningLog) uint64 {
 // A WRITE FENCE READS THE PUBLISHED FLOOR AT THE GENERATION IT NAMES, for the
 // domain it was built for, and at nothing else.
 //
-// The fence names the generation of the checkpoint its write's snapshot read,
-// and [stateLog.floorOf] is the one line between that name and the register.
-// Read a generation up, the floor published at the fence's own reads as a dead
-// number space's — zero — and the published-floor witness drops out of both
-// write fences; read a generation down, every current floor is a refusal; bound
-// to anything but its argument, it answers for a sequence space the cursor is
-// not in. One floor, published at one generation and asked about at three,
-// tells each of those apart.
+// [stateLog.floorOf] is the one line between the generation the fence's
+// snapshot read and the register. Read a generation up, the fence's own floor
+// reads as zero and the published-floor witness drops out of both fences; a
+// generation down, every current floor refuses; bound to anything but its
+// argument, it answers for another sequence space. One floor asked about at
+// three generations tells each apart.
 func TestAWriteFenceReadsTheFloorAtTheGenerationItNames(t *testing.T) {
 	t.Parallel()
 	fleet := coordmem.NewFleet()
@@ -856,25 +815,14 @@ func TestAWriteFenceReadsTheFloorAtTheGenerationItNames(t *testing.T) {
 
 // THE WRITE FENCES AS THE ENGINE WIRES THEM REFUSE ON THE PUBLISHED FLOOR
 // ALONE, in every identity-claiming domain, while the log still holds
-// everything.
+// everything: the trim publishes the floor before its purge, so until then it
+// is the only witness. Each domain's fence reaches it through its own wiring,
+// so each is asked with a floor one past its next record (refused) and AT it
+// (cleared), the boundary [statelog.Replayable] draws.
 //
-// The fence takes the higher of two witnesses, and every other case here that
-// refuses a write at zero does it with the stream's first sequence — a purge
-// that has landed. The floor is the witness to one that has NOT: the trim
-// publishes it before the purge it licenses, so until that purge lands it is
-// the only thing that says a record this node never applied may be about to
-// go. Each domain's fence reaches it through its own wiring line, so each is
-// asked here with a floor one past its next record and a log that has lost
-// nothing, which the floor alone refuses, and then with the floor AT its next
-// record, which clears — the boundary [statelog.Replayable] draws.
-//
-// EVERY IDENTITY-CLAIMING LOG THE NODE RUNS, read off the running set: a
-// domain whose fence is wired and has no zero write here fails the case, so a
-// log added to the register is held to its own floor the day it is added — a
-// fence bound to ANOTHER log's floor reads a number in the wrong sequence
-// space, refuses nothing this log needs refused, and is caught by nothing but
-// this case. The identity estate's fence was wired that way and asked by
-// nobody until the list here stopped being typed.
+// The domains are read off the running set, so a new identity-claiming log
+// with no zero write here fails the case: a fence bound to ANOTHER log's floor
+// reads the wrong sequence space, and nothing else catches it.
 func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
@@ -887,9 +835,8 @@ func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 			"writer, artifacts writer, datastore writer, assistant writer, executor writer, " +
 			"access writer or atlas writer")
 	}
-	// THE HEARTBEAT IS WATCHED RATHER THAN OBEYED: a node below a
-	// published floor may ask the fleet for a snapshot, and an adoption
-	// racing the writes below would be what they measured.
+	// THE HEARTBEAT IS WATCHED RATHER THAN OBEYED: a node below a published
+	// floor may ask for a snapshot, and an adoption would race the writes.
 	s.rejoinMu.Lock()
 	s.rejoin = func(context.Context) error { return nil }
 	s.rejoinMu.Unlock()
@@ -931,9 +878,8 @@ func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 			return err
 		},
 		// AN EVICTION ON THE CODE LOG'S OWN GATE SUBJECT, through a store
-		// over the running log's write authority rather than the native
-		// runtime's, which a company hosting no repositories builds none of:
-		// the code log is reserved and runs whether or not it hosts code.
+		// over the running log's publisher: the native runtime builds none
+		// for a company hosting no repositories, yet the code log always runs.
 		gitlet.Domain{}.Name(): func(ctx context.Context, key string) error {
 			store, err := gitlet.NewStore(gitlet.StoreOptions{
 				Publisher: s.Domain(gitlet.Domain{}.Name()).publisher,
@@ -1066,12 +1012,10 @@ func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 
 // ONE DOMAIN'S UNREADABLE FLOOR REFUSES THAT DOMAIN ALONE.
 //
-// Each domain's floor is its own key, and a row that does not decode — or a
-// read of it that timed out under load — is that key's fault. Read as a
-// whole, any one of them refused every domain: every health, every copy's
-// verdict and, once the memo aged, every read of every domain on the node.
-// Each domain answers from its own key now, so the tracker's floor reads, its
-// fence clears, and only the knowledge base's own refuse.
+// Each domain's floor is its own key, and a row that does not decode (or a
+// read that timed out) is that key's fault: read as a whole, one bad row would
+// refuse every domain's health, copy verdict and, once the memo aged, every
+// read on the node.
 func TestOneDomainsUnreadableFloorRefusesThatDomainAlone(t *testing.T) {
 	t.Parallel()
 	const generation = 1

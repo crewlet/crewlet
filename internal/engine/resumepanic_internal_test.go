@@ -13,13 +13,11 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A RESUME THAT PANICS IS ABANDONED, NOT STRANDED.
-//
-// The resume path had no recovery at all. A panic outside the turn loop
-// unwound through the coordinator, skipping both its revert and its settle, so
-// the run row stayed in resumed while the queue redelivered a completion the
-// claim then refused. Abandoned, the coordinator leaves the claim taken and
-// settles the delivery, and the failure is put on the seat with its cause.
+// A RESUME THAT PANICS IS ABANDONED, NOT STRANDED: a panic unwinding through
+// the coordinator skips its revert and settle, leaving the run row resumed
+// while the queue redelivers a completion the claim refuses. Abandoned, the
+// claim stays taken, the delivery is settled, and the failure is put on the
+// seat with its cause.
 func TestAResumeThatPanicsIsAbandonedAndRecordsTheFailureOnTheSeat(t *testing.T) {
 	t.Parallel()
 	p := &pub{}
@@ -98,14 +96,11 @@ func TestAResumeOnANodeWithNoCompanyIsUnavailableHere(t *testing.T) {
 	}
 }
 
-// A RESUME RUNS UNDER THE EPOCH ITS SEAT WAS FOUND IN.
-//
-// The resumer resolves the seat and its org from one read of the epoch, and
-// resumeTurn used to read the epoch again to build the runner, its registry,
-// its meter and its judge. An apply landing between the two resumed a seat of
-// one revision with the tools and caps of the next. The epoch now travels on
-// the resume: this engine holds a live company, and a resume handed none is
-// refused rather than quietly served from a second read.
+// A RESUME RUNS UNDER THE EPOCH ITS SEAT WAS FOUND IN: building the runner,
+// registry, meter and judge from a second read of the epoch resumes a seat of
+// one revision with the tools and caps of the next when an apply lands
+// between. The epoch travels on the resume, so with a live company here, a
+// resume handed none is refused rather than served from a second read.
 func TestAResumeIsNotRebuiltFromASecondReadOfTheEpoch(t *testing.T) {
 	t.Parallel()
 	company, seat := executorCompany(t)

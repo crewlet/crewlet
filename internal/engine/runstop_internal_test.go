@@ -18,14 +18,10 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
-// A PERSON'S STOP ENDS THE SEAT'S RUNNING WORK, ITS EXECUTOR INCLUDED.
-//
-// The seat's turn hears a stop at its next round; the run that turn launched is
-// its harness's own process, with no rounds the engine sees, and it used to
-// run on to its end. These cases hold the engine to the rest of the promise:
-// every way a stop reaches a seat this node holds ends its running run, and
-// the turn that was waiting on the run is closed as stopped — the same records
-// a turn stopped at its next round leaves — wherever it was when the stop came.
+// A PERSON'S STOP ENDS THE SEAT'S RUNNING WORK, ITS EXECUTOR INCLUDED: every
+// way a stop reaches a seat this node holds ends its running run, and the turn
+// waiting on the run closes as stopped, with the records a turn stopped at its
+// next round leaves, wherever it was when the stop came.
 
 // janeStops is the pause every case puts on the seat: Jane, through her machine
 // token, asking for the running work to stop.
@@ -54,11 +50,9 @@ func parkOnRun(t *testing.T, e *Engine) {
 	}
 }
 
-// stopFinished waits for the stop of run turnID to be finished, its row gone:
-// a job that started in a box is ended by the stop's read, which waits for it
-// (internal/sandbox's endJob), so wherever the stop reaches the seat it is only
-// decided there, and the ending's own retry finishes it, at once and off that
-// frame.
+// stopFinished waits for the stop of run turnID to finish, its row gone: where
+// the stop reaches the seat it is only decided, and the ending's own retry
+// finishes it off that frame (internal/sandbox's endJob).
 func stopFinished(t *testing.T, e *Engine, turnID string) {
 	t.Helper()
 	eventually(t, "the stop of "+turnID+" to be finished, its row gone", func() bool {
@@ -286,9 +280,7 @@ func TestALaunchStoppedBeforeItsParkClosesItsOwnTurnAsStopped(t *testing.T) {
 			"counting no second turn", turns, ops)
 	}
 	// CHARGED ONCE: the park paid for the segment, and the close, which ran
-	// nothing, pays nothing of it again — no tokens, no auxiliary calls, no
-	// wall time. Built from the parking segment's telemetry, it charged that
-	// segment's calls and span a second time.
+	// nothing, pays none of it again (closeStoppedAtPark).
 	if spent := turns[1].Spend; spent.Tokens() != 0 || spent.WallMs != 0 || spent.Rounds != 0 {
 		t.Fatalf("the stopped close charged %+v; the park already paid for the segment", spent)
 	}
@@ -419,13 +411,9 @@ func TestALaunchAStopEndedMidwayIsReportedAsTheStop(t *testing.T) {
 }
 
 // A STOP THAT FINISHED BEFORE ITS TURN COULD PARK IS STILL THE TURN'S END ONCE
-// THE SEAT IS RESUMED. The stop ends a launching run in the time its box takes
-// to die and deletes the row; the person can resume the seat before the turn
-// unwinds to its park. The frame used to read the stop off the row, then off the
-// pause — both gone by then — so it took the refused park for a suspension with
-// nowhere to go, and the turn's last record was its park: parked for good,
-// beside a run announced stopped. The frame now asks the coordinator, which
-// kept the stop's decision for it.
+// THE SEAT IS RESUMED: the stop can delete the row, and the person lift the
+// pause, before the turn unwinds to its park, so the frame asks the
+// coordinator, which kept the stop's decision, never the row or the pause.
 //
 // Mutation: answer the refused park from the row and the pause alone, and the
 // turn is never closed.
@@ -461,8 +449,7 @@ func TestALaunchStoppedBeforeItsParkIsClosedAsStoppedOnceTheSeatIsResumed(t *tes
 
 // A LAUNCH A STOP ENDED UNDER IT IS THE STOP ONCE THE SEAT IS RESUMED TOO: the
 // turn reads the decision the coordinator kept for it, never the pause, which
-// the person may have lifted before the launch unwound — read off the pause,
-// the stop was reported as a launch that broke.
+// the person may have lifted before the launch unwound.
 //
 // Mutation: ask the seat's fence rather than the coordinator, and the turn
 // fails rather than stops.

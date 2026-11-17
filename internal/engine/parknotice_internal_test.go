@@ -116,14 +116,12 @@ func newNotices(t *testing.T, base time.Duration) (*parkNotices, *syncBuffer) {
 }
 
 // A BROKER OUTAGE COSTS ONE ATTEMPT PER STEP OF THE BACKOFF, HOWEVER MANY PARKS
-// IT SPANS, AND ONE LINE EACH WAY. One node logged 36 000
-// `seat_provider_park_not_published` lines in a three-minute outage: every
-// renewal of every parked seat was published on the spot, failed and said so.
-// Held, the notices wait for the broker on one schedule, the newest per seat,
-// and land once it answers, each seat's latest state exactly once.
+// IT SPANS, AND ONE LINE EACH WAY. Held, the notices wait for the broker on one
+// schedule, the newest per seat, and land once it answers, each seat's latest
+// state exactly once.
 //
-// Mutation: publish every notice on the spot, as before, and the broker is
-// asked six thousand times.
+// Mutation: publish every notice on the spot, and the broker is asked six
+// thousand times.
 func TestABrokerOutageCostsOneAttemptPerStepAndOneLineEachWay(t *testing.T) {
 	t.Parallel()
 	const base = 5 * time.Millisecond
@@ -132,8 +130,7 @@ func TestABrokerOutageCostsOneAttemptPerStepAndOneLineEachWay(t *testing.T) {
 	at := time.Date(2026, 11, 1, 0, 49, 0, 0, time.UTC)
 	began := time.Now()
 
-	// THE STORM: three parked seats renewed two thousand times each, as the
-	// probe that was re-armed for an instant already past renewed them.
+	// THE STORM: three parked seats renewed two thousand times each.
 	const renewals = 2000
 	seats := []string{"pm", "eng", "qa"}
 	for i := range renewals {

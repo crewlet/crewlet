@@ -65,16 +65,11 @@ func (s *crossingRows) SettleTake(ctx context.Context, turnID string, settle san
 	return s.PendingStore.SettleTake(ctx, turnID, settle)
 }
 
-// THE ENGINE'S WRITES OF A RUN'S ROW UNDER A BUDGET OF THEIR OWN ARE GIVEN THE
-// ROW'S CROSSING BESIDE THEIR REASON.
-//
-// A row is written whole, up to six megabytes, and a node reaching the store
-// across a slow link sends it at the link's pace; the store keeps a caller's
-// deadline as it is. So the session a job's box started and a job's pull mark,
-// each written off the request that said it, and each attempt at a settle of a
-// take of the run's notes, are bounded by their own reason — a store's slow
-// moment, a leader's election outlasted — and the time a row at its bound takes
-// to cross (sandbox.RowBudget). Exact, in a bubble.
+// The engine's own-budget writes of a run's row (the session start, the pull
+// mark, each settle attempt) get their reason's budget plus the time a row at
+// its bound takes to cross (sandbox.RowBudget): a row is written whole, up to
+// six megabytes, at a slow link's pace, and the store keeps a caller's
+// deadline as it is. Exact, in a bubble.
 //
 // Mutation: hold any of the three to its reason alone, and its row reads the
 // crossing short.
