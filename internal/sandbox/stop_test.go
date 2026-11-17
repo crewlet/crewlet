@@ -814,8 +814,9 @@ func (s *recordUnansweredOnce) CollectStop(ctx context.Context, turnID string, c
 
 // A STOP IS SAID ENDED UNREAD ONLY ONCE ITS RECORD SAYS SO. A stop whose read of
 // its box comes to nothing (the box gone, or unreadable on this node's own
-// host, or its host or its host's store silent for the box timeout since the
-// stop) is ended with nothing charged by its record of that (CollectStop): a
+// host, or its host or its host's store given up, here by the stop's age: the
+// box timeout and twice objstore.AssumedClockSkew by this node's clock) is
+// ended with nothing charged by its record of that (CollectStop): a
 // write of this node's store, which can fall silent after the attempt's own
 // read of the run's row answered. The stop is then kept for this node's retry,
 // which reads the box again and charges whatever that read finds. Said before
@@ -863,7 +864,9 @@ func TestAStopIsSaidEndedUnreadOnlyOnceItsRecordSaysSo(t *testing.T) {
 			rig.coordinator.pending = &recordUnansweredOnce{PendingStore: rig.coordinator.pending}
 
 			rig.stop(t)
-			rig.now = rig.now.Add(DefaultBoxTimeout)
+			// PAST THE STOP'S AGE BOUND, so a silent host is given up on the
+			// retry's first ask, whose silence has only just begun.
+			rig.now = rig.now.Add(DefaultBoxTimeout + 2*objstore.AssumedClockSkew)
 			rig.fireRetries()
 			kept := rig.get("t1")
 			if kept.Ending == nil || kept.Stop == nil || kept.Stop.Collected {
