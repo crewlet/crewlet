@@ -19,6 +19,8 @@
 // after it are read, which is when the text is known to be one value. A [Name]'s or a [String]'s decoded
 // text, or a [Number]'s literal as written, is read with [Scanner.Read] like any io.Reader, a piece at a
 // time, never ending a read inside a UTF-8 sequence; what is not read, the next Next passes over.
+// [Scanner.InvalidUTF8] says whether the text Read handed held a byte that begins no UTF-8 character, which
+// the decoded text, U+FFFD there as for a U+FFFD written or escaped, cannot say.
 // [Scanner.Skip] passes over a whole value and [Scanner.Capture] answers a value's bytes as written up to a
 // bound its caller names, passing over a longer one: a reader that hands a short value out raw holds it, at
 // that bound, and passes media over unheld. [Scanner.Depth] and [Scanner.Offset] say where a token sits, for
