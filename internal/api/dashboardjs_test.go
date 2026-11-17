@@ -2690,6 +2690,8 @@ const (
 	// (6,822,314 bytes), 10,692 over main: 6663 KiB.
 	// Chat receipts as marks, records coloured by kind and the coding harness marks, on kit
 	// 0.149.0: 6651.8 KiB, about 18.7 KiB over main: 6652 KiB.
+	// Artifact links drawn as artifact references, Show latest and the comment pin, on kit 0.148.0:
+	// 6650.0 KiB (6,809,588 bytes), 17,276 over main: 6651 KiB.
 	treeBudget = 5<<20 + 1543<<10
 )
 

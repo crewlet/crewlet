@@ -25,6 +25,7 @@
 
 import { memo, useCallback, useState, type ReactNode } from "react";
 import {
+  ArtifactRef,
   Button,
   EmptyState,
   Tag,
@@ -38,6 +39,7 @@ import {
 } from "@crewlethq/ui";
 import { CheckGlyph, MessageSquareGlyph } from "@crewlethq/icons/glyphs";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import { KIND_WORDS } from "~/lib/artifacts/words.ts";
 import type { AskAnswer } from "~/components/writes.tsx";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { accessNote } from "~/lib/decisions.ts";
@@ -50,6 +52,7 @@ import {
   answerWords,
   answeredPreview,
   answeredTexts,
+  artifactHeadline,
   artifactWords,
   askPreview,
   askTexts,
@@ -442,9 +445,28 @@ function rowWords(row: InboxRow, index: OrgIndex): { text: string; excerpt?: str
 }
 
 /** The word after the name, where the row is not a plain question or update. */
-function qualifierOf(row: InboxRow): { word: string; danger: boolean } | null {
-  // "commented on Q3 plan": the kit reads a name and its qualifier as one run.
-  if (row.kind === "artifact") return { word: artifactWords(row.notice).did, danger: false };
+function qualifierOf(row: InboxRow): { word: ReactNode; danger: boolean } | null {
+  // "commented on Q3 plan": the kit reads a name and its qualifier as one run,
+  // the artifact drawn as a task's key is in the row's words.
+  if (row.kind === "artifact") {
+    const words = artifactWords(row.notice);
+    const headline = artifactHeadline(row.notice);
+    return {
+      word: headline ? (
+        <>
+          {words.on}{" "}
+          <ArtifactRef
+            kind={headline.kind}
+            kindLabel={KIND_WORDS[headline.kind]}
+            title={headline.title}
+          />
+        </>
+      ) : (
+        words.did
+      ),
+      danger: false,
+    };
+  }
   if (row.kind !== "decision") return null;
   if (row.subject.kind === "run") return { word: "executor", danger: false };
   if (row.subject.kind === "seat") return { word: "stopped", danger: true };

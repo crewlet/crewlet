@@ -40,7 +40,7 @@
  * same rule ([AddressLink]).
  */
 
-import { createContext, useContext, useMemo, type ReactNode } from "react";
+import { Children, createContext, useContext, useMemo, type ReactNode } from "react";
 import { ColorChip, Highlight, InlineCode, InlineRef, peelPunctuation } from "@crewlethq/ui";
 import { VendorMark } from "@crewlethq/icons";
 import {
@@ -50,6 +50,7 @@ import {
   type GlyphSize,
 } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
+import { ArtifactLink, artifactAddress, artifactHref } from "./ArtifactLink.tsx";
 import { appRoute } from "~/lib/appRoute.ts";
 import {
   checksLinks,
@@ -244,7 +245,37 @@ function AddressToken({
  * on a host the company configured, otherwise the address inert, whole and
  * with its title.
  */
-export function AddressLink({
+export function AddressLink(props: { address: string; text?: string; links: LinkMode } & Edges) {
+  const { address, links, open, close } = props;
+  const artifact = artifactAddress(address);
+  if (artifact === null) return <AddressAsWritten {...props} />;
+  return (
+    <ArtifactLink
+      id={artifact.id}
+      to={artifactTarget(artifact, links)}
+      version={artifact.version}
+      words="Artifact"
+      fallback={<AddressAsWritten {...props} />}
+      open={open}
+      close={close}
+    />
+  );
+}
+
+/**
+ * Where a reference to an artifact opens under each link rule: as written
+ * under `anchor`, rebuilt from its id (and the version it names) where the
+ * dashboard checks links, and nowhere under `text`.
+ */
+function artifactTarget(
+  artifact: NonNullable<ReturnType<typeof artifactAddress>>,
+  links: LinkMode,
+): string | undefined {
+  if (links === "text") return undefined;
+  return links === "anchor" ? artifact.hash : artifactHref(artifact.id, artifact.version);
+}
+
+function AddressAsWritten({
   address,
   text = address,
   links,
@@ -522,7 +553,28 @@ function SeatMention({
  * too: the dashboard's own links into itself are the ones it builds, a key's
  * and a handle's, never one a model or an agent chose.
  */
-export function LabelledLink({
+export function LabelledLink(
+  props: { href: string; mode: Exclude<LinkMode, "text">; children?: ReactNode } & Edges,
+) {
+  const artifact = artifactAddress(props.href);
+  if (artifact === null) return <LabelledAsWritten {...props} />;
+  const label = Children.toArray(props.children)
+    .filter((part) => typeof part === "string" || typeof part === "number")
+    .join("");
+  return (
+    <ArtifactLink
+      id={artifact.id}
+      to={artifactTarget(artifact, props.mode)}
+      version={artifact.version}
+      words={label || "Artifact"}
+      fallback={<LabelledAsWritten {...props} />}
+      open={props.open}
+      close={props.close}
+    />
+  );
+}
+
+function LabelledAsWritten({
   href,
   mode,
   children,

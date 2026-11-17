@@ -59,6 +59,7 @@ import {
   ArtifactPanel,
   ArtifactVersionChip,
   ArtifactWorkspace,
+  CommentPinGlyph,
   Button,
   ButtonLink,
   Callout,
@@ -83,7 +84,6 @@ import {
   FolderInputGlyph,
   ImageGlyph,
   InfoGlyph,
-  MessageSquareGlyph,
   MessagesSquareGlyph,
   PencilGlyph,
   PaperclipGlyph,
@@ -386,6 +386,11 @@ function Loaded({
   }, [detail.head_number, shownHead]);
   const showing = version > 0 ? version : shownHead;
   const newer = version === 0 && detail.head_number > shownHead;
+  // ONE WAY BACK TO THE NEWEST, from the chip's Show latest and from either notice.
+  const showLatest = useCallback(() => {
+    setVersion("");
+    setShownHead(detail.head_number);
+  }, [setVersion, detail.head_number]);
 
   // ---- the panel at the side ------------------------------------------------
   const hasData = keepsData(detail) && store !== null;
@@ -659,7 +664,7 @@ function Loaded({
           {
             key: "comment",
             label: comments.placing ? "Stop commenting" : "Comment",
-            icon: <MessageSquareGlyph size="sm" />,
+            icon: <CommentPinGlyph size="sm" />,
             keys: capsOf(keyRow("artifact.comment").presses[0]!),
             pressed: comments.placing,
             ...(comments.can ? {} : { disabledReason: comments.reason ?? "" }),
@@ -939,14 +944,7 @@ function Loaded({
         layout="banner"
         variant="info"
         action={
-          <Button
-            size="small"
-            variant="secondary"
-            onClick={() => {
-              setVersion("");
-              setShownHead(detail.head_number);
-            }}
-          >
+          <Button size="small" variant="secondary" onClick={showLatest}>
             Show the latest
           </Button>
         }
@@ -963,7 +961,7 @@ function Loaded({
         variant="info"
         live="polite"
         action={
-          <Button size="small" variant="secondary" onClick={() => setShownHead(detail.head_number)}>
+          <Button size="small" variant="secondary" onClick={showLatest}>
             Show it
           </Button>
         }
@@ -994,6 +992,7 @@ function Loaded({
                   version={showing}
                   latest={detail.head_number}
                   items={chipItems}
+                  onShowLatest={showLatest}
                 />
               ) : undefined
             }

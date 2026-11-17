@@ -774,12 +774,11 @@
   padding: 0;
   list-style: none;
 }
-/* The artifact a publishing call wrote, under the call's own row. */
+/* The artifact a publishing call wrote, under the call's own row, at a caption's size. */
 .tool-row-artifact {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
+  margin: 0;
   padding: 0 var(--spacing-3) var(--spacing-2);
+  font-size: var(--font-size-xs);
 }
 
 /* ---- Attention ---------------------------------------------------------- */
