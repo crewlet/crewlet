@@ -55,7 +55,7 @@ const unsettled = (marks: readonly CodeCommitMark[] | undefined) =>
     (m.checks ?? []).some((c) => c.state === "running" || c.state === "pending"),
   );
 
-function failureOf(err: unknown): MarksFailure {
+export function failureOf(err: unknown): MarksFailure {
   if (!(err instanceof QueryError)) return { code: "query_failed", sentence: null };
   const refusal = err.refusal as { detail?: string | null } | null;
   return { code: err.message, sentence: err.detail ?? refusal?.detail ?? null };

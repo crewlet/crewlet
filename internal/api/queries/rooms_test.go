@@ -511,8 +511,8 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // Changes and its peek those of `code_changes` and `code_change`, a change's
 // page its routing's, `code_change_routing`, a repository's own page those of
 // `code_repo` (which `crewlet gitlet status -repo` reads too) and of its
-// content, `code_refs`, `code_tree`, `code_blob`, `code_log`, `code_blame`
-// and `code_find`, and a commit's page and a comparison those of `code_commit`,
+// content, `code_refs`, `code_tree`, `code_blob`, `code_log`, `code_blame`,
+// `code_tree_commits` and `code_find`, and a commit's page and a comparison those of `code_commit`,
 // `code_diff` and `code_compare`, a seat's Code tab and My work's Reviews
 // that of `code_reviews`, and Gitlet › Queue, Gitlet › Checks and the checks
 // tabs those of a repository's merge queues and its checks, `code_queue`,
@@ -543,9 +543,6 @@ var readOutsideTheDashboard = map[string]string{
 	// MANY TIPS AT ONCE, answered ahead of the Branches and Tags screens that
 	// draw them: until the first reads it, a script reads the reference's path.
 	"code_tips": "a script: GET /gitlet/repos/{name}/tips, as docs/reference/api-endpoints.md prints it",
-	// A DIRECTORY'S LAST COMMITS: the first room that reads them deletes this line.
-	"code_tree_commits": "a script: GET /gitlet/repos/{name}/tree-commits, as docs/reference/api-endpoints.md " +
-		"prints it",
 	// TAGS BY THEIR DATE, answered ahead of the screens that draw them.
 	"code_tags": "a script: GET /gitlet/repos/{name}/tags, as docs/reference/api-endpoints.md prints it",
 }

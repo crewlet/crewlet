@@ -990,13 +990,13 @@
   overflow: hidden;
 }
 
+/* ONE LINE: the subject gives way first; the writer and the end group never shrink. */
 .code-latest {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-2) var(--spacing-3);
   min-height: var(--size-row-md);
-  padding: var(--spacing-2) var(--spacing-4);
+  padding: var(--spacing-2) var(--row-inline);
   background: var(--color-surface-subtle);
   border-block-end: 1px solid var(--color-border-default);
   font-size: var(--font-size-sm);
@@ -1004,32 +1004,179 @@
 
 .code-latest__who {
   display: inline-flex;
+  flex: none;
   align-items: center;
   gap: var(--spacing-2);
 }
 
 .code-latest__author {
   font-weight: var(--font-weight-semibold);
+  white-space: nowrap;
 }
 
 .code-latest__subject {
-  flex: 1 1 12rem;
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
+  color: var(--color-text-secondary);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .code-latest__end {
   display: inline-flex;
+  flex: none;
   align-items: center;
   gap: var(--spacing-2);
   margin-inline-start: auto;
 }
 
+/* THE CHECK'S SLOT keeps its width while the marks are read, so the id never moves. */
+.code-latest__check {
+  display: inline-flex;
+  justify-content: flex-end;
+  min-inline-size: var(--size-control-sm);
+}
+
 .code-latest__when {
   color: var(--color-text-tertiary);
   white-space: nowrap;
+}
+
+/* A DIRECTORY'S ENTRIES: the name, the last commit's subject and when; the subject gives way. */
+.code-entries {
+  inline-size: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: var(--font-size-sm);
+}
+
+.code-entries td {
+  padding: var(--spacing-2) var(--row-inline);
+  vertical-align: middle;
+}
+
+.code-entries tbody tr + tr {
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-entries tbody tr:hover {
+  background: var(--color-surface-hover);
+}
+
+/* THE COLUMNS' WIDTHS: a fixed table reads them off its colgroup, the subject takes the rest. */
+.code-entries__col-name {
+  inline-size: 34%;
+}
+
+.code-entries__col-when {
+  inline-size: calc(1.75 * var(--spacing-10));
+}
+
+.code-entries__commit {
+  min-inline-size: 0;
+  overflow: hidden;
+}
+
+.code-entries__when {
+  color: var(--color-text-tertiary);
+  text-align: end;
+  white-space: nowrap;
+}
+
+/* A QUIET LINK: the secondary ink, a step brighter on hover, never underlined. */
+.code-entries__subject {
+  display: block;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-entries__subject:hover {
+  color: var(--color-text-primary);
+}
+
+.code-entries__note {
+  display: block;
+  overflow: hidden;
+  color: var(--color-text-tertiary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-entries__empty {
+  color: var(--color-text-tertiary);
+  text-align: center;
+}
+
+.code-entries__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-4);
+  padding: var(--spacing-2) var(--row-inline);
+  border-block-start: 1px solid var(--color-border-default);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* THE PHONE: the head row in two lines, and each entry its name and age over its subject. */
+@container page (width < 640px) {
+  .code-latest {
+    flex-wrap: wrap;
+  }
+
+  .code-latest__end {
+    flex: 1 1 100%;
+    margin-inline-start: 0;
+  }
+
+  .code-entries colgroup {
+    display: none;
+  }
+
+  .code-entries,
+  .code-entries tbody,
+  .code-entries tr,
+  .code-entries td {
+    display: block;
+  }
+
+  .code-entries tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "name when" "commit commit";
+    gap: var(--spacing-1) var(--spacing-3);
+    padding: var(--spacing-2) var(--row-inline);
+  }
+
+  .code-entries td {
+    padding: 0;
+  }
+
+  .code-entries__name {
+    grid-area: name;
+    min-inline-size: 0;
+  }
+
+  .code-entries__when {
+    grid-area: when;
+  }
+
+  .code-entries__commit {
+    grid-area: commit;
+    font-size: var(--font-size-xs);
+  }
+
+  .code-entries__commit:empty {
+    display: none;
+  }
+
+  .code-entries__empty {
+    grid-column: 1 / -1;
+  }
 }
 
 /* AN ENTRY OF A DIRECTORY: its glyph and its name on one line. */

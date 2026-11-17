@@ -17,7 +17,6 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Announcer } from "@crewlethq/ui";
-import { onTheRight } from "~/test/codeScreens.tsx";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
@@ -481,6 +480,38 @@ function stubEngine(
           return json({ position: POSITION, level: "session" });
         case "/query/code_commit_marks":
           return json({ commit_marks: [], position: POSITION, level: "session" });
+        case "/query/code_tree_commits":
+          return json({
+            repo: "web",
+            kind: "tree_commits",
+            tree_commits: {
+              tree: OTHER,
+              entries:
+                p.get("path") === "src"
+                  ? [{ path: "src/app.go", commit: HEAD }]
+                  : [
+                      { path: "README.md", commit: HEAD },
+                      { path: "src", commit: OTHER },
+                    ],
+              commits: [
+                {
+                  oid: HEAD,
+                  author: "Ada",
+                  authored_at: "2026-10-22T10:00:00Z",
+                  committed_at: "2026-10-22T10:00:00Z",
+                  subject: "Start the storefront",
+                },
+                {
+                  oid: OTHER,
+                  author: "Grace",
+                  authored_at: "2026-10-21T10:00:00Z",
+                  committed_at: "2026-10-21T10:00:00Z",
+                  subject: "Older work",
+                },
+              ],
+              total: p.get("path") === "src" ? 1 : 2,
+            },
+          });
         case "/query/code_find":
           return json({
             repo: "web",
@@ -562,6 +593,14 @@ function mount(hash: string, repo = "web", viewer: unknown = ADMIN_VIEWER) {
 
 const reads = (asked: URL[], what: string) => asked.filter((u) => u.pathname === `/query/${what}`);
 
+/** The head row's subject link, once it says `subject`. */
+const headRow = (subject: string) =>
+  waitFor(() => {
+    const link = document.querySelector<HTMLAnchorElement>(".code-latest__subject");
+    expect(link?.textContent).toBe(subject);
+    return link!;
+  });
+
 // THE CODE TAB IS THE REPOSITORY'S LANDING, as a code host's is: the header
 // names the repository under its owner off the chart, with its description;
 // the root's files stand under the latest commit, read at the commit the root
@@ -584,11 +623,19 @@ test("the code tab is the root's files, its latest commit and its README, at one
   expect(readme?.searchParams.get("ref")).toBe(HEAD);
   expect(reads(asked, "code_repo")[0]?.searchParams.get("name")).toBe("web");
   // THE LATEST COMMIT, one commit of the root's history at the listed commit.
-  expect(await screen.findByRole("link", { name: "Start the storefront" })).toBeTruthy();
+  expect(await headRow("Start the storefront")).toBeTruthy();
   const latest = reads(asked, "code_log")[0];
   expect(latest?.searchParams.get("ref")).toBe(HEAD);
   expect(latest?.searchParams.get("limit")).toBe("1");
-  expect(screen.getByRole("table", { name: "Files" })).toBeTruthy();
+  expect(screen.getByRole("table", { name: "Files in main" })).toBeTruthy();
+  // EACH ENTRY'S LAST COMMIT AND THE HEAD ROW'S MARKS, at the same commit.
+  await waitFor(() => expect(reads(asked, "code_tree_commits")).toHaveLength(1));
+  expect(reads(asked, "code_tree_commits")[0]!.searchParams.get("ref")).toBe(HEAD);
+  await waitFor(() =>
+    expect(
+      reads(asked, "code_commit_marks").some((u) => u.searchParams.get("commits") === HEAD),
+    ).toBe(true),
+  );
 });
 
 // The About rail's sentence says its time in words; the latest commit's chip keeps the short form.
@@ -611,26 +658,185 @@ test("a directory is read at the address's revision and its entries open at it",
   const asked = stubEngine();
   mount("#/gitlet/repos/web?ref=feature&path=src");
 
-  const table = await screen.findByRole("table", { name: "Files" });
+  const table = await screen.findByRole("table", { name: "Files in src at feature" });
   const link = within(table).getByRole("link", { name: "app.go" });
   expect(link.getAttribute("href")).toBe("#/gitlet/repos/web?ref=feature&path=src%2Fapp.go");
   const read = reads(asked, "code_blob").find((u) => u.searchParams.get("path") === "src");
   expect(read?.searchParams.get("ref")).toBe("feature");
 });
 
-// A DIRECTORY IS A LIST LIKE EVERY OTHER: the data grid, its sizes on the
-// right edge, and its heads sorting the entries once the whole directory is
-// here. Mutation: draw the hand-built table again, or leave Size at the
-// start, and this fails.
-test("a directory's entries are drawn on the data grid, sortable once the whole directory is here", async () => {
+/** The rows of the files table, each as its cells' words. */
+const fileRows = (table: HTMLElement) =>
+  [...table.querySelectorAll("tbody tr")].map((tr) =>
+    [...tr.querySelectorAll("td")].map((td) => td.textContent),
+  );
+
+// EACH ENTRY NAMES ITS LAST COMMIT AND WHEN, directories first once the whole directory
+// is here, git's order while it is paged; the head cells are a screen reader's alone.
+// Mutation: sort a paged directory, or link an entry's subject to the branch, and this fails.
+test("a directory's entries carry their last commit and age, directories first once the directory is whole", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
   stubEngine();
   mount("#/gitlet/repos/web");
+  const table = await screen.findByRole("table", { name: "Files in main" });
+  await waitFor(() =>
+    expect(within(table).getAllByRole("link", { name: "Older work" })).toHaveLength(1),
+  );
+  expect(fileRows(table)).toEqual([
+    ["srcDirectory", "Older work", "7d ago"],
+    ["README.mdFile", "Start the storefront", "6d ago"],
+  ]);
+  expect(within(table).getByRole("link", { name: "Older work" }).getAttribute("href")).toBe(
+    `#/gitlet/repos/web/commits/${OTHER}`,
+  );
+  expect(within(table).getByRole("link", { name: "Older work" }).getAttribute("title")).toBe(
+    "Older work by Grace",
+  );
+  expect(
+    within(table)
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent),
+  ).toEqual(["Name", "Last commit", "Updated"]);
+  expect(table.querySelector("thead")!.classList.contains("sr-only")).toBe(true);
 
-  const table = await screen.findByRole("table", { name: "Files" });
-  expect(table.classList.contains("crewlet-data-grid")).toBe(true);
-  expect(onTheRight(table, "Size")).toBe(true);
-  const name = within(table).getByRole("columnheader", { name: /Name/ });
-  expect(within(name).getByRole("button")).toBeTruthy();
+  cleanup();
+  stubAnswering("code_tree", (url) =>
+    json(
+      byRef(url, {
+        kind: "tree",
+        next: "e:2",
+        tree: {
+          tree: OTHER,
+          entries: [
+            { mode: "100644", type: "blob", oid: OTHER, path: "README.md", size: 20 },
+            { mode: "040000", type: "tree", oid: OTHER, path: "src" },
+          ],
+          total: 3,
+        },
+      }),
+    ),
+  );
+  mount("#/gitlet/repos/web");
+  const paged = await screen.findByRole("table", { name: "Files in main" });
+  expect(fileRows(paged).map((r) => r[0])).toEqual(["README.mdFile", "srcDirectory"]);
+  expect(screen.getByText("2 of 3 entries loaded")).toBeTruthy();
+});
+
+// J AND K WALK A DIRECTORY'S ENTRIES, each focusing its name's link, and Enter elsewhere
+// opens the one the cursor is on. Mutation: drop useListKeys from Entries, and this fails.
+test("j and k walk a directory's entries and Enter opens one", async () => {
+  stubEngine();
+  mount("#/gitlet/repos/web");
+  const table = await screen.findByRole("table", { name: "Files in main" });
+  const src = await within(table).findByRole("link", { name: "src" });
+  const readme = within(table).getByRole("link", { name: "README.md" });
+  fireEvent.keyDown(window, { key: "j" });
+  expect(document.activeElement).toBe(src);
+  fireEvent.keyDown(window, { key: "j" });
+  expect(document.activeElement).toBe(readme);
+  fireEvent.keyDown(window, { key: "k" });
+  expect(document.activeElement).toBe(src);
+  fireEvent.keyDown(window, { key: "j" });
+  readme.blur();
+  fireEvent.keyDown(window, { key: "Enter" });
+  await waitFor(() => expect(location.hash).toBe("#/gitlet/repos/web?path=README.md"));
+});
+
+/** A tree-commits page naming `entries`, each commit a log row named by its subject. */
+function treeCommits(entries: Record<string, unknown>[], next?: string, extra = {}) {
+  return json({
+    repo: "web",
+    kind: "tree_commits",
+    ...(next ? { next } : {}),
+    tree_commits: {
+      tree: OTHER,
+      entries,
+      commits: entries
+        .filter((e) => e.commit)
+        .map((e) => ({
+          oid: e.commit,
+          author: "Ada",
+          authored_at: "2026-10-22T10:00:00Z",
+          committed_at: "2026-10-22T10:00:00Z",
+          subject: `Last of ${String(e.path)}`,
+        })),
+      total: 3,
+      ...extra,
+    },
+  });
+}
+
+// THE LAST COMMITS ARE READ PAGE BY PAGE until every loaded entry is answered, each page
+// asked with the one before's cursor. Mutation: stop after the first page, and this fails.
+test("an entry's last commit is read page by page until every loaded entry is answered", async () => {
+  const asked = stubAnswering("code_tree_commits", (url) =>
+    url.searchParams.get("cursor") === "e:1"
+      ? treeCommits([{ path: "src" }, { path: "README.md", out_of_time: true }], undefined, {
+          out_of_time: true,
+        })
+      : treeCommits([{ path: "LICENSE", commit: HEAD }], "e:1"),
+  );
+  const tree = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname !== "/query/code_tree") return tree(input, init);
+      return json(
+        byRef(url, {
+          kind: "tree",
+          tree: {
+            tree: OTHER,
+            entries: [
+              { mode: "100644", type: "blob", oid: OTHER, path: "LICENSE", size: 20 },
+              { mode: "100644", type: "blob", oid: OTHER, path: "README.md", size: 20 },
+              { mode: "040000", type: "tree", oid: OTHER, path: "src" },
+            ],
+            total: 3,
+          },
+        }),
+      );
+    }),
+  );
+  mount("#/gitlet/repos/web");
+  expect(await screen.findByText("Not found in one read's time")).toBeTruthy();
+  expect(screen.getByText("No file in it was ever committed")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Last of LICENSE" })).toBeTruthy();
+  const pages = reads(asked, "code_tree_commits");
+  expect(pages.map((u) => u.searchParams.get("cursor"))).toEqual([null, "e:1"]);
+  expect(screen.getByText("Not found in one read's time").getAttribute("title")).toBe(
+    "Finding its last commit ran past one read's time. Reload to look again.",
+  );
+});
+
+// A REFUSAL OR A FAILURE IS SAID ONCE UNDER THE ENTRIES, whose names still draw; a failed
+// page is asked again by Retry. Mutation: a line per row, or no Retry, and this fails.
+test("refused or failed last commits are said once under the entries, and a failed page is asked again by Retry", async () => {
+  stubAnswering("code_tree_commits", () =>
+    engineJson({ error: "unavailable", detail: "this node answers no last commits yet" }, 503),
+  );
+  mount("#/gitlet/repos/web");
+  const note = await screen.findByText(
+    "Each entry's last commit is unavailable: this node answers no last commits yet.",
+  );
+  expect(note.closest("[role=status]")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "README.md" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+
+  cleanup();
+  let fail = true;
+  const asked = stubAnswering("code_tree_commits", () =>
+    fail
+      ? engineJson({ error: "query_failed" }, 500)
+      : treeCommits([{ path: "src", commit: HEAD }]),
+  );
+  mount("#/gitlet/repos/web");
+  await screen.findByText("Each entry's last commit could not be read.", { exact: false });
+  fail = false;
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(await screen.findByRole("link", { name: "Last of src" })).toBeTruthy();
+  expect(reads(asked, "code_tree_commits")).toHaveLength(2);
 });
 
 // THE BRANCHES AND TAGS ARE READ ONCE FOR THE PAGE, never once a picker: a
@@ -2522,7 +2728,7 @@ test("Go to file finds a file at the listing's commit and opens it at the addres
   const asked = stubEngine();
   mount("#/gitlet/repos/web?ref=feature");
   const field = await screen.findByRole("combobox", { name: "Go to file" });
-  await screen.findByRole("link", { name: "Start the storefront" });
+  await headRow("Start the storefront");
   for (const typed of ["m", "ma", "mai", "main"])
     fireEvent.change(field, { target: { value: typed } });
   await act(async () => {
@@ -2554,7 +2760,7 @@ test("Go to file says when no path holds the query, and an engine's refusal in i
   stubEngine();
   mount("#/gitlet/repos/web");
   const field = await screen.findByRole("combobox", { name: "Go to file" });
-  await screen.findByRole("link", { name: "Start the storefront" });
+  await headRow("Start the storefront");
   fireEvent.change(field, { target: { value: "zzz" } });
   await act(async () => {
     vi.advanceTimersByTime(200);
@@ -2568,7 +2774,7 @@ test("Go to file says when no path holds the query, and an engine's refusal in i
   );
   mount("#/gitlet/repos/web");
   const again = await screen.findByRole("combobox", { name: "Go to file" });
-  await screen.findByRole("link", { name: "Start the storefront" });
+  await headRow("Start the storefront");
   fireEvent.change(again, { target: { value: "main" } });
   await act(async () => {
     vi.advanceTimersByTime(200);
@@ -2586,7 +2792,7 @@ test("Go to file asks a query past 256 bytes cut to them", async () => {
   const asked = stubEngine();
   mount("#/gitlet/repos/web");
   const field = await screen.findByRole("combobox", { name: "Go to file" });
-  await screen.findByRole("link", { name: "Start the storefront" });
+  await headRow("Start the storefront");
   fireEvent.change(field, { target: { value: "界".repeat(90) } });
   await act(async () => {
     vi.advanceTimersByTime(200);
@@ -2614,4 +2820,141 @@ test("t focuses Go to file; a t typed into a field stays a letter", async () => 
     field.dispatchEvent(typed);
   });
   expect(typed.defaultPrevented).toBe(false);
+});
+
+/** The engine with the head row's commit and its marks as a case draws them. */
+function stubHead(commit: Record<string, unknown>, marks: () => Response) {
+  const asked = stubAnswering("code_commit_marks", marks);
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname !== "/query/code_log") return engine(input, init);
+      asked.push(url);
+      return json(byRef(url, { kind: "log", log: { commits: [commit], scanned: 1 } }));
+    }),
+  );
+  return asked;
+}
+
+const MERGE = {
+  oid: HEAD,
+  parent_count: 2,
+  author: "cto",
+  committer: "Crewlet",
+  engine_committed: true,
+  authored_at: "2026-10-22T09:00:00Z",
+  committed_at: "2026-10-22T10:00:00Z",
+  subject: "Merge change web!41: cache the cart badge for 30s",
+};
+
+const PASSED_MAIN = {
+  target: "refs/heads/main",
+  state: "passed",
+  counts: { passed: 2 },
+  required: 2,
+  required_passed: 2,
+  last_ended: "2026-10-22T10:00:00Z",
+};
+
+// THE HEAD ROW IS GITLET'S WHERE GITLET WROTE THE MERGE, its check a glyph whose word a
+// screen reader says; refused marks leave the commit's own author and no check.
+// Mutation: decide Gitlet without the marks' landing, and this fails.
+test("the head row is Gitlet's where Gitlet wrote the merge, with its check", async () => {
+  stubHead(MERGE, () =>
+    json({
+      commit_marks: [
+        {
+          commit: HEAD,
+          checks: [PASSED_MAIN],
+          merged: [
+            {
+              repo: "web",
+              ref: "web!41",
+              title: "cache the cart badge",
+              state: "merged",
+              merge_oid: HEAD,
+              merged_by: "cto",
+              merged_via: "direct",
+            },
+          ],
+        },
+      ],
+      position: POSITION,
+      level: "session",
+    }),
+  );
+  mount("#/gitlet/repos/web");
+  await headRow(MERGE.subject);
+  await waitFor(() =>
+    expect(document.querySelector(".code-latest__author")?.textContent).toBe("Gitlet"),
+  );
+  expect(document.querySelector(".code-latest__who")!.getAttribute("title")).toBe(
+    "Gitlet wrote this merge commit when CTO merged web!41 through its gate",
+  );
+  const check = document.querySelector<HTMLElement>(".code-latest__check .code-check-mark")!;
+  expect(check.textContent).toBe("Passed");
+  expect(check.getAttribute("title")).toMatch(/^2 checks: 2 passed\. 2 of 2 required passed\./);
+  expect(document.querySelector(".code-latest__when")!.getAttribute("dateTime")).toBe(
+    MERGE.committed_at,
+  );
+
+  cleanup();
+  stubHead(MERGE, () => engineJson({ error: "unavailable", detail: "no marks here yet" }, 503));
+  mount("#/gitlet/repos/web");
+  await headRow(MERGE.subject);
+  await waitFor(() =>
+    expect(document.querySelector(".code-latest__author")?.textContent).toBe("CTO"),
+  );
+  expect(document.querySelector(".code-latest__check .code-check-mark")).toBeNull();
+});
+
+/** The root's listing naming the push that brought HEAD, long past the checks kept. */
+function pushedLongAgo() {
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname !== "/query/code_tree") return engine(input, init);
+      const answer = (await (await engine(input, init)).json()) as Record<string, unknown>;
+      return json({
+        ...answer,
+        pushed_by: {
+          [HEAD]: {
+            push_id: "p1",
+            position: POSITION,
+            at: "2026-10-22T10:00:00Z",
+            principal: { kind: "agent", seat: "cto" },
+            via: "git",
+          },
+        },
+      });
+    }),
+  );
+}
+
+// PAST THE CHECKS KEPT, THE HEAD ROW SAYS SO at the root, where the listing names the push
+// that brought the commit; refused marks leave the slot empty.
+// Mutation: draw nothing for an old commit, or drop LatestCheck's `failed`, and this fails.
+test("the head row says the checks are no longer kept past 30 days at the root", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-12-28T12:00:00Z"));
+  stubHead(MERGE, () => engineJson({ error: "unavailable", detail: "no marks here yet" }, 503));
+  pushedLongAgo();
+  mount("#/gitlet/repos/web");
+  // THE WRITER WAITS FOR THE MARKS on a merge, so its name says the marks have settled.
+  await waitFor(() => expect(document.querySelector(".code-latest__author")).toBeTruthy());
+  expect(document.querySelector(".code-latest__check")!.textContent).toBe("");
+
+  cleanup();
+  stubAnswering("code_commit_marks", () =>
+    json({ commit_marks: [{ commit: HEAD }], position: POSITION, level: "session" }),
+  );
+  pushedLongAgo();
+  mount("#/gitlet/repos/web");
+  const kept = await screen.findByText("Checks no longer kept");
+  expect(kept.closest(".code-latest__check")).toBeTruthy();
+  expect(kept.getAttribute("title")).toBe("Checks are kept 30 days.");
 });
