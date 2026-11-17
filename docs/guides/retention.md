@@ -2183,7 +2183,11 @@ configuration rather than by a command, and its three stages are timed:
   7 days). The `code-retention` duty removes the repository's rows in bounded
   steps, each one record every data node applies, paced to a third of each
   node's write lane, and the last leaves only its deletion marker, which drops
-  every later record about the repository on every node, for ever. A purge
+  every later record about the repository on every node, for ever. Its last
+  step also deletes the key the viewed marks of its changes were digested
+  under: those marks are each person's own, which no purge reaches, and name
+  no file once the key is gone
+  ([Viewed files](../concepts/gitlet.md#viewed-files)). A purge
   once begun is finished whatever the retention says, since it has no undo,
   and the name is free again once it is. One begins only on a node serving
   the revision the fleet is on, so a node that failed to apply a longer

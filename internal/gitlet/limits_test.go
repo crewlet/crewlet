@@ -69,13 +69,14 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 	// (MaxProtectionsPerRepo) and every path owner (MaxPathOwners, one row an
 	// owner), the published chain — which no part removes: MaxPublishedLayers
 	// layers of MaxLayerParts parts each — the name claim, the repository's
-	// row, its kind's count, its repository tally row and the deletion marker.
+	// row, its kind's count, its repository tally row, its viewed key and the
+	// deletion marker.
 	chain := gitlet.MaxPublishedLayers * (1 + gitlet.MaxLayerParts)
-	if final := gitlet.PurgePartRows + gitlet.MaxProtectionsPerRepo + gitlet.MaxPathOwners + chain + 5; final >
+	if final := gitlet.PurgePartRows + gitlet.MaxProtectionsPerRepo + gitlet.MaxPathOwners + chain + 6; final >
 		gitlet.MaxRecordRows {
 		t.Errorf("the final purge removes up to %d rows (PurgePartRows %d + MaxProtectionsPerRepo %d + "+
-			"MaxPathOwners %d + a chain's %d + 5 with its repository tally row), past the %d one record's "+
-			"apply may touch (MaxRecordRows)",
+			"MaxPathOwners %d + a chain's %d + 6 with its repository tally row and viewed key), past the %d one "+
+			"record's apply may touch (MaxRecordRows)",
 			final, gitlet.PurgePartRows, gitlet.MaxProtectionsPerRepo, gitlet.MaxPathOwners, chain,
 			gitlet.MaxRecordRows)
 	}

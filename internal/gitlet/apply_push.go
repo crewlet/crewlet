@@ -1169,9 +1169,9 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // MaxProtectionsPerRepo rules, MaxPathOwners path owners (one row each, their
 // globs packed into it) and a published chain of at most MaxPublishedLayers
 // layers of MaxLayerParts parts each: with the name claim, the row, its kind's
-// count, its repository tally row and the marker that is PurgePartRows +
-// MaxProtectionsPerRepo + MaxPathOwners + MaxPublishedLayers × (1 +
-// MaxLayerParts) + 5 rows, which the limits test holds within MaxRecordRows. A change's revisions, authors, body
+// count, its repository tally row, its viewed key and the marker that is
+// PurgePartRows + MaxProtectionsPerRepo + MaxPathOwners + MaxPublishedLayers ×
+// (1 + MaxLayerParts) + 6 rows, which the limits test holds within MaxRecordRows. A change's revisions, authors, body
 // and conversation go before the changes, through which alone they are found.
 //
 // AN OLD NAME a rename left redirecting to the repository is NOT released
@@ -1208,7 +1208,7 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 		purgeAllFactsSQL, purgeAllBodiesSQL, purgeAllMergeabilitySQL, purgeAllConversationsSQL,
 		purgeAllChangesSQL, purgeAllCheckLogsSQL, purgeAllChecksSQL, purgeAllDispatchesSQL, purgeAllCheckTargetsSQL,
 		purgeAllQueueSQL, purgeAllCandidatesSQL, purgeAllLandingsSQL, purgeAllGreenSQL, purgeAllTipsDueSQL,
-		purgeAllLayerPartsSQL, purgeAllLayersSQL, clearProtectionsSQL, clearPathOwnersSQL,
+		purgeAllLayerPartsSQL, purgeAllLayersSQL, clearProtectionsSQL, clearPathOwnersSQL, purgeViewedKeySQL,
 	} {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := tx.ExecContext(ctx, stmt, p.RepoID)
@@ -1478,4 +1478,7 @@ const (
 			(repo_id, name, at, by, reason, purge_record_id, rejects, last_reject_at, version)
 		VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?)
 		ON CONFLICT (repo_id) DO NOTHING`
+	// purgeViewedKeySQL deletes the key the repository's viewed marks were digested under, after
+	// which those marks, which are each person's and stay, name no file.
+	purgeViewedKeySQL = `DELETE FROM code_viewed_keys WHERE repo_id = ?`
 )

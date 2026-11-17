@@ -69,7 +69,10 @@ import (
 //     enqueue was made for (concerns.go's head, "Whom the actor acted for") —
 //     and on an open, a reopen, a push's entry, a merge and an enqueue
 //     whatever they wake ([WorkingForVersion]).
-const RecordVersion = 2
+//   - 3: a person's viewed marks on a change's files, and the key a
+//     repository's are digested under ([OpViewed], [OpViewedKey],
+//     [ViewedVersion]).
+const RecordVersion = ViewedVersion
 
 // WorkingForVersion is the version from which a record carries whom an
 // agent's write was made for — on a routing beside its actor, or beside none
@@ -81,6 +84,10 @@ const RecordVersion = 2
 // a_code_row_keeps_whom_an_agents_write_was_made_for). A record below it keeps
 // none, whatever it holds ([keptCarrier]).
 const WorkingForVersion = 2
+
+// ViewedVersion is the version from which a code record may be a person's viewed marks ([OpViewed])
+// or the key a repository's are digested under ([OpViewedKey]).
+const ViewedVersion = 3
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped
@@ -114,6 +121,9 @@ const GateRecordVersion = 1
 // The routing's row and the payload's own are on EVERY OP rather than the
 // ones that carry one today, because every payload's working_for means one
 // thing, and a later payload that carries it is stamped by its row too.
+//
+// A PERSON'S VIEWED MARKS AND A REPOSITORY'S VIEWED KEY are new ops, so each
+// row names `op` and its value.
 var versionedFields = statelog.RecordFields{
 	{Name: "ChangeRouting.WorkingFor", Since: WorkingForVersion,
 		Path: []string{"mutation", "routing", "working_for"}},
@@ -122,6 +132,8 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Mutation.WorkingFor", Since: WorkingForVersion, Path: []string{"mutation", "working_for"}},
 	{Name: "PushEntry.WorkingFor", Since: WorkingForVersion, Op: string(OpPush),
 		Path: []string{"mutation", "pushes", "working_for"}},
+	{Name: "RecordEnvelope.Op viewed", Since: ViewedVersion, Path: []string{"op"}, Equals: string(OpViewed)},
+	{Name: "RecordEnvelope.Op viewed_key", Since: ViewedVersion, Path: []string{"op"}, Equals: string(OpViewedKey)},
 }
 
 // VersionedFields is the table, for the conformance suite.
@@ -476,6 +488,14 @@ const (
 	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpMarks OpKind = "marks"
 
+	// OpViewed moves one person's viewed marks on one change's files by one gesture
+	// ([ViewedMarks]) on their own subject, under [ViewedPath], forgetting their marks on ended changes.
+	OpViewed OpKind = "viewed"
+
+	// OpViewedKey records the key a repository's viewed marks are digested under ([ViewedKeyRecord]),
+	// on its own subject, once: before the first mark of any of its files.
+	OpViewedKey OpKind = "viewed_key"
+
 	// OpCandidate records a queue's TRAIN ([Candidate]): the
 	// candidates its home built of a target's live entries onto the target's
 	// tip, each a merge of a batch of them on the one before, and the pack
@@ -532,7 +552,7 @@ const (
 	OpCloseSettled OpKind = "close_settled"
 )
 
-// OpKinds are the fifty-six, in the order they are documented.
+// OpKinds are the fifty-eight, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPush, OpSettings, OpDelete, OpRestore, OpPurgePart, OpPurge,
 	OpActivate, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpCompact, OpRetireSweep,
@@ -543,7 +563,7 @@ var OpKinds = []OpKind{
 	OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve, OpRevise, OpMergeability,
 	OpMergeabilityKept, OpAsks,
 	OpCheckQueued, OpCheckStarted, OpCheckFinished, OpChecksSweep, OpCheckDispatched, OpMerge, OpEnqueue, OpDequeue,
-	OpMarks, OpCandidate, OpEject, OpLand, OpGreen, OpBroken, OpQueueSweep, OpCloseSettled,
+	OpMarks, OpViewed, OpViewedKey, OpCandidate, OpEject, OpLand, OpGreen, OpBroken, OpQueueSweep, OpCloseSettled,
 }
 
 // CheckOps are the ops of a repository's CHECKS, in [OpKinds]' order: every

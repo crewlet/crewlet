@@ -10268,6 +10268,21 @@ at most 32, and `omitted`), each reviewer row `at`, when the record that last
 moved it landed (absent past the notices' horizon), and each finding
 `raised_at`, when the review that raised it landed.
 
+`?part=viewed` on `GET /gitlet/repos/{name}/changes/{n}` answers `viewed`: the
+files the asker marked viewed with `code_mark_viewed`, in `path_digest` order,
+each with `path_digest`, `file_digest` and `at`, and beside a page that holds
+one, `viewed_key`, the repository's key in lowercase hex (`?limit=` 1 to
+1 000, unset or `0` is 500, and `?cursor=`, a digest). `path_digest` is the
+HMAC-SHA256 under the key of the path's UTF-8 bytes, and `file_digest` that of
+the path, a NUL byte, the object id, a NUL byte and the mode the mark was made
+at (both empty for a file the change deletes), each in lowercase hex. A mark is
+current while the revision shown gives the file a `file_digest` equal to the
+mark's. A person's own alone: a seat or a credential bound to no seat is
+answered none, and so is a change that is closed or merged; a read the
+Dashboard Assistant makes for a person is answered the marks without the key.
+`revision`, `file` or `context` beside it is `400 bad_params`. An older data
+node refuses it and another answers.
+
 A part read by object id — `files`, `diff`, and `findings`' placing — reads
 the change's rows first, at the caller's freshness, then every other row it
 needs at `session` floored at that first read's position, and asks the
