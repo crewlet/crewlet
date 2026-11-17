@@ -363,6 +363,10 @@ it draw one);
 `lib/lineDiff.test.ts` holds the same of the package's `diffLines`, which
 nothing compares with; `components/DiffView.test.tsx` holds what it draws.
 
+A diff a host lets expand opens each hunk with git's header and draws its gaps
+as the host's controls; Gitlet reads the hidden lines from the blob by its id.
+Stacked, each file is its own DiffView with its own window.
+
 ### Code is coloured by kind in Gitlet
 
 A file Gitlet draws under 256 KiB, and its blame, colour each token in the

@@ -161,6 +161,37 @@
 .diff-view__block:first-child > .diff-view__skip:first-child {
   border-block-start: none;
 }
+/* A GAP A HOST CAN FILL: its controls in the numbers' gutter, git's hunk line
+   in the code's column; the gutter's width is in the code's face, as a line's. */
+.diff-view__skip[data-gap] {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--spacing-2);
+  padding: 0 var(--spacing-3) 0 var(--spacing-2);
+  min-block-size: var(--size-control-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-compact);
+}
+.diff-view__gap {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-inline-size: calc(var(--diff-digits) * 2ch + 2ch + var(--spacing-2) * 2);
+}
+.diff-view--split .diff-view__gap {
+  min-inline-size: calc(var(--diff-digits) * 1ch + 2ch + var(--spacing-2));
+}
+:where(.diff-view__gap) > * {
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-xs);
+}
+.diff-view__header {
+  grid-column: 2;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 /* SPLIT: the older text on the left and the newer on the right, a hairline
    between them. */
 .diff-view__pair {

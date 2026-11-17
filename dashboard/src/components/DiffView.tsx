@@ -161,6 +161,15 @@ export interface DiffLine {
 export interface DiffHunk {
   lines: readonly DiffLine[];
   skipped: number;
+  /** Git's own line opening the hunk (`@@ -14,12 +14,14 @@ func New(…)`), where it came from a patch. */
+  header?: string | undefined;
+}
+
+/** A gap a host may fill: the unchanged lines above hunk `hunk`, or after the last (`hunk` = the hunks' count). */
+export interface DiffGap {
+  hunk: number;
+  /** How many lines it hides; null where the host does not know. */
+  skipped: number | null;
 }
 
 /** How the two sides are laid out. */
@@ -232,6 +241,13 @@ export type DiffViewProps = DiffSource & {
    * only with `hue="code"` and never inside a changed run (`styles/diffs.test.ts`).
    */
   tokens?: ((side: "before" | "after", n: number) => readonly DiffSpan[] | null) | undefined;
+  /**
+   * A gap's control, drawn beside the header of each hunk in place of the
+   * "N unchanged lines" row; without it every diff draws that row as before.
+   */
+  expand?: ((gap: DiffGap) => ReactNode) | undefined;
+  /** Unchanged lines after the last hunk, null where unknown; with `expand` only, 0 draws no gap there. */
+  trailing?: number | null | undefined;
 };
 
 /**
@@ -302,6 +318,7 @@ const ROW_ESTIMATE_PX = 21;
 /** One row of the diff, as it is drawn: what is underlined in it is its lines' [Pair]s'. */
 type Row =
   | { kind: "skip"; count: number }
+  | { kind: "gap"; gap: DiffGap; header: string | undefined }
   /** `continues`: the line goes on the setting the line above it began ([continuesAbove]). */
   | { kind: "line"; line: DiffLine; continues: boolean }
   | { kind: "pair"; left: DiffLine | null; right: DiffLine | null };
@@ -453,10 +470,19 @@ function pairByPath(
  * by side from its first line, which is where the layout pairs them; what is
  * underlined is the [Pair]s' business, and the same in either layout.
  */
-function rowsOf(hunks: readonly DiffHunk[], split: boolean): Row[] {
+function rowsOf(
+  hunks: readonly DiffHunk[],
+  split: boolean,
+  expandable = false,
+  trailing: number | null = null,
+): Row[] {
   const rows: Row[] = [];
-  for (const hunk of hunks) {
-    if (hunk.skipped > 0) rows.push({ kind: "skip", count: hunk.skipped });
+  for (const [at, hunk] of hunks.entries()) {
+    if (expandable) {
+      if (hunk.skipped > 0 || hunk.header) {
+        rows.push({ kind: "gap", gap: { hunk: at, skipped: hunk.skipped }, header: hunk.header });
+      }
+    } else if (hunk.skipped > 0) rows.push({ kind: "skip", count: hunk.skipped });
     const lines = hunk.lines;
     if (!split) {
       lines.forEach((line, i) =>
@@ -481,6 +507,9 @@ function rowsOf(hunks: readonly DiffHunk[], split: boolean): Row[] {
         rows.push({ kind: "pair", left: removed[k] ?? null, right: added[k] ?? null });
       }
     }
+  }
+  if (expandable && trailing !== 0 && hunks.length > 0) {
+    rows.push({ kind: "gap", gap: { hunk: hunks.length, skipped: trailing }, header: undefined });
   }
   return rows;
 }
@@ -658,6 +687,7 @@ function useWindow(
 function rowDraws(row: Row, accepts: (line: DiffLine) => boolean): boolean {
   switch (row.kind) {
     case "skip":
+    case "gap":
       return false;
     case "line":
       return accepts(row.line);
@@ -781,6 +811,7 @@ interface Tracks {
   onPick?: ((line: DiffLine, extend: boolean) => void) | undefined;
   picked?: ((line: DiffLine) => boolean) | undefined;
   reveal?: ((line: DiffLine) => boolean) | undefined;
+  expand?: ((gap: DiffGap) => ReactNode) | undefined;
   /** A line's coloured spans on the side it is drawn, set only in the code hue. */
   spans?:
     | ((line: DiffLine, side: "left" | "right" | undefined) => readonly DiffSpan[] | null)
@@ -907,6 +938,13 @@ function RowView({ row, tracks, pairs }: { row: Row; tracks: Tracks; pairs: Pair
   switch (row.kind) {
     case "skip":
       return <div className="diff-view__skip">{plural(row.count, "unchanged line")}</div>;
+    case "gap":
+      return (
+        <div className="diff-view__skip" data-gap="">
+          <span className="diff-view__gap">{tracks.expand?.(row.gap)}</span>
+          {row.header && <span className="diff-view__header">{row.header}</span>}
+        </div>
+      );
     case "line":
       return (
         <>
@@ -958,7 +996,7 @@ function RowView({ row, tracks, pairs }: { row: Row; tracks: Tracks; pairs: Pair
 
 export function DiffView(props: DiffViewProps) {
   const { layout = "unified", against, empty, "aria-label": label } = props;
-  const { notes, onPick, picked, reveal, hue, tokens } = props;
+  const { notes, onPick, picked, reveal, hue, tokens, expand, trailing = null } = props;
   const { hunks: given, before, after, context } = props;
   // TWO TEXTS ARE COMPARED ONCE, for as long as they are the two texts.
   const compared = useMemo(
@@ -977,7 +1015,11 @@ export function DiffView(props: DiffViewProps) {
   // ONE DIFF, ONE SET OF PAIRS, whichever layout draws it: a diff that turns
   // unified as its column narrows keeps every underline it has already read.
   const pairs = useMemo(() => pairsOf(hunks, shape.keyed), [hunks, shape.keyed]);
-  const rows = useMemo(() => rowsOf(hunks, split), [hunks, split]);
+  const expandable = expand !== undefined;
+  const rows = useMemo(
+    () => rowsOf(hunks, split, expandable, trailing),
+    [hunks, split, expandable, trailing],
+  );
   const blocks = useMemo(() => blocksOf(rows), [rows]);
   const shown = useWindow(body, blocks, rows.length > WINDOW_FROM_ROWS);
   useReveal(body, blocks, reveal, shown.holds);
@@ -1004,6 +1046,7 @@ export function DiffView(props: DiffViewProps) {
     onPick,
     picked,
     reveal,
+    expand,
     spans,
   };
   return (

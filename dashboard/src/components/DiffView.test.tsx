@@ -578,6 +578,67 @@ describe("a diff a host writes on", () => {
   });
 });
 
+describe("a diff a host lets expand", () => {
+  const GAPPED: DiffHunk[] = [
+    {
+      skipped: 13,
+      header: "@@ -14,2 +14,2 @@ func New()",
+      lines: [removed(14, "a"), added(14, "b")],
+    },
+    { skipped: 0, header: "@@ -16,1 +16,1 @@", lines: [same(16, 16, "c")] },
+  ];
+  const control = (gap: { hunk: number; skipped: number | null }) => (
+    <button type="button">{`Expand ${gap.hunk}:${gap.skipped ?? "?"}`}</button>
+  );
+
+  // GIT'S HEADER AND THE HOST'S CONTROL, only where the host asks: every other
+  // diff keeps its "N unchanged lines" row. Mutation: draw headers always.
+  test("opens every hunk with its header and its gap's control, and without it the skip row is unchanged", () => {
+    const { container, unmount } = render(
+      <DiffView hunks={GAPPED} expand={control} trailing={0} />,
+    );
+    const gaps = [...container.querySelectorAll(".diff-view__skip[data-gap]")];
+    expect(gaps.map((g) => g.textContent)).toEqual([
+      "Expand 0:13@@ -14,2 +14,2 @@ func New()",
+      "Expand 1:0@@ -16,1 +16,1 @@",
+    ]);
+    unmount();
+    const plain = render(<DiffView hunks={GAPPED} />).container;
+    expect(plain.querySelector("[data-gap]")).toBeNull();
+    expect(plain.querySelector(".diff-view__skip")!.textContent).toBe("13 unchanged lines");
+    expect(plain.textContent).not.toContain("@@");
+  });
+
+  test("draws the gap after the last hunk only where the host says lines may follow", () => {
+    const count = (trailing: number | null) => {
+      const { container, unmount } = render(
+        <DiffView hunks={GAPPED} expand={control} trailing={trailing} />,
+      );
+      const said = [...container.querySelectorAll("[data-gap]")].map((g) => g.textContent);
+      unmount();
+      return said.at(-1);
+    };
+    expect(count(0)).toBe("Expand 1:0@@ -16,1 +16,1 @@");
+    expect(count(9)).toBe("Expand 2:9");
+    expect(count(null)).toBe("Expand 2:?");
+  });
+
+  // TWO FILES OF ONE STACK ARE TWO DIFFS: a pick in one marks nothing in the
+  // other. Mutation: share the pick across diffs, and this fails.
+  test("two diffs of one stack keep their own picks and gaps", () => {
+    const { container } = render(
+      <>
+        <DiffView hunks={GAPPED} expand={control} picked={(l) => l.after === 16} />
+        <DiffView hunks={GAPPED} expand={control} />
+      </>,
+    );
+    const [one, two] = [...container.querySelectorAll(".diff-view")];
+    expect(one!.querySelectorAll("[data-picked]")).toHaveLength(1);
+    expect(two!.querySelectorAll("[data-picked]")).toHaveLength(0);
+    expect(two!.querySelectorAll("[data-gap]")).toHaveLength(3);
+  });
+});
+
 // THE CODE HUE IS A CLASS ON THE ROOT AND NOTHING ELSE: the same rows, marks,
 // words and runs either way. Mutation: draw the run or the mark differently
 // under the hue, or drop the class, and this fails.
@@ -1014,6 +1075,21 @@ describe("a long diff", () => {
     } finally {
       restore();
     }
+  });
+
+  // A GAP ROW IS A ROW OF THE WINDOW, so its blocks stay the window's own size.
+  test("counts a gap row as a row of its window", () => {
+    const restore = installObserver();
+    const hunks: DiffHunk[] = Array.from({ length: 550 }, (_, i) => ({
+      skipped: 2,
+      header: `@@ -${i * 3 + 3},1 +${i * 3 + 3},1 @@`,
+      lines: [added(i * 3 + 3, `line ${i}`)],
+    }));
+    const { container } = render(<DiffView hunks={hunks} expand={() => null} trailing={0} />);
+    expect(container.querySelectorAll("[data-block]")).toHaveLength(11);
+    const first = container.querySelector('[data-block="0"]')!;
+    expect(first.querySelectorAll("[data-gap]")).toHaveLength(WINDOW_BLOCK_ROWS / 2);
+    restore();
   });
 
   test("is mounted whole up to the windowing threshold", () => {

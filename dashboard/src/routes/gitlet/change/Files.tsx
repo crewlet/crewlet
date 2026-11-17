@@ -48,7 +48,7 @@ import { usePatchPages } from "~/lib/patchPages.ts";
 import { useReviewDrafts, type DraftFinding, type ReviewDrafts } from "~/lib/reviewDrafts.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
-import { useDiffTokens } from "../syntax.tsx";
+import { useDiffSides, useDiffTokens } from "../syntax.tsx";
 import type {
   CodeChangeAnswer,
   CodeChangeDetail,
@@ -367,7 +367,8 @@ function FileDiff({
   // Every page held is asked again when what the patch is read from moves.
   useAskAgainWhenMoved(moved, !entry?.binary, paged.refresh);
   // A FILE PAST THE LISTING'S PAGES READ is coloured from its patch's own entry.
-  const tokens = useDiffTokens({ repo: change.repo, file: entry ?? file, hunks });
+  const sides = useDiffSides({ repo: change.repo, file: entry ?? file });
+  const tokens = useDiffTokens({ sides, file: entry ?? file, hunks });
   const [pick, setPick] = useState<Pick | null>(null);
   const ofFile: Placed[] = findings
     .filter((f) => f.path === path)
