@@ -442,7 +442,8 @@ type EndedNote struct {
 // A note any other step read is none of them: that step published it delivered
 // as it read it, and the ending reports nothing of it. NOR IS AN ITEM FOR ONE
 // JOB ([RunNote.For]): the ending reports what became of a person's notes, and
-// what becomes of a job's item is its filer's to say.
+// a job's item is the store's, filed in its own writes of the record, so what
+// becomes of it is the store's to say.
 //
 // NEVER THE ROW'S COMMAND ([PendingRun.CommandID]): that is the box's, and goes
 // with the box — a park's teardown and an expired pause clear it from a job

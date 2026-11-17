@@ -1689,8 +1689,9 @@ func (i *runInbox) take(ctx context.Context, launch string, candidates []openedN
 // ctx stripped of its cancellation, because the take that read them is done and
 // the hook it answered may have gone: the read is on the record, and its record
 // is owed regardless. A PERSON'S NOTES ALONE: an item for one job
-// ([sandbox.RunNote.For]) is that job's, and what becomes of it is its filer's
-// to say, so no record of a person's notes names it.
+// ([sandbox.RunNote.For]) is that job's, filed in the store's own writes, and
+// what becomes of it is the store's to say, so no record of a person's notes
+// names it.
 func (i *runInbox) delivered(ctx context.Context, taken []sandbox.RunNote, notes []steer.Note) {
 	if len(notes) == 0 {
 		return
