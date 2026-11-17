@@ -337,7 +337,13 @@ test("Approve is one review of the head carrying the drafts and the standing fin
 
   await review("Approve");
   const dialog = await screen.findByRole("dialog");
-  expect(within(dialog).getByText(/1 drafted finding on revision 2/)).toBeTruthy();
+  // THE REVISION IS NAMED ONCE, by the subtitle; the drafts are "on this revision".
+  expect(within(dialog).getByText(/1 drafted finding on this revision/)).toBeTruthy();
+  expect(
+    within(dialog)
+      .getAllByText(/revision 2/i)
+      .map((e) => e.textContent),
+  ).toEqual(["Revision 2"]);
   await within(dialog).findByText("The retry never stops");
   fireEvent.click(within(dialog).getByRole("button", { name: "Approve" }));
 

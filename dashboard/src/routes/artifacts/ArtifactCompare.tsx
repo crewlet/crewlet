@@ -217,6 +217,7 @@ function SourceCompare({
                 newer={newer}
                 from={picked.from}
                 to={picked.to}
+                named={texts.length === 1}
               />
             </>
           )}
@@ -274,12 +275,15 @@ function LineCompare({
   newer,
   from,
   to,
+  named,
 }: {
   detail: ArtifactDetail;
   older: number;
   newer: number;
   from: ArtifactEntry;
   to: ArtifactEntry;
+  /** Whether the heading names the file: false where the picker above it does. */
+  named: boolean;
 }) {
   const tooBig = from.object.size > MAX_COMPARE_BYTES || to.object.size > MAX_COMPARE_BYTES;
   const answer = useRest<LineComparison>(
@@ -329,7 +333,8 @@ function LineCompare({
       return (
         <div className="artifact-compare-lines">
           <h3 className="artifact-compare-heading">
-            {to.path}: {plural(result.hunks.length, "change")}
+            {named ? `${to.path}: ` : ""}
+            {plural(result.hunks.length, "change")}
           </h3>
           <DiffView
             hunks={lineDiff}

@@ -237,12 +237,17 @@ test("a list, a page of text, a body and a colour each read as what they are", (
   expect(colour.classList.contains("crewlet-change-list__row--block")).toBe(false);
 });
 
-// A COMPANY CHANGE STILL WAITING IS NOT "SAVED": the subtitle says where it
-// lands in words true at its state. Mutation: say "Saved" on a pending card.
-test("a pending company change does not say it is saved", () => {
+// THE SUBTITLE SAYS WHERE AND THE TAG SAYS THE STATE, each once: a waiting
+// card is not "Saved", and a saved one does not say "Saved" twice. Mutation:
+// put the state back into the subtitle, and this is red.
+test("a company change says where it lands once, and its state once", () => {
   draw({ scope: "server", state: "proposed", title: "Add seat Technical Writer" });
-  expect(screen.queryByText("Saved for the company")).toBeNull();
-  screen.getByText("For the company, once approved");
+  screen.getByText("For the company");
+  expect(screen.queryByText(/saved|once approved/i)).toBeNull();
+  cleanup();
+  draw({ scope: "server", state: "applied", title: "Add seat Technical Writer" });
+  screen.getByText("For the company");
+  expect(screen.getAllByText(/saved/i).map((e) => e.textContent)).toEqual(["Saved"]);
 });
 
 // THE EXACT REQUEST IS AN ADMINISTRATOR'S: the engine sends it to them alone,

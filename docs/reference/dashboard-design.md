@@ -9887,7 +9887,8 @@ as a second `h1` gave a screen reader two page titles, and a body written from
 - **History** swaps the outline for the revisions and the comments for the
   page's changes, each drawn as the person, the change and the turn that made
   it. It reads one revision in the page's place, as what it changed against
-  the one saved before it (by line) or as its full text.
+  the one saved before it (by line) or as its full text, headed once, by the
+  title that names the revision.
 - **Edit writes as you, in place.** The page itself becomes the editor (the
   design system's `RichEditor`, [ADR-0044](../../adr/0044-a-page-is-edited-in-place-and-saved-as-the-markdown-it-was.md)): it looks the same while it is
   edited as when it is read, blocks come from a slash menu or from Markdown

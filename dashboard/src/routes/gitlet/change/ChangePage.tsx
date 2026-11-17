@@ -688,7 +688,7 @@ function ReviewDialog({
       <p className="muted">
         {drafts.length === 0
           ? "No finding is drafted on this revision's lines."
-          : `${drafts.length} drafted finding${drafts.length === 1 ? "" : "s"} on revision ${change.revision} will be raised with it.`}
+          : `${drafts.length} drafted finding${drafts.length === 1 ? "" : "s"} on this revision will be raised with it.`}
         {elsewhere.length > 0 &&
           ` Drafts on revision ${elsewhere.map((d) => d.revision).join(", ")} stay in this tab: a review raises findings on the revision it judges.`}
       </p>

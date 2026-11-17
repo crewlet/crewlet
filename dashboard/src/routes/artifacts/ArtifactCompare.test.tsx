@@ -147,6 +147,30 @@ test("the files are compared by digest, and the changed page line by line", asyn
   expect(within(lines).getByText("1 unchanged line")).toBeTruthy();
 });
 
+// A FILE IS NAMED ONCE: with two text files changed, the picker names the one
+// compared, and the heading over its lines counts its changes without naming it
+// again. Mutation: name the file in that heading beside the picker, and this is red.
+test("the file the picker names is not named again over its lines", async () => {
+  const query = vi.fn(async (what: string, args: { n?: number }) => {
+    if (what !== "artifact_version") return {};
+    return args.n === 11
+      ? version(11, [file("index.html", "a"), file("app.js", "b", "text/javascript")])
+      : version(12, [file("index.html", "A"), file("app.js", "B", "text/javascript")]);
+  });
+  vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
+  const scripts = [11, 12].map((n) => `/artifacts/${ID}/versions/${n}/files/app.js`);
+  texts[scripts[0]!] = "let a = 1;\n";
+  texts[scripts[1]!] = "let a = 2;\n";
+  try {
+    mount(12, 11);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "1 change" })).toBeTruthy());
+    expect(screen.getAllByText("index.html").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("heading", { name: /index\.html/ })).toBeNull();
+  } finally {
+    for (const path of scripts) delete texts[path];
+  }
+});
+
 // A COMPARISON NOT MADE IS SAID, never drawn: past the line diff's bounds a
 // changed file is a sentence naming the bound, and no line of it is drawn as
 // though it had been compared.
