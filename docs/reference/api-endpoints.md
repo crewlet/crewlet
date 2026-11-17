@@ -5643,7 +5643,10 @@ the row's own `actor` column), `tool` (an `operator_acted` call's tool),
 `dir` (a `backup_requested` copy's directory) and `conversation_id` (an
 `assistant_turn_completed` turn's conversation), beside `node`, the envelope's
 publishing node, which every event row carries. That is what the dashboard's
-Audit log and backup history draw from.
+Audit log and backup history draw from. A failure's kind is a tag too,
+`error_kind` (an `executor_collected` launch's `max_turns` or `out_of_memory`, a
+turn's `budget_exhausted`), and a spend record's row carries its `tokens` and
+`calls` (a launch's are its harness's rounds).
 
 **What is not here.** A request refused before any tool ran — a read sent to
 the write transport, a token that is nobody, a malformed body, a backup with
