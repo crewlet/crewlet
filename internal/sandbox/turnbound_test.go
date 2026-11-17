@@ -578,6 +578,71 @@ func (s *settledAsReleased) ReleaseClaim(ctx context.Context, turnID string, rel
 	return released, err
 }
 
+// claimBehindRelease is a run store whose next claim of a job, on its way to the
+// store, is overtaken by before: a claim already on its way when a hand-back of
+// the job's last claim went out ([Coordinator.claimCompletion]).
+type claimBehindRelease struct {
+	PendingStore
+	before func(ctx context.Context)
+}
+
+func (s *claimBehindRelease) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
+) (PendingRun, bool, error) {
+	if before := s.before; before != nil {
+		s.before = nil
+		before(ctx)
+	}
+	return s.PendingStore.ClaimForResume(ctx, turnID, tail, fence)
+}
+
+// A CLAIM THAT PROVES A BLOCKED RESUME'S HAND-BACK LANDED COUNTS ITS RUN. A
+// hand-back whose answer the store lost has landed where a claim of its job, on
+// its way when the hand-back went out, wins on the run the hand-back put back,
+// and that win is the step that takes the hand-back's answer
+// ([Coordinator.claimCompletion]): the run of a resume that failed on a
+// condition only an operator clears was back where its claim found it, so it is
+// counted there with its seat, its condition and the instant the failure was
+// met, as the hand-back's own answer would have counted it.
+//
+// Mutation: leave the count out of the claim's proof, and the run waits for
+// the operator uncounted.
+func TestAClaimThatProvesABlockedHandBackLandedCountsItsRun(t *testing.T) {
+	t.Parallel()
+	live := t.Context()
+	rig := newCoordRig(t)
+	run := rig.launch("t1")
+	claimed, won, err := rig.pending.ClaimForResume(live, "t1", CompletionTail(run.LaunchID), rigLease)
+	if err != nil || !won {
+		t.Fatalf("the premise: the first claim of t1 = %v, %v", won, err)
+	}
+	payload, _ := rig.completion("t1")
+	met := rig.now
+	store := &claimBehindRelease{PendingStore: rig.coordinator.pending}
+	rig.coordinator.pending = store
+	// THE FIRST CLAIM'S HAND-BACK, its resume failed on a full disk, goes out
+	// while the second claim is on its way, and lands with its answer lost.
+	store.before = func(ctx context.Context) {
+		rig.coordinator.mu.Lock()
+		cr, moved := rig.coordinator.handingBackLocked(claimed, resumeUnrevertedDetail,
+			failure{blocked: "disk_full"}, nil)
+		rig.coordinator.mu.Unlock()
+		moved()
+		if landed, landErr := store.PendingStore.ReleaseClaim(ctx, "t1", cr.release); landErr != nil || !landed {
+			t.Errorf("the premise: the hand-back landed = %v, %v", landed, landErr)
+		}
+	}
+	if _, onItsWay, claimErr := rig.coordinator.claimCompletion(live, payload, rigLease); claimErr != nil || !onItsWay {
+		t.Fatalf("the claim on its way = %v, %v; want it won on the run the hand-back put back",
+			onItsWay, claimErr)
+	}
+	got := rig.coordinator.ResumesBlocked()
+	want := ResumesBlocked{Runs: 1, Seat: "swe", Kind: "disk_full", Since: met}
+	if got.Runs != want.Runs || got.Seat != want.Seat || got.Kind != want.Kind || !got.Since.Equal(want.Since) {
+		t.Fatalf("resumes waiting for an operator once the claim proved the hand-back landed = %+v, want %+v",
+			got, want)
+	}
+}
+
 // WHAT THE GIVE-UP COUNTS OF A RESUME THIS NODE CANNOT MAKE, by the fleet's
 // answer: one another node or build can make counts nothing while a live node
 // may, nor while the fleet cannot be read, and counts once none may; one no
