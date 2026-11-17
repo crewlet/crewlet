@@ -18,6 +18,7 @@ import { cx } from "@crewlethq/ui";
 import { StatusMark, TypeIcon, type RowChrome } from "~/components/work.tsx";
 import { groupLabel, STATUS_TONE, type Tone, type LabelContext } from "~/lib/work.ts";
 import type { WorkGroup } from "~/protocol/index.ts";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 /**
  * The dot a status is drawn with.
@@ -70,6 +71,22 @@ export function GroupMark({
   // done before the word is read.
   if (axis === "status") return <StatusMark status={groupKey} />;
   if (axis === "type") return <TypeIcon type={groupKey} types={chrome.types} />;
+  // THE HOLDER'S FACE heads an assignee lane, the empty mark an unassigned one.
+  if (axis === "assignee") {
+    return (
+      <ChoiceFace
+        seat={
+          groupKey
+            ? {
+                name: chrome.seatName?.(groupKey) ?? groupKey,
+                kind: chrome.seatKind?.(groupKey),
+                avatar: chrome.seatAvatar?.(groupKey),
+              }
+            : null
+        }
+      />
+    );
+  }
   if (axis === "due:bucket") {
     const tone = DUE_BAND_TONE[groupKey];
     return tone ? <i className={cx("dot", tone)} aria-hidden="true" /> : null;

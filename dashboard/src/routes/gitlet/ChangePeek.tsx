@@ -20,7 +20,7 @@ import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type { CodeChangeDetail, CodePrecondition, CodeReadiness } from "~/protocol/index.ts";
 import { ChangeStateTag } from "./ChangeRow.tsx";
 import { preconditionSentence, readinessCount, readinessNext } from "./readinessWords.ts";
-import { BranchChip } from "./ui.tsx";
+import { BranchChip, Face } from "./ui.tsx";
 import "~/styles/gitlet.css";
 
 /**
@@ -90,7 +90,11 @@ function ChangeReading({ change }: { change: CodeChangeDetail }) {
           },
           {
             label: "Owner",
-            value: owner.name,
+            value: (
+              <>
+                <Face who={change.owner} size="text" /> {owner.name}
+              </>
+            ),
             // THE OWNER'S OTHER OPEN CHANGES: an owner's changes are kept by
             // state, so the listing names one.
             path: ["gitlet"],
@@ -129,7 +133,7 @@ function ChangeReading({ change }: { change: CodeChangeDetail }) {
           <ul className="code-change-authors">
             {change.authors.map((a) => (
               <li key={a.author}>
-                {seatBadge(a.author).name}{" "}
+                <Face who={a.author} size="text" /> {seatBadge(a.author).name}{" "}
                 <span className="muted">from revision {a.first_revision}</span>
               </li>
             ))}

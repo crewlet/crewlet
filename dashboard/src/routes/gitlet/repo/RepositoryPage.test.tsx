@@ -66,7 +66,7 @@ const OTHER = "89abcdef0123456789abcdef0123456789abcdef";
 
 const ORG = withDerived({
   name: "Acme",
-  roles: [{ name: "CTO", handle: "cto" }],
+  roles: [{ name: "CTO", handle: "cto", avatar: { character: "hexlet", color: "cyan" } }],
   units: [{ id: "engineering", name: "Engineering", roles: [] }],
   services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
 }) as unknown as OrgProjection;

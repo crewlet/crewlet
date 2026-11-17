@@ -99,6 +99,7 @@ import { humanize, textBudget } from "~/lib/format.ts";
 import { PROJECT_PAGE, TASK_BODY_MAX_BYTES, TASK_TITLE_MAX_BYTES } from "~/contract/work.ts";
 import type { WorkProjectDetail } from "~/protocol/index.ts";
 import { forgetDraft, keepDraft, keptDraft } from "./newTaskDraft.ts";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 /** How many seats the assignee field offers at once. */
 const SEAT_CHOICES = 8;
@@ -762,6 +763,7 @@ function AssigneeField({
     const row = (s: Seat, hint: ReactNode): ComboboxOption => ({
       value: s.handle,
       label: s.name,
+      leading: <ChoiceFace seat={s} />,
       hint,
     });
     return [

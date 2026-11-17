@@ -94,6 +94,7 @@ import { useIamGesture, type IamAnswer, type IamGesture } from "~/lib/iamWrite.t
 import { useWaiting } from "~/lib/waiting.ts";
 import { useRest, type RestOptions, type RestResult } from "~/lib/useRest.ts";
 import { pathSegment, rest } from "~/protocol/index.ts";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 /**
  * The word for a credential the engine reports `revoked`: USED for a reset
@@ -622,10 +623,21 @@ export function seatOptions(
   { none = false }: { none?: boolean } = {},
 ): SelectOption[] {
   return [
-    ...(none ? [{ value: NO_SEAT, label: "No seat", description: "Acts as itself" }] : []),
+    ...(none
+      ? [
+          {
+            value: NO_SEAT,
+            label: "No seat",
+            description: "Acts as itself",
+            leading: <ChoiceFace seat={null} />,
+          },
+        ]
+      : []),
     ...seats.map((s) => ({
       value: s.handle,
       label: s.name || s.handle,
+      // A HUMAN SEAT, so the face is the person's initials.
+      leading: <ChoiceFace seat={{ name: s.name || s.handle, kind: "human", avatar: null }} />,
       description: s.handle,
       text: `${s.name} ${s.handle}`,
     })),

@@ -47,6 +47,8 @@ import { DEFAULT_RANGE, HOME_RANGE_SCREEN, isHomeRange, rangeOf } from "~/routes
 export interface WidgetOption {
   value: string;
   label: string;
+  /** Drawn before the label: a seat's face. */
+  leading?: ReactNode;
 }
 
 export interface WidgetChoices {

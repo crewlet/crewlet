@@ -69,6 +69,7 @@ import { itemAddress } from "~/lib/work.ts";
 import { LINK_KINDS, linkArgs, linkedSentence, type LinkKind } from "~/lib/taskRelations.ts";
 import type { WorkRanked } from "~/protocol/index.ts";
 import { PAGE_TITLE_MAX_BYTES } from "~/contract/pages.ts";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 /** How the composer posts. */
 export type ComposeMode = { kind: "reply"; replyTo?: string } | { kind: "comment" };
@@ -232,6 +233,7 @@ export const Composer = forwardRef<
                   pick(seat.handle);
                 }}
               >
+                <ChoiceFace seat={seat} />
                 <strong>{seat.name}</strong>
                 <span className="t-caption">{handleLabel(seat.handle)}</span>
               </li>
@@ -374,6 +376,7 @@ function AskDialog({
       index.seats.map((seat) => ({
         value: seat.handle,
         label: seat.name,
+        leading: <ChoiceFace seat={seat} />,
         description: handleLabel(seat.handle),
         text: `${seat.name} ${seat.handle}`,
         group: seat.kind === "human" ? "People" : "Agents",

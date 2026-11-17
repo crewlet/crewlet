@@ -60,7 +60,7 @@
  * never printed — see `lib/work.ts` [foldChartReapplies].
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { href, useParam } from "~/app/router.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
@@ -82,7 +82,7 @@ import { Histogram, type Bar } from "~/ui/Histogram.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useClient, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { indexOrg } from "~/lib/seats.ts";
+import { indexOrg, kindOfAuthor, seatLookup, useOrgIndex } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { plural } from "~/lib/format.ts";
 import { barsOver, useTimeRange, windowParam, type Offer } from "~/lib/range.ts";
@@ -105,6 +105,8 @@ import type { WorkActivityAnswer, WorkActivityRecord } from "~/protocol/index.ts
 import { assisted, authorWords } from "~/lib/attribution.ts";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import { ArrangePicker } from "./toolbar/WorkBar.tsx";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
+import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 
 /**
  * The window this screen offers.
@@ -361,7 +363,14 @@ export function HistoryView({
         </div>
         <div className="work-chips">
           <FacetPicker name="Kind" all="Any kind" value={kind} onChange={setKind} facets={kinds} />
-          <FacetPicker name="By" all="Anyone" value={actor} onChange={setActor} facets={actors} />
+          <FacetPicker
+            name="By"
+            all="Anyone"
+            value={actor}
+            onChange={setActor}
+            facets={actors}
+            face={(handle) => <ChoiceFace seat={seatLookup(index)(handle)} />}
+          />
         </div>
         <div className="work-bar-trail">
           <span className="work-bar-end">
@@ -497,6 +506,7 @@ function FacetPicker({
   value,
   facets,
   onChange,
+  face,
 }: {
   name: string;
   /** What the picker says when nothing is chosen. */
@@ -504,6 +514,8 @@ function FacetPicker({
   value: string;
   facets: { value: string; label: string; count: number | null }[];
   onChange: (next: string) => void;
+  /** A facet's face, for a facet of people. */
+  face?: (value: string) => ReactNode;
 }) {
   return (
     <ArrangePicker
@@ -518,6 +530,7 @@ function FacetPicker({
         ...facets.map((f) => ({
           value: f.value,
           label: f.label,
+          ...(face ? { leading: face(f.value) } : {}),
           text: f.label,
           description: f.count === null ? undefined : plural(f.count, "change"),
         })),
@@ -598,10 +611,21 @@ function ItemKey({ line }: { line: ChangeLine }) {
  * trail's half and not a second name for the author.
  */
 function ChangeAuthor({ line, chrome }: { line: ChangeLine; chrome: LabelContext }) {
+  const index = useOrgIndex();
   if (line.kind !== "record") return <span className="truncate muted">the engine</span>;
   const { record } = line;
+  const seat = record.actor ? seatLookup(index)(record.actor) : null;
   return (
     <span className="row gap-1">
+      {seat && record.actor_kind !== "system" && (
+        <SeatAvatar
+          name={seat.name}
+          kind={(seat.kind ?? kindOfAuthor(record.actor_kind)) === "human" ? "human" : "agent"}
+          avatar={seat.avatar}
+          size="xs"
+          decorative
+        />
+      )}
       <span
         className="truncate"
         title={

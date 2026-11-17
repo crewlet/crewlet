@@ -61,6 +61,7 @@ import {
   Skeleton,
   Tag,
   VisuallyHidden,
+  TableEntityCell,
 } from "@crewlethq/ui";
 import { ListOrderedGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -79,7 +80,7 @@ import {
   type QueuePlace,
 } from "~/lib/checks.ts";
 import { fmtElapsed, plural } from "~/lib/format.ts";
-import { useSeatBadgeOf } from "~/lib/seats.ts";
+import { useSeatBadgeOf, type SeatBadge } from "~/lib/seats.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useLatestChecks } from "~/lib/useLatestChecks.ts";
 import { usePaged } from "~/lib/usePaged.ts";
@@ -88,6 +89,7 @@ import { CHECKS_POLL_MS } from "./checks/CheckList.tsx";
 import { REPO_PARAM } from "./paths.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
+import { plainSeat } from "~/app/frame/cells.tsx";
 
 /**
  * How often the queues are read again: HALF A MINUTE, the checks listings'
@@ -264,10 +266,7 @@ function Band({ band, detailed }: { band: QueueBand; detailed: boolean }) {
                 header: "Enqueued by",
                 shrink: true,
                 cell: (p) => (
-                  <Party
-                    party={p.row.enqueued_by}
-                    name={seatBadge(p.row.enqueued_by.handle).name}
-                  />
+                  <Party party={p.row.enqueued_by} seat={seatBadge(p.row.enqueued_by.handle)} />
                 ),
               },
               {
@@ -343,10 +342,17 @@ function Band({ band, detailed }: { band: QueueBand; detailed: boolean }) {
   );
 }
 
-/** Who enqueued an entry: a seat by its name, a person by theirs. */
-function Party({ party, name }: { party: CodeParty; name: string }) {
+/** Who enqueued an entry: their face and name, a seat by its own and a person by theirs. */
+function Party({ party, seat }: { party: CodeParty; seat: SeatBadge }) {
   return (
-    <span title={party.kind === "person" ? "A person" : "A seat"}>{name || party.handle}</span>
+    <TableEntityCell
+      {...plainSeat({
+        ...seat,
+        name: seat.name || party.handle,
+        kind: seat.kind ?? (party.kind === "person" ? "human" : "agent"),
+      })}
+      title={party.kind === "person" ? "A person" : "A seat"}
+    />
   );
 }
 

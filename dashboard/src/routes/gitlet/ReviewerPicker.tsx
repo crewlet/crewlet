@@ -15,6 +15,7 @@ import { Select } from "@crewlethq/ui";
 import { indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 export function ReviewerPicker({
   id,
@@ -37,7 +38,12 @@ export function ReviewerPicker({
     () =>
       indexOrg(org)
         .seats.filter((s) => s.handle !== viewer.handle && !exclude.includes(s.handle))
-        .map((s) => ({ value: s.handle, label: s.name || s.handle, description: s.handle })),
+        .map((s) => ({
+          value: s.handle,
+          label: s.name || s.handle,
+          description: s.handle,
+          leading: <ChoiceFace seat={s} />,
+        })),
     [org, viewer.handle, exclude],
   );
   return (

@@ -44,6 +44,7 @@ import {
   type Model,
   type Tool,
 } from "./model.ts";
+import { seatBadge } from "~/ui/SeatAvatar.tsx";
 
 /**
  * What an app's action is called to a screen reader: its visible words, then
@@ -170,8 +171,7 @@ function IssueSubjects({ issue }: { issue: Issue }) {
           {issue.agents.map((agent) => (
             <EntityChip
               key={agent.handle}
-              name={agent.name}
-              kind={agent.kind}
+              {...seatBadge(agent.name, agent.kind, agent.avatar)}
               size="xs"
               href={href(["company", "org", "seats", agent.handle])}
             />
