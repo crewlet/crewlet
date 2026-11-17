@@ -11644,8 +11644,9 @@ model and every repoint as one revision.
 
 **Adding and editing a model is one wizard**, a page of its own in place of the
 list: the name and the harness (fixed once the model exists), how it signs
-in, the model (the harness's aliases and the public catalogue's models, or any name
-as text), where it runs a seat's executor (for a harness with a runner), what it is used for,
+in, the model (the harness's aliases, each with the version it resolves to on the
+vendor's own service where the engine knows it, and the public catalogue's models,
+or any name as text), where it runs a seat's executor (for a harness with a runner), what it is used for,
 its limits, a test call and a review of exactly what changes. A pasted
 credential is tested before anything is stored and sealed before the document
 that names it is written; the document is checked with a dry run against the

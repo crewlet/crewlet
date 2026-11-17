@@ -3041,7 +3041,8 @@ carries its `fix`.
 
 ```json
 {"source": "models.dev", "fetched_at": "…", "provider": "anthropic",
- "aliases": [{"id": "sonnet", "name": "Sonnet", "detail": "The harness's latest Sonnet"}],
+ "aliases": [{"id": "sonnet", "name": "Sonnet", "detail": "The harness's latest Sonnet",
+   "model": "claude-sonnet-5-5", "version": "5.5"}],
  "models": [{"id": "claude-opus-5-5", "name": "Claude Opus 5.5", "family": "claude-opus",
    "released": "2026-…", "tool_call": true}],
  "docs_url": "https://code.claude.com/docs/en/model-config"}
@@ -3052,7 +3053,9 @@ key: no credential leaves the engine to name models, and whether a plan reaches
 one is what the test call says. Claude Code reads provider `anthropic`, Codex
 `openai`, Gemini CLI `google` and Grok `xai`; OpenCode and Pi name their
 `provider` and are offered `<provider>/<id>`. Every other built-in harness names
-its own models, and is answered its aliases and page with `"source": "none"`. A copy
+its own models, and is answered its aliases and page with `"source": "none"`. An
+alias's `model` and `version` are what it resolves to on the vendor's own service,
+from the harness profile, and are absent where the profile does not know. A copy
 is kept for a day and revalidated; a catalogue that cannot be read keeps the
 last copy and says how old it is in `reason`, and with no copy the answer is
 `"source": "none"` with `models: []` and the `reason`. `400 bad_params` for an

@@ -130,6 +130,16 @@ type ModelAlias struct {
 	ID     string `yaml:"id,omitempty"`
 	Name   string `yaml:"name,omitempty"`
 	Detail string `yaml:"detail,omitempty"`
+	// Model and Version are what the alias resolves to on the vendor's own
+	// service, for the builds WrittenFor names; both empty where not known.
+	Model   string `yaml:"model,omitempty"`
+	Version string `yaml:"version,omitempty"`
+}
+
+// namesVersion reports whether a model id carries a version label, as
+// `5.5` or as `5-5`, so the label cannot drift from the id it is read for.
+func namesVersion(model, version string) bool {
+	return strings.Contains(model, version) || strings.Contains(model, strings.ReplaceAll(version, ".", "-"))
 }
 
 // ReadsLimitWindow reports the window a vendor's sentence names by the
@@ -264,6 +274,12 @@ func (p *Profile) validateSignIn(add func(string, ...any)) {
 			add("model_aliases[%d].id %q is listed twice", i, alias.ID)
 		}
 		seen[alias.ID] = true
+		switch {
+		case (alias.Model == "") != (alias.Version == ""):
+			add("model_aliases[%d] (%s) sets one of model and version: the label is the model's own version, so both are set or neither", i, alias.ID)
+		case alias.Version != "" && !namesVersion(alias.Model, alias.Version):
+			add("model_aliases[%d] (%s) labels model %q as version %q, which its id does not name", i, alias.ID, alias.Model, alias.Version)
+		}
 	}
 	if p.ModelsDocs != "" {
 		if u, err := url.Parse(p.ModelsDocs); err != nil || u.Scheme != "https" || u.Host == "" {
