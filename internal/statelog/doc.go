@@ -735,4 +735,46 @@
 // derived from the transition's. A transition is one node's fact about
 // itself, never a record on a log — the alarms most worth a wake are about the
 // logs, and a log at its ceiling would refuse the record that says so.
+//
+// # A run waiting for an operator is raised fleet-wide
+//
+// `executor_resume_blocked` ([KindExecutorResumeBlocked]) counts the runs of
+// seats, across the fleet, that finished their executor's job and failed their
+// last resume on a condition only an operator clears: the disk of the node
+// holding the seat full, read-only or failing, its limit of open files
+// reached, or the fleet's nodes holding different keys or running different
+// builds (internal/sandbox's Coordinator.ResumesBlocked, which each node says
+// in its status record). The reading names the seat of the run waiting
+// longest, the node holding it, the condition its last resume failed on, and
+// how long since the first such failure in a row.
+//
+// THE GIVE-UP NEVER ENDS SUCH A RUN, so this is the wait's one signal: the
+// failure is the node's, the run and its seat wait for the operator, and the
+// sandbox judged each failure at the classification the give-up itself reads,
+// so the rule fires at any count (ADR-0015). FLEET-WIDE, off the live status
+// records of the nodes holding the seats, because the node holding the seat
+// may evaluate no table of its own: a satellite runs no state log. Every
+// field is zero where no node holds such a run.
+//
+// # Whose failure a refusal is
+//
+// [Reason.RefusesTheWrite] sets apart the refusals of a write for WHAT THE
+// WRITE IS OR NAMES, which every node and every attempt meets alike and only a
+// different write gets past: a record larger than the broker takes
+// (record_too_large), an object deleted for good (deleted), an operation id
+// that already names another write (op_reused), or an operation a later
+// record has undone or replaced (superseded). Every refusal of the node, the
+// log or the broker the write was sent through (a node evicted, behind or
+// deferring, a log full, truncated or wrong, a broker that refused or skewed,
+// a record a reanchor voided) is not one: another node, a later attempt of the
+// same write or an operator's gesture on the fleet gets past it. Nor is a
+// reason this build does not name.
+//
+// What it decides is whose failure a refusal is: a piece of work that asked
+// for such a write failed for what it asked, while every other refusal is the
+// node's or its infrastructure's (internal/agent/builtin's
+// KindStateLogWriteRefused beside KindStateLogUnavailable). It is decided per
+// reason beside [Reason.BlamesWriter] and held by an explicit answer for every
+// reason (TestOnlyARefusalOfTheWriteItselfIsTheWorks), so a reason added later
+// is put on a side where it is declared.
 package statelog

@@ -1089,22 +1089,15 @@ type Reading struct {
 
 	// ExecutorResumesBlocked is how many runs of seats, across the fleet,
 	// finished their executor's job and failed their last resume on a
-	// condition only an operator clears: the disk of the node holding the
-	// seat full, read-only or failing, its limit of open files reached, or the
-	// fleet's nodes holding different keys or running different builds
-	// (internal/sandbox's Coordinator.ResumesBlocked, which each node says in
-	// its status record). ExecutorResumeBlockedSeat is the seat of the run waiting
-	// longest, ExecutorResumeBlockedNode the node holding it,
-	// ExecutorResumeBlockedKind the condition its last resume failed on, and
-	// ExecutorResumeBlockedFor how long since the first such failure in a row.
-	//
-	// THE GIVE-UP NEVER ENDS SUCH A RUN, so this is the wait's one signal: the
-	// failure is the node's, the run and its seat wait for the operator, and
-	// the sandbox judged each failure at the classification the give-up
-	// itself reads, so the rule fires at any count (ADR-0015). FLEET-WIDE, off
-	// the live leases, because the node holding the seat may evaluate no table
-	// of its own: a satellite runs no state log. All zero where no node holds
-	// such a run.
+	// condition only an operator clears (internal/sandbox's
+	// Coordinator.ResumesBlocked, off each node's status record).
+	// ExecutorResumeBlockedSeat is the seat of the run waiting longest,
+	// ExecutorResumeBlockedNode the node holding it, ExecutorResumeBlockedKind
+	// the condition its last resume failed on, and ExecutorResumeBlockedFor
+	// how long since the first such failure in a row. Read fleet-wide, since a
+	// satellite holding the seat evaluates no table; all zero where no node
+	// holds such a run (the package doc's "A run waiting for an operator is
+	// raised fleet-wide").
 	ExecutorResumesBlocked    int
 	ExecutorResumeBlockedSeat string
 	ExecutorResumeBlockedNode string
