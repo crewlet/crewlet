@@ -1260,7 +1260,7 @@ func scanPush(s scanner) (PushRow, int, error) {
 	if err := s.Scan(&row.PushID, &row.RepoID, &position, &at, &row.Actor, &row.ActorKind,
 		&row.ActorSeat, &via, &row.Run.TurnID, &row.Run.WorkBackend, &row.Run.WorkKey, &row.Run.Model,
 		&row.Run.RunID, &row.Run.Harness, &row.Node, &row.Atomic, &commands, &row.PackID, &row.PackBytes,
-		&introduced, &row.IntroducedCount, &received); err != nil {
+		&introduced, &row.IntroducedCount, &row.Offered, &received); err != nil {
 		return PushRow{}, 0, err
 	}
 	if row.Via = PushVia(via); !row.Via.Valid() {
@@ -4694,7 +4694,7 @@ const (
 		ORDER BY retired_position, pack_id, part LIMIT ?`
 	pushColumns = `push_id, repo_id, position, at, actor, actor_kind, actor_seat, via, turn_id,
 		work_backend, work_key, model, run_id, harness, node, atomic, commands, pack_id, pack_bytes,
-		introduced, introduced_count, received_at`
+		introduced, introduced_count, offered, received_at`
 	pushSQL        = `SELECT ` + pushColumns + ` FROM code_pushes WHERE push_id = ?`
 	pushesFirstSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ?
 		ORDER BY position DESC, push_id DESC LIMIT ?`

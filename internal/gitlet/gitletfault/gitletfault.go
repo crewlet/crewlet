@@ -270,6 +270,10 @@ const (
 	// starts and never on a barrier's. ON NO CRASH PATH: the step leaves
 	// nothing behind to recover, so a case faults it for the refusal.
 	CommitterBeforeAdmit Point = "committer.before_admit"
+	// HostBeforeOffered: an attempt's count of the commits it offered is about to run, in its
+	// scratch. ON NO CRASH PATH: only a push a rule refuses whole meets it, so a case faults it
+	// for the attempt recorded uncounted.
+	HostBeforeOffered Point = "host.before_offered"
 
 	// MaintainBeforeStep: a maintenance run of a copy is about to take its
 	// next step — an index, with or without its bitmap, the commit-graph, or
@@ -346,8 +350,9 @@ var importPath = []Point{ImportAfterBuild, ImportAfterUpload, ImportAfterPropose
 var mirrorPath = []Point{MirrorAfterBuild, MirrorAfterUpload, MirrorAfterPropose}
 
 // refusalPoints are the steps no crash matrix walks, each faulted for the
-// refusal a case asserts on: a committer's admission reading the log's usage.
-var refusalPoints = []Point{CommitterBeforeAdmit}
+// refusal a case asserts on: a committer's admission reading the log's usage,
+// and an attempt's count of what it offered.
+var refusalPoints = []Point{CommitterBeforeAdmit, HostBeforeOffered}
 
 // holdPoints are the steps no crash matrix walks, each held or reached so a
 // case orders what it does next behind the step: a maintenance run's step,

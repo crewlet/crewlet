@@ -1,7 +1,12 @@
 package gitlet
 
 import (
+	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 // A PUSH A RULE REFUSES WHOLE IS AN ATTEMPT: a push git received every command
@@ -26,6 +31,7 @@ func TestAPushRefusedWholeByARuleIsAnAttempt(t *testing.T) {
 		refused := locked("L")
 		refused.Result, refused.Reason, refused.Detail = ResultNG, RefusalProtectedDirect, "the receiver's sentence"
 		p := proposalOf(refused)
+		p.Offered = 1
 		pushes := e.num(`SELECT pushes FROM code_repos WHERE id = ?`, decideRepo)
 		entries, answers := decideIn(t, e, DefaultLimits(), p)
 		if len(entries) != 1 || !answers[0].inRecord || answers[0].refused != "" {
@@ -34,12 +40,14 @@ func TestAPushRefusedWholeByARuleIsAnAttempt(t *testing.T) {
 		}
 		got := entries[0]
 		if got.PushID != p.PushID || got.Pack != nil || len(got.Commands) != 1 ||
-			got.Commands[0].Reason != RefusalProtectedDirect || got.Commands[0].Detail != "" {
-			t.Fatalf("the attempt's entry is %+v, want its one refused command, no sentence and no pack", got)
+			got.Commands[0].Reason != RefusalProtectedDirect || got.Commands[0].Detail != "" || got.Offered != 1 {
+			t.Fatalf("the attempt's entry is %+v, want its one refused command, no sentence, no pack and the "+
+				"one commit it offered", got)
 		}
 		e.apply(pushOf(t, decideRepo, entries...))
-		if n := e.num(`SELECT COUNT(*) FROM code_pushes WHERE push_id = ? AND pack_id = ''`, p.PushID); n != 1 {
-			t.Fatalf("%d rows of the attempt with no pack, want one", n)
+		if n := e.num(`SELECT COUNT(*) FROM code_pushes WHERE push_id = ? AND pack_id = '' AND offered = 1`,
+			p.PushID); n != 1 {
+			t.Fatalf("%d rows of the attempt with no pack and its one commit offered, want one", n)
 		}
 		if n := e.num(`SELECT COUNT(*) FROM code_refs WHERE repo_id = ? AND ref = 'refs/heads/locked'`,
 			decideRepo); n != 0 {
@@ -105,9 +113,10 @@ func TestAPushRefusedWholeByARuleIsAnAttempt(t *testing.T) {
 				t.Fatalf("at %d live packs: %d entries, refused %q; want the attempt", packs, len(entries),
 					answers[0].refused)
 			}
-			if got := entries[0]; got.Pack != nil || len(got.Introduced) != 0 || got.IntroducedCount != 0 {
-				t.Fatalf("at %d live packs the attempt names pack %v and %d commits, want none", packs, got.Pack,
-					got.IntroducedCount)
+			if got := entries[0]; got.Pack != nil || len(got.Introduced) != 0 || got.IntroducedCount != 0 ||
+				got.Offered != 3 {
+				t.Fatalf("at %d live packs the attempt names pack %v, %d commits introduced and %d offered, want "+
+					"none introduced and the listing's 3 offered", packs, got.Pack, got.IntroducedCount, got.Offered)
 			}
 		}
 	})
@@ -144,5 +153,83 @@ func TestOnlyARulesRefusalOfEveryCommandIsAnAttempt(t *testing.T) {
 	}
 	if Attempted(nil) {
 		t.Error("a push of no command is an attempt")
+	}
+}
+
+// ONLY AN ATTEMPT THAT OFFERED COMMITS STAMPS ITS RECORD at OfferedVersion,
+// through the production encoder: an attempt with none and an ordinary push
+// are stamped the base, and a record holding both an ordinary push and an
+// attempt with commits is stamped OfferedVersion.
+//
+// Mutations: drop the versionedFields row (stamped the base, red); tag Offered
+// without omitempty (every push stamped OfferedVersion, red).
+func TestOnlyAnAttemptThatOfferedCommitsStampsItsRecord(t *testing.T) {
+	t.Parallel()
+	attempt := func(offered int) PushEntry {
+		e := pushEntry("attempt", Command{Ref: "refs/heads/locked", Old: ZeroOID, New: oid("L"),
+			Result: ResultNG, Reason: RefusalProtectedDirect})
+		e.Pack, e.Offered = nil, offered
+		return e
+	}
+	landed := pushEntry("landed", move("refs/heads/main", oid("A"), oid("B")))
+	for name, tc := range map[string]struct {
+		entries []PushEntry
+		want    int
+	}{
+		"an attempt that offered two commits": {[]PushEntry{attempt(2)}, OfferedVersion},
+		"an attempt that offered none":        {[]PushEntry{attempt(0)}, baseRecordVersion},
+		"an ordinary push":                    {[]PushEntry{landed}, baseRecordVersion},
+		"an ordinary push and an attempt":     {[]PushEntry{landed, attempt(1)}, OfferedVersion},
+	} {
+		body, err := json.Marshal(PushBatch{RepoID: "stamp", Pushes: tc.entries})
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := Encode(stampRecord(0, OpPush, string(body)))
+		if err != nil {
+			t.Fatalf("%s: encode: %v", name, err)
+		}
+		if got := stampOf(t, encoded); got != tc.want {
+			t.Errorf("%s: stamped %d, want %d", name, got, tc.want)
+		}
+	}
+}
+
+// AN OFFERED COUNT RIDES ONLY AN ATTEMPT: a proposal carrying one is refused
+// naming offered unless it is a push git received, refused whole by a rule,
+// storing, introducing and opening nothing, and its count is no negative.
+//
+// Mutation: drop any one rule of validOffered (its case validates, red).
+func TestAnOfferedCountRidesOnlyAnAttempt(t *testing.T) {
+	t.Parallel()
+	refused := Command{Ref: "refs/heads/locked", Old: ZeroOID, New: oid("L"), Result: ResultNG,
+		Reason: RefusalProtectedDirect}
+	valid := func() Proposal {
+		p := proposalOf(refused)
+		p.RepoID, p.DropEpoch, p.Offered = uuid.Must(uuid.NewV7()).String(), 0, 2
+		return p
+	}
+	if err := valid().Validate(); err != nil {
+		t.Fatalf("an attempt offering two commits: %v", err)
+	}
+	for name, mutate := range map[string]func(*Proposal){
+		"a negative count": func(p *Proposal) { p.Offered = -1 },
+		"built by the engine": func(p *Proposal) {
+			p.Via, p.Principal = ViaEngine, Principal{Kind: PrincipalAgent, Seat: "dev", Run: RunProvenance{TurnID: "t"}}
+		},
+		"a command not refused": func(p *Proposal) { p.Commands = []Command{cmd("refs/heads/locked", ZeroOID, oid("L"))} },
+		"refused only stale": func(p *Proposal) {
+			p.Commands = []Command{{Ref: "refs/heads/locked", Old: oid("K"), New: oid("L"), Result: ResultNG,
+				Reason: RefusalStale}}
+		},
+		"a pack":             func(p *Proposal) { p.Pack = packOf(p.PushID) },
+		"introduced commits": func(p *Proposal) { p.Introduced, p.IntroducedCount = []string{oid("L")}, 1 },
+		"a change":           func(p *Proposal) { p.Change = &ChangeOption{Title: "t"} },
+	} {
+		p := valid()
+		mutate(&p)
+		if err := p.Validate(); !errors.Is(err, ErrInvalidProposal) || !strings.Contains(err.Error(), "offered: ") {
+			t.Errorf("%s: %v, want refused naming offered", name, err)
+		}
 	}
 }

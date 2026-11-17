@@ -210,7 +210,8 @@ func unchecked(err error) error {
 //     pass spools the pack's commits for step 8 (packCommits).
 //  4. ATOMIC: a push refused in part is refused whole.
 //  5. NOTHING LEFT: every command refused, so nothing is stored.
-//     5b. AN ATTEMPT (gitlet.Attempted, a push git received): its pack dropped
+//     5b. AN ATTEMPT (gitlet.Attempted, a push git received): its refused
+//     commands' commits counted in the scratch (offered), its pack dropped,
 //     and the push proposed with nothing stored, so its record says who
 //     tried; its pusher is told the refusals step 5 formed, whatever the
 //     proposal comes to.
@@ -355,7 +356,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	// 5 NOTHING LEFT: every command refused, so nothing is uploaded and
 	// nothing proposed but an attempt (5b), with no pack: steps 6 to 9 pass
 	// it by on ref.
-	attempt := false
+	attempt, offered := false, 0
 	if !undecided(cmds) {
 		v := settled(cmds, statelog.Position{}, false, false)
 		result.outcome, result.refusal = v.outcome, v.refusal
@@ -363,7 +364,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 			return done(landed{Commands: cmds, Result: result}), nil
 		}
 		l.Progress("recording the refused push")
-		attempt, ref = true, nil
+		attempt, offered, ref = true, s.offered(ctx, &l, cmds, ref), nil
 	}
 
 	// 6 THE SIZE, before a byte is uploaded.
@@ -441,8 +442,8 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		return gitlet.Proposal{
 			PushID: l.PushID, RepoID: l.Synced.Repo.ID, Principal: l.Principal, Via: l.Via, Node: s.o.NodeID,
 			Atomic: l.Atomic, Commands: proposed, Pack: pack, Introduced: introduced, IntroducedCount: count,
-			ReceivedAt: l.ReceivedAt, Seen: l.Synced.Position, DropEpoch: l.Synced.DropEpoch, Change: change,
-			WrittenFor: l.WrittenFor,
+			Offered: offered, ReceivedAt: l.ReceivedAt, Seen: l.Synced.Position, DropEpoch: l.Synced.DropEpoch,
+			Change: change, WrittenFor: l.WrittenFor,
 		}
 	}
 	introduced, count, stored, err := s.introduceAndStore(ctx, &l, news, packPath, ref, title,
@@ -586,6 +587,34 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 // command is refused (gitlet.Attempted): one git received, never a merge.
 func (l *landing) attempt(cmds []gitlet.Command) bool {
 	return l.Merge == nil && l.Via == gitlet.ViaGit && gitlet.Attempted(cmds)
+}
+
+// offered is an attempt's commits the repository lacks: the listing of what a
+// push introduces (introduced) over its commands' new ids, counted and not
+// kept; 0 for a push with no pack, and 0, logged, where the listing fails.
+func (s *Server) offered(ctx context.Context, l *landing, cmds []gitlet.Command, ref *gitlet.PackRef) int {
+	if ref == nil {
+		return 0
+	}
+	var news []string
+	for _, c := range cmds {
+		if c.New != gitlet.ZeroOID && !slices.Contains(news, c.New) {
+			news = append(news, c.New)
+		}
+	}
+	if len(news) == 0 {
+		return 0
+	}
+	err := s.fault(ctx, gitletfault.HostBeforeOffered, 0)
+	count := 0
+	if err == nil {
+		_, count, err = s.introduced(ctx, l.Scratch, l.objects(), news, ref.PackBytes())
+	}
+	if err != nil {
+		s.log.Warn("code_push_offered_uncounted", "repo", l.Synced.Repo.Name, "push_id", l.PushID, "error", err)
+		return 0
+	}
+	return count
 }
 
 // forceAndStale is land's step 2 for a push: one merge-base a branch update,

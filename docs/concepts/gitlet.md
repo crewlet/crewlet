@@ -8122,10 +8122,11 @@ options together to 1 MiB before receive-pack reads either, and refuses a
 push past it — far past the 33 KiB a change's options take at their longest.
 
 **Checked before it is stored.** A push naming more than 1 000 refs, a credential
-bound to no seat, an archived or deleted repository — each is refused before
-receive-pack runs, and nothing is stored. A deletion or a direct push a
+bound to no seat, and an archived or deleted repository are each refused
+before receive-pack runs, and nothing is stored. A deletion or a direct push a
 protection refuses is refused too, and nothing of it is stored, but it is
-received in its scratch so it can be recorded (below). A forced update of a ref a protection keeps from forcing,
+received in its scratch so its commits can be counted and it can be recorded
+(below). A forced update of a ref a protection keeps from forcing,
 and a blob larger than `code.limits.max_blob_bytes`, are known only once the
 objects are, so the hook checks them — and refuses the push before uploading
 anything. A ref keeps the first refusal it meets: a force-push of a protected
@@ -8163,6 +8164,12 @@ refuses are not recorded, and neither is a write the engine refuses, which its
 tool call answers. A seat's attempt counts against its day's pushes, and a seat
 past its day is told the rule and nothing is recorded. Its pusher is told the
 rule whatever becomes of the record: one no data node takes is a logged line.
+The commits it offered that the repository lacks are counted in the scratch it
+was received in, by the listing every landed push takes, and recorded as its
+`offered`; a listing that fails leaves the attempt recorded with no count. The
+count is kept only by data nodes of a build that reads it: one of an earlier
+build holds back each record that carries one
+([Which records an upgrade holds back](../guides/replication.md#which-records-an-upgrade-holds-back)).
 
 **A clock that is behind.** git walks a repository's commits newest first by
 date wherever it has no generation number to stop on, so a commit dated before

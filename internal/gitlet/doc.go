@@ -807,7 +807,8 @@
 // A PUSH A RULE REFUSES WHOLE, one git received every command of which is
 // refused, one by a rule on who may move which ref ([Attempted]), is recorded
 // as an attempt that moves nothing and names no pack, so the push history says
-// who tried; any other push left with no ok command writes nothing.
+// who tried, with how many commits it offered since [OfferedVersion]; any other
+// push left with no ok command writes nothing.
 //
 // # Reads are held to who asks
 //

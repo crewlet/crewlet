@@ -597,6 +597,8 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 			continue
 		}
 		if attempt {
+			// A decide-made attempt keeps its receiver's listing as what it offered.
+			p.Offered = max(p.Offered, p.IntroducedCount)
 			p.Pack, p.Introduced, p.IntroducedCount, p.Change = nil, nil, 0, nil
 		}
 		// A SEAT'S DAY, then THE PACK BOUND, LAST: each the push whole —

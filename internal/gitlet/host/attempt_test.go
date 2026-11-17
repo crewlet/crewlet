@@ -43,8 +43,9 @@ func refusedAs(t *testing.T, res gitlettest.Pushed, want map[string]gitlet.Refus
 
 // attemptRow is the push history's newest row, which must be a new one recorded
 // moving nothing, with no pack and nothing introduced, its commands refused as
-// want says.
-func attemptRow(t *testing.T, c *gitlettest.Case, rowsBefore int, want map[string]gitlet.Refusal) gitlet.PushRow {
+// want says and offered the commits it counts.
+func attemptRow(t *testing.T, c *gitlettest.Case, rowsBefore int, want map[string]gitlet.Refusal,
+	offered int) gitlet.PushRow {
 	t.Helper()
 	rows := pushRows(t, c)
 	if len(rows) != rowsBefore+1 {
@@ -52,8 +53,9 @@ func attemptRow(t *testing.T, c *gitlettest.Case, rowsBefore int, want map[strin
 	}
 	row := rows[0]
 	if row.PackID != "" || row.PackBytes != 0 || len(row.Introduced) != 0 || row.IntroducedCount != 0 ||
-		len(row.Commands) != len(want) {
-		t.Fatalf("the attempt's row is %+v, want %d commands, no pack and nothing introduced", row, len(want))
+		len(row.Commands) != len(want) || row.Offered != offered {
+		t.Fatalf("the attempt's row is %+v, want %d commands, no pack, nothing introduced and %d commits offered",
+			row, len(want), offered)
 	}
 	for _, cmd := range row.Commands {
 		if cmd.Result != gitlet.ResultNG || cmd.Reason != want[cmd.Ref] {
@@ -63,16 +65,19 @@ func attemptRow(t *testing.T, c *gitlettest.Case, rowsBefore int, want map[strin
 	return row
 }
 
-// A PUSH A RULE REFUSES WHOLE IS RECORDED: a direct push to a branch no one
-// pushes to, a force-push of protected main rewriting two commits, a deletion
-// of main, and an --atomic push of the locked branch beside an unprotected one
-// are each answered as before and recorded once, moving nothing, with no pack
-// and nothing introduced: nothing is stored and no cache holds what they sent.
-// A push refused for its blob, which no rule on who may move which ref
-// refuses, is not recorded.
+// A PUSH A RULE REFUSES WHOLE IS RECORDED WITH WHAT IT OFFERED: a direct push
+// of one commit to a branch no one pushes to, a force-push of protected main
+// rewriting two commits, a deletion of main, and an --atomic push of the
+// locked branch beside an unprotected one, a commit each, are each answered as
+// before and recorded once, moving nothing, with no pack and nothing
+// introduced, and with the commits they offered that the repository lacks (1,
+// 2, none and 2): nothing is stored and no cache holds what they sent. A push
+// refused for its blob, which no rule on who may move which ref refuses, is
+// not recorded.
 //
 // Mutations: keep refusedEvery's early answer for an attempt (the direct push
-// is not recorded, red); propose the attempt's pack (a bundle is stored, red).
+// is not recorded, red); count the first command's commits alone (the atomic
+// push offered 1, red); propose the attempt's pack (a bundle is stored, red).
 func TestAPushARuleRefusesWholeIsRecordedWithWhatItOffered(t *testing.T) {
 	c, p, work := attemptCase(t, gitlettest.SoloOptions{})
 	base := p.Head(work)
@@ -82,7 +87,7 @@ func TestAPushARuleRefusesWholeIsRecordedWithWhatItOffered(t *testing.T) {
 	res := p.Push(c.Ctx, work, c.URL(0), "HEAD:refs/heads/locked")
 	want := map[string]gitlet.Refusal{"refs/heads/locked": gitlet.RefusalProtectedDirect}
 	refusedAs(t, res, want)
-	attemptRow(t, c, rows, want)
+	attemptRow(t, c, rows, want, 1)
 	rows++
 
 	p.Git().Run(t, work, "reset", "--quiet", "--hard", "HEAD~3")
@@ -91,13 +96,13 @@ func TestAPushARuleRefusesWholeIsRecordedWithWhatItOffered(t *testing.T) {
 	res = p.PushArgs(c.Ctx, work, []string{"--force"}, c.URL(0), "main")
 	want = map[string]gitlet.Refusal{"refs/heads/main": gitlet.RefusalProtectedForce}
 	refusedAs(t, res, want)
-	attemptRow(t, c, rows, want)
+	attemptRow(t, c, rows, want, 2)
 	rows++
 
 	res = p.Push(c.Ctx, work, c.URL(0), ":refs/heads/main")
 	want = map[string]gitlet.Refusal{"refs/heads/main": gitlet.RefusalProtectedDelete}
 	refusedAs(t, res, want)
-	attemptRow(t, c, rows, want)
+	attemptRow(t, c, rows, want, 0)
 	rows++
 
 	p.Git().Run(t, work, "checkout", "--quiet", "-B", "side", base)
@@ -107,7 +112,7 @@ func TestAPushARuleRefusesWholeIsRecordedWithWhatItOffered(t *testing.T) {
 	want = map[string]gitlet.Refusal{"refs/heads/locked": gitlet.RefusalProtectedDirect,
 		"refs/heads/topic": gitlet.RefusalAtomic}
 	refusedAs(t, res, want)
-	attemptRow(t, c, rows, want)
+	attemptRow(t, c, rows, want, 2)
 	rows++
 
 	if n := len(objects(t, c)) - stored; n != 0 {
@@ -160,5 +165,25 @@ func TestAnAttemptIsAnsweredItsRefusalWhateverItsRecordComesTo(t *testing.T) {
 	c.Fleet.Faults().Disarm(gitletfault.CommitterBeforeAdmit)
 	if n := len(pushRows(t, c)); n != rows {
 		t.Errorf("the attempt no committer took was recorded: %d rows, want %d", n, rows)
+	}
+}
+
+// AN ATTEMPT'S COUNT THE LISTING CANNOT MAKE IS NO COUNT: the count fails, and
+// the push is answered its rule as before, recorded with no commits offered,
+// and the failure is a logged line.
+//
+// Mutation: refuse the push when its count fails (no row, red).
+func TestAnAttemptsCountTheListingCannotMakeIsRecordedUncounted(t *testing.T) {
+	var l logs
+	c, p, work := attemptCase(t, gitlettest.SoloOptions{Logger: l.logger()})
+	rows := len(pushRows(t, c))
+	c.Fleet.Faults().Arm(gitletfault.HostBeforeOffered, gitletfault.Action{Err: errors.New("the listing ran out")})
+	p.Commit(work, map[string]string{"a.txt": "a\n"}, "a")
+	res := p.Push(c.Ctx, work, c.URL(0), "HEAD:refs/heads/locked")
+	want := map[string]gitlet.Refusal{"refs/heads/locked": gitlet.RefusalProtectedDirect}
+	refusedAs(t, res, want)
+	attemptRow(t, c, rows, want, 0)
+	if n := l.count("code_push_offered_uncounted"); n != 1 {
+		t.Errorf("%d lines say the attempt went uncounted, want 1", n)
 	}
 }
