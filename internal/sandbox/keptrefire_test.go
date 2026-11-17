@@ -602,6 +602,121 @@ func (s *liftAfterRecovery) LiftHold(ctx context.Context, turnID string, cond Co
 	return lifted, err
 }
 
+// listedAfter is a run store whose listing of the runs, a signal's of every
+// hold on its condition, is answered only once after is closed, and which
+// answers every other call as the store beneath it does: a signal whose lift
+// lands once the case has done what it does first.
+type listedAfter struct {
+	PendingStore
+	after <-chan struct{}
+}
+
+func (s *listedAfter) ListActive(ctx context.Context) ([]PendingRun, error) {
+	select {
+	case <-s.after:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return s.PendingStore.ListActive(ctx)
+}
+
+// liftedWhileRead is a run store that lands a signal's lift of a hold while a
+// re-fire whose claim the hold refused is on its way, after that re-fire read
+// the run's row: the first read of a row once a claim was refused returns only
+// once the lift has been answered, and the signal's listing of the runs waits
+// for that read and lists every run twice, so its second lift of the run, which
+// lifts nothing, is asked only once the first one's re-fire was asked for. It
+// answers every call as the store beneath it does.
+type liftedWhileRead struct {
+	PendingStore
+	read, lifted     chan struct{}
+	refused, reading atomic.Bool
+	lifts            atomic.Int64
+}
+
+func newLiftedWhileRead(store PendingStore) *liftedWhileRead {
+	return &liftedWhileRead{PendingStore: store, read: make(chan struct{}), lifted: make(chan struct{})}
+}
+
+func (s *liftedWhileRead) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
+) (PendingRun, bool, error) {
+	run, won, err := s.PendingStore.ClaimForResume(ctx, turnID, tail, fence)
+	if err == nil && !won {
+		s.refused.Store(true)
+	}
+	return run, won, err
+}
+
+func (s *liftedWhileRead) Get(ctx context.Context, turnID string) (PendingRun, bool, error) {
+	run, found, err := s.PendingStore.Get(ctx, turnID)
+	if s.refused.Load() && s.reading.CompareAndSwap(false, true) {
+		close(s.read)
+		select {
+		case <-s.lifted:
+		case <-ctx.Done():
+		}
+	}
+	return run, found, err
+}
+
+func (s *liftedWhileRead) ListActive(ctx context.Context) ([]PendingRun, error) {
+	select {
+	case <-s.read:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	runs, err := s.PendingStore.ListActive(ctx)
+	return append(runs, runs...), err
+}
+
+func (s *liftedWhileRead) LiftHold(ctx context.Context, turnID string, cond Condition) (bool, error) {
+	if s.lifts.Add(1) == 2 {
+		close(s.lifted)
+	}
+	return s.PendingStore.LiftHold(ctx, turnID, cond)
+}
+
+// liftedUnderKeep is a run store that lands a signal's lift of a hold while
+// the lift of a node's keep of it is on its way: the first lift of a hold it
+// is asked for (the keep's, which the signal starts before its listing) is
+// made only once a third has been asked, and the signal's listing of the runs
+// waits for that first one and lists every run twice, so the third, which
+// lifts nothing, is asked once the signal's own lift has landed and its
+// re-fire was asked for. It answers every call as the store beneath it does.
+type liftedUnderKeep struct {
+	PendingStore
+	first, third chan struct{}
+	lifts        atomic.Int64
+}
+
+func newLiftedUnderKeep(store PendingStore) *liftedUnderKeep {
+	return &liftedUnderKeep{PendingStore: store, first: make(chan struct{}), third: make(chan struct{})}
+}
+
+func (s *liftedUnderKeep) LiftHold(ctx context.Context, turnID string, cond Condition) (bool, error) {
+	switch s.lifts.Add(1) {
+	case 1:
+		close(s.first)
+		select {
+		case <-s.third:
+		case <-ctx.Done():
+		}
+	case 3:
+		close(s.third)
+	}
+	return s.PendingStore.LiftHold(ctx, turnID, cond)
+}
+
+func (s *liftedUnderKeep) ListActive(ctx context.Context) ([]PendingRun, error) {
+	select {
+	case <-s.first:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	runs, err := s.PendingStore.ListActive(ctx)
+	return append(runs, runs...), err
+}
+
 // budgetHeldOnRow is a rig whose swe run finished and whose resume its seat's
 // budget held on the run's row until until, the completion's delivery
 // acknowledged; and whose box's host's waiter reads the runs through a store
@@ -647,10 +762,13 @@ func budgetHeldOnRow(t *testing.T, rig *coordRig, until time.Time) {
 // signal once the lift of the hold has landed, and not before, since a re-fire
 // beside the lift met the hold still standing and dropped the keep; and every
 // lift its signal makes re-fires the job, unless this node carries it already,
-// kept or a re-fire of it on its way, so it is re-fired once. A claim the
-// hold refuses leaves it kept: a delivery queued behind the resume that held
-// the job leaves it standing, and the re-fire of whatever was kept in its place
-// keeps it again from the row.
+// kept for anything but that hold or a re-fire of it on its way, so it is
+// re-fired once: a keep for the hold the lift cleared is re-fired in its place,
+// and a re-fire on its way that leaves the job kept for that hold is followed by
+// one as it returns, unless a claim of the job won meanwhile. A claim the hold
+// refuses leaves it kept: a delivery queued behind the resume that held the job
+// leaves it standing, and the re-fire of whatever was kept in its place keeps it
+// again from the row.
 //
 // Mutation: keep nothing for a hold on the row, and the job is never carried;
 // arm its re-fire no later than the backstop, and it is armed sooner than the
@@ -677,9 +795,13 @@ func budgetHeldOnRow(t *testing.T, rig *coordRig, until time.Time) {
 // gate was asked, the row still unheld, is counted as seen and lifts nothing;
 // write the hold without owing the completion on the job's record, and a
 // restart after a lift of the hold leaves the job owed nothing; re-fire the
-// job on a signal's lift while this node keeps it or a re-fire of it is on its
-// way, or keep it from the row in a recovery while that lift's re-fire is, and
-// it is re-fired twice at once.
+// job on a signal's lift while this node keeps it for another condition or a
+// re-fire of it is on its way, or keep it from the row in a recovery while that
+// lift's re-fire is, and it is re-fired twice at once; leave a keep for the hold
+// the lift cleared as it is, or a lift that lands under a re-fire unasked when
+// that re-fire returns, and a keep made against a read of the row from before
+// the lift waits for the hold's instant; keep that lift through a claim that
+// won, and the job is re-fired into the hold its resume met again.
 func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 	t.Parallel()
 
@@ -1190,6 +1312,121 @@ func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 			if claims := counted.claims.Load(); claims != 1 {
 				t.Fatalf("the job was claimed %d times; want it re-fired once, by the recovery's keep, and "+
 					"not again by the signal's lift that found that re-fire on its way", claims)
+			}
+		})
+
+	t.Run("re-fired on a signal whose lift lands once the seat's recovery has kept it", func(t *testing.T) {
+		t.Parallel()
+		live := t.Context()
+		rig := newCoordRig(t)
+		budgetHeldOnRow(t, rig, rig.now.Add(24*time.Hour))
+		rig.restart(t, rig.queue, "", rigLease, nil)
+		// THE SIGNAL LANDS BEFORE THE RECOVERY READS WHAT WAS SIGNALLED, and
+		// its lift of every hold on the condition lands only once the
+		// recovery has kept the row it read held: that keep finds nothing
+		// signalled since, and is made for the hold's instant, a day on.
+		restarted := rig.coordinator
+		recovered := make(chan struct{})
+		restarted.pending = &listedAfter{PendingStore: restarted.pending, after: recovered}
+		restarted.Readmit("budget", "swe")
+		if err := rig.recoverSeat(live, rigLease.Owner, rigLease.Epoch); err != nil {
+			t.Fatalf("recovering the seat: %v", err)
+		}
+		close(recovered)
+		restarted.inflight.Wait()
+		if resumed := rig.resumer.calls(); len(resumed) != 1 || !resumed[0].Success {
+			t.Fatalf("the turn resumed %d times (%+v) once its signal's lift landed after the seat's recovery "+
+				"kept it; want it carried once, not kept for an instant its row no longer holds it to",
+				len(resumed), resumed)
+		}
+	})
+
+	t.Run("re-fired on a signal whose lift lands while a re-fire that read its row held is on its way",
+		func(t *testing.T) {
+			t.Parallel()
+			live := t.Context()
+			rig := newCoordRig(t)
+			budgetHeldOnRow(t, rig, rig.now.Add(24*time.Hour))
+			// A DELIVERY BEHIND THE HOLD THAT THE NODE'S GATE REFUSES: kept for
+			// the gate's condition in the hold's place, its re-fire at the
+			// backstop.
+			gate := gated(rig)
+			gate.refuse(true)
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(live, payload, ev); !errors.Is(err, ErrResumeUnavailable) {
+				t.Fatalf("the premise: the delivery the gate refused = %v; want it refused", err)
+			}
+			gate.refuse(false)
+			// THE BUDGET IS SIGNALLED, and that keep's re-fire, made after the
+			// signal, meets the hold with its claim and reads the row held; the
+			// signal's lift lands only then, and finds the re-fire on its way,
+			// which keeps the job for the hold it read.
+			rig.coordinator.pending = newLiftedWhileRead(rig.coordinator.pending)
+			rig.coordinator.Readmit("budget", "swe")
+			rig.fireRetries()
+			rig.coordinator.inflight.Wait()
+			if resumed := rig.resumer.calls(); len(resumed) != 1 || !resumed[0].Success {
+				t.Fatalf("the turn resumed %d times (%+v) once its signal's lift landed under a re-fire that "+
+					"read its row held; want it carried once, not kept for an instant its row no longer holds "+
+					"it to", len(resumed), resumed)
+			}
+		})
+
+	t.Run("left to a keep for another condition when its signal's lift lands", func(t *testing.T) {
+		t.Parallel()
+		live := t.Context()
+		rig := newCoordRig(t)
+		budgetHeldOnRow(t, rig, rig.now.Add(24*time.Hour))
+		// A DELIVERY BEHIND THE HOLD THAT THE NODE'S GATE REFUSES: kept for
+		// the gate's condition in the hold's place, its re-fire at the
+		// backstop.
+		gate := gated(rig)
+		gate.refuse(true)
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(live, payload, ev); !errors.Is(err, ErrResumeUnavailable) {
+			t.Fatalf("the premise: the delivery the gate refused = %v; want it refused", err)
+		}
+		// THE BUDGET IS SIGNALLED, its lift lands, and the keep for the
+		// gate's condition carries the job: the lift asks the gate nothing.
+		rig.coordinator.Readmit("budget", "swe")
+		rig.coordinator.inflight.Wait()
+		if got := rig.get("t1"); got.HeldFor != "" {
+			t.Fatalf("the premise: the row is still held for %q after its signal", got.HeldFor)
+		}
+		if asked, _, _ := gate.counts(); asked != 1 {
+			t.Fatalf("the gate was asked %d times once the signal's lift landed; want the job left to its keep "+
+				"for the gate's condition, and the gate asked once, by the delivery", asked)
+		}
+		// THAT KEEP'S BACKSTOP, the gate admitting again: carried.
+		gate.refuse(false)
+		rig.fireRetries()
+		rig.coordinator.inflight.Wait()
+		if resumed := rig.resumer.calls(); len(resumed) != 1 || !resumed[0].Success {
+			t.Fatalf("the turn resumed %d times (%+v) at its keep's backstop; want it carried once",
+				len(resumed), resumed)
+		}
+	})
+
+	t.Run("re-fired once where the signal's lift lands under its keep's own lift and the resume is held again",
+		func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			budgetHeldOnRow(t, rig, rig.now.Add(24*time.Hour))
+			// THE BUDGET STILL REFUSES, and the signal's own lift lands while
+			// the keep's lift is on its way: the keep's re-fire claims the job
+			// after that lift, and its resume, held again, keeps the job for a
+			// hold no lift has cleared.
+			rig.resumer.failWith(budgetHeld(rig.now.Add(24 * time.Hour)))
+			counted := &countedCalls{PendingStore: rig.coordinator.pending}
+			rig.coordinator.pending = newLiftedUnderKeep(counted)
+			rig.coordinator.Readmit("budget", "swe")
+			rig.coordinator.inflight.Wait()
+			if claims := counted.claims.Load(); claims != 1 {
+				t.Fatalf("the job was claimed %d times; want it claimed once, by its keep's re-fire, and kept "+
+					"for the hold its resume met again, which no lift cleared", claims)
+			}
+			if got := rig.get("t1"); got.HeldFor != "budget" {
+				t.Fatalf("the premise: the row is held for %q; want the resume held again", got.HeldFor)
 			}
 		})
 

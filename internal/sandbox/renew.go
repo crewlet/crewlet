@@ -153,15 +153,17 @@ import (
 // before it, and on its condition's signal once its own lift of the hold has
 // landed, a signal during the resume the budget held included
 // ([Coordinator.keepHeldOnRow]), every lift of a hold the signal makes
-// re-firing the job besides unless this node carries it already, kept or a
-// re-fire of it on its way ([Coordinator.refireLifted],
-// [Coordinator.carriedLocked]), kept through a delivery of it or a re-fire
-// that meets the hold ([Coordinator.forgetAdmitted], [Coordinator.keepHeldClaim]),
-// and kept again by the seat's recovery from the row ([Coordinator.keepHeldRows]),
-// or, once a lift has cleared the hold, re-armed by it from the refusal the
-// release that wrote the hold owed on the job's record ([Release.Hold],
-// [Coordinator.rearmOwed]); nothing else announced the job once its hold had
-// lifted while that host's store was silent. Its re-fire's collection starts the clock where the silence still
+// re-firing the job besides unless this node carries it already, kept for
+// anything but that hold or a re-fire of it on its way, whose end re-fires it
+// where it left it kept for that hold ([Coordinator.refireLifted],
+// [Coordinator.carriedLocked], [Coordinator.refired]), kept through a delivery
+// of it or a re-fire that meets the hold ([Coordinator.forgetAdmitted],
+// [Coordinator.keepHeldClaim]), and kept again by the seat's recovery from the
+// row ([Coordinator.keepHeldRows]), or, once a lift has cleared the hold,
+// re-armed by it from the refusal the release that wrote the hold owed on the
+// job's record ([Release.Hold], [Coordinator.rearmOwed]); nothing else
+// announced the job once its hold had lifted while that host's store was
+// silent. Its re-fire's collection starts the clock where the silence still
 // stands.
 //
 // WHAT IT COSTS: a hand-back that settles nothing for as long as it lasts is

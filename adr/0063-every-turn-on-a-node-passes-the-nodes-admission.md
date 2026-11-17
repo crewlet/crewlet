@@ -69,11 +69,16 @@ hold records the completion as owed on the job's record too
 (`sandbox.PendingStore.ReleaseClaim`); and every lift of a hold a signal
 makes re-fires the job too (`sandbox.Coordinator.refireLifted`), since a
 lift that found nothing kept, as one racing the seat's recovery can, left the
-job to that host's waiter, unless the node carries the job already, kept or a
-re-fire of it on its way, as the seat's recovery keeps no row whose job it
-does: a node re-fires a job at most once at a time
-(`sandbox.Coordinator.carriedLocked`), since a second re-fire beside the first
-asked the gate, claimed and read the row for a job the first carried already.
+job to that host's waiter, unless the node carries the job already, kept for
+anything but that hold or a re-fire of it on its way, as the seat's recovery
+keeps no row whose job it does: neither starts a second re-fire beside one
+(`sandbox.Coordinator.carriedLocked`), since a second asked the gate, claimed
+and read the row for a job the first carried already; but a keep for the hold
+the lift cleared is re-fired in its place, and a re-fire on its way that
+leaves the job kept for it is followed by one as it returns
+(`sandbox.Coordinator.refired`), since that keep, made against a reading of
+the row from before the lift and of the signals from after the signal, waited
+for the hold's instant once the hold was gone.
 A delivery of it that the hold refuses leaves it kept, and a claim the hold
 refuses with nothing kept for the job, whatever was kept in its place having
 re-fired into the hold, keeps it again from the row

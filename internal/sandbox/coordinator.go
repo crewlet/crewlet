@@ -1210,9 +1210,14 @@ type Coordinator struct {
 	// refiring counts the re-fires of each run's job on their way, by turn
 	// id, from the moment one is started until it returns
 	// ([Coordinator.refireLocked], [Coordinator.liftAndRefireLocked]): a
-	// node re-fires a job at most once at a time ([Coordinator.carriedLocked]).
-	// Under mu.
+	// signal's lift of the job's hold and a seat's recovery start none beside
+	// them ([Coordinator.carriedLocked]). Under mu.
 	refiring map[string]int
+	// liftedDuring is, by turn id, the condition of a signal's lift of a
+	// job's hold that landed while a re-fire of the job was on its way, for
+	// the last of those re-fires to take up as it returns ([Coordinator.refired]).
+	// Under mu.
+	liftedDuring map[string]Condition
 	// blocked are the completions whose last resume here failed on a
 	// condition only an operator clears, by turn id ([blockedResume]).
 	// Under mu.
@@ -1395,6 +1400,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		republish:    map[string]*refirePublish{},
 		refused:      map[string]refusedCompletion{},
 		refiring:     map[string]int{},
+		liftedDuring: map[string]Condition{},
 		blocked:      map[string]blockedResume{},
 		owed:         map[string]map[string]struct{}{},
 		held:         map[string]bool{},
@@ -6651,7 +6657,9 @@ func (c *Coordinator) rearmOwed(ctx context.Context, runs []PendingRun) {
 // re-fires the job ([Coordinator.refireLifted]), and kept here too, with that
 // signal since seen, the job was lifted and re-fired a second time beside it.
 // Asked under the lock the keep is made under ([Coordinator.keepHeldOnRow]), so
-// that lift's re-fire cannot start between the question and the keep.
+// that lift's re-fire cannot start between the question and the keep; and a
+// lift that lands once the keep is made, its signal read before the pass read
+// the seat's runs, re-fires the keep in its place ([Coordinator.refireLifted]).
 func (c *Coordinator) keepHeldRows(ctx context.Context, runs []PendingRun, seen map[signal]uint64) {
 	var kept []PendingRun
 	for _, run := range runs {
