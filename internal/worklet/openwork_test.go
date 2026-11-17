@@ -33,15 +33,9 @@ func (r *roundTrip) openWork(t *testing.T, agents, people []string) worklet.Open
 	return got.Open
 }
 
-// OPEN WORK IS READ BY HOLDER AND BY WHAT WAITS ON WHAT, across the company.
-//
-// dev holds four items, one urgent and one high; qa one; a finished item
-// counts nothing. root is waited on by a and b, a by c, and b and c by d (once):
-// four. A question to the owner on gate holds e and f, which agents hold with
-// no question of their own, and g, which waits on its own question.
-//
-// Mutation: count a waiter twice, count finished work, or count an agent item
-// that waits on its own question as ready, and a check goes red.
+// OPEN WORK IS READ BY HOLDER AND BY WHAT WAITS ON WHAT: dev holds four open items, four wait on
+// root (d once, the finished one not), and the owner's question on gate holds e, f and g, only e
+// and f ready, as g waits on its own question.
 func TestOpenWorkIsReadByHolderAndByWhatWaitsOnWhat(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

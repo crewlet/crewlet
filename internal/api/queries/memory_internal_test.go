@@ -67,15 +67,9 @@ func acmeSources(t *testing.T) (Sources, string) {
 	return Sources{Company: func() (*config.Company, *org.Organization) { return cfg, roster }}, ceo.String()
 }
 
-// THE ADVISOR READS THE RUNS THAT ENDED FOR MEMORY OR ON THEIR ROUND CAP off a
-// listing, which carries no payload: the kind from the `error_kind` tag, the
-// spend and rounds from the row, the box's ceiling from one record per seat.
-// Over its whole week a page at a time, by the chart's handle: another failure
-// is not one, a seat the chart no longer holds is left out, and a week past the
-// bound or a fleet that did not answer whole is unread rather than read as whole.
-//
-// Mutation: read the kind or the ceiling off the listing's payload, which a
-// listing never carries, and the runs read as none.
+// THE ADVISOR READS RUNS THAT ENDED FOR MEMORY OR ON THEIR ROUND CAP off a payload-less listing,
+// its week a page at a time: the kind from `error_kind`, the box's ceiling from one record per
+// seat; another failure or a seat off the chart is left out, and a partial read is unread.
 func TestTheAdvisorReadsTheRunsThatEndedForMemoryOrOnTheirCap(t *testing.T) {
 	t.Parallel()
 	s, ceo := acmeSources(t)
@@ -134,12 +128,9 @@ func TestTheAdvisorReadsTheRunsThatEndedForMemoryOrOnTheirCap(t *testing.T) {
 	}
 }
 
-// A SEAT'S BUDGET STOPS ARE READ ONCE PER WINDOW: a refusal inside a window an
-// earlier one already said resets later is that stop's, and its scope and
-// reset come from the first refusal's record.
-//
-// Mutation: read the second refusal's record, which the fake does not hold, or
-// none, and the read fails or the resets go missing.
+// A SEAT'S BUDGET STOPS ARE READ ONCE PER WINDOW: a refusal inside a window an earlier one said
+// resets later is that stop's, its scope and reset from the first refusal's record. Mutation:
+// read the second refusal's record, which the fake lacks, and the read fails.
 func TestTheAdvisorReadsEachBudgetStopOnce(t *testing.T) {
 	t.Parallel()
 	s, ceo := acmeSources(t)

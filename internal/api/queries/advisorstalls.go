@@ -17,10 +17,9 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// weekOf lists every row of eventType in the window before now, newest first, a
-// page at a time back to the window's start. A fleet that did not answer whole,
-// or a week past the bound, is an error: the source is then unread, never read
-// in part as though whole.
+// weekOf lists every row of eventType in the window before now, newest first, a page at a time.
+// A fleet that did not answer whole, or a week past the bound, is an error: the source is then
+// unread, never read in part as though whole.
 func (s Sources) weekOf(ctx context.Context, now time.Time, eventType string, failed *bool) ([]store.EventRecord, error) {
 	if s.Events == nil {
 		return nil, errors.New("queries: this node reads no event log")
@@ -49,10 +48,9 @@ func (s Sources) weekOf(ctx context.Context, now time.Time, eventType string, fa
 	}
 }
 
-// endedRuns is every executor run in the window before now that ended for
-// memory or on its round cap, by its agent's handle, read off the listing's
-// `error_kind` tag, `tokens` and `calls`. A box's memory ceiling is in the
-// run's payload alone, so it is read once per seat, off its newest such run.
+// endedRuns is every executor run in the window that ended for memory or on its round cap, by
+// agent handle, off the listing's `error_kind` tag, `tokens` and `calls`. A box's memory ceiling
+// is in the run's payload alone, so it is read once per seat, off its newest such run.
 func (s Sources) endedRuns(ctx context.Context, now time.Time) ([]advisor.EndedRun, error) {
 	failed := true
 	rows, err := s.weekOf(ctx, now, types.ExecutorCollected{}.EventType(), &failed)
@@ -98,10 +96,9 @@ func (s Sources) memoryCeiling(ctx context.Context, id string) (int64, error) {
 	return run.MemoryBytes, nil
 }
 
-// budgetStops is every turn in the window before now a token budget refused,
-// by its seat's handle, oldest first. When its window resets is in the
-// record's payload alone, so it is read once per stop: a refusal inside a
-// window already read is that stop's.
+// budgetStops is every turn in the window a token budget refused, by seat handle, oldest first.
+// When its window resets is in the record's payload alone, so it is read once per stop: a
+// refusal inside a window already read is that stop's.
 func (s Sources) budgetStops(ctx context.Context, now time.Time) ([]advisor.BudgetStop, error) {
 	rows, err := s.weekOf(ctx, now, types.BudgetExhausted{}.EventType(), nil)
 	if err != nil {

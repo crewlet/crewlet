@@ -8,12 +8,9 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
-// THE ANALYST'S ANSWER LISTS WHAT PEOPLE HAVE NOT SET ASIDE: a finding answered
-// wrong, or already known within its 30 days, is counted and never listed; one
-// answered useful is listed with its answer; an old run is marked stale; an
-// analyst that is off says which entry would turn it on.
-//
-// Mutation: list a set-aside finding, or drop the staleness, and a check fails.
+// THE ANALYST'S ANSWER LISTS WHAT PEOPLE HAVE NOT SET ASIDE: a finding answered wrong, or known
+// within its 30 days, is counted, never listed; one answered useful is listed with its answer; an
+// old run is stale; an analyst that is off says which entry would turn it on.
 func TestTheAnalystsAnswerListsWhatPeopleHaveNotSetAside(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2030, 1, 9, 12, 0, 0, 0, time.UTC)

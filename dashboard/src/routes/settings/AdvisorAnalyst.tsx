@@ -1,8 +1,6 @@
-/**
- * Settings › Advisor's analyst (ADR-0157): problems no rule names, found by a
- * run on the company's own models and listed only once the engine has checked
- * every record and number each cites. Kept apart from the rule-based list.
- */
+/** Settings › Advisor's analyst (ADR-0157): problems no rule names, found by a run on the
+ *  company's own models, listed only once the engine has checked every record and number each
+ *  cites. Kept apart from the rule-based list. */
 
 import { useState } from "react";
 import {

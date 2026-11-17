@@ -443,11 +443,10 @@ func TestACollectedRecordNamesAContextExhaustedRun(t *testing.T) {
 	}
 }
 
-// A RUN WHOSE HARNESS THE KERNEL KILLED FOR MEMORY HAS ITS OWN KIND, as does one
-// that ended on its round cap, where its
-// box has a memory domain of its own; a direct box shares the engine host's, so
-// a kill there is recorded and never the run's ending. Every record says the
-// kills its job saw and the ceiling, so its box's size is evidence on any end.
+// A RUN WHOSE HARNESS THE KERNEL KILLED FOR MEMORY HAS ITS OWN KIND, as does one that ended on
+// its round cap, where its box has a memory domain of its own; a direct box shares the engine
+// host's, so a kill there is recorded and never the run's ending. Every record says the kills
+// its job saw and the ceiling, so its box's size is evidence on any end.
 //
 // Mutation: class the run by its kills alone, class a direct box's, or drop
 // the kills from a record that did not fail, and a row goes red.

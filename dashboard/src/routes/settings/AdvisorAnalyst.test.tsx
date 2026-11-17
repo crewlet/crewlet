@@ -1,9 +1,6 @@
-/**
- * Settings › Advisor's analyst. The invariants: an analyst that is off says how
- * to turn it on; a run that did not end clean says so and never reads as all
- * clear; Run now and each answer are sent as the engine's own routes; and
- * "Nothing found" is said only for a fresh, whole, clean run.
- */
+/** Settings › Advisor's analyst: off says how to turn it on; a run that did not end clean never
+ *  reads as all clear; Run now and each answer use the engine's routes; "Nothing found" is said
+ *  only for a fresh, whole, clean run. */
 
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";

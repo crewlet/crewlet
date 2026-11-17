@@ -102,10 +102,8 @@ export interface AdvisorSubject {
   name?: string;
 }
 
-/**
- * One record behind a finding: a work item by key, a turn by id, a change by its
- * address or Gitlet reference (`web!42`), or a comment by id.
- */
+/** One record behind a finding: a work item by key, a turn by id, a change by its address or
+ *  Gitlet reference (`web!42`), or a comment by id. */
 export interface AdvisorRecord {
   kind: "item" | "turn" | "change" | "comment" | (string & {});
   id: string;

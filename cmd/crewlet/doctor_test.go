@@ -76,10 +76,9 @@ func TestTheDoctorPrintsKindsOrdinalsAndCountsUnlessAskedForWords(t *testing.T) 
 	}
 }
 
-// A CLASS SAID FOR SEVERAL SUBJECTS IS ONE ROW naming them all, with each
-// one's evidence, and with -words its words once and each subject's item under it.
-//
-// Mutation: print a row per finding, and the class is listed twice.
+// A CLASS SAID FOR SEVERAL SUBJECTS IS ONE ROW naming them all, with each one's evidence, and
+// with -words its words once and each subject's item under it. Mutation: print a row per
+// finding, and the class is listed twice.
 func TestTheDoctorSaysAClassOnceForEverySubject(t *testing.T) {
 	t.Parallel()
 	learns := func(seat, item string) advisor.Finding {

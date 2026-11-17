@@ -64,12 +64,9 @@ func capped(seat, turn string, tokens, rounds int64) advisor.EndedRun {
 	return advisor.EndedRun{Seat: seat, Kind: types.ExecutorErrorMaxTurns, Turn: turn, Tokens: tokens, Rounds: rounds}
 }
 
-// A SEAT WHOSE RUNS END ON THEIR ROUND CAP is the owner's to raise: twice in a
-// week, or once at a million tokens, while the cap still holds. Its records
-// are the turns, the costliest first, and its fix raises the seat's own cap.
-//
-// Mutation: drop the token floor, read a raised cap as the one the runs met,
-// or count another kind, and a row goes red.
+// A SEAT WHOSE RUNS END ON THEIR ROUND CAP is the owner's to raise: twice in a week, or once at a
+// million tokens, while the cap holds; its records are the turns, costliest first, and its fix
+// raises the seat's cap. Mutation: drop the token floor or count another kind, and a row fails.
 func TestARunEndedOnItsCapIsTheOwnersToRaise(t *testing.T) {
 	t.Parallel()
 	ev := advisor.Evidence{Runs: []advisor.EndedRun{
@@ -110,12 +107,9 @@ func TestARunEndedOnItsCapIsTheOwnersToRaise(t *testing.T) {
 	}
 }
 
-// A SEAT ITS OWN BUDGET STOPPED for half a working day while it held open work
-// is the owner's to raise, at the ceiling it was refused at; the company's
-// budget is one finding naming every seat it stopped.
-//
-// Mutation: count overlapping stops twice, drop the open-work gate, or read a
-// raised ceiling as the one refused, and a row goes red.
+// A SEAT ITS OWN BUDGET STOPPED for half a working day while it held open work is the owner's to
+// raise, at the ceiling it was refused at; the company's budget is one finding naming every seat
+// it stopped. Mutation: count overlapping stops twice or drop the open-work gate, and a row fails.
 func TestASeatStoppedOnItsBudgetWhileHoldingWorkIsTheOwnersToRaise(t *testing.T) {
 	t.Parallel()
 	at := monday.Add(-30 * time.Hour)
@@ -170,10 +164,9 @@ func replace(t *testing.T, s, old, new string) string {
 	return strings.Replace(s, old, new, 1)
 }
 
-// ONE AGENT HOLDING MOST OPEN WORK while another has little is the owner's to
-// share out: 20 items and half of what agents hold, with its queued wakes.
-//
-// Mutation: drop the idle-agent gate or count a person's items, and a row goes red.
+// ONE AGENT HOLDING MOST OPEN WORK while another has little is the owner's to share out: 20 items
+// and half of what agents hold, with its queued wakes. Mutation: drop the idle-agent gate or
+// count a person's items, and a row goes red.
 func TestOneAgentHoldingMostOpenWorkIsTheOwnersToShare(t *testing.T) {
 	t.Parallel()
 	holders := []worklet.HeldOpen{{Handle: "dev", Open: 25, Keys: []string{"ENG-1", "ENG-2"}},
@@ -271,10 +264,8 @@ func TestMergesThatWaitedForWantOfAChecksAreOnePerRepository(t *testing.T) {
 	}
 }
 
-// EVERY CLASS SAYS ONE THING ABOUT EVERY SUBJECT, so a class reads as one row
-// naming them all: what differs is the subject, the item, the facts and the
-// records. Each class here is raised for two subjects.
-//
+// EVERY CLASS SAYS ONE THING ABOUT EVERY SUBJECT, so a class reads as one row naming them all;
+// only the subject, item, facts and records differ. Each class here is raised for two subjects.
 // Mutation: put a seat's number back into a class's why, and its row splits.
 func TestEveryClassSaysOneThingAboutEverySubject(t *testing.T) {
 	t.Parallel()

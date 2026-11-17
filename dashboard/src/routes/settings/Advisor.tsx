@@ -201,10 +201,9 @@ function GoLiveCheck({ owner, unread }: { owner: AdvisorFinding[]; unread: strin
 type PageFix = { path: string[]; query?: Record<string, string>; action: string };
 
 /**
- * Where an `open_page` fix is taken, by the page the engine names and what it
- * opens on: the one gesture there, opened on arrival, so the row's action is the
- * step rather than a page to look for it on. The pages are the contract's
- * (`ADVISOR_PAGES`), held to the engine's.
+ * Where an `open_page` fix is taken, by the page the engine names and what it opens on: the one
+ * gesture there, opened on arrival, so the row's action is the step rather than a page to look for
+ * it on. The pages are the contract's (`ADVISOR_PAGES`), held to the engine's.
  */
 const PAGE_FIXES: Readonly<Record<AdvisorPage, (target: string) => PageFix | null>> = {
   backups: () => ({

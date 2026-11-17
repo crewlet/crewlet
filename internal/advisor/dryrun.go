@@ -8,10 +8,9 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
-// CheckChange applies ch to a copy of c as the dashboard sends it (merge, then
-// set) and refuses it where the copy breaks an admission rule c keeps: the
-// check an analyst's fix passes before it is listed. The entity route checks
-// it again, against the revision it is sent to, when a person previews it.
+// CheckChange applies ch to a copy of c as the dashboard sends it (merge, then set) and refuses
+// it where the copy breaks an admission rule c keeps: an analyst's fix passes it before it is
+// listed, and the entity route checks again when a person previews it.
 func CheckChange(c *config.Company, ch Change) error {
 	raw, err := json.Marshal(c)
 	if err != nil {

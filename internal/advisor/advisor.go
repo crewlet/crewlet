@@ -31,12 +31,9 @@
 //
 // # Work that stalls where nothing else says so
 //
-// stalls.go reads six more classes from the week's records: runs that end on
-// their round cap, seats a budget stopped while they held work, open work piled
-// on one agent, the item the most work waits on, ready agent work behind a
-// person, and merges a delegate allowed that waited on a person for want of a
-// required check. Every class says one thing for every subject, so it reads as
-// one row ([TestEveryClassSaysOneThingAboutEverySubject]).
+// stalls.go reads six more classes off the week's records ([ClassRoundCap] and
+// the rest). Every class says one thing for every subject, so it reads as one
+// row ([TestEveryClassSaysOneThingAboutEverySubject]).
 //
 // # What the atlas shows needs a person
 //

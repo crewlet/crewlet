@@ -99,12 +99,6 @@ func roomQueries(t *testing.T) map[string][]string {
 	return calls
 }
 
-// everySeam is a Sources with every seam present, which is what makes the
-// registry list everything this build can answer.
-//
-// The seams are only tested for nil by Register, so zero values are enough
-// and nothing here is called — this sweep is about WHICH NAMES exist, not
-// what they answer. The per-kind tests in this package cover the answers.
 // noModels is an analyst whose models never start.
 type noModels struct{}
 
@@ -112,6 +106,12 @@ func (noModels) Deps(context.Context, *config.Company) (analyst.Deps, error) {
 	return analyst.Deps{}, errors.New("no models in this sweep")
 }
 
+// everySeam is a Sources with every seam present, which is what makes the
+// registry list everything this build can answer.
+//
+// The seams are only tested for nil by Register, so zero values are enough
+// and nothing here is called — this sweep is about WHICH NAMES exist, not
+// what they answer. The per-kind tests in this package cover the answers.
 func everySeam(t *testing.T) queries.Sources {
 	t.Helper()
 	surface, _ := configSurface(t, companyDoc)

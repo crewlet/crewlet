@@ -48,13 +48,9 @@ roles:
     token_budget: {day: 1000000}
 `
 
-// ONE RUN AT A TIME, ACROSS THE FLEET, AND AN ANSWER SETS A FINDING ASIDE: a
-// press while a run is going is refused, the run's findings are recorded when
-// it ends, a wrong answer drops the same finding from the next run, and a
-// scheduled run is due once per slot.
-//
-// Mutation: skip the claim's running check, keep answered fingerprints out of
-// the next run's grounding, or read the slot off the wrong day, and a check fails.
+// ONE RUN AT A TIME, ACROSS THE FLEET, AND AN ANSWER SETS A FINDING ASIDE: a press mid-run is
+// refused, findings are recorded when it ends, a wrong answer drops the finding from the next
+// run, and a scheduled run is due once per slot.
 func TestOneRunAtATimeAndAnswersSetFindingsAside(t *testing.T) {
 	t.Parallel()
 	c, err := config.ParseCompanyDocument([]byte(serviceShape))

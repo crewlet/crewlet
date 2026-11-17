@@ -7,13 +7,9 @@ import (
 	"testing"
 )
 
-// THE ANALYST'S CHAIN IS HELD TO ASK CREWLET'S RULES, since it reads the
-// company's records as a person's assistant does: off until named, a safe
-// entry handed out, one that keeps its web tools or names no entry refused at
-// admission and by AnalystChain alike, and its bounds held.
-//
-// Mutation: drop the member check from AnalystChain or validateAdvisor, or a
-// bound, and a case goes red.
+// THE ANALYST'S CHAIN IS HELD TO ASK CREWLET'S RULES, as it reads records as a person's assistant
+// does: off until named, a safe entry handed out, one that keeps its web tools or names no entry
+// refused at admission and by AnalystChain alike, and its bounds held.
 func TestTheAnalystsChainIsHeldToAskCrewletsRules(t *testing.T) {
 	t.Parallel()
 	doc := func(entries, block string) string {

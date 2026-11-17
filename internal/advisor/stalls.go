@@ -16,10 +16,9 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// The classes of work that stalls where nothing else says so: runs that end on
-// their round cap, seats stopped on their budget, open work piled on one
-// agent, an item the most work waits on, ready agent work held behind a
-// person, and merges a delegate allowed that wait on a person for want of CI.
+// The classes of work that stalls where nothing else says so: runs ending on their round cap,
+// seats stopped on their budget, open work piled on one agent, the item most work waits on, ready
+// agent work held behind a person, and delegate-allowed merges waiting on a person for want of CI.
 const (
 	ClassRoundCap         Class = "run.round_cap"
 	ClassBudgetStopped    Class = "budget.stopped"
@@ -200,10 +199,9 @@ func at(path config.Path, fields string) string {
 	return path.String() + "." + fields
 }
 
-// budgetStopped is one finding per agent seat its own budget stopped for
-// [minStoppedHours] or more while it held open work, and one for the company
-// where the company's budget did, naming every seat it stopped. A ceiling
-// raised past the one a turn was refused at is fixed.
+// budgetStopped is one finding per agent seat its own budget stopped for [minStoppedHours] or
+// more while it held open work, and one naming every seat the company's budget stopped. A
+// ceiling raised past the one a turn was refused at is fixed.
 func budgetStopped(c *config.Company, ev Evidence) []Finding {
 	held := map[string]worklet.HeldOpen{}
 	for _, h := range ev.Work.Open.Holders {

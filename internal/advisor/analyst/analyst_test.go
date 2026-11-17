@@ -73,13 +73,9 @@ func finding(records []map[string]any, facts []map[string]any, fix map[string]an
 		"item": "900K of 1M tokens", "records": records, "facts": facts, "fix": fix}
 }
 
-// THE ANALYST FINDS A PLANTED PROBLEM NO RULE NAMES, cites its records and
-// numbers from its own reads, and offers a change that checks; a finding that
-// cites a record it never read, a number its reads do not hold, or nothing, is
-// dropped and counted, never listed.
-//
-// Mutation: skip the record check, the number check or the evidence check in
-// advisor.Ground, and a dropped finding is listed.
+// THE ANALYST FINDS A PLANTED PROBLEM NO RULE NAMES, citing records and numbers from its own
+// reads, with a change that checks; one citing an unread record, a number its reads lack, or
+// nothing, is dropped and counted. Mutation: skip a check in advisor.Ground, and it is listed.
 func TestTheAnalystListsOnlyWhatItsOwnReadsShow(t *testing.T) {
 	t.Parallel()
 	d := planted(t)

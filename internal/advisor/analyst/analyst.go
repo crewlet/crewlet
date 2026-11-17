@@ -1,19 +1,6 @@
-// Package analyst runs the setup advisor's analyst: one model run over the
-// week's records, served as read tools, that submits findings the engine then
-// grounds ([advisor.Ground]) before anything is listed (ADR-0157).
-//
-// # What the model reads
-//
-// Only the tools in tools.go, each over [Data], the same reads `GET /advisor`
-// makes: numbers, closed words, times, handles and record ids. No comment,
-// message, title or transcript is served, so words somebody wrote cannot steer
-// what the administrator is told; a person opens the records to read them.
-//
-// # What bounds a run
-//
-// The company's own model entries (`advisor.analyst.llm`), a token ceiling of
-// its own ([ceilingMeter]) inside the company's budget, never a seat's, a
-// bounded number of rounds, and two submissions.
+// Package analyst runs the setup advisor's analyst (ADR-0157): one run on the company's own
+// models over tools.go's reads of [Data] (numbers, closed words and record ids, never anyone's
+// words), bounded by [ceilingMeter], whose findings [advisor.Ground] checks before any is listed.
 package analyst
 
 import (
