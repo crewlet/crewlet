@@ -189,6 +189,8 @@ type callRec struct {
 	started time.Time
 	took    time.Duration
 	result  ToolResult
+	// images is what result's images were; result keeps none of their bytes.
+	images  []mcp.ImageRecord
 	settled bool
 	// refused marks a call answered without running.
 	refused bool
@@ -765,7 +767,7 @@ func (d *dispatcher) call(r *run, in toolsession.Call) toolsession.Result {
 	select {
 	case res := <-result:
 		d.frame()
-		return d.withheld(c.run, toolsession.Result{Output: res.Output, Failed: res.Failed})
+		return d.withheld(c.run, toolsession.Result{Output: res.Output, Failed: res.Failed, Images: res.Images})
 	case <-timeout:
 		d.parkLocally(c)
 		return d.withheld(c.run, toolsession.Result{Output: stillRunning})
@@ -1351,6 +1353,9 @@ func (d *dispatcher) settleLocked(c *callRec, res ToolResult, refused bool) {
 	if c.settled {
 		return
 	}
+	// THE BYTES ARE THE ANSWER'S, NOT THE RECORD'S: kept as what they were,
+	// so a phase of many calls holds no picture past its answer.
+	c.images, res.Images = mcp.ImageRecords(res.Images), nil
 	c.result, c.settled, c.refused = res, true, refused
 	d.awaitedLocked(c, false)
 	d.cond.Broadcast()

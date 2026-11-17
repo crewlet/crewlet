@@ -30,7 +30,6 @@ import {
   Tooltip,
   type DataGridColumn,
 } from "@crewlethq/ui";
-import { UsersGlyph } from "@crewlethq/icons/glyphs";
 import type {
   McpAgentServer,
   McpAgentTools,
@@ -217,7 +216,7 @@ export function AgentsView({ data }: { data: McpData }) {
     <div className="mcp-page">
       <AgentsNotes agents={answer.agents} budget={answer.tool_budget} servers={data.servers} />
       <Card padding="none">
-        <Card.Header icon={<UsersGlyph size="sm" />} count={answer.agents.length || undefined}>
+        <Card.Header count={answer.agents.length || undefined}>
           <Card.Title>Agents by server</Card.Title>
         </Card.Header>
         {answer.agents.length > 0 ? (
@@ -284,7 +283,7 @@ function EffectiveTools({
   const levels = useLevelsOf(names);
   return (
     <Card padding="none">
-      <Card.Header icon={<UsersGlyph size="sm" />}>
+      <Card.Header>
         <Card.Title>{agent.name}'s tools</Card.Title>
       </Card.Header>
       <Card.Body>

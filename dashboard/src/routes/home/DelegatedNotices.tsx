@@ -15,7 +15,7 @@
 
 import { useState } from "react";
 import { ButtonLink, Callout, IconButton } from "@crewlethq/ui";
-import { FlagGlyph, ListChecksGlyph, XGlyph } from "@crewlethq/icons/glyphs";
+import { XGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
@@ -57,7 +57,7 @@ export function DelegatedNotices({ viewer }: { viewer: Pick<ViewerState, "owner"
       {flagged && (
         <Callout
           variant="warning"
-          icon={<FlagGlyph size="md" />}
+
           title={`A delegate flagged ${requests(flaggedRows.length, data.flagged_more)} as harmful`}
           action={
             <span className="row gap-1">
@@ -84,7 +84,7 @@ export function DelegatedNotices({ viewer }: { viewer: Pick<ViewerState, "owner"
       {digest && (
         <Callout
           variant="info"
-          icon={<ListChecksGlyph size="md" />}
+
           title={`Delegates decided ${requests(decidedRows.length, data.decided_more)} yesterday`}
           action={
             <span className="row gap-1">

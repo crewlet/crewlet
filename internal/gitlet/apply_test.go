@@ -136,7 +136,7 @@ func (e *estate) applyRows(b built) (int, error) {
 }
 
 // countersMatchRows holds every count code_repos keeps of a repository's refs
-// to a COUNT of the rows themselves.
+// and of its changes by state to a COUNT of the rows themselves.
 func (e *estate) countersMatchRows(id string) {
 	e.t.Helper()
 	for counter, count := range map[string]string{
@@ -149,6 +149,13 @@ func (e *estate) countersMatchRows(id string) {
 		rows := e.num(`SELECT COUNT(*) FROM code_refs WHERE repo_id = ? AND `+count, id)
 		if kept != rows {
 			e.t.Errorf("%s counts %d %s and its refs hold %d", id, kept, counter, rows)
+		}
+	}
+	for i, state := range []ChangeState{ChangeStateDraft, ChangeStateOpen, ChangeStateClosed, ChangeStateMerged} {
+		kept := e.changeCountsOf(id)[i]
+		rows := e.num(`SELECT COUNT(*) FROM code_changes WHERE repo_id = ? AND state = ?`, id, string(state))
+		if kept != rows {
+			e.t.Errorf("%s counts %d %s changes and its changes hold %d", id, kept, state, rows)
 		}
 	}
 }
@@ -714,6 +721,7 @@ func (e *estate) seed(id string, pushes, refs, packs int) {
 	}
 	e.exec(`UPDATE code_repos SET refs = refs + ?, branches = branches + ? WHERE id = ?`, refs, refs, id)
 	e.seedPacks(id, 0, packs)
+	e.recountActivity(id)
 }
 
 // seedPacks writes n live packs of a repository straight into the estate, the
@@ -751,6 +759,7 @@ func (e *estate) seedWeighed(id string, n, width int) {
 			received_at, row_bytes)
 		SELECT printf('%s-weighed-%06d', ?, i), ?, i + 1, i, 'seed', 'operator', 'git', '[]', 0, ? FROM k`,
 		n, id, id, width)
+	e.recountActivity(id)
 }
 
 // exec runs one statement in a writer transaction — a case's hand-built row,
@@ -964,6 +973,7 @@ func TestAPurgePartIsBoundedByWhatItsChangesWeigh(t *testing.T) {
 			}
 			e.seedWeighedChanges("repo-a", seeded, width)
 			e.apply(partOf(t, "repo-a", 1))
+			e.changeCountsMatchRows()
 			if left := e.num(`SELECT COUNT(*) FROM code_pushes WHERE repo_id = 'repo-a'`); left != 0 {
 				t.Fatalf("the part left %d of its %d pushes, which fit its bytes and go first", left, tc.pushes)
 			}
@@ -1102,7 +1112,8 @@ func TestAPurgeLeavesOnlyItsMarker(t *testing.T) {
 		Purge{RepoID: "repo-a", Name: "a", Reason: "past retention"})
 	e.apply(purge)
 	for _, table := range []string{"code_repos", "code_refs", "code_packs", "code_pushes", "code_protections",
-		"code_packs_retired", "code_ref_drops", "code_layers", "code_layer_parts", "code_tips_due"} {
+		"code_packs_retired", "code_ref_drops", "code_layers", "code_layer_parts", "code_tips_due",
+		"code_push_days", "code_pusher_days"} {
 		column := "repo_id"
 		if table == "code_repos" {
 			column = "id"

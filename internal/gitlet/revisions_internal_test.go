@@ -219,11 +219,14 @@ func TestAnEntryTakenBackLeavesTheBookAsItFoundIt(t *testing.T) {
 		// readiness of the change it merged and of the one it closed, which
 		// the apply clears ([clearReadiness]) and the book counts a row each
 		// whether or not it holds an answer, since the book reads no
-		// mergeability ([changeBook.rowCount]).
+		// mergeability ([changeBook.rowCount]); and the tally row the states it
+		// moves are counted in, which the decide holds the record to
+		// ([changeBook.decidedRows]).
 		rows, moved := book.alone(tried[0])
-		if rows != 10 || moved != 4 {
-			t.Errorf("entry %s alone writes %d rows of %d changes, want 10 of 4: four changes, two revisions, "+
-				"two authors and the readiness of the two it merged and closed", tried[0].PushID, rows, moved)
+		if rows != 10+tallyRows || moved != 4 {
+			t.Errorf("entry %s alone writes %d rows of %d changes, want %d of 4: four changes, two revisions, "+
+				"two authors, the readiness of the two it merged and closed and the tally row their states "+
+				"move", tried[0].PushID, rows, moved, 10+tallyRows)
 		}
 		if diff := stateOf(book).differs(before); diff != "" {
 			t.Errorf("weighing entry %s alone left the book's %s other than it found them", tried[0].PushID, diff)

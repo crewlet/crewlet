@@ -294,6 +294,12 @@ var modelCalls = map[string]modelCall{
 	"internal/providers/llm/harness/doctor.go:probeRequest": {
 		none: "every probe the doctor sends (the smoke test, the shell probe and " +
 			"the web probe) asks a fixed prompt the engine wrote"},
+	// The summary of a conversation's earlier messages: the cards they showed
+	// read fenced under the call's token, and the summary defused.
+	"internal/assistant/summary.go:summaryRequest": {tests: []string{
+		"internal/assistant.TestASummaryReadsWhatItsMessagesShowedFencedUnderATokenOfItsOwn",
+		"internal/assistant.TestALongConversationIsSummarizedForItsNextTurn",
+	}},
 	"internal/assistant/conversations.go:nameConversation": {
 		none: "it titles a person's own conversation from their question and the " +
 			"assistant's answer to it, which the assistant wrote for them after reading " +

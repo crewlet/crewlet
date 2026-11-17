@@ -124,7 +124,7 @@ func buildBriefMessages(in promptInput) []llm.Message {
 	system.WriteString("\n\n")
 	system.WriteString(briefPersonBlock(in))
 	out := []llm.Message{{Role: llm.RoleSystem, Content: system.String()}}
-	out = append(out, historyMessages(in.History)...)
+	out = append(out, historyMessages(in.History, in.Summary)...)
 	return append(out, llm.Message{Role: llm.RoleUser, Content: briefQuestion(in)})
 }
 

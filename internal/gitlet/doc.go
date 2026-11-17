@@ -25,6 +25,11 @@
 // subject and by nothing else, receive-pack never runs in a cache, and git is
 // told `ok` only from a push's applied row (ADR-0084).
 //
+// A LISTING OF REPOSITORIES (repolisting.go, apply_repotallies.go) is read by name or by last
+// push over an index of each kind, with each row's card read where asked; code_repo_tallies
+// counts the repositories by owner, visibility, kind and status, kept by the lifecycle applies
+// and re-derived by the applier.
+//
 // # The bundle is the permanent format, and no stored pack reaches 2 GiB
 //
 // One object a push — one PUT, and one GET on every Gitlet node that installs it,
@@ -162,7 +167,9 @@
 // state (replicated 0097), a repository's, the company's in a state —
 // newest first, testing every filter that index does not seek on the rows the
 // page read, so a page is the rows it read and never scans past its limit
-// for the few it keeps. One change ([ReadChange]) is read by its number on
+// for the few it keeps. A live state asked by when its changes moved
+// ([ChangeSortUpdated]) walks its lifecycle's and its conversations' indexes
+// in step (changesort.go). One change ([ReadChange]) is read by its number on
 // its repository, its revisions paged newest first beside it. Both are held to
 // the asker's grant on the change's repository ([JudgeRead]): a listing that
 // names a repository, and a read of one change, are refused whole where the
@@ -176,6 +183,10 @@
 // where each finding is in the revision asked about, and the floor those
 // reads by object id are asked at — is decided once, over those rows
 // (revisionread.go), for every surface that shows it.
+//
+// ITS COUNTS (apply_counts.go, counts.go): code_repos counts each repository's changes by
+// state and code_change_tallies those in use by owner and visibility, kept by every apply and
+// re-derived when their rules change; a counts read sums the tallies the asker's grant reads.
 //
 // # A change's conversation is rows on its own subject
 //
@@ -235,7 +246,13 @@
 // owners on its chart, asks those who may review (code_reviewers, reason
 // [ReviewerPathOwner]), skips the rest by [SkipReason], and stamps whom else
 // the facts concern, so the apply judges nothing again; code_revision_facts
-// keeps one row a revision, and a change read's revisions carry it.
+// keeps one row a revision, and a change read's revisions carry it. Since
+// [OwnedPathsVersion] it carries when its home read the facts
+// ([Revise.MeasuredAt]) and each matched owner's globs ([MatchedOwner], none
+// where the revision touches all); the writer stamps the globs each ask is for
+// ([OwnerAsk], code_reviewers.owned_paths), and the facts keep each owner's
+// first glob and how many more ([TouchedOwner]), which the merge gate's
+// sentence names.
 //
 // A CHANGE'S MERGE READINESS IS JUDGED, NEVER TRUSTED (readiness.go): one pure
 // [ReadinessOf] over the rows one snapshot holds and the chart one epoch holds
@@ -298,6 +315,14 @@
 // so moves only by a merge whose preconditions one snapshot proved, or by a
 // person's own push under direct_push persons, which is that person's recorded
 // override; never by a seat's push, which every protection refuses.
+//
+// A LISTING'S CARDS (changecards.go): asked with [ReadQuery.Cards], each listed change's
+// conversation counts, its reviewers' faces, its head's [CheckRollup] and a recent
+// ejection, a statement a part over the page's ids and one rollup a head.
+//
+// A CHANGE'S PAGE (changepage.go): its detail names its participants, a reviewer row when the
+// record behind it landed (one notice of that record, none past the notices' horizon), a finding
+// when its review landed, and [ReadQuery.FindingPaths] counts its findings by path.
 //
 // # A change wakes the seats its records concern
 //
@@ -601,7 +626,11 @@
 // measured, # Measured); and an index
 // of each executor's pushes, where a collected run's report scans its
 // repositories' pushes since its launch ([ReadRunPushes], below) — some 40
-// to 100 bytes a push each, 1.8 to 4.5 GB each at 250 000 pushes a day. A
+// to 100 bytes a push each, 1.8 to 4.5 GB each at 250 000 pushes a day. Its
+// pushes counted by day hold a row a repository and UTC day, about 200 bytes
+// whatever its rate (some 360 MB at 10 000 repositories pushed daily), and by
+// pusher a row a pusher, repository and day, about 170 bytes (some 0.9 GB at
+// three pushers a repository a day): code_push_days and code_pusher_days. A
 // forced update or a deletion leaves one row more, its ref drop, a commit id and a
 // ref without the history row's commands, kept [PruneGrace] — two weeks of
 // such commands, against the history's half year of every push — and longer
@@ -852,6 +881,10 @@
 // level its caller states: a comparison's two sides cost one barrier, and are
 // read at one moment.
 //
+// A refs listing is also read by when each branch moved (code_refs_moved_idx,
+// replicated 0170), narrowed by a bounded find ([MaxRefsScanned]), and in detail
+// ([RefListing]): its mover, protection, change and the asker's deletion verdict.
+//
 // A repository's PUSHES are read in LOG ORDER: code_pushes_repo_idx is keyed
 // (repo_id, position, push_id) (replicated 0084), because a record's
 // instant is the broker's and steps back across a stream leader's change, so
@@ -903,13 +936,14 @@
 // asked of first is the estate router's: the repository's HOME, the first of
 // its rendezvous order over the live Gitlet nodes (ADR-0089).
 //
-// Two of those reads answer with text git leaves unbounded: a path's HISTORY
+// Three of those reads answer with text git leaves unbounded: a path's HISTORY
 // ([GitLog], its literal [LogQuery.Grep] matched by the Gitlet node, never by
-// git) and a file's BLAME ([GitBlame]). Each such field — a commit's subject,
-// its author's name and address, its parents, a blamed line — is DESCRIBED BY
-// ITS SIZE past its bound, never cut ([MaxLogSubjectBytes] and its kin, each of
-// the field's encoded size), so the widest commit, and the widest line with its
-// commit, always fit one page. A kind is an estate request's and no record's,
+// git), a file's BLAME ([GitBlame]) and a directory's LAST COMMITS
+// ([GitTreeCommits]), whose commits are a history's. Each such field (a
+// commit's subject, its author's name and address, its parents, a blamed line)
+// is DESCRIBED BY ITS SIZE past its bound, never cut ([MaxLogSubjectBytes] and
+// its kin, each of the field's encoded size), so the widest commit, and the
+// widest line with its commit, always fit one page. A kind is an estate request's and no record's,
 // so a kind added moves no [RecordVersion].
 //
 // # An engine write is built on a Gitlet node and lands as a push
@@ -933,15 +967,17 @@
 //
 // # A change's revisions are read by the ids their rows record
 //
-// Three of those reads are of a change's revisions: a revision's FACTS against
+// Four of those reads are of a change's revisions: a revision's FACTS against
 // its target ([GitRevisionFacts]) — its merge base, the trees of its base and
 // its head, the files it touches and their classes, and the patch-id of its
 // diff, the engine's own read, which its repository's home asks naming no
 // asker ([GitReadKind.EnginesOwn]) — where lines anchored in
-// one revision are in another ([GitReanchor]), and what the change changed
-// between two ([GitInterdiff]). Each names its commits by the whole ids the
-// rows record, never an abbreviation: an interdiff compares two revisions'
-// bases as ids, which an abbreviation would make two spellings of one commit.
+// one revision are in another ([GitReanchor]), what the change changed
+// between two ([GitInterdiff]), and the lines around a finding's range with
+// that revision's diff marks ([GitExcerpts]). Each names its commits by the
+// whole ids the rows record, never an abbreviation: an interdiff compares two
+// revisions' bases as ids, which an abbreviation would make two spellings of
+// one commit.
 // A revision's touched list is bounded by [MaxTouchedPaths] and by
 // [MaxTouchedBytes] of JSON, so the facts that carry it are one page; past
 // either the revision touches all. And [Reanchor] is the one rule that places
@@ -1155,7 +1191,7 @@
 //     one push of [MaxCommandsPerPush] forced updates. That keeps pace with
 //     one such push a record, and with deletions while their tombstones are
 //     not yet due; it falls behind a record the committer fills with them —
-//     some 1 900 drops a record of forced updates, up to 1 246 a record of
+//     some 1 894 drops a record of forced updates, up to 1 242 a record of
 //     deletions whose tombstones come due in turn, four behind one push of a
 //     thousand of those — and what it falls behind by waits for records with
 //     room, up to MaxRecordRows-4 a record, so the drops past the grace grow
@@ -1223,6 +1259,12 @@
 //     and a delta is never replaced by a full answer carrying them again
 //     beside every row; only those the full answer cannot serve weigh against
 //     the delta alone.
+//
+// THE PUSHES ARE COUNTED AS THEY LAND AND GO (apply_activity.go):
+// code_push_days by UTC day and quarter-hour and code_pusher_days by pusher
+// and day, moved by the push apply, the history's horizon and a purge part
+// alike, so they hold what the history holds, and a read folds them at the
+// asker's own day bounds.
 //
 // # A compaction merges packs, decided alone
 //
@@ -1483,7 +1525,7 @@
 //
 // A PUSH RECORD (BenchmarkApplyAPushRecord, one run): 86–94 ms for the most
 // ref creations a record the committer forms carries (three pushes of
-// [MaxCommandsPerPush] and a fourth of the 926 its row bound leaves, 3 935
+// [MaxCommandsPerPush] and a fourth of the 921 its row bound leaves, 3 932
 // rows, against a repository of 10 000 refs), and no slower, 86–95 ms, with
 // [HorizonDeletesPerRecord] expired push rows of the widest a row can be
 // (461 000 bytes) waiting — because the history's removal stops at
@@ -1503,9 +1545,9 @@
 // average of 0.8–1.1, each arm interleaved with the build before the drops
 // and the build that gave them a second index, where the sweep of 3 995
 // tombstones above took 40 ms in all three against the Xeon's 53–61: 57 ms
-// for the most deletions a record the committer forms carries (1 310 in two
+// for the most deletions a record the committer forms carries (1 309 in two
 // pushes) at a repository holding [MaxTombstonesPerRepo] expired tombstones,
-// which writes its 1 310 tombstones and as many drops and sweeps the 1 374
+// which writes its 1 309 tombstones and as many drops and sweeps the 1 376
 // its rows leave — every row of MaxRecordRows touched, as the build before's
 // shape of 1 965 deletions counted twice did in 67 ms in the same run (96–105
 // ms on the Xeon); 73 ms with the widest expired push rows waiting as well,
@@ -1572,7 +1614,7 @@
 // of about 4–7 — interleaved with the build before it, two rounds): 172–189
 // ms for the most live changes one record moves — a push of
 // [MaxCommandsPerPush] fast-forwards of changes' sources by their author and
-// one deleting the sources of the 232 more its rows leave, 1 232 changes
+// one deleting the sources of the 231 more its rows leave, 1 231 changes
 // written back beside a thousand revisions, the refs and the deletions'
 // drops — the longest shape a record the committer forms has, at seven
 // tenths to three quarters of statelog.ApplyTxTimeBudget; and 19–26 ms for a
@@ -1656,6 +1698,27 @@
 // for a part that cuts one change through 2 998 of its notices, oldest first;
 // and 50–58 ms for the final purge over twenty-nine such changes, with the
 // rules — each deleted notice read back by its own delete to announce it.
+//
+// THE PUSH ACTIVITY (code_push_days and code_pusher_days; four counts of one
+// iteration on a 12-core build server shared with other builds, where before
+// them one push took 6.2-11.7 ms, the group 13.6-28.9, maximal+history
+// 201-255 and the narrow part 76-98): one push 7.7-14.2 ms; a group of
+// [MaxPushesPerRecord] 22.3-32.6 ms, and 16.3-31.7 by as many seats, a pusher
+// day each; one push whose horizon takes [HorizonDeletesPerRecord] rows each
+// on a day and by a pusher of its own, the widest move, 27.7-39.2 ms;
+// maximal+history 195-258 ms, unchanged. A purge part: narrow 112-141 ms, the
+// delete answering each row it takes; 234-290 ms for [PurgePartRows] pushes
+// over 182 days each by its own pusher, 3 182 keys moved on top, the widest
+// part; 19-26 ms for a part taking PurgePartRows rows no push stands for. A
+// listing's sparks (BenchmarkARepositoryListingAnswersItsSparks): 52-77 ms for
+// a page of [MaxSparkReposPerPage] over 16 days of every quarter-hour counted,
+// against 214-305 ms at [MaxReposPerPage], past a tenth of
+// statelog.ReadBudget, so such a listing is held to the first; a detail's
+// spark and pushers 5.7-12.6 ms. The re-derivation
+// (BenchmarkRederiveThePushActivity): 21-22 µs a push row writing every
+// activity row, as an upgrade's first boot does, and 17-19 µs reading kept
+// rows: about 12 s for the reference company's 543 000 push rows and some 16
+// minutes for 0091's 45 million, once a node at each [DerivationVersion].
 //
 // A RETIRE SWEEP (BenchmarkApplyARetireSweep, the record applied and
 // committed; BenchmarkRetireSweepStep, the whole step — the decide's read,

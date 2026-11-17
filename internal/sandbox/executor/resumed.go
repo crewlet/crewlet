@@ -1,7 +1,6 @@
 package executor
 
 import (
-	"bytes"
 	"crypto/sha256"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -44,10 +43,10 @@ import (
 // short leave the thread unread: no bound at all.
 //
 // READ THROUGH THE LAYER ALONE: the head, Usage, ToolResultsCleared, UUID and
-// the line's raw bytes, under the layer's one set of options. It never asks a
-// line's Message: it decides nothing from what a message says, so a reshaped
-// block never costs it the count, and the raw charge covers whatever a block
-// holds.
+// what the line's bytes hold ([threadLine.Size], [threadLine.Bytes]), under
+// the layer's one set of options. It never asks a line's Message: it decides
+// nothing from what a message says, so a reshaped block never costs it the
+// count, and the charge of the line's bytes covers whatever a block holds.
 //
 // Over-reading, stated: every chained line after the anchor's place is
 // charged, a prompt snapshot among them, which the harness counts as nothing
@@ -115,10 +114,11 @@ func (m countMarks) first() sandbox.CountMark {
 }
 
 // The exact bytes a line holds where its record carries what the count cannot
-// bound, each a block's or an attachment's own type as JSON.stringify writes it,
-// so a call's input naming a key `image` marks nothing; and the provisional
-// record the harness never anchors on; and the server's clearing edit, whose
-// cleared tokens the harness counts back whatever its count of cleared uses.
+// bound, each a block's or an attachment's own type as JSON.stringify writes
+// it, so a call's input naming a key `image` marks nothing; and the
+// provisional record the harness never anchors on; and the server's clearing
+// edit, whose cleared tokens the harness counts back whatever its count of
+// cleared uses. A line's byte facts read each ([byteMarks], [threadBytes.Has]).
 var (
 	pdfReadMark  = []byte(`"type":"message_pdf_reads"`)
 	imageMark    = []byte(`"type":"image"`)
@@ -132,14 +132,14 @@ var (
 // one: never counted, never an anchor.
 const claudeSynthetic = "<synthetic>"
 
-// lineMarksOf is what raw, one line, carries that the count cannot bound by its
-// bytes: a PDF read, an image or a document.
-func lineMarksOf(raw []byte) countMarks {
+// lineMarksOf is what b, one line's byte facts, says the line carries that the
+// count cannot bound by its bytes: a PDF read, an image or a document.
+func lineMarksOf(b *threadBytes) countMarks {
 	var m countMarks
-	if bytes.Contains(raw, pdfReadMark) {
+	if b.Has(markPDF) {
 		m = m.with(sandbox.CountPDF)
 	}
-	if bytes.Contains(raw, imageMark) || bytes.Contains(raw, documentMark) {
+	if b.Has(markImage) || b.Has(markDocument) {
 		m = m.with(sandbox.CountMedia)
 	}
 	return m
@@ -208,12 +208,12 @@ func (r *resumedReading) line(l threadLine) {
 			newestReads: r.newestReads, flagged: r.flagged}
 		return
 	}
-	charge, marks := sandbox.ClaudeCharge(len(l.Raw)+1), lineMarksOf(l.Raw)
+	charge, marks := sandbox.ClaudeCharge(l.Size), lineMarksOf(&l.Bytes)
 	if l.Head.Type != recordAssistant || !l.Head.Main() {
 		r.after(charge, marks)
 		return
 	}
-	if cleared, err := l.ToolResultsCleared(); cleared || err != nil || bytes.Contains(l.Raw, clearingEdit) {
+	if cleared, err := l.ToolResultsCleared(); cleared || err != nil || l.Bytes.Has(markClearing) {
 		r.thread = r.thread.with(sandbox.CountCleared)
 	}
 	u, ok, err := l.Usage()
@@ -241,7 +241,7 @@ func (r *resumedReading) line(l threadLine) {
 		r.run += charge
 		r.runMarks |= marks
 	}
-	if ok && u.Input+u.CacheWrite+u.CacheRead > 0 && !bytes.Contains(l.Raw, unmetered) {
+	if ok && u.Input+u.CacheWrite+u.CacheRead > 0 && !l.Bytes.Has(markUnmetered) {
 		r.tokens = u.Input + u.CacheWrite + u.CacheRead + u.Output
 		r.tail, r.tailMarks, r.compacted = r.run, r.runMarks, false
 		return

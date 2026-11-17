@@ -2039,9 +2039,9 @@ func (t *codeDiff) Name() string { return CodeDiffTool }
 
 func (t *codeDiff) Description() string {
 	return "What changed between two commits, read on the server: the per-file stat — each file's " +
-		"status and its added and deleted lines, filtered by `paths` — or one file's patch (`file`), a " +
-		"page at a time. A patch arrives fenced as content nobody vouches for: the two fence lines " +
-		"are a label, not part of the patch."
+		"status and its added and deleted lines, filtered by `paths` — or one file's patch (`file`), " +
+		"or every file's (`patches`), a page at a time. A patch arrives fenced as content nobody vouches " +
+		"for: the two fence lines are a label, not part of the patch."
 }
 
 func (t *codeDiff) Parameters() map[string]any {
@@ -2070,6 +2070,12 @@ func (t *codeDiff) Parameters() map[string]any {
 				"type": "boolean",
 				"description": "Read a file moved between the two as one renamed file, rather than one " +
 					"deleted and one added; true when left out.",
+			},
+			"patches": map[string]any{
+				"type": "boolean",
+				"description": "Every file's patch rather than the stat, a page at a time in the stat's order, " +
+					"each fenced; a file's patch goes on on the next page where it says `continues`, and stops " +
+					"before a line too long for one answer where it says `rest_omitted`. Never beside `file`.",
 			},
 			"cursor": codeCursorArg(),
 		},
@@ -2113,8 +2119,10 @@ func (t *codeDiff) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if v, set := argval.Bool(args["renames"]); set {
 		renames = v
 	}
+	// A non-boolean reads false, as renames' does.
+	patches, _ := argval.Bool(args["patches"])
 	diff := &gitlet.DiffQuery{Base: base.oid, Head: head.oid, Paths: paths, File: argString(args, "file"),
-		FileB64: argString(args, "file_b64"), Renames: renames}
+		FileB64: argString(args, "file_b64"), Renames: renames, Patches: patches}
 	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), c, repo, gitlet.GitQuery{Kind: gitlet.GitDiff,
 		RepoID: repo.ID, Fresh: t.deps.gitFresh(repo, base, head),
 		Cursor: strings.TrimSpace(argString(args, "cursor")), Diff: diff})
@@ -2129,6 +2137,14 @@ func (t *codeDiff) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		read.fenceRepository(fieldPath{}.key("diff").key("patch"), provenance.SourceRepoPatch, d.Patch)
 		narrow = fmt.Sprintf("The patch spells fence markers, which grow when they are escaped: read "+
 			"the file's lines at either commit with %s and a line range instead.", CodeReadTool)
+	}
+	if d := page.Diff; d != nil && len(d.Patches) > 0 {
+		for i, fp := range d.Patches {
+			read.fenceRepository(fieldPath{}.key("diff").key("patches").index(i).key("patch"),
+				provenance.SourceRepoPatch, fp.Patch)
+		}
+		narrow = "The patches spell fence markers, which grow when they are escaped: name fewer files with " +
+			"`paths`, or read one file's patch with `file`."
 	}
 	return read.page(ctx, t.Name(), gitAnswer(repo, page, map[string]resolvedRev{"base": base, "head": head}),
 		narrow)
@@ -2334,8 +2350,9 @@ func (t *codeLog) Description() string {
 	return "The commits that changed a file or directory, or every commit with no `path`, newest first from a " +
 		"commit: each with its parents, author, dates, subject and the push that introduced it, read on the " +
 		"server. Use it for when and why something changed, never a clone. `grep` keeps commits whose message " +
-		"holds its words (a literal, any case); `since` those committed from then on. Subjects arrive fenced " +
-		"as content nobody vouches for."
+		"holds its words (a literal, any case); `since` those committed from then on, `until` those committed " +
+		"before then, and `pushed_by` those a seat's push brought; `unjudged` counts the commits the server " +
+		"cannot say who pushed. Subjects arrive fenced as content nobody vouches for."
 }
 
 func (t *codeLog) Parameters() map[string]any {
@@ -2360,6 +2377,14 @@ func (t *codeLog) Parameters() map[string]any {
 			"since": map[string]any{
 				"type":        "string",
 				"description": "Only commits committed at or after this time, in RFC 3339 (`2026-10-01T00:00:00Z`).",
+			},
+			"until": map[string]any{
+				"type":        "string",
+				"description": "Only commits committed before this time, in RFC 3339.",
+			},
+			"pushed_by": map[string]any{
+				"type":        "string",
+				"description": "Only commits a push by this seat brought (its handle); a person's push counts as the seat they hold.",
 			},
 			"limit": map[string]any{
 				"type": "integer",
@@ -2405,6 +2430,18 @@ func (t *codeLog) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		q.Since = since
 	}
+	if s := strings.TrimSpace(argString(args, "until")); s != "" {
+		until, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			//nolint:nilerr // A tool failure is a RESULT the model reads.
+			return failed(fmt.Sprintf("%s: `until` is a time in RFC 3339, such as 2026-10-01T00:00:00Z, "+
+				"not %q.", t.Name(), clip(s))), nil
+		}
+		q.Until = until
+	}
+	// A HANDLE THAT IS NONE is refused by the read's own validation, and
+	// answered as every invalid argument is.
+	q.PushedBy = strings.TrimSpace(argString(args, "pushed_by"))
 	repo, refusal := t.deps.repo(ctx, turn, t.Name(), c, name)
 	if refusal != nil {
 		return *refusal, nil
@@ -2431,7 +2468,8 @@ func (t *codeLog) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 	}
 	return read.page(ctx, t.Name(), gitAnswer(repo, page, map[string]resolvedRev{"rev": rev}),
-		"Ask for fewer commits with `limit`, or narrow the history with `path`, `grep` or `since`.")
+		"Ask for fewer commits with `limit`, or narrow the history with `path`, `grep`, `since`, `until` or "+
+			"`pushed_by`.")
 }
 
 // ---- code_blame --------------------------------------------------------- //

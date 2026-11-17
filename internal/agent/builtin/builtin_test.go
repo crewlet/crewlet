@@ -315,8 +315,11 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		// are reads, and every write is read by the people the artifact is
 		// shared with; a folder made or an artifact filed is where a whole
 		// team finds its work.
-		builtin.ListArtifactsTool:        false,
-		builtin.GetArtifactTool:          false,
+		builtin.ListArtifactsTool: false,
+		builtin.GetArtifactTool:   false,
+		// AND THE RENDER, a read whose screenshots go to the caller's own
+		// box alone.
+		builtin.RenderArtifactTool:       false,
 		builtin.DashboardSourcesTool:     false,
 		builtin.ArtifactFormatTool:       false,
 		builtin.CompanyBrandTool:         false,
@@ -328,6 +331,12 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.UploadArtifactAssetTool:  true,
 		builtin.CreateArtifactFolderTool: true,
 		builtin.MoveArtifactTool:         true,
+		// A thread's words are read by everybody the artifact is shared with.
+		builtin.ListArtifactCommentsTool:   false,
+		builtin.CommentOnArtifactTool:      true,
+		builtin.ResolveArtifactCommentTool: true,
+		builtin.EditArtifactCommentTool:    true,
+		builtin.RemoveArtifactCommentTool:  true,
 
 		// THE DATASTORE: its two reads are reads, and a row or a schema
 		// written is what everybody the sheet is shared with sees.
@@ -1191,6 +1200,10 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// AND THE DATASTORE BESIDE IT, which the four data tools take
 		// with the artifacts half.
 		ArtifactData: artifactDataDeps(newFakeData()),
+		// AND THE RENDER, a seat's alone, over a renderer that answers
+		// nothing and no box.
+		Render: builtin.RenderDeps{Renderer: &fakeRenderer{},
+			Turns: builtin.NewRenderTurns(func() time.Time { return fakeAt })},
 		// AND GITLET, whose twelve read tools register only over
 		// Gitlet and the requester ceiling's halves beside it, and whose
 		// writes only where its writes are wired too: left out, every walk over

@@ -35,7 +35,7 @@
  * else is told so by the engine's refusal.
  */
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Button,
   Card,
@@ -60,16 +60,12 @@ import {
 import { Modal } from "~/components/Modal.tsx";
 import {
   ArrowRightGlyph,
-  BadgeCheckGlyph,
   ChevronLeftGlyph,
   ChevronRightGlyph,
-  FlagGlyph,
   GaugeGlyph,
-  ListChecksGlyph,
   PencilGlyph,
   PlusGlyph,
   SearchGlyph,
-  ShieldCheckGlyph,
   TrashGlyph,
 } from "@crewlethq/icons/glyphs";
 import { LimitSetting } from "~/components/LimitSetting.tsx";
@@ -85,6 +81,7 @@ import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
 import { DelegatedRuleDialog, RULES_REREAD, type RuleTarget } from "./DelegatedRuleDialog.tsx";
 import { useParam } from "~/app/router.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import { plainSeat } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -207,8 +204,8 @@ export function DelegatedDecisions() {
   return (
     <>
       <PageNote>
-        Let an agent decide some requests in a person&rsquo;s place. Crewlet checks every decision
-        and sends anything risky or unclear to people.
+        Let agents decide some requests in a person&rsquo;s place; anything risky or unclear still
+        goes to people.
       </PageNote>
       <QueryState error={error} refusal={refusal} detail={detail} loading={loading && !data}>
         {data && (
@@ -274,7 +271,6 @@ export function DelegatedDecisions() {
             </PageToolbar>
             <VerdictsCard
               name="decided"
-              icon={<ListChecksGlyph size="sm" />}
               title={
                 data.complete ? `Decided on ${companyDateLabel(data.day)}` : "Decided today, so far"
               }
@@ -287,33 +283,36 @@ export function DelegatedDecisions() {
               rows={shown(data.decided)}
               more={data.decided_more}
               filtered={filtered}
-              empty={
-                data.complete
-                  ? "No request was decided that day."
-                  : "No request has been decided yet today."
-              }
+              empty={{
+                title: data.complete ? "No decisions that day" : "No decisions yet today",
+                hint: "A request an agent decides shows here with its verdict.",
+              }}
             />
             <VerdictsCard
               name="sampled"
-              icon={<BadgeCheckGlyph size="sm" />}
               title="Spot-checks"
               subtitle="Decisions picked for people to review, last 7 days"
               all={data.spot_checks}
               rows={shown(data.spot_checks)}
               more={data.spot_checks_more}
               filtered={filtered}
-              empty="No decision was picked for review this week."
+              empty={{
+                title: "No spot-checks this week",
+                hint: "Some decisions are picked for people to review after the fact.",
+              }}
             />
             <VerdictsCard
               name="flagged"
-              icon={<FlagGlyph size="sm" />}
               title="Flagged denials"
               subtitle="Requests an agent refused with high confidence, last 7 days"
               all={data.flagged}
               rows={shown(data.flagged)}
               more={data.flagged_more}
               filtered={filtered}
-              empty="No agent flagged a request as harmful this week."
+              empty={{
+                title: "No flagged denials this week",
+                hint: "A request an agent refuses as harmful shows here.",
+              }}
             />
           </>
         )}
@@ -377,7 +376,6 @@ function RulesCard({
   return (
     <Card padding="none">
       <Card.Header
-        icon={<ShieldCheckGlyph size="sm" />}
         count={answer.rules.length}
         subtitle={
           answer.enabled
@@ -402,21 +400,23 @@ function RulesCard({
                 write.submit(enabledPlan(on));
               }}
             />
-            <Button
-              size="small"
-              variant="secondary"
-              leadingIcon={<PlusGlyph size="sm" />}
-              disabledReason={addHeld}
-              title={addHeld}
-              onClick={() => begin({ kind: "sheet", target: { kind: "add" } })}
-            >
-              Add a rule
-            </Button>
           </span>
         }
       >
         <Card.Title id="delegated-rules">Rules</Card.Title>
       </Card.Header>
+      <PageActions>
+        <Button
+          size="small"
+          variant="primary"
+          leadingIcon={<PlusGlyph size="sm" />}
+          disabledReason={addHeld}
+          title={addHeld}
+          onClick={() => begin({ kind: "sheet", target: { kind: "add" } })}
+        >
+          Add rule
+        </Button>
+      </PageActions>
       {gesture.kind === "switch" && write.state.kind !== "idle" && !saved && (
         <div className="delegated-rules-status">
           <SettingWriteStatus write={write} unchanged="Already so." onReload={onApplied} />
@@ -424,10 +424,9 @@ function RulesCard({
       )}
       {answer.rules.length === 0 ? (
         <EmptyState
-          size="compact"
-          icon={<ShieldCheckGlyph size="xl" />}
+          size="inline"
           title="No rules yet"
-          description="Add a rule to let an agent decide one kind of request. Until then, people decide every request."
+          description="Until a rule names a kind of request, people decide every one."
         />
       ) : (
         <List variant="numbered-divided" aria-labelledby="delegated-rules">
@@ -678,6 +677,7 @@ function LimitsCard({
     <Card padding="none">
       <Card.Header
         icon={<GaugeGlyph size="sm" />}
+        count={answer.limits.length}
         subtitle="Past any of these, a request goes to people, whatever the agent decides."
       >
         <Card.Title id="delegated-limits">What Crewlet enforces</Card.Title>
@@ -701,7 +701,6 @@ function LimitsCard({
 /** One list of verdicts, its foot saying how much of it is shown. */
 function VerdictsCard({
   name,
-  icon,
   title,
   subtitle,
   all,
@@ -711,14 +710,13 @@ function VerdictsCard({
   empty,
 }: {
   name: string;
-  icon: ReactNode;
   title: string;
   subtitle: string;
   all: readonly DelegatedVerdictRow[];
   rows: DelegatedVerdictRow[];
   more: boolean;
   filtered: boolean;
-  empty: string;
+  empty: { title: string; hint: string };
 }) {
   const columns = useVerdictColumns();
   const titleID = `delegated-${name}`;
@@ -728,7 +726,7 @@ function VerdictsCard({
   ].filter(Boolean);
   return (
     <Card padding="none">
-      <Card.Header icon={icon} count={all.length} subtitle={subtitle}>
+      <Card.Header count={all.length} subtitle={subtitle}>
         <Card.Title id={titleID}>{title}</Card.Title>
       </Card.Header>
       <DataGrid<DelegatedVerdictRow>
@@ -738,11 +736,11 @@ function VerdictsCard({
         rowKey={(r) => `${r.request}:${r.by}:${r.at}`}
         columns={columns}
         defaultSort="-at"
-        empty={{
-          title: filtered && all.length > 0 ? "Nothing matches" : empty,
-          hint: filtered && all.length > 0 ? "Clear the search or the filters." : undefined,
-          icon: "list-checks",
-        }}
+        empty={
+          filtered && all.length > 0
+            ? { title: "Nothing matches", hint: "Clear the search or the filters.", size: "inline" }
+            : { ...empty, size: "inline" }
+        }
         footer={foot.length > 0 ? <span className="t-caption">{foot.join(". ")}.</span> : null}
       />
     </Card>

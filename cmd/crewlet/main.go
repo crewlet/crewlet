@@ -41,6 +41,7 @@ import (
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/host"
+	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/insights"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -49,6 +50,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mcprelay"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/research"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -2518,6 +2520,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// one this process booted on would describe a company that
 			// is no longer running.
 			Company: func() (*config.Company, *org.Organization) { return companyConfig(e) },
+			// The web pages Ask Crewlet reads, through the address check
+			// every outbound call takes (ADR-0151).
+			Research: research.New(httpx.Guarded(research.Timeout), time.Now),
+			Searcher: e,
 			// WHICH OF THE COMPANY'S OWN SERVICES THIS NODE SERVES ONLY
 			// ONCE RESTARTED, so the org projection says it beside the
 			// backends and a reader is not shown a workspace whose every

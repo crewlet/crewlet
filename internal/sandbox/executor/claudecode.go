@@ -320,6 +320,11 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// that chooses cs.
 	b.WriteString(claudePinGate(paths, len(req.Skills) > 0, req.Steer.Set()))
 	line(`set -- "$@" --settings "$cs"`)
+	// THE ENTRY'S EFFORT, as its runs on the engine host pass it, on a release
+	// that takes the flag ([claudeEffortFloor]).
+	if req.Effort != "" {
+		line(`if at %s; then set -- "$@" --effort %s; fi`, floorArgs(claudeEffortFloor), sandbox.ShellQuote(req.Effort))
+	}
 	b.WriteString(claudeSessionGate(session, paths, req.FreshWiring != nil && configPath != ""))
 	// THE RECORD, before the harness starts, so a run killed before it reported
 	// anything still says which session it took up, and why it began again
@@ -372,6 +377,10 @@ at() { [ -z "$a" ] || [ "$a" -gt "$1" ] || { [ "$a" -eq "$1" ] && { [ "$b" -gt "
 // (steer_reader_never_ran) — which tells an operator the box's harness needs an
 // upgrade, where taking the notes would have told them nothing at all.
 const claudeNotesFloor = "2.1.163"
+
+// claudeEffortFloor is the oldest Claude Code release a run is handed the
+// entry's `--effort` on: 2.1.163, the oldest measured to take the flag.
+const claudeEffortFloor = "2.1.163"
 
 // claudeSnapshotFloor is the oldest Claude Code release a resumed run is
 // started with `--system-prompt-snapshot off` on: 2.1.267, which added the

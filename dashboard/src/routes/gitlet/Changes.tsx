@@ -56,7 +56,14 @@
  * the list, which is where a reader decides what to open next.
  */
 
-import { useMemo } from "react";
+import { useMemo, type ComponentType } from "react";
+import {
+  GitMergeGlyph,
+  GitPullRequestClosedGlyph,
+  GitPullRequestDraftGlyph,
+  GitPullRequestGlyph,
+  type GlyphProps,
+} from "@crewlethq/icons/glyphs";
 import {
   Button,
   EmptyState,
@@ -72,7 +79,7 @@ import {
 } from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
-import { useParam } from "~/app/router.tsx";
+import { href, useParam } from "~/app/router.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import {
@@ -80,24 +87,34 @@ import {
   CHANGE_STATE_FILTERS,
   EVERY_STATE,
   changeLive,
+  changePath,
   changeStateWord,
   firstUnready,
   CHANGE_WINDOW_FILTERS,
   isChangeNeed,
   isChangeWindow,
   isRepoName,
+  knownChangeState,
+  parseChangeRef,
   refName,
+  type KnownChangeState,
 } from "~/lib/code.ts";
-import { fmtCount, fmtDateTime, plural, relTime } from "~/lib/format.ts";
+import { ago } from "~/lib/ago.ts";
+import { fmtCount, fmtDateTime, plural } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { codeRest, useCodeQuery, type CodeParams } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
-import type { CodeChangeState, CodeChangeSummary, CodeChangesAnswer } from "~/protocol/index.ts";
+import type {
+  CodeChangeName,
+  CodeChangeState,
+  CodeChangeSummary,
+  CodeChangesAnswer,
+} from "~/protocol/index.ts";
 import { REPO_PARAM, changeObject } from "./paths.ts";
 import { readinessCount, readinessNext } from "./readinessWords.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
-import { Face, useWhoName } from "./ui.tsx";
+import { BranchChip, Face, useWhoName } from "./ui.tsx";
 import "~/styles/gitlet.css";
 
 /**
@@ -410,7 +427,7 @@ function ChangeCell({ change, now }: { change: CodeChangeSummary; now: number })
         <span>
           opened{" "}
           <time dateTime={change.opened_at} title={fmtDateTime(change.opened_at)}>
-            {relTime(change.opened_at, now)}
+            {ago(change.opened_at, now)}
           </time>{" "}
           by
         </span>
@@ -418,8 +435,10 @@ function ChangeCell({ change, now }: { change: CodeChangeSummary; now: number })
           <Face who={change.owner} />
           <span>{whoName(change.owner)}</span>
         </span>
-        <span className="mono code-change-cell__branches">
-          {refName(change.source_ref).name} → {refName(change.target_ref).name}
+        <span className="code-change-cell__branches">
+          <BranchChip name={refName(change.source_ref).name} />
+          {" → "}
+          <BranchChip name={refName(change.target_ref).name} />
         </span>
         {change.revision > 1 && <span>revision {change.revision}</span>}
       </span>
@@ -427,17 +446,51 @@ function ChangeCell({ change, now }: { change: CodeChangeSummary; now: number })
   );
 }
 
+/** Each state's glyph, the code host's own. */
+const STATE_GLYPHS: Readonly<Record<KnownChangeState, ComponentType<GlyphProps>>> = {
+  draft: GitPullRequestDraftGlyph,
+  open: GitPullRequestGlyph,
+  closed: GitPullRequestClosedGlyph,
+  merged: GitMergeGlyph,
+};
+
 /**
- * A change's state as its row marks it. COLOUR IS STATE, and only the two that
- * are an outcome carry one: merged, which reached its target, and closed,
- * which will not — neutral, since closing is no fault. A live change is
- * outlined: it is still moving.
+ * A change's state: the kit's change colours on its pill, with the state's
+ * glyph and word (the seventh exception); a state this build does not know is
+ * its word on the neutral outline.
  */
 export function ChangeStateTag({ state }: { state: CodeChangeState }) {
-  const word = changeStateWord(state);
-  if (state === "merged") return <Tag variant="success">{word}</Tag>;
-  if (state === "closed") return <Tag variant="neutral">{word}</Tag>;
-  return <Tag appearance="outline">{word}</Tag>;
+  if (!knownChangeState(state)) return <Tag appearance="outline">{state}</Tag>;
+  const Glyph = STATE_GLYPHS[state];
+  return (
+    <Tag className="code-state" data-state={state} leadingIcon={<Glyph size="xs" />}>
+      {changeStateWord(state)}
+    </Tag>
+  );
+}
+
+/**
+ * A change by its reference on its state's pill (`web!41`), opening the change:
+ * how a commit or a branch names the change it belongs to.
+ */
+export function ChangeRefPill({ change }: { change: CodeChangeName }) {
+  const at = parseChangeRef(change.ref);
+  const Glyph = knownChangeState(change.state) ? STATE_GLYPHS[change.state] : null;
+  const pill = Glyph ? (
+    <Tag className="code-state" data-state={change.state} leadingIcon={<Glyph size="xs" />}>
+      {change.ref}
+    </Tag>
+  ) : (
+    <Tag appearance="outline">{change.ref}</Tag>
+  );
+  const title = `Change ${change.ref}, ${changeStateWord(change.state).toLowerCase()}: ${change.title}`;
+  return at ? (
+    <a className="code-change-ref" href={href(changePath(at.repo, at.number))} title={title}>
+      {pill}
+    </a>
+  ) : (
+    <span title={title}>{pill}</span>
+  );
 }
 
 /**

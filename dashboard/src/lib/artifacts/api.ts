@@ -15,6 +15,7 @@ import { pathSegments } from "~/lib/segment.ts";
 import { pathSegment, rest } from "~/protocol/index.ts";
 import type {
   ArtifactAudience,
+  ArtifactCommentAnchor,
   ArtifactDeckAnswer,
   DeckPlan,
   SlidesStartersAnswer,
@@ -156,6 +157,103 @@ export function addAsset(id: string, upload: string, name: string): Omit<KeyedRe
  */
 export function removeAsset(id: string, asset: string): Omit<KeyedRequest, "key"> {
   return { method: "DELETE", path: `${base(id)}/assets/${pathSegment(asset)}` };
+}
+
+// ---- comments ---------------------------------------------------------------
+
+const comments = (id: string) => `${base(id)}/comments`;
+const thread = (id: string, threadID: string) => `${comments(id)}/${pathSegment(threadID)}`;
+
+/** The picture types a thread's crop may be, as the engine checks them by their bytes. */
+const CROP_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+
+/** A picture's data URL as the open's body carries it: its bytes in base64 and its type, or null. */
+export function cropBody(dataURL: string): { crop: string; crop_type: string } | null {
+  const m = /^data:(image\/[a-z]+);base64,([A-Za-z0-9+/]+={0,2})$/.exec(dataURL);
+  return m && CROP_TYPES.has(m[1]!) ? { crop: m[2]!, crop_type: m[1]! } : null;
+}
+
+/** What a new thread says, and where it points. */
+export interface CommentOpening {
+  body: string;
+  /** The version on show, which the thread is made on; 0 leaves it to the engine, which takes the head. */
+  version: number;
+  anchor: ArtifactCommentAnchor;
+  /** The part's words as the reader saw them. */
+  quote?: string | undefined;
+  /** A picture of the part, as a data URL; one the engine would not read is left out. */
+  crop?: string | undefined;
+}
+
+/** Open a thread with its first remark (`POST /artifacts/{id}/comments`), on part or all of it. */
+export function openComment(id: string, opening: CommentOpening): Omit<KeyedRequest, "key"> {
+  const crop = opening.crop ? cropBody(opening.crop) : null;
+  return {
+    method: "POST",
+    path: comments(id),
+    body: {
+      body: opening.body,
+      ...(opening.version > 0 ? { version: opening.version } : {}),
+      anchor: opening.anchor,
+      ...(opening.quote ? { quote: opening.quote } : {}),
+      ...(crop ?? {}),
+    },
+  };
+}
+
+/** Answer a thread (`POST …/comments/{thread}/replies`), naming the remark answered, if one. */
+export function replyToComment(
+  id: string,
+  threadID: string,
+  body: string,
+  replyTo?: string,
+): Omit<KeyedRequest, "key"> {
+  return {
+    method: "POST",
+    path: `${thread(id, threadID)}/replies`,
+    body: { body, ...(replyTo ? { reply_to: replyTo } : {}) },
+  };
+}
+
+/** Rewrite one of the reader's own remarks (`PATCH …/comments/{thread}/remarks/{remark}`). */
+export function editRemark(
+  id: string,
+  threadID: string,
+  remark: string,
+  body: string,
+): Omit<KeyedRequest, "key"> {
+  return {
+    method: "PATCH",
+    path: `${thread(id, threadID)}/remarks/${pathSegment(remark)}`,
+    body: { body },
+  };
+}
+
+/** Take a remark down (`DELETE …/comments/{thread}/remarks/{remark}`): its author's, or an administrator's. */
+export function removeRemark(
+  id: string,
+  threadID: string,
+  remark: string,
+): Omit<KeyedRequest, "key"> {
+  return { method: "DELETE", path: `${thread(id, threadID)}/remarks/${pathSegment(remark)}` };
+}
+
+/** Resolve a thread (`POST …/comments/{thread}/resolve`), naming the version that addressed it. */
+export function resolveComment(
+  id: string,
+  threadID: string,
+  version?: number,
+): Omit<KeyedRequest, "key"> {
+  return {
+    method: "POST",
+    path: `${thread(id, threadID)}/resolve`,
+    body: version ? { version } : {},
+  };
+}
+
+/** Open a resolved thread again (`POST …/comments/{thread}/reopen`). */
+export function reopenComment(id: string, threadID: string): Omit<KeyedRequest, "key"> {
+  return { method: "POST", path: `${thread(id, threadID)}/reopen`, body: {} };
 }
 
 /** Move an artifact to the trash (`DELETE /artifacts/{id}`). */

@@ -100,6 +100,8 @@ const EDITING_ELEMENTS = new Set([
   // uilet's labelled value (FormField with its control), which every
   // configuration form and the dialogs that hold a value draw.
   "ValueField",
+  // uilet's one-setting panel, which every setting's pencil opens.
+  "SettingForm",
   "Textarea",
 ]);
 
@@ -283,6 +285,9 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "components/SettingEditor.tsx":
     "saved per change: one setting's value, in the panel its pencil opens, written by that " +
     "panel's own Save",
+  "routes/settings/AssistantSettings.tsx":
+    "saved per change: the research hosts, in the setting panel its pencil opens, written by " +
+    "that panel's own Save",
   "components/TitleField.tsx":
     "not an editor: one field; every screen that draws it holds the value and declares the draft",
   "components/ConfigField.tsx":

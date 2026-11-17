@@ -261,7 +261,7 @@
 // change to its inputs — a pack added, a pack a compaction retired, a
 // dropping pack an expunge's commit took out of the repository, a pack
 // removed with no retirement, the refs rewritten, its own files reported
-// damaged, the installed published chain moving — does to it. There are six:
+// damaged, the installed published chain moving — does to it. There are eight:
 // the INSTALLED CHAIN's two halves (below, "The installed chain": the
 // published multi-pack-index layers with their bitmaps, and the commit-graph
 // layers with the node's own TIP over them, each with the chain file the cache
@@ -275,7 +275,9 @@
 // code and no git — a round's fold and the backfill) and the MEMO (below: the
 // answers of reads by object id, one file an answer in crewlet/memo, a
 // directory it owns whole) — the last two the declarations a change to the
-// packs or the refs keeps. A retirement keeps the commit-graph too (X04): a
+// packs or the refs keeps. Two more are the node's own, written by the cache's
+// own code and no git: the CODE INDEX (codeindex.go) and the TAG INDEX (below).
+// A retirement keeps the commit-graph too (X04): a
 // compaction merges packs and drops no commit, so the graph over them names
 // every commit the outputs hold, where a pack removed with no retirement may
 // have taken commits with it — and so does AN EXPUNGE'S COMMIT, the one
@@ -424,6 +426,12 @@
 // it. A rebuild or a swap MOVES it whole into the incarnation it promotes,
 // one rename however many entries it holds (carryMemo, SeedMove), never a
 // link an entry.
+//
+// # The tag index
+//
+// One file a copy, crewlet/tags (tags.go): every tag in git's creatordate order, then
+// each commit's tags, renamed in with packed-refs. A failed step sets the index aside,
+// never the round, and past TagsRetry a read asks a round for it.
 //
 // # What this process did not write is checked before it serves, and every byte is scrubbed behind it
 //

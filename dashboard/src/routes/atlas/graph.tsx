@@ -8,7 +8,6 @@
 import { VendorMark } from "@crewlethq/icons";
 import type { GraphAttentionTone, GraphCanvasLabels, GraphEdge, GraphNode } from "@crewlethq/ui";
 import type { AtlasMapEdge, AtlasSummary } from "~/contract/atlas.ts";
-import { relTime } from "~/lib/format.ts";
 import { KindGlyph } from "./parts.tsx";
 import {
   FAMILIES,
@@ -20,6 +19,7 @@ import {
   entries,
   openTasks,
 } from "./words.ts";
+import { ago } from "~/lib/ago.ts";
 
 /** The words the map says on its own, in the atlas's word for one item. */
 export const MAP_LABELS: Partial<GraphCanvasLabels> = {
@@ -60,7 +60,7 @@ export function cardOf(summary: AtlasSummary, now: number, open = 0): Omit<Graph
     // would read its path twice.
     caption:
       summary.state === "stale"
-        ? `Last seen ${relTime(summary.last_seen, now)}`
+        ? `Last seen ${ago(summary.last_seen, now)}`
         : summary.key === summary.name
           ? undefined
           : summary.key,

@@ -15,6 +15,9 @@
  * used to stack over the artifact is in those panels now, one at a time at
  * its side (`panels.ts`), each reached by its key too (`app/keymap.ts`).
  *
+ * The Comments panel (`panel=comments`, key `c`) lists the threads, and Comment mode (Shift+C)
+ * places one on a page, slide or board (`comments/`); a reader below commenter only reads.
+ *
  * # The engine decides what this reader sees
  *
  * The head (`artifact`) is shaped by the reader's role: the owner and editors
@@ -56,6 +59,7 @@ import {
   ArtifactPanel,
   ArtifactVersionChip,
   ArtifactWorkspace,
+  CommentPinGlyph,
   Button,
   ButtonLink,
   Callout,
@@ -65,6 +69,7 @@ import {
   PresenceStack,
   Skeleton,
   peopleRailKey,
+  useEscapeWithin,
   useToast,
   type ArtifactBarTool,
   type MenuEntry,
@@ -79,6 +84,7 @@ import {
   FolderInputGlyph,
   ImageGlyph,
   InfoGlyph,
+  MessagesSquareGlyph,
   PencilGlyph,
   PaperclipGlyph,
   PinGlyph,
@@ -92,7 +98,7 @@ import { artifactFolderPath, artifactSectionPath } from "~/app/routes.ts";
 import { artifactPlace, useFolderTree } from "~/lib/artifacts/folders.ts";
 import { href, useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
-import { useKeymap } from "~/app/keymap.ts";
+import { capsOf, keyRow, useKeymap } from "~/app/keymap.ts";
 import { FrameNavToggle, OwnPageHeader } from "~/app/frame/OwnHeader.tsx";
 import { AssistantTrigger } from "~/app/assistant/AssistantTrigger.tsx";
 import { useOwnStar, usePageLabels } from "~/app/Shell.tsx";
@@ -151,6 +157,8 @@ import {
   type PanelName,
 } from "./panels.ts";
 import { useArtifactPresence } from "./presence.ts";
+import { CommentsPanel } from "./comments/CommentsPanel.tsx";
+import { CommentsScope, useArtifactComments } from "./comments/state.tsx";
 import { followMoves, followTarget, moves } from "~/lib/artifacts/follow.ts";
 import { useViewer } from "~/lib/viewer.ts";
 
@@ -194,6 +202,8 @@ export function ArtifactPage({ id, standalone = false }: { id: string; standalon
   // writes as the page's version, through a store of its own (ViewTab).
   const store = useDataStore(id, { via: "dashboard" }, live === true && keepsData(head!));
   const bridgeStores = useRef(new Set<ArtifactDataStore>());
+  // WHO ASKS AGAIN WHEN A COMMENT MOVES: the page's comments, while it is drawn.
+  const commentsMoved = useRef(new Set<() => void>());
 
   const room = useArtifactRoom(id, live === true, {
     onJoined: (answer) => {
@@ -209,6 +219,7 @@ export function ArtifactPage({ id, standalone = false }: { id: string; standalon
       // questions that decide what this reader may see.
       detail.refetch();
       if (push.what === "version" || push.what === "reset") versions.refetch();
+      if (push.what === "comment") for (const ask of commentsMoved.current) ask();
     },
   });
 
@@ -256,6 +267,7 @@ export function ArtifactPage({ id, standalone = false }: { id: string; standalon
       room={room}
       store={store}
       bridgeStores={bridgeStores.current}
+      commentsMoved={commentsMoved.current}
       refetch={detail.refetch}
       standalone={standalone}
     />
@@ -335,6 +347,7 @@ function Loaded({
   room,
   store,
   bridgeStores,
+  commentsMoved,
   refetch,
   standalone,
 }: {
@@ -345,6 +358,8 @@ function Loaded({
   room: ReturnType<typeof useArtifactRoom>;
   store: ReturnType<typeof useDataStore>;
   bridgeStores: Set<ArtifactDataStore>;
+  /** Where the room's comment pushes are heard. */
+  commentsMoved: Set<() => void>;
   refetch: () => void;
   /** On its standalone page: the way back is the gallery, and there is no Open in new tab. */
   standalone: boolean;
@@ -371,6 +386,11 @@ function Loaded({
   }, [detail.head_number, shownHead]);
   const showing = version > 0 ? version : shownHead;
   const newer = version === 0 && detail.head_number > shownHead;
+  // ONE WAY BACK TO THE NEWEST, from the chip's Show latest and from either notice.
+  const showLatest = useCallback(() => {
+    setVersion("");
+    setShownHead(detail.head_number);
+  }, [setVersion, detail.head_number]);
 
   // ---- the panel at the side ------------------------------------------------
   const hasData = keepsData(detail) && store !== null;
@@ -416,6 +436,29 @@ function Loaded({
     const panel = panelBox.current?.closest('[role="complementary"]');
     return expanded || (panel ? getComputedStyle(panel).position === "absolute" : false);
   };
+
+  // ---- comments -----------------------------------------------------------
+  const comments = useArtifactComments({
+    detail,
+    version: showing,
+    moved: commentsMoved,
+    ownerName: people.seatName(detail.owner),
+    covering,
+  });
+  // COMMENT MODE, from the bar or its key: the list opens beside the artifact
+  // where there is room for both, and a panel drawn over it makes way.
+  const togglePlacing = () => {
+    const on = !comments.placing;
+    comments.setPlacing(on);
+    if (!on) return;
+    if (covering()) comments.stepAside();
+    else if (!comments.narrow && panel !== "comments") openPanel("comments");
+  };
+  // ESCAPE ENDS COMMENT MODE wherever focus is in the dashboard (the bar's
+  // tool is drawn outside this page's own element), once no layer holds the
+  // key; inside the artifact's own page, its runtime reports it.
+  const everywhere = useMemo(() => ({ current: document.documentElement }), []);
+  useEscapeWithin(everywhere, () => comments.setPlacing(false), comments.placing);
 
   // ---- who is here, and following them --------------------------------------
   const presence = useArtifactPresence(room, people, showing);
@@ -594,6 +637,8 @@ function Loaded({
   useKeymap({
     "artifact.details": () => toggle("details"),
     "artifact.history": () => toggle("history"),
+    "artifact.comments": () => toggle("comments"),
+    "artifact.comment": { run: togglePlacing, when: comments.placeable && comments.can },
     "artifact.data": { run: () => toggle("data"), when: hasData },
     "artifact.people": () => toggle("people"),
     "artifact.share": () => setSharing(true),
@@ -612,7 +657,21 @@ function Loaded({
     drawn.length === 0
       ? "People here"
       : `People here, ${drawn.length} ${drawn.length === 1 ? "other" : "others"}`;
+  const openThreads = comments.answer?.counts.open ?? 0;
   const tools: ArtifactBarTool[] = [
+    ...(comments.placeable
+      ? [
+          {
+            key: "comment",
+            label: comments.placing ? "Stop commenting" : "Comment",
+            icon: <CommentPinGlyph size="sm" />,
+            keys: capsOf(keyRow("artifact.comment").presses[0]!),
+            pressed: comments.placing,
+            ...(comments.can ? {} : { disabledReason: comments.reason ?? "" }),
+            onSelect: togglePlacing,
+          },
+        ]
+      : []),
     {
       key: "details",
       label: "Details",
@@ -628,6 +687,15 @@ function Loaded({
       keys: ["h"],
       pressed: panel === "history",
       onSelect: () => toggle("history"),
+    },
+    {
+      key: "comments",
+      label: openThreads > 0 ? `Comments, ${openThreads} open` : "Comments",
+      icon: <MessagesSquareGlyph size="sm" />,
+      keys: capsOf(keyRow("artifact.comments").presses[0]!),
+      pressed: panel === "comments",
+      ...(openThreads > 0 ? { badge: openThreads } : {}),
+      onSelect: () => toggle("comments"),
     },
     ...(hasData
       ? [
@@ -816,9 +884,37 @@ function Loaded({
       />
     ),
     settings: () => <SettingsTab detail={detail} onChanged={refetch} focus={settingsFocus} />,
+    comments: () => (
+      <CommentsPanel
+        onPlace={() => {
+          // THE PART IS PICKED ON THE ARTIFACT, so a panel over it makes way.
+          if (!comments.placing && covering()) comments.stepAside();
+          comments.setPlacing(!comments.placing);
+        }}
+      />
+    ),
   };
 
   const notices: ReactNode[] = [];
+  // COMMENT MODE IS SAID ABOVE THE ARTIFACT, pushing it down rather than
+  // covering any of it, with the way out beside it.
+  if (comments.placing)
+    notices.push(
+      <Callout
+        key="placing"
+        layout="banner"
+        variant="info"
+        title="Comment mode"
+        live="polite"
+        action={
+          <Button size="small" variant="secondary" onClick={() => comments.setPlacing(false)}>
+            Done
+          </Button>
+        }
+      >
+        {PLACING_WORDS[detail.kind] ?? PLACING_WORDS.html}
+      </Callout>,
+    );
   if (detail.elevated)
     notices.push(
       <Callout key="elevated" layout="banner" variant="info" title="Opened as an administrator">
@@ -848,14 +944,7 @@ function Loaded({
         layout="banner"
         variant="info"
         action={
-          <Button
-            size="small"
-            variant="secondary"
-            onClick={() => {
-              setVersion("");
-              setShownHead(detail.head_number);
-            }}
-          >
+          <Button size="small" variant="secondary" onClick={showLatest}>
             Show the latest
           </Button>
         }
@@ -872,7 +961,7 @@ function Loaded({
         variant="info"
         live="polite"
         action={
-          <Button size="small" variant="secondary" onClick={() => setShownHead(detail.head_number)}>
+          <Button size="small" variant="secondary" onClick={showLatest}>
             Show it
           </Button>
         }
@@ -882,146 +971,158 @@ function Loaded({
     );
 
   return (
-    <div className="artifact-page">
-      <OwnPageHeader>
-        <ArtifactBar
-          end={<AssistantTrigger />}
-          title={detail.title}
-          kind={detail.kind}
-          icon={detail.icon}
-          kindLabel={KIND_WORDS[detail.kind]}
-          start={<FrameNavToggle />}
-          back={back}
-          {...(renameAccess.can ? { onRename: rename } : {})}
-          renaming={renaming}
-          onRenamingChange={setRenaming}
-          version={
-            // THE EDIT SAYS AT ITS FOOT WHICH VERSION IT IS BASED ON, and the title needs the room.
-            versioned && !kind?.editing ? (
-              <ArtifactVersionChip
+    <CommentsScope value={comments}>
+      <div className="artifact-page">
+        <OwnPageHeader>
+          <ArtifactBar
+            end={<AssistantTrigger />}
+            title={detail.title}
+            kind={detail.kind}
+            icon={detail.icon}
+            kindLabel={KIND_WORDS[detail.kind]}
+            start={<FrameNavToggle />}
+            back={back}
+            {...(renameAccess.can ? { onRename: rename } : {})}
+            renaming={renaming}
+            onRenamingChange={setRenaming}
+            version={
+              // THE EDIT SAYS AT ITS FOOT WHICH VERSION IT IS BASED ON, and the title needs the room.
+              versioned && !kind?.editing ? (
+                <ArtifactVersionChip
+                  version={showing}
+                  latest={detail.head_number}
+                  items={chipItems}
+                  onShowLatest={showLatest}
+                />
+              ) : undefined
+            }
+            {...(kind?.modes ? { modes: kind.modes } : {})}
+            presence={
+              drawn.length > 0 ? (
+                <PresenceStack
+                  members={drawn}
+                  self
+                  size="xs"
+                  onSelect={() => openPanel(panel === "people" ? null : "people")}
+                />
+              ) : undefined
+            }
+            {...(kind?.editing
+              ? {
+                  status: <EditingStatus dirty={kind.editing.dirty} saving={kind.editing.saving} />,
+                }
+              : {})}
+            kindTools={kind?.tools ?? []}
+            tools={tools}
+            menu={menu}
+          />
+        </OwnPageHeader>
+        {notices.length > 0 && <div className="artifact-notices">{notices}</div>}
+        {followed && target && (
+          <FollowBanner
+            className="artifact-follow"
+            name={people.seatName(followed)}
+            onStop={stopFollowing}
+            labels={{
+              following: (name) => {
+                // A SLIDE OR A DOC'S TAB IS MOVED TO, not said: the view is
+                // already on it. A page's own region is said in its words.
+                const region = target.focus.region;
+                const where = region && !isViewRegion(region) ? ` They are in ${region}.` : "";
+                return `Following ${name}.${where} Press Esc or scroll to stop.`;
+              },
+            }}
+          />
+        )}
+        {left && !followed && (
+          <FollowBanner
+            className="artifact-follow"
+            name={people.seatName(left.seat)}
+            state="left"
+            onStop={() => setLeft(null)}
+            onDismiss={() => setLeft(null)}
+            {...(left.wasHere
+              ? {}
+              : {
+                  labels: {
+                    left: (name: string) => `${name} is not here, so there is nobody to follow.`,
+                  },
+                })}
+          />
+        )}
+        <ArtifactWorkspace
+          className="artifact-workspace"
+          bodyRef={body}
+          bodyClassName={`artifact-body artifact-body--${detail.kind}`}
+          bodyLabel={detail.title}
+          expanded={expanded}
+          panel={
+            panel ? (
+              <ArtifactPanel
+                key={panel}
+                title={panelTitle(panel, !contentIsData(detail.kind))}
+                size={PANEL_SPECS[panel].size}
+                focusOnOpen={readerOpened.current}
+                onClose={() => openPanel(null)}
+                expanded={expanded}
+                {...(panel === "data" || panel === "history"
+                  ? { onExpandedChange: setExpanded }
+                  : {})}
+              >
+                <div className="artifact-panel-body" ref={panelBox}>
+                  {panelBody[panel]()}
+                </div>
+              </ArtifactPanel>
+            ) : null
+          }
+        >
+          <KindControlsSink.Provider value={setKind}>
+            <RegionNamesSink.Provider value={setRegions}>
+              <ViewTab
+                detail={detail}
                 version={showing}
-                latest={detail.head_number}
-                items={chipItems}
+                store={store}
+                room={room}
+                presence={presence}
+                drawn={drawn}
+                bridgeStores={bridgeStores}
+                onPublished={(n: number) => {
+                  refetch();
+                  setVersion("");
+                  setShownHead(n);
+                }}
               />
-            ) : undefined
-          }
-          {...(kind?.modes ? { modes: kind.modes } : {})}
-          presence={
-            drawn.length > 0 ? (
-              <PresenceStack
-                members={drawn}
-                self
-                size="xs"
-                onSelect={() => openPanel(panel === "people" ? null : "people")}
-              />
-            ) : undefined
-          }
-          {...(kind?.editing
-            ? { status: <EditingStatus dirty={kind.editing.dirty} saving={kind.editing.saving} /> }
-            : {})}
-          kindTools={kind?.tools ?? []}
-          tools={tools}
-          menu={menu}
+            </RegionNamesSink.Provider>
+          </KindControlsSink.Provider>
+        </ArtifactWorkspace>
+        <ArtifactShare
+          detail={detail}
+          open={sharing}
+          onClose={() => setSharing(false)}
+          onChanged={refetch}
         />
-      </OwnPageHeader>
-      {notices.length > 0 && <div className="artifact-notices">{notices}</div>}
-      {followed && target && (
-        <FollowBanner
-          className="artifact-follow"
-          name={people.seatName(followed)}
-          onStop={stopFollowing}
-          labels={{
-            following: (name) => {
-              // A SLIDE OR A DOC'S TAB IS MOVED TO, not said: the view is
-              // already on it. A page's own region is said in its words.
-              const region = target.focus.region;
-              const where = region && !isViewRegion(region) ? ` They are in ${region}.` : "";
-              return `Following ${name}.${where} Press Esc or scroll to stop.`;
-            },
-          }}
-        />
-      )}
-      {left && !followed && (
-        <FollowBanner
-          className="artifact-follow"
-          name={people.seatName(left.seat)}
-          state="left"
-          onStop={() => setLeft(null)}
-          onDismiss={() => setLeft(null)}
-          {...(left.wasHere
-            ? {}
-            : {
-                labels: {
-                  left: (name: string) => `${name} is not here, so there is nobody to follow.`,
-                },
-              })}
-        />
-      )}
-      <ArtifactWorkspace
-        className="artifact-workspace"
-        bodyRef={body}
-        bodyClassName={`artifact-body artifact-body--${detail.kind}`}
-        bodyLabel={detail.title}
-        expanded={expanded}
-        panel={
-          panel ? (
-            <ArtifactPanel
-              key={panel}
-              title={panelTitle(panel, !contentIsData(detail.kind))}
-              size={PANEL_SPECS[panel].size}
-              focusOnOpen={readerOpened.current}
-              onClose={() => openPanel(null)}
-              expanded={expanded}
-              {...(panel === "data" || panel === "history"
-                ? { onExpandedChange: setExpanded }
-                : {})}
-            >
-              <div className="artifact-panel-body" ref={panelBox}>
-                {panelBody[panel]()}
-              </div>
-            </ArtifactPanel>
-          ) : null
-        }
-      >
-        <KindControlsSink.Provider value={setKind}>
-          <RegionNamesSink.Provider value={setRegions}>
-            <ViewTab
-              detail={detail}
-              version={showing}
-              store={store}
-              room={room}
-              presence={presence}
-              drawn={drawn}
-              bridgeStores={bridgeStores}
-              onPublished={(n: number) => {
-                refetch();
-                setVersion("");
-                setShownHead(n);
-              }}
-            />
-          </RegionNamesSink.Provider>
-        </KindControlsSink.Provider>
-      </ArtifactWorkspace>
-      <ArtifactShare
-        detail={detail}
-        open={sharing}
-        onClose={() => setSharing(false)}
-        onChanged={refetch}
-      />
-      <TrashDialog detail={detail} open={trashing} onClose={() => setTrashing(false)} />
-      {moving && (
-        <MoveDialog
-          subject={{ kind: "artifacts", items: [detail] }}
-          onClose={() => setMoving(false)}
-          onMoved={() => {
-            setMoving(false);
-            refetch();
-          }}
-        />
-      )}
-    </div>
+        <TrashDialog detail={detail} open={trashing} onClose={() => setTrashing(false)} />
+        {moving && (
+          <MoveDialog
+            subject={{ kind: "artifacts", items: [detail] }}
+            onClose={() => setMoving(false)}
+            onMoved={() => {
+              setMoving(false);
+              refetch();
+            }}
+          />
+        )}
+      </div>
+    </CommentsScope>
   );
 }
+
+/** What Comment mode asks of the reader, by the kind being commented on. */
+const PLACING_WORDS: Partial<Record<ArtifactDetail["kind"], string>> = {
+  html: "Click a section or a point of the page to comment on it. Press Escape to stop.",
+  slides: "Click an element of the slide to comment on it. Press Escape to stop.",
+  design: "Click a point on a board to comment on it. Press Escape to stop.",
+};
 
 /** The keys that move a reader's view of the body, and so stop a follow. */
 const NAVIGATION_KEYS = new Set([

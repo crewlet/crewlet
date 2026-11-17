@@ -247,8 +247,8 @@ func TestADirectSeatInACompanyThatHostsCodeIsWarned(t *testing.T) {
 				}
 				// AND THE OWNER IS TOLD THE SAME in their own words: what the
 				// cell lets an agent do and what to run it in instead.
-				for _, says := range []string{"every code repository", "act as any other agent",
-					"a container or a cloud sandbox"} {
+				for _, says := range []string{"read every repository", "act as any other agent",
+					"a container or cloud sandbox"} {
 					if !strings.Contains(got[0].Person, says) {
 						t.Errorf("the warning does not tell a person %q: %q", says, got[0].Person)
 					}

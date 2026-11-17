@@ -1,6 +1,7 @@
 /**
  * GITLET'S PAGES, LAID OUT: a comparison's title stays clear of the files'
- * sticky toolbar under it, and the clone panel shows its whole address.
+ * sticky toolbar under it, the clone panel shows its whole address, and code
+ * coloured by kind keeps the box it had plain.
  */
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { page } from "vitest/browser";
@@ -8,8 +9,14 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { InertWebSocket, LayoutClient } from "~/test/layout.tsx";
 import { eventually } from "~/test/settle.ts";
+import { DiffView, type DiffHunk } from "~/components/DiffView.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import type { CodeChangeSummary } from "~/protocol/index.ts";
+import { ChangesGrid } from "./Changes.tsx";
+import { BranchChip } from "./ui.tsx";
 import { ComparePage } from "./commit/ComparePage.tsx";
 import { RepositoryPage } from "./repo/RepositoryPage.tsx";
+import { SYNTAX_CLASS } from "./syntax.tsx";
 
 const POSITION = { stream: "CREWLET_CODE_LOG", generation: 1, seq: 12 };
 const BASE = "3a3ecae0123456789abcdef0123456789abcdef0";
@@ -28,9 +35,36 @@ const json = (payload: unknown) =>
     headers: { "Content-Type": "application/json" },
   });
 
-/** The engine, for one repository's comparison of feature into main. */
+/** A Go file whose third line holds a keyword, a call, a string and a comment, wider than a phone. */
+const MAIN_GO = [
+  "package main",
+  "",
+  'func main() { serve(":8080") } // the storefront, on the port the shell and the health check both read',
+  "",
+];
+
+/** The engine, for one repository's comparison of feature into main, and one file. */
 function answer(url: URL): Response {
   switch (url.pathname) {
+    case "/query/code_blob":
+      if (url.searchParams.get("path") !== "cmd/main.go") break;
+      return json({
+        repo: "web",
+        ref: url.searchParams.get("ref") ?? "main",
+        commit: BASE,
+        kind: "blob",
+        blob: {
+          path: "cmd/main.go",
+          oid: HEAD,
+          size: MAIN_GO.join("\n").length,
+          lines: MAIN_GO.length - 1,
+          start_line: 1,
+          end_line: MAIN_GO.length - 1,
+          text: MAIN_GO.join("\n"),
+        },
+        position: POSITION,
+        level: "session",
+      });
     case "/query/code_repo":
       return json({
         repo: {
@@ -225,5 +259,702 @@ for (const width of [1440, 390]) {
     const under = card.getBoundingClientRect();
     expect(box.left).toBeGreaterThanOrEqual(Math.floor(under.left));
     expect(box.right).toBeLessThanOrEqual(Math.ceil(under.right));
+  });
+}
+
+// A CODED DIFF'S BAND HOLDS ITS NUMBERS AND STOPS BEFORE THE SIGN, and a changed
+// run keeps a visible underline. Mutation: a narrower `--diff-gutter`, or a
+// transparent run decoration, fails it.
+// A CODED LINE KEEPS THE PLAIN LINE'S HEIGHT, and no ink is drawn inside a
+// run. Mutation: `font-size: 1.2em` on the comment rule fails it.
+test("a coloured diff's band holds its numbers, and a changed run keeps its underline", async () => {
+  const hunks: DiffHunk[] = [
+    {
+      skipped: 9,
+      lines: [
+        { kind: "same", text: "keep", before: 10, after: 10 },
+        { kind: "remove", text: "paid in any order", before: 11, after: null },
+        { kind: "add", text: "paid in join order", before: null, after: 11 },
+        { kind: "add", text: "ties are rare", before: null, after: 12 },
+      ],
+    },
+  ];
+  // Each line's first word a keyword and the rest a comment, by its side and number.
+  const texts = { before: new Map<number, string>(), after: new Map<number, string>() };
+  for (const line of hunks[0]!.lines) {
+    if (line.before !== null) texts.before.set(line.before, line.text);
+    if (line.after !== null) texts.after.set(line.after, line.text);
+  }
+  const tokens = (side: "before" | "after", n: number) => {
+    const text = texts[side].get(n) ?? "";
+    const word = Math.max(text.indexOf(" "), 0);
+    return [
+      { end: word, className: SYNTAX_CLASS.keyword },
+      { end: text.length, className: SYNTAX_CLASS.comment },
+    ];
+  };
+  const heights = () =>
+    [...document.querySelectorAll<HTMLElement>(".diff-view__line")].map(
+      (line) => line.getBoundingClientRect().height,
+    );
+  for (const layout of ["unified", "split"] as const) {
+    mount(<DiffView hue="code" hunks={hunks} layout={layout} />);
+    const plain = await eventually(() => {
+      if (layout === "split") expect(document.querySelector(".diff-view--split")).not.toBeNull();
+      const drawn = heights();
+      expect(drawn.length).toBeGreaterThan(0);
+      return drawn;
+    });
+    flushSync(() => root?.unmount());
+    host?.remove();
+    mount(<DiffView hue="code" hunks={hunks} layout={layout} tokens={tokens} />);
+    const changed = await eventually(() => {
+      const found = [
+        ...document.querySelectorAll<HTMLElement>(
+          '.diff-view--code .diff-view__line:is([data-kind="add"], [data-kind="remove"])',
+        ),
+      ];
+      expect(found).toHaveLength(3);
+      if (layout === "split") expect(document.querySelector(".diff-view--split")).not.toBeNull();
+      return found;
+    });
+    for (const line of changed) {
+      const style = getComputedStyle(line);
+      const band = Number(/(-?[\d.]+)px/.exec(style.boxShadow)?.[1]);
+      expect(band, `${layout}: ${style.boxShadow}`).toBeGreaterThan(0);
+      const left = line.getBoundingClientRect().left + parseFloat(style.borderLeftWidth);
+      const numbers = line.querySelectorAll(".diff-view__number");
+      const last = numbers[numbers.length - 1]!.getBoundingClientRect();
+      const mark = line.querySelector(".diff-view__mark")!.getBoundingClientRect();
+      expect(left + band, `${layout}: the band holds the numbers`).toBeGreaterThanOrEqual(
+        last.right - 0.5,
+      );
+      expect(left + band, `${layout}: the band stops before the sign`).toBeLessThanOrEqual(
+        mark.left + 0.5,
+      );
+    }
+    expect(document.querySelectorAll(".code-syn-comment").length).toBeGreaterThan(0);
+    expect(heights(), `${layout}: each line keeps its plain height`).toEqual(plain);
+    expect(document.querySelector('.diff-view__run [class*="code-syn-"]')).toBeNull();
+    const runs = document.querySelectorAll(".diff-view--code .diff-view__run");
+    expect(runs.length, `${layout}: the edited line draws its runs`).toBeGreaterThan(0);
+    for (const run of runs) {
+      const style = getComputedStyle(run);
+      expect(style.textDecorationLine, `${layout}: a run's underline`).toContain("underline");
+      expect(style.textDecorationColor, `${layout}: a run's underline colour`).not.toBe(
+        "rgba(0, 0, 0, 0)",
+      );
+    }
+    flushSync(() => root?.unmount());
+    host?.remove();
+    root = null;
+    host = null;
+  }
+});
+
+/** A change as the listing answers it. */
+function summary(number: number, state: string): CodeChangeSummary {
+  return {
+    id: `id-web-${number}`,
+    repo_id: "repo-web",
+    number,
+    title: `Change ${number}`,
+    state,
+    source_ref: "refs/heads/feature",
+    target_ref: "refs/heads/main",
+    head: HEAD,
+    revision: 1,
+    owner: "jane",
+    owner_kind: "human",
+    opened_at: "2026-11-01T10:00:00Z",
+    opened_position: POSITION,
+    version: 1,
+    position: POSITION,
+    repo: "web",
+    ref: `web!${number}`,
+    access: "maintain",
+  } as unknown as CodeChangeSummary;
+}
+
+const NONE = "rgba(0, 0, 0, 0)";
+
+// A CHIP ON A SELECTED ROW DRAWS NO GROUND (`aria-current` on its overlay or on
+// the row), and a state pill paints the kit's fill. Mutation: drop either arm
+// of the selected-row rule, or the merged pill's rule, and this fails.
+test("a branch chip draws no ground on a selected row, and a state pill paints its fill", async () => {
+  location.hash = "#/gitlet/changes?peek=change:web!42";
+  mount(
+    <ChangesGrid
+      rows={[summary(42, "open"), summary(41, "merged")]}
+      onLoadMore={undefined}
+      loadedNote={undefined}
+    />,
+  );
+  const rowOf = (ref: string) =>
+    eventually(() => {
+      const row = [...document.querySelectorAll<HTMLElement>('[role="row"]')].find((r) =>
+        r.textContent?.includes(ref),
+      );
+      expect(row).toBeTruthy();
+      return row!;
+    });
+  const picked = await rowOf("web!42");
+  const other = await rowOf("web!41");
+  const grounds = (row: HTMLElement) =>
+    [...row.querySelectorAll(".code-branch-chip")].map((c) => getComputedStyle(c).backgroundColor);
+  expect(grounds(picked)).toEqual([NONE, NONE]);
+  for (const ground of grounds(other)) expect(ground).not.toBe(NONE);
+  const probe = document.createElement("span");
+  probe.style.background = "var(--color-change-merged-fill)";
+  host!.append(probe);
+  const pill = other.querySelector<HTMLElement>('.code-state[data-state="merged"]')!;
+  expect(getComputedStyle(pill).backgroundColor).toBe(getComputedStyle(probe).backgroundColor);
+  expect(getComputedStyle(probe).backgroundColor).not.toBe(NONE);
+  flushSync(() => root?.unmount());
+  host?.remove();
+  location.hash = "";
+
+  mount(
+    <DataGrid<{ id: string }>
+      rows={[{ id: "a" }]}
+      rowKey={(r) => r.id}
+      isSelected={() => true}
+      aria-label="Branches"
+      columns={[{ key: "branch", header: "Branch", cell: () => <BranchChip name="main" /> }]}
+    />,
+  );
+  const chip = await eventually(() => {
+    const el = document.querySelector<HTMLElement>(".code-branch-chip");
+    expect(el).toBeTruthy();
+    return el!;
+  });
+  expect(chip.closest('[role="row"]')?.getAttribute("aria-current")).toBe("true");
+  expect(getComputedStyle(chip).backgroundColor).toBe(NONE);
+});
+
+// A STATE PILL'S WORD IS CENTRED ON ITS GLYPH, the phone's stacked grid too,
+// whose kit rule sets a pictured value's words on their baseline. Mutation:
+// drop the pill word's `align-self`, and at 390px the word rides 4px high.
+for (const width of [1440, 390]) {
+  test(`a state pill's word is centred on its glyph, at ${width}px`, async () => {
+    await page.viewport(width, 900);
+    const states = ["open", "draft", "merged", "closed"];
+    mount(
+      <ChangesGrid
+        rows={states.map((s, i) => summary(i + 1, s))}
+        onLoadMore={undefined}
+        loadedNote={undefined}
+      />,
+      width,
+    );
+    const pills = await eventually(() => {
+      const found = [...document.querySelectorAll<HTMLElement>(".code-state")];
+      expect(found).toHaveLength(states.length);
+      if (width === 390) expect(document.querySelector("[data-stacked]")).not.toBeNull();
+      return found;
+    });
+    const middle = (el: Element) => {
+      const box = el.getBoundingClientRect();
+      return box.top + box.height / 2;
+    };
+    for (const pill of pills) {
+      const glyph = pill.querySelector("svg")!;
+      const word = pill.lastElementChild!;
+      expect(word.textContent, pill.dataset.state).not.toBe("");
+      expect(Math.abs(middle(word) - middle(glyph)), pill.dataset.state).toBeLessThanOrEqual(1);
+    }
+  });
+}
+
+/** A 120-character branch name, which has to wrap inside its row. */
+const LONG_BRANCH = "frontend/".padEnd(120, "stream-the-shell-");
+
+/** The repository's branches in detail: a protected main, a long name with its change, a protected release. */
+function withBranches() {
+  const row = (name: string, extra: Record<string, unknown>) => ({
+    ref: `refs/heads/${name}`,
+    oid: HEAD,
+    position: POSITION,
+    moved_at: "2026-11-15T10:00:00Z",
+    moved_by: {
+      push_id: "p1",
+      actor: "jane",
+      actor_kind: "person",
+      actor_seat: "jane",
+      via: "git",
+    },
+    ...extra,
+  });
+  const rule = (pattern: string) => ({ patterns: [pattern], direct_push: "none" });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), location.origin);
+      if (url.pathname === "/query/code_tips") {
+        const oids = (url.searchParams.get("oids") ?? "").split(",");
+        return json({
+          repo: "web",
+          kind: "tips",
+          tips: {
+            base: BASE,
+            tips: oids.map((oid) => ({
+              oid,
+              type: "commit",
+              peeled: oid,
+              peeled_type: "commit",
+              behind: 12,
+              ahead: 3,
+            })),
+          },
+        });
+      }
+      if (url.pathname !== "/query/code_refs" || url.searchParams.get("detail") !== "true") {
+        return answer(url);
+      }
+      return json({
+        refs_detail: [
+          row("main", {
+            oid: BASE,
+            protection: rule("refs/heads/main"),
+            delete_refusal: "default_branch",
+            delete_detail: "main is web's default branch",
+          }),
+          row(LONG_BRANCH, {
+            change: { number: 42, title: "Stream the shell", state: "open" },
+            may_delete: true,
+          }),
+          row("release/2026.11", {
+            protection: rule("refs/heads/release/*"),
+            delete_refusal: "protected_delete",
+            delete_detail: "release/2026.11 is protected: its rule refuses a delete",
+          }),
+        ],
+        position: POSITION,
+        level: "session",
+      });
+    }),
+  );
+}
+
+const overlaps = (a: DOMRect, b: DOMRect) =>
+  a.left < b.right - 0.5 &&
+  b.left < a.right - 0.5 &&
+  a.top < b.bottom - 0.5 &&
+  b.top < a.bottom - 0.5;
+
+// A BRANCH ROW KEEPS EVERY CONTROL CLEAR of its words, a long name wrapping inside
+// its row, on a phone, beside a peek and at full width. Mutation: drop the phone
+// stack, or the name's wrap, and a control lands on the name or leaves the box.
+for (const [viewport, column] of [
+  [1440, 1200],
+  [390, 358],
+  [1440, 600],
+] as const) {
+  test(`a branch row keeps every control clear and its name inside it, at a ${column}px column`, async () => {
+    await page.viewport(viewport, 900);
+    withBranches();
+    location.hash = "#/gitlet/repos/web?tab=branches&view=all";
+    mount(<RepositoryPage repo="web" />, column);
+    const rows = await eventually(() => {
+      const found = [...document.querySelectorAll<HTMLElement>(".code-refs__table tbody tr")];
+      expect(found).toHaveLength(3);
+      return found;
+    });
+    const box = document.querySelector<HTMLElement>(".code-refs")!;
+    expect(box.scrollWidth).toBeLessThanOrEqual(box.clientWidth);
+    const edge = box.getBoundingClientRect();
+    for (const row of rows) {
+      expect(row.scrollWidth, row.dataset.key).toBeLessThanOrEqual(row.clientWidth);
+      const words = [
+        ...row.querySelectorAll<HTMLElement>(".code-refs__marks, .code-byline, .code-change-ref"),
+      ].map((w) => w.getBoundingClientRect());
+      for (const control of row.querySelectorAll<HTMLElement>(
+        ".code-refs__actions a, .code-refs__actions button",
+      )) {
+        const at = control.getBoundingClientRect();
+        const name = control.getAttribute("aria-label") ?? control.textContent ?? "";
+        for (const w of words) expect(overlaps(at, w), name).toBe(false);
+        expect(at.right, name).toBeLessThanOrEqual(edge.right);
+      }
+      // A STACKED ROW: the name over who moved it, the controls under both.
+      if (column < 640) {
+        const cell = (c: string) => row.querySelector(`.code-refs__${c}`)!.getBoundingClientRect();
+        expect(cell("updated").top).toBeGreaterThanOrEqual(cell("name").bottom - 0.5);
+        expect(cell("actions").top).toBeGreaterThanOrEqual(cell("updated").bottom - 0.5);
+      }
+    }
+    // HOW FAR A BRANCH IS FROM main: bars beside the columns, words where the row stacks.
+    const drift = await eventually(() => {
+      const found = document.querySelector<HTMLElement>(".code-drift");
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    const shown = (el: Element) => getComputedStyle(el).display !== "none";
+    expect(shown(drift.querySelector(".code-drift__words")!)).toBe(column < 640);
+    expect(shown(drift.querySelector(".code-drift__bars")!)).toBe(column >= 640);
+    if (column < 640) return;
+    // THE TABLE FILLS ITS BOX: the name on the title's inset, the controls ending on the box's.
+    const title = box.querySelector(".code-refs__heading")!.getBoundingClientRect();
+    const marks = rows[0]!.querySelector(".code-refs__marks")!.getBoundingClientRect();
+    expect(Math.abs(marks.left - title.left)).toBeLessThan(1);
+    const controls = rows[1]!.querySelector(".code-refs__controls")!.getBoundingClientRect();
+    expect(edge.right - controls.right).toBeCloseTo(marks.left - edge.left, 0);
+  });
+}
+
+/** A history page of three commits, the first with a 200-character subject. */
+function withHistory() {
+  const commit = (oid: string, subject: string, at: string) => ({
+    oid,
+    author: "Jane Founder",
+    authored_at: at,
+    committed_at: at,
+    subject,
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), location.origin);
+      if (url.pathname !== "/query/code_log") return answer(url);
+      return json({
+        repo: "web",
+        kind: "log",
+        log: {
+          commits: [
+            commit(HEAD, "render: ".padEnd(200, "stream the shell "), "2026-11-15T10:00:00Z"),
+            commit(BASE, "cart: cache the badge count for 30s", "2026-11-15T09:00:00Z"),
+            commit("1".repeat(40), "go.mod: bump to go 1.27", "2026-11-14T09:00:00Z"),
+          ],
+          scanned: 3,
+          complete: true,
+        },
+        pushed_by: {
+          [BASE]: {
+            push_id: "p1",
+            position: POSITION,
+            at: "2026-11-15T09:00:00Z",
+            principal: { kind: "agent", seat: "jane", run: { turn_id: "t", work_key: "ENG-399" } },
+            via: "engine",
+          },
+        },
+        position: POSITION,
+        level: "session",
+      });
+    }),
+  );
+}
+
+// A COMMIT ROW KEEPS ITS ID AND BROWSE ON ITS TITLE'S LINE where there is room, and stacks
+// them under its words on a phone or beside a peek, above the row's stretched link.
+// Mutation: drop the phone fold, or the controls' lift over the link.
+for (const [viewport, column] of [
+  [1440, 1200],
+  [390, 358],
+  [1440, 600],
+] as const) {
+  test(`a commit row's facts sit by its title or stack under it, at a ${column}px column`, async () => {
+    await page.viewport(viewport, 900);
+    withHistory();
+    location.hash = "#/gitlet/repos/web?tab=commits";
+    mount(<RepositoryPage repo="web" />, column);
+    const rows = await eventually(() => {
+      const found = [...document.querySelectorAll<HTMLElement>(".code-list__row")];
+      expect(found).toHaveLength(3);
+      return found;
+    });
+    const list = document.querySelector<HTMLElement>(".code-list")!;
+    expect(list.scrollWidth).toBeLessThanOrEqual(list.clientWidth);
+    for (const row of rows) {
+      expect(row.scrollWidth, row.dataset.key).toBeLessThanOrEqual(row.clientWidth);
+      const title = row.querySelector(".code-list__title")!.getBoundingClientRect();
+      const meta = row.querySelector(".code-list__meta")!.getBoundingClientRect();
+      const body = row.querySelector(".code-list__body")!.getBoundingClientRect();
+      const facts = row.querySelector(".code-list__facts")!.getBoundingClientRect();
+      const box = row.getBoundingClientRect();
+      expect(
+        row.querySelector(".code-list__link")!.getBoundingClientRect().right,
+      ).toBeLessThanOrEqual(box.right);
+      if (column >= 640) {
+        expect(facts.top).toBeLessThan(title.bottom);
+        expect(facts.left).toBeGreaterThanOrEqual(body.right);
+      } else {
+        expect(facts.top).toBeGreaterThanOrEqual(meta.bottom - 0.5);
+      }
+      expect(facts.right).toBeLessThanOrEqual(box.right + 0.5);
+      // THE ROW'S CONTROLS ARE WHAT A PRESS ON THEM HITS, not the link under them.
+      for (const control of row.querySelectorAll<HTMLElement>(
+        ".code-sha, a[aria-label^='Browse']",
+      )) {
+        const at = control.getBoundingClientRect();
+        const hit = document.elementFromPoint(at.left + at.width / 2, at.top + at.height / 2);
+        expect(control.contains(hit), control.getAttribute("aria-label") ?? "").toBe(true);
+      }
+    }
+  });
+}
+
+// A COMMIT'S ID STAYS PUT WHEN ITS CHECK ARRIVES: the check's slot keeps its width while the
+// marks are read, and at a phone's width a row's pill, change and tags wrap inside it.
+// Mutation: draw the slot only once the marks answer.
+const THIRD = "1".repeat(40);
+for (const [viewport, column] of [
+  [1440, 1200],
+  [390, 358],
+] as const) {
+  test(`a commit's id stays put when its check arrives, at ${viewport}px`, async () => {
+    await page.viewport(viewport, 900);
+    withHistory();
+    const history = vi.mocked(fetch).getMockImplementation()!;
+    let release = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    const tags = ["refs/tags/v2026.11.2", "refs/tags/v2026.11.1"];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input), location.origin);
+        if (url.pathname === "/query/code_log") {
+          const answer = (await (await history(input)).json()) as Record<string, unknown>;
+          return json({ ...answer, tagged: { commits: { [THIRD]: { refs: tags } } } });
+        }
+        if (url.pathname !== "/query/code_commit_marks") return history(input);
+        await held;
+        const change = { repo: "web", title: "cache the badge", state: "merged" };
+        const passed = { state: "passed", counts: { passed: 2 }, required: 2, required_passed: 2 };
+        return json({
+          commit_marks: [
+            { commit: BASE, checks: [{ ...passed, target: "refs/heads/main" }] },
+            {
+              commit: THIRD,
+              merged: [{ ...change, ref: "web!41", merge_oid: THIRD }],
+              heads: [{ change: { ...change, ref: "web!40" }, n: 2 }],
+            },
+          ],
+          position: POSITION,
+          level: "session",
+        });
+      }),
+    );
+    location.hash = "#/gitlet/repos/web?tab=commits";
+    mount(<RepositoryPage repo="web" />, column);
+    const rows = await eventually(() => {
+      const found = [...document.querySelectorAll<HTMLElement>(".code-list__row")];
+      expect(found).toHaveLength(3);
+      return found;
+    });
+    const sha = () => rows[1]!.querySelector(".code-sha")!.getBoundingClientRect();
+    const before = sha();
+    release();
+    await eventually(() => expect(rows[1]!.querySelector(".code-check-mark")).toBeTruthy());
+    await eventually(() => expect(rows[2]!.querySelector(".code-change-ref")).toBeTruthy());
+    expect([sha().x, sha().y]).toEqual([before.x, before.y]);
+    const last = rows[2]!;
+    expect(last.scrollWidth).toBeLessThanOrEqual(last.clientWidth);
+    const box = last.getBoundingClientRect();
+    for (const el of last.querySelectorAll<HTMLElement>(
+      ".code-change-ref, .code-tag-chip, .code-commit-landed",
+    )) {
+      expect(el.getBoundingClientRect().right, el.textContent!).toBeLessThanOrEqual(
+        box.right + 0.5,
+      );
+    }
+  });
+}
+
+/** The file view of `cmd/main.go` at `width`, once its third line is coloured. */
+async function colouredLine(width: number): Promise<HTMLElement> {
+  await page.viewport(width, 900);
+  location.hash = "#/gitlet/repos/web?path=cmd%2Fmain.go";
+  mount(<RepositoryPage repo="web" />, width);
+  return eventually(() => {
+    const line = document.querySelector<HTMLElement>("#L3");
+    expect(line?.querySelector(".code-syn-comment")).toBeTruthy();
+    return line!;
+  });
+}
+
+// A COLOURED LINE KEEPS THE PLAIN LINE'S BOX: an ink changes no advance, and
+// a line too wide still scrolls the card, never the page. Mutation:
+// `letter-spacing: 1px` on the keyword rule fails it.
+for (const width of [1440, 390]) {
+  test(`a coloured line keeps the plain line's box, at ${width}px`, async () => {
+    const line = await colouredLine(width);
+    const text = line.querySelector(".code-source__text")!;
+    expect(text.textContent).toBe(MAIN_GO[2]);
+    for (const kind of ["keyword", "function", "string", "comment"])
+      expect(text.querySelector(`.code-syn-${kind}`), kind).toBeTruthy();
+    // THE SAME TEXT PLAIN, a line drawn beside it with no spans.
+    const plain = line.cloneNode(true) as HTMLElement;
+    plain.removeAttribute("id");
+    plain.querySelector(".code-source__text")!.textContent = MAIN_GO[2]!;
+    line.after(plain);
+    const box = (el: HTMLElement, part: string) => el.querySelector(part)!.getBoundingClientRect();
+    const [coloured, drawn] = [box(line, ".code-source__text"), box(plain, ".code-source__text")];
+    expect(Math.abs(coloured.width - drawn.width)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(coloured.height - drawn.height)).toBeLessThanOrEqual(0.5);
+    expect(box(line, ".code-source__number").left).toBe(box(plain, ".code-source__number").left);
+    plain.remove();
+    if (width === 390) {
+      const source = line.closest<HTMLElement>(".code-source")!;
+      expect(source.scrollWidth).toBeGreaterThan(source.clientWidth);
+      expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
+    }
+  });
+}
+
+// A COMMENT IS ITALIC AND IN ITS INK, as the kit draws one. Mutation: drop
+// the comment rule's `font-style`, or read another ink, and this fails.
+test("a comment is italic and in its ink", async () => {
+  const line = await colouredLine(1440);
+  const comment = line.querySelector(".code-syn-comment")!;
+  const probe = document.createElement("span");
+  probe.style.color = "var(--color-syntax-comment)";
+  host!.append(probe);
+  expect(getComputedStyle(comment).fontStyle).toBe("italic");
+  expect(getComputedStyle(comment).color).toBe(getComputedStyle(probe).color);
+  expect(getComputedStyle(comment).color).not.toBe(getComputedStyle(line).color);
+});
+
+/** A repository's root whose head row and first entry carry subjects far wider than a row. */
+function withHome() {
+  const at = "2026-11-15T10:00:00Z";
+  const commit = (oid: string, subject: string) => ({
+    oid,
+    author: "Jane Founder",
+    authored_at: at,
+    committed_at: at,
+    subject,
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), location.origin);
+      switch (url.pathname) {
+        case "/query/code_tree": {
+          const listed = (await answer(url).json()) as Record<string, unknown>;
+          return json({ ...listed, resolved: { ref: { ref: "refs/heads/main", oid: BASE } } });
+        }
+        case "/query/code_log":
+          return json({
+            repo: "web",
+            kind: "log",
+            log: { commits: [commit(BASE, "Merge: ".padEnd(160, "cache the badge "))], scanned: 1 },
+          });
+        case "/query/code_tree_commits":
+          return json({
+            repo: "web",
+            kind: "tree_commits",
+            tree_commits: {
+              tree: BASE,
+              entries: [
+                { path: "cmd", commit: HEAD },
+                { path: "go.mod", commit: BASE },
+              ],
+              commits: [
+                commit(HEAD, "render: ".padEnd(200, "stream the shell ")),
+                commit(BASE, "go.mod: bump to go 1.27"),
+              ],
+              total: 2,
+            },
+          });
+        case "/query/code_find":
+          return json({
+            repo: "web",
+            kind: "find",
+            find: {
+              tree: BASE,
+              matches: [
+                { path: "cmd/web/main.go", oid: HEAD, mode: "100644", spans: [[8, 12]] },
+                {
+                  path: "internal/render/main_test.go",
+                  oid: HEAD,
+                  mode: "100644",
+                  spans: [[16, 20]],
+                },
+              ],
+              total: 2,
+              files: 1204,
+            },
+          });
+      }
+      return answer(url);
+    }),
+  );
+}
+
+// A REPOSITORY'S HOME HOLDS ITS WIDTH: subjects give way, an entry's age stays one line, and on
+// a phone each row stacks. Mutation: drop the subject's `overflow: hidden`, the phone rule or
+// the colgroup: this fails.
+for (const [viewport, column] of [
+  [1024, 740],
+  [640, 608],
+] as const) {
+  test(`a repository's home holds its width, its subjects giving way, at ${viewport}px`, async () => {
+    await page.viewport(viewport, 900);
+    withHome();
+    location.hash = "#/gitlet/repos/web";
+    mount(<RepositoryPage repo="web" />, column);
+    const table = await eventually(() => {
+      const found = document.querySelector<HTMLElement>(".code-entries");
+      expect(found?.querySelectorAll(".code-entries__subject")).toHaveLength(2);
+      expect(document.querySelector(".code-latest__subject")).toBeTruthy();
+      return found!;
+    });
+    const card = document.querySelector<HTMLElement>(".code-browser")!;
+    const content = document.querySelector<HTMLElement>(".crewlet-app-shell__content")!;
+    for (const el of [content, card, table]) {
+      expect(el.scrollWidth, el.className).toBeLessThanOrEqual(el.clientWidth);
+    }
+    const end = document.querySelector<HTMLElement>(".code-bar-end")!;
+    const bar = end.getBoundingClientRect();
+    expect(bar.right).toBeLessThanOrEqual(content.getBoundingClientRect().right + 0.5);
+    // THE END GROUP IS ONE LINE where there is room: Go to file never takes the whole group.
+    if (column >= 640) {
+      const tops = [...end.children].map((el) => Math.round(el.getBoundingClientRect().top));
+      expect(new Set(tops).size, tops.join(",")).toBe(1);
+    }
+    for (const row of table.querySelectorAll<HTMLElement>("tbody tr")) {
+      const box = row.getBoundingClientRect();
+      const name = row.querySelector(".code-entries__name")!.getBoundingClientRect();
+      const when = row.querySelector(".code-entries__when")!.getBoundingClientRect();
+      const subject = row.querySelector(".code-entries__subject")!.getBoundingClientRect();
+      expect(subject.right, row.dataset.key).toBeLessThanOrEqual(box.right + 0.5);
+      expect(row.querySelector("time")!.getClientRects()).toHaveLength(1);
+      if (column < 640) {
+        expect(Math.abs(name.top - when.top)).toBeLessThan(6);
+        expect(subject.top).toBeGreaterThanOrEqual(name.bottom - 0.5);
+      } else {
+        expect(subject.top).toBeLessThan(name.bottom);
+        // THE SUBJECT'S COLUMN IS THE WIDEST: the columns are not equal thirds.
+        const commit = row.querySelector(".code-entries__commit")!.getBoundingClientRect();
+        expect(commit.width, row.dataset.key).toBeGreaterThan(name.width);
+        expect(commit.width, row.dataset.key).toBeGreaterThan(when.width);
+      }
+    }
+    const latest = card.querySelector<HTMLElement>(".code-latest")!;
+    const head = latest.querySelector(".code-latest__subject")!.getBoundingClientRect();
+    const frame = card.getBoundingClientRect();
+    for (const part of [".code-sha", ".code-latest__when", "a[href*='tab=commits']"]) {
+      const at = latest.querySelector(part)!.getBoundingClientRect();
+      expect(at.right, part).toBeLessThanOrEqual(frame.right + 0.5);
+      if (column < 640) expect(at.top, part).toBeGreaterThanOrEqual(head.bottom - 0.5);
+      else expect(at.top, part).toBeLessThan(head.bottom);
+    }
+  });
+
+  // GO TO FILE'S LIST STAYS IN THE VIEWPORT. Mutation: a fixed width on the field, and this fails.
+  test(`Go to file's list stays inside the viewport at ${viewport}px`, async () => {
+    await page.viewport(viewport, 900);
+    withHome();
+    location.hash = "#/gitlet/repos/web";
+    mount(<RepositoryPage repo="web" />, column);
+    await page.getByRole("combobox", { name: "Go to file" }).fill("main");
+    const list = await eventually(() => {
+      const found = document.querySelector<HTMLElement>("[role=listbox]");
+      expect(found?.textContent).toContain("cmd/web/main.go");
+      return found!;
+    });
+    const box = list.getBoundingClientRect();
+    expect(box.left).toBeGreaterThanOrEqual(0);
+    expect(box.right).toBeLessThanOrEqual(window.innerWidth);
   });
 }

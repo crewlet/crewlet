@@ -102,6 +102,11 @@ type Sources struct {
 	// existed.
 	Company func() (*config.Company, *org.Organization)
 
+	// Research reads the web pages Ask Crewlet may read (ADR-0151), and
+	// Searcher searches them.
+	Research ResearchReader
+	Searcher ResearchSearcher
+
 	// AwaitingRestart is which of Crewlet's own services the company it is
 	// handed turns on that this node serves only once restarted, by the org
 	// projection's keys for them (`engine.Engine.AwaitingRestart`); nil names
@@ -1055,14 +1060,19 @@ func Register(r *Registry, s Sources) {
 	if s.Work != nil || s.Pages != nil || s.Usage != nil {
 		r.Register("company_feed", Everybody(), s.companyFeed)
 	}
+	if s.Research != nil && s.Company != nil {
+		r.Register("research_page", Everybody(), s.researchPage)
+	}
+	if s.Searcher != nil {
+		r.Register("research_search", Everybody(), s.researchSearch)
+	}
 	if s.Work != nil || s.Sandbox != nil {
 		r.Register("decisions", Everybody(), s.decisions)
 	}
-	// ONE INBOX FROM EVERY NATIVE DOMAIN, registered wherever either half
-	// is wired: whose inbox is the composed question's own verb, own or
-	// lead WITH NO APP, and each half is read under its own permission —
-	// see [Sources.composedInbox].
-	if s.Work != nil || s.Code != nil {
+	// ONE INBOX FROM EVERY NATIVE DOMAIN, registered wherever any half is
+	// wired, own or lead WITH NO APP; each half is read under its own
+	// permission ([Sources.composedInbox]).
+	if s.Work != nil || s.Code != nil || s.Artifacts != nil {
 		r.Register("inbox", DecidedBy(authz.ActionInbox), s.composedInbox)
 	}
 	// WHAT A PERSON DECIDED LATELY, the other half of `decisions` and

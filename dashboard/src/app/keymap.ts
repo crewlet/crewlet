@@ -292,6 +292,15 @@ const PAGE: KeyRow[] = [
     whileTyping: true,
   },
   { id: "tab", scope: "object", presses: DIGITS, does: "Go to that tab", by: "dashboard" },
+  // A REPOSITORY'S GO TO FILE (`routes/gitlet/repo/GoToFile.tsx`): the field it focuses.
+  {
+    id: "code.find",
+    scope: "object",
+    presses: [{ key: "t" }],
+    does: "Go to a file in a repository",
+    by: "dashboard",
+    service: "code",
+  },
   // AN OPEN ARTIFACT'S PANELS, each a letter that opens it and closes it
   // again (`routes/artifacts/ArtifactPage.tsx`). Its first letter wherever it
   // is free; Escape from inside a panel closes it too, the panel's own key
@@ -316,6 +325,23 @@ const PAGE: KeyRow[] = [
     scope: "artifact",
     presses: [{ key: "d" }],
     does: "Show or hide its data, where it keeps any",
+    by: "dashboard",
+  },
+  // COMMENTS AND COMMENT MODE SHARE THEIR LETTER, the panel bare and placing
+  // a comment with Shift, so each names its Shift: a window chord compares
+  // Shift only for a row that says it.
+  {
+    id: "artifact.comments",
+    scope: "artifact",
+    presses: [{ key: "c", shift: false }],
+    does: "Show or hide its comments",
+    by: "dashboard",
+  },
+  {
+    id: "artifact.comment",
+    scope: "artifact",
+    presses: [{ key: "c", shift: true }],
+    does: "Comment on a part of it: a page's section or point, a slide's element, a board's point",
     by: "dashboard",
   },
   {
@@ -635,6 +661,8 @@ export const SCOPES_APART: readonly (readonly [KeyScope, KeyScope])[] = [
   ["chatbox", "list"],
   ["chatbox", "message"],
   ["artifact", "message"],
+  // A focused message is Chatlet's, and Chatlet is no page with tabs.
+  ["message", "object"],
   // CHATLET DRAWS NO CREATE PAGE AND NO CHARTER. A PEEK can be open over it
   // (any address may carry one), and Chatlet's Escape is bound only while
   // none is (`routes/chatlet/shortcuts.ts`), so the two never answer one

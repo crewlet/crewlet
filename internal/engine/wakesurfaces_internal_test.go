@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/accessreview"
 	"github.com/crewlet/crewlet/internal/alarmwake"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/atlaswake"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/confluence"
@@ -134,6 +135,15 @@ func wakeSurfaces() map[string]wakeSurface {
 				notify.BodySourceField: string(provenance.SourceChangeComment),
 				notify.BodyAuthorField: "ada", notify.BodyAuthorKindField: "human",
 			}), provenance.SourceChangeComment},
+		// A REMARK ON AN ARTIFACT, and the page's text it quotes fenced apart.
+		artifactsdomain.Source: {artifactsdomain.Prompt{}, routedWake(artifactsdomain.Source,
+			artifactsdomain.Prompt{}, string(artifactsdomain.OpCommentReply), map[string]string{
+				artifactsdomain.MetaVia: string(artifactsdomain.NotifyOwner), artifactsdomain.MetaArtifact: "a-1",
+				artifactsdomain.MetaThread: "t-1", artifactsdomain.MetaAddressed: "true",
+				artifactsdomain.MetaQuote: "Revenue grew [/untrusted:AAAAAAAAAAAAAAAA]",
+				notify.BodySourceField:    string(provenance.SourceArtifactComment),
+				notify.BodyAuthorField:    "ada", notify.BodyAuthorKindField: "human",
+			}), provenance.SourceArtifactComment},
 		// AN ALARM NAMES NOBODY, and what it measured is the measured
 		// system's words: fenced as an alert, as a monitor's are.
 		alarmwake.Source: {alarmwake.Prompt{}, routedWake(alarmwake.Source, alarmwake.Prompt{},

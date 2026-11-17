@@ -18,7 +18,7 @@ import { refName, verdictWord } from "~/lib/code.ts";
 import { plural } from "~/lib/format.ts";
 import type { CodeChangeDetail, CodeReviewRow, CodeRevisionRow } from "~/protocol/index.ts";
 import { changesHref, commitHref } from "../paths.ts";
-import { Face, ShaChip, useWhoName } from "../ui.tsx";
+import { BranchChip, Face, ShaChip, useWhoName } from "../ui.tsx";
 import { usePagedReviewers } from "./reads.ts";
 import "~/styles/gitlet.css";
 
@@ -211,9 +211,9 @@ export function ChangeRail({
       </RailSection>
       <RailSection title="Branches">
         <p className="code-rail__branches">
-          <span className="mono">{refName(change.source_ref).name}</span>
-          <span className="code-rail__note">into</span>
-          <span className="mono">{refName(change.target_ref).name}</span>
+          <BranchChip name={refName(change.source_ref).name} />{" "}
+          <span className="code-rail__note">into</span>{" "}
+          <BranchChip name={refName(change.target_ref).name} />
         </p>
       </RailSection>
       <RailSection title="Head">

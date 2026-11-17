@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -408,10 +409,12 @@ func TestALandingNamesThePushThatBroughtItsHeadIn(t *testing.T) {
 // read, naming the push that merged it, and records no facts of it; a change
 // whose head is not in its target has its facts recorded, its touched paths
 // matched against the repository's path owners on the home, beside the digest
-// of the owners matched against.
+// of the owners matched against and the instant the home measured them, its
+// clock to the microsecond.
 //
 // Mutation: record the facts of a head its target holds rather than land it,
-// and the landing is never asked.
+// and the landing is never asked; send no instant, or the clock's nanoseconds,
+// and the facts' measured_at is not the clock's microsecond.
 func TestAChangeWhoseHeadIsInItsTargetIsLanded(t *testing.T) {
 	t.Parallel()
 	h := newGitHome(t, gitlettest.Settings())
@@ -427,7 +430,8 @@ func TestAChangeWhoseHeadIsInItsTargetIsLanded(t *testing.T) {
 		Touched: []string{}})
 	measured := h.e.hold(h.repo, 2, oid("b"), oid("1"), gitlet.RevisionFactsAnswer{MergeBase: oid("9"),
 		PatchID: oid("e"), Touched: []string{"upload/retry.go", "README.md"}})
-	h.homeLoop(t, newNudges(), time.Hour, nil)
+	c := &clock{now: time.Now().UTC().Truncate(time.Second).Add(123_456_789)}
+	h.homeLoop(t, newNudges(), time.Hour, c.Now)
 	h.e.waitDone(t, h.repo, 30*time.Second)
 	revises, landings := h.e.wrote()
 	want := gitlet.ChangeLanded{RepoID: h.repo, ChangeID: landed.ID, Revision: landed.Revision, HeadOID: landed.Head,
@@ -441,10 +445,14 @@ func TestAChangeWhoseHeadIsInItsTargetIsLanded(t *testing.T) {
 	}
 	r := revises[0]
 	matched, digest := gitlet.MatchOwners(owners, []string{"upload/retry.go", "README.md"}, false)
-	if !slices.Equal(r.RequestedOwners, matched) || r.OwnersDigest != digest || len(matched) != 1 ||
+	if !reflect.DeepEqual(r.RequestedOwners, matched) || r.OwnersDigest != digest || len(matched) != 1 ||
 		r.TargetPosition != measured.TipPosition || r.BaseOID != oid("9") || r.PatchID != oid("e") {
 		t.Fatalf("change 2's facts are %+v, want them matched to %v under digest %s at the tip's position %s",
 			r, matched, digest, measured.TipPosition)
+	}
+	if want := c.Now().Truncate(time.Microsecond); !r.MeasuredAt.Equal(want) || r.MeasuredAt.Nanosecond()%1000 != 0 {
+		t.Fatalf("change 2's facts were measured at %s, want the home's clock to the microsecond, %s",
+			r.MeasuredAt.Format(time.RFC3339Nano), want.Format(time.RFC3339Nano))
 	}
 }
 

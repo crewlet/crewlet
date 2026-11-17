@@ -56,8 +56,19 @@ type fakeArtifacts struct {
 	adoption      *artifactsdomain.Adoption
 	folderCreates []artifactsdomain.FolderCreateInput
 	moves         [][2]string
+	marks         []artifactsdomain.MarkInput
 	queries       []artifactsdomain.ListQuery
 	prefixes      []artifactsdomain.CommonPrefix
+
+	// The comment threads, and every comment write's input.
+	threads       map[artifacts.ID][]artifactsdomain.CommentThread
+	opened        []artifactsdomain.ThreadInput
+	replied       []artifactsdomain.ReplyInput
+	edited        []artifactsdomain.RemarkEdit
+	removed       []artifactsdomain.RemarkRemoval
+	resolved      []artifactsdomain.ResolveInput
+	reopened      []artifactsdomain.ReopenInput
+	commentCalled []artifactsdomain.Call
 
 	// The refusals a case injects.
 	publishErr  error
@@ -71,6 +82,7 @@ func newFakeArtifacts() *fakeArtifacts {
 		versions:  map[artifacts.ID]map[int]artifactsdomain.Version{},
 		objects:   map[objstore.Hash][]byte{},
 		transfers: map[string][]byte{},
+		threads:   map[artifacts.ID][]artifactsdomain.CommentThread{},
 	}
 }
 
@@ -554,5 +566,6 @@ func artifactDeps(f *fakeArtifacts, chart artifactChart, req requesters) builtin
 		Now:         func() time.Time { return fakeAt },
 		KitVersion:  func() string { return "0.47.0" },
 		FolderTurns: builtin.NewFolderTurns(func() time.Time { return fakeAt }),
+		Comments:    f,
 	}
 }

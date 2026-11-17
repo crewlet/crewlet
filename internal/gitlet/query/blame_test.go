@@ -37,7 +37,8 @@ func (x *fixture) gitBlame(rev, path string) map[int]string {
 // A BLAME NAMES EVERY LINE'S COMMIT AND PUSH: each line of the file, in order,
 // with the commit git's own blame names for it and the line it had there —
 // its old path where the file was renamed since — each commit once a page
-// with its author, its date and its subject, and named with the push that
+// with its author, its committer and the engine's mark (false: the person
+// committed it), its date and its subject, and named with the push that
 // introduced it. Read a few lines a page, the pages hold the range whole,
 // each naming exactly the commits its lines do, each `l:` cursor resuming at
 // the line the page before it ended before — and the range is blamed by ONE
@@ -116,7 +117,9 @@ func TestABlameNamesEveryLinesCommitAndPush(t *testing.T) {
 		}
 		for id := range named {
 			c, ok := b.Commits[id]
-			if !ok || c.Author != "Crewlet Test" || c.AuthorEmail != "test@example.com" || c.Subject == "" {
+			if !ok || c.Author != "Crewlet Test" || c.AuthorEmail != "test@example.com" || c.Subject == "" ||
+				c.Committer != "Crewlet Test" || c.CommitterEmail != "test@example.com" ||
+				c.EngineCommitted == nil || *c.EngineCommitted {
 				t.Errorf("page %d names commit %s as %+v", i, id, c)
 			}
 			if _, ok := p.PushedBy[id]; !ok {
@@ -170,9 +173,9 @@ func TestABlameNamesEveryLinesCommitAndPush(t *testing.T) {
 
 // A LONG SUBJECT AND LINE ARE DESCRIBED BY THEIR SIZE, never cut: a subject of
 // 5 000 bytes — and one of a thousand control bytes, a thousand bytes that
-// encode to six thousand — an author's name past a kibibyte and a line of
-// 9 000 bytes are each answered absent beside their size, by a log and by a
-// blame alike, and the page still fits its bound.
+// encode to six thousand — an author's name, a committer's name and address
+// past a kibibyte and a line of 9 000 bytes are each answered absent beside
+// their size, by a log and by a blame alike, and the page still fits its bound.
 //
 // Mutation: a field past its bound answered whole → the page past the bytes
 // it was cut against, and the absent field present, red.
@@ -182,6 +185,7 @@ func TestALongSubjectAndLineAreDescribedBySize(t *testing.T) {
 	long := strings.Repeat("s", 5000)
 	control := strings.Repeat("\x01", 1000)
 	name := strings.Repeat("n", 1100)
+	email := "engine@" + strings.Repeat("e", 1100) + ".example"
 	commitWith := func(subject string, files map[string]string, author string) string {
 		t.Helper()
 		for path, content := range files {
@@ -195,7 +199,7 @@ func TestALongSubjectAndLineAreDescribedBySize(t *testing.T) {
 		}
 		git := x.p.Git()
 		if author != "" {
-			git = git.Env("GIT_AUTHOR_NAME=" + author)
+			git = git.Env("GIT_AUTHOR_NAME="+author, "GIT_COMMITTER_NAME="+author, "GIT_COMMITTER_EMAIL="+email)
 		}
 		git.Run(t, x.work, "add", "-A")
 		git.Run(t, x.work, "commit", "-q", "-F", message)
@@ -219,6 +223,10 @@ func TestALongSubjectAndLineAreDescribedBySize(t *testing.T) {
 		t.Fatalf("the log lists %d commits, want 3", len(c))
 	case c[0].Author != "" || c[0].AuthorBytes != len(name) || c[0].Subject != "named at length":
 		t.Errorf("the long author reads %q, %d bytes", c[0].Author, c[0].AuthorBytes)
+	case c[0].Committer != "" || c[0].CommitterBytes != len(name) || c[0].CommitterEmail != "" ||
+		c[0].CommitterEmailBytes != len(email) || c[0].EngineCommitted == nil || *c[0].EngineCommitted:
+		t.Errorf("the long committer reads %q, %d bytes, <%q>, %d bytes, engine %v", c[0].Committer,
+			c[0].CommitterBytes, c[0].CommitterEmail, c[0].CommitterEmailBytes, c[0].EngineCommitted)
 	case c[1].Subject != "" || c[1].SubjectBytes != len(control):
 		t.Errorf("the control bytes' subject reads %q, %d bytes", c[1].Subject, c[1].SubjectBytes)
 	case c[2].Subject != "" || c[2].SubjectBytes != len(long) || c[2].Author != "Crewlet Test":
@@ -240,5 +248,11 @@ func TestALongSubjectAndLineAreDescribedBySize(t *testing.T) {
 	}
 	if commit := b.Blame.Commits[lines[0].Commit]; commit.Subject != "" || commit.SubjectBytes != len(long) {
 		t.Errorf("the blamed commit's long subject reads %q, %d bytes", commit.Subject, commit.SubjectBytes)
+	}
+	h := mustRead(t, s, blameQ(repo, gitlet.BlameQuery{Rev: head, Path: "h.txt"}))
+	if commit := h.Blame.Commits[head]; commit.Author != "" || commit.AuthorBytes != len(name) ||
+		commit.Committer != "" || commit.CommitterBytes != len(name) || commit.CommitterEmail != "" ||
+		commit.CommitterEmailBytes != len(email) || commit.EngineCommitted == nil || *commit.EngineCommitted {
+		t.Errorf("the blamed commit's long committer reads %+v", commit)
 	}
 }

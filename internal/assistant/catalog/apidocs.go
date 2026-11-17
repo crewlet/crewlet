@@ -79,7 +79,7 @@ func docKey(pattern string) string {
 
 // referenceIndex is the reference, indexed by [docKey] once.
 var referenceIndex = sync.OnceValue(func() map[string]routeDoc {
-	return indexReference(crewlet.APIReference)
+	return indexReference(crewlet.APIReference())
 })
 
 // indexReference reads a reference's routes.
@@ -363,7 +363,7 @@ var queryRow = regexp.MustCompile("^\\|\\s*`[a-z_]+`\\s*\\|\\s*`\\{([^}]*)\\}`\\
 // queryIndex is every read route's query parameters as the reference's
 // question table documents them, by [docKey].
 var queryIndex = sync.OnceValue(func() map[string][]string {
-	return indexQuery(crewlet.APIReference)
+	return indexQuery(crewlet.APIReference())
 })
 
 // indexQuery reads the question table's rows of a reference: each route's

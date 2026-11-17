@@ -112,6 +112,12 @@ import (
 // the rows they touch counted in the record's before any horizon takes what
 // is left ([countSeatDays]).
 //
+// # Its pushes are counted by day and by pusher
+//
+// Every push row it inserts is counted in its UTC day's quarter-hour and its
+// pusher's day, and every row its horizon deletes is counted out, in one move
+// none of the horizons is given ([countPushActivity]).
+//
 // # Whom each push was made for is kept on its rows
 //
 // A seat's entry carries whom its push was made for ([PushEntry.WorkingFor]),
@@ -251,7 +257,8 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	// THE CHANGES THE RECORD MOVES, before any horizon too: their rows are
 	// the record's own, which its decide counted as this writes them
 	// (revisions.go) — each entry in order, each change one version.
-	changed, err := applyChangeMoves(ctx, tx, at, p.RepoID, pushRows)
+	// THE TALLY ROWS STAY OUT OF rows: a horizon is given what an older build's rows leave it (record.go).
+	changed, tallied, err := applyChangeMoves(ctx, tx, at, p.RepoID, pushRows)
 	if err != nil {
 		return 0, err
 	}
@@ -271,7 +278,7 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	// refs it changes are written. The budget is what the record's rows
 	// leave of MaxRecordRows: a merge record's own rows (spent) among them.
 	budget := MaxRecordRows - spent
-	expired, err := a.expirePushes(ctx, tx, at, p.RepoID, budget-rows)
+	expired, gone, err := a.expirePushes(ctx, tx, at, p.RepoID, budget-rows)
 	if err != nil {
 		return 0, err
 	}
@@ -374,6 +381,11 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 		}); err != nil {
 		return 0, fmt.Errorf("gitlet: write the pushes at %s: %w", at.position, err)
 	}
+	// THE PUSHES COUNTED IN AND THE HORIZON'S OUT, in one move and apart from rows (record.go).
+	activity, err := countPushActivity(ctx, tx, at, p.RepoID, pushRows, gone)
+	if err != nil {
+		return 0, err
+	}
 	// THE CONFLICT IS A SKIP, never an abort, though no record this build
 	// applies meets one — every drop it writes is new at its own position —
 	// because an insert aborted on its primary key would stall the log on
@@ -420,7 +432,7 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	if err != nil {
 		return 0, err
 	}
-	return rows + expired + swept + forgotten, nil
+	return rows + expired + swept + forgotten + tallied + activity, nil
 }
 
 // packKind is what added e's pack, as its code_packs row names it: a merge
@@ -440,17 +452,19 @@ func (e PushEntry) packKind() PackKind {
 // change an entry opens from its push's options (revisions.go), from the
 // change rows the record finds, and answers the rows it wrote. A record
 // carrying an open reads the repository's next number first, which its opens
-// take in their entries' order.
+// take in their entries' order. It answers apart the tally rows it wrote
+// counting the changes' states (apply_counts.go), which no horizon is given.
 func applyChangeMoves(ctx context.Context, tx *sql.Tx, at applyContext, repoID string,
-	pushes []PushEntry) (int, error) {
+	pushes []PushEntry) (written, tallied int, err error) {
 
 	book, err := readChangeBook(ctx, tx, repoID, pushes, at.packed, at.at())
 	if err != nil {
-		return 0, fmt.Errorf("gitlet: the push at %s: %w", at.position, err)
+		return 0, 0, fmt.Errorf("gitlet: the push at %s: %w", at.position, err)
 	}
+	read := book.statesRead()
 	if slices.ContainsFunc(pushes, func(e PushEntry) bool { return e.Change != nil }) {
 		if err = tx.QueryRowContext(ctx, nextChangeSQL, repoID).Scan(&book.next); err != nil {
-			return 0, fmt.Errorf("gitlet: read %s's next change at %s: %w", repoID, at.position, err)
+			return 0, 0, fmt.Errorf("gitlet: read %s's next change at %s: %w", repoID, at.position, err)
 		}
 	}
 	for _, e := range pushes {
@@ -465,11 +479,13 @@ func applyChangeMoves(ctx context.Context, tx *sql.Tx, at applyContext, repoID s
 			_, _ = changeNotApplied(ctx, at, repoID, PushChangeID(e.PushID), why)
 		}
 	}
-	written, err := book.write(ctx, tx, at.maxVariables)
-	if err != nil {
-		return 0, fmt.Errorf("gitlet: the changes the push at %s moves: %w", at.position, err)
+	if written, err = book.write(ctx, tx, at.maxVariables); err != nil {
+		return 0, 0, fmt.Errorf("gitlet: the changes the push at %s moves: %w", at.position, err)
 	}
-	return written, nil
+	if tallied, err = countChanges(ctx, tx, repoID, book.counted(read)); err != nil {
+		return 0, 0, fmt.Errorf("%w (the push at %s)", err, at.position)
+	}
+	return written, tallied, nil
 }
 
 // refDrop is one object a forced update or a deletion moved a ref off: one
@@ -519,12 +535,12 @@ func leavesObject(c Command) bool {
 // push of MaxCommandsPerPush always) while no tombstone is due, and behind
 // any record of deletions the committer forms while their tombstones are
 // not yet due. Elsewhere it falls behind by the difference. Behind the
-// committer's fullest record of forced updates — 1 965 in two pushes,
-// counted two rows each — it has 65 rows for their 1 965 drops, some 1 900
+// committer's fullest record of forced updates, 1 963 in two pushes
+// counted two rows each, it has 69 rows for their 1 963 drops, some 1 894
 // short. Behind deletions whose tombstones come due in turn, the sweep takes
 // a row for each first: 996 rows are left for the thousand drops of one
-// maximal push of them, four short, and 64 for the 1 310 of the committer's
-// fullest record of them, 1 246 short. And up to 64 fewer while the push
+// maximal push of them, four short, and 67 for the 1 309 of the committer's
+// fullest record of them, 1 242 short. And up to 64 fewer while the push
 // history is expiring too. No reservation in the committer's bound closes
 // that for deletions: a deletion's lifetime is four row operations — its
 // tombstone written and swept, its drop written and forgotten — and one
@@ -789,32 +805,30 @@ func countSeatDays(ctx context.Context, tx *sql.Tx, at applyContext, pushes []Pu
 // members' clock skew past its own horizon — and every node, holding the
 // same rows in the same order, removes the same ones, never one inside the
 // horizon.
+//
+// It answers what it deleted as the activity counts it, which the record's
+// apply counts out ([countPushActivity]).
 func (a *Applier) expirePushes(ctx context.Context, tx *sql.Tx, at applyContext, repoID string,
-	budget int) (int, error) {
+	budget int) (int, pushActivity, error) {
 
 	limit := min(HorizonDeletesPerRecord, budget)
 	if limit <= 0 {
-		return 0, nil
+		return 0, pushActivity{}, nil
 	}
 	horizon := store.EncodeTime(at.brokerAt.Add(-PushHistory))
 	expired, _, _, err := pushesWithin(ctx, tx, HorizonBytesPerRecord,
 		func(instant int64) bool { return instant >= horizon }, expiredPushesSQL, repoID, limit)
 	if err != nil {
-		return 0, fmt.Errorf("gitlet: read %s's expired pushes: %w", repoID, err)
+		return 0, pushActivity{}, fmt.Errorf("gitlet: read %s's expired pushes: %w", repoID, err)
 	}
 	if len(expired) == 0 {
-		return 0, nil
+		return 0, pushActivity{}, nil
 	}
-	list, err := jsonList(expired)
+	n, gone, err := deletePushes(ctx, tx, expired)
 	if err != nil {
-		return 0, err
+		return 0, pushActivity{}, fmt.Errorf("gitlet: delete %s's expired pushes: %w", repoID, err)
 	}
-	res, err := tx.ExecContext(ctx, deletePushesSQL, list)
-	if err != nil {
-		return 0, fmt.Errorf("gitlet: delete %s's expired pushes: %w", repoID, err)
-	}
-	n, _ := res.RowsAffected()
-	return int(n), nil
+	return n, gone, nil
 }
 
 // sweepTombstones removes, inside the record's own repository and within limit
@@ -941,6 +955,10 @@ func (a *Applier) sweepTombstones(ctx context.Context, tx *sql.Tx, at applyConte
 // collector takes it as it takes the repository's live packs'. SO DOES A REF
 // DROP, its grace or not: it keeps an object of the repository's own packs
 // reachable, and those packs go with it.
+//
+// Each push it deletes is counted out of the activity on top of its rows, and
+// a part that finds no push takes up to PurgePartRows of what is left of it
+// (apply_activity.go).
 func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContext, p PurgePart) (int, error) {
 	var parts int
 	if err := tx.QueryRowContext(ctx, purgePartsSQL, p.RepoID).Scan(&parts); err != nil {
@@ -948,6 +966,12 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 	}
 	if p.Part != parts+1 {
 		return 0, nil
+	}
+	// ITS REPOSITORY TALLY ROW moves on the first part, deleted to purging, beside the
+	// part's own rows and never charged to its budget.
+	before, err := tallyStandingIn(ctx, tx, p.RepoID)
+	if err != nil {
+		return 0, err
 	}
 	budget := PurgePartRows
 	deleted := 0
@@ -957,17 +981,22 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 		return 0, fmt.Errorf("gitlet: read %s's pushes to purge: %w", p.RepoID, err)
 	}
 	if len(pushIDs) > 0 {
-		list, err := jsonList(pushIDs)
-		if err != nil {
-			return 0, err
+		n, counted, deleteErr := deletePushes(ctx, tx, pushIDs)
+		if deleteErr != nil {
+			return 0, fmt.Errorf("gitlet: purge %s's pushes: %w", p.RepoID, deleteErr)
 		}
-		res, err := tx.ExecContext(ctx, deletePushesSQL, list)
-		if err != nil {
-			return 0, fmt.Errorf("gitlet: purge %s's pushes: %w", p.RepoID, err)
+		moved, moveErr := moveActivity(ctx, tx, at.maxVariables, p.RepoID, counted.negated())
+		if moveErr != nil {
+			return 0, moveErr
 		}
-		n, _ := res.RowsAffected()
-		deleted += int(n)
+		deleted += n + moved
 		budget -= len(pushIDs)
+	} else {
+		left, leftErr := purgeLeftActivity(ctx, tx, p.RepoID)
+		if leftErr != nil {
+			return 0, leftErr
+		}
+		deleted += left
 	}
 	if cut {
 		budget = 0
@@ -1114,7 +1143,11 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 		gone.tombstones, livePacksGone, liveBytesGone, liveObjectsGone, at.packed, p.RepoID); err != nil {
 		return 0, fmt.Errorf("gitlet: count %s's purge at %s: %w", p.RepoID, at.position, err)
 	}
-	return deleted + 1, nil
+	moved, tallyErr := retally(ctx, tx, p.RepoID, before)
+	if tallyErr != nil {
+		return 0, tallyErr
+	}
+	return deleted + 1 + moved, nil
 }
 
 // applyPurge removes what remains of a repository and writes its deletion
@@ -1123,7 +1156,8 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // redelivery of the marker's own record, which its gate lets through by op id,
 // deletes nothing and inserts nothing. Unbounded statements are safe because
 // the decide forms a purge only once at most PurgePartRows of the
-// repository's pushes, refs, packs, retired packs, ref drops, changes'
+// repository's pushes and the days and pusher days they are counted in,
+// refs, packs, retired packs, ref drops, changes'
 // revisions, authors, bodies and rows and their conversations' rows — its
 // reviewers, participants, comments, reviews, findings, revisions' facts and
 // mergeability among them — the changes' notices by their counts
@@ -1135,9 +1169,9 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // MaxProtectionsPerRepo rules, MaxPathOwners path owners (one row each, their
 // globs packed into it) and a published chain of at most MaxPublishedLayers
 // layers of MaxLayerParts parts each: with the name claim, the row, its kind's
-// count and the marker that is PurgePartRows + MaxProtectionsPerRepo +
-// MaxPathOwners + MaxPublishedLayers × (1 + MaxLayerParts) + 4 rows, which the
-// limits test holds within MaxRecordRows. A change's revisions, authors, body
+// count, its repository tally row and the marker that is PurgePartRows +
+// MaxProtectionsPerRepo + MaxPathOwners + MaxPublishedLayers × (1 +
+// MaxLayerParts) + 5 rows, which the limits test holds within MaxRecordRows. A change's revisions, authors, body
 // and conversation go before the changes, through which alone they are found.
 //
 // AN OLD NAME a rename left redirecting to the repository is NOT released
@@ -1168,6 +1202,7 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 	}
 	for _, stmt := range []string{
 		purgeAllPushesSQL, purgeAllRefsSQL, purgeAllPacksSQL, purgeAllRetiredSQL, purgeAllDropsSQL,
+		purgeAllPushDaysSQL, purgeAllPusherDaysSQL,
 		purgeAllRevisionsSQL, purgeAllAuthorsSQL, purgeAllReviewersSQL, purgeAllParticipantsSQL,
 		purgeAllFindingsSQL, purgeAllCommentsSQL, purgeAllFindingTextsSQL, purgeAllReviewsSQL,
 		purgeAllFactsSQL, purgeAllBodiesSQL, purgeAllMergeabilitySQL, purgeAllConversationsSQL,
@@ -1201,11 +1236,21 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 	case err != nil:
 		return 0, fmt.Errorf("gitlet: read %s's kind at %s: %w", p.RepoID, at.position, err)
 	}
+	before, err := tallyStandingIn(ctx, tx, p.RepoID)
+	if err != nil {
+		return 0, err
+	}
 	if res, err = tx.ExecContext(ctx, removeRepoSQL, p.RepoID); err != nil {
 		return 0, fmt.Errorf("gitlet: remove %s at %s: %w", p.RepoID, at.position, err)
 	}
 	n, _ = res.RowsAffected()
 	deleted += int(n)
+	// AND COUNTED OUT OF ITS REPOSITORY TALLY ROW, pruned where it was the key's last.
+	moved, err := retally(ctx, tx, p.RepoID, before)
+	if err != nil {
+		return 0, err
+	}
+	deleted += moved
 	if n > 0 {
 		if res, err = tx.ExecContext(ctx, uncountKindSQL, kind); err != nil {
 			return 0, fmt.Errorf("gitlet: count %s out at %s: %w", p.RepoID, at.position, err)
@@ -1380,7 +1425,8 @@ const (
 	expiredPushesSQL = `SELECT push_id, row_bytes, at FROM code_pushes WHERE repo_id = ?
 		ORDER BY position, push_id LIMIT ?`
 	deletePushesSQL = `DELETE FROM code_pushes
-		WHERE push_id IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
+		WHERE push_id IN (SELECT CAST(value AS TEXT) FROM json_each(?))
+		RETURNING at, via, actor_kind, actor_seat`
 	tombstonesOldestSQL = `SELECT ref, position, at FROM code_refs WHERE repo_id = ? AND target = ''
 		ORDER BY at, ref LIMIT ?`
 	deleteRefsSQL = `DELETE FROM code_refs WHERE rowid IN (SELECT r.rowid

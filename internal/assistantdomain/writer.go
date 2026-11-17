@@ -285,6 +285,35 @@ func (w *Writer) TitleConversation(ctx context.Context, c Call, id uuid.UUID,
 		}))
 }
 
+// SummarizeConversation records the summary of a conversation's first through
+// messages, which the prompt carries in their place.
+func (w *Writer) SummarizeConversation(ctx context.Context, c Call, id uuid.UUID,
+	summary string, through int) (statelog.Result, error) {
+
+	if err := c.validate(true); err != nil {
+		return statelog.Result{}, err
+	}
+	if err := checkText("the summary", summary, SummaryMaxBytes); err != nil {
+		return statelog.Result{}, err
+	}
+	if through < 1 {
+		return statelog.Result{}, invalid("a summary covers at least one message")
+	}
+	sealed, err := w.sealer.sealString(summary, AAD(id, RecordConversation, id, ColumnSummary))
+	if err != nil {
+		return statelog.Result{}, err
+	}
+	subject, scope := ConversationSubject(id), ScopeSet{Subject: true}
+	return w.publish(ctx, request(subject, scope, c.OpID, statelog.PatternArbitrated,
+		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			if _, err := owned(ctx, tx, c.Owner, id.String()); err != nil {
+				return statelog.Decision{}, err
+			}
+			return decision(stamp, c.By, subject, OpConversationSummarized, scope, c.OpID,
+				ConversationSummarized{SummarySealed: sealed, Through: through}, w.now())
+		}))
+}
+
 // ClearConversation purges one of the owner's conversations at once, the Clear
 // gesture: everything in it goes, and its deletion marker keeps any later
 // record about it from writing a row. Revoking the turn's grants and declining

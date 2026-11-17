@@ -74,6 +74,30 @@ func TestSetClaudeLimitsBecomeFlags(t *testing.T) {
 	}
 }
 
+// THE ENTRY'S EFFORT REACHES THE BOX'S HARNESS as its runs on the host pass it:
+// Claude Code's flag on a release that takes it, OpenCode's model variant. None
+// set, neither is.
+func TestAnEntrysEffortReachesTheBoxsHarness(t *testing.T) {
+	t.Parallel()
+	cmd := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x", Model: "opus", Effort: "xhigh"},
+		executor.Paths{}, ""))
+	if want := `if at 2 1 163; then set -- "$@" --effort 'xhigh'; fi`; !strings.Contains(cmd, want) {
+		t.Errorf("the claude-code run is missing %q:\n%s", want, cmd)
+	}
+	cmd = scriptOf(t, commandOf(opencode(), sandbox.RunRequest{Brief: "x",
+		Model: "anthropic/claude-sonnet-5", Effort: "high"}, executor.Paths{}, ""))
+	if want := "--model 'anthropic/claude-sonnet-5#high'"; !strings.Contains(cmd, want) {
+		t.Errorf("the opencode run is missing %q:\n%s", want, cmd)
+	}
+	for _, h := range []executor.Harness{claude(), opencode()} {
+		cmd = scriptOf(t, commandOf(h, sandbox.RunRequest{Brief: "x", Model: "anthropic/claude-sonnet-5"},
+			executor.Paths{}, ""))
+		if strings.Contains(cmd, "--effort") || strings.Contains(cmd, "#") && strings.Contains(cmd, "claude-sonnet-5#") {
+			t.Errorf("%T passes an effort nobody set:\n%s", h, cmd)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------
 // claude-code: the parser
 // ---------------------------------------------------------------------

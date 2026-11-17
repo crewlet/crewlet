@@ -16,8 +16,8 @@ import (
 //
 // A CLOSED SET, and most advisories carry none: an advisory with no class is
 // still answered by `crewlet validate`, a `/config` write and the apply log,
-// and the advisor shows it in its own words. A class is given to an advisory
-// whose fix the advisor can build.
+// and the advisor lists it in its own title and person words. A class is given
+// to an advisory whose fix the advisor can build.
 type AdvisoryClass string
 
 const (
@@ -53,14 +53,30 @@ const FrequentScheduleFires = 12
 // seven days, so every day-of-week restriction is seen. It is a Monday.
 var referenceWeek = time.Date(2030, time.January, 7, 0, 0, 0, 0, time.UTC)
 
-// classed is advisory with its class and its words for the person who owns
-// the company ([Warning.Person]): message is the operator's, as `crewlet
-// validate` prints it, and person says the same without a document key.
-func classed(class AdvisoryClass, path Path, message, person string) Warning {
-	w := advisory(path, message)
-	w.Class, w.Person = class, person
+// classed is a's advisory at path with its class: message is the operator's,
+// as `crewlet validate` prints it, and a's words say the same without a
+// document key.
+func classed(class AdvisoryClass, a advice, path Path, message string) Warning {
+	w := a.raise(path, message)
+	w.Class = class
 	return w
 }
+
+// The words of the four classed advisories ([AdvisoryClasses]).
+var (
+	healthAdvice = says("No agent watches the engine's own alarms",
+		"No agent is told when an alarm fires, so nobody hears of it until someone opens the "+
+			"dashboard. Let one agent watch the engine's health.")
+	auxiliaryAdvice = says("Agents that learn on their main model",
+		"Learning runs on the same model as the agent's own work, so it costs more than it "+
+			"needs to. Choose a smaller model for learning.")
+	scheduleAdvice = says(fmt.Sprintf("Schedules run %d or more times a day", FrequentScheduleFires),
+		"Each run starts a turn whether or not anything changed, and every turn costs. Run it "+
+			"less often, or date a task for when to check.")
+	directBoxAdvice = says("Agents run directly on the engine's own server",
+		"An agent on the engine's own server can read every repository and act as any other "+
+			"agent. Run agents in a container or cloud sandbox instead.")
+)
 
 // healthWarnings advises a company with agent seats that gives none of them
 // `health_tools`: an alarm that fires on a node wakes the seats holding the
@@ -85,13 +101,10 @@ func (c *Company) healthWarnings() []Warning {
 	if first == nil {
 		return nil
 	}
-	return []Warning{classed(ClassHealthUnheld, first,
+	return []Warning{classed(ClassHealthUnheld, healthAdvice, first,
 		"no agent seat holds health_tools, so an alarm that fires on a node wakes no "+
 			"agent and nobody hears it until a person opens the dashboard. Set "+
-			"health_tools on the seat that looks after operations",
-		"No agent watches the engine's own alarms, so an alarm reaches nobody until a "+
-			"person opens the dashboard. Let the agent that looks after operations read "+
-			"the engine's health.")}
+			"health_tools on the seat that looks after operations")}
 }
 
 // auxiliaryWarnings advises every agent seat whose auxiliary chain starts on
@@ -120,22 +133,26 @@ func (c *Company) auxiliaryWarnings() []Warning {
 			continue
 		}
 		handle := seat.Handle()
-		w := classed(ClassAuxiliaryModel, at(path, "llm_auxiliary"), fmt.Sprintf(
+		w := classed(ClassAuxiliaryModel, auxiliaryAdvice, at(path, "llm_auxiliary"), fmt.Sprintf(
 			"%s's reflection and summaries run on providers.llm.%s, the model its "+
 				"executor runs on, so learning costs a share of the seat's own spend "+
 				"at that model's price. Point llm_auxiliary at an entry with a smaller model",
-			handle, aux[0]), auxiliaryPerson)
+			handle, aux[0]))
+		// NO ITEM: the seat is all that tells two apart, so several are named as a count.
 		w.Seat = handle
 		out = append(out, w)
 	}
 	return out
 }
 
-// auxiliaryPerson is [ClassAuxiliaryModel] in a person's words: the same for
-// every seat, which the warning names apart (Warning.Seat), so a screen says
-// it once for all of them.
-const auxiliaryPerson = "Reflection and summaries run on the same model as the agent's own work, " +
-	"so learning costs a share of its spend at that model's price. Choose a smaller model for its routines."
+// ModelName is a providers.llm entry as a person reads it: its model, or its
+// key where it names none.
+func (c *Company) ModelName(key string) string {
+	if m := c.Providers.LLM[key].Model; m != "" {
+		return m
+	}
+	return key
+}
 
 // SameModel reports whether two providers.llm entries run one model: the
 // same entry, or two driving one harness with one model id.
@@ -166,16 +183,13 @@ func (c *Company) scheduleWarnings() []Warning {
 			if !ok || fires < FrequentScheduleFires {
 				continue
 			}
-			w := classed(ClassScheduleFrequent, at(idx(path, i), "cron"), fmt.Sprintf(
+			w := classed(ClassScheduleFrequent, scheduleAdvice, at(idx(path, i), "cron"), fmt.Sprintf(
 				"schedule %q fires %d times a day, and each fire starts a turn whether or "+
 					"not anything changed. If it checks for something that happens "+
 					"(a deploy, a merge), file a work item dated for when to look "+
-					"instead; otherwise run it less often", s.Name, fires), fmt.Sprintf(
-				"The schedule %s runs %d times a day, and each run starts a turn whether or "+
-					"not anything changed. A check that waits for something to happen, such "+
-					"as a deploy, is better as a task dated for when to look. Otherwise run "+
-					"it less often.", s.Name, fires))
+					"instead; otherwise run it less often", s.Name, fires))
 			w.Seat, w.Unit = seat, unit
+			w.Item = fmt.Sprintf("%s (%d a day)", s.Name, fires)
 			out = append(out, w)
 		}
 	}

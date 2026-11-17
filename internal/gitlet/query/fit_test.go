@@ -3,7 +3,9 @@ package query_test
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/rand/v2"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -54,6 +56,12 @@ func TestEveryAnswerFitsAPage(t *testing.T) {
 			files+1)
 	}
 	pages(t, s, treeQ(repo, gitlet.TreeQuery{Rev: head, Path: "wide"}), limit)
+	// A FIND of the most files it answers, over every file of the tree.
+	if a := mustRead(t, s, findQ(repo, head, "e", gitlet.MaxFindLimit)); encoded(t, a) > limit ||
+		a.Find.Total != files+1 || len(a.Find.Matches) == 0 {
+		t.Errorf("the find of e answered %d matches of %d in %d bytes, want some of %d, within %d",
+			len(a.Find.Matches), a.Find.Total, encoded(t, a), files+1, limit)
+	}
 
 	text := pages(t, s, blobQ(repo, gitlet.BlobQuery{Rev: head, Path: "huge.txt"}), limit)
 	if joined(text) != tree["huge.txt"] {
@@ -121,6 +129,55 @@ func TestEveryAnswerFitsAPage(t *testing.T) {
 	}
 	if a := mustRead(t, s, reanchorQ(repo, gitlet.ReanchorQuery{Head: atBound, Anchors: anchors})); encoded(t, a) > limit {
 		t.Errorf("the re-anchoring of %d anchors encodes to %d bytes, past %d", len(anchors), encoded(t, a), limit)
+	}
+
+	// A HISTORY OF THE WIDEST COMMITS: every person field at its encoded bound
+	// in `&` (six bytes encoded; git strips `<` from an ident), every other
+	// commit the engine's convention: each page fits, every commit whole.
+	wide := func(prefix string) string {
+		amps := (gitlet.MaxLogPersonBytes - len(prefix)) / 6
+		return prefix + strings.Repeat("&", amps) + strings.Repeat("w", gitlet.MaxLogPersonBytes-len(prefix)-6*amps)
+	}
+	person, address := wide(""), wide("a@")
+	engine := wide(gitlet.EngineCommitterLocal + "@")
+	subject := strings.Repeat("&", gitlet.MaxLogSubjectBytes/6) + strings.Repeat("s", gitlet.MaxLogSubjectBytes%6)
+	marked := map[string]bool{}
+	for i := range gitlet.MaxLogLimit {
+		name, email, convention := person, address, i%2 == 1
+		if convention {
+			name, email = gitlet.EngineCommitterName, engine
+		}
+		id := x.p.Git().Env("GIT_AUTHOR_NAME="+person, "GIT_AUTHOR_EMAIL="+address, "GIT_COMMITTER_NAME="+name,
+			"GIT_COMMITTER_EMAIL="+email).Commit(t, x.work, map[string]string{"history.txt": strconv.Itoa(i)},
+			subject)
+		marked[id] = convention
+	}
+	x.push(gitlettest.RepoName, "main")
+	tip, _ = x.tip("refs/heads/main")
+	history := pages(t, s, logQ(repo, gitlet.LogQuery{Rev: tip, Path: "history.txt", Limit: gitlet.MaxLogLimit}),
+		limit)
+	listed := 0
+	for _, p := range history {
+		for _, c := range p.Log.Commits {
+			listed++
+			switch {
+			case c.Author != person || c.AuthorEmail != address || c.Subject != subject:
+				t.Errorf("commit %s at its bounds reads author %d bytes, address %d, subject %d", c.OID,
+					len(c.Author), len(c.AuthorEmail), len(c.Subject))
+			case marked[c.OID] && (c.Committer != gitlet.EngineCommitterName || c.CommitterEmail != engine):
+				t.Errorf("commit %s reads committer %q <%d bytes>, want the engine's at its bound", c.OID,
+					c.Committer, len(c.CommitterEmail))
+			case !marked[c.OID] && (c.Committer != person || c.CommitterEmail != address):
+				t.Errorf("commit %s reads committer %d bytes <%d bytes>, want the person's at its bound", c.OID,
+					len(c.Committer), len(c.CommitterEmail))
+			case c.EngineCommitted == nil || *c.EngineCommitted != marked[c.OID]:
+				t.Errorf("commit %s is marked %v, want %t", c.OID, c.EngineCommitted, marked[c.OID])
+			}
+		}
+	}
+	if listed != gitlet.MaxLogLimit || len(history) < 2 {
+		t.Errorf("the widest history's %d pages list %d commits, want all %d in several", len(history), listed,
+			gitlet.MaxLogLimit)
 	}
 }
 
@@ -246,6 +303,45 @@ func TestTheTextCostIsJSONs(t *testing.T) {
 		}
 		if got, want := query.TextCost([]byte(s.String())), len(out)-2; got != want {
 			t.Fatalf("the page costs %q at %d bytes; encoding/json writes %d", s.String(), got, want)
+		}
+	}
+}
+
+// A DIRECTORY'S LAST COMMITS FIT A PAGE: 300 entries of 250 `<` bytes, each
+// last changed by its own commit whose author, address and subject are at
+// their encoded bounds, read page by page at the shipped bound: every page
+// within it, the pages holding every entry.
+// Mutation: leave a commit's cost, or its push's, out of the cut.
+func TestADirectorysLastCommitsFitAPage(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
+	name := func(i int) string { return fmt.Sprintf("d/%03d%s", i, strings.Repeat("<", 247)) }
+	ident := fmt.Sprintf("%s <%s@example.com>", strings.Repeat("&", gitlet.MaxLogPersonBytes/6),
+		strings.Repeat("&", (gitlet.MaxLogPersonBytes-12)/6))
+	subject := strings.Repeat("<", gitlet.MaxLogSubjectBytes/6)
+	tree := map[string]histNode{}
+	for i := range 300 {
+		tree[name(i)] = file("0")
+	}
+	hist := []histCommit{{ref: "refs/heads/main", tree: tree, date: 1_700_000_000}}
+	for i := range 300 {
+		tr := maps.Clone(hist[i].tree)
+		tr[name(i)] = file("1")
+		hist = append(hist, histCommit{ref: "refs/heads/main", parents: []int{i}, tree: tr,
+			date: 1_700_000_100 + int64(i), ident: ident, msg: subject})
+	}
+	ids := writeHistory(t, x.p.Git(), x.work, hist)
+	x.push(gitlettest.RepoName, "refs/heads/main:refs/heads/main")
+	repo := x.repo(gitlettest.RepoName)
+	x.synced(0, repo)
+	ps := pages(t, x.server(0, query.Options{}), treeCommitsQ(repo, ids[300], "d"), gitlet.MaxGitAnswerBytes)
+	got, commits := entriesOf(t, ps)
+	if len(got) != 300 || len(ps) < 3 {
+		t.Fatalf("the directory's last commits gave %d entries in %d pages, want 300 in several", len(got), len(ps))
+	}
+	for _, c := range commits {
+		if c.Subject == "" || c.Author == "" {
+			t.Fatalf("commit %s is carried with its subject or author described, want both at their bound", c.OID)
 		}
 	}
 }

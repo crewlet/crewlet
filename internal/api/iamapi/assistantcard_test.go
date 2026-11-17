@@ -47,3 +47,35 @@ func TestTheSeatsCardReadsTheSeatsAnswer(t *testing.T) {
 		t.Error("the seats card reads no path; the walk is not reading its spec")
 	}
 }
+
+// list_audit_events' identity card reads only keys GET /iam/audit answers.
+func TestTheIdentityTrailCardReadsTheAuditAnswer(t *testing.T) {
+	t.Parallel()
+	tool, ok := catalog.Lookup("list_audit_events")
+	if !ok {
+		t.Fatal("the catalogue holds no list_audit_events")
+	}
+	args, reached := assistanttest.CardVariants(t, tool)["identity"]
+	if !reached {
+		t.Fatal("no example arguments reach list_audit_events' identity card")
+	}
+	delete(args, "about")
+	delete(args, "event")
+	req, err := tool.Request(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Method != http.MethodGet || req.Path != "/iam/audit" {
+		t.Fatalf("the identity trail sends %s %s, not GET /iam/audit", req.Method, req.Path)
+	}
+	got := newRig(t).as(administrator(), req.Method, req.Path+"?"+req.Query.Encode(), nil)
+	if got.status != http.StatusOK {
+		t.Fatalf("GET /iam/audit answered %d %v", got.status, got.body)
+	}
+	held, _ := assistanttest.HoldCard(t, "list_audit_events/identity",
+		tool.Cards["identity"], got.body,
+		assistanttest.ValueTypes{"row": reflect.TypeFor[iamapi.AuditRow]()})
+	if held == 0 {
+		t.Error("the identity trail's card reads no path; the walk is not reading its spec")
+	}
+}

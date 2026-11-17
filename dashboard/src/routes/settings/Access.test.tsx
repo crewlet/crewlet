@@ -376,7 +376,7 @@ test("a seat names who holds it and a token the seat its row binds", async () =>
   expect(vacant?.querySelector(".crewlet-statcard__value")?.textContent).toBe("1");
   // What the figure is out of, in words: "1 / 3 total" read as a fraction
   // with its slash missing.
-  expect(within(vacant as HTMLElement).getByText("of 3 human seats · 1 invited")).toBeTruthy();
+  expect(within(vacant as HTMLElement).getByText("of 3 · 1 invited")).toBeTruthy();
   // AND ITS ROW NAMES THE INVITATION rather than "Open seat".
   const sam = screen
     .getAllByRole("link", { name: /Sam Support/ })
@@ -868,8 +868,8 @@ test("the open invitations are listed, and the toggle asks for every state", asy
 // WHAT THE FIGURE IS OUT OF, in words, and a figure of none says the seats are
 // held rather than leaving "0" over a bare total.
 test("the open-seats figure says what it is out of", () => {
-  expect(openSeatsWords(0, 0, 4)).toBe("all 4 human seats are held");
-  expect(openSeatsWords(0, 0, 1)).toBe("the one human seat is held");
-  expect(openSeatsWords(2, 0, 4)).toBe("of 4 human seats");
-  expect(openSeatsWords(0, 1, 3)).toBe("of 3 human seats · 1 invited");
+  expect(openSeatsWords(0, 0, 4)).toBe("every seat is held");
+  expect(openSeatsWords(0, 0, 1)).toBe("every seat is held");
+  expect(openSeatsWords(2, 0, 4)).toBe("of 4");
+  expect(openSeatsWords(0, 1, 3)).toBe("of 3 · 1 invited");
 });

@@ -25,7 +25,8 @@ import (
 //     a flat hour would refuse every rebuild above about 3.5 GiB while
 //     code.limits.repo_max_bytes admits a tebibyte; and a read's ten seconds
 //     kills the scan of any large push.
-//   - A TRANSFER (upload-pack, receive-pack) is a client's leg at the floor
+//   - A TRANSFER (upload-pack, receive-pack, and a download of a file's
+//     bytes or an archive, [DownloadDeadline]) is a client's leg at the floor
 //     every transfer is held to, objstore.ReadBase + objstore.PaceFor, IN
 //     SERIES with the local pack work over the same bytes. receive-pack adds
 //     the engine's hook after both, since all three phases run inside one
@@ -147,6 +148,10 @@ func transferDeadline(bytes int64) time.Duration {
 func UploadPackDeadline(liveBytes int64) time.Duration {
 	return transferDeadline(liveBytes)
 }
+
+// DownloadDeadline bounds one download of bytes to a client: a file's bytes or
+// an archive, the client's leg in series with local work over the same bytes.
+func DownloadDeadline(bytes int64) time.Duration { return transferDeadline(bytes) }
 
 // ReceivePackDeadline bounds one receive-pack into a repository holding
 // liveObjects objects. Its phases run in series in one process: the client's

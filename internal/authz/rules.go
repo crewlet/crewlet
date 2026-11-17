@@ -108,7 +108,8 @@ const (
 	// socket.
 	ActionCodeRead Action = "code.read"
 	// ActionCodeGit admits the git transport — the advertisement, a
-	// fetch's upload-pack and a push's receive-pack — whose grant then
+	// fetch's upload-pack and a push's receive-pack — and its two
+	// downloads, a file's bytes and a commit's ZIP, whose grant then
 	// decides by service: a push is refused at its advertisement to a
 	// principal that may push nothing, and every command it carries is
 	// judged by the grant's ref rule.
@@ -154,6 +155,10 @@ const (
 	// own log (internal/inbox), so each domain's are written by a verb of
 	// its own.
 	ActionCodeMarkInbox Action = "code_mark_inbox"
+	// ActionArtifactMarkInbox is a person's gesture over their own COMMENT
+	// notices, the artifacts log's half (the operator tool
+	// `artifact_mark_inbox`), under no app: a comment is a relation.
+	ActionArtifactMarkInbox Action = "artifact_mark_inbox"
 
 	// THE CODE WRITE TOOLS, a seat's and a person's assistant's, named after
 	// the tools and decided as the git transport's push is: admitted for
@@ -691,6 +696,10 @@ const (
 	// for either.
 	ActionArtifactList Action = "list_artifacts"
 	ActionArtifactRead Action = "get_artifact"
+	// ActionArtifactRender renders a version in the engine's browser as a
+	// viewer sees it: a read of everything get_artifact reads, its data
+	// included, that writes nothing.
+	ActionArtifactRender Action = toolname.RenderArtifact
 	// THE DASHBOARD SOURCE CATALOGUE is the engine's own vocabulary, read
 	// before a board exists, so it is everybody's: what a source ANSWERS is
 	// decided as each board's viewer, never by who listed it.
@@ -724,6 +733,14 @@ const (
 	ActionArtifactDataRead  Action = "read_artifact_data"
 	ActionArtifactDataQuery Action = "query_artifact_data"
 	ActionArtifactDataWrite Action = "write_artifact_data"
+	// COMMENTS (ADR-0154): reading threads is a viewer's, every write a
+	// commenter's; the domain's writer keeps an edit to the remark's author
+	// and a removal to its author or an administrator moderating.
+	ActionArtifactCommentList    Action = "list_artifact_comments"
+	ActionArtifactComment        Action = "comment_on_artifact"
+	ActionArtifactCommentResolve Action = "resolve_artifact_comment"
+	ActionArtifactCommentEdit    Action = "edit_artifact_comment"
+	ActionArtifactCommentRemove  Action = "remove_artifact_comment"
 
 	// ActionArtifactForce discards a newer version than the one the writer
 	// read: a publish asks it from inside, once it knows the base is stale.
@@ -1401,6 +1418,8 @@ var rules = map[Action]rule{
 	// (ADR-0110), so no code notice is theirs to list, count or mark.
 	ActionCodeMarkInbox: {class: ClassOwnRecord, app: iam.GrantGitlet, humanOnly: true,
 		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionArtifactMarkInbox: {class: ClassOwnRecord, humanOnly: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
 
 	// --- reading the atlas ------------------------------------------- //
 	//
@@ -2042,6 +2061,8 @@ var rules = map[Action]rule{
 		assist: AssistRead},
 	ActionArtifactRead: {class: ClassShared, minRole: artifacts.RoleViewer,
 		recency: iam.RecencyAny, assist: AssistRead},
+	ActionArtifactRender: {class: ClassShared, minRole: artifacts.RoleViewer,
+		recency: iam.RecencyAny, assist: AssistRead},
 	// CREATING IS THE APP AND NOTHING ELSE: there is no artifact yet to hold
 	// a relation to, and its creator becomes its owner.
 	ActionArtifactCreate: {class: ClassApp, app: iam.GrantArtifacts,
@@ -2071,6 +2092,19 @@ var rules = map[Action]rule{
 		recency: iam.RecencyAny, assist: AssistRead},
 	ActionArtifactDataWrite: {class: ClassShared, minRole: artifacts.RoleViewer,
 		recency: iam.RecencyAny, steerable: true, assist: AssistApprove},
+	// COMMENTS ARE THE COMMENTER'S RUNG (ADR-0154), with no app: commenting
+	// is reading closely, not authoring. Reading threads is a viewer's. None
+	// is steerable, so a turn's requester must hold the role too.
+	ActionArtifactCommentList: {class: ClassShared, minRole: artifacts.RoleViewer,
+		recency: iam.RecencyAny, assist: AssistRead},
+	ActionArtifactComment: {class: ClassShared, minRole: artifacts.RoleCommenter,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionArtifactCommentResolve: {class: ClassShared, minRole: artifacts.RoleCommenter,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionArtifactCommentEdit: {class: ClassShared, minRole: artifacts.RoleCommenter,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionArtifactCommentRemove: {class: ClassShared, minRole: artifacts.RoleCommenter,
+		recency: iam.RecencyAny, assist: AssistApprove},
 	// DISCARDING A NEWER VERSION is a person's, present: refused to every
 	// seat before the class is read, and to every machine token.
 	ActionArtifactForce: {class: ClassShared, app: iam.GrantArtifacts,

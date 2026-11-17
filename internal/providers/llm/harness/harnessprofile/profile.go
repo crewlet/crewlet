@@ -962,6 +962,14 @@ type Profile struct {
 	// only opencode declares it.
 	ModelNamesProvider bool `yaml:"model_names_provider,omitempty"`
 
+	// Effort is how the harness takes a reasoning effort and which levels it
+	// takes ([Effort]). Nil: it has none, and config refuses an entry's effort.
+	Effort *Effort `yaml:"effort,omitempty"`
+
+	// EffortNote says why a harness with no Effort has none the engine passes,
+	// in the refusal of an entry's effort.
+	EffortNote string `yaml:"effort_note,omitempty"`
+
 	// PromptMode is stdin (the default), argv or file.
 	PromptMode PromptMode `yaml:"prompt_mode,omitempty"`
 
@@ -2001,6 +2009,7 @@ func (p *Profile) problems() []string {
 		bad = append(bad, fmt.Sprintf(format, args...))
 	}
 
+	p.validateEffort(add)
 	if strings.TrimSpace(string(p.Binary)) == "" {
 		add("binary is empty — set overrides.binary")
 	}

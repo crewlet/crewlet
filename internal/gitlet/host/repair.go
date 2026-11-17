@@ -211,10 +211,13 @@ func confirmed(ctx context.Context, c rebuilder, synced cache.Synced, err error)
 
 // retriedLine is the line a request whose cache was rebuilt under it is
 // logged with: code_push_retried for a push's request, code_fetch_retried for
-// a fetch's, as failedLine names the request's failure.
+// a fetch's, code_download_retried for a download's, as failedLine names it.
 func retriedLine(r *http.Request) string {
-	if auth.GitAccess(r) == auth.GitPush {
+	switch auth.GitAccess(r) {
+	case auth.GitPush:
 		return "code_push_retried"
+	case auth.GitDownload:
+		return "code_download_retried"
 	}
 	return "code_fetch_retried"
 }

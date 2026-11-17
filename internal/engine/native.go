@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/alarmwake"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/atlaswake"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/authz/orgchart"
@@ -1311,7 +1312,7 @@ func (n *native) feedsReading(now time.Time, out *statelog.Reading) {
 // acknowledges a declared one this company does not run.
 func declaredInboundSources() []string {
 	return []string{alarmwake.Source, accessreview.Source, atlaswake.Source, worklet.Source,
-		doclet.Source, chatlet.Source, gitlet.Source}
+		doclet.Source, chatlet.Source, gitlet.Source, artifactsdomain.Source}
 }
 
 // nativeParsers is what the engine's own sources contribute to the inbound
@@ -1345,6 +1346,11 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 	// wake names its seat and reads no row (internal/atlaswake).
 	parsers = append(parsers, atlaswake.Parser{})
 	prompts = append(prompts, atlaswake.Prompt{})
+	// AND A COMMENT ON AN ARTIFACT, on every node: the artifacts domain is
+	// no half a company chooses, and a comment record carries the routing
+	// its writer decided, so a node holding no data routes it as one does.
+	parsers = append(parsers, artifactsdomain.NewParser(artifactsdomain.ParserOptions{}))
+	prompts = append(prompts, artifactsdomain.Prompt{})
 	// THE HALVES THIS COMPANY RUNS NATIVELY, wherever they are held: a
 	// parser reads a record's own routing snapshot and the chart, never a
 	// row, so a node that holds no data routes a native change exactly as

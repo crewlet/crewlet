@@ -774,12 +774,11 @@
   padding: 0;
   list-style: none;
 }
-/* The artifact a publishing call wrote, under the call's own row. */
+/* The artifact a publishing call wrote, under the call's own row, at a caption's size. */
 .tool-row-artifact {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
+  margin: 0;
   padding: 0 var(--spacing-3) var(--spacing-2);
+  font-size: var(--font-size-xs);
 }
 
 /* ---- Attention ---------------------------------------------------------- */
@@ -876,10 +875,6 @@
 /* A card's note sits on the card's own inset, above the rows it is about. */
 .live-card > .coverage-note {
   margin: var(--spacing-3) var(--spacing-4) 0;
-}
-.coverage-nodes {
-  margin: var(--spacing-1) 0 0;
-  padding-inline-start: var(--spacing-5);
 }
 
 /* ---- Backups & retention ------------------------------------------------ */
@@ -1958,7 +1953,6 @@ a.prof-row:hover {
   }
 }
 
-.org-builder-problems ul,
 .org-builder-list {
   margin: 0;
   padding: 0;
@@ -2781,16 +2775,40 @@ a.prof-row:hover {
   white-space: nowrap;
 }
 
-/* THE NEWEST CHANGE: the page's head and title, who changed it and when, what
-   each save said, the lines it changed, and the page's opening under a rule. */
+/* THE NEWEST CHANGE: which page, the writer's note, who, when and how much,
+   then the change as the page reads and the page's earlier saves. */
 .knowledge-latest {
   grid-area: latest;
   gap: var(--spacing-3);
 }
-.knowledge-latest-who {
+.knowledge-latest-head {
   display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.knowledge-latest-where {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-2);
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+/* The save's own words lead what is said about it. */
+.knowledge-latest-note {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+.knowledge-latest-who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
   margin: 0;
   min-width: 0;
   font-size: var(--font-size-compact);
@@ -2800,35 +2818,57 @@ a.prof-row:hover {
   font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);
 }
-.knowledge-latest-who > time {
+.knowledge-latest-facts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1) var(--spacing-2);
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
-  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
-.knowledge-latest-notes {
+.knowledge-latest-earlier {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
+  padding-top: var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
+}
+/* On the rows' own edge: the tiles' day headings are inset to their rows. */
+.knowledge-latest-earlier-title {
+  padding-inline: 0;
+}
+.knowledge-latest-saves {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
   margin: 0;
   padding: 0;
   list-style: none;
 }
-.knowledge-latest-note {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: baseline;
-  gap: var(--spacing-3);
+/* AN EARLIER SAVE, said as the newest is: its note, then who, when and how much. */
+.knowledge-latest-save {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+.knowledge-latest-save-note {
+  margin: 0;
   font-size: var(--font-size-compact);
   color: var(--color-text-primary);
+  overflow-wrap: anywhere;
 }
-.knowledge-latest-note > time {
+.knowledge-latest-save-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1) var(--spacing-2);
+  margin: 0;
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
 .knowledge-latest-opening {
-  padding-top: var(--spacing-3);
-  border-top: 1px solid var(--color-border-default);
+  padding-top: var(--spacing-1);
 }
 
 .knowledge-section-title {
@@ -8921,38 +8961,20 @@ a.live-row:hover {
   margin-left: var(--spacing-1);
   color: var(--color-text-tertiary);
 }
-/* The panel a pencil opens: wide enough for the engine's own sentence about
-   a ceiling that can never refuse, and no wider than a phone leaves room for. */
-/* Taller than the kit's 360px panel: a check's warning is a paragraph, and a
-   panel that scrolled it hid Save anyway below the fold of a popover. */
-.crewlet-popover.ceiling-pop {
-  width: min(22rem, calc(100vw - 2 * var(--spacing-4)));
-  max-height: min(34rem, 85vh);
+/* A setting's value in its row, and the word that says a save is applying. */
+.setting-value {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--spacing-2);
+  min-width: 0;
 }
-.ceiling-edit {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  padding: var(--spacing-3);
-}
-.ceiling-edit-who {
-  margin: 0;
-  font-size: var(--font-size-compact);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-  overflow-wrap: anywhere;
-}
-.ceiling-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--spacing-2);
+.setting-value-applying {
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-tertiary);
 }
 .ceiling-status:empty {
   display: none;
-}
-.ceiling-warnings {
-  margin: 0 0 var(--spacing-2);
-  padding-left: 1.1em;
 }
 
 /* SETTINGS › CONFIGURATION, THE DOCUMENT EDITOR: the summary takes the row
@@ -9371,14 +9393,6 @@ a.live-row:hover {
   .app .crewlet-app-shell__content:has(.artifacts-selection) {
     padding-bottom: calc(var(--size-control-lg) + var(--spacing-8));
   }
-}
-
-/* THE QUOTA'S KEY on Settings › File storage, quiet under its figure, as a
-   settings table draws a key. */
-.storage-quota-key {
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-tertiary);
 }
 
 /* AN ARTIFACT THE READER CANNOT OPEN, refused or in the trash: one

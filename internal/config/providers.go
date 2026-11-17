@@ -269,6 +269,10 @@ type LLMProvider struct {
 	// OpenAI id for Codex, `<provider>/<model>` for OpenCode.
 	Model string `yaml:"model,omitempty" json:"model,omitempty" desc:"Model id, in the harness's own grammar (OpenCode: <provider>/<model>)."`
 
+	// Effort is how hard the model reasons, as the harness spells its own levels
+	// ([harnessprofile.Effort]). Empty passes none: the harness's own default.
+	Effort string `yaml:"effort,omitempty" json:"effort,omitempty" desc:"Reasoning effort, in the harness's own levels (claude-code: low, medium, high, xhigh, max). Refused on a harness with no such setting, or a level it does not take. Absent: the harness's default."`
+
 	// RunIn is WHERE a run launched on this entry happens, naming a cell of
 	// providers.sandbox. Empty takes the catalogue's default.
 	//
@@ -860,13 +864,48 @@ func (c *Company) validateLLMCredentials() error {
 	return p.err()
 }
 
-// validateLLMModels is [LLMProvider.validateModel] over every entry of the
-// company, in key order.
+// validateLLMModels is [LLMProvider.validateModel] and
+// [LLMProvider.validateEffort] over every entry of the company, in key order.
 func (c *Company) validateLLMModels() error {
 	var p problems
 	for _, key := range sortedKeys(c.Providers.LLM) {
 		spec := c.Providers.LLM[key]
 		p.wrap(spec.validateModel(entryPath(key)))
+		p.wrap(spec.validateEffort(entryPath(key)))
+	}
+	return p.err()
+}
+
+// validateEffort refuses an effort the entry's harness would drop: a level its
+// merged profile does not take on the model, or any on a harness with none.
+// ADMISSION, like validateModel: the levels are a vendor fact a newer peer may know.
+func (l *LLMProvider) validateEffort(path Path) error {
+	if l.Effort == "" || (l.Harness != "" && !l.Harness.Valid()) {
+		return nil
+	}
+	profile, err := harnessprofile.Load(l.HarnessName(), l.Overrides)
+	if err != nil {
+		//nolint:nilerr // validateProfile reports a profile that does not load.
+		return nil
+	}
+	model := profile.ModelArgument(strings.TrimSpace(l.Model))
+	if envref.Has(l.Model) {
+		model = ""
+	}
+	problem := profile.EffortProblem("the "+l.HarnessName()+" harness", model, l.Effort)
+	if problem == "" {
+		return nil
+	}
+	var p problems
+	switch {
+	case !profile.TakesEffort() && l.HarnessName() == string(HarnessCustom):
+		p.add(at(path, "effort"), ErrConflict, "%s: declare overrides.effort with args carrying "+
+			"{effort} and the levels the harness takes, or remove the field", problem)
+	case !profile.TakesEffort():
+		p.add(at(path, "effort"), ErrConflict, "%s. Remove the field: the harness runs at its "+
+			"own default", problem)
+	default:
+		p.add(at(path, "effort"), ErrUnknownValue, "%s", problem)
 	}
 	return p.err()
 }

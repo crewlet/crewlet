@@ -91,13 +91,7 @@ import {
 } from "@crewlethq/ui";
 import { KeyGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { href, useOpenHere } from "~/app/router.tsx";
-import {
-  alarmKindTitle,
-  alarmPlace,
-  alarmPlaceWords,
-  alarmsLink,
-  namedAlarms,
-} from "~/lib/alarms.ts";
+import { alarmTitle, alarmPlace, alarmPlaceWords, alarmsLink, namedAlarms } from "~/lib/alarms.ts";
 import { useAlarmPlaces } from "~/lib/useInboxCounts.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtElapsed, fmtUptime, relTime, tsKey } from "~/lib/format.ts";
@@ -384,7 +378,12 @@ function PanelBody({
             ) : count === 0 ? (
               "None"
             ) : (
-              <AlarmNames count={count} worst={health.alarms.worst} readsReport={readsReport} />
+              <AlarmNames
+                count={count}
+                worst={health.alarms.worst}
+                worstTitle={health.alarms.worst_title}
+                readsReport={readsReport}
+              />
             )}
           </DescriptionList.Item>
         </DescriptionList>
@@ -446,10 +445,12 @@ function PanelBody({
 function AlarmNames({
   count,
   worst,
+  worstTitle,
   readsReport,
 }: {
   count: number;
   worst: string | undefined;
+  worstTitle?: string | undefined;
   readsReport: boolean;
 }) {
   const report = useQuery("retention", undefined, { enabled: readsReport });
@@ -490,7 +491,7 @@ function AlarmNames({
   const more = worst ? count - 1 : count;
   return (
     <Stack as="ul" gap={1}>
-      {worst ? <li>{alarmKindTitle(worst)}</li> : null}
+      {worst ? <li>{alarmTitle({ kind: worst, title: worstTitle })}</li> : null}
       {more > 0 ? (
         <li>
           <Text variant="caption">{worst ? `${more} more` : `${more} standing`}</Text>

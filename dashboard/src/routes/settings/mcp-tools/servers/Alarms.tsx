@@ -12,20 +12,15 @@
  */
 
 import type { ReactNode } from "react";
-import {
-  AttentionList,
-  Button,
-  ButtonLink,
-  RelativeTime,
-  Text,
-  type AttentionItem,
-} from "@crewlethq/ui";
+import { AttentionList, Button, ButtonLink, Text, type AttentionItem } from "@crewlethq/ui";
 import type { McpAlarm, McpAlarmEntry, McpServerNode, McpServerStatus } from "~/contract/mcp.ts";
 import { href } from "~/app/router.tsx";
 import { listed } from "~/lib/format.ts";
 import type { McpData } from "../data.ts";
 import { ServerMark, type OnFlow } from "../parts.tsx";
-import { ALARM, failureWords, FIX } from "../words.ts";
+import { failureWords, FIX } from "../words.ts";
+import { ALARM } from "~/lib/mcpAlarmWords.ts";
+import { AgoTime } from "~/components/AgoTime.tsx";
 
 /**
  * The node cell an entry's failure is read from: the named agent's, else the
@@ -135,7 +130,7 @@ function itemFor(
   const failure = cell ? failureWords(cell.error_class, cell.error) : null;
   const since = entry.since ? (
     <>
-      since <RelativeTime value={entry.since} />
+      since <AgoTime since value={entry.since} />
     </>
   ) : null;
 

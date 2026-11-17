@@ -17,16 +17,17 @@ import {
   Button,
   Callout,
   GRAPH_CANVAS_NARROW_WIDTH,
-  GraphCanvas,
-  IconButton,
-  Link,
-  StatusDot,
-  Text,
-  graphReach,
   type GraphBand,
+  GraphCanvas,
   type GraphEdge,
   type GraphGroup,
   type GraphNode,
+  graphReach,
+  IconButton,
+  Link,
+  NoticeList,
+  StatusDot,
+  Text,
 } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import type { AtlasLane, AtlasMapAnswer, AtlasSummary } from "~/contract/atlas.ts";
@@ -392,24 +393,24 @@ function Collapsed({ answer }: { answer: AtlasMapAnswer }) {
   const total = closed.reduce((sum, group) => sum + group.count, 0);
   return (
     <Callout variant="info" layout="banner" title={`${entries(total)} are not drawn on the map`}>
-      The atlas holds more entries than the map draws at once, so the engine closed these groups.
-      Each is read whole in the catalogue:{" "}
-      {closed.map((group, i) => (
-        <span key={group.key}>
-          {i > 0 && (i === closed.length - 1 ? " and " : ", ")}
-          <Link
-            href={href(["company", "atlas"], {
-              lane: group.lane,
-              ...(group.vendor ? { vendor: group.vendor } : {}),
-            })}
-            size="inherit"
-          >
-            {group.vendor ? VENDORS[group.vendor].name : NO_VENDOR} in {LANES[group.lane].label} (
-            {group.count.toLocaleString()})
-          </Link>
-        </span>
-      ))}
-      .
+      The map draws only so many entries at once, so these groups are closed. Each opens whole in
+      the catalogue.
+      <NoticeList
+        notices={closed.map((group) => ({
+          key: group.key,
+          title: `${group.vendor ? VENDORS[group.vendor].name : NO_VENDOR} in ${LANES[group.lane].label} (${group.count.toLocaleString()})`,
+          action: (
+            <Link
+              href={href(["company", "atlas"], {
+                lane: group.lane,
+                ...(group.vendor ? { vendor: group.vendor } : {}),
+              })}
+            >
+              Open in the catalogue
+            </Link>
+          ),
+        }))}
+      />
     </Callout>
   );
 }

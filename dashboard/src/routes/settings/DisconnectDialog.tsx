@@ -29,7 +29,7 @@ import { Button, Callout, Checkbox, InlineCode } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AgentAvatar } from "~/lib/avatar.ts";
-import { PlugGlyph, ExternalLinkGlyph, ClockGlyph } from "@crewlethq/icons/glyphs";
+import { PlugGlyph, ExternalLinkGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { marked } from "~/ui/Problems.tsx";
 import { pathSegment, rest, RestError } from "~/protocol/index.ts";
@@ -401,53 +401,45 @@ export function DisconnectDialog({
         // rather than either feedback mark: nothing has failed, the surface
         // is simply held by something else and the next attempt is already
         // scheduled.
-        <Callout variant="neutral" icon={<ClockGlyph size="md" />}>
+        <Callout variant="neutral">
           <span>Waiting for {name} to finish provisioning.</span>
         </Callout>
       )}
 
       {error && bySettings && (
-        <Callout variant="warning" role="alert" title="The company’s settings refused it">
-          <span className="col" style={{ gap: 4 }}>
-            <span>
-              {stuck ? `What ${name} held is removed. ` : ""}The change that removes {name} breaks a
-              rule of the company’s settings:
-            </span>
-            <span>{marked(error)}</span>
-            <span>
-              Change it in{" "}
-              <a className="prose-link" href={href(["settings", "config"])}>
-                Configuration
-              </a>
-              , then disconnect again.
-            </span>
-          </span>
+        <Callout
+          variant="warning"
+          role="alert"
+          title="The company’s settings refused it"
+          action={
+            <a className="t-link" href={href(["settings", "config"])}>
+              Open Configuration
+            </a>
+          }
+        >
+          {stuck ? `What ${name} held is removed. ` : ""}Removing {name} breaks this rule:{" "}
+          {marked(error)} Change the rule, then disconnect again.
         </Callout>
       )}
 
       {error && !bySettings && (
-        <Callout variant="danger" role="alert">
-          <span className="col" style={{ gap: 4 }}>
-            {stuck && <span>{name} hasn’t let the disconnect finish.</span>}
-            <span>{error}</span>
-            {/* THE WAY OUT of a teardown that can never succeed: a
-                  revoked credential, an instance that is gone. Offered
-                  only after one has actually failed, because it leaves
-                  the vendor holding things nobody will remove. */}
-            <span className="t-caption">
-              Forcing it leaves anything still there for you to remove.
-            </span>
-            <span>
-              <Button
-                size="small"
-                variant="ghost"
-                onClick={() => void submit(true)}
-                disabled={busy}
-              >
-                Disconnect anyway
-              </Button>
-            </span>
-          </span>
+        <Callout
+          variant="danger"
+          role="alert"
+          title={stuck ? `${name} hasn’t let the disconnect finish` : undefined}
+          action={
+            // The way out of a teardown that can never succeed, offered only after one failed.
+            <Button
+              size="small"
+              variant="secondary"
+              onClick={() => void submit(true)}
+              disabled={busy}
+            >
+              Disconnect anyway
+            </Button>
+          }
+        >
+          {error} Disconnecting anyway leaves anything still there for you to remove.
         </Callout>
       )}
     </Modal>

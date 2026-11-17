@@ -2031,7 +2031,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             page is missing. */}
             <CoverageNote coverage={[view.coverage]} what="this turn" />
             {cut && (
-              <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
+              <Callout variant="warning">
                 Too long to show in full; the middle phases are missing.
                 {traceId ? " The trace has the same work." : ""}
               </Callout>
@@ -2198,6 +2198,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                               plain
                               copyable={false}
                               selectable
+                              language="json"
                               label="agent_turn_completed, as JSON"
                               code={summaryJSON}
                             />
@@ -2212,6 +2213,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                               plain
                               copyable={false}
                               selectable
+                              language="json"
                               label="turn_completed, as JSON"
                               code={learningJSON}
                             />
@@ -2393,7 +2395,7 @@ export function TurnPeek({ turnId }: { turnId: string }) {
               opening and its ending and not its middle, and a rail that said
               nothing would report a long turn as a short one. */}
           {view.cut && (
-            <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
+            <Callout variant="warning">
               Too long to show in full; the middle phases are missing.
             </Callout>
           )}

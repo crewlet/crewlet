@@ -631,7 +631,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 			}
 		}
 		own := entryRows(entry)
-		if recordRows(rows+own+book.rowCount()) > MaxRecordRows {
+		if recordRows(rows+own+book.decidedRows()) > MaxRecordRows {
 			// ALONE is the push leading the next record, the entries before
 			// it landed: what it would cost there decides whether it can
 			// land at all.
@@ -655,7 +655,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 			return nil, nil, batchMoves{}, 0, routeErr
 		}
 		fits, rest, fitErr := room.fit(i, len(entries) == 0, routings,
-			MaxRecordRows-recordRows(rows+own+book.rowCount()))
+			MaxRecordRows-recordRows(rows+own+book.decidedRows()))
 		if fitErr != nil {
 			return nil, nil, batchMoves{}, 0, fitErr
 		}
@@ -674,7 +674,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		entries = append(entries, entry)
 	}
 	ejected, _, _ := book.queueEnds()
-	return entries, answers, batchMoves{rows: book.rowCount(), ejected: ejected}, repo.version, nil
+	return entries, answers, batchMoves{rows: book.decidedRows(), ejected: ejected}, repo.version, nil
 }
 
 // seatQuota is one round's count of each seat's pushes on the deciding
@@ -847,18 +847,10 @@ func (r pushRepo) grantRef(id string) RepoRef {
 // ref of the live repository r — a push's every command, a change's every
 // write — with its sentence, or "" where it takes them: an archived repository
 // is read-only, one being imported takes nothing until its import is done, and
-// a pull mirror moves only by its syncs. One judgement for the push decide and
-// the change decide, in this order, so both refuse one repository alike.
+// a pull mirror moves only by its syncs ([RepoStateRefusal], the rule an engine
+// write and a refs listing's deletion verdict judge by too).
 func (r pushRepo) writeRefusal() (Refusal, string) {
-	switch {
-	case r.status == RepoStatusArchived:
-		return RefusalRepoArchived, ArchivedDetail(r.name, r.managedBy)
-	case r.status == RepoStatusImporting:
-		return RefusalRepoImporting, ImportingDetail(r.name)
-	case r.mirrored:
-		return RefusalRepoMirrored, MirroredDetail(r.name, r.managedBy)
-	}
-	return "", ""
+	return RepoStateRefusal(RepoRef{Name: r.name, Status: r.status, ManagedBy: r.managedBy, Mirrored: r.mirrored})
 }
 
 // pushRepoIn reads a repository's row for a decide.

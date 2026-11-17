@@ -23,12 +23,15 @@ import (
 // the field each kind answers in, an interdiff in a diff's; and unkept is
 // every part no page holds, since its kind is never memoized (memoizable).
 var (
-	stamped = []string{"RepoID", "Position", "Memo", "PushedBy", "Coverage"}
+	stamped = []string{"RepoID", "Position", "Memo", "PushedBy", "Coverage", "Tagged"}
 	partOf  = map[gitlet.GitReadKind]string{gitlet.GitTree: "Tree", gitlet.GitBlob: "Blob", gitlet.GitDiff: "Diff",
-		gitlet.GitCompare: "Compare", gitlet.GitLandedIn: "LandedIn", gitlet.GitRevisionFacts: "RevisionFacts",
-		gitlet.GitReanchor: "Reanchor", gitlet.GitInterdiff: "Diff", gitlet.GitLog: "Log", gitlet.GitBlame: "Blame",
-		gitlet.GitChecksFile: "ChecksFile", gitlet.GitCodeFiles: "CodeFiles", gitlet.GitSearch: "Search"}
-	unkept = []string{"LandedIn", "RevisionFacts", "Reanchor", "ChecksFile", "CodeFiles"}
+		gitlet.GitCompare: "Compare", gitlet.GitTips: "Tips", gitlet.GitTags: "Tags", gitlet.GitLandedIn: "LandedIn",
+		gitlet.GitRevisionFacts: "RevisionFacts", gitlet.GitReanchor: "Reanchor", gitlet.GitInterdiff: "Diff",
+		gitlet.GitLog: "Log", gitlet.GitBlame: "Blame", gitlet.GitTreeCommits: "TreeCommits",
+		gitlet.GitChecksFile: "ChecksFile",
+		gitlet.GitCodeFiles:  "CodeFiles", gitlet.GitSearch: "Search", gitlet.GitFind: "Find",
+		gitlet.GitExcerpts: "Excerpts"}
+	unkept = []string{"Tips", "Tags", "LandedIn", "RevisionFacts", "Reanchor", "ChecksFile", "CodeFiles", "Find"}
 )
 
 // memoized is every kind memoizable answers from the memo.
@@ -193,6 +196,18 @@ func TestAMemoEntryHoldsEveryFieldOfItsAnswer(t *testing.T) {
 // (spell), so a package's move is no reshape: the encoding reads fields, not
 // import paths.
 func shapeOf() string {
+	return shapeOfType(reflect.TypeFor[gitlet.GitAnswer](), func(owner reflect.Type, f reflect.StructField) bool {
+		return owner == reflect.TypeFor[gitlet.GitAnswer]() &&
+			(slices.Contains(stamped, f.Name) || slices.Contains(unkept, f.Name))
+	})
+}
+
+// shapeOfType is the shape of root and every type it holds, skipping each
+// field skip names, as a fingerprint.
+func shapeOfType(root reflect.Type, skip func(owner reflect.Type, f reflect.StructField) bool) string {
+	if skip == nil {
+		skip = func(reflect.Type, reflect.StructField) bool { return false }
+	}
 	var b strings.Builder
 	seen := map[reflect.Type]bool{}
 	var walk func(ty reflect.Type)
@@ -210,7 +225,7 @@ func shapeOf() string {
 		fmt.Fprintf(&b, "%s{", spell(ty))
 		for i := range ty.NumField() {
 			f := ty.Field(i)
-			if ty == reflect.TypeFor[gitlet.GitAnswer]() && (slices.Contains(stamped, f.Name) || slices.Contains(unkept, f.Name)) {
+			if skip(ty, f) {
 				continue
 			}
 			fmt.Fprintf(&b, "%s %s;", f.Name, spell(f.Type))
@@ -218,13 +233,13 @@ func shapeOf() string {
 		b.WriteString("}")
 		for i := range ty.NumField() {
 			f := ty.Field(i)
-			if ty == reflect.TypeFor[gitlet.GitAnswer]() && (slices.Contains(stamped, f.Name) || slices.Contains(unkept, f.Name)) {
+			if skip(ty, f) {
 				continue
 			}
 			walk(f.Type)
 		}
 	}
-	walk(reflect.TypeFor[gitlet.GitAnswer]())
+	walk(root)
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:8])
 }
@@ -260,12 +275,10 @@ func spell(ty reflect.Type) string {
 }
 
 // memoShapes is the shape of the answers each memoFormat this build reads was
-// written over: a format names one shape, for ever. page/4's was recorded as
-// 4a3450124092111d while the fingerprint spelled each type with its package's
-// name (code.GitAnswer); the same fields, spelled as spell spells them, are
-// 7bc6fe45e8de6b7f.
+// written over: a format names one shape, for ever. page/9 adds a diff's
+// every file's patch to page/8's answers.
 var memoShapes = map[string]string{
-	"page/4": "7bc6fe45e8de6b7f",
+	"page/9": "bbc0015057f6907a",
 }
 
 // AN ANSWER'S SHAPE IS ITS MEMO FORMAT. An entry a node keeps outlives the
@@ -297,12 +310,14 @@ func (fakeCache) WantHistory(string)                                {}
 func (f fakeCache) MemoGet(cache.Synced, cache.MemoKey) ([]byte, bool) {
 	return f.body, f.body != nil
 }
-func (fakeCache) Memo(cache.Synced) *cache.MemoBatch             { return nil }
-func (fakeCache) Spool() (*os.File, error)                       { return nil, os.ErrInvalid }
-func (fakeCache) IndexTip(cache.Synced) (cache.IndexedTip, bool) { return cache.IndexedTip{}, false }
+func (fakeCache) MemoProbe(cache.Synced, cache.MemoKey) ([]byte, bool) { return nil, false }
+func (fakeCache) Memo(cache.Synced) *cache.MemoBatch                   { return nil }
+func (fakeCache) Spool() (*os.File, error)                             { return nil, os.ErrInvalid }
+func (fakeCache) IndexTip(cache.Synced) (cache.IndexedTip, bool)       { return cache.IndexedTip{}, false }
 func (fakeCache) CodeIndex(context.Context, cache.Synced) (*cache.CodeIndexView, bool) {
 	return nil, false
 }
+func (fakeCache) Tags(cache.Synced) (*cache.TagIndex, bool) { return nil, false }
 
 // A PAGE FROM THE MEMO FITS WHATEVER IT IS STAMPED WITH. A page carries its
 // budget — the most the fields Read stamps may encode to and the page still
@@ -395,5 +410,53 @@ func TestAStatsRunHoldsOnePagesCountsAtATime(t *testing.T) {
 				t.Fatalf("page %d's count %d is %+v, want file %d's", p, j, c, i)
 			}
 		}
+	}
+}
+
+// tipsShapes is the shape of gitlet.Tip each tipsMemoFormat this build reads
+// was written over: a format names one shape, for ever. tips/2 added each
+// commit's committer and engine mark.
+var tipsShapes = map[string]string{
+	"tips/2": "4d98085adadc82e0",
+}
+
+// A tip's facts, every field set but its counts, read back whole, and an entry
+// cut short or running long is no entry.
+// Mutation: leave a field out of encodeTipFact.
+func TestATipsEntryHoldsEveryFieldOfItsTip(t *testing.T) {
+	t.Parallel()
+	var tip gitlet.Tip
+	n := 0
+	filled(reflect.ValueOf(&tip).Elem(), "tip", &n)
+	tip.Behind, tip.Ahead, tip.CountsOutOfTime = nil, nil, false
+	body := encodeTipFact(tip)
+	got, err := decodeTipFact(body)
+	if err != nil {
+		t.Fatalf("decodeTipFact: %v", err)
+	}
+	if !reflect.DeepEqual(got, tip) {
+		t.Errorf("the tip read back =\n%+v\nwant every field written\n%+v", got, tip)
+	}
+	if _, err := decodeTipFact(body[:len(body)-1]); err == nil {
+		t.Error("decodeTipFact read an entry cut short")
+	}
+	if _, err := decodeTipFact(append(body, 0)); err == nil {
+		t.Error("decodeTipFact read an entry with a byte past its end")
+	}
+	behind, ahead, err := decodeSides(encodeSides(7, 1<<40))
+	if err != nil || behind != 7 || ahead != 1<<40 {
+		t.Errorf("the counts read back = %d, %d, %v; want 7 and 1<<40", behind, ahead, err)
+	}
+	if _, _, err := decodeSides(append(encodeSides(1, 2), 0)); err == nil {
+		t.Error("decodeSides read an entry with a byte past its end")
+	}
+}
+
+// A field of Tip, TipTag or LogCommit changed fails until tipsMemoFormat moves.
+func TestATipsEntrysShapeIsItsFormat(t *testing.T) {
+	t.Parallel()
+	if got, want := shapeOfType(reflect.TypeFor[gitlet.Tip](), nil), tipsShapes[tipsMemoFormat]; got != want {
+		t.Errorf("a tip is of shape %s, and tipsMemoFormat %q was written over %q: give the encoding the "+
+			"change, move tipsMemoFormat, and name the new format's shape here", got, tipsMemoFormat, want)
 	}
 }

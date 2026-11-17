@@ -445,7 +445,7 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 	for _, want := range []string{
 		title(spelled(t, art+data)) + " more, registered on every node that takes " +
 			"artifact uploads",
-		spelled(t, art) + " for artifacts, their folders and the company's brand, and " +
+		spelled(t, art) + " for artifacts, their comments, their folders and the company's brand, and " +
 			spelled(t, data) + " for an artifact's datastore",
 		"the operator catalogue serves the same " + spelled(t, art+data),
 	} {

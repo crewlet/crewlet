@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -433,8 +434,8 @@ func (e *Engine) refreshParties(ctx context.Context, c *Company) {
 	e.rebuildPartiesLocked(c, e.readStandingLocked(ctx))
 }
 
-// firstPartySources are the notification sources this engine hosts itself —
-// its tracker, its knowledge base, its chat and Gitlet — whose senders
+// firstPartySources are the notification sources this engine hosts itself:
+// its tracker, its knowledge base, its chat, Gitlet and its artifacts, whose senders
 // ARE seat handles, declared to every party registry the engine builds
 // ([partyRegistry]) as the namespaces whose ids are handles.
 //
@@ -446,7 +447,8 @@ func (e *Engine) refreshParties(ctx context.Context, c *Company) {
 // fails nothing — its every sender reads as an outside party, so a person's
 // comment wakes a seat that will not act for them — which is why a test
 // holds every native parser's source to this list.
-var firstPartySources = []string{worklet.Source, doclet.Source, chatlet.Source, gitlet.Source}
+var firstPartySources = []string{worklet.Source, doclet.Source, chatlet.Source, gitlet.Source,
+	artifactsdomain.Source}
 
 // partyRegistry is the ONE construction of a party registry on this node: the
 // org's seats, with the engine's own surfaces declared as the namespaces whose

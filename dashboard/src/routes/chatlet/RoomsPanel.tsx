@@ -27,7 +27,6 @@ import {
   Menu,
   NavDivider,
   SidebarNav,
-  Tooltip,
 } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 import {
@@ -343,20 +342,17 @@ function DockToggle() {
   if (nav.narrow) return null;
   const docked = nav.rooms.docked;
   return (
-    <Tooltip
-      content={
+    <IconButton
+      label={docked ? "Unpin the panel" : "Pin the panel"}
+      size="md"
+      variant="ghost"
+      pressed={docked}
+      icon={<PinGlyph size="sm" />}
+      tooltip={
         docked ? "Unpin, so the panel slides in from Menu" : "Pin the panel beside the conversation"
       }
-    >
-      <IconButton
-        label={docked ? "Unpin the panel" : "Pin the panel"}
-        size="md"
-        variant="ghost"
-        pressed={docked}
-        icon={<PinGlyph size="sm" />}
-        onClick={() => nav.rooms.dock(!docked)}
-      />
-    </Tooltip>
+      onClick={() => nav.rooms.dock(!docked)}
+    />
   );
 }
 
@@ -367,15 +363,14 @@ function DockToggle() {
  */
 function CloseSheet({ onClose }: { onClose: () => void }) {
   return (
-    <Tooltip content="Close the panel">
-      <IconButton
-        label="Close the panel"
-        size="md"
-        variant="ghost"
-        icon={<XGlyph size="sm" />}
-        onClick={onClose}
-      />
-    </Tooltip>
+    <IconButton
+      label="Close the panel"
+      size="md"
+      variant="ghost"
+      icon={<XGlyph size="sm" />}
+      tooltip
+      onClick={onClose}
+    />
   );
 }
 

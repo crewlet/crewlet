@@ -56,6 +56,9 @@ export function isRepoPrefix(prefix: string): boolean {
   return isRepoName(prefix) || isRepoName(`${prefix}0`);
 }
 
+/** How many days the push history keeps who moved a ref (`gitlet.PushHistory`). */
+export const PUSH_HISTORY_DAYS = 181;
+
 /**
  * How many digits of an object id a reader is shown: SEVEN, git's own default
  * abbreviation (`core.abbrev`) and the fewest an abbreviated id the engine
@@ -205,7 +208,7 @@ export function parseChangeRef(text: string): { repo: string; number: number } |
 }
 
 /** A state of a change this build knows (`contract/code.ts`). */
-type KnownChangeState = (typeof CHANGE_STATES)[number];
+export type KnownChangeState = (typeof CHANGE_STATES)[number];
 
 /**
  * Each state of a change in words: what a row's mark says and what the
@@ -219,7 +222,7 @@ const CHANGE_STATE_WORDS: Readonly<Record<KnownChangeState, string>> = {
   merged: "Merged",
 };
 
-function knownChangeState(state: CodeChangeState): state is KnownChangeState {
+export function knownChangeState(state: CodeChangeState): state is KnownChangeState {
   return (CHANGE_STATES as readonly string[]).includes(state);
 }
 

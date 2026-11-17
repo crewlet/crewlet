@@ -391,3 +391,30 @@ func TestAContainedPanicIsItsOwnKind(t *testing.T) {
 		t.Errorf("an unclassified failure is kind %q", got)
 	}
 }
+
+// A CALL'S IMAGES ARE RECORDED BY TYPE AND SIZE, NEVER AS PICTURES: a row keeps
+// `images` only when its call's answer carried one.
+func TestARowRecordsACallsImagesByTypeAndSize(t *testing.T) {
+	t.Parallel()
+	rows := toolExecutions([]toolloop.Execution{
+		{Name: "read_comment", Output: "ana's crop of the chart",
+			Images: []mcp.ImageRecord{{MIMEType: mcp.ImagePNG, Bytes: 1234}}},
+		{Name: "read_page", Output: "a page"},
+	})
+	raw, err := json.Marshal(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	images, _ := json.Marshal(got[0]["images"])
+	if string(images) != `[{"bytes":1234,"mime_type":"image/png"}]` || got[0]["result"] != "ana's crop of the chart" {
+		t.Errorf("the image's row records %s beside %q, want its type and size beside its text",
+			images, got[0]["result"])
+	}
+	if _, ok := got[1]["images"]; ok {
+		t.Errorf("a row of an answer with no image records %v", got[1]["images"])
+	}
+}

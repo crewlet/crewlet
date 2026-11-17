@@ -35,27 +35,31 @@ import (
 // with a newline — by abbreviated ids, and every argument list a read ran is
 // held to its template: the kind's fixed options, whole ids at their places,
 // `--disambiguate=` validated hex, a history's window as numbers the server
-// formats and a blame's range as two, and — for a history and a blame alone,
-// which read no path on a standard input — the path as the ONE argument after
-// `--`, where git reads it as a path whatever it spells: a history's as a
+// formats and a blame's range as two, and — for a history, a blame and a
+// directory's walks, which read no path on a standard input — the path as the
+// ONE argument after `--` (a directory walk's as one or more literal
+// pathspecs), where git reads it as a path whatever it spells: a history's as a
 // literal pathspec, a blame's as itself. Every other path was fed to
 // cat-file's batch, `<id>:<path>`, where it is a name like any other, and a
-// filtered stat's and a patch's files to diff-pairs as the raw records
-// diff-tree wrote. This is what keeps diff-tree's, diff-pairs', rev-list's,
-// log's and blame's `--output` out — the writers gate argues their run-time
-// arguments in its allowance — so an argument a read adds is red here, and
-// so is a path moved before `--`. And every path `--output=x` spells is read
+// filtered stat's, a patch's and every file's patches' files to diff-pairs as
+// the raw records diff-tree wrote. This is what keeps diff-tree's,
+// diff-pairs', rev-list's, log's and blame's `--output` out — the writers gate
+// argues their run-time arguments in its allowance — so an argument a read
+// adds is red here, and so is a path moved before `--`. And every path `--output=x` spells is read
 // as the path it is: its history lists its commit, its blame its line. A
 // landed-in read's ancestry checks are held too: whole ids, both sides. And a
 // change's revisions: their facts walk and diff the paths by ids alone, and
 // lex a Go file's two versions — `--output=y.go`'s — from blobs a batch is
 // fed by id, anchors on them are found by the batch and diffed by pairs
 // numbered rather than named, and an interdiff kept to them looks its touched
-// paths up as `<id>:<path>` lines of a lookup's batch, no pathspec.
+// paths up as `<id>:<path>` lines of a lookup's batch, no pathspec. An excerpt
+// of each is found the same way, its rename by a walk of two ids. A
+// history's until reaches git as a formatted number, its seat not at all.
 //
 // Mutations: the log's path before `--`, or `--output=x` added to the log's
 // or the blame's arguments → red; an interdiff kept to its touched paths that
-// walks the heads rather than look them up → red.
+// walks the heads rather than look them up → red; the seat handed to git as
+// an argument → red.
 func TestAPathReachesGitOnlyAsData(t *testing.T) {
 	t.Parallel()
 	rec := &recording{}
@@ -84,6 +88,9 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 	for _, p := range []string{"--output=x/f", "-M", "-r"} {
 		mustRead(t, s, diffQ(repo, gitlet.DiffQuery{Base: base, Head: head, File: p}))
 	}
+	mustRead(t, s, diffQ(repo, gitlet.DiffQuery{Base: base, Head: head, Patches: true}))
+	mustRead(t, s, diffQ(repo, gitlet.DiffQuery{Base: base, Head: head, Patches: true,
+		Paths: []string{"--output=x", "-r"}}))
 	mustRead(t, s, compareQ(repo, base[:8], head))
 	tip, at := x.tip("refs/heads/main")
 	mustRead(t, s, landedQ(repo, base[:7], "refs/heads/main", tip, at, true))
@@ -107,6 +114,44 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 	mustRead(t, s, interdiffQ(repo, gitlet.InterdiffQuery{FromBase: head, FromHead: base, ToBase: base, ToHead: head,
 		ToTouched: []string{"-r"}, File: "-r"}))
 
+	// EXCERPTS of the paths on both sides, and of a file renamed to an odd path: the other
+	// side found by the batch, the rename by a walk of two ids, the pairs diffed by number.
+	x.branch("moved", head)
+	x.git("mv", "--", "a:b", "--output=w")
+	moved := x.p.Commit(x.work, nil, "move a:b")
+	x.push(gitlettest.RepoName, "refs/heads/moved")
+	x.git("checkout", "-q", "main")
+	var excerpted []gitlet.ExcerptAnchor
+	for i, p := range paths[:4] {
+		excerpted = append(excerpted,
+			gitlet.ExcerptAnchor{LineAnchor: gitlet.LineAnchor{ID: fmt.Sprintf("new%d", i), Path: p,
+				Side: gitlet.SideNew, BlobOID: x.blobAt(head, p), Start: 1, End: 1}, Base: base, Head: head},
+			gitlet.ExcerptAnchor{LineAnchor: gitlet.LineAnchor{ID: fmt.Sprintf("old%d", i), Path: p,
+				Side: gitlet.SideOld, BlobOID: x.blobAt(base, p), Start: 1, End: 1}, Base: base, Head: head})
+	}
+	excerpted = append(excerpted,
+		gitlet.ExcerptAnchor{LineAnchor: gitlet.LineAnchor{ID: "moved", Path: "--output=w", Side: gitlet.SideNew,
+			BlobOID: x.blobAt(moved, "--output=w"), Start: 1, End: 1}, Base: head, Head: moved},
+		gitlet.ExcerptAnchor{LineAnchor: gitlet.LineAnchor{ID: "moved from", Path: "a:b", Side: gitlet.SideOld,
+			BlobOID: x.blobAt(head, "a:b"), Start: 1, End: 1}, Base: head, Head: moved})
+	for _, e := range mustRead(t, s, excerptsQ(repo, gitlet.ExcerptsQuery{Anchors: excerpted})).Excerpts.Excerpts {
+		var want []gitlet.ExcerptLine
+		switch {
+		case strings.HasPrefix(e.ID, "new"):
+			want = []gitlet.ExcerptLine{{Mark: "+", New: 1, Text: "two"}}
+		case strings.HasPrefix(e.ID, "old"):
+			want = []gitlet.ExcerptLine{{Mark: "-", Old: 1, Text: "one"}}
+		default:
+			want = []gitlet.ExcerptLine{{Mark: " ", Old: 1, New: 1, Text: "two"}}
+			if e.Status != "R" {
+				t.Errorf("the excerpt %q reads status %q, want the rename", e.ID, e.Status)
+			}
+		}
+		if !slices.Equal(e.Lines, want) {
+			t.Errorf("the excerpt %q reads %+v, want %+v", e.ID, e.Lines, want)
+		}
+	}
+
 	// A HISTORY AND A BLAME, each path the one argument after `--`: every
 	// path's history is its two commits, and its blame its one line of the
 	// head's, whatever the path spells.
@@ -122,6 +167,9 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 		}
 	}
 	mustRead(t, s, logQ(repo, gitlet.LogQuery{Rev: head, Grep: "head", Limit: 1}))
+	// A WINDOW AND A SEAT: formatted numbers, and no seat, reach git.
+	mustRead(t, s, logQ(repo, gitlet.LogQuery{Rev: head, Path: "--output=x/f", Since: historyDay,
+		Until: time.Now(), PushedBy: "ceo"}))
 	// A SEARCH: its text is the argument of -e, where git reads a pattern
 	// whatever it spells — an option's name, `-O` (--open-files-in-pager)
 	// folded — its paths filtered here, over git's answer, and a clause git
@@ -136,6 +184,49 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 	if q := logQ(repo, gitlet.LogQuery{Rev: head, Limit: 1}); mustRead(t, s, q).Next != "" {
 		q.Cursor = mustRead(t, s, q).Next
 		mustRead(t, s, q)
+	}
+	// A FIND: its query is matched in Go over the tree's listing, which is
+	// listed by the root tree's id, and reaches git as nothing at all: the
+	// check is fed ids, and the listing names the tree.
+	root := strings.TrimSpace(x.git("rev-parse", head+"^{tree}"))
+	for _, fq := range []string{"--output=x", "-r"} {
+		from := rec.count()
+		if f := mustRead(t, s, findQ(repo, head[:7], fq, 0)).Find; f.Total == 0 {
+			t.Errorf("the find of %q found nothing, want the paths spelling it", fq)
+		}
+		for _, r := range rec.since(from) {
+			if !slices.Equal(r.cmd.Args, []string{"cat-file", "--batch-check", "-Z"}) &&
+				!slices.Equal(r.cmd.Args, []string{"rev-parse", "--disambiguate=" + head[:7]}) &&
+				!slices.Equal(r.cmd.Args, []string{"ls-tree", "-z", "-l", "-r", root}) || strings.Contains(r.stdin, fq) {
+				t.Errorf("the find of %q ran git %q fed %q, which is no find's", fq, r.cmd.Args, r.stdin)
+			}
+		}
+	}
+
+	// A DIRECTORY'S LAST COMMITS: the listing names the tree, and every walk
+	// names the directory, or its entries once the walk narrows, as literal
+	// pathspecs after `--`, whatever they spell; `-r`, last changed on a merged
+	// side branch, is walked alone from the merge.
+	x.branch("odd", head)
+	side := x.p.Commit(x.work, map[string]string{"-r": "side\n"}, "side")
+	x.git("checkout", "-q", "main")
+	x.git("merge", "-q", "--no-ff", "-m", "take the side", "odd")
+	later := x.commit(map[string]string{"zz": "z\n"}, "later")
+	ts := x.server(0, query.Options{Git: rec})
+	query.SetTreeWalk(ts, query.TreeWalk{NarrowRecords: 1, NarrowEntries: 2, NarrowWalks: 3})
+	for _, dir := range []string{"", "--output=x"} {
+		for _, e := range mustRead(t, ts, treeCommitsQ(repo, later[:7], dir)).TreeCommits.Entries {
+			if e.Commit == "" || e.Path == "-r" && e.Commit != side {
+				t.Errorf("the last commit of %q was answered %q", e.Path, e.Commit)
+			}
+		}
+	}
+	for _, walk := range []string{"--first-parent", "-1"} {
+		if !slices.ContainsFunc(rec.ran(), func(c gitproc.Cmd) bool {
+			return c.Args[0] == "log" && c.Args[1] == walk && slices.Contains(c.Args, logLiteralTemplate+"-r")
+		}) {
+			t.Errorf("no walk `log %s` named the entry -r", walk)
+		}
 	}
 
 	ran := rec.ran()
@@ -189,14 +280,16 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 }
 
 // templates are the argument lists a read runs: "<oid>" a whole id, "<range>"
-// two joined by "...", and "<abbrevs>" one or more `--disambiguate=` of
-// validated hex, ending the list.
+// two joined by "...", "<abbrevs>" one or more `--disambiguate=` of
+// validated hex, ending the list, "<oids>" one or more whole ids, ending it,
+// and "<literals>" one or more literal pathspecs, ending it.
 var templates = [][]string{
 	{"cat-file", "--batch-check", "-Z"},
 	{"cat-file", "--batch-check=%(objectmode) %(objectname) %(objecttype)", "-Z"},
 	{"cat-file", "blob", "<oid>"},
 	{"rev-parse", "<abbrevs>"},
 	{"ls-tree", "-z", "-l", "<oid>"},
+	{"ls-tree", "-z", "<oid>"},
 	{"ls-tree", "-z", "-l", "-r", "<oid>"},
 	{"diff-tree", "-z", "-r", "--raw", "--numstat", "--no-ext-diff", "--no-textconv", "<oid>", "<oid>"},
 	{"diff-tree", "-z", "-r", "--raw", "--numstat", "--no-ext-diff", "--no-textconv", "-M", "<oid>", "<oid>"},
@@ -205,6 +298,7 @@ var templates = [][]string{
 	{"diff-pairs", "-z", "--numstat", "--no-ext-diff", "--no-textconv"},
 	{"diff-pairs", "-z", "-p", "--full-index", "--no-color", "--no-ext-diff", "--no-textconv", "-U3"},
 	{"diff-pairs", "-z", "-p", "-U0", "--no-color", "--no-ext-diff", "--no-textconv"},
+	{"diff-pairs", "-z", "-p", "-U1073741824", "--no-color", "--no-ext-diff", "--no-textconv"},
 	{"merge-base", "<oid>", "<oid>"},
 	{"merge-base", "--is-ancestor", "<oid>", "<oid>"},
 	{"rev-list", "--left-right", "--count", "<range>"},
@@ -220,30 +314,38 @@ var templates = [][]string{
 	{"grep", "-I", "-n", "-z", "--no-color", "--full-name", "-E", "-i", "-e", "<pattern>", "--end-of-options",
 		"<oid>"},
 	{"grep", "-I", "-n", "-z", "--no-color", "--full-name", "-e", "^", "--end-of-options", "<oid>"},
+	{"log", "-z", "--no-walk=unsorted", "--no-mailmap", "--no-color", "--no-notes", query.LogFormat, "<oids>"},
 }
 
 // logLiteralTemplate is the magic a history's path follows `--` with.
 const logLiteralTemplate = ":(literal)"
 
-// historyTemplates are a history's argument lists — its fixed options, its
-// format with or without the message, its window (a since, a skip, both or
-// neither), the commit, and its path as a literal pathspec, the one argument
-// after `--`, or none — and a blame's: its range, the commit, and its path,
-// the one argument after `--`. "<since>" and "<skip>" are the numbers the
-// server formats, "<literal>" the literal magic and any path, "<path>" any
-// path, "<lines>" two line numbers.
+// historyTemplates are a history's argument lists (its fixed options, its
+// format with or without the message, its window: every combination, in
+// order, of a since, an until and a skip, the commit, and its path as a
+// literal pathspec, the one argument after `--`, or none) and a blame's: its
+// range, the commit, and its path, the one argument after `--`. "<since>",
+// "<until>" and "<skip>" are the numbers the server formats, "<literal>" the
+// literal magic and any path, "<path>" any path, "<lines>" two line numbers.
 func historyTemplates() [][]string {
 	var out [][]string
-	for _, format := range []string{"--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%ct%x00%s%x00",
-		"--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%ct%x00%s%x00%B%x00"} {
-		for _, window := range [][]string{{}, {"<since>"}, {"<skip>"}, {"<since>", "<skip>"}} {
+	for _, format := range []string{"--format=%H%x00%P%x00%an%x00%ae%x00%cn%x00%ce%x00%at%x00%ct%x00%s%x00",
+		"--format=%H%x00%P%x00%an%x00%ae%x00%cn%x00%ce%x00%at%x00%ct%x00%s%x00%B%x00"} {
+		for _, window := range [][]string{{}, {"<since>"}, {"<until>"}, {"<skip>"}, {"<since>", "<until>"},
+			{"<since>", "<skip>"}, {"<until>", "<skip>"}, {"<since>", "<until>", "<skip>"}} {
 			for _, path := range [][]string{{}, {"--", "<literal>"}} {
 				out = append(out, slices.Concat([]string{"log", "-z", "--topo-order", "--no-mailmap", "--no-color",
 					"--no-notes", format}, window, []string{"<oid>"}, path))
 			}
 		}
 	}
-	return append(out, []string{"blame", "--porcelain", "-L", "<lines>", "<oid>", "--", "<path>"})
+	// A directory's last commits: the group walk (the root's names no path),
+	// the same over the directory or its entries, and an entry walked alone.
+	walk := []string{"log", "--first-parent", "-z", "--no-color", "--no-notes", "--root", "--name-status",
+		"--no-renames", "--diff-merges=first-parent", "--format=%H%x00%P", "<oid>"}
+	return append(out, []string{"blame", "--porcelain", "-L", "<lines>", "<oid>", "--", "<path>"}, walk,
+		append(slices.Clone(walk), "--", "<literals>"),
+		[]string{"log", "-1", "-z", "--no-color", "--no-notes", "--format=%H", "<oid>", "--", "<literal>"})
 }
 
 // fitsTemplate reports whether args is one of templates, or a history's or a
@@ -277,6 +379,30 @@ func fits(args, tmpl []string) bool {
 		}
 		return true
 	}
+	if len(tmpl) > 0 && tmpl[len(tmpl)-1] == "<literals>" {
+		head := tmpl[:len(tmpl)-1]
+		if len(args) <= len(head) || !fits(args[:len(head)], head) {
+			return false
+		}
+		for _, a := range args[len(head):] {
+			if !strings.HasPrefix(a, logLiteralTemplate) {
+				return false
+			}
+		}
+		return true
+	}
+	if len(tmpl) > 0 && tmpl[len(tmpl)-1] == "<oids>" {
+		head := tmpl[:len(tmpl)-1]
+		if len(args) <= len(head) || !slices.Equal(args[:len(head)], head) {
+			return false
+		}
+		for _, a := range args[len(head):] {
+			if !gitref.ValidOID(a) {
+				return false
+			}
+		}
+		return true
+	}
 	if len(args) != len(tmpl) {
 		return false
 	}
@@ -293,6 +419,10 @@ func fits(args, tmpl []string) bool {
 			}
 		case "<since>":
 			if n, ok := strings.CutPrefix(args[i], "--max-age="); !ok || !digits(n) {
+				return false
+			}
+		case "<until>":
+			if n, ok := strings.CutPrefix(args[i], "--min-age="); !ok || !digits(n) {
 				return false
 			}
 		case "<skip>":

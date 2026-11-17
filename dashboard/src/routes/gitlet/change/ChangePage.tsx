@@ -84,7 +84,7 @@ import { ChangeStateTag, ReadinessMeter } from "../Changes.tsx";
 import { CodeNotFound } from "../NotFound.tsx";
 import { ReviewerPicker } from "../ReviewerPicker.tsx";
 import { changesHref, repoHref } from "../paths.ts";
-import { Byline } from "../ui.tsx";
+import { BranchChip, Byline } from "../ui.tsx";
 import { Checks } from "./Checks.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { Files } from "./Files.tsx";
@@ -239,17 +239,11 @@ function ChangeDraft({ boxes, change }: { boxes: DraftBoxes; change: CodeChangeD
 function bylineVerb(change: CodeChangeDetail): ReactNode {
   const source = refName(change.source_ref).name;
   const target = refName(change.target_ref).name;
-  // EACH BRANCH A LINK IN THE SENTENCE, so it takes `.prose-link`'s rule
-  // under its words as every link inside a sentence does, on its chip.
+  // EACH BRANCH A LINK IN THE SENTENCE: `BranchChip` keeps `.prose-link` on it.
   const branches = (
     <>
-      <a className="code-branch-chip prose-link" href={repoHref(change.repo, { ref: source })}>
-        {source}
-      </a>{" "}
-      into{" "}
-      <a className="code-branch-chip prose-link" href={repoHref(change.repo)}>
-        {target}
-      </a>
+      <BranchChip name={source} href={repoHref(change.repo, { ref: source })} /> into{" "}
+      <BranchChip name={target} href={repoHref(change.repo)} />
     </>
   );
   switch (change.state) {

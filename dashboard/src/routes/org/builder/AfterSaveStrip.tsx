@@ -50,14 +50,7 @@ import { useRecheck } from "~/routes/settings/recheck.ts";
 import { revisionOfEtag } from "./model/transport.ts";
 import { pinSavedEpoch, type SavedRevision } from "./savedRevision.ts";
 import { screenPath } from "./dialogParts.tsx";
-import {
-  CheckGlyph,
-  XGlyph,
-  FileTextGlyph,
-  CircleAlertGlyph,
-  InfoGlyph,
-  RotateCwGlyph,
-} from "@crewlethq/icons/glyphs";
+import { XGlyph, FileTextGlyph } from "@crewlethq/icons/glyphs";
 import {
   Button,
   ButtonLink,
@@ -401,17 +394,7 @@ function SavedRevisionStrip({ saved, onDismiss }: { saved: SavedRevision; onDism
         variant={
           state.tone === "critical" ? "danger" : state.tone === "neutral" ? "neutral" : "info"
         }
-        icon={
-          state.tone === "positive" ? (
-            <CheckGlyph />
-          ) : state.tone === "critical" ? (
-            <CircleAlertGlyph />
-          ) : state.tone === "neutral" ? (
-            <InfoGlyph />
-          ) : (
-            <RotateCwGlyph />
-          )
-        }
+
         action={
           <span className="row gap-1 wrap">
             {!readsCompany ? null : saved.parentRevisionId ? (
@@ -553,6 +536,7 @@ function YamlDialog({ savedRevision, onClose }: { savedRevision: string; onClose
             plain
             wrap
             selectable
+            language="yaml"
             label="The company as YAML"
             code={state.text}
             maxHeight="var(--record-max)"

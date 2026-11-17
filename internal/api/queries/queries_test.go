@@ -273,6 +273,9 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"link_hosts": "everybody",
 		"executors":  "everybody", "company_feed": "everybody",
 		"decisions": "everybody",
+		// A page from a host the company lists, for whoever Ask Crewlet acts for.
+		"research_page":   "everybody",
+		"research_search": "everybody",
 		// The other half of `decisions`: a person's own asks need no app.
 		"answered_decisions": "everybody",
 		// Each model's condition and uses, in two readings: a member's names no
@@ -349,6 +352,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"artifact_assets":       "decided_by:" + string(authz.ActionArtifactRead),
 		"artifact_seen_by":      "decided_by:" + string(authz.ActionArtifactRead),
 		"artifact_access":       "decided_by:" + string(authz.ActionArtifactRead),
+		"artifact_comments":     "decided_by:" + string(authz.ActionArtifactRead),
 		"artifact_usage":        "decided_by:" + string(authz.ActionArtifactUsage),
 		"artifact_trail":        "decided_by:" + string(authz.ActionAuditRead),
 		"brand":                 "decided_by:" + string(authz.ActionBrandRead),
@@ -391,20 +395,29 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		// again by the Gitlet node that answers a read by object id.
 		"code_refs":    string(iam.GrantGitlet),
 		"code_tree":    string(iam.GrantGitlet),
+		"code_find":    string(iam.GrantGitlet),
 		"code_blob":    string(iam.GrantGitlet),
 		"code_log":     string(iam.GrantGitlet),
 		"code_blame":   string(iam.GrantGitlet),
 		"code_diff":    string(iam.GrantGitlet),
+		"code_tips":    string(iam.GrantGitlet),
+		"code_tags":    string(iam.GrantGitlet),
 		"code_compare": string(iam.GrantGitlet),
 		"code_commit":  string(iam.GrantGitlet),
+		// AND EACH ENTRY'S LAST COMMIT, decided per repository alike.
+		"code_tree_commits": string(iam.GrantGitlet),
 		// AND ITS MERGE QUEUES AND ITS CHECKS, decided per repository alike:
 		// a listing across repositories keeps the rows of those the caller
 		// reads, and one attempt — and its log — is refused on one it does
 		// not.
-		"code_queue":     string(iam.GrantGitlet),
-		"code_checks":    string(iam.GrantGitlet),
-		"code_check":     string(iam.GrantGitlet),
-		"code_check_log": string(iam.GrantGitlet),
+		"code_queue":        string(iam.GrantGitlet),
+		"code_checks":       string(iam.GrantGitlet),
+		"code_check":        string(iam.GrantGitlet),
+		"code_check_log":    string(iam.GrantGitlet),
+		"code_commit_marks": string(iam.GrantGitlet),
+		// AND GITLET'S SECTION COUNTS, decided per repository alike: the company's leave out what the caller
+		// does not read.
+		"code_counts": string(iam.GrantGitlet),
 		// AND A SEARCH OF THEIR LINES, decided per repository alike: an
 		// unfiltered search leaves out what the caller does not read, and a
 		// repo: naming one is refused — by every Gitlet node that answers it.

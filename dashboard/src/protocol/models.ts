@@ -197,12 +197,21 @@ export interface CatalogueModel {
   released?: string;
 }
 
+/** A model name the harness resolves itself; `model` and `version` are what it resolves to on the vendor's own service, where the engine knows. */
+export interface ModelAlias {
+  id: string;
+  name: string;
+  detail: string;
+  model?: string;
+  version?: string;
+}
+
 /** `llm_models`: the models a harness can run, from models.dev, with its own aliases and docs. */
 export interface ModelsAnswer {
   source: "models.dev" | "none";
   fetched_at: string | null;
   provider: string;
-  aliases: Array<{ id: string; name: string; detail: string }>;
+  aliases: ModelAlias[];
   models: CatalogueModel[];
   docs_url: string;
   reason?: string;

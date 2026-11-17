@@ -26,8 +26,11 @@ import { DeviceDialog } from "./flows/DeviceDialog.tsx";
 import { RemoveDialog } from "./flows/RemoveDialog.tsx";
 import { RetryDialog } from "./flows/RetryDialog.tsx";
 import { TestDialog } from "./flows/TestDialog.tsx";
-import { ModelWizard } from "./wizard/ModelWizard.tsx";
+import { lazyScreen } from "~/app/lazyScreen.ts";
 import "~/styles/models.css";
+
+/** The add and edit wizard, a chunk of its own: drawn only while a model is added or edited. */
+const ModelWizard = lazyScreen("model-wizard", (module) => module.ModelWizard);
 
 export function Models({ id }: { id?: string }) {
   const data = useModelsData();

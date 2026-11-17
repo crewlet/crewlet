@@ -80,12 +80,20 @@ func init() {
 type CodeFetchedVia string
 
 const (
-	// FetchedViaGit is upload-pack serving a fetch or a clone through
-	// Gitlet's git routes.
+	// FetchedViaGit is a read through Gitlet's git routes: upload-pack
+	// serving a fetch or a clone, or a download beside them (Kind raw or
+	// archive).
 	FetchedViaGit CodeFetchedVia = "git"
 	// FetchedViaTool is a server-side read through a code tool — a seat's,
 	// or an operator assistant's.
 	FetchedViaTool CodeFetchedVia = "tool"
+)
+
+// The kinds a read through the git routes other than a fetch is filed under
+// (CodeFetched.Kind beside FetchedViaGit): a file's bytes, a commit's ZIP.
+const (
+	FetchedRaw     = "raw"
+	FetchedArchive = "archive"
 )
 
 // CodeFetchedVias is the closed set.
@@ -118,9 +126,10 @@ func (k CodeReaderKind) Valid() bool { return slices.Contains(CodeReaderKinds(),
 
 // CodeFetched records the reads ONE READER made of a `visibility: unit`
 // repository's contents, one way, since the serving node's last flush — git
-// fetches whose answers carried a pack, or server-side reads of one kind that
-// answered — within one company day, which the envelope's instant, the newest
-// read's, falls in. Recorded on the node that SERVED them, and never for a
+// fetches whose answers carried a pack, server-side reads of one kind that
+// answered, or downloads of a file or a commit's ZIP (Kind raw or archive) —
+// within one company day, which the envelope's instant, the newest read's,
+// falls in. Recorded on the node that SERVED them, and never for a
 // `visibility: company` repository, whose readers nobody audits.
 //
 // A producer hands the node's ledger one read at a time in this same shape,
@@ -144,11 +153,10 @@ type CodeFetched struct {
 	// handle; empty for a token bound to nobody.
 	Seat string `json:"seat,omitempty"`
 
-	// Via is how it was read; Kind, for a server-side read, is which read
-	// (gitlet.GitReadKind: tree, blob, diff, compare, landed_in, log and blame,
-	// and a change's revision_facts, reanchor and interdiff; or merge_preview,
-	// a comparison's merge of two commits, internal/gitlet/home's
-	// PreviewReadKind), and empty for a fetch.
+	// Via is how it was read; Kind, for a server-side read, is which read (one
+	// of gitlet.GitReadKinds, or merge_preview, a comparison's merge of two
+	// commits, internal/gitlet/home's PreviewReadKind), for a download through
+	// the git routes raw or archive, and empty for a fetch.
 	Via  CodeFetchedVia `json:"via"`
 	Kind string         `json:"kind,omitempty"`
 
@@ -158,8 +166,8 @@ type CodeFetched struct {
 	Reads int64 `json:"reads"`
 
 	// Bytes is what the reader was sent, over every read the record stands
-	// for: the whole answer that carried the pack, for a fetch, and the
-	// answer's encoding, for a server-side read.
+	// for: the whole answer that carried the pack, for a fetch, the answer's
+	// encoding, for a server-side read, and the bytes sent, for a download.
 	Bytes int64 `json:"bytes"`
 }
 
@@ -177,11 +185,17 @@ func (e CodeFetched) Actor() string {
 	return e.Principal
 }
 
-// SummaryFor names the repository and what was read of it: a fetch by its
-// size, a server-side read by its kind, each with how many times where the
-// record stands for more than one.
+// SummaryFor names the repository and what was read of it: a fetch or a
+// download by its size, a server-side read by its kind, each with how many
+// times where the record stands for more than one.
 func (e CodeFetched) SummaryFor(actor string) string {
 	what := "fetched " + e.RepoName
+	switch {
+	case e.Via == FetchedViaGit && e.Kind == FetchedRaw:
+		what = "downloaded a file of " + e.RepoName
+	case e.Via == FetchedViaGit && e.Kind == FetchedArchive:
+		what = "downloaded " + e.RepoName + " as a ZIP"
+	}
 	if e.Via == FetchedViaTool {
 		what = "read " + e.RepoName
 		if e.Kind != "" {

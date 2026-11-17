@@ -62,18 +62,17 @@ import { useQuery } from "~/lib/useQuery.ts";
  */
 type PageGroup = "turn" | "delegation" | "notifications" | "schedules";
 
-/** Each group's heading and glyph, in the engine's drawing order. */
-const LIMIT_GROUPS: Readonly<Record<PageGroup, { title: string; icon: ReactNode; note?: string }>> =
+/** Each group's heading, in the engine's drawing order. */
+const LIMIT_GROUPS: Readonly<Record<PageGroup, { title: string; note?: string; icon: ReactNode }>> =
   {
     turn: { title: "Guardrails on every turn", icon: <GaugeGlyph size="sm" /> },
     delegation: { title: "Delegation", icon: <NetworkGlyph size="sm" /> },
     notifications: { title: "Notifications", icon: <BellGlyph size="sm" /> },
+    // The one cap a schedule overrides, said once over its row.
     schedules: {
       title: "Schedules",
+      note: "A schedule can set its own limit",
       icon: <CalendarClockGlyph size="sm" />,
-      // THE ONE CAP A SCHEDULE OVERRIDES, said once over its row rather than
-      // as a clause that wrapped the row's name onto two lines.
-      note: "A schedule may set its own time limit.",
     },
   };
 
@@ -111,10 +110,7 @@ export function Limits() {
     .filter((g) => g.rows.length > 0);
   return (
     <>
-      <PageNote>
-        The caps the engine holds the company&rsquo;s work to. Each is a setting of the company
-        document: change one here and the engine checks it against the whole company first.
-      </PageNote>
+      <PageNote>The caps every turn, delegation and wake-up is held to.</PageNote>
       <QueryState error={error} refusal={refusal} detail={detail} loading={loading && !data}>
         {data && rows.length === 0 && (
           <EmptyState
@@ -144,13 +140,13 @@ function LimitGroupCard({
   caps: LimitRow[];
   onApplied: () => void;
 }) {
-  const { title, icon, note } = LIMIT_GROUPS[group];
+  const { title, note, icon } = LIMIT_GROUPS[group];
   const titleID = `limits-${group}`;
   return (
     // FLUSH, so the table's row rules reach the card's edges under the
     // head's own rule rather than stopping at a body's inset.
     <Card padding="none">
-      <Card.Header icon={icon} subtitle={note}>
+      <Card.Header icon={icon} count={caps.length} subtitle={note}>
         <Card.Title id={titleID}>{title}</Card.Title>
       </Card.Header>
       <SettingsTable aria-labelledby={titleID}>

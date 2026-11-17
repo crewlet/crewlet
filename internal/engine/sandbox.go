@@ -4594,8 +4594,10 @@ func (e *Engine) SeatHeldBySandbox(handle string) bool {
 //     each backend decides, rather than being exported like the rest.
 type executorRun struct {
 	model string
-	files map[string]string
-	env   map[string]string
+	// effort is the entry's reasoning effort, passed beside the model.
+	effort string
+	files  map[string]string
+	env    map[string]string
 
 	// signIn is env without the integrations' box defaults and the seat's
 	// own credentials for a tool: what the run's sign-in is judged on, since
@@ -4667,6 +4669,7 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 	maps.Copy(env, credentials)
 	run := executorRun{
 		model:     agent.ModelArgument(),
+		effort:    agent.Effort(),
 		env:       env,
 		signIn:    signIn,
 		files:     agent.SandboxCredentials(),

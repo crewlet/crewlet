@@ -335,6 +335,15 @@ func (a assistantRecords) TitleConversation(ctx context.Context, w assistant.Wri
 	return settled(a.w.TitleConversation(ctx, c, id, title))
 }
 
+func (a assistantRecords) SummarizeConversation(ctx context.Context, w assistant.Write,
+	id uuid.UUID, summary string, through int) error {
+	c, err := a.call(w)
+	if err != nil {
+		return err
+	}
+	return settled(a.w.SummarizeConversation(ctx, c, id, summary, through))
+}
+
 func (a assistantRecords) ClearConversation(ctx context.Context, w assistant.Write,
 	id uuid.UUID) (assistant.Written, error) {
 	c, err := a.call(w)

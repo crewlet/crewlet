@@ -182,6 +182,19 @@ describe("the table", () => {
     expect(frame.filter((id) => !bound.has(id))).toEqual([]);
   });
 
+  // GO TO FILE IS A BARE t ON A PAGE WITH TABS, a key only where the company hosts code; a
+  // focused chat message's t is apart from it. Mutation: scope it to the frame, and this fails.
+  test("t is Go to file on a page with tabs, Gitlet's alone", () => {
+    const row = keyRow("code.find");
+    expect([row.presses, row.scope, row.service]).toEqual([[{ key: "t" }], "object", "code"]);
+    const bare = KEYMAP.filter((r) =>
+      r.presses.some((p) => p.key === "t" && !p.after && !p.mod && !p.alt && !p.shift),
+    );
+    expect(bare.map((r) => r.id).sort()).toEqual(["code.find", "message.thread"]);
+    expect(liveTogether("object", "message")).toBe(false);
+    expect(liveTogether("object", "list")).toBe(true);
+  });
+
   test("every scope a row names has a heading in the legend", () => {
     const scopes = new Set(KEY_SCOPES.map((s) => s.scope));
     expect(KEYMAP.filter((r) => !scopes.has(r.scope)).map((r) => r.id)).toEqual([]);
@@ -241,6 +254,7 @@ describe("the legend", () => {
     expect(has("go.worklet")).toBe(false);
     expect(has("go.me")).toBe(false);
     expect(has("project")).toBe(false);
+    expect(has("code.find")).toBe(false);
     expect(has("go.doclet")).toBe(true);
     expect(has("go.inbox")).toBe(true);
   });
@@ -300,6 +314,20 @@ describe("binding a row", () => {
     expect(next).not.toHaveBeenCalled();
     press("j");
     expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  // ONE LETTER, TWO ROWS: an artifact's Comments panel bare, Comment mode
+  // with Shift. Mutation: drop either row's `shift` and one press does both.
+  test("an artifact's comments take c, and Comment mode Shift with it", () => {
+    const panel = vi.fn();
+    const place = vi.fn();
+    render(<Bound handlers={{ "artifact.comments": panel, "artifact.comment": place }} />);
+    press("c");
+    expect(panel).toHaveBeenCalledTimes(1);
+    expect(place).not.toHaveBeenCalled();
+    press("C", { shiftKey: true });
+    expect(place).toHaveBeenCalledTimes(1);
+    expect(panel).toHaveBeenCalledTimes(1);
   });
 
   // A JUMP MAY TAKE ITS PREFIX'S OWN LETTER: Gitlet's is `g g`, the one

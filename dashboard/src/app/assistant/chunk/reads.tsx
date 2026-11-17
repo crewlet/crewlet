@@ -15,6 +15,7 @@
 
 import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import {
+  ArtifactKindGlyph,
   Button,
   ButtonLink,
   DataGrid,
@@ -37,6 +38,7 @@ import {
   FileTextGlyph,
   FolderGlyph,
   FolderKanbanGlyph,
+  GlobeGlyph,
   LayersGlyph,
   ListFilterGlyph,
   MapGlyph,
@@ -56,12 +58,22 @@ import { ASSISTANT_WORDS, renderMarkdown } from "~/lib/markdown.ts";
 import { fmtExact } from "~/lib/format.ts";
 import { useLatestHandlers } from "~/lib/useLatestHandlers.ts";
 import { href as hrefOf } from "../../router.tsx";
+import { isArtifactKind } from "~/lib/artifacts/words.ts";
 import { recordWord } from "../brief.ts";
 import { cellText, factText, ProseBlock, ReplyProse, type CardHandlers } from "./blocks.tsx";
 import { mentionsOf, readsOf, type Mention, type Read } from "./mentions.ts";
+import { Sources, sourcesOf } from "./sources.tsx";
 import { openInApp } from "./openInApp.ts";
 
 type EntityKind = NonNullable<AssistantEntityCard["kind"]>;
+
+/** A record's glyph; an artifact's is its kind's, which its card's subtitle names. */
+function entityGlyph(entity: AssistantEntityCard): ReactNode {
+  const kind = entity.subtitle ?? "";
+  if (entity.kind === "artifact" && isArtifactKind(kind))
+    return <ArtifactKindGlyph kind={kind} size="xs" />;
+  return entity.kind ? KIND_GLYPH[entity.kind]() : <FileTextGlyph size="xs" />;
+}
 
 /** Each kind of record as the glyph its chip carries: decoration, the words are read. */
 const KIND_GLYPH: Record<EntityKind, () => ReactNode> = {
@@ -78,6 +90,7 @@ const KIND_GLYPH: Record<EntityKind, () => ReactNode> = {
   view: () => <ListFilterGlyph size="xs" />,
   room: () => <MessageSquareGlyph size="xs" />,
   atlas_entry: () => <MapGlyph size="xs" />,
+  web_page: () => <GlobeGlyph size="xs" />,
 };
 
 /** What a record's kind is called, at the head of its peek: "Task", "Agent". */
@@ -396,7 +409,7 @@ export function ReadChip({
     <RecordChip
       {...(keyed ? { code: text } : { label: text })}
       title={entity.title}
-      glyph={entity.kind ? KIND_GLYPH[entity.kind]() : <FileTextGlyph size="xs" />}
+      glyph={entityGlyph(entity)}
       meta={kindWord(entity)}
       actions={actions}
     >
@@ -437,10 +450,15 @@ export function Answer({
       text.trim() === "" ? [] : renderMarkdown(text, { ...ASSISTANT_WORDS, prose: mentions.prose });
     return { nodes: rendered, named: mentions.named };
   }, [text, reads, handlers]);
-  const unnamed = reads.filter((read) => !named.has(read.id));
+  // A WEB PAGE IS CITED under Sources, never also on the Also looked up line.
+  const sources = useMemo(() => sourcesOf(cards), [cards]);
+  const unnamed = reads.filter(
+    (read) => !named.has(read.id) && read.event.card.entity?.kind !== "web_page",
+  );
   return (
     <Stack gap={3}>
       {nodes.length > 0 ? <ProseBlock dimmed={dimmed}>{nodes}</ProseBlock> : null}
+      <Sources sources={sources} />
       {unnamed.length > 0 ? (
         <RecordChipList label="Also looked up">
           {unnamed.map((read) => (

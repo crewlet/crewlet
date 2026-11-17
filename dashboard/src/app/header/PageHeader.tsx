@@ -448,7 +448,7 @@ export function SectionColumn({
   // section's own content began below the fold on every visit.
   //
   // FOLDED ON EVERY ARRIVAL, the workspace's own address included. That
-  // address is a section's (Settings lands on Models) and the one the
+  // address is a section's (Settings lands on General) and the one the
   // sidebar's Settings row opens, so opening the list there put the page the
   // reader asked for under twenty rows of other pages: Models began 1,340px
   // down a phone. The folded control says what it is ("Section · Models" and

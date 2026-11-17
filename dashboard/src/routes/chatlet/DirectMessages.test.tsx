@@ -128,19 +128,36 @@ test("lists every direct conversation, newest first, and no room", async () => {
 // list. The list's head drew a second one, a menu of New message (already the
 // head's own button) and Mark all as read, which is now a button of its own,
 // held with its reason while nothing is unread.
-test("the list's head is no second Direct messages control; Mark all as read is its own button", async () => {
+test("the list's head is no second Direct messages control; Mark all read is its own button", async () => {
   mount(<DirectMessagesView />, "#/chatlet/dms");
   await waitFor(() => expect(rows()).toHaveLength(3));
   const list = document.querySelector<HTMLElement>(".chat-dms-list")!;
   expect(within(list).queryByRole("button", { name: /Direct messages/ })).toBeNull();
   const head = list.querySelector<HTMLElement>(".chat-dms-head")!;
-  // A conversation is unread (Bo's), so Mark all as read is offered, not held.
-  const markAll = within(head).getByRole("button", { name: "Mark all as read" });
+  // A conversation is unread (Bo's), so Mark all read is offered, not held.
+  const markAll = within(head).getByRole("button", { name: "Mark all read" });
   expect(markAll.getAttribute("aria-disabled")).not.toBe("true");
+  expect(markAll.textContent).toBe("Mark all read");
   expect(within(head).getByRole("button", { name: "New message" })).toBeTruthy();
 });
 
-test("a row's date is long where the column is wide, and short, with the switch's word dropped, where it is narrow", async () => {
+// THE FILTER SAYS WHAT IT IS AND WHAT IT WOULD LEAVE: a chip whose word and
+// count are drawn, pressed while it narrows the list.
+test("the Unread filter is a chip with its count, pressed while it narrows", async () => {
+  mount(<DirectMessagesView />, "#/chatlet/dms");
+  await waitFor(() => expect(rows()).toHaveLength(3));
+  const head = document.querySelector<HTMLElement>(".chat-dms-head")!;
+  expect(within(head).queryByRole("switch")).toBeNull();
+  const unread = within(head).getByRole("button", { name: /^Unread/ });
+  expect(unread.querySelector(".crewlet-filter-chip__label")?.textContent).toBe("Unread");
+  expect(unread.querySelector(".crewlet-filter-chip__count")?.textContent).toBe("1");
+  expect(unread.getAttribute("aria-pressed")).toBe("false");
+  fireEvent.click(unread);
+  await waitFor(() => expect(rows()).toEqual([DM_BO]));
+  expect(unread.getAttribute("aria-pressed")).toBe("true");
+});
+
+test("a row's date is long where the column is wide, and short where it is narrow, with every word in the head drawn", async () => {
   mount(<DirectMessagesView />, "#/chatlet/dms");
   const ops = await screen.findByRole("button", { name: /^Ops Agent/ });
   expect(ops.querySelector("time")?.textContent).toBe("October 28");
@@ -151,9 +168,13 @@ test("a row's date is long where the column is wide, and short, with the switch'
     mount(<DirectMessagesView />, "#/chatlet/dms");
     const narrow = await screen.findByRole("button", { name: /^Ops Agent/ });
     expect(narrow.querySelector("time")?.textContent).toBe("Oct 28");
-    // Still named by its word, and New message still in the head.
-    expect(screen.getByRole("switch", { name: "Unreads" })).toBeTruthy();
+    // THE NARROW HEAD HIDES NO WORD: the filter and Mark all read keep theirs.
     const head = document.querySelector<HTMLElement>(".chat-dms-head")!;
+    expect(head.querySelector(".crewlet-visually-hidden")).toBeNull();
+    expect(within(head).getByRole("button", { name: /^Unread/ }).textContent).toMatch(/^Unread/);
+    expect(within(head).getByRole("button", { name: "Mark all read" }).textContent).toBe(
+      "Mark all read",
+    );
     expect(within(head).getByRole("button", { name: "New message" })).toBeTruthy();
   } finally {
     width.mockRestore();
@@ -182,12 +203,12 @@ test("opening a conversation keeps it in the address, draws its head, and Close 
   );
 });
 
-test("Unreads keeps the unread conversations and the open one; the find field narrows by name", async () => {
+test("Unread keeps the unread conversations and the open one; the find field narrows by name", async () => {
   mount(<DirectMessagesView />, `#/chatlet/dms?room=${DM_OPS}`);
   await waitFor(() => expect(rows()).toHaveLength(3));
-  fireEvent.click(screen.getByRole("switch", { name: "Unreads" }));
+  fireEvent.click(screen.getByRole("button", { name: /^Unread/ }));
   await waitFor(() => expect(rows()).toEqual([DM_BO, DM_OPS]));
-  fireEvent.click(screen.getByRole("switch", { name: "Unreads" }));
+  fireEvent.click(screen.getByRole("button", { name: /^Unread/ }));
   fireEvent.change(screen.getByRole("textbox", { name: "Find a conversation" }), {
     target: { value: "ops" },
   });

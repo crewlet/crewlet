@@ -54,3 +54,13 @@ test("leaving a panel takes its own keys with it; staying on it keeps them", () 
   expect(Object.fromEntries(withPanel(comparing, null))).toEqual({ version: "2" });
   expect(withPanel(comparing, "history").get("against")).toBe("1");
 });
+
+test("Comments is a panel of every artifact, and its thread and filter leave with it", () => {
+  expect(panelOf(q("panel=comments"), NONE)).toBe("comments");
+  const reading = q("panel=comments&thread=t1&filter=resolved&version=2");
+  expect(Object.fromEntries(withPanel(reading, "history"))).toEqual({
+    panel: "history",
+    version: "2",
+  });
+  expect(withPanel(reading, "comments").get("thread")).toBe("t1");
+});

@@ -46,17 +46,18 @@ import {
   Callout,
   Card,
   Checkbox,
+  type DataGridColumn,
   EmptyState,
   EmptyValue,
   InlineCode,
   Input,
-  Tag,
+  NoticeList,
   TableKeyCell,
   TableTagsCell,
-  type DataGridColumn,
+  Tag,
 } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
-import { NetworkGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
+import { NetworkGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { QueryState } from "~/components/common.tsx";
@@ -216,7 +217,7 @@ export function BrokerMembership({
     // grants and a state-log one says that waiting will not clear it.
     return error ? (
       <Card>
-        <Card.Header icon={<NetworkGlyph size="sm" />}>
+        <Card.Header>
           <Card.Title>Broker members</Card.Title>
         </Card.Header>
         <QueryState error={error} refusal={refusal} loading={false} />
@@ -226,7 +227,7 @@ export function BrokerMembership({
   if (answer.external) {
     return (
       <Card>
-        <Card.Header icon={<NetworkGlyph size="sm" />}>
+        <Card.Header>
           <Card.Title>Broker members</Card.Title>
         </Card.Header>
         <EmptyState
@@ -252,23 +253,19 @@ export function BrokerMembership({
   return (
     <Card padding="none">
       <Card.Header
-        icon={<NetworkGlyph size="sm" />}
         // THE COUNT IS THE TABLE'S ROWS: counting the group's voters said 0
         // over a table listing the one node that advertises a broker.
         count={rows.length}
-        subtitle={answer.group ? groupSummary(answer.group, answer.group_from) : undefined}
+        subtitle={
+          answer.solo
+            ? "One embedded broker, with no cluster"
+            : answer.group
+              ? groupSummary(answer.group, answer.group_from)
+              : undefined
+        }
       >
         <Card.Title>Broker members</Card.Title>
       </Card.Header>
-      {/* ONE EMBEDDED BROKER IS A STATE, said plainly: it has no cluster, so
-          the group's columns would say "not a voter" of the only member. */}
-      {answer.solo && (
-        <Card.Body padding="md">
-          <p className="t-caption muted">
-            This engine runs one embedded broker, so there is no cluster to show.
-          </p>
-        </Card.Body>
-      )}
       {((!answer.group && !answer.solo) || answer.findings.length > 0 || error) && (
         <Card.Body padding="md">
           <div className="col gap-2">
@@ -285,30 +282,29 @@ export function BrokerMembership({
                 </span>
               </Callout>
             )}
-            {answer.findings.map((f) => (
-              <Callout
-                key={`${f.kind}:${f.node}:${f.peer ?? ""}`}
-                variant={f.kind === "dead_member" ? "warning" : "info"}
-                role={f.kind === "dead_member" ? "alert" : "status"}
-                icon={<TriangleAlertGlyph size="md" />}
-              >
-                <span className="row wrap gap-2 baseline">
-                  <span>
-                    <strong>{FINDING_TITLE[f.kind] ?? f.kind}</strong>{" "}
-                    <InlineCode close=":">{voterLabel(f.node, f.peer)}</InlineCode> {f.detail}.
-                  </span>
-                  {f.kind === "dead_member" && (
+            {answer.findings.length > 0 && (
+              <NoticeList
+                notices={answer.findings.map((f) => ({
+                  key: `${f.kind}:${f.node}:${f.peer ?? ""}`,
+                  tone: f.kind === "dead_member" ? "warning" : "info",
+                  subject: FINDING_TITLE[f.kind] ?? f.kind,
+                  title: (
+                    <>
+                      <InlineCode close=":">{voterLabel(f.node, f.peer)}</InlineCode> {f.detail}.
+                    </>
+                  ),
+                  action: f.kind === "dead_member" && (
                     <Button
-                      variant="ghost"
+                      variant="secondary"
                       size="small"
                       onClick={() => setRemoving({ node: f.node, peer: f.peer ?? "" })}
                     >
                       Remove from the group
                     </Button>
-                  )}
-                </span>
-              </Callout>
-            ))}
+                  ),
+                }))}
+              />
+            )}
           </div>
         </Card.Body>
       )}
@@ -526,7 +522,7 @@ export function BrokerRemoveDialog({
         </Callout>
       )}
       {heard?.kind === "unanswered" && (
-        <Callout variant="warning" role="alert" icon={<ClockGlyph size="md" />}>
+        <Callout variant="warning" role="alert">
           <span>
             <strong>No answer</strong> ({heard.why}). Check the panel before sending again.
           </span>

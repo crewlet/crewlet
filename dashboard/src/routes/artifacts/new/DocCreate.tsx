@@ -425,8 +425,7 @@ export function DocCreate() {
           {untouched && (
             <FilterChipGroup
               className="doc-create-starts"
-              label="Start from a template"
-              hideLabel
+              label="Start from"
               semantics="radio"
               activate="manual"
               allowNone

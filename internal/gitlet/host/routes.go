@@ -40,6 +40,13 @@ const (
 	PatternBoxGitletDiff = "GET /box/gitlet/{repo}/diff"
 )
 
+// A PERSON'S TWO DOWNLOADS beside git (download.go), spelled from the
+// classifier's tails.
+const (
+	PatternRaw     = "GET /git/{repo}/" + auth.DownloadRawTail
+	PatternArchive = "GET /git/{repo}/" + auth.DownloadArchiveTail
+)
+
 // What a client that speaks the protocol itself, rather than through git,
 // posts to a repository's two RPCs: the path after the repository's own
 // (`/git/{repo}`), and the content type each handler requires, refusing any

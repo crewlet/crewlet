@@ -4,7 +4,7 @@
  * vendor's words for what a seat holds.
  */
 
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   CONFLUENCE_LANE,
   DATADOG_LANE,
@@ -69,6 +69,10 @@ import type { AccessLaneStatus, AccessSeatLane, AccessStep } from "~/contract/ac
 import { laneWords } from "./words.ts";
 import { grantReach, newGrant } from "~/lib/grants.ts";
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 const sre = () => datadogAnswer().seats.find((s) => s.handle === "sre")!.lanes.datadog!;
 
 describe("a row's status", () => {
@@ -126,13 +130,15 @@ describe("a row's clocks", () => {
       observed_at: at(1),
       sync: { at: at(10), outcome: "ok" as const, steps: [] },
     };
-    expect(clockValue(lane, now)).toBe("Checked 1m ago, last applied 10m ago");
+    expect(clockValue(lane, now)).toBe("Checked 1 minute ago, last applied 10 minutes ago");
     const refused = { ...lane, sync: { ...lane.sync, outcome: "failed" as const } };
-    expect(clockValue(refused, now)).toBe("Checked 1m ago, refused 10m ago");
+    expect(clockValue(refused, now)).toBe("Checked 1 minute ago, refused 10 minutes ago");
     const waiting = { ...lane, sync: { ...lane.sync, outcome: "waiting" as const } };
-    expect(clockValue(waiting, now)).toBe("Checked 1m ago, waiting on a person since 10m ago");
+    expect(clockValue(waiting, now)).toBe(
+      "Checked 1 minute ago, waiting on a person since 10 minutes ago",
+    );
     const { sync: _, ...unsynced } = lane;
-    expect(clockValue(unsynced, now)).toBe("Checked 1m ago, never applied");
+    expect(clockValue(unsynced, now)).toBe("Checked 1 minute ago, never applied");
   });
 
   test("a lane no pass has checked says so, or what its last sync did", () => {
@@ -142,7 +148,7 @@ describe("a row's clocks", () => {
       ...sre(),
       sync: { at: at(10), outcome: "ok" as const, steps: [] },
     };
-    expect(clockValue(applied, now)).toBe("Last applied 10m ago");
+    expect(clockValue(applied, now)).toBe("Last applied 10 minutes ago");
   });
 });
 
@@ -718,6 +724,9 @@ test("the settings Crewlet sets carry the lane's note on them, and nothing witho
 // as how it is issued, for as long as its lane says one lasts; a minted one
 // keeps its time, and one provided from outside says so.
 test("a credential reads as issued at use, minted when, or provided externally", () => {
+  // A fixed instant: a day back reads "yesterday" on the reader's calendar.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-10T12:00:00Z"));
   const now = Date.now();
   const issued = neutralAnswer().seats[1]!.lanes[NEUTRAL_LANE.key]!.observed;
   const words = laneWords(NEUTRAL_LANE.key);
@@ -729,7 +738,7 @@ test("a credential reads as issued at use, minted when, or provided externally",
     ...issued,
     credential: onLane({ variable: "VENDOR_TOKEN_SRE" }).observed.credential!,
   };
-  expect(credentialNote(NEUTRAL_LANE, minted, now)).toBe(", minted 1d ago");
+  expect(credentialNote(NEUTRAL_LANE, minted, now)).toBe(", minted yesterday");
   expect(
     credentialNote(
       NEUTRAL_LANE,

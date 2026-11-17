@@ -134,6 +134,18 @@ func stringsBytes(ss []string) int {
 	return n
 }
 
+// int64sBytes is the length of a list of numbers.
+func int64sBytes(ns []int64) int {
+	n := 2
+	for i, v := range ns {
+		if i > 0 {
+			n++
+		}
+		n += intBytes(v)
+	}
+	return n
+}
+
 // encodedBytes is the length of the ref's JSON encoding.
 func (r RefRow) encodedBytes() int {
 	n := 2 + field("ref", stringBytes(r.Ref), true)
@@ -141,6 +153,59 @@ func (r RefRow) encodedBytes() int {
 		n += field("oid", stringBytes(r.OID), false)
 	}
 	return n + field("position", positionBytes(r.Position), false)
+}
+
+// encodedBytes is the length of the ref's JSON encoding in detail.
+func (l RefListing) encodedBytes() int {
+	n := 2 + field("ref", stringBytes(l.Ref), true) + field("oid", stringBytes(l.OID), false) +
+		field("position", positionBytes(l.Position), false) + field("moved_at", timeBytes(l.MovedAt), false)
+	if l.MovedBy != nil {
+		n += field("moved_by", l.MovedBy.encodedBytes(), false)
+	}
+	if l.Protection != nil {
+		n += field("protection", l.Protection.encodedBytes(), false)
+	}
+	if l.Change != nil {
+		n += field("change", l.Change.encodedBytes(), false)
+	}
+	if l.MayDelete {
+		n += field("may_delete", trueBytes, false)
+	}
+	if l.DeleteRefusal != "" {
+		n += field("delete_refusal", stringBytes(string(l.DeleteRefusal)), false)
+	}
+	if l.DeleteDetail != "" {
+		n += field("delete_detail", stringBytes(l.DeleteDetail), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the mover's JSON encoding.
+func (m RefMover) encodedBytes() int {
+	n := 2 + field("push_id", stringBytes(m.PushID), true) + field("actor", stringBytes(m.Actor), false) +
+		field("actor_kind", stringBytes(m.ActorKind), false)
+	if m.ActorSeat != "" {
+		n += field("actor_seat", stringBytes(m.ActorSeat), false)
+	}
+	return n + field("via", stringBytes(string(m.Via)), false)
+}
+
+// encodedBytes is the length of the protection's JSON encoding.
+func (p RefProtection) encodedBytes() int {
+	n := 2 + field("patterns", nullableStringsBytes(p.Patterns), true)
+	if p.AllowForce {
+		n += field("allow_force", trueBytes, false)
+	}
+	if p.AllowDelete {
+		n += field("allow_delete", trueBytes, false)
+	}
+	return n + field("direct_push", stringBytes(string(p.DirectPush)), false)
+}
+
+// encodedBytes is the length of the change's JSON encoding.
+func (c RefChange) encodedBytes() int {
+	return 2 + field("number", intBytes(c.Number), true) + field("title", stringBytes(c.Title), false) +
+		field("state", stringBytes(string(c.State)), false)
 }
 
 // encodedBytes is the length of the principal's JSON encoding.
@@ -689,7 +754,51 @@ func (s RepoSummary) encodedBytes() int {
 	if !s.LastPushAt.IsZero() {
 		n += field("last_push_at", timeBytes(s.LastPushAt), false)
 	}
+	if len(s.Spark) > 0 {
+		n += field("spark", int64sBytes(s.Spark), false)
+	}
+	if s.ChangeCounts != nil {
+		n += field("change_counts", s.ChangeCounts.encodedBytes(), false)
+	}
+	if s.Card != nil {
+		n += field("card", s.Card.encodedBytes(), false)
+	}
 	return n
+}
+
+// encodedBytes is the length of the counts' JSON encoding, every field written.
+func (c ChangeCounts) encodedBytes() int {
+	return 2 + field("live", intBytes(c.Live), true) + field("draft", intBytes(c.Draft), false) +
+		field("open", intBytes(c.Open), false) + field("closed", intBytes(c.Closed), false) +
+		field("merged", intBytes(c.Merged), false)
+}
+
+// encodedBytes is the length of the card's JSON encoding: each part omitted where absent, the
+// first written one opening the object.
+func (c RepoCard) encodedBytes() int {
+	n, first := 2, true
+	if c.PushMirrored {
+		n += field("push_mirrored", trueBytes, first)
+		first = false
+	}
+	if c.LastPush != nil {
+		n += field("last_push", c.LastPush.encodedBytes(), first)
+		first = false
+	}
+	if c.TipChecks != nil {
+		n += field("tip_checks", c.TipChecks.encodedBytes(), first)
+	}
+	return n
+}
+
+// encodedBytes is the length of the last push's JSON encoding.
+func (p LastPush) encodedBytes() int {
+	n := 2 + field("push_id", stringBytes(p.PushID), true) + field("at", timeBytes(p.At), false) +
+		field("actor", stringBytes(p.Actor), false) + field("actor_kind", stringBytes(p.ActorKind), false)
+	if p.ActorSeat != "" {
+		n += field("actor_seat", stringBytes(p.ActorSeat), false)
+	}
+	return n + field("via", stringBytes(string(p.Via)), false) + field("outcome", p.Outcome.encodedBytes(), false)
 }
 
 // members is the length of the change's own members, without the braces that
@@ -773,8 +882,78 @@ func (s ChangeSummary) encodedBytes() int {
 	if s.Readiness != nil {
 		n += field("readiness", s.Readiness.encodedBytes(), false)
 	}
-	return n + field("open_findings", intBytes(s.OpenFindings), false) +
+	n += field("open_findings", intBytes(s.OpenFindings), false) +
 		field("updated_at", timeBytes(s.UpdatedAt), false)
+	if s.Card != nil {
+		n += field("card", s.Card.encodedBytes(), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the card's JSON encoding.
+func (c ChangeCard) encodedBytes() int {
+	n := 2 + field("comments", intBytes(c.Comments), true) + field("reviews", intBytes(c.Reviews), false) +
+		field("changes_requested", intBytes(c.ChangesRequested), false)
+	if len(c.Reviewers) > 0 {
+		list := 2 + len(c.Reviewers) - 1
+		for _, f := range c.Reviewers {
+			list += f.encodedBytes()
+		}
+		n += field("reviewers", list, false)
+	}
+	if c.ReviewersOmitted != 0 {
+		n += field("reviewers_omitted", intBytes(int64(c.ReviewersOmitted)), false)
+	}
+	if c.Checks != nil {
+		n += field("checks", c.Checks.encodedBytes(), false)
+	}
+	if c.Ejected != nil {
+		n += field("ejected", c.Ejected.encodedBytes(), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the face's JSON encoding.
+func (f ReviewerFace) encodedBytes() int {
+	n := 2 + field("handle", stringBytes(f.Handle), true) + field("kind", stringBytes(string(f.Kind)), false)
+	if f.Verdict != "" {
+		n += field("verdict", stringBytes(string(f.Verdict)), false)
+	}
+	if f.VerdictRevision != 0 {
+		n += field("verdict_revision", intBytes(f.VerdictRevision), false)
+	}
+	if f.Asked {
+		n += field("asked", trueBytes, false)
+	}
+	if f.Reason != "" {
+		n += field("reason", stringBytes(string(f.Reason)), false)
+	}
+	return n + ownedPathsBytes(f.OwnedPaths, f.OwnedPathsOmitted)
+}
+
+// ownedPathsBytes is the length of an ask's globs and their count as a row or a face encodes them,
+// each where set, neither first.
+func ownedPathsBytes(paths []string, omitted int) int {
+	n := 0
+	if len(paths) > 0 {
+		n += field("owned_paths", stringsBytes(paths), false)
+	}
+	if omitted != 0 {
+		n += field("owned_paths_omitted", intBytes(int64(omitted)), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the ejection's JSON encoding.
+func (e CardEjection) encodedBytes() int {
+	n := 2 + field("reason", stringBytes(string(e.Reason)), true) + field("at", timeBytes(e.At), false)
+	if len(e.Checks) > 0 {
+		n += field("checks", stringsBytes(e.Checks), false)
+	}
+	if e.ChecksMore != 0 {
+		n += field("checks_more", intBytes(int64(e.ChecksMore)), false)
+	}
+	return n
 }
 
 // encodedBytes is the length of the readiness's JSON encoding: its list null
@@ -919,7 +1098,11 @@ func (f RevisionFactsRow) encodedBytes() int {
 	if !f.Classes.IsZero() {
 		n += field("classes", f.Classes.encodedBytes(), false)
 	}
-	n += field("node", stringBytes(f.Node), false) + field("owners_digest", stringBytes(f.OwnersDigest), false)
+	n += field("node", stringBytes(f.Node), false)
+	if !f.MeasuredAt.IsZero() {
+		n += field("measured_at", timeBytes(f.MeasuredAt), false)
+	}
+	n += field("owners_digest", stringBytes(f.OwnersDigest), false)
 	if len(f.RequestedOwners) > 0 {
 		owners := 2
 		for i, o := range f.RequestedOwners {
@@ -977,7 +1160,11 @@ func (r ReviewerRow) encodedBytes() int {
 	if r.Note != "" {
 		n += field("note", stringBytes(r.Note), false)
 	}
-	return n + field("position", positionBytes(r.Position), false)
+	n += field("position", positionBytes(r.Position), false)
+	if !r.At.IsZero() {
+		n += field("at", timeBytes(r.At), false)
+	}
+	return n + ownedPathsBytes(r.OwnedPaths, r.OwnedPathsOmitted)
 }
 
 // encodedBytes is the length of the comment's JSON encoding.
@@ -1122,7 +1309,19 @@ func (f FindingRow) encodedBytes() int {
 	if !f.ResolvedPosition.IsZero() {
 		n += field("resolved_position", positionBytes(f.ResolvedPosition), false)
 	}
-	return n + field("position", positionBytes(f.Position), false)
+	n += field("position", positionBytes(f.Position), false)
+	if !f.RaisedAt.IsZero() {
+		n += field("raised_at", timeBytes(f.RaisedAt), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the group's JSON encoding.
+func (p FindingPathRow) encodedBytes() int {
+	return 2 + field("path", stringBytes(p.Path), true) +
+		field("state", stringBytes(string(p.State)), false) +
+		field("revision", intBytes(p.Revision), false) +
+		field("findings", intBytes(p.Findings), false)
 }
 
 // encodedBytes is the length of the anchor's JSON encoding.
@@ -1230,4 +1429,61 @@ func (row PushRow) encodedBytes(commands int) int {
 		n += field("introduced_count", intBytes(int64(row.IntroducedCount)), false)
 	}
 	return n + field("received_at", timeBytes(row.ReceivedAt), false)
+}
+
+// encodedBytes is the length of the rollup's JSON encoding.
+func (c CheckRollup) encodedBytes() int {
+	n := 2 + field("state", stringBytes(string(c.State)), true) +
+		field("counts", c.Counts.encodedBytes(), false) +
+		field("required", intBytes(int64(c.Required)), false) +
+		field("required_passed", intBytes(int64(c.RequiredPassed)), false)
+	if !c.LastEnded.IsZero() {
+		n += field("last_ended", timeBytes(c.LastEnded), false)
+	}
+	if !c.RunningSince.IsZero() {
+		n += field("running_since", timeBytes(c.RunningSince), false)
+	}
+	if len(c.Failing) > 0 {
+		list := 2 + len(c.Failing) - 1
+		for _, f := range c.Failing {
+			list += f.encodedBytes()
+		}
+		n += field("failing", list, false)
+	}
+	if c.FailingMore != 0 {
+		n += field("failing_more", intBytes(int64(c.FailingMore)), false)
+	}
+	if c.More {
+		n += field("more", trueBytes, false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the counts' JSON encoding: every count is
+// omitted at zero.
+func (c CheckCounts) encodedBytes() int {
+	size, first := 2, true
+	for _, s := range []struct {
+		key   string
+		count int
+	}{
+		{"queued", c.Queued}, {"running", c.Running}, {"passed", c.Passed}, {"failed", c.Failed},
+		{"errored", c.Errored}, {"cancelled", c.Cancelled}, {"skipped", c.Skipped}, {"other", c.Other},
+	} {
+		if s.count == 0 {
+			continue
+		}
+		size += field(s.key, intBytes(int64(s.count)), first)
+		first = false
+	}
+	return size
+}
+
+// encodedBytes is the length of the failing check's JSON encoding.
+func (f FailingCheck) encodedBytes() int {
+	n := 2 + field("name", stringBytes(f.Name), true) + field("state", stringBytes(string(f.State)), false)
+	if f.Required {
+		n += field("required", trueBytes, false)
+	}
+	return n
 }

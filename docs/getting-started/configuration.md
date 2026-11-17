@@ -302,7 +302,7 @@ timezone: America/Los_Angeles            # an IANA zone name; absent is UTC
 
 It is a clock for **authored instants and calendar boundaries only**. No duration — a lease, a timeout, a retention horizon — is measured against it, because a duration measured on a wall clock changes length twice a year. And there is only one: the tracker and the scheduler take no zone of their own, because a company whose board, whose people's days and whose standups each kept a clock had one "today" per subsystem. A schedule's own `timezone` is that one piece of work's wall clock — the Tokyo team's 09:30 standup — and nothing else is cut on it.
 
-The value must be a real IANA name (`Europe/Berlin`, `America/New_York`, `UTC`), and `Local` and `localtime` are refused: each is whatever zone the host reading it is set to, so two nodes would cut two different days from it. The [`org` projection](../reference/api-endpoints.md) carries the resolved clock to every reader (`UTC` where none is written), so the dashboard cuts its days where the engine does. An apply that changes it moves the next answer, the next scheduler tick and the next tool call; a turn already running keeps the clock of the epoch it started on. A write that moves it is answered with a warning naming both zones (the dry run's too), since every budget window and every schedule without a zone of its own moves with it; the dashboard changes it on Company › Budgets, under **Company clock**, and asks for **Save anyway** on that warning.
+The value must be a real IANA name (`Europe/Berlin`, `America/New_York`, `UTC`), and `Local` and `localtime` are refused: each is whatever zone the host reading it is set to, so two nodes would cut two different days from it. The [`org` projection](../reference/api-endpoints.md) carries the resolved clock to every reader (`UTC` where none is written), so the dashboard cuts its days where the engine does. An apply that changes it moves the next answer, the next scheduler tick and the next tool call; a turn already running keeps the clock of the epoch it started on. A write that moves it is answered with a warning naming both zones (the dry run's too), since every budget window and every schedule without a zone of its own moves with it; the dashboard changes it on Settings › General, under **Company clock**, and asks for **Save anyway** on that warning.
 
 ### Token budgets
 
@@ -438,6 +438,9 @@ assistant:
     timeout_seconds: 1200               # one run's wall clock, 60..1200
     max_steps: 150                      # rounds and Crewlet calls a task makes, 10..400
     max_tokens: 3000000                 # tokens a task may spend, 10000..20000000
+  research:                             # optional: absent reads no web page
+    hosts: [developers.cloudflare.com, docs.github.com]
+    search: { mcp_server: tavily }      # optional: an mcp_servers entry running tavily-mcp
 ```
 
 | Field | Default | Meaning |
@@ -456,6 +459,8 @@ assistant:
 | `deep_work.timeout_seconds` | 1200 | The longest one deep-work run takes. Never past the turn's read grant, which is why it is also the ceiling. |
 | `deep_work.max_steps` | 150 | The most agentic rounds and Crewlet calls one deep-work task makes, across the runs an approval continues. |
 | `deep_work.max_tokens` | 3000000 | The most tokens one deep-work task spends before it is stopped; the person's and the company's budgets still apply. |
+| `research.hosts` | none | The hosts Ask Crewlet may read web pages from, through the engine, over `https`: each a host name alone, at most 50. Absent, it reads no web page ([Web research](../guides/assistant.md#web-research)). |
+| `research.search.mcp_server` | none | The `mcp_servers` entry Ask Crewlet searches those hosts through: a shared, enabled entry the curated catalogue recognises as Tavily (`tavily-mcp`), whose `tavily_search` is not blocked. Each API node runs its own instance of it for research alone, never a seat's. Absent, Ask Crewlet only reads pages it is given or finds by address. |
 
 A numeric field left out, or `0`, takes its default; a value outside its range
 is refused naming the field.
@@ -556,6 +561,11 @@ providers:
                                         #   breach is a retryable `timeout`. An executor run is
                                         #   not on this clock: its rounds are capped only where
                                         #   providers.sandbox.default_max_turns sets a cap
+      effort: high                      # optional: reasoning effort, in the harness's own levels
+                                        #   (claude-code: low | medium | high | xhigh | max). Absent
+                                        #   passes none, so the harness runs at its default. Refused
+                                        #   on a harness with no such setting or a level it does not
+                                        #   take. See LLM Backends, "Reasoning effort"
       max_concurrent: 4                 # optional — live harness processes on this host at once
                                         #   (default 4). Each is a 200-400 MB runtime that holds
                                         #   its slot for its whole run, and subscription plans
@@ -1572,11 +1582,13 @@ store:
                                     #   the broker, 1 GiB..64 TiB. Unset
                                     #   derives the smaller of a quarter of the
                                     #   broker's limit and what its state logs'
-                                    #   half and a 1 GiB coordination floor
-                                    #   leave. A full bucket refuses uploads,
-                                    #   never the fleet's leases. An existing
-                                    #   bucket keeps the reservation it was
-                                    #   created with. REFUSED with backend s3
+                                    #   five eighths and a 1 GiB coordination
+                                    #   floor leave. A full bucket refuses
+                                    #   uploads, never the fleet's leases. A
+                                    #   data node raises an existing bucket to
+                                    #   a larger figure at boot where the
+                                    #   broker has room, and never lowers it.
+                                    #   REFUSED with backend s3
   #   s3:                           #   REFUSED unless backend is s3
   #     endpoint: ""                #   the S3 API's base URL; empty is Amazon
                                     #   S3's own for the region. R2, MinIO,

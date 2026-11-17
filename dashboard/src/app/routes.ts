@@ -366,6 +366,7 @@ export type FramedScreen =
   | { screen: "artifact"; id: string; standalone: boolean }
   /** A kind's own create page, or, with no kind, the address that redirects to one. */
   | { screen: "new-artifact"; kind: MakeKind | null }
+  | { screen: "general" }
   | { screen: "models"; id?: string }
   | { screen: "mcp-tools"; server?: string; tool?: string }
   | { screen: "secrets"; name?: string }
@@ -844,17 +845,18 @@ function artifactsRoute(rest: string[], screen: Make, under: Under): Route {
 
 /**
  * Settings' sections. The bare `#/settings` names none of them: the Settings
- * row lands on its first section, Models, and an address is one page.
+ * row lands on its first section, General, and an address is one page.
  */
 function settings(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
   const none = () => missing("settings", under("Settings"));
   if (first === undefined) {
-    return missing("settings", "Settings itself", "Settings opens on Models");
+    return missing("settings", "Settings itself", "Settings opens on General");
   }
   // THE SECTIONS THAT TAKE NO TAIL: every row they list has a page of its
   // own somewhere else, or none.
   const bare: Partial<Record<string, FramedScreen>> = {
+    general: { screen: "general" },
     limits: { screen: "limits" },
     "ask-crewlet": { screen: "ask-crewlet" },
     people: { screen: "people" },

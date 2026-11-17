@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -46,9 +48,10 @@ func (n *node) tip(repo, ref string) (string, statelog.Position) {
 // head, against target at its tip — touching touched, the path owners matched
 // against owners: what a home that read them would send, its owners matched
 // by gitlet.MatchOwners and the human paths its target's gate names by
-// gitlet.MatchTargetHumanPaths, against the gates repo's rules hold now. Its
-// base is A, and its head's tree its head's own, so no two heads hold the same
-// code unless a case says they do (codeOf).
+// gitlet.MatchTargetHumanPaths, against the gates repo's rules hold now, and
+// measured at [measuredAt] as a home of this build measures. Its base is A,
+// and its head's tree its head's own, so no two heads hold the same code
+// unless a case says they do (codeOf).
 func (n *node) revising(repo, change string, rev int64, head, target string, owners []gitlet.PathOwner,
 	touched ...string) gitlet.ConversationWrite {
 
@@ -64,7 +67,25 @@ func (n *node) revising(repo, change string, rev int64, head, target string, own
 		RepoID: repo, ChangeID: change, N: rev, HeadOID: head, TargetRef: target, TargetOID: tip,
 		TargetPosition: at, BaseOID: oidOf("A"), BaseTree: oidOf("the tree of A"),
 		HeadTree: oidOf("the tree of " + head), PatchID: oidOf("patch-" + head), Touched: touched, Node: n.id,
-		RequestedOwners: matched, OwnersDigest: digest, HumanPaths: held, HumanPathsDigest: humanDigest}}
+		MeasuredAt: measuredAt, RequestedOwners: matched, OwnersDigest: digest, HumanPaths: held,
+		HumanPathsDigest: humanDigest}}
+}
+
+// measuredAt is when [node.revising]'s home read its facts: a sub-second instant at the microsecond,
+// as a home's clock gives it, so the figures a case measures price a real instant's widest spelling.
+var measuredAt = harnessAt.Add(123_456 * time.Microsecond)
+
+// olderHome is w's revise as a home before gitlet.OwnedPathsVersion sends it: no instant, and no
+// owner naming its globs.
+func olderHome(w gitlet.ConversationWrite) gitlet.ConversationWrite {
+	r := *w.Revise
+	r.MeasuredAt = time.Time{}
+	r.RequestedOwners = slices.Clone(r.RequestedOwners)
+	for i := range r.RequestedOwners {
+		r.RequestedOwners[i].Paths = nil
+	}
+	w.Revise = &r
+	return w
 }
 
 // gatesOfID is the merge gates of the repository whose id is repo, as a
@@ -95,6 +116,7 @@ type storedFacts struct {
 	touched          []string
 	owners, skipped  string
 	digest, patchID  string
+	measured         int64
 	touchesAll, held bool
 }
 
@@ -106,9 +128,9 @@ func (n *node) facts(change string, rev int64) storedFacts {
 	var touched string
 	err := n.db.Reader().Read(n.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(n.t.Context(), `SELECT target_ref, target_oid, target_position, touched, owners,
-			skipped, owners_digest, patch_id, touches_all FROM code_revision_facts WHERE change_id = ? AND n = ?`,
-			change, rev).Scan(&f.target, &f.tip, &f.at, &touched, &f.owners, &f.skipped, &f.digest, &f.patchID,
-			&f.touchesAll)
+			skipped, owners_digest, patch_id, touches_all, measured_at FROM code_revision_facts
+			WHERE change_id = ? AND n = ?`, change, rev).Scan(&f.target, &f.tip, &f.at, &touched, &f.owners,
+			&f.skipped, &f.digest, &f.patchID, &f.touchesAll, &f.measured)
 	})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -291,7 +313,11 @@ func TestARetargetRecomputesTheFacts(t *testing.T) {
 // MATCHING A REVISION'S TOUCHED PATHS IS THE HOME'S (gitlet.MatchOwners): every
 // owner one of whose globs matches a touched path — and every owner where the
 // revision touches all — in the order the repository's settings hold them,
-// beside the digest of the rows matched against.
+// each with every one of its globs that matched, in its order, and none where
+// the revision touches all; beside the digest of the rows matched against.
+//
+// Mutation: stop an owner's match at its first hit, and the cto is named with
+// one of its two touched globs.
 func TestMatchOwnersReadsEveryGlobOfEveryOwner(t *testing.T) {
 	t.Parallel()
 	owners := gitlet.CanonicalPathOwners([]gitlet.PathOwner{
@@ -299,20 +325,25 @@ func TestMatchOwnersReadsEveryGlobOfEveryOwner(t *testing.T) {
 		pathOwner(gitlet.OwnerSeat, "cto", "docs/*.md", "Makefile"),
 		pathOwner(gitlet.OwnerUnit, "Sales", "sales/**"),
 	})
+	cto := gitlet.Owner{Kind: gitlet.OwnerSeat, Ref: "cto"}
+	platform := gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Platform"}
+	sales := gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Sales"}
 	for name, tc := range map[string]struct {
 		touched []string
 		all     bool
-		want    []gitlet.Owner
+		want    []gitlet.MatchedOwner
 	}{
 		"one glob of one owner": {[]string{"upload/retry.go", "README.md"}, false,
-			[]gitlet.Owner{{Kind: gitlet.OwnerUnit, Ref: "Platform"}}},
-		"the second glob of an owner": {[]string{"Makefile"}, false,
-			[]gitlet.Owner{{Kind: gitlet.OwnerSeat, Ref: "cto"}}},
+			[]gitlet.MatchedOwner{{Owner: platform, Paths: []string{"upload/**"}}}},
+		"the second glob of an owner": {[]string{"docs/index.md"}, false,
+			[]gitlet.MatchedOwner{{Owner: cto, Paths: []string{"docs/*.md"}}}},
+		"two globs of one owner": {[]string{"Makefile", "docs/index.md"}, false,
+			[]gitlet.MatchedOwner{{Owner: cto, Paths: []string{"Makefile", "docs/*.md"}}}},
 		"a glob that matches no deeper": {[]string{"docs/guides/gitlet.md"}, false, nil},
 		"two owners, in their order": {[]string{"sales/q3.csv", "docs/index.md"}, false,
-			[]gitlet.Owner{{Kind: gitlet.OwnerSeat, Ref: "cto"}, {Kind: gitlet.OwnerUnit, Ref: "Sales"}}},
-		"touching all": {nil, true, []gitlet.Owner{{Kind: gitlet.OwnerSeat, Ref: "cto"},
-			{Kind: gitlet.OwnerUnit, Ref: "Platform"}, {Kind: gitlet.OwnerUnit, Ref: "Sales"}}},
+			[]gitlet.MatchedOwner{{Owner: cto, Paths: []string{"docs/*.md"}},
+				{Owner: sales, Paths: []string{"sales/**"}}}},
+		"touching all": {nil, true, []gitlet.MatchedOwner{{Owner: cto}, {Owner: platform}, {Owner: sales}}},
 	} {
 		got, digest := gitlet.MatchOwners(owners, tc.touched, tc.all)
 		if !reflect.DeepEqual(got, tc.want) || digest != gitlet.OwnersDigest(owners) {
@@ -364,9 +395,13 @@ func TestPathOwnersAreRequestedFromTouchedPaths(t *testing.T) {
 		t.Fatalf("Platform's lead is %d participants of the change, want one", got)
 	}
 	f := n.facts(change, 1)
-	if want, _ := json.Marshal([]gitlet.Owner{{Kind: gitlet.OwnerUnit, Ref: "Platform"}}); f.owners != string(want) ||
-		f.skipped != "" {
+	if want, _ := json.Marshal([]gitlet.TouchedOwner{{Owner: gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Platform"},
+		FirstPath: "upload/**"}}); f.owners != string(want) || f.skipped != "" {
 		t.Fatalf("the facts' match is %q, skipping %q; want Platform's, skipping nobody", f.owners, f.skipped)
+	}
+	if asked.ownedPaths != `["upload/**"]` || asked.ownedOmitted != 0 {
+		t.Fatalf("Platform's lead is asked for %s and %d more, want upload/**", asked.ownedPaths,
+			asked.ownedOmitted)
 	}
 
 	n.revise(repo, "B", "B2")
@@ -379,8 +414,10 @@ func TestPathOwnersAreRequestedFromTouchedPaths(t *testing.T) {
 		t.Fatalf("a revision touching all asked the cto %+v (%v), want a path owner's ask", got, ok)
 	}
 	revise := decodedRevise(t, n, res.Position)
-	if want := []gitlet.Reviewer{{Handle: "cto", Kind: gitlet.PartyAgent}}; !reflect.DeepEqual(revise.Asked, want) {
-		t.Fatalf("the record asks %+v, want the cto alone: Platform's lead is asked already", revise.Asked)
+	if want := []gitlet.OwnerAsk{{Reviewer: gitlet.Reviewer{Handle: "cto", Kind: gitlet.PartyAgent},
+		Paths: []string{"docs/*.md"}}}; !reflect.DeepEqual(revise.Asked, want) {
+		t.Fatalf("the record asks %+v, want the cto alone, for every glob it owns: Platform's lead is asked "+
+			"already", revise.Asked)
 	}
 }
 
@@ -750,7 +787,9 @@ func factsWake(t *testing.T, n *node, p statelog.Position, want string) notify.R
 // carries founder too, so cto's wake is written by dev for founder. Revision
 // 2, which the person on harness pushed, is a person's push, made for nobody
 // but themselves: its facts carry nobody, at version 1, and the reviewer they
-// ask to look again is woken by harness for nobody.
+// ask to look again is woken by harness for nobody. Every revise is sent as a
+// home before gitlet.OwnedPathsVersion sends it, since a home of this build
+// stamps its every revise at that version whatever it routes.
 //
 // Mutations: the open's revision kept without its carrier, or revisionPusher
 // reading none — revision 1's wakes are written for nobody, red; the stamp's
@@ -776,7 +815,8 @@ func TestARevisionsFactsWakeForWhomItsRevisionWasPushed(t *testing.T) {
 		return r.WorkingFor, n.recordAt(p).V
 	}
 
-	first, err := w.Converse(ctx, n.revising(repo, change, 1, oidOf("B"), mainRef, owners, "upload/retry.go"))
+	first, err := w.Converse(ctx, olderHome(n.revising(repo, change, 1, oidOf("B"), mainRef, owners,
+		"upload/retry.go")))
 	requireConversed(t, first, err)
 	if f, v := carried(first.Position); !reflect.DeepEqual(f, founder) || v != gitlet.WorkingForVersion {
 		t.Errorf("revision 1's facts route for %+v at version %d, want founder, for whom dev opened the change, "+
@@ -790,7 +830,8 @@ func TestARevisionsFactsWakeForWhomItsRevisionWasPushed(t *testing.T) {
 
 	// THE LEAD'S FALLBACK, the one seat a change nobody may review tells.
 	fallback, fallbackChange := ownedChangeFor(t, n, "api", types.ForTurn(founder))
-	res, err := w.Converse(ctx, n.revising(fallback, fallbackChange, 1, oidOf("B"), mainRef, nil, "upload/retry.go"))
+	res, err := w.Converse(ctx, olderHome(n.revising(fallback, fallbackChange, 1, oidOf("B"), mainRef, nil,
+		"upload/retry.go")))
 	requireConversed(t, res, err)
 	if r := decodedRevise(t, n, res.Position).Routing; r == nil || r.LeadFallback != "cto" || len(r.PathOwners) != 0 ||
 		len(r.ReReview) != 0 {
@@ -809,7 +850,8 @@ func TestARevisionsFactsWakeForWhomItsRevisionWasPushed(t *testing.T) {
 	review, err := w.Converse(ctx, reviewing(repo, change, platLead, 1, gitlet.VerdictRequestChanges, nil))
 	requireReviewed(t, review, err)
 	n.revise(repo, "B", "B2")
-	second, err := w.Converse(ctx, n.revising(repo, change, 2, oidOf("B2"), mainRef, owners, "upload/retry.go"))
+	second, err := w.Converse(ctx, olderHome(n.revising(repo, change, 2, oidOf("B2"), mainRef, owners,
+		"upload/retry.go")))
 	requireConversed(t, second, err)
 	if f, v := carried(second.Position); f != nil || v != 1 {
 		t.Errorf("revision 2's facts route for %+v at version %d, want nobody at 1: the person on harness "+
@@ -826,24 +868,30 @@ func TestARevisionsFactsWakeForWhomItsRevisionWasPushed(t *testing.T) {
 // A REVISE APPLIES FROM ITS RECORD ALONE: whom its facts ask, skip and wake is
 // stamped on the record by the writer from its snapshot and its chart, so a
 // node applying the record judges nothing again — it holds no chart at all —
-// and holds the rows of the node that wrote it, byte for byte.
+// and holds the rows of the node that wrote it, byte for byte: the instant
+// its home measured the facts, the first glob each owner kept, and the globs
+// each ask is for, one of them through two.
 func TestAReviseAppliesFromItsRecordAlone(t *testing.T) {
 	t.Parallel()
 	a, b := newTwoNodes(t)
 	owners := []gitlet.PathOwner{
-		pathOwner(gitlet.OwnerUnit, "Platform", "upload/**"),
+		pathOwner(gitlet.OwnerUnit, "Platform", "upload/**", "web/**"),
 		pathOwner(gitlet.OwnerSeat, "reader", "docs/**"),
 	}
 	repo, change := ownedChange(t, a, "web", owners...)
 	w, _ := writerOn(t, a, a.pub)
 	ctx := t.Context()
-	first := a.revising(repo, change, 1, oidOf("B"), mainRef, owners, "upload/retry.go", "docs/upload.md")
+	first := a.revising(repo, change, 1, oidOf("B"), mainRef, owners, "upload/retry.go", "docs/upload.md",
+		"web/app.go")
 	first.Revise.Classes = gitlet.RevisionClasses{CommentOnly: []int{0}, Complete: true}
 	res, err := w.Converse(ctx, first)
 	requireConversed(t, res, err)
 	a.revise(repo, "B", "B2")
 	res, err = w.Converse(ctx, a.revising(repo, change, 2, oidOf("B2"), mainRef, owners, "upload/retry.go"))
 	requireConversed(t, res, err)
+	if got, ok := a.reviewer(change, "plat-lead"); !ok || got.ownedPaths != `["upload/**","web/**"]` {
+		t.Fatalf("Platform's lead is asked %+v (%v), want for its two globs the revision touched", got, ok)
+	}
 	b.drain()
 	for _, table := range []string{"code_revision_facts", "code_reviewers", "code_participants",
 		"code_conversations"} {
@@ -976,4 +1024,460 @@ func decodedRevise(t *testing.T, n *node, p statelog.Position) gitlet.Revise {
 		t.Fatalf("the record at %s carries a %T, want a revise", p, payload)
 	}
 	return r
+}
+
+// readReviewers is the reviewers part of web's change number as ada reads it, on one page.
+func readReviewers(t *testing.T, n *node, number int64) map[string]gitlet.ReviewerRow {
+	t.Helper()
+	answer, err := n.reader.Read(t.Context(), gitlet.ReadQuery{Asker: ada, Kind: gitlet.ReadChange, Repo: "web",
+		Change: number, Part: gitlet.PartReviewers, Fresh: stale})
+	if err != nil {
+		t.Fatalf("read web!%d's reviewers: %v", number, err)
+	}
+	out := map[string]gitlet.ReviewerRow{}
+	for _, rv := range answer.Reviewers {
+		out[rv.Reviewer] = rv
+	}
+	return out
+}
+
+// A PATH OWNER'S ASK NAMES THE GLOBS IT IS FOR: Platform and Infra both resolve
+// to plat-lead, who is asked once, for the union of the globs of both that the
+// revision touched, sorted and each once though both own docs/**; the record
+// names each owner's own, the facts keep each owner's first and how many more,
+// and the reviewers part answers the ask's. An ask by name names none, and
+// asking a path owner again by name makes the row the asker's, its note and no
+// globs.
+//
+// Mutations: union only the first owner's globs (Infra's missing, red); keep a
+// glob two owners share twice (docs/** twice, red); drop the clearing in
+// askReviewersConflictSQL (the re-asked row keeps its globs beside the note,
+// red).
+func TestAPathOwnersAskNamesTheGlobsItIsFor(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	owners := []gitlet.PathOwner{
+		pathOwner(gitlet.OwnerUnit, "Platform", "docs/**", "upload/**"),
+		pathOwner(gitlet.OwnerUnit, "Infra", "docs/**", "infra/**"),
+		pathOwner(gitlet.OwnerSeat, "cto", "Makefile"),
+	}
+	repo, change := ownedChange(t, n, "web", owners...)
+	w, _ := writerOn(t, n, n.pub)
+	ctx := t.Context()
+	res, err := w.Converse(ctx, n.revising(repo, change, 1, oidOf("B"), mainRef, owners, "upload/retry.go",
+		"docs/upload.md", "infra/main.tf"))
+	requireConversed(t, res, err)
+
+	infra := gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Infra"}
+	platform := gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Platform"}
+	union := []string{"docs/**", "infra/**", "upload/**"}
+	revise := decodedRevise(t, n, res.Position)
+	if want := []gitlet.OwnerAsk{{Reviewer: gitlet.Reviewer{Handle: "plat-lead", Kind: gitlet.PartyAgent},
+		Paths: union}}; !reflect.DeepEqual(revise.Asked, want) {
+		t.Fatalf("the record asks %+v, want plat-lead once, for %v", revise.Asked, union)
+	}
+	if want := []gitlet.MatchedOwner{{Owner: infra, Paths: []string{"docs/**", "infra/**"}},
+		{Owner: platform, Paths: []string{"docs/**", "upload/**"}}}; !reflect.DeepEqual(revise.RequestedOwners, want) {
+		t.Fatalf("the record's owners are %+v, want %+v", revise.RequestedOwners, want)
+	}
+	kept, _ := json.Marshal([]gitlet.TouchedOwner{{Owner: infra, FirstPath: "docs/**", MorePaths: 1},
+		{Owner: platform, FirstPath: "docs/**", MorePaths: 1}})
+	if f := n.facts(change, 1); f.owners != string(kept) {
+		t.Fatalf("the facts keep the owners %s, want %s", f.owners, kept)
+	}
+	if _, ok := n.reviewer(change, "cto"); ok {
+		t.Fatalf("the cto, owning Makefile, was asked of a revision that does not touch it")
+	}
+
+	converse(t, w, asking(repo, change, dev, "cto"))
+	rows := readReviewers(t, n, 1)
+	if got := rows["plat-lead"]; !slices.Equal(got.OwnedPaths, union) || got.OwnedPathsOmitted != 0 ||
+		got.Reason != gitlet.ReviewerPathOwner {
+		t.Fatalf("the reviewers part answers plat-lead %+v, want the path owner's ask for %v", got, union)
+	}
+	if got := rows["cto"]; got.Reviewer != "cto" || got.OwnedPaths != nil || got.OwnedPathsOmitted != 0 {
+		t.Fatalf("the reviewers part answers the cto, asked by name, %+v, want no globs", got)
+	}
+
+	review, err := w.Converse(ctx, reviewing(repo, change, platLead, 1, gitlet.VerdictApprove, nil))
+	requireReviewed(t, review, err)
+	if got := readReviewers(t, n, 1)["plat-lead"]; got.State != gitlet.ReviewerReviewed ||
+		!slices.Equal(got.OwnedPaths, union) {
+		t.Fatalf("plat-lead's answered ask reads %+v, want reviewed, still for %v", got, union)
+	}
+	converse(t, w, asking(repo, change, ada, "plat-lead"))
+	if got, ok := n.reviewer(change, "plat-lead"); !ok || got.reason != string(gitlet.ReviewerAsked) ||
+		got.note != "the retry loop" || got.ownedPaths != "" || got.ownedOmitted != 0 {
+		t.Fatalf("plat-lead asked again by name is %+v (%v), want the asker's ask, their note and no globs", got, ok)
+	}
+}
+
+// AN ASK'S GLOBS STOP AT THEIR BOUNDS WITH A COUNT: an ask names at most
+// MaxPathOwnerPaths globs, the first in their order, and only as many as
+// MaxOwnedPathsBytes holds as JSON, counting the rest; the record's owners
+// still name every glob each matched. The row, the reviewers part and the
+// card's face answer the count, and an ask by name clears it with the globs.
+//
+// Mutations: drop the count bound, or the bytes bound; write no count on the
+// row, read none into the reviewers part or the face, or keep it on an ask by
+// name: each red.
+func TestAnAsksGlobsStopAtTheirBoundsWithACount(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	w, _ := writerOn(t, n, n.pub)
+	dirs := func(prefix string, count, width int) (globs, touched []string) {
+		for i := range count {
+			dir := fmt.Sprintf("%s%02d", prefix, i)
+			dir += strings.Repeat("x", max(width-len(dir), 0))
+			globs, touched = append(globs, dir+"/**"), append(touched, dir+"/f")
+		}
+		return globs, touched
+	}
+
+	seatGlobs, seatTouched := dirs("a", gitlet.MaxPathOwnerPaths, 0)
+	unitGlobs, unitTouched := dirs("b", 8, 0)
+	owners := []gitlet.PathOwner{pathOwner(gitlet.OwnerSeat, "cto", seatGlobs...),
+		pathOwner(gitlet.OwnerUnit, "Engineering", unitGlobs...)}
+	repo, change := ownedChange(t, n, "web", owners...)
+	res, err := w.Converse(t.Context(), n.revising(repo, change, 1, oidOf("B"), mainRef, owners,
+		append(seatTouched, unitTouched...)...))
+	requireConversed(t, res, err)
+	revise := decodedRevise(t, n, res.Position)
+	if len(revise.Asked) != 1 || !slices.Equal(revise.Asked[0].Paths, seatGlobs) || revise.Asked[0].PathsOmitted != 8 {
+		t.Fatalf("the record asks %+v, want the cto once, for its %d globs and 8 more", revise.Asked,
+			gitlet.MaxPathOwnerPaths)
+	}
+	if len(revise.RequestedOwners) != 2 || !slices.Equal(revise.RequestedOwners[0].Paths, seatGlobs) ||
+		!slices.Equal(revise.RequestedOwners[1].Paths, unitGlobs) {
+		t.Fatalf("the record's owners are %+v, want each naming every glob it matched", revise.RequestedOwners)
+	}
+	named, _ := json.Marshal(seatGlobs)
+	if got, ok := n.reviewer(change, "cto"); !ok || got.ownedPaths != string(named) || got.ownedOmitted != 8 {
+		t.Fatalf("the cto's row is %+v (%v), want its %d globs and 8 more", got, ok, gitlet.MaxPathOwnerPaths)
+	}
+	if got := readReviewers(t, n, 1)["cto"]; !slices.Equal(got.OwnedPaths, seatGlobs) || got.OwnedPathsOmitted != 8 {
+		t.Fatalf("the reviewers part answers the cto %+v, want its %d globs and 8 more", got,
+			gitlet.MaxPathOwnerPaths)
+	}
+	if f := faceOf(t, n, 1, "cto"); !slices.Equal(f.OwnedPaths, seatGlobs) || f.OwnedPathsOmitted != 8 {
+		t.Fatalf("the cto's face is %+v, want its %d globs and 8 more", f, gitlet.MaxPathOwnerPaths)
+	}
+	converse(t, w, reviewing(repo, change, cto, 1, gitlet.VerdictApprove, nil))
+	converse(t, w, asking(repo, change, ada, "cto"))
+	if got, ok := n.reviewer(change, "cto"); !ok || got.reason != string(gitlet.ReviewerAsked) ||
+		got.ownedPaths != "" || got.ownedOmitted != 0 {
+		t.Fatalf("the cto asked again by name is %+v (%v), want the asker's ask, no globs and no count", got, ok)
+	}
+
+	wide, wideTouched := dirs("w", 20, 100)
+	owners = []gitlet.PathOwner{pathOwner(gitlet.OwnerUnit, "Platform", wide...)}
+	repo, change = ownedChange(t, n, "api", owners...)
+	res, err = w.Converse(t.Context(), n.revising(repo, change, 1, oidOf("B"), mainRef, owners, wideTouched...))
+	requireConversed(t, res, err)
+	ask := decodedRevise(t, n, res.Position).Asked
+	if len(ask) != 1 {
+		t.Fatalf("the record asks %+v, want Platform's lead once", ask)
+	}
+	named, _ = json.Marshal(ask[0].Paths)
+	more, _ := json.Marshal(wide[:len(ask[0].Paths)+1])
+	if k := len(ask[0].Paths); k == 0 || !slices.Equal(ask[0].Paths, wide[:k]) ||
+		len(named) > gitlet.MaxOwnedPathsBytes || len(more) <= gitlet.MaxOwnedPathsBytes ||
+		ask[0].PathsOmitted != len(wide)-k {
+		t.Fatalf("the ask names %d globs (%d bytes) and %d more, want the longest prefix of %d within %d bytes "+
+			"and the rest counted", k, len(named), ask[0].PathsOmitted, len(wide), gitlet.MaxOwnedPathsBytes)
+	}
+	if got, ok := n.reviewer(change, ask[0].Handle); !ok || got.ownedPaths != string(named) ||
+		got.ownedOmitted != ask[0].PathsOmitted {
+		t.Fatalf("%s's row is %+v (%v), want the ask's %d globs and %d more", ask[0].Handle, got, ok,
+			len(ask[0].Paths), ask[0].PathsOmitted)
+	}
+}
+
+// A REVISION TOUCHING ALL IS ASKED FOR EVERY GLOB OF ITS OWNERS: its home names
+// no glob, since every glob matches, and the decide asks plat-lead for every
+// glob of Platform and Infra the snapshot holds; the facts keep both owners
+// with none. The same revise from a home before gitlet.OwnedPathsVersion asks
+// plat-lead for nothing, its record stamped 1.
+//
+// Mutations: name no glob on a touches-all ask (plat-lead asked for nothing,
+// red); fill them whatever the home's build (the older home's record stamped
+// OwnedPathsVersion, red).
+func TestARevisionTouchingAllIsAskedForEveryGlobOfItsOwners(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	owners := []gitlet.PathOwner{
+		pathOwner(gitlet.OwnerUnit, "Platform", "docs/**", "upload/**"),
+		pathOwner(gitlet.OwnerUnit, "Infra", "infra/**"),
+	}
+	w, _ := writerOn(t, n, n.pub)
+	all := func(repo, change string) gitlet.ConversationWrite {
+		cw := n.revising(repo, change, 1, oidOf("B"), mainRef, owners)
+		cw.Revise.Touched, cw.Revise.TouchesAll = nil, true
+		cw.Revise.RequestedOwners, cw.Revise.OwnersDigest = gitlet.MatchOwners(owners, nil, true)
+		return cw
+	}
+	repo, change := ownedChange(t, n, "web", owners...)
+	res, err := w.Converse(t.Context(), all(repo, change))
+	requireConversed(t, res, err)
+	revise := decodedRevise(t, n, res.Position)
+	for _, o := range revise.RequestedOwners {
+		if len(o.Paths) != 0 {
+			t.Fatalf("the record names %s %s's globs %v, want none where the revision touches all", o.Kind, o.Ref,
+				o.Paths)
+		}
+	}
+	if want := []gitlet.OwnerAsk{{Reviewer: gitlet.Reviewer{Handle: "plat-lead", Kind: gitlet.PartyAgent},
+		Paths: []string{"docs/**", "infra/**", "upload/**"}}}; !reflect.DeepEqual(revise.Asked, want) {
+		t.Fatalf("the record asks %+v, want %+v", revise.Asked, want)
+	}
+	bare, _ := json.Marshal([]gitlet.Owner{{Kind: gitlet.OwnerUnit, Ref: "Infra"},
+		{Kind: gitlet.OwnerUnit, Ref: "Platform"}})
+	if f := n.facts(change, 1); f.owners != string(bare) {
+		t.Fatalf("the facts keep the owners %s, want %s, naming no glob", f.owners, bare)
+	}
+
+	repo, change = ownedChange(t, n, "api", owners...)
+	res, err = w.Converse(t.Context(), olderHome(all(repo, change)))
+	requireConversed(t, res, err)
+	older := decodedRevise(t, n, res.Position)
+	if len(older.Asked) != 1 || older.Asked[0].Handle != "plat-lead" || older.Asked[0].Paths != nil {
+		t.Fatalf("an older home's revise asks %+v, want plat-lead for no glob", older.Asked)
+	}
+	if v := n.recordAt(res.Position).V; v != 1 {
+		t.Fatalf("an older home's revise is stamped %d, want 1", v)
+	}
+}
+
+// A REVISE'S GLOBS ARE HELD TO THE OWNERS THEY NAME: an owner's globs are
+// named where the facts were measured and do not touch all, and nowhere else,
+// at most MaxPathOwnerPaths of them, each a path glob, sorted and once, and a
+// measured instant is after 1970; each refusal names its field before
+// anything is read. A glob the owner does not hold in the snapshot is refused
+// superseded, nothing appended.
+//
+// Mutation: drop the decide's membership check (the record names a glob
+// nobody owns, red).
+func TestARevisesGlobsAreHeldToTheOwnersTheyName(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	owners := []gitlet.PathOwner{pathOwner(gitlet.OwnerUnit, "Platform", "docs/**", "upload/**")}
+	repo, change := ownedChange(t, n, "web", owners...)
+	w, _ := writerOn(t, n, n.pub)
+	many := make([]string, gitlet.MaxPathOwnerPaths+1)
+	for i := range many {
+		many[i] = fmt.Sprintf("d%02d/**", i)
+	}
+	for name, tc := range map[string]struct {
+		set   func(r *gitlet.Revise)
+		field string
+	}{
+		"globs past the bound": {func(r *gitlet.Revise) { r.RequestedOwners[0].Paths = many },
+			fmt.Sprintf("revise.requested_owners[0].paths: %d globs", gitlet.MaxPathOwnerPaths+1)},
+		"globs out of order": {func(r *gitlet.Revise) { r.RequestedOwners[0].Paths = []string{"upload/**", "docs/**"} },
+			"revise.requested_owners[0].paths[1]"},
+		"a glob twice": {func(r *gitlet.Revise) { r.RequestedOwners[0].Paths = []string{"upload/**", "upload/**"} },
+			"revise.requested_owners[0].paths[1]"},
+		"no glob": {func(r *gitlet.Revise) { r.RequestedOwners[0].Paths = []string{"/upload/**"} },
+			"revise.requested_owners[0].paths[0]: \"/upload/**\" is not a path glob"},
+		"a measured owner naming none": {func(r *gitlet.Revise) { r.RequestedOwners[0].Paths = nil },
+			"names none of unit Platform"},
+		"globs where the revision touches all": {func(r *gitlet.Revise) { r.Touched, r.TouchesAll = nil, true },
+			"a revision that touches all names no glob"},
+		"globs never measured": {func(r *gitlet.Revise) { r.MeasuredAt = time.Time{} }, "measured_at"},
+		"asks the home sends": {func(r *gitlet.Revise) {
+			r.Asked = []gitlet.OwnerAsk{{Reviewer: gitlet.Reviewer{Handle: "plat-lead"}}}
+		}, "the writer stamps"},
+		"an instant before 1970": {func(r *gitlet.Revise) { r.MeasuredAt = time.Unix(-1, 0) },
+			"revise.measured_at"},
+	} {
+		cw := n.revising(repo, change, 1, oidOf("B"), mainRef, owners, "upload/retry.go")
+		tc.set(cw.Revise)
+		before := n.end()
+		if _, err := w.Converse(t.Context(), cw); !errors.Is(err, gitlet.ErrInvalidProposal) ||
+			!strings.Contains(err.Error(), tc.field) || n.end() != before {
+			t.Errorf("%s answered %v, want ErrInvalidProposal naming %s, nothing appended", name, err, tc.field)
+		}
+	}
+
+	stranger := n.revising(repo, change, 1, oidOf("B"), mainRef, owners, "upload/retry.go")
+	stranger.Revise.RequestedOwners[0].Paths = []string{"upload/*.go"}
+	before := n.end()
+	res, err := w.Converse(t.Context(), stranger)
+	requireConversationRefused(t, n, before, res, err, gitlet.ConversationRefusalSuperseded, `owns no glob "upload/*.go"`)
+}
+
+// A REVISION'S FACTS KEEP WHEN THEY WERE MEASURED: the instant its home read
+// them, as the home sent it, on the row and in a change read; the same tip read
+// again is refused and leaves it; facts that replace them, matched against
+// changed owners or against a new target, carry their own; and an older
+// home's facts carry none. Facts matched again ask the owner they add for its
+// globs, and an ask the change held keeps the globs it was asked for.
+//
+// Mutations: bind the record's broker instant instead (M1 reads the broker's,
+// red); leave measured_at out of the upsert's SET (step 3 reads M1, red).
+func TestARevisionsFactsKeepWhenTheyWereMeasured(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	was := []gitlet.PathOwner{pathOwner(gitlet.OwnerUnit, "Platform", "upload/**")}
+	repo, change := ownedChange(t, n, "web", was...)
+	w, _ := writerOn(t, n, n.pub)
+	ctx := t.Context()
+	measured := func(cw gitlet.ConversationWrite, at time.Time) gitlet.ConversationWrite {
+		cw.Revise.MeasuredAt = at
+		return cw
+	}
+	reads := func(step string, want time.Time) {
+		t.Helper()
+		f := factsRead(t, n, 1, 1)
+		var stored int64
+		if !want.IsZero() {
+			stored = want.UnixMicro()
+		}
+		if !f.MeasuredAt.Equal(want) || n.facts(change, 1).measured != stored {
+			t.Fatalf("%s: the facts read measured at %s, kept as %d; want %s, %d", step, f.MeasuredAt,
+				n.facts(change, 1).measured, want, stored)
+		}
+	}
+	m1 := harnessAt.Add(-time.Hour).Add(123_456 * time.Microsecond)
+	res, err := w.Converse(ctx, measured(n.revising(repo, change, 1, oidOf("B"), mainRef, was, "upload/retry.go",
+		"docs/upload.md"), m1))
+	requireConversed(t, res, err)
+	reads("revision 1's first facts", m1)
+
+	before := n.end()
+	res, err = w.Converse(ctx, measured(n.revising(repo, change, 1, oidOf("B"), mainRef, was, "upload/retry.go",
+		"docs/upload.md"), m1.Add(time.Minute)))
+	requireConversationRefused(t, n, before, res, err, gitlet.ConversationRefusalSuperseded, "holds facts against")
+	reads("the same tip read again", m1)
+
+	now := []gitlet.PathOwner{pathOwner(gitlet.OwnerUnit, "Platform", "docs/**", "upload/**"),
+		pathOwner(gitlet.OwnerSeat, "cto", "docs/**")}
+	s := suiteSettings()
+	s.Owner = gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Engineering"}
+	s.PathOwners = gitlet.CanonicalPathOwners(now)
+	n.ensure("web", s, t1)
+	m3 := m1.Add(2 * time.Minute)
+	res, err = w.Converse(ctx, measured(n.revising(repo, change, 1, oidOf("B"), mainRef, now, "upload/retry.go",
+		"docs/upload.md"), m3))
+	requireConversed(t, res, err)
+	reads("the facts matched against changed owners", m3)
+	if got, ok := n.reviewer(change, "cto"); !ok || got.ownedPaths != `["docs/**"]` {
+		t.Fatalf("the owner the match adds is asked %+v (%v), want for docs/**", got, ok)
+	}
+	if got, _ := n.reviewer(change, "plat-lead"); got.ownedPaths != `["upload/**"]` {
+		t.Fatalf("plat-lead's held ask is for %s, want the upload/** it was asked for", got.ownedPaths)
+	}
+
+	c, _ := committerOn(t, n, n.pub)
+	moved, err := c.ProposeChange(ctx, writing(dev, n.change(change).version, func(p *gitlet.ChangeProposal) {
+		p.Retarget = &gitlet.ChangeRetarget{RepoID: repo, ChangeID: change, TargetRef: releaseRef}
+	}))
+	requireChanged(t, moved, err)
+	m4 := m3.Add(time.Minute)
+	res, err = w.Converse(ctx, measured(n.revising(repo, change, 1, oidOf("B"), releaseRef, now,
+		"upload/retry.go"), m4))
+	requireConversed(t, res, err)
+	reads("the retarget's facts", m4)
+
+	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(releaseRef, oidOf("R"), oidOf("R2"))))
+	res, err = w.Converse(ctx, olderHome(n.revising(repo, change, 1, oidOf("B"), releaseRef, now,
+		"upload/retry.go")))
+	requireConversed(t, res, err)
+	reads("an older home's facts", time.Time{})
+}
+
+// ONLY A REVISE'S NEW FACTS STAMP ITS RECORD: a home of this build's revise
+// matching no owner is stamped gitlet.OwnedPathsVersion by its measured
+// instant alone; an older home's, decided by this build, is stamped 1, its
+// asks naming no globs.
+//
+// Mutations: drop the Revise.MeasuredAt row (stamped 1, red); tag MeasuredAt
+// without omitzero (the older home's stamped OwnedPathsVersion, red).
+func TestOnlyARevisesNewFactsStampItsRecord(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	w, _ := writerOn(t, n, n.pub)
+	repo, change := ownedChange(t, n, "web")
+	res, err := w.Converse(t.Context(), n.revising(repo, change, 1, oidOf("B"), mainRef, nil, "upload/retry.go"))
+	requireConversed(t, res, err)
+	if v := n.recordAt(res.Position).V; v != gitlet.OwnedPathsVersion {
+		t.Fatalf("a measured revise matching no owner is stamped %d, want %d", v, gitlet.OwnedPathsVersion)
+	}
+
+	owners := []gitlet.PathOwner{pathOwner(gitlet.OwnerUnit, "Platform", "upload/**")}
+	repo, change = ownedChange(t, n, "api", owners...)
+	res, err = w.Converse(t.Context(), olderHome(n.revising(repo, change, 1, oidOf("B"), mainRef, owners,
+		"upload/retry.go")))
+	requireConversed(t, res, err)
+	if v := n.recordAt(res.Position).V; v != 1 {
+		t.Fatalf("an older home's revise is stamped %d, want 1", v)
+	}
+	if asked := decodedRevise(t, n, res.Position).Asked; len(asked) != 1 || asked[0].Paths != nil ||
+		asked[0].PathsOmitted != 0 {
+		t.Fatalf("an older home's revise asks %+v, want plat-lead for no glob", asked)
+	}
+}
+
+// THE FACTS KEEP ONE GLOB OF EACH OWNER FOR THE GATE: the merge gate reads the
+// facts' owners on every judgment, so they keep each owner's first glob and
+// how many more, never the list, at the widest: 64 owners, each of 32 globs,
+// the first 128 bytes JSON spells six bytes each. The record names every glob.
+//
+// Mutation: keep the record's owners whole in the column (every glob, red).
+func TestTheFactsKeepOneGlobOfEachOwnerForTheGate(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	first := strings.Repeat("<", gitref.MaxPathGlobBytes)
+	globs, touched := []string{first}, []string{first}
+	for i := range gitlet.MaxPathOwnerPaths - 1 {
+		globs, touched = append(globs, fmt.Sprintf("a%02d/**", i)), append(touched, fmt.Sprintf("a%02d/x", i))
+	}
+	var owners []gitlet.PathOwner
+	var kept []gitlet.TouchedOwner
+	for i := range gitlet.MaxPathOwners {
+		handle := fmt.Sprintf("s%02d", i)
+		handle += strings.Repeat("x", 64-len(handle))
+		owners = append(owners, pathOwner(gitlet.OwnerSeat, handle, globs...))
+		kept = append(kept, gitlet.TouchedOwner{Owner: gitlet.Owner{Kind: gitlet.OwnerSeat, Ref: handle},
+			FirstPath: first, MorePaths: gitlet.MaxPathOwnerPaths - 1})
+	}
+	gate := gitlet.MergeGate{MergeBy: gitlet.MergeByWriters, Approvals: gitlet.ApprovalsNone, OwnersApprove: true,
+		Landing: gitlet.Landing{Depth: 4, Batch: 4}, DeleteSource: gitlet.DeleteSeats}
+	s := gatedSettings(gate)
+	s.Owner = gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Engineering"}
+	s.PathOwners = gitlet.CanonicalPathOwners(owners)
+	repo := n.ensure("web", s, t1).RepoID
+	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, gitlet.ZeroOID, oidOf("A")),
+		set(featureRef, gitlet.ZeroOID, oidOf("B"))))
+	c, _ := committerOn(t, n, n.pub)
+	opened, err := c.ProposeChange(t.Context(), opening(repo, featureRef, mainRef, dev))
+	requireChanged(t, opened, err)
+	change := opened.ChangeID
+	w, _ := writerOn(t, n, n.pub)
+	res, err := w.Converse(t.Context(), n.revising(repo, change, 1, oidOf("B"), mainRef, owners, touched...))
+	requireConversed(t, res, err)
+
+	for _, o := range decodedRevise(t, n, res.Position).RequestedOwners {
+		if !slices.Equal(o.Paths, globs) {
+			t.Fatalf("the record names %s's globs %d, want all %d", o.Ref, len(o.Paths), len(globs))
+		}
+	}
+	want, _ := json.Marshal(kept)
+	if f := n.facts(change, 1); f.owners != string(want) {
+		t.Fatalf("the facts keep %d bytes of owners, want %d: each owner's first glob and how many more",
+			len(f.owners), len(want))
+	}
+	var facts gitlet.GateFacts
+	if err = n.db.Reader().Read(t.Context(), func(tx *sql.Tx) (err error) {
+		facts, _, err = gitlet.LoadGateFacts(t.Context(), tx, repo, change)
+		return err
+	}); err != nil {
+		t.Fatalf("load the gate's facts: %v", err)
+	}
+	if !reflect.DeepEqual(facts.Head.RequestedOwners, kept) {
+		t.Fatalf("the gate reads the owners %+v, want each with its first glob and how many more",
+			facts.Head.RequestedOwners)
+	}
 }

@@ -42,11 +42,13 @@ afterEach(() => {
  * The shell over a socket whose viewer holds `grants`, recording every seat
  * it watches and every question it asks of what waits on them.
  */
-function shellAs(grants: string[]) {
+function shellAs(grants: string[], services?: Record<string, string>) {
   const store = new Store();
   // THE SOCKET'S FIRST FRAME CARRIES THE ORG, as a served frame's always
   // does: what the company runs is known before a read is asked.
-  store.applyOrg(withDerived({ name: "Acme", roles: [] }));
+  store.applyOrg(
+    withDerived({ name: "Acme", roles: [], ...(services ? { services } : {}) }) as never,
+  );
   const socket = new LiveSocket(store);
   const watched: string[] = [];
   socket.watch = (seat: string) => void watched.push(seat);
@@ -70,6 +72,7 @@ function shellAs(grants: string[]) {
           items: [],
           total: 0,
           answerable: 0,
+          more: false,
           capped: false,
         });
       default:
@@ -124,4 +127,21 @@ test("a reader without Worklet is watched and asked what waits on them", async (
   });
   expect(watched.filter(Boolean)).toEqual(["ana"]);
   expect(asks.decisions).toBeGreaterThan(0);
+});
+
+// EVERY COMPANY KEEPS ARTIFACTS, whose comments reach a person's inbox, so the
+// watch is taken whatever the company runs. Mutation: take it only where
+// Worklet or Gitlet runs, and this reader's seat is never watched.
+test("a reader on a company running neither Worklet nor Gitlet is watched all the same", async () => {
+  const { watched } = shellAs(["doclet"], {
+    tracker: "jira",
+    knowledge: "doclet",
+    chat: "chatlet",
+    code: "none",
+  });
+  await afterMicrotasks();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(watched.filter(Boolean)).toEqual(["ana"]);
 });

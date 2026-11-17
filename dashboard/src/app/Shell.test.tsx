@@ -412,7 +412,14 @@ describe("the Inbox badge", () => {
     const asked: { what: string; params?: Record<string, unknown> }[] = [];
     const { store, socket } = answering(
       {
-        decisions: { handle: "ada", items: [], total: 1, answerable: 2, capped: false },
+        decisions: {
+          handle: "ada",
+          items: [],
+          total: 1,
+          answerable: 2,
+          more: false,
+          capped: false,
+        },
         inbox: {
           handle: "ada",
           notices: [notice("mention", 1), notice("assignee", 2), notice("reporter", 3)],
@@ -435,7 +442,7 @@ describe("the Inbox badge", () => {
   // A COUNT THE ENGINE CAPPED is a floor, and says so.
   test("a capped count is drawn as a floor", async () => {
     const { store, socket } = answering({
-      decisions: { handle: "ada", items: [], total: 50, answerable: 0, capped: true },
+      decisions: { handle: "ada", items: [], total: 50, answerable: 0, more: false, capped: true },
     });
     mountShell(store, socket);
     await settle();
@@ -446,7 +453,7 @@ describe("the Inbox badge", () => {
   // reader checks, and it would be there permanently on a quiet company.
   test("nothing waiting draws no figure", async () => {
     const { store, socket } = answering({
-      decisions: { handle: "ada", items: [], total: 0, answerable: 0, capped: false },
+      decisions: { handle: "ada", items: [], total: 0, answerable: 0, more: false, capped: false },
       inbox: { handle: "ada", notices: [notice("mention", 1)], primary_reasons: [], sources: [] },
     });
     mountShell(store, socket);
@@ -1134,10 +1141,10 @@ describe("the page header", () => {
   });
 
   // AN ADDRESS THAT NAMES NO SCREEN IS IN NO SECTION. Settings owns every
-  // address under it, so a mistyped one (or one that moved out, as General
-  // did) draws "Not found" beside a column, and a phone picker, marking none.
+  // address under it, so a mistyped one draws "Not found" beside a column,
+  // and a phone picker, marking none.
   test("a Settings address that names no screen marks no section", async () => {
-    location.hash = "#/settings/general";
+    location.hash = "#/settings/overview";
     const { store, socket } = answering({});
     mountShell(store, socket);
     await settle();
@@ -1794,7 +1801,7 @@ describe("the compact sidebar", () => {
     const win = await folded();
     try {
       expect(screen.getByRole("link", { name: /^Settings/ }).getAttribute("href")).toBe(
-        "#/settings/models",
+        "#/settings/general",
       );
       act(() => screen.getByRole("button", { name: /, your menu$/ }).click());
       act(() => screen.getByRole("menuitem", { name: /^Preferences/ }).click());
