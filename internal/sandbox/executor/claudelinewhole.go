@@ -484,7 +484,6 @@ func contentBlock(raw json.RawMessage) (threadCall, json.RawMessage, error) {
 	if b.Input != nil {
 		keys.to = sendTarget(b.Input)
 	}
-	keys.text = threadResultText{Bytes: -1}
 	if b.Content != nil {
 		keys.text = resultTextOf(b.Content)
 	}
@@ -513,12 +512,12 @@ func sendTarget(input json.RawMessage) string {
 
 // resultTextOf is a tool_result's content, raw, as the reading compares it
 // with a log's output: its text ([resultText]) read as it will stream
-// ([textResult]), a piece at a time, into its length and its digests; Bytes
-// -1 where the content holds no text.
+// ([textResult]), a piece at a time, into its length and its digests; no
+// text, the zero value, where the content holds none.
 func resultTextOf(content json.RawMessage) threadResultText {
 	text, ok := resultText(content)
 	if !ok {
-		return threadResultText{Bytes: -1}
+		return threadResultText{}
 	}
 	var read textResult
 	cut := textCut{text: text}

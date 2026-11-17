@@ -1144,7 +1144,7 @@ func (w *holdingsWalk) count(thread string, call threadCall, n int, record int32
 		}
 		facts.resultThread, facts.line, facts.resultRec = thread, n, record
 		facts.failed = call.Failed
-		facts.textBytes, facts.opening, facts.whole = int(call.Text.Bytes), call.Text.Opening, call.Text.Whole
+		facts.textBytes, facts.opening, facts.whole = int(call.Text.Bytes()), call.Text.Opening, call.Text.Whole
 	}
 }
 

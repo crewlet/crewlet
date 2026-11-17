@@ -281,16 +281,24 @@ func (h *textHandback) write(p []byte) {
 var _ [sandbox.MaxBridgeOutputBytes - sandbox.HoldingsOpeningBytes]struct{}
 
 // threadResultText is a tool_result's text as the reading compares it with a
-// log's output ([threadCall.Text]): Bytes its decoded length, -1 where the
-// result's content holds no text ([resultText]); Opening the SHA-256 of its
-// first [sandbox.HoldingsOpeningBytes]; Whole the SHA-256 of all of it, where
-// Bytes is at most [sandbox.MaxBridgeOutputBytes], else zero, as a log keeps
-// no longer output whole to compare. A call holds it by value: a text of any
+// log's output ([threadCall.Text]): its decoded length
+// ([threadResultText.Bytes]); Opening the SHA-256 of its first
+// [sandbox.HoldingsOpeningBytes]; Whole the SHA-256 of all of it, where it is
+// at most [sandbox.MaxBridgeOutputBytes] long, else zero, as a log keeps no
+// longer output whole to compare. A call holds it by value: a text of any
 // length costs a call these 72 bytes.
+//
+// THE ZERO VALUE IS NO TEXT, what a result whose content holds none reads as
+// ([resultText]) and what a tool_use's call holds: never a text of no bytes,
+// whose digests are the empty text's, which no zero digest is.
 type threadResultText struct {
-	Bytes          int64
+	// size is the text's decoded length plus one; 0 where there is no text.
+	size           int64
 	Opening, Whole [sha256.Size]byte
 }
+
+// Bytes is the text's decoded length; -1 where there is no text.
+func (t threadResultText) Bytes() int64 { return t.size - 1 }
 
 // textResult reads a tool_result's text into its length and its two digests
 // ([threadResultText]), keeping its first [sandbox.MaxBridgeOutputBytes] bytes
@@ -311,7 +319,7 @@ func (r *textResult) write(p []byte) {
 // sum is the text read so far, as the reading compares it.
 func (r *textResult) sum() threadResultText {
 	held := r.kept[:min(r.n, int64(len(r.kept)))]
-	t := threadResultText{Bytes: r.n, Opening: sha256.Sum256(held[:min(len(held), sandbox.HoldingsOpeningBytes)])}
+	t := threadResultText{size: r.n + 1, Opening: sha256.Sum256(held[:min(len(held), sandbox.HoldingsOpeningBytes)])}
 	// WHOLE ONLY WHERE A LOG COULD HAVE KEPT IT WHOLE: a longer text is
 	// compared by its opening alone, so its whole is never hashed.
 	if r.n <= int64(len(r.kept)) {

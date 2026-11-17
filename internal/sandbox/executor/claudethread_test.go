@@ -1606,7 +1606,7 @@ func ctBlocks(blocks threadBlocks) string {
 // result's text as its length and digests.
 func ctCallFacts(b *strings.Builder, c threadCall) {
 	fmt.Fprintf(b, "call %q: id %q, name %q, sends to %q, failed %t, its result's text %d bytes, opening %x, "+
-		"whole %x\n", c.Kind, c.ID, c.Name, c.To, c.Failed, c.Text.Bytes, c.Text.Opening, c.Text.Whole)
+		"whole %x\n", c.Kind, c.ID, c.Name, c.To, c.Failed, c.Text.Bytes(), c.Text.Opening, c.Text.Whole)
 }
 
 // ctLegAnswer writes to b what a line's own toolUseResult says: what it answers
@@ -2725,7 +2725,7 @@ func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 	interrupted := "[Tool call interrupted: the session ended before this call's result was recorded, so its " +
 		"outcome is unknown. Check whether it took effect before relying on it or running it again.]"
 	text := func(s string) threadResultText { return ltWhole(s).Result }
-	none := threadResultText{Bytes: -1}
+	none := threadResultText{}
 	send := func(input string) string {
 		return `[{"type":"tool_use","id":"` + ctCall + `","name":"SendMessage","input":` + input + `}]`
 	}

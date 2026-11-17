@@ -107,7 +107,7 @@ func ltWhole(text string) ltFacts {
 		Units:    min(utf16Units([]byte(text)), skillListingMaxNameUnits+1),
 	}
 	f.Agent, f.Leg, f.Notice = taskNotification(text)
-	f.Result.Bytes = int64(len(text))
+	f.Result.size = int64(len(text)) + 1
 	f.Result.Opening = sha256.Sum256([]byte(text[:min(sandbox.HoldingsOpeningBytes, len(text))]))
 	if len(text) <= sandbox.MaxBridgeOutputBytes {
 		f.Result.Whole = sha256.Sum256([]byte(text))
@@ -406,6 +406,45 @@ func TestATextsFactsAreReadAsItsWholeTextReadsThem(t *testing.T) {
 			b.WriteString(parts[rng.IntN(len(parts))])
 		}
 		ltCheck(t, fmt.Sprintf("random text %d (%.40q)", i, b.String()), b.String(), rng)
+	}
+}
+
+// A RESULT'S TEXT'S ZERO VALUE IS NO TEXT: a tool_result whose content holds
+// no text (absent, null, an image's blocks, two text blocks) reads as the zero
+// value, -1 bytes, as does a tool_use's call; and a text of no bytes is a text,
+// 0 bytes long with the empty text's digests, never the zero value.
+//
+// Mutation: read the zero value's length as 0, and a call no reading filled
+// claims a text of no bytes with digests no text has; store a text's length
+// as written, and a text of no bytes reads as none.
+func TestAResultTextsZeroValueIsNoText(t *testing.T) {
+	t.Parallel()
+	if n := (threadResultText{}).Bytes(); n != -1 {
+		t.Errorf("the zero value's text is %d bytes long, want -1, no text", n)
+	}
+	empty := sha256.Sum256(nil)
+	for content, want := range map[string]threadResultText{
+		``:     {},
+		`null`: {},
+		`[{"type":"image","source":{"type":"base64","data":"AA=="}}]`: {},
+		`[{"type":"text","text":"a"},{"type":"text","text":"b"}]`:     {},
+		`""`:                          {size: 1, Opening: empty, Whole: empty},
+		`[{"type":"text","text":""}]`: {size: 1, Opening: empty, Whole: empty},
+		`"b1"`:                        ltWhole("b1").Result,
+	} {
+		raw := json.RawMessage(content)
+		if content == "" {
+			raw = nil
+		}
+		if got := resultTextOf(raw); got != want {
+			t.Errorf("a result whose content is %s reads as %d bytes, opening %x, want %d bytes, opening %x",
+				content, got.Bytes(), got.Opening, want.Bytes(), want.Opening)
+		}
+	}
+	c, err := blockCallOf('{', blockKeys{typ: json.RawMessage(`"tool_use"`), id: json.RawMessage(`"toolu_x"`),
+		name: json.RawMessage(`"Bash"`)})
+	if err != nil || c.Text != (threadResultText{}) {
+		t.Errorf("a tool_use's call holds a text of %d bytes (%v), want none", c.Text.Bytes(), err)
 	}
 }
 

@@ -1318,8 +1318,8 @@ type threadCall struct {
 	// absent, and on a tool_use.
 	Failed bool
 	// Text is a tool_result's text ([resultText]), as the reading compares it
-	// with a log's output ([threadResultText]); its Bytes -1 where its content
-	// holds no text. The zero value on a tool_use.
+	// with a log's output ([threadResultText]); no text, its zero value, where
+	// its content holds none, and on a tool_use.
 	Text threadResultText
 }
 
