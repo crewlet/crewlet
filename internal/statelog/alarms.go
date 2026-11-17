@@ -2293,9 +2293,8 @@ var table = []rule{
 		// its own and sent the operator to the wrong machine.
 		kind:  KindClockSkew,
 		title: "A server clock is wrong",
-		person: "A server's clock is far off the others', so cleanup may delete files still in use " +
-			"and other decisions timed across servers go wrong. " +
-			"Turn on time sync on that machine.",
+		person: "A server's clock is far off the others', so cleanup may delete files in use " +
+			"and timed decisions go wrong. Turn on time sync there.",
 		fires: func(r Reading) (string, bool) {
 			if r.ClockSkewBound <= 0 {
 				return "", false
