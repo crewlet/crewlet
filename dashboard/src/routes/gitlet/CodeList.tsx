@@ -60,6 +60,8 @@ export interface CodeListProps<T> {
   lead?: (row: T) => ReactNode;
   title: (row: T) => ReactNode;
   titleAfter?: (row: T) => ReactNode;
+  /** A line under the title: a repository's description. */
+  summary?: (row: T) => ReactNode;
   meta?: (row: T) => ReactNode;
   facts?: (row: T) => ReactNode;
   below?: (row: T) => ReactNode;
@@ -230,6 +232,7 @@ export function CodeList<T>({
   lead,
   title,
   titleAfter,
+  summary,
   meta,
   facts,
   below,
@@ -312,6 +315,7 @@ export function CodeList<T>({
             )}
             {titleAfter?.(item)}
           </p>
+          {summary && <p className="code-list__summary">{summary(item)}</p>}
           {meta && <div className="code-list__meta">{meta(item)}</div>}
         </div>
         {facts && <div className="code-list__facts">{facts(item)}</div>}

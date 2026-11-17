@@ -28,6 +28,18 @@ export const REPO_STATUSES = ["importing", "active", "archived", "deleted", "pur
 export const REPO_SEARCH_MODES = ["indexed", "grep"] as const;
 
 /**
+ * What a repository is for (`gitlet.RepoKinds`): the listing's `kind` filter. HELD BOTH WAYS, in
+ * order, by `internal/gitlet.TestTheDashboardKnowsEveryKindOfRepository`.
+ */
+export const REPO_KINDS = ["project", "scratch"] as const;
+
+/**
+ * The orders a listing of repositories walks (`gitlet.RepoSorts`): its `sort`. HELD BOTH WAYS, in
+ * order, by `internal/gitlet.TestTheDashboardSortsRepositoriesAsTheEngineDoes`.
+ */
+export const REPO_SORTS = ["name", "pushed"] as const;
+
+/**
  * The classes of a path a merge gate exempts a change by (`gitlet.PathClasses`),
  * narrowest first: what a protection rule's form offers for its approvals'
  * exemptions and each human path's. HELD BOTH WAYS, in order, by

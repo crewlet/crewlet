@@ -9,6 +9,7 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { InertWebSocket, LayoutClient } from "~/test/layout.tsx";
 import { eventually } from "~/test/settle.ts";
+import { SessionReading } from "~/lib/frameSession.ts";
 import { DiffView, type DiffHunk } from "~/components/DiffView.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import type { CodeChangeSummary } from "~/protocol/index.ts";
@@ -16,6 +17,7 @@ import { ChangesGrid } from "./Changes.tsx";
 import { BranchChip } from "./ui.tsx";
 import { ComparePage } from "./commit/ComparePage.tsx";
 import { RepositoryPage } from "./repo/RepositoryPage.tsx";
+import { Repositories } from "./Repositories.tsx";
 import { SYNTAX_CLASS } from "./syntax.tsx";
 
 const POSITION = { stream: "CREWLET_CODE_LOG", generation: 1, seq: 12 };
@@ -760,6 +762,122 @@ for (const [viewport, column] of [
         const hit = document.elementFromPoint(at.left + at.width / 2, at.top + at.height / 2);
         expect(control.contains(hit), control.getAttribute("aria-label") ?? "").toBe(true);
       }
+    }
+  });
+}
+
+/** Five repositories with every fact: one a 63-byte scratch name, one a 300-character description. */
+function withRepositories() {
+  const row = (name: string, extra: Record<string, unknown> = {}) => ({
+    id: `id-${name}`,
+    name,
+    status: "active",
+    managed_by: "config",
+    kind: "project",
+    owner: { kind: "unit", ref: "engineering" },
+    visibility: "company",
+    search: "indexed",
+    default_branch: "main",
+    refs: 3,
+    live_packs: 2,
+    live_bytes: 19_293_798,
+    live_objects: 40,
+    position: POSITION,
+    head: BASE,
+    pushes: 214,
+    last_push_at: "2026-11-15T09:00:00Z",
+    description: "The storefront: a React app and the Go server that renders it",
+    change_counts: { live: 4, open: 3, draft: 1, closed: 0, merged: 9 },
+    card: {
+      push_mirrored: true,
+      last_push: {
+        push_id: "p1",
+        at: "2026-11-15T09:00:00Z",
+        actor: "jane",
+        actor_kind: "person",
+        actor_seat: "jane",
+        via: "git",
+        outcome: { moved: 1 },
+      },
+      tip_checks: { state: "passed", counts: { passed: 3 }, required: 2, required_passed: 2 },
+    },
+    spark: [9, 14, 6, 1, 3, 12, 17, 11, 8, 15, 19, 7, 13, 8],
+    ...extra,
+  });
+  const repos = [
+    row("web"),
+    row("api", { card: {}, change_counts: { live: 12, open: 12, draft: 0, closed: 0, merged: 0 } }),
+    row("docs", { description: "A".repeat(300), search: "grep" }),
+    row("infra", { visibility: "unit", spark: Array<number>(14).fill(0) }),
+    row(`jane.${"s".repeat(58)}`, { kind: "scratch", owner: { kind: "seat", ref: "jane" } }),
+  ];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), location.origin);
+      // WHO IS SIGNED IN is left unanswered, as the screen's own suite leaves it.
+      if (url.pathname === "/auth/session") return new Promise<Response>(() => {});
+      if (url.pathname === "/query/code_repos") {
+        return json({
+          repos,
+          repos_total: { repos: 5, live_bytes: 96_468_990 },
+          position: POSITION,
+          level: "session",
+        });
+      }
+      return answer(url);
+    }),
+  );
+}
+
+// THE REPOSITORIES HOLD THEIR WIDTH, THEIR FACTS IN FIXED TRACKS: at 1440 each fact's left edge
+// is the same down the card and on the title's line; at 640 the facts sit under the meta. Mutation:
+// make the tracks `auto` (the edges differ), or drop the phone rule (the row overflows).
+for (const [viewport, column] of [
+  [1440, 1150],
+  [640, 608],
+] as const) {
+  test(`the repositories hold their width, their facts aligned, at ${viewport}px`, async () => {
+    await page.viewport(viewport, 900);
+    withRepositories();
+    location.hash = "#/gitlet/repos";
+    mount(
+      <SessionReading>
+        <Repositories />
+      </SessionReading>,
+      column,
+    );
+    const rows = await eventually(() => {
+      const found = [...document.querySelectorAll<HTMLElement>(".code-list__row")];
+      expect(found).toHaveLength(5);
+      return found;
+    });
+    const content = document.querySelector<HTMLElement>(".crewlet-app-shell__content")!;
+    const list = document.querySelector<HTMLElement>(".code-list__rows")!;
+    for (const el of [content, list]) {
+      expect(el.scrollWidth, el.className).toBeLessThanOrEqual(el.clientWidth);
+    }
+    const edges = (cell: string) =>
+      rows.map((row) => Math.round(row.querySelector(cell)!.getBoundingClientRect().left));
+    for (const cell of [
+      ".code-repo-facts__changes",
+      ".code-repo-facts__checks",
+      ".code-repo-facts__spark",
+    ]) {
+      if (column >= 640) expect(new Set(edges(cell)).size, cell).toBe(1);
+    }
+    for (const row of rows) {
+      const box = row.getBoundingClientRect();
+      expect(row.scrollWidth, row.dataset.key).toBeLessThanOrEqual(row.clientWidth);
+      const title = row.querySelector(".code-list__title")!.getBoundingClientRect();
+      const meta = row.querySelector(".code-list__meta")!.getBoundingClientRect();
+      const facts = row.querySelector(".code-repo-facts")!.getBoundingClientRect();
+      expect(facts.right, row.dataset.key).toBeLessThanOrEqual(box.right + 0.5);
+      expect(title.right, row.dataset.key).toBeLessThanOrEqual(box.right + 0.5);
+      if (column >= 640) expect(facts.top, row.dataset.key).toBeLessThan(title.bottom);
+      else expect(facts.top, row.dataset.key).toBeGreaterThanOrEqual(meta.bottom - 0.5);
+      const spark = row.querySelector(".code-repo-facts__spark")!.getBoundingClientRect();
+      expect(spark.width, row.dataset.key).toBeGreaterThan(40);
     }
   });
 }
