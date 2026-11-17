@@ -150,8 +150,9 @@ import (
 // # An item for one job is that job's alone
 //
 // A record can hold an item for one job beside a person's notes
-// ([sandbox.RunNote.For]), which the store files only while that job is the
-// record's and removes at the next launch. So every reader of the record's
+// ([sandbox.RunNote.For]), which only the store's own writes file (a filing
+// of a person's note that names a job is refused, [sandbox.ErrNoteKind]) and
+// the next launch removes. So every reader of the record's
 // waiting notes names the job it reads inside ([runSteers.waiting]): the run
 // inbox the job it serves, and the review and a relaunch's brief none, which
 // hands them no item. And every step that reads a person's notes passes an

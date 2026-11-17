@@ -1209,10 +1209,17 @@ func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 					}
 				}
 				if tc.item {
-					filed, _, err := rig.pending.FileNote(t.Context(), "t1", NoteFiling{Note: RunNote{ID: "item",
-						Sealed: []byte("sealed:item"), For: launched.LaunchID}, MaxWaiting: 5, MaxNotes: 10})
-					if err != nil || filed != NoteAccepted {
-						t.Fatalf("file the job's item = %s, %v", filed, err)
+					// PUT ON THE RECORD BY THE STORE'S OWN WRITE, as an item
+					// is filed: no filer may file one ([ErrNoteKind]).
+					if _, won, _, err := rig.pending.writeFound(t.Context(), "t1", true, Fence{},
+						func(run *PendingRun) bool {
+							run.Steer.Seq++
+							run.Steer.Notes = append(slices.Clone(run.Steer.Notes), RunNote{ID: "item",
+								Seq: run.Steer.Seq, Sealed: []byte("sealed:item"), At: rig.now,
+								For: launched.LaunchID})
+							return true
+						}); err != nil || !won {
+						t.Fatalf("put the job's item on its record: %v, %v", won, err)
 					}
 					serve("item")
 				}

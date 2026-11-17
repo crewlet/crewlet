@@ -69,9 +69,7 @@ var noteCases = []struct {
 	{"ACancelAndAVerdictCommute", testACancelAndAVerdictCommute},
 	{"EveryReadOfAPlacedNoteTakesItsPlace", testEveryReadOfAPlacedNoteTakesItsPlace},
 	{"AFilingCountsNoHookServedNoteAsWaiting", testAFilingCountsNoHookServedNoteAsWaiting},
-	{"AnItemIsFiledOnlyWhileItsJobIsTheRecords", testAnItemIsFiledOnlyWhileItsJobIsTheRecords},
-	{"AJobsItemsAreBoundedApartFromAPersonsNotes", testAJobsItemsAreBoundedApartFromAPersonsNotes},
-	{"ALaunchRemovesEveryItemOfTheJobBeforeIt", testALaunchRemovesEveryItemOfTheJobBeforeIt},
+	{"APersonCannotFileAnItem", testAPersonCannotFileAnItem},
 	{"ACallPastItsBoundIsRecordedAsNoCall", testACallPastItsBoundIsRecordedAsNoCall},
 	{"ASessionOrAnIDOutsideTheCharsetIsRecordedAsNoCall", testASessionOrAnIDOutsideTheCharsetIsRecordedAsNoCall},
 	{"AnIntegerIDAndAQuotedIDOfTheCharsetAreKept", testAnIntegerIDAndAQuotedIDOfTheCharsetAreKept},
@@ -94,6 +92,8 @@ var noteRawCases = []struct {
 		testAnUnansweredServeIsRemovedAndFencesItsWriteInFlight},
 	{"AVerdictIsIdempotentAndAnswersEveryHookReadOfItsJob",
 		testAVerdictIsIdempotentAndAnswersEveryHookReadOfItsJob},
+	{"AJobsItemsCountTowardNoBoundOfAPersons", testAJobsItemsCountTowardNoBoundOfAPersons},
+	{"ALaunchRemovesEveryItemOfTheJobBeforeIt", testALaunchRemovesEveryItemOfTheJobBeforeIt},
 	{"EveryWriteHandsAnItemOnlyToItsJob", testEveryWriteHandsAnItemOnlyToItsJob},
 }
 

@@ -297,12 +297,12 @@ const (
 	MaxNoteCallBytes = 64
 
 	// MaxJobItems bounds the items for one job a run's row holds
-	// ([RunNote.For]), apart from a person's notes: held by every write that
-	// files one, by one count ([jobItems]), a filing answering [NoteSpent]
-	// past it ([PendingStore.FileNote]). TEN: an item for one job is what that
-	// job alone is to be told, such as a call its predecessor still ran when it
-	// was replaced, which is ordinarily one or a few, and Claude Code runs at
-	// most ten tool calls at once by default
+	// ([RunNote.For]), apart from a person's notes: the bound every write of
+	// the store's own that files one holds, since no filer files one
+	// ([PendingStore.FileNote] refuses it, [ErrNoteKind]). TEN: an item for
+	// one job is what that job alone is to be told, such as a call its
+	// predecessor still ran when it was replaced, which is ordinarily one or
+	// a few, and Claude Code runs at most ten tool calls at once by default
 	// (CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY, which nothing in this tree sets).
 	// Ten at the widest seal ([MaxNoteSealedBytes]), each served
 	// [MaxNoteServes] times and read, are under a quarter of a mebibyte of the

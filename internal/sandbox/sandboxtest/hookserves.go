@@ -3,6 +3,7 @@ package sandboxtest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -100,19 +101,37 @@ func rowVersion(t *testing.T, runs coord.SandboxRuns, turnID string) uint64 {
 	return record.Version
 }
 
-// jobItem is an item for one job, filed as its filer files one.
+// jobItem is an item for one job: a note naming the job it is for.
 func jobItem(id, job string) sandbox.RunNote {
 	n := sealedNote(id)
 	n.For = job
 	return n
 }
 
-// fileItem files an item for job under the turn's bounds, and answers what
-// became of it.
-func fileItem(ctx context.Context, s sandbox.PendingStore, turnID, id, job string) (sandbox.NoteFiled, error) {
-	filed, _, err := s.FileNote(ctx, turnID, sandbox.NoteFiling{Note: jobItem(id, job), MaxWaiting: maxWaiting,
-		MaxNotes: maxNotes})
-	return filed, err
+// placeItem puts an item for job on turnID's record, waiting and served to
+// nobody, numbered after every note the record holds, as the store's own write
+// of the record files one.
+//
+// ONTO THE RECORDS THE STORE IS BUILT ON, because no filer may file one
+// ([sandbox.ErrNoteKind]) and this build's store files none: what every write
+// does with an item a record holds is the store's whoever put it there, and an
+// item on the record is what these cases hold it to.
+func placeItem(t *testing.T, runs coord.SandboxRuns, turnID, id, job string) {
+	t.Helper()
+	if _, ok, err := runs.MutateSandboxRun(t.Context(), turnID, func(current coord.Record) (coord.SandboxRunChange, error) {
+		var row sandbox.PendingRun
+		if err := json.Unmarshal(current.Value, &row); err != nil {
+			return coord.SandboxRunChange{}, err
+		}
+		row.Steer.Seq++
+		item := jobItem(id, job)
+		item.Seq = row.Steer.Seq
+		row.Steer.Notes = append(row.Steer.Notes, item)
+		raw, err := json.Marshal(row)
+		return coord.SandboxRunChange{Put: raw}, err
+	}); err != nil || !ok {
+		t.Fatalf("put item %s for job %s on %s: %v %v", id, job, turnID, ok, err)
+	}
 }
 
 // A HOOK'S SERVE RECORDS THE SERVE AND NO READ. A harness answered its notes by
@@ -895,56 +914,62 @@ func testAFilingCountsNoHookServedNoteAsWaiting(t *testing.T, s sandbox.PendingS
 	}
 }
 
-// AN ITEM IS FILED ONLY WHILE ITS JOB IS THE RECORD'S. An item for one job is
-// read only by a reader inside that job, and the launch that opens the next
-// removes it: so a filing for a job the record no longer names, one whose filer
-// lost its race to that launch, answers closed and writes nothing, since
-// nothing in the job it names will read it. The current job's item is filed.
+// A PERSON CANNOT FILE AN ITEM. A filing is a person's note: one that names a
+// job ([sandbox.RunNote.For]) is refused with [sandbox.ErrNoteKind] before
+// anything is written, whichever job it names, the record's own included, and
+// on a turn with no record at all, where the refusal is no answer of a status:
+// an item for one job is the store's to file, in its own writes of the record,
+// never a filer's. The record is left as it was, and the person's note filed
+// after it is the turn's first.
 //
-// Mutation: file an item for a job the record no longer names, and it lands
-// behind the next job's launch.
-func testAnItemIsFiledOnlyWhileItsJobIsTheRecords(t *testing.T, s sandbox.PendingStore) {
+// Mutation: file a note that names a job, as an item or as a person's note,
+// and it lands on the record or is answered as a status.
+func testAPersonCannotFileAnItem(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
-	const turn = "t-item-job"
+	const turn = "t-item-filed"
 	previous := mustLaunched(t, s, run(turn))
 	mustClaim(t, s, turn)
 	current := mustBeginLaunch(t, s, run(turn))
-	if filed, err := fileItem(ctx, s, turn, "i-1", previous); err != nil || filed != sandbox.NoteClosed {
-		t.Errorf("an item for the job the record no longer names = %s, %v, want closed", filed, err)
+	for _, tc := range []struct {
+		name, turn, id, job string
+	}{
+		{"for the record's own job", turn, "i-1", current},
+		{"for the job before it", turn, "i-2", previous},
+		{"to a turn with no record", "t-item-no-record", "i-3", current},
+	} {
+		filed, _, err := s.FileNote(ctx, tc.turn, sandbox.NoteFiling{Note: jobItem(tc.id, tc.job),
+			MaxWaiting: maxWaiting, MaxNotes: maxNotes})
+		if !errors.Is(err, sandbox.ErrNoteKind) || filed != "" {
+			t.Errorf("an item filed %s = %q, %v, want it refused with ErrNoteKind", tc.name, filed, err)
+		}
 	}
-	if notes := mustGet(t, s, turn).Steer.Notes; len(notes) != 0 {
-		t.Errorf("a refused item landed on the record: %+v", notes)
+	if steer := mustGet(t, s, turn).Steer; len(steer.Notes) != 0 || steer.Seq != 0 {
+		t.Errorf("a refused item touched the record: %d notes, the last numbered %d", len(steer.Notes), steer.Seq)
 	}
-	if filed, err := fileItem(ctx, s, turn, "i-2", current); err != nil || filed != sandbox.NoteAccepted {
-		t.Fatalf("an item for the record's own job = %s, %v, want accepted", filed, err)
-	}
-	if n := notesByID(t, s, turn)["i-2"]; n.For != current || !n.Waiting() || n.Seq != 1 {
-		t.Errorf("the item is %+v, want it waiting, for job %s, numbered 1", n, current)
+	mustFile(t, s, turn, "n-1")
+	if n := notesByID(t, s, turn)["n-1"]; n.Seq != 1 || n.For != "" || !n.Waiting() {
+		t.Errorf("the person's note after the refusals is %+v, want it waiting, the turn's first", n)
 	}
 }
 
-// A JOB'S ITEMS ARE BOUNDED APART FROM A PERSON'S NOTES. A job's items are
-// bounded by [sandbox.MaxJobItems], which holds the row's share of them, and
-// count toward neither bound of a person's: a turn that holds its job's ten
-// still takes a person's note, five waiting, and an eleventh item is spent.
-// READ OR NOT: an item the job's own step read stays on the record until the
-// next launch's write removes it, so it counts toward the bound as a waiting
-// one does, and a job that reads each item before it files the next never
-// files past the ten the row holds.
+// A JOB'S ITEMS COUNT TOWARD NO BOUND OF A PERSON'S. An item for one job a
+// record holds is counted apart from a person's notes, against
+// [sandbox.MaxJobItems], the bound of the store's own writes that file one:
+// READ OR NOT, it counts toward neither of a person's two bounds. A turn whose
+// job holds its ten, half of them read by the job's own step and the rest
+// waiting, still takes a person's note, five of them waiting, and a sixth
+// waiting is full; and it takes the turn's ten in all, an eleventh spent.
 //
-// Mutation: ignore the items' bound, count only the waiting ones or only the
-// read ones toward it, or count an item toward a person's, and a filing goes
-// wrong.
-func testAJobsItemsAreBoundedApartFromAPersonsNotes(t *testing.T, s sandbox.PendingStore) {
+// Mutation: count an item, waiting or read, toward either of a person's
+// bounds, and a filing goes wrong.
+func testAJobsItemsCountTowardNoBoundOfAPersons(t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns) {
 	ctx := t.Context()
 	const turn = "t-item-bound"
 	launch := mustLaunched(t, s, run(turn))
 	var read []string
 	for i := range sandbox.MaxJobItems {
 		id := fmt.Sprintf("i-%02d", i+1)
-		if filed, err := fileItem(ctx, s, turn, id, launch); err != nil || filed != sandbox.NoteAccepted {
-			t.Fatalf("item %d = %s, %v, want accepted", i+1, filed, err)
-		}
+		placeItem(t, runs, turn, id, launch)
 		if i < sandbox.MaxJobItems/2 {
 			read = append(read, id)
 		}
@@ -954,15 +979,24 @@ func testAJobsItemsAreBoundedApartFromAPersonsNotes(t *testing.T, s sandbox.Pend
 		!slices.Equal(idsOf(taken), read) {
 		t.Fatalf("the job's own step read %v, %v, want %v", idsOf(taken), err, read)
 	}
-	if filed, err := fileItem(ctx, s, turn, "i-11", launch); err != nil || filed != sandbox.NoteSpent {
-		t.Errorf("the eleventh item, half of the ten before it read by the job's own step = %s, %v, want spent",
-			filed, err)
-	}
 	for i := range maxWaiting {
-		mustFile(t, s, turn, fmt.Sprintf("n-%d", i+1))
+		mustFile(t, s, turn, fmt.Sprintf("n-%02d", i+1))
 	}
-	if filed, _, err := file(ctx, s, turn, "n-6"); err != nil || filed != sandbox.NoteFull {
+	if filed, _, err := file(ctx, s, turn, "n-full"); err != nil || filed != sandbox.NoteFull {
 		t.Errorf("a person's sixth waiting note beside the job's items = %s, %v, want full", filed, err)
+	}
+	var mine []string
+	for i := range maxWaiting {
+		mine = append(mine, fmt.Sprintf("n-%02d", i+1))
+	}
+	if taken, err := s.TakeNotes(ctx, turn, bridgeTake(launch, mine...)); err != nil || len(taken) != maxWaiting {
+		t.Fatalf("the job's own step read %v, %v, want the person's five", idsOf(taken), err)
+	}
+	for i := maxWaiting; i < maxNotes; i++ {
+		mustFile(t, s, turn, fmt.Sprintf("n-%02d", i+1))
+	}
+	if filed, _, err := file(ctx, s, turn, "n-spent"); err != nil || filed != sandbox.NoteSpent {
+		t.Errorf("a person's eleventh note beside the job's items = %s, %v, want spent", filed, err)
 	}
 }
 
@@ -970,19 +1004,17 @@ func testAJobsItemsAreBoundedApartFromAPersonsNotes(t *testing.T, s sandbox.Pend
 // new, so every item on the record was the job before it's alone, waiting,
 // served or read, and nothing in the new job will read one: the launch's own
 // write removes each, before anything it files, and leaves a person's notes as
-// they are. The new job's items are then bounded from none.
+// they are.
 //
-// Mutation: keep an item of the job before, or count it against the new job's
-// bound, and a check goes red.
-func testALaunchRemovesEveryItemOfTheJobBeforeIt(t *testing.T, s sandbox.PendingStore) {
+// Mutation: keep an item of the job before, waiting, served or read, and a
+// check goes red.
+func testALaunchRemovesEveryItemOfTheJobBeforeIt(t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns) {
 	ctx := t.Context()
 	const turn = "t-item-removed"
 	first := mustLaunched(t, s, run(turn))
 	mustFile(t, s, turn, "n-1")
 	for _, id := range []string{"i-waiting", "i-served", "i-read"} {
-		if filed, err := fileItem(ctx, s, turn, id, first); err != nil || filed != sandbox.NoteAccepted {
-			t.Fatalf("item %s = %s, %v", id, filed, err)
-		}
+		placeItem(t, runs, turn, id, first)
 	}
 	mustServe(t, s, turn, hookServe(first, "take-1", callNo(1), "i-served"), "i-served")
 	if taken, err := s.TakeNotes(ctx, turn, bridgeTake(first, "i-read")); err != nil || len(taken) != 1 {
@@ -1000,12 +1032,6 @@ func testALaunchRemovesEveryItemOfTheJobBeforeIt(t *testing.T, s sandbox.Pending
 	if !slices.Equal(idsOf(notes), []string{"n-1"}) || notes[0].Read == nil ||
 		notes[0].Read.Launch != relaunched.LaunchID {
 		t.Fatalf("the relaunch left notes %v, want the person's note alone, read by its brief", idsOf(notes))
-	}
-	for i := range sandbox.MaxJobItems {
-		if filed, err := fileItem(ctx, s, turn, fmt.Sprintf("j-%02d", i+1), relaunched.LaunchID); err != nil ||
-			filed != sandbox.NoteAccepted {
-			t.Fatalf("the new job's item %d = %s, %v, want accepted", i+1, filed, err)
-		}
 	}
 }
 
@@ -1172,24 +1198,9 @@ func testEveryWriteHandsAnItemOnlyToItsJob(t *testing.T, s sandbox.PendingStore,
 	const turn = "t-item-writes"
 	launch := mustLaunched(t, s, run(turn))
 	mustFile(t, s, turn, "n-1")
-	if filed, err := fileItem(ctx, s, turn, "i-mine", launch); err != nil || filed != sandbox.NoteAccepted {
-		t.Fatalf("the job's item = %s, %v", filed, err)
-	}
-	// AN ITEM FOR ANOTHER JOB, written onto the record whole.
-	if _, ok, err := runs.MutateSandboxRun(ctx, turn, func(current coord.Record) (coord.SandboxRunChange, error) {
-		var row sandbox.PendingRun
-		if err := json.Unmarshal(current.Value, &row); err != nil {
-			return coord.SandboxRunChange{}, err
-		}
-		row.Steer.Seq++
-		foreign := jobItem("i-other", "job-before")
-		foreign.Seq = row.Steer.Seq
-		row.Steer.Notes = append(row.Steer.Notes, foreign)
-		raw, err := json.Marshal(row)
-		return coord.SandboxRunChange{Put: raw}, err
-	}); err != nil || !ok {
-		t.Fatalf("write the other job's item: %v %v", ok, err)
-	}
+	placeItem(t, runs, turn, "i-mine", launch)
+	// AN ITEM FOR ANOTHER JOB, on the record all the same.
+	placeItem(t, runs, turn, "i-other", "job-before")
 	mustServe(t, s, turn, hookServe(launch, "take-1", callNo(1), "i-other", "n-1", "i-mine"), "n-1", "i-mine")
 	polled, err := s.ServeNotes(ctx, turn, sandbox.NoteServe{IDs: []string{"i-other", "i-mine"}, Launch: launch,
 		Statuses: []string{sandbox.StatusLaunching, sandbox.StatusRunning}})

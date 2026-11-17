@@ -44,16 +44,20 @@ import (
 // beside the serves its harness cancelled or answered nothing
 // ([PendingStore.SettleHook]). The first serve of a note fixes its place among
 // the turn's reads ([RunNote.Place]), and every later read of it is recorded
-// there. And an ITEM FOR ONE JOB ([RunNote.For]) is filed only while that job
-// is the record's, handed over only to a reader inside it, and removed by the
-// write of the launch that opens the next.
+// there. And an ITEM FOR ONE JOB ([RunNote.For]) is handed over only to a
+// reader inside that job, and removed by the write of the launch that opens
+// the next.
 //
 // What a note SAYS it never
 // reads: a note is sealed by the engine under the fleet keyring before it is
 // filed ([RunNote.Sealed]), and opened by the engine before anything of it
 // reaches a model (internal/engine, runsteer.go, and ADR-0067). The store keeps
 // the seal as the bytes it was handed, as it keeps an answer's
-// ([RecordedAnswer.Sealed]).
+// ([RecordedAnswer.Sealed]). A FILING IS A PERSON'S NOTE ALONE
+// ([PendingStore.FileNote]): an item for one job is the store's to file, in
+// its own writes of the record, never a filer's, so a filing that names a job
+// is refused ([ErrNoteKind]) and no filer can hand one job words a person's
+// note would not reach it with.
 //
 // # Bounds are the caller's
 //
@@ -165,14 +169,19 @@ type RunNote struct {
 	// confirmed from.
 	Serves []HookServed `json:"serves,omitempty"`
 
-	// For is the one job the item is for, where its filer made it that job's
-	// alone: filed only while that job is the record's
-	// ([PendingStore.FileNote]), bounded apart from a person's notes
-	// ([MaxJobItems]), handed over by every write only to a reader inside that
-	// job ([RunNote.IsFor]), passed over by every reader of a person's notes
-	// (the ending, the carry, the review, a launch's brief, the capture's
-	// cursor), and removed by the write of the launch that opens the next job
-	// ([openNotes]). Empty for a person's note, an item of the whole turn.
+	// For is the one job the item is for, where the store made it that job's
+	// alone. FILED BY THE STORE ALONE, in its own writes of the record, never
+	// handed in by a filer: [PendingStore.FileNote] files a person's note
+	// and refuses one that names a job ([ErrNoteKind]), since an item tells a
+	// job something on the store's account rather than a person's. This
+	// build's store files none, and a record holds one only where a store's
+	// write put it there: wherever it does, it is counted apart from a
+	// person's notes ([MaxJobItems]), handed over by every write only to a
+	// reader inside that job ([RunNote.IsFor]), passed over by every reader
+	// of a person's notes (the ending, the carry, the review, a launch's
+	// brief, the capture's cursor), and removed by the write of the launch
+	// that opens the next job ([openNotes]). Empty for a person's note, an
+	// item of the whole turn.
 	For string `json:"for,omitempty"`
 
 	// LostTake is TRANSIENT, and set on a note a launch's brief carries
@@ -608,11 +617,9 @@ const (
 	// NoteFull — as many notes as may wait are already waiting.
 	NoteFull NoteFiled = "full"
 	// NoteSpent — the turn has taken as many notes as it takes.
-	// For an item for one job: that job holds [MaxJobItems] already.
 	NoteSpent NoteFiled = "spent"
 	// NoteClosed — the run's ending is decided, or the run has no record:
-	// nothing will read the note. Or the note is an item for a job the
-	// record no longer names ([RunNote.For]), which nothing will read either.
+	// nothing will read the note.
 	NoteClosed NoteFiled = "closed"
 )
 
@@ -623,9 +630,9 @@ type NoteFiling struct {
 	// MaxWaiting is how many notes may wait unread at once, and MaxNotes how
 	// many the turn takes in all — internal/agent/steer's MaxPendingNotes and
 	// MaxTurnNotes, which the caller passes so the two numbers have one home.
-	// Both required. A PERSON'S BOUNDS: they count a person's notes alone, and
-	// an item for one job ([RunNote.For]) is held to [MaxJobItems] apart from
-	// them.
+	// Both required. A PERSON'S BOUNDS: they count a person's notes alone,
+	// and an item for one job a record holds ([RunNote.For]) counts toward
+	// neither.
 	MaxWaiting, MaxNotes int
 }
 
@@ -783,7 +790,17 @@ func viewOf(update coord.SandboxRunUpdate) (NotesView, error) {
 // errNoteBounds is a filing that names no bounds.
 var errNoteBounds = errors.New("sandbox: a note is filed with the turn's bounds, and none were given")
 
-// FileNote files a note on a run's record. See the contract on [PendingStore].
+// ErrNoteKind is a filing of a note that is not a person's: one naming the job
+// it is for ([RunNote.For]), refused by [PendingStore.FileNote] before anything
+// is written. An item for one job is the store's to file, in its own writes of
+// the record, never a filer's: the engine files a person's note, which reaches
+// a job only as that person's words, and a filer that could name a job could
+// hand it words on the store's account instead.
+var ErrNoteKind = errors.New("sandbox: a filed note is a person's: an item for one job is the " +
+	"store's to file, never a filer's")
+
+// FileNote files a person's note on a run's record. See the contract on
+// [PendingStore].
 //
 // NO FENCE, as [CoordStore.AppendBridgeCall] takes none: a person's note is an
 // append to the turn, never an ownership decision, and refusing one because the
@@ -794,6 +811,11 @@ func (s *CoordStore) FileNote(ctx context.Context, turnID string, filing NoteFil
 	switch {
 	case filing.MaxWaiting <= 0 || filing.MaxNotes <= 0:
 		return "", PendingRun{}, errNoteBounds
+	case note.For != "":
+		// REFUSED, AND NO ANSWER OF A STATUS: whatever the record holds,
+		// nothing a filer hands in is filed as an item.
+		return "", PendingRun{}, fmt.Errorf("sandbox: note %s to run %s names job %s: %w",
+			note.ID, turnID, note.For, ErrNoteKind)
 	case note.ID == "" || len(note.Sealed) == 0:
 		return "", PendingRun{}, fmt.Errorf("sandbox: a note to run %s needs its id and its seal", turnID)
 	case len(note.Sealed) > MaxNoteSealedBytes:
@@ -819,31 +841,16 @@ func (s *CoordStore) FileNote(ctx context.Context, turnID string, filing NoteFil
 			filed = NoteDuplicate
 			return false
 		}
-		if note.For != "" {
-			// AN ITEM FOR ONE JOB, filed only while that job is the record's,
-			// in this decide: an item whose filer lost a race to the launch
-			// that opens the next job is never written behind it, since
-			// nothing in the job it names will read it.
-			switch {
-			case run.LaunchID != note.For:
-				filed = NoteClosed
-				return false
-			case jobItems(notes, note.For) >= MaxJobItems:
-				filed = NoteSpent
-				return false
-			}
-		} else {
-			// SPENT BEFORE FULL, as a turn's box answers: a turn that has
-			// taken all it takes will never take this note.
-			mine, waiting := personsNotes(notes, run.LaunchID)
-			switch {
-			case mine >= filing.MaxNotes:
-				filed = NoteSpent
-				return false
-			case waiting >= filing.MaxWaiting:
-				filed = NoteFull
-				return false
-			}
+		// SPENT BEFORE FULL, as a turn's box answers: a turn that has taken
+		// all it takes will never take this note.
+		mine, waiting := personsNotes(notes, run.LaunchID)
+		switch {
+		case mine >= filing.MaxNotes:
+			filed = NoteSpent
+			return false
+		case waiting >= filing.MaxWaiting:
+			filed = NoteFull
+			return false
 		}
 		filed = NoteAccepted
 		run.Steer.Seq++
@@ -864,18 +871,6 @@ func (s *CoordStore) FileNote(ctx context.Context, turnID string, filing NoteFil
 		return NoteClosed, PendingRun{}, nil
 	}
 	return filed, read, nil
-}
-
-// jobItems is how many of notes are items for job ([RunNote.For]): what
-// [MaxJobItems] bounds, whichever write files one.
-func jobItems(notes []RunNote, job string) int {
-	count := 0
-	for _, held := range notes {
-		if held.For != "" && held.For == job {
-			count++
-		}
-	}
-	return count
 }
 
 // personsNotes is how many of notes are a person's, the turn's own and no job's
@@ -1363,8 +1358,8 @@ func (s *CoordStore) WatchNotes(ctx context.Context, turnID string) (<-chan Note
 //   - every ITEM FOR ONE JOB ([RunNote.For]) is removed first: the job this
 //     write opens is new, so every item on the record was the job before it's
 //     alone, and nothing in this one will read it. An item for the job this
-//     write opens may be filed after the removal, held to [MaxJobItems] as a
-//     filing's is ([jobItems]); the steps below are a person's notes';
+//     write opens is the store's to file after it, held to [MaxJobItems];
+//     the steps below are a person's notes';
 //   - the brief's notes ([PendingRun.BriefNotes]) are recorded READ by the job:
 //     a note the record already holds, still waiting, is recorded read; one it
 //     holds read by the take the brief names as lost ([RunNote.LostTake]) is

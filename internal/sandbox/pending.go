@@ -3764,11 +3764,13 @@ type PendingStore interface {
 	// toward the waiting bound a note a hook's live serve handed to the
 	// record's job ([RunNote.LiveServe]) no longer waits, its hook's answer
 	// having handed it to the model at the step it answered; a note a poll
-	// served still waits until its harness confirms it. AN ITEM FOR ONE JOB
-	// ([RunNote.For]) is filed only while that job is the record's, and is
-	// [NoteClosed] otherwise, since nothing in the job it names will read it;
-	// it is held to [MaxJobItems] items for that job, [NoteSpent] past it, and
-	// counts toward no bound of a person's.
+	// served still waits until its harness confirms it. An item for one job
+	// the record holds ([RunNote.For]) counts toward neither.
+	//
+	// A PERSON'S NOTE ALONE: a filing that names a job ([RunNote.For]) is
+	// refused with [ErrNoteKind] before anything is read or written, whatever
+	// the record holds. An item for one job is the store's to file, in its
+	// own writes of the record, never a filer's.
 	//
 	// NO FENCE, as [PendingStore.AppendBridgeCall] takes none: a note is an
 	// append to the turn, never an ownership decision. The note must carry
