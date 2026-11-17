@@ -206,7 +206,7 @@ const (
 	// bytes a push (internal/gitlet/compact's steady arm at the floor),
 	// 0.5 MB, the publications of their layers, 0.18–3.51 MB, its git
 	// clients' barriers at BarrierRecordBytes, 2.4–5.0 MB, and its changes'
-	// records, 14.6–86.5 MB (each MEASURED as its writer forms it,
+	// records, 14.7–86.6 MB (each MEASURED as its writer forms it,
 	// TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt), against
 	// the tracker's measured 9.9 MB of records and 2.2 MB of barriers, every
 	// record in its signed frame. Two thirds is below that day: a company
@@ -590,6 +590,11 @@ const (
 	// the longest an answer to a finding carries, kept on the finding's own
 	// narrow row for the same reason.
 	MaxReviewNoteBytes = 1 << 10
+
+	// MaxOwnedPathsBytes is the most a path owner's ask's globs weigh as JSON (code_reviewers.owned_paths),
+	// the globs past it counted: a note's bound, because the row holds one or the other and never both,
+	// so it stays the width replicated 0100 sized it to.
+	MaxOwnedPathsBytes = MaxReviewNoteBytes
 
 	// MaxCommentBytes is the longest comment on a change: as long as the
 	// change's own description (MaxChangeBodyBytes) and a comment on a task

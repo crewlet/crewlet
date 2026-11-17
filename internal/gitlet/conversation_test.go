@@ -180,6 +180,8 @@ func requireConversationRefused(t *testing.T, n *node, before uint64, res gitlet
 // reviewerRow is one ask of a reviewer as n's rows hold it.
 type reviewerRow struct {
 	kind, reason, state, by, byKind, note string
+	ownedPaths                            string
+	ownedOmitted                          int
 }
 
 // reviewer is reviewer's ask on change as n's rows hold it, and false for none.
@@ -188,8 +190,9 @@ func (n *node) reviewer(change, reviewer string) (reviewerRow, bool) {
 	var r reviewerRow
 	err := n.db.Reader().Read(n.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(n.t.Context(), `SELECT reviewer_kind, reason, state, requested_by,
-			requested_by_kind, note FROM code_reviewers WHERE change_id = ? AND reviewer = ?`, change, reviewer).
-			Scan(&r.kind, &r.reason, &r.state, &r.by, &r.byKind, &r.note)
+			requested_by_kind, note, owned_paths, owned_paths_omitted FROM code_reviewers
+			WHERE change_id = ? AND reviewer = ?`, change, reviewer).
+			Scan(&r.kind, &r.reason, &r.state, &r.by, &r.byKind, &r.note, &r.ownedPaths, &r.ownedOmitted)
 	})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):

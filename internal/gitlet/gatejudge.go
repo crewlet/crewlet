@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/gitref"
@@ -70,6 +71,8 @@ import (
 //     digests its owners to another digest than the match recorded is owners
 //     the home has not matched yet, and leaves the term COMPUTING until its
 //     next revise — which the change is due at once ([ReadChangesDue]).
+//     Its sentence names each touched owner with the first glob of its the
+//     revision touched, which the facts keep beside it, and at most eight owners.
 //   - CHECK, where it requires checks: every required check passed — or
 //     skipped, its paths untouched — on the head commit, by its latest
 //     attempt whatever ran it.
@@ -375,19 +378,30 @@ type QueuedFacts struct {
 // CURRENT target at all; how many paths the revision touches — never the
 // paths, up to MaxTouchedBytes a change, which no judgment reads — or that it
 // touches all, and their classes; the path owners its home matched them to,
-// with the digest of the owner rows it matched against; and which of its
-// target's human paths its home found holding it or waived, with the digest
-// of the rules' human paths it matched against ([Revise]).
+// each with the first of its globs they touch and how many more
+// ([TouchedOwner]), never the list, with the digest of the owner rows it
+// matched against; and which of its target's human paths its home found
+// holding it or waived, with the digest of the rules' human paths it matched
+// against ([Revise]).
 type HeadFacts struct {
 	Recorded         bool
 	TouchedCount     int
 	TouchesAll       bool
 	Classes          RevisionClasses
-	RequestedOwners  []Owner
+	RequestedOwners  []TouchedOwner
 	SkippedOwners    []SkippedOwner
 	OwnersDigest     string
 	HumanPaths       HumanPathMatch
 	HumanPathsDigest string
+}
+
+// TouchedOwner is a path owner a revision touches as its facts keep it (code_revision_facts.owners)
+// and its merge gate reads it: the first of its globs the touched paths matched, and how many more;
+// neither where the facts name none (a revision touching all, or a home before [OwnedPathsVersion]).
+type TouchedOwner struct {
+	Owner
+	FirstPath string `json:"first_path,omitempty"`
+	MorePaths int    `json:"more_paths,omitempty"`
 }
 
 // GateCheck is the latest attempt of one check on a change's head commit, as
@@ -1014,7 +1028,7 @@ func (g gateJudge) ownersApproval() Precondition {
 	for _, a := range g.tally.counted() {
 		if a.Kind == PartyPerson || (a.Kind == PartyAgent && slices.Contains(common, a.Handle)) {
 			p.State = PreconditionMet
-			p.Detail = fmt.Sprintf("%s's approval counts for every path owner revision %d touches (%s)", a.named(),
+			p.Detail = fmt.Sprintf("%s's approval counts for every path owner revision %d touches: %s", a.named(),
 				n, ownersNamed(h.RequestedOwners))
 			return p
 		}
@@ -1047,13 +1061,13 @@ func (g gateJudge) ownersApproval() Precondition {
 // unit's lead chain — the first owner's order kept, nearest first. A person is
 // eligible for every owner and is never listed here; a nil chart makes no seat
 // eligible.
-func (g gateJudge) commonEligible(owners []Owner) []string {
+func (g gateJudge) commonEligible(owners []TouchedOwner) []string {
 	if g.roster == nil {
 		return nil
 	}
 	var common []string
 	for i, o := range owners {
-		eligible := g.eligibleFor(o)
+		eligible := g.eligibleFor(o.Owner)
 		if i == 0 {
 			common = eligible
 			continue
@@ -1257,13 +1271,27 @@ func maintainedBy(repo RepoRef, r Roster) string {
 	return "a principal that maintains the repository"
 }
 
-// ownersNamed is path owners in a sentence: each by its kind and reference.
-func ownersNamed(owners []Owner) string {
+// maxOwnersNamed is the most path owners an owners_approval sentence names, each with its first glob:
+// a reader acts on a handful, and a listed change's readiness stays a few kilobytes (MaxReadinessBlockers'
+// reason).
+const maxOwnersNamed = 8
+
+// ownersNamed is path owners in a sentence: each by its kind and reference and, where its facts
+// keep one, its first glob that matched and how many more; at most maxOwnersNamed of them.
+func ownersNamed(owners []TouchedOwner) string {
 	said := make([]words.Said, len(owners))
 	for i, o := range owners {
-		said[i] = words.Said(string(o.Kind) + " " + o.Ref)
+		named := string(o.Kind) + " " + o.Ref
+		switch {
+		case o.FirstPath == "":
+		case o.MorePaths > 0:
+			named += fmt.Sprintf(" (%q and %d more)", o.FirstPath, o.MorePaths)
+		default:
+			named += " (" + strconv.Quote(o.FirstPath) + ")"
+		}
+		said[i] = words.Said(named)
 	}
-	return words.And(said)
+	return words.AndMore(said, maxOwnersNamed)
 }
 
 // appendOnce is list with v appended where it holds no v yet.
