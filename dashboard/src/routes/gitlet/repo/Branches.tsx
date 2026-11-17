@@ -245,7 +245,7 @@ function DefaultBox({
 }
 
 /** The default branch read in detail: found page by page, since a find matches any part of a name. */
-function useDefaultBranch(repo: CodeRepoDetail) {
+export function useDefaultBranch(repo: CodeRepoDetail) {
   const params = useMemo(
     () => ({
       name: repo.name,
@@ -618,9 +618,9 @@ function CopyName({ name }: { name: string }) {
   );
 }
 
-/** A branch's rules in words: "Protected by release/*: no force-push, no delete, pushes through changes only". */
-function protectionTitle(p: CodeRefProtection): string {
-  const clauses = [
+/** A branch's rules as clauses: "no force-push, no delete, pushes through changes only". */
+export function protectionWords(p: CodeRefProtection): string {
+  return [
     p.allow_force ? "force-push allowed" : "no force-push",
     p.allow_delete ? "delete allowed" : "no delete",
     p.direct_push === "none"
@@ -628,11 +628,15 @@ function protectionTitle(p: CodeRefProtection): string {
       : p.direct_push === "persons"
         ? "persons push directly"
         : `direct pushes by ${p.direct_push}`,
-  ];
+  ].join(", ");
+}
+
+/** A branch's rules in words: "Protected by release/*: no force-push, no delete, pushes through changes only". */
+function protectionTitle(p: CodeRefProtection): string {
   const names = p.patterns.map((pattern) =>
     pattern.startsWith(HEADS) ? pattern.slice(HEADS.length) : pattern,
   );
-  return `Protected by ${names.join(" and ")}: ${clauses.join(", ")}`;
+  return `Protected by ${names.join(" and ")}: ${protectionWords(p)}`;
 }
 
 /** One branch: its name and marks, who moved it and when, its change, and its controls. */
