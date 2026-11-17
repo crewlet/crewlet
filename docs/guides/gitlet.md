@@ -134,7 +134,10 @@ makes its default branch, so it needs no clone to start; beside it, the
 address to clone it from and the two commands that push a repository you
 already have into it. Its **Code** tab lists each entry with the commit that
 last changed it; press `t`, or **Go to file**, to find a file by name. Its
-README and its LICENSE are tabs under the files. From then on the
+README and its LICENSE are tabs under the files. Beside the files, the
+repository's rail says who owns it and how it is read, lists its open changes,
+who pushed to it over the last 30 days and how many pushes landed each day,
+where it is mirrored and its newest tag. From then on the
 repository's page writes it from the browser, each write one commit or one
 ref moved, as you:
 
