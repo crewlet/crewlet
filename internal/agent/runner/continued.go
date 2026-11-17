@@ -1904,23 +1904,16 @@ func (r *Runner) toldNotes(reads []steer.Read, unsure bool, fresh []steer.Note) 
 }
 
 // inReadOrder is reads together with every note of fresh whose place the run's
-// record holds already ([steer.Briefing.Orders]), in the order of the record's
-// places: one it holds read, a take having recorded it and lost its answer and
-// the take's settle having handed it to this brief, and one a hook's serve
-// placed, which the launch's write reads at that place. Then the rest of fresh,
-// which the launch's write reads after every one of them, in their own order.
+// record holds already ([steer.Briefing.Orders]: a lost take's, or one a hook's
+// serve placed), in the order of the record's places, then the rest of fresh,
+// the notes the launch's write reads after every one of them, in their own
+// order.
 //
-// BY THE RECORD'S PLACES, never by when the runner came to hold a note: a read
-// this segment made reaches the runner before the record has numbered it (Order
-// zero), and the source that recorded it says where it is ([Runner.placed]);
-// and a lost take's note is handed over only once its settle is answered — at a
-// later round, after a later take's notes, or at a brief — while the record
-// numbered it where the take was made; and a note a hook's serve placed waits
-// at that place while a later note, correcting it, is read at a later one. Told
-// in the order the runner came to hold them, a person's later note, correcting
-// it, was told ahead of the note it corrects. A read the source has not placed
-// (the first segment's box keeps no record) keeps its turn, after every placed
-// one.
+// BY THE RECORD'S PLACES, never by when the runner came to hold a note, which
+// told a person's later note, correcting it, ahead of the note it corrects. A
+// read the source has not placed (the first segment's box keeps no record)
+// keeps its turn, after every placed one. Why the two orders differ is the
+// package doc's "The order a continuation tells a person's notes in".
 func (r *Runner) inReadOrder(reads []steer.Read, fresh []steer.Note) ([]steer.Read, []steer.Note) {
 	r.mu.Lock()
 	placed := r.placed
