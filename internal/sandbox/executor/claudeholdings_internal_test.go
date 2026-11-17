@@ -3819,6 +3819,34 @@ func TestEveryKeyTheReadingDecodesIsExactAndLastWins(t *testing.T) {
 	}
 }
 
+// EVERY THREAD OF A SESSION IS READ THROUGH ONE READER ([holdingsWalk.reader]):
+// the walk reads its main thread and each subagent's through the one line
+// reader it made for the first, reset for each, so a session of a thousand
+// subagents costs the walk one reader's buffers, never one a member; and each
+// thread is still read whole, the reading standing.
+//
+// Mutation: make a reader for each member, and the walk reads its two threads
+// through two.
+func TestEveryThreadOfASessionIsReadThroughOneReader(t *testing.T) {
+	t.Parallel()
+	w := newHoldingsWalk(ctSession, hsAsk(hsLogged(hsSubCall, hsSubOut)), hsBounds())
+	var readers []*threadReader
+	if err := eachMember(bytes.NewReader(tarOfMembers(t, hsResumed(t).members())), hsBounds(),
+		func(h *tar.Header, member io.Reader) error {
+			err := w.member(t.Context(), h, member)
+			if w.lines != nil && !slices.Contains(readers, w.lines) {
+				readers = append(readers, w.lines)
+			}
+			return err
+		}); err != nil {
+		t.Fatalf("reading the session: %v", err)
+	}
+	if !w.read[hsMain] || !w.read[hsAgentThread] || len(readers) != 1 {
+		t.Errorf("the walk read its main thread %t and its subagent's %t through %d readers; want both read "+
+			"through one", w.read[hsMain], w.read[hsAgentThread], len(readers))
+	}
+}
+
 // NO ID THE CALL-ID RULE REFUSES IS KEPT: an id is the box's word, as long as a
 // line, and nothing can link, answer or notice a call under one, so a leg filed
 // under it would hold the box's bytes until the walk ends, a hundred mebibytes
