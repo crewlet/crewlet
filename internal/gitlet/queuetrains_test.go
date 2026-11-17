@@ -418,3 +418,34 @@ func TestAnEjectionCarriesWhatAReQueueSends(t *testing.T) {
 		}
 	}
 }
+
+// BenchmarkTheQueueReadOfEveryRepository is the first page of a queue read of every repository
+// asking for trains, over 50 repositories holding 200 live entries and 100 ejections of the day.
+func BenchmarkTheQueueReadOfEveryRepository(b *testing.B) {
+	gitlet.Quiet(b)
+	n := newNode(b)
+	for r := range 50 {
+		repo := n.ensure(fmt.Sprintf("repo-%02d", r), suiteSettings(), t1).RepoID
+		for i := range 4 {
+			n.insertEntry(repo, mainRef, int64(i+1), gitlet.QueueWaiting, time.Time{})
+		}
+		for i := range 2 {
+			n.insertEntry(repo, mainRef, int64(100+i), gitlet.QueueEjected,
+				harnessAt.Add(-time.Duration(r*2+i+1)*time.Minute))
+		}
+	}
+	for _, trains := range []bool{false, true} {
+		b.Run(fmt.Sprintf("trains=%t", trains), func(b *testing.B) {
+			q := gitlet.ReadQuery{Kind: gitlet.ReadQueue, Asker: ada, Trains: trains, Limit: 200, Fresh: stale}
+			for b.Loop() {
+				got, err := n.reader.Read(b.Context(), q)
+				if err != nil || len(got.Queue) != 200 || trains != (len(got.Ejected) == gitlet.MaxEjectionsShown &&
+					got.EjectedTotal != nil && got.EjectedTotal.Total == 100) {
+					b.Fatalf("the first page = %d entries, %d ejections, total %+v, %v; want 200, and %d and 100 "+
+						"where it asks for trains", len(got.Queue), len(got.Ejected), got.EjectedTotal, err,
+						gitlet.MaxEjectionsShown)
+				}
+			}
+		})
+	}
+}
