@@ -114,7 +114,7 @@ var ReproducibleTables = []string{
 
 	// The files a person marked viewed on a change, by keyed digests: written by the viewed records on
 	// their own subject alone (viewed.go). Not a repository's, so no purge removes them; its purge
-	// deletes the key, after which they name no file.
+	// deletes the key, after which they name no file once the log is trimmed past the key's record.
 	"code_viewed_files",
 
 	// The activation fence: the configuration activation every

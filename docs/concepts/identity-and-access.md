@@ -3123,7 +3123,10 @@ take away from what the person holds, never add to it, and every row states
 how far it lets Ask Crewlet reach (ADR-0052):
 
 - **read**: a read grant takes the verb, so a turn reads what the person may
-  read with nothing for them to approve;
+  read with nothing for them to approve, but for `code_change`'s `viewed_key`,
+  which it is never answered: it has no use for the key, and its conversation
+  would keep it past the repository's purge
+  ([Viewed files](gitlet.md#viewed-files));
 - **approve**: the verb runs only as the one request the person approved,
   carried by a grant bound to that request;
 - **never**: no grant takes it, whoever approved what.

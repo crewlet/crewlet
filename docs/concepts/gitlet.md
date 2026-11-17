@@ -2405,16 +2405,20 @@ none.
   repository the first time any of its files is marked: one of the path, and
   one of the path with the object id and the mode. A screen digests the files
   it shows under the same key and compares; the read answers the key to the
-  person beside their marks, and never to the Dashboard Assistant. A
-  repository's purge deletes its key, after which its changes' marks, which
-  are each person's and no purge removes, name no file to anybody
+  person beside their marks, and never to Ask Crewlet. A repository's purge
+  deletes its key, after which its changes' marks, which are each person's and
+  no purge removes, name no file to anybody once the code log is trimmed past
+  the key's record, which it keeps as it keeps the repository's other records
   ([Deletion and purge](#deletion-and-purge)).
 - **Only a draft or open change takes marks.** A closed or merged change reads
   none and refuses new ones, and the person's next mark forgets them; a change
   reopened before then shows its old marks again, each current only where its
   file is unchanged. A purged change's marks are left to the cap.
 - **A gesture names at most 32 files, and a person holds at most 2 000 marks**,
-  the oldest dropped past them. Marking a file again makes its mark the newest.
+  the oldest dropped past them. Marking a file again at a new object id or
+  mode makes its mark the newest; marking it again as it stands changes
+  nothing, unless the same gesture changes another mark, which makes both the
+  newest.
 - **A mark is decided by a data node holding nothing of the change's
   repository back**, so a change opened or reopened a moment ago is never
   refused as ended by a node behind it; the mark waits for the position its
@@ -3473,7 +3477,7 @@ with.
 A person's viewed marks on a purged repository's changes are the person's, not
 the repository's: no purge removes them, and they hold each file's path, object
 id and mode only as digests under the key the purge deleted, so they name no
-file once it has; they are never answered once the change is gone, and leave
+file once the code log is trimmed past the key's record; they are never answered once the change is gone, and leave
 with the person's oldest marks past their cap ([Viewed files](#viewed-files)).
 Nothing sweeps the marks of a person who marks nothing more.
 

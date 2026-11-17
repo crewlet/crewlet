@@ -10280,8 +10280,8 @@ the path, a NUL byte, the object id, a NUL byte and the mode the mark was made
 at (both empty for a file the change deletes), each in lowercase hex. A mark is
 current while the revision shown gives the file a `file_digest` equal to the
 mark's. A person's own alone: a seat or a credential bound to no seat is
-answered none, and so is a change that is closed or merged; a read the
-Dashboard Assistant makes for a person is answered the marks without the key.
+answered none, and so is a change that is closed or merged; a read
+Ask Crewlet makes for a person is answered the marks without the key.
 `revision`, `file` or `context` beside it is `400 bad_params`. An older data
 node refuses it and another answers.
 

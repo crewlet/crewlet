@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -155,7 +156,8 @@ func (t *codeMarkViewed) unknown(actor Actor, ref, opID string) tools.Result {
 
 // viewedGestureOf is a call's `viewed` and `unviewed`, or why they are no gesture, in the model's
 // words: none named, more than gitlet.MaxViewedPerMark, a file that is no object or names no path, or
-// a file naming an object id without a mode or the reverse. Gitlet checks the rest.
+// a file naming an object id without a mode or the reverse. Paths are kept exactly as sent, in both
+// lists, so a mark and its take-back name the same file. Gitlet checks the rest.
 func viewedGestureOf(tool string, args map[string]any) ([]gitlet.ViewedFile, []string, string) {
 	var viewed []gitlet.ViewedFile
 	if raw, present := args["viewed"]; present && raw != nil {
@@ -182,7 +184,13 @@ func viewedGestureOf(tool string, args map[string]any) ([]gitlet.ViewedFile, []s
 			viewed = append(viewed, file)
 		}
 	}
-	unviewed := argStrings(args, "unviewed")
+	unviewed, ok := argPaths(args, "unviewed")
+	if !ok {
+		return nil, nil, fmt.Sprintf("%s: `unviewed` is a list of paths.", tool)
+	}
+	if i := slices.Index(unviewed, ""); i >= 0 {
+		return nil, nil, fmt.Sprintf("%s: `unviewed` item %d is no path.", tool, i)
+	}
 	switch n := len(viewed) + len(unviewed); {
 	case n == 0:
 		return nil, nil, fmt.Sprintf("%s marked nothing: name the files in `viewed` or `unviewed`.", tool)

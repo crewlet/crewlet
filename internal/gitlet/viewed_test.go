@@ -387,10 +387,10 @@ func TestAViewedMarkIsDecidedWhereTheRepositoryIsCurrent(t *testing.T) {
 // row as it was, so a screen whose revision gives the file another id or mode digests another file
 // digest and reads it unviewed; marking it again at a new mode or id moves the one row; a deleted
 // file is marked with neither and reads back as the path with both empty; and unviewed takes a mark
-// back.
+// back. A re-mark at a new id or mode moves the row to its record's position and broker instant.
 //
 // Mutations: key the row by the file digest too (two rows, red); leave file_digest out of the
-// upsert's SET (the digest stays, red).
+// upsert's SET (the digest stays, red); leave position or at out of it (red).
 func TestAMarkIsCurrentForTheIDAndModeItWasMadeAt(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -416,11 +416,24 @@ func TestAMarkIsCurrentForTheIDAndModeItWasMadeAt(t *testing.T) {
 		t.Fatalf("a push moved a.go's mark to %s", got)
 	}
 	for _, step := range []gitlet.ViewedFile{file("a.go", blobX, "100755"), file("a.go", blobY, "100755")} {
-		markFiles(t, m, viewing(ada, "founder", web, []gitlet.ViewedFile{step}))
+		res := markFiles(t, m, viewing(ada, "founder", web, []gitlet.ViewedFile{step}))
 		marks := held()
 		if len(marks) != 2 || marks[key.PathDigest("a.go")] != key.FileDigest("a.go", step.BlobOID, step.Mode) {
 			t.Fatalf("after marking a.go at %s %s founder holds %v, want its one row at that state", step.BlobOID,
 				step.Mode, marks)
+		}
+		if n.count(`SELECT COUNT(*) FROM code_viewed_files WHERE handle = 'founder' AND path_digest = ?
+			AND position = ?`, key.PathDigest("a.go"), res.Position.Packed()) != 1 {
+			t.Errorf("a.go marked again at %s %s keeps an older position, want %s", step.BlobOID, step.Mode,
+				res.Position)
+		}
+		_, stored := bodyAt(t, n, res.Position)
+		answer, err := readViewed(t, n, ada, "web", web.number, 0, "")
+		for _, row := range answer.Viewed {
+			if row.PathDigest == key.PathDigest("a.go") && (err != nil || !row.At.Equal(stored.Truncate(time.Microsecond))) {
+				t.Errorf("a.go marked again reads marked at %s (%v), want its record's broker instant %s", row.At,
+					err, stored)
+			}
 		}
 	}
 	markFiles(t, m, viewing(ada, "founder", web, []gitlet.ViewedFile{{Path: "gone.go"}}, "b.go"))
@@ -586,9 +599,11 @@ func TestAViewedMarkReplaysIdentically(t *testing.T) {
 
 // THE PERSON'S OLDEST MARKS GO PAST THE CAP: with bea's marks oldest of all and founder filled to
 // MaxViewedFiles over two changes, three more files of founder's drop founder's three oldest by
-// position, then change, then path digest, keep the newest, and leave bea's whole.
+// position, then change, then path digest, keep the newest, and leave bea's whole. The oldest file,
+// marked again at a new mode first, is newer for it and stays.
 //
-// Mutations: order by position descending (the newest go, red); count across persons (bea's go, red).
+// Mutations: order by position descending (the newest go, red); count across persons (bea's go, red);
+// leave position out of the re-mark's upsert (the re-marked file goes, red).
 func TestThePersonsOldestMarksGoPastTheCap(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -597,6 +612,7 @@ func TestThePersonsOldestMarksGoPastTheCap(t *testing.T) {
 	markFiles(t, m, viewing(bea, "cto", web[0], []gitlet.ViewedFile{file("bea.go", blobX, "100644")}))
 	key := viewedKeyOf(t, n, web[0].repo)
 	var firstBatch []string
+	pathOf := map[string]string{}
 	for i := 0; i < gitlet.MaxViewedFiles; i += gitlet.MaxViewedPerMark {
 		change := web[i/(gitlet.MaxViewedFiles/2+1)]
 		var files []gitlet.ViewedFile
@@ -605,11 +621,14 @@ func TestThePersonsOldestMarksGoPastTheCap(t *testing.T) {
 			files = append(files, file(path, blobX, "100644"))
 			if i == 0 {
 				firstBatch = append(firstBatch, key.PathDigest(path))
+				pathOf[key.PathDigest(path)] = path
 			}
 		}
 		markFiles(t, m, viewing(ada, "founder", change, files))
 	}
 	slices.Sort(firstBatch)
+	markFiles(t, m, viewing(ada, "founder", web[0], []gitlet.ViewedFile{file(pathOf[firstBatch[0]], blobX,
+		"100755")}))
 	newest := []gitlet.ViewedFile{file("n/1.go", blobX, "100644"), file("n/2.go", blobX, "100644"),
 		file("n/3.go", blobX, "100644")}
 	markFiles(t, m, viewing(ada, "founder", web[1], newest))
@@ -618,8 +637,9 @@ func TestThePersonsOldestMarksGoPastTheCap(t *testing.T) {
 	}
 	for i, d := range firstBatch {
 		gone := n.count(`SELECT COUNT(*) FROM code_viewed_files WHERE handle = 'founder' AND path_digest = ?`, d) == 0
-		if gone != (i < 3) {
-			t.Errorf("founder's %d-th oldest mark is gone = %v, want only the three oldest gone", i, gone)
+		if gone != (i >= 1 && i <= 3) {
+			t.Errorf("founder's %d-th oldest mark is gone = %v, want only the three oldest but the re-marked "+
+				"first gone", i, gone)
 		}
 	}
 	for _, f := range newest {
@@ -805,12 +825,14 @@ func (p refusingPublisher) Publish(_ context.Context, req statelog.Request) (sta
 	return statelog.Result{}, errors.New("not published")
 }
 
-// A VIEWED READ ANSWERS THE ASKER'S OWN: ada reads founder's marks with web's key; bea, a seat and a
-// credential bound to no seat read none and no key; pages of two in digest order resume exactly by
-// a digest cursor, each carrying the key; a cursor that is no digest is ErrBadCursor; and viewed
-// beside a part, detail_only, brief, finding_ids or finding_paths is ErrInvalid.
+// A VIEWED READ ANSWERS THE ASKER'S OWN: ada reads founder's marks with web's key; bea reads her own;
+// the seat cto, whose handle bea's marks are kept under, and a credential bound to no seat read none
+// and no key; pages of two in digest order resume exactly by a digest cursor, each carrying the key;
+// a cursor that is no digest is ErrBadCursor; and viewed beside a part, detail_only, brief,
+// finding_ids or finding_paths is ErrInvalid.
 //
-// Mutation: read by the change alone, and bea reads founder's, red.
+// Mutations: read by the change alone, and bea reads founder's, red; answer any party its handle's
+// marks, and the seat cto reads bea's, red.
 func TestAViewedReadAnswersTheAskersOwn(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -821,7 +843,7 @@ func TestAViewedReadAnswersTheAskersOwn(t *testing.T) {
 		file("e.go", blobX, "100644")}))
 	markFiles(t, m, viewing(bea, "cto", web, []gitlet.ViewedFile{file("z.go", blobX, "100644")}))
 	key := viewedKeyOf(t, n, web.repo)
-	for name, who := range map[string]gitlet.Principal{"bea": bea, "a seat": dev, "unbound": unbound} {
+	for name, who := range map[string]gitlet.Principal{"bea": bea, "the seat cto": cto, "unbound": unbound} {
 		answer, err := readViewed(t, n, who, "web", web.number, 0, "")
 		switch {
 		case err != nil:

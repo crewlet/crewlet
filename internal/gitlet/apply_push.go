@@ -1479,6 +1479,7 @@ const (
 		VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?)
 		ON CONFLICT (repo_id) DO NOTHING`
 	// purgeViewedKeySQL deletes the key the repository's viewed marks were digested under, after
-	// which those marks, which are each person's and stay, name no file.
+	// which those marks, which are each person's and stay, name no file once the log is trimmed
+	// past the key's record.
 	purgeViewedKeySQL = `DELETE FROM code_viewed_keys WHERE repo_id = ?`
 )

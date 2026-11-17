@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -187,50 +188,72 @@ func TestEveryRefusalTheActRouteAnswersIsWordedForAPerson(t *testing.T) {
 	}
 
 	// A PERSON'S VIEWED FILES, through code_mark_viewed: each refusal Gitlet's writer answers, each
-	// error before an answer, and the tool's own refusals before any write.
+	// error before an answer, and the tool's own refusals before any write. Each writer case reaches the
+	// writer and answers its own status and word, so an internal fault cannot pass as a refusal.
+	//
+	// Mutation: answer the change row without its repository's resolution, red.
 	viewed := `{"args":{"repo":"web","change":"42","viewed":[{"path":"a.go","blob_oid":"` +
 		strings.Repeat("a", 40) + `","mode":"100644"}]}}`
-	marks := map[string]func() (gitlet.MarkResult, error){
-		"not_permitted": refusedMark(gitlet.MarkNotPermitted, "jane-founder's viewed files are marked only by the "+
-			"person who holds that seat, as themselves"),
-		"ended": refusedMark(gitlet.MarkEnded, "web!42 is closed, and a change keeps viewed files only while it "+
-			"is a draft or open"),
-		"invalid": refusedMark(gitlet.MarkInvalid, "repository web holds no change "+
-			"0190f3c4-0000-7000-8000-0000000000c1"),
-		"busy": refusedMark(gitlet.MarkBusy, "jane-founder's viewed files kept changing for every round the mark "+
-			"may take; the same mark again is the same write"),
-		"busy on the repository": refusedMark(gitlet.MarkBusy, "repository web kept changing for every round its "+
-			"first viewed mark may take; the same mark again is the same write"),
-		"unavailable": refusedMark(gitlet.MarkUnavailable, "Gitlet could not record the mark just now, and "+
-			"nothing was written"),
-		"an unknown outcome": func() (gitlet.MarkResult, error) {
+	marks := map[string]struct {
+		mark    func() (gitlet.MarkResult, error)
+		status  int
+		refusal gitlet.MarkRefusal
+	}{
+		"not_permitted": {refusedMark(gitlet.MarkNotPermitted, "jane-founder's viewed files are marked only by "+
+			"the person who holds that seat, as themselves"), http.StatusForbidden, gitlet.MarkNotPermitted},
+		"ended": {refusedMark(gitlet.MarkEnded, "web!42 is closed, and a change keeps viewed files only while "+
+			"it is a draft or open"), http.StatusConflict, gitlet.MarkEnded},
+		"invalid": {refusedMark(gitlet.MarkInvalid, "repository web holds no change "+
+			"0190f3c4-0000-7000-8000-0000000000c1"), http.StatusUnprocessableEntity, gitlet.MarkInvalid},
+		"busy": {refusedMark(gitlet.MarkBusy, "jane-founder's viewed files kept changing for every round the "+
+			"mark may take; the same mark again is the same write"), http.StatusServiceUnavailable,
+			gitlet.MarkBusy},
+		"busy on the repository": {refusedMark(gitlet.MarkBusy, "repository web kept changing for every round "+
+			"its first viewed mark may take; the same mark again is the same write"),
+			http.StatusServiceUnavailable, gitlet.MarkBusy},
+		"unavailable": {refusedMark(gitlet.MarkUnavailable, "Gitlet could not record the mark just now, and "+
+			"nothing was written"), http.StatusServiceUnavailable, gitlet.MarkUnavailable},
+		"an unknown outcome": {func() (gitlet.MarkResult, error) {
 			return gitlet.MarkResult{}, fmt.Errorf("%w (asked of 10.0.0.7)", estate.ErrOutcomeUnknown)
-		},
-		"a fleet that serves none": func() (gitlet.MarkResult, error) {
+		}, 0, ""},
+		"a fleet that serves none": {func() (gitlet.MarkResult, error) {
 			return gitlet.MarkResult{}, &estate.ErrUnserved{Detail: "data-a: no code half"}
-		},
+		}, http.StatusServiceUnavailable, ""},
 	}
-	for name, mark := range marks {
-		status, answer := act(t, viewedSurface(t, &viewedHost{mark: mark}), "founder",
+	for name, tc := range marks {
+		host := &viewedHost{mark: tc.mark}
+		status, answer := act(t, viewedSurface(t, host), "founder",
 			builtin.CodeMarkViewedTool, "application/json", viewed, newKey())
-		if status < 400 && answer["outcome"] != string(statelog.OutcomeUnknown) {
-			t.Fatalf("%s answered %d %v", name, status, answer)
+		unknown := answer["outcome"] == string(statelog.OutcomeUnknown)
+		switch {
+		case host.marked.Load() != 1:
+			t.Errorf("code_mark_viewed: %s reached the writer %d times, want once", name, host.marked.Load())
+		case tc.status == 0 && !unknown:
+			t.Errorf("code_mark_viewed: %s answered %d %v, want an unknown outcome", name, status, answer)
+		case tc.status != 0 && (status != tc.status || answer["refusal"] != string(tc.refusal) && tc.refusal != ""):
+			t.Errorf("code_mark_viewed: %s answered %d %v, want %d with refusal %q", name, status, answer,
+				tc.status, tc.refusal)
+		case answer["error"] == string(httpjson.CodeInternalError):
+			t.Errorf("code_mark_viewed: %s answered an internal fault %v", name, answer)
 		}
 		wordedForAPerson(t, "code_mark_viewed: "+name, answer)
 	}
 	for name, tc := range map[string]struct {
 		body   string
 		closed bool
+		status int
 	}{
-		"no file":         {`{"args":{"repo":"web","change":"42"}}`, false},
-		"33 files":        {`{"args":{"repo":"web","change":"42","unviewed":[` + manyPaths(33) + `]}}`, false},
-		"a closed change": {viewed, true},
+		"no file": {`{"args":{"repo":"web","change":"42"}}`, false, http.StatusUnprocessableEntity},
+		"33 files": {`{"args":{"repo":"web","change":"42","unviewed":[` + manyPaths(33) + `]}}`, false,
+			http.StatusUnprocessableEntity},
+		"a closed change": {viewed, true, http.StatusConflict},
 	} {
 		host := &viewedHost{closed: tc.closed, mark: refusedMark(gitlet.MarkInvalid, "unreached")}
 		status, answer := act(t, viewedSurface(t, host), "founder", builtin.CodeMarkViewedTool,
 			"application/json", tc.body, newKey())
-		if status < 400 {
-			t.Fatalf("code_mark_viewed: %s answered %d %v", name, status, answer)
+		if status != tc.status || host.marked.Load() != 0 || tc.closed && answer["refusal"] != string(gitlet.MarkEnded) {
+			t.Errorf("code_mark_viewed: %s answered %d %v having marked %d times, want %d before any write",
+				name, status, answer, host.marked.Load(), tc.status)
 		}
 		wordedForAPerson(t, "code_mark_viewed: "+name, answer)
 	}
@@ -458,6 +481,7 @@ type viewedHost struct {
 	writingHost
 	closed bool
 	mark   func() (gitlet.MarkResult, error)
+	marked atomic.Int32
 }
 
 func (h *viewedHost) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
@@ -468,10 +492,12 @@ func (h *viewedHost) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAns
 	return gitlet.ReadAnswer{Level: q.Fresh.Level, Position: statelog.Position{Stream: topics.CodeLogStream,
 		Generation: 1, Seq: 9}, ChangeBrief: &gitlet.ChangeSummary{ChangeRow: gitlet.ChangeRow{
 		ID: "0190f3c4-0000-7000-8000-0000000000c1", RepoID: "0190f3c4-0000-7000-8000-00000000c0de", Number: 42,
-		State: state}, Repo: "web", Ref: "web!42"}}, nil
+		State: state}, Repo: "web", Ref: "web!42"}, Resolved: &gitlet.RepoRef{
+		ID: "0190f3c4-0000-7000-8000-00000000c0de", Name: "web", Status: gitlet.RepoStatusActive}}, nil
 }
 
 func (h *viewedHost) Mark(context.Context, gitlet.MarkWrite) (gitlet.MarkResult, error) {
+	h.marked.Add(1)
 	return h.mark()
 }
 

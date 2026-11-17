@@ -2186,7 +2186,7 @@ configuration rather than by a command, and its three stages are timed:
   every later record about the repository on every node, for ever. Its last
   step also deletes the key the viewed marks of its changes were digested
   under: those marks are each person's own, which no purge reaches, and name
-  no file once the key is gone
+  no file once the key is gone and the code log is trimmed past its record
   ([Viewed files](../concepts/gitlet.md#viewed-files)). A purge
   once begun is finished whatever the retention says, since it has no undo,
   and the name is free again once it is. One begins only on a node serving

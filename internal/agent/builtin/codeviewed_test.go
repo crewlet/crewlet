@@ -72,9 +72,11 @@ func TestCodeMarkViewedIsAPersonsAlone(t *testing.T) {
 // A VIEWED MARK IS SENT AT ITS READ: the write names the repository id and the change id the call's
 // one read answered, the files as given (a deleted file with neither id nor mode), and that read's
 // position as Seen; the read is at or past the caller's `seen`; the answer names the handle, the
-// repository, the change, the outcome and the position, and no digest or key.
+// repository, the change, the outcome and the position, and no digest or key. An `unviewed` path is
+// sent exactly, untrimmed and unsplit on its comma.
 //
-// Mutation: send the caller's `seen` as Seen rather than the read's position, red.
+// Mutations: send the caller's `seen` as Seen rather than the read's position, red; read `unviewed`
+// through argStrings, red.
 func TestCodeMarkViewedSendsTheGestureAtItsRead(t *testing.T) {
 	t.Parallel()
 	writes := &codeWrites{}
@@ -83,7 +85,7 @@ func TestCodeMarkViewedSendsTheGestureAtItsRead(t *testing.T) {
 	floor := codeAt(12)
 	got, err := tool.Call(asBoundPerson(), map[string]any{"repo": "site", "change": "7", "seen": floor.String(),
 		"viewed": []any{map[string]any{"path": "a.txt", "blob_oid": mainOID, "mode": "100644"},
-			map[string]any{"path": "gone.txt"}}, "unviewed": []any{"b.txt"}})
+			map[string]any{"path": "gone.txt"}}, "unviewed": []any{" b.txt", "dir/a,b.txt"}})
 	if err != nil || got.Failed {
 		t.Fatalf("a person's viewed mark answered %v %q", err, got.Output)
 	}
@@ -100,7 +102,7 @@ func TestCodeMarkViewedSendsTheGestureAtItsRead(t *testing.T) {
 		t.Errorf("the mark is %+v, want founder's own under an operation", w)
 	case w.Files.RepoID != siteID || w.Files.ChangeID != siteChangeID:
 		t.Errorf("the mark names %s of %s, want the change the read answered", w.Files.ChangeID, w.Files.RepoID)
-	case !slices.Equal(w.Files.Viewed, want) || !slices.Equal(w.Files.Unviewed, []string{"b.txt"}):
+	case !slices.Equal(w.Files.Viewed, want) || !slices.Equal(w.Files.Unviewed, []string{" b.txt", "dir/a,b.txt"}):
 		t.Errorf("the mark carries %+v and %v, want the files as given", w.Files.Viewed, w.Files.Unviewed)
 	case w.Seen != f.at:
 		t.Errorf("the mark was sent seen at %s, want the read's position %s", w.Seen, f.at)
@@ -187,6 +189,15 @@ func TestCodeMarkViewedSaysEachRefusalInItsClass(t *testing.T) {
 		tools.RefusalOf(got) != tools.RefusalInvalid || len(host.reads) != 0 {
 		t.Errorf("33 files answered %v %+v having read %d times, want invalid before any read", err, got,
 			len(host.reads))
+	}
+	for name, unviewed := range map[string]any{"an empty path": []any{"a.txt", ""},
+		"a path that is a list": []any{"a.txt", []any{"b.txt"}}, "an object": map[string]any{"path": "a.txt"}} {
+		bad := args()
+		bad["unviewed"] = unviewed
+		if got, err := tool.Call(asBoundPerson(), bad); err != nil || !got.Failed ||
+			tools.RefusalOf(got) != tools.RefusalInvalid || len(host.reads) != 0 {
+			t.Errorf("`unviewed` as %s answered %v %+v, want invalid before any read", name, err, got)
+		}
 	}
 	elsewhere := args()
 	elsewhere["seen"] = "CREWLET_TRACKER_LOG@1:12"

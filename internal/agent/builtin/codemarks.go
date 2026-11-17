@@ -180,13 +180,14 @@ func (t *codeMarkInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 }
 
 // markFloor is a mark's `seen` argument as a position on stream, the log of
-// the domain whose notices the mark names, called logName in a refusal that
-// ends with hint, what to pass instead: the zero position where the call names
-// none, or why it is not one. ONE PARSER FOR BOTH INBOX TOOLS (mark_inbox and code_mark_inbox),
-// since the floor is the same claim over either log. A position on another
-// log is refused here rather than waited for: a coordinate on one domain's log
-// says nothing of how far another's was read, and each writer would refuse it
-// anyway (gitlet.MarkWrite.Validate, worklet.Writer.MarkInbox).
+// the domain the mark is decided on, called logName in a refusal that ends
+// with hint, what to pass instead: the zero position where the call names
+// none, or why it is not one. ONE PARSER FOR EVERY MARK'S FLOOR (the inbox
+// tools and code_mark_viewed), since the floor is the same claim over any
+// log. A position on another log is refused here rather than waited for: a
+// coordinate on one domain's log says nothing of how far another's was read,
+// and each writer would refuse it anyway (gitlet.MarkWrite.Validate,
+// worklet.Writer.MarkInbox).
 func markFloor(args map[string]any, stream, logName, hint string) (statelog.Position, string) {
 	raw := strings.TrimSpace(argString(args, "seen"))
 	if raw == "" {
