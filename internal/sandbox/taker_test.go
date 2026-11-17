@@ -1118,9 +1118,13 @@ func TestAStampWithNoTakerIsSettledByAge(t *testing.T) {
 // then finds no tenure to stamp. And the window is the renewals' own word:
 // once one confirms the same epoch again, it is open again.
 //
-// IN A SYNCTEST BUBBLE: the keep is held at its step while three renewals go
-// unanswered, and let go three and a half intervals after the claim — past the
-// three intervals its window covers, inside the four of its TTL.
+// IN A SYNCTEST BUBBLE: the store goes silent after the claim and the collection
+// comes one renewal interval later, still inside the window, so its capture is
+// begun under the lease. The keep is held at its step while two and a half more
+// intervals pass, and let go three and a half intervals after the claim: past
+// the three intervals its window covers, inside the four of its TTL, and inside
+// the room the keep's first read is given ([keepReadRoom]), so the keep reaches
+// its fence rather than giving its read up.
 //
 // Mutation: read a tenure as held whatever its window, confirm a renewal the
 // store did not answer, or confirm a window as long as the whole TTL, and the
@@ -1149,6 +1153,10 @@ func TestAKeepIsFencedOnceItsLastRenewalNoLongerCoversIt(t *testing.T) {
 				session := rig.runner.Session
 				gate := make(chan struct{})
 				c.gate(keep, gate)
+				store.setDown(errors.New("coord: the lease store did not answer"))
+				every := seat.SeatLeaseTTL / coord.KeptRenewals
+				time.Sleep(every)
+				synctest.Wait()
 				rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1",
 					HarnessVersion: "2.1.310", Captured: &session.Archive})
 				collectLeaving(t, rig, "t1")
@@ -1157,9 +1165,7 @@ func TestAKeepIsFencedOnceItsLastRenewalNoLongerCoversIt(t *testing.T) {
 					t.Fatalf("the premise: the collection's capture is %+v, want it begun under this "+
 						"process's taker lease", begun)
 				}
-				store.setDown(errors.New("coord: the lease store did not answer"))
-				every := seat.SeatLeaseTTL / coord.KeptRenewals
-				time.Sleep(3*every + every/2)
+				time.Sleep(2*every + every/2)
 				synctest.Wait()
 				if lease := heldBy(t, store, thisProcess); lease == nil || lease.Epoch != begun.TakerEpoch {
 					t.Fatalf("the premise: this process's taker lease is %+v, want it still held at the "+
