@@ -1163,10 +1163,10 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		}
 	}
 
-	// A MERGE QUEUE'S TWO WRITES, every field of each — the principal the
-	// committer stamps among them, which crosses whole whoever set it — and
-	// every field of the answer, the preconditions a gate_unmet names among
-	// them.
+	// A MERGE QUEUE'S TWO WRITES AND THE HOME'S EJECT, every field of each —
+	// the principal the committer stamps among them, which crosses whole
+	// whoever set it — and every field of the answer, the preconditions a
+	// gate_unmet names among them.
 	for name, p := range map[string]gitlet.QueueProposal{
 		"an enqueue": {Enqueue: &gitlet.Enqueue{RepoID: ref.ID, EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
 			ChangeID: item.ChangeID, TargetRef: "refs/heads/main",
@@ -1174,6 +1174,11 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			DeleteSource: true, CloseTask: true, Principal: seat}},
 		"a dequeue": {Dequeue: &gitlet.Dequeue{RepoID: ref.ID, EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
 			Principal: seat}},
+		"an eject naming the train it failed on": {Eject: &gitlet.Eject{RepoID: ref.ID, Entries: []gitlet.Ejection{{
+			EntryID: "019a0c2e-0000-7000-8000-0000000000f1", Reason: gitlet.EjectCheckFailed, Checks: []string{"e2e"},
+			TestedIn: &gitlet.EjectionTrain{CandidateID: "019a0c2e-0000-7000-8000-0000000000f7",
+				BaseOID:   "6666666666666666666666666666666666666666",
+				CommitOID: "8888888888888888888888888888888888888888"}}}}},
 	} {
 		p.OpID, p.Asker, p.Seen, p.WrittenFor = "019a0c2e-0000-7000-8000-0000000000f0.code_merge_change", seat, at,
 			carrier

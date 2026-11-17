@@ -957,7 +957,16 @@ func (e CardEjection) encodedBytes() int {
 	if e.ChecksMore != 0 {
 		n += field("checks_more", intBytes(int64(e.ChecksMore)), false)
 	}
+	if e.TestedIn != nil {
+		n += field("tested_in", e.TestedIn.encodedBytes(), false)
+	}
 	return n
+}
+
+// encodedBytes is the length of the train's JSON encoding.
+func (t EjectionTrain) encodedBytes() int {
+	return 2 + field("candidate_id", stringBytes(t.CandidateID), true) +
+		field("base_oid", stringBytes(t.BaseOID), false) + field("commit_oid", stringBytes(t.CommitOID), false)
 }
 
 // encodedBytes is the length of the readiness's JSON encoding: its list null
