@@ -4700,3 +4700,37 @@ test("Copy is held for a binary file and past 1 MiB, and says when the clipboard
   });
   expect(refused.getAttribute("aria-label") ?? refused.textContent).toContain("refused");
 });
+
+// A PICKED RUN IS TINTED AND ITS FIRST LINE HOLDS ITS ACTIONS: copy the lines, copy a
+// link to them at the commit, blame them. Mutation: link the branch, or draw the menu
+// on every picked line, and this fails.
+test("a picked run is tinted, and its menu copies its lines, links them at the commit and blames them", async () => {
+  const clip = stubClipboard();
+  stubEngine(detail(), [], { "src/two.go": TWO_PAGES });
+  mount("#/gitlet/repos/web?path=src%2Ftwo.go&lines=17-19");
+  const trigger = await screen.findByRole("button", { name: "Actions for lines 17 to 19" });
+  expect(screen.getAllByRole("button", { name: /^Actions for/ })).toHaveLength(1);
+  expect(trigger.closest(".code-source__line")?.id).toBe("L17");
+  expect(
+    [...document.querySelectorAll(".code-source__line[data-picked]")].map((l) => l.id),
+  ).toEqual(["L17", "L18", "L19"]);
+
+  fireEvent.click(trigger);
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Copy lines" }));
+  await waitFor(() => expect(clip.written).toEqual(["l17\nl18\nl19"]));
+  fireEvent.click(screen.getByRole("button", { name: "Actions for lines 17 to 19" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Copy a link to these lines" }));
+  await waitFor(() => expect(clip.written).toHaveLength(2));
+  expect(clip.written[1]).toMatch(
+    new RegExp(`#/gitlet/repos/web\\?ref=${HEAD}&path=src%2Ftwo\\.go&lines=17-19$`),
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Actions for lines 17 to 19" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Blame these lines" }));
+  await waitFor(() => expect(location.hash).toContain("lens=blame"));
+  expect(location.hash).toContain("lines=17-19");
+  const inBlame = await screen.findByRole("button", { name: "Actions for lines 17 to 19" });
+  expect(inBlame.closest("tr")?.id).toBe("L17");
+  fireEvent.click(inBlame);
+  expect(await screen.findByRole("menuitem", { name: "Show these lines' code" })).toBeTruthy();
+});

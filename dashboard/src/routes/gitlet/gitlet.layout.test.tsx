@@ -1261,3 +1261,32 @@ test("Go to file's list stays inside the viewport from a file's tree at 1440px",
   expect(box.left).toBeGreaterThanOrEqual(0);
   expect(box.right).toBeLessThanOrEqual(window.innerWidth);
 });
+
+// A PICKED LINE KEEPS THE PLAIN LINE'S BOX: the tint and the run's menu change no
+// height, and the menu sits in the gutter left of the number. Mutation: put the
+// trigger in the line's flow, or another ground, and this fails.
+for (const width of [1440, 390]) {
+  test(`a picked line keeps the plain line's box, at ${width}px`, async () => {
+    await page.viewport(width, 900);
+    location.hash = "#/gitlet/repos/web?path=cmd%2Fmain.go&lines=1";
+    mount(<RepositoryPage repo="web" />, width);
+    const trigger = await eventually(() => {
+      const found = document.querySelector<HTMLElement>("#L1 .code-source__gutter button");
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    const picked = document.querySelector<HTMLElement>("#L1")!;
+    const plain = document.querySelector<HTMLElement>("#L3")!;
+    expect(picked.hasAttribute("data-picked")).toBe(true);
+    expect(picked.getBoundingClientRect().height).toBe(plain.getBoundingClientRect().height);
+    const probe = document.createElement("span");
+    probe.style.background = "var(--color-surface-selected)";
+    picked.append(probe);
+    expect(getComputedStyle(picked).backgroundColor).toBe(getComputedStyle(probe).backgroundColor);
+    probe.remove();
+    const number = picked.querySelector(".code-source__number")!.getBoundingClientRect();
+    const box = trigger.getBoundingClientRect();
+    expect(box.right).toBeLessThanOrEqual(number.left + 0.5);
+    expect(box.left).toBeGreaterThanOrEqual(picked.getBoundingClientRect().left - 0.5);
+  });
+}

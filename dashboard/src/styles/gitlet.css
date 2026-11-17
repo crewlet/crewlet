@@ -8,8 +8,8 @@
    here spends a hue but a state (a meter met) and the kit's code host colours
    (a change's state, a branch, and its code's syntax in `gitlet-code.css`),
    the seventh exception. A directory and a file are told apart by their
-   glyphs and their names, a seat by its own face, a picked line by a rule at
-   its edge. */
+   glyphs and their names, a seat by its own face, a picked run by the selected
+   tint and the accent edge. */
 
 /* GITLET › CHANGES' "NEEDS A PERSON" BAND: the changes an agent company cannot
    move on its own, above the grid. A ruled box rather than a callout, since
@@ -1672,13 +1672,37 @@
   background: var(--color-surface-hover);
 }
 
-/* A PICKED LINE IS RULED, not tinted: a pick is the reader's place, not the
-   line's state. Forced colours drop the rule and paint its outline. */
+/* A pick takes the selected tint and the accent edge, as a coloured diff's does;
+   forced colours paint its outline. */
 .code-source__line[data-picked],
 .code-blame tr[data-picked] {
-  box-shadow: inset 2px 0 0 var(--color-border-strong);
+  background: var(--color-surface-selected);
+  box-shadow: inset 2px 0 0 var(--color-brand-accent);
   outline: 2px solid transparent;
   outline-offset: -2px;
+}
+
+/* THE RUN'S ACTIONS in a gutter before the numbers, laid over the line so its
+   box is unchanged. */
+.code-source[data-gutter] .code-source__line {
+  grid-template-columns: var(--size-control-sm) 7ch max-content;
+}
+
+.code-source__gutter {
+  position: relative;
+}
+
+.code-blame__number > .code-source__gutter {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: var(--spacing-1);
+}
+
+.code-source__gutter > * {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 0;
+  translate: 0 -50%;
 }
 
 .code-source__number {
@@ -1757,7 +1781,9 @@
   white-space: nowrap;
 }
 
-.code-blame__number {
+.code-blame td.code-blame__number {
+  position: relative;
+  padding-inline-start: calc(var(--size-control-sm) + var(--spacing-2));
   width: 7ch;
   text-align: right;
   font-family: var(--font-family-mono);

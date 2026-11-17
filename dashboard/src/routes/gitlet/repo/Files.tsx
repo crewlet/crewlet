@@ -15,7 +15,8 @@
  * `lines=` the lines picked — `12`, or `12-20` — which pressing a line's
  * number sets (Shift extends the run), so a link to a line is the address on
  * screen. Opening a directory or a file is a new place in the history; picking
- * lines and changing the revision or the lens replace it.
+ * lines and changing the revision or the lens replace it. A picked run takes the
+ * selected tint, and its first line holds its actions ([LineActions]).
  *
  * # One read for a directory or a file
  *
@@ -146,6 +147,7 @@ import { CloneAddress, CodeMenu, NO_CLONE_ADDRESS } from "./CodeMenu.tsx";
 import { GoToFile } from "./GoToFile.tsx";
 import { FileView } from "./FileView.tsx";
 import { FileBytes, WAITING_FOR_COMMIT } from "./FileActions.tsx";
+import { LineActions } from "./LineActions.tsx";
 import "~/styles/gitlet.css";
 
 /** What one page of a path read holds: a listing's entries, or one page of a file. */
@@ -362,10 +364,12 @@ function PathView({
                 repo={repo}
                 rev={commit || rev}
                 path={path}
+                commit={commit}
                 blob={file}
                 total={file.lines}
                 picked={picked}
                 onPick={onPick}
+                onLens={onLens}
               />
             ) : !file.binary && file.lines > 0 ? (
               <FileLines
@@ -379,6 +383,8 @@ function PathView({
                 total={file.lines}
                 picked={picked}
                 onPick={onPick}
+                commit={commit}
+                onLens={onLens}
               />
             ) : (
               <PathBody
@@ -603,6 +609,8 @@ function FileLines({
   total,
   picked,
   onPick,
+  commit,
+  onLens,
 }: {
   /** The repository's name, which a read of the blob's lines above them names. */
   repo: string;
@@ -616,6 +624,9 @@ function FileLines({
   total: number;
   picked: LineRun | null;
   onPick: (run: LineRun | null) => void;
+  /** The commit the file was read at, whole, which the run's link names. */
+  commit: string;
+  onLens: (blame: boolean) => void;
 }) {
   const place = `${rev}\n${path}\n${opened}`;
   const [from, open] = useOpened(place, opened);
@@ -677,6 +688,8 @@ function FileLines({
         pages={pages}
         picked={picked}
         onPick={onPick}
+        commit={commit}
+        onLens={onLens}
       />
       <Pager paged={more} what="lines" />
     </>
@@ -1119,10 +1132,9 @@ function Pager({
 }
 
 /**
- * A file's lines, numbered, the ones the address picks ruled — never tinted:
- * a pick is the reader's place, not a state of the line. Pressing a number
- * picks its line, Shift extends the run from the one picked, and pressing the
- * one line picked again lets it go.
+ * A file's lines, numbered, the ones the address picks tinted, the run's first
+ * line holding its actions. Pressing a number picks its line, Shift extends the
+ * run from the one picked, and pressing the one line picked again lets it go.
  */
 function Source({
   repo,
@@ -1131,6 +1143,8 @@ function Source({
   pages,
   picked,
   onPick,
+  commit = "",
+  onLens,
 }: {
   repo: string;
   path: string;
@@ -1139,6 +1153,9 @@ function Source({
   pages: readonly CodeBlobAnswer[];
   picked: LineRun | null;
   onPick?: (run: LineRun | null) => void;
+  commit?: string;
+  /** Where a run can be blamed: the gutter's actions are drawn only with it and `onPick`. */
+  onLens?: (blame: boolean) => void;
 }) {
   const head = pages[0];
   const lines = useMemo(() => {
@@ -1150,6 +1167,7 @@ function Source({
     return split;
   }, [pages]);
   const from = head?.start_line ?? 1;
+  const drawnLines = useMemo(() => ({ from, texts: lines }), [from, lines]);
   const grammar = useGrammar(path);
   const stateOf = useLineStates({ repo, blob: head ?? null, grammar, from, lines });
   usePickInView(place, picked, lines.length);
@@ -1180,12 +1198,19 @@ function Source({
   // them; one it does not have at all is said in the card's head.
   const offLoaded =
     picked !== null && picked.start <= head.lines && (picked.start < from || picked.start > shown);
+  const gutter = Boolean(onPick && onLens);
+  const menuAt = gutter && picked && !offLoaded && picked.start <= shown ? picked.start : 0;
   return (
     <>
       {offLoaded && (
         <p className="code-blob__note">{`Line ${picked.start} is not among the lines loaded.`}</p>
       )}
-      <div className="code-source" role="region" aria-label={`The lines of ${path}`}>
+      <div
+        className="code-source"
+        role="region"
+        aria-label={`The lines of ${path}`}
+        data-gutter={gutter || undefined}
+      >
         {lines.map((text, i) => {
           const n = from + i;
           return (
@@ -1197,6 +1222,20 @@ function Source({
               state={stateOf(n)}
               on={picked !== null && n >= picked.start && n <= picked.end}
               press={press}
+              gutter={gutter}
+              menu={
+                n === menuAt && picked && onLens ? (
+                  <LineActions
+                    repo={repo}
+                    path={path}
+                    commit={commit}
+                    picked={picked}
+                    drawn={drawnLines}
+                    blame={false}
+                    onLens={onLens}
+                  />
+                ) : undefined
+              }
             />
           );
         })}
@@ -1218,6 +1257,8 @@ const SourceLine = memo(function SourceLine({
   state,
   on,
   press,
+  gutter,
+  menu,
 }: {
   n: number;
   text: string;
@@ -1226,11 +1267,15 @@ const SourceLine = memo(function SourceLine({
   state: State | null;
   on: boolean;
   press: (n: number, extend: boolean) => void;
+  /** A track before the number, holding `menu` on the run's first line. */
+  gutter: boolean;
+  menu: React.ReactNode;
 }) {
   // A press redraws the line but tokenizes nothing: its tokens follow its text and state.
   const tokens = useMemo(() => tokensOf(grammar, text, state), [grammar, text, state]);
   return (
     <div id={`L${n}`} className="code-source__line" data-picked={on || undefined}>
+      {gutter && <span className="code-source__gutter">{menu}</span>}
       <button
         type="button"
         className="code-source__number"
@@ -1317,19 +1362,24 @@ function Blame({
   repo,
   rev,
   path,
+  commit,
   blob,
   total,
   picked,
   onPick,
+  onLens,
 }: {
   repo: CodeRepoDetail;
   rev: string;
   path: string;
+  /** The commit the file was read at, whole, which the run's link names. */
+  commit: string;
   /** The file's first page: its blob's id and size, which colouring its lines reads. */
   blob: CodeBlobAnswer;
   total: number;
   picked: LineRun | null;
   onPick: (run: LineRun | null) => void;
+  onLens: (blame: boolean) => void;
 }) {
   const place = `${rev}\n${path}\nblame`;
   // THE FIRST RANGE ASKED HOLDS THE PICKED LINE, decided from the address
@@ -1404,6 +1454,10 @@ function Blame({
   // COLOURED AS THE FILE IS: a line past its bound counts as empty for the walk.
   const grammar = useGrammar(path);
   const texts = useMemo(() => rows.map((l) => l.text ?? ""), [rows]);
+  const drawnLines = useMemo(
+    () => ({ from: rows[0]?.line ?? 1, texts: rows.map((l) => l.text) }),
+    [rows],
+  );
   const stateOf = useLineStates({
     repo: repo.name,
     blob,
@@ -1470,6 +1524,19 @@ function Blame({
                   )}
                 </td>
                 <td className="code-blame__number">
+                  {picked && l.line === picked.start && (
+                    <span className="code-source__gutter">
+                      <LineActions
+                        repo={repo.name}
+                        path={path}
+                        commit={commit}
+                        picked={picked}
+                        drawn={drawnLines}
+                        blame
+                        onLens={onLens}
+                      />
+                    </span>
+                  )}
                   <button
                     type="button"
                     className="code-source__number"
