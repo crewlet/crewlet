@@ -12,7 +12,7 @@
  * and held, with the reason, where no change can be opened.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -170,6 +170,26 @@ function stubEngine({
         case "/query/code_repo":
           return json({ repo: REPO, position: POSITION, level: "session" });
         case "/query/code_refs":
+          if (p.get("detail") === "true") {
+            return json({
+              refs_detail: [
+                {
+                  ref: "refs/heads/retry",
+                  oid: SHA,
+                  position: POSITION,
+                  moved_at: "2026-10-27T11:00:00Z",
+                },
+                {
+                  ref: "refs/heads/main",
+                  oid: MAIN,
+                  position: POSITION,
+                  moved_at: "2026-10-27T10:00:00Z",
+                },
+              ],
+              position: POSITION,
+              level: "session",
+            });
+          }
           return json({
             refs: [
               { ref: "refs/heads/main", oid: MAIN, position: POSITION },
@@ -533,20 +553,32 @@ test("a comparison reads what head changed since the merge base, and its preview
   expect(changed.closest(".t-label")).toBeNull();
 });
 
-// A COMPARISON'S TWO PICKERS LIST ONE READ of the repository's branches and
-// of its tags, each up to a thousand refs: never one read a picker. Mutation:
-// let each picker read its own listings, and this fails.
-test("a comparison's two pickers share one read of the branches and the tags", async () => {
+// A COMPARISON'S PICKERS READ ONLY WHEN OPENED, each panel named for what it chooses,
+// and an unset head chooses the default branch by its name. Mutation: read the
+// listings on the page again, or write the default as none, and this fails.
+test("a comparison's pickers read only when opened, and each panel names what it chooses", async () => {
   const { asked } = stubEngine();
   mount(<ComparePage repo="web" />, "#/gitlet/repos/web/compare?head=retry");
 
   expect(await screen.findByText("Conflicts")).toBeTruthy();
-  // BOTH PICKERS ARE DRAWN, whatever role their searchable trigger takes.
-  expect(document.querySelector('[aria-label="Base"]')).not.toBeNull();
-  expect(document.querySelector('[aria-label="Compared"]')).not.toBeNull();
-  await waitFor(() => expect(reads(asked, "code_refs").length).toBeGreaterThanOrEqual(2));
-  const listings = reads(asked, "code_refs").map((u) => u.searchParams.get("prefix"));
-  expect(listings.sort()).toEqual([null, "refs/tags/"]);
+  expect(screen.getByRole("button", { name: "Compared: retry" })).toBeTruthy();
+  expect(reads(asked, "code_refs")).toHaveLength(0);
+  fireEvent.click(screen.getByRole("button", { name: "Base: main" }));
+  const base = await screen.findByRole("dialog", { name: "Choose the base" });
+  await within(base).findByRole("option", { name: /^retry/ });
+  expect(reads(asked, "code_refs").map((u) => u.searchParams.get("order"))).toEqual(["moved"]);
+  fireEvent.keyDown(within(base).getByRole("combobox"), { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+  act(() => {
+    location.hash = "#/gitlet/repos/web/compare";
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Compared: Choose what to compare" }));
+  const head = await screen.findByRole("dialog", { name: "Choose what to compare" });
+  fireEvent.mouseDown(await within(head).findByRole("option", { name: /^main/ }));
+  await waitFor(() =>
+    expect(new URLSearchParams(location.hash.split("?")[1]).get("head")).toBe("main"),
+  );
 });
 
 // OPEN CHANGE IS ONE code_open_change of the branch compared into the base

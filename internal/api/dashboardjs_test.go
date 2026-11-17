@@ -2703,6 +2703,8 @@ const (
 	// on kit 0.150.1: 6700.2 KiB (6,861,017 bytes), 38,703 over main: 6701 KiB.
 	// Configuration warnings as one quiet line with compact rows, on kit 0.151.0: 6706.0 KiB
 	// (6,866,978 bytes), 5,961 over main: 6707 KiB.
+	// A branch and tag picker in a panel and a repository's Code menu: 6711.5 KiB (6,872,599 bytes),
+	// 11,582 over main: 6712 KiB.
 	treeBudget = 5<<20 + 1587<<10
 )
 
