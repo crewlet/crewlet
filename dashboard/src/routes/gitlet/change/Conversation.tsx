@@ -23,10 +23,8 @@ import { AsideLayout, Button, Stack, Tag, Textarea, useSendOnEnter } from "@crew
 import { GitBranchGlyph } from "@crewlethq/icons/glyphs";
 import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { useDraftState } from "~/app/assistant/draft.ts";
-import { href } from "~/app/router.tsx";
 import { PageFailed } from "~/components/common.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
-import { changePath } from "~/lib/code.ts";
 import { verdictWord } from "~/lib/code.ts";
 import { useNow } from "~/lib/clock.ts";
 import { plural } from "~/lib/format.ts";
@@ -39,6 +37,7 @@ import type {
   CodeReviewRow,
   CodeRevisionRow,
 } from "~/protocol/index.ts";
+import { changeHref } from "../paths.ts";
 import { Byline, Face, ShaChip } from "../ui.tsx";
 import { MergeBox } from "./Merge.tsx";
 import { ChangeRail } from "./Rail.tsx";
@@ -186,9 +185,9 @@ function TimelineEntry({
   switch (entry.kind) {
     case "review": {
       const r = entry.review;
-      const files = href(changePath(change.repo, change.number), {
+      const files = changeHref(change.repo, change.number, {
         tab: "files",
-        ...(r.revision !== change.revision ? { rev: String(r.revision) } : {}),
+        ...(r.revision !== change.revision ? { rev: r.revision } : {}),
       });
       return (
         <TimelineCard
@@ -229,10 +228,10 @@ function TimelineEntry({
               // revision since the one before it.
               <a
                 className="t-link"
-                href={href(changePath(change.repo, change.number), {
+                href={changeHref(change.repo, change.number, {
                   tab: "files",
-                  rev: String(v.n),
-                  since: String(v.n - 1),
+                  rev: v.n,
+                  since: v.n - 1,
                 })}
               >
                 What it changed

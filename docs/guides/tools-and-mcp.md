@@ -751,7 +751,7 @@ is woken, never shown an inbox ([How a person learns they have work](../concepts
 **Nor is `code_mark_viewed`**, which the operator catalogue serves beside the
 code writes: a person's own marks over the files of a change they review, each
 at the object id and mode they read, kept while the change is a draft or open,
-which the change's Files tab reads back. It writes the caller's own record
+which the change's Files changed tab reads back. It writes the caller's own record
 alone and takes `gitlet`. A seat is never offered it: a seat reviews a change
 whole and keeps no viewed files ([Viewed files](../concepts/gitlet.md#viewed-files)).
 

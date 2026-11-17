@@ -3,8 +3,8 @@
  * laid out as a code host lays one out: a header saying who wants to merge
  * which revision of which branch into which, then the conversation about it
  * with where its merge stands (its merge box) and a rail of whom it asked, its
- * diff with every finding and thread on the lines they are about, its
- * revisions, where it came from and whom its records notified.
+ * revisions, its checks, its diff with every finding and thread on the lines
+ * they are about, and More: where it came from and whom its records notified.
  *
  * # Read a part at a time, at the tab's floor
  *
@@ -39,8 +39,7 @@
  * merged change's Revert (`ChangeWrites.tsx`). What THIS reader cannot do on
  * a live change stays drawn, held with its sentence: an author's own verdicts
  * above all, since an author's review counts for nothing and the engine takes
- * none (`own_change`), where Request review is the author's step and leads the
- * bar instead.
+ * none (`own_change`), where Request review is the author's step.
  */
 
 import { useId, useMemo, useState, type ReactNode } from "react";
@@ -48,19 +47,28 @@ import {
   Button,
   EmptyState,
   FormField,
+  IconButton,
+  Menu,
   Skeleton,
   Stack,
   Tabs,
+  Tag,
   Textarea,
   tabId,
+  useClipboard,
 } from "@crewlethq/ui";
 import {
-  BellGlyph,
-  DiffGlyph,
+  CheckGlyph,
+  ChevronDownGlyph,
+  CopyGlyph,
+  EllipsisGlyph,
+  FileDiffGlyph,
+  GitCommitVerticalGlyph,
+  GitPullRequestClosedGlyph,
   ListChecksGlyph,
-  MessagesSquareGlyph,
-  RotateCcwClockGlyph,
-  ScrollTextGlyph,
+  MessageSquareGlyph,
+  SquareKanbanGlyph,
+  UserPlusGlyph,
 } from "@crewlethq/icons/glyphs";
 import { Modal } from "~/components/Modal.tsx";
 import { DraftBoxes, DraftBoxesContext, boxesDraft, useOpenBoxes } from "~/app/assistant/boxes.ts";
@@ -71,57 +79,107 @@ import { usePageMenu } from "~/app/Shell.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { QueryState } from "~/components/common.tsx";
 import { WriteButton } from "~/components/WriteButton.tsx";
+import { ago } from "~/lib/ago.ts";
 import { authoredBy, changeLive, changeRef, isRepoName, refName } from "~/lib/code.ts";
 import { useNow } from "~/lib/clock.ts";
+import { fmtCount, fmtDateTime, plural } from "~/lib/format.ts";
 import { draftedRevisions, findingOf, forgetDrafts, readDrafts } from "~/lib/reviewDrafts.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { menuHold, type WriteAccess } from "~/lib/useWriteAccess.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import type { CodeChangeDetail, CodeVerdict } from "~/protocol/index.ts";
+import type { CodeChangeDetail, CodeRevisionRow, CodeVerdict } from "~/protocol/index.ts";
 import { ChangeStateTag, ReadinessMeter } from "../Changes.tsx";
 import { CodeNotFound } from "../NotFound.tsx";
 import { ReviewerPicker } from "../ReviewerPicker.tsx";
-import { changesHref, repoHref } from "../paths.ts";
+import { CHANGE_TABS, changesHref, repoHref, type ChangeTab } from "../paths.ts";
 import { BranchChip, Byline } from "../ui.tsx";
 import { Checks } from "./Checks.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { Files } from "./Files.tsx";
-import { Commits, Notified, Provenance } from "./Facts.tsx";
-import { CHANGE_POLL_MS, useStandingFindings } from "./reads.ts";
+import { Notified, Provenance, Revisions } from "./Facts.tsx";
+import {
+  CHANGE_POLL_MS,
+  changePartParams,
+  revisionInputs,
+  useAskAgainWhenMoved,
+  useStandingFindings,
+} from "./reads.ts";
 import "~/styles/gitlet.css";
-
-/** The page's tabs, the conversation first: what a reader opens a change for. */
-const CHANGE_TABS = [
-  "conversation",
-  "files",
-  "commits",
-  "checks",
-  "provenance",
-  "notified",
-] as const;
-type ChangeTab = (typeof CHANGE_TABS)[number];
 
 /** Each tab's glyph: decorative, its label names it. */
 const CHANGE_TAB_GLYPHS: Readonly<Record<ChangeTab, ReactNode>> = {
-  conversation: <MessagesSquareGlyph size="sm" />,
-  files: <DiffGlyph size="sm" />,
-  commits: <RotateCcwClockGlyph size="sm" />,
+  conversation: <MessageSquareGlyph size="sm" />,
+  revisions: <GitCommitVerticalGlyph size="sm" />,
   checks: <ListChecksGlyph size="sm" />,
-  provenance: <ScrollTextGlyph size="sm" />,
-  notified: <BellGlyph size="sm" />,
+  files: <FileDiffGlyph size="sm" />,
+  more: <EllipsisGlyph size="sm" />,
 };
 
 const CHANGE_TAB_LABELS: Readonly<Record<ChangeTab, string>> = {
   conversation: "Conversation",
-  files: "Files",
-  commits: "Commits",
+  revisions: "Revisions",
   checks: "Checks",
-  provenance: "Provenance",
-  // WHOM ITS RECORDS NOTIFIED, named for what the tab lists.
-  notified: "Notified",
+  files: "Files changed",
+  more: "More",
 };
+
+/** The phone's fold of the tabs, worded apart from the More tab. */
+const OVERFLOW_LABEL = "Other tabs";
+
+/** More, folded into the phone's Other tabs menu, says what it holds. */
+const MORE_MENU_LABEL = "Where it came from and who was notified";
+
+/**
+ * The head revision's diff totals, the Files changed tab's own first question,
+ * asked again on the tab's own key: the version, the head and its facts' base.
+ */
+function useHeadDiff(change: CodeChangeDetail, revisions: readonly CodeRevisionRow[]) {
+  const { repo, number, revision } = change;
+  const params = useMemo(
+    () => changePartParams({ repo, number }, "files", { revision }),
+    [repo, number, revision],
+  );
+  const read = useCodeQuery("code_change", params);
+  useAskAgainWhenMoved(
+    `${change.version}/${revisionInputs(revisions, revision)}`,
+    true,
+    read.refetch,
+  );
+  return read.data?.diff;
+}
+
+/** `+207 −51` and five squares, the head's lines added and removed. */
+function Diffstat({
+  added,
+  deleted,
+  revision,
+}: {
+  added: number;
+  deleted: number;
+  revision: number;
+}) {
+  const lines = added + deleted;
+  const plus = lines === 0 ? 0 : Math.round((5 * added) / lines);
+  return (
+    <span
+      className="code-diffstat"
+      role="img"
+      aria-label={`${plural(added, "line")} added and ${fmtCount(deleted)} removed in revision ${revision}`}
+    >
+      <span>+{fmtCount(added)}</span>
+      <span>−{fmtCount(deleted)}</span>
+      {lines > 0 && (
+        <span className="code-diffstat__squares">
+          {[0, 1, 2, 3, 4].map((i) => (
+            <span key={i} data-kind={i < plus ? "added" : "removed"} />
+          ))}
+        </span>
+      )}
+    </span>
+  );
+}
 
 export function ChangePage({ repo, number }: { repo: string; number: number }) {
   const named = isRepoName(repo);
@@ -161,6 +219,7 @@ export function ChangePage({ repo, number }: { repo: string; number: number }) {
       </QueryState>
     );
   }
+  const revisions = read.data?.revisions ?? [];
   return (
     <DraftBoxesContext.Provider value={boxes}>
       <ChangeDraft boxes={boxes} change={change} />
@@ -169,22 +228,12 @@ export function ChangePage({ repo, number }: { repo: string; number: number }) {
       </PageActions>
       <header>
         <ChangeHeader change={change} />
-        <Tabs
-          overflow="menu"
-          variant="underline"
-          ariaLabel="The change's sections"
-          value={tab}
-          onValueChange={(next) => setTab(next as ChangeTab)}
+        <ChangeTabs
+          change={change}
+          revisions={revisions}
+          tab={tab}
+          setTab={setTab}
           panelId={panelId}
-          items={CHANGE_TABS.map((value) => ({
-            value,
-            label: CHANGE_TAB_LABELS[value],
-            icon: CHANGE_TAB_GLYPHS[value],
-            ...(value === "conversation" && change.conversation
-              ? { count: change.conversation.reviews + change.conversation.comments }
-              : {}),
-            ...(value === "commits" ? { count: change.revision } : {}),
-          }))}
         />
       </header>
       <div
@@ -194,16 +243,74 @@ export function ChangePage({ repo, number }: { repo: string; number: number }) {
         aria-labelledby={tabId(panelId, tab)}
         tabIndex={0}
       >
-        {tab === "conversation" && (
-          <Conversation change={change} revisions={read.data?.revisions ?? []} />
-        )}
-        {tab === "files" && <Files change={change} revisions={read.data?.revisions ?? []} />}
-        {tab === "commits" && <Commits change={change} revisions={read.data?.revisions ?? []} />}
+        {tab === "conversation" && <Conversation change={change} revisions={revisions} />}
+        {tab === "revisions" && <Revisions change={change} revisions={revisions} />}
         {tab === "checks" && <Checks change={change} />}
-        {tab === "provenance" && <Provenance change={change} />}
-        {tab === "notified" && <Notified change={change} />}
+        {tab === "files" && <Files change={change} revisions={revisions} />}
+        {tab === "more" && (
+          <Stack gap={5}>
+            <section aria-labelledby={`${panelId}-provenance`} className="code-more">
+              <h2 id={`${panelId}-provenance`} className="code-more__title">
+                Where it came from
+              </h2>
+              <Provenance change={change} />
+            </section>
+            <section aria-labelledby={`${panelId}-notified`} className="code-more">
+              <h2 id={`${panelId}-notified`} className="code-more__title">
+                Whom its records notified
+              </h2>
+              <Notified change={change} />
+            </section>
+          </Stack>
+        )}
       </div>
     </DraftBoxesContext.Provider>
+  );
+}
+
+/** The tab row: each tab's count where one is known, and the head's diffstat at its end. */
+function ChangeTabs({
+  change,
+  revisions,
+  tab,
+  setTab,
+  panelId,
+}: {
+  change: CodeChangeDetail;
+  revisions: readonly CodeRevisionRow[];
+  tab: ChangeTab;
+  setTab: (next: ChangeTab) => void;
+  panelId: string;
+}) {
+  const diff = useHeadDiff(change, revisions);
+  const counts: Partial<Record<ChangeTab, number>> = {
+    ...(change.conversation ? { conversation: change.conversation.comments } : {}),
+    revisions: change.revision,
+    ...(diff ? { files: diff.total } : {}),
+  };
+  return (
+    <Tabs
+      overflow="menu"
+      // THE FOLD'S TRIGGER is never named as the More tab beside it.
+      moreLabel={OVERFLOW_LABEL}
+      variant="underline"
+      ariaLabel="The change's sections"
+      value={tab}
+      onValueChange={(next) => setTab(next as ChangeTab)}
+      panelId={panelId}
+      note={
+        diff ? (
+          <Diffstat added={diff.added} deleted={diff.deleted} revision={change.revision} />
+        ) : undefined
+      }
+      items={CHANGE_TABS.map((value) => ({
+        value,
+        label: value === "more" ? <span>{CHANGE_TAB_LABELS.more}</span> : CHANGE_TAB_LABELS[value],
+        ...(value === "more" ? { menuLabel: MORE_MENU_LABEL } : {}),
+        icon: CHANGE_TAB_GLYPHS[value],
+        ...(counts[value] !== undefined ? { count: counts[value] } : {}),
+      }))}
+    />
   );
 }
 
@@ -231,19 +338,42 @@ function ChangeDraft({ boxes, change }: { boxes: DraftBoxes; change: CodeChangeD
   return null;
 }
 
+/** A branch's name copied by one press, the control saying it landed. */
+function CopyBranch({ name }: { name: string }) {
+  const { state, copy } = useClipboard({ failedResetMs: null });
+  return (
+    <IconButton
+      label={
+        state === "copied"
+          ? `Copied ${name}`
+          : state === "failed"
+            ? "The browser refused the clipboard"
+            : "Copy the branch name"
+      }
+      icon={state === "copied" ? <CheckGlyph /> : <CopyGlyph />}
+      size="sm"
+      variant="ghost"
+      onClick={() => void copy(name)}
+    />
+  );
+}
+
 /**
  * What the change's byline says it does, as a code host's does: who wants to
  * merge which revision of which branch into which — or merged it, or closed
- * it — and when.
+ * it.
  */
 function bylineVerb(change: CodeChangeDetail): ReactNode {
   const source = refName(change.source_ref).name;
   const target = refName(change.target_ref).name;
-  // EACH BRANCH A LINK IN THE SENTENCE: `BranchChip` keeps `.prose-link` on it.
+  // EACH BRANCH A LINK IN THE SENTENCE, the source's name one press from the clipboard.
   const branches = (
     <>
-      <BranchChip name={source} href={repoHref(change.repo, { ref: source })} /> into{" "}
-      <BranchChip name={target} href={repoHref(change.repo)} />
+      <span className="code-change-byline__source">
+        <BranchChip name={source} href={repoHref(change.repo, { ref: source })} />
+        <CopyBranch name={source} />
+      </span>{" "}
+      into <BranchChip name={target} href={repoHref(change.repo)} />
     </>
   );
   switch (change.state) {
@@ -269,24 +399,24 @@ function bylineVerb(change: CodeChangeDetail): ReactNode {
   );
 }
 
-/** When the byline's act happened: the merge, the close, or the opening. */
-function bylineAt(change: CodeChangeDetail): string | undefined {
-  if (change.state === "merged") return change.merged_at ?? change.opened_at;
-  if (change.state === "closed") return change.closed_at ?? change.opened_at;
-  return change.opened_at;
+/** When the byline's act happened, and the word before it on a live change. */
+function bylineAt(change: CodeChangeDetail): { at: string; word: string } {
+  if (change.state === "merged") return { at: change.merged_at ?? change.opened_at, word: "" };
+  if (change.state === "closed") return { at: change.closed_at ?? change.opened_at, word: "" };
+  return { at: change.opened_at, word: "opened " };
 }
 
 /**
- * The change's header: its reference, title and state — beside a live
- * change's readiness, the meter every listing draws — and its byline, which
- * says what it proposes. Where it stands with its reviewers, its work item
- * and its head are the conversation's rail, beside it.
+ * The change's header: its reference, title and a live change's readiness,
+ * then one sentence: its state pill, who wants to merge which revision of
+ * which branch into which, when, and its work item.
  */
 function ChangeHeader({ change }: { change: CodeChangeDetail }) {
   const now = useNow();
   const seatBadge = useSeatBadgeOf();
   const actor = change.state === "merged" && change.merged_by ? change.merged_by : change.owner;
   const work = change.work_item;
+  const when = bylineAt(change);
   return (
     <ObjectHeader
       kind="Change"
@@ -294,25 +424,30 @@ function ChangeHeader({ change }: { change: CodeChangeDetail }) {
       identifier={change.ref}
       title={change.title}
       status={
-        <>
-          <ChangeStateTag state={change.state} />
-          {changeLive(change.state) && change.readiness && (
-            <ReadinessMeter change={change} nameOf={(h) => seatBadge(h).name} />
-          )}
-        </>
+        changeLive(change.state) && change.readiness ? (
+          <ReadinessMeter change={change} nameOf={(h) => seatBadge(h).name} />
+        ) : undefined
       }
       description={
         <span className="code-change-byline">
-          <Byline who={actor} verb={bylineVerb(change)} at={bylineAt(change)} now={now}>
-            <a className="t-link" href={repoHref(change.repo)}>
-              {change.repo}
-            </a>
+          <span className="code-change-byline__state">
+            <ChangeStateTag state={change.state} />
+          </span>
+          <Byline who={actor} verb={bylineVerb(change)} now={now}>
+            <span className="code-change-byline__at">
+              {when.word}
+              <time className="code-byline__when" dateTime={when.at} title={fmtDateTime(when.at)}>
+                {ago(when.at, now, { clock: true })}
+              </time>
+            </span>
             {work && (
               <a
-                className="t-link mono"
+                className="code-change-byline__work"
                 href={changesHref({ work: `${work.backend}:${work.id}`, state: "all" })}
               >
-                {work.key || work.id}
+                <Tag appearance="outline" size="sm" leadingIcon={<SquareKanbanGlyph size="xs" />}>
+                  {work.key || work.id}
+                </Tag>
               </a>
             )}
           </Byline>
@@ -331,17 +466,11 @@ export const OWN_CHANGE_HELD =
   "You wrote this change, so your review would not count. Ask somebody else to review it.";
 
 /**
- * The page bar's writes, as the change's state leaves them: on a LIVE change a
- * draft's Ready for review, the three verdicts, an ask for review and Close;
- * on a closed one its Reopen alone; on a merged one none, its Revert standing
- * where the merge controls were. A verdict the reader cannot give is drawn
- * held with its reason: the change's own author's, above all.
- *
- * ONE PRIMARY ACTION STAYS IN VIEW ON A PHONE: Ready for review on a draft,
- * Request review for the change's author, Approve otherwise. Every other write
- * is marked `page-action-folds`, which the bar hides at a phone's width, and
- * published to its More menu (`usePageMenu`), held in the same words as the
- * inline control.
+ * The page bar, as the change's state leaves it: on a LIVE change Close change
+ * and a Review menu (the verdicts and Request review, each held with its
+ * reason), a draft's Ready for review before them; a closed one's Reopen; none
+ * on a merged one. Every control is a default button: the merge box holds the
+ * page's one primary. Close change folds into the bar's More on a phone.
  */
 function ChangeActions({ change }: { change: CodeChangeDetail }) {
   const [verdict, setVerdict] = useState<CodeVerdict | null>(null);
@@ -355,8 +484,7 @@ function ChangeActions({ change }: { change: CodeChangeDetail }) {
   const live = changeLive(change.state);
   const draft = change.state === "draft";
   const reopenable = change.state === "closed";
-  const own = authoredBy(change, viewer);
-  const verdictHeld = own ? OWN_CHANGE_HELD : undefined;
+  const verdictHeld = authoredBy(change, viewer) ? OWN_CHANGE_HELD : undefined;
   const markReady = () =>
     void update.run(
       { change: change.ref, expected_version: change.version, draft: false },
@@ -368,68 +496,20 @@ function ChangeActions({ change }: { change: CodeChangeDetail }) {
         ? {}
         : { disabled: true, description: blocked }
       : menuHold(access);
-  // WHICH WRITE LEADS THE BAR, the one kept in view on a phone.
-  const lead: "ready" | "ask" | "approve" = draft ? "ready" : own ? "ask" : "approve";
-  // THE LEAD STAYS IN VIEW on a phone; every other write folds into the menu.
-  const FOLDS = "page-action-folds";
-  const askFolds = lead === "ask" ? undefined : FOLDS;
-  const approveFolds = lead === "approve" ? undefined : FOLDS;
   usePageMenu(
     live
       ? [
-          ...(lead !== "approve"
-            ? [
-                {
-                  key: "approve",
-                  label: "Approve",
-                  onSelect: () => setVerdict("approve"),
-                  ...held(review.access, verdictHeld),
-                },
-              ]
-            : []),
-          {
-            key: "request_changes",
-            label: "Request changes",
-            onSelect: () => setVerdict("request_changes"),
-            ...held(review.access, verdictHeld),
-          },
-          {
-            key: "comment",
-            label: "Comment",
-            onSelect: () => setVerdict("comment"),
-            ...held(review.access, verdictHeld),
-          },
-          ...(lead !== "ask"
-            ? [
-                {
-                  key: "ask",
-                  label: "Request review",
-                  onSelect: () => setAsking(true),
-                  ...held(ask.access, undefined),
-                },
-              ]
-            : []),
           {
             key: "close",
-            label: "Close",
+            label: "Close change",
             onSelect: () => setClosing(true),
             ...held(close.access, undefined),
           },
         ]
-      : reopenable
-        ? [
-            {
-              key: "close",
-              label: "Reopen",
-              onSelect: () => setClosing(true),
-              ...held(close.access, undefined),
-            },
-          ]
-        : [],
+      : [],
   );
   if (!live) {
-    // A FINISHED CHANGE: a closed one is reopened, and a merged one is
-    // reverted from where its merge controls were.
+    // A FINISHED CHANGE: a closed one is reopened, a merged one reverted from its merge box.
     return reopenable ? (
       <>
         <WriteButton
@@ -445,79 +525,63 @@ function ChangeActions({ change }: { change: CodeChangeDetail }) {
       </>
     ) : null;
   }
-  // REQUEST REVIEW leads an author's bar, and follows the verdicts on anybody
-  // else's.
-  const askButton = (
-    <span className={askFolds}>
-      <WriteButton
-        write={ask}
-        size="small"
-        variant={lead === "ask" ? "primary" : "secondary"}
-        showRefusal={false}
-        onPress={() => setAsking(true)}
-      >
-        Request review
-      </WriteButton>
-    </span>
-  );
   return (
     <>
       {draft && (
-        <WriteButton write={update} size="small" variant="primary" onPress={markReady}>
+        <WriteButton write={update} size="small" variant="secondary" onPress={markReady}>
           Ready for review
         </WriteButton>
       )}
-      {lead === "ask" && askButton}
-      <span className={approveFolds}>
-        <WriteButton
-          write={review}
-          size="small"
-          // A DRAFT'S STEP IS BEING MARKED READY, AND AN AUTHOR'S IS ASKING:
-          // a verdict there is offered, never the page's primary action.
-          variant={lead === "approve" ? "primary" : "secondary"}
-          blocked={verdictHeld}
-          showRefusal={false}
-          onPress={() => setVerdict("approve")}
-        >
-          Approve
-        </WriteButton>
-      </span>
-      <span className="page-action-folds">
-        <WriteButton
-          write={review}
-          size="small"
-          variant="secondary"
-          blocked={verdictHeld}
-          showRefusal={false}
-          onPress={() => setVerdict("request_changes")}
-        >
-          Request changes
-        </WriteButton>
-      </span>
-      <span className="page-action-folds">
-        <WriteButton
-          write={review}
-          size="small"
-          variant="secondary"
-          blocked={verdictHeld}
-          showRefusal={false}
-          onPress={() => setVerdict("comment")}
-        >
-          Comment
-        </WriteButton>
-      </span>
-      {lead !== "ask" && askButton}
       <span className="page-action-folds">
         <WriteButton
           write={close}
           size="small"
-          variant="ghost"
+          variant="secondary"
+          leadingIcon={<GitPullRequestClosedGlyph size="sm" />}
           showRefusal={false}
           onPress={() => setClosing(true)}
         >
-          Close
+          Close change
         </WriteButton>
       </span>
+      <Menu
+        label={`Review ${change.ref}`}
+        trigger="Review"
+        trailingIcon={<ChevronDownGlyph size="sm" />}
+        triggerVariant="secondary"
+        align="end"
+        items={[
+          {
+            key: "approve",
+            label: "Approve",
+            icon: <CheckGlyph size="sm" />,
+            onSelect: () => setVerdict("approve"),
+            ...held(review.access, verdictHeld),
+          },
+          {
+            key: "request_changes",
+            label: "Request changes",
+            icon: <FileDiffGlyph size="sm" />,
+            onSelect: () => setVerdict("request_changes"),
+            ...held(review.access, verdictHeld),
+          },
+          {
+            key: "comment",
+            label: "Comment",
+            icon: <MessageSquareGlyph size="sm" />,
+            onSelect: () => setVerdict("comment"),
+            ...held(review.access, verdictHeld),
+          },
+          { kind: "separator", key: "asks" },
+          {
+            key: "ask",
+            label: "Request review",
+            icon: <UserPlusGlyph size="sm" />,
+            onSelect: () => setAsking(true),
+            ...held(ask.access, undefined),
+          },
+        ]}
+      />
       {verdict && (
         <ReviewDialog change={change} verdict={verdict} onClose={() => setVerdict(null)} />
       )}

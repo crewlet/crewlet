@@ -1479,7 +1479,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/gitlet/repos/{name}` | **A repository**, laid out as a code host lays one out: its header (its owner's path and its name, its marks: its state where it is not active, scratch, a pull mirror, who reads it, a push mirror; and its description) and tabs **Code**, where it lands (the files at a revision: at a directory the latest commit that touched it across the head of a card of its entries, each with its glyph and its last commit, and at the root its README and LICENSE as tabs of one card and its rail beside them: **About** as sentences, **Open changes**, **Who pushes here**, **Pushes** over 14 days, its **Mirror** and its newest **Tag**; at a file its lines beside the repository's tree, the lines picked tinted, switched to its **Blame**, with **Raw** and **Download**, its **History** and a **Permalink** at the commit the revision resolved to; the branches and tags beside the revision picker at the root, **Go to file** (`t`), and **Code**, its clone address, command and ZIP), **Changes** (the changes proposed to it, in the grid every listing of changes draws, by state), **Commits** (the history at a revision, of a path or of every path, as a timeline of the reader's days, each commit with who wrote it, how it reached its branch, its checks, the change it landed with and its tags, its id with its copy and its files), **Branches** (its branches by when each moved, with who moved it, checks, drift and change, and its tags by date), **Pushes** (its push history), **Checks** (every attempt it keeps, newest ended first, each opening in the check pane) and **Settings** (its settings, rules, merge gates and path owners, a card each, shown and never edited here where the repository is declared: those lead to Settings › Configuration) *(hidden where the company hosts no code)*. A name no repository can have is said in place. Its page bar's **Compare** opens a comparison | `tab=code\|changes\|commits\|branches\|pushes\|checks\|settings` (`code` is never spelled: it is the landing) · on Code and Commits, `ref=` (a branch, a tag's whole ref or a commit; none is the default branch) and `path=` (from the root) · on Code, `lens=blame`, `lines=` (`12`, or `12-20`) and `doc=license` · on Commits, `by=` (a seat), `when=` (`today\|7d\|30d\|90d`) and `q=` (words in a message) · on Changes, `state=` · on Branches, `view=active\|stale\|all\|tags` and `q=` (a find) |
 | `#/gitlet/repos/{name}/commits/{sha}` | **A commit**, by its whole id: its header (subject, short id, repository, author, when it was authored and committed, its parents), who pushed it — the seat or the credential, when and how, and the turn, executor and work item behind a seat's push, as the engine recorded them — the changes it belongs to (those it merged, and those whose revision it heads), and what it changed against its first parent (a root commit's from git's empty tree) in the one `DiffView` *(hidden where the company hosts no code)*. An abbreviated id is Not Found | `file=` (a path) · `line=` (as on a comparison) · `layout=unified\|split` |
 | `#/gitlet/repos/{name}/compare` | **A comparison** of two revisions: how they relate (ahead, behind, their merge base), what merging the compared into the base would do (merges cleanly, or conflicts in which paths), what it changed since the two parted in the one `DiffView`, and the page bar's **Open change**, which proposes the compared branch into the base branch, prefilled with its head's subject and the work item its push was charged to *(hidden where the company hosts no code)* | `base=` (none is the default branch) · `head=` (none asks for it) · `file=` · `line=` (a line of `file=`'s newer side, marked and scrolled to, the patch read on to the page holding it; opening another file drops it; a failed check links one) · `layout=unified\|split` |
-| `#/gitlet/repos/{name}/changes/{n}` | **A change**, `web!42` in full, laid out as a code host lays one out: its header (reference, title, state beside a live change's readiness meter, and a byline saying who wants to merge which revision of which branch into which — or merged or closed it — and when, with its repository and its work item) and the page bar's **Approve**, **Request changes**, **Comment**, **Request review** and **Close** on a live change, **Reopen** alone on a closed one and nothing on a merged one; tabs, each with its glyph: **Conversation** (its description, a card its owner opened; the merge box — on a live change every condition to merge with where it stands, and the merge controls: where its gate stands, judged with the reader as the merger, **Merge** (or **Add to queue** where the target's gate requires a check) with its method, **Delete its branch** and **Close** its work item, sending the head on screen, held with the gate's sentence while it is unmet; **Override**, a person's alone with a reason; **Re-run checks**, **Rebase** and **Take out of the queue** — each refusal said by Gitlet's own word, and on a merged change into what, by whom and how, with **Revert**; its activity, a rail of its reviews and threads as cards and its revisions pushed as lines, in the order their records landed, with a comment of the reader's own; and beside them a rail of whom it asked for a review and where each stands, its owner, authors, work item, branches, head and whether it merges), **Files** (a tree of the revision's files beside one file's patch under its head in the one `DiffView`, every finding and thread under the line it is on as a card, the outdated ones under a Disclosure, a finding drafted on picked lines and sent with a review, and **Apply suggestion** on an open finding of the head), **Commits** (its revisions as cards, each with its facts and the way to its files and to what it changed), **Checks** (the attempts that judge it: its head's, checked for its target, each opening in the check pane), **Provenance** (who opened it, from which turn and executor, for which work item, and how it ended) and **Notified** (whom each record about it reached, and why) *(hidden where the company hosts no code)*. A number that is not a whole number from 1 is Not Found | `tab=conversation\|files\|commits\|checks\|provenance\|notified` · on Files, `rev=` (a revision; none is the head), `since=` (an earlier revision, to read what changed since it), `file=` (a path), `layout=unified\|split`, `thread=` (a thread on a line, opening its file and its revision) |
+| `#/gitlet/repos/{name}/changes/{n}` | **A change**, `web!42` in full, laid out as a code host lays one out: its header (reference and title beside a live change's readiness meter, and one sentence: its state pill, who wants to merge which revision of which branch into which, or merged or closed it, with the branch's copy, when it was opened and its work item) and the page bar's **Close change** and **Review** (a menu of the three verdicts and Request review) on a live change, a draft's **Ready for review**, **Reopen** alone on a closed one and nothing on a merged one; tabs, each with its glyph, the head's diffstat at the row's end: **Conversation** (its description, a card its owner opened; the merge box — on a live change every condition to merge with where it stands, and the merge controls: where its gate stands, judged with the reader as the merger, **Merge** (or **Add to queue** where the target's gate requires a check) with its method, **Delete its branch** and **Close** its work item, sending the head on screen, held with the gate's sentence while it is unmet; **Override**, a person's alone with a reason; **Re-run checks**, **Rebase** and **Take out of the queue** — each refusal said by Gitlet's own word, and on a merged change into what, by whom and how, with **Revert**; its activity, a rail of its reviews and threads as cards and its revisions pushed as lines, in the order their records landed, with a comment of the reader's own; and beside them a rail of whom it asked for a review and where each stands, its owner, authors, work item, branches, head and whether it merges), **Revisions** (its revisions as cards, each with its facts and the way to its files and to what it changed), **Checks** (the attempts that judge it: its head's, checked for its target, each opening in the check pane), **Files changed** (a tree of the revision's files beside one file's patch under its head in the one `DiffView`, every finding and thread under the line it is on as a card, the outdated ones under a Disclosure, a finding drafted on picked lines and sent with a review, and **Apply suggestion** on an open finding of the head) and **More** (where it came from: who opened it, from which turn and executor, for which work item, and how it ended; and whom each record about it reached, and why) *(hidden where the company hosts no code)*. A number that is not a whole number from 1 is Not Found | `tab=conversation\|revisions\|checks\|files\|more` · on Files changed, `rev=` (a revision; none is the head), `since=` (an earlier revision, to read what changed since it), `file=` (a path), `layout=unified\|split`, `thread=` (a thread on a line, opening its file and its revision) |
 | `#/gitlet/search` | **Gitlet › Search**: the lines of the repositories the reader reads that match a search, by repository and then file, each file a card of its path and its lines, each line opening its file at the commit it was searched at with the line picked, under a Callout of what was not searched — asked when the reader presses Search | `q=` (the search, in Gitlet's grammar), `mode=literal\|regex\|word`, `repo=`, `path=`, `ref=` |
 | `#/gitlet/pushes` | **Gitlet › Pushes**: one repository's pushes, newest first in log order — when, who pushed (the seat, or the credential and the seat it acts as), what became of its refs (five at most, its refusals first, the rest counted, every ref one press away; each a branch's or a tag's glyph, its name, the word for what became of it and the commits it moved between, a moved ref's the way to the comparison of what the push changed on it), the commits it brought, the turn and work item behind a seat's push, how it was built and its pack — with Load older | `repo=` (a repository's name; without one, the section asks for it) |
 | `#/gitlet/queue` | **Gitlet › Queue**: the merge queues of gated branches, a band per repository and branch, its entries in queue order — the place, the change, who enqueued it and its state — and, once a repository is named, each entry's train base, a `SegmentedMeter` of the required checks of what it is tested in, its time queued against the slowest of their declared timeouts, and what the queue put out in the last day, in the danger tone with the reason and the checks or paths the engine found | `repo=` (a repository's name; without one, every repository's live entries) |
@@ -3553,7 +3553,7 @@ change that merges nothing, what became of it in its state pill (Merged,
 Closed); and the findings seats raised that stand open, by weight with the
 heaviest first
 ("Open agent findings: Blocker 1 · Nit 2"), in words and never in a hue.
-**Open the diff** is one press to the change's page on its Files tab. The
+**Open the diff** is one press to the change's page on its Files changed tab. The
 byline's note says why it reached the reader in Gitlet's own words
 ("asked for your review", "asked to look again"), never the tracker's. The
 LIST ASKS NOTHING per card: every word above came with the list it was
@@ -5773,7 +5773,7 @@ a tool arrives in it with the control that sends it. The controls
 | Edit · Delete file · New file · Add a file | A repository's Code tab, on a branch: a file's card and a directory's bar; Add a file on an empty repository | `code_commit_files{repo, branch, expected_head, message, files}`: one commit of one file (`put` or `delete`) at the commit the page read; an empty repository's first file sends no `expected_head`, a root commit that makes its default branch |
 | Revert · Cherry-pick | A commit's page | `code_revert` / `code_cherry_pick{repo, branch, expected_head, commit, message?}`: one new commit on the branch chosen |
 | Rebase · Take out of the queue · Revert | A change's page, beside its merge controls; Take out on a row of Gitlet › Queue | `code_rebase_change{change, expected_head}` · `code_dequeue_change{change}` · `code_revert_change{change, merge?}`, each after a confirmation |
-| Answer finding | A standing finding on a change's Files tab | `code_resolve_finding{change, findings, resolution, note?}` |
+| Answer finding | A standing finding on a change's Files changed tab | `code_resolve_finding{change, findings, resolution, note?}` |
 | Send (`Enter`) | A chat room's composer | `post_message{channel, body, links?}`: under the operation key the outbox keeps (`Idempotency-Key`), so a retry after a lost answer is the same message rather than a second one. `links` are what the words link to that a room previews, read from the body when it is sent: this dashboard's records (a task, a page or an artifact the Attach pickers wrote in, or one linked by hand) as whole addresses on it, and github.com pull requests (`https://github.com/{owner}/{repo}/pull/{n}`, pasted or linked), once each and at most `MAX_MESSAGE_LINKS` (`chatlet.MaxLinks`), so the room previews what a person attached as it does what a seat links. Nothing is checked against the sender: `chat_unfurls` reads each record as the reader looking at the message, and a pull request only under an owner the GitHub configuration names, so a link previews nothing for a reader who may not open it, whoever sent it. A message of words alone sends none |
 | Reply | A chat thread's composer | `reply_in_thread{channel, reply_to, body, links?}`, its links read from the body as Send's are |
 | Edit message, then Save | A chat message of your own (its More menu) | `edit_message{channel, message_id, body}`: the author's alone, never an admin's on somebody else's words, and taken in an archived room. Save is held over a rewrite that is the message as it stands or is empty; the editor closes on an answer that took it and keeps your words on any other |
@@ -8730,11 +8730,13 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
 - **A change's page**, `#/gitlet/repos/{name}/changes/{n}` — the address its
   reference is short for, which mirrors the engine's own REST path
   (`/gitlet/repos/{name}/changes/{n}`) — is laid out as a code host lays one
-  out. Its header is its reference, title and state (that pill), beside a live
-  change's readiness meter (the one every listing draws), and a byline: who
-  wants to merge which revision of which branch into which — or merged it, or
-  closed it — and when, the two branches as chips that open their code, with
-  its repository and its work item. Its tabs each wear a glyph. It reads the
+  out. Its header is its reference and title, beside a live change's readiness
+  meter (the one every listing draws), and one sentence: its state pill, who wants
+  to merge which revision of which branch into which (or merged it, or closed it),
+  the branches as chips that open their code with a copy of the source's name,
+  when it was opened, merged or closed, and its work item. Its tabs are **Conversation**,
+  **Revisions**, **Checks**, **Files changed** and **More**, each with its glyph,
+  taken by the digits 1 to 5 in that order, and the row ends in the head's diffstat. It reads the
   change a part at a time (`code_change`): its detail rides the first page of its
   revisions, and each tab asks the part it draws, every one a code question at
   the tab's floor. The detail is the one read on a clock, every minute; a part
@@ -8773,7 +8775,7 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   never on a push or a mergeability its home recorded, which write no review
   or comment: a busy target branch re-checks every live change into it, and
   each held page would otherwise be read again on every push to it.
-  **Files** is the revision's files (`rev=`, the
+  **Files changed** is the revision's files (`rev=`, the
   head by default; `since=` reads what changed since an earlier revision, the
   engine's interdiff), a page at a time — **Load more files** asks the page
   after from the cursor the last one ended at — drawn as a TREE beside the
@@ -8810,11 +8812,11 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   review supersedes a finding the dialog never showed; the drafts are
   forgotten only once the engine has taken it. Findings and comments are each
   read a page of two hundred at a time, oldest first, and where either runs
-  past one the Files tab says so above the diff. An open finding
+  past one the Files changed tab says so above the diff. An open finding
   with a suggestion offers **Apply suggestion** (`code_apply_suggestions`,
   against the head on screen), and every finding and thread a reply; a thread
   **Resolve**. **Request review** asks reviewers by handle with a note
-  (`code_request_review`); **Close** and **Reopen** move the change against
+  (`code_request_review`); **Close change** and **Reopen** move the change against
   the version on screen (`code_close_change`). A finding that still stands
   offers **Answer finding** (`code_resolve_finding`): Resolved, Won't fix or
   Disputed, an author's answers, which leave a blocker standing for whoever
@@ -8830,19 +8832,20 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   transport's, through `useAct` and a `WriteButton`, and never optimistic:
   nothing moves until the engine answers, and the answer's position is the
   floor the page is read at next. The page bar draws what the change's state
-  leaves to it: a live change's verdicts, Request review and Close; a closed
-  change's Reopen alone; and nothing on a merged change, whose Revert stands
-  in the merge box. What this reader cannot do on a live change is drawn held
-  with the reason: a change's own author is held from every verdict ("You
-  wrote this change, so your review would not count"), since the engine takes
-  no review by an author (`own_change`), and Request review leads the
-  author's bar instead, the one write kept in view on a phone. **Commits**
+  leaves to it: on a live change **Close change** and **Review**, a menu of the three
+  verdicts and Request review, each held with its reason, and a draft's **Ready for
+  review**, all default buttons; a closed change's Reopen alone; and nothing on a
+  merged change, whose Revert stands in the merge box. A change's own author finds
+  every verdict held ("You wrote this change, so your review would not count"),
+  since the engine takes no review by an author (`own_change`); on a phone Close
+  change folds into the bar's More. **Revisions**
   lists the revisions as cards on
   the rail, newest first: who pushed each and when, its head with its copy,
   the facts its home recorded, and the way to its head commit, its files and
-  what it changed since the one before; **Provenance** who opened the change and with
+  what it changed since the one before; **More** holds where it came from, who
+  opened the change and with
   which credential, the turn and the executor behind it, its work item, its
-  authors and how it ended, a card of its properties; **Notified** whom each record about it reached
+  authors and how it ended, a card of its properties; and under it whom each record about it reached
   (`code_change_routing`), newest first, a card a record and each recipient by
   their face, with the one reason it
   heard under in the voice of somebody else's notice (`CODE_PHRASES`' `about`,

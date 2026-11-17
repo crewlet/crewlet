@@ -298,6 +298,12 @@ function mount(hash = "#/gitlet/repos/web/changes/42", viewer: unknown = VIEWER)
   );
 }
 
+/** Opens the page bar's Review menu and presses its item `name`. */
+async function review(name: string) {
+  fireEvent.click(await screen.findByRole("button", { name: "Review web!42" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name }));
+}
+
 // ONE REVIEW, ONE PRESS: Approve sends one code_review_change of the head
 // revision with every finding drafted on its lines and the reader's standing
 // findings it carries — and nothing moves until the engine answers, the
@@ -325,7 +331,7 @@ test("Approve is one review of the head carrying the drafts and the standing fin
   );
   mount();
 
-  fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+  await review("Approve");
   const dialog = await screen.findByRole("dialog");
   expect(within(dialog).getByText(/1 drafted finding on revision 2/)).toBeTruthy();
   await within(dialog).findByText("The retry never stops");
@@ -380,7 +386,7 @@ test("a review carries a standing finding on the standing read's second page", a
     },
   );
   mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Request changes" }));
+  await review("Request changes");
   const dialog = await screen.findByRole("dialog");
   await within(dialog).findByText("The retry never stops");
   expect(within(dialog).getByText("The backoff never grows")).toBeTruthy();
@@ -401,7 +407,7 @@ test("a review is held while the reader's standing findings are being read", asy
     standing: () => new Promise<Response>(() => {}),
   });
   mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+  await review("Approve");
   const dialog = await screen.findByRole("dialog");
   const press = within(dialog).getByRole("button", { name: "Approve" });
   await waitFor(() =>
@@ -427,7 +433,7 @@ test("a refused standing read holds the review until it is read again", async ()
     },
   );
   mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+  await review("Approve");
   const dialog = await screen.findByRole("dialog");
   const press = within(dialog).getByRole("button", { name: "Approve" });
   await waitFor(() => expect(press.getAttribute("title")).toMatch(/were not read/));
@@ -482,26 +488,27 @@ test("the Files tab asks for a diff again only when the change moves", async () 
     changeAsked.filter((u) => u.searchParams.get("part") === part).length;
   const details = () => changeAsked.filter((u) => !u.searchParams.get("part")).length;
   await waitFor(() => expect(askedFor("diff")).toBe(1));
-  expect(askedFor("files")).toBe(1);
+  // THE TAB ROW'S COUNTS ask the head's files beside the tab's own read, on its key.
+  expect(askedFor("files")).toBe(2);
 
   const before = details();
   for (let minute = 0; minute < 3; minute++) {
     await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
   }
   await waitFor(() => expect(details()).toBeGreaterThanOrEqual(before + 3));
-  expect(askedFor("files")).toBe(1);
+  expect(askedFor("files")).toBe(2);
   expect(askedFor("diff")).toBe(1);
 
   version = 6;
   await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
-  await waitFor(() => expect(askedFor("files")).toBe(2));
+  await waitFor(() => expect(askedFor("files")).toBe(4));
   await waitFor(() => expect(askedFor("diff")).toBe(2));
 
   // A RETARGET'S NEW FACTS land in a record of the home's own, after the one
   // that moved the version: the base they record moves the diff too.
   base = "fedcba9876543210fedcba9876543210fedcba98";
   await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
-  await waitFor(() => expect(askedFor("files")).toBe(3));
+  await waitFor(() => expect(askedFor("files")).toBe(6));
   await waitFor(() => expect(askedFor("diff")).toBe(3));
 });
 
@@ -784,6 +791,209 @@ test("the header's state is its pill, and its branches are chips in the byline a
   expect(rail.textContent).toBe("retry into main");
 });
 
+// THE HEADER IS ONE SENTENCE: the pill, who wants to merge which revision of
+// which branch into which, when it was opened and its work item.
+// Mutation: draw the time as a cell (no "opened"), or drop the copy, and this fails.
+test("the header says who wants to merge which revision of which branch into which, and when", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-27T13:00:00Z"));
+  stubEngine(
+    detail({ work_item: { backend: "worklet", id: "ENG-415", key: "ENG-415", project: "ENG" } }),
+    () => json({}),
+  );
+  mount();
+  const line = await waitFor(() => {
+    const said = document.querySelector<HTMLElement>(".code-change-byline");
+    expect(said?.textContent).toMatch(/opened 3 hours ago/);
+    return said!;
+  });
+  expect(line.firstElementChild?.querySelector(".code-state")).not.toBeNull();
+  expect(line.textContent).toMatch(
+    /^OpenEngineer\s*wants to merge revision 2 of retry\s*into main\s*·?opened 3 hours agoENG-415$/,
+  );
+  expect(within(line).getByRole("button", { name: "Copy the branch name" })).toBeTruthy();
+  expect(within(line).getByRole("link", { name: "ENG-415" }).getAttribute("href")).toBe(
+    "#/gitlet?work=worklet%3AENG-415&state=all",
+  );
+  expect(line.querySelector("time")?.getAttribute("title")).toBe(
+    fmtDateTime("2026-10-27T10:00:00Z"),
+  );
+});
+
+// REVIEW IS ONE DEFAULT BUTTON, its menu the three verdicts and Request review,
+// each opening its dialog. Mutation: make the trigger primary, and this fails.
+test("Review is one default button whose menu holds the verdicts and Request review", async () => {
+  stubEngine(detail(), () => json({}));
+  mount();
+  const trigger = await screen.findByRole("button", { name: "Review web!42" });
+  expect(trigger.className).not.toMatch(/primary/);
+  for (const button of document.querySelectorAll(".page-actions button")) {
+    expect(button.className, button.textContent ?? "").not.toMatch(/primary/);
+  }
+  fireEvent.click(trigger);
+  const items = await screen.findAllByRole("menuitem");
+  expect(items.map((i) => i.textContent)).toEqual([
+    "Approve",
+    "Request changes",
+    "Comment",
+    "Request review",
+  ]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Request review" }));
+  expect(await screen.findByRole("dialog", { name: "Request review of web!42" })).toBeTruthy();
+});
+
+/** The detail with a conversation of `comments` comments and two reviews. */
+const talked = (comments: number) =>
+  detail({
+    conversation: {
+      comments,
+      reviews: 2,
+      open_findings: 0,
+      open_blockers: 0,
+      changes_requested: 0,
+      version: 1,
+      position: POSITION,
+    },
+  });
+
+// THE TABS AND THEIR COUNTS: Conversation counts comments alone, Revisions the
+// head's number, Files changed the head's files (the diffstat note is a layout case).
+// Mutation: count reviews in Conversation's figure, and this fails.
+test("the tabs are Conversation, Revisions, Checks, Files changed and More, with their counts", async () => {
+  stubEngine(talked(3), () => json({}));
+  mount();
+  const row = await screen.findByRole("tablist", { name: "The change's sections" });
+  await waitFor(() =>
+    expect(within(row).getByRole("tab", { name: /^Files changed/ }).textContent).toBe(
+      "Files changed1",
+    ),
+  );
+  expect(
+    within(row)
+      .getAllByRole("tab")
+      .map((t) => t.textContent),
+  ).toEqual(["Conversation3", "Revisions2", "Checks", "Files changed1", "More"]);
+});
+
+// THE DIGITS FOLLOW THE TAB ORDER, and one past the end is left alone.
+// Mutation: reorder CHANGE_TABS, and this fails.
+test("the digits open the change's tabs in their order", async () => {
+  stubEngine(detail(), () => json({}));
+  mount();
+  await screen.findByRole("tabpanel");
+  const press = (key: string) =>
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    });
+  press("2");
+  await waitFor(() => expect(location.hash).toBe("#/gitlet/repos/web/changes/42?tab=revisions"));
+  press("5");
+  await waitFor(() => expect(location.hash).toBe("#/gitlet/repos/web/changes/42?tab=more"));
+  press("6");
+  await settled(() => location.hash.length);
+  expect(location.hash).toBe("#/gitlet/repos/web/changes/42?tab=more");
+});
+
+// MORE HOLDS PROVENANCE AND NOTIFIED one under the other; an old key lands on
+// the conversation. Mutation: keep a notified tab, and this fails.
+test("More holds where the change came from and whom it notified, and an old key lands on Conversation", async () => {
+  stubEngine(detail(), () => json({}));
+  mount("#/gitlet/repos/web/changes/42?tab=more");
+  expect(await screen.findByRole("heading", { name: "Where it came from" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "Whom its records notified" })).toBeTruthy();
+  expect(await screen.findByRole("list", { name: "Whom it notified" })).toBeTruthy();
+  cleanup();
+  stubEngine(detail(), () => json({}));
+  mount("#/gitlet/repos/web/changes/42?tab=notified");
+  const selected = await screen.findByRole("tab", { selected: true });
+  expect(selected.textContent).toMatch(/^Conversation/);
+});
+
+// THE COUNTS' FILES READ IS FILES CHANGED'S OWN FIRST QUESTION.
+// Mutation: ask the counts with other parameters, and this fails.
+test("the files read for the counts is the Files changed tab's own first question", async () => {
+  // A REVISION NO OTHER CASE READS: the tab's kept answers outlive a case.
+  stubEngine(detail({ revision: 9 }), () => json({}), {
+    files: () =>
+      engineJson(
+        {
+          position: POSITION,
+          level: "session",
+          revision: 9,
+          diff: {
+            base: HEAD,
+            head: HEAD,
+            files: [{ path: "app.go", status: "M", added: 1, deleted: 1 }],
+            total: 1,
+            added: 1,
+            deleted: 1,
+          },
+        },
+        200,
+        { "Cache-Control": "private, max-age=31536000, immutable", ETag: '"files-2"' },
+      ),
+  });
+  mount();
+  await screen.findByRole("tab", { name: /^Files changed/ });
+  const files = () => changeAsked.filter((u) => u.searchParams.get("part") === "files");
+  await waitFor(() => expect(files()).toHaveLength(1));
+  fireEvent.click(screen.getByRole("tab", { name: /^Files changed/ }));
+  expect(await screen.findByRole("region", { name: "Changes to app.go" })).toBeTruthy();
+  expect(files().length).toBeGreaterThan(0);
+  for (const u of files()) {
+    expect([u.searchParams.get("revision"), u.searchParams.get("since_revision")]).toEqual([
+      "9",
+      null,
+    ]);
+  }
+});
+
+// THE COUNTS ARE ASKED AGAIN ON FILES CHANGED'S OWN KEY: a base the head's
+// facts record anew moves them on Conversation too, once. Mutation: read the
+// counts once per head revision, and the tab keeps its old count.
+test("a moved base asks the tab row's counts again once", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  let base = HEAD;
+  let total = 1;
+  const revision = () => ({
+    n: 2,
+    head: HEAD,
+    pusher: "dev",
+    pusher_kind: "agent",
+    position: POSITION,
+    at: "2026-10-27T10:00:00Z",
+    facts: { target_ref: "refs/heads/main", target_oid: HEAD, base_oid: base, touched: [] },
+  });
+  stubEngine(detail(), () => json({}), {
+    "": () =>
+      json({ position: POSITION, level: "session", change: detail(), revisions: [revision()] }),
+    files: () =>
+      json({
+        position: POSITION,
+        level: "session",
+        revision: 2,
+        diff: { base, head: HEAD, files: [], total, added: total, deleted: 0 },
+      }),
+  });
+  mount();
+  const tab = await screen.findByRole("tab", { name: /^Files changed/ });
+  await waitFor(() => expect(tab.textContent).toBe("Files changed1"));
+  const files = () => changeAsked.filter((u) => u.searchParams.get("part") === "files").length;
+  const details = () => changeAsked.filter((u) => !u.searchParams.get("part")).length;
+  expect(files()).toBe(1);
+  let before = details();
+  await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
+  await waitFor(() => expect(details()).toBeGreaterThan(before));
+  await settled(() => changeAsked.length);
+  expect(files()).toBe(1);
+  base = "fedcba9876543210fedcba9876543210fedcba98";
+  total = 7;
+  await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
+  await waitFor(() => expect(tab.textContent).toBe("Files changed7"));
+  await settled(() => changeAsked.length);
+  expect(files()).toBe(2);
+});
+
 // A FINISHED CHANGE OFFERS ONLY WHAT STILL APPLIES: a merged change takes no
 // review, no ask and no close from anybody, so its bar draws none of them and
 // its Revert stands where the merge controls were; a closed one offers its
@@ -793,7 +1003,7 @@ test("a merged change offers no review, no ask and no close, only its revert", a
   stubEngine(detail({ state: "merged", readiness: undefined }), () => json({}));
   mount();
   await screen.findByRole("button", { name: "Revert" });
-  for (const name of ["Approve", "Request changes", "Request review", "Close", "Reopen"]) {
+  for (const name of ["Review web!42", "Close change", "Reopen"]) {
     expect(screen.queryByRole("button", { name }), name).toBeNull();
   }
 });
@@ -804,7 +1014,7 @@ test("a closed change offers its reopen alone", async () => {
   );
   mount();
   const reopen = await screen.findByRole("button", { name: "Reopen" });
-  for (const name of ["Approve", "Request changes", "Request review", "Close"]) {
+  for (const name of ["Review web!42", "Close change"]) {
     expect(screen.queryByRole("button", { name }), name).toBeNull();
   }
   await waitFor(() => expect(reopen.getAttribute("title")).toBeNull());
@@ -818,12 +1028,10 @@ test("a closed change offers its reopen alone", async () => {
   });
 });
 
-// AN AUTHOR'S REVIEW COUNTS FOR NOTHING, so the engine takes none: the reader
-// who wrote the change is held from every verdict with the reason, and asking
-// for a review is the step that leads their bar, the one kept in view on a
-// phone. Mutation: draw the verdicts for every reader, and the author is
-// offered Approve and then refused.
-test("the change's author is held from reviewing it, and asks for a review instead", async () => {
+// AN AUTHOR'S REVIEW COUNTS FOR NOTHING, so the engine takes none: the Review
+// menu holds the author's verdicts with the reason, and Request review stays open.
+// Mutation: draw the verdicts for every reader, and the author is offered Approve.
+test("the change's author finds the verdicts held in the Review menu, with why", async () => {
   stubEngine(
     detail({
       authors: [
@@ -834,19 +1042,17 @@ test("the change's author is held from reviewing it, and asks for a review inste
     () => json({}),
   );
   mount();
-  const ask = await screen.findByRole("button", { name: "Request review" });
-  // THE BAR'S OWN: the Conversation tab's comment box has a Comment of its own.
+  await screen.findByRole("tabpanel");
+  fireEvent.click(await screen.findByRole("button", { name: "Review web!42" }));
   for (const name of ["Approve", "Request changes", "Comment"]) {
-    const verdict = screen
-      .getAllByRole("button", { name })
-      .find((b) => b.closest(".page-action-folds") !== null);
-    await waitFor(() =>
-      expect(verdict?.getAttribute("title"), name).toBe(
-        "You wrote this change, so your review would not count. Ask somebody else to review it.",
-      ),
+    const verdict = await screen.findByRole("menuitem", { name: new RegExp(`^${name}`) });
+    await waitFor(() => expect(verdict.getAttribute("aria-disabled"), name).toBe("true"));
+    expect(verdict.textContent).toContain(
+      "You wrote this change, so your review would not count. Ask somebody else to review it.",
     );
   }
-  expect(ask.closest(".page-action-folds")).toBeNull();
+  const ask = screen.getByRole("menuitem", { name: /^Request review/ });
+  expect(ask.getAttribute("aria-disabled")).not.toBe("true");
 });
 
 // A LINE PICKED ON THE HEAD DRAFTS A FINDING INTO THE TAB, never to the
@@ -947,9 +1153,9 @@ test("the Checks tab lists the attempts that judge the change, asked by its numb
 
 // WHOM IT WOKE IS SAID IN SOMEBODY ELSE'S VOICE: a recipient is named with
 // why they heard, never "asked for your review" beside a colleague's name.
-test("the Notified tab names each recipient with why they heard, in the third person", async () => {
+test("More names each recipient with why they heard, in the third person", async () => {
   stubEngine(detail(), () => json({}));
-  mount("#/gitlet/repos/web/changes/42?tab=notified");
+  mount("#/gitlet/repos/web/changes/42?tab=more");
   const list = await screen.findByRole("list", { name: "Whom it notified" });
   expect(within(list).getByText(/asked to review/)).toBeTruthy();
   expect(within(list).queryByText(/your review/)).toBeNull();
@@ -969,13 +1175,16 @@ test.each([
   const acted = stubEngine(detail(), () => json({ outcome: "applied" }));
   mount("#/gitlet/repos/web/changes/42", viewer);
   await screen.findByRole("tabpanel");
-  for (const name of ["Approve", "Request changes", "Request review", "Close"]) {
-    const button = await screen.findByRole("button", { name });
-    await waitFor(() => expect(button.getAttribute("title"), name).toBe(reason));
+  const close = await screen.findByRole("button", { name: "Close change" });
+  await waitFor(() => expect(close.getAttribute("title")).toBe(reason));
+  fireEvent.click(screen.getByRole("button", { name: "Review web!42" }));
+  for (const name of ["Approve", "Request changes", "Comment", "Request review"]) {
+    const item = await screen.findByRole("menuitem", { name: new RegExp(`^${name}`) });
+    expect(item.getAttribute("aria-disabled"), name).toBe("true");
+    expect(item.textContent, name).toContain(reason);
   }
-  for (const button of screen.getAllByRole("button", { name: "Comment" })) {
-    expect(button.getAttribute("title")).toBe(reason);
-  }
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+  expect(screen.getByRole("button", { name: "Comment" }).getAttribute("title")).toBe(reason);
   cleanup();
 
   mount("#/gitlet/repos/web/changes/42?tab=files&file=app.go", viewer);
@@ -1010,7 +1219,7 @@ test("a comment on the change sends on Enter, and Shift+Enter is a new line", as
 });
 
 // A DRAFT'S NEXT STEP IS BEING MARKED READY, and the page offers it: Ready
-// for review is the bar's primary action, one code_update_change against the
+// for review is in the bar, one code_update_change against the
 // version on screen; and a draft is offered no merge. Mutation: drop the
 // action, send another version, or draw the merge controls on a draft, and
 // this fails.
@@ -1053,19 +1262,15 @@ test("a draft is marked ready for review from the page bar, and offers no merge"
   });
 });
 
-// ONE ACTION IN VIEW ON A PHONE: the bar hides `page-action-folds` at that
-// width and the same writes are in its More menu, so only the primary action
-// is left outside a fold. Mutation: draw the secondary writes bare, and the
-// bar runs off a phone's edge again, and this fails.
-test("the change's secondary writes fold on a phone, its primary action stays", async () => {
+// REVIEW STAYS IN VIEW ON A PHONE: the bar hides `page-action-folds` at that
+// width, and Close change is in its More menu. Mutation: fold Review, and this fails.
+test("Close change folds on a phone, and Review stays", async () => {
   stubEngine(detail(), () => json({ outcome: "applied" }));
   mount();
-  const approve = await screen.findByRole("button", { name: "Approve" });
-  expect(approve.closest(".page-action-folds")).toBeNull();
-  for (const name of ["Request changes", "Request review", "Close"]) {
-    const button = await screen.findByRole("button", { name });
-    expect(button.closest(".page-action-folds"), name).not.toBeNull();
-  }
+  const trigger = await screen.findByRole("button", { name: "Review web!42" });
+  expect(trigger.closest(".page-action-folds")).toBeNull();
+  const close = await screen.findByRole("button", { name: "Close change" });
+  expect(close.closest(".page-action-folds")).not.toBeNull();
 });
 
 // A DIFF IS READ FOR ITS CHANGES: with no file in the address the tab opens

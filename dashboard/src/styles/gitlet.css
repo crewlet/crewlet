@@ -54,7 +54,7 @@
 /* THE BYLINE under the title: who wants to merge which revision of which
    branch into which, the branches as chips that open their code. */
 .code-change-byline {
-  display: block;
+  display: inline-block;
   margin-block-start: var(--spacing-1);
 }
 
@@ -144,6 +144,82 @@
   display: inline-flex;
   border-radius: var(--radius-pill);
   text-decoration: none;
+}
+
+/* THE HEADER'S SENTENCE: the state pill, then the byline, wrapping as one line;
+   one atomic box, so the description's clamp never cuts it. */
+.code-change-byline__state {
+  display: inline-flex;
+  margin-inline-end: var(--spacing-2);
+  vertical-align: middle;
+}
+
+.code-change-byline > .code-byline {
+  display: inline;
+}
+
+.code-change-byline > .code-byline > * {
+  margin-inline-end: var(--spacing-2);
+  vertical-align: middle;
+}
+
+.code-change-byline__source {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.code-change-byline__at::before {
+  content: "·";
+  margin-inline-end: var(--spacing-1);
+}
+
+.code-change-byline__work {
+  display: inline-flex;
+  border-radius: var(--radius-pill);
+  text-decoration: none;
+}
+
+/* THE TAB ROW'S NOTE: the head's lines added and removed, five squares told by
+   shape (filled added, hollow removed); the diff colours stay a diff's own. */
+.code-diffstat {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.code-diffstat__squares {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.code-diffstat__squares > span {
+  box-sizing: border-box;
+  inline-size: 8px;
+  block-size: 8px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+}
+
+.code-diffstat__squares > [data-kind="added"] {
+  background: currentColor;
+}
+
+/* MORE: where the change came from, then whom its records notified. */
+.code-more {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+
+.code-more__title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
 }
 
 /* THE DESCRIPTION: a card its owner opened, the first thing on the page. */
