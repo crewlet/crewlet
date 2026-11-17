@@ -801,8 +801,14 @@ for (const [viewport, column] of [
     for (const el of [content, card, table]) {
       expect(el.scrollWidth, el.className).toBeLessThanOrEqual(el.clientWidth);
     }
-    const bar = document.querySelector<HTMLElement>(".code-bar-end")!.getBoundingClientRect();
+    const end = document.querySelector<HTMLElement>(".code-bar-end")!;
+    const bar = end.getBoundingClientRect();
     expect(bar.right).toBeLessThanOrEqual(content.getBoundingClientRect().right + 0.5);
+    // THE END GROUP IS ONE LINE where there is room: Go to file never takes the whole group.
+    if (column >= 640) {
+      const tops = [...end.children].map((el) => Math.round(el.getBoundingClientRect().top));
+      expect(new Set(tops).size, tops.join(",")).toBe(1);
+    }
     for (const row of table.querySelectorAll<HTMLElement>("tbody tr")) {
       const box = row.getBoundingClientRect();
       const name = row.querySelector(".code-entries__name")!.getBoundingClientRect();

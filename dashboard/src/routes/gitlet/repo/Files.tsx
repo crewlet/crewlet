@@ -699,7 +699,9 @@ function RefCounts({ repo, tags = true }: { repo: CodeRepoDetail; tags?: boolean
         href={repoHref(repo.name, { tab: "branches" })}
         leadingIcon={<GitBranchGlyph size="sm" />}
       >
-        <strong>{fmtCount(repo.branches)}</strong> {repo.branches === 1 ? "Branch" : "Branches"}
+        <span>
+          <strong>{fmtCount(repo.branches)}</strong> {repo.branches === 1 ? "Branch" : "Branches"}
+        </span>
       </ButtonLink>
       {tags && (
         <ButtonLink
@@ -708,7 +710,9 @@ function RefCounts({ repo, tags = true }: { repo: CodeRepoDetail; tags?: boolean
           href={repoHref(repo.name, { tab: "branches", view: "tags" })}
           leadingIcon={<TagGlyph size="sm" />}
         >
-          <strong>{fmtCount(repo.tags)}</strong> {repo.tags === 1 ? "Tag" : "Tags"}
+          <span>
+            <strong>{fmtCount(repo.tags)}</strong> {repo.tags === 1 ? "Tag" : "Tags"}
+          </span>
         </ButtonLink>
       )}
     </span>

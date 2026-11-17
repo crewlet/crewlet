@@ -1973,12 +1973,15 @@
 }
 
 /* GO TO FILE in the bar's end group; a phone gives it a line of its own. */
-.code-find {
-  flex: 0 1 calc(9 * var(--size-control-sm));
+.code-bar-end .code-find {
+  flex: 0 1 auto;
+  inline-size: calc(9 * var(--size-control-sm));
+  max-inline-size: 100%;
 }
 @container page (width < 640px) {
-  .code-find {
+  .code-bar-end .code-find {
     flex: 1 1 100%;
+    inline-size: 100%;
   }
 }
 
