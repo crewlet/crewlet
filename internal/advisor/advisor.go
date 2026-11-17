@@ -29,6 +29,15 @@
 // permission the seat catalogue offers), never listed by hand, so it cannot
 // fall behind the Agents tab.
 //
+// # Work that stalls where nothing else says so
+//
+// stalls.go reads six more classes from the week's records: runs that end on
+// their round cap, seats a budget stopped while they held work, open work piled
+// on one agent, the item the most work waits on, ready agent work behind a
+// person, and merges a delegate allowed that waited on a person for want of a
+// required check. Every class says one thing for every subject, so it reads as
+// one row ([TestEveryClassSaysOneThingAboutEverySubject]).
+//
 // # What the atlas shows needs a person
 //
 // atlas.go reads five more classes off the company's atlas as its asker reads
@@ -44,6 +53,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Class names what a finding is about. Each has one entry in [catalogue].
@@ -122,6 +132,8 @@ const (
 	SubjectIntegration SubjectKind = "integration"
 	SubjectSeat        SubjectKind = "seat"
 	SubjectSchedule    SubjectKind = "schedule"
+	// SubjectRepository is a repository, named as its code host names it.
+	SubjectRepository SubjectKind = "repository"
 )
 
 // Subject is the one thing a finding is about.
@@ -143,6 +155,41 @@ type Fact struct {
 	Value int64  `json:"value"`
 }
 
+// RecordKind is what a record names, so a reader knows how to open it.
+type RecordKind string
+
+// The records a finding names.
+const (
+	// RecordItem is a work item, by its key.
+	RecordItem RecordKind = "item"
+	// RecordTurn is one turn of an agent, by its id.
+	RecordTurn RecordKind = "turn"
+	// RecordChange is a pull request's address or a Gitlet change's reference.
+	RecordChange RecordKind = "change"
+	// RecordComment is a comment, by its id.
+	RecordComment RecordKind = "comment"
+)
+
+// Record is one record behind a finding's evidence.
+type Record struct {
+	Kind RecordKind `json:"kind"`
+	ID   string     `json:"id"`
+}
+
+// recordsOf is ids as records of one kind, at most [worklet.MaxPatternExamples].
+func recordsOf(kind RecordKind, ids []string) []Record {
+	out := []Record{}
+	for _, id := range ids {
+		if len(out) == worklet.MaxPatternExamples {
+			break
+		}
+		if id != "" {
+			out = append(out, Record{Kind: kind, ID: id})
+		}
+	}
+	return out
+}
+
 // Finding is one thing about a company's setup an administrator should know,
 // with the change that fixes it.
 type Finding struct {
@@ -153,7 +200,8 @@ type Finding struct {
 	Area     Area     `json:"area"`
 	Subject  Subject  `json:"subject"`
 	// Title says what is wrong, in one line. Title and Why are the same on
-	// every finding of one class: what it is about is Subject, Item and Names.
+	// every finding of one class, so a class reads as one row: what it is
+	// about is Subject, Item, Names, Evidence and Records.
 	Title string `json:"title"`
 	// Why says what it costs, in the owner's words.
 	Why string `json:"why"`
@@ -166,8 +214,8 @@ type Finding struct {
 	// Path is where in the company document the finding is located.
 	Path     string `json:"path"`
 	Evidence []Fact `json:"evidence"`
-	// Records names at most five records behind the evidence, by id.
-	Records []string `json:"records,omitempty"`
+	// Records names at most five records behind the evidence.
+	Records []Record `json:"records,omitempty"`
 	// Entries names at most [MaxAtlasEntries] atlas entries the finding is
 	// about, only for a reader who holds the atlas app.
 	Entries []AtlasEntry `json:"entries,omitempty"`
@@ -186,7 +234,8 @@ type Answer struct {
 // [Answer.Unread]'s words: integrations whose last reconcile, the tracker's
 // work patterns, the turn ledger, the alarms (this node's evaluation or the
 // fleet's marks), the seats' pauses, the executor runs' records, the schedules'
-// fires and the held conversations that could not be read.
+// fires, the held conversations, the budget refusals and the merge
+// escalations that could not be read.
 const (
 	UnreadIntegrations = "integrations"
 	UnreadWork         = "work"
@@ -196,6 +245,8 @@ const (
 	UnreadRuns         = "runs"
 	UnreadFires        = "fires"
 	UnreadHolds        = "holds"
+	UnreadStops        = "budget_stops"
+	UnreadMerges       = "merges"
 )
 
 // Inputs is what one answer is read from.

@@ -65,11 +65,18 @@ const (
 	// PatternApprovalRubberStamp is a person choosing one agent's
 	// recommended option on almost every decision it asks of them.
 	PatternApprovalRubberStamp Pattern = "approval_rubber_stamp"
+	// PatternWorkBottleneck is one item an agent holds that much open work
+	// waits on, directly or through each other.
+	PatternWorkBottleneck Pattern = "work_bottleneck"
+	// PatternWorkHeldByPerson is agent work that needs no decision of its own
+	// waiting on an item a person holds.
+	PatternWorkHeldByPerson Pattern = "work_held_by_person"
 )
 
 // Patterns is every [Pattern] a timeline may declare.
 var Patterns = []Pattern{PatternHealthyCompany, PatternAgentHandoffs, PatternAgentMentionsWithoutAsk,
-	PatternPersonRequestsWithoutAsk, PatternAskOvertaken, PatternReviewIdle, PatternApprovalRubberStamp}
+	PatternPersonRequestsWithoutAsk, PatternAskOvertaken, PatternReviewIdle, PatternApprovalRubberStamp,
+	PatternWorkBottleneck, PatternWorkHeldByPerson}
 
 // Valid reports whether p is a declared pattern.
 func (p Pattern) Valid() bool { return slices.Contains(Patterns, p) }
@@ -111,10 +118,12 @@ const (
 	VerbWatch Verb = "watch"
 	// VerbTurn is a turn Actor takes on the item, charged to it.
 	VerbTurn Verb = "turn"
+	// VerbWait makes the item wait on the item On names.
+	VerbWait Verb = "wait"
 )
 
 // Verbs is every [Verb].
-var Verbs = []Verb{VerbFile, VerbComment, VerbAssign, VerbStatus, VerbWatch, VerbTurn}
+var Verbs = []Verb{VerbFile, VerbComment, VerbAssign, VerbStatus, VerbWatch, VerbTurn, VerbWait}
 
 // Valid reports whether v is a declared verb.
 func (v Verb) Valid() bool { return slices.Contains(Verbs, v) }
@@ -150,6 +159,8 @@ type Step struct {
 	Assignee string `json:"assignee,omitempty"`
 	Status   string `json:"status,omitempty"`
 	Watcher  string `json:"watcher,omitempty"`
+	// On is the filed item a wait step makes the item wait on.
+	On string `json:"on,omitempty"`
 
 	// Expect is what the step must cause, read from the records it wrote.
 	Expect Expect `json:"expect"`
@@ -270,6 +281,9 @@ func (tl Timeline) checkStep(i int, st Step, filed map[string]bool) error {
 	if st.Verb != VerbFile && !filed[st.Item] {
 		return fmt.Errorf("%s is %s before it is filed", st.Item, st.Verb)
 	}
+	if st.On != "" && (!filed[st.On] || st.On == st.Item) {
+		return fmt.Errorf("%s waits on %q, which is not another filed item", st.Item, st.On)
+	}
 	for _, h := range slices.Concat(st.Mentions, []string{st.Ask, st.Assignee, st.Watcher}, st.Expect.Woken) {
 		if h != "" && tl.Kind(h) == "" {
 			return fmt.Errorf("%q is not a declared seat", h)
@@ -294,7 +308,7 @@ func checkVerbFields(tl Timeline, i int, st Step) error {
 		"asks":    st.Asks != nil,
 		"answers": st.Answers != nil, "assignee": st.Assignee != "",
 		"recommend": st.Recommend != "", "choose": st.Choose != "",
-		"status": st.Status != "", "watcher": st.Watcher != "",
+		"status": st.Status != "", "watcher": st.Watcher != "", "on": st.On != "",
 	}
 	allowed := map[Verb][]string{
 		VerbFile:    {"assignee"},
@@ -303,9 +317,11 @@ func checkVerbFields(tl Timeline, i int, st Step) error {
 		VerbStatus:  {"status", "assignee"},
 		VerbWatch:   {"watcher"},
 		VerbTurn:    {},
+		VerbWait:    {"on"},
 	}[st.Verb]
 	required := map[Verb]string{
 		VerbComment: "say", VerbAssign: "assignee", VerbStatus: "status", VerbWatch: "watcher",
+		VerbWait: "on",
 	}[st.Verb]
 	for field, set := range has {
 		if set && !slices.Contains(allowed, field) {

@@ -57,6 +57,8 @@ export interface AdvisorFix {
   url?: string;
   /** The dashboard page an `open_page` fix is taken on (`ADVISOR_PAGES`). */
   page?: AdvisorPage | (string & {});
+  /** What that page opens on: an item's key, a seat's handle. */
+  target?: string;
   /** The question a `draft_with_assistant` fix asks Ask Crewlet. */
   prompt?: string;
   /** The atlas tool call an `atlas_act` fix sends, once per entry the finding names. */
@@ -85,11 +87,28 @@ export interface AdvisorAtlasEntry {
 
 /** The one thing a finding is about. */
 export interface AdvisorSubject {
-  kind: "company" | "seat" | "schedule" | "integration" | "alarm" | "atlas" | (string & {});
+  kind:
+    | "company"
+    | "seat"
+    | "schedule"
+    | "integration"
+    | "repository"
+    | "alarm"
+    | "atlas"
+    | (string & {});
   seat?: string;
   unit?: string;
   schedule?: string;
   name?: string;
+}
+
+/**
+ * One record behind a finding: a work item by key, a turn by id, a change by its
+ * address or Gitlet reference (`web!42`), or a comment by id.
+ */
+export interface AdvisorRecord {
+  kind: "item" | "turn" | "change" | "comment" | (string & {});
+  id: string;
 }
 
 /** One thing about the company's setup worth acting on. */
@@ -108,6 +127,8 @@ export interface AdvisorFinding {
   item?: string;
   /** The seats it is about, by name, where one finding speaks for several. */
   names?: string[];
+  /** At most five records behind its evidence. */
+  records?: AdvisorRecord[];
   /** At most five atlas entries the finding is about; absent for a reader without the atlas app. */
   entries?: AdvisorAtlasEntry[];
   fix: AdvisorFix;
@@ -144,7 +165,7 @@ export interface AdvisorAnswer {
   notices?: AdvisorNotice[];
   /**
    * What the answer could not read (`integrations`, `work`, `ledger`, `pauses`, `runs`, `alarms`,
-   * `atlas`, `atlas_sources`),
+   * `budget_stops`, `merges`, `atlas`, `atlas_sources`),
    * so a short list never reads as all clear.
    */
   unread: string[];
