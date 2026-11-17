@@ -457,6 +457,7 @@ func TestAPurgeIsBoundedByWhatItsChangesWeigh(t *testing.T) {
 						received_at, row_bytes)
 					SELECT printf('wide-%02d', i), ?, i + 1, 0, 'seed', 'operator', 'git', '[]', 0, ? FROM k`,
 					tc.pushes, id, width)
+				gitlet.RecountChanges(t, n.db)
 			}
 			changes := func() int {
 				return n.count(`SELECT COUNT(*) FROM code_changes WHERE repo_id = ?`, id)

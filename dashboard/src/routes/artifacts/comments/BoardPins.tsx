@@ -77,6 +77,7 @@ export function BoardPins({
     const { anchor, board } = hit;
     const seq = c.startDraft({ anchor, label: anchorLabel(anchor), crop: undefined });
     if (c.narrow) c.showPanel();
+    else c.stepAside();
     capture.current?.();
     capture.current = null;
     // A BOARD THAT IS NOT LIVE (off screen, or drawn too small to run) has no
@@ -94,9 +95,8 @@ export function BoardPins({
       if (capture.current === stop) capture.current = null;
     });
     capture.current = stop;
-    id = host.captureComment({
-      point: { x: (anchor.x ?? 0) / board.w, y: (anchor.y ?? 0) / board.h },
-    });
+    // A BOARD'S PIXELS ARE ITS PAGE'S VIEWPORT, which the page may scroll past the board.
+    id = host.captureComment({ view: { x: anchor.x ?? 0, y: anchor.y ?? 0 } });
   };
 
   const pins = c.threads.filter(

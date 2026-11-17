@@ -339,7 +339,8 @@ version.
   and a `doc`, a `dashboard` and a `sheet` take only those in this release.
 - **A thread remembers where and when it was made**: its anchor, the version
   it was made on, the section's words as the commenter saw them (up to 1 KiB)
-  and, if they chose, a picture of that part (up to 64 KiB). It never stores
+  and, if they chose, a picture of that part as they saw it, with the page
+  and any element in it scrolled where they left it (up to 64 KiB). It never stores
   where it is on a later version: that is **found again** on every version a
   reader opens, by the anchor's content. A section is found by its name, an
   element by its path and, if the slide was rearranged, by its tag and words,

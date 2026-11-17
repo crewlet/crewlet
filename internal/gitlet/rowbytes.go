@@ -134,6 +134,18 @@ func stringsBytes(ss []string) int {
 	return n
 }
 
+// int64sBytes is the length of a list of numbers.
+func int64sBytes(ns []int64) int {
+	n := 2
+	for i, v := range ns {
+		if i > 0 {
+			n++
+		}
+		n += intBytes(v)
+	}
+	return n
+}
+
 // encodedBytes is the length of the ref's JSON encoding.
 func (r RefRow) encodedBytes() int {
 	n := 2 + field("ref", stringBytes(r.Ref), true)
@@ -742,6 +754,9 @@ func (s RepoSummary) encodedBytes() int {
 	if !s.LastPushAt.IsZero() {
 		n += field("last_push_at", timeBytes(s.LastPushAt), false)
 	}
+	if len(s.Spark) > 0 {
+		n += field("spark", int64sBytes(s.Spark), false)
+	}
 	if s.ChangeCounts != nil {
 		n += field("change_counts", s.ChangeCounts.encodedBytes(), false)
 	}
@@ -1128,7 +1143,11 @@ func (r ReviewerRow) encodedBytes() int {
 	if r.Note != "" {
 		n += field("note", stringBytes(r.Note), false)
 	}
-	return n + field("position", positionBytes(r.Position), false)
+	n += field("position", positionBytes(r.Position), false)
+	if !r.At.IsZero() {
+		n += field("at", timeBytes(r.At), false)
+	}
+	return n
 }
 
 // encodedBytes is the length of the comment's JSON encoding.
@@ -1273,7 +1292,19 @@ func (f FindingRow) encodedBytes() int {
 	if !f.ResolvedPosition.IsZero() {
 		n += field("resolved_position", positionBytes(f.ResolvedPosition), false)
 	}
-	return n + field("position", positionBytes(f.Position), false)
+	n += field("position", positionBytes(f.Position), false)
+	if !f.RaisedAt.IsZero() {
+		n += field("raised_at", timeBytes(f.RaisedAt), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the group's JSON encoding.
+func (p FindingPathRow) encodedBytes() int {
+	return 2 + field("path", stringBytes(p.Path), true) +
+		field("state", stringBytes(string(p.State)), false) +
+		field("revision", intBytes(p.Revision), false) +
+		field("findings", intBytes(p.Findings), false)
 }
 
 // encodedBytes is the length of the anchor's JSON encoding.

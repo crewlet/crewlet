@@ -448,6 +448,12 @@ func TestAFieldOneKindReadsIsRefusedOnEveryOther(t *testing.T) {
 			q.ChangeSort = gitlet.ChangeSortUpdated
 		}},
 		{"cards", []gitlet.ReadKind{gitlet.ReadChanges}, func(q *gitlet.ReadQuery) { q.Cards = true }},
+		{"day_bounds", []gitlet.ReadKind{gitlet.ReadRepos, gitlet.ReadRepo, gitlet.ReadPushes},
+			func(q *gitlet.ReadQuery) {
+				day := harnessAt.Truncate(gitlet.PushSlot)
+				q.DayBounds = []time.Time{day, day.Add(24 * time.Hour)}
+			}},
+		{"finding_paths", []gitlet.ReadKind{gitlet.ReadChange}, func(q *gitlet.ReadQuery) { q.FindingPaths = true }},
 	} {
 		for _, kind := range gitlet.ReadKinds() {
 			q, named := asks[kind]

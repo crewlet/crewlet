@@ -20,9 +20,20 @@ test("every built-in harness has a kit mark or is a glyph harness, and only buil
 });
 
 // The kit names a harness's mark after the harness or its first word (gemini-cli, qwen).
-test.each(GLYPH_HARNESSES)("the kit ships no mark named after %s", (harness) => {
-  expect(KIT).not.toContain(harness);
-  expect(KIT).not.toContain(harness.split("-")[0]);
+test("the kit ships no mark named after a glyph harness", () => {
+  for (const harness of GLYPH_HARNESSES) {
+    expect(KIT).not.toContain(harness);
+    expect(KIT).not.toContain(harness.split("-")[0]);
+  }
+});
+
+test.each([
+  ["codex", "openai"],
+  ["muse-code", "meta"],
+  ["kimi-code", "kimi"],
+])("%s draws its vendor's mark, %s, rather than the glyph", (harness, vendor) => {
+  expect(HARNESS_MARKS[harness]).toBe(vendor);
+  expect(GLYPH_HARNESSES).not.toContain(harness);
 });
 
 test.each(Object.entries(HARNESS_MARKS))("%s draws the kit's %s mark", (harness, vendor) => {

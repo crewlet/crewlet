@@ -989,6 +989,7 @@ func (n *node) purgeNow(id string) {
 		if err != nil {
 			n.t.Fatalf("purge %s: %v", id, err)
 		}
+		n.activityHolds()
 		if res.Done {
 			return
 		}

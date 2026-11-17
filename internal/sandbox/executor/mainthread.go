@@ -52,10 +52,10 @@ type threadReading interface {
 
 // walkThread reads r, one thread member, a whole line at a time through the
 // layer's reader ([newThreadReader]) within maxBytes, handing each line to
-// every reading in the order given, ctx checked between lines, and each
-// reading's end once. It goes on past a refused line, the reader staying
-// usable, so a reading that reads past one (the floor's figure, which counts
-// nothing of it) reads every line after it.
+// every reading in the order given, ctx asked by the reader before each line
+// ([threadReader.Next]), and each reading's end once. It goes on past a
+// refused line, the reader staying usable, so a reading that reads past one
+// (the floor's figure, which counts nothing of it) reads every line after it.
 func walkThread(ctx context.Context, r io.Reader, maxBytes int64, readings ...threadReading) {
 	reader := newThreadReader(r, maxBytes)
 	ended := func(torn bool, err error) {
@@ -64,11 +64,7 @@ func walkThread(ctx context.Context, r io.Reader, maxBytes int64, readings ...th
 		}
 	}
 	for {
-		if err := ctx.Err(); err != nil {
-			ended(false, err)
-			return
-		}
-		l, err := reader.Next()
+		l, err := reader.Next(ctx)
 		var refused *threadLineError
 		switch {
 		case err == nil:
