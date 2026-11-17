@@ -62,7 +62,8 @@ const (
 // and every person's notices. The caller names the read level.
 func PatternsWindow(now time.Time, c *config.Company) worklet.PatternsQuery {
 	return worklet.PatternsQuery{Since: now.Add(-Window), Until: now,
-		Reviewers: AgentHandles(c), QuietSince: now.Add(-ReviewQuiet), People: personHandles(c)}
+		Reviewers: AgentHandles(c), QuietSince: now.Add(-ReviewQuiet), People: personHandles(c),
+		Agents: AgentHandles(c)}
 }
 
 // LedgerDays is how many company days the turn ledger is read over: the
@@ -79,13 +80,23 @@ type Evidence struct {
 	Backup Backup
 	// Paused is every agent seat the engine paused for a failure (ADR-0117).
 	Paused []PausedSeat
-	// MemoryKills is every run in the window the kernel stopped for memory.
-	MemoryKills []MemoryKill
+	// Runs is every executor run in the window that ended for memory or on
+	// its round cap.
+	Runs []EndedRun
 	// Fires is every schedule fire in the window whose turn could be read.
 	Fires []ScheduleFire
-	// WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread and RunsUnread say the
-	// caller could not read that source, so its classes raise nothing and the answer names it.
+	// Stops is every turn in the window refused on a token budget.
+	Stops []BudgetStop
+	// Merges is every merge in the window a delegate allowed and the engine
+	// put to people because its branch requires no check.
+	Merges []UncheckedMerge
+	// Waiting is each agent seat's wakes queued now, by handle, where its
+	// holder reported them.
+	Waiting map[string]int
+	// The Unread flags say the caller could not read that source, so its
+	// classes raise nothing and the answer names it.
 	WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread, RunsUnread, FiresUnread bool
+	StopsUnread, MergesUnread                                                     bool
 }
 
 // source is the record a detector reads.
@@ -104,6 +115,10 @@ const (
 	sourceRuns
 	// sourceFires is the schedules' fires and what their turns wrote, [Evidence.Fires].
 	sourceFires
+	// sourceStops is the turns refused on a budget, [Evidence.Stops].
+	sourceStops
+	// sourceMerges is the access log's merge escalations, [Evidence.Merges].
+	sourceMerges
 )
 
 // unread reports whether ev could not read src.
@@ -121,6 +136,10 @@ func (ev Evidence) unread(src source) bool {
 		return ev.RunsUnread
 	case sourceFires:
 		return ev.FiresUnread
+	case sourceStops:
+		return ev.StopsUnread
+	case sourceMerges:
+		return ev.MergesUnread
 	}
 	panic(fmt.Sprintf("advisor: a detector reads source %d, which is none", src))
 }
@@ -164,6 +183,9 @@ var detectors = []detector{
 	{ClassApprovalRubberStamp, sourceWork, approvalRubberStamp},
 	{ClassSandboxOutOfMemory, sourceRuns, sandboxOutOfMemory},
 	{ClassInboundSilent, sourceWork, inboundSilent},
+	{ClassWorkBottleneck, sourceWork, workBottleneck},
+	{ClassWorkHeldByPerson, sourceWork, workHeldByPerson},
+	{ClassMergeNoChecks, sourceMerges, mergeNoChecks},
 }
 
 // Thresholds, each the point where a pattern stops being a slip: routing on
@@ -212,6 +234,9 @@ const (
 func EvidenceClasses() []Class {
 	out := make([]Class, 0, len(detectors))
 	for _, d := range detectors {
+		out = append(out, d.class)
+	}
+	for _, d := range documented {
 		out = append(out, d.class)
 	}
 	return append(append(out, PausedClasses()...), ClassScheduleUnproductive)
@@ -266,6 +291,11 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 			s.Name = seatName(c, s.Seat)
 		}
 	}
+	for _, d := range documented {
+		if !ev.unread(d.source) {
+			found = append(found, d.detect(c, ev)...)
+		}
+	}
 	answer.Findings = scheduleEvidence(c, ev, append(answer.Findings, found...))
 	sortFindings(answer.Findings)
 	if ev.WorkUnread {
@@ -286,6 +316,12 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 	if ev.FiresUnread {
 		answer.Unread = append(answer.Unread, UnreadFires)
 	}
+	if ev.StopsUnread {
+		answer.Unread = append(answer.Unread, UnreadStops)
+	}
+	if ev.MergesUnread {
+		answer.Unread = append(answer.Unread, UnreadMerges)
+	}
 	return answer
 }
 
@@ -298,13 +334,60 @@ func seatName(c *config.Company, handle string) string {
 	return handle
 }
 
-func engineFinding(class Class, subject Subject, title, why string, facts []Fact, records []string) Finding {
+// engineFinding is an engine class's finding in its class's words, what it is
+// about in item, facts and records.
+func engineFinding(class Class, subject Subject, item string, facts []Fact, records []Record) Finding {
+	said := engineWords[class]
 	return Finding{
 		Class: class, Severity: SeverityNote, Actor: ActorEngine, Source: SourceEvidence,
-		Area: AreaWork, Subject: subject, Title: title, Why: why, Evidence: facts,
-		Records: slices.Clone(records),
+		Area: AreaWork, Subject: subject, Title: said.title, Why: said.why, Item: item, Evidence: facts,
+		Records: records,
 		Fix:     Fix{Kind: FixNone, Options: []Option{}, Sentence: engineSentences[class]},
 	}
+}
+
+// said is a class's title and why, the same for every subject it is raised for.
+type said struct{ title, why string }
+
+// engineWords is every engine class's words.
+var engineWords = map[Class]said{
+	ClassAgentMentionsWithoutAsk: {"Agents woke each other with comments that asked nothing.",
+		"A comment that names an agent wakes it, and these asked it nothing, so each started a " +
+			"turn with nothing to answer."},
+	ClassPersonRequestsWithoutAsk: {"Agents asked a person for something without asking them a question.",
+		"Agents asked these people for an answer or an action in comments that put no question to " +
+			"them with an ask, so nothing in them reached the Inbox as a decision."},
+	ClassAskOvertaken: {"People answered questions that no longer needed an answer.",
+		"These answers went to a question its asker had asked again since, or whose item had " +
+			"already finished."},
+	ClassNoticeLoad: {"A person was sent more notices than anyone reads.",
+		"Most of the notices these people were sent asked nothing of them, so what does ask them " +
+			"waits among the rest."},
+	ClassNoopShare: {"An agent was woken for turns that changed nothing.",
+		"A quarter or more of these agents' turns committed nothing: no work moved and no words written."},
+	ClassPickupStillWaiting: {"Agents picked up work and moved none of it.",
+		"These pickups ended with words only (a comment or a chat post) and nothing typed on the " +
+			"item, as when an agent says the item still waits on something."},
+	ClassRedeliveredSeen: {"Wakes repeated changes an agent had already read.",
+		"These agents were woken for changes a turn of theirs had already read, so the engine " +
+			"absorbed the wakes instead of starting turns."},
+	ClassAuxiliaryShare: {"An agent spent a large share of its tokens on auxiliary calls.",
+		"More than 15% of the tokens these agents' turns spent went to auxiliary calls inside them " +
+			"rather than to the turns' own work."},
+}
+
+// reviewWords is each way a review waits: on the agent holding it, on a
+// person its holder asked, or on nobody.
+var reviewWords = map[string]said{
+	"holder": {"Work in review waited a day for the agent holding it.",
+		"The agent holding these items in review took no turn on them in the last 24 hours (a turn " +
+			"on a linked pull request counts on the change, not the item), so the work behind them waits."},
+	"asked": {"Work in review waited a day for a person's answer.",
+		"Their holders asked this person to review them a day ago or more, so the work behind them " +
+			"waits on that answer."},
+	"nobody": {"Work in review has no reviewer.",
+		"Their holder moved these items into review itself and asked nobody, so no seat holds the " +
+			"review. The work pickup hands each back to its holder to act on it or name a reviewer."},
 }
 
 // engineSentences is what each engine class's note says about the pattern.
@@ -322,25 +405,23 @@ var engineSentences = map[Class]string{
 
 func agentMentionsWithoutAsk(ev Evidence, kind func(string) SeatKind) []Finding {
 	woken, seats := 0, 0
-	var records []string
+	var comments []string
 	for _, n := range ev.Work.Named {
 		if kind(n.Handle) != SeatAgent || n.Woken == 0 {
 			continue
 		}
 		woken += n.Woken
 		seats++
-		records = appendExamples(records, n.WokenComments)
+		comments = append(comments, n.WokenComments...)
 	}
 	if woken < minNamedWakes || woken*100 < namedWakesPer100*ev.Work.AgentComments {
 		return nil
 	}
 	return []Finding{engineFinding(ClassAgentMentionsWithoutAsk, Subject{Kind: SubjectCompany},
-		"Agents woke each other with comments that asked nothing.",
-		fmt.Sprintf("In the last 7 days, %d agent comments named %d agents without asking "+
-			"anything and each started a turn, out of %d agent comments.",
-			woken, seats, ev.Work.AgentComments),
+		fmt.Sprintf("%d of %d agent comments woke %s", woken, ev.Work.AgentComments,
+			words.Count(seats, "agent", "agents")),
 		[]Fact{{Key: "woken", Value: int64(woken)}, {Key: "agents", Value: int64(seats)},
-			{Key: "agent_comments", Value: int64(ev.Work.AgentComments)}}, records)}
+			{Key: "agent_comments", Value: int64(ev.Work.AgentComments)}}, recordsOf(RecordComment, comments))}
 }
 
 // personRequestsWithoutAsk is one finding per person agents asked for something
@@ -354,11 +435,8 @@ func personRequestsWithoutAsk(ev Evidence, kind func(string) SeatKind) []Finding
 		}
 		out = append(out, engineFinding(ClassPersonRequestsWithoutAsk,
 			Subject{Kind: SubjectSeat, Seat: n.Handle},
-			"Agents asked a person for something without asking them a question.",
-			fmt.Sprintf("In the last 7 days, agents asked %s for an answer or an action in %d "+
-				"comments that put no question to them with an ask, so nothing in them reached "+
-				"the Inbox as a decision.", n.Handle, n.Requested),
-			[]Fact{{Key: "named", Value: int64(n.Requested)}}, n.RequestedComments))
+			words.Count(n.Requested, "comment", "comments"),
+			[]Fact{{Key: "named", Value: int64(n.Requested)}}, recordsOf(RecordComment, n.RequestedComments)))
 	}
 	return out
 }
@@ -370,12 +448,9 @@ func askOvertaken(ev Evidence, _ func(string) SeatKind) []Finding {
 		return nil
 	}
 	return []Finding{engineFinding(ClassAskOvertaken, Subject{Kind: SubjectCompany},
-		"People answered questions that no longer needed an answer.",
-		fmt.Sprintf("In the last 7 days, %d of %d answers went to a question asked again "+
-			"since (%d) or whose item had already finished (%d).",
-			overtaken, w.Answers, w.Superseded, w.Moot),
+		fmt.Sprintf("%d of %d answers: %d asked again, %d finished", overtaken, w.Answers, w.Superseded, w.Moot),
 		[]Fact{{Key: "answers", Value: int64(w.Answers)}, {Key: "superseded", Value: int64(w.Superseded)},
-			{Key: "moot", Value: int64(w.Moot)}}, w.Overtaken)}
+			{Key: "moot", Value: int64(w.Moot)}}, recordsOf(RecordComment, w.Overtaken))}
 }
 
 // approvalRubberStamp is one finding per asking agent whose decisions a person
@@ -408,12 +483,11 @@ func approvalRubberStamp(ev Evidence, _ func(string) SeatKind) []Finding {
 		out = append(out, Finding{
 			Class: ClassApprovalRubberStamp, Severity: SeverityNote, Actor: ActorOwner,
 			Source: SourceEvidence, Area: AreaApprovals, Subject: Subject{Kind: SubjectSeat, Seat: asker},
-			Title: fmt.Sprintf("%s chose %s's recommendation in %d of %d decisions.",
+			Title: "A person chose an agent's recommendation in nearly every decision it asked.",
+			Why: "Each decision still costs a press and makes the agent wait. Whether the agent may " +
+				"act on some kinds of them without asking is your call.",
+			Item: fmt.Sprintf("%s chose %s's recommendation in %d of %d decisions",
 				people, asker, s.recommended, s.decided),
-			Why: fmt.Sprintf("In the last 7 days %s asked %s %d decisions and the recommended "+
-				"option was taken %d times. Each one still costs a press and makes the agent "+
-				"wait. Whether %s may act on some kinds of them without asking is your call.",
-				asker, people, s.decided, s.recommended, asker),
 			Evidence: []Fact{{Key: "decided", Value: int64(s.decided)},
 				{Key: "recommended", Value: int64(s.recommended)}},
 			Fix: Fix{Kind: FixDraftWithAssistant, Options: []Option{},
@@ -479,24 +553,11 @@ func reviewIdle(ev Evidence, _ func(string) SeatKind) []Finding {
 	var out []Finding
 	for _, w := range order {
 		keys := byWait[w]
-		items := words.Count(len(keys), "item in review", "items in review")
-		title, why := "Work in review waited a day for the agent holding it.",
-			fmt.Sprintf("%s held by %s had no turn by it on the item in the last 24 hours "+
-				"(a turn on a linked pull request counts on the change, not the item), so "+
-				"the work behind them waits.", items, w.on)
-		switch w.how {
-		case "asked":
-			title, why = "Work in review waited a day for a person's answer.",
-				fmt.Sprintf("%s waited the last 24 hours on %s, whom its holder asked to review "+
-					"it, so the work behind them waits on that answer.", items, w.on)
-		case "nobody":
-			title, why = "Work in review has no reviewer.",
-				fmt.Sprintf("%s that %s moved into review itself had no reviewer for 24 hours: no "+
-					"seat holds the review and no question waits on anybody. The work pickup hands "+
-					"it back to %s to act on the review or name a reviewer.", items, w.on, w.on)
-		}
-		out = append(out, engineFinding(ClassReviewIdle, Subject{Kind: SubjectSeat, Seat: w.on},
-			title, why, []Fact{{Key: "idle", Value: int64(len(keys))}}, appendExamples(nil, keys)))
+		f := engineFinding(ClassReviewIdle, Subject{Kind: SubjectSeat, Seat: w.on},
+			words.Count(len(keys), "item in review", "items in review"),
+			[]Fact{{Key: "idle", Value: int64(len(keys))}}, recordsOf(RecordItem, keys))
+		f.Title, f.Why = reviewWords[w.how].title, reviewWords[w.how].why
+		out = append(out, f)
 	}
 	return out
 }
@@ -510,10 +571,7 @@ func noticeLoad(ev Evidence, _ func(string) SeatKind) []Finding {
 			continue
 		}
 		out = append(out, engineFinding(ClassNoticeLoad, Subject{Kind: SubjectSeat, Seat: n.Handle},
-			"A person was sent more notices than anyone reads.",
-			fmt.Sprintf("In the last 7 days, %s was sent %d notices, and %d of them asked "+
-				"something of them, so what does ask them waits among the rest.",
-				n.Handle, n.Notices, n.Addressed),
+			fmt.Sprintf("%d notices, %d of them asking something", n.Notices, n.Addressed),
 			[]Fact{{Key: "notices", Value: int64(n.Notices)}, {Key: "addressed", Value: int64(n.Addressed)}},
 			nil))
 	}
@@ -590,9 +648,7 @@ func noopShare(ev Evidence, _ func(string) SeatKind) []Finding {
 			continue
 		}
 		out = append(out, engineFinding(ClassNoopShare, Subject{Kind: SubjectSeat, Seat: s.handle},
-			"An agent was woken for turns that changed nothing.",
-			fmt.Sprintf("In the last 7 days, %d of %s's %d turns committed nothing: no work "+
-				"moved and no words written.", s.nothing, s.handle, s.turns),
+			fmt.Sprintf("%d of %d turns", s.nothing, s.turns),
 			[]Fact{{Key: "turns", Value: s.turns}, {Key: "nothing", Value: s.nothing}}, nil))
 	}
 	return out
@@ -613,10 +669,7 @@ func pickupStillWaiting(ev Evidence, _ func(string) SeatKind) []Finding {
 		return nil
 	}
 	return []Finding{engineFinding(ClassPickupStillWaiting, Subject{Kind: SubjectCompany},
-		"Agents picked up work and moved none of it.",
-		fmt.Sprintf("In the last 7 days, %d of %d pickups ended with words only (a comment "+
-			"or a chat post) and nothing typed on the item, as when an agent says the item "+
-			"still waits on something.", words, pickups),
+		fmt.Sprintf("%d of %d pickups", words, pickups),
 		[]Fact{{Key: "pickups", Value: pickups}, {Key: "words", Value: words}}, nil)}
 }
 
@@ -630,10 +683,7 @@ func redeliveredSeen(ev Evidence, _ func(string) SeatKind) []Finding {
 			continue
 		}
 		out = append(out, engineFinding(ClassRedeliveredSeen, Subject{Kind: SubjectSeat, Seat: s.handle},
-			"Wakes repeated changes an agent had already read.",
-			fmt.Sprintf("In the last 7 days, %d of the %d wakes for %s came for changes a turn "+
-				"of it had already read, so the engine absorbed them instead of starting turns.",
-				s.absorbed, woke, s.handle),
+			fmt.Sprintf("%d of %d wakes", s.absorbed, woke),
 			[]Fact{{Key: "woke", Value: woke}, {Key: "absorbed", Value: s.absorbed}}, nil))
 	}
 	return out
@@ -648,9 +698,7 @@ func auxiliaryShare(ev Evidence, _ func(string) SeatKind) []Finding {
 			continue
 		}
 		out = append(out, engineFinding(ClassAuxiliaryShare, Subject{Kind: SubjectSeat, Seat: s.handle},
-			"An agent spent a large share of its tokens on auxiliary calls.",
-			fmt.Sprintf("In the last 7 days, %d of %s's %d tokens went to auxiliary calls "+
-				"inside its turns rather than to the turns' own work.", s.auxiliary, s.handle, s.tokens),
+			fmt.Sprintf("%s of %s tokens", tokensSaid(s.auxiliary), tokensSaid(s.tokens)),
 			[]Fact{{Key: "tokens", Value: s.tokens}, {Key: "auxiliary", Value: s.auxiliary}}, nil))
 	}
 	return out
@@ -676,14 +724,15 @@ func AgentHandles(c *config.Company) []string {
 	return out
 }
 
-func appendExamples(records, more []string) []string {
-	for _, r := range more {
-		if len(records) == worklet.MaxPatternExamples {
-			break
-		}
-		records = append(records, r)
+// tokensSaid is a token count as a person reads it: 26.5M, 812K, 940.
+func tokensSaid(n int64) string {
+	switch {
+	case n >= 1_000_000:
+		return trimmed(fmt.Sprintf("%.1f", float64(n)/1_000_000)) + "M"
+	case n >= 1_000:
+		return fmt.Sprintf("%dK", n/1_000)
 	}
-	return records
+	return fmt.Sprint(n)
 }
 
 // inboundSilent raises when the poll settled a change in the window and the
@@ -707,10 +756,11 @@ func inboundSilent(ev Evidence, _ func(string) SeatKind) []Finding {
 		Class: ClassInboundSilent, Severity: SeverityCosts, Actor: ActorOwner, Source: SourceEvidence,
 		Area: AreaIntegrations, Subject: Subject{Kind: SubjectIntegration, Name: name},
 		Path:  "integrations." + string(kind),
-		Title: fmt.Sprintf("%d pull requests your work waited on reached it only through the engine's poll.", polled.Count),
-		Why: fmt.Sprintf("When %s's webhook delivers a merge or a close, the item waiting on it hears within a "+
-			"minute. In the last 7 days %d were learned by the poll instead, each at least ten minutes late, "+
-			"and no delivery has settled one since, so the webhook is not reaching this company.", name, polled.Count),
+		Title: "Pull requests your work waited on reached it only through the engine's poll.",
+		Why: "When the webhook delivers a merge or a close, the item waiting on it hears within a " +
+			"minute. These were learned by the poll instead, each at least ten minutes late, and no " +
+			"delivery has settled one since, so the webhook is not reaching this company.",
+		Item:     words.Count(polled.Count, "pull request", "pull requests"),
 		Evidence: []Fact{{Key: "polled", Value: int64(polled.Count)}, {Key: "delivered", Value: int64(delivered.Count)}},
 		Fix: Fix{Kind: FixExternalStep, Options: []Option{}, Setting: string(kind),
 			Sentence:  "Open " + name + "'s settings and check that its webhook reaches the engine.",

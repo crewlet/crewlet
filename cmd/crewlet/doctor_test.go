@@ -35,7 +35,7 @@ var doctorAnswer = advisor.Answer{Revision: "rev-7", Findings: []advisor.Finding
 	{Class: advisor.ClassPersonRequestsWithoutAsk, Severity: advisor.SeverityNote, Actor: advisor.ActorEngine,
 		Subject: advisor.Subject{Kind: advisor.SubjectSeat, Seat: "jordan", Name: "Jordan"},
 		Title:   "Agents named a person without asking them a question.", Why: "Named 6 times.",
-		Evidence: []advisor.Fact{{Key: "named", Value: 6}}, Records: []string{"c-1"}},
+		Evidence: []advisor.Fact{{Key: "named", Value: 6}}, Records: []advisor.Record{{Kind: advisor.RecordComment, ID: "c-1"}}},
 	{Class: advisor.ClassAuxiliaryModel, Severity: advisor.SeverityNote, Actor: advisor.ActorOwner,
 		Subject: advisor.Subject{Kind: advisor.SubjectSeat, Seat: "jordan", Name: "Jordan"},
 		Title:   "It learns on its own model.", Why: "Learning costs its spend.", Item: "sonnet-large"},
@@ -65,7 +65,7 @@ func TestTheDoctorPrintsKindsOrdinalsAndCountsUnlessAskedForWords(t *testing.T) 
 	out, _, _ = cli(t, "doctor", "-words", config)
 	for _, want := range []string{"schedule:sre:invoice-sync", "seat:jordan",
 		"1. No verified backup. One server, and nothing copied off it.",
-		"Learning costs its spend. (sonnet-large)"} {
+		"   seat:jordan: sonnet-large"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("-words does not print %q:\n%s", want, out)
 		}
@@ -73,6 +73,32 @@ func TestTheDoctorPrintsKindsOrdinalsAndCountsUnlessAskedForWords(t *testing.T) 
 	header := strings.SplitN(out, "\n", 2)[0]
 	if len(header) > 100 {
 		t.Errorf("-words widened the table to %d columns:\n%s", len(header), out)
+	}
+}
+
+// A CLASS SAID FOR SEVERAL SUBJECTS IS ONE ROW naming them all, with each
+// one's evidence, and with -words its words once and each subject's item under it.
+//
+// Mutation: print a row per finding, and the class is listed twice.
+func TestTheDoctorSaysAClassOnceForEverySubject(t *testing.T) {
+	t.Parallel()
+	learns := func(seat, item string) advisor.Finding {
+		return advisor.Finding{Class: advisor.ClassAuxiliaryModel, Severity: advisor.SeverityNote,
+			Actor: advisor.ActorOwner, Subject: advisor.Subject{Kind: advisor.SubjectSeat, Seat: seat},
+			Title: "Agents that learn on their main model.", Why: "Learning costs its spend.", Item: item,
+			Evidence: []advisor.Fact{{Key: "seats", Value: 1}}}
+	}
+	config := doctorNode(t, advisor.Answer{Revision: "rev-1", Findings: []advisor.Finding{
+		learns("ada", "opus"), learns("bo", "sonnet")}})
+	out, _, _ := cli(t, "doctor", config)
+	if strings.Count(out, string(advisor.ClassAuxiliaryModel)) != 1 || !strings.Contains(out, "seat#1,seat#2") ||
+		!strings.Contains(out, "seats=1; seats=1") {
+		t.Errorf("two seats of one class are not one row:\n%s", out)
+	}
+	out, _, _ = cli(t, "doctor", "-words", config)
+	if strings.Count(out, "Learning costs its spend.") != 1 || !strings.Contains(out, "   seat:ada: opus") ||
+		!strings.Contains(out, "   seat:bo: sonnet") {
+		t.Errorf("-words does not say the class once with each seat under it:\n%s", out)
 	}
 }
 
