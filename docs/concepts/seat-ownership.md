@@ -423,7 +423,10 @@ only the link says whether anything is crossing. So a replay that hears
 nothing for its stall is refused for **silence** only where its link carried
 less than seven tenths of the floor over that stall, in either direction; the
 error says what the link carried. While the link moves, the replay waits, and
-is judged again a stall later, with two caps on the wait:
+is judged again every second, over the stall before each judgment, its
+consumer asked about itself before each as before the stall; a link that falls
+still ends the wait within a stall and a second of its last byte. Two caps
+hold the wait:
 
 - **Placed again past one message and a window.** Once the link has read one
   message at the broker's limit and one of the replay's pulls since the replay
@@ -478,7 +481,9 @@ bounds, about 278 seconds where they ended at 30 (294 for an end barrier,
 where it ended at 45.5). That is
 the price of not refusing a seat behind traffic that is crossing, and only a
 copy or a link that stops answering while other traffic keeps the link moving
-pays it in full; a link that falls still ends the wait within a stall. None of
+pays it in full; a link that falls still ends the wait within a stall and a
+second of its last byte, and a request's within its bound and a quarter of a
+second. None of
 it touches ownership: the seat's lease is renewed throughout, and a lost
 lease, a drain or a stop cuts the hydration rather than waiting for it
 (above).

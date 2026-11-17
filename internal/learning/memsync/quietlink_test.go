@@ -61,21 +61,27 @@ func meteredSyncer(t *testing.T, db *store.DB, copies *fakeCopies, link Link) (*
 //     of one pull at the transport's bound since it was placed, and not a
 //     nanosecond before, naming the link's movement;
 //   - on a still link, the replay is refused at its pull's stall, as it is
-//     where no link is metered, naming the link's stillness.
+//     where no link is metered, naming the link's stillness;
+//   - on a link that falls still a second and a half past the stall, the
+//     replay is refused for silence at the first judgment after, two
+//     seconds past the stall, judged every second while the link moved.
 //
 // Mutant: no byte cap — the fast link's replay is never placed again, and is
 // refused at its time cap. Mutant: a placement for the link's movement arms
 // the behind clock — the fast link's replay is refused a minute after its
 // first. Mutant: no time cap — the creeping link's replay runs on past it.
 // Mutant: silence judged by words alone — every link's replay is refused at
-// its stall.
+// its stall. Mutant: a held replay judged again a stall later — the link that
+// falls still runs on to twice the stall.
 func TestAReplayHearingNothingOnAMovingLinkIsPlacedAgainPastOneTransportPull(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
-		name    string
-		moving  bool
-		rate    float64
-		scripts []copyScript
+		name   string
+		moving bool
+		// stillFrom is when a moving link falls still, nil for never.
+		stillFrom func(s *Syncer) time.Duration
+		rate      float64
+		scripts   []copyScript
 		// carried is the notes the hydration carries, or -1 for a refusal.
 		carried int
 		// ends is when the hydration ends, read off the syncer.
@@ -103,6 +109,14 @@ func TestAReplayHearingNothingOnAMovingLinkIsPlacedAgainPastOneTransportPull(t *
 			ends:    func(s *Syncer) time.Duration { return s.stall(s.pullBound()) },
 			says:    []string{"the link carried nothing at the floor", "(0 rows carried)"},
 		},
+		{
+			name: "falling still past its stall", moving: true, rate: 1 << 10,
+			stillFrom: func(s *Syncer) time.Duration { return s.stall(s.pullBound()) + 1500*time.Millisecond },
+			scripts:   []copyScript{{mute: true}},
+			carried:   -1,
+			ends:      func(s *Syncer) time.Duration { return s.stall(s.pullBound()) + 2*quietWait },
+			says:      []string{"the link carried nothing at the floor"},
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -113,11 +127,14 @@ func TestAReplayHearingNothingOnAMovingLinkIsPlacedAgainPastOneTransportPull(t *
 				copies := newFakeCopies(log)
 				copies.scripts["agent_diary"] = c.scripts
 				start := time.Now()
+				var s *Syncer
 				link := fakeLink{
-					moving: func() bool { return c.moving },
-					read:   func() uint64 { return uint64(c.rate * time.Since(start).Seconds()) },
+					moving: func() bool {
+						return c.moving && (c.stillFrom == nil || time.Since(start) < c.stillFrom(s))
+					},
+					read: func() uint64 { return uint64(c.rate * time.Since(start).Seconds()) },
 				}
-				s, _ := meteredSyncer(t, db, copies, link)
+				s, _ = meteredSyncer(t, db, copies, link)
 				ends := c.ends(s)
 				h := hydrating(t.Context(), s)
 				time.Sleep(ends - time.Nanosecond)

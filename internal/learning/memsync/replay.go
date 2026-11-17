@@ -76,7 +76,10 @@ import (
 //
 //   - a link that did not move over the stall — or none metered, a member's
 //     connection among them — is SILENCE, and refuses the seat as above;
-//   - a link that moved holds the replay, judged again a stall later;
+//   - a link that moved holds the replay, judged again every [quietWait] —
+//     over the stall before each judgment, its consumer asked about itself
+//     before each, as a quiet replay's is — so a link that falls still ends
+//     the wait within a stall and a second of its last byte;
 //   - once it has read [Syncer.quietBytes] since the replay last heard
 //     anything — one message at the transport's bound and a pull, the most
 //     a word waits behind — the replay is placed again ([placedQuiet]),
@@ -991,6 +994,13 @@ func (r *tableReplay) pull(ctx context.Context) (bool, error) {
 			}
 			continue
 		case errors.Is(err, errHeld):
+			// HELD, AND ASKED ABOUT ITSELF until the next judgment, as a
+			// quiet replay is before its stall: a consumer gone or never
+			// pulled says so behind the link's traffic, and is placed
+			// again sooner than the caps.
+			if qerr := r.quiet(ctx, p, clock.until); qerr != nil {
+				return false, qerr
+			}
 			continue
 		case err != nil:
 			return false, err
@@ -1072,7 +1082,8 @@ func earliest(a, b time.Time) time.Time {
 }
 
 // errHeld is a replay that heard nothing for its stall while its link moved:
-// its silence clock runs on, to the next judgment ([tableReplay.judge]).
+// its silence clock runs on, to the next judgment a [quietWait] later
+// ([tableReplay.judge]), its consumer asked about itself meanwhile.
 var errHeld = errors.New("memsync: the replay has heard nothing while its link moves")
 
 // judge decides a pull nothing has been heard of since c.heard, at c.until,
@@ -1084,8 +1095,10 @@ var errHeld = errors.New("memsync: the replay has heard nothing while its link m
 //     for [Syncer.quietCap] refuses the seat ([tableReplay.creeping]);
 //   - and past [Syncer.quietBytes] read off the link since c.heard, the
 //     replay is placed again ([placedQuiet]);
-//   - otherwise the replay waits on, and is judged again a stall later, or
-//     at the time cap where that comes first ([errHeld]).
+//   - otherwise the replay waits on, and is judged again a [quietWait]
+//     later, or at the time cap where that comes first ([errHeld]): a link
+//     that falls still is refused within a stall and a second of its last
+//     byte, where a judgment a stall later let it run up to two.
 func (r *tableReplay) judge(ctx context.Context, p *replayPull, c *quietClock) error {
 	if r.s.link == nil || !r.s.link.Moving(c.stall) {
 		return r.silence(ctx, p, c)
@@ -1098,7 +1111,7 @@ func (r *tableReplay) judge(ctx context.Context, p *replayPull, c *quietClock) e
 		return placeAgain{why: placedQuiet, detail: fmt.Sprintf("%d bytes crossed the link to this "+
 			"node in the %v since the replay last heard it", read-c.read, now.Sub(c.heard))}
 	}
-	c.until = earliest(now.Add(c.stall), r.at.word.Add(r.s.quietCap()))
+	c.until = earliest(now.Add(quietWait), r.at.word.Add(r.s.quietCap()))
 	return errHeld
 }
 
