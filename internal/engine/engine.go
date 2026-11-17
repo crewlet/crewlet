@@ -34,148 +34,116 @@ import (
 
 // Company is one immutable configuration epoch.
 //
-// EVERYTHING A TURN READS COMES FROM ONE OF THESE, taken by value at the top
-// of the turn. Reading each setting from a live cell on every access lets a
-// hot reload landing mid-turn change the round cap between the executor and
-// the reviewer, and then needs a context-local "pin" to paper over it. An
-// epoch that is replaced rather than mutated makes that unrepresentable: an
+// Everything a turn reads comes from one, taken by value at the top of the
+// turn. An epoch is replaced, never mutated, so a hot reload landing mid-turn
+// cannot change the round cap between the executor and the reviewer: an
 // in-flight turn holds the one it started under until it ends.
 type Company struct {
 	Config *config.Company
 	Org    *org.Organization
 
-	// Models is the company's providers.llm, built. NIL WHEN IT HAS NONE,
-	// which is a valid company rather than a broken one: an org chart
-	// written before its credentials exist validates, applies and places
-	// its seats. What it cannot do is think, so the dispatcher holds every
-	// delivery on the seat's inbox while this is nil (see
-	// [Engine.conditionsFor]) and the apply that brings a provider releases
-	// them. The nil registry answers every method as a company with no
-	// models ([phase.ErrNoProviders]), so a consumer that forgets to ask
-	// is refused rather than crashed.
+	// Models is the company's providers.llm, built. NIL WHEN IT HAS NONE, a
+	// valid company: a chart written before its credentials exist applies
+	// and places its seats, and the dispatcher holds every delivery on the
+	// seat's inbox until an apply brings a provider ([Engine.conditionsFor]).
+	// The nil registry answers as a company with no models
+	// ([phase.ErrNoProviders]), so a consumer that forgets to ask is refused
+	// rather than crashed.
 	Models *phase.Registry
 
-	// contacts resolves the `${VAR}` contact ids a teammate in the prompts'
-	// roster may carry: the resolver this epoch was built through, which on
-	// a running node is its own chain — the secret store, then the
-	// environment it was handed — so a teammate's id reads in a prompt as
-	// notification routing reads it. Never the process environment behind
-	// the chain's back.
+	// contacts resolves the `${VAR}` contact ids in the prompts' roster
+	// through the chain this epoch was built with (the secret store, then the
+	// handed environment), so a prompt reads an id as notification routing
+	// does. Never the process environment behind the chain's back.
 	contacts org.EnvLookup
 
-	// Tools is the catalogue every seat's surface is cut from: the
-	// builtins, plus the SHARED MCP servers, which one company-wide child
-	// serves for everyone.
+	// Tools is the catalogue every seat's surface is cut from: the builtins
+	// plus the SHARED MCP servers.
 	//
-	// It is not the whole surface. A `shared: false` server is a template
-	// that gives each role its own child holding that role's credentials,
-	// and two children of one template publish the same tool names — so
-	// they cannot live in one registry without one shadowing the other and
-	// every seat calling whichever won.
-	//
-	// A seat this node has CLAIMED runs against a clone of this with its
-	// own children filed in, and that clone lives on the [Engine] rather
-	// than here: it belongs to the seat's LEASE, and an epoch is replaced
-	// wholesale by every apply. See the seatTools field in run.go.
+	// It is not the whole surface: a `shared: false` server gives each role
+	// its own child holding that role's credentials, and two children of one
+	// template publish the same tool names, so in one registry one would
+	// shadow the other for every seat. A seat this node has CLAIMED
+	// runs against a clone with its own children filed in, kept on the
+	// [Engine] because it belongs to the seat's lease and an epoch is
+	// replaced by every apply (the seatTools field in run.go).
 	Tools *tools.Registry
 
 	// AskTool is `ask_and_wait`, the tool an executor's run asks a person
 	// through and parks on (ADR-0068): offered on that run's surface alone
-	// ([runner.Config.Ask]) rather than filed in Tools, because no other
-	// phase has a run to park. Built with the builtins ([Engine.equip]);
-	// nil on an epoch built without an engine, whose runs offer none.
+	// ([runner.Config.Ask]), since no other phase has a run to park. Built
+	// with the builtins ([Engine.equip]); nil on an epoch built without an
+	// engine.
 	AskTool runner.RunAsk
 
-	// CheckoutTool is `code_checkout`, the tool an executor's run checks a
-	// repository on Gitlet out through (ADR-0093):
-	// offered on that run's surface alone ([runner.Config.Checkout]), for
-	// AskTool's reason — it grants to the running job's row, which no other
-	// phase has. Built with the builtins where the epoch's code tools serve
-	// ([Engine.equip]); nil on an epoch whose company hosts no code.
+	// CheckoutTool is `code_checkout`, an executor's run's checkout of a
+	// Gitlet repository (ADR-0093), on that run's surface alone
+	// ([runner.Config.Checkout]) for AskTool's reason: it grants to the
+	// running job's row. Built with the builtins where the epoch's code tools
+	// serve ([Engine.equip]); nil on an epoch whose company hosts no code.
 	CheckoutTool tools.Callable
-	// HoldTool records a call an executor's run makes to a tool at Needs
-	// approval as the question it parks on (ADR-0077), installed on that
-	// run's surface alone ([runner.Config.Hold]). Built with AskTool; nil
-	// on an epoch built without an engine or without the fleet keyring's
+	// HoldTool records an executor's run's call to a tool at Needs approval
+	// as the question it parks on (ADR-0077), on that run's surface alone
+	// ([runner.Config.Hold]). Nil without an engine or the fleet keyring's
 	// cipher, whose runs are refused every such call.
 	HoldTool tools.Holder
 
-	// ActivatedAt is the instant the revision this epoch was applied from
-	// was activated — the activation pointer's own ([coord.Activation.At]),
-	// or a boot's reading of the boot row's `served_at`
-	// ([store.Revision.ServedAt]) — in UTC, stamped ONCE, as the company is
-	// built ([stampActivation]).
+	// ActivatedAt is the instant this epoch's revision was activated (the
+	// activation pointer's [coord.Activation.At], or at boot the row's
+	// [store.Revision.ServedAt]), in UTC, stamped once at build
+	// ([stampActivation]). Zero for a company no activation named (one handed
+	// to [New] in code); nothing derived from the configuration may be
+	// written from a zero instant.
 	//
-	// ZERO FOR A COMPANY NO ACTIVATION HAS NAMED: one handed to [New] in code
-	// rather than read from a store. `crewlet run` never boots on one — it
-	// starts on the revision its store activated, or on nothing, and a Tier
-	// B file reaches the engine through an activation and its apply. A zero
-	// instant is a configuration nothing derived from it may be written from.
-	//
-	// IT IS WHAT EVERY ROW DERIVED FROM THE CONFIGURATION IS STAMPED WITH
-	// ([configplane.ActivationStamp]) — the tracker's chart-owned project
-	// fields and the knowledge containers — so that an older configuration
-	// applied late on another node cannot walk a newer one back. Never the
-	// applying node's own clock: every node applies one activation
-	// separately, at its reconcile tick and again at every boot. See
-	// [Engine.applyChart].
+	// Every row derived from the configuration is stamped with it
+	// ([configplane.ActivationStamp]) so an older configuration applied late
+	// on another node cannot walk a newer one back. Never the applying node's
+	// clock: every node applies one activation separately, at each reconcile
+	// tick and boot. See [Engine.applyChart].
 	ActivatedAt time.Time
 
-	// codeInForce is Gitlet's settings IN FORCE at this epoch — its
-	// limits and its deleted retention — stamped when it is installed
-	// ([Engine.installEpoch], [carriedCode]): its own `code` block where it
-	// sets `code.backend: gitlet`, and otherwise that of the newest earlier epoch
-	// that did, which a committer and a retention duty still running from
-	// it decide with until a restart. Nil on an epoch never installed, or
-	// one with no hosting epoch before it, which is held to its own
-	// configuration's ([Engine.codeInForce]).
+	// codeInForce is Gitlet's settings (limits, deleted retention) IN FORCE
+	// at this epoch, stamped at install ([Engine.installEpoch],
+	// [carriedCode]): its own `code` block where it sets `code.backend:
+	// gitlet`, else the newest earlier hosting epoch's, which a committer
+	// and a retention duty running from it keep deciding with until a
+	// restart. Nil when never installed or with no hosting epoch before it
+	// ([Engine.codeInForce]).
 	codeInForce *config.Code
 
 	// roster is this epoch's chart as Gitlet reads a seat's grant
-	// ([codeRoster]), built at its first question — stamped when the epoch is
-	// installed ([Engine.installEpoch], [rosterOf]). Nil on an epoch never
-	// installed, which [Engine.codeRoster] answers as no chart: a node that
-	// cannot judge a seat, whose code reads refuse it about themselves so
-	// another node is asked — never a seat that stands nowhere. A function
-	// rather than the value, so an epoch copied whole copies no lock.
+	// ([codeRoster]), built at its first question and stamped at install
+	// ([Engine.installEpoch], [rosterOf]). Nil when never installed, which
+	// [Engine.codeRoster] answers as no chart: code reads refuse so another
+	// node is asked, never treating the seat as standing nowhere. A function,
+	// so an epoch copied whole copies no lock.
 	roster func() codeRoster
 	// catalogue is the sandbox catalogue this epoch was built with
-	// ([buildSandbox]): the cells a launch may place a box in, the runners
-	// it may start, the engine-wide setup steps and the default turn cap.
-	// Nil where the company reaches no cell — no providers.sandbox, or no
-	// seat that launches.
+	// ([buildSandbox]): cells, runners, engine-wide setup steps and the
+	// default turn cap. Nil where the company reaches no cell.
 	//
-	// PINNED WITH THE EPOCH, and what every launch of this epoch's turns
-	// places its run by, never the node's live manager: the turn's member,
-	// its run_in and its seat's box settings come from this epoch, and a
-	// launch that read the catalogue of whichever revision was live at the
-	// moment could resolve a pinned entry to a cell its own revision never
-	// configured, or refuse a run_in the live catalogue had just dropped.
-	// The node's coordinator keeps the live manager — the newest catalogue,
-	// carrying every cell a box already out may be in — for polling,
-	// collecting and reclaiming runs that are already out
-	// ([sandbox.Coordinator.SetManager]).
+	// PINNED WITH THE EPOCH: every launch of its turns places by it, never by
+	// the node's live manager, which could resolve a pinned entry to a cell
+	// this revision never configured or refuse a run_in it just dropped. The
+	// coordinator keeps the live manager, whose newest catalogue carries every
+	// cell a run already out may be in ([sandbox.Coordinator.SetManager]).
 	catalogue *sandbox.Manager
 }
 
 // NewCompany builds an epoch from a validated config.
 //
-// It does NOT reach the network. Building an epoch must be something a
-// `validate` command can do, and a constructor that dialled a provider would
-// make config validation depend on the vendor being up.
+// It does NOT reach the network, so `crewlet validate` does not depend on a
+// vendor being up.
 func NewCompany(c *config.Company) (*Company, error) {
-	// ENV-ONLY, which is what makes `crewlet validate` work on a laptop:
-	// the secret store lives in a database this path must not need.
+	// Env-only: the secret store lives in a database `validate` must not need.
 	return NewCompanyWith(c, config.EnvOnly())
 }
 
 // NewCompanyWith is [NewCompany] over a caller-supplied ${VAR} resolver.
 //
-// THE ONE SEAM THE SECRET STORE PLUGS INTO. A running node passes a chain
-// with the store in front of the environment, so a rotated secret wins over
-// a stale `.env` that was exported into the process months ago — which is
-// the whole point of having a store, and is a rule that has to hold for
-// EVERY value, not just the ones whose call site remembered.
+// The one seam the secret store plugs into: a running node passes a chain
+// with the store in front of the environment, so a rotated secret wins over a
+// stale exported `.env` for every value.
 func NewCompanyWith(c *config.Company, env *config.Resolver) (*Company, error) {
 	if env == nil {
 		env = config.EnvOnly()
@@ -185,8 +153,8 @@ func NewCompanyWith(c *config.Company, env *config.Resolver) (*Company, error) {
 
 // processEUID is the user this engine runs as, the one fact
 // [config.Company.ValidateHost] needs. A variable so a test judges a root
-// engine without being one, and a suite run as root, in a container, does not
-// change what every case that builds an epoch means.
+// engine without being one, and a suite run as root does not change every
+// case that builds an epoch.
 var processEUID = os.Geteuid
 
 // newCompany builds an epoch whose harness entries keep their sit-outs on
@@ -195,20 +163,12 @@ func newCompany(c *config.Company, env *config.Resolver, plans *harness.Plans) (
 	if c == nil {
 		return nil, fmt.Errorf("engine: no company config")
 	}
-	// VALIDATED HERE, not merely assumed. ParseCompany validates, but a
-	// Company is an exported struct an embedder can build directly — and an
-	// epoch assembled from an invalid one is a company that boots and then
-	// fails at its first turn, which is the worst place to learn it.
-	//
-	// It is also what lets everything below rely on the invariants instead
-	// of re-checking them: a validated role always yields a handle, so the
-	// seat walk needs no empty-handle guard.
-	//
-	// The RUNNABLE rules only. An epoch is built from stored revisions, and
-	// one a newer peer admitted under rules this build does not share still
-	// runs; refusing to build it would split the fleet's epoch. A document
-	// submitted to this build met its admission rules at the door it came
-	// through. See [config.Company.ValidateRunnable].
+	// VALIDATED HERE: a Company can be built directly, bypassing
+	// ParseCompany, and an invalid epoch boots then fails at its first turn.
+	// Everything below relies on it (a validated role always yields a
+	// handle). The RUNNABLE rules only: a stored revision a newer peer
+	// admitted under rules this build lacks still runs, or the fleet's epoch
+	// splits; admission rules ran at the door ([config.Company.ValidateRunnable]).
 	if err := c.ValidateRunnable(); err != nil {
 		return nil, fmt.Errorf("engine: invalid company config: %w", err)
 	}
@@ -223,9 +183,8 @@ func newCompany(c *config.Company, env *config.Resolver, plans *harness.Plans) (
 	if err != nil {
 		return nil, err
 	}
-	// DESCRIBED BEFORE ANYTHING IS FILED, so every MCP tool this epoch's
-	// registry is given, and every seat's registry cloned from it, carries
-	// what its server is for into the prompt's server list.
+	// Described before anything is filed, so every MCP tool here and in each
+	// seat's clone carries its server's description into the prompt.
 	registry := tools.NewRegistry()
 	registry.DescribeServers(serverDescriptions(c))
 	return &Company{
@@ -239,44 +198,34 @@ func newCompany(c *config.Company, env *config.Resolver, plans *harness.Plans) (
 
 // Seats returns the company's agent seats, for the placement sweep.
 //
-// AGENT seats only. A human seat is addressable and never spawned, so
-// including one would make the fleet try to claim a lease for something no
-// node can run — and then report the company permanently under capacity.
+// AGENT seats only: a human seat is never spawned, and claiming a lease for
+// it would report the company permanently under capacity.
 func (c *Company) Seats() []placement.Seat {
-	// NIL IS NO SEATS, and the sweep asks on every tick: an unconfigured
-	// node has an empty seat set rather than an unanswerable question, and
+	// Nil is no seats: the sweep asks every tick, and an unconfigured node
 	// converges the moment its first epoch arrives.
 	if c == nil {
 		return nil
 	}
 	var out []placement.Seat
 	for role := range c.Org.AllRoles() {
-		// Through the predicate, not a comparison against KindAgent: an
-		// UNSET kind is an agent, and spelling the rule out here would
-		// have excluded every role that did not name its kind — which is
-		// most of them, and produces a company with no seats at all.
+		// The predicate, not a KindAgent comparison: an UNSET kind is an
+		// agent, and most roles name none.
 		if !role.IsAgent() {
 			continue
 		}
-		// No empty-handle guard: validation refuses any role whose name
-		// yields no handle ("the name yields no handle, so set one
-		// explicitly"), and NewCompany validates. Probed, not assumed —
-		// "!!!", "---" and "日本" are all refused at parse.
+		// No empty-handle guard: NewCompany validates, and validation
+		// refuses a name that yields no handle.
 		//
-		// THE ID IS CARRIED WITH THE SEAT, because every durable name the
-		// host and the mailbox sweep build is made from it and neither can
-		// resolve one on the paths where the company view is gone. A seat
-		// with no derivable id is still listed: the host refuses to claim
-		// it, loudly, where dropping it here would make it vanish from the
-		// placement arithmetic with nothing to say so.
+		// The id rides with the seat: the host and the mailbox sweep build
+		// durable names from it where the company view is gone. A seat with
+		// no id is still listed, so the host refuses it loudly rather than
+		// it vanishing from the placement arithmetic.
 		id, _ := c.Org.AgentIDFor(role)
 		out = append(out, placement.Seat{
 			ID: id, Handle: role.Handle(), Placement: role.Placement})
 	}
-	// Sorted, because this feeds the placement math and the sweep compares
-	// its own answer across ticks. An org walk's order is stable today but
-	// is not a property the org model promises, and a fleet that reshuffled
-	// its eligibility list every tick would churn seats for no reason.
+	// Sorted: the sweep compares its answer across ticks, and the org walk's
+	// order is not promised, so an unsorted list could churn seats.
 	slices.SortFunc(out, func(a, b placement.Seat) int {
 		return cmp.Compare(a.Handle, b.Handle)
 	})
@@ -286,17 +235,14 @@ func (c *Company) Seats() []placement.Seat {
 // RunnerFor builds the phase runner for one seat, against the tool surface
 // this node gives it.
 //
-// Per turn, not cached. A runner holds the turn's task and its conversation
-// history, both of which are per-turn facts; caching one per seat would carry
-// the previous turn's ask into the next one.
+// Per turn, not cached: a runner holds the turn's task and history, and a
+// cached one would carry the previous turn's ask into the next.
 //
-// reg is an explicit PARAMETER rather than something the epoch looks up,
-// because the seat's own surface is a fact about this node's leases and not
-// about the configuration: only the node that claimed the seat has its
-// per-role children. Pass [Engine.seatRegistry]; nil falls back to the
-// epoch's shared surface as the seat holds it ([grantedSurface]), which is the
-// correct answer for a seat granted no per-role server and for any caller that
-// holds no lease.
+// reg is a parameter because the seat's surface is a fact about this node's
+// leases, not the configuration: only the claiming node has its per-role
+// children. Pass [Engine.seatRegistry]; nil falls back to the epoch's shared
+// surface as the seat holds it ([grantedSurface]), right for a seat with no
+// per-role server and for a caller holding no lease.
 func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Registry, in RunnerInput) (_ *runner.Runner, err error) {
 	defer origin.Stamp(&err)
 	role := c.Org.AgentSeatByHandle(handle)
@@ -304,22 +250,18 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 		return nil, fmt.Errorf("engine: %q is not an agent seat in this company", handle)
 	}
 	if c.Models == nil {
-		// Refused HERE, naming the seat and the fix, rather than by the
-		// runner's own nil check, which reads as a wiring fault. The
-		// dispatcher never gets this far for a company with no models, so
-		// what reaches it is a path that bypasses the inbox: a turn resuming
-		// from its executor after a revision removed every provider.
+		// Refused here, naming the seat, rather than by the runner's nil
+		// check, which reads as a wiring fault. Only a path that bypasses the
+		// inbox reaches this: a resume after a revision removed every provider.
 		return nil, fmt.Errorf("engine: seat %q cannot take a turn: %w", handle, phase.ErrNoProviders)
 	}
 	if reg == nil {
 		reg = grantedSurface(c, role)
 	}
-	// REFUSED HERE TOO, for the reason [turn.Run] refuses it: this field
-	// arms submit_work's own citation check, and a caller that omits it
-	// does not get a weaker check, it gets none — `no_action` accepted on a
-	// turn somebody is waiting on, and a citation naming any surface at all.
-	// The resume path omitted it while the dispatch path did not, so the two
-	// halves of one contract disagreed with nothing to say so.
+	// Refused here too, as [turn.Run] refuses it: Reply arms submit_work's
+	// citation check, and omitting it disables the check entirely
+	// (`no_action` accepted on a turn somebody waits on), so the dispatch and
+	// resume paths must both carry it.
 	if !in.Reply.Valid() {
 		return nil, fmt.Errorf(
 			"engine: RunnerInput.Reply is %q for %q, which is not one of %q, %q "+
@@ -327,9 +269,9 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 				"pending run's row, because the submission check reads it",
 			in.Reply.Kind, handle, turn.ReplyNone, turn.ReplyTool, turn.ReplyEngine)
 	}
-	// AND A PICKUP'S TURN CARRIES THE READ OF ITS ANSWER, for the same
-	// reason: without it the submission check and every later one would hold
-	// the turn to nothing on its item (ADR-0122).
+	// A pickup's turn carries the read of its answer, for the same reason:
+	// without it the submission checks hold the turn to nothing on its item
+	// (ADR-0122).
 	if in.Reply.Item != "" && in.PickupAnswer == nil {
 		return nil, fmt.Errorf("engine: RunnerInput.Reply names item %q for %q and no "+
 			"PickupAnswer reads it: build it with Engine.pickupAnswerFor", in.Reply.Item, handle)
@@ -337,49 +279,40 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 	te := c.Config.TurnEngine
 	del := te.Delegation
 	return runner.New(runner.Config{
-		// THE TURN'S OWN READING of who may be reached, so the roster its
-		// prompt renders leaves out exactly the people its tools do — and
-		// the chain the roster's ${VAR} contact ids resolve through.
+		// The turn's own reading of who may be reached, so the prompt's
+		// roster leaves out exactly whom its tools do, and the chain its
+		// ${VAR} contact ids resolve through.
 		Seat: prompts.Seat{Org: c.Org, Role: role, Env: c.contacts,
 			Withheld: in.Turn.Context.WithholdsContacts,
 			Chatlet:  c.Config.ChatBackendFor() == config.ChatChatlet},
 		Registry: reg,
-		// WHAT THIS SEAT'S SURFACES LEAVE OUT of the epoch's registry: the
-		// builtins the authority table refuses it before any object is
-		// named — the health tools, where its role carries no health grant
-		// — asked of the same decision every call is, so it is offered a
-		// tool exactly where it is admitted to it; and the code writes,
-		// where its code tier writes no repository, so every call of one
-		// would be refused ([Company.withheldFrom]).
+		// What this seat's surfaces leave out, every call of which it would
+		// be refused: builtins the authority table refuses before any object
+		// is named (health tools without a health grant), and code writes
+		// where its code tier writes no repository ([Company.withheldFrom]).
 		Withheld: c.withheldFrom(ctx, handle, reg),
 		Models:   c.Models,
-		// THE PROCESS'S, threaded per turn like the publisher: the epoch is
-		// configuration and the session directory is not.
+		// The process's, threaded per turn: the session directory is not
+		// configuration.
 		Sessions: in.Sessions,
 		Metrics:  in.Metrics,
-		// The onboarding pass's extension policy: the executor's rounds
-		// are its harness's own, capped by the run's max_turns, and the
-		// reviewer's budget is a structural one — so the pass is the only
-		// engine loop a cap is extended in.
+		// The onboarding pass's extension policy, the only engine loop a cap
+		// is extended in: the executor's rounds are its harness's own and the
+		// reviewer's budget is structural.
 		Caps: runner.Caps{
 			ExtensionStep: te.ExtensionRoundStep,
 			ExtensionOn:   te.ExtensionEnabled.Or(true),
 		},
 		Budget: in.Budget,
 		Judge:  in.Judge,
-		// BOUND TO THE TURN'S ATTRIBUTION, so every rewrite the runner, its
-		// ledgers and its delegate workers ask for is this turn's cost.
+		// Bound to the turn's attribution, so every rewrite the runner, its
+		// ledgers and its workers ask for is this turn's cost.
 		Compact: in.Compact.For(role, in.Turn.Context.Aux()),
-		// Threaded from the caller rather than resolved here, because
-		// whether this node holds the seat is a fact about its leases and
-		// not about the configuration — the same reason reg is a
-		// parameter.
+		// From the caller, for reg's reason: a fact about this node's leases.
 		Fence: in.Fence,
-		// The company's own delegation caps AND the seat's visible worker
-		// templates, from the SAME pinned epoch as the round caps above,
-		// so a revision landing mid-turn cannot move a cap a call is
-		// judged against or add a worker to a graph that is already
-		// planned.
+		// Delegation caps and worker templates from the same pinned epoch,
+		// so a revision mid-turn cannot move a cap or add a worker to a
+		// planned graph.
 		Subagent: &runner.SubagentConfig{
 			Limits: subagent.Limits{
 				MaxTurns:         del.MaxTurns,
@@ -390,9 +323,8 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 				BudgetFraction:   del.BudgetFraction,
 				MinTokensPerTask: del.PerTaskFloor(),
 			},
-			// CLONED, because the live config cell is replaced wholesale
-			// by an apply and a turn holding the old map would otherwise
-			// be reading a schema the next apply is free to mutate.
+			// Cloned, so the turn never reads a map the next apply may
+			// mutate.
 			Workers:   config.CloneWorkers(c.Config.WorkersFor(handle)),
 			Remaining: in.Remaining,
 		},
@@ -401,52 +333,38 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 		Reply:        in.Reply,
 		PickupAnswer: in.PickupAnswer,
 		Endings:      in.Endings,
-		// THE SEAT'S ACCESS AND WHAT CHANGED IN IT, rendered at the dispatch
-		// beside the endings and frozen with them (capability.go).
+		// Rendered at the dispatch and frozen with the endings (capability.go).
 		Access:            in.Access,
 		CapabilityChanges: in.CapabilityChanges,
 		Skills:            in.Skills,
 		SkipNames:         toolname.Discovery(),
 		Publisher:         in.Publisher,
 		Turn:              in.Turn,
-		// The working indicator's phase hook, threaded per turn like the
-		// publisher beside it: which turn's indicator a phase moves is the
-		// caller's answer, not the epoch's.
-		OnPhase: in.OnPhase,
+		OnPhase:           in.OnPhase,
 		Onboarding: runner.Onboarding{
 			Markers: in.Markers, Latch: in.Latch,
 			Rounds:  te.OnboardingRounds(),
 			Ceiling: te.OnboardingMaxToolRoundsCeiling,
 		},
 		Resume: in.Resume,
-		// The executor's LAUNCHER, which the runner requires. Supplied by
-		// the caller rather than resolved here, because building it needs
-		// the engine and the turn — and there is one helper behind both
-		// call sites ([Engine.agentRunFor]), so a turn launches the same
-		// way whether it is dispatched or resumed.
+		// From the caller: building it needs the engine and the turn, and
+		// one helper serves dispatch and resume alike ([Engine.agentRunFor]).
 		Launcher: in.Launcher,
-		// THE EXECUTOR RUN'S WAY TO PARK ON A PERSON, built with the
-		// epoch's builtins: its evidence is checked against the same
-		// tracker and knowledge base a work item's decision is.
-		Ask: c.AskTool,
-		// AND ITS CHECKOUT of the company's own repositories, on the same
-		// surface for the same reason.
+		// Built with the epoch's builtins, so the run's evidence is checked
+		// against the tracker and knowledge base a work item's decision is.
+		Ask:      c.AskTool,
 		Checkout: c.CheckoutTool,
-		// AND ITS WAY TO PARK ON A CALL THAT NEEDS APPROVAL, recorded on
-		// the same row through the same desk.
-		Hold: c.HoldTool,
-		// The turn's note box, opened by the caller because the caller is
-		// what files it where a person's note can find it.
+		Hold:     c.HoldTool,
+		// Opened by the caller, which files it where a person's note finds it.
 		Steer: in.Steer,
 	})
 }
 
 // RunnerInput is the per-turn half of a runner's configuration.
 type RunnerInput struct {
-	// Task is the ask, and Endings how the turn's conversation's earlier
-	// turns ended, rendered at its dispatch ([conversationRead]): both fixed
-	// for the turn, and Endings empty on a resume, whose runner thaws the
-	// one its first segment froze.
+	// Task is the ask, and Endings how the conversation's earlier turns
+	// ended, rendered at dispatch ([conversationRead]) and fixed for the
+	// turn. Endings is empty on a resume, which thaws the frozen one.
 	Task    string
 	Endings string
 
@@ -456,33 +374,24 @@ type RunnerInput struct {
 	Access            string
 	CapabilityChanges string
 
-	// Metrics is the node's recorder, which every surface of the turn
-	// counts into ([runner.Config.Metrics], where it is copied): its
-	// refusal-loop decisions ([metrics.ToolPolicyRefusalLoops]) and the
-	// calls answered outside their schema ([metrics.ToolArgsOutsideSchema]),
-	// the executor run's bridged calls included. Nil counts nothing.
+	// Metrics is the node's recorder every surface of the turn counts into
+	// ([runner.Config.Metrics]), the executor's bridged calls included:
+	// [metrics.ToolPolicyRefusalLoops] and [metrics.ToolArgsOutsideSchema].
+	// Nil counts nothing.
 	Metrics *metrics.Recorder
 
 	// Compact is the epoch's compactor; the runner binds it to the seat.
-	// Nil rewrites nothing, and every reader of it then carries a payload
-	// whole or names it by its size — never a cut.
+	// Nil rewrites nothing, and its readers carry a payload whole or name it
+	// by size — never a cut.
 	Compact *compact.Compactor
 
-	// Skills is the company's tool-skill registry, threaded per turn like
-	// everything else the runner reads: the registry itself outlives an
-	// epoch, but which registry a turn runs against is the node's answer
-	// at the moment the turn started.
+	// Skills is the company's tool-skill registry: it outlives an epoch, but
+	// which one a turn runs against is the node's answer at turn start.
 	Skills *skills.Registry
 
 	// Context is the turn's prefetched prompt blocks, judged against THIS
-	// turn's trigger and frozen before the runner is built.
-	//
-	// There is no re-fetch seam beside it any more. One existed for the
-	// thin-trigger case: a pointer the turn-start search could not use,
-	// re-searched between the planning and acting phases on the plan the
-	// first had written. With one phase deciding and acting there is
-	// nothing between them to hang it on, and the executor asks instead,
-	// with search_knowledge, over the same seam.
+	// turn's trigger and frozen before the runner is built. A thin trigger
+	// gets no re-fetch: the executor asks with search_knowledge instead.
 	Context prefetch.Blocks
 
 	// Reply says who is waiting for this turn, derived from the trigger
@@ -508,43 +417,36 @@ type RunnerInput struct {
 	// test that drives a runner directly.
 	Fence func() error
 
-	// Remaining reads the seat's token headroom for a sub-agent spawn.
-	// Nil means the seat is uncapped, which is what a company with no
-	// token budget already is — and is NOT the same as a read that failed,
-	// which refuses the spawn rather than granting it no ceiling.
+	// Remaining reads the seat's token headroom for a sub-agent spawn. Nil
+	// means uncapped (no token budget), which is NOT a failed read: that
+	// refuses the spawn.
 	Remaining runner.Remaining
 
 	// Publisher receives the phase telemetry, and Turn identifies the turn
-	// it belongs to. Nil publishes nothing — the right answer for a runner
-	// a test drives directly, and the reason both are per-turn inputs
-	// rather than epoch configuration.
+	// it belongs to. Nil publishes nothing, as for a runner a test drives.
 	Publisher queue.Publisher
 	Turn      runner.Turn
 
-	// Sessions is where the turn's phases serve their tools to the harness that
-	// runs them: the engine's one [toolsession.Host] ([Engine.sessions]).
-	// Both RunnerFor call sites pass it, because a phase that offers tools
-	// reaches its harness through nothing else — a runner built without it is
-	// refused where it is built ([runner.New]).
+	// Sessions is where the turn's phases serve their tools to their
+	// harness: the engine's one [toolsession.Host] ([Engine.sessions]).
+	// Required: a phase's tools reach its harness through nothing else, so
+	// [runner.New] refuses a runner without it.
 	Sessions *toolsession.Host
 
 	// OnPhase moves the working indicator's wording as the turn changes
-	// phase. Nil is a turn nobody is watching a composer for — see
-	// [Engine.beginWorkingStatus], whose nil session's Phase is a no-op, so
-	// this is wired unconditionally rather than branched on.
+	// phase. Wired unconditionally: [Engine.beginWorkingStatus]'s nil
+	// session's Phase is a no-op.
 	OnPhase func(phase.Phase)
 
-	// Launcher runs this turn's executor as its harness's own agentic
-	// run. Built by [Engine.agentRunFor], which BOTH RunnerFor call sites
-	// use; nil is a seat with nothing to launch on, which the runner
-	// refuses to be built for.
+	// Launcher runs this turn's executor as its harness's own agentic run,
+	// built by [Engine.agentRunFor] for both RunnerFor call sites. Required:
+	// the runner refuses to be built without one.
 	Launcher runner.AgentLauncher
 
 	// Markers and Latch drive the first-turn onboarding pass. Nil markers
-	// disable it: without somewhere to mark, the pass would run every turn
-	// forever. The latch is the PROCESS's, not the turn's — it is what
-	// stops a transient marker-read failure re-onboarding a seat this
-	// process has already seen marked.
+	// disable it, or it would run every turn. The latch is the PROCESS's, so
+	// a transient marker-read failure cannot re-onboard a seat this process
+	// has already seen marked.
 	Markers runner.Markers
 	Latch   *runner.Latch
 
@@ -552,19 +454,17 @@ type RunnerInput struct {
 	// parked on rather than a fresh turn. Nil is the ordinary case.
 	Resume *runner.Resume
 
-	// Steer is where the turn's notes from a person wait: the first
-	// segment's box, or the record of the run a resumed segment collects
-	// ([Engine.runSteers]). Nil is a turn nobody can steer: every test that
-	// drives a turn directly.
+	// Steer is where a person's notes to the turn wait: the first segment's
+	// box, or the record of the run a resumed segment collects
+	// ([Engine.runSteers]). Nil is a turn nobody can steer.
 	Steer runner.SteerSource
 }
 
 // TurnSettings is the loop's pinned configuration for this epoch.
 //
 // deadline is the instant THIS turn's wall-clock cap ends ([wallClockDeadline]
-// on the turn's own start, carried across its parks), zero for the triggers
-// that carry none. It is a per-turn argument rather than a config field
-// because it comes off the fire, not the epoch.
+// on the turn's own start, carried across its parks), zero where the trigger
+// carries none: it comes off the fire, not the epoch.
 func (c *Company) TurnSettings(deadline time.Time) turn.Settings {
 	te := c.Config.TurnEngine
 	return turn.Settings{

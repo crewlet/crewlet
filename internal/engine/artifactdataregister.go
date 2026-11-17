@@ -11,23 +11,19 @@ import (
 )
 
 // artifactDataRegistrations is the artifact datastore's entry in the register
-// ([register]), after the artifacts domain: its declaration, applier, write
-// seams, barrier, generation record, node gate and Tier A ceiling
-// (`stream.artifact_data_log_max_bytes`, read through
-// config.Stream.ArtifactDataMaxBytes).
+// ([register]), after the artifacts domain, with its Tier A ceiling
+// `stream.artifact_data_log_max_bytes` (config.Stream.ArtifactDataMaxBytes).
 //
-// A STRICT, IDENTITY-CLAIMING DOMAIN, so it states a barrier (a
-// `linearizable` read of a store is a quorum-committed position), its own
-// generation record and the node gate's writer: the trim counts nodes on this
-// log too. It declares no wake feed: no record on it wakes a seat in this
-// release (datastore watches arrive with a later build).
+// A STRICT, IDENTITY-CLAIMING DOMAIN, so it states a barrier (a `linearizable`
+// read is a quorum-committed position), its own generation record and the node
+// gate's writer, since the trim counts nodes on this log too. It declares no
+// wake feed: no record on it wakes a seat.
 func artifactDataRegistrations() []registration {
 	return []registration{{
 		Domain: artifactdata.Domain{},
 		NewApplier: func(s *stateLog) (statelog.Applier, error) {
-			// WHAT EACH COMMITTED BATCH MOVED, told to this node's socket
-			// hub: every data node applies every record, so each node's
-			// apply is what reaches its own sockets.
+			// WHAT EACH COMMITTED BATCH MOVED, told to this node's socket hub:
+			// every data node applies every record, so each reaches its own sockets.
 			return artifactdata.NewApplier(s.nodeID, s.artifactDataMoved), nil
 		},
 		NewSeams: func(s *stateLog, spec statelog.StreamSpec, appendTo *jetstream.DomainLog,
@@ -46,11 +42,10 @@ func artifactDataRegistrations() []registration {
 				Gates: artifactdata.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 		},
 		Barrier: artifactdata.EncodeBarrier,
-		// THE REFERENCE COMPANY'S WHOLE RATE, for the tracker's reason: a
-		// seat's datastore tools read at `linearizable`
-		// (statelog.ReadLevelDefaults), and the census does not say how a
-		// company's reads split between the logs a seat reads.
-		Trimmed:    artifactdata.EncodeTrimmed,
+		Trimmed: artifactdata.EncodeTrimmed,
+		// THE REFERENCE COMPANY'S WHOLE RATE, as the tracker's: datastore tools
+		// read at `linearizable` (statelog.ReadLevelDefaults), and the census
+		// does not say how reads split between the logs a seat reads.
 		Reads:      &statelog.ReadModel{PerSeatDay: statelog.LinearizableReadsPerSeatDay},
 		Generation: artifactdata.GenerationRecord{},
 		NewGate: func(s *stateLog, _ *runningLog,
@@ -58,9 +53,8 @@ func artifactDataRegistrations() []registration {
 
 			w, err := artifactdata.NewWriter(artifactdata.WriterDeps{
 				Publisher: publisher, DB: s.estate().Reader(),
-				// THE GATE WRITES NO DOCUMENT: an eviction names a machine,
-				// and the writer's seat resolver is for a person column's
-				// value, which this writer is never asked to hold.
+				// THE GATE WRITES NO DOCUMENT: an eviction names a machine, and
+				// the seat resolver serves only person columns.
 				SeatExists: func(context.Context, string) (bool, error) {
 					return false, errGateWritesNoDocument
 				},

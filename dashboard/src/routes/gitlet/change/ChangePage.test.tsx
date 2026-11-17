@@ -337,7 +337,13 @@ test("Approve is one review of the head carrying the drafts and the standing fin
 
   await review("Approve");
   const dialog = await screen.findByRole("dialog");
-  expect(within(dialog).getByText(/1 drafted finding on revision 2/)).toBeTruthy();
+  // THE REVISION IS NAMED ONCE, by the subtitle; the drafts are "on this revision".
+  expect(within(dialog).getByText(/1 drafted finding on this revision/)).toBeTruthy();
+  expect(
+    within(dialog)
+      .getAllByText(/revision 2/i)
+      .map((e) => e.textContent),
+  ).toEqual(["Revision 2"]);
   await within(dialog).findByText("The retry never stops");
   fireEvent.click(within(dialog).getByRole("button", { name: "Approve" }));
 
@@ -1489,7 +1495,7 @@ test("a review's findings are cards under it, each with its excerpt marked at it
   const excerpt = await within(card).findByRole("group", {
     name: "Lines 18 to 20 of internal/server/routes.go at revision 1, line 19 marked",
   });
-  const marked = [...excerpt.querySelectorAll("[data-picked]")];
+  const marked = [...excerpt.querySelectorAll(".crewlet-diff-view__line--picked")];
   expect(marked).toHaveLength(1);
   expect(marked[0]!.textContent).toContain('r.Stream("product")');
   expect(

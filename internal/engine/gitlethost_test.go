@@ -77,12 +77,10 @@ roles:
 // opsToken is the founder's operator token: long enough for the guard.
 const opsToken = "ops-token-0123456789abcdefghijklmnopqrstuv"
 
-// bindOps binds the `ops` Tier A token to the founder's human seat through e's
-// identity directory — the row `crewlet iam create -kind machine -login
-// token:ops -seat founder` writes — and waits until e reports the binding:
-// the guard resolves a token's seat from this node's own copy of the
-// directory, so a push before the row applied would be a push by a token
-// bound to nobody, which fetches only.
+// bindOps binds the `ops` Tier A token to the founder's human seat in e's
+// identity directory (the row `crewlet iam create -kind machine -login
+// token:ops -seat founder` writes) and waits until e reports it: the guard
+// reads this node's own copy, and a token bound to nobody only fetches.
 func bindOps(t *testing.T, e *engine.Engine) {
 	t.Helper()
 	key := uuid.Must(uuid.NewV7()).String()
@@ -106,11 +104,9 @@ func bindOps(t *testing.T, e *engine.Engine) {
 }
 
 // gitletNodeBootstrap is a data node's Tier A with a persisted stream, its roles
-// mutated by roles (nil leaves them undeclared: every role), and the founder's
-// token. The token states its grants, as every Tier A token must, and lists
-// Gitlet, without which it reaches no repository at all (ADR-0110): what a
-// credential holding it may do to a repository is the standing of the seat
-// the directory binds it to (ADR-0088).
+// set to roles (nil: every role), and the founder's token, whose grants list
+// Gitlet, without which it reaches no repository (ADR-0110); what it may do
+// there is its bound seat's standing (ADR-0088).
 func gitletNodeBootstrap(t *testing.T, roles []string) *config.Bootstrap {
 	t.Helper()
 	return bootstrap(t, func(b *config.Bootstrap) {
@@ -122,11 +118,10 @@ func gitletNodeBootstrap(t *testing.T, roles []string) *config.Bootstrap {
 	})
 }
 
-// newGitletNode boots an engine over b for the company doc, its hook this test
-// binary, and stops it at the end of the test — on the git the suite runs,
-// held to the node floor first where the boot builds Gitlet
-// (engine.RequireNodeGit), so a machine below it reads the contributor's
-// sentence rather than the node's refusal.
+// newGitletNode boots an engine over b for doc, its hook this test binary,
+// stopped at the test's end. Where the boot builds Gitlet it first holds the
+// suite's git to the node floor (engine.RequireNodeGit), so a machine below it
+// reads the contributor's sentence rather than the node's refusal.
 func newGitletNode(t *testing.T, b *config.Bootstrap, doc string) (*engine.Engine, error) {
 	t.Helper()
 	engine.RequireNodeGit(t, b, parsedCompany(t, doc))
@@ -149,10 +144,8 @@ func bootGitletNode(t *testing.T, b *config.Bootstrap, doc string) (*engine.Engi
 }
 
 // GITLET'S GIT SURFACE IS BUILT EXACTLY WHERE THE COMPANY HOSTS CODE AND THE
-// NODE HAS THE GITLET ROLE: a company without code.backend: gitlet builds none, a node
-// whose roles name no gitlet builds none — and neither makes a cache directory
-// — and a node with every role for a company that hosts code builds one, its
-// directory tagged as the cache's.
+// NODE HAS THE GITLET ROLE: otherwise no host and no cache directory; with
+// both, a host whose directory is tagged as the cache's.
 //
 // Mutation: build the host regardless of the gitlet role, and the second case
 // goes red.
@@ -192,16 +185,13 @@ func TestACompanyWithoutGitletBuildsNoHost(t *testing.T) {
 	}
 }
 
-// A GITLET NODE VERIFIES A BOX'S TOKEN, WITH GITLET BUILT OR NOT: the box
-// tokens — an executor's and a check's — are built at New over the fleet's
-// keyring, whatever the company runs, so a node whose box routes find Gitlet
-// unbuilt — which tells a box why only once its token verifies
-// (api.CodeSurface.VerifyBox) — verifies a token another node of the fleet
-// minted exactly as a node serving Gitlet does, and refuses one another
-// keyring signed.
+// A GITLET NODE VERIFIES A BOX'S TOKEN, WITH GITLET BUILT OR NOT: box and
+// check tokens are built at New over the fleet's keyring, since a box route
+// finding Gitlet unbuilt says so only once the token verifies
+// (api.CodeSurface.VerifyBox). A peer's token verifies; another keyring's not.
 //
-// Mutation: build the box tokens, or the check tokens, with Gitlet
-// rather than at New — the node serving none of it holds none, red.
+// Mutation: build the box or check tokens with Gitlet rather than at New, and
+// the node serving none holds none, red.
 func TestAGitletNodeVerifiesABoxsTokenWithOrWithoutItsHost(t *testing.T) {
 	t.Parallel()
 	ref := host.BoxRunRef{TurnID: uuid.Must(uuid.NewV7()).String(), LaunchID: uuid.NewString()}
@@ -282,16 +272,14 @@ func TestAGitletNodeVerifiesABoxsTokenWithOrWithoutItsHost(t *testing.T) {
 	}
 }
 
-// A VOLUME WITH NO ROOM FOR A CACHE REFUSES THE GITLET NODE BY NAME. Here the
-// broker beside the cache may still write every byte the volume has free, so
-// the request spools leave the cache nothing to take a share of: the node is
-// refused with the engine's own account of the volume — the figures and every
-// setting that changes one — never with the cache's refusal of a budget of
-// nothing, which names none of them. An explicit gitlet.cache_max_bytes on the
-// same volume is the operator's answer, and the node boots on it.
+// A VOLUME WITH NO ROOM FOR A CACHE REFUSES THE GITLET NODE BY NAME: with the
+// broker free to fill the volume, the request spools leave the cache no share,
+// and the refusal is the engine's account of the volume (the figures and every
+// setting that changes one), never the cache's refusal of a zero budget, which
+// names none. An explicit gitlet.cache_max_bytes on the same volume boots.
 //
-// Mutation: derive a budget of nothing without refusing it, and the refusal is
-// the cache's, naming no setting.
+// Mutation: derive a zero budget without refusing it, and the refusal is the
+// cache's, naming no setting.
 func TestAVolumeWithNoRoomRefusesGitletByName(t *testing.T) {
 	t.Parallel()
 	gittest.RequireNode(t)
@@ -308,9 +296,9 @@ func TestAVolumeWithNoRoomRefusesGitletByName(t *testing.T) {
 		return e, err
 	}
 
-	// THE BUDGET LEFT TO THE ROOM, this case's subject: the fixture declares
-	// one (brokertest.GitletCacheIn), and the room is read off the volume the
-	// case stands in for (WithCacheDisk), never off the machine running it.
+	// THE DERIVED BUDGET: cleared, as the fixture declares one
+	// (brokertest.GitletCacheIn); the room is read off WithCacheDisk's volume,
+	// never the machine's.
 	derived := gitletNodeBootstrap(t, nil)
 	derived.Gitlet.CacheMaxBytes = 0
 	_, err := boot(derived)
@@ -336,10 +324,9 @@ func TestAVolumeWithNoRoomRefusesGitletByName(t *testing.T) {
 	}
 }
 
-// A GITLET NODE BOOTS ONLY AT ITS FLOOR — git 2.55 or newer, gitproc.NodeMinVersion
-// — and the refusal names the role, code.backend: gitlet, the version it needs and the
-// git it found: a boot, not a first push, is where an operator learns the
-// host's git is too old.
+// A GITLET NODE BOOTS ONLY AT ITS FLOOR (gitproc.NodeMinVersion), refused at
+// boot rather than at a first push, naming the role, code.backend: gitlet, the
+// version it needs and the git it found.
 //
 // Not parallel: it sets PATH, which every git the process starts reads.
 //
@@ -373,12 +360,10 @@ func TestAGitletNodeBootsOnlyAtItsFloor(t *testing.T) {
 	}
 }
 
-// A PERSON PUSHES THROUGH GITLET: the founder clones the empty
-// repository the company declares, commits and pushes with their own operator
-// token as the Basic password, the branch lands, and this node's event store
-// holds the push audited as the founder, by repository, through the token it
-// came through — which is the host built over the engine's own guard, Audit,
-// Estate and Objects.
+// A PERSON PUSHES THROUGH GITLET with their operator token as the Basic
+// password: the branch lands, and this node's event store audits the push as
+// the founder, by repository and token, so the host is built over the
+// engine's own guard, Audit, Estate and Objects.
 func TestAPersonPushesThroughTheEnginesHost(t *testing.T) {
 	t.Parallel()
 	b := gitletNodeBootstrap(t, nil)
@@ -423,14 +408,12 @@ func TestAPersonPushesThroughTheEnginesHost(t *testing.T) {
 	}
 }
 
-// A PUSH'S CHANGE IS LINKED ON THE DEPLOYMENT'S ADDRESS: the founder pushes a
-// branch with `-o change` through Gitlet, and git prints the
-// change it opened with the link to its page on `api.external_url` — the
-// address the engine took from its Tier A at construction, which the host is
-// built with, so a node serving a push never names a change and no page.
+// A PUSH'S CHANGE IS LINKED ON THE DEPLOYMENT'S ADDRESS: a push with `-o
+// change` prints the change it opened with its page on `api.external_url`,
+// which the host is built with from Tier A.
 //
-// Mutation: build the host with no ExternalBase (buildGitletHost) — git prints
-// the change's name alone, red.
+// Mutation: build the host with no ExternalBase (buildGitletHost), and git
+// prints the change's name alone, red.
 func TestAPushsChangeIsLinkedOnTheDeploymentsAddress(t *testing.T) {
 	t.Parallel()
 	b := gitletNodeBootstrap(t, nil)
@@ -458,20 +441,17 @@ func TestAPushsChangeIsLinkedOnTheDeploymentsAddress(t *testing.T) {
 	}
 }
 
-// A GITLET NODE ANSWERS THE FLEET'S CODE STATUS, on the broker, as a peer asks it:
-// a question on topics.CodeStatus naming a repository is answered by the node
-// serving Gitlet with its host's own status — the node, its cache, and
-// the repository's heat and copy in service, as the person's clone and push
-// through the engine's host left them. The wire is the question's and the
-// answer's own (version, repo, nodes, without_hot, status). A question that
-// names its Gitlet nodes is answered by those alone, under the id the node's own
-// host gives it. A question at a version this build does not speak is answered
-// by nobody, which its asker reads as a node that did not answer, never as a
-// guess at its fields.
+// A GITLET NODE ANSWERS THE FLEET'S CODE STATUS on topics.CodeStatus with its
+// host's own status: the node, its cache, and the repository's heat and copy
+// as the founder's clone and push left them, on the wire's own fields
+// (version, repo, nodes, without_hot, status). A question naming its nodes is
+// answered by those alone, under the host's own id; one at a version this
+// build does not speak is answered by nobody, which the asker reads as a node
+// that did not answer, never a guess at its fields.
 //
-// Mutation: register no answerer beside the host (buildGitletHost), and the
-// question is answered by nobody; register it under another id than the
-// host's, and the question naming the node is not answered, red.
+// Mutation: register no answerer beside the host (buildGitletHost), and nobody
+// answers; register it under another id than the host's, and the question
+// naming the node goes unanswered, red.
 func TestAGitletNodeAnswersTheFleetsCodeStatus(t *testing.T) {
 	t.Parallel()
 	b := gitletNodeBootstrap(t, nil)
@@ -533,10 +513,9 @@ func TestAGitletNodeAnswersTheFleetsCodeStatus(t *testing.T) {
 			st.Hot)
 	}
 
-	// A QUESTION THAT NAMES ITS NODES is answered by those alone, by the id
-	// the node's host gives itself — and one that asks for no hot list gets
-	// none. (Read into a cleared answer: decoding leaves a field the JSON
-	// does not carry as it was.)
+	// A QUESTION THAT NAMES ITS NODES is answered by those alone, and one
+	// asking for no hot list gets none. The answer is cleared first: decoding
+	// leaves a field the JSON lacks as it was.
 	answer.Status = host.CodeStatus{}
 	if replies := ask(`{"version":1,"nodes":["`+self+`"],"without_hot":true}`, 10*time.Second); len(replies) != 1 {
 		t.Fatalf("a question naming the Gitlet node was answered %d times, want once", len(replies))
@@ -554,22 +533,17 @@ func TestAGitletNodeAnswersTheFleetsCodeStatus(t *testing.T) {
 	}
 }
 
-// THE GIT HALF IS SERVED ONCE AN APPLY BUILDS GITLET, with no restart
-// (M3-O17). A Gitlet node booted with no company has not built Gitlet, so a
-// read of a repository by object id and an engine write through its own router
-// are each unserved, the node saying so; the first apply that sets
-// code.backend: gitlet builds Gitlet and the git reads beside it, and the next
-// read — of the commit the founder pushed through that host — is answered by
-// this node's own git half, and so is the founder's next write, built and
-// landed by Gitlet and read back at the commit it made. The router and
-// the estate server ask for that half per request: either one built before
-// the runtime existed, and holding what it found then, would answer each of
-// them unserved until the node restarted.
+// THE GIT HALF IS SERVED ONCE AN APPLY BUILDS GITLET, with no restart. With no
+// company, a git read by object id and an engine write through the node's
+// router are each unserved, saying so; after the first apply setting
+// code.backend: gitlet, this node's git half answers the read of the founder's
+// pushed commit and builds and lands the founder's next write. The router and
+// the estate server resolve that half per request: one resolved at build
+// would answer unserved until a restart.
 //
-// Mutations: resolve the git half once, when the router is built — the read
-// after the apply is still unserved, red; answer the half's writes with
-// nothing built (a stub where Gitlet's Write is) — the write after the
-// apply is not applied, red.
+// Mutations: resolve the git half once, when the router is built, and the read
+// after the apply is unserved, red; stub Gitlet's Write so writes answer with
+// nothing built, and the write after the apply is not applied, red.
 func TestTheGitHalfIsServedOnceAnApplyBuildsGitlet(t *testing.T) {
 	t.Parallel()
 	gittest.RequireNode(t)
@@ -642,29 +616,14 @@ func TestTheGitHalfIsServedOnceAnApplyBuildsGitlet(t *testing.T) {
 	}
 }
 
-// A GITLET NODE'S OWN ALARMS NAME A BITMAP ITS CACHE REFUSED FOR MEMORY. The
-// cache judges every repository it holds against what the node's memory can
-// give its background work, and a bitmap past that is refused — logged,
-// counted, gauged — and stands as code_maintenance_refused on the node whose
-// cache refused it, since an alarm describes one node. Nothing filled the
-// reading's code half from the cache, so the alarm could never fire on a
-// running node.
-//
-// The node here is one whose transfer lane takes all its memory, by
-// arithmetic rather than by the machine running the case: its git pool is
-// told the node has 8 GiB (engine.WithGitMemory, gitproc.Options.Memory) and
-// its operator set gitlet.max_transfers to one transfer more than 8 GiB holds at
-// gitproc.TransferMemory each — 37 at 224 MiB, 8 288 MiB kept — so whatever
-// the machine's cores add for serving, the background work's budget is
-// nothing and the bitmap of every repository the node holds a pack of is
-// refused. Its cache budget is explicit so the case is not decided by the
-// machine's free disk either: those 37 transfers' request spools take
-// 37 × 64 MiB = 2 368 MiB (host.SpoolAllowance) out of the room a derived
-// budget is a share of. Before the node holds a pack its alarms are silent —
-// the alarm follows the refusal, never the configuration — and once the
-// founder's push lands the node's own evaluation, the one its gauge, its log
-// and its health envelope are fed, names it within a maintainer pass and an
-// evaluation.
+// A GITLET NODE'S OWN ALARMS NAME A BITMAP ITS CACHE REFUSED FOR MEMORY:
+// code_maintenance_refused stands on that node once it holds a pack, never
+// from its configuration alone. The memory is arithmetic, not the machine's:
+// the pool is told 8 GiB (engine.WithGitMemory) and gitlet.max_transfers is one
+// more than that holds at gitproc.TransferMemory each, leaving background work
+// no budget. The cache budget is explicit so free disk decides nothing either
+// (37 transfers' spools take 2 368 MiB of a derived budget's room,
+// host.SpoolAllowance).
 //
 // Mutation: drop r.code from the reading's assembly (retentionreport.go), or
 // fill nothing from the cache in codeReading, and the alarm never fires.
@@ -704,9 +663,8 @@ func TestTheGitCachesMaintenanceAlarmFiresOnItsNode(t *testing.T) {
 		t.Fatalf("the founder's push did not land:\n%s", pushed)
 	}
 
-	// A MAINTAINER PASS AND AN EVALUATION: the cache judges what it holds on
-	// its maintainer's tick, and the node evaluates its table on its own.
-	// The minute is room for a loaded machine, never the expected wait.
+	// A MAINTAINER PASS AND AN EVALUATION; the minute is room for a loaded
+	// machine, never the expected wait.
 	deadline := time.Now().Add(cache.MidxDebounce + statelog.AlarmInterval + time.Minute)
 	for {
 		kinds, _ := e.Alarms()
@@ -735,11 +693,10 @@ func TestTheGitCachesMaintenanceAlarmFiresOnItsNode(t *testing.T) {
 	}
 }
 
-// atTheBound is a Gitlet node's compactor's code seam with every due listing
-// answered as naming one more repository, at the most live packs a repository
-// may hold — the reading a running node's compactor raises the alarm from,
-// shown it without two thousand packs pushed into a repository — and every
-// listing counted.
+// atTheBound is a Gitlet node's compactor's code seam answering every due
+// listing with one more repository at gitlet.MaxPacksPerRepo, the reading the
+// compactor raises the alarm from without that many packs pushed, and counting
+// every listing.
 type atTheBound struct {
 	gitletcompact.Estate
 	listings *atomic.Int64
@@ -759,27 +716,17 @@ func (e atTheBound) Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAn
 	}}}, nil
 }
 
-// THE COMPACTION-BEHIND ALARM FIRES ON ITS NODE, through the wiring a running
-// node has: a STARTED Gitlet node — listed among the Gitlet nodes once its host
-// beats, and so, alone, the maintainer of every repository — whose compactor's
-// pass finds a repository at the pack bound fills its alarm reading's
-// compaction half, which the retention loop's own reading carries into the
-// alarm table — so code_compaction_behind stands on that node, naming the
-// repository, for as long as its pushes would be refused. And it is the
-// compactor's FIRST pass that names it: started only once the runtime it reads
-// through is published, and passing only once this node is listed, that pass
-// finds its listing served and this node the repository's maintainer.
-//
-// STARTED, because a node is a repository's maintainer only once a listing of
-// the Gitlet nodes carries it, and only a started node's host beats its presence:
-// a node built and never started maintains nothing, its compactor waiting to
-// be listed.
+// THE COMPACTION-BEHIND ALARM FIRES ON ITS NODE through a running node's
+// wiring: a STARTED Gitlet node (only a started host beats its presence, and
+// only a listed node maintains a repository) whose compactor finds a
+// repository at the pack bound fills its reading's compaction half, and
+// code_compaction_behind stands naming it. The compactor's FIRST pass names
+// it: it starts once its runtime is published and passes once this node is listed.
 //
 // Mutations: leave the compactor's half out of the reading (codeReading), and
-// the alarm never fires; pass at Start without waiting for this node to be
-// listed (compact's awaitListed), and the first pass, before the host beats,
-// finds no listing that carries this node — the repository is named a listing
-// later.
+// the alarm never fires; pass at Start without waiting to be listed (compact's
+// awaitListed), and the first pass finds no listing carrying this node, so the
+// repository is named a listing later.
 func TestTheCompactionBehindAlarmFiresOnItsNode(t *testing.T) {
 	t.Parallel()
 	b := gitletNodeBootstrap(t, nil)
@@ -800,12 +747,10 @@ func TestTheCompactionBehindAlarmFiresOnItsNode(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// THE COMPACTOR'S READING, read until it names the repository: its first
-	// pass's, once the node's first beat is listed — which the presence view
-	// hears within about a second, the pass following within a
-	// gitletcompact.ListedRecheck — the next comes a Poll later, and the
-	// deadline leaves room for it only so that a pass too early fails here by
-	// its count rather than by the clock.
+	// THE COMPACTOR'S READING, until it names the repository: the first beat is
+	// heard within about a second and the pass follows within a
+	// gitletcompact.ListedRecheck; the deadline allows one Poll more only so a
+	// pass too early fails on its count, not the clock.
 	deadline := time.Now().Add(gitletcompact.Poll + time.Minute)
 	for engine.CodeReadingForTest(t.Context(), e).CodeCompactionBehind == 0 {
 		if time.Now().After(deadline) {
@@ -895,21 +840,17 @@ roles:
     kind: human
 `
 
-// THE BUSY ALARM FIRES ON ITS DATA NODE, through the wiring a running node
-// has: the committer of a data node WITHOUT the gitlet role — a node that holds
-// no git cache, and decides the pushes of every repository rendezvous ranks it
-// first for — refuses busy the proposals its repository's full queue cannot
-// hold, and one that waited in another repository's queue until its asker
-// could wait no longer, and the node's own reading carries them into the
-// alarm table, so code_commit_busy stands on that node naming the repository
-// with the most by its name. Each queue waits behind its repository's first
-// batch, held at its publish.
+// THE BUSY ALARM FIRES ON ITS DATA NODE through a running node's wiring: the
+// committer on a data node WITHOUT the gitlet role (no git cache, deciding the
+// pushes rendezvous ranks it first for) refuses busy the proposals a full
+// queue cannot hold and one that outwaited its asker in another repository's
+// queue, and code_commit_busy stands naming the repository with the most. Each
+// queue waits behind its repository's first batch, held at its publish.
 //
 // Mutations: read the committer only where a git cache stands (codeReading's
-// early return on a node without one), and the reading counts nothing and the
-// alarm never fires here; leave the name out of the reading, and the detail
-// names the repository's id; carry the node's share as the proposals that
-// waited, and the reading says none waited.
+// early return), and the alarm never fires here; leave the name out of the
+// reading, and the detail names the id; carry the node's share as the
+// proposals that waited, and the reading says none waited.
 func TestTheCommitBusyAlarmFiresOnItsDataNode(t *testing.T) {
 	t.Parallel()
 	const past = 3
@@ -996,10 +937,9 @@ func TestTheCommitBusyAlarmFiresOnItsDataNode(t *testing.T) {
 	go propose(api, 0)
 	entered("api")
 
-	// A PROPOSAL THAT WAITED OUT ITS ASKER'S ATTEMPT behind api's held
-	// batch: queued with two seconds more than a batch and its answer —
-	// room for a loaded machine between the deadline and its arrival — and
-	// answered busy while it waits.
+	// A PROPOSAL THAT OUTWAITS ITS ASKER behind api's held batch is answered
+	// busy; its deadline is a batch and its answer plus two seconds of room
+	// for a loaded machine.
 	short, cancel := context.WithTimeout(t.Context(), gitlet.CommitBudget+gitlet.ReplyMargin+2*time.Second)
 	defer cancel()
 	if res, err := c.Propose(short, stale(api, 1)); err != nil || res.Answer.Refused != gitlet.RefusalBusy ||
@@ -1076,10 +1016,9 @@ func TestTheCommitBusyAlarmFiresOnItsDataNode(t *testing.T) {
 	}
 }
 
-// serveWeb waits for gitCompany's declared repository to exist on e, binds the
-// `ops` token to the founder ([bindOps]), and serves Gitlet on e behind
-// b's guard over e's identity directory, as the API mounts it: the URL a
-// person's git clones and pushes `web` at.
+// serveWeb waits for gitCompany's `web` to exist on e, binds `ops` to the
+// founder ([bindOps]) and serves Gitlet behind b's guard over e's identity
+// directory, as the API mounts it, returning the URL git reaches `web` at.
 func serveWeb(t *testing.T, b *config.Bootstrap, e *engine.Engine) string {
 	t.Helper()
 	h, ok := e.GitletHost()
@@ -1118,18 +1057,15 @@ func serveWeb(t *testing.T, b *config.Bootstrap, e *engine.Engine) string {
 	return srv.URL + "/git/web.git"
 }
 
-// THE BACKLOG ALARM BORROWS EACH CHECK'S OWN TIMEOUT, through the wiring a
-// running node has: two attempts queued on a data node at the same instant,
-// two minutes ago — one of a check given a minute to run, one given ten — and
-// the node's reading counts the first alone, naming it, so
-// code_checks_backlog stands on the node at its next evaluation. The node runs
-// no git, so no runner ever claims either: the backlog is measured from the
-// rows by the data node, which is how a fleet with no live runner still
-// raises it.
+// THE BACKLOG ALARM BORROWS EACH CHECK'S OWN TIMEOUT: of two attempts queued
+// together two minutes ago, one of a check given a minute and one given ten,
+// the data node's reading counts the first alone, naming it, and
+// code_checks_backlog stands at its next evaluation. The node runs no git, so
+// no runner claims either: the backlog is measured from the rows, which is how
+// a fleet with no live runner still raises it.
 //
-// Mutation: judge every attempt at one threshold of the rule's own — any one
-// — and the two attempts, queued together, are counted together or not at
-// all — red.
+// Mutation: judge every attempt at one threshold of the rule's own, and the
+// two are counted together or not at all, red.
 func TestTheBacklogAlarmBorrowsEachChecksTimeout(t *testing.T) {
 	t.Parallel()
 	b := gitletNodeBootstrap(t, []string{"data", "ingress", "seats", "workers"})

@@ -20,11 +20,9 @@ import (
 )
 
 // filingServer is the MCP server the filing tool is a tool of. NOT A BUILTIN:
-// every builtin is decided by the authority table, and a seat's surface leaves
-// off one the table refuses before any object is named ([Company.withheldFrom]),
-// which a builtin with no row of its own, as this double would be, always is.
-// An MCP server's tool reaches the seat's executor, served beneath the run's
-// endpoint under its server's name (mcpbridge.Servers).
+// a builtin with no authority-table row of its own is left off a seat's
+// surface ([Company.withheldFrom]); an MCP server's tool reaches the executor
+// under its server's name (mcpbridge.Servers).
 const filingServer = "tracker"
 
 // filingTool is a seat's tool that files a work item once it is released,
@@ -60,20 +58,15 @@ func (f *filingTool) CallInTurn(ctx context.Context, turn *turnctx.Turn, _ map[s
 }
 
 // A CALL STILL RUNNING AS ITS HARNESS ENDS ITS RUN COUNTS IN THE TURN'S OUTCOME,
-// end to end: through the real launch, the real bridge and its ledger, the run
-// store and the coordinator that collects the run and resumes its turn, on the
-// node that holds the call. The run calls a tool that files a work item, and its
-// harness ends its own run while the call still runs — as Claude Code does once
-// it gave the call up at its tool timeout. The collection ends the job's session,
-// which answers the box's call that it is still running; only then is the tool
-// let go, so the call files the item after the session ended and its update
-// lands while the collection waits for it — and the turn's outcome counts the
-// work item.
+// end to end over the real launch, bridge, run store and coordinator. The run
+// calls a tool that files a work item and ends while the call runs, as Claude
+// Code does past its tool timeout; the tool is let go only once the collection
+// ends the job's session, so its update lands while the collection waits, and
+// the outcome counts the item.
 //
 // Mutation: collect without waiting for the calls in flight
-// (collection-reads-without-the-drain), and the turn's outcome is read before
-// the call's update lands: the work item is in no outcome, and the turn is
-// booked as one that changed nothing.
+// (collection-reads-without-the-drain), and the work item is in no outcome:
+// the turn is booked as one that changed nothing.
 func TestACallStillRunningAsItsHarnessEndsItsRunCountsInTheTurnsOutcome(t *testing.T) {
 	t.Parallel()
 	// A MODEL THAT ANSWERS THE TURN'S OWN PHASES, its reviewer's among them:
@@ -146,15 +139,12 @@ func TestACallStillRunningAsItsHarnessEndsItsRunCountsInTheTurnsOutcome(t *testi
 }
 
 // AN ANSWERED PARK CONTINUES ON A FRESH JOB AND A FRESH SESSION, AND NO CALL OF
-// THE PARKED SESSION LANDS ON IT. A run that asked a person something is
-// collected and parked, and its collection ends the asking job's session on the
-// bridge, as every collection does — the coordinator's Ended, which the engine
-// wires to the bridge's close ([Engine.coordinatorOptions]): the asking box's
-// next call is refused and runs nothing. The answer's relaunch is a job of its
-// own in the same round, whose opening is a session of its own: its calls land
-// as its job's, numbered after the asking job's, while the parked session's
-// token, dialled again once the new job is served, reaches nothing — so no call
-// of the parked session lands on the new job.
+// THE PARKED SESSION LANDS ON IT. The park's collection ends the asking job's
+// session (the coordinator's Ended, wired to the bridge's close in
+// [Engine.coordinatorOptions]), so its next call is refused; the answer's
+// relaunch is a job of its own in the same round, its calls numbered after
+// the asking job's, and the parked session's token, dialled again, reaches
+// nothing.
 //
 // Mutation: resolve a job's token by its run alone, and the parked session's
 // call reaches the new job's opening.

@@ -33,16 +33,15 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// headLog is ONE executor log as these cases play it: the head a turn's dispatch
-// reads off it, the rows its launches restore from and record on, and every
-// object's archive. It keeps the domain's rules these cases turn on and no
-// others — the head is the ended turn that read the conversation last, a turn's
-// first landed record keeps its read, a begin holds its base where the base's
-// row still names the session the read saw, a live row that landed no capture
-// holds its base against an end's absorption, and only a turn that landed a
-// capture absorbs what its read handed out — which the domain's own suite holds
-// on the real log (internal/executordomain's
-// TestAConversationsHeadIsTheTurnThatReadItLast and
+// headLog is ONE executor log as these cases play it: the head a dispatch
+// reads, the rows launches restore from and record on, and every object's
+// archive. It keeps only the domain rules these cases turn on — the head is the
+// ended turn that read the conversation last, a turn's first landed record
+// keeps its read, a begin holds its base where the base's row still names the
+// session the read saw, a live row with no capture holds its base against an
+// end's absorption, and only a turn that landed a capture absorbs what its read
+// handed out — which the domain's own suite holds on the real log
+// (internal/executordomain's TestAConversationsHeadIsTheTurnThatReadItLast and
 // TestNoReleaseTakesAHeldBase).
 type headLog struct {
 	mu       sync.Mutex
@@ -55,9 +54,8 @@ type headLog struct {
 	// as a log does where the base moved before the begin landed.
 	holdNothing bool
 
-	// headErr, where set, is what every head read answers in place of the
-	// head: a log the estate router could not reach, or a copy the read
-	// ladder refused.
+	// headErr, where set, answers every head read in place of the head: a log
+	// the estate router could not reach, or a copy the read ladder refused.
 	headErr error
 
 	heads  int
@@ -382,11 +380,10 @@ func (conversingKeep) Upload(context.Context, executorkeep.SealedSpool,
 	return executorkeep.SealedObject{}, errors.New("no case here keeps a session")
 }
 
-// conversingLaunch is a seat whose turns serve the conversation key —
-// `chat:D1` unless a case serves another — on an engine whose dispatch reads
-// that conversation's head off one log, whose launches record on it and
-// continue sessions from it, and the double's runner every launch starts its
-// job on.
+// conversingLaunch is a seat whose turns serve conversation `chat:D1` (unless
+// a case serves another) on an engine whose dispatch reads its head off one
+// log, whose launches record on it and continue sessions from it, and the
+// double's runner every launch starts its job on.
 type conversingLaunch struct {
 	e    *Engine
 	c    *Company
@@ -503,11 +500,10 @@ func (k conversingLaunch) lastStarted(t *testing.T) sandbox.RunRequest {
 	return started[len(started)-1]
 }
 
-// A TURN READS ITS CONVERSATION ONCE, at its dispatch. Its first launch is
-// answered which session it continues from that read with no other, and every
-// later launch — a relaunch of the turn, on a segment that resumed it — from
-// what the first one froze: none of them reads the conversation's head again,
-// so a sibling that ended meanwhile never moves the turn's base or its account.
+// A TURN READS ITS CONVERSATION ONCE, at its dispatch. Its first launch
+// continues from that read, and every later launch (a relaunch on a resumed
+// segment) from what the first one froze: none reads the head again, so a
+// sibling that ended meanwhile never moves the turn's base or its account.
 //
 // Mutation: read the head in the probe, the launch or a relaunch, and the count
 // goes past one.
@@ -567,13 +563,12 @@ func TestATurnAfterASessionRanOutOfContextStartsItsOwnSayingWhy(t *testing.T) {
 	}
 }
 
-// THE FROZEN BASE OUTLIVES A SIBLING'S END, as the engine wires it. Turn t2's
-// dispatch read b1, the conversation's head; its first launch continued b1 and
-// recorded its begin, which holds it. Its sibling t3, which read b1 too, captured
-// and ended — and b1 is still there, t2 holding it — and t3 is the head now. A
-// relaunch of t2 from a resumed segment, which reads no conversation, is
-// answered b1 — never t3 — carried to the sandbox layer as the conversation's
-// session, and continued in a box of its own.
+// THE FROZEN BASE OUTLIVES A SIBLING'S END, as the engine wires it. t2's
+// dispatch read b1, the head; its first launch continued b1 and its begin holds
+// it. Sibling t3, which read b1 too, captured and ended, so t3 is the head now
+// while b1 stays, held by t2. A relaunch of t2 from a resumed segment, which
+// reads no conversation, is answered b1, never t3, carried to the sandbox as
+// the conversation's session and continued in a box of its own.
 //
 // Mutation: answer a relaunch from a head read now, freeze nothing on the
 // record, or carry the base as a kept capture, and a check goes red.
@@ -636,16 +631,14 @@ func TestTheFrozenBaseOutlivesASiblingsEnd(t *testing.T) {
 	}
 }
 
-// A SCHEDULED FIRE CONTINUES THE PREVIOUS FIRE'S SESSION. Every fire of a
-// schedule carries the schedule's conversation, stamped as the scheduler stamps
-// it, and the dispatcher takes the turn's conversation off it — so a fire's
-// dispatch reads the head the schedule's last fire left on its seat, and is
-// told how the earlier fires ended in the schedule's words; its first launch
-// continues the last fire's session in a box of its own and holds it on the
-// log; and once the fire has captured and ended, its end absorbs the last
-// fire's row, so the fire after it continues this one's. Another seat running
-// the same schedule — a unit's, fanned out — keeps a conversation of its own:
-// its read finds none of this seat's fires.
+// A SCHEDULED FIRE CONTINUES THE PREVIOUS FIRE'S SESSION. Every fire carries
+// its schedule's conversation, stamped as the scheduler stamps it, so its
+// dispatch reads the head the last fire left on its seat and is told how the
+// earlier fires ended in the schedule's words; its first launch continues that
+// session in a box of its own and holds it; once it captures and ends, its end
+// absorbs the last fire's row, so the next fire continues this one. Another
+// seat running the same schedule (a unit's, fanned out) has its own
+// conversation: its read finds none of this seat's fires.
 //
 // Mutation: stamp a fire with no conversation, read any key but the fire's or
 // any seat's but the turn's own, or tell a schedule's earlier fires in a
@@ -725,21 +718,18 @@ func TestAScheduledFireContinuesThePreviousFiresSession(t *testing.T) {
 	}
 }
 
-// THE NEXT FIRE CONTINUES THE SCHEDULE'S LINE, NOT THE FIRE THAT ENDED LAST,
-// as the engine reads it. Fire f10 read the schedule's head, f09, and parked
-// on a person's question; f11 read the same head beside it, continued it and
-// ended; f12 read the schedule after that end, continued f11 and ended; and
-// f10, answered, ended last of all. The next fire's dispatch reads f12, the
-// newest in the schedule's line: its first launch is answered f12's session,
-// and its brief tells in the schedule's words how f10 ended, f10's session
-// offered beside the head and both handed out for its end to absorb. headLog
-// orders a head as the domain's head statement does, and the domain's own
-// suite holds that statement to the same line (internal/executordomain's
-// TestAFireThatEndsAfterTheFiresBesideItIsToldNotContinued).
+// THE NEXT FIRE CONTINUES THE SCHEDULE'S LINE, NOT THE FIRE THAT ENDED LAST.
+// f10 read the head, f09, and parked on a person's question; f11 read f09
+// beside it, continued it and ended; f12 read after that end, continued f11
+// and ended; f10, answered, ended last. The next fire reads f12, newest in the
+// line: its first launch is answered f12's session, and its brief tells in the
+// schedule's words how f10 ended, f10's session offered beside the head and
+// both handed out for its end to absorb. headLog orders its head as the
+// domain's head statement does, which internal/executordomain's
+// TestAFireThatEndsAfterTheFiresBesideItIsToldNotContinued holds to this line.
 //
-// Mutation: order headLog's head by its end alone (lineAfter), as the domain
-// ordered it before, and the fire is handed f10's session, which saw neither
-// fire beside it.
+// Mutation: order headLog's head by its end alone (lineAfter), and the fire is
+// handed f10's session, which saw neither fire beside it.
 func TestTheNextFireContinuesTheSchedulesLineNotTheFireThatEndedLast(t *testing.T) {
 	t.Parallel()
 	k := newConversingLaunch(t, 0, 0)
@@ -810,12 +800,12 @@ func TestTheNextFireContinuesTheSchedulesLineNotTheFireThatEndedLast(t *testing.
 	}
 }
 
-// EVERY FRESH FALLBACK IS TOLD THE FROZEN ENDINGS. A launch that cannot continue
-// the conversation's session — a box whose harness cannot take it up, an object
-// the store no longer holds, a session no window can carry, a begin the log did
-// not hold — starts its run on the turn's fresh brief, and a run that continues
-// it carries that brief for its script to hand a session of its own: each is
-// told how the conversation's earlier turns ended, as the dispatch rendered it.
+// EVERY FRESH FALLBACK IS TOLD THE FROZEN ENDINGS. A launch that cannot
+// continue the session (a harness that cannot take it up, an object the store
+// lost, a session no window can carry, a begin the log did not hold) starts on
+// the turn's fresh brief, and a continued run carries that brief for its script
+// to hand a session of its own: either way it is told how the earlier turns
+// ended, as the dispatch rendered it.
 //
 // Mutation: hand a fallback any brief but the turn's fresh one, or leave the
 // endings out of the brief a continued run carries, and a row goes red.
@@ -865,13 +855,12 @@ func TestEveryFreshFallbackIsToldTheFrozenEndings(t *testing.T) {
 }
 
 // A CONVERSATION NO WINDOW CAN CARRY STARTS FRESH; ONE A WINDOW CAN IS
-// CONTINUED. A turn's first launch that would continue its conversation's
-// session weighs that session's context (the base's own, which its row
-// recorded) with the brief that continues it against the most room the seat's
-// and the company's capped windows can leave the launch, each ceiling less
-// what its own turn spent there: past it no window turning over ever leaves
-// room, so the run starts a session of its own on its fresh brief's floor;
-// within it, the session is continued.
+// CONTINUED. A first launch weighs the base's context (as its row recorded it)
+// plus the continuing brief against the most room the seat's and the
+// company's capped windows can leave it, each ceiling less its own turn's
+// spend there: past that no window turning over ever makes room, so the run
+// starts its own session on its fresh brief's floor; within it, the session is
+// continued.
 //
 // Mutation: weigh the first launch's floor by anything but the base's context,
 // or wait for a floor no window can meet, and a row goes red.
@@ -904,12 +893,11 @@ func TestAConversationNoWindowCanCarryStartsFresh(t *testing.T) {
 	}
 }
 
-// AN ENDING LEFT OUT OF THE BRIEF IS NOT ABSORBED. A conversation whose ended
-// turns are more than the brief's bound tells the newest of them whole and
-// counts the rest; the turn's first launch freezes, and records as its begin,
-// only the turns the brief told — so the turn's end, which absorbs what its
-// first read handed out, leaves the ones it was never told for the next turn,
-// whose brief tells them.
+// AN ENDING LEFT OUT OF THE BRIEF IS NOT ABSORBED. Past the brief's bound it
+// tells the newest ended turns whole and counts the rest; the first launch
+// freezes, and records as its begin, only the turns told — so the turn's end,
+// absorbing what its read handed out, leaves the untold ones for the next
+// turn's brief.
 //
 // Mutation: freeze the whole read rather than the told part of it, and the
 // end absorbs turns nobody was told.
@@ -973,14 +961,12 @@ func sameTurns(a, b []string) bool {
 }
 
 // THE SWITCH OFF CARRIES NOTHING BETWEEN TURNS, and still records every end.
-// `turn_engine.conversation_session.enabled: false` reads no head of the turn's
-// conversation and renders no account of its earlier turns; the turn's first
-// launch freezes no read, records no begin and continues no session — and the
-// turn's end is recorded on the executor log all the same, which is the turn's
-// account rather than its session: by the frame that ends a turn of a
-// conversation refused at the delegation cap, and by the one that ends a turn
-// whose first launch was abandoned once its run was recorded, each of a company
-// with the switch off.
+// With `turn_engine.conversation_session.enabled: false` no head is read and no
+// account rendered; the first launch freezes no read, records no begin and
+// continues no session — yet the turn's end, its account rather than its
+// session, is still recorded on the executor log: here by the frame ending a
+// turn refused at the delegation cap and by the one ending a turn whose first
+// launch was abandoned after its run was recorded.
 //
 // Mutation: read the head with the switch off, or gate a turn's end in its
 // frame on the switch, and a check goes red.
@@ -1044,12 +1030,11 @@ func TestTheSwitchOffCarriesNothingBetweenTurns(t *testing.T) {
 	}
 }
 
-// A CONVERSATION THAT CANNOT BE READ IS LESS CONTEXT, NOT A FAILED TURN. A head
-// read that fails — the estate router unable to reach a data node, a copy the
-// read ladder refuses — fails open: the turn is told nothing of how its
-// conversation's earlier turns ended, its first launch freezes no read, records
-// no begin and continues no session, and it launches all the same, on its fresh
-// brief, the probe saying why it continued nothing.
+// A CONVERSATION THAT CANNOT BE READ IS LESS CONTEXT, NOT A FAILED TURN. A
+// failed head read (an unreachable data node, a copy the read ladder refuses)
+// fails open: the turn is told nothing of earlier endings, its first launch
+// freezes no read, records no begin and continues no session, and it launches
+// on its fresh brief, the probe saying why it continued nothing.
 //
 // Mutation: fail or panic on a head that cannot be read, or freeze a read
 // nobody made, and a check goes red.
@@ -1082,13 +1067,12 @@ func TestAnUnreadableConversationIsLessContextNotAFailedTurn(t *testing.T) {
 	}
 }
 
-// A TURN THAT NEVER LAUNCHED TELLS THE NEXT TURN HOW IT ENDED. A turn of a
-// conversation refused before its first round — at the delegation cap — ends in
-// its own frame with no run, and its end is recorded on the executor log under
-// its conversation: failed, saying which guard, so the conversation's next turn
-// is told how it ended. A turn of no conversation refused the same way — an
-// agent-to-agent ask, which most delegation chains are — leaves no row: no
-// later turn is told how it ended, and no reader asks.
+// A TURN THAT NEVER LAUNCHED TELLS THE NEXT TURN HOW IT ENDED. A turn refused
+// before its first round (at the delegation cap) ends in its own frame with no
+// run, and its end is recorded on the executor log under its conversation,
+// failed and naming the guard, so the next turn is told. A turn of no
+// conversation refused the same way (an agent-to-agent ask) leaves no row: no
+// later turn would read it.
 //
 // Mutation: record an end only for a turn that launched, and the conversation's
 // turn ends nowhere; record one for a turn of no conversation too, and that
@@ -1128,16 +1112,15 @@ func TestATurnThatNeverLaunchedTellsTheNextTurnHowItEnded(t *testing.T) {
 }
 
 // AN ABANDONED FIRST LAUNCH ENDS ITS TURN ON THE LOG. A first launch whose job
-// would not start once its run's record was written abandons that record, so no
-// ending of the run owes the turn's end: the frame that ends the turn records it
-// — failed, saying the launch was abandoned, and redacted, since the launch's
-// error can quote what a box said — which lifts the hold the turn's begin took
-// and tells the conversation's next turn how this one ended.
+// would not start after its run's record was written abandons that record, so
+// no run ending owes the turn's end: the frame ending the turn records it
+// (failed, saying the launch was abandoned, redacted since the error can quote
+// a box), which lifts the begin's hold and tells the next turn how this ended.
 //
 // Mutation: record an abandoned launch's end only where a stop abandoned it,
-// and the turn ends nowhere. (That the launch's own account of its error is
-// redacted is [TestTheEndCarriesTheTurnsOwnDecisionAndBreach]'s: every path to
-// the log redacts the failure again, so none of it reaches the log here.)
+// and the turn ends nowhere. (Redacting the launch's own error is
+// [TestTheEndCarriesTheTurnsOwnDecisionAndBreach]'s: every path to the log
+// redacts the failure again.)
 func TestAnAbandonedFirstLaunchEndsItsTurnOnTheLog(t *testing.T) {
 	t.Parallel()
 	e, spy := loggingEngine(t)
@@ -1162,15 +1145,13 @@ func TestAnAbandonedFirstLaunchEndsItsTurnOnTheLog(t *testing.T) {
 }
 
 // AN ENDING TELLS THE NEXT TURN AN UNKEPT CAPTURE ONLY WHERE IT IS NEWER THAN
-// THE ROW'S PLACE. The end names the turn's newest capture as not kept where
-// the run's record says so, and the log decides on the row's own place: a
-// capture of that very attempt whose record the log took before the end — one
-// its taker handed on before its lease's window closed, settled refused by the
-// node that waited on it — is the row's own, the very session the
-// conversation's next turn continues, so the head's account says nothing of a
-// session not kept, which would tell that turn its own session was lost. A
-// turn whose end took an older capture off, and so names none, tells the
-// unkept one, and why.
+// THE ROW'S PLACE. The end names the turn's newest capture unkept where the
+// run's record says so, and the log decides on the row's own place: a capture
+// of that very attempt that the log took before the end (handed on before its
+// taker's lease window closed, settled refused by the node that waited on it)
+// is the row's own, the session the next turn continues, so the head's account
+// must not call it lost. A turn whose end took an older capture off, and so
+// names none, tells the unkept one, and why.
 //
 // Mutation: tell the ending's unkept capture as the row holds it, and the head
 // is told its session was not kept.

@@ -415,7 +415,7 @@ test("a line the address names is marked in its file's patch", async () => {
 
   const region = await screen.findByRole("region", { name: "Changes to app.go" });
   await within(region).findByText("new");
-  const marked = region.querySelectorAll(".diff-view__line[data-picked]");
+  const marked = region.querySelectorAll(".crewlet-diff-view__line--picked");
   expect(marked.length).toBe(1);
   expect(marked[0]?.textContent).toContain("new");
   expect(within(region).queryByText(/outside what this diff changes/)).toBeNull();
@@ -437,7 +437,7 @@ test("a line the patch does not draw offers the file at the head on that line", 
   expect(target.hash).toContain(`ref=${SHA}`);
   expect(target.hash).toContain("path=app.go");
   expect(target.hash).toContain("lines=40");
-  expect(region.querySelectorAll(".diff-view__line[data-picked]").length).toBe(0);
+  expect(region.querySelectorAll(".crewlet-diff-view__line--picked").length).toBe(0);
 });
 
 // THE PATCH IS FOLLOWED TO THE LINE, a page at a time with no press, and no
@@ -461,7 +461,7 @@ test("a line on a later page of the patch is read to and marked with no press", 
 
   const region = await screen.findByRole("region", { name: "Changes to app.go" });
   expect(await within(region).findByText("omega")).toBeTruthy();
-  const marked = region.querySelectorAll(".diff-view__line[data-picked]");
+  const marked = region.querySelectorAll(".crewlet-diff-view__line--picked");
   expect(marked.length).toBe(1);
   expect(marked[0]?.textContent).toContain("omega");
   expect(within(region).queryByText(/outside what this diff changes/)).toBeNull();
@@ -516,7 +516,7 @@ test("opening another file drops the line the address named", async () => {
   const query = new URLSearchParams(location.hash.split("?")[1] ?? "");
   expect(query.get("file")).toBe("z.go");
   expect(query.has("line")).toBe(false);
-  expect(region.querySelectorAll(".diff-view__line[data-picked]").length).toBe(0);
+  expect(region.querySelectorAll(".crewlet-diff-view__line--picked").length).toBe(0);
 });
 
 // A ROOT COMMIT'S CHANGE IS EVERY FILE IT HOLDS, measured from git's empty
@@ -928,7 +928,7 @@ test("the lines draw plain while the blobs are read", async () => {
 
   expect(await screen.findByText("func Later() {}")).toBeTruthy();
   await new Promise((resolve) => setTimeout(resolve, 50));
-  expect(document.querySelector('.diff-view [class^="code-syn-"]')).toBeNull();
+  expect(document.querySelector('.crewlet-diff-view [class^="code-syn-"]')).toBeNull();
   release();
   await waitFor(() =>
     expect(inkedLine("same", "more notes")).toEqual(["code-syn-comment:more notes"]),

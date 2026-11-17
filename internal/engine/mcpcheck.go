@@ -25,66 +25,17 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// "TEST NOW" ON AN MCP SERVER'S PAGE, AND IN THE ADD FLOW BEFORE IT IS SAVED.
-//
-// A test brings up a connection of its own to a server where the server runs,
-// walks its stages and lists its tools, and never calls one ([mcp.Test]).
-//
-// # Where it runs
-//
-// A SHARED server runs on every node, and each node reaches it from where it
-// is: its own resolver, its own network, its own PATH. So it is tested on
-// every node that holds a presence lease, each answering what it found. A
-// PER-AGENT server runs as one seat, on the node holding that seat, with the
-// seat's own credentials, which only that node resolves (a GitHub token is
-// issued for the seat on the node that holds it, and no other node may act
-// as the seat): so it is tested for one seat, on its holder alone, which is
-// the node that proves it holds the seat when the request arrives, as a
-// restart is ([Engine.applyMCPRestart]).
-//
-// # The request is an instruction, so it is signed
-//
-// A node asked to test a server starts a process or dials an address as the
-// company, with the credentials the server is started with. So the request
-// crosses a channel the fleet signs ([mcpCheckChannel], internal/signedask),
-// bound to an id and a deadline, and a node answers only a request that
-// verifies, names it (or names the seat it holds) and is in this build's
-// wire version. Who may ask is decided where the request arrived
-// (internal/api/mcpapi); a draft travels in the request, its ${VAR}s resolved
-// by each answering node from its own snapshot, so no value crosses the
-// broker that a saved entry would not.
-//
-// # A draft is tested as a write would leave it
-//
-// An entry not written yet is tested in the company it would join: its own
-// launch and values, the seats' credentials for it, and turned on whatever
-// its `enabled` says, since a test of how it runs is what was asked. It is
-// never recorded: the server's latest test is of the entry the company runs.
-//
-// # A value is tested before it is stored
-//
-// A value is tested with the entry it is for, as the fleet's ACTIVE revision
-// states it, sent with the request ([MCPCheckRequest.Entry]) the way a draft
-// is: so a value stored straight after its entry's write is tested on nodes
-// that have not applied that write yet, rather than refused by a node whose
-// company does not have the server. Each key under test reads its value
-// ([MCPValueTry]).
-//
-// # What a request carries is sealed
-//
-// The channel is signed and not encrypted, so the entry a request sends (a
-// draft, or an entry under a value test, whose literal values the revision
-// keeps sealed) and every value under test cross it sealed under the fleet's
-// keyring, each bound to the request ([mcpEntryAAD], [mcpValueAAD]). Never
-// recorded.
-//
-// # The latest test is kept, bounded
-//
-// A test of a saved server is recorded as the server's latest
-// ([coord.MCPCheck]), every sentence redacted and bounded, at most
-// [coord.MaxMCPCheckNodes] nodes, and the apply that removes the server
-// removes it ([Engine.clearRemovedMCPChecks]). Its tools are the answer to the
-// person who asked, never stored.
+// "Test now" on an MCP server's page and in the add flow: a connection of its
+// own where the server runs, walking its stages and listing its tools, never
+// calling one ([mcp.Test]). A shared server is tested on every node holding a
+// presence lease; a per-agent one for one seat, on the node that proves it
+// holds the seat, as a restart is ([Engine.applyMCPRestart]). The request is an
+// instruction, so it crosses a signed channel ([mcpCheckChannel]) with the
+// entry and values it carries sealed ([mcpEntryAAD], [mcpValueAAD]); a draft or
+// a value under test travels with its entry, so no node needs to have applied
+// it, and each answering node resolves its ${VAR}s from its own snapshot. Only
+// a saved server's test is recorded ([coord.MCPCheck]), bounded, and its tools
+// never are (package doc, "Testing an MCP server").
 
 // The refusals of a test, beside the restart's ([ErrNoMCPServer],
 // [ErrMCPServerOff], [ErrMCPSeatOnShared], [ErrNoAgentSeat] and
@@ -103,11 +54,9 @@ var (
 type MCPCheckRequest struct {
 	// Server is the configured server's name, or the draft's.
 	Server string
-	// Entry is the entry to test, sent with the request so that no node needs
-	// to have applied it: a draft not written yet, or for a value under test
-	// the entry as the fleet's active revision states it. Nil tests the entry
-	// each node's own company runs, which is a saved server's test and is
-	// recorded as its latest.
+	// Entry is the entry to test, sent so that no node needs to have applied
+	// it: a draft, or for a value under test the fleet's active revision's.
+	// Nil tests each node's own, a saved server's test, recorded as its latest.
 	Entry *config.MCPServer
 	// Draft is whether Entry is not written yet.
 	Draft bool
@@ -160,10 +109,9 @@ const mcpCheckChannel = "mcp.check"
 
 // mcpCheckWire is the request and reply version this build speaks; a node
 // answers only a request in its own version, and an asker reads only a
-// reply in it.
-// Version 3 carries the entry under test and every value under test sealed
-// ([mcpCheckAsk.Entry], [mcpCheckAsk.Values]), which a version 2 node would
-// not open, testing something else.
+// reply in it. Version 3 seals the entry and values under test
+// ([mcpCheckAsk.Entry], [mcpCheckAsk.Values]), which an older node could not
+// open, testing something else.
 const mcpCheckWire = 3
 
 // mcpCheckAsk asks nodes to test a server.
@@ -264,8 +212,8 @@ const (
 	// encoded: every tool the server listed (at most [mcp.MaxServerTools]),
 	// their descriptions and then their titles shortened until they fit.
 	// Half the 1 MiB a NATS server carries by default, so the reply's
-	// envelope and the rest of the report fit beside it; 461 tools take
-	// about 150 KiB with their words whole.
+	// envelope and the rest of the report fit beside it; 461 tools take about
+	// 150 KiB with their words whole.
 	maxMCPCheckToolBytes = 512 << 10
 )
 
@@ -532,13 +480,11 @@ func (e *Engine) answerMCPCheck(ctx context.Context, raw []byte) ([]byte, error)
 
 // testHere tests the server ask names on this node, nil where this node does
 // not answer it: a seat's test on a node that cannot prove it holds the seat.
-// The report is bounded and redacted, as every node's is before it leaves.
+// The report is bounded and redacted ([boundedReport]) before it leaves.
 //
 // ONE TEST OF AN ENTRY AT A TIME ON A NODE ([mcpTestKey]): a test holds a
-// process or a connection for up to its budget, so a second asked while the
-// first runs is answered at once that one is running, rather than starting
-// another beside it. A person asking again gets the first one's answer by
-// asking once it has come.
+// process or a connection for up to its budget, so a second is answered at
+// once that the first is running rather than started beside it.
 func (e *Engine) testHere(ctx context.Context, ask mcpCheckAsk) *mcp.TestReport {
 	c := e.Company()
 	if ask.Seat != uuid.Nil {
@@ -564,11 +510,10 @@ func (e *Engine) testHere(ctx context.Context, ask mcpCheckAsk) *mcp.TestReport 
 		report = mcp.Unstarted(mcp.Spec{Name: ask.Server},
 			"this node runs no company that declares the server; it may not have applied the latest revision yet")
 	case ask.Seat == uuid.Nil && !ask.Draft && server.PersonSignIn():
-		// A SAVED SERVER SIGNED IN TO WITH OAUTH is tested under its grant,
-		// as it runs, a value under test included (its entry sent as the
-		// fleet's active revision states it). A draft never is, whatever its
-		// name: the grant's token goes to the address it was issued for, and
-		// a draft's address is somebody's typing.
+		// A SAVED SERVER SIGNED IN TO WITH OAUTH is tested under its grant, as
+		// it runs, a value under test included. A draft never is, whatever its
+		// name: the grant's token goes to the address it was issued for, and a
+		// draft's address is somebody's typing.
 		report = e.testServer(ctx, server, nil, nil, nil, nil, tried, e.testBearer(ctx, server.Name))
 	case ask.Seat == uuid.Nil:
 		report = e.testServer(ctx, server, nil, nil, nil, nil, tried, nil)
@@ -649,14 +594,11 @@ func testedEntry(c *Company, ask mcpCheckAsk, sent *config.MCPServer) *config.MC
 	return &c.Config.MCPServers[i]
 }
 
-// testServer tests server on this node, as a seat when seat is set (with
-// block, the seat's values for it), with the values a start of it would be
-// given: the same resolution ([resolveServer]), the same spec ([serverSpec])
-// and so the same address rule and the same launch ([mcp.Test]); with tried,
-// each of its keys reads its value. bearer is the grant's token source of a saved server a person signed
-// in to with OAuth, nil for any other, and is sent only where the test dials
-// the origin the saved server is dialled at. A service identity signs in for
-// the test itself.
+// testServer tests server on this node with what a start of it would be given:
+// the same resolution ([resolveServer]) and spec ([serverSpec]), so the same
+// address rule and launch ([mcp.Test]). A set seat is tested with block, its
+// values for the server; each of tried's keys reads its value. bearer is the
+// grant of a saved server a person signed in to with OAuth, nil for any other.
 func (e *Engine) testServer(ctx context.Context, server *config.MCPServer, seat *org.Role, block map[string]string,
 	env *config.Resolver, mint *seatMint, tried []MCPValueTry, bearer mcp.BearerSource) mcp.TestReport {
 
@@ -685,21 +627,16 @@ func (e *Engine) testServer(ctx context.Context, server *config.MCPServer, seat 
 	if err != nil {
 		return mcp.Unstarted(unstarted, err.Error())
 	}
-	// THE GRANT'S TOKEN GOES WHERE THE SERVER RUNS AND NOWHERE ELSE: the
-	// origin of the entry this node runs, which the grant was checked against
-	// ([Engine.grantMoved]). A value under test that moves the server's
-	// address, or an entry sent with the test (the fleet's active revision's,
-	// ahead of this node's apply) that names another, takes it to an origin
-	// the grant was not issued for, which is tested without it.
+	// THE GRANT'S TOKEN GOES ONLY TO THE ORIGIN OF THE ENTRY THIS NODE RUNS,
+	// which the grant was checked against ([Engine.grantMoved]): a value under
+	// test or a sent entry that moves the address is tested without it.
 	if bearer != nil && mcp.SameOrigin(values.url, e.grantedAddress(server.Name)) {
 		spec.Bearer = bearer
 	}
-	// A SERVICE IDENTITY SIGNS IN FOR ITS TEST, saved or a draft, with what
-	// the test resolves, a value under test included: its own client, for
-	// the address under test, so no token goes anywhere it was not issued
-	// for. A source of its own, which asks the vendor now rather than
-	// answering with a token this node already holds, and holds nothing the
-	// running server reads.
+	// A SERVICE IDENTITY SIGNS IN FOR ITS TEST, saved or a draft, as its own
+	// client for the address under test, so no token goes anywhere it was not
+	// issued for. Its own source asks the vendor now rather than reusing a
+	// token this node holds, and holds nothing the running server reads.
 	if server.OAuth.ServiceIdentity() {
 		spec.Bearer = &oauthSource{engine: e, server: instance, service: e.newServiceIdentity(server, env)}
 	}
@@ -768,18 +705,17 @@ func withTried(server *config.MCPServer, block map[string]string, forSeat bool,
 	return &copied, block
 }
 
-// boundedReport is report as it leaves this node: every sentence passed
-// through the redaction pass and cut to [coord.MaxMCPErrorBytes], the
-// server's identity cut to [coord.MaxMCPServerInfoBytes] with its
-// instructions left out, every tool the server listed with its names and words
-// cut and all of them within [maxMCPCheckToolBytes] ([toolsWithin]), and each
-// tool whose name a built-in of surface holds refused for it, since built-ins
-// are filed first. EVERY TOOL: the first listing of a server is accepted as
-// the person adding it was shown it, so a test shows them all.
+// boundedReport is report as it leaves this node: every sentence redacted and
+// cut to [coord.MaxMCPErrorBytes], the identity cut to
+// [coord.MaxMCPServerInfoBytes] without its instructions, every tool's names
+// and words cut to fit [maxMCPCheckToolBytes] ([toolsWithin]), and a tool whose
+// name a built-in of surface holds refused for it, since built-ins are filed
+// first. EVERY TOOL: a server's first listing is accepted as the person adding
+// it was shown it.
 //
 // NO INSTRUCTIONS: they are the server's words for a model, and a test's
 // answer is read by people and, on approval, by the assistant; the server's
-// detail carries them to the configuration's reader.
+// detail shows them to the configuration's reader.
 func boundedReport(report mcp.TestReport, surface *tools.Registry) mcp.TestReport {
 	out := report
 	out.Steps = make([]mcp.TestStep, len(report.Steps))

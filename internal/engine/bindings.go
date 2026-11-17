@@ -11,54 +11,21 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
-// A SEAT BINDING THAT DANGLES, and the one rule that says so.
-//
-// # The residue a bind leaves
-//
-// A binding lives on the IDENTITY log and the seat it names in the company
-// this node is running. Every binding the directory writes — a person's, which
-// they hold for as long as they are here (ADR-0032), and a service account's,
-// which is optional — is checked against the running org as a HUMAN seat when
-// it is made, and that check is ADVISORY: the org can drop the seat or turn it
-// into an agent's afterwards, and a revision applied elsewhere first is one
-// this node has not seen. The residue — a binding to a seat the running
-// company does not hold as a human seat — is LEGAL rather than corruption, and
-// nothing clears it but a record, which differs by who is bound: a PERSON is
-// moved to another human seat or removed, since the directory refuses to
-// unbind one, and a SERVICE ACCOUNT is unbound or moved. It is reported in one
-// place, `crewlet iam check` and `GET /iam/check` (`binding_dangling`, naming
-// the seat and that remedy), and it is ENFORCED, which is not reporting, on
-// the request path (`403 seat_unavailable`) and at the company write
-// (`409 seat_held`).
-//
-// # Why it is a finding and never an alarm
-//
-// An alarm answers whether a NODE is doing its job (ADR-0015). A person bound
-// to a seat the company no longer holds is a fact about the company's CONTENT:
-// every node would raise it at once, for a state no node can repair, and its
-// age is nowhere in any record — so an alarm over it had to keep a clock of
-// its own per node. The report names who and why when somebody asks, which is
-// all a residue a record repairs needs.
-//
-// # Why the rule is the REQUEST PATH's own table
-//
-// [session.ResolveSeat] is what decides, per request, whether a signed-in
-// person is served, refused 403 naming their seat, or held off 503 — and a
-// binding is dangling exactly when that table would refuse them for want of the
-// seat. A second predicate written here ("does the chart hold this
-// handle") is how the report came to miss a binding to an AGENT seat: it asked
-// whether the row existed, the request path asks whether it is a human seat,
-// and a person the request path refused on every call was one the report said
-// nothing about. So the report asks this function, and this function asks the
-// table.
+// A SEAT BINDING DANGLES when its seat is not a HUMAN seat of the running
+// company. The check when a binding is made is ADVISORY (the org changes
+// after, or a revision applied elsewhere is unseen here), so the residue is
+// legal and only a record clears it: a person is moved or removed (ADR-0032),
+// a service account unbound or moved. Reported by `crewlet iam check` and
+// `GET /iam/check` (`binding_dangling`); enforced on the request path
+// (`403 seat_unavailable`) and at the company write (`409 seat_held`). A
+// finding, never an alarm: it is the company's CONTENT, which every node would
+// raise at once and none can repair (ADR-0015). The rule is
+// [session.ResolveSeat]'s table, never a predicate of its own: asking whether
+// the chart holds the handle misses a person bound to an AGENT seat.
 
-// bindingProbeBudget bounds one person's seat lookup.
-//
-// TWO SECONDS, and it is a per-ROW budget on a report that may cover every
-// binding in the company — so the number is what one local SQL read on a busy
-// node costs at its worst rather than what a network call would. A lookup that
-// cannot answer inside it is the unknown arm, which the report counts as
-// unchecked.
+// bindingProbeBudget bounds one person's seat lookup. Per ROW, on a report that
+// may cover every binding, so it is one local SQL read on a busy node at its
+// worst, not a network call. A lookup past it is the unknown arm: unchecked.
 const bindingProbeBudget = 2 * time.Second
 
 // errSeatUnknown is the unknown arm when the resolver has no read failure of
@@ -70,15 +37,12 @@ var errSeatUnknown = errors.New("engine: this node runs no company, so it " +
 // node runs: whether it dangles, and if so the sentence every surface prints —
 // which seat, why, and what to do.
 //
-// THREE-VALUED: dangling, not dangling, or an error when this node cannot tell
-// — it runs no company yet, or the lookup failed. The report counts the third
-// as unchecked rather than guessing, because reporting a binding as dangling on
-// a node that could not say sends an administrator to move somebody whose
-// seat is perfectly there.
+// THREE-VALUED: an error when this node cannot tell (no company yet, or the
+// lookup failed), which the report counts as unchecked: a guess of dangling
+// sends an administrator to move somebody whose seat is there.
 //
-// ITS SHAPE IS THE REPORT'S SEAM, internal/api/iamapi's Bindings, so the
-// method value is what the report is wired with and nothing adapts between
-// them.
+// Its shape is internal/api/iamapi's Bindings seam, so the method value is
+// wired in with nothing adapting between them.
 func (e *Engine) DanglingBinding(ctx context.Context, row iamdomain.PersonRow) (
 	dangling bool, detail string, err error) {
 
@@ -90,12 +54,10 @@ func danglingBinding(ctx context.Context, chart session.Chart, b iamdomain.SeatB
 	bool, string, error) {
 
 	if b.Seat == "" {
-		// NO BINDING, so nothing to dangle — the request path serves the
-		// row under its login, which is a service account's (a person
-		// always holds a seat, ADR-0032), and widening this rule to it
-		// would make it disagree with the seat table it is defined as. A
-		// removed person has no row to be asked about at all: a removal
-		// deletes it and leaves the tombstone.
+		// NO BINDING, nothing to dangle: the request path serves the row
+		// under its login (a service account's; a person always holds a
+		// seat, ADR-0032), and widening the rule would make it disagree
+		// with the seat table. A removed person has no row at all.
 		return false, "", nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, bindingProbeBudget)
@@ -117,16 +79,11 @@ func danglingBinding(ctx context.Context, chart session.Chart, b iamdomain.SeatB
 	return false, "", nil
 }
 
-// danglingRemedy is what repairs a dangling binding, which depends on WHO is
-// bound — one record either way.
-//
-// A PERSON IS NEVER TOLD TO UNBIND: they hold a human seat for as long as
-// they are here (ADR-0032), and the directory refuses the unbind, so the
-// sentence that used to serve both kinds sent an administrator to a gesture
-// the engine answers `seat_required`. A SERVICE ACCOUNT's seat is optional,
-// so unbinding it is the one-record repair and a move the other. A person,
-// and a kind this build does not name, get the remedy that holds for both (a
-// move or a removal) rather than a guess at which it is.
+// danglingRemedy is the one-record repair, which depends on WHO is bound. A
+// person is never told to unbind, which the directory refuses
+// (`seat_required`, ADR-0032): a person, and a kind this build does not name,
+// get a move or a removal. A service account's seat is optional, so it gets
+// an unbind or a move.
 func danglingRemedy(kind iam.Kind) string {
 	if kind == iam.KindMachine {
 		return ". Unbind them, or move them to another human seat"

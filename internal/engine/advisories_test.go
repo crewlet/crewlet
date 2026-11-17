@@ -13,14 +13,11 @@ import (
 )
 
 // advisoryCompanyDoc applies cleanly and raises two advisories: one about a
-// seat — a human seat with no account on the Mattermost workspace the company
-// declares (disabled, so nothing is dialled), which nobody can mention there —
-// and one about no seat at all, a company day ceiling the week ceiling makes
-// unable to refuse a turn. It also carries a `manages:` entry naming nobody, a
-// dangling reference, which is a warning of another kind and must not be
-// logged as an advisory. The embeddings block is what lets
-// [advisoryRefusedDoc] be refused at build while still validating, as
-// [danglingCompanyDoc]'s is.
+// seat (a human seat with no account on the declared, disabled Mattermost
+// workspace) and one about no seat (a day ceiling the week ceiling makes
+// unable to refuse a turn). Its dangling `manages:` entry is a warning of
+// another kind and must not be logged as an advisory. The embeddings block
+// lets [advisoryRefusedDoc] be refused at build while still validating.
 const advisoryCompanyDoc = `
 name: Acme
 providers:
@@ -113,16 +110,10 @@ func wantAdvisories(warnings []config.Warning, revision string, epoch int64) []a
 	return out
 }
 
-// A COMPANY'S ADVISORIES ARE LOGGED WHEN A NODE APPLIES IT, once per epoch it
-// applies — which is the only report a company seeded from a file ever gets,
-// since a `/config` answer goes to whoever wrote and a seed is written by
-// nobody. Not on every tick, not for a refused revision retried for an epoch
-// this node does not serve, and again for a re-activation, because that is a
-// new epoch the node rebuilds from.
-//
-// The advisories ONLY: the document's dangling `manages:` entry is logged by
-// org_dangling_reference beside these, and a line here as well would warn
-// twice about one fact.
+// A COMPANY'S ADVISORIES ARE LOGGED ONCE PER EPOCH A NODE APPLIES: not on
+// every tick, not for a refused revision, and again on a re-activation (a new
+// epoch). It is the only report a company seeded from a file gets. Only the
+// advisories: the dangling `manages:` entry is org_dangling_reference's.
 //
 // Mutation: log [config.Company.Warnings] instead and the dangling reference
 // joins the lines; drop the seat and the first line's key goes missing; move

@@ -21,52 +21,31 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// Gitlet, wired: its settings in force, the seam the API's routes and
-// the host reach it through, its committer's stop, the census term of its git
-// clients, the reconcile of the repositories code.repos declares, and the
-// code-retention duty that sweeps the packs retired past their grace and
-// purges what was deleted.
+// Gitlet, wired: its settings in force, the seam the API's routes and the host
+// reach it through, its committer's stop, its git clients' census term, the
+// reconcile of code.repos and the code-retention duty.
 //
-// # Every data node commits
-//
-// A company that sets `code.backend: gitlet` gets a committer and a lifecycle store on
-// every data node ([Engine.startNative]), served to the estate router beside
-// the code log's reader ([Engine.estateBackend], [gitlet.Served]); a push is
-// asked of its repository's committer — the first node rendezvous ranks for
-// it — whichever node received it (internal/estate). There is no committer
-// election and no per-repository lease: every node computes the same order,
-// and two nodes with different views of the fleet still commit safely, since
-// the repository's subject lets one record land per round.
-//
-// # Every data node reconciles
-//
-// The repositories code.repos declares are made to exist, settled and
-// retired by EVERY data node at EVERY boot and EVERY activation
-// ([Engine.applyCodeRepos]), each deciding the same declaration: a create
-// arbitrates on the name's own subject, so two nodes creating one name land
-// one repository, and the reconcile raises the code log's ACTIVATION FENCE
-// first ([gitlet.Store.Activate]) — one record per activation fleet-wide — so a
-// node applying an older activation late is refused on every node rather
-// than walking a newer one back, and an activation that changes nothing
-// writes that one record and nothing else.
+// EVERY DATA NODE COMMITS: `code.backend: gitlet` gives every data node a
+// committer and a lifecycle store ([Engine.startNative]), served to the estate
+// router ([Engine.estateBackend], [gitlet.Served]), and a push is asked of its
+// repository's rendezvous-first committer whichever node received it. No
+// election and no per-repository lease: the repository's subject lets one
+// record land per round, so nodes with differing fleet views commit safely.
+// Every data node also reconciles code.repos ([Engine.applyCodeRepos]).
 
 // codeInForce is Gitlet's settings IN FORCE at the current epoch
-// ([Company.codeInForce]) — none set where no company is current yet. Read per
-// call: by the committer's decide and the reader's repository detail (the
-// limits), by the code-retention duty's every pass (the retention), and by the
-// committer's every batch (the retention again, for the repo_deleted sentence,
-// [gitlet.RepoGone], which names when a deleted repository's purge may begin —
-// the same reading the duty purges by, so under one revision the two name
-// one instant). So a revision's settings hold from its activation on, with no
-// restart: they are an epoch's, never the runtime's — and therefore each
-// node's, while a revision is applied node by node on each node's own clock.
+// ([Company.codeInForce]), none before a company. Read per call (the
+// committer's decide and batches, the reader's repository detail, every
+// retention pass), so a revision's settings hold from its activation with no
+// restart, on each node's own epoch; the committer's repo_deleted sentence
+// ([gitlet.RepoGone]) and the duty's purge read the same value, so under one
+// revision they name one instant.
 func (e *Engine) codeInForce() config.Code { return codeInForceAt(e.Company()) }
 
-// codeInForceAt is Gitlet's settings in force at epoch c: for a
-// reader that takes something else off the same epoch beside them — the
-// engine's commit signer reads a seat's role and the identity domain off ONE
-// epoch, so a revision that renames the seat and moves the domain together
-// signs a commit by both or by neither.
+// codeInForceAt is Gitlet's settings in force at epoch c, for a reader that
+// takes something else off the same epoch: the commit signer reads a seat's
+// role and the identity domain off ONE epoch, so a revision moving both signs
+// a commit by both or by neither.
 func codeInForceAt(c *Company) config.Code {
 	switch {
 	case c == nil || c.Config == nil:
@@ -81,16 +60,14 @@ func codeInForceAt(c *Company) config.Code {
 // ([Engine.codeInForce]), the defaults applied.
 func (e *Engine) codeLimits() gitlet.Limits { return gitlet.LimitsOf(e.codeInForce()) }
 
-// codeSeatRules is the chart and the calendar the committer judges a SEAT'S
-// push by ([gitlet.CommitterOptions.SeatRules]) — the current epoch's roster,
-// the one a seat's code read is judged by ([Engine.codeRoster]), and the
-// company's clock its day's quota is counted on — and the activation the
-// chart is of, which a mergeability stamps the readiness it judges with
-// ([gitlet.SeatRules.Epoch]) — all off ONE epoch, so a revision that moves a
-// seat and the clock together is judged by both or by neither, and false
-// where no epoch is installed yet: no chart, on which the committer hands a
-// seat's push to the repository's next committer rather than judge it. Read
-// once a batch that carries a seat's push.
+// codeSeatRules is what the committer judges a SEAT'S push by
+// ([gitlet.CommitterOptions.SeatRules]), read once a batch that carries one:
+// the current epoch's roster (the one [Engine.codeRoster] judges reads by),
+// the company's clock for the day's quota, and the chart's activation that a
+// mergeability stamps its readiness with ([gitlet.SeatRules.Epoch]), all off
+// ONE epoch, so a revision moving a seat and the clock is judged by both or by
+// neither. False before an epoch: the committer then hands a seat's push to
+// the repository's next committer rather than judge it.
 func (e *Engine) codeSeatRules() (gitlet.SeatRules, bool) {
 	c := e.Company()
 	if c == nil || c.roster == nil {
@@ -123,61 +100,47 @@ func chartEpochOf(c *Company) int64 {
 }
 
 // codeDeletedRetention is how long a deleted repository waits for its purge at
-// the current epoch ([Engine.codeInForce]), the default applied. Two readers,
-// one reading: the code-retention pass's [gitlet.Retention.Retention], read at
-// every pass, and the committer's [gitlet.CommitterOptions.Retention], read at
-// every batch for the repo_deleted sentence ([gitlet.RepoGone]) — so under one
-// revision a push to a deleted repository is told the instant the duty purges
-// from, and a revision that moves code.deleted_retention_days moves what a
-// push is told with it. Not the same instant at every moment: the duty runs on
-// its lease holder and the committer on the repository's rendezvous-first
-// data node, each reading its own node's epoch at its own moment (a pass, a
-// batch), so while such a revision is applied node by node the two may each
-// answer from a different one — which is why the sentence names the instant
-// as the earliest the purge may begin on the deciding node's epoch, never as
-// a promise.
+// the current epoch, the default applied. The retention pass
+// ([gitlet.Retention.Retention]) and the committer's repo_deleted sentence
+// ([gitlet.CommitterOptions.Retention], [gitlet.RepoGone]) both read it, so
+// under one revision a push is told the instant the duty purges from. While a
+// revision is applied node by node, the duty's lease holder and the
+// repository's committer may read different epochs, which is why the sentence
+// names the earliest the purge may begin on the deciding node's epoch, never a
+// promise.
 func (e *Engine) codeDeletedRetention() time.Duration {
 	return e.codeInForce().DeletedRetention()
 }
 
-// codeLifecyclePolicy is what a tool's create is held to — and the
-// credentials a person's mirror or import may name — and how long a
-// seat's scratch repository may sit idle, at the current epoch
-// ([Engine.codeInForce]), the defaults applied through the code domain's one
-// conversion ([gitlet.ScratchOf]). Two readers, one reading: the lifecycle
-// store's decide of a create ([gitlet.StoreOptions.Policy]) and the
-// code-retention pass's scratch expiry ([gitlet.Retention.Policy]) — so a
-// revision that moves code.scratch holds from its activation on, with no
-// restart, on each node's own epoch.
+// codeLifecyclePolicy is code.scratch at the current epoch through the code
+// domain's one conversion ([gitlet.ScratchOf]): what a tool's create is held
+// to, the credentials a mirror or import may name, and how long a seat's
+// scratch repository may sit idle. Read by the lifecycle store's create
+// ([gitlet.StoreOptions.Policy]) and the scratch expiry
+// ([gitlet.Retention.Policy]), so a revision holds from its activation.
 func (e *Engine) codeLifecyclePolicy() gitlet.LifecyclePolicy {
 	return gitlet.ScratchOf(e.codeInForce())
 }
 
-// codeRemoteCredentials is code.remote_credentials at the current epoch
-// ([Engine.codeInForce]): the variables a mirror's or an import's dial may
-// resolve, each for the hosts it declares — read at every dial (mirrorDial),
-// so a revision that withdraws one stops its value leaving at the next
-// attempt, with no restart. The lifecycle decide reads the same table through
-// its policy ([gitlet.ScratchOf]).
+// codeRemoteCredentials is code.remote_credentials at the current epoch: the
+// variables a mirror's or an import's dial may resolve, each for its declared
+// hosts. Read at every dial (mirrorDial), so a revision that withdraws one
+// stops its value leaving at the next attempt. The lifecycle decide reads the
+// same table through [gitlet.ScratchOf].
 func (e *Engine) codeRemoteCredentials() config.CodeRemoteCredentials {
 	return e.codeInForce().RemoteCredentials
 }
 
-// carriedCode is Gitlet's settings in force at next, installed over
-// prev ([Engine.installEpoch]): next's own `code` block where it sets
-// `code.backend: gitlet`, and otherwise prev's in force.
+// carriedCode is Gitlet's settings in force at next, installed over prev
+// ([Engine.installEpoch]): next's own `code` block where it sets
+// `code.backend: gitlet`, otherwise prev's in force.
 //
 // CARRIED, because the revision that turns the host off cannot hold its
-// settings — `code.limits` and `code.deleted_retention_days` without
-// `code.backend: gitlet` are refused, since after a restart they would read as live
-// while governing nothing — and a node whose runtime was built with the host
-// keeps serving it until that restart ([backendSwitches]). Read off that
-// revision, every push the still-running committer decided was held to the
-// DEFAULTS: a company that had capped its repositories at 2 GiB and its pushes
-// at 64 MiB got 20 GiB and 1 GiB on a host it had just asked to wind down. And
-// the still-running retention duty would purge by the default seven days a
-// repository the company had chosen to keep restorable for a year — a purge
-// has no undo. A revision that hosts code again brings its own.
+// settings (validation refuses them without the backend), yet a runtime built
+// with the host keeps serving it until a restart ([backendSwitches]). Read off
+// that revision, the running committer would hold pushes to the DEFAULT
+// limits, and the retention duty would purge by the default seven days a
+// repository kept restorable for a year: a purge has no undo.
 func carriedCode(next, prev *Company) *config.Code {
 	if next.Config != nil && next.Config.CodeBackendFor() == config.CodeGitlet {
 		in := next.Config.Code
@@ -189,13 +152,11 @@ func carriedCode(next, prev *Company) *config.Code {
 	return prev.codeInForce
 }
 
-// OperatorCode is Gitlet's estate seam as the API's routes and the host
-// reach it — the router's, on every node, for [OperatorWork]'s reason — or
-// false where this node's RUNNING runtime was not built with `code.backend: gitlet`: a
-// company that does not host code, one that turned it on and has not
-// restarted, and a node that runs no native runtime yet. Which halves a node
-// runs is [Engine.nativeHalves]' one answer, so Gitlet is handed out
-// exactly where a data node serves it.
+// OperatorCode is Gitlet's estate seam as the API's routes and the host reach
+// it, the router's on every node for [OperatorWork]'s reason; false where this
+// node's RUNNING runtime was not built with `code.backend: gitlet` (no hosted
+// code, turned on but not restarted, or no native runtime yet). Which halves a
+// node runs is [Engine.nativeHalves]' one answer.
 func OperatorCode(e *Engine) (estate.CodeSeam, bool) {
 	if e.router == nil || !e.nativeHalves().code {
 		return estate.CodeSeam{}, false
@@ -203,12 +164,10 @@ func OperatorCode(e *Engine) (estate.CodeSeam, bool) {
 	return e.router.Code(), true
 }
 
-// codeEvents is the event stream Gitlet on this node announces what its
-// records applied on — the checks writer an applied ending, the committer an
-// applied merge and an opened change, the change writer a review — its
-// queue's, the one every event of this node is published to; and nil, never a
-// typed nil, where it holds none: a node with no queue records no event of any
-// kind.
+// codeEvents is the queue this node's Gitlet announces applied records on
+// (the checks writer's endings, the committer's merges and opened changes, the
+// change writer's reviews); nil, never a typed nil, where the node holds no
+// queue, which records no event of any kind.
 func (e *Engine) codeEvents() gitlet.EventPublisher {
 	if e.backends == nil || e.backends.Queue == nil {
 		return nil
@@ -217,54 +176,34 @@ func (e *Engine) codeEvents() gitlet.EventPublisher {
 }
 
 // codeAgentID is the agent id a seat's day is counted under, off the LIVE
-// epoch at the moment an opened change or a review is announced
-// ([gitlet.CommitterOptions.AgentIDs]) — the same resolution the event log files
-// a participant's handle by ([store.DB.SetEventSeats]), so the event's
-// `agent_id` and its party rows name one seat. False for a human seat, a
-// handle the chart does not hold, and a node with no company active.
+// epoch when an opened change or a review is announced
+// ([gitlet.CommitterOptions.AgentIDs]): the resolution [store.DB.SetEventSeats]
+// files a participant's handle by, so the event's `agent_id` and its party
+// rows name one seat. False for a human seat, a handle the chart does not
+// hold, and a node with no company active.
 func (e *Engine) codeAgentID(handle string) (string, bool) { return seatAgentID(e.Company(), handle) }
 
-// stopCommitter ends this node's committer: a proposal queued on it is
-// answered "not serving", which every asker reads as a node that ran nothing
-// and takes to the repository's runner-up with the same push id, and a batch
-// already publishing finishes — or, past the bound, is cut and answers its own
-// outcome (unknown, naming its operation).
+// stopCommitter ends this node's committer: a queued proposal is answered "not
+// serving", which its asker takes to the repository's runner-up under the same
+// push id, and a publishing batch finishes or, past the bound, answers unknown.
+// Nil-safe.
 //
-// IN THE TEARDOWN BEFORE THE ESTATE SUBJECT STOPS ANSWERING
-// ([Engine.stopServingEstate]), because that withdrawal CANCELS the answers in
-// flight before it waits for them (queue.Queue.Serve's contract), and a
-// proposal still queued here is one of them: its context ended, the committer
-// answers it with that cancellation, and the estate carries the failure back as
-// the push's answer — final, so its asker reports `context canceled` to the git
-// client, for a push its batch may yet have landed, rather than moving on.
-// Stopped first, the committer answers every queued proposal "not serving" and
-// finishes the batch in flight before anything is cancelled, so every asker
-// either has its outcome or takes the push to the runner-up under the same id.
-// The order saves no wait: once the subject is withdrawn, an ask finds no
-// responder at once and moves on as fast as a refusal. Nil-safe, which is a
-// node with no runtime or a company that hosts no code.
-//
-// AND BEFORE THE ADMISSION IS WITHDRAWN ([Engine.withdraw]), with every other
-// state-log publisher: every batch it commits is a record on the code log,
-// and one appended once the admission is gone is a write a capacity
-// coordinator was told nobody was making.
+// BEFORE THE ESTATE SUBJECT STOPS ANSWERING ([Engine.stopServingEstate]), which
+// cancels answers in flight (queue.Queue.Serve's contract): a still-queued
+// proposal would answer `context canceled` to the git client, final, for a push
+// its batch may yet land. The order costs no wait. AND BEFORE THE ADMISSION IS
+// WITHDRAWN ([Engine.withdraw]): every batch is a code-log record, and one
+// appended after it is a write the capacity coordinator was told nobody makes.
 func (e *Engine) stopCommitter(ctx context.Context) { e.native.Load().stopCommitter(ctx) }
 
 // stopCommitter is [Engine.stopCommitter] on this runtime, and the stop its
-// own failure path takes ([native.shutdown]). [gitlet.Committer.Stop] is
-// idempotent, so the teardown's stop and the shutdown's after it are one.
+// own failure path takes ([native.shutdown]); [gitlet.Committer.Stop] is
+// idempotent. The change writer and the checks writer stop with it for the
+// same reasons, all three closed first and drained together ([stopTogether]).
 //
-// BOUNDED by [statelog.DefaultResolveBudget]: a batch in flight resolves
-// within it when the broker answers — it is the bound every write's own wait
-// for its applier takes — and when the broker does not, the push ids the batch
-// carried collapse on whatever landed when their clients push again.
-//
-// THE CHANGE WRITER AND THE CHECKS WRITER STOP WITH IT, for the same two
-// reasons: a write of a change's conversation or of a repository's checks
-// waiting its turn is answered "not serving" and taken to the runner-up, and a
-// publish in flight finishes before the estate subject cancels its answer and
-// before the admission is withdrawn. All three are CLOSED FIRST and then
-// drained TOGETHER under the one bound ([stopTogether]).
+// BOUNDED by [statelog.DefaultResolveBudget], the bound every write's wait for
+// its applier takes: past it, the batch's push ids collapse on whatever landed
+// when their clients push again.
 func (n *native) stopCommitter(ctx context.Context) {
 	if n == nil || n.committer == nil {
 		return
@@ -300,18 +239,12 @@ type closingWriter interface {
 // stopTogether stops writers under ONE bound, CLOSING EVERY ONE FIRST and only
 // then draining them ALL AT ONCE.
 //
-// CLOSED FIRST, because a writer still open admits and publishes new work on a
-// node that is stopping: stopped one after another, the change writer took
-// conversation writes for as long as the committer's stop waited on a batch
-// a broker election held — the whole bound — and published them, records the
-// estate subject's withdrawal and the admission's then cut short.
-//
-// DRAINED TOGETHER, because the bound is the teardown's, not each writer's:
-// stopped one after another, a writer whose turn came after a committer that
-// spent the bound got a context already ended and cancelled its publishes in
-// flight at once, answering their askers from a cancelled publish, where it
-// would have finished them inside the very bound it was handed. Each now
-// drains with the whole of it, beside the others.
+// CLOSED FIRST, because an open writer keeps admitting and publishing work
+// while another's stop waits out the bound: records the estate subject's
+// withdrawal and the admission's then cut short. DRAINED TOGETHER, because the
+// bound is the teardown's, not each writer's: drained in turn, a writer after
+// one that spent the bound gets an ended context and cancels publishes it
+// could have finished.
 func stopTogether(ctx context.Context, bound time.Duration, writers ...closingWriter) {
 	bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), bound)
 	defer cancel()
@@ -331,24 +264,16 @@ func stopTogether(ctx context.Context, bound time.Duration, writers ...closingWr
 type clientTerm func(holds int64, minAge time.Duration) int
 
 // clientBarriers is the census term of a log's readers that are neither seats
-// nor the engine's own passes: the code log's git clients —
-// [gitlet.GitReadsPerDay] over the ceiling the log's stream holds, so a resize
-// of the log (`crewlet retention set-capacity`) moves the census with it. Nil
-// for every other log.
+// nor the engine's own passes: for the code log its git clients,
+// [gitlet.GitReadsPerDay] over the ceiling its stream holds, so a resize
+// (`crewlet retention set-capacity`) moves the census with it; nil otherwise.
 //
-// A TERM OF THE LOG, WHATEVER THIS NODE HOSTS. The code log runs, and keeps
-// the ceiling the term is a share of, in every register, whether or not the
-// company hosts code; and the rate the census is held against is the barriers
-// EVERY node applied over the alarm's day ([retention.census]) — the fleet's
-// reads, never this node's. Keyed on this node's runtime instead, the term
-// judged a fleet's git reads against the seats' term alone in two places: on
-// every node restarted after a revision turned Gitlet off, while up to
-// a day of git barriers from before the switch were still in the window; and,
-// during the rolling restart after a revision turned it on, on every node not
-// yet restarted, while its peers served git. A healthy host fired
-// census_drift for up to a day either way. On a company that has never hosted
-// code nothing appends a git barrier, so the term allows for reads that never
-// come.
+// A TERM OF THE LOG, WHATEVER THIS NODE HOSTS: the code log keeps its ceiling
+// in every register, and the census is held against the barriers EVERY node
+// applied over the alarm's day ([retention.census]). Keyed on this node's
+// runtime, a healthy host fires census_drift for up to a day around a switch
+// of the backend, its fleet's git reads judged against the seats' term alone.
+// A company that never hosted code just allows for reads that never come.
 func clientBarriers(domain string) clientTerm {
 	if domain != (gitlet.Domain{}).Name() {
 		return nil
@@ -357,42 +282,17 @@ func clientBarriers(domain string) clientTerm {
 }
 
 // applyCodeRepos asks for the reconcile of code.repos at this activation
-// ([reconcileCodeRepos]): the repositories this company declares are made to
-// exist on the code log with the settings it declares, and every
-// configuration-managed repository it no longer declares is deleted — softly,
-// restorably for `code.deleted_retention_days`.
-//
-// # Asked for, never waited on
-//
-// The apply returns once it has asked, and [codeReconciler] decides beside it:
-// a reconcile costs a write for every repository that changed — 16–19 s on
-// one node at the ten thousand a document may declare, and more in a fleet
-// whose nodes race on each — while a node behind on an epoch for 45 s that a
-// peer has applied is shed, and how many repositories a company declares must
-// never decide that (the reconciler says more). A newer activation's request
-// ends an older one's reconcile still running, since the newer decides every
-// repository again. And because the apply has reported the revision applied by
-// then, a reconcile that leaves something undone is RUN AGAIN by the
-// reconciler, on a growing backoff, until it applies: nothing else would.
-//
-// # On every data node at every boot and every activation
-//
-// Idempotent, and never the apply's failure — [Engine.applyContainers]'
-// posture, for its reason: this is one clause of an apply and the rest stands
-// without it, and it is cheap where nothing changed. Every node deciding the same declaration
-// is SAFE rather than merely harmless: a create arbitrates on the name's own
-// subject, so two creates of one name land one repository, and the fence
-// refuses an older activation's records wherever they land. Nodes applying
-// one activation at the same moment race on every subject it changes, and
-// the broker lets one record land on each: the others re-decide from it and
-// write nothing.
-//
-// NOT ON A REVISION THAT TURNED THE HOST OFF: on a runtime built with the host
-// that revision changes nothing until a restart (the restart line says so),
-// and nothing deletes a repository because the HOST was switched off. Nor on a
-// node in a mode that does not publish, whose lifecycle store is withheld
-// ([Engine.writeSide]), nor for a company no activation has named — its first
-// activation does it, as [Engine.applyChart] explains.
+// ([reconcileCodeRepos]): declared repositories exist with their settings, and
+// configuration-managed ones no longer declared are deleted, restorably for
+// `code.deleted_retention_days`. Never the apply's failure
+// ([Engine.applyContainers]' posture) and never waited on: a reconcile costs a
+// write per changed repository (16–19 s at ten thousand) while a node 45 s
+// behind is shed, so [codeReconciler] decides beside the apply, runs again
+// what is left undone on a backoff (nothing else would), and ends an older
+// activation's run for a newer one. Every data node runs it at every boot and activation, safely
+// ([reconcileCodeRepos]); none runs it for a revision that turned the host off
+// (nothing is deleted for that), on a node that does not publish
+// ([Engine.writeSide]), or before a first activation ([Engine.applyChart]).
 func (e *Engine) applyCodeRepos(ctx context.Context, c *Company, activatedAt time.Time) {
 	if _, _, runs := e.codeReposSides(c, activatedAt); !runs {
 		return
@@ -427,12 +327,10 @@ func (e *Engine) codeReposSides(c *Company, activatedAt time.Time) (*gitlet.Stor
 }
 
 // stopCodeRepos ends the reconcile of code.repos in flight and refuses every
-// request after ([codeReconciler.stop]). Nil-safe.
-//
-// BEFORE THE ADMISSION IS WITHDRAWN ([Engine.withdraw]), with every other
-// loop that appends to a log: a reconcile publishes a record for every
-// repository that changed, and one still running once the admission is gone
-// is a publisher a capacity coordinator cannot see.
+// request after ([codeReconciler.stop]). Nil-safe. BEFORE THE ADMISSION IS
+// WITHDRAWN ([Engine.withdraw]), with every loop that appends to a log: a
+// reconcile still publishing after it is a publisher a capacity coordinator
+// cannot see.
 func (e *Engine) stopCodeRepos() {
 	if e.codeRepos != nil {
 		e.codeRepos.stop()
@@ -453,61 +351,18 @@ type codeLives interface {
 	WalkLives(ctx context.Context, visit func(gitlet.RepoLife) error) error
 }
 
-// reconcileCodeRepos is one reconcile of code.repos — the declaration repos,
-// its owners resolved on the activation's chart — at the activation
-// activatedAt, logged to logger.
-//
-// # The fence first
-//
-// It raises the code log's ACTIVATION FENCE to this activation before it
-// decides any repository ([gitlet.Store.Activate]), and every decision after it
-// waits for this node to have applied that fence (the session floor its
-// [gitlet.Activation] carries). So every decision reads a snapshot in which each
-// older activation's EARLIER records have applied — a difference one of them
-// made is settled back — while each older activation's LATER record is refused
-// by the fence, identically on every node, because the fence is derived from
-// the log (internal/gitlet's package doc). That is what lets an unchanged
-// repository cost nothing: an activation that changes nothing writes its one
-// fence record fleet-wide, never a settings record a repository a node, and
-// the unchanged declarations are read in one batch ([gitlet.Store.EnsureRepos]).
-//
-// # What changed, side by side
-//
-// The repositories that changed — created, settled, restored, and the
-// configuration-managed ones the document no longer declares, deleted — are
-// decided several at a time ([gitlet.Store.EnsureRepos],
-// [gitlet.Store.DeleteRepos]), each its own subject, so their records reach the
-// applier together and are committed as one batch. One at a time, a create
-// was a publish, an append and a wait for this node to apply it — 6.7 ms, and
-// a deletion 7.0 ms — so the last of the ten thousand repositories a document
-// may declare existed over a minute after its first activation; side by side,
-// 16–19 s (internal/gitlet's doc.go, measured section).
-//
-// # A failure every repository shares is said once
-//
-// A failure the whole reconcile meets — a later activation's fence, this
-// node's own refusal by the code log, an estate it cannot read, its context
-// ending — is logged ONCE, and no deletion follows it: ten thousand
-// lines on every data node at every activation say nothing the first did not,
-// and a deletion met the same failure after a wait of its own. A refusal for
-// one repository is logged and the rest are still decided. It logs only what
-// it wrote.
-//
-// # What it answers: what running it again can do
-//
-// It answers the first failure it left undone that a second run can apply —
-// a fence the log did not raise, a failure every repository shared, a
-// repository whose outcome the log did not answer or whose decision this node
-// could not make yet, a deletion that failed, the deletions a failed walk of
-// the rows skipped — and nil where nothing of that kind is left, which is what
-// [codeReconciler] runs it again for. The design working is no such failure: a
-// later activation's fence or row (that activation's reconcile owns them), a
-// context ended by a newer request or the engine stopping (the newer
-// reconcile, or the next boot, decides everything again), a purge to wait out
-// (the code-retention duty declares the name when it completes). Nor is what
-// no second run can change: a name another manager holds, and a declaration
-// the code log refuses as written — each waits for a revision that changes it,
-// and is said at every run until then.
+// reconcileCodeRepos is one reconcile of code.repos (owners resolved on the
+// activation's chart) at activatedAt. It raises the code log's ACTIVATION FENCE
+// first ([gitlet.Store.Activate]) and every decision waits for this node to
+// apply it, so older activations' earlier records are settled back and their
+// later ones refused on every node (internal/gitlet's package doc); an
+// unchanged activation writes that one record. Changed repositories are decided
+// side by side, racing nodes landing one record a subject
+// ([gitlet.Store.EnsureRepos], [gitlet.Store.DeleteRepos]). A shared failure is
+// logged ONCE and no deletion follows; one repository's is logged and the rest
+// decided. It answers the first failure a second run can apply, for
+// [codeReconciler]; nil for the design working (a later activation, a stop, a
+// purge [Engine.redeclareCode] waits out) or what only a revision changes.
 func reconcileCodeRepos(ctx context.Context, logger *slog.Logger, store codeLifecycle,
 	lives codeLives, owners *org.Index, repos []config.CodeRepo, activatedAt time.Time) error {
 
@@ -535,14 +390,10 @@ func reconcileCodeRepos(ctx context.Context, logger *slog.Logger, store codeLife
 		}
 		decided = append(decided, d)
 	}
-	// THE ROWS BEFORE THE DECISIONS, at the stale level and in the
-	// reconcile's own narrow walk: what each declared name was — none, live
-	// or deleted — which names what a write did, and which
-	// configuration-managed repositories the document no longer declares.
-	// Stale is enough, because every deletion decides inside its own
-	// snapshot after the fence: a row this walk missed is caught at the next
-	// apply, and one it showed wrongly is decided away. Held as it is read,
-	// a map of the declared names and a list of what goes — never the rows.
+	// THE ROWS BEFORE THE DECISIONS, stale and narrow: what each declared
+	// name was (naming what a write did) and which configuration-managed
+	// repositories go. Stale is enough: every deletion decides in its own
+	// snapshot after the fence. Held as a name map and a list, never the rows.
 	was := make(map[string]gitlet.RepoStatus, len(declared))
 	var gone []gitlet.RepoLife
 	listErr := lives.WalkLives(ctx, func(l gitlet.RepoLife) error {
@@ -580,11 +431,8 @@ func reconcileCodeRepos(ctx context.Context, logger *slog.Logger, store codeLife
 		}
 	}
 	if err != nil {
-		// THE SHARED FAILURE IS THE ANSWER, whatever a repository's own was
-		// before it: a run again decides that repository with the rest once
-		// the shared one clears, and where it is the design working — a
-		// later activation owns the repositories, or the engine stopped —
-		// no run of THIS activation has anything left to do.
+		// THE SHARED FAILURE IS THE ANSWER, whatever a repository's own was:
+		// a run again decides that repository with the rest once it clears.
 		return codeReposNotApplied(ctx, logger, failureOf(ctx, err), "no further "+
 			"repository was created, settled or deleted at this activation")
 	}
@@ -637,14 +485,11 @@ func (w *codeReposWritten) ensured(name string, was map[string]gitlet.RepoStatus
 }
 
 // importsIgnored says, in ONE line a run, which declarations name an import
-// for a repository that existed before the run — live or deleted, as the walk
-// of the rows found it (was) — and is not being imported: an import is read
-// by its repository's create alone ([gitlet.Declared.Import]), so each of these
-// is passed by, and the line is what tells the person who added one to a
-// repository that already holds history that nothing will be fetched — and
-// the one who left one in place after its import that it can go. One still
-// being imported is its create's import running, and is not named. Its count,
-// and its first [codeReposLoggedNames] names; nothing where there are none.
+// for a repository that already existed (was: live or deleted) and is not
+// being imported: an import is read by its repository's create alone
+// ([gitlet.Declared.Import]), so the line tells a person nothing will be
+// fetched, or that a finished import can go. Its count and first
+// [codeReposLoggedNames] names; nothing where there are none.
 func importsIgnored(ctx context.Context, logger *slog.Logger, decided []gitlet.Declared,
 	was map[string]gitlet.RepoStatus) {
 
@@ -665,18 +510,15 @@ func importsIgnored(ctx context.Context, logger *slog.Logger, decided []gitlet.D
 }
 
 // codeReposLoggedNames is the most names the reconcile's line lists of each
-// kind of write, beside the count of them all: thirty-two names of at most 63
-// bytes are 2 KB, where the ten thousand one first activation can create are
-// over 300 KB in one line — past the line a log pipeline carries whole (a
-// container runtime's json log splits a line at 16 KB) — and name nothing a
-// person reads that `crewlet gitlet status` does not list.
+// kind of write, beside the count: 32 names of at most 63 bytes are 2 KB, where
+// ten thousand pass the 16 KB at which a container runtime's json log splits a
+// line, and `crewlet gitlet status` lists them all anyway.
 const codeReposLoggedNames = 32
 
-// log says what was written in one line, and nothing where nothing was: this
-// runs at every boot and every activation on every data node, and a line
-// naming every repository each time would report a company nobody edited as
-// one that changed. Each kind is its COUNT, and its first
-// [codeReposLoggedNames] names.
+// log says what was written in one line, and nothing where nothing was: it
+// runs at every boot and activation on every data node, and a line each time
+// would report a company nobody edited as one that changed. Each kind is its
+// COUNT and its first [codeReposLoggedNames] names.
 func (w *codeReposWritten) log(ctx context.Context, logger *slog.Logger) {
 	var attrs []any
 	for _, f := range []struct {
@@ -722,10 +564,8 @@ const codeReposRunAgain = "this node runs the reconcile of code.repos again unti
 func codeReposNotApplied(ctx context.Context, logger *slog.Logger, err error, detail string) error {
 	switch {
 	case errors.Is(err, gitlet.ErrSuperseded):
-		// A LATER ACTIVATION OWNS THE REPOSITORIES: this node applies an
-		// older configuration than one the fleet has already fenced, or
-		// has applied a later one itself, so every decision this one made
-		// would be refused on every node.
+		// A LATER ACTIVATION OWNS THE REPOSITORIES (fenced by the fleet or
+		// this node): every decision this one made is refused everywhere.
 		logger.InfoContext(ctx, "code_repos_superseded", "error", err.Error(),
 			"detail", "a later configuration's reconcile owns the repositories, so this "+
 				"activation decides no further one; this node reconciles the later one")
@@ -759,9 +599,7 @@ func codeRepoNotApplied(ctx context.Context, logger *slog.Logger, name string, e
 		return nil
 	case errors.Is(err, gitlet.ErrNotConfigManaged):
 		// SOMEBODY ELSE'S REPOSITORY HOLDS THE NAME, and a reconcile never
-		// takes over a repository the configuration does not manage — so
-		// no run of it changes this, and it is said at each one until a
-		// revision renames the declaration.
+		// takes one over: said at each run until a revision renames it.
 		logger.ErrorContext(ctx, "code_repo_not_applied", "name", name, "error", err.Error(),
 			"detail", "a repository code.repos does not manage holds this name, and the "+
 				"configuration never takes one over: rename the declaration; the rest of "+
@@ -780,43 +618,30 @@ func codeRepoNotApplied(ctx context.Context, logger *slog.Logger, name string, e
 }
 
 // retiredByOmission reports a repository the reconcile deletes for being
-// absent from code.repos — called for one the document does not declare: a
-// LIVE repository, active or archived, that the CONFIGURATION manages.
-//
-// ONLY THE CONFIGURATION'S. A repository some other manager made — a later
-// build's own value for one a person or a lead created — is no declaration's
-// to retire, and this build is a newer build's OLDER PEER in a rolling
-// upgrade: deleting such a repository for being absent from code.repos would
-// throw away somebody's repository on every node this build runs on.
-// [gitlet.Store.DeleteRepo] checks the manager again inside its own snapshot,
-// so this is the reconcile not asking rather than the only guard.
+// absent from code.repos: a LIVE one (importing, active or archived) that the
+// CONFIGURATION manages. ONLY THE CONFIGURATION'S: another manager's, a later
+// build's value among them, is no declaration's to retire, and this build may
+// be a newer one's OLDER PEER in a rolling upgrade. [gitlet.Store.DeleteRepo]
+// checks the manager again in its own snapshot; this is the reconcile not
+// asking.
 func retiredByOmission(l gitlet.RepoLife) bool {
 	live := l.Status == gitlet.RepoStatusImporting || l.Status == gitlet.RepoStatusActive ||
 		l.Status == gitlet.RepoStatusArchived
 	return live && l.ManagedBy == gitlet.ManagedConfig
 }
 
-// declaredRepo is one code.repos entry as the domain records it, against the
-// chart of the activation being applied, indexed once for the whole list
-// ([codeOwners]): the owner and every path owner resolved to a unit's key (or
-// a seat's handle), every protection rule spelled as its namespaced pattern
-// ([config.CodeProtection.Pattern]) and SORTED, each one's merge gate resolved
-// ([config.CodeProtection.Gate]) and in its one form ([gitlet.CanonicalGate]),
-// and the path owners in theirs ([gitlet.CanonicalPathOwners]) — the record
-// carries one canonical order, so every node deciding one declaration forms
-// byte-identical records, and [gitlet.RepoSettings.Validate] refuses any other —
-// and the default branch, the visibility and the search mode defaulted, the
-// last to indexed: a repository the company declares is searched across. Its
-// mirrors and its import are recorded as written — each credential the ${VAR}
-// reference itself, never what it resolves to, which is read only when the
-// remote is dialed — a push mirror's seat by its handle, trimmed as an owner's
-// is, and its refs in the document's order, unset for the default.
+// declaredRepo is one code.repos entry as the domain records it, on the
+// activation's chart indexed once ([codeOwners]): owners resolved to a unit's
+// key or a seat's handle, protection rules as namespaced patterns SORTED,
+// gates and path owners in their one form ([gitlet.CanonicalGate],
+// [gitlet.CanonicalPathOwners]), so every node forms byte-identical records
+// ([gitlet.RepoSettings.Validate] refuses any other order); branch, visibility
+// and search defaulted, search to indexed. Mirrors and import as written: a
+// credential stays its ${VAR} reference, resolved only at the dial.
 //
-// AN ERROR only for a revision validation refuses — an owner the chart does
-// not resolve: a runnable revision never reaches it, and one that does is
-// named rather than recorded with an empty owner. It is [gitlet.ErrInvalid],
-// since the declaration as written is what is wrong: no run of the reconcile
-// changes it, and only a revision that corrects it does.
+// AN ERROR, [gitlet.ErrInvalid], only for what validation refuses (an owner
+// the chart does not resolve): named rather than recorded with an empty owner,
+// and only a revision corrects it.
 func declaredRepo(o *org.Index, r config.CodeRepo) (gitlet.Declared, error) {
 	if o == nil {
 		return gitlet.Declared{}, fmt.Errorf("%w: the epoch has no chart to resolve the "+
@@ -945,10 +770,8 @@ const (
 
 	// codeRetentionDutyTTL is how long the duty outlives a holder that
 	// stopped renewing it: three ticks ([gitlet.RetentionInterval]), every
-	// other singleton's rule — a holder that died is replaced within three
-	// quarters of an hour, against a purge that is days late by design. A
-	// pass in flight renews it as it runs ([dutyRenewal.keep]), so no pass
-	// outlives its holder's claim.
+	// singleton's rule, against a purge days late by design. A pass renews
+	// it as it runs ([dutyRenewal.keep]).
 	codeRetentionDutyTTL = 3 * gitlet.RetentionInterval
 )
 
@@ -996,16 +819,13 @@ func (e *Engine) newCodeRetentionDuty(store *gitlet.Store, reader *gitlet.Reader
 			// would have purged.
 			Retention: e.codeDeletedRetention,
 			OnPurged:  e.redeclareCode,
-			// AND ITS code.scratch, read at every pass's scratch expiry —
-			// which deletes nothing a live turn holds: every run row's holds
-			// and every seat holder's running turns', asked once a page of
-			// due repositories ([Engine.codeHolds]).
+			// AND ITS code.scratch, for the scratch expiry, which deletes
+			// nothing a live turn holds ([Engine.codeHolds]).
 			Policy: e.codeLifecyclePolicy,
 			Holds:  e.codeHolds,
-			// AND ITS REF EXPIRY, last, which deletes seats' idle branches
-			// through each repository's committer — the estate router's,
-			// which asks the one rendezvous ranks first and fails over —
-			// keeping every branch the same holds name.
+			// AND ITS REF EXPIRY, last: seats' idle branches deleted through
+			// the router's committer, which fails over, keeping every branch
+			// the same holds name.
 			Propose: e.router.Code().Propose,
 			Node:    nodeID,
 			Logger:  logging.Get("gitlet"),
@@ -1033,15 +853,10 @@ func (e *Engine) startCodeRetention(ctx context.Context, nodeID string, n *nativ
 }
 
 // stopCodeRetention ends the duty's loop, waiting out a pass in flight.
-// Nil-safe.
-//
-// BEFORE THE ADMISSION IS WITHDRAWN ([Engine.withdraw]), with every other
-// loop that appends to a log: a pass publishes purge steps and
-// re-declarations, and one still running once the admission is gone is a
-// publisher a capacity coordinator cannot see. And so before
-// [Engine.releaseDuties], which follows the withdrawal, as every loop that
-// claims a duty is: one still running past the release takes the duty
-// straight back, and the node exits holding it for its whole TTL.
+// Nil-safe. BEFORE THE ADMISSION IS WITHDRAWN ([Engine.withdraw]), with every
+// loop that appends to a log (a pass publishes purge steps and
+// re-declarations), and so before [Engine.releaseDuties]: a loop running past
+// the release takes the duty back, and the node exits holding it a whole TTL.
 func (e *Engine) stopCodeRetention() {
 	d := e.codeRetention
 	if d == nil {
@@ -1056,26 +871,17 @@ func (e *Engine) stopCodeRetention() {
 func (d *codeRetentionDuty) decidesFrom() []string { return []string{gitlet.Domain{}.Name()} }
 
 // declined is whether this node declines the duty now, said on a change
-// ([dutyDecline.record]) — asked before every turn's claim, and before every
-// renewal of a pass in flight ([dutyRenewal.declining]). A purge removes rows
-// on every node and the bytes of every pack the repository named, and has no
-// undo, so this node declines while either of two things is true:
+// ([dutyDecline.record]), asked before every claim and every renewal
+// ([dutyRenewal.declining]). A purge has no undo, so it declines while:
 //
-//   - its copy of the code log is out of service ([Engine.copyOutOfService]):
-//     a purge decided from it is one the node's peers may not agree was due;
-//   - it does not serve the revision the fleet's activation pointer names
-//     ([Engine.servedFleetRevision]), nothing activated included: the pass
-//     purges by this node's code.deleted_retention_days, and a holder that
-//     failed to apply a revision lengthening it — to save a deleted
-//     repository — would purge that repository by the retention the company
-//     replaced. Stronger than the posture on purpose, and cheap: a node
-//     merely applying the revision, or starting, asks again a reconcile
-//     interval later ([codeRetentionDuty.wait]), a node that failed it a
-//     [gitlet.RetentionInterval] later, and a purge is days late by design.
+//   - its code log copy is out of service ([Engine.copyOutOfService]): peers
+//     may not agree a purge it decides was due;
+//   - it does not serve the fleet's activated revision
+//     ([Engine.servedFleetRevision]), stricter than the posture on purpose: a
+//     holder that failed a revision lengthening code.deleted_retention_days
+//     would purge by the one it replaced. Cheap: a purge is days late by design.
 //
-// The pass's sweeps of retired packs are declined with its purges: they
-// decide from the same copy, and a sweep that waits for a node that serves
-// only keeps an object from the collector a while longer.
+// The pack sweeps decline with it, deciding from the same copy.
 func (d *codeRetentionDuty) declined(ctx context.Context) bool {
 	reason, _ := copyDeclineReason(ctx, codeRetentionDecline, d.copies, d.decidesFrom())
 	if reason.key == "" {
@@ -1123,12 +929,10 @@ func (d *codeRetentionDuty) turn(ctx context.Context) (gitlet.RetentionReport, b
 			return gitlet.RetentionReport{}, false
 		}
 	}
-	// FROM HERE THE PASS KEEPS THE DUTY AS IT RUNS, and is ended the moment
-	// it cannot say it still holds it or this node comes to decline it
-	// ([dutyRenewal.keep]) — so no pass purges beside another holder's, nor
-	// on past a copy gone wrong or a revision this node has not applied. A
-	// pass stops between steps when its context ends, and the next resumes
-	// from the rows.
+	// FROM HERE THE PASS KEEPS THE DUTY, ended the moment it cannot say it
+	// holds it or this node declines ([dutyRenewal.keep]), so no pass purges
+	// beside another holder's. It stops between steps; the next resumes from
+	// the rows.
 	work, kept := d.renewal.keep(ctx, d.claim, asked)
 	report, err := d.pass.Pass(work)
 	ended := work.Err() != nil
@@ -1146,15 +950,12 @@ func (d *codeRetentionDuty) turn(ctx context.Context) (gitlet.RetentionReport, b
 	return report, true
 }
 
-// logCodeRetention says what one pass did: at info where it swept, purged,
-// released an old name, expired a scratch repository or kept one a live turn
-// holds, expired, kept or held a seat's idle branch, failed (an expiry's too),
-// held a name, could not read the live turns' holds or stopped at its budget,
-// at debug where it found nothing due. A pass ENDED — the
-// engine stopping, the duty lost or declined mid-pass, which the renewal has
-// said — is no failure; any other error is a warning. There is no /fleet view
-// of a pass: this line, and the scratch expiry's own
-// code_scratch_expiry_skipped warning, are where a pass is read.
+// logCodeRetention says what one pass did: at info where it did, kept, held or
+// failed anything or stopped at its budget, at debug where nothing was due. A
+// pass ENDED (the engine stopping, the duty lost or declined mid-pass, which
+// the renewal has said) is no failure; any other error is a warning. There is
+// no /fleet view of a pass: this line and the scratch expiry's
+// code_scratch_expiry_skipped warning are where it is read.
 func logCodeRetention(ctx context.Context, logger *slog.Logger, report gitlet.RetentionReport, err error,
 	ended bool) {
 	attrs := []any{"sweeps", report.Sweeps, "swept_rows", report.SweptRows,
@@ -1193,16 +994,12 @@ func logCodeRetention(ctx context.Context, logger *slog.Logger, report gitlet.Re
 	}
 }
 
-// redeclareCode is the retention pass's [gitlet.Retention.OnPurged]: the purge
-// of a repository freed its name, and where the CURRENT epoch declares that
-// name again — a person re-added it while it purged, and the reconcile could
-// only wait the purge out (code_repo_awaits_purge) — it is created now rather
-// than at the next activation, which nothing schedules.
-//
-// Under the current epoch's own activation, fenced first as every reconcile
-// is. An error keeps the name for the next pass: a fence a later activation
-// has raised — this node applies an older configuration — or a write that did
-// not land. A name the epoch does not declare is simply free.
+// redeclareCode is the retention pass's [gitlet.Retention.OnPurged]: where the
+// CURRENT epoch declares the name a purge freed (the reconcile could only wait
+// the purge out, code_repo_awaits_purge), it is created now, since nothing
+// schedules the next activation. Fenced under the epoch's own activation as
+// every reconcile is; an error (a later activation's fence, a write that did
+// not land) keeps the name for the next pass.
 func (e *Engine) redeclareCode(ctx context.Context, name string) error {
 	c := e.Company()
 	store := e.writeSide().code

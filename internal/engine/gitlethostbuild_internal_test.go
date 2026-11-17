@@ -53,14 +53,11 @@ func TestTheGitletRoleIsNeededOnlyWhereCodeIsHosted(t *testing.T) {
 }
 
 // THE CACHE'S DERIVED BUDGET COUNTS WHAT THE CACHE HOLDS. Free space excludes
-// the cache's own files, so a budget derived from it alone shrank at every
-// restart of a warm node, and its first janitor pass evicted the difference:
-// warm repositories downloaded again for no change in the disk. A cache
-// holding a gibibyte on a volume with F free derives from F plus that
-// gibibyte, less the request spools' allowance and the revision facts' patch
-// spools (query.PatchSpoolAllowance), a second boot over the same files
-// derives the same budget, and a cache on the store's own filesystem is held
-// to the shared half.
+// the cache's own files, so a budget from it alone shrinks at every restart of
+// a warm node and the janitor evicts the difference. The room is free space
+// plus what the cache holds, less the request spools' allowance and the patch
+// spools (query.PatchSpoolAllowance); a second boot over the same files derives
+// the same budget, and a cache on the store's filesystem gets the shared half.
 //
 // Mutations: derive from the free space alone, and the budgets go red; leave
 // the patch spools out of the room, and they go red too.
@@ -77,9 +74,8 @@ func TestTheCacheBudgetCountsWhatTheCacheHolds(t *testing.T) {
 	b.Store.Path = filepath.Join(base, "crewlet.db")
 	dir := filepath.Join(base, "git")
 
-	// A GIBIBYTE THE LAST PROCESS LEFT IN trash/, which Prepare counts (the
-	// janitor gives it back after the boot) — sparse, so the case costs no
-	// disk.
+	// A GIBIBYTE THE LAST PROCESS LEFT IN trash/, which Prepare counts; sparse,
+	// so the case costs no disk.
 	first := prepareCache(t, dir)
 	first.Release()
 	leftover := filepath.Join(dir, "trash", "leftover")
@@ -129,17 +125,13 @@ func TestTheCacheBudgetCountsWhatTheCacheHolds(t *testing.T) {
 func noBroker() (jetstream.VolumeClaim, bool, error) { return jetstream.VolumeClaim{}, false, nil }
 
 // THE CACHE LEAVES THE BROKER BESIDE IT ITS CLAIM. An embedded broker storing
-// its streams on the cache's volume may fill it up to the store limit its
-// server enforces — three quarters of that volume's free space where
-// stream.store_max_bytes is unset — so the room the cache divides is what that
-// limit leaves, and the cache, the broker and the request spools together
-// never claim more than the volume has: the reference layout, with everything
-// under one directory, gave the broker three quarters and the cache a quarter
-// of one free space, and the store nothing to grow into. A broker on another
-// volume claims nothing of this one, a small volume's share is the share with
-// no floor raising it, and a claim that cannot be read fails the build rather
-// than be guessed. (A claim that leaves no room at all is
-// TestARoomOfNothingRefusesGitletByName's.)
+// its streams on the cache's volume may fill it to its store limit (three
+// quarters of the free space where stream.store_max_bytes is unset), so the
+// cache divides only what that limit leaves, and cache, broker and request
+// spools together never claim more than the volume has. A broker on another
+// volume claims nothing of this one, a small volume's share has no floor
+// raising it, and a claim that cannot be read fails the build rather than be
+// guessed. (A claim leaving no room is TestARoomOfNothingRefusesGitletByName's.)
 //
 // Mutation: leave the broker's claim out of the room, and the overcommit rows
 // go red.
@@ -186,8 +178,7 @@ func TestTheCacheBudgetLeavesTheBrokerItsClaim(t *testing.T) {
 			if err != nil {
 				t.Fatalf("codeCacheBudget: %v", err)
 			}
-			// THE ROWS' ROOMS are before the revision facts' patch spools,
-			// which every node's room is less.
+			// THE ROWS' ROOMS are before the patch spools, which every room is less.
 			room := tc.room + held - query.PatchSpoolAllowance
 			if size.room != room || size.broker != tc.broker || size.dedicated {
 				t.Fatalf("sized %+v, want a shared room of %d with the broker claiming %d",
@@ -196,10 +187,8 @@ func TestTheCacheBudgetLeavesTheBrokerItsClaim(t *testing.T) {
 			if size.budget != config.DerivedCacheMaxBytes(size.room, false) {
 				t.Errorf("budget %d, want the shared share of the room %d", size.budget, size.room)
 			}
-			// NEVER AN OVERCOMMIT: what the cache may hold, what the broker
-			// may still write and what the spools and the patches may hold
-			// fit in what the volume has room for beside everything already
-			// there.
+			// NEVER AN OVERCOMMIT: the cache, the broker's remaining claim, the
+			// spools and the patches fit in the volume beside what it holds.
 			if size.budget+size.broker+size.spools+size.patches > tc.free+held {
 				t.Errorf("the cache's %d, the broker's %d, the spools' %d and the patches' %d claim "+
 					"more than the %d free and %d held", size.budget, size.broker, size.spools,
@@ -220,19 +209,14 @@ func TestTheCacheBudgetLeavesTheBrokerItsClaim(t *testing.T) {
 	}
 }
 
-// A VOLUME WITH NO ROOM FOR A CACHE REFUSES GITLET BY NAME. Where what
-// the cache's volume has — its free space and what the cache holds — is all
-// claimed by the bounded tenants beside it, the broker's limit, the request
-// spools and the revision facts' patch spools, there is no share to derive:
-// any budget would be bytes the volume does not have. So the build is refused
-// here, naming every figure it was decided from and each setting that changes
-// one, rather than by the cache's own refusal of a budget of nothing, which
-// names none of them. A sixteen-core node's spools reach that with eighteen
-// gibibytes free on the single-volume layout; a declared broker limit past
-// the volume, a broker holding to no limit, a small volume of the cache's own
-// and one the patch spools alone overfill reach it too. An explicit
-// gitlet.cache_max_bytes is the operator's decision on the same volume, and is
-// sized as written (code_cache_sized warns that the room cannot hold it).
+// A VOLUME WITH NO ROOM FOR A CACHE REFUSES GITLET BY NAME. Where the bounded
+// tenants beside the cache (the broker's limit, the request spools, the patch
+// spools) claim all the volume has, free and held, any derived budget is bytes
+// the volume lacks. So the build is refused here, naming every figure and the
+// setting that changes each, rather than by the cache's own refusal of a budget
+// of nothing, which names none. An explicit gitlet.cache_max_bytes is the
+// operator's decision, sized as written (code_cache_sized warns the room
+// cannot hold it).
 //
 // Mutations: derive a budget of nothing without refusing it, and every refused
 // row goes red; leave the patch spools out of the room, and their row is sized.
@@ -272,8 +256,8 @@ func TestARoomOfNothingRefusesGitletByName(t *testing.T) {
 			broker: 10 * gib, limit: "no limit at all", transfers: 4},
 		{name: "spools past a small volume of the cache's own", free: gib / 2, dedicated: true,
 			transfers: 16},
-		// ROOM FOR THE REQUEST SPOOLS AND A QUARTER GIBIBYTE MORE, which the
-		// revision facts' patch spools take, and more.
+		// ROOM FOR THE REQUEST SPOOLS AND A QUARTER GIBIBYTE, less than the
+		// patch spools take.
 		{name: "the patch spools past a small volume of the cache's own",
 			free: host.SpoolAllowance(4) + gib/4, dedicated: true, transfers: 4},
 	} {
@@ -325,12 +309,10 @@ func TestARoomOfNothingRefusesGitletByName(t *testing.T) {
 }
 
 // THE REFERENCE LAYOUT CONVERGES WITHOUT EVER OVERCOMMITTING ITS VOLUME. The
-// broker beside the cache re-derives its limit from the free space at every
-// start, which the cache's last budget has spent, and the cache re-derives its
-// budget from what that limit leaves: boot after boot, with the cache full to
-// its budget each time, the broker's limit and the cache's budget together
-// stay within the volume, and the cache settles rather than growing without
-// end.
+// broker re-derives its limit at every start from the free space the cache's
+// last budget left, and the cache from what that limit leaves: boot after
+// boot, the cache full each time, the two stay within the volume and the cache
+// settles rather than growing without end.
 func TestTheReferenceLayoutConverges(t *testing.T) {
 	t.Parallel()
 	const gib = int64(1) << 30
@@ -371,15 +353,11 @@ func TestTheReferenceLayoutConverges(t *testing.T) {
 }
 
 // A TEST NODE WHOSE BROKER IS DECLARED HOSTS CODE ON ANY DISK. A broker
-// [brokertest.StoreIn] sizes claims a fixed sixteen gibibytes of the room its
-// cache's budget is derived from. So a fixture that left the budget to the
-// derivation hosted code only on a runner with more than about seventeen and a
-// half gibibytes free. The end-to-end gates' runner had 9.2 GB, and every one
-// of their five code-hosting cases failed at engine.New with this refusal (CI
-// run 41669250876). Declared beside the broker ([brokertest.GitletCacheIn]), the
-// budget and the transfer lane are the same whatever the disk, that runner's
-// included. Left to the derivation on that runner's disk, the node is refused,
-// which is the failure the declaration exists to keep out of every suite.
+// [brokertest.StoreIn] sizes claims a fixed 16 GiB of the room the cache's
+// budget derives from, so a budget left to the derivation hosts code only with
+// about 17.5 GiB free, and on the end-to-end runner's 9.2 GB the node is
+// refused at engine.New. Declared beside the broker ([brokertest.GitletCacheIn]),
+// the budget and the transfer lane are the same whatever the disk.
 //
 // Mutation: drop the budget from GitletCacheIn, and the small disks refuse; drop
 // the lane, and every disk's spools follow the machine.
@@ -468,31 +446,17 @@ func TestAVolumeNotMadeYetIsItsAncestors(t *testing.T) {
 }
 
 // TWO DIRECTORIES ARE ONE VOLUME WHEN THEY DRAW ON ONE POOL OF SPACE, which a
-// device id alone does not say: a btrfs subvolume and a quota-less ZFS dataset
-// each have a device id of their own and write into the space every other one
-// of their pool writes into. So the device id, the filesystem id and the space
-// left read at one instant each say "one volume", the last only once the
-// cache's own reading held still across the other's; and everything uncertain
-// — an unreadable directory, a volume that never holds still — reads as one.
+// device id alone does not say: a btrfs subvolume or quota-less ZFS dataset
+// has its own. So a shared device id, filesystem id or space left each says
+// "one", the space only once the cache's reading held still across the
+// other's, and anything uncertain reads as one. The space is compared within
+// the COARSER OF THE TWO BLOCK SIZES, as each ZFS dataset rounds the pool's
+// space down to its recordsize. A FILESYSTEM OF NO BLOCKS (procfs) IS APART AT
+// ONCE, before any wait, lest a busy cache volume be judged one with /proc.
 //
-// The space left is compared within the COARSER OF THE TWO BLOCK SIZES, never
-// to the byte: each dataset of a ZFS pool reports the pool's space rounded down
-// to its own recordsize, so a store's dataset at 16 KiB beside a cache's at the
-// default 128 KiB reported the same space only when the pool's free bytes
-// happened to fall within 16 KiB of a 128 KiB boundary — one boot in eight —
-// and at every other boot the cache took seven eighths of the pool.
-//
-// A FILESYSTEM OF NO BLOCKS IS APART AT ONCE, however the cache's volume
-// moves: the space left is the only reading the instant is for, and it can
-// make nothing one with procfs. Read for an instant first, a cache volume a
-// suite's other cases wrote to between every pair of reads was judged to share
-// with /proc once its reads ran out (TestAnotherFilesystemIsAnotherVolume, in
-// a loaded run).
-//
-// Mutation: compare the device ids alone, and the pooled rows go red; compare
-// the space left to the byte, and the row of two block sizes goes red; ask
-// whether the cache's volume moved before whether either filesystem has
-// blocks, and the row of procfs beside a busy disk goes red.
+// Mutation: device ids alone reddens the pooled rows; space compared to the
+// byte, the row of two block sizes; asking whether the cache's volume moved
+// before whether either has blocks, the row of procfs beside a busy disk.
 func TestTwoDirectoriesOnOnePoolAreOneVolume(t *testing.T) {
 	t.Parallel()
 	const kib = int64(1) << 10
@@ -592,18 +556,12 @@ func TestTheMaxTransfersDescriptionIsThePoolsDefault(t *testing.T) {
 
 // THE HOST IS STOPPED ONCE, AND WAITED FOR ONE BUDGET, however many ask. The
 // teardown and the runtime's shutdown both stop it, and a host whose git work
-// outlives the bound is exactly the stop that runs the whole budget: asked
-// again, it would wait a second budget of the process's termination grace for
-// work a first wait already gave up on. Here a stop that holds until its bound
-// is asked for twice, the way the teardown and the shutdown ask: it runs once,
-// and the two together take one budget.
+// outlives the bound would otherwise wait a second budget of the termination
+// grace for work the first wait gave up on.
 //
-// The case runs in a synctest bubble, because its claims are about the bound's
-// clock: the bound's timer fires at exactly its budget on the bubble's clock,
-// and nothing else moves that clock, so the pair takes EXACTLY one budget when
-// the stop runs once and exactly two when it runs twice. On the wall clock the
-// first stop rightly waits its whole budget, and a loaded runner under -race
-// spends the margin beside it on scheduling alone (#1225).
+// It runs in a synctest bubble: only the bound's timer moves the clock, so the
+// pair takes EXACTLY one budget when the stop runs once and two when it runs
+// twice, which a loaded wall clock under -race cannot tell apart.
 //
 // Mutation: drop the once, and the second call runs the stop again and the
 // pair takes two budgets. Bound the stop by the caller's context rather than
@@ -647,13 +605,12 @@ func TestGitletIsStoppedOnceWithinOneBudget(t *testing.T) {
 }
 
 // EVERY FACTS READ OF A HOME HAS A SPOOL. A node's facts reads are its own
-// home's in the steady state — the router's walk asks a repository's home
-// first — and a home asks at most as many at once as its loop works
-// repositories, so the query server spools exactly that many patches at once:
-// fewer, and a home's own reads would wait on each other and turn unready; more,
-// and the cache's room would be sized beside spools nothing asks for. The two
-// packages may not import each other, so the engine, which builds both, holds
-// them equal here.
+// home's in the steady state (the router asks a repository's home first), and
+// a home asks at most as many at once as its loop works repositories, so the
+// query server spools exactly that many: fewer, and a home's reads wait on
+// each other and turn unready; more, and the cache's room is sized beside
+// spools nothing asks for. The two packages may not import each other, so the
+// engine, which builds both, holds them equal.
 //
 // Mutation: set query.MaxPatchSpools to one — red.
 func TestEveryFactsReadOfAHomeHasASpool(t *testing.T) {

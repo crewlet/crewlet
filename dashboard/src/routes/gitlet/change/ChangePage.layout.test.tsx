@@ -205,7 +205,7 @@ function mount(width: number) {
 /** The page once its timeline holds the finding's excerpt. */
 async function drawn(): Promise<HTMLElement> {
   return eventually(() => {
-    const excerpt = host!.querySelector<HTMLElement>(".code-excerpt .diff-view");
+    const excerpt = host!.querySelector<HTMLElement>(".code-excerpt .crewlet-diff-view");
     expect(excerpt).not.toBeNull();
     return host!.querySelector<HTMLElement>(".crewlet-app-shell__content")!;
   });

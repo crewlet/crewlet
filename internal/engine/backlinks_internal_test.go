@@ -9,14 +9,12 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 )
 
-// A PAGE'S BACKLINKS ARE ANSWERED ONLY WHERE BOTH COPIES THEY READ SERVE, on a
-// real node through the reader the engine hands the API (ADR-0079): the links
-// come from the pages' and the tasks' bodies and are named from both domains'
-// rows, so a node whose TRACKER copy is wrong answers none of them though its
-// knowledge base serves — and a single node, with no peer to ask, says so,
-// naming the copy — rather than listing links derived from rows it stopped
-// serving. Read straight off the node's own index, they were listed as
-// complete beside a page a peer had answered.
+// A PAGE'S BACKLINKS ARE ANSWERED ONLY WHERE BOTH COPIES THEY READ SERVE
+// (ADR-0079), through the reader the engine hands the API: the links come from
+// pages' and tasks' bodies and are named from both domains' rows, so a node
+// whose TRACKER copy is wrong answers none though its knowledge base serves,
+// and a single node with no peer to ask says so, naming the copy, rather than
+// listing links derived from rows it stopped serving.
 func TestAWrongTrackerCopyAnswersNoBacklinks(t *testing.T) {
 	t.Parallel()
 	e, _, _ := bootRejoinNode(t)

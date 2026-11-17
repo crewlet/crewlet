@@ -27,10 +27,8 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// countingClaim is a duty's claim that counts how often it was asked and
-// answers NOT HELD, so a turn that claims stops right there and no pass,
-// embedding or trim needs its real inputs — and its give-back, which counts
-// how often the duty was given back.
+// countingClaim is a duty's claim and give-back that count their calls. The
+// claim answers NOT HELD, so a turn stops there and needs no real inputs.
 type countingClaim struct{ asked, gaveBack atomic.Int64 }
 
 func (c *countingClaim) claim(context.Context) (bool, error) {
@@ -65,12 +63,9 @@ func everyRegisteredLog() *stateLog {
 	return &stateLog{logs: newLogSet(runs)}
 }
 
-// trimCounts is every registered domain, in the register's order, whose log
-// the trim counts something of from this node's own rows: the logs that claim
-// identity, whose evictions it counts, and the logs that write anchors, whose
-// anchors it counts. Read off the register rather than listed, because the
-// set grows with every domain that claims identity — the identity estate, the
-// artifacts and their datastores among them.
+// trimCounts is every registered domain, in the register's order, whose
+// evictions (it claims identity) or anchors the trim counts from this node's
+// rows. Read off the register, since the set grows with each such domain.
 func trimCounts() []string {
 	var out []string
 	for _, d := range registeredDomains() {
@@ -95,16 +90,10 @@ func collectorReferences(t *testing.T) collect.References {
 
 // A DUTY DECLINES WHILE A COPY IT DECIDES FROM IS OUT OF SERVICE — ADR-0079.
 //
-// A fleet-singleton duty that decides from a domain's rows decides for the
-// whole fleet: the embedding duty publishes the vectors every node applies —
-// and withdraws the vector of every task its tracker copy no longer shows —
-// the trim purges past the evictions its own rows hold, and the collector
-// deletes what no row of its copy names. On a holder whose copy of any of
-// those domains is wrong, each acted on rows the node had stopped serving. So
-// a node whose copy of a domain the duty decides from is out of service does
+// A node whose copy of a domain the duty decides from is out of service does
 // not claim it and GIVES IT BACK, so a node whose copies serve takes it at its
-// next tick rather than once the lease lapses — the trim's is 45 minutes; a
-// wrong copy of a domain the duty does not read costs it nothing.
+// next tick rather than after the lease's TTL; a wrong copy of a domain the
+// duty does not read costs it nothing.
 func TestADutyDeclinesWhileACopyItDecidesFromIsOutOfService(t *testing.T) {
 	t.Parallel()
 	refs := collectorReferences(t)
@@ -131,9 +120,8 @@ func TestADutyDeclinesWhileACopyItDecidesFromIsOutOfService(t *testing.T) {
 			},
 		},
 		"the object collector": {
-			// Every domain a Required table is declared in: a person's
-			// conversation files are Ask Crewlet's, and a seat's sealed
-			// executor session is the executor log's (ADR-0073).
+			// Every domain a Required table is declared in, the executor
+			// log's sealed sessions among them (ADR-0073).
 			decidesFrom: []string{trackerName, codeName, artifactsdomain.Domain{}.Name(),
 				assistantdomain.Domain{}.Name(), executordomain.Domain{}.Name()},
 			turn: func(t *testing.T, e *Engine, claim *countingClaim) {
@@ -179,12 +167,9 @@ func TestADutyDeclinesWhileACopyItDecidesFromIsOutOfService(t *testing.T) {
 }
 
 // EVERY DUTY NAMES THE DOMAINS IT DECIDES FROM, each a registered domain: the
-// embedding duty the vectors and the domain of every corpus the engine embeds,
-// the trim every log whose evictions or anchors it counts from this node's
-// rows, and the collector every domain
-// whose rows name its objects. A corpus whose source maps to no domain, or a
-// declaration in a domain this list missed, would be a duty deciding from a
-// copy nobody asked the verdict of.
+// embedding duty the vectors and every embedded corpus's domain, the trim every
+// log whose evictions or anchors it counts, the collector every domain whose
+// rows name its objects. One missed is a copy nobody asks the verdict of.
 func TestEveryDutyNamesTheDomainsItDecidesFrom(t *testing.T) {
 	t.Parallel()
 	registered := registeredNames()
@@ -201,9 +186,8 @@ func TestEveryDutyNamesTheDomainsItDecidesFrom(t *testing.T) {
 		t.Errorf("the trim decides from %v, want the logs whose evictions or "+
 			"anchors it counts, %v", trim, counted)
 	}
-	// A LOG THAT WRITES ANCHORS AND CLAIMS NO IDENTITY, which no registered
-	// domain is today: the trim still counts its anchors from this node's
-	// rows, so it still decides from its copy.
+	// A LOG THAT WRITES ANCHORS AND CLAIMS NO IDENTITY (no registered domain
+	// yet): the trim still counts its anchors, so decides from its copy.
 	anchored := anchorsWithoutIdentity{worklet.Domain{}}
 	only := &stateLog{logs: newLogSet([]*runningLog{{domain: anchored, spec: anchored.Stream()}})}
 	if trim := (&retention{state: only}).decidesFrom(); !slices.Equal(trim, []string{anchored.Name()}) {
@@ -221,8 +205,8 @@ func TestEveryDutyNamesTheDomainsItDecidesFrom(t *testing.T) {
 			collector, named)
 	}
 
-	// THE CODE-RETENTION DUTY PURGES BY THE CODE LOG'S ROWS, and by nothing
-	// else: what is due and what a purge step removes are both read there.
+	// THE CODE-RETENTION DUTY reads what is due and what a purge removes
+	// from the code log's rows alone.
 	retention := (&codeRetentionDuty{}).decidesFrom()
 	if want := []string{codeName}; !slices.Equal(retention, want) {
 		t.Errorf("the code-retention duty decides from %v, want %v", retention, want)
@@ -250,10 +234,8 @@ func sameNames(a, b []string) bool {
 	return slices.Equal(slices.Sorted(slices.Values(a)), slices.Sorted(slices.Values(b)))
 }
 
-// A DECLINED DUTY IS ANNOUNCED ONCE, AND SO IS ITS RESUMPTION: a tick that
-// declines while the last one did says nothing new, so a copy out of service
-// for an hour is one line rather than sixty, and the line that ends it names
-// the domain it waited on.
+// A DECLINED DUTY IS ANNOUNCED ONCE, AND SO IS ITS RESUMPTION, which names
+// the domain it waited on: a tick declining as the last one did says nothing.
 func TestADeclinedDutyIsAnnouncedOnceAndResumes(t *testing.T) {
 	t.Parallel()
 	var verdict atomic.Pointer[copyVerdict]
@@ -317,8 +299,7 @@ func TestADeclinedDutyIsAnnouncedOnceAndResumes(t *testing.T) {
 	}
 }
 
-// lockedWriter serialises writes to w, which a handler shared by the tick and
-// its renewals may make from two goroutines.
+// lockedWriter serialises writes to w, which the tick and its renewals share.
 type lockedWriter struct {
 	mu *sync.Mutex
 	w  *bytes.Buffer
@@ -330,16 +311,12 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 	return l.w.Write(p)
 }
 
-// A TICK STOPS WHEN A COPY IT DECIDES FROM GOES OUT OF SERVICE under it, and
-// gives the duty back once it has RETURNED: a training tick runs for minutes,
-// and a renewal that only asked whether the lease was still held would carry
-// on deciding from a copy that had gone wrong since the tick began. The
-// renewal asks the verdict first, cuts the tick off — mid-request — without
-// renewing, and the tick gives the lease back as a declined tick does, once
-// the request it had in flight has ended, never from the renewal: a publish
-// already on its way would otherwise land after another node took the duty.
-// The kept duty's own cases certify the renewal; this one holds the tick's
-// wiring to it.
+// A TICK STOPS WHEN A COPY IT DECIDES FROM GOES OUT OF SERVICE under it (a
+// training tick runs for minutes): the renewal asks the verdict first and cuts
+// the tick off mid-request without renewing, and the tick gives the lease back
+// only once its in-flight request has ended, never from the renewal, or a
+// publish on its way would land after another node took the duty. The kept
+// duty's cases certify the renewal; this holds the tick's wiring to it.
 func TestATickStopsWhenACopyItDecidesFromGoesOutOfService(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNodeOf(t, embeddingDutyCompany)

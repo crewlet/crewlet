@@ -16,33 +16,23 @@ import (
 	"github.com/crewlet/crewlet/internal/trashreap"
 )
 
-// THE DASHBOARD ASSISTANT'S STATE LOG, wired: its entry in the register, its
-// two sides over the running log, its retention through the trash reaper, and
-// a person's erasure from it (ADR-0053). The orchestrator that reads and
-// writes through these sides is internal/assistant, wired in assistant.go.
-//
-// EVERY DATA NODE RUNS IT, whatever its company keeps: the register runs every
-// domain or none ([register]), and a node serving the dashboard is a data node
-// (`ingress` requires `data`), so the person's drawer reads its own node's
-// copy.
+// The dashboard assistant's state log, wired: its register entry, its two
+// sides, its retention through the trash reaper and a person's erasure
+// (ADR-0053); internal/assistant reads and writes through them (assistant.go).
+// Every data node runs it: the register runs every domain or none
+// ([register]), and `ingress` requires `data`, so the drawer reads its own
+// node's copy.
 
-// assistantRegistrations is the assistant domain's entry in the register: its
-// declaration, applier, write seams, generation record, node gate and Tier A
-// ceiling (`stream.assistant_log_max_bytes`, read through
-// config.Stream.AssistantMaxBytes).
+// assistantRegistrations is the assistant domain's register entry, its Tier A
+// ceiling `stream.assistant_log_max_bytes`.
 //
-// A STRICT, IDENTITY-CLAIMING DOMAIN, so it states its own generation record
-// and the node gate's writer: the trim counts nodes on this log, so one the
-// gate could not write would keep an evicted node counted here for ever. It
-// declares a BARRIER, as every identity-claiming log does. A person never reads
-// the log at `linearizable` (they read their own conversation through the node
-// their own writes waited on, and an approval is arbitrated at the broker
-// rather than read); the object collector does, before it judges a file's
-// object (assistantdomain.ObjectEstate), and only when it has one to judge, so
-// a log nobody wrote to gets no barrier at boot. The barrier is also the
-// ordinary record the reserve and the eviction machinery are proved against on
-// every identity log, this one included. And no wake feed: no record on it
-// wakes a seat.
+// A strict, identity-claiming domain, so it states its generation record and
+// the node gate's writer: the trim counts nodes on this log, and one the gate
+// could not write would keep an evicted node counted for ever. It declares a
+// barrier, as every identity-claiming log does; its one linearizable reader is
+// the object collector (assistantdomain.ObjectEstate), only when it has a file
+// to judge, so an unwritten log takes no barrier at boot. No record on it wakes
+// a seat, so it has no wake feed.
 func assistantRegistrations() []registration {
 	return []registration{{
 		Domain: assistantdomain.Domain{},
@@ -66,19 +56,16 @@ func assistantRegistrations() []registration {
 		},
 		Barrier: assistantdomain.EncodeBarrier,
 		Trimmed: assistantdomain.EncodeTrimmed,
-		// NO SEAT READS THIS LOG, so its read model is zero, as the identity
-		// estate's is: a person's reads take no barrier (above), and the
-		// object collector's pins, its one linearizable reader, are counted
-		// as the engine's own ([Engine.backgroundBarriers]). A seat that
-		// starts reading it at `linearizable` meets `census_drift` on its
-		// first barrier.
+		// No seat reads this log, so its read model is zero; the object
+		// collector's pins count as the engine's own
+		// ([Engine.backgroundBarriers]). A seat reading it at `linearizable`
+		// meets `census_drift` on its first barrier.
 		Reads:      &statelog.ReadModel{PerSeatDay: 0},
 		Generation: assistantdomain.GenerationRecord{},
 		NewGate: func(s *stateLog, _ *runningLog,
 			publisher *statelog.Publisher) (gateWrite, error) {
 
-			// A GATE WRITER, which holds no keyring: an eviction names a
-			// machine and carries nothing a person said.
+			// No keyring: an eviction names a machine, nothing a person said.
 			w, err := assistantdomain.NewGateWriter(publisher)
 			if err != nil {
 				return nil, err
@@ -94,20 +81,12 @@ func assistantRegistrations() []registration {
 			}, nil
 		},
 		OpsRetention: statelog.OpsRetention,
-		// NOT DERIVED FROM THE DISK, like the identity estate's and the
-		// usage log's: the log grows with how many people ask the
-		// assistant, and a larger volume buys none of them
-		// ([config.DefaultAssistantLogMaxBytes]).
-		//
-		// BUT SCALED DOWN TO ITS FIELD'S FLOOR where the broker is short,
-		// which the identity estate's and the usage log's are not: the
-		// assistant is a feature a company may never turn on, and a fixed
-		// 512 MiB counted in full on every fresh node raised the least a
-		// node boots in past the limit crewlet-operator gives the smallest
-		// data volume it admits, so a deployment sized for everything else
-		// stopped booting. Scaled, it reserves its 64 MiB floor there (a
-		// month at ten people) and its default wherever the broker has the
-		// room.
+		// Not derived from the disk: the log grows with how many people ask
+		// the assistant, not with the volume ([config.DefaultAssistantLogMaxBytes]).
+		// But scaled down to its 64 MiB floor (a month at ten people) where
+		// the broker is short: a feature a company may never turn on must not
+		// raise the least a node boots in past the smallest data volume
+		// crewlet-operator admits.
 		Ceiling: func(stream config.Stream, _ int64) domainCeiling {
 			bytes, derived := stream.AssistantMaxBytes()
 			return domainCeiling{Bytes: bytes,
@@ -117,10 +96,9 @@ func assistantRegistrations() []registration {
 	}}
 }
 
-// openAssistant builds the assistant estate's reader and writer over its
-// running domain, both over the fleet keyring: the writer seals what a person
-// says and is shown, and the reader opens it for them. A node whose assistant
-// domain did not come up is a boot failure naming the domain.
+// openAssistant builds the assistant estate's reader and writer over the
+// fleet keyring: the writer seals what a person says and is shown, the reader
+// opens it. A domain that did not come up is a boot failure.
 func (c *core) openAssistant(e *Engine, sl *stateLog) error {
 	running := sl.Domain(assistantdomain.Domain{}.Name())
 	if running == nil {
@@ -134,8 +112,7 @@ func (c *core) openAssistant(e *Engine, sl *stateLog) error {
 	opts := assistantdomain.ReaderOptions{
 		DB: sl.estate().Reader(), Log: running.reader, Sealer: sealer,
 	}
-	// A NIL RECORDER STAYS A NIL INTERFACE: one wrapped in it would be a
-	// recorder the reader calls into.
+	// A nil recorder stays a nil interface, not a typed nil the reader calls.
 	if e.metrics != nil {
 		opts.Metrics = e.metrics
 	}
@@ -171,25 +148,16 @@ func (e *Engine) AssistantWriter() *assistantdomain.Writer {
 	return nil
 }
 
-// assistantRetention is how long a conversation is kept after it was last
-// used, asked at every reaper pass: the `assistant.retention_days` of the
-// revision the fleet's activation pointer names, read on a node that runs that
-// very activation ([Engine.fleetCompany]), so an apply that changes it reaches
-// the next pass without a restart. Or an error saying why this node cannot
-// know it.
+// assistantRetention is how long a conversation is kept after its last use,
+// asked at every reaper pass: `assistant.retention_days` of the fleet's
+// activated revision, read only on a node running it ([Engine.fleetCompany]),
+// so an apply reaches the next pass without a restart; or why this node
+// cannot know it.
 //
-// THE FLEET'S REVISION, NEVER THIS NODE'S OWN. The purge is a record every
-// data node applies, and a purged conversation is gone for the person who
-// owned it. The revision a node serves is that node's alone (ADR-0057): a node
-// that refused the fleet's revision goes on serving the one before and boots
-// on it again, and a node booted on an offline import the fleet did not take
-// runs a document the fleet never activated. Read from either, the term may be
-// one the company has since lengthened, and every conversation between the two
-// terms would be purged for good. So the term is unknown there, and an unknown
-// term purges nothing of this source ([trashreap.Termed]): a purge the
-// company's term allows is made by the next pass that can read it, which is
-// late rather than wrong. A node that runs no company at all is no exception:
-// it reaps nothing for its age until it applies the fleet's revision.
+// Never this node's own revision (ADR-0057): a node that refused the fleet's,
+// or booted on an offline import, may hold a term the company has since
+// lengthened, and a purge is permanent on every data node. There the term is
+// unknown and purges nothing ([trashreap.Termed]): late rather than wrong.
 func (e *Engine) assistantRetention(ctx context.Context) (time.Duration, error) {
 	company, err := e.servedFleetRevision(ctx)
 	if err != nil {
@@ -198,9 +166,8 @@ func (e *Engine) assistantRetention(ctx context.Context) (time.Duration, error) 
 	return assistantRetentionOf(company), nil
 }
 
-// assistantRetentionOf is the retention a company's document states, with the
-// block's own default and bounds ([config.Assistant.Retention]); a company
-// built in code without a document states none, which is the default.
+// assistantRetentionOf is the retention a company's document states
+// ([config.Assistant.Retention]); a company built in code takes the default.
 func assistantRetentionOf(c *Company) time.Duration {
 	if c.Config == nil {
 		return config.Assistant{}.Retention()
@@ -208,24 +175,18 @@ func assistantRetentionOf(c *Company) time.Duration {
 	return c.Config.Assistant.Retention()
 }
 
-// ownerItem prefixes the reaper's id of a person whose conversations their
-// erasure takes, beside a conversation's own id. A conversation's id is a uuid
-// and never begins with it.
+// ownerItem prefixes the reaper's id for a person's erasure, beside a
+// conversation's id, a uuid that never begins with it.
 const ownerItem = "owner:"
 
 // assistantTrash is the assistant's retention and erasure as the trash reaper
-// reaches them: conversations untouched past their retention, and the
-// conversations of a person the identity estate has removed. The reaper is the
-// fleet singleton that already runs hourly with a lease, a report and derived
-// operation ids, so a retention purge and an erasure are decided by exactly
-// the machinery every other domain's trash is.
+// reaches them: conversations untouched past their retention, and those of a
+// person the identity estate removed, decided by the machinery every other
+// domain's trash is.
 //
-// ONE SOURCE FOR BOTH, so a pass that cannot read this source's term skips
-// its erasures with its purges ([Engine.assistantRetention]). The erasure is
-// not the reaper's to make first: every data node erases a removed person as
-// soon as its own identity applier reports the removal
-// ([Engine.runAssistantErasure]), and only an erasure every node failed to
-// make waits, with the purges, for a pass that can read the term.
+// One source for both, so a pass that cannot read the term skips its erasures
+// too. That is safe because the reaper only backs up
+// [Engine.runAssistantErasure], which every data node runs on the removal.
 type assistantTrash struct {
 	reader assistantRows
 	writer assistantPurges
@@ -260,9 +221,9 @@ func (a assistantTrash) Term(ctx context.Context) (time.Duration, error) {
 	return a.term(ctx)
 }
 
-// TrashedBefore nominates, first, every person the identity estate removed who
-// still owns a conversation here (their erasure), and then the conversations
-// untouched since before cutoff, the longest untouched first.
+// TrashedBefore nominates first every removed person who still owns a
+// conversation here, then the conversations untouched since before cutoff,
+// the longest untouched first.
 func (a assistantTrash) TrashedBefore(ctx context.Context, cutoff time.Time,
 	limit int) ([]string, error) {
 
@@ -328,9 +289,9 @@ func removedOwners(ctx context.Context, reader assistantRows,
 	return removed(ctx, ids)
 }
 
-// assistantSource is the assistant's source for the trash reaper on this node,
-// false where this node writes nothing: a mode that publishes nothing, or a
-// core runtime without the assistant's or the identity estate's sides.
+// assistantSource is the assistant's trash reaper source on this node, false
+// where it writes nothing: a mode that publishes nothing, or a core runtime
+// missing the assistant's or identity estate's sides.
 func (e *Engine) assistantSource() (assistantTrash, bool) {
 	c := e.core.Load()
 	if c == nil || !e.mode.Publishes() || c.assistantReader == nil ||
@@ -341,9 +302,9 @@ func (e *Engine) assistantSource() (assistantTrash, bool) {
 		term: e.assistantRetention, removed: c.iamReader.Removed}, true
 }
 
-// nudgeAssistantErasure tells this node's erasure loop that the identity
-// applier removed somebody. It never blocks: it runs on the identity apply
-// loop's own goroutine, and a signal already pending covers this one.
+// nudgeAssistantErasure tells the erasure loop the identity applier removed
+// somebody. It never blocks the apply loop it runs on; a pending signal
+// covers this one.
 func (e *Engine) nudgeAssistantErasure() {
 	select {
 	case e.assistantErasure <- struct{}{}:
@@ -352,15 +313,10 @@ func (e *Engine) nudgeAssistantErasure() {
 }
 
 // runAssistantErasure erases a removed person's conversations as soon as the
-// identity applier reports the removal, until ctx ends. ONE GOROUTINE, owned
-// by the core's run context.
-//
-// THE REAPER IS THE BACKSTOP, not this: a node that was down when the removal
-// applied, or one in a mode that publishes nothing, leaves the erasure to the
-// reaper's next pass that can read the assistant's term, which nominates the
-// same people ([assistantTrash]). Every data node hears the removal from its
-// own applier and asks; the erasure is arbitrated on the owner's subject, so
-// the first lands and the rest find it done.
+// identity applier reports the removal, until ctx ends; one goroutine, owned
+// by the core's run context. Every data node asks, and the owner's subject
+// arbitrates, so the first lands. A node down or not publishing leaves it to
+// the reaper's next pass ([assistantTrash]).
 func (e *Engine) runAssistantErasure(ctx context.Context) {
 	for {
 		select {

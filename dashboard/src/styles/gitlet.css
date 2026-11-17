@@ -263,8 +263,8 @@
   text-decoration: none;
 }
 
-/* THE TAB ROW'S NOTE: the head's lines added and removed, five squares told by
-   shape (filled added, hollow removed); the diff colours stay a diff's own. */
+/* THE TAB ROW'S NOTE: the head's lines added and removed in the diff family's
+   inks, five squares told by shape too (filled added, hollow removed). */
 .code-diffstat {
   display: inline-flex;
   align-items: center;
@@ -288,8 +288,34 @@
   border-radius: 2px;
 }
 
+.code-diffstat__added {
+  color: var(--color-diff-added-sign);
+}
+
+.code-diffstat__removed {
+  color: var(--color-diff-removed-sign);
+}
+
 .code-diffstat__squares > [data-kind="added"] {
-  background: currentColor;
+  border-color: var(--color-diff-added-mark);
+  background: var(--color-diff-added-mark);
+}
+
+.code-diffstat__squares > [data-kind="removed"] {
+  border-color: var(--color-diff-removed-mark);
+}
+
+/* Forced colours drop the fills; the filled square keeps its shape in the text colour. */
+@media (forced-colors: active) {
+  .code-diffstat__squares > [data-kind="added"] {
+    forced-color-adjust: none;
+    border-color: CanvasText;
+    background: CanvasText;
+  }
+
+  .code-diffstat__squares > [data-kind="removed"] {
+    border-color: GrayText;
+  }
 }
 
 /* MORE: where the change came from, then whom its records notified. */

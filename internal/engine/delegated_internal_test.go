@@ -64,10 +64,9 @@ func escalation(t *testing.T, store sandbox.PendingStore, turnID string) *sandbo
 }
 
 // A request no delegate answered goes to people once the company's deadline
-// passes, and not a moment before, whether the deadline is the engine's
-// default or one the document sets; the escalation is recorded as the
-// engine's, naming the server and the command it decided, which the access log
-// refuses a record without, and its sentence says the deadline it waited.
+// passes, not before, whether the deadline is the engine's default or the
+// document's; the escalation is recorded as the engine's, naming the server and
+// command (the access log refuses a record without), its sentence the deadline.
 //
 // Mutation: compare the deadline the wrong way round, or skip the sweep's
 // write, and a request waits on a silent delegate for ever; sweep by the

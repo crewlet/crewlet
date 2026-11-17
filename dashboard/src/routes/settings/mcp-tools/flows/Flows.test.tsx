@@ -3,7 +3,7 @@
  * back until the engine has said what it would meet.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
@@ -11,7 +11,8 @@ import { TestClient } from "~/test/client.tsx";
 import { afterMicrotasks } from "~/test/settle.ts";
 import type { McpCheckAnswer, McpServerAnswer } from "~/contract/mcp.ts";
 import { removeServer, restartServer, setEnabled, storeValue, testServer } from "../api.ts";
-import { LINEAR_DETAIL, mcpData } from "../fixtures.ts";
+import type { McpData } from "../data.ts";
+import { LINEAR_APPROVAL, LINEAR_DETAIL, mcpData } from "../fixtures.ts";
 import { FAILURE } from "../words.ts";
 import { useFlow } from "../parts.tsx";
 import { Flows } from "./Flows.tsx";
@@ -121,6 +122,11 @@ vi.mock("../api.ts", async (actual) => ({
       : new Promise(() => {}),
   ),
 }));
+// WHO MAY ANSWER a held call is the rule's own suite: an admin reads here.
+vi.mock("~/lib/useWriteAccess.ts", async (actual) => ({
+  ...(await actual<typeof import("~/lib/useWriteAccess.ts")>()),
+  useAnswerHold: () => undefined,
+}));
 vi.mock("~/protocol/configWrite.ts", async (actual) => ({
   ...(await actual<typeof import("~/protocol/configWrite.ts")>()),
   getEntity: vi.fn(async () => ({
@@ -130,19 +136,19 @@ vi.mock("~/protocol/configWrite.ts", async (actual) => ({
   })),
 }));
 
-function Host() {
+function Host({ data }: { data: McpData }) {
   const flow = useFlow();
-  return <Flows data={mcpData("admin")} name="linear" flow={flow} onRemoved={() => {}} />;
+  return <Flows data={data} name="linear" flow={flow} onRemoved={() => {}} />;
 }
 
-function mountAt(hash: string) {
+function mountAt(hash: string, data: McpData = mcpData("admin")) {
   location.hash = hash;
   render(
     <TestClient>
       <ToastProvider>
         <LayerHost>
           <Router>
-            <Host />
+            <Host data={data} />
           </Router>
         </LayerHost>
       </ToastProvider>
@@ -207,6 +213,20 @@ test("disabling a server writes it off", async () => {
     "Disabled the MCP server linear",
     expect.anything(),
   );
+});
+
+// A CALL WAITING IS SAID ONCE, by the dialog's title: its row carries no card
+// title saying "Waiting for your approval" again. Mutation: draw each call as
+// its titled card, and this is red.
+test("the waiting calls are rows under the dialog's title, not cards titled again", async () => {
+  mountAt(
+    "#/settings/mcp-tools?flow=approve&server=linear",
+    mcpData("admin", () => {}, { approvals: [LINEAR_APPROVAL] }),
+  );
+  await settle();
+  const dialog = screen.getByRole("dialog", { name: "A call is waiting" });
+  expect(within(dialog).getByRole("button", { name: "Deny" })).toBeDefined();
+  expect(within(dialog).queryByText(/waiting for your approval/i)).toBeNull();
 });
 
 // A RESTART NAMING AN AGENT restarts that agent's instance alone, as the

@@ -16,18 +16,14 @@ import (
 )
 
 // THE FREEZE FITS ITS BOUND, whatever the log admits: the largest read a head
-// can answer — the most turns it hands out and the most siblings it offers, each
-// a turn and an object, and a base whose every free-text field is at the log's
-// bound and escapes at JSON's worst — encodes within the sandbox's
-// ConversationBaseMaxBytes,
-// the share of the run's record the read is held to. And only what the brief
-// told is frozen: a turn its bound left out is neither absorbed nor offered,
-// and stays for the next read.
-//
-// HERE, WHERE THE TWO MEET: the bound is the sandbox's and the read's limits
-// are the executor log's, and the sandbox links no state log, so the read is
-// built as the log answers it and frozen as the engine's dispatch freezes it
-// ([executordomain.Head.Kept], conversation.go).
+// can answer (most turns handed out, most siblings offered, each with an
+// object, and a base whose every free-text field is at the log's bound and
+// escapes at JSON's worst) encodes within sandbox.ConversationBaseMaxBytes, its
+// share of the run's record. Only what the brief told is frozen: a turn its
+// bound left out is neither absorbed nor offered, and stays for the next read.
+// It lives here because the bound is the sandbox's, the limits the executor
+// log's, and the sandbox links no state log; the read is frozen as dispatch
+// freezes it ([executordomain.Head.Kept], conversation.go).
 //
 // Mutation: lower the bound below the largest read, or freeze what the brief
 // did not tell, and this goes red.

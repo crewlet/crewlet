@@ -14,64 +14,30 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
-// COMPANY KEYS: the secrets the engine mints for itself, once per company, and
-// every node then reads.
+// COMPANY KEYS: secrets the engine mints once per company and every node reads;
+// one exists, the identity estate's blind-index key. Blinds are compared across
+// nodes, so all must hold the SAME key, and a mismatch fails silently.
 //
-// One exists: the identity estate's blind-index key. It is the key a BLIND is
-// derived under, and a blind is compared across nodes — the directory's decide
-// compares an address by it — so every node has to hold the SAME key. A node computing under one it
-// minted and did not keep is computing values nobody else can match, and
-// nothing reports it, because a blind is opaque by construction.
+// Every mint is behind a guard ([Engine.companyKey] requires one): a missing
+// key may be a DELETED one, and only the caller's estate can tell.
 //
-// There were two. The org chart's was minted on demand for a keyed address
-// index nothing ever held, and it was the one mint with no guard against a
-// deleted key. It went with the unwired index it was for.
-//
-// # Every key is minted behind a guard
-//
-// A missing key is not always a key nobody minted: somebody may have deleted
-// one that every stored value was derived under, and minting another then
-// silently orphans all of them. Only the estate that derived values under a
-// key can say whether it ever did, so [Engine.companyKey] REQUIRES the caller's
-// guard rather than taking a nil for "mint whatever happens" — which is exactly
-// how the chart's key came to have none.
-//
-// # Why the mint is a create, and what the hold is still for
-//
-// The company's secret store is last-write-wins for a PUT. Two nodes that each
-// found the key absent each minted one, and each read its own back when the
-// other's write had not landed yet, so both went on computing under different
-// keys while the store held one of them. A fresh fleet booting every node at
-// once is exactly when that happens.
-//
-// The key is therefore written with a CREATE, which the store refuses over a
-// key that exists: whichever mint lands first is THE key, and every other
-// minter reads that one back. That is the whole of the correctness, and it is
-// the store's own — a lease cannot give it, because a holder paused past its
-// lease (a GC stop, a coordination write that hangs and then lands) writes
-// after a second holder has minted and read its key back, and a put then
-// splits the company exactly as it did with no hold at all.
-//
-// The fleet hold and the in-process gate stay, as the COURTESY they are: they
-// keep two nodes — and two goroutines of this process, since a hold claimed
-// again by the owner that holds it answers yes — from each running the mint's
-// guard and generating a key only one of them can keep.
+// The mint is a CREATE, refused over an existing key, so the first to land is
+// THE key and every minter reads it back. That alone is the correctness: a
+// lease cannot fence a write. The fleet hold, and the in-process gate (a hold
+// answers yes to its own holder again), only spare keys nobody keeps.
 
 // companyKeyHoldTTL bounds how long a node that died while minting keeps every
 // other node from minting.
 //
-// ONE SEAT HEARTBEAT (15 s at the shipped 45 s seat lease), the budget the node
-// already gives a handful of coordination writes: a mint is a read, a write and
-// a read back, so the TTL is a backstop for a dead holder rather than a
-// deadline for the work, and the hold is given back the moment the work ends.
+// ONE SEAT HEARTBEAT (15 s at the shipped 45 s lease): a mint is three
+// coordination round trips, so this backstops a dead holder rather than timing
+// the work, and the hold is released as soon as the work ends.
 const companyKeyHoldTTL = seat.SeatLeaseTTL / seat.HeartbeatRatio
 
 // companyKeyPoll is how often a node that found another minting looks again.
 //
-// A QUARTER OF A SECOND, because the holder's work is three coordination round
-// trips and a waiter is a request somebody is waiting on: polling slower would
-// add up to the interval to the first sign-in by address on a fresh fleet,
-// and faster would buy nothing but reads against a store that is mid-write.
+// A QUARTER OF A SECOND: the holder's work is three round trips and a waiter
+// is a request somebody waits on; faster buys only reads of a mid-write store.
 const companyKeyPoll = 250 * time.Millisecond
 
 // mintGate is the in-process half of the mint's exclusion. Its zero value is
@@ -94,11 +60,8 @@ func (g *mintGate) enter(ctx context.Context) (func(), error) {
 
 // companyKey reads a company key, minting it first if no node ever has.
 //
-// may is asked, under the hold, before a key is minted, and its error refuses
-// the mint: a missing key is not always a key nobody minted — somebody may have
-// deleted one that every stored blind was derived under — and only the caller
-// knows what its estate would say about that. It is REQUIRED; see the file's
-// header.
+// may is asked under the hold before a mint, and its error refuses it. It is
+// REQUIRED (the file's header).
 func (e *Engine) companyKey(ctx context.Context, name string, source secrets.Source,
 	may func(context.Context) error) (string, error) {
 
@@ -127,8 +90,7 @@ func (e *Engine) companyKey(ctx context.Context, name string, source secrets.Sou
 		}
 		release, held := func() {}, true
 		if hold != nil {
-			// NIL IS THE SINGLE-NODE ANSWER: no coordination store, so
-			// no peer to be kept apart from.
+			// Nil hold: single node, no peer to keep apart from.
 			release, held, err = hold(ctx)
 			if err != nil {
 				return "", fmt.Errorf("engine: claim the right to mint %s: %w",
@@ -140,8 +102,7 @@ func (e *Engine) companyKey(ctx context.Context, name string, source secrets.Sou
 			release()
 			return value, err
 		}
-		// A PEER IS MINTING IT. Its write is what this node will read
-		// next, so wait for that rather than minting a second one.
+		// A PEER IS MINTING: wait to read its write.
 		select {
 		case <-ctx.Done():
 			return "", fmt.Errorf("engine: wait for a peer to mint %s: %w",
@@ -167,18 +128,14 @@ func (e *Engine) mintKey(ctx context.Context, store *fleetsecrets.Estate, name s
 	if err != nil {
 		return "", fmt.Errorf("engine: mint %s: %w", name, err)
 	}
-	// A CREATE, which a key that landed first refuses — see the file's
-	// header — and whoever's landed is the one read back. THE NODE, AS THE
-	// ENGINE: nobody asked for this key — the first write that needed one
-	// did — so no credential made it either.
+	// A CREATE (the file's header). Authored by the node as the engine: no
+	// credential asked for this key.
 	if _, err = store.Create(ctx, name, secrets.EncodeKey(minted), secrets.Author{
 		Name: e.id, Kind: string(iam.ActorSystem),
 	}, source, time.Now().UTC()); err != nil {
 		return "", fmt.Errorf("engine: store %s: %w", name, err)
 	}
-	// READ BACK rather than returning what was minted: what every other
-	// node will read is the stored value, and a node that used anything
-	// else would be deriving blinds nobody can match.
+	// READ BACK, never the minted value: another node's may have landed.
 	value, err := presentKey(ctx, store, name)
 	if err == nil && value == "" {
 		err = fmt.Errorf("engine: %s was written and reads back empty", name)
@@ -211,9 +168,8 @@ func presentKey(ctx context.Context, store *fleetsecrets.Estate, name string) (
 // shared by every writer and sign-in on this node.
 //
 // CACHED ONCE RESOLVED, and only then: the key never changes while a company
-// runs (rotating it is a migration, see [iamdomain.BlindKeyName]), so a blinder
-// that was built is right for the life of the process, and a failure — a store
-// that could not be read, a peer still minting — is retried by the next caller
+// runs (rotating it is a migration, [iamdomain.BlindKeyName]), and a failure
+// is retried by the next caller
 // rather than remembered.
 type personBlinds struct {
 	mu   sync.Mutex
@@ -253,18 +209,12 @@ func (s personBlindSource) Blinder(ctx context.Context) (*iamdomain.Blinder, err
 // mayMintPersonBlindKey refuses to mint the identity estate's key over one
 // somebody deleted.
 //
-// A MISSING KEY ON AN ESTATE THAT HOLDS BLINDS IS A DELETION, never a fresh
-// company: no blind can be derived without a key, so one stored anywhere means
-// a key existed. Minting a new one then would orphan every address in the
-// directory — each sign-in by address matches nobody — and, worse, let a second
-// person take each of them, since the directory compares an address by its
-// blind and a new key derives a different one. So the remedy is the
-// operator's: restore the key.
-//
-// "NO BLIND HERE" IS AN ABSENCE, and the rows asked prove it only when their
-// own snapshot has APPLIED everything the log held when the question was asked
-// — see [iamdomain.CoversLog]. A node behind the log, or holding a record it
-// retained, may simply not have the blinded rows yet.
+// A MISSING KEY ON AN ESTATE THAT HOLDS BLINDS IS A DELETION (no blind exists
+// without a key): a new key would
+// orphan every address in the directory and let a second person claim each one
+// (a new key derives a different blind), so the remedy is restoring the key.
+// "No blind here" holds only when the rows' snapshot covers the log
+// ([iamdomain.CoversLog]); a node behind it may not have the rows yet.
 func (e *Engine) mayMintPersonBlindKey(ctx context.Context) error {
 	c := e.core.Load()
 	if c == nil || c.log == nil {
@@ -279,11 +229,9 @@ func (e *Engine) mayMintPersonBlindKey(ctx context.Context) error {
 // now — what an answer read from this node's rows afterwards is proved against
 // ([iamdomain.CoversLog]).
 //
-// THE END ONLY, and never a verdict of "caught up" beside it: whether the rows
-// hold the log is a fact about the SNAPSHOT that reads them, which says how
-// much it applied in the same transaction as the rows. A verdict formed here,
-// from the applier's checkpoint, is the one that moved past a record the node
-// retained and called the node current while that record's rows were missing.
+// THE END ONLY, never a "caught up" verdict: whether rows hold the log is a
+// fact about the snapshot reading them, not the applier's checkpoint, which
+// can pass a retained record whose rows are missing.
 func (e *Engine) IdentityLogEnd(ctx context.Context) (uint64, error) {
 	s, err := e.stateLogOf()
 	if err != nil {
@@ -304,10 +252,8 @@ func (e *Engine) IdentityLogEnd(ctx context.Context) (uint64, error) {
 // judgeBlindKeyMint is the mint decision over its two seams: the identity log's
 // end, and whether this node's rows — proved against it — hold a blind.
 //
-// SEPARATE FROM THE ENGINE so every arm is a case of its own. THE END IS READ
-// FIRST: rows asked afterwards can only have more of the log than the end they
-// are proved against, so a record landing between the two makes the answer
-// "cannot say" rather than letting a snapshot that missed it say "none".
+// THE END IS READ FIRST: rows read afterwards can only hold more of the log,
+// so a record landing between makes the answer "cannot say", never "none".
 func judgeBlindKeyMint(ctx context.Context, logEnd func(context.Context) (uint64, error),
 	holdsBlinds func(context.Context, uint64) (bool, error)) error {
 

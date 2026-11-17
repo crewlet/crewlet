@@ -14,21 +14,15 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
-// THE IDENTITY DUTIES ARE ARMED WHERE THEIR INPUTS ARE, and nowhere else.
+// THE IDENTITY DUTIES ARE ARMED WHERE THEIR INPUTS ARE, and nowhere else: a
+// duty with no loop behind it looks, from everywhere else, exactly like one
+// finding nothing to do. So:
 //
-// Each of the two had no loop behind it until it was armed here — a sweep
-// record nothing published, three indexes nobody read — and each of those
-// looked, from every other vantage point, exactly like a duty quietly finding
-// nothing to do. So the arming decision is held three ways:
-//
-//  1. A node running the identity domain arms both, at their stated
-//     intervals.
-//  2. A data node holding seats alone RUNS the domain, as every data node
-//     does, and arms nothing, for the reason the next one does.
-//  3. A data node serving ingress alone RUNS the domain and still arms
-//     nothing: every duty is a worker singleton its roles gate would refuse
-//     on every tick, and loops that never run reported as armed duties are
-//     exactly the look-alike this case exists to rule out.
+//  1. A node running the identity domain arms them, at their stated intervals.
+//  2. A data node holding seats alone RUNS the domain and arms nothing.
+//  3. A data node serving ingress alone RUNS the domain and arms nothing too:
+//     every duty is a worker singleton its roles gate refuses on every tick,
+//     and such loops reported as armed are the look-alike ruled out here.
 func TestTheIdentityDutiesAreArmedWhereTheirInputsAre(t *testing.T) {
 	t.Parallel()
 	storeDir := func(b *config.Bootstrap) {
@@ -67,16 +61,12 @@ func TestTheIdentityDutiesAreArmedWhereTheirInputsAre(t *testing.T) {
 	}
 }
 
-// EVERY IDENTITY DUTY IS A LEASE-CLAIMED FLEET SINGLETON.
-//
-// Each duty's claim is the node's own `worker:` lease on the duty's name, so a
-// fleet runs each pass on exactly one node per tick — the sweep publisher and
-// the probe above all, which write records and ask somebody else's identity
-// provider. A duty armed with no claim runs on EVERY node, and nothing else in
-// this package would notice: the pass still runs, the records it writes are
-// still accepted. So the case reads the coordination store after the first
-// tick, which every duty takes at arming: each armed duty's lease is held, by
-// this node.
+// EVERY IDENTITY DUTY IS A LEASE-CLAIMED FLEET SINGLETON: its claim is the
+// node's own `worker:` lease on the duty's name, so a fleet runs each pass on
+// one node per tick. A duty armed with no claim runs on EVERY node and nothing
+// else would notice (the pass runs, its records are accepted), so the case
+// reads the coordination store after the first tick, taken at arming: each
+// armed duty's lease is held by this node.
 func TestEveryIdentityDutyIsALeaseClaimedSingleton(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
@@ -107,14 +97,11 @@ func TestEveryIdentityDutyIsALeaseClaimedSingleton(t *testing.T) {
 	}
 }
 
-// THE DUTY ROSTER IS READ WHILE THE NODE STOPS, and never raced.
-//
-// `/health` serves [engine.Engine.IdentityDuties] from the socket's health
-// tick, which keeps running while a node is torn down under an open dashboard
-// — and the stop cleared the roster through a plain pointer that tick was
-// reading. The fleet suite's race detector caught it on a restart. Here a
-// reader loops over the roster while the node stops, which the detector
-// reports against a plain pointer, and a stopped node names no duties.
+// THE DUTY ROSTER IS READ WHILE THE NODE STOPS, and never raced: `/health`
+// serves [engine.Engine.IdentityDuties] from the socket's health tick, which
+// keeps running while a node is torn down under an open dashboard. Readers loop
+// over the roster while the node stops, which -race reports against a plain
+// pointer, and a stopped node names no duties.
 //
 // Mutation: store the roster in a plain pointer again and -race fails this.
 func TestTheDutyRosterIsReadableWhileTheNodeStops(t *testing.T) {

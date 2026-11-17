@@ -16,14 +16,10 @@ import (
 
 // THE CHAT APPLIER A RUNNING NODE BUILDS TELLS THE ATTACHED HUB WHAT IT WROTE.
 //
-// The chat applier says what each committed batch wrote; the hub pushes it to
-// the sockets each room admits. Between them is exactly this package — the
-// register that builds the applier, the hook it is handed and the setter the
-// hub is attached by — and a nil observer handed to the applier there compiles,
-// runs and passes every chat case, while every open room on every node goes
-// quiet. So the applier here is the REGISTER's, built with the hooks a running
-// node hands it, and the hub is attached AFTER the applier exists, which is the
-// order a running node attaches it in.
+// A nil observer handed to the applier in the register compiles and passes
+// every chat case while every open room on every node goes quiet. So the
+// applier here is the REGISTER's, built with a running node's hooks, and the
+// hub is attached AFTER it exists, the order a running node attaches it in.
 //
 // Mutation: hand the register's applier a nil observer, or drop chatApplied
 // from applyHooks, and the hub hears nothing.

@@ -19,24 +19,17 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A QUEUED CLOSE IS WRITTEN AS ITS ENQUEUER (M5-D27): the work item of a
-// change its queue landed is closed in the enqueuer's own name — a seat as
-// itself, a person as the human seat they hold with the credential they
-// enqueued through beside it, the inverse of builtin.CodeAskerOf — and never
-// in a name of the queue's: a principal bound to no seat closes nothing, and
-// an item on a vendor's tracker is refused before anything is read or
-// written, the engine holding no credential of the enqueuer's there. A SEAT'S
-// CLOSE IS WRITTEN FOR WHOM ITS ENQUEUE WAS MADE FOR (ADR-0109): the enqueuing
-// turn's write made late, so the close a seat's enqueue made for founder asks
-// is written for founder, as the turn's own writes state it, and one made for
-// nobody for nobody, the seat's own work. A person writes for nobody but
-// themselves, whatever their entry holds.
+// A QUEUED CLOSE IS WRITTEN AS ITS ENQUEUER (M5-D27), never in a name of the
+// queue's: a seat as itself, a person as their human seat with their
+// credential beside it; a principal bound to no seat closes nothing, and a
+// vendor's item is refused before anything is read or written. A seat's close
+// is written for whom its enqueue was made for (ADR-0109), for nobody where it
+// was made for nobody; a person writes for nobody but themselves.
 //
 // Mutation: write a person's close as an operator (or drop its credential) →
 // red; give an unbound credential a name of its own → red; close a vendor's
 // item through the engine's tracker → it reaches the nil engine, red; write
-// a seat's close for nobody whatever its enqueue was made for → the close
-// founder's enqueue asks is written for nobody, red.
+// a seat's close for nobody whatever its enqueue was made for → red.
 func TestAQueuedCloseIsWrittenAsItsEnqueuer(t *testing.T) {
 	t.Parallel()
 	founder := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}
@@ -93,13 +86,11 @@ func TestAQueuedCloseIsWrittenAsItsEnqueuer(t *testing.T) {
 	}
 }
 
-// A CLOSE WORKLET REFUSES FOR GOOD IS NOT ASKED AGAIN (M5-D27): a queued
-// change's close that Worklet answers with a refusal it MARKS as final — the
-// item gone, not the enqueuer's to write, its content or its state refusing
-// the close — is answered NotClosed, in the engine's own sentence naming the
-// item, so the queue settles it and tells the change's people once; a
-// failure of the node's own stays a plain error, which leaves the close owed
-// for the next turn.
+// A CLOSE WORKLET REFUSES FOR GOOD IS NOT ASKED AGAIN (M5-D27): a refusal
+// Worklet marks final — the item gone, not the enqueuer's to write, its
+// content or state refusing the close — is NotClosed in the engine's own
+// sentence naming the item, so the queue tells the change's people once; the
+// node's own failure stays a plain error, which leaves the close owed.
 //
 // Mutations: let a gone item through as the node's failure → it is asked
 // again every turn, red; let a refused write through → red; settle the
@@ -134,13 +125,10 @@ func TestACloseWorkletRefusesForGoodIsNotAskedAgain(t *testing.T) {
 	}
 }
 
-// closeRequesters composes the principals a queued close is decided for, as
-// the engine's turnRequesters does on the closing node: a seat or a person by
-// handle, a credential by "login:" and its login, any other handle as an
-// agent seat holding every app — save a handle in left, which the
-// organisation holds no seat for any more (errNoSuchSeat, the composer's
-// definitive answer), and one in unreadable, whose row the directory cannot
-// read now.
+// closeRequesters composes principals as turnRequesters does: held by handle
+// (a credential under "login:" and its login), any other handle as an agent
+// seat holding every app — save a handle in left, whose seat is gone
+// (errNoSuchSeat), and one in unreadable, whose row cannot be read now.
 type closeRequesters struct {
 	held       map[string]iam.Principal
 	left       []string
@@ -166,33 +154,17 @@ func (r closeRequesters) Credential(_ context.Context, login string) (iam.Princi
 }
 
 // A QUEUED CLOSE IS DECIDED WITHIN THE APPS OF WHOM ITS ENQUEUE WAS MADE FOR
-// (ADR-0109, M5-D27): swe queued a change in a turn somebody woke, and the
-// queue's close of its work item, that turn's write made late, is decided as
-// a call of the turn would be now — for swe, within what whom the enqueue was
-// made for may use, composed again on the closing node. Each close is decided
-// as the queue's close composes it, from the close the home hands over (the
-// entry's enqueuer and the carrier its row keeps), and a close made is made
-// as the very actor it was decided for: swe, written for whom the enqueue was
-// made for. Made for ada, who does not use Worklet, it is not closed, naming
-// her and the app; for the token whose write carried Worklet, closed, and for
-// the same token whose write carried Chatlet alone, not, the app named; for
-// cto, a colleague seat, closed; for nobody, decided for swe alone and
-// closed, as before the carrier; for omar, whose seat the organisation no
-// longer holds, not closed, naming him, so the queue settles it once rather
-// than ask it on every turn; for bea, whose row the directory cannot read
-// now, a plain error, which leaves the close owed for the next turn; and for
-// a stranger, who uses no app, not closed. A requester named by a kind this
-// build does not know is decided not at all: the close stays owed, its error
-// saying the fleet's builds differ, for a home of the build that knows the
-// kind.
+// (ADR-0109, M5-D27), composed again on the closing node from the close the
+// home hands over, and made as the very actor it was decided for. swe's close
+// made for ada, who lacks Worklet, or the token whose write carried Chatlet
+// alone: not closed, naming them and the app; for the token carrying Worklet,
+// cto or nobody (swe alone): closed; for omar, whose seat is gone: not closed,
+// settled once; for bea, unreadable now: a plain error, owed; for a stranger:
+// not closed; for a kind this build does not know: owed, the builds differ.
 //
-// Mutations: decide the close for the enqueuer alone — ada's is closed, red;
-// drop the entry's carrier where the close is composed from what the home
-// handed over — ada's is closed, red; write a close made for nobody whatever
-// it was decided for — the token's and cto's are made as swe's own work, red;
-// read omar's seat leaving as a read that failed — his close is asked on
-// every turn, red; settle the unknown kind not closed — this build decides a
-// close it cannot judge, red.
+// Mutations, each red: decide for the enqueuer alone or drop the carrier →
+// ada's closed; write every close for nobody → the token's and cto's are swe's
+// own; omar's leaving read as failed → asked every turn; unknown kind settled.
 func TestAQueuedCloseIsDecidedWithinTheAppsOfWhomItsEnqueueWasMadeFor(t *testing.T) {
 	t.Parallel()
 	chart := orgchart.Of(writtenChart(t))

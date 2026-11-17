@@ -8,14 +8,10 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// A REVISION ANOTHER NODE WROTE KEEPS ITS AUTHOR ON THIS ONE.
-//
-// A revision is stored first by the node that served the write, and every
-// other node meets it through the pointer. Those nodes recorded it as written
-// by `peer`, from `fleet`, at the instant it was activated — so one revision
-// had a different author on every node, and Settings › Audit, reading
-// whichever node served it, could not say an operator had written it. The
-// pointer carries the origin now, and the adoption stores what it carries.
+// A REVISION ANOTHER NODE WROTE KEEPS ITS AUTHOR ON THIS ONE: every node but
+// the writer meets it through the pointer, and adopts the origin the pointer
+// carries rather than `peer`, `fleet` and the activation instant, so Settings ›
+// Audit names one author whichever node serves it.
 func TestAnAdoptedRevisionKeepsItsAuthor(t *testing.T) {
 	t.Parallel()
 	p := newPlane(t)
@@ -47,9 +43,8 @@ func TestAnAdoptedRevisionKeepsItsAuthor(t *testing.T) {
 		t.Errorf("adopted with source %q at %s, want api at %s — how and when it was "+
 			"written, not when this node met it", got.Source, got.CreatedAt, written)
 	}
-	// And it was ACTIVATED when the pointer says, which is not when it was
-	// written: applied here, it is what this node boots on, at the instant
-	// it boots its chart with next time and its config history shows.
+	// ACTIVATED when the pointer says, not when written: applied here, it is
+	// the boot row, at the instant this node's config history shows.
 	if !got.Boots || !got.ActivatedAt.Equal(pinnedNow) {
 		t.Errorf("adopted boots=%v at %s, want the boot row at the pointer's %s",
 			got.Boots, got.ActivatedAt, pinnedNow)

@@ -19,19 +19,13 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
-// dutyTTLs is every TTL expression a duty claim site in this package passes,
-// keyed by its source text, with the LONGEST value that expression can take.
+// dutyTTLs is every TTL expression a duty claim site passes, keyed by its
+// source text, with the LONGEST value that expression can take.
 //
-// Two entries are bounds rather than constants, and each says whose check makes
-// the bound true: the scheduler's tick is refused at or above schedule.MaxTick,
-// and the waiter's interval is refused by Engine.waiterDuty once its duty would
-// exceed the ceiling. The waiter's bound therefore IS the ceiling, so it is
-// marked as not sizing it: counting it would make the ceiling justify itself.
-//
-// Every other entry is a plain CONSTANT, and its longest value is the constant
-// itself: the expression takes no argument, so there is nothing for it to
-// reach. Why each constant is the duration it is stays at its own definition
-// rather than being copied here, where the copy would be free to disagree.
+// Two entries are bounds: schedule.MaxTick refuses the scheduler's tick, and
+// Engine.waiterDuty refuses an interval past the ceiling. The waiter's bound
+// IS the ceiling, so it does not size it: that would make the ceiling justify
+// itself. Every other entry is a constant, whose reason stays at its definition.
 var dutyTTLs = map[string]struct {
 	longest time.Duration
 	// sizesCeiling is false for a bound derived from coord.MaxDutyTTL.
@@ -49,9 +43,8 @@ var dutyTTLs = map[string]struct {
 	"atlasCollectDutyTTL":  {atlasCollectDutyTTL, true},
 	"atlasWakeDutyTTL":     {atlasWakeDutyTTL, true},
 	"learningDutyTTL":      {learningDutyTTL, true},
-	// THE IDENTITY DUTIES' LEASE is three of a duty's interval, and the longest
-	// is the roster's (identityduties_internal_test.go): the one claim site
-	// passes the helper's parameter, which only the roster resolves.
+	// THE IDENTITY DUTIES' one claim site passes the helper's parameter, which
+	// only the roster resolves (identityduties_internal_test.go).
 	"identityDutyTTL(interval)": {longestIdentityDutyTTL(), true},
 	"setup.LeaseTTL":            {setup.LeaseTTL, true},
 	"companyKeyHoldTTL":         {companyKeyHoldTTL, true},
@@ -60,14 +53,10 @@ var dutyTTLs = map[string]struct {
 }
 
 // TestEveryDutyTTLFitsTheDutyCeiling ties coord.MaxDutyTTL to the duties that
-// justify it, in both directions.
-//
-// Every duty TTL must fit under the ceiling, because every backend refuses one
-// above it, and a refused duty never runs: that is exactly how the retention
-// sweep, the mailbox retirement, the integration reconcile and the skill
-// curator went unrun on every embedded-kv fleet, one warning per tick. And the
-// longest must EQUAL the ceiling, so the constant cannot drift above the duty
-// it is sized for (an unjustified ceiling) or stay put when that duty shrinks.
+// justify it, in both directions: every duty TTL fits under it, since every
+// backend refuses one above and a refused duty never runs; and the longest
+// EQUALS it, so the ceiling cannot drift above the duty it is sized for or
+// stay put when that duty shrinks.
 func TestEveryDutyTTLFitsTheDutyCeiling(t *testing.T) {
 	t.Parallel()
 	longest := time.Duration(0)
@@ -92,15 +81,12 @@ func TestEveryDutyTTLFitsTheDutyCeiling(t *testing.T) {
 	}
 }
 
-// TestEveryDutyClaimSiteIsInTheTTLTable is what keeps the table above honest:
-// a duty claimed anywhere with a TTL expression the table does not list fails
-// here, so a new duty cannot skip the ceiling check by not being written down.
-//
-// On the syntax tree rather than by grep, because a claim is a call and a
-// line-oriented scan cannot tell a call from a comment naming it. Two layers:
-// every duty in the engine goes through workerDuty or workerHold, and nothing
-// outside the two duty helpers calls the schedule package's claim functions
-// directly.
+// TestEveryDutyClaimSiteIsInTheTTLTable keeps dutyTTLs honest: a duty claimed
+// with a TTL expression the table does not list fails here, so a new duty
+// cannot skip the ceiling check by not being written down. Every duty goes
+// through workerDuty or workerHold, and nothing else calls the schedule
+// package's claim functions. On the syntax tree, since grep cannot tell a call
+// from a comment naming it.
 func TestEveryDutyClaimSiteIsInTheTTLTable(t *testing.T) {
 	t.Parallel()
 	claims := dutyClaims(t, sourcetree.Root(t))
@@ -117,8 +103,7 @@ func TestEveryDutyClaimSiteIsInTheTTLTable(t *testing.T) {
 				"with the longest value it can take", site.where, site.expr)
 		}
 	}
-	// A guard asserting an absence must assert it matched its subject: a
-	// renamed helper would otherwise leave this scanning nothing, green.
+	// A renamed helper would otherwise leave this scanning nothing, green.
 	for expr := range dutyTTLs {
 		if !slices.Contains(sites, expr) {
 			t.Errorf("dutyTTLs lists %q but no workerDuty or workerHold call passes it; "+
@@ -138,10 +123,9 @@ var (
 // dutyHelperFiles are the two files allowed to call claimFunctions.
 var dutyHelperFiles = []string{"internal/engine/duty.go", "internal/schedule/duty.go"}
 
-// dutySite is one call the duty gate judges: where it is, and what it names —
-// a helper's TTL expression, or the claim function called directly. A helper's
-// call also carries which helper it is and its duty-name expression, which the
-// duty-table gate (dutydocs_internal_test.go) resolves through dutyNames.
+// dutySite is one call the duty gate judges: a helper's TTL expression or the
+// claim function called directly. A helper's call also carries the helper and
+// its duty-name expression, which dutydocs_internal_test.go resolves.
 type dutySite struct {
 	where, expr string
 	helper      string
@@ -159,11 +143,9 @@ type dutyCalls struct {
 // dutyClaims reads every non-test Go file under root's internal/ and cmd/
 // for the calls the gate above judges.
 //
-// ONLY A FILE THAT NAMES ONE OF THE FUNCTIONS IS PARSED: each judged call
-// spells its callee, and an identifier has no escapes, so a file whose bytes
-// spell none of them holds no such call (sourcetree.Identifiers). Parsing all
-// of internal/ and cmd/ to find the two dozen that do was ten seconds under
-// the race detector.
+// ONLY A FILE THAT NAMES ONE OF THE FUNCTIONS IS PARSED: an identifier has no
+// escapes, so a file whose bytes spell none holds no such call
+// (sourcetree.Identifiers), and parsing every file is slow under race.
 func dutyClaims(t *testing.T, root string) dutyCalls {
 	t.Helper()
 	names := sourcetree.MustIdentifiers(append(slices.Clone(claimFunctions), dutyHelpers...)...)
@@ -204,10 +186,9 @@ func dutyClaims(t *testing.T, root string) dutyCalls {
 	return out
 }
 
-// THE DUTY GATE, ON A TREE WHOSE VERDICT IS KNOWN — through the same read,
-// prefilter and matcher. A helper's call and a direct claim are planted
-// outside the helpers' files, the same claim inside one, and a file that
-// does not parse and names no claim, which the gate must never open.
+// THE DUTY GATE, ON A TREE WHOSE VERDICT IS KNOWN: a helper's call and a
+// direct claim outside the helpers' files, a claim inside one, and an
+// unparsable file naming no claim, which the prefilter must never open.
 func TestTheDutyGateFindsEveryClaimInAPlantedTree(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

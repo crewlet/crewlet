@@ -14,15 +14,9 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// WHAT FOLLOWS AN APPLIED REVISION.
-//
-// A company is published by one gesture — a config apply, and the boot that
-// installs the first one — and everything derived from it is brought up to it
-// by ONE list of steps ([engine.Engine]'s followCompany). Every case here is
-// about that list being run on the apply as well as at boot: a step that ran
-// only at boot is a seat that exists in the org tree and nowhere else — not
-// addressable, no mailbox, on no dashboard — until the process restarts, which
-// is the shape that makes a cause impossible to find.
+// Every case here holds that the ONE list of steps a published company is
+// followed by ([engine.Engine]'s followCompany) runs on an apply as well as at
+// boot: a boot-only step leaves an added seat in the org tree and nowhere else.
 
 // orgCompanyDoc is a company with one unit, one seat in it and one at the
 // root.
@@ -53,13 +47,8 @@ var withCFO = strings.Replace(orgCompanyDoc, "units:\n",
 	"  - name: CFO\n    handle: cfo\n    llm: zulu\nunits:\n", 1)
 
 // AN APPLIED REVISION IS THE RUNNING ORG, in one apply: a seat it adds is
-// addressable, has a mailbox, and reaches every open dashboard.
-//
-// The party registry is derived from one org and answers for it permanently,
-// so a company with a new seat needs a new registry; a durable subscription IS
-// a seat's mailbox, and until something creates it every event published to
-// that seat is DROPPED rather than retained; and the dashboard's roster is
-// derived from the company, so only the published hook corrects it.
+// addressable, has a mailbox (until one exists every event to the seat is
+// DROPPED), and reaches every open dashboard through the published hook.
 //
 // Mutation: drop the mailbox step from the list the apply runs and the
 // mailbox half fails; drop the parties step and the registry half does.
@@ -85,9 +74,8 @@ func TestAnAppliedRevisionIsTheRunningOrg(t *testing.T) {
 	if got := published.Load(); got != 1 {
 		t.Errorf("one apply fired the company-published hook %d times, want once", got)
 	}
-	// THE BROKER'S OWN ANSWER rather than the node's set: what this is
-	// about is whether the subscription exists, and the set is this
-	// process's belief about that.
+	// The broker's answer, not the node's set, which is only this
+	// process's belief that the subscription exists.
 	deadline := time.Now().Add(20 * time.Second)
 	for !slices.Contains(mailboxHandles(t, e), "cfo") {
 		if time.Now().After(deadline) {
@@ -99,13 +87,8 @@ func TestAnAppliedRevisionIsTheRunningOrg(t *testing.T) {
 }
 
 // A SEAT'S TOOL CREDENTIALS ARE REPLACED BY AN APPLY, so changing one reaches
-// the seat's own children with no lease release and no restart.
-//
-// Which children a seat runs is the seat's `mcp_env` and its name. Nothing but
-// a LEASE ACQUISITION used to recompute them: the apply re-filed whatever the
-// bridge was already running, so a rotated credential took effect when the
-// process restarted or when the seat happened to move to another node — which
-// looks exactly like a vendor that will not accept the new key.
+// the seat's own children with no lease release and no restart; otherwise a
+// rotated key looks exactly like a vendor refusing it.
 func TestARotatedSeatCredentialReachesItsOwnChildren(t *testing.T) {
 	t.Parallel()
 	doc := mcpCompany(false, "SEAT_TOKEN")
@@ -120,8 +103,8 @@ func TestARotatedSeatCredentialReachesItsOwnChildren(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 
-	// THE SAME SEAT, STILL HELD, still on the same lease: the child is
-	// replaced and nothing else about the seat is.
+	// The same seat, still held on the same lease: only the child is
+	// replaced.
 	deadline := time.Now().Add(20 * time.Second)
 	for {
 		got := describes(t, e, "ceo", "tracker_probe")
@@ -138,27 +121,19 @@ func TestARotatedSeatCredentialReachesItsOwnChildren(t *testing.T) {
 		t.Error("the seat was released to pick up its own credential; the " +
 			"whole point is that it is not")
 	}
-	// AND THE PEER SEAT IS UNTOUCHED. Each seat has its own bridge because
-	// two children of one template publish the same tool names, and a
-	// retire-then-reconcile that reached across would stop a colleague's
-	// child while it was serving a turn.
+	// And the peer seat is untouched: each seat has its own bridge, since
+	// one template's children share tool names, and a reconcile reaching
+	// across would stop a colleague's child mid-turn.
 	if got := describes(t, e, "cto", "tracker_probe"); !strings.Contains(got, "cto-secret") {
 		t.Errorf("the CTO's child reports %q — the CEO's rotation reached it", got)
 	}
 }
 
 // mailboxHandles is every seat the broker holds an INBOX mailbox for, named
-// by the handle the running company gives it.
-//
-// THE PAIR IDENTIFIES ONE, never the subject alone: a consumer on a seat's
-// inbox subject under some other group belongs to somebody else. The control
-// subscription is deliberately not counted — a seat whose control
-// subscription exists is not a seat whose inbox does.
-//
-// The subject carries the seat's ID, so this resolves each one back through
-// the company. A mailbox whose seat the company no longer has is reported by
-// its id: that is genuinely all this node can say about it, and dropping it
-// would make a leaked mailbox invisible to the one assertion that looks.
+// by the handle the running company gives it. Subject and group together
+// identify one: a consumer on the subject under another group is somebody
+// else's, and the control subscription is not an inbox. A mailbox whose seat
+// the company no longer has is reported by id, so a leak stays visible.
 func mailboxHandles(t *testing.T, e *engine.Engine) []string {
 	t.Helper()
 	subs, err := e.Backends().Queue.ListSubscriptions(t.Context(),

@@ -20,9 +20,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// rowsOnly is a pending store holding the rows a case puts, answering Get and
-// RaiseCodeFloor as the coordination store's does — the two calls boxRuns
-// makes — and nothing else.
+// rowsOnly is a pending store answering Get and RaiseCodeFloor over the rows
+// a case puts, as the coordination store's does, and nothing else.
 type rowsOnly struct {
 	sandbox.PendingStore
 	rows map[string]sandbox.PendingRun
@@ -53,15 +52,12 @@ func codeAt(seq uint64) statelog.Position {
 	return statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: seq}
 }
 
-// A BOX'S RUN IS LIVE while its job is in its box: launching — its first
-// checkouts' clones can run before the launch returns — or running, with no
-// ending decided; never a row
-// parked on a question, answered, reseeded or resumed, whose box holds no job
-// that may push. Its grants map to Gitlet's, an access this build does
-// not know read as read and never more, and its pushes are stamped with the
-// row's turn, launch, work item — its id beside its tracker and key, what a
-// change its push opens carries it by (M4-decisions D34) — model and
-// harness.
+// A BOX'S RUN IS LIVE while its job is in its box: launching (its first
+// clones can run before the launch returns) or running, with no ending
+// decided; never a row parked, answered, reseeded or resumed, whose box holds
+// no job that may push. Its grants map to Gitlet's, an unknown access read as
+// read and never more, and its pushes are stamped with the row's turn, launch,
+// work item (its id too, M4-decisions D34), model and harness.
 //
 // Mutations: count awaiting_clarification live — its row admits a box — red;
 // leave the item's id off the stamp — red.
@@ -118,15 +114,12 @@ func TestBoxRunsJudgesLiveness(t *testing.T) {
 }
 
 // A SEAT'S STOP IS READ ONE WAY, BY THE SEAT'S ID: stoppedBy answers the
-// person whose pause asked the seat's running work to stop — what
-// Gitlet refuses a coding box's push by — "" for a seat not paused, for a pause
-// without stop_running and for a handle the running company holds no agent
-// seat for, and errPausesUnread on a node that has not read the pauses yet,
-// never "not stopped".
+// person whose pause asked the seat's running work to stop; "" for a seat not
+// paused, a pause without stop_running or a handle naming no agent seat; and
+// errPausesUnread on a node that has not read the pauses, never "not stopped".
 //
-// Mutations: answer "" before the watch's first answer — the unread node
-// reads not stopped — red; answer a pause without stop_running — the paused
-// seat reads stopped — red.
+// Mutations: answer "" before the watch's first answer, or answer a pause
+// without stop_running → red.
 func TestStoppedByIsWhoAskedTheSeatsWorkToStop(t *testing.T) {
 	t.Parallel()
 	unread, _ := engineOn(t)
@@ -162,23 +155,19 @@ func TestStoppedByIsWhoAskedTheSeatsWorkToStop(t *testing.T) {
 	}
 }
 
-// A SEAT'S STOP REACHES BOTH OF A DETACHED RUN'S EDGES ONE WAY:
-// Gitlet's view of the runs (codeBoxRuns, which it refuses a box's push by) and
-// the fence the session a launch opens on the tool bridge asks before and
-// after every bridged call (Engine.seatFence, mcpbridge.Session.Fence) read
-// ONE pause record the same way — the person who stopped the seat; nobody for
-// a seat not paused, for a pause that did not stop its running work and for a
-// seat resumed — so a box's pushes and its run's bridged calls are refused,
-// and let through again, together. A node that has not read the pauses is
-// Gitlet's alone to answer, as unknown: no turn runs there to ask the
-// fence, since the screening defers its delivery.
+// A SEAT'S STOP REACHES BOTH OF A DETACHED RUN'S EDGES ONE WAY: Gitlet's view
+// (codeBoxRuns) and the bridge session's fence (Engine.seatFence) read ONE
+// pause record the same way (the person who stopped the seat; nobody when not
+// paused, not stopping its running work, or resumed), so a box's pushes and
+// its run's bridged calls are refused, and let through again, together. An
+// unread node is Gitlet's alone to answer, as unknown (stoppedBy).
 //
-// Mutations: let Gitlet read StopRunning off anything but the pause
-// the fence reads — the stopped seat's pushes read not stopped — red.
+// Mutation: let Gitlet read StopRunning off anything but the fence's pause →
+// red.
 func TestTheEngineStopsOneWayForBoxAndBridge(t *testing.T) {
 	t.Parallel()
-	// The two edges as the engine builds them: what Gitlet is
-	// handed (gitlethost.go) and the fence LaunchExecutor gives the session.
+	// The two edges as the engine builds them: what Gitlet is handed
+	// (gitlethost.go) and the fence LaunchExecutor gives the session.
 	edges := func(t *testing.T, e *Engine) (box, bridge func(context.Context, string) (string, error)) {
 		t.Helper()
 		fence := e.seatFence("ceo")
@@ -236,14 +225,12 @@ func TestTheEngineStopsOneWayForBoxAndBridge(t *testing.T) {
 	agree(t, e, "a seat resumed", "", nil)
 }
 
-// A FLOOR THIS BUILD CANNOT READ IS NONE: a token that does not parse, or one
-// naming a position on another log, reads as the zero floor — which a box
-// reads past LINEARIZABLE, the safe direction — and the next raise writes a
-// readable one over it; a raise never lowers a floor, and never writes for
-// a superseded launch.
+// A FLOOR THIS BUILD CANNOT READ IS NONE: an unparseable token or another
+// log's position reads as the zero floor (LINEARIZABLE, the safe direction),
+// and the next raise writes a readable one over it; a raise never lowers a
+// floor, and never writes for a superseded launch.
 //
-// Mutation: answer a floor on another log as it reads — the box's session
-// read is refused for a foreign floor — red.
+// Mutation: answer a floor on another log as it reads → red.
 func TestBoxRunsReadsAnUnreadableFloorAsNone(t *testing.T) {
 	t.Parallel()
 	turn, launch := uuid.Must(uuid.NewV7()).String(), uuid.NewString()
@@ -282,16 +269,13 @@ func TestBoxRunsReadsAnUnreadableFloorAsNone(t *testing.T) {
 	}
 }
 
-// BOX RUNS HOLD ON THE ROW (M3-decisions M3-O61): a box's push holds the seat
-// branches it names on its run's row — joined to the row's code holds, the
-// set the run's turn's holds are written to and Gitlet's retention
-// reads — and the admission reads them back with the row, so a later push of
-// a branch the run holds asks nothing. A row that is gone, or whose ending is
-// decided, holds nothing new and is NO ERROR — a run that has ended depends on
-// nothing — and a row at its bound refuses the hold, nothing written.
+// BOX RUNS HOLD ON THE ROW (M3-decisions M3-O61): a box's push joins the seat
+// branches it names to its run's code holds, and the admission reads them back
+// with the row, so a later push of a held branch asks nothing. A row gone or
+// ended holds nothing new and is NO ERROR (an ended run depends on nothing);
+// a row at its bound refuses, nothing written.
 //
-// Mutation: answer AddCodeHolds' false (no live row) as an error → the gone
-// row's hold fails, red.
+// Mutation: answer AddCodeHolds' false (no live row) as an error → red.
 func TestBoxRunsHoldsOnTheRow(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
