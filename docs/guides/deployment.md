@@ -887,15 +887,46 @@ entire point of that distinction. The coordination KV rides this same
 connection on purpose — one connection, one fate. An outage that outlasts the
 lease TTL (45 s unless `coordination.lease_ttl_seconds` says otherwise) does
 hand this node's seats to a peer, and that is the intended behaviour rather
-than something a reconnect policy should paper over. Each attempt gets **2
-seconds** to connect, and 2 more for TLS and the NATS handshake, not the
-embedded member's listener budget: the loop tries the URLs in turn, and a
-member that silently drops packets holds every attempt at it for that long
-before a member that answers is asked, which is time the node spends not
-renewing its leases. A URL whose name resolves to several addresses — a
-headless Kubernetes service naming every pod of the cluster — shares those 2
-seconds among them, tried in a random order so a fleet's connections spread
-across the members, rather than taking 2 seconds for each.
+than something a reconnect policy should paper over. Each attempt gets **5
+seconds** to connect, and 5 more for TLS and the NATS handshake — a request's
+term, because the handshake's packets queue at the link's bottleneck like any
+request's, and a bottleneck the engine supports may hold four seconds of the
+link's rate; at the 2 seconds an attempt was once given, a node whose
+connection dropped behind a deep queue could not dial again while other
+traffic kept it deep. It is not the embedded member's listener budget either:
+the loop tries the URLs in turn, and a member that silently drops packets
+holds every attempt at it for that long before a member that answers is
+asked (a member that takes the connection and then never answers holds it
+for the handshake's 5 seconds instead, and one slow at both for up to 10),
+which is time the node spends not renewing its leases. A pool of three with
+two members down ahead of the live one reaches it 10 seconds after the drop,
+and up to 20 where both take the connection and hang, where the 2-second
+terms took 4 and 8. At the default 45-second lease that is far inside the
+TTL. At the floor, a 15-second lease renewed every 5 seconds, a drop just
+before a renewal leaves 10 seconds of the TTL, which two dead members ahead
+of the live one use up, and the node's seats are handed to a peer: a fleet
+at the floor lease on an external cluster keeps its `stream.url` to members
+that are up, or its lease above the floor. A URL whose name resolves to
+several addresses — a headless Kubernetes service naming every pod of the
+cluster — shares those 5 seconds among them, tried in a random order so a
+fleet's connections spread across the members, rather than taking 5 seconds
+for each.
+
+**The servers must wait as long for a node's CONNECT.** A NATS server cuts a
+connection whose CONNECT has not arrived within its authorization timeout,
+2 seconds by default, counted from when it took the connection; the CONNECT
+crosses the link after the server's INFO has crossed the other way, so
+behind a deep queue it arrives later than that, and a node whose connection
+dropped there is cut before it can authenticate, every time. Set
+`authorization { timeout: 5 }` in every server's configuration.
+
+**Nothing on the way may terminate TCP.** The node reads its own sockets to
+tell a link that is still carrying a large message from one that carries
+nothing — what it read, and what the server's kernel acknowledged — so a
+proxy that buffers between the node and the servers, a service mesh's
+sidecar among them, acknowledges for the servers and hides which one it is.
+Exclude the servers' client port from mesh capture, as a
+[satellite's leaf link](satellite-nodes.md#what-a-satellite-still-needs) does.
 
 **A connection the client gives up on is a node restart.** Reconnecting for
 ever covers a server that goes away and comes back. It does not cover the

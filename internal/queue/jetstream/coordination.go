@@ -46,7 +46,8 @@ type Coordination struct {
 // meets it as its next request failing, which is the right place.
 func OpenCoordination(ctx context.Context, cfg Config) (*Coordination, error) {
 	if cfg.URL != "" {
-		conn, err := dial(cfg, watched{})
+		// A COMMAND'S DIAL, which is no node's data link: unmetered.
+		conn, err := dial(cfg, watched{}, nil)
 		if err != nil {
 			return nil, fmt.Errorf("connect nats: %w", err)
 		}

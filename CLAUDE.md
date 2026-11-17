@@ -4,7 +4,7 @@ Crewlet is a Go engine for orchestrating hierarchically organized AI agent compa
 
 ## Where to Look
 - The docs are the source of truth for how the system should work. `docs/index.md` lists every page and is the docs site's navigation; before changing a subsystem, read its concept page under `docs/concepts/` (`overview.md` is the vision, design principles and architecture; `docs/getting-started/quickstart.md` the first run).
-- **`internal/README.md` maps every package** — what it is for, and the decisions it holds that a reader would be tempted to "fix" back to the obvious shape. Before you change a package, read its row there and its package doc (`go doc ./internal/<pkg>`), which is the authority. Change the code, the comment and the row together, and give a new package a row.
+- **`internal/README.md` maps every package**, one line each: what it is for. A package's decisions live in its package doc (`go doc ./internal/<pkg>`), the authority: read it before you change the package, and record a decision there, never in the map. Until a package's row is folded into its doc (#1474), read the row too: it may still hold decisions the doc lacks. A row may not grow (`internal/commentgate`), and a new package gets a one-line row.
 - `adr/` holds decision records, for a decision that binds more than one package (one inside a package stays in its doc). Each names an Authority it may not restate and an Enforced-by (a test, a compile error or `nothing`); `internal/adr` checks both ways.
 
 ## This Is a Public Open-Source Repository
@@ -80,7 +80,7 @@ A `v*` tag is the only compatibility boundary: a surface no tag has shipped has 
 - **IDs are `uuid.UUID`**, timestamps `time.Time` in UTC, durations `time.Duration`; a config field holding seconds is named `…Seconds` and converted once, at the edge
 - **Enums are a named string type** with typed constants and a `Valid()` method, so an unknown value off the wire is a value rather than a panic
 - **Concurrency**: a goroutine's lifetime belongs to whoever started it, and every one has a way to stop. Channels for handoff, a mutex for state; `sync.OnceValue` over a `sync.Once` plus a variable. Everything runs under `-race`
-- **Comments explain WHY**, and especially why the obvious alternative is wrong. A package's rationale goes in its package doc, where `go doc` will find it
+- **Comments explain WHY, briefly**: the decision, and why the obvious alternative is wrong, in the fewest lines that keep a reader from undoing it — every reader of the code pays for every line beside it, every time. A comment block outside a package doc stays within 12 lines. The argument behind it is written once, in the package doc, where `go doc` will find it (or in an ADR when it binds more than one package), and the comment points there; history stays in the commit, the pull request and the issue, and a rule is stated where it is decided, not again where it applies. `internal/commentgate` holds the bound, with an inventory of older code that only shrinks
 
 ## Tech Stack
 - **Go 1.27+**, pure Go: the module pins its own toolchain (`GOTOOLCHAIN=auto` fetches it), and `CGO_ENABLED=0` builds every release target. **The standard library first** (`net/http`, `log/slog`, `context`, `encoding/json`): a dependency has to earn its place against what `std` already does.

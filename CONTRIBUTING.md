@@ -88,9 +88,9 @@ naming the variable. ci.yml's `git recipe (macOS)` job runs `make
 test-gitproc` — gitproc's own suite on the three pins — on macOS for every pull
 request, so the recipe's macOS branch is built where a Mac contributor builds
 it; on Linux `make test` runs the same packages. Its `harness capture (macOS)`
-job runs `make test-capture` there the same way: internal/flock's pin cases and
-the cases of a harness's output capture, which rest on darwin calls no Linux job
-makes.
+job runs `make test-capture` there the same way: internal/flock's pin cases,
+the cases of a harness's output capture and internal/sockcount's suite, which
+rest on darwin calls no Linux job makes.
 
 **What fetching Chromium takes** — `curl`, `unzip` and the same SHA-256 tool,
 `zip` for `make chromium-test` (the recipe's own suite, in `make check`), and on
@@ -1120,8 +1120,13 @@ deletes nothing itself.
   goes in key/value pairs, and a message is a name rather than a sentence.
 - **Errors say what to do about it.** An error a person will read names the
   field, the file or the variable they have to change — not just what failed.
-- **Comments explain WHY**, and especially why an obvious alternative is
-  wrong. The diff shows what the code does.
+- **Comments explain WHY, briefly**: the decision, and why an obvious
+  alternative is wrong, within 12 lines outside a package doc. The argument
+  behind it is written once, in the package doc (or an ADR when it binds
+  more than one package), and the comment points there. The diff shows what
+  the code does, and the history stays in the commit, the pull request and
+  the issue. `internal/commentgate` holds the bound, with an inventory of
+  older code that only shrinks.
 - **A field holding words somebody else wrote is declared on the field**, as a
   credential's `secret:"true"` is: a read type tags it `untrusted:"fence"`
   (words at length: a body, a comment, a message, an excerpt) or
