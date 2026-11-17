@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -111,7 +112,10 @@ func (r *coordRig) abandoned() bool {
 // the pass runs, and what it refuses is carried: a re-fire, a held completion's
 // backstop and an owed answer by the pass when it is done, and a delivery by the
 // queue, handed back as the node's failure. A claim the gate let through before
-// the pass began is the attempt's, which the reap refuses to touch.
+// the pass began is the attempt's, which the reap refuses to touch: for as long
+// as that attempt is out, and for its own run alone, so a claim whose attempt
+// has returned, and a dead claim beside a live one, are still tails the pass
+// reaps.
 //
 // Each case orders the claim inside the pass with a store that holds the pass's
 // fence until the claim settled and a claim that won until the pass has read
@@ -126,7 +130,10 @@ func (r *coordRig) abandoned() bool {
 // answer or a held completion's backstop to nothing, and neither is carried;
 // hand a refused delivery back as the message's, and it counts toward its
 // poison; let the reap end a claim this node's own attempt holds, and a claim
-// let through before the pass is reaped under its turn.
+// let through before the pass is reaped under its turn; never count an attempt
+// off, and the claim of one that returned is reaped by no later pass; count
+// attempts by the seat rather than the run, and a dead claim beside a live one
+// is never reaped.
 func TestASeatsRecoveryAndTheClaimsOfItsRunsExcludeEachOther(t *testing.T) {
 	t.Parallel()
 
@@ -458,6 +465,99 @@ func TestASeatsRecoveryAndTheClaimsOfItsRunsExcludeEachOther(t *testing.T) {
 			t.Fatalf("the turn resumed %d times (%+v); want it carried once, by the attempt", len(calls), calls)
 		}
 	})
+
+	t.Run("a claim whose attempt has returned is reaped by the seat's next pass", func(t *testing.T) {
+		t.Parallel()
+		live := t.Context()
+		rig := newCoordRig(t)
+		rig.launch("t1")
+		rig.coordinator.countRun("swe", StatusRunning)
+		rig.runner.Finish(Result{Success: true, Text: "fixed the flake"})
+		// THE CLAIM LANDS AND THE STORE'S ANSWER IS LOST: the attempt returns
+		// with the run claimed and nothing of this node's working on it.
+		rig.coordinator.pending = &claimLandsUnanswered{PendingStore: rig.coordinator.pending}
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(live, payload, ev); !errors.Is(err, ErrStoreSilent) {
+			t.Fatalf("the premise: the claim whose answer was lost = %v; want the store's silence", err)
+		}
+		if got := rig.get("t1"); got.Status != StatusResumed {
+			t.Fatalf("the premise: the run is %q; want the claim that landed", got.Status)
+		}
+		// THE SEAT LET GO OF AND TAKEN AGAIN by this node, under a newer lease.
+		rig.coordinator.ReleaseSeat("swe")
+		if err := rig.recoverSeatOn(live, rigLease.Owner, rigLease.Epoch+1, rigInbox); err != nil {
+			t.Fatalf("recovering the seat: %v", err)
+		}
+		if !rig.gone("t1") || !rig.endedWith("t1", types.ExecutorFailureAbandoned) {
+			t.Fatalf("the pass left a claim whose attempt had returned (failures %+v); want it reaped as the "+
+				"abandoned tail it is", rig.failures())
+		}
+	})
+
+	t.Run("a dead claim beside this node's live one is reaped", func(t *testing.T) {
+		t.Parallel()
+		live := t.Context()
+		rig := newCoordRig(t)
+		rig.launch("t1")
+		rig.launch("t2")
+		rig.coordinator.countRun("swe", StatusRunning)
+		rig.coordinator.countRun("swe", StatusRunning)
+		rig.runner.Finish(Result{Success: true, Text: "fixed the flake"})
+		// t2's CLAIM IS ONE NO ATTEMPT HOLDS: taken, and its attempt gone.
+		if _, won, err := rig.pending.ClaimForResume(live, "t2", CompletionTail(rig.get("t2").LaunchID),
+			rigLease); err != nil || !won {
+			t.Fatalf("the premise: claiming t2 = %v, %v", won, err)
+		}
+		// t1's IS A DELIVERY'S, which holds its turn before it begins while a
+		// pass of the seat runs on this node.
+		begin, release := make(chan struct{}), make(chan struct{})
+		var beginOnce sync.Once
+		rig.resumer.beforeBegin = func(context.Context) {
+			beginOnce.Do(func() { close(begin) })
+			<-release
+		}
+		payload, ev := rig.completion("t1")
+		resumed := make(chan error, 1)
+		go func() { resumed <- rig.coordinator.OnCompleted(live, payload, ev) }()
+		<-begin
+		if err := rig.recoverSeat(live, rigLease.Owner, rigLease.Epoch); err != nil {
+			t.Fatalf("recovering the seat: %v", err)
+		}
+		if !rig.gone("t2") || !rig.endedWith("t2", types.ExecutorFailureAbandoned) {
+			t.Fatalf("the pass left t2's dead claim beside t1's live one (failures %+v); want it reaped",
+				rig.failures())
+		}
+		if got := rig.get("t1"); got.Status != StatusResumed || rig.endedWith("t1", types.ExecutorFailureAbandoned) {
+			t.Fatalf("the pass reaped t1's live claim (run %q, failures %+v); want it left to its attempt",
+				got.Status, rig.failures())
+		}
+		close(release)
+		if err := <-resumed; err != nil {
+			t.Fatalf("the attempt the pass left alone: %v", err)
+		}
+		rig.coordinator.inflight.Wait()
+		if calls := rig.resumer.calls(); len(calls) != 1 || !calls[0].Success {
+			t.Fatalf("t1's turn resumed %d times (%+v); want it carried once, by its attempt", len(calls), calls)
+		}
+	})
+}
+
+// claimLandsUnanswered is a run store that lets the first claim of a job it is
+// asked land and then answers it as a store that did not answer: the claim is
+// on the row, and the attempt that made it holds nothing of it. It answers
+// every other call as the store beneath it does.
+type claimLandsUnanswered struct {
+	PendingStore
+	lost atomic.Bool
+}
+
+func (s *claimLandsUnanswered) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
+) (PendingRun, bool, error) {
+	run, won, err := s.PendingStore.ClaimForResume(ctx, turnID, tail, fence)
+	if err != nil || !won || !s.lost.CompareAndSwap(false, true) {
+		return run, won, err
+	}
+	return PendingRun{}, false, fmt.Errorf("sandbox: claim run %s: %w", turnID, errStoreUnanswered)
 }
 
 // answeredOnReread is a run store that records a person's answer to a run once

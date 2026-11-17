@@ -1501,10 +1501,17 @@ func recovered(f func()) {
 // its run behind it, the run counted where the write was recorded from until
 // the seat moved; a release left recorded refused the job's completion, and
 // left it counted as the claim, for as long; and a claim's count left up never
-// let an owed release be made again.
+// let an owed release be made again. AND SO IS A CLAIM'S COUNT AS THIS NODE'S
+// LIVE ATTEMPT ON ITS RUN, which keeps every recovery pass of the seat off the
+// run while it stands, and the seat's recovery gate a pass closes, which
+// refuses every claim of the seat's runs while it stands (recoverygate.go):
+// left up, a claim whose store call panicked kept the run from every later
+// pass, and a pass whose store call panicked refused its seat's claims, until
+// the process restarted.
 //
-// Mutation: drop any one write's settle on its way out, the release's or the
-// claims' count's; its case leaves it out.
+// Mutation: drop any one write's settle on its way out, the release's, the
+// claims' count's, the live attempt's or the recovery gate's; its case leaves it
+// out.
 func TestAWriteWhoseStoreCallPanicsLeavesNothingOutOnItsRun(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1611,6 +1618,7 @@ func TestAWriteWhoseStoreCallPanicsLeavesNothingOutOnItsRun(t *testing.T) {
 			rig.coordinator.mu.Lock()
 			out, release, claiming := rig.coordinator.writing["t1"], rig.coordinator.releases["t1"],
 				rig.coordinator.claiming["t1"]
+			live, gate := rig.coordinator.live["t1"], rig.coordinator.recovering["swe"]
 			rig.coordinator.mu.Unlock()
 			if out != nil {
 				t.Errorf("a write is left out on t1 (%d of them), holding every later move on it", len(out.out))
@@ -1621,6 +1629,13 @@ func TestAWriteWhoseStoreCallPanicsLeavesNothingOutOnItsRun(t *testing.T) {
 			if claiming != 0 {
 				t.Errorf("%d claims of t1's job are left counted as on their way, holding its release back",
 					claiming)
+			}
+			if live != nil {
+				t.Errorf("%d claims of t1 are left counted as this node's live attempt, keeping every later "+
+					"recovery pass of its seat off it", live.n)
+			}
+			if gate != nil {
+				t.Error("the seat's recovery gate is left closed, refusing every later claim of its runs")
 			}
 		})
 	}
