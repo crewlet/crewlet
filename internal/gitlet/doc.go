@@ -625,13 +625,15 @@
 // entry, where an index of the push
 // rows serving that one-day question would have kept an entry of some forty
 // bytes for every seat's push for its 181 days, about 1.8 GB at 250 000
-// pushes a day. That is one of THREE INDEXES THE PUSH ROWS ARE NOT GIVEN,
+// pushes a day. That is one of FOUR INDEXES THE PUSH ROWS ARE NOT GIVEN,
 // each an entry every push would keep on every data node for its 181 days
 // to answer a question the one index the rows have already answers: that
 // one; a second index of the rows in log order beside the repository's,
 // where the one was reordered instead (replicated 0084; a second would have
 // added about a quarter to the 395.3 bytes a push's row weighed then,
-// measured, # Measured); and an index
+// measured, # Measured); an index of each pusher's pushes, where a history
+// narrowed to one pusher scans the repository's pushes newest first and skips
+// the days its pusher's counts hold none of ([PushFilter]); and an index
 // of each executor's pushes, where a collected run's report scans its
 // repositories' pushes since its launch ([ReadRunPushes], below) — some 40
 // to 100 bytes a push each, 1.8 to 4.5 GB each at 250 000 pushes a day. Its
@@ -805,6 +807,12 @@
 // company's configuration ([CommitterOptions.Current]), decides none of its
 // pushes and hands them to the repository's next committer.
 //
+// A PUSH A RULE REFUSES WHOLE, one git received every command of which is
+// refused, one by a rule on who may move which ref ([Attempted]), is recorded
+// as an attempt that moves nothing and names no pack, so the push history says
+// who tried, with how many commits it offered since [OfferedVersion]; any other
+// push left with no ok command writes nothing.
+//
 // # Reads are held to who asks
 //
 // Every read a principal makes names its ASKER ([ReadQuery.Asker], refused
@@ -924,6 +932,10 @@
 // reader of the index's first shape — the listing, the history horizon, a
 // purge part and its count — reads the reordered one, so it is one index,
 // not two.
+//
+// A history NARROWED to a pusher or a window ([PushFilter]) reads the same index newest
+// first, [MaxPushesScanned] pushes a page at most, skipping and stopping by instants with
+// [PushInstantSkew] for a margin: at most about 140 ms a page (BenchmarkANarrowedPushHistory).
 //
 // A read of a repository's CONTENT is a Gitlet node's (internal/gitlet/query), and
 // this package holds only what both ends of one import: its wire — [GitQuery]

@@ -10,6 +10,14 @@ import (
 // the bytes a reader is actually handed rather than another encoder's.
 var EncodeAnswer = encodeAnswer
 
+// SearchPageHits and SearchContextPageHits are what a page of code_search
+// asks the search for, without and with context, for the cases that hold a
+// call to them.
+const (
+	SearchPageHits        = searchPageHits
+	SearchContextPageHits = searchContextPageHits
+)
+
 // CodeStatusJudges is how many grant reads one code_status call runs at once,
 // for the cases that hold a call to it.
 const CodeStatusJudges = codeStatusJudges

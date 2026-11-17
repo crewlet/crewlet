@@ -135,6 +135,8 @@ var notRefArgs = map[string]string{
 	"mode":               "how a search's text is read",
 	"ignore_case":        "how a search's text is read",
 	"limit":              "a page's size",
+	"context":            "how many lines around a search's hit it answers",
+	"per_file":           "how many of a file's lines a search answers",
 	"status":             "a repository status filter, or the state a check is reported in",
 	"branches_prefix":    "a listing's prefix: it reads every ref under it and depends on none",
 	"branches_cursor":    "a listing's place",

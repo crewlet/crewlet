@@ -50,10 +50,13 @@ type Proposal struct {
 	// refused carry ResultNG and their reason, the rest no result yet.
 	Commands []Command `json:"commands"`
 	// Pack is the bundle the push stored, nil when it carried no objects.
-	Pack            *PackRef  `json:"pack,omitempty"`
-	Introduced      []string  `json:"introduced,omitempty"`
-	IntroducedCount int       `json:"introduced_count,omitempty"`
-	ReceivedAt      time.Time `json:"received_at"`
+	Pack            *PackRef `json:"pack,omitempty"`
+	Introduced      []string `json:"introduced,omitempty"`
+	IntroducedCount int      `json:"introduced_count,omitempty"`
+	// Offered is an attempt's count of the commits its refused commands offered, made by its
+	// receiver ([PushEntry.Offered]); 0 on every other proposal.
+	Offered    int       `json:"offered,omitempty"`
+	ReceivedAt time.Time `json:"received_at"`
 	// Seen is the code log's position the receiving node checked the push
 	// against — its linearizable sync before receive-pack ran, the state the
 	// client's commands were formed from and the thin pack's bases were read
@@ -119,9 +122,10 @@ type Proposal struct {
 
 // ProposeResult is what became of one proposal.
 type ProposeResult struct {
-	// Outcome is applied, pending or unknown for a push in a record, and
-	// empty for one answered with no record of its own: every command noop
-	// or ng, or a refusal of the whole push. A push answered from the row an
+	// Outcome is applied, pending or unknown for a push in a record, an
+	// attempt's among them ([Attempted]), and empty for one answered with no
+	// record of its own: every command noop or ng and no attempt, or a
+	// refusal of the whole push. A push answered from the row an
 	// earlier record applied it as is applied, and its Answer says
 	// Collapsed.
 	Outcome statelog.Outcome `json:"outcome,omitempty"`
@@ -546,6 +550,27 @@ func (p Proposal) validFields() error {
 			return fmt.Errorf("%w: introduced[%d]: %q is not an object id", ErrInvalidProposal, i, oid)
 		}
 	}
+	return p.validOffered()
+}
+
+// validOffered holds a count of the commits offered to an attempt's proposal: a push git received
+// that its receiver refused whole, by a rule, storing and opening nothing.
+func (p Proposal) validOffered() error {
+	switch {
+	case p.Offered < 0:
+		return fmt.Errorf("%w: offered: %d is no count of commits", ErrInvalidProposal, p.Offered)
+	case p.Offered == 0:
+		return nil
+	case p.Via != ViaGit:
+		return fmt.Errorf("%w: offered: only a push git received is an attempt", ErrInvalidProposal)
+	case !Attempted(p.Commands):
+		return fmt.Errorf("%w: offered: only a push its receiver refused whole, by a rule, carries the "+
+			"commits it offered", ErrInvalidProposal)
+	case p.Pack != nil || len(p.Introduced) > 0 || p.IntroducedCount > 0:
+		return fmt.Errorf("%w: offered: an attempt stores and introduces nothing", ErrInvalidProposal)
+	case p.Change != nil:
+		return fmt.Errorf("%w: offered: an attempt opens no change", ErrInvalidProposal)
+	}
 	return nil
 }
 
@@ -669,7 +694,7 @@ func (p Proposal) entryWith(cmds []Command, day string) PushEntry {
 	e := PushEntry{
 		PushID: p.PushID, Principal: p.Principal, Via: p.Via, Node: p.Node, Atomic: p.Atomic,
 		Commands: stored, Pack: p.Pack, Introduced: p.Introduced,
-		IntroducedCount: p.IntroducedCount, ReceivedAt: p.ReceivedAt,
+		IntroducedCount: p.IntroducedCount, Offered: p.Offered, ReceivedAt: p.ReceivedAt,
 	}
 	if p.Principal.Kind == PrincipalAgent {
 		e.Day, e.WorkingFor = day, p.WrittenFor.Carrier()

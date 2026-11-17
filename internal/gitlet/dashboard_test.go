@@ -374,6 +374,28 @@ func TestTheDashboardCountsEveryPusherKind(t *testing.T) {
 	}
 }
 
+// THE DASHBOARD NARROWS A LISTING OF REPOSITORIES TO EACH KIND THE ENGINE KNOWS: Gitlet ›
+// Repositories offers `REPO_KINDS` (`contract/code.ts`) as its listing's `kind`.
+// Mutation: drop a kind from either side, or reorder the dashboard's, and this fails.
+func TestTheDashboardKnowsEveryKindOfRepository(t *testing.T) {
+	t.Parallel()
+	got, want := theDashboardsList(t, "REPO_KINDS"), spelledOut(gitlet.RepoKinds())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's REPO_KINDS is %v, want the engine's, in order: %v", got, want)
+	}
+}
+
+// THE DASHBOARD SORTS A LISTING OF REPOSITORIES AS THE ENGINE DOES: Gitlet › Repositories asks
+// its listing's `sort` from `REPO_SORTS` (`contract/code.ts`).
+// Mutation: drop an order from either side, or reorder the dashboard's, and this fails.
+func TestTheDashboardSortsRepositoriesAsTheEngineDoes(t *testing.T) {
+	t.Parallel()
+	got, want := theDashboardsList(t, "REPO_SORTS"), spelledOut(gitlet.RepoSorts())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's REPO_SORTS is %v, want the engine's, in order: %v", got, want)
+	}
+}
+
 // THE DASHBOARD RAISES FINDINGS IN THE ENGINE'S WORDS: the weights and the
 // subjects a change page's finding composer offers, which its review sends
 // back as code_review_change's `severity` and `category`, in the engine's

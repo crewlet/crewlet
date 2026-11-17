@@ -1406,6 +1406,33 @@ func registeredStatements() map[string]statement {
 			[]string{"SCAN json_each AS j", pushDaysKey + " (repo_id=? AND day>=? AND day<?)"}},
 		"pusher days of": {pusherDaysOfSQL, []any{"repo-1", 0, 86400000000},
 			[]string{pusherDaysKey + " (repo_id=? AND day>=? AND day<?)"}},
+		// A PUSH HISTORY NARROWED AND ITS CHANGES (pushfilter.go, pushmerged.go): a pusher's days, a push at or below a
+		// place, a window and a stretch weighed from the index alone, a window's rows, and the changes pushes merged.
+		"a pusher's days": {pusherGroupsSQL, []any{"repo-1", "agent", "dev", 0, int64(math.MaxInt64)},
+			[]string{"COVERING INDEX " + pushDaysKey + " (repo_id=? AND day>=? AND day<?)",
+				pusherDaysKey + " (repo_id=? AND day=? AND pusher_kind=? AND pusher=?)"}},
+		"a jump's next pushes": {jumpNearSQL, []any{"repo-1", 100, 0, narrowWindowRows},
+			[]string{"COVERING INDEX code_pushes_repo_idx (repo_id=? AND position<?)"}},
+		"a push at or below": {pushAtOrBelowSQL, []any{"repo-1", 100},
+			[]string{"COVERING INDEX code_pushes_repo_idx (repo_id=? AND position<=?)"}},
+		"a narrowed window weighed": {narrowWeighSQL, []any{"repo-1", 100, "p", narrowWindowRows, 0},
+			[]string{"COVERING INDEX code_pushes_repo_idx (repo_id=? AND position<=?)"}},
+		"a narrowed window's weights": {narrowWeightsSQL, []any{"repo-1", 100, "p", narrowWindowRows},
+			[]string{"COVERING INDEX code_pushes_repo_idx (repo_id=? AND position<=?)"}},
+		"a narrowed window's last": {narrowLastSQL, []any{"repo-1", 100, "p", narrowWindowRows - 1},
+			[]string{"COVERING INDEX code_pushes_repo_idx (repo_id=? AND position<=?)"}},
+		"a narrowed stretch weighed": {narrowSpanSQL, []any{"repo-1", 100, "p", 10, ""},
+			[]string{"COVERING INDEX code_pushes_repo_idx (repo_id=? AND position>=? AND position<=?)"}},
+		"narrowed to a window": {narrowedWindowSQL, []any{"repo-1", 100, "p", 10, "", 0, int64(math.MaxInt64)},
+			[]string{"code_pushes_repo_idx (repo_id=? AND position<=? AND position>=?)"}},
+		"narrowed to a seat or a person": {narrowedPartySQL, append([]any{"repo-1", 100, "p", 10, "", 0,
+			int64(math.MaxInt64), "agent", "dev"}, viaSlots(PusherAgent)...),
+			[]string{"code_pushes_repo_idx (repo_id=? AND position<=? AND position>=?)"}},
+		"narrowed to Gitlet's": {narrowedGitletSQL, append([]any{"repo-1", 100, "p", 10, "", 0,
+			int64(math.MaxInt64)}, viaSlots(PusherGitlet)...),
+			[]string{"code_pushes_repo_idx (repo_id=? AND position<=? AND position>=?)"}},
+		"the changes pushes merged": {pushMergedSQL, []any{"repo-1", `["` + oid("m") + `"]`},
+			[]string{"SCAN json_each AS j", commitMergedKey + " (repo_id=? AND merge_oid=?)"}},
 		// ONE PERSON'S CODE INBOX (inboxread.go, marks.go): a range of their
 		// notices newest first, every filter bound — under `unread` its lower
 		// bound the seen-through position — and the notices an unread mark

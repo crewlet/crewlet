@@ -429,7 +429,9 @@ func newSweepRig(t *testing.T) *sweepRig {
 	host := sweepGitletHost(t, words)
 	codeWire := writeDeps(host, sweepCodeWrites(words))
 	codeWire.Searcher = &codeSearches{answer: func(int, codesearch.Query) (codesearch.Answer, error) {
-		return codesearch.Answer{Hits: []codesearch.Hit{searchHit(host.detail.Name, "a.txt", 1, words)}}, nil
+		hit := searchHit(host.detail.Name, "a.txt", 2, words)
+		hit.Before, hit.After = []string{words}, []string{words}
+		return codesearch.Answer{Hits: []codesearch.Hit{hit}}, nil
 	}}
 	codeWire.Logs = &checkLogs{text: words}
 	codeWire.Placement = purgePlacement{}

@@ -61,7 +61,8 @@ var suiteAt = time.Unix(1_700_000_000, 0).UTC()
 // an enqueue's own, and a seat's push entry's own; or a revise on its change's
 // subject carrying one of gitlet.OwnedPathsVersion's fields alone. A new op's
 // row is a record of it: founder's viewed marks on their own subject, and a
-// repository's viewed key on its own.
+// repository's viewed key on its own. And the seat's push as an attempt, its
+// one command refused by a protection, carrying the one commit it offered.
 func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 	const repo = "0190f3c4-0000-7000-8000-00000000c0de"
 	founder := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}
@@ -128,6 +129,10 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 	case "RecordEnvelope.Op viewed_key":
 		op, payload = gitlet.OpViewedKey, gitlet.ViewedKeyRecord{RepoID: repo,
 			Key: gitlet.ViewedKey(strings.Repeat("ab", gitlet.ViewedKeyBytes))}
+	case "PushEntry.Offered":
+		entry.Commands[0].Result, entry.Commands[0].Reason = gitlet.ResultNG, gitlet.RefusalProtectedDirect
+		entry.Via, entry.Offered = gitlet.ViaGit, 1
+		op, payload = gitlet.OpPush, gitlet.PushBatch{RepoID: repo, Pushes: []gitlet.PushEntry{entry}}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}

@@ -125,6 +125,10 @@ could, so owning `deploy/**` lets no seat push there that could not before
 
 ### Or make one in the dashboard
 
+**Gitlet › Repositories** lists the most recently pushed first, with each
+repository's open changes, its default branch's checks and two weeks of
+pushes; Projects and Scratch narrow it.
+
 A project the document does not declare is made in the dashboard too: **New
 repository** on **Gitlet › Repositories** (`code_create_repo`) takes its name,
 the unit that owns it and, where you say them, a description, a default
@@ -135,15 +139,18 @@ address to clone it from and the two commands that push a repository you
 already have into it. Its **Code** tab lists each entry with the commit that
 last changed it; press `t`, or **Go to file**, to find a file by name. Pick a
 branch or a tag from the button before the files; **Find a branch** matches
-any part of a name. Its README and its LICENSE are tabs under the files.
+any part of a name. Its README and its LICENSE are tabs under the files. A file
+opens beside the repository's tree. Press a line's number to pick it, Shift to
+pick a run, and **…** to copy the lines or a link to them.
 Beside the files, the repository's rail says who owns it and how it is read,
 lists its open changes, who pushed to it over the last 30 days and how many
 pushes landed each day, where it is mirrored and its newest tag. From then on
 the repository's page writes it from the browser, each write one commit or one
 ref moved, as you:
 
-- **Code**, on a branch: **Edit** a text file of up to 256 KiB (the README's
-  pencil too), **Delete file**, or **New file** in a directory
+- **Code**, on a branch: **Edit** a text file of up to 256 KiB (its pencil, the
+  README's too), **Delete file** (under a file's **More**), or **New file** in a
+  directory (or the plus at the head of a file's tree)
   (`code_commit_files`), each at the
   commit the page read, so a push made since is refused rather than written
   over;
@@ -377,8 +384,9 @@ it means](../concepts/gitlet.md#what-git-prints-and-what-it-means).
 `/git/{name}/-/archive.zip` serves it.
 
 Anybody who may fetch a repository may download one file of a commit, or the
-whole commit as a ZIP, without git: from the dashboard, signed in, once its
-code screens offer the buttons, or from a script with a token. Name the commit
+whole commit as a ZIP, without git: from the dashboard, signed in, from a
+file's **Raw** and **Download** or **Code** › **Download ZIP**, or from a
+script with a token. Name the commit
 by its whole id:
 
 ```sh
@@ -1274,8 +1282,9 @@ push](../concepts/gitlet.md#a-seats-push)):
 - **A seat outside the owning unit fills at most half** of the repository's
   refs and half its bytes, so the owners always keep room to push
   (`repo_refs`, `repo_size`).
-- **A seat lands at most `code.limits.pushes_per_seat_day` pushes a day**
-  ([The daily quota](#the-daily-quota), `push_quota`).
+- **A seat makes at most `code.limits.pushes_per_seat_day` pushes a day**,
+  a push a rule refused whole among them ([The daily quota](#the-daily-quota),
+  `push_quota`).
 - **A data node behind the company's configuration decides no seat's push**:
   the revision it failed to apply may be the one that took the seat's grant
   away, so the repository's next committer decides it.
@@ -1357,10 +1366,11 @@ repositories](#declare-repositories)).
 
 ### The daily quota
 
-A seat lands at most `code.limits.pushes_per_seat_day` pushes a day on the
+A seat makes at most `code.limits.pushes_per_seat_day` pushes a day on the
 company's [calendar](../getting-started/configuration.md#the-companys-clock),
-every repository together and every push it lands — built by its tools or sent
-from its coding box: 1 000 unless set, about thirty-three times the thirty
+every repository together and every push it lands, built by its tools or sent
+from its coding box, as well as every push a rule refused whole, which is
+recorded as an attempt: 1 000 unless set, about thirty-three times the thirty
 pushes a seat of the reference company makes a day. It is a bound on a seat
 pushing in a loop, not a budget, and your pushes are never counted:
 
@@ -1373,7 +1383,9 @@ code:
 Past it, a push is refused whole as `push_quota`, its sentence naming when the
 count starts again — the company's next midnight — and **nothing records it**:
 a record of every refusal of a runaway seat would cost the code log what the
-quota exists to bound, so a refused push is not in the push history. A seat
+quota exists to bound, so a refused push is not in the push history. An
+attempt past the day is told its own rule, not `push_quota`, and is not
+recorded either. A seat
 that meets it is pushing in a loop: read what its turns are doing before you
 raise the bound. Its git work is already done by then — the pack it built is
 stored, named by nothing, and deleted by the object collector a day later.

@@ -403,6 +403,11 @@ type PushRow struct {
 	Node     string        `json:"node,omitempty"`
 	Atomic   bool          `json:"atomic,omitempty"`
 	Commands []Command     `json:"commands"`
+	// Change is the change this push's own record merged on a branch one of its commands set: a merge's or a
+	// queue landing's, or else the lowest-numbered a push merged; ChangesMore counts the others. Answered on
+	// a push history's rows ([Reader.pushes]); nil where its record merged none.
+	Change      *ChangeName `json:"change,omitempty"`
+	ChangesMore int         `json:"changes_more,omitempty"`
 	// Omitted is the commands a row read IN BRIEF ([ReadQuery.Brief]) leaves
 	// out of Commands, counted by what became of each — so Commands and
 	// Omitted together are every command the push carried, and a reader says
@@ -414,7 +419,10 @@ type PushRow struct {
 	PackBytes       int64         `json:"pack_bytes,omitempty"`
 	Introduced      []string      `json:"introduced,omitempty"`
 	IntroducedCount int           `json:"introduced_count,omitempty"`
-	ReceivedAt      time.Time     `json:"received_at"`
+	// Offered is an attempt's commits offered ([PushEntry.Offered]); absent on every other row, on an
+	// attempt that offered none or was not counted, and on rows recorded before [OfferedVersion].
+	Offered    int       `json:"offered,omitempty"`
+	ReceivedAt time.Time `json:"received_at"`
 }
 
 // CommandCounts is commands of a push counted by what became of each, in the
@@ -1292,6 +1300,9 @@ type ReadQuery struct {
 	// versionedFields row. The domain landed on main with it
 	// ([RecordVersion]).
 	Push string `json:"push,omitempty"`
+	// PushFilter narrows a push history to one pusher's pushes and a window of their instants ([PushFilter]);
+	// refused on every other kind and beside Push. A request field, so an older build refuses it unread.
+	PushFilter *PushFilter `json:"push_filter,omitempty"`
 	// Commit is the commit a `commit` read names the changes of, its whole
 	// id; refused on every other kind. A field only that kind reads, which a
 	// build that predates the kind refuses whole ([ReadKinds]).
@@ -1604,7 +1615,9 @@ type ReadQuery struct {
 	// as a listing of changes — and the engine's own two reads of pushes in
 	// log order, introduced and run_pushes, 1..MaxSnapshotItems (0 = the
 	// most) — run_pushes' the pushes of its run's repositories a page READS,
-	// whatever few of them name the run; checks 1..200 (0 = 50), the rows a
+	// whatever few of them name the run; a push history narrowed by PushFilter, the
+	// pushes a page KEEPS, reading at most MaxPushesScanned pushes and MaxPageBytes
+	// of their rows; checks 1..200 (0 = 50), the rows a
 	// page READS, as a listing of changes; checks_queued 1..MaxSnapshotItems
 	// (0 = the most), the attempts a runner's claim walk reads a page; a page
 	// of a duty listing —
@@ -1631,6 +1644,8 @@ type ReadAnswer struct {
 	// executor's pushes, oldest first — each repository the run was given
 	// in its query's order, and each one's pushes in log order.
 	Pushes []PushRow `json:"pushes,omitempty"`
+	// PushScan is on every page of a narrowed push history ([ReadQuery.PushFilter]), and nil on every other.
+	PushScan *PushScan `json:"push_scan,omitempty"`
 	// PushDays is the repository's pushes on each of the asker's days, oldest first, zeros included:
 	// answered on a push history asked with [ReadQuery.DayBounds], whatever the page holds.
 	PushDays []int64  `json:"push_days,omitempty"`

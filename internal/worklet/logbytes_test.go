@@ -888,6 +888,8 @@ var codeLogFields = map[gitlet.OpKind]struct {
 				"seat's direct push — each its command's place and whether it lands green; the measured " +
 				"push, a coding box's moving its branch on, moves none. The queue's history it makes is " +
 				"swept with an idle repository's queue (codeLogNegligible)",
+			"pushes.offered": "an attempt's count of the commits it offered (gitlet.PushEntry.Offered), " +
+				"and the measured push lands",
 		},
 	},
 	gitlet.OpCompact: {

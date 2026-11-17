@@ -3462,7 +3462,8 @@ a repository's recent activity and who pushes to it without walking its push
 history:
 
 - every push row is counted on its UTC day, by the quarter-hour its record
-  landed in, the ref lifecycle's expiries too, as the push history lists them;
+  landed in, the ref lifecycle's expiries too, and a push a rule refused whole
+  (an attempt), as the push history lists them;
 - who pushed is counted per UTC day: a seat by its handle, a person by the
   human seat they hold whichever credential they pushed with, and Gitlet for a
   merge, a merge queue's landing, an import and a pull mirror's sync, never the
@@ -3484,6 +3485,55 @@ history:
 They are asked with `day_bounds` beside `repo_facts=true` on a listing of
 repositories or one repository's detail, or on a push history
 (`GET /gitlet/repos/{name}/pushes`); see [the code
+reads](../reference/api-endpoints.md#the-code-reads).
+
+### Narrowing a push history
+
+A repository's push history can be narrowed to one pusher, to a window of
+time, or to both:
+
+- a pusher is named as its pushes are counted ([Counting
+  pushes](#counting-pushes)): a seat by its handle, a person by the human seat
+  they hold whichever credential they pushed with, or Gitlet, whose pushes are
+  merges, merge queue landings, imports and pull mirror syncs. A seat's merges
+  are Gitlet's, and the ref lifecycle's expiries are nobody's;
+- a window runs from `since` (inclusive) to `until` (exclusive), judged on each
+  push's own instant;
+- the narrowed history stays in the order its pushes landed.
+
+No index of who pushed is kept. One would cost every push about a hundred
+bytes on every data node for its 181 days (some 4.5 GB at 250 000 pushes a
+day), and one of people's pushes alone as much for each of theirs. So a
+narrowed read scans the history newest first, at most 5 000 pushes and
+4 MiB of their rows a page, and answers the pushes it keeps up to its limit.
+A page can hold fewer, or none, beside a cursor, and `push_scan` says how far
+back it has looked.
+
+Narrowed to a pusher, the read takes the repository's counts of who pushed on
+each UTC day: it skips the days the pusher did not push on, leaves a day once
+it has met that day's pushes, and ends once it has met them all. Narrowed to a
+window, it skips what was pushed after the window and stops past its start.
+
+Skipping and stopping rest on the clocks. A record's instant can stand before
+the instant of a record that landed earlier, when the stream's leader changes;
+the engine assumes it stands at most two hours before, two broker members each
+assumed within an hour of the fleet's clock (the `clock_skew` alarm watches
+only the member leading the position register, and an external NATS cluster's
+servers are the operator's to keep, see [Deployment § Every machine's
+clock](../guides/deployment.md#every-machines-clock)). So a narrowed read reads
+two hours past each end of a day or window it skips to or stops at, and a push
+stamped further out of order can be left out of a narrowed page, while the
+unnarrowed history lists it.
+
+`day_bounds` beside a pusher is refused, since the days count every pusher's
+pushes; beside a window, every bound lies inside it.
+
+Each push also names the change its own record merged on a branch it set
+("Gitlet merged web!41 into main"): a merge's, a merge queue landing's, or one
+a push merged by setting the change's target to its head, with how many more
+it merged. A change the repository's home Gitlet node found merged after a
+push moved its target past the change's head is named on no push, since no row
+keeps which push did it. See [the code
 reads](../reference/api-endpoints.md#the-code-reads).
 
 ### Deletion and purge
@@ -5173,7 +5223,8 @@ token is the guard's `401`, as any credential it does not know is.
 **What is recorded.** A box's push is no `operator_acted` event — no person
 acted — and its push row is its record: the seat as an agent, the run that
 made it (its turn, its launch, its work item, its model and its harness),
-received over git. A refused one is its `code_box_refused` or `code_push` line.
+received over git. A refused one is its `code_box_refused` or `code_push` line,
+and one a rule refused whole is an attempt on the push history too.
 Those rows are also how the seat learns what its run delivered here: when the
 run is collected, the engine reads the pushes made under its launch to the
 repositories it was given — one linearizable read a run, its later pages at
@@ -5441,7 +5492,9 @@ every such push to, whichever way it came.
   **unrecorded**: nothing of it is decided and no record carries it, because a
   refusal recorded for every push of a runaway seat would cost the log the
   record a push the quota exists to bound. Its sentence names the instant the
-  count starts again, the company's next midnight. A person's pushes are never
+  count starts again, the company's next midnight. A push a rule refused whole
+  ([an attempt](#a-push-end-to-end)) counts too, and one past the bound is
+  told its rule and not recorded. A person's pushes are never
   counted. A push the quota refuses has already stored its pack; nothing names
   it, and the [object collector](object-store.md#collection-and-audit) deletes
   it a day later — the quota bounds what a seat costs the log, not its git
@@ -6111,6 +6164,15 @@ the files' paths and then of their lines: at most 500 of them, each line cut
 to its first 256 bytes, with the file's path, the line's number and the id of
 the file's object.
 
+Each line also names where the expression matched in the text answered, at
+most 32 matches. Asked, a search answers up to three lines of the file on
+each side of each line, a line two near lines share answered once; a search
+asking them answers at most 100 lines. Asked to answer at most so many lines
+of one file, it answers how many lines of each file matched. Through git grep
+the lines around are read from the file once git grep is done, under the
+read's own time rather than the search's five seconds, so a search those
+seconds cut still answers its lines with the lines around them.
+
 - **Through the index**, where the node keeps the repository's code index
   (`codeindex`, [The cache on a Gitlet node](#the-cache-on-a-gitlet-node)) and it
   answers for the commit searched: the files of the commit the index's
@@ -6248,7 +6310,9 @@ sequenceDiagram
 - **Exact.** Each node keeps the first lines of its repositories by
   repository name, path and line, at most the search's limit, and the asker
   keeps the first of all of them, so the answer is the same whichever node
-  answers first, and a limit cuts the first lines of the whole search. A
+  answers first, and a limit cuts the first lines of the whole search. Each
+  line keeps the matches, the lines around it and the file's total its node
+  answered. A
   repository whose search stopped early — its answer full, or its five
   seconds spent — answered its first lines up to its last, so the asker keeps
   no line of any repository past that last: every line of the search before
@@ -6269,6 +6333,11 @@ sequenceDiagram
   repositories named before the next one, that one cannot reach the answer
   and is not read — a search for a common word reads the repositories that
   fill its limit rather than every repository in the company.
+- **A newer protocol only where it is needed.** A search asking context lines
+  or a per-file bound is asked at a newer protocol of the request, which a
+  Gitlet node of an earlier build does not answer, so its repositories are
+  asked of the next node of their order and, if none answers, named under
+  `not_answering`; any other search is answered by every build.
 
 Every answer carries its **coverage**, so a search that could not reach part
 of the company never reads as one that found nothing there. Each repository
@@ -8171,9 +8240,11 @@ options together to 1 MiB before receive-pack reads either, and refuses a
 push past it — far past the 33 KiB a change's options take at their longest.
 
 **Checked before it is stored.** A push naming more than 1 000 refs, a credential
-bound to no seat, an archived or deleted repository, a deletion or a direct
-push a protection refuses — each is refused before receive-pack runs, and
-nothing is stored. A forced update of a ref a protection keeps from forcing,
+bound to no seat, and an archived or deleted repository are each refused
+before receive-pack runs, and nothing is stored. A deletion or a direct push a
+protection refuses is refused too, and nothing of it is stored, but it is
+received in its scratch so its commits can be counted and it can be recorded
+(below). A forced update of a ref a protection keeps from forcing,
 and a blob larger than `code.limits.max_blob_bytes`, are known only once the
 objects are, so the hook checks them — and refuses the push before uploading
 anything. A ref keeps the first refusal it meets: a force-push of a protected
@@ -8201,6 +8272,22 @@ engine, which the repository does not already hold, is refused
 pack are read before its upload begins, never beside it.
 Only a push that passes every check is uploaded, as **one** object: its pack
 with the indexes the receiving git wrote.
+
+**A push a rule refuses is recorded.** A push git received every ref of which
+is refused, one at least by a protection, the grant, the default branch, a
+moved tag or a reserved ref, is an *attempt*: it is recorded moving nothing,
+with no pack and no commit introduced, so the push history says who tried
+what. A stale push, one too large, and one the repository's state or the fleet
+refuses are not recorded, and neither is a write the engine refuses, which its
+tool call answers. A seat's attempt counts against its day's pushes, and a seat
+past its day is told the rule and nothing is recorded. Its pusher is told the
+rule whatever becomes of the record: one no data node takes is a logged line.
+The commits it offered that the repository lacks are counted in the scratch it
+was received in, by the listing every landed push takes, and recorded as its
+`offered`; a listing that fails leaves the attempt recorded with no count. The
+count is kept only by data nodes of a build that reads it: one of an earlier
+build holds back each record that carries one
+([Which records an upgrade holds back](../guides/replication.md#which-records-an-upgrade-holds-back)).
 
 **A clock that is behind.** git walks a repository's commits newest first by
 date wherever it has no generation number to stop on, so a commit dated before
@@ -9203,7 +9290,7 @@ words, since git does not read the header.
 | The push was recorded and every node dropped it | `(not_applied: the push was durable at <position> and applied nowhere; re-run git push)` | Run the push again; nothing landed ([what a refusal names](#a-push-end-to-end)). |
 | The repository is taking pushes faster than its committer commits them | `(busy: <n> pushes are queued for this repository on this node, the most it holds)`, or the same of the bytes queued for it or held across the node's repositories; `(busy: the push's asker stops waiting in <t>, and a batch started now may take 30s and its answer 1s more; run git push again)`, or `(busy: the push waited <t> behind this repository's earlier pushes on this node, …)`; or `(busy: the repository kept changing for every round the write may take; run git push again)` | Run the push again; nothing of it landed. One repository's pushes meet at one node, which commits them a batch at a time ([The committer](#the-committer)). A full queue, a node at its whole bound, or a push that waited in the queue until its asker could wait no longer raises `code_commit_busy` on that node for fifteen minutes, naming the repository with the most refusals; a push that reached the committer with too little of its asker's attempt left raises nothing. |
 | A push carrying objects into a repository holding the most live packs one may until a compaction merges them — 2 048 ([Limits](#limits)) | `(compaction_behind: <repo> holds <n> live packs, and a push adds none past 2048 until compaction catches up: nothing was decided; run git push again in a minute)` | Nothing of the push was decided, and no row names anything it uploaded; it lands once the repository's home Gitlet node has merged its packs, which the home tries every minute ([Compaction](#compaction)) — run the push again a minute later. A push carrying none — deletions, refs moved onto commits the repository already holds — still lands. Refused for longer, the home's `code_compaction_behind` alarm stands and its log says what keeps the merge from landing. |
-| A seat's push past the pushes one seat may land in a day on the company's calendar, every repository together — `code.limits.pushes_per_seat_day`, 1 000 unless set ([A seat's push](#a-seats-push)) | `(push_quota: seat <handle> has landed <n> pushes since <day> began on the company's calendar, and code.limits.pushes_per_seat_day lets a seat land <limit> pushes a day: nothing was decided; the count starts again at <the company's next midnight>)` | Nothing of the push was decided and no record carries it; run it again once the instant named has passed. A seat that meets it is pushing in a loop: look at what its turns are doing before raising the bound. A pack the push stored is named by no row, and the [object collector](object-store.md#collection-and-audit) deletes it a day later. A person's pushes are never counted. |
+| A seat's push past the pushes one seat may record in a day on the company's calendar, its refused attempts among them, every repository together — `code.limits.pushes_per_seat_day`, 1 000 unless set ([A seat's push](#a-seats-push)) | `(push_quota: seat <handle> has made <n> pushes, refused attempts included, since <day> began on the company's calendar, and code.limits.pushes_per_seat_day lets a seat make <limit> pushes a day: nothing was decided; the count starts again at <the company's next midnight>)` | Nothing of the push was decided and no record carries it; run it again once the instant named has passed. A seat that meets it is pushing in a loop: look at what its turns are doing before raising the bound. A pack the push stored is named by no row, and the [object collector](object-store.md#collection-and-audit) deletes it a day later. A person's pushes are never counted. |
 | A push moving the branches of more open changes than one record can carry beside its own refs — hundreds of change branches force-pushed at once ([Revisions](#revisions)) — or a person's push landing on hundreds of protected branches, each landing a row and its green row ([The merge queue](#the-merge-queue)) | `(too_many_changes: this push moves <n> live changes[ and lands on <m> protected branches], and their rows beside its own would take its record to <rows> of the 4000 rows one record may write: nothing was decided; push their branches in fewer pushes)` | Push the branches in groups: each group's revisions are written in its own record. Nothing of the push was decided. A push whose changes fit a record of its own, but not beside the pushes batched before it, is never refused: the committer decides it first in its next record. |
 | A push its node checked against the repository just before an [expunge](#expunge) of the repository's unreachable objects began | `(expunging: an expunge of <repo>'s unreachable objects began after this push was checked against it (drop epoch <n>, now <m>): nothing was decided; run git push again)` | Run the push again: nothing of it was decided, and its node checks it again against the repository as the expunge left it. A pack it uploaded is named by no row, and the [object collector](object-store.md#collection-and-audit) deletes it a day later. |
 | Nothing took the push | `(unavailable: no data node took push <id>: …)` | Nothing landed; push again, or once the fleet has a data node serving. |
@@ -9344,7 +9431,10 @@ revised is one click from the terminal that pushed it.
 | `code_compaction_invalid`, `code_publication_invalid`, `code_compaction_unanswerable` | `ERROR` | Under the component `gitlet.compact`: the node that built a compaction or a publication found it breaking a rule its committer holds it to before storing any of it — a bug in that node's build, so nothing was stored or proposed. Otherwise a repository's committer refused a compaction before its record because its outputs hold more objects than the packs it replaces — or a publication, a compaction carrying a published multi-pack-index layer, because the chain it leaves would hold more than 32 layers or its layer names a pack or the id of a layer below it — a bug in the build of the Gitlet node that made it (`node`), never the repository's: nothing was recorded, and what it stored, named by no row, is removed by the object collector after its grace; or a compaction's record applied and this node's rows do not hold the outputs or the layer it added (`missing`) — a bug in the build that wrote the record, answered `unknown`, so the node that built it adopts nothing. Each with the `repo` and the `compaction_id`. Report any of these lines. |
 | `code_layer_not_applied` | `WARN` | Under the component `gitlet.apply`: a publication's record applied as nothing on this node, because the layers it replaces are not the top of the repository's published chain or its base is not the layer below them (`chain`, `base`, `replaces`) — a record no correct committer forms, which every node applies alike, so the chain stays as it was. With the `repo`, the `layer` and the record's `position`. Report it. |
 | `code_pack_adopt_failed` | `WARN` | The receiving node could not link a push's pack into its cache once its row applied; its next sync downloads it instead. |
+| `code_push_attempt_invalid` | `ERROR` | The engine's own check refused the proposal of an attempt, a push a rule refused whole, before it was recorded: a bug. Keys `repo`, `push_id` and `error`. The pusher is still told the rule that refused the push, and nothing is recorded. |
+| `code_push_attempt_unrecorded` | `WARN` | No data node recorded an attempt, a push a rule refused whole: its committer could not be asked or refused it (keys `repo`, `push_id`, `refusal`, `error`). The pusher is still told the rule; the attempt is missing from the push history and the seat's day. |
 | `code_push_blob_path` | `WARN` | The path of a blob over the limit could not be found; the refusal names the blob without it. |
+| `code_push_offered_uncounted` | `WARN` | An attempt's count of the commits it offered failed or ran out of its budget (keys `repo`, `push_id`, `error`), so the attempt is recorded with no count and reads as a push to its refs alone. |
 | `code_push_store_full` | `WARN` | A push's bundle was refused by the object store because it has no room: the fleet's NATS bucket holds as many bytes as it [reserves](object-store.md#its-byte-reservation), or an S3-compatible bucket's provider refused the write for room (MinIO's `XMinioStorageFull`, a quota spent). The push's `bytes`, and the store's own answer naming its bucket (`error`). The push is refused `store_full` and recorded `refused`, and nothing was stored or proposed; every push that stores a pack is refused the same until an operator makes room. |
 | `code_push_unchecked` | `WARN` | The engine could not finish its own work on a push once receive-pack had written its pack: a git process over the push's objects on this node failed or ran past its deadline (the force check's merge-base, the blob scan, the listing of the commits it introduces), or the push's pack could not be read. The push fails — git prints the `words`, the push is recorded `failed` — and nothing is proposed. Its bundle may already be stored, since the listing runs beside the upload: named by no row, the object collector removes it after its grace. `DEBUG` when the push's request ended under it — its client gone, the node stopping, receive-pack ended — which `code_git_abandoned` or `code_push_failed` records. |
 | `code_hook_accept_failed` | `WARN` | The hook socket failed to accept a connection; it goes on accepting. |

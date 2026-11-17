@@ -102,14 +102,19 @@ func (s *Server) Answer(ctx context.Context, sealed []byte) ([]byte, error) {
 		if len(adm.Request.Assign[s.node]) == 0 {
 			return nil, errNotAsked
 		}
-		return s.wire.SealReply(Reply{Version: Protocol, Request: adm.ID, Node: s.node, Unverified: adm.Why})
+		return s.wire.SealReply(Reply{Version: replyProtocol(adm.Request.Version), Request: adm.ID, Node: s.node,
+			Unverified: adm.Why})
 	default:
 		return nil, fmt.Errorf("codesearch: %s request refused: %s", adm.Disposition, adm.Why)
 	}
 	req := adm.Request
-	if req.Version != Protocol {
-		return nil, fmt.Errorf("codesearch: a request at protocol %d, and this build speaks %d", req.Version,
-			Protocol)
+	if req.Version < baseProtocol || req.Version > Protocol {
+		return nil, fmt.Errorf("codesearch: a request at protocol %d, and this build speaks %d to %d", req.Version,
+			baseProtocol, Protocol)
+	}
+	if req.Version < ContextProtocol && requestProtocol(req.Search) >= ContextProtocol {
+		return nil, fmt.Errorf("codesearch: a request at protocol %d carries context or per_file, which "+
+			"protocol %d introduced", req.Version, ContextProtocol)
 	}
 	asked := req.Assign[s.node]
 	if len(asked) == 0 {
@@ -118,6 +123,15 @@ func (s *Server) Answer(ctx context.Context, sealed []byte) ([]byte, error) {
 	rctx, cancel := gitlet.AnswerBy(ctx, req.Deadline)
 	defer cancel()
 	return s.wire.SealReply(s.search(rctx, req, asked))
+}
+
+// replyProtocol is the protocol a reply to a request stamped v carries: v,
+// where this build speaks it, so its asker reads the reply; Protocol otherwise.
+func replyProtocol(v int) int {
+	if v < baseProtocol || v > Protocol {
+		return Protocol
+	}
+	return v
 }
 
 // search reads the repositories asked IN THE ORDER OF THEIR NAMES, in the
@@ -168,7 +182,7 @@ func (s *Server) search(ctx context.Context, req Request, asked []Assigned) Repl
 		})
 	}
 	wg.Wait()
-	out := Reply{Version: Protocol, Request: req.ID, Node: s.node, Repos: results}
+	out := Reply{Version: req.Version, Request: req.ID, Node: s.node, Repos: results}
 	out.Hits, out.Cut = m.lines()
 	for i, a := range asked {
 		if m.passed(a.Name) {
