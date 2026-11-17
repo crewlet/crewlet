@@ -303,9 +303,9 @@ test("a change to a page's body reads as a line diff, like its History", () => {
     ],
   });
   const diff = screen.getByRole("group", { name: "Page" });
-  const removed = diff.querySelectorAll('.diff-view__line[data-kind="remove"]');
-  const added = [...diff.querySelectorAll('.diff-view__line[data-kind="add"]')].map(
-    (line) => line.querySelector(".diff-view__text")?.textContent?.trim() ?? "",
+  const removed = diff.querySelectorAll('.crewlet-diff-view__line[data-kind="remove"]');
+  const added = [...diff.querySelectorAll('.crewlet-diff-view__line[data-kind="add"]')].map(
+    (line) => line.querySelector(".crewlet-diff-view__text")?.textContent?.trim() ?? "",
   );
   expect(removed).toHaveLength(0);
   // Three lines added, the blank one among them: which of the two blank lines

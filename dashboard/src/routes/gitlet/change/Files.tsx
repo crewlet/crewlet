@@ -1,7 +1,7 @@
 /**
- * A change's diff: the files a revision changes, one file's patch drawn by the
- * dashboard's one `DiffView`, in the code hue, its code coloured by kind, and
- * every finding and thread on the line it is about.
+ * A change's diff: the files a revision changes, one file's patch drawn by
+ * `DiffView` with its code coloured by kind, and every finding and thread on
+ * the line it is about.
  *
  * # Read by object id, placed by the engine
  *
@@ -58,8 +58,8 @@ import type {
   CodeFindingRow,
   CodeRevisionRow,
 } from "~/protocol/index.ts";
-import { fmtCount, plural } from "~/lib/format.ts";
-import { DiffHead, FileTree } from "../FileTree.tsx";
+import { plural } from "~/lib/format.ts";
+import { DiffCounts, DiffHead, FileTree } from "../FileTree.tsx";
 import { PatchPager } from "../PatchPager.tsx";
 import { repoHref } from "../paths.ts";
 import { Thread } from "./Conversation.tsx";
@@ -269,7 +269,8 @@ export function Files({
           <Stack gap={2}>
             {files.data?.diff && (
               <p className="code-files__totals">
-                {`${plural(files.data.diff.total, "file")} changed, +${fmtCount(files.data.diff.added)} −${fmtCount(files.data.diff.deleted)}`}
+                {`${plural(files.data.diff.total, "file")} changed, `}
+                <DiffCounts added={files.data.diff.added} deleted={files.data.diff.deleted} />
               </p>
             )}
             <FileTree files={listed} current={shown} onOpen={(f) => setFile(f.path)} />
@@ -479,7 +480,6 @@ function FileDiff({
       ) : (
         <>
           <DiffView
-            hue="code"
             tokens={tokens}
             hunks={hunks}
             layout={layout}

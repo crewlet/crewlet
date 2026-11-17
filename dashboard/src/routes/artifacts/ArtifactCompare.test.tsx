@@ -10,7 +10,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { ArtifactCompare } from "./ArtifactCompare.tsx";
 import { Router } from "~/app/router.tsx";
-import { MAX_EDITS } from "~/lib/lineDiff.ts";
+import { MAX_EDITS } from "@crewlethq/ui";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
 import type { ArtifactDetail, ArtifactEntry } from "~/protocol/index.ts";
 
@@ -110,11 +110,11 @@ const mount = (picked: number, against: number) =>
 
 /** A diff's lines as `[kind, path or the older and newer numbers, text]`, in order. */
 function linesOf(diff: HTMLElement): string[][] {
-  return [...diff.querySelectorAll<HTMLElement>(".diff-view__line")].map((line) => [
+  return [...diff.querySelectorAll<HTMLElement>(".crewlet-diff-view__line")].map((line) => [
     line.dataset.kind ?? "",
-    line.querySelector(".diff-view__path")?.textContent ??
-      [...line.querySelectorAll(".diff-view__number")].map((n) => n.textContent).join("|"),
-    line.querySelector(".diff-view__text")?.textContent ?? "",
+    line.querySelector(".crewlet-diff-view__path")?.textContent ??
+      [...line.querySelectorAll(".crewlet-diff-view__number")].map((n) => n.textContent).join("|"),
+    line.querySelector(".crewlet-diff-view__text")?.textContent ?? "",
   ]);
 }
 

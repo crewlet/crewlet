@@ -32,23 +32,21 @@
  * was not, which the dialog says tool by tool before reading the changes
  * again.
  *
- * EVERY PART IS THE ONE DIFF THE DASHBOARD DRAWS (`components/DiffView.tsx`),
- * never the package's: its diffs paint a removed line in the danger state's
- * hue and an added one in the success state's, and here a removed hint is no
- * failure. The two texts are handed to it whole, so its own line diff
- * compares them; the hints are keyed, each moved hint its old word removed
- * and its new one added.
+ * EVERY PART IS A `DiffView`, handed its two texts whole; the hints are keyed,
+ * each moved hint its old word removed and its new one added.
  */
 
 import { useMemo, useState, type ReactNode } from "react";
 import {
   Button,
   Callout,
+  changedRuns,
   DescriptionList,
   RailList,
   Skeleton,
   Text,
   useToast,
+  type Run,
 } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 import { DiffView, type DiffHunk } from "~/components/DiffView.tsx";
@@ -60,7 +58,6 @@ import type {
 } from "~/contract/mcp.ts";
 import type { ToolAnnotations } from "~/contract/tools.ts";
 import { plural } from "~/lib/format.ts";
-import { changedRuns, type Run } from "~/lib/wordDiff.ts";
 import { reviewChanges, type ChangesDecision } from "../api.ts";
 import { useServerDetail } from "../data.ts";
 import { RiskChips } from "../parts.tsx";

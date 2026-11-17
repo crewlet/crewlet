@@ -9974,7 +9974,7 @@ a.live-row:hover {
 
 /* The History tab's comparison of two versions (uilet's VersionCompare, which
    lays the two sides out itself), across both columns, and the files lens
-   inside it, whose diffs are `components/DiffView.tsx`'s. */
+   inside it, whose diffs are the kit's `DiffView`. */
 .artifact-compare-row {
   grid-column: 1 / -1;
   min-width: 0;
