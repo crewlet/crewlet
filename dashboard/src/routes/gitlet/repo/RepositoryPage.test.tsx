@@ -34,6 +34,8 @@ import { modules } from "~/test/source.ts";
 import { DECLARED, DECLARED_LIFE, PERSON_ONLY, PURGE_KEEPERS } from "~/lib/repoWrites.ts";
 import { SYNTAX_MAX_BYTES, load } from "~/lib/syntax/index.ts";
 import { forgetDownloadProbes } from "./downloads.ts";
+import { forgetTreeChoice } from "./FileView.tsx";
+import { forgetTrees } from "./tree.ts";
 import { sinceOf } from "./History.tsx";
 import { RepositoryPage } from "./RepositoryPage.tsx";
 
@@ -51,6 +53,8 @@ vi.mock("~/lib/syntax/index.ts", async (real) => {
 afterEach(() => {
   cleanup();
   forgetDownloadProbes();
+  forgetTrees();
+  forgetTreeChoice();
   vi.useRealTimers();
   vi.unstubAllGlobals();
   location.hash = "";
@@ -442,20 +446,25 @@ function stubEngine(
             position: POSITION,
             level: "session",
           });
-        case "/query/code_tree":
+        case "/query/code_tree": {
+          // THE ROOT, `src` (the file view's tree reads it), and any other directory empty.
+          const dir = p.get("path") ?? "";
+          const entries =
+            dir === ""
+              ? [
+                  { mode: "100644", type: "blob", oid: OTHER, path: "README.md", size: 20 },
+                  { mode: "040000", type: "tree", oid: OTHER, path: "src" },
+                ]
+              : dir === "src"
+                ? [{ mode: "100644", type: "blob", oid: OTHER, path: "src/app.go", size: 30 }]
+                : [];
           return json(
             byRef(url, {
               kind: "tree",
-              tree: {
-                tree: OTHER,
-                entries: [
-                  { mode: "100644", type: "blob", oid: OTHER, path: "README.md", size: 20 },
-                  { mode: "040000", type: "tree", oid: OTHER, path: "src" },
-                ],
-                total: 2,
-              },
+              tree: { tree: OTHER, ...(dir ? { path: dir } : {}), entries, total: entries.length },
             }),
           );
+        }
         case "/query/code_blob": {
           const path = p.get("path");
           const coded = path
@@ -1389,7 +1398,7 @@ test("a file's picked lines are its address, and its Permalink names the commit"
   expect(screen.getByRole("button", { name: "Line 1" }).getAttribute("aria-pressed")).toBe("false");
   expect(screen.getByText("func Run() {}")).toBeTruthy();
 
-  const permalink = screen.getByRole("link", { name: "Permalink" });
+  const permalink = screen.getByRole("link", { name: "Permalink: this file at 0123456" });
   expect(permalink.getAttribute("href")).toBe(
     `#/gitlet/repos/web?ref=${HEAD}&path=src%2Fapp.go&lines=2`,
   );
@@ -3179,7 +3188,7 @@ test("a file edited here is one commit on the branch read, at the commit it reso
   stubEngine(detail({ managed_by: "tools" }), acted);
   mount("#/gitlet/repos/web?path=src%2Fapp.go", "web", MAINTAINER);
 
-  const edit = await screen.findByRole("button", { name: "Edit" });
+  const edit = await screen.findByRole("button", { name: "Edit app.go" });
   await waitFor(() => expect(edit.getAttribute("title")).toBeNull());
   fireEvent.click(edit);
   const dialog = await screen.findByRole("dialog", { name: "Edit src/app.go" });
@@ -3239,13 +3248,35 @@ test("an empty repository's first file is a root commit on its default branch", 
   });
 });
 
-// A TAG TAKES NO COMMIT: the controls are drawn and held, saying so.
-test("a file read at a tag is held from a commit, with the reason", async () => {
+// EDIT IS A PENCIL AND DELETE IS IN MORE, each a commit at the head read, and each
+// held with its reason at a tag. Mutation: drop the menu entry's hold, or send the
+// delete without the head read, and this fails.
+test("Edit is a pencil and Delete is in More, each held with its reason at a tag", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools" }), acted);
+  mount("#/gitlet/repos/web?path=src%2Fapp.go", "web", MAINTAINER);
+  const edit = await screen.findByRole("button", { name: "Edit app.go" });
+  await waitFor(() => expect(edit.getAttribute("title")).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "More file actions" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: /^Delete file/ }));
+  const dialog = await screen.findByRole("dialog", { name: "Delete src/app.go?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Delete file" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]!.args).toMatchObject({
+    branch: "main",
+    expected_head: HEAD,
+    files: [{ op: "delete", path: "src/app.go" }],
+  });
+
+  cleanup();
   stubEngine(detail({ managed_by: "tools" }), []);
   mount("#/gitlet/repos/web?ref=refs%2Ftags%2Fv1&path=src%2Fapp.go", "web", MAINTAINER);
-
-  const edit = await screen.findByRole("button", { name: "Edit" });
-  await waitFor(() => expect(edit.getAttribute("title")).toMatch(/Choose a branch/));
+  const held = await screen.findByRole("button", { name: "Edit app.go" });
+  await waitFor(() => expect(held.getAttribute("title")).toMatch(/^Choose a branch/));
+  fireEvent.click(screen.getByRole("button", { name: "More file actions" }));
+  const del = await screen.findByRole("menuitem", { name: /^Delete file/ });
+  expect(del.getAttribute("aria-disabled")).toBe("true");
+  expect(del.textContent).toContain("Choose a branch to commit to: a tag or a commit takes none.");
 });
 
 // WHO READS A REPOSITORY IS ONE OF ITS DETAILS: the form's Read by sends
@@ -4152,4 +4183,554 @@ test("the root's bar counts the branches and tags, each a link to its list", asy
   expect(screen.getByRole("link", { name: "1 Tag" }).getAttribute("href")).toBe(
     "#/gitlet/repos/web?tab=branches&view=tags",
   );
+});
+
+/** A tree entry as `code_tree` lists it. */
+const entry = (path: string, type: "tree" | "blob" = "blob") => ({
+  mode: type === "tree" ? "040000" : "100644",
+  type,
+  oid: OTHER,
+  path,
+});
+
+/** The repository's tree by directory, each in git's order. */
+const TREE: Record<string, ReturnType<typeof entry>[]> = {
+  "": [
+    entry(".github", "tree"),
+    entry("Makefile"),
+    entry("cmd", "tree"),
+    entry("go.mod"),
+    entry("internal", "tree"),
+  ],
+  ".github": [entry(".github/ci.yml")],
+  cmd: [entry("cmd/web", "tree")],
+  "cmd/web": [entry("cmd/web/main.go")],
+  internal: [entry("internal/render", "tree"), entry("internal/server.go")],
+  "internal/render": [entry("internal/render/page.go")],
+};
+
+/** The engine with TREE as its tree, `answer` taking any directory it answers first. */
+function stubTree(answer?: (url: URL, dir: string) => Response | undefined) {
+  return stubAnswering("code_tree", (url) => {
+    const dir = url.searchParams.get("path") ?? "";
+    const own = answer?.(url, dir);
+    if (own) return own;
+    const entries = TREE[dir] ?? [];
+    return json(
+      byRef(url, {
+        kind: "tree",
+        tree: { tree: OTHER, ...(dir ? { path: dir } : {}), entries, total: entries.length },
+      }),
+    );
+  });
+}
+
+const MAIN_GO_AT = "#/gitlet/repos/web?path=cmd%2Fweb%2Fmain.go";
+const treeDirs = (asked: URL[]) =>
+  reads(asked, "code_tree").map((u) => u.searchParams.get("path") ?? "");
+const item = (tree: HTMLElement, name: string) => within(tree).getByRole("treeitem", { name });
+const levelNames = (tree: HTMLElement, level: number) =>
+  within(tree)
+    .getAllByRole("treeitem")
+    .filter((i) => i.getAttribute("aria-level") === String(level))
+    .map((i) => i.textContent);
+
+// A FILE IS READ BESIDE ITS REPOSITORY'S TREE, opened down to it, each directory
+// read once at the commit the file was read at. Mutation: read the tree at the
+// branch's name, or read every directory on arrival, and this fails.
+test("a file opens beside its repository's tree, opened down to it at the file's commit", async () => {
+  const asked = stubTree();
+  mount(MAIN_GO_AT);
+
+  const tree = await screen.findByRole("tree", { name: "Files of web at main" });
+  const file = await within(tree).findByRole("treeitem", { name: "main.go" });
+  expect(file.getAttribute("aria-current")).toBe("page");
+  expect(file.getAttribute("href")).toBe(MAIN_GO_AT);
+  expect(item(tree, "cmd").getAttribute("aria-expanded")).toBe("true");
+  expect(item(tree, "web").getAttribute("aria-expanded")).toBe("true");
+  expect(item(tree, "internal").getAttribute("aria-expanded")).toBe("false");
+  expect(levelNames(tree, 1)).toEqual([".github", "cmd", "internal", "go.mod", "Makefile"]);
+  expect(treeDirs(asked).sort()).toEqual(["", "cmd", "cmd/web"]);
+  for (const u of reads(asked, "code_tree")) expect(u.searchParams.get("ref")).toBe(HEAD);
+  expect(document.querySelector(".toolbar")).toBeNull();
+});
+
+// A DIRECTORY OPENS IN PLACE, read once for the visit; the address does not move.
+// Mutation: drop the kept levels, or navigate on a directory's press, and this fails.
+test("a directory in the tree opens and closes in place, read once", async () => {
+  const asked = stubTree();
+  mount(MAIN_GO_AT);
+  const tree = await screen.findByRole("tree", { name: "Files of web at main" });
+  await within(tree).findByRole("treeitem", { name: "main.go" });
+
+  fireEvent.click(item(tree, "internal"));
+  const server = await within(tree).findByRole("treeitem", { name: "server.go" });
+  expect(server.getAttribute("aria-level")).toBe("2");
+  expect(item(tree, "internal").getAttribute("aria-expanded")).toBe("true");
+  fireEvent.click(item(tree, "internal"));
+  expect(within(tree).queryByRole("treeitem", { name: "server.go" })).toBeNull();
+  fireEvent.click(item(tree, "internal"));
+  await within(tree).findByRole("treeitem", { name: "server.go" });
+  expect(treeDirs(asked).filter((d) => d === "internal")).toHaveLength(1);
+  expect(location.hash).toBe(MAIN_GO_AT);
+});
+
+// ANOTHER FILE OPENED FROM THE TREE KEEPS THE TREE and the row's focus while it reads.
+// Mutation: hand the pane the live commit ("" while the file reads), and this fails.
+test("opening another file keeps the tree drawn and its row focused while the file reads", async () => {
+  const asked = stubTree();
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/query/code_blob" && url.searchParams.get("path") === "go.mod") {
+        await held;
+      }
+      return engine(input, init);
+    }),
+  );
+  mount(MAIN_GO_AT);
+  const tree = await screen.findByRole("tree", { name: "Files of web at main" });
+  await within(tree).findByRole("treeitem", { name: "main.go" });
+  const goMod = item(tree, "go.mod");
+  act(() => goMod.focus());
+  act(() => {
+    location.hash = goMod.getAttribute("href")!;
+  });
+  await waitFor(() => expect(item(tree, "go.mod").getAttribute("aria-current")).toBe("page"));
+  expect(screen.getByRole("tree", { name: "Files of web at main" })).toBe(tree);
+  expect(item(tree, "main.go")).toBeTruthy();
+  expect(document.activeElement).toBe(goMod);
+  expect(treeDirs(asked).sort()).toEqual(["", "cmd", "cmd/web"]);
+  release();
+  await screen.findByRole("button", { name: "Line 1" });
+  expect(screen.getByRole("tree", { name: "Files of web at main" })).toBe(tree);
+});
+
+// THE TREE MOVES BY THE KEYS with one tab stop, and a file's Enter is its link's own.
+// Mutation: give every row a tab stop, or swallow Enter on a file, and this fails.
+test("the tree moves by the keys, and Enter on a file opens it at the address's revision", async () => {
+  stubTree();
+  mount("#/gitlet/repos/web?ref=feature&path=cmd%2Fweb%2Fmain.go");
+  const tree = await screen.findByRole("tree", { name: "Files of web at feature" });
+  await within(tree).findByRole("treeitem", { name: "main.go" });
+  const focused = () => document.activeElement?.textContent;
+
+  act(() => item(tree, "cmd").focus());
+  fireEvent.keyDown(item(tree, "cmd"), { key: "ArrowDown" });
+  expect(focused()).toBe("web");
+  fireEvent.keyDown(item(tree, "web"), { key: "ArrowLeft" });
+  expect(item(tree, "web").getAttribute("aria-expanded")).toBe("false");
+  fireEvent.keyDown(item(tree, "web"), { key: "ArrowLeft" });
+  expect(focused()).toBe("cmd");
+  fireEvent.keyDown(item(tree, "cmd"), { key: "ArrowRight" });
+  expect(focused()).toBe("web");
+  fireEvent.keyDown(item(tree, "web"), { key: "ArrowRight" });
+  expect(item(tree, "web").getAttribute("aria-expanded")).toBe("true");
+  fireEvent.keyDown(item(tree, "web"), { key: "End" });
+  expect(focused()).toBe("Makefile");
+  fireEvent.keyDown(item(tree, "Makefile"), { key: "Home" });
+  expect(focused()).toBe(".github");
+  fireEvent.keyDown(item(tree, ".github"), { key: "g" });
+  expect(focused()).toBe("go.mod");
+  expect(
+    within(tree)
+      .getAllByRole("treeitem")
+      .filter((i) => i.tabIndex === 0),
+  ).toHaveLength(1);
+
+  const goMod = item(tree, "go.mod");
+  expect(goMod.getAttribute("href")).toBe("#/gitlet/repos/web?ref=feature&path=go.mod");
+  expect(fireEvent.keyDown(goMod, { key: "Enter" })).toBe(true);
+});
+
+// A LONG DIRECTORY PAGES with Load more, in git's order until whole, then a code
+// host's. Mutation: sort a paged directory, or never ask its cursor, and this fails.
+test("a long directory pages with Load more, in git's order until it is whole", async () => {
+  const asked = stubTree((url, dir) => {
+    if (dir !== "internal") return undefined;
+    const second = url.searchParams.get("cursor") === "p2";
+    return json(
+      byRef(url, {
+        kind: "tree",
+        ...(second ? {} : { next: "p2" }),
+        tree: {
+          tree: OTHER,
+          path: dir,
+          entries: second ? [entry("internal/render", "tree")] : [entry("internal/zeta.go")],
+          total: 2,
+        },
+      }),
+    );
+  });
+  mount(MAIN_GO_AT);
+  const tree = await screen.findByRole("tree", { name: "Files of web at main" });
+  await within(tree).findByRole("treeitem", { name: "main.go" });
+  fireEvent.click(item(tree, "internal"));
+  const more = await within(tree).findByRole("treeitem", { name: "Load more in internal" });
+  expect(levelNames(tree, 2)).toEqual(["web", "zeta.go", "Load more in internal"]);
+
+  act(() => more.focus());
+  fireEvent.keyDown(more, { key: "Enter" });
+  await within(tree).findByRole("treeitem", { name: "render" });
+  expect(levelNames(tree, 2)).toEqual(["web", "render", "zeta.go"]);
+  expect(
+    reads(asked, "code_tree").filter((u) => u.searchParams.get("cursor") === "p2"),
+  ).toHaveLength(1);
+});
+
+// A DIRECTORY REFUSED OR FAILED SAYS SO UNDER ITS ROW, and the file still draws.
+// Mutation: drop the refusal's sentence, or blank the file on a tree's failure, and this fails.
+test("a directory refused or failed says so under its row; the file still draws", async () => {
+  let internal = 0;
+  const asked = stubTree((_url, dir) => {
+    if (dir === "internal") {
+      internal++;
+      return internal === 1
+        ? engineJson({ error: "unavailable", detail: "this node lists no trees yet" }, 503)
+        : undefined;
+    }
+    if (dir === ".github") return json({ error: "query_failed" }, 500);
+    return undefined;
+  });
+  mount(MAIN_GO_AT);
+  const tree = await screen.findByRole("tree", { name: "Files of web at main" });
+  await within(tree).findByRole("treeitem", { name: "main.go" });
+  fireEvent.click(item(tree, "internal"));
+  expect(
+    await within(tree).findByText(
+      "This directory's listing is unavailable: this node lists no trees yet",
+    ),
+  ).toBeTruthy();
+
+  fireEvent.click(item(tree, ".github"));
+  const failed = await within(tree).findByRole("treeitem", { name: /could not be read/ });
+  fireEvent.click(failed);
+  await waitFor(() => expect(treeDirs(asked).filter((d) => d === ".github")).toHaveLength(2));
+  expect(screen.getByRole("button", { name: "Line 1" })).toBeTruthy();
+
+  cleanup();
+  forgetTrees();
+  stubTree((_url, dir) =>
+    dir === ""
+      ? engineJson({ error: "unavailable", detail: "this node lists no trees yet" }, 503)
+      : undefined,
+  );
+  mount(MAIN_GO_AT);
+  expect(
+    await screen.findByText(
+      "This directory's listing is unavailable: this node lists no trees yet",
+    ),
+  ).toBeTruthy();
+  expect(screen.queryByRole("tree")).toBeNull();
+  expect(await screen.findByRole("button", { name: "Line 1" })).toBeTruthy();
+});
+
+// THE FILE'S LATEST COMMIT IS A CARD OF ITS OWN, read at the file's commit, and
+// History is in the crumbs' row. Mutation: read it at the branch, or keep History
+// in the card, and this fails.
+test("the file's latest commit is a card over the file, with its check and no History", async () => {
+  const asked = stubTree();
+  mount(MAIN_GO_AT);
+  await headRow("Start the storefront");
+  const card = document.querySelector<HTMLElement>(".code-latest--card")!;
+  const log = reads(asked, "code_log")[0]!.searchParams;
+  expect([log.get("path"), log.get("limit"), log.get("ref")]).toEqual([
+    "cmd/web/main.go",
+    "1",
+    HEAD,
+  ]);
+  await waitFor(() =>
+    expect(card.querySelector(".code-check-mark")?.getAttribute("title")).toMatch(/^2 checks/),
+  );
+  expect(within(card).queryByRole("link", { name: "History" })).toBeNull();
+  const crumbs = document.querySelector<HTMLElement>(".code-file-crumbs")!;
+  expect(within(crumbs).getByRole("link", { name: "History" }).getAttribute("href")).toBe(
+    "#/gitlet/repos/web?tab=commits&path=cmd%2Fweb%2Fmain.go",
+  );
+});
+
+// THE CRUMBS LEAD BACK TO EACH DIRECTORY and copy the path from the root, never a URL.
+// Mutation: copy the address, or reset a refusal, and this fails.
+test("the crumbs lead back to each directory and copy the path", async () => {
+  let written = "";
+  let refuse = false;
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText: (t: string) =>
+        refuse ? Promise.reject(new Error("denied")) : ((written = t), Promise.resolve()),
+    },
+  });
+  stubTree();
+  mount("#/gitlet/repos/web?ref=feature&path=cmd%2Fweb%2Fmain.go");
+  const path = await screen.findByRole("navigation", { name: "Path of the file" });
+  expect(
+    within(path)
+      .getAllByRole("link")
+      .map((a) => a.getAttribute("href")),
+  ).toEqual([
+    "#/gitlet/repos/web?ref=feature",
+    "#/gitlet/repos/web?ref=feature&path=cmd",
+    "#/gitlet/repos/web?ref=feature&path=cmd%2Fweb",
+  ]);
+  fireEvent.click(screen.getByRole("button", { name: "Copy the path cmd/web/main.go" }));
+  expect(await screen.findByRole("button", { name: "Copied cmd/web/main.go" })).toBeTruthy();
+  expect(written).toBe("cmd/web/main.go");
+
+  refuse = true;
+  fireEvent.click(screen.getByRole("button", { name: "Copied cmd/web/main.go" }));
+  expect(
+    await screen.findByRole("button", { name: "The browser refused the clipboard" }),
+  ).toBeTruthy();
+});
+
+// `t` FOCUSES GO TO FILE IN THE PANE, showing a hidden pane first; typed into the
+// field it stays a letter. Mutation: bind `t` only in the pane, and this fails.
+test("t on a file's view focuses Go to file in the tree, showing a hidden tree first", async () => {
+  stubTree();
+  mount(MAIN_GO_AT);
+  const pane = await screen.findByRole("complementary", { name: "Files of web at main" });
+  const press = () => {
+    const t = new KeyboardEvent("keydown", { key: "t", bubbles: true, cancelable: true });
+    act(() => {
+      window.dispatchEvent(t);
+    });
+    return t;
+  };
+  expect(press().defaultPrevented).toBe(true);
+  expect(document.activeElement).toBe(within(pane).getByRole("combobox", { name: "Go to file" }));
+
+  fireEvent.click(within(pane).getByRole("button", { name: "Collapse the file tree" }));
+  expect(screen.queryByRole("complementary", { name: "Files of web at main" })).toBeNull();
+  press();
+  const field = await screen.findByRole("combobox", { name: "Go to file" });
+  await waitFor(() => expect(document.activeElement).toBe(field));
+  const typed = new KeyboardEvent("keydown", { key: "t", bubbles: true, cancelable: true });
+  act(() => {
+    field.dispatchEvent(typed);
+  });
+  expect(typed.defaultPrevented).toBe(false);
+});
+
+// THE PANE'S CHOICE LASTS THE VISIT, with the picker kept in reach while it is
+// hidden. Mutation: hold the choice in the component, and the second mount fails.
+test("the tree collapses and comes back for the visit", async () => {
+  stubTree();
+  mount(MAIN_GO_AT);
+  fireEvent.click(await screen.findByRole("button", { name: "Collapse the file tree" }));
+  const show = screen.getByRole("button", { name: "Show the file tree" });
+  await waitFor(() => expect(document.activeElement).toBe(show));
+  const crumbs = document.querySelector<HTMLElement>(".code-file-crumbs")!;
+  expect(within(crumbs).getByRole("button", { name: "Branch or tag: main" })).toBeTruthy();
+
+  cleanup();
+  mount("#/gitlet/repos/web?path=go.mod");
+  await screen.findByRole("button", { name: "Line 1" });
+  expect(screen.queryByRole("tree")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Show the file tree" }));
+  const collapse = await screen.findByRole("button", { name: "Collapse the file tree" });
+  await waitFor(() => expect(document.activeElement).toBe(collapse));
+  expect(await screen.findByRole("tree", { name: "Files of web at main" })).toBeTruthy();
+});
+
+// A REVISION CHOSEN IN THE PANE KEEPS THE FILE, and the tree is read at its commit.
+// Mutation: drop `path` on a choice, or keep the old commit's tree, and this fails.
+test("choosing a revision from the pane keeps the file", async () => {
+  const asked = stubTree();
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      const answer = await engine(input, init);
+      if (url.pathname !== "/query/code_blob" || url.searchParams.get("ref") !== "feature") {
+        return answer;
+      }
+      const body = (await answer.json()) as Record<string, unknown>;
+      return json({ ...body, resolved: { ref: { ref: "refs/heads/feature", oid: OTHER } } });
+    }),
+  );
+  mount(MAIN_GO_AT);
+  const pane = await screen.findByRole("complementary", { name: "Files of web at main" });
+  fireEvent.click(within(pane).getByRole("button", { name: "Branch or tag: main" }));
+  const panel = await screen.findByRole("dialog", { name: "Switch branches or tags" });
+  await within(panel).findByRole("option", { name: /^feature/ });
+  const field = within(panel).getByRole("combobox", { name: "Find a branch" });
+  await waitFor(() => expect(document.activeElement).toBe(field));
+  fireEvent.keyDown(field, { key: "ArrowDown" });
+  fireEvent.keyDown(field, { key: "Enter" });
+  await waitFor(() => {
+    const p = new URLSearchParams(location.hash.split("?")[1]);
+    expect([p.get("ref"), p.get("path")]).toEqual(["feature", "cmd/web/main.go"]);
+  });
+  await screen.findByRole("tree", { name: "Files of web at feature" });
+  await waitFor(() =>
+    expect(
+      reads(asked, "code_tree").filter((u) => u.searchParams.get("ref") === OTHER),
+    ).not.toHaveLength(0),
+  );
+});
+
+/** The reason a held control gives, as the kit describes it. */
+const reasonOf = (el: HTMLElement) =>
+  document.getElementById(el.getAttribute("aria-describedby") ?? "")?.textContent;
+
+// RAW AND DOWNLOAD NAME THE FILE'S COMMIT, whole, never the branch or the tag, which
+// the route refuses. Mutation: build `rev` from the address, and this fails.
+test("Raw and Download name the file's commit, never the branch", async () => {
+  stubArchive(405);
+  mount(MAIN_GO_AT);
+  const raw = await screen.findByRole("link", { name: "Raw" });
+  const path = "path=cmd%2Fweb%2Fmain.go";
+  expect(raw.getAttribute("href")).toBe(`/git/web/-/raw?rev=${HEAD}&${path}`);
+  expect(raw.getAttribute("title")).toBe("The file's bytes as committed at 0123456");
+  const download = screen.getByRole("link", { name: "Download main.go" });
+  expect(download.getAttribute("href")).toBe(`/git/web/-/raw?rev=${HEAD}&${path}&download=1`);
+  expect(download.getAttribute("download")).toBe("main.go");
+
+  cleanup();
+  stubArchive(405);
+  mount("#/gitlet/repos/web?ref=refs%2Ftags%2Fv1&path=cmd%2Fweb%2Fmain.go");
+  expect((await screen.findByRole("link", { name: "Raw" })).getAttribute("href")).toBe(
+    `/git/web/-/raw?rev=${HEAD}&${path}`,
+  );
+});
+
+// AN OLDER FLEET HOLDS RAW AND DOWNLOAD with the reason, probed once for the page.
+// Mutation: draw the links on a 404, or probe on every file, and this fails.
+test("Raw and Download are held on a fleet that serves no downloads, probed once", async () => {
+  const { probes } = stubArchive(404);
+  mount(MAIN_GO_AT);
+  const raw = await waitFor(() => {
+    const held = screen.getByRole("button", { name: "Raw" });
+    expect(reasonOf(held)).toBe("Downloading a file is not available on this fleet yet.");
+    return held;
+  });
+  expect(raw.getAttribute("aria-disabled")).toBe("true");
+  const download = screen.getByRole("button", { name: "Download main.go" });
+  expect(reasonOf(download)).toBe("Downloading a file is not available on this fleet yet.");
+  act(() => {
+    location.hash = "#/gitlet/repos/web?path=go.mod";
+  });
+  await screen.findByRole("button", { name: "Download go.mod" });
+  expect(probes).toEqual(["HEAD"]);
+});
+
+/** A file of two pages (BIG_PAGE_LINES and ten more), its lines `l<n>`. */
+const TWO_PAGES: Coded = {
+  oid: BIG_OID,
+  text: Array.from({ length: BIG_PAGE_LINES + 10 }, (_, i) => `l${i + 1}\n`).join(""),
+};
+
+/** The clipboard stubbed: what it was written, or a refusal while `refuse` holds. */
+function stubClipboard() {
+  const box = { written: [] as string[], refuse: false };
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText: (t: string) =>
+        box.refuse ? Promise.reject(new Error("denied")) : (box.written.push(t), Promise.resolve()),
+    },
+  });
+  return box;
+}
+
+// COPY COPIES THE WHOLE FILE, reading at the commit the pages not loaded; a file
+// wholly loaded asks nothing. Mutation: copy the loaded pages only, and this fails.
+test("Copy copies the whole file, reading the pages not loaded", async () => {
+  const clip = stubClipboard();
+  const asked = stubEngine(detail(), [], { "src/two.go": TWO_PAGES });
+  mount("#/gitlet/repos/web?path=src%2Ftwo.go");
+  await screen.findByRole("button", { name: "Load more lines" });
+  fireEvent.click(screen.getByRole("button", { name: "Copy the file's contents" }));
+  expect(await screen.findByRole("button", { name: "Copied the file's contents" })).toBeTruthy();
+  expect(clip.written).toEqual([TWO_PAGES.text]);
+  const atCommit = reads(asked, "code_blob").filter((u) => u.searchParams.get("ref") === HEAD);
+  expect(atCommit.map((u) => u.searchParams.get("cursor"))).toEqual([
+    null,
+    `l${BIG_PAGE_LINES + 1}`,
+  ]);
+
+  cleanup();
+  const whole = stubEngine();
+  mount("#/gitlet/repos/web?path=src%2Fapp.go");
+  await screen.findByRole("button", { name: "Line 3" });
+  const before = reads(whole, "code_blob").length;
+  fireEvent.click(screen.getByRole("button", { name: "Copy the file's contents" }));
+  await screen.findByRole("button", { name: "Copied the file's contents" });
+  expect(clip.written.at(-1)).toBe("package app\n\nfunc Run() {}\n");
+  expect(reads(whole, "code_blob")).toHaveLength(before);
+});
+
+// COPY IS HELD WITH ITS REASON for a binary file and past 1 MiB, and says when the
+// browser refused. Mutation: draw Copy on a binary file, or reset a refusal, and this fails.
+test("Copy is held for a binary file and past 1 MiB, and says when the clipboard refused", async () => {
+  stubEngine(detail(), [], {
+    "bin/app": { oid: OTHER, text: "x\n", binary: true },
+    "big.json": { oid: OTHER, text: "{}\n", size: Math.round(3.2 * 1024 * 1024) },
+  });
+  mount("#/gitlet/repos/web?path=bin%2Fapp");
+  const binary = await screen.findByRole("button", { name: "Copy the file's contents" });
+  await waitFor(() =>
+    expect(reasonOf(binary)).toBe("A binary file has no text to copy: download it."),
+  );
+  act(() => {
+    location.hash = "#/gitlet/repos/web?path=big.json";
+  });
+  await waitFor(() =>
+    expect(reasonOf(screen.getByRole("button", { name: "Copy the file's contents" }))).toBe(
+      "This file is 3.2 MiB: copy one past 1 MiB from Raw.",
+    ),
+  );
+
+  cleanup();
+  const clip = stubClipboard();
+  clip.refuse = true;
+  stubEngine();
+  mount("#/gitlet/repos/web?path=src%2Fapp.go");
+  await screen.findByRole("button", { name: "Line 3" });
+  fireEvent.click(screen.getByRole("button", { name: "Copy the file's contents" }));
+  const refused = await screen.findByRole("button", { name: "The browser refused the clipboard" });
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(refused.getAttribute("aria-label") ?? refused.textContent).toContain("refused");
+});
+
+// A PICKED RUN IS TINTED AND ITS FIRST LINE HOLDS ITS ACTIONS: copy the lines, copy a
+// link to them at the commit, blame them. Mutation: link the branch, or draw the menu
+// on every picked line, and this fails.
+test("a picked run is tinted, and its menu copies its lines, links them at the commit and blames them", async () => {
+  const clip = stubClipboard();
+  stubEngine(detail(), [], { "src/two.go": TWO_PAGES });
+  mount("#/gitlet/repos/web?path=src%2Ftwo.go&lines=17-19");
+  const trigger = await screen.findByRole("button", { name: "Actions for lines 17 to 19" });
+  expect(screen.getAllByRole("button", { name: /^Actions for/ })).toHaveLength(1);
+  expect(trigger.closest(".code-source__line")?.id).toBe("L17");
+  expect(
+    [...document.querySelectorAll(".code-source__line[data-picked]")].map((l) => l.id),
+  ).toEqual(["L17", "L18", "L19"]);
+
+  fireEvent.click(trigger);
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Copy lines" }));
+  await waitFor(() => expect(clip.written).toEqual(["l17\nl18\nl19"]));
+  fireEvent.click(screen.getByRole("button", { name: "Actions for lines 17 to 19" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Copy a link to these lines" }));
+  await waitFor(() => expect(clip.written).toHaveLength(2));
+  expect(clip.written[1]).toMatch(
+    new RegExp(`#/gitlet/repos/web\\?ref=${HEAD}&path=src%2Ftwo\\.go&lines=17-19$`),
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Actions for lines 17 to 19" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Blame these lines" }));
+  await waitFor(() => expect(location.hash).toContain("lens=blame"));
+  expect(location.hash).toContain("lines=17-19");
+  const inBlame = await screen.findByRole("button", { name: "Actions for lines 17 to 19" });
+  expect(inBlame.closest("tr")?.id).toBe("L17");
+  fireEvent.click(inBlame);
+  expect(await screen.findByRole("menuitem", { name: "Show these lines' code" })).toBeTruthy();
 });

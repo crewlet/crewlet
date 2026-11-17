@@ -2711,6 +2711,8 @@ const (
 	// train, on kit 0.151.0: 6734.2 KiB (6,895,802 bytes), 34,785 over main: 6735 KiB.
 	// Gitlet's repositories as rows with their changes, checks and pushes by day: 6740.8 KiB
 	// (6,902,550 bytes), 6,748 over the train's: 6741 KiB.
+	// A file beside its repository's tree, with raw, download, copy and line actions: 6755.8 KiB
+	// (6,917,984 bytes), 22,182 over main: 6756 KiB.
 	treeBudget = 5<<20 + 1621<<10
 )
 
