@@ -5847,6 +5847,7 @@ few kit pieces, in the same anatomy, so a reader learns one shape.
 | Banner | `Callout layout="banner"` | A condition of the whole product, in the frame's state bar. |
 | Callout | `Callout` | One condition on a page, a section or a dialog. |
 | Grouped findings | `Callout` holding a `NoticeList` | Several findings from one source: a check's warnings, refused files, missing nodes. |
+| Standing advisory | quiet, `collapsible` `Callout` holding a `compact` `NoticeList` | Warnings that stay while their cause does (a company's configuration warnings): one line until opened. |
 | Panel | `AttentionList` | A page's mixed conditions, each with its fix (Settings › Advisor, tool server alarms). |
 | Field error | the field's own error | One field's refusal, beside the field. |
 
@@ -5876,6 +5877,15 @@ possible by wording every warning of one rule alike: a configuration warning
 carries `title` and `person` (the same for every subject) and its specifics in
 `item`; an alarm carries `title` and `person` beside the operator's `detail`
 and `remedy`.
+
+**Advisories rest as one line.** A standing advisory is not an alarm: it is
+drawn quiet (the tone on the glyph and the edge, no fill) and `collapsible`,
+closed as "3 configuration warnings · Review", and it remembers being opened
+per surface (`STORAGE_KEYS.warningsOpen`). Opened, a `compact` list gives each
+kind one line, its title, what it applies to ("9 agents") and its one action;
+the names and the explanation open under one line at a time. The same
+warnings answering a reader's own change rest open. Refusals and alarms stay
+loud, tinted and open.
 
 **Placement.** One notice area per page, under the page bar and tabs, danger
 first. A section's own condition sits in its head; a dialog's above its
