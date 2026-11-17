@@ -462,12 +462,24 @@ the dependency surface before choosing a host for it:
   about 2.9 seconds across a 100 ms leaf link before its rows' own bytes
   (145 ms at 5 ms a round trip, 29 ms at 1 ms), and a year of episodes about
   a minute across a 100 ms, 100 Mbit/s link. Time refuses it only when
-  nothing arrives for its stall (20.5 seconds for a pull across a link) or
-  when nothing is delivered to a table's replay for a minute, whichever
-  copies of the changelog it is placed on, and it says once a minute that it
-  is still running (`memory_hydration_slow`); the answers that refuse a seat
-  whatever the time, such as a row larger than the node's connection
-  carries, still refuse it. It windows its pulls to what the link carries
+  nothing arrives for its stall (20.5 seconds for a pull across a link)
+  while the leaf link carries nothing, or when nothing is delivered to a
+  table's replay for a minute, whichever copies of the changelog it is
+  placed on, and it says once a minute that it is still running
+  (`memory_hydration_slow`); the answers that refuse a seat whatever the
+  time, such as a row larger than the node's connection carries, still
+  refuse it. Behind a download or an event of megabytes on the same link it
+  waits for as long as the link keeps moving: the node reads its link's own
+  socket (below), and counts it moving while it carries, in either
+  direction, at least seven tenths of the floor of thirty seconds a
+  mebibyte, about 24 KB a second. What a quiet link carries on its own —
+  the fleet's presence reads, pings and heartbeats — has to stay under that
+  line, as the presence reads of the fleets these pages document do, at
+  under two fifths of the floor. A replay that hears nothing on a moving link
+  is placed again once the link has read 8.9 MB since its last word, and
+  refused once it has heard nothing for about 253 seconds; its other requests
+  are held up to 248 seconds past their own bounds the same way
+  ([across a link, silence is the link's](../concepts/seat-ownership.md#a-seats-memory-follows-it)). It windows its pulls to what the link carries
   within one lease heartbeat at the floor, so the node's lease renewals cross
   behind them in time; below about 0.84 Mbit/s a renewal sent behind a full
   window can still miss its own five-second term, as one behind an upload

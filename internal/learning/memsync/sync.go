@@ -180,6 +180,10 @@ type Syncer struct {
 	// ([Syncer.pullBound]), and 0 in a member's own process.
 	window int
 
+	// link is the meter of the link this node's connection crosses
+	// ([Config.Link]), and nil where it crosses none or nobody meters it.
+	link Link
+
 	// copies, when set, is where a hydration's replays make their consumers
 	// ([Syncer.replays]): a test's seam, nil in production, where they are
 	// the changelog's own ([changelogCopies]).
@@ -230,7 +234,11 @@ func New(db *store.DB, js jetstream.JetStream, agentID AgentIDFor, cfg Config) (
 				"link needs its lease heartbeat (Config.LeaseHeartbeat), which sizes the window "+
 				"its replays' pulls share with its lease renewals; got %v", cfg.LeaseHeartbeat)
 		}
-		s.pace, s.window = objstore.MiBPace, windowFor(cfg.LeaseHeartbeat)
+		s.pace, s.window, s.link = objstore.MiBPace, windowFor(cfg.LeaseHeartbeat), cfg.Link
+	} else if cfg.Link != nil {
+		return nil, errors.New("memsync: a node whose connection reaches the memory changelog " +
+			"in its own process crosses no link, so it has none to meter (Config.Link is set " +
+			"without Config.AcrossLink)")
 	}
 	return s, nil
 }
@@ -1105,7 +1113,8 @@ func (s *Syncer) checkIdentity(ctx context.Context) error {
 	// its own to hold it to less. A handle of each request's own, because
 	// the requests can be out together and the client caches each reply on
 	// its handle with no lock.
-	info, err := jsprovision.ReadWith(ctx, s.timing.Arriving(jsapi.Crossing(apiBytes, s.pace)),
+	timing := s.waits(jsapi.Crossing(apiBytes, s.pace))
+	info, err := jsprovision.ReadWith(ctx, timing,
 		func(ctx context.Context) (*jetstream.StreamInfo, error) {
 			stream, err := s.js.Stream(ctx, topics.MemoryStream)
 			if err != nil {
@@ -1113,6 +1122,12 @@ func (s *Syncer) checkIdentity(ctx context.Context) error {
 			}
 			return stream.CachedInfo(), nil
 		}, nil)
+	if err != nil && jsprovision.Unanswered(ctx, err) {
+		return fmt.Errorf("memsync: read the memory changelog's identity: nobody answered it in %s: %w — "+
+			"a seat is not admitted from a stream this node cannot identify, "+
+			"because a recreated one is EMPTY and would hydrate every seat to "+
+			"nothing while reporting success", s.heldFor(timing, timing.Lookup), err)
+	}
 	if err != nil {
 		return fmt.Errorf("memsync: read the memory changelog's identity: %w — "+
 			"a seat is not admitted from a stream this node cannot identify, "+
@@ -1239,7 +1254,7 @@ func (s *Syncer) checkIdentity(ctx context.Context) error {
 // unanswered that long.
 func (s *Syncer) barrier(ctx context.Context, agentID, what string, arrival time.Duration) (uint64, error) {
 	subject := barrierSubject(agentID)
-	timing := s.timing.Arriving(arrival)
+	timing := s.waits(arrival)
 	ack, err := jsprovision.ReadWith(ctx, timing,
 		func(ctx context.Context) (*jetstream.PubAck, error) {
 			ack, err := s.js.Publish(ctx, subject, nil)
@@ -1261,10 +1276,10 @@ func (s *Syncer) barrier(ctx context.Context, agentID, what string, arrival time
 			what, subject, refused, topics.MemoryPrefix, err)
 	}
 	return 0, fmt.Errorf("memsync: publish %s to %s: no member of the changelog acknowledged it "+
-		"in the %v it is asked for: the changelog had no leader that long, or the broker refused "+
+		"in the %s it is asked for: the changelog had no leader that long, or the broker refused "+
 		"the publish without an answer, as it refuses a connection without publish permission "+
 		"on %s> (jetstream_client_error says so): %w",
-		what, subject, timing.Lookup, topics.MemoryPrefix, err)
+		what, subject, s.heldFor(timing, timing.Lookup), topics.MemoryPrefix, err)
 }
 
 // unacknowledged reports a publish nobody answered: the silence the hedge

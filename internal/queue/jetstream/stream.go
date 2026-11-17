@@ -155,6 +155,14 @@
 // buffer still draining. The deployment guides state it as a requirement:
 // the link reaches the broker's own sockets.
 //
+// WHAT READS IT (ADR-0155): a wait across a link ends for silence only while
+// the link carries nothing at the floor. A seat's hydration
+// (internal/learning/memsync, handed the meter as its Config.Link) refuses a
+// replay that heard nothing for its stall only where the link did not move
+// over it, and holds its hedged requests' ceilings past their spans while it
+// moves (internal/jsprovision's Timing.Following), each wait capped by one
+// message at the transport's bound crossing at the floor.
+//
 // # A pull allocates for what it receives, never for what it may
 //
 // The client library's fetches size their delivery channels by the BATCH a

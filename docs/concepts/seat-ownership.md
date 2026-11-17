@@ -409,7 +409,51 @@ to thirty seconds and its pull's arrival, each consumer's creation is asked as
 a write, for up to thirty seconds, and a deletion is hygiene, one request of
 five seconds, whose failure leaves the consumer for the broker to reap once it
 has had no pull for longer than a live replay goes between two (46 seconds in
-a member's own process, about nine minutes across a link).
+a member's own process, about thirteen minutes across a link). Across a link,
+each of those bounds runs only while the link is still (below).
+
+**Across a link, silence is the link's.** A node whose connection crosses a
+link (a satellite's leaf link, or a dial to an external cluster) meters it at
+its own socket: the bytes it read, and the bytes the far end acknowledged of
+what it wrote ([what a satellite still needs](../guides/satellite-nodes.md#what-a-satellite-still-needs)).
+Neither the broker nor the client sees a message cross until its last byte is
+in, so a replay whose rows wait on the link behind the node's own download, or
+behind an event of megabytes, hears nothing for as long as that takes, and
+only the link says whether anything is crossing. So a replay that hears
+nothing for its stall is refused for **silence** only where its link carried
+less than seven tenths of the floor over that stall, in either direction; the
+error says what the link carried. While the link moves, the replay waits, and
+is judged again a stall later, with two caps on the wait:
+
+- **Placed again past one message and a window.** Once the link has read one
+  message at the broker's limit and one of the replay's pulls since the replay
+  last heard anything (8.9 MB at the shipped lease), every word its copy owes
+  it has crossed or was never sent, and the replay is placed again on a copy
+  the broker chooses afresh (`memory_replay_placed_again`, `why=quiet`): on a
+  link of 100 Mbit/s, under a second's worth. Such a placement starts no
+  minute of the replay being behind (above), since the link it waits on
+  carries other traffic, which may hold its words longer than a minute.
+- **Refused at one pull at the broker's limit.** A replay that hears nothing
+  for the stall of one pull at the broker's limit since its last word, across
+  every placement (about 253 seconds at the floor), while its link moves too
+  slowly to reach the first cap, is refused: the link carries the node's other
+  traffic too slowly for the replay's words to cross, or the copy stopped
+  answering behind it.
+
+The identity reads, the barriers and each consumer's creation are held the same
+way: each is refused at its bound only where the link did not move over that
+bound, and is held past it while the link moves, by one message at the
+broker's limit crossing at the floor at most (about 248 seconds), asking
+nothing more past its bound and waiting for the requests already out. A
+member crosses no link and has no meter, and time alone refuses its
+hydrations. Where a link carries a hydration nothing (a dead link, a member
+that stopped answering on a quiet link), the seat is refused at the same
+stall as before; where it moves, a hydration that used to be refused behind a
+download or a large event completes. One case is slower than it was: a copy
+that stops answering altogether on a link saturated at the floor, which waits
+for the caps rather than its stall. A consumer that is gone, or a pull it
+never got, still answers the replay's probe behind the traffic and places it
+again sooner.
 
 Its fixed cost is round trips. Two read the changelog's identity, before the
 barrier and after the last table, and one publishes the barrier; each of the
@@ -426,9 +470,18 @@ another (at most four a pass), so the rest of that pass waits for it, and so
 does the next pass, with the releases it would make: a seat whose role was
 removed, a re-pin, a shed for capacity. So does anything else that takes that
 seat's lock, a sandbox apply preparing the held seats among them, and a seats
-node's first `/ready`, which waits for its first pass. None of it touches
-ownership: the seat's lease is renewed throughout, and a lost lease, a drain or
-a stop cuts the hydration rather than waiting for it (above).
+node's first `/ready`, which waits for its first pass. Across a moving link
+those waits are the longer ones above: a replay that hears nothing waits up to
+its 253-second cap, where its stall used to refuse it at 20.5 seconds, and its
+identity reads, barriers and consumer creations up to 248 seconds past their
+bounds, about 278 seconds where they ended at 30 (294 for an end barrier,
+where it ended at 45.5). That is
+the price of not refusing a seat behind traffic that is crossing, and only a
+copy or a link that stops answering while other traffic keeps the link moving
+pays it in full; a link that falls still ends the wait within a stall. None of
+it touches ownership: the seat's lease is renewed throughout, and a lost
+lease, a drain or a stop cuts the hydration rather than waiting for it
+(above).
 
 **A replay holds one pull of rows at a time, bounded in messages and in
 bytes.** A pull asks for at most 1024 messages, which sets how many round
