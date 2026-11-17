@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
@@ -33,9 +34,13 @@ import (
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
+	"github.com/crewlet/crewlet/internal/queue"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/version"
 )
 
@@ -1364,4 +1369,108 @@ func TestTheEnginesCoordinatorHoldsThisProcesssTakerLease(t *testing.T) {
 		t.Errorf("an engine with no lease store hands its coordinator %#v as its taker lease's store, under %q; "+
 			"want neither", opts.Takers, opts.Incarnation)
 	}
+}
+
+// A DELIVERY MADE AS A SEAT'S CONTROL TOPIC IS ATTACHED WAITS FOR THE SEAT'S
+// RECOVERY. A seat's recovery pass reads a claim it finds as one whose node
+// stopped, so none of the seat's runs is claimed on this node while the pass
+// runs (internal/sandbox's recoverygate.go). The broker holds what was
+// published to the seat's control topic while nothing here consumed it and
+// delivers it the moment the topic is attached, which on a seat already held,
+// prepared by the apply that brings the runtime up, the node's admission does
+// not refuse. So the preparation hands the subscription to the pass, which
+// makes it once the seat's recovery gate is closed
+// ([sandbox.Coordinator.RecoverSeat]'s attach): the delivery is refused its
+// claim (sandbox.ErrSeatRecovering) and handed back as this node's failure,
+// and the pass takes the run over as its last holder left it.
+//
+// Mutation: attach the control topic before the pass and hand the pass no
+// attach, as the preparation did, and the delivery claims the run ahead of it.
+func TestADeliveryAsTheSeatsControlTopicIsAttachedWaitsForItsRecovery(t *testing.T) {
+	t.Parallel()
+	live := t.Context()
+	c, seat := executorCompany(t)
+	bridge := bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	})
+	e, _ := launchRig(t, c, bridge)
+	agent, ok := c.Org.AgentIDFor(seat)
+	if !ok {
+		t.Fatal("the seat has no agent id")
+	}
+	rt := e.sandbox.Load()
+	// A JOB OF THE SEAT'S RUNNING, whose completion was published while
+	// nothing here consumed the seat's control topic.
+	opened, openErr := rt.pending.BeginLaunch(live, sandbox.PendingRun{
+		TurnID: "t1", AgentHandle: seat.Handle(), AgentID: agent.String(), Role: seat.Name,
+		Harness: "claude-code",
+	}, sandbox.Fence{})
+	if openErr != nil {
+		t.Fatalf("BeginLaunch: %v", openErr)
+	}
+	if suspended, err := rt.pending.MarkSuspended(live, "t1", sandbox.Suspension{
+		State: json.RawMessage(`{"version":4,"iteration":1}`), Iteration: 1}); err != nil || !suspended {
+		t.Fatalf("MarkSuspended = %v, %v", suspended, err)
+	}
+	finished := types.ExecutorFinished{Agent: agent.String(), AgentHandle: seat.Handle(), RoleName: seat.Name,
+		TurnID: "t1", LaunchID: opened.LaunchID, Harness: "claude-code"}
+	attached := &deliveredOnAttach{EventQueue: e.backends.Queue, topic: topics.AgentControl(agent),
+		ev: events.New(finished, events.TraceContext{})}
+	e.backends.Queue = attached
+	if err := attached.Start(live); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	if err := e.prepareSeatSandbox(live, rt, placement.Seat{ID: agent, Handle: seat.Handle()}, 1,
+		"node-a:1"); err != nil {
+		t.Fatalf("prepareSeatSandbox: %v", err)
+	}
+	got, delivered := attached.outcome()
+	if !delivered {
+		t.Fatal("the premise: the seat's control topic was attached and nothing was delivered on it")
+	}
+	if !errors.Is(got.Err, sandbox.ErrSeatRecovering) || got.Outcome != queue.OutcomeNak || got.FailsMessage() {
+		t.Fatalf("the delivery made as the seat's control topic was attached = %s (%v, fails the message "+
+			"%v); want it refused by the seat's recovery gate and handed back as this node's", got.Outcome,
+			got.Err, got.FailsMessage())
+	}
+	if row, found, err := rt.pending.Get(live, "t1"); err != nil || !found || row.Status != sandbox.StatusRunning {
+		t.Fatalf("the run is %q (found %v, %v) once the seat was prepared; want it running, taken over as "+
+			"its last holder left it", row.Status, found, err)
+	}
+}
+
+// deliveredOnAttach is an event queue that, the moment a subscription to topic
+// is attached, hands it ev as the broker hands a message it held for the topic,
+// and keeps what the subscription made of it. It answers every call as the
+// queue beneath it does.
+type deliveredOnAttach struct {
+	queue.EventQueue
+	topic     string
+	ev        *events.Event
+	mu        sync.Mutex
+	got       queue.Result
+	delivered bool
+}
+
+func (q *deliveredOnAttach) Subscribe(ctx context.Context, topic, group string, h queue.Handler) error {
+	if err := q.EventQueue.Subscribe(ctx, topic, group, h); err != nil {
+		return err
+	}
+	if topic != q.topic {
+		return nil
+	}
+	got := h(ctx, q.ev)
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.got, q.delivered = got, true
+	return nil
+}
+
+// outcome is what the subscription made of the delivery, and whether one was
+// made.
+func (q *deliveredOnAttach) outcome() (queue.Result, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.got, q.delivered
 }
