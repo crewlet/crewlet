@@ -79,7 +79,12 @@ func Unacked(c net.Conn) (int, error) {
 // not read. darwin keeps no such count, so there it is written less what the
 // send buffer holds (`SO_NWRITE`): two readings at two instants, which can
 // step back by what a write added between them — a caller that holds the
-// count over time keeps the largest it has read.
+// count over time keeps the largest it has read. And it lags by every byte of
+// a Write still in the socket: the send buffer holds them before the Write
+// returns, and a caller counts them into written only once it has, so a
+// caller that hands its socket one Write of megabytes reads nothing
+// acknowledged until that Write ends — it writes in chunks it counts as each
+// returns, and lags by one chunk at most.
 func Acked(c net.Conn, written uint64) (uint64, error) {
 	var n uint64
 	err := control(c, func(fd uintptr) (err error) {

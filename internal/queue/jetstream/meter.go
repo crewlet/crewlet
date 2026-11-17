@@ -270,13 +270,38 @@ func (c *meteredConn) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// Write counts what it wrote.
+// meterWriteChunk is the most of one Write a [meteredConn] hands its socket
+// at a time: 64 KiB, the size of a socket's send buffer before the kernel
+// autotunes it.
+//
+// WHY A WRITE IS SPLIT: where the kernel keeps no count of what the far end
+// acknowledged (darwin, [sockcount.Acked]), the count is what was written
+// less what the send buffer still holds, and the send buffer holds a Write's
+// bytes while the Write is still in the socket. nats.go flushes a large
+// message as ONE Write ([externalWriteDeadline]), so counted only once it
+// returned, a message of 8 MiB crossing a link at the floor — four minutes —
+// would read as nothing acknowledged for all of them, the very case the meter
+// is for. Split, the count lags by one chunk at most. Each chunk is written
+// under the deadline the whole Write was given, since a socket's deadline is
+// an instant, not a span.
+const meterWriteChunk = 64 << 10
+
+// Write counts what it wrote, a chunk ([meterWriteChunk]) at a time.
 func (c *meteredConn) Write(p []byte) (int, error) {
-	n, err := c.Conn.Write(p)
-	if n > 0 {
-		c.written.Add(uint64(n))
+	var total int
+	for len(p) > 0 {
+		chunk := p[:min(len(p), meterWriteChunk)]
+		n, err := c.Conn.Write(chunk)
+		if n > 0 {
+			c.written.Add(uint64(n))
+			total += n
+		}
+		if err != nil {
+			return total, err
+		}
+		p = p[n:]
 	}
-	return n, err
+	return total, nil
 }
 
 // NetConn is the socket under the count, for a reader of its kernel's counts

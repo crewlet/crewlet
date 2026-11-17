@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -604,5 +605,71 @@ func TestAnExternalDialClosesTheSocketItsClientGaveUp(t *testing.T) {
 	}
 	if n := meter.heldSockets(); n != 1 {
 		t.Errorf("the meter holds %d sockets after three dials, want the one the client has", n)
+	}
+}
+
+// A METERED WRITE IS COUNTED AS ITS SOCKET TAKES IT, never only once it
+// returns: nats.go flushes a large message as one Write, and where the kernel
+// keeps no count of what the far end acknowledged (darwin) the meter's count
+// is what was written less what the socket still holds, so a Write counted
+// whole would read as nothing acknowledged for the whole of its crossing.
+// Sixty-four MiB written to a peer that reads nothing, far past both sockets'
+// buffers, blocks, and is counted while it does; once the peer reads it all,
+// the Write returns, counted whole.
+//
+// Mutant: the Write handed to the socket whole — nothing is counted while it
+// blocks.
+func TestAMeteredWriteIsCountedAsItsSocketTakesIt(t *testing.T) {
+	t.Parallel()
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			close(accepted)
+			return
+		}
+		accepted <- c
+	}()
+	client, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, ok := <-accepted
+	if !ok {
+		t.Fatal("the peer's socket was never accepted")
+	}
+	t.Cleanup(func() { _ = peer.Close() })
+	meter := newLinkMeter()
+	t.Cleanup(meter.close)
+	c := meter.wrap(client)
+	t.Cleanup(func() { _ = c.Close() })
+
+	const size = 64 << 20
+	wrote := make(chan error, 1)
+	go func() {
+		_, err := c.Write(make([]byte, size))
+		wrote <- err
+	}()
+	until(t, "the blocked write counted as its socket took it", func() bool {
+		select {
+		case err := <-wrote:
+			t.Fatalf("a write of %d bytes to a peer that reads nothing returned (%v)", size, err)
+		default:
+		}
+		return meter.written() > 0
+	})
+	if n, err := io.CopyN(io.Discard, peer, size); err != nil {
+		t.Fatalf("the peer read %d of %d bytes: %v", n, size, err)
+	}
+	if err := <-wrote; err != nil {
+		t.Fatalf("the write: %v", err)
+	}
+	if n := meter.written(); n != size {
+		t.Errorf("the meter counted %d bytes of a %d-byte write", n, size)
 	}
 }
