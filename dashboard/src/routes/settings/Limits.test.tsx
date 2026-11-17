@@ -117,7 +117,7 @@ test("each cap carries its name, its key to copy, its value and its source", asy
     within(changed)
       .getAllByRole("cell")
       .map((c) => c.textContent),
-  ).toEqual(["7", "Changed from 10"]);
+  ).toEqual(["7", "Changed from 10", ""]);
   // ONLY THE CHANGED ROW IS MARKED; a default says so in a word, never a tag.
   const resting = within(turn).getByRole("row", { name: /Review rounds per turn/ });
   expect(resting.hasAttribute("data-changed")).toBe(false);
@@ -126,7 +126,7 @@ test("each cap carries its name, its key to copy, its value and its source", asy
     within(resting)
       .getAllByRole("cell")
       .map((c) => c.textContent),
-  ).toEqual(["3", "Default"]);
+  ).toEqual(["3", "Default", ""]);
 });
 
 test("a cap whose value switches it off says Off, as a word", async () => {
@@ -136,7 +136,7 @@ test("a cap whose value switches it off says Off, as a word", async () => {
     within(wakeUps)
       .getAllByRole("cell")
       .map((c) => c.textContent),
-  ).toEqual(["Off", "Default"]);
+  ).toEqual(["Off", "Default", ""]);
 });
 
 test("a set value names the default it replaced, Off where the default is no limit", () => {
@@ -186,7 +186,7 @@ async function change(name: RegExp, value: string) {
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name }));
   });
-  const field = screen.getByRole("textbox");
+  const field = screen.getByRole("spinbutton");
   fireEvent.change(field, { target: { value } });
   await act(async () => {
     fireEvent.submit(field.closest("form")!);
@@ -227,7 +227,7 @@ test("a cap is checked by the engine, then saved as a patch of its one key", asy
   expect(within(row).getByText("5")).toBeTruthy();
   // THE WRITE'S OWN STATUS, beside the key's copy status the row also holds.
   expect(within(row).getByText("applying…").getAttribute("role")).toBe("status");
-  expect(screen.queryByRole("textbox")).toBeNull();
+  expect(screen.queryByRole("spinbutton")).toBeNull();
 });
 
 // ONCE THIS NODE APPLIED IT the page re-reads, and the mark goes when the
@@ -305,7 +305,7 @@ test("Save is held while the value typed is the one in force", async () => {
   await show(LIMITS);
   await change(/Change Review rounds per turn/, "3");
   expect(saveButton().getAttribute("aria-disabled")).toBe("true");
-  fireEvent.change(screen.getByRole("textbox"), { target: { value: "4" } });
+  fireEvent.change(screen.getByRole("spinbutton"), { target: { value: "4" } });
   expect(saveButton().getAttribute("aria-disabled")).not.toBe("true");
 });
 
@@ -322,7 +322,7 @@ test.each([
   await show(LIMITS);
   await change(name, typed);
   expect(calls).toEqual([]);
-  expect(screen.getByRole("textbox").getAttribute("aria-invalid")).toBe("true");
+  expect(screen.getByRole("spinbutton").getAttribute("aria-invalid")).toBe("true");
   expect(screen.getAllByText(said).length).toBeGreaterThan(0);
   expect(saveButton().getAttribute("aria-disabled")).toBe("true");
 });
@@ -365,7 +365,7 @@ test("a value the engine refuses is said in a person's words, and nothing is sav
   expect(refused.textContent).not.toContain("The whole company is checked");
   expect(calls.filter((c) => c.method === "PATCH" && !c.path.includes("dry_run"))).toEqual([]);
   // The field stays open on what was typed.
-  expect((screen.getByRole("textbox") as HTMLInputElement).value).toBe("40");
+  expect((screen.getByRole("spinbutton") as HTMLInputElement).value).toBe("40");
 });
 
 test("the engine's range refusal is said as the field says it, and an unworded rule plainly", async () => {
@@ -422,11 +422,12 @@ test("what is typed is held to the cap's unit before any request", async () => {
   await change(/Change Review rounds per turn/, "2.5");
   expect(calls).toEqual([]);
   // THE FIELD IS REFUSED, in its own line under it, before anything is sent,
-  // saying what the value is not: the line under the field already says what
-  // it takes, and the two said the same thing.
-  expect(screen.getByRole("textbox").getAttribute("aria-invalid")).toBe("true");
+  // saying what the value is not. No sentence says how to type it: the
+  // steppers, the bounds and the Default chip do.
+  expect(screen.getByRole("spinbutton").getAttribute("aria-invalid")).toBe("true");
   expect(screen.getAllByText("“2.5” is not a whole number.").length).toBeGreaterThan(0);
-  expect(screen.getAllByText(/A whole number\./)).toHaveLength(1);
+  expect(screen.queryByText(/A whole number\./)).toBeNull();
+  expect(screen.queryByText(/Empty is the default/)).toBeNull();
 });
 
 // A CAP NO DOCUMENT CARRIES IS NOT OFFERED A CHANGE: the engine says which
