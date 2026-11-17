@@ -24,6 +24,7 @@ import {
   CheckGlyph,
   EyeGlyph,
   FileDiffGlyph,
+  FlagGlyph,
   GitCommitVerticalGlyph,
   GitCompareGlyph,
   MessageSquareGlyph,
@@ -35,6 +36,7 @@ import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { useDraftState } from "~/app/assistant/draft.ts";
 import { PageFailed } from "~/components/common.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
+import { changeLive } from "~/lib/code.ts";
 import { useNow } from "~/lib/clock.ts";
 import { plural } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
@@ -43,6 +45,7 @@ import { useViewer } from "~/lib/viewer.ts";
 import type {
   CodeChangeDetail,
   CodeCommentRow,
+  CodeFindingRow,
   CodeReviewRow,
   CodeReviewerRow,
   CodeRevisionRow,
@@ -61,11 +64,15 @@ import {
   TimelineList,
   type DiscTone,
 } from "./Timeline.tsx";
+import { FindingCard, type ExcerptRead } from "./Finding.tsx";
 import {
+  partMovedBy,
   partRefusal,
   positionBefore,
   refusedWords,
   usePagedComments,
+  usePagedExcerpts,
+  usePagedFindings,
   usePagedReviewers,
   usePagedReviews,
 } from "./reads.ts";
@@ -161,9 +168,38 @@ export function Conversation({
   const comments = usePagedComments(change);
   // ONE READ for the timeline's asks and the rail's reviewers.
   const asked = usePagedReviewers(change);
+  // A FINDING ROW MOVES ONLY WITH WHAT SOMEBODY SAID: the placements a push
+  // moves are Files changed's to read.
+  const findings = usePagedFindings(change, change.revision, partMovedBy(change, "said"));
+  const excerpts = usePagedExcerpts(change);
   const entries = timelineOf(reviews.items, comments.items, revisions, asked.items);
   const askedRefused = partRefusal(asked);
-  const parts = [reviews, comments, asked];
+  const parts = [reviews, comments, asked, findings, excerpts];
+  const excerptsRefused = partRefusal(excerpts);
+  const excerptOf = (id: string): ExcerptRead => {
+    const found = excerpts.items.find((e) => e.id === id);
+    if (found) return found;
+    if (excerpts.error && excerpts.items.length === 0) {
+      // AN OLDER FLEET knows no excerpts part: it refuses the parameter.
+      if (excerptsRefused === null) return "reading";
+      return excerpts.error === "bad_params" ? "refused" : { failed: excerptsRefused };
+    }
+    return excerpts.loading || excerpts.paging ? "reading" : "missing";
+  };
+  const findingsRefused = partRefusal(findings);
+  const said: Said = {
+    findingsRead:
+      findings.items.length > 0
+        ? "read"
+        : findingsRefused !== null
+          ? { refused: findingsRefused }
+          : findings.loading || findings.error
+            ? "reading"
+            : "read",
+    findingsOf: (review) => findings.items.filter((f) => f.review_id === review),
+    repliesTo: (finding) => comments.items.filter((c) => c.finding_id === finding),
+    excerptOf,
+  };
   const more = parts.some((p) => p.more);
   const paging = parts.some((p) => p.paging);
   const pageError = parts.find((p) => p.pageError)?.pageError ?? null;
@@ -191,7 +227,13 @@ export function Conversation({
               />
             </TimelineItem>
             {entries.map((entry) => (
-              <TimelineEntry key={entryKey(entry)} entry={entry} change={change} now={now} />
+              <TimelineEntry
+                key={entryKey(entry)}
+                entry={entry}
+                change={change}
+                said={said}
+                now={now}
+              />
             ))}
           </TimelineList>
           {more && (
@@ -282,14 +324,72 @@ function reviewGlyph(verdict: string): ReactNode {
   return <EyeGlyph size="sm" />;
 }
 
+/** What a review's box draws beside it: its findings, each one's replies and excerpt. */
+interface Said {
+  /** Whether the findings' first page is in, still out, or refused (the engine's sentence). */
+  findingsRead: "read" | "reading" | { refused: string };
+  findingsOf: (review: string) => CodeFindingRow[];
+  repliesTo: (finding: string) => CodeCommentRow[];
+  excerptOf: (finding: string) => ExcerptRead;
+}
+
+/** A review's findings under it: a head that counts them, then each card. */
+function ReviewFindings({
+  change,
+  review,
+  said,
+}: {
+  change: CodeChangeDetail;
+  review: CodeReviewRow;
+  said: Said;
+}) {
+  const loaded = said.findingsOf(review.id);
+  const open = loaded.filter((f) => f.state === "open").length;
+  const state = said.findingsRead;
+  // NOTHING IS COUNTED AS LOADED OR LATER until the first page is in.
+  const later = state === "read" ? review.findings - loaded.length : 0;
+  return (
+    <section
+      className="code-review-findings"
+      aria-label={`Findings of the review by ${review.reviewer}`}
+    >
+      <div className="code-review-findings__head">
+        <FlagGlyph size="sm" />
+        <span>
+          <strong>{plural(review.findings, "finding")}</strong> on revision {review.revision}
+          {later > 0 && `, ${loaded.length} loaded`}
+        </span>
+        {state === "read" && <span className="code-review-findings__open">{open} open</span>}
+      </div>
+      {typeof state === "object" && (
+        <p className="muted">{refusedWords("Its findings are unavailable", state.refused)}</p>
+      )}
+      {loaded.map((f) => (
+        <FindingCard
+          key={f.id}
+          change={change}
+          finding={f}
+          replies={said.repliesTo(f.id)}
+          applicable={changeLive(change.state) && f.revision === change.revision}
+          excerpt={said.excerptOf(f.id)}
+          where="review"
+        />
+      ))}
+      {later > 0 && <p className="muted">{later} more on a later page.</p>}
+    </section>
+  );
+}
+
 /** One entry, as the timeline draws it. */
 function TimelineEntry({
   entry,
   change,
+  said,
   now,
 }: {
   entry: Entry;
   change: CodeChangeDetail;
+  said: Said;
   now: number;
 }) {
   switch (entry.kind) {
@@ -314,11 +414,7 @@ function TimelineEntry({
               ) : (
                 <p className="muted">No summary.</p>
               )}
-              {r.findings > 0 && (
-                <a className="t-link" href={files}>
-                  {plural(r.findings, "finding")} on revision {r.revision}
-                </a>
-              )}
+              {r.findings > 0 && <ReviewFindings change={change} review={r} said={said} />}
             </article>
           }
         >
@@ -547,9 +643,12 @@ export function Thread({
 export function ReplyComposer({
   change,
   target,
+  focus = false,
 }: {
   change: CodeChangeDetail;
   target: { thread: string } | { finding: string };
+  /** Takes focus as it opens, where a press opened it. */
+  focus?: boolean;
 }) {
   const write = useAct("code_comment_on_change");
   const [body, setBody] = useDraftState("");
@@ -580,6 +679,7 @@ export function ReplyComposer({
         <Textarea
           aria-label="Reply"
           aria-describedby={keys.describedBy}
+          autoFocus={focus}
           placeholder="Reply…"
           value={body}
           rows={1}

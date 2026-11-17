@@ -694,7 +694,9 @@ made as you and never ahead of the engine's answer:
 A merged change shows **Revert** in their place ([Reverting a
 change](#reverting-a-change)): a confirmation that says what it opens, with a
 box to merge the revert once it is open. A finding that still stands is
-answered on the **Files changed** tab with **Answer finding**: Resolved, Won't fix or
+answered under its review or on the **Files changed** tab: **Resolve** in one press, for
+an author of the change, or
+**Answer** with Resolved, Won't fix or
 Disputed by an author, or Dismiss by its raiser, a maintainer or a person
 (`code_resolve_finding`).
 

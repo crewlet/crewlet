@@ -559,8 +559,9 @@
   margin-block-start: var(--spacing-2);
 }
 
-/* A BYLINE'S OWN TIME IN A TIMELINE SENTENCE follows a middot. */
-.code-timeline .code-byline > .code-byline__when::before {
+/* A BYLINE'S OWN TIME IN A TIMELINE SENTENCE, or a finding's on its line, follows a middot. */
+.code-timeline .code-byline > .code-byline__when::before,
+.code-finding__by .code-byline > .code-byline__when::before {
   content: "·";
   margin-inline-end: var(--spacing-1);
 }
@@ -1027,8 +1028,8 @@
   margin-inline-start: auto;
 }
 
-/* A FINDING ON A LINE, as a card under it: its weight, its subject, its
-   title and who raised it across its head. */
+/* A FINDING, as a card under its review or its line: its weight, subject,
+   title and state across its head, then its lines, words and suggestion. */
 .code-finding {
   display: flex;
   flex-direction: column;
@@ -1048,7 +1049,37 @@
 
 .code-finding__title {
   min-width: 0;
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
   overflow-wrap: anywhere;
+}
+
+.code-finding__state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  margin-inline-start: auto;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.code-finding__where {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-size: var(--font-size-xs);
+}
+
+.code-finding__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-finding__end {
+  margin-inline-start: auto;
 }
 
 .code-finding__by {
@@ -1060,12 +1091,57 @@
 }
 
 .code-suggestion {
-  margin: 0;
-  padding: var(--spacing-2);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-sm);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.code-suggestion__head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.code-suggestion__where {
+  margin-inline-start: auto;
+}
+
+/* AN EXCERPT: a few lines of the diff at the code's 12 px, scrolled in its own box. */
+.code-excerpt {
+  min-width: 0;
+  overflow-x: auto;
+  font-size: var(--font-size-xs);
+}
+
+.code-excerpt--reading {
+  min-block-size: 4.5rem;
+}
+
+/* A LINE TOO LONG TO SHOW is said in words, in the ink a reader reads past. */
+.code-excerpt__elided {
+  color: var(--color-text-tertiary);
+}
+
+/* A REVIEW'S FINDINGS: a head that counts them, then each card. */
+.code-review-findings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+
+.code-review-findings__head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-size: var(--font-size-sm);
+}
+
+.code-review-findings__open {
+  margin-inline-start: auto;
+  color: var(--color-text-secondary);
 }
 
 /* PROVENANCE: a label and its value a row, the labels one column. */

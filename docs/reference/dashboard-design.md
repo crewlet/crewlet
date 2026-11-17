@@ -187,7 +187,7 @@ before it, and the sentence beside it says what they are doing.
 **A reviewer's face in a change's row wears the kit's verdict corner** in place of a status:
 a check on the success fill for an approval, a mark on the danger fill for changes requested,
 each said in its title too. It is held to Gitlet's rows (`SeatAvatar.test.tsx`); a verdict
-elsewhere stays words.
+elsewhere stays words, but for a review's disc on a change's timeline (`change/timeline.test.ts`).
 
 | Status (pill tone) | `activity` | Label |
 |---|---|---|
@@ -5782,7 +5782,7 @@ a tool arrives in it with the control that sends it. The controls
 | Edit · Delete file · New file · Add a file | A repository's Code tab, on a branch: a file's card and a directory's bar; Add a file on an empty repository | `code_commit_files{repo, branch, expected_head, message, files}`: one commit of one file (`put` or `delete`) at the commit the page read; an empty repository's first file sends no `expected_head`, a root commit that makes its default branch |
 | Revert · Cherry-pick | A commit's page | `code_revert` / `code_cherry_pick{repo, branch, expected_head, commit, message?}`: one new commit on the branch chosen |
 | Rebase · Take out of the queue · Revert | A change's page, beside its merge controls; Take out on a row of Gitlet › Queue | `code_rebase_change{change, expected_head}` · `code_dequeue_change{change}` · `code_revert_change{change, merge?}`, each after a confirmation |
-| Answer finding | A standing finding on a change's Files changed tab | `code_resolve_finding{change, findings, resolution, note?}` |
+| Answer · Resolve | A standing finding, under its review and on a change's Files changed tab | `code_resolve_finding{change, findings, resolution, note?}` |
 | Send (`Enter`) | A chat room's composer | `post_message{channel, body, links?}`: under the operation key the outbox keeps (`Idempotency-Key`), so a retry after a lost answer is the same message rather than a second one. `links` are what the words link to that a room previews, read from the body when it is sent: this dashboard's records (a task, a page or an artifact the Attach pickers wrote in, or one linked by hand) as whole addresses on it, and github.com pull requests (`https://github.com/{owner}/{repo}/pull/{n}`, pasted or linked), once each and at most `MAX_MESSAGE_LINKS` (`chatlet.MaxLinks`), so the room previews what a person attached as it does what a seat links. Nothing is checked against the sender: `chat_unfurls` reads each record as the reader looking at the message, and a pull request only under an owner the GitHub configuration names, so a link previews nothing for a reader who may not open it, whoever sent it. A message of words alone sends none |
 | Reply | A chat thread's composer | `reply_in_thread{channel, reply_to, body, links?}`, its links read from the body as Send's are |
 | Edit message, then Save | A chat message of your own (its More menu) | `edit_message{channel, message_id, body}`: the author's alone, never an admin's on somebody else's words, and taken in an archived room. Save is held over a rewrite that is the message as it stands or is empty; the editor closes on an answer that took it and keeps your words on any other |
@@ -8754,7 +8754,11 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   the one before (`since=`). Each review is a row whose disc wears its verdict's tone
   (changes requested in the danger state's, an approval in the success state's, a
   comment neutral), the verdict said in words beside it, and its summary and findings
-  in a box under it: the one place a verdict takes a hue; everywhere else it stays words. Each ask for review that stands is a row
+  in a box under it; with a change row's verdict corner, the only places a verdict takes a
+  hue; everywhere else it stays words.
+  Each finding is a card (`change/Finding.tsx`, the one Files changed draws too) with
+  the lines around it as its revision's diff marks them (`part=excerpts`, read again
+  only when somebody reviews), its own lines marked, and a suggestion as a small diff. Each ask for review that stands is a row
   where it was made: by whom, of whom and when, a path owner's with the paths it owns
   ("earlier" past the notices' horizon), and a withdrawn ask says so. Each thread is a
   card beside its writer's face, with its replies, a one-line reply growing as it is
@@ -8772,15 +8776,15 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   a reviewer nobody asked listed by their review; its owner, its authors, its
   work item, its branches as chips, its head, and whether its latest
   revision merges into its target as its home recorded it — cleanly, in the
-  success state's tone, or conflicting, in the danger state's, with the paths. The engine pages reviews, comments and asks oldest
-  first, so what one page leaves out is the newest: **Load more** under the
+  success state's tone, or conflicting, in the danger state's, with the paths. The engine pages reviews, comments, asks,
+  findings and their excerpts oldest first, so what one page leaves out is the newest: **Load more** under the
   timeline asks each part's page after the cursor its last one ended at, and
   the timeline is built over every page loaded, so a reply on a later page
   joins its root. The asks are asked again as the change or its conversation
-  moves; every page of reviews and comments loaded only when somebody wrote
+  moves; every page of reviews, comments, findings and excerpts loaded only when somebody wrote
   on the change (the conversation's `spoken_at`, beside the part's count),
-  never on a push or a mergeability its home recorded, which write no review
-  or comment: a busy target branch re-checks every live change into it, and
+  never on a push or a mergeability its home recorded, which write none of
+  them: a busy target branch re-checks every live change into it, and
   each held page would otherwise be read again on every push to it.
   **Files changed** is the revision's files (`rev=`, the
   head by default; `since=` reads what changed since an earlier revision, the
@@ -8797,8 +8801,9 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   after from the cursor the last one ended at, and the hunks drawn from every
   page read (`lib/patchPages.ts`); every finding
   the engine placed in that revision (`gitlet.PlaceFindings`, the rule a seat's
-  `code_get_change` reads by) is drawn under its last line as a card — its
-  weight, its subject, its title and who raised it across its head — every thread on a
+  `code_get_change` reads by) is drawn under its last line as a card (its
+  weight, its subject, its title, and who raised it and when, across its head);
+  every thread on a
   line of it under its line — the findings and comments past their first page
   loaded by **Load more findings and comments** above the diff, each part's
   next page at one press — and what has no line here — a finding whose own
@@ -8825,7 +8830,8 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   **Resolve conversation**. **Request review** asks reviewers by handle with a note
   (`code_request_review`); **Close change** and **Reopen** move the change against
   the version on screen (`code_close_change`). A finding that still stands
-  offers **Answer finding** (`code_resolve_finding`): Resolved, Won't fix or
+  offers **Resolve** in one press, an author's (held with why for any other
+  reader), and **Answer** (`code_resolve_finding`): Resolved, Won't fix or
   Disputed, an author's answers, which leave a blocker standing for whoever
   raised it, or Dismiss, its raiser's, a maintainer's or a person's, with a
   note; the form says that a dismissal clears the finding for good, and the
@@ -9139,7 +9145,7 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   differs, its repository, its parents and its whole id with its copy; then
   **Pushed** and **Changes**, a card each, side by side where there is room;
   then what it changed, the file tree beside each file's diff, as a change's
-  Files tab draws them. It is the commit as the history lists it
+  Files changed tab draws them. It is the commit as the history lists it
   beside what the ROWS say of it (`code_commit`): the push that introduced it,
   by the answering Gitlet node's index of pushes and that push's row — who
   pushed it, when and how, and the turn, the executor and the work item

@@ -31,6 +31,7 @@ import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { ChangePage } from "./ChangePage.tsx";
 import { EDIT_MOVED } from "./Description.tsx";
+import { NOT_AUTHOR_RESOLVE } from "./Finding.tsx";
 import { CHANGE_POLL_MS } from "./reads.ts";
 
 beforeEach(() => sessionStorage.clear());
@@ -265,6 +266,8 @@ function stubEngine(
           return ONE_STANDING();
         case "comments":
         case "reviews":
+        case "reviewers":
+        case "excerpts":
           return json(page);
         default:
           return json({
@@ -1409,6 +1412,319 @@ test("Load more asks the next page of every part that has one", async () => {
   );
 });
 
+// ---- Findings under their review ------------------------------------------- //
+
+/** Revision 1's two findings, raised by review r1: f-1 with a suggestion, f-2 without. */
+const F1 = {
+  ...MINE,
+  id: "f-1",
+  review_id: "r1",
+  raiser: "cto",
+  raiser_kind: "agent",
+  path: "internal/server/routes.go",
+  line_start: 19,
+  line_end: 19,
+  severity: "major",
+  category: "security",
+  title: "The shell flushes before the CSP nonce is set",
+  body: "Set the nonce first.",
+  suggestion: '\tmux.Handle("GET /p/{slug}", withCSPNonce(r.Stream("product")))\n',
+  raised_at: "2026-10-27T10:00:00Z",
+};
+const F2 = {
+  ...F1,
+  id: "f-2",
+  path: "internal/render/stream.go",
+  line_start: 42,
+  line_end: 42,
+  severity: "minor",
+  category: "correctness",
+  title: "The shell is never flushed after the preload",
+  suggestion: undefined,
+};
+const EXCERPTS = {
+  "f-1": {
+    id: "f-1",
+    status: "M",
+    lines: [
+      { mark: "+", new: 18, text: "\t// reads land" },
+      { mark: "+", new: 19, text: '\tmux.Handle("GET /p/{slug}", r.Stream("product"))' },
+      { mark: "+", new: 20, text: '\tmux.Handle("GET /c/{slug}", r.Page("category"))' },
+    ],
+  },
+  "f-2": {
+    id: "f-2",
+    status: "M",
+    lines: [
+      { mark: " ", old: 41, new: 41, text: "\tw.Write(shell.Head)" },
+      { mark: "+", new: 42, text: "\tw.Write(shell.Preload(hero))" },
+      { mark: " ", old: 42, new: 43, text: "\treturn s.islands(ctx, w, page)" },
+    ],
+  },
+};
+
+/** The engine with review r1 of revision 1 raising `findings`, and their excerpts as `excerpts` answers. */
+function stubFindings(
+  findings: readonly Record<string, unknown>[],
+  excerpts: (url: URL) => Response,
+  extra: Record<string, unknown> = {},
+) {
+  return stubEngine(detail(extra), () => json({ outcome: "applied" }), {
+    reviews: page({
+      reviews: [reviewRow("r1", 20, "request_changes", 1, { findings: findings.length })],
+    }),
+    findings: page({ revision: 2, findings }),
+    excerpts,
+  });
+}
+
+// A REVIEW'S FINDINGS ARE CARDS UNDER IT, each with its excerpt, its own lines
+// marked. Mutation: mark every line of the excerpt, and three rows are marked.
+test("a review's findings are cards under it, each with its excerpt marked at its lines", async () => {
+  stubFindings([F1, F2], page({ excerpts: EXCERPTS, context: 3 }));
+  mount();
+  const card = await screen.findByRole("article", { name: `Finding: ${F1.title}` });
+  const box = screen.getByRole("region", { name: "Findings of the review by cto" });
+  expect(spoken(box.firstElementChild!)).toBe("2 findings on revision 1 2 open");
+  const excerpt = await within(card).findByRole("group", {
+    name: "Lines 18 to 20 of internal/server/routes.go at revision 1, line 19 marked",
+  });
+  const marked = [...excerpt.querySelectorAll("[data-picked]")];
+  expect(marked).toHaveLength(1);
+  expect(marked[0]!.textContent).toContain('r.Stream("product")');
+  expect(
+    within(card)
+      .getByRole("link", { name: /routes\.go:19/ })
+      .getAttribute("href"),
+  ).toBe("#/gitlet/repos/web/changes/42?tab=files&rev=1&file=internal%2Fserver%2Froutes.go");
+  expect(within(card).getByText("Major")).toBeTruthy();
+  expect(within(card).getByText("Security")).toBeTruthy();
+});
+
+// A SUGGESTION IS A SMALL DIFF of the finding's lines and the lines suggested;
+// Apply suggestion only on the head's open finding. Mutation: offer it on
+// revision 1's finding when the head is 2.
+test("a suggestion is a small diff of the finding's lines and the lines suggested", async () => {
+  stubFindings([F1], page({ excerpts: EXCERPTS }));
+  mount();
+  const card = await screen.findByRole("article", { name: `Finding: ${F1.title}` });
+  const diff = await within(card).findByRole("group", {
+    name: "The lines suggested in place of line 19 of internal/server/routes.go",
+  });
+  const rows = [...diff.querySelectorAll("[data-kind]")].map((r) => r.getAttribute("data-kind"));
+  expect(rows).toEqual(["remove", "add"]);
+  expect(diff.textContent).toContain("withCSPNonce");
+  expect(within(card).queryByRole("button", { name: "Apply suggestion" })).toBeNull();
+  cleanup();
+  stubFindings([F1], page({ excerpts: EXCERPTS }), { revision: 1 });
+  mount();
+  const head = await screen.findByRole("article", { name: `Finding: ${F1.title}` });
+  expect(await within(head).findByRole("button", { name: "Apply suggestion" })).toBeTruthy();
+});
+
+// A FINDING SAYS WHERE ITS LINES CANNOT BE SHOWN, and why, the rest of it drawn.
+// Mutation: draw nothing for a refused excerpts read, and the sentence goes.
+test("a finding says where its lines cannot be shown and why", async () => {
+  stubFindings([F1, F2], () => json({ error: "bad_params", detail: "unknown part" }, 400));
+  mount();
+  await screen.findByRole("article", { name: `Finding: ${F2.title}` });
+  expect(
+    await screen.findAllByText("The lines around it are unavailable on this fleet yet."),
+  ).toHaveLength(2);
+  expect(screen.getAllByText("Set the nonce first.")).toHaveLength(2);
+  cleanup();
+  // A READ THAT FAILED is no older fleet: it says so in the engine's words.
+  stubFindings([F1], () => json({ error: "query_failed" }, 500));
+  mount();
+  expect(await screen.findByText("The lines around it are unavailable.")).toBeTruthy();
+  expect(screen.queryByText(/on this fleet yet/)).toBeNull();
+  cleanup();
+  stubFindings(
+    [F1, F2],
+    page({
+      excerpts: {
+        "f-1": { id: "f-1", binary: true, lines: [] },
+        "f-2": {
+          ...EXCERPTS["f-2"],
+          more: true,
+          lines: [{ mark: "+", new: 42, text_bytes: 12_600 }],
+        },
+      },
+    }),
+  );
+  mount();
+  const f2 = await screen.findByRole("article", { name: `Finding: ${F2.title}` });
+  expect(await screen.findByText("A binary file: there are no lines to show.")).toBeTruthy();
+  expect(within(f2).getByRole("group").textContent).toContain(
+    "A line of 12 KiB, too long to show here",
+  );
+  // ITS SENTENCE IS WORDS, never painted as code.
+  const elided = await waitFor(() => {
+    const span = within(f2).getByRole("group").querySelector(".code-excerpt__elided");
+    expect(span).not.toBeNull();
+    return span!;
+  });
+  expect(elided.textContent).toBe("A line of 12 KiB, too long to show here");
+  expect(within(f2).getByRole("group").querySelector('[class^="code-syn-"]')).toBeNull();
+  expect(
+    within(f2)
+      .getByRole("link", { name: /read them on Files changed/ })
+      .getAttribute("href"),
+  ).toContain("file=internal%2Frender%2Fstream.go");
+  cleanup();
+  stubFindings([F1], page({ excerpts: {} }));
+  mount();
+  expect(
+    await screen.findByText("Its lines are shown once its revision's files are recorded."),
+  ).toBeTruthy();
+});
+
+// THE FINDINGS AND THEIR EXCERPTS ARE READ AGAIN ONLY WHEN SOMEBODY REVIEWS:
+// a push and a conversation version moved ask neither. Mutation: key either
+// on the change's or the conversation's version, and every push asks it again.
+test("the findings and their excerpts are asked again only when somebody reviews", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  let version = 5;
+  let conversation = { reviews: 1, spoken_at: "2026-10-27T11:00:00Z", version: 1 };
+  const facts = () => ({
+    comments: 0,
+    open_findings: 1,
+    open_blockers: 0,
+    changes_requested: 1,
+    position: POSITION,
+    ...conversation,
+  });
+  stubEngine(
+    () => detail({ version, conversation: facts() }),
+    () => json({}),
+    {
+      reviews: page({ reviews: [reviewRow("r1", 20, "request_changes", 1, { findings: 1 })] }),
+      findings: page({ revision: 2, findings: [F1] }),
+      excerpts: page({ excerpts: EXCERPTS }),
+    },
+  );
+  mount();
+  await screen.findByRole("article", { name: `Finding: ${F1.title}` });
+  const asked = () => changeAsked.filter((u) => u.searchParams.get("part") === "excerpts").length;
+  const findings = () =>
+    changeAsked.filter((u) => u.searchParams.get("part") === "findings").length;
+  const details = () => changeAsked.filter((u) => !u.searchParams.get("part")).length;
+  expect([asked(), findings()]).toEqual([1, 1]);
+  version = 6;
+  conversation = { ...conversation, version: 2 };
+  const before = details();
+  await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
+  await waitFor(() => expect(details()).toBeGreaterThan(before));
+  await settled(() => changeAsked.length);
+  expect([asked(), findings()]).toEqual([1, 1]);
+  conversation = { reviews: 2, spoken_at: "2026-10-27T12:00:00Z", version: 3 };
+  await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
+  await waitFor(() => expect(asked()).toBe(2));
+  await settled(() => changeAsked.length);
+  expect(findings()).toBe(2);
+});
+
+// LOAD MORE PAGES THE FINDINGS AND THEIR EXCERPTS together, with the same cursor.
+// Mutation: page the findings alone, and the second card has no lines.
+test("Load more asks the findings' and the excerpts' next pages with the same cursor", async () => {
+  stubEngine(detail(), () => json({}), {
+    reviews: page({ reviews: [reviewRow("r1", 20, "request_changes", 1, { findings: 2 })] }),
+    findings: (url) =>
+      url.searchParams.get("cursor")
+        ? page({ revision: 2, findings: [F2] })()
+        : page({ revision: 2, findings: [F1], next: "f-1" })(),
+    excerpts: (url) =>
+      url.searchParams.get("cursor")
+        ? page({ excerpts: { "f-2": EXCERPTS["f-2"] } })()
+        : page({ excerpts: { "f-1": EXCERPTS["f-1"] }, next: "f-1" })(),
+  });
+  mount();
+  await screen.findByRole("article", { name: `Finding: ${F1.title}` });
+  expect(screen.getByText("1 more on a later page.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+  const f2 = await screen.findByRole("article", { name: `Finding: ${F2.title}` });
+  expect(await within(f2).findByRole("group", { name: /^Lines 41 to 43/ })).toBeTruthy();
+  const later = changeAsked.filter((u) => u.searchParams.get("cursor") === "f-1");
+  expect(later.map((u) => u.searchParams.get("part")).sort()).toEqual(["excerpts", "findings"]);
+});
+
+// A REFUSED FINDINGS READ IS SAID, never counted as findings on a later page.
+// Mutation: draw the review's findings box from the counts alone, and it
+// says "2 more on a later page" with no Load more to reach them.
+test("a refused findings read says its findings are unavailable", async () => {
+  stubEngine(detail(), () => json({}), {
+    reviews: page({ reviews: [reviewRow("r1", 20, "request_changes", 1, { findings: 2 })] }),
+    findings: () => json({ error: "query_failed" }, 500),
+  });
+  mount();
+  const box = await screen.findByRole("region", { name: "Findings of the review by cto" });
+  expect(await within(box).findByText("Its findings are unavailable.")).toBeTruthy();
+  expect(spoken(box.firstElementChild!)).toBe("2 findings on revision 1");
+  expect(box.textContent).not.toMatch(/later page|loaded/);
+  expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+});
+
+// RESOLVE ANSWERS A STANDING FINDING IN ONE PRESS, an author's; Reply opens its box.
+// Mutation: send Resolve without its resolution, and this fails.
+test("Resolve answers a standing finding in one press, and Reply opens its box", async () => {
+  const authors = [
+    { author: "dev", kind: "agent", first_revision: 1, position: POSITION },
+    { author: "jane", kind: "person", first_revision: 2, position: POSITION },
+  ];
+  const acted = stubEngine(detail({ authors }), () => json({ outcome: "applied" }), {
+    reviews: page({ reviews: [reviewRow("r1", 20, "request_changes", 1, { findings: 1 })] }),
+    findings: page({ revision: 2, findings: [F1] }),
+  });
+  mount("#/gitlet/repos/web/changes/42", STEWARD);
+  const card = await screen.findByRole("article", { name: `Finding: ${F1.title}` });
+  expect(within(card).queryByRole("textbox", { name: "Reply" })).toBeNull();
+  fireEvent.click(within(card).getByRole("button", { name: "Reply" }));
+  expect(document.activeElement).toBe(within(card).getByRole("textbox", { name: "Reply" }));
+  const resolve = within(card).getByRole("button", { name: "Resolve" });
+  await waitFor(() => expect(resolve.getAttribute("title")).toBeNull());
+  fireEvent.click(resolve);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_resolve_finding",
+    args: { change: "web!42", findings: ["f-1"], resolution: "resolved" },
+  });
+});
+
+// RESOLVED IS AN AUTHOR'S ANSWER, which the engine refuses anybody else: a
+// reader who did not write the change finds Resolve held with why.
+// Mutation: hold Resolve only on a resolved finding, and it is live here.
+test("Resolve is held for a reader who did not write the change", async () => {
+  stubEngine(detail(), () => json({ outcome: "applied" }), {
+    reviews: page({ reviews: [reviewRow("r1", 20, "request_changes", 1, { findings: 1 })] }),
+    findings: page({ revision: 2, findings: [F1] }),
+  });
+  mount("#/gitlet/repos/web/changes/42", STEWARD);
+  const card = await screen.findByRole("article", { name: `Finding: ${F1.title}` });
+  const resolve = within(card).getByRole("button", { name: "Resolve" });
+  await waitFor(() => expect(resolve.getAttribute("title")).toBe(NOT_AUTHOR_RESOLVE));
+  expect(resolve.getAttribute("aria-disabled")).toBe("true");
+});
+
+// FILES CHANGED DRAWS THE SAME CARD, with when the finding was raised.
+// Mutation: draw the card without its byline on Files changed.
+test("Files changed draws the same finding card, with when it was raised", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-27T12:00:00Z"));
+  stubEngine(detail(), () => json({}), {
+    findings: page({
+      revision: 2,
+      findings: [{ ...MINE, raised_at: "2026-10-27T10:00:00Z" }],
+      placed: { "f-mine": { start: 9, end: 9, outdated: true } },
+    }),
+  });
+  mount("#/gitlet/repos/web/changes/42?tab=files&file=app.go");
+  fireEvent.click(await screen.findByText("1 outdated on this file"));
+  const card = await screen.findByRole("article", { name: `Finding: ${MINE.title}` });
+  expect(spoken(card.querySelector(".code-finding__by")!)).toMatch(
+    /raised it on revision 1 2 hours ago$/,
+  );
+});
+
 // A FINISHED CHANGE OFFERS ONLY WHAT STILL APPLIES: a merged change takes no
 // review, no ask and no close from anybody, so its bar draws none of them and
 // its Revert stands where the merge controls were; a closed one offers its
@@ -1609,8 +1925,15 @@ test.each([
   mount("#/gitlet/repos/web/changes/42?tab=files&file=app.go", viewer);
   // THE OUTDATED FINDING, under its Disclosure: opened, its reply is drawn.
   fireEvent.click(await screen.findByText("1 outdated on this file"));
-  const reply = await screen.findByRole("button", { name: "Reply" });
+  fireEvent.click(await screen.findByRole("button", { name: "Reply", expanded: false }));
+  const reply = screen
+    .getAllByRole("button", { name: "Reply" })
+    .find((b) => b.getAttribute("aria-expanded") === null)!;
   await waitFor(() => expect(reply.getAttribute("title")).toBe(reason));
+  for (const name of ["Resolve", /^Answer the finding/]) {
+    const held = screen.getByRole("button", { name });
+    expect(held.getAttribute("title"), String(name)).toBe(reason);
+  }
   expect(acted).toHaveLength(0);
 });
 

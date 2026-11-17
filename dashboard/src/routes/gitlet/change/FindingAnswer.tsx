@@ -13,6 +13,7 @@
 
 import { useState } from "react";
 import { Button, Input, Select } from "@crewlethq/ui";
+import { CircleCheckGlyph } from "@crewlethq/icons/glyphs";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import type { CodeChangeDetail, CodeFindingRow } from "~/protocol/index.ts";
@@ -28,6 +29,11 @@ export const FINDING_ANSWERS: readonly { value: string; label: string; done: str
 /** The states a finding still stands in, which alone take an answer. */
 const STANDING = ["open", "resolved", "wont_fix", "disputed"];
 
+/** Whether a finding in `state` still stands, and so takes an answer. */
+export function findingStands(state: string): boolean {
+  return STANDING.includes(state);
+}
+
 export function FindingAnswer({
   change,
   finding,
@@ -39,7 +45,7 @@ export function FindingAnswer({
   const [open, setOpen] = useState(false);
   const [resolution, setResolution] = useState("resolved");
   const [note, setNote] = useState("");
-  if (!STANDING.includes(finding.state)) return null;
+  if (!findingStands(finding.state)) return null;
   const answer = FINDING_ANSWERS.find((a) => a.value === resolution) ?? FINDING_ANSWERS[0]!;
   const blocked = resolution === finding.state ? "It is answered this way already." : undefined;
   const submit = async () => {
@@ -63,11 +69,12 @@ export function FindingAnswer({
       <WriteButton
         write={write}
         size="small"
-        variant="secondary"
+        variant="ghost"
+        leadingIcon={<CircleCheckGlyph size="sm" />}
         aria-label={`Answer the finding “${finding.title}”`}
         onPress={() => setOpen(true)}
       >
-        Answer finding
+        Answer
       </WriteButton>
     );
   }

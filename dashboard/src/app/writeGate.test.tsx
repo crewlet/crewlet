@@ -209,8 +209,8 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     why: "a change's Edit of its title and description (code_update_change)",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
   },
-  "routes/gitlet/change/Files.tsx": {
-    why: "a finding's Apply suggestion, on the line the finding is on",
+  "routes/gitlet/change/Finding.tsx": {
+    why: "a finding's Apply suggestion and Resolve, on the conversation and on Files changed",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
   },
   "routes/gitlet/change/Merge.tsx": {
