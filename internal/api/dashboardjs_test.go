@@ -1476,7 +1476,8 @@ const (
 	// The Settings polish, on kit 0.143.0: 420.2 KiB, the kit's shared chunk most of it: 421 KiB, 2.30 seconds.
 	// The clear controls, Doclet changes, Settings polish and notices train, on kit 0.144.0: 422.2 KiB: 423 KiB, 2.31 seconds.
 	// Gitlet's commits as a timeline on one list, on kit 0.144.0: 423.1 KiB: 424 KiB, 2.32 seconds.
-	initialBudget = 424 << 10
+	// Setting editors and SettingsTable on DataGrid's anatomy, on kit 0.150.0, whose one sheet adds their rules: 424.4 KiB: 425 KiB, 2.32 seconds.
+	initialBudget = 425 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2683,7 +2684,9 @@ const (
 	// 6631.3 KiB (6,790,461 bytes), 12,721 over main: 6632 KiB.
 	// A comment's draft beside its pin, its picture fitted in a well, on kit 0.146.0: 6633.1 KiB
 	// (6,792,312 bytes), 1,851 over main: 6634 KiB.
-	treeBudget = 5<<20 + 1514<<10
+	// Setting editors and SettingsTable on DataGrid's anatomy, on kit 0.150.0: 6661.5 KiB (6,821,388 bytes),
+	// 29,076 over main, the kit's editors in the settings editors' chunk and kit 0.147.0 to 0.150.0: 6662 KiB.
+	treeBudget = 5<<20 + 1542<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
