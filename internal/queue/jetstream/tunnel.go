@@ -421,8 +421,11 @@ func (t *tunnel) handshake(down net.Conn) (up net.Conn, pending io.Reader, ok bo
 	_ = down.SetDeadline(time.Now().Add(t.connectTerm))
 	up, err = t.dialer.dialMember(t.ctx, "tcp", req.Host)
 	if err != nil {
-		t.log.Warn("leaf_tunnel_dial_failed", "member", req.Host, "error", err.Error(),
-			"detail", "the leaf's link could not reach this member, and dials the next")
+		// THE LEAF LOGS IT, not the tunnel: nats-server prints the status
+		// line it was answered, the dial's error in it ([reason]), and
+		// holds that line to its own pace for a remote that keeps failing,
+		// where a line here would repeat at every attempt for as long as a
+		// listed member is down.
 		tunnelStatus(down, http.StatusBadGateway, reason(err), "")
 		return nil, nil, false
 	}
