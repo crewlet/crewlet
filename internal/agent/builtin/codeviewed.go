@@ -35,12 +35,12 @@ func (t *codeMarkViewed) Name() string { return CodeMarkViewedTool }
 func (t *codeMarkViewed) Description() string {
 	return fmt.Sprintf("Mark files of a change as viewed, or take marks back: your own progress through a "+
 		"change's files. Name the change by `repo` and `change`. `viewed` lists files to mark, each `{path, "+
-		"blob_oid, mode}`: the path as `code_get_change` part=files names it, and that file's `new_oid` and "+
+		"blob_oid, mode}`: the path as `%s` part=files names it, and that file's `new_oid` and "+
 		"`new_mode` from the same answer; omit both for a file the change deletes, which has no `new_oid`. "+
 		"`unviewed` lists paths whose mark to take back. At most %d files a call. A mark stays while later "+
 		"revisions give the file the same object id and mode, and reads unviewed once one changes either; mark "+
 		"it again then. Only a draft or open change keeps marks, and you hold at most %d, your oldest going "+
-		"first.", gitlet.MaxViewedPerMark, gitlet.MaxViewedFiles)
+		"first.", CodeGetChangeTool, gitlet.MaxViewedPerMark, gitlet.MaxViewedFiles)
 }
 
 func (t *codeMarkViewed) Parameters() map[string]any {
@@ -70,8 +70,8 @@ func (t *codeMarkViewed) Parameters() map[string]any {
 			"seen": map[string]any{
 				"type": "string",
 				"description": "How far you have read the code log, `<stream>@<generation>:<sequence>`: the " +
-					"`position` code_get_change answered with the files you mark. The change is read at least " +
-					"that far before the mark is made. Omit it to read wherever the call is answered.",
+					"`position` " + CodeGetChangeTool + " answered with the files you mark. The change is " +
+					"read at least that far before the mark is made. Omit it to read wherever the call is answered.",
 			},
 		},
 		"required": []string{"repo", "change"},
@@ -106,7 +106,7 @@ func (t *codeMarkViewed) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if bad != "" {
 		return failed(bad), nil
 	}
-	seen, bad := markFloor(args, topics.CodeLogStream, "code log", "pass the `position` code_get_change answered")
+	seen, bad := markFloor(args, topics.CodeLogStream, "code log", "pass the `position` "+CodeGetChangeTool+" answered")
 	if bad != "" {
 		return failed(bad), nil
 	}
