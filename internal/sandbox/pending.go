@@ -202,6 +202,17 @@ type Release struct {
 	// next attempt waits for them. Nil hands back a claim to be retried as
 	// the job's completion comes round, and clears any hold an earlier
 	// release put on it.
+	//
+	// A HOLD ALSO OWES THE COMPLETION ON THE JOB'S RECORD
+	// ([LaunchRecord.RefusalOwed]), its condition, where the record owes
+	// none yet. The hold spent the completion's delivery, and the row is
+	// all a restart or the seat's next holder reads: while the hold stands
+	// its recovery keeps the job for the hold's instant, but a lift clears
+	// the hold, and a lift whose re-fire had not yet claimed the job (one
+	// the store did not answer, kept again in memory alone) left that
+	// recovery nothing to keep or re-arm, the job announced by nothing
+	// while the box's host's store was silent. Owed, it is re-armed and
+	// offered to the recovering holder's gate at once ([Coordinator.rearmOwed]).
 	Hold *Refusal
 
 	// RelaunchRefusedIn, where it names a window, is the budget window the
@@ -2891,9 +2902,15 @@ type PendingStore interface {
 	// its answer, and one that did not would be owed a resume nobody could
 	// make.
 	//
+	// A RELEASE THAT HOLDS THE RESUME ([Release.Hold]) RECORDS THE
+	// COMPLETION AS OWED in the same write, the hold's condition and the
+	// store's instant, where the job's record owes none yet
+	// ([LaunchRecord.RefusalOwed]).
+	//
 	// FALSE IS NOT AN ERROR: it is a run that moved on, or a row that is
 	// gone. A release to a status outside [Claimable] is an error, because
-	// no claim ever takes a run out of one.
+	// no claim ever takes a run out of one, and so is a hold whose condition
+	// is past [MaxOwedConditionBytes].
 	ReleaseClaim(ctx context.Context, turnID string, release Release) (bool, error)
 
 	// LiftHold clears the hold a release put on a run's resume
@@ -4925,7 +4942,10 @@ type LaunchRecord struct {
 	// the completion its re-fire; RefusalOwedSince is when it did, by that
 	// holder's clock. Both or neither. Written by the one write
 	// [PendingStore.OweRefusal] makes before the delivery is acknowledged,
-	// only where the record owes none yet, so the first refusal's condition
+	// and by the release that holds the job's resume on the row
+	// ([Release.Hold]), whose hold spends its delivery as an acknowledgement
+	// does, with the hold's condition and the store's instant; each only
+	// where the record owes none yet, so the first refusal's condition
 	// and instant stand through every re-announcement refused after it;
 	// cleared by the write that settles the completion: the park on the
 	// job's question ([PendingStore.MarkAwaiting]), the turn's next launch,

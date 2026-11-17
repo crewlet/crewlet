@@ -61,7 +61,10 @@ the claim refuses a held row, so before the instant nothing carried the job
 but that host's waiter, and a re-fire then claimed nothing and dropped the
 keep; it is kept unheld, re-fired at the hold's instant and never sooner, and
 on its condition's signal once the lift of its hold has landed, and the seat's
-recovery keeps every held row it finds the same way; and every lift of a hold a
+recovery keeps every held row it finds the same way, and re-arms one whose hold
+a lift cleared before its re-fire claimed the job, since the release that
+writes a hold records the completion as owed on the job's record too
+(`sandbox.PendingStore.ReleaseClaim`); and every lift of a hold a
 signal makes re-fires the job too (`sandbox.Coordinator.refireLifted`), since a
 lift that found nothing kept, as one racing the seat's recovery can, left the
 job to that host's waiter, unless the node carries the job already, kept or a

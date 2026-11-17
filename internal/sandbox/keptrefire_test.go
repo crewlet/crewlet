@@ -534,6 +534,38 @@ func (s *liftAfterFence) ClaimForResume(ctx context.Context, turnID string, tail
 	return s.PendingStore.ClaimForResume(ctx, turnID, tail, fence)
 }
 
+// liftBeforeFence is a run store that orders a signal's lift of a hold, and
+// the start of its re-fire, before a recovery's fence of the run, and that
+// re-fire's claim after the recovery: the recovery's claim of the run's
+// ownership waits for a claim of the job to be asked, and that claim waits
+// for recovered. It answers every call as the store beneath it does.
+type liftBeforeFence struct {
+	PendingStore
+	recovered <-chan struct{}
+	claiming  chan struct{}
+	asked     atomic.Bool
+}
+
+func (s *liftBeforeFence) ClaimOwnership(ctx context.Context, turnID, owner string, epoch int64) (bool, error) {
+	select {
+	case <-s.claiming:
+	case <-ctx.Done():
+	}
+	return s.PendingStore.ClaimOwnership(ctx, turnID, owner, epoch)
+}
+
+func (s *liftBeforeFence) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
+) (PendingRun, bool, error) {
+	if s.asked.CompareAndSwap(false, true) {
+		close(s.claiming)
+	}
+	select {
+	case <-s.recovered:
+	case <-ctx.Done():
+	}
+	return s.PendingStore.ClaimForResume(ctx, turnID, tail, fence)
+}
+
 // liftAfterRecovery is a run store that orders a signal's lift of a hold after
 // a recovery's own lift of it has been asked and before that lift is answered:
 // its listing of the runs (a signal's) waits for recovered, and the first lift
@@ -640,9 +672,11 @@ func budgetHeldOnRow(t *testing.T, rig *coordRig, until time.Time) {
 // out of a recovery, and nothing is kept; read what was signalled only once the
 // recovery has listed the seat's runs, and a signal during it whose listing of
 // the holds the store does not answer leaves the job kept for the hold's
-// instant; re-fire the job on a signal's lift while this node keeps it or a
-// re-fire of it is on its way, or keep it from the row in a recovery while
-// that lift's re-fire is, and it is re-fired twice at once.
+// instant; write the hold without owing the completion on the job's record,
+// and a restart after a lift of the hold leaves the job owed nothing; re-fire
+// the job on a signal's lift while this node keeps it or a re-fire of it is
+// on its way, or keep it from the row in a recovery while that lift's re-fire
+// is, and it is re-fired twice at once.
 func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 	t.Parallel()
 
@@ -934,6 +968,33 @@ func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 		}
 	})
 
+	t.Run("re-fired by the seat's recovery where its hold was lifted before a restart", func(t *testing.T) {
+		t.Parallel()
+		live := t.Context()
+		rig := newCoordRig(t)
+		budgetHeldOnRow(t, rig, rig.now.Add(24*time.Hour))
+		if got := rig.get("t1"); got.Launch.RefusalOwed != "budget" || got.Launch.RefusalOwedSince.IsZero() {
+			t.Fatalf("the held job's record owes %q since %v; want the completion owed for the hold's "+
+				"condition, in the release that wrote the hold", got.Launch.RefusalOwed,
+				got.Launch.RefusalOwedSince)
+		}
+		// THE HOLD LIFTED, and the node restarts before any re-fire of the
+		// job claimed it: the row holds the job no longer, and nothing of
+		// this node's memory survives.
+		if lifted, err := rig.pending.LiftHold(live, "t1", "budget"); err != nil || !lifted {
+			t.Fatalf("the premise: LiftHold = %v, %v", lifted, err)
+		}
+		rig.restart(t, rig.queue, "", rigLease, nil)
+		if err := rig.recoverSeat(live, rigLease.Owner, rigLease.Epoch); err != nil {
+			t.Fatalf("recovering the seat: %v", err)
+		}
+		rig.coordinator.inflight.Wait()
+		if resumed := rig.resumer.calls(); len(resumed) != 1 || !resumed[0].Success {
+			t.Fatalf("the turn resumed %d times (%+v) after its hold was lifted and the node restarted; want "+
+				"it carried once by the recovery, from what its record owes", len(resumed), resumed)
+		}
+	})
+
 	t.Run("re-fired on its signal where nothing is kept for it", func(t *testing.T) {
 		t.Parallel()
 		rig := newCoordRig(t)
@@ -1002,6 +1063,37 @@ func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 					"left as it is by the recovery that found it re-fired", claims)
 			}
 		})
+
+	t.Run("re-fired once where the signal's lift lands before the recovery's fence", func(t *testing.T) {
+		t.Parallel()
+		live := t.Context()
+		rig := newCoordRig(t)
+		budgetHeldOnRow(t, rig, rig.now.Add(24*time.Hour))
+		rig.restart(t, rig.queue, "", rigLease, nil)
+		// THE SIGNAL'S LIFT LANDS BEFORE THE RECOVERY'S FENCE, its re-fire
+		// on its way: the recovery takes the row over unheld, the completion
+		// owed on its record, and re-arms nothing for a job that re-fire
+		// carries.
+		restarted := rig.coordinator
+		counted := &countedCalls{PendingStore: restarted.pending}
+		recovered := make(chan struct{})
+		restarted.pending = &signalledOnRecovery{
+			PendingStore: &liftBeforeFence{PendingStore: counted, recovered: recovered,
+				claiming: make(chan struct{})},
+			signal: func() { restarted.Readmit("budget", "swe") }}
+		if err := rig.recoverSeat(live, rigLease.Owner, rigLease.Epoch); err != nil {
+			t.Fatalf("recovering the seat: %v", err)
+		}
+		close(recovered)
+		restarted.inflight.Wait()
+		if resumed := rig.resumer.calls(); len(resumed) != 1 || !resumed[0].Success {
+			t.Fatalf("the turn resumed %d times (%+v); want it carried once", len(resumed), resumed)
+		}
+		if claims := counted.claims.Load(); claims != 1 {
+			t.Fatalf("the job was claimed %d times; want it re-fired once, by the signal's lift, and not "+
+				"re-armed again by the recovery that found that re-fire on its way", claims)
+		}
+	})
 
 	t.Run("re-fired once where the signal's lift lands after the recovery's keep has re-fired it",
 		func(t *testing.T) {

@@ -6752,7 +6752,9 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 		// pass is done ([Coordinator.keepHeldRows]), whatever else its
 		// record owes: a re-fire before that instant claims nothing. Else
 		// a refusal a holder of the seat acknowledged and owes, re-armed
-		// once the pass is done ([Coordinator.rearmOwed]).
+		// once the pass is done ([Coordinator.rearmOwed]): a hold lifted
+		// since among them, which owed its completion in the release that
+		// wrote it ([Release.Hold]).
 		switch {
 		case run.HeldFor != "":
 			tally.held = append(tally.held, run)
