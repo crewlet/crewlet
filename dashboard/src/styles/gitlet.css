@@ -1566,7 +1566,7 @@
   }
 }
 
-/* A FILE'S CARD: its name, size and controls across the head, its lines
+/* A FILE'S CARD: its lens, size and controls across the head, its lines
    flush under it. The head wraps rather than squeezing a control's label. */
 .code-blob {
   overflow: hidden;
@@ -1583,13 +1583,12 @@
   border-block-end: 1px solid var(--color-border-default);
 }
 
-.code-blob__name {
+.code-blob__lens {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--spacing-1) var(--spacing-2);
+  gap: var(--spacing-1) var(--spacing-3);
   min-width: 0;
-  font-weight: var(--font-weight-semibold);
 }
 
 .code-blob__facts {
@@ -1602,8 +1601,30 @@
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--spacing-1) var(--spacing-2);
   margin-inline-start: auto;
+}
+
+/* COPY AND DOWNLOAD, one group: their edges joined. */
+.code-blob__pair {
+  display: inline-flex;
+}
+
+.code-blob__pair > :first-child {
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
+.code-blob__pair > :last-child {
+  margin-inline-start: -1px;
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+
+.code-blob__rule {
+  align-self: stretch;
+  border-inline-start: 1px solid var(--color-border-default);
 }
 
 .code-blob__body {

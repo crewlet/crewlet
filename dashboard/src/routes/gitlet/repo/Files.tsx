@@ -65,6 +65,8 @@ import {
   Callout,
   Card,
   CodeBlock,
+  IconButton,
+  IconButtonLink,
   SegmentedControl,
   Skeleton,
   Stack,
@@ -73,7 +75,6 @@ import {
 } from "@crewlethq/ui";
 import {
   BookOpenGlyph,
-  FileCodeGlyph,
   ScaleGlyph,
   GitBranchGlyph,
   LinkGlyph,
@@ -135,7 +136,7 @@ import { RefPicker, revisionWord } from "./refs.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import {
   EditFileButton,
-  FileWriteButtons,
+  FileMoreMenu,
   FirstFileButton,
   NewFileButton,
   targetOf,
@@ -144,6 +145,7 @@ import {
 import { CloneAddress, CodeMenu, NO_CLONE_ADDRESS } from "./CodeMenu.tsx";
 import { GoToFile } from "./GoToFile.tsx";
 import { FileView } from "./FileView.tsx";
+import { FileBytes, WAITING_FOR_COMMIT } from "./FileActions.tsx";
 import "~/styles/gitlet.css";
 
 /** What one page of a path read holds: a listing's entries, or one page of a file. */
@@ -305,6 +307,11 @@ function PathView({
   const commit = commitOf(rev, first.data);
   const target = targetOf(rev, first.data);
   const dir = Boolean(first.data?.tree);
+  // THE WHOLE TEXT WHERE THE PATH'S OWN PAGES HOLD IT: read from line 1 to its last page.
+  const loaded = useMemo(() => {
+    if (start > 1 || paged.more || !file || file.binary) return null;
+    return paged.items.map((p) => ("mode" in p ? "" : (p.text ?? ""))).join("");
+  }, [start, paged.more, paged.items, file]);
   // A PATH NOT ANSWERED YET keeps the last kind drawn, so moving between files keeps
   // the pane; a first one is a file where the address picks lines or the blame.
   const [kind, setKind] = useState<"file" | "dir" | null>(null);
@@ -341,6 +348,7 @@ function PathView({
             path={path}
             commit={commit}
             file={file}
+            loaded={loaded}
             blame={blame}
             onLens={onLens}
             picked={picked}
@@ -928,9 +936,8 @@ function LatestCheck({
 }
 
 /**
- * A file, as one card: its name, its size and lines across the head, with the
- * switch between its lines and its blame, its history, the Permalink and the
- * writes a branch takes; then its lines, its blame, or what it has instead.
+ * A file's card: across its head the switch between its lines and its blame, its
+ * lines and size, then Raw, Copy and Download, Edit, the Permalink and More.
  */
 function FileCard({
   repo,
@@ -938,6 +945,7 @@ function FileCard({
   path,
   commit,
   file,
+  loaded,
   blame,
   onLens,
   picked,
@@ -949,6 +957,8 @@ function FileCard({
   path: string;
   commit: string;
   file: CodeBlobAnswer;
+  /** The whole text where every page is loaded, else null. */
+  loaded: string | null;
   blame: boolean;
   onLens: (blame: boolean) => void;
   picked: LineRun | null;
@@ -961,18 +971,12 @@ function FileCard({
   // A PICK THE FILE CANNOT DRAW is said beside its size: a stale link to a
   // line past its end.
   const beyond = picked && !file.binary && picked.start > file.lines;
+  const link = <LinkGlyph />;
+  const permalink = `Permalink: this file at ${commit ? shortOID(commit) : revisionWord(repo, rev)}`;
   return (
     <Card padding="none" className="code-blob">
       <div className="code-blob__head">
-        <span className="code-blob__name">
-          <FileCodeGlyph size="sm" className="code-glyph" />
-          <span className="mono">{baseName(path)}</span>
-          <span className="code-blob__facts">
-            {facts}
-            {beyond ? ` · it has no line ${picked.start}` : ""}
-          </span>
-        </span>
-        <span className="code-blob__actions">
+        <span className="code-blob__lens">
           {!file.binary && file.lines > 0 && (
             <SegmentedControl
               semantics="radio"
@@ -987,23 +991,38 @@ function FileCard({
               ]}
             />
           )}
-          {commit && (
-            <ButtonLink
-              size="small"
+          <span className="code-blob__facts">
+            {facts}
+            {beyond ? ` · it has no line ${picked.start}` : ""}
+          </span>
+        </span>
+        <span className="code-blob__actions">
+          <FileBytes repo={repo.name} path={path} commit={commit} file={file} loaded={loaded} />
+          <EditFileButton repo={repo} target={target} path={path} file={file} />
+          <span className="code-blob__rule" aria-hidden="true" />
+          {commit ? (
+            <IconButtonLink
+              label={permalink}
+              icon={link}
+              size="sm"
               variant="ghost"
-              title={`The same place at commit ${commit}`}
-              leadingIcon={<LinkGlyph size="sm" />}
               href={repoHref(repo.name, {
                 ref: commit,
                 path,
                 ...(blame ? { lens: "blame" as const } : {}),
                 ...(picked ? { lines: linesValue(picked) } : {}),
               })}
-            >
-              Permalink
-            </ButtonLink>
+            />
+          ) : (
+            <IconButton
+              label={permalink}
+              icon={link}
+              size="sm"
+              variant="ghost"
+              disabledReason={WAITING_FOR_COMMIT}
+            />
           )}
-          <FileWriteButtons repo={repo} target={target} path={path} file={file} />
+          <FileMoreMenu repo={repo} target={target} path={path} />
         </span>
       </div>
       <div className="code-blob__body">{children}</div>

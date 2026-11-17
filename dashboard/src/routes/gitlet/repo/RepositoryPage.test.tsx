@@ -1398,7 +1398,7 @@ test("a file's picked lines are its address, and its Permalink names the commit"
   expect(screen.getByRole("button", { name: "Line 1" }).getAttribute("aria-pressed")).toBe("false");
   expect(screen.getByText("func Run() {}")).toBeTruthy();
 
-  const permalink = screen.getByRole("link", { name: "Permalink" });
+  const permalink = screen.getByRole("link", { name: "Permalink: this file at 0123456" });
   expect(permalink.getAttribute("href")).toBe(
     `#/gitlet/repos/web?ref=${HEAD}&path=src%2Fapp.go&lines=2`,
   );
@@ -3188,7 +3188,7 @@ test("a file edited here is one commit on the branch read, at the commit it reso
   stubEngine(detail({ managed_by: "tools" }), acted);
   mount("#/gitlet/repos/web?path=src%2Fapp.go", "web", MAINTAINER);
 
-  const edit = await screen.findByRole("button", { name: "Edit" });
+  const edit = await screen.findByRole("button", { name: "Edit app.go" });
   await waitFor(() => expect(edit.getAttribute("title")).toBeNull());
   fireEvent.click(edit);
   const dialog = await screen.findByRole("dialog", { name: "Edit src/app.go" });
@@ -3248,13 +3248,35 @@ test("an empty repository's first file is a root commit on its default branch", 
   });
 });
 
-// A TAG TAKES NO COMMIT: the controls are drawn and held, saying so.
-test("a file read at a tag is held from a commit, with the reason", async () => {
+// EDIT IS A PENCIL AND DELETE IS IN MORE, each a commit at the head read, and each
+// held with its reason at a tag. Mutation: drop the menu entry's hold, or send the
+// delete without the head read, and this fails.
+test("Edit is a pencil and Delete is in More, each held with its reason at a tag", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools" }), acted);
+  mount("#/gitlet/repos/web?path=src%2Fapp.go", "web", MAINTAINER);
+  const edit = await screen.findByRole("button", { name: "Edit app.go" });
+  await waitFor(() => expect(edit.getAttribute("title")).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "More file actions" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: /^Delete file/ }));
+  const dialog = await screen.findByRole("dialog", { name: "Delete src/app.go?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Delete file" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]!.args).toMatchObject({
+    branch: "main",
+    expected_head: HEAD,
+    files: [{ op: "delete", path: "src/app.go" }],
+  });
+
+  cleanup();
   stubEngine(detail({ managed_by: "tools" }), []);
   mount("#/gitlet/repos/web?ref=refs%2Ftags%2Fv1&path=src%2Fapp.go", "web", MAINTAINER);
-
-  const edit = await screen.findByRole("button", { name: "Edit" });
-  await waitFor(() => expect(edit.getAttribute("title")).toMatch(/Choose a branch/));
+  const held = await screen.findByRole("button", { name: "Edit app.go" });
+  await waitFor(() => expect(held.getAttribute("title")).toMatch(/^Choose a branch/));
+  fireEvent.click(screen.getByRole("button", { name: "More file actions" }));
+  const del = await screen.findByRole("menuitem", { name: /^Delete file/ });
+  expect(del.getAttribute("aria-disabled")).toBe("true");
+  expect(del.textContent).toContain("Choose a branch to commit to: a tag or a commit takes none.");
 });
 
 // WHO READS A REPOSITORY IS ONE OF ITS DETAILS: the form's Read by sends
@@ -4551,4 +4573,130 @@ test("choosing a revision from the pane keeps the file", async () => {
       reads(asked, "code_tree").filter((u) => u.searchParams.get("ref") === OTHER),
     ).not.toHaveLength(0),
   );
+});
+
+/** The reason a held control gives, as the kit describes it. */
+const reasonOf = (el: HTMLElement) =>
+  document.getElementById(el.getAttribute("aria-describedby") ?? "")?.textContent;
+
+// RAW AND DOWNLOAD NAME THE FILE'S COMMIT, whole, never the branch or the tag, which
+// the route refuses. Mutation: build `rev` from the address, and this fails.
+test("Raw and Download name the file's commit, never the branch", async () => {
+  stubArchive(405);
+  mount(MAIN_GO_AT);
+  const raw = await screen.findByRole("link", { name: "Raw" });
+  const path = "path=cmd%2Fweb%2Fmain.go";
+  expect(raw.getAttribute("href")).toBe(`/git/web/-/raw?rev=${HEAD}&${path}`);
+  expect(raw.getAttribute("title")).toBe("The file's bytes as committed at 0123456");
+  const download = screen.getByRole("link", { name: "Download main.go" });
+  expect(download.getAttribute("href")).toBe(`/git/web/-/raw?rev=${HEAD}&${path}&download=1`);
+  expect(download.getAttribute("download")).toBe("main.go");
+
+  cleanup();
+  stubArchive(405);
+  mount("#/gitlet/repos/web?ref=refs%2Ftags%2Fv1&path=cmd%2Fweb%2Fmain.go");
+  expect((await screen.findByRole("link", { name: "Raw" })).getAttribute("href")).toBe(
+    `/git/web/-/raw?rev=${HEAD}&${path}`,
+  );
+});
+
+// AN OLDER FLEET HOLDS RAW AND DOWNLOAD with the reason, probed once for the page.
+// Mutation: draw the links on a 404, or probe on every file, and this fails.
+test("Raw and Download are held on a fleet that serves no downloads, probed once", async () => {
+  const { probes } = stubArchive(404);
+  mount(MAIN_GO_AT);
+  const raw = await waitFor(() => {
+    const held = screen.getByRole("button", { name: "Raw" });
+    expect(reasonOf(held)).toBe("Downloading a file is not available on this fleet yet.");
+    return held;
+  });
+  expect(raw.getAttribute("aria-disabled")).toBe("true");
+  const download = screen.getByRole("button", { name: "Download main.go" });
+  expect(reasonOf(download)).toBe("Downloading a file is not available on this fleet yet.");
+  act(() => {
+    location.hash = "#/gitlet/repos/web?path=go.mod";
+  });
+  await screen.findByRole("button", { name: "Download go.mod" });
+  expect(probes).toEqual(["HEAD"]);
+});
+
+/** A file of two pages (BIG_PAGE_LINES and ten more), its lines `l<n>`. */
+const TWO_PAGES: Coded = {
+  oid: BIG_OID,
+  text: Array.from({ length: BIG_PAGE_LINES + 10 }, (_, i) => `l${i + 1}\n`).join(""),
+};
+
+/** The clipboard stubbed: what it was written, or a refusal while `refuse` holds. */
+function stubClipboard() {
+  const box = { written: [] as string[], refuse: false };
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText: (t: string) =>
+        box.refuse ? Promise.reject(new Error("denied")) : (box.written.push(t), Promise.resolve()),
+    },
+  });
+  return box;
+}
+
+// COPY COPIES THE WHOLE FILE, reading at the commit the pages not loaded; a file
+// wholly loaded asks nothing. Mutation: copy the loaded pages only, and this fails.
+test("Copy copies the whole file, reading the pages not loaded", async () => {
+  const clip = stubClipboard();
+  const asked = stubEngine(detail(), [], { "src/two.go": TWO_PAGES });
+  mount("#/gitlet/repos/web?path=src%2Ftwo.go");
+  await screen.findByRole("button", { name: "Load more lines" });
+  fireEvent.click(screen.getByRole("button", { name: "Copy the file's contents" }));
+  expect(await screen.findByRole("button", { name: "Copied the file's contents" })).toBeTruthy();
+  expect(clip.written).toEqual([TWO_PAGES.text]);
+  const atCommit = reads(asked, "code_blob").filter((u) => u.searchParams.get("ref") === HEAD);
+  expect(atCommit.map((u) => u.searchParams.get("cursor"))).toEqual([
+    null,
+    `l${BIG_PAGE_LINES + 1}`,
+  ]);
+
+  cleanup();
+  const whole = stubEngine();
+  mount("#/gitlet/repos/web?path=src%2Fapp.go");
+  await screen.findByRole("button", { name: "Line 3" });
+  const before = reads(whole, "code_blob").length;
+  fireEvent.click(screen.getByRole("button", { name: "Copy the file's contents" }));
+  await screen.findByRole("button", { name: "Copied the file's contents" });
+  expect(clip.written.at(-1)).toBe("package app\n\nfunc Run() {}\n");
+  expect(reads(whole, "code_blob")).toHaveLength(before);
+});
+
+// COPY IS HELD WITH ITS REASON for a binary file and past 1 MiB, and says when the
+// browser refused. Mutation: draw Copy on a binary file, or reset a refusal, and this fails.
+test("Copy is held for a binary file and past 1 MiB, and says when the clipboard refused", async () => {
+  stubEngine(detail(), [], {
+    "bin/app": { oid: OTHER, text: "x\n", binary: true },
+    "big.json": { oid: OTHER, text: "{}\n", size: Math.round(3.2 * 1024 * 1024) },
+  });
+  mount("#/gitlet/repos/web?path=bin%2Fapp");
+  const binary = await screen.findByRole("button", { name: "Copy the file's contents" });
+  await waitFor(() =>
+    expect(reasonOf(binary)).toBe("A binary file has no text to copy: download it."),
+  );
+  act(() => {
+    location.hash = "#/gitlet/repos/web?path=big.json";
+  });
+  await waitFor(() =>
+    expect(reasonOf(screen.getByRole("button", { name: "Copy the file's contents" }))).toBe(
+      "This file is 3.2 MiB: copy one past 1 MiB from Raw.",
+    ),
+  );
+
+  cleanup();
+  const clip = stubClipboard();
+  clip.refuse = true;
+  stubEngine();
+  mount("#/gitlet/repos/web?path=src%2Fapp.go");
+  await screen.findByRole("button", { name: "Line 3" });
+  fireEvent.click(screen.getByRole("button", { name: "Copy the file's contents" }));
+  const refused = await screen.findByRole("button", { name: "The browser refused the clipboard" });
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(refused.getAttribute("aria-label") ?? refused.textContent).toContain("refused");
 });
