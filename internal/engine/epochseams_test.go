@@ -128,6 +128,7 @@ var servingSeams = []reflect.Type{
 	reflect.TypeFor[chatlet.Options](),
 	reflect.TypeFor[chatlet.ReaderOptions](),
 	reflect.TypeFor[search.ChatIndexer](),
+	reflect.TypeFor[search.ChangeIndexer](),
 	reflect.TypeFor[engine.ItemRanker](),
 	reflect.TypeFor[search.FanOut](),
 }
@@ -280,6 +281,8 @@ var classified = map[string]struct {
 		"judged by: which repositories it lists, and whether it reads one"},
 	"gitlet.ReaderOptions.Now": {seamNone, "the clock a change's routing dates the notices still kept " +
 		"by"},
+	"gitlet.ReaderOptions.ChangeWords": {seamNone, "this node's own index of changes' words, a " +
+		"search.ChangeIndexer, classified there; every match is judged in the read's snapshot"},
 
 	"query.Options.NodeID": {seamNone, "this node's name, which a refusal about the node names"},
 	"query.Options.Cache": {seamNone, "the node's git cache, synced from the code log's rows like " +
@@ -402,6 +405,14 @@ var classified = map[string]struct {
 	"search.ChatIndexer.estate":      {seamNone, "the replicated rows the index walks"},
 	"search.ChatIndexer.pruneCursor": {seamNone, "how far the index's prune has walked"},
 	"search.ChatIndexer.rebuild":     {seamNone, "whether the index must be built again"},
+
+	"search.ChangeIndexer.db":         {seamNone, "the node's own file the index is kept in"},
+	"search.ChangeIndexer.estate":     {seamNone, "the replicated rows the index walks"},
+	"search.ChangeIndexer.code":       {seamNone, "the code domain whose applied prefix bounds the walk"},
+	"search.ChangeIndexer.repoCursor": {seamNone, "how far the index's purge follower has walked"},
+	"search.ChangeIndexer.rebuild":    {seamNone, "whether the index must be built again"},
+	"search.ChangeIndexer.scan": {seamNone, "how many postings or documents of what drives one search " +
+		"reads"},
 
 	"engine.itemRanker.fan":   {seamNone, "the item search's fan-out, classified on search.FanOut"},
 	"engine.itemRanker.index": {seamNone, "the node's lexical index"},
