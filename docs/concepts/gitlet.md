@@ -7449,7 +7449,10 @@ change as whoever enqueued it.
   or not. A branch holds one train: a candidate abandons the one before it,
   whose candidates are removed and whose entries wait again.
 - An **eject** puts live entries of one branch out — `check_failed` (naming
-  the checks), `conflict` (naming up to 100 paths), `gate_unmet`,
+  the checks, and for a bisected culprit the train they failed on: its
+  candidate, the commit it was merged onto and the commit they ran on, kept on
+  the entry since the train's rows go with it), `conflict` (naming up to 100
+  paths), `gate_unmet`,
   `head_moved`, `not_fast_forward` or `repo_mirrored` (the repository is a
   [pull mirror](#mirrors-and-imports), which nothing merges into: its home
   ejects every live entry rather than build a train) — and abandons the train
@@ -7600,7 +7603,8 @@ holds.
   between the last known good (the train's base where no commit passed) and
   the first known red is queued the failed checks (`purpose: bisect`), until
   the first red commit follows a good one. Its entry is the culprit, ejected
-  `check_failed` naming the checks; the eject abandons the train, and the
+  `check_failed` naming the checks and the commit they failed on, the train's
+  merge onto the branch at its base; the eject abandons the train, and the
   next turn builds it again without that change. A batch of `batch` changes
   finds its culprit in log₂ `batch` more rounds, and while it does nothing
   behind it lands, since every later candidate holds the culprit too. That
@@ -7610,6 +7614,10 @@ holds.
   and 12 at eight, while a queue that never batches falls further behind
   with every red candidate. A larger batch spends a few fewer check runs a
   landed change (0.98 at two, 0.95 at four, 0.94 at eight) for that wait.
+  A data node of an earlier build holds back an ejection that names its
+  train, and every later record of its repository, until it is upgraded
+  ([Which records an upgrade holds
+  back](../guides/replication.md#which-records-an-upgrade-holds-back)).
 - **Cancel what a given-up train still runs.** An eject, a dequeue, a person
   moving the branch and a new train each give the branch's train up, and
   its candidates' and probes' checks still queued or running measure commits

@@ -298,7 +298,9 @@
 // pushes that move its head have one writer, and every record that leaves the
 // change no longer what was enqueued ends its entry in its own apply: a close,
 // a draft, a retarget and a landing dequeue it, and a push that moves its head
-// ejects it.
+// ejects it. An ejection for a check that failed names the train it failed on
+// (its candidate, base and commit, version 7), since the train's rows go with
+// it.
 //
 // A CHANGE MERGES BY ONE RECORD ITS GATE DECIDES (merge.go, ADR-0096): a merge
 // ([Merge]) built on the repository's home onto the tip it read of the target

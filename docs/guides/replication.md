@@ -801,6 +801,10 @@ Its version 6, a check's test counts and its output's lines, rides most check
 endings, so an older data node holds back those endings and every later record
 of their repository's checks until it is upgraded; a roll that upgrades the
 data nodes first holds back none.
+Its version 7, the train a failed check's ejection names, rides only those
+ejections, so an older data node holds back such an eject and every later
+record of its repository until it is upgraded; a roll that upgrades the data
+nodes first holds back none.
 A release that adds a field to a record gives it the next
 version of its domain's table, and from then on an older node holds back the
 records carrying it and every later record whose scope meets one — except a
