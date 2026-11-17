@@ -919,6 +919,165 @@
   color: var(--color-text-secondary);
 }
 
+.code-clone__lab {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.code-clone__missing {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* THE ACTIONS UNDER A HAIRLINE, one a row at the panel's width. */
+.code-clone__acts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0 calc(-1 * var(--spacing-3));
+  padding: var(--spacing-2) var(--spacing-2) 0;
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-clone__acts .code-clone__act {
+  justify-content: flex-start;
+}
+
+/* THE REVISION PICKER (`repo/refs.tsx`). No width of its own: the kit's panel
+   is a width range, and the list is what scrolls inside its height. */
+.code-picker__button {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.code-picker__word {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-picker-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.code-picker {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.code-picker__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-2) 0 var(--spacing-3);
+}
+
+.code-picker__title {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-picker__find {
+  padding: var(--spacing-2) var(--spacing-3) 0;
+}
+
+.code-picker__tabs {
+  padding: 0 var(--spacing-3);
+}
+
+.code-picker__body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.code-picker__note,
+.code-picker__status {
+  margin: 0;
+  padding: var(--spacing-2) var(--spacing-3) 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.code-picker__list {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: var(--spacing-1);
+  list-style: none;
+  overflow-y: auto;
+}
+
+.code-picker__more {
+  color: var(--color-brand-accent-ink);
+}
+
+.code-picker__list:empty {
+  display: none;
+}
+
+/* LEAD, NAME, MARKS, TIME: the name is the one column that gives way. */
+.code-picker__list .code-picker__row {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-picker__lead {
+  display: inline-flex;
+}
+
+.code-picker__check {
+  color: var(--color-brand-accent-ink);
+}
+
+.code-picker__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-primary);
+}
+
+.code-picker__marks {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+.code-picker__rule {
+  display: inline-flex;
+  color: var(--color-text-tertiary);
+}
+
+.code-picker__when {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+.code-picker__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-block-start: 1px solid var(--color-border-default);
+  font-size: var(--font-size-sm);
+}
+
 /* ---- A repository's page (`routes/gitlet/repo/`) ------------------------- */
 
 /* THE BAR ABOVE THE CODE: the revision, the path, then the writes and the

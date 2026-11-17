@@ -2699,9 +2699,11 @@ const (
 	// (6,836,450 bytes), 14,136 over main: 6677 KiB.
 	// The setting editors, artifact references, chat receipts and Gitlet repository home train,
 	// on kit 0.150.1: 6700.2 KiB (6,861,017 bytes), 38,703 over main: 6701 KiB.
+	// A branch and tag picker in a panel and a repository's Code menu: 6711.5 KiB (6,872,599 bytes),
+	// 11,582 over main: 6712 KiB.
 	// A repository's rail: its open changes, pushers, push spark, mirror and newest tag, on kit
-	// 0.150.1: 6716.8 KiB (6,878,017 bytes), 17,000 over main: 6717 KiB.
-	treeBudget = 5<<20 + 1597<<10
+	// 0.150.1: 6728.1 KiB (6,889,605 bytes), 17,006 over the picker's: 6729 KiB.
+	treeBudget = 5<<20 + 1609<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

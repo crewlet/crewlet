@@ -245,7 +245,7 @@ function DefaultBox({
 }
 
 /** The default branch read in detail: found page by page, since a find matches any part of a name. */
-export function useDefaultBranch(repo: CodeRepoDetail) {
+export function useDefaultBranch(repo: CodeRepoDetail, enabled = true) {
   const params = useMemo(
     () => ({
       name: repo.name,
@@ -255,7 +255,7 @@ export function useDefaultBranch(repo: CodeRepoDetail) {
     }),
     [repo.name, repo.default_branch],
   );
-  const first = useCodeQuery("code_refs", params);
+  const first = useCodeQuery("code_refs", params, { enabled });
   const want = HEADS + repo.default_branch;
   const inFirst = first.data?.refs_detail?.find((r) => r.ref === want);
   const next = first.data?.next ?? "";
@@ -632,7 +632,7 @@ export function protectionWords(p: CodeRefProtection): string {
 }
 
 /** A branch's rules in words: "Protected by release/*: no force-push, no delete, pushes through changes only". */
-function protectionTitle(p: CodeRefProtection): string {
+export function protectionTitle(p: CodeRefProtection): string {
   const names = p.patterns.map((pattern) =>
     pattern.startsWith(HEADS) ? pattern.slice(HEADS.length) : pattern,
   );
@@ -1072,6 +1072,12 @@ function TagsView({ repo }: { repo: CodeRepoDetail }) {
   );
 }
 
+/** What a tag says when `date` carries none, shared with the revision picker. */
+export const TAG_LATE = "after the year 9999";
+export const TAG_UNDATED = "undated";
+export const TAG_UNDATED_TITLE =
+  "A lightweight tag of a tree or a blob, or an annotated tag naming no tagger, has no date of its own.";
+
 /** When a tag was made: its own date, past the year 9999, or none of its own. */
 function TagDate({ tag, now }: { tag: CodeTagRow; now: number }) {
   if (tag.date) {
@@ -1081,12 +1087,8 @@ function TagDate({ tag, now }: { tag: CodeTagRow; now: number }) {
       </time>
     );
   }
-  if (tag.date_unix !== undefined) return <span>after the year 9999</span>;
-  return (
-    <span title="A lightweight tag of a tree or a blob, or an annotated tag naming no tagger, has no date of its own.">
-      undated
-    </span>
-  );
+  if (tag.date_unix !== undefined) return <span>{TAG_LATE}</span>;
+  return <span title={TAG_UNDATED_TITLE}>{TAG_UNDATED}</span>;
 }
 
 /** One tag: its name opening its files at its whole ref, the commit it names and when, and its controls. */

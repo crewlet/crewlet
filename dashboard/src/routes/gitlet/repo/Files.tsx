@@ -65,7 +65,6 @@ import {
   Callout,
   Card,
   CodeBlock,
-  Copyable,
   SegmentedControl,
   Skeleton,
   Stack,
@@ -120,13 +119,11 @@ import {
 import { commitHref, repoHref } from "../paths.ts";
 import {
   CheckRollupMark,
-  CloneButton,
   Face,
   GITLET,
   LICENSE_NAMES,
   README_NAMES,
   ShaChip,
-  cloneURL,
   useWhoName,
 } from "../ui.tsx";
 import { Painted, paintFence, tokensOf, useGrammar, useLineStates } from "../syntax.tsx";
@@ -134,7 +131,7 @@ import { gitletWrote, mergeTitle, subjectOf } from "./History.tsx";
 import { useReportDocs } from "./About.tsx";
 import { Entries } from "./Entries.tsx";
 import { useCommitMarks } from "./marks.ts";
-import { RefPicker, revisionWord, type Revisions } from "./refs.tsx";
+import { RefPicker, revisionWord } from "./refs.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import {
   EditFileButton,
@@ -144,6 +141,7 @@ import {
   targetOf,
   type CommitTarget,
 } from "./FileWrites.tsx";
+import { CloneAddress, CodeMenu, NO_CLONE_ADDRESS } from "./CodeMenu.tsx";
 import { GoToFile } from "./GoToFile.tsx";
 import "~/styles/gitlet.css";
 
@@ -164,7 +162,14 @@ function commitOf(rev: string, answer: CodeGitAnswer | null, param = "ref"): str
   return answer?.resolved?.[param]?.oid ?? "";
 }
 
-export function Files({ repo, revisions }: { repo: CodeRepoDetail; revisions: Revisions }) {
+export function Files({
+  repo,
+  cloneURL,
+}: {
+  repo: CodeRepoDetail;
+  /** The engine's clone address, absent where the deployment names none. */
+  cloneURL: string | undefined;
+}) {
   const [ref, setRef] = useParam("ref", "", "filter");
   const [path] = useParam("path", "", "filter");
   const [lens, setLens] = useParam("lens", "", "filter");
@@ -174,12 +179,12 @@ export function Files({ repo, revisions }: { repo: CodeRepoDetail; revisions: Re
     // and a repository whose other branches are live while its default
     // branch holds nothing is read from them.
     return repo.branches > 0 ? (
-      <NoDefaultBranch repo={repo} revisions={revisions} onRev={setRef} />
+      <NoDefaultBranch repo={repo} onRev={setRef} />
     ) : (
-      <EmptyRepository repo={repo} />
+      <EmptyRepository repo={repo} cloneURL={cloneURL} />
     );
   }
-  const place = { repo, revisions, rev: ref, path, onRev: setRef };
+  const place = { repo, cloneURL, rev: ref, path, onRev: setRef };
   return path === "" ? (
     <RootListing {...place} />
   ) : (
@@ -195,15 +200,14 @@ export function Files({ repo, revisions }: { repo: CodeRepoDetail; revisions: Re
 
 interface Place {
   repo: CodeRepoDetail;
-  /** The repository's branches and tags, read once by its page ([useRevisions]). */
-  revisions: Revisions;
+  cloneURL: string | undefined;
   rev: string;
   path: string;
   onRev: (rev: string) => void;
 }
 
 /** The repository's root at the revision: its listing. */
-function RootListing({ repo, revisions, rev, path, onRev }: Place) {
+function RootListing({ repo, cloneURL, rev, path, onRev }: Place) {
   const params = useMemo(
     () => ({ name: repo.name, ...(rev ? { ref: rev } : {}) }),
     [repo.name, rev],
@@ -222,12 +226,13 @@ function RootListing({ repo, revisions, rev, path, onRev }: Place) {
     <Stack gap={4}>
       <FilesBar
         repo={repo}
-        revisions={revisions}
+        cloneURL={cloneURL}
         rev={rev}
         path={path}
         onRev={onRev}
         target={targetOf(rev, first.data)}
         commit={commit}
+        unread={Boolean(first.error)}
         dir
       />
       <Card padding="none" className="code-browser">
@@ -256,7 +261,7 @@ function RootListing({ repo, revisions, rev, path, onRev }: Place) {
 /** A path under the root: a directory's listing, or a file's lines or its blame. */
 function PathView({
   repo,
-  revisions,
+  cloneURL,
   rev,
   path,
   onRev,
@@ -303,7 +308,7 @@ function PathView({
     <Stack gap={4}>
       <FilesBar
         repo={repo}
-        revisions={revisions}
+        cloneURL={cloneURL}
         rev={rev}
         path={path}
         onRev={onRev}
@@ -630,18 +635,19 @@ function FileLines({
 /**
  * The bar above the code: the revision, the path back up to the root (the
  * repository's name first, every directory a link) and, at a directory, Go
- * to file and a new file in it and, at the root, the clone. What a reader
+ * to file and a new file in it and, at the root, the Code menu. What a reader
  * does with a file is on the file's own card ([FileCard]).
  */
 function FilesBar({
   repo,
-  revisions,
+  cloneURL,
   rev,
   path,
   onRev,
   target,
   commit,
   dir = false,
+  unread = false,
 }: Place & {
   /** Where a commit from here lands ([targetOf]). */
   target: CommitTarget;
@@ -649,11 +655,13 @@ function FilesBar({
   commit: string;
   /** The path is a directory (or the root), which takes a new file. */
   dir?: boolean;
+  /** The path's read failed, so its commit is not known. */
+  unread?: boolean;
 }) {
   const at = (p: string) => repoHref(repo.name, { ref: rev, path: p });
   return (
     <PageToolbar>
-      <RefPicker repo={repo} revisions={revisions} value={rev} onChoose={onRev} />
+      <RefPicker repo={repo} value={rev} onChoose={onRev} />
       {path === "" ? (
         // AT THE ROOT the path is the repository the header names, so the bar
         // says what the picker picks among instead, each a link to its list.
@@ -684,7 +692,9 @@ function FilesBar({
       <span className="code-bar-end">
         {dir && <GoToFile repo={repo.name} rev={rev} commit={commit} />}
         {dir && <NewFileButton repo={repo} target={target} dir={path} />}
-        {path === "" && <CloneButton repo={repo.name} />}
+        {path === "" && (
+          <CodeMenu repo={repo} cloneURL={cloneURL} commit={commit} failed={unread} />
+        )}
       </span>
     </PageToolbar>
   );
@@ -1537,19 +1547,11 @@ function RepoDocs({
  * pushed: the picker reaches its branches, and its Settings make one of them
  * the default.
  */
-function NoDefaultBranch({
-  repo,
-  revisions,
-  onRev,
-}: {
-  repo: CodeRepoDetail;
-  revisions: Revisions;
-  onRev: (rev: string) => void;
-}) {
+function NoDefaultBranch({ repo, onRev }: { repo: CodeRepoDetail; onRev: (rev: string) => void }) {
   return (
     <Stack gap={3}>
       <PageToolbar>
-        <RefPicker repo={repo} revisions={revisions} value="" onChoose={onRev} />
+        <RefPicker repo={repo} value="" onChoose={onRev} />
         <RefCounts repo={repo} tags={false} />
       </PageToolbar>
       <Card className="code-setup">
@@ -1577,8 +1579,13 @@ function NoDefaultBranch({
  * commands that clone it or push a repository a reader already has, each
  * with its copy, as a code host's empty repository offers them.
  */
-function EmptyRepository({ repo }: { repo: CodeRepoDetail }) {
-  const url = cloneURL(repo.name);
+function EmptyRepository({
+  repo,
+  cloneURL,
+}: {
+  repo: CodeRepoDetail;
+  cloneURL: string | undefined;
+}) {
   return (
     <Card className="code-setup">
       <Card.Header divided>
@@ -1595,15 +1602,19 @@ function EmptyRepository({ repo }: { repo: CodeRepoDetail }) {
           </span>
           <Stack gap={2}>
             <h3 className="t-label">Clone it</h3>
-            <Copyable value={url} variant="block" monospace ariaLabel={`Copy ${url}`} />
+            <CloneAddress url={cloneURL} />
           </Stack>
           <Stack gap={2}>
             <h3 className="t-label">Or push a repository you already have</h3>
-            <CodeBlock
-              copyable
-              copyLabel="Copy the commands"
-              code={`git remote add origin ${url}\ngit push -u origin ${repo.default_branch}`}
-            />
+            {cloneURL ? (
+              <CodeBlock
+                copyable
+                copyLabel="Copy the commands"
+                code={`git remote add origin ${cloneURL}\ngit push -u origin ${repo.default_branch}`}
+              />
+            ) : (
+              <p className="muted">{NO_CLONE_ADDRESS}</p>
+            )}
           </Stack>
         </Stack>
       </Card.Body>

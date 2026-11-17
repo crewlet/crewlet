@@ -113,7 +113,6 @@ import {
   SearchModeControl,
 } from "./RepoWrites.tsx";
 import { useDefaultChecks } from "./marks.ts";
-import { useRevisions } from "./refs.tsx";
 import "~/styles/gitlet.css";
 
 /**
@@ -151,12 +150,7 @@ export function RepositoryPage({ repo }: { repo: string }) {
   const named = isRepoName(repo);
   const read = useCodeQuery("code_repo", { name: repo }, { enabled: named, pollMs: REPO_POLL_MS });
   const [tab, setTab] = useTab<RepoTab>("tab", REPO_TABS);
-  // THE BRANCHES AND TAGS ITS PICKERS LIST, read here — once, under the
-  // repository's current name — while a tab that draws a picker is open, so a
-  // move between the root and a path, or between Code and Commits, asks
-  // neither listing again (`refs.tsx`'s useRevisions).
   const current = read.data?.repo?.name ?? "";
-  const revisions = useRevisions(current, current !== "" && (tab === "code" || tab === "commits"));
   // CHANGES' COUNT AND CHECKS' MARKER on every tab: the live changes, and the default head's verdict.
   const counts = useCodeQuery(
     "code_counts",
@@ -237,9 +231,9 @@ export function RepositoryPage({ repo }: { repo: string }) {
         aria-labelledby={tabId(panelId, tab)}
         tabIndex={0}
       >
-        {tab === "code" && <Code repo={detail} revisions={revisions} counts={counts} />}
+        {tab === "code" && <Code repo={detail} cloneURL={read.data?.clone_url} counts={counts} />}
         {tab === "changes" && <RepoChanges repo={detail} />}
-        {tab === "commits" && <Commits repo={detail} revisions={revisions} />}
+        {tab === "commits" && <Commits repo={detail} />}
         {tab === "branches" && <Branches repo={detail} />}
         {tab === "pushes" && <PushHistory repo={detail.name} />}
         {tab === "checks" && <RepoChecks repo={detail.name} />}
@@ -440,16 +434,16 @@ function RepoHeader({ repo }: { repo: CodeRepoDetail }) {
  */
 function Code({
   repo,
-  revisions,
+  cloneURL,
   counts,
 }: {
   repo: CodeRepoDetail;
-  revisions: ReturnType<typeof useRevisions>;
+  cloneURL: string | undefined;
   counts: QueryResult<CodeCountsAnswer>;
 }) {
   const [path] = useParam("path", "", "filter");
   const [docs, setDocs] = useState("");
-  const files = <Files repo={repo} revisions={revisions} />;
+  const files = <Files repo={repo} cloneURL={cloneURL} />;
   if (path !== "") return files;
   return (
     <RootDocs.Provider value={setDocs}>
