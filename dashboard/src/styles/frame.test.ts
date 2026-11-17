@@ -649,6 +649,7 @@ describe("the frame's layout", () => {
       [".feed-row", "screens.css"],
       [".thread-entry", "screens.css"],
       [".code-list__row", "gitlet.css"],
+      [".code-entries td", "gitlet.css"],
       [".code-refs__table td", "gitlet.css"],
     ] as const;
     for (const [row, file] of ROWS) {

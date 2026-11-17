@@ -57,7 +57,7 @@ import { CodeList, useDayGroups, type ListDay } from "../CodeList.tsx";
 import { commitHref, repoHref } from "../paths.ts";
 import { ChangeRefPill } from "../Changes.tsx";
 import { CheckRollupMark, Face, GITLET, ShaChip, TagChip, useWhoName, type Who } from "../ui.tsx";
-import { useCommitMarks, type MarksFailure } from "./marks.ts";
+import { REFUSED_CODES, useCommitMarks, type MarksFailure } from "./marks.ts";
 import { RefPicker, revisionWord, type Revisions } from "./refs.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import "~/styles/gitlet.css";
@@ -108,23 +108,32 @@ export function provenanceOf(
 /** How many parents a commit has, or null where the page says neither. */
 const parentsOf = (c: CodeLogCommit): number | null => c.parent_count ?? c.parents?.length ?? null;
 
+/** The landing whose merge commit this is, as the commit's marks name it. */
+const landingOf = (c: CodeLogCommit, mark: CodeCommitMark | null | undefined) =>
+  mark?.merged?.find((m) => m.merge_oid === c.oid);
+
 /** Gitlet wrote this merge commit: two parents or more, brought by a merge or a queue landing. */
-export function gitletWrote(c: CodeLogCommit, by: CodePushedBy | undefined): boolean {
-  const merged = by?.via === "merge" || by?.via === "queue";
+export function gitletWrote(
+  c: CodeLogCommit,
+  by: CodePushedBy | undefined,
+  mark?: CodeCommitMark | null,
+): boolean {
+  const merged = by?.via === "merge" || by?.via === "queue" || landingOf(c, mark) !== undefined;
   return merged && (parentsOf(c) ?? 0) >= 2 && c.engine_committed !== false;
 }
 
 /** The merge chip's title: which change Gitlet merged or landed, and for whom. */
-function mergeTitle(
+export function mergeTitle(
   c: CodeLogCommit,
-  by: CodePushedBy,
+  by: CodePushedBy | undefined,
   mark: CodeCommitMark | null | undefined,
   whoName: (who: Who) => string,
 ): string {
-  const pusher = by.principal.seat ?? by.principal.operator_id ?? "";
+  const landing = landingOf(c, mark);
+  const pusher = by?.principal.seat ?? by?.principal.operator_id ?? landing?.merged_by ?? "";
   const who = pusher ? whoName(pusher) : "a person";
   const change = mark?.merged?.[0]?.ref ?? mark?.heads?.[0]?.change.ref ?? "a change";
-  if (by.via === "queue") {
+  if ((by?.via ?? (landing?.merged_via === "queue" ? "queue" : "merge")) === "queue") {
     return `Gitlet wrote this commit when ${change} landed from the merge queue, queued by ${who}`;
   }
   const what = (parentsOf(c) ?? 0) >= 2 ? "merge commit" : "commit";
@@ -280,9 +289,6 @@ function MarksNote({ failed, retry }: { failed: MarksFailure; retry: () => void 
     </p>
   );
 }
-
-/** The refusals a retry does not change: the engine said no, or this fleet answers no marks yet. */
-const REFUSED_CODES = new Set(["unavailable", "bad_params", "not_found", "unauthorized"]);
 
 /** The commit's files, browsed at it. */
 function BrowseAt({ repo, oid }: { repo: string; oid: string }) {

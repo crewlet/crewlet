@@ -966,13 +966,6 @@
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--spacing-1) var(--spacing-4);
-  font-size: var(--font-size-sm);
-}
-
-.code-ref-counts__link {
-  display: inline-flex;
-  align-items: center;
   gap: var(--spacing-1);
 }
 
@@ -990,13 +983,13 @@
   overflow: hidden;
 }
 
+/* ONE LINE: the subject gives way first; the writer and the end group never shrink. */
 .code-latest {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-2) var(--spacing-3);
   min-height: var(--size-row-md);
-  padding: var(--spacing-2) var(--spacing-4);
+  padding: var(--spacing-2) var(--row-inline);
   background: var(--color-surface-subtle);
   border-block-end: 1px solid var(--color-border-default);
   font-size: var(--font-size-sm);
@@ -1004,32 +997,179 @@
 
 .code-latest__who {
   display: inline-flex;
+  flex: none;
   align-items: center;
   gap: var(--spacing-2);
 }
 
 .code-latest__author {
   font-weight: var(--font-weight-semibold);
+  white-space: nowrap;
 }
 
 .code-latest__subject {
-  flex: 1 1 12rem;
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
+  color: var(--color-text-secondary);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .code-latest__end {
   display: inline-flex;
+  flex: none;
   align-items: center;
   gap: var(--spacing-2);
   margin-inline-start: auto;
 }
 
+/* THE CHECK'S SLOT keeps its width while the marks are read, so the id never moves. */
+.code-latest__check {
+  display: inline-flex;
+  justify-content: flex-end;
+  min-inline-size: var(--size-control-sm);
+}
+
 .code-latest__when {
   color: var(--color-text-tertiary);
   white-space: nowrap;
+}
+
+/* A DIRECTORY'S ENTRIES: the name, the last commit's subject and when; the subject gives way. */
+.code-entries {
+  inline-size: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: var(--font-size-sm);
+}
+
+.code-entries td {
+  padding: var(--spacing-2) var(--row-inline);
+  vertical-align: middle;
+}
+
+.code-entries tbody tr + tr {
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-entries tbody tr:hover {
+  background: var(--color-surface-hover);
+}
+
+/* THE COLUMNS' WIDTHS: a fixed table reads them off its colgroup, the subject takes the rest. */
+.code-entries__col-name {
+  inline-size: 34%;
+}
+
+.code-entries__col-when {
+  inline-size: calc(1.75 * var(--spacing-10));
+}
+
+.code-entries__commit {
+  min-inline-size: 0;
+  overflow: hidden;
+}
+
+.code-entries__when {
+  color: var(--color-text-tertiary);
+  text-align: end;
+  white-space: nowrap;
+}
+
+/* A QUIET LINK: the secondary ink, a step brighter on hover, never underlined. */
+.code-entries__subject {
+  display: block;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-entries__subject:hover {
+  color: var(--color-text-primary);
+}
+
+.code-entries__note {
+  display: block;
+  overflow: hidden;
+  color: var(--color-text-tertiary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-entries__empty {
+  color: var(--color-text-tertiary);
+  text-align: center;
+}
+
+.code-entries__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-4);
+  padding: var(--spacing-2) var(--row-inline);
+  border-block-start: 1px solid var(--color-border-default);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* THE PHONE: the head row in two lines, and each entry its name and age over its subject. */
+@container page (width < 640px) {
+  .code-latest {
+    flex-wrap: wrap;
+  }
+
+  .code-latest__end {
+    flex: 1 1 100%;
+    margin-inline-start: 0;
+  }
+
+  .code-entries colgroup {
+    display: none;
+  }
+
+  .code-entries,
+  .code-entries tbody,
+  .code-entries tr,
+  .code-entries td {
+    display: block;
+  }
+
+  .code-entries tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "name when" "commit commit";
+    gap: var(--spacing-1) var(--spacing-3);
+    padding: var(--spacing-2) var(--row-inline);
+  }
+
+  .code-entries td {
+    padding: 0;
+  }
+
+  .code-entries__name {
+    grid-area: name;
+    min-inline-size: 0;
+  }
+
+  .code-entries__when {
+    grid-area: when;
+  }
+
+  .code-entries__commit {
+    grid-area: commit;
+    font-size: var(--font-size-xs);
+  }
+
+  .code-entries__commit:empty {
+    display: none;
+  }
+
+  .code-entries__empty {
+    grid-column: 1 / -1;
+  }
 }
 
 /* AN ENTRY OF A DIRECTORY: its glyph and its name on one line. */
@@ -1226,9 +1366,27 @@
   white-space: pre;
 }
 
-/* THE README: a card under the files, its text at a reading measure. */
+/* THE README AND THE LICENSE: tabs across the card's head, Edit at its end, the text the card's width. */
+.code-docs__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  min-height: var(--size-row-md);
+  padding: var(--spacing-2) var(--row-inline);
+  border-block-end: 1px solid var(--color-border-default);
+}
+
+.code-docs__head > :first-child {
+  min-width: 0;
+}
+
+.code-docs__body {
+  padding: var(--spacing-5) var(--spacing-6);
+}
+
 .code-readme .prose {
-  max-width: var(--size-measure);
+  max-width: none;
 }
 
 .code-readme__text {
@@ -2096,4 +2254,65 @@
 
 .code-search-line__text {
   white-space: pre;
+}
+
+/* GO TO FILE in the bar's end group; a phone gives it a line of its own. */
+.code-bar-end .code-find {
+  flex: 0 1 auto;
+  inline-size: calc(9 * var(--size-control-sm));
+  max-inline-size: 100%;
+}
+@container page (width < 640px) {
+  .code-bar-end .code-find {
+    flex: 1 1 100%;
+    inline-size: 100%;
+  }
+}
+
+/* A FOUND FILE: its glyph, then its path with the matched runs strong. */
+.code-find__row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.code-find__path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-find__dir {
+  color: var(--color-text-secondary);
+}
+
+.code-find__base {
+  color: var(--color-text-primary);
+}
+
+.code-find__hit {
+  font-weight: var(--font-weight-semibold);
+}
+
+/* A REPOSITORY'S TITLE: its owner's path in the secondary ink, a slash, its name. */
+.code-repo-title {
+  overflow-wrap: anywhere;
+}
+
+.code-repo-title__owner,
+.code-repo-title__slash {
+  color: var(--color-text-secondary);
+  font-weight: var(--font-weight-regular);
+}
+
+.code-repo-title__link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.code-repo-title__link:hover {
+  color: var(--color-text-primary);
 }

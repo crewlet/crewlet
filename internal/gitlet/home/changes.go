@@ -554,14 +554,16 @@ type against struct {
 
 // revise asks the repository's change writer to record due's revision's facts
 // f — its trees and its classes with the rest, as the Gitlet node read them —
-// its touched paths matched against rules' path owners and against the human
-// paths rules' gates hold its target to, and answers whether they were
+// its touched paths matched against rules' path owners, each owner with its
+// globs that matched, and against the human paths rules' gates hold its target
+// to, measured now to the microsecond, and answers whether they were
 // recorded: an answer that the rows moved since — superseded, the change
 // closed or merged — is the next pass's to read; one that decided nothing for
 // a reason of the log's is this turn's failure.
 func (c *changes) revise(ctx context.Context, repoID string, due gitlet.ChangeDue, f *gitlet.RevisionFactsAnswer,
 	rules against, at statelog.Position) (bool, error) {
 
+	measured := c.now().UTC().Truncate(time.Microsecond)
 	matched, digest := gitlet.MatchOwners(rules.owners, f.Touched, f.TouchesAll)
 	held, humanDigest, err := gitlet.MatchTargetHumanPaths(rules.gates, due.TargetRef, f.Touched, f.TouchesAll,
 		f.Classes)
@@ -574,7 +576,7 @@ func (c *changes) revise(ctx context.Context, repoID string, due gitlet.ChangeDu
 			TargetRef: due.TargetRef, TargetOID: due.Tip, TargetPosition: due.TipPosition, BaseOID: f.MergeBase,
 			BaseTree: f.BaseTree, HeadTree: f.HeadTree, PatchID: f.PatchID,
 			PatchIDOmitted: f.PatchIDOmission == gitlet.OmittedPastBound, Touched: f.Touched,
-			TouchesAll: f.TouchesAll, Classes: f.Classes, Node: c.node,
+			TouchesAll: f.TouchesAll, Classes: f.Classes, Node: c.node, MeasuredAt: measured,
 			RequestedOwners: matched, OwnersDigest: digest, HumanPaths: held, HumanPathsDigest: humanDigest}})
 	switch {
 	case err != nil:

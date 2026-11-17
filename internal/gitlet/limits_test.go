@@ -711,3 +711,78 @@ func TestGitReadsFollowTheCodeLogsCeiling(t *testing.T) {
 		}
 	}
 }
+
+// THE WIDEST REVISE FITS ITS RECORD: the widest revise a home of this build
+// sends, measured, touching MaxTouchedBytes of paths with every place classed
+// and every human path held, its MaxPathOwners owners each naming every glob
+// of theirs, just under MaxPathOwnersBytes of them, passes the conversation's
+// bound with the writer's widest stamp, an ask at its bound for each owner. A
+// revise refused for its bytes would leave its change due its facts for good.
+//
+// Mutation: price an ask at MaxPathOwnersBytes rather than MaxOwnedPathsBytes
+// (refused, red).
+func TestTheWidestReviseFitsItsRecord(t *testing.T) {
+	t.Parallel()
+	var touched []string
+	for i := range gitlet.MaxTouchedPaths {
+		touched = append(touched, fmt.Sprintf("t/%04d", i))
+	}
+	for pad := 1; ; pad++ {
+		wider := slices.Clone(touched)
+		for i := range wider {
+			wider[i] = fmt.Sprintf("t/%04d/", i) + strings.Repeat("p", pad)
+		}
+		if gitlet.TouchedCost(wider) > gitlet.MaxTouchedBytes {
+			break
+		}
+		touched = wider
+	}
+	places := make([]int, len(touched))
+	for i := range places {
+		places[i] = i
+	}
+	held := make([]int, gitlet.MaxTargetHumanPaths)
+	for i := range held {
+		held[i] = i
+	}
+	ownersOf := func(width int) []gitlet.PathOwner {
+		var owners []gitlet.PathOwner
+		for i := range gitlet.MaxPathOwners {
+			ref := fmt.Sprintf("u%02d", i)
+			po := gitlet.PathOwner{Owner: gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: ref + strings.Repeat("r", 64-len(ref))}}
+			for k := range gitlet.MaxPathOwnerPaths {
+				dir := fmt.Sprintf("o%02d/g%02d/", i, k)
+				po.Paths = append(po.Paths, dir+strings.Repeat("x", width-len(dir)-len("/**"))+"/**")
+			}
+			owners = append(owners, po)
+		}
+		return owners
+	}
+	width := gitref.MaxPathGlobBytes
+	for ; ; width-- {
+		encoded, err := json.Marshal(ownersOf(width))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(encoded) <= gitlet.MaxPathOwnersBytes {
+			break
+		}
+	}
+	owners := ownersOf(width)
+	digest := gitlet.OwnersDigest(owners)
+	var matched []gitlet.MatchedOwner
+	for _, po := range owners {
+		matched = append(matched, gitlet.MatchedOwner{Owner: po.Owner, Paths: po.Paths})
+	}
+	w := gitlet.ConversationWrite{OpID: statelog.NewOpID(time.Now(), ""), Revise: &gitlet.Revise{
+		RepoID: "0190f3c4-0000-7000-8000-00000000b0b0", ChangeID: "0190f3c4-0000-7000-8000-00000000c0c0", N: 1,
+		HeadOID: oidOf("B"), TargetRef: "refs/heads/main", TargetOID: oidOf("A"), BaseOID: oidOf("A"),
+		TargetPosition: statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 2}, PatchID: oidOf("patch"),
+		BaseTree: oidOf("base tree"), HeadTree: oidOf("head tree"),
+		Touched: touched, Classes: gitlet.RevisionClasses{WhitespaceOnly: places, Complete: true},
+		Node: strings.Repeat("n", 64), MeasuredAt: measuredAt, RequestedOwners: matched, OwnersDigest: digest,
+		HumanPaths: gitlet.HumanPathMatch{Held: held}, HumanPathsDigest: digest}}
+	if err := w.Validate(); err != nil {
+		t.Fatalf("the widest revise, its %d owners' globs %d bytes wide, is refused: %v", len(matched), width, err)
+	}
+}

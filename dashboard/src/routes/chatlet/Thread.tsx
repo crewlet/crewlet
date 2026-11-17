@@ -55,6 +55,7 @@ import {
   Button,
   ChatDivider,
   ChatThread,
+  DeliveryReceipt,
   WorkingLine,
   type ChatThreadHandle,
 } from "@crewlethq/ui";
@@ -65,7 +66,6 @@ import { useClient } from "~/lib/store-hooks.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
-import { andList } from "~/lib/words.ts";
 import type { ChatMessageView, ChatReadState, ChatThreadAnswer } from "~/protocol/index.ts";
 
 import { useArrivals } from "./arrivals.ts";
@@ -93,6 +93,9 @@ import { ReadFailed, ReadPending } from "./ReadState.tsx";
 import { roomTitle, roomWhere } from "./rooms.ts";
 import { useRoomDetail } from "./roomDetail.ts";
 import { RoomScopeProvider, useRoomScope } from "./scope.tsx";
+
+/** The thread's receipt speaks of replies: "Replies reach Bo Chen and Ops Agent". */
+const REPLY_LABELS = { reaches: (who: string) => `Replies reach ${who}` };
 
 const repliesOn = (answer: ChatThreadAnswer) => answer.replies ?? [];
 const replyID = (view: ChatMessageView) => view.message.id;
@@ -233,14 +236,22 @@ function Thread({
     <div className={typers.length > 0 ? "chat-pane-status is-typing" : "chat-pane-status"}>
       <ActivityLine typing={typingLine(typers)} />
       {reach.length > 0 && (
-        <p className="chat-pane-note chat-pane-note--lead">
-          <AvatarStack
-            members={reach.map((handle) => stackMember(people.person(handle)))}
-            size="xs"
-            max={4}
-            decorative
+        <p className="chat-pane-note">
+          {/* WHOM A REPLY REACHES, as the kit's receipt: their faces, and
+              their names in its tooltip and its name. */}
+          <DeliveryReceipt
+            tense="draft"
+            recipients={reach.map((handle) => ({ id: handle, name: people.nameOf(handle) }))}
+            faces={
+              <AvatarStack
+                members={reach.map((handle) => stackMember(people.person(handle)))}
+                size="xs"
+                max={4}
+                decorative
+              />
+            }
+            labels={REPLY_LABELS}
           />
-          <span>Replies reach {andList(reach.map(people.nameOf))}.</span>
         </p>
       )}
     </div>

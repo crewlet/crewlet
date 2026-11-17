@@ -121,11 +121,16 @@ describe("who follows a thread", () => {
 });
 
 describe("the pane", () => {
+  // WHO A REPLY REACHES IS THE KIT'S RECEIPT: their faces, and their names in
+  // its name and tooltip, never a sentence under the box. Mutation: put the
+  // sentence back.
   test("draws the root, the reply count, and who a reply reaches", async () => {
     open();
     expect(await screen.findByText("said m-1")).toBeTruthy();
     expect(screen.getByText("2 replies")).toBeTruthy();
-    expect(screen.getByText(/Replies reach Bo Chen and Ops Agent\./)).toBeTruthy();
+    const receipt = screen.getByRole("button", { name: "Replies reach Bo Chen and Ops Agent" });
+    expect(receipt.closest(".chat-pane-note")!.textContent).not.toContain("Replies reach");
+    expect(receipt.querySelector(".crewlet-avatar-stack")).not.toBeNull();
   });
 
   test("Follow writes the reader's own mark", async () => {

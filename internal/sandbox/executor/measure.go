@@ -2,7 +2,6 @@ package executor
 
 import (
 	"archive/tar"
-	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -55,14 +54,26 @@ import (
 // thread written by a release older than the count's floor is no count of a
 // session ([claudeCountFloor]).
 //
-// THE FLOOR'S FIGURE KEEPS ITS RULE ([contextReading]): the last main-thread
-// assistant line's input side, read off each whole line's bytes by
-// encoding/json as every capture's figure has been, the one decode of the walk
-// outside the layer's options, so the figure every reader of a stamp reads
-// ([sandbox.SessionCapture.ContextTokens]) does not move with this change. Two
-// differences, both of lines no resume reads: a last piece with no break is no
-// line (the box cuts it away before a resume), and a line the layer refuses
-// counts nothing, as encoding/json counted nothing of it.
+// THE FLOOR'S FIGURE IS WHAT THE LAYER READS OF A REPLY ([contextReading]):
+// the input side of the last reply of the main thread's own
+// ([threadHead.Main]) whose usage the layer reads ([threadLine.Usage]), by
+// the one rule a reply's usage is read by in a thread and in a run's stream
+// ([readUsage]), the count's included. So the two readings of one walk never
+// part on which record is a main-thread reply or on what its usage says: each
+// key exactly as written, each count a whole number in digits alone, and the
+// usage counted as Claude Code counts it, a reply read otherwise giving no
+// figure and the reply before it standing. Never encoding/json's reading of
+// the whole line, a rule of its own that matched a key in any case, merged a
+// key written twice, read a null or a negative count as 0, and took a record
+// that does not say it is a sidechain, or that names an agent, for the main
+// thread's; and that refused the whole line for any key it read, in any case,
+// holding a value of another kind, where the layer reads each key it reads by
+// its last value as written, so a reply that one refused for a `Type` of
+// another kind, an earlier `isSidechain` that is no boolean or an earlier
+// `message` that is no object now gives its figure. Every reply measured
+// carries a usage the layer reads ([threadLine.Usage] has the measure). A
+// last piece with no break is no line (the box cuts it away before a resume),
+// and a line the layer refuses counts nothing.
 //
 // ITS PACE: the walk is fed by the pipe the take writes into, so a meter slower
 // than the scrub would hold the take up inside its wait. The walk decodes each
@@ -208,11 +219,11 @@ func meterArchive(ctx context.Context, r io.Reader, session, release string) (in
 }
 
 // contextReading is the floor's figure as a reading of the walk
-// ([threadReading]): the input side of the last main-thread assistant line, by
-// the rule every capture's figure has been read by ([assistantInput]), applied
-// to each whole line's bytes and to nothing else. A line the layer refuses
-// counts nothing, as that rule counted nothing of one; a walk that ended on an
-// error leaves no figure, as a read that failed always has.
+// ([threadReading]): the input side of the last main-thread reply whose usage
+// the layer reads, its uncached input, its cache writes and its cache reads
+// (the file comment). A line the layer refuses, and a reply whose usage it
+// cannot read, count nothing; a walk that ended on an error leaves no figure,
+// as a read that failed always has.
 type contextReading struct {
 	last   int64
 	failed bool
@@ -220,9 +231,17 @@ type contextReading struct {
 
 var _ threadReading = (*contextReading)(nil)
 
-// line reads one whole line's figure, where it has one.
+// line reads one line's figure, where it is a main-thread reply whose usage
+// the layer reads and whose input side is above zero.
 func (c *contextReading) line(l threadLine) {
-	if n := assistantInput(l.Raw); n > 0 {
+	if l.Head.Type != recordAssistant || !l.Head.Main() {
+		return
+	}
+	u, ok, err := l.Usage()
+	if err != nil || !ok {
+		return
+	}
+	if n := u.Input + u.CacheWrite + u.CacheRead; n > 0 {
 		c.last = n
 	}
 }
@@ -239,32 +258,6 @@ func (c *contextReading) context() int64 {
 		return 0
 	}
 	return c.last
-}
-
-// assistantInput is the whole input one transcript line's assistant message
-// records, zero for any other line — a subagent's included.
-func assistantInput(line []byte) int64 {
-	// MOST LINES ARE NOT ONE: a tool's result, a person's message, a summary.
-	if !bytes.Contains(line, []byte(`"assistant"`)) || !bytes.Contains(line, []byte(`"usage"`)) {
-		return 0
-	}
-	var rec struct {
-		Type        string `json:"type"`
-		IsSidechain bool   `json:"isSidechain"`
-		Message     struct {
-			Usage *struct {
-				Input      int64 `json:"input_tokens"`
-				CacheWrite int64 `json:"cache_creation_input_tokens"`
-				CacheRead  int64 `json:"cache_read_input_tokens"`
-			} `json:"usage"`
-		} `json:"message"`
-	}
-	if json.Unmarshal(line, &rec) != nil || rec.Type != "assistant" || rec.IsSidechain ||
-		rec.Message.Usage == nil {
-		return 0
-	}
-	u := rec.Message.Usage
-	return max(u.Input, 0) + max(u.CacheWrite, 0) + max(u.CacheRead, 0)
 }
 
 // lastExportInput is the input of the last request an OpenCode export records:

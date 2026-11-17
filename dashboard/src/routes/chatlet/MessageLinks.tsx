@@ -32,9 +32,11 @@ import { useEffect, type ReactNode } from "react";
 
 import { ArtifactKindGlyph, LinkCard, safeHref } from "@crewlethq/ui";
 import { VendorMark } from "@crewlethq/icons";
+import { LayersGlyph } from "@crewlethq/icons/glyphs";
 import { ProductMark } from "@crewlethq/icons/product-mark";
 import { addressMark, AddressLink } from "~/components/InlineToken.tsx";
 import { appRoute } from "~/lib/appRoute.ts";
+import { isArtifactKind, KIND_WORDS } from "~/lib/artifacts/words.ts";
 import { describeLink, type LinkDescription } from "~/lib/inlineTokens.ts";
 import { useLinkHosts } from "~/lib/linkHosts.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -49,18 +51,31 @@ import { useChatPeople } from "./people.ts";
 /** How many of a message's links unfurl into previews. */
 export const MAX_UNFURLS = 3;
 
-/** The app a record belongs to, as its preview names it. */
-export function unfurlSource(kind: ChatUnfurlKind): { name: string; mark: ReactNode } {
+/** The app a record belongs to, as its preview names it; an artifact's mark is its kind's (`meta`). */
+export function unfurlSource(kind: ChatUnfurlKind, meta = ""): { name: string; mark: ReactNode } {
   switch (kind) {
     case "task":
       return { name: "Worklet", mark: <ProductMark product="worklet" size="xs" /> };
     case "page":
       return { name: "Doclet", mark: <ProductMark product="doclet" size="xs" /> };
     case "artifact":
-      return { name: "Artifacts", mark: <ArtifactKindGlyph kind="design" size="xs" /> };
+      return {
+        name: "Artifacts",
+        mark: isArtifactKind(meta) ? (
+          <ArtifactKindGlyph kind={meta} size="xs" />
+        ) : (
+          <LayersGlyph size="xs" />
+        ),
+      };
     case "pull_request":
       return { name: "GitHub", mark: <VendorMark vendor="github" size={12} /> };
   }
+}
+
+/** A preview's facts line: an artifact's kind in its words ("Slides"), any other record's as sent. */
+function unfurlMeta(unfurl: ChatUnfurl): string {
+  const meta = unfurl.meta ?? "";
+  return unfurl.kind === "artifact" && isArtifactKind(meta) ? KIND_WORDS[meta] : meta;
 }
 
 /**
@@ -150,11 +165,11 @@ function Unfurled({ links }: { links: readonly string[] }) {
               return (
                 <LinkCard
                   key={key}
-                  source={unfurlSource(unfurl.kind)}
+                  source={unfurlSource(unfurl.kind, unfurl.meta)}
                   title={unfurl.title}
                   address={d.link}
                   {...(unfurl.code ? { code: unfurl.code } : {})}
-                  {...(unfurl.meta ? { meta: unfurl.meta } : {})}
+                  {...(unfurl.meta ? { meta: unfurlMeta(unfurl) } : {})}
                   {...(unfurl.status ? { status: unfurl.status } : {})}
                   {...(unfurl.tone ? { statusTone: unfurl.tone } : {})}
                   {...(owner

@@ -17,13 +17,14 @@
  *   - The FOOT: Settings, the engine's state and the reader. Account has no
  *     row: the user block IS the reader, and opens it from its name and menu.
  *
- * Settings is what the ENGINE runs, and nothing the company decides: a column
- * of four groups, Runtime (Models, MCP & tools, Secrets, Limits), Spend
- * (the readings, never the ceilings), Access (People, Service accounts, API
- * tokens, Sign-in policy, Delegated decisions, Audit log) and Engine (Nodes, Configuration,
- * Backups & retention, File storage). It lists only what lives in it: a row
- * that left for Company is found there, by the sidebar and the palette, and
- * never again as a second row here leading out.
+ * Settings is what the ENGINE runs, and the company-wide basics it runs on: a
+ * column of five groups, Company (General: the company's clock), Runtime
+ * (Models, MCP & tools, Secrets, Limits), Spend (the readings, never the
+ * ceilings), Access (People, Service accounts, API tokens, Sign-in policy,
+ * Delegated decisions, Audit log) and Engine (Nodes, Configuration, Backups &
+ * retention, File storage). It lists only what lives in it: a row that left
+ * for Company is found there, by the sidebar and the palette, and never again
+ * as a second row here leading out.
  *
  * # A sidebar row owns an address PREFIX
  *
@@ -31,7 +32,7 @@
  * which row a page is in. A row owns a prefix (`owns`, its landing unless it
  * says otherwise) and an address is in the row owning the LONGEST prefix of
  * it: `#/company/org/table` is Structure's, `#/company` alone is
- * Principles'. Settings lands on its first section, `#/settings/models`, and
+ * Principles'. Settings lands on its first section, `#/settings/general`, and
  * owns all of `#/settings`; Gitlet lands on its Changes, `#/gitlet`, and owns
  * all of it.
  *
@@ -1154,9 +1155,9 @@ export const WORKSPACES: WorkspaceRow[] = [
     label: "Settings",
     // THE GEAR: what a reader looks for to change how the engine runs.
     icon: "settings",
-    path: ["settings", "models"],
+    path: ["settings", "general"],
     owns: ["settings"],
-    hint: "What the engine runs: models, tools, spend, access and its nodes",
+    hint: "The company's clock, and what the engine runs: models, tools, spend, access and its nodes",
     chord: "s",
     place: "foot",
     renderer: "column",
@@ -1165,6 +1166,18 @@ export const WORKSPACES: WorkspaceRow[] = [
     // the readings' own links carried it.
     keep: ["window"],
     sections: [
+      {
+        // THE COMPANY-WIDE BASICS: its clock, which every budget window, due
+        // date and zoneless schedule is cut on. Every member reads it; an
+        // admin changes it.
+        key: "general",
+        label: "General",
+        icon: "sliders-vertical",
+        path: ["settings", "general"],
+        hint: "The company's clock: the time zone its days, weeks and schedules run on",
+        keywords: ["timezone", "time zone", "clock", "company clock", "calendar"],
+        group: "Company",
+      },
       {
         key: "models",
         label: "Models",
@@ -1335,7 +1348,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "code",
         path: ["settings", "config"],
         hint: "The active company revision, its history and its diffs",
-        keywords: ["company document", "timezone"],
+        keywords: ["company document"],
         group: "Engine",
         grants: ["admin"],
       },
@@ -1505,6 +1518,7 @@ export function framelessOf(path: readonly string[]): FramelessRoute | null {
  */
 export const RESERVED_SEGMENTS: string[] = [
   "company",
+  "general",
   "principles",
   "brand",
   "org",
@@ -1580,7 +1594,7 @@ export const RESERVED_SEGMENTS: string[] = [
  * its own copy of the sections is a second table that is wrong the day a
  * section moves. A section whose path IS its workspace's landing page is one
  * destination under the workspace's name, found by that section's words too:
- * Settings opens on Models, and "models" finds it.
+ * Settings opens on General, and "timezone" finds it.
  *
  * IT CARRIES NO GRANTS: what closes one is its ADDRESS's, decided by
  * [closedBy] — the workspace's permissions first, then the section's — the

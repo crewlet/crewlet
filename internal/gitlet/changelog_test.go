@@ -113,7 +113,7 @@ var changeRecordBytes = map[string]int64{
 	"open":                   3_160,
 	"edit":                   2_770,
 	"reviewers":              1_240,
-	"revise":                 1_420,
+	"revise":                 1_460,
 	"mergeability":           1_030,
 	"mergeability_recheck":   880,
 	"mergeability_refresh":   860,

@@ -1,6 +1,7 @@
 package gitlet_test
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -87,6 +88,11 @@ func matchedBy(f gitlet.GateFacts, rules gitlet.GateRules, touched ...string) gi
 	return f
 }
 
+// touchedOwner is the path owner kind ref as a head revision's facts keep it, with no glob.
+func touchedOwner(kind gitlet.OwnerKind, ref string) gitlet.TouchedOwner {
+	return gitlet.TouchedOwner{Owner: gitlet.Owner{Kind: kind, Ref: ref}}
+}
+
 // approving is f with reviewer's standing verdict approving revision.
 func approving(f gitlet.GateFacts, reviewer gitlet.Party, revision int64) gitlet.GateFacts {
 	f.Rows.Approvals = append(slices.Clone(f.Rows.Approvals), gitlet.Approval{Reviewer: reviewer, Revision: revision})
@@ -144,7 +150,8 @@ func TestOwnersApproveNeedsOneCommonApprover(t *testing.T) {
 	rules := gated(t, gate)
 	f := gateCase("web/app.go", "data/schema.sql")
 	f.OwnerRowsDigest = f.Head.OwnersDigest
-	f.Head.RequestedOwners = []gitlet.Owner{{Kind: gitlet.OwnerUnit, Ref: "Data"}, {Kind: gitlet.OwnerUnit, Ref: "Web"}}
+	f.Head.RequestedOwners = []gitlet.TouchedOwner{touchedOwner(gitlet.OwnerUnit, "Data"),
+		touchedOwner(gitlet.OwnerUnit, "Web")}
 
 	both := approving(approving(f, gateWebLead, 2), gateDataLd, 2)
 	p := judgedAs(t, gitlet.JudgeGate(both, rules), gitlet.PreconditionOwnersApproval, gitlet.PreconditionUnmet,
@@ -158,7 +165,8 @@ func TestOwnersApproveNeedsOneCommonApprover(t *testing.T) {
 		gitlet.PreconditionMet, `person "founder"'s approval counts`)
 	// A SEAT OWNER's chain is the seat and its unit's leads: reader's own
 	// path and Web's share Web's lead and the cto.
-	f.Head.RequestedOwners = []gitlet.Owner{{Kind: gitlet.OwnerSeat, Ref: "reader"}, {Kind: gitlet.OwnerUnit, Ref: "Web"}}
+	f.Head.RequestedOwners = []gitlet.TouchedOwner{touchedOwner(gitlet.OwnerSeat, "reader"),
+		touchedOwner(gitlet.OwnerUnit, "Web")}
 	judgedAs(t, gitlet.JudgeGate(approving(f, gateWebLead, 2), rules), gitlet.PreconditionOwnersApproval,
 		gitlet.PreconditionMet, `seat "web-lead"'s approval counts`)
 }
@@ -179,7 +187,7 @@ func TestAnOwnerRowChangeLeavesOwnersApproveComputing(t *testing.T) {
 	gate.OwnersApprove = true
 	rules := gated(t, gate)
 	f := approving(gateCase("web/app.go"), gateWebLead, 2)
-	f.Head.RequestedOwners = []gitlet.Owner{{Kind: gitlet.OwnerUnit, Ref: "Web"}}
+	f.Head.RequestedOwners = []gitlet.TouchedOwner{touchedOwner(gitlet.OwnerUnit, "Web")}
 	f.OwnerRowsDigest = oidOf("owners since")
 	r := gitlet.JudgeGate(f, rules)
 	judgedAs(t, r, gitlet.PreconditionOwnersApproval, gitlet.PreconditionComputing,
@@ -207,7 +215,7 @@ func TestAStaleApprovalDoesNotCount(t *testing.T) {
 	gate.HumanPaths = []gitlet.HumanPath{{Glob: "deploy/**"}}
 	rules := gated(t, gate)
 	f := matchedBy(approving(gateCase("deploy/app.yaml"), gateFounder, 1), rules, "deploy/app.yaml")
-	f.Head.RequestedOwners = []gitlet.Owner{{Kind: gitlet.OwnerUnit, Ref: "Web"}}
+	f.Head.RequestedOwners = []gitlet.TouchedOwner{touchedOwner(gitlet.OwnerUnit, "Web")}
 	f.OwnerRowsDigest = f.Head.OwnersDigest
 	stale := gitlet.JudgeGate(f, rules)
 	judgedAs(t, stale, gitlet.PreconditionApproval, gitlet.PreconditionUnmet, "no approval counts on revision 2")
@@ -399,7 +407,8 @@ func TestTheGateNamesEveryUnmetTerm(t *testing.T) {
 	rules := gated(t, gate)
 	f := matchedBy(gateCase("deploy/app.yaml", "data/schema.sql"), rules, "deploy/app.yaml", "data/schema.sql")
 	f.OwnerRowsDigest = f.Head.OwnersDigest
-	f.Head.RequestedOwners = []gitlet.Owner{{Kind: gitlet.OwnerUnit, Ref: "Data"}, {Kind: gitlet.OwnerUnit, Ref: "Web"}}
+	f.Head.RequestedOwners = []gitlet.TouchedOwner{touchedOwner(gitlet.OwnerUnit, "Data"),
+		touchedOwner(gitlet.OwnerUnit, "Web")}
 	f.Checks = []gitlet.GateCheck{
 		{Name: "lint", Attempt: 1, State: gitlet.CheckStateFailed, Reason: gitlet.CheckReasonExit},
 		{Name: "unit", Attempt: 2, State: gitlet.CheckStatePassed, Reason: gitlet.CheckReasonExit},
@@ -610,4 +619,63 @@ func TestAChecksFileChangeNeedsAPerson(t *testing.T) {
 	}
 	judgedAs(t, gitlet.JudgeGate(matchedBy(approving(f, gateWebLead, 2), both, gitlet.ChecksFilePath, "app.go"), both),
 		gitlet.PreconditionHumanApproval, gitlet.PreconditionUnmet, gitlet.ChecksDirGlob)
+}
+
+// THE OWNERS' APPROVAL NAMES THE GLOBS EACH OWNER TOUCHES: its sentence names
+// each touched owner with the first glob of its the revision touched and how
+// many more, as the facts keep them, and at most eight owners, the rest
+// counted. Owners the facts keep with no glob read today's unmet words
+// exactly, and the met sentence's list after a colon.
+//
+// Mutations: drop the globs from ownersNamed (the first sentence names none,
+// red); drop maxOwnersNamed (ten owners named, red).
+func TestTheOwnersApprovalNamesTheGlobsEachOwnerTouches(t *testing.T) {
+	t.Parallel()
+	gate := bareGate()
+	gate.OwnersApprove = true
+	rules := gated(t, gate)
+	f := gateCase("web/app.go", "web/static/app.css", "data/schema.sql")
+	f.OwnerRowsDigest = f.Head.OwnersDigest
+	data, web := touchedOwner(gitlet.OwnerUnit, "Data"), touchedOwner(gitlet.OwnerUnit, "Web")
+	data.FirstPath = "data/**"
+	web.FirstPath, web.MorePaths = "web/**", 1
+	f.Head.RequestedOwners = []gitlet.TouchedOwner{data, web}
+	both := approving(approving(f, gateWebLead, 2), gateDataLd, 2)
+	named := `unit Data ("data/**") and unit Web ("web/**" and 1 more)`
+	judgedAs(t, gitlet.JudgeGate(both, rules), gitlet.PreconditionOwnersApproval, gitlet.PreconditionUnmet,
+		"revision 2 touches the paths of "+named+", and no one approval counts for all of them")
+	judgedAs(t, gitlet.JudgeGate(approving(both, gateCTO, 2), rules), gitlet.PreconditionOwnersApproval,
+		gitlet.PreconditionMet, `seat "cto"'s approval counts for every path owner revision 2 touches: `+named)
+
+	// KEPT WITH NO GLOB, as facts recorded before gitlet.OwnedPathsVersion keep them.
+	exactly := func(r gitlet.Readiness, want string) {
+		t.Helper()
+		i := slices.IndexFunc(r.Preconditions, func(p gitlet.Precondition) bool {
+			return p.Kind == gitlet.PreconditionOwnersApproval
+		})
+		if i < 0 || r.Preconditions[i].Detail != want {
+			t.Errorf("the owners' approval reads %+v, want %q", r.Preconditions, want)
+		}
+	}
+	f.Head.RequestedOwners = []gitlet.TouchedOwner{touchedOwner(gitlet.OwnerUnit, "Data"),
+		touchedOwner(gitlet.OwnerUnit, "Web")}
+	both = approving(approving(f, gateWebLead, 2), gateDataLd, 2)
+	exactly(gitlet.JudgeGate(both, rules), `revision 2 touches the paths of unit Data and unit Web, and no one `+
+		`approval counts for all of them: it waits on one from seat "cto", or a person's`)
+	exactly(gitlet.JudgeGate(approving(both, gateCTO, 2), rules), `seat "cto"'s approval counts for every path `+
+		`owner revision 2 touches: unit Data and unit Web`)
+	f.Head.RequestedOwners = []gitlet.TouchedOwner{touchedOwner(gitlet.OwnerSeat, "gone"),
+		touchedOwner(gitlet.OwnerUnit, "Data")}
+	exactly(gitlet.JudgeGate(f, rules), `revision 2 touches the paths of seat gone and unit Data, and only a `+
+		`person may approve for all of them: its owner seat "dev" asks one`)
+
+	f.Head.RequestedOwners = nil
+	for i := range 10 {
+		f.Head.RequestedOwners = append(f.Head.RequestedOwners, touchedOwner(gitlet.OwnerUnit, fmt.Sprintf("U%d", i)))
+	}
+	p := judgedAs(t, gitlet.JudgeGate(f, rules), gitlet.PreconditionOwnersApproval, gitlet.PreconditionUnmet,
+		"unit U6, unit U7 and 2 more, and only a person may approve")
+	if strings.Contains(p.Detail, "U8") {
+		t.Errorf("the owners' approval names %q, want eight owners and how many more", p.Detail)
+	}
 }

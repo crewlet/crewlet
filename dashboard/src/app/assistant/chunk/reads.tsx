@@ -15,6 +15,7 @@
 
 import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import {
+  ArtifactKindGlyph,
   Button,
   ButtonLink,
   DataGrid,
@@ -57,6 +58,7 @@ import { ASSISTANT_WORDS, renderMarkdown } from "~/lib/markdown.ts";
 import { fmtExact } from "~/lib/format.ts";
 import { useLatestHandlers } from "~/lib/useLatestHandlers.ts";
 import { href as hrefOf } from "../../router.tsx";
+import { isArtifactKind } from "~/lib/artifacts/words.ts";
 import { recordWord } from "../brief.ts";
 import { cellText, factText, ProseBlock, ReplyProse, type CardHandlers } from "./blocks.tsx";
 import { mentionsOf, readsOf, type Mention, type Read } from "./mentions.ts";
@@ -64,6 +66,14 @@ import { Sources, sourcesOf } from "./sources.tsx";
 import { openInApp } from "./openInApp.ts";
 
 type EntityKind = NonNullable<AssistantEntityCard["kind"]>;
+
+/** A record's glyph; an artifact's is its kind's, which its card's subtitle names. */
+function entityGlyph(entity: AssistantEntityCard): ReactNode {
+  const kind = entity.subtitle ?? "";
+  if (entity.kind === "artifact" && isArtifactKind(kind))
+    return <ArtifactKindGlyph kind={kind} size="xs" />;
+  return entity.kind ? KIND_GLYPH[entity.kind]() : <FileTextGlyph size="xs" />;
+}
 
 /** Each kind of record as the glyph its chip carries: decoration, the words are read. */
 const KIND_GLYPH: Record<EntityKind, () => ReactNode> = {
@@ -399,7 +409,7 @@ export function ReadChip({
     <RecordChip
       {...(keyed ? { code: text } : { label: text })}
       title={entity.title}
-      glyph={entity.kind ? KIND_GLYPH[entity.kind]() : <FileTextGlyph size="xs" />}
+      glyph={entityGlyph(entity)}
       meta={kindWord(entity)}
       actions={actions}
     >

@@ -78,7 +78,7 @@ test("the actor's button is a short noun, with the seat's name on hover and in i
   const seat = await screen.findByRole("button", { name: `Seat, ${NAME}` });
   expect(seat.textContent).toBe("Seat");
   act(() => seat.focus());
-  expect(screen.getByRole("tooltip").textContent).toBe(NAME);
+  expect(screen.getByRole("tooltip", { hidden: true }).textContent).toBe(NAME);
 });
 
 // THE PAYLOAD WRAPS. Drawn unwrapped, a long value ran past the card's edge

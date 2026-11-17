@@ -449,12 +449,14 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
         />
       )}
       {(!thread || thread.replies === 0) && answeringLine}
-      {/* WHOM A PERSON'S MESSAGE REACHED, AND WHO ANSWERED, under its words:
-          the post's own routing as the engine kept it. */}
+      {/* WHOM A PERSON'S MESSAGE REACHED, AND WHO ANSWERED AND WHEN, as the
+          kit's mark and tooltip under its words: the post's own routing as
+          the engine kept it. */}
       {showsReceipt(message, isAgent, view.answered) && (
         <DeliveryReceipt
-          recipients={reachRecipients(message.reach, view.answered, names.nameOf)}
+          recipients={reachRecipients(message.reach, view.answered, names.nameOf, timeOf)}
           truncated={message.reach?.truncated}
+          sentAt={timeOf(message.created_at)}
         />
       )}
     </>
