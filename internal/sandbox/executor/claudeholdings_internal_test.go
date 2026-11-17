@@ -3533,12 +3533,14 @@ func TestACallsRecordsInTwoThreadsAreTold(t *testing.T) {
 // read. Any other text names no subagent's leg: no header, or one with more on
 // its line; an agent or a leg outside its rule; the ids in the other order; a
 // line between them and the status; or a status other than completed, or with
-// more on its line. Read as the walk reads one, a piece at a time
-// ([textNotice]).
+// more on its line. Read as the walk reads one: the text a user record's
+// content, through the line's decode ([decodeThreadLine]) and the message's
+// [threadMessage.Notification].
 //
 // Mutation: read any status as completed, read past a line that is no output
 // file, or take a leg outside the call-id rule, and a text of another shape
-// answers a leg.
+// answers a leg; end the text's reading without deciding its last line, and
+// a notification ending at its status names none.
 func TestATaskNotificationIsReadLineByLine(t *testing.T) {
 	t.Parallel()
 	const head, done = "<task-notification>\n", "<status>completed</status>"
@@ -3562,7 +3564,14 @@ func TestATaskNotificationIsReadLineByLine(t *testing.T) {
 		"a status other than completed":   {head + ids + "<status>killed</status>", false},
 		"a status with more on its line":  {head + ids + done + " ", false},
 	} {
-		agent, leg, ok := ltNotice(tc.text)
+		record := ctReplace(t, ctNotification(ctUUID(1), ctUUID(3)),
+			`"content":"`+strings.ReplaceAll(ctNotificationText, "\n", `\n`)+`"`, `"content":`+jsonString(t, tc.text))
+		m, err := ctLine(t, record).Message()
+		if err != nil {
+			t.Errorf("%s reads no message: %v", name, err)
+			continue
+		}
+		agent, leg, ok := m.Notification()
 		if ok != tc.ok || (ok && (agent != ctAgent || leg != hsStarted)) {
 			t.Errorf("%s reads as %t, naming %q and %q; want %t, naming %q and %q", name, ok, agent, leg, tc.ok,
 				ctAgent, hsStarted)

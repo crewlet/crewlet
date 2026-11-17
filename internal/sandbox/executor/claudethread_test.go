@@ -2786,7 +2786,9 @@ func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 // first block, or hold only its last kind, and a text and a call read as one
 // block; read a text's notification, or its handback's name, as none, and a
 // notification names no leg, or no handback; stop reading a text once it says
-// something, and a handback named past its first piece is missed.
+// something, and a handback named past its first piece is missed; end a
+// text's reading without deciding its last line, and a notification ending at
+// its status names no leg.
 func TestAMessageSaysItsContentsShape(t *testing.T) {
 	t.Parallel()
 	notification := ctNotification(ctUUID(1), ctUUID(3))
@@ -2796,6 +2798,9 @@ func TestAMessageSaysItsContentsShape(t *testing.T) {
 	// ([textPieceBytes]), where whether it says anything is long decided.
 	late := ctReplace(t, notification, `</task-notification>"`, `<result>`+strings.Repeat("x", 2*textPieceBytes)+
 		claudeToolHandback+`</result>\n</task-notification>"`)
+	// atStatus ends at its status line, the last line a notification is read
+	// to, which only the text's end decides.
+	atStatus := ctReplace(t, notification, `\n</task-notification>"`, `"`)
 	inBlock := `[{"type":"text","text":"` + strings.ReplaceAll(ctNotificationText, "\n", `\n`) + `"}]`
 	for name, tc := range map[string]struct {
 		record string
@@ -2815,6 +2820,7 @@ func TestAMessageSaysItsContentsShape(t *testing.T) {
 		"a skill's text":                    {record: ctSkillText(ctUUID(4), ctUUID(5)), blocks: "1 [text]"},
 		"a text and a call":                 {record: ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."},`+ctUseContent[1:]), blocks: "2 [tool_use text]"},
 		"an empty list":                     {record: ctAssistant(ctUUID(2), ctUUID(3), `[]`), blocks: "0 []"},
+		"a notification to its status":      {record: atStatus, notice: true},
 	} {
 		m, err := ctLine(t, tc.record).Message()
 		if err != nil {

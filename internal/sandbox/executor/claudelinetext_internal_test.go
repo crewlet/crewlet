@@ -137,18 +137,6 @@ func ltStreamed(pieces [][]byte) ltFacts {
 	return f
 }
 
-// ltNotice is the subagent and the leg text names, read as a reader holding a
-// whole text reads one, through [textCut].
-func ltNotice(text string) (agent, leg string, ok bool) {
-	var notice textNotice
-	cut := textCut{text: text}
-	for p := cut.next(); p != nil; p = cut.next() {
-		notice.write(p)
-	}
-	notice.end()
-	return notice.notice()
-}
-
 // ltPieces is text cut into pieces of whole characters, the i-th at most
 // size(i) bytes long but never shorter than one character, as jsonscan's Read
 // hands a text into a buffer of that size.
