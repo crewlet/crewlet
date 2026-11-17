@@ -305,10 +305,10 @@ func validClaudeAgent(agent string) bool {
 }
 
 // threadReader reads one member of a Claude Code session a whole line at a
-// time, each line's head decoded ([threadReader.Next]). One goroutine reads
-// it. A THREAD'S MEMBER: a subagent's metadata is one JSON document with no
-// line break ([claudeSubagentMeta]), which it reads as nothing but a torn
-// piece. ONE READER READS A SESSION'S MEMBERS, one after another
+// time, each line decoded into its head and its facts ([threadReader.Next]).
+// One goroutine reads it. A THREAD'S MEMBER: a subagent's metadata is one JSON
+// document with no line break ([claudeSubagentMeta]), which it reads as nothing
+// but a torn piece. ONE READER READS A SESSION'S MEMBERS, one after another
 // ([threadReader.Reset]): a reading of a session's threads keeps one reader's
 // buffers whatever members it reads, never one a member.
 type threadReader struct {
@@ -375,7 +375,8 @@ func (e *threadSourceError) Error() string { return e.err.Error() }
 func (e *threadSourceError) Unwrap() error { return e.err }
 
 // Next is the member's next WHOLE line, one that ends in "\n", its break
-// dropped and its head decoded. It answers:
+// dropped and the line decoded into its head and its facts
+// ([decodeThreadLine]). It answers:
 //
 //   - io.EOF at the member's end. A last piece with no break is never a line:
 //     it is a write its harness never finished, or the NULs GNU tar fills a
@@ -1612,10 +1613,13 @@ func (m threadMessage) NamesHandback() bool { return m.namesHandback }
 func (m threadMessage) Blocks() threadBlocks { return m.blocks }
 
 // Calls is the message's call blocks: an assistant's tool_use blocks, a user's
-// tool_result blocks. THE ONLY WAY A CALL'S ID LEAVES THIS LAYER: no accessor
-// hands out "a line's ids", which would hand a reader of calls a hook's
-// firing, and an attachment's `toolUseID` leaves only as a key
-// ([threadLine.AttachmentToolUseID]).
+// tool_result blocks. THE ONE WAY AN ID LEAVES THIS LAYER AS A CALL'S: no
+// accessor hands out "a line's ids", which would hand a reader of calls a
+// hook's firing; an attachment's `toolUseID` leaves only as a key
+// ([threadLine.AttachmentToolUseID]); and a task notification's
+// `<tool-use-id>` leaves as the leg its text claims
+// ([threadMessage.Notification]), which its one reader matches only against a
+// call it read here.
 func (m threadMessage) Calls() []threadCall { return m.calls }
 
 // Says reports whether the message SAYS ANYTHING, as Claude Code reads a
@@ -2484,12 +2488,13 @@ func (l threadLine) ReplacementCount() (int, error) {
 // Anything else, null and an entry that is no string among it, is this
 // accessor's error, never the line's, handed with what the list held before
 // it: the entries before an entry that is no string, counted and their
-// prefixes held, as a reader that walks the list would have read them first. No release's resume throws on such a
-// list: each one's load repairs a refusal's fallback before its filter reads
-// it, keeping a list's strings and dropping a value that is no list (2.1.322's
-// UWt @293630140 through M2 @293633304, 2.1.310's cPt @247026592 through m1
-// @247029756), and 2.1.322's filter reads a user's or an assistant's list for
-// its strings alone, and a value that is no list as none (eGe @295286851).
+// prefixes held, as a reader that walks the list would have read them first.
+// No release's resume throws on such a list: each one's load repairs a
+// refusal's fallback before its filter reads it, keeping a list's strings and
+// dropping a value that is no list (2.1.322's UWt @293630140 through M2
+// @293633304, 2.1.310's cPt @247026592 through m1 @247029756), and 2.1.322's
+// filter reads a user's or an assistant's list for its strings alone, and a
+// value that is no list as none (eGe @295286851).
 // The error is conservative: its readers refuse a list the harness wrote in
 // no shape it writes rather than follow it through those repairs, and no
 // thread the probes kept holds one.

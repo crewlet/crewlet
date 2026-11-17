@@ -894,8 +894,8 @@ const chainPrefixBytes = 10
 // at least two records, each one block, so its blocks are at most about its
 // lines too. Two bounds rather than one sum, since a thread of ordinary calls
 // fills each about halfway. Past either, See files nothing more, the thread
-// is whyBound and the chain drops what it filed, and See still decodes and
-// hands back each user and assistant message, with pastChainBound.
+// is whyBound and the chain drops what it filed, and See still hands back
+// each user and assistant message, with pastChainBound.
 //
 // MEASURED on two cores, one case a process, in four runs
 // (BenchmarkAThreadChainAtItsBounds, whose doc says how each figure is read
@@ -916,7 +916,7 @@ const chainPrefixBytes = 10
 //     the resume makes as well; End took every other case at a bound in
 //     29 ms or less;
 //   - THE COINCIDENT WORST, the reading's worst line (one at [threadLineMax]
-//     of the smallest results a message holds) decoded by See beside the
+//     of the smallest results a message holds) read by See beside the
 //     chain at both bounds, before it passes them: 101 MiB held at most.
 //     Exact telling's reading, which reads that line after that thread in
 //     its own pass, holds 102 MiB at most there, measured the same way
@@ -955,8 +955,8 @@ const chainPrefixBytes = 10
 //     decode, 109 MiB held at most; its usage's one iteration's type, 93 to
 //     105 MiB; its one applied context edit's type, 93 MiB;
 //   - the reading's worst line beside the count: 101 to 102 MiB, the chain's
-//     own 101 to 102, since the count decodes nothing of a user record's
-//     results;
+//     own 101 to 102, since the count reads nothing of a user record's
+//     results, whose facts the line's one decode reads for every reading;
 //   - WHAT THE COUNT KEEPS from line to line at its most, a restart's uuid
 //     and a run's id each filling a line so, then the reading's worst line:
 //     149 to 150 MiB held at most while the count kept both as it decoded
@@ -1220,14 +1220,15 @@ func (c *threadChain) inTurn(n int) {
 
 // See files line, the thread's next whole line, and answers its handle
 // (noChainRecord for a line the load keeps no record of) and, for a user or
-// assistant record, its message, decoded once here so its caller decodes it
-// no second time; mErr is that decode's error, which the chain has already
-// taken for the thread's cannot tell (whyAdmission). It never fails the
+// assistant record, its message ([threadLine.Message]) and mErr, the
+// message's error, which the chain has already taken for the thread's cannot
+// tell (whyAdmission): handed back together, so its caller reads the message
+// the chain judged and the error the chain took of it. It never fails the
 // reading. PAST THE BOUND it files nothing more, the thread is cannot tell
-// (whyBound), and it still decodes and hands back every user and assistant
-// message, with pastChainBound as the handle. line.N must be the thread's
-// next line number: a line out of turn is the thread's cannot tell
-// (whyLineGap). See panics after End.
+// (whyBound), and it still hands back every user and assistant message, with
+// pastChainBound as the handle. line.N must be the thread's next line number:
+// a line out of turn is the thread's cannot tell (whyLineGap). See panics
+// after End.
 func (c *threadChain) See(line threadLine) (chainHandle, threadMessage, error) {
 	c.filing("See")
 	c.inTurn(line.N)

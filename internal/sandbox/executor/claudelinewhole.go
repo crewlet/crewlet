@@ -104,8 +104,9 @@ func (w threadWire) head() (threadHead, error) {
 // factsOf is what a line's accessors read of w, its whole decode, h its head
 // ([lineFacts]): its small values as written, and each frame its record's
 // type reads, read by each reader's rule. A frame the type does not read is
-// left empty, so a record of another type never pays for a key it carries,
-// an api-request-blob's whole request among them.
+// left empty, so a record of another type never pays for reading a frame it
+// carries, an api-request-blob's whole request among them, though the line's
+// decode ([wireDecode]) still copies that frame's bytes.
 func factsOf(w *threadWire, h threadHead) *lineFacts {
 	f := &lineFacts{
 		uuid: w.UUID, version: w.Version, origin: w.Origin, apiError: w.APIError,

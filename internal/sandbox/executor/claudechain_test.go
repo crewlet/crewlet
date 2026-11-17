@@ -1965,8 +1965,8 @@ func TestALineThatIsNoRecordIsSkippedOnlyWhereTheLoadSkipsIt(t *testing.T) {
 // the one before it, never beside it, and the boundary itself with it, so a
 // boundary at the bound in place of a longer list is read, and one past it
 // with no list to replace, whether it names what it kept or not, is whyBound;
-// and past the bound See still decodes and hands back each user and assistant
-// message, with pastChainBound, which answers whyBound. THE ROOM COMES BEFORE
+// and past the bound See still hands back each user and assistant message,
+// with pastChainBound, which answers whyBound. THE ROOM COMES BEFORE
 // THE SHAPE, as the lists are read in order: a list whose prefixes, or whose
 // entries, pass the bound before an entry in no shape is whyBound, and one in
 // no shape within it is whyRetractionShape or whyPreservedShape; a retraction's
