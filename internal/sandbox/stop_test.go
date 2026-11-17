@@ -416,8 +416,8 @@ func TestAStopLeavesAJobItsCollectionHandedToItsTurn(t *testing.T) {
 			// resume, which collects the job again under its claim, as every
 			// resume of a handed-back claim does.
 			var stopReads, turnReads atomic.Int32
-			rig.runner.CollectFunc = func(context.Context) error {
-				row, found, err := rig.pending.Get(context.Background(), "t1")
+			rig.runner.CollectFunc = func(ctx context.Context) error {
+				row, found, err := rig.pending.Get(ctx, "t1")
 				if err == nil && found && row.Status == StatusResumed && row.Ending == nil && row.Stop == nil {
 					turnReads.Add(1)
 				} else {
