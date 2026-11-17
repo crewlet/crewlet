@@ -443,7 +443,8 @@ func TestACollectedRecordNamesAContextExhaustedRun(t *testing.T) {
 	}
 }
 
-// A RUN WHOSE HARNESS THE KERNEL KILLED FOR MEMORY HAS ITS OWN KIND, where its
+// A RUN WHOSE HARNESS THE KERNEL KILLED FOR MEMORY HAS ITS OWN KIND, as does one
+// that ended on its round cap, where its
 // box has a memory domain of its own; a direct box shares the engine host's, so
 // a kill there is recorded and never the run's ending. Every record says the
 // kills its job saw and the ceiling, so its box's size is evidence on any end.
@@ -470,6 +471,9 @@ func TestACollectedRecordNamesARunKilledForMemory(t *testing.T) {
 		{"a command killed, the run finishing", Container, Result{Success: true, MemoryKills: 1, MemoryBytes: 2 << 30}, "", 1},
 		{"context first", Container, Result{Error: "too long", ContextExhausted: true, OutOfMemory: true, MemoryKills: 1},
 			types.ExecutorErrorContextExhausted, 1},
+		{"its round cap", Container, Result{Error: "error_max_turns", RoundCapped: true},
+			types.ExecutorErrorMaxTurns, 0},
+		{"its round cap, finishing", Container, Result{Success: true, RoundCapped: true}, "", 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
