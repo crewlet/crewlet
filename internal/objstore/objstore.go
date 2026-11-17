@@ -332,10 +332,27 @@ const RecordWithin = 12 * time.Hour
 // member leading the coordination store's position register, may stand from
 // the fleet's — the median of the data nodes' clocks: what the engine's
 // `clock_skew` alarm raises past, and the bound under every rule that judges
-// an instant one machine stamped by another machine's clock — the collector's
-// grace against [RecordWithin], and a retired reference's grace against the
-// longest read of what its row names, each pinned by
-// internal/objstore/references.
+// an instant one machine stamped by another machine's clock:
+//
+//   - the collector's grace (collect.PendingGrace) against [RecordWithin]: a
+//     key one node minted, judged a day old by the collector's clock while a
+//     write may name it for twelve hours by the deciding node's; pinned by
+//     internal/objstore/references;
+//   - a retired reference's grace (gitlet.RetireGrace) against the longest
+//     read of what its row names: the broker's instant on the retirement,
+//     judged by the code-retention duty holder's clock; pinned there too;
+//   - the idle times past which a turn's hold is also recorded
+//     (gitlet.HoldRecordAfter on a scratch repository, gitlet.RefHoldRecordAfter
+//     on a seat's branch): the holding node's clock and the retention pass's,
+//     each against the same broker-stamped activity; pinned there too;
+//   - a ref drop's grace (gitlet.PruneGrace): the broker's instant on the push
+//     that dropped it, judged by the clock of the node expunging the
+//     repository; a policy's edge rather than a margin under a read, so no
+//     inequality pins it, and its doc says what the bound moves it by;
+//   - a seat's push days (the push apply's day rule, internal/gitlet's
+//     apply_push.go): a day forgotten only once a committer's clock has reached
+//     a day beginning a whole company day after it ended, so a committer still
+//     deciding on it stands more than a day behind another; argued at the rule.
 //
 // # Two readings, and every rule takes the second
 //
@@ -347,19 +364,28 @@ const RecordWithin = 12 * time.Hour
 // fleet's clock disagree by at most this, and any TWO such machines by up to
 // TWICE it — two nodes, or a node and a broker member stamping some other
 // log's records, which on an embedded fleet is a data node the alarm holds
-// too. Every rule bounded here compares two such machines — the node deciding
-// a write against the node running the collector, the node sweeping a retired
-// row against the member that stamped its retirement — so each is held to
-// twice it. The servers of an external NATS cluster are not nodes, and
-// nothing measures them but the one leading the register: their clocks are
-// the operator's to keep (docs/guides/deployment.md).
+// too. Every rule bounded here compares two machines — the node deciding a
+// write against the node running the collector, the node sweeping a retired
+// row against the member that stamped its retirement, the node holding a
+// repository against the node passing over it, one committer against another
+// — so each is held to twice it. Not every one of them is a machine the alarm
+// holds: a rule judged on the clock of a node that runs seats, a turn's hold
+// on a repository, rests on a clock the alarm measures only where that node
+// holds data too, since a node without the data role writes no row to the
+// register. The servers of an external NATS cluster are not nodes, and
+// nothing measures them but the one leading the register. Those clocks are
+// the operator's to keep, so NTP runs on every node and every server, not
+// only on the machines the alarm watches (docs/guides/deployment.md).
 //
 // AN HOUR: NTP keeps every machine within milliseconds, so a node an hour off
 // is one whose clock nothing keeps — a host with no NTP client, a virtual
 // machine restored from a snapshot — and the hour, doubled for two machines,
 // still fits inside each rule's margin: the collector's grace exceeds
-// RecordWithin by twelve hours, and a retired pack's grace the longest read of
-// the largest bundle a row names by two hours and thirty-nine minutes.
+// RecordWithin by twelve hours, a retired pack's grace the longest read of the
+// largest bundle a row names by two hours and thirty-nine minutes, each hold
+// threshold falls short of the idle window it is defined from by exactly the
+// two hours, and a seat's push days leave a whole day against those two
+// hours; a ref drop's fourteen days, a policy's edge, move by at most them.
 const AssumedClockSkew = time.Hour
 
 // identifier is what a declared table or column may be spelled as, since each

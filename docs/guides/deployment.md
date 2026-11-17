@@ -106,21 +106,51 @@ until it ends
 ### Every machine's clock
 
 **Keep every machine's clock synchronised** — every node's, and every server's
-of an external NATS cluster. Two of the engine's deletions judge an instant
-one machine stamped by another machine's clock, and both assume every
-machine's clock keeps within an hour of the fleet's. The
-[object collector](../concepts/object-store.md#collection-and-audit) deletes an
-object no row names only once its key, minted by the node that uploaded it,
-and the store's own record of when it was written are both more than a day old
-by the clock of the node running the collector; and Gitlet's
-`code-retention` duty removes a
-[retired pack's](../concepts/object-store.md#live-retired-and-derived-references) row
-once the instant the broker stamped on its retirement is a day old by the
-clock of the node holding the duty. Each day leaves a margin past the longest
-upload or read it has to outlast — twelve hours for the collector, two hours
-and thirty-nine minutes for a retired pack — and a clock running ahead of the
-other by more than that deletes an object a write or a read still needs. NTP
-keeps machines within milliseconds of each other; a host without it drifts,
+of an external NATS cluster. Several of the engine's rules judge an instant
+one machine stamped by another machine's clock, and every one assumes every
+machine's clock keeps within an hour of the fleet's, so any two within two
+hours of each other:
+
+- The [object collector](../concepts/object-store.md#collection-and-audit)
+  deletes an object no row names only once its key, minted by the node that
+  uploaded it, and the store's own record of when it was written are both more
+  than a day old by the clock of the node running the collector, while a write
+  may still name a key twelve hours old by the clock of the node deciding it.
+  That leaves twelve hours, and a collector's clock running further ahead of
+  the writer's than that deletes an object a write still names.
+- Gitlet's `code-retention` duty removes a
+  [retired pack's](../concepts/object-store.md#live-retired-and-derived-references)
+  row once the instant the broker stamped on its retirement is a day old by the
+  clock of the node holding the duty: two hours and thirty-nine minutes past
+  the longest read of the largest pack, so a duty holder's clock running
+  further ahead of the broker's than that deletes a pack a clone is still
+  reading.
+- A turn's hold on a
+  [scratch repository](../concepts/gitlet.md#a-scratch-repositorys-idle-expiry)
+  or on a seat's branch ([the ref lifecycle](../concepts/gitlet.md#the-ref-lifecycle))
+  is recorded on the repository only once it has gone 22 hours without
+  activity, or the branch 334 hours unset, by the clock of the node running the
+  turn, while the `code-retention` pass judges the same broker-stamped activity
+  by its own clock against a day at the shortest, or the branch's fourteen
+  days. The two hours between them are all the margin there is, so a turn's
+  node whose clock runs further behind the duty holder's than that can lose a
+  scratch repository, or a seat's branch, that a live turn still holds.
+- A ref drop, the commit a force-push or a deletion moved a branch or tag off,
+  is kept fourteen days after the broker's instant on that push, judged by the
+  clock of the node expunging the repository
+  ([retention and history](../concepts/gitlet.md#retention-and-history)). That
+  is a policy's edge rather than a margin: a clock past the bound moves it by
+  the clock's error, and history force-pushed away can go that much before or
+  after its fortnight.
+- A seat's [daily push count](../concepts/gitlet.md#a-seats-push) is kept by
+  each repository's committer on the day its own clock reads, and a seat's
+  older day is forgotten only once a committer has counted the seat on a day
+  beginning a whole day after it ended. That leaves a day, so a committer whose
+  clock runs more than a day behind another's counts a seat's pushes on a day
+  already forgotten, from nothing, and can land them past
+  `code.limits.pushes_per_seat_day`.
+
+NTP keeps machines within milliseconds of each other; a host without it drifts,
 and a virtual machine restored from a snapshot can come back hours off.
 
 Every data node reads the fleet's clocks on its position heartbeat, every ten
@@ -136,8 +166,12 @@ and every node raises it about the broker member once that member's clock does
 own clock too; on an external NATS cluster the server leading the register's
 stream. So while no node raises it, every data node and that member keep
 within an hour of the fleet's clock, and any two of them — every member of an
-embedded broker among them — within two hours of each other, inside both
-margins. With two data nodes neither clock outvotes the other, so both are
+embedded broker among them — within two hours of each other, inside every
+margin above. A rule judged on the clock of a node that runs seats, a turn's
+hold above, rests on a clock the alarm measures only where that node holds
+data too: a node without the `data` role writes no row to the register, so
+nothing measures its clock, and NTP on it is all that keeps it inside the
+bound. With two data nodes neither clock outvotes the other, so both are
 named once they stand more than two hours apart. The alarm names a clock that
 has already drifted rather than keeping one from drifting, and it cannot see
 the other servers of an external NATS cluster disagree with the one it reads,

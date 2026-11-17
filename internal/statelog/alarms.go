@@ -2280,11 +2280,10 @@ var table = []rule{
 	},
 	{
 		// THE THRESHOLD IS THE ASSUMPTION ITSELF (ADR-0015), handed in with
-		// the measure: objstore.AssumedClockSkew is what the collector's
-		// grace and a retired reference's grace were sized against, so the
-		// alarm fires exactly where a clock stops being one those rules hold
-		// on. AT the bound is still inside it, as every rule here is silent at
-		// its threshold.
+		// the measure: objstore.AssumedClockSkew is what every rule its doc
+		// lists was sized against, so the alarm fires exactly where a clock
+		// stops being one those rules hold on. AT the bound is still inside
+		// it, as every rule here is silent at its threshold.
 		//
 		// TWO CLOCKS, EACH NAMED: this node's and the broker member's leading
 		// the position register, each against the fleet's — the median of the
@@ -2294,7 +2293,8 @@ var table = []rule{
 		// its own and sent the operator to the wrong machine.
 		kind:  KindClockSkew,
 		title: "A server clock is wrong",
-		person: "A server's clock is far off the others', so cleanup may delete files still in use. " +
+		person: "A server's clock is far off the others', so cleanup may delete files still in use " +
+			"and other decisions timed across servers go wrong. " +
 			"Turn on time sync on that machine.",
 		fires: func(r Reading) (string, bool) {
 			if r.ClockSkewBound <= 0 {
@@ -2326,7 +2326,7 @@ var table = []rule{
 			if off == "" {
 				return "", false
 			}
-			return fmt.Sprintf("%s, past the %s every deletion that judges one machine's "+
+			return fmt.Sprintf("%s, past the %s every rule that judges one machine's "+
 				"instant by another machine's clock assumes", off,
 				spoken(r.ClockSkewBound)), true
 		},
@@ -2339,16 +2339,14 @@ var table = []rule{
 			"stream, which `nats stream info KV_crewlet_statelog_positions` names. With two " +
 			"data nodes their median is the midpoint, which neither clock outvotes: both are " +
 			"named once they stand more than twice the bound apart, and either may be the one " +
-			"that moved. Two deletions rest on every node and that member keeping within the " +
-			"bound of the fleet's clock, and so on any two machines keeping within twice it: " +
-			"the object collector deletes an object once its key is a day old by the " +
-			"collector's clock, while a write may still name a key twelve hours old by the " +
-			"deciding node's; and Gitlet's code-retention duty sweeps a retired pack's " +
-			"row once the broker's instant on its retirement is a day old by the duty holder's " +
-			"clock, while a clone that began on the pack may still be reading it for most of " +
-			"that day. A clock past the bound can delete an object a write or a read still " +
-			"needs. The measure is the coordination store's position register, read on every " +
-			"heartbeat: each data node's row carries the instant the node stamped on it and the " +
+			"that moved. Every rule that judges an instant one machine stamped by another " +
+			"machine's clock rests on every node and that member keeping within the bound of " +
+			"the fleet's clock, and so on any two machines keeping within twice it; " +
+			"docs/guides/deployment.md (\"Every machine's clock\") lists each with what a " +
+			"clock past the bound does, the object collector deleting an object a write still " +
+			"names and Gitlet's code-retention duty sweeping a retired pack a clone is still " +
+			"reading among them. The measure is the coordination store's position register, " +
+			"read on every heartbeat: each data node's row carries the instant the node stamped on it and the " +
 			"instant the broker stored it, so each says how far that node's clock stands from " +
 			"the member's, and the median of them is the fleet's clock, off by no more than a " +
 			"heartbeat's own work between the two instants. See docs/guides/deployment.md.",
