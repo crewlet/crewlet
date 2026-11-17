@@ -715,6 +715,21 @@ describe("in Gitlet", () => {
   });
 });
 
+// ONE PICK, ONE LOOK ACROSS GITLET: a coloured diff's pick and a file's take the
+// selected tint and the accent edge. Mutation: tint the file's pick with another
+// surface, or rule it in the border's ink, and this fails.
+test("a pick in a coloured diff and in a Gitlet file take one tint and one edge", () => {
+  const ruleOf = (selector: string) =>
+    sheetRules().find((r) => splitSelectors(r.selector).includes(selector))?.body ?? "";
+  const diff = ruleOf(".diff-view--code .diff-view__line[data-kind][data-picked]");
+  const file = ruleOf(".code-source__line[data-picked]");
+  const tint = (body: string) => /background(?:-color)?:\s*var\((--[\w-]+)\)/.exec(body)?.[1];
+  expect(tint(diff)).toBe("--color-surface-selected");
+  expect(tint(file)).toBe(tint(diff));
+  expect(ruleOf(".code-blame tr[data-picked]")).toBe(file);
+  for (const body of [diff, file]) expect(body).toMatch(/box-shadow:[^;]*--color-brand-accent\)/);
+});
+
 // NO HUE OUTSIDE GITLET: no rule that reaches what a diff draws spends a state's
 // hue, and in Gitlet only the code hue's own rules do. The accent is not listed:
 // it marks where the reader is, never a line's kind.

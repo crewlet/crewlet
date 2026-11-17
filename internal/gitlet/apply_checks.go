@@ -146,6 +146,10 @@ type checkEnding struct {
 	exitCode                                              sql.NullInt64
 	durationMs, failuresOmitted, finishedAt, position     int64
 	log                                                   *CheckLog
+	// testsTotal is NULL where no report was read, as exitCode is where no status was.
+	testsTotal                          sql.NullInt64
+	testsFailed, testsSkipped, logLines int64
+	tailCut                             bool
 }
 
 // checkPart is what one record says of a row: each of its three parts, nil
@@ -201,6 +205,11 @@ func finishedPart(f CheckFinished, at applyContext) (checkPart, error) {
 		state: string(f.State), reason: string(f.Reason), url: f.URL, summary: f.Summary, tail: f.Tail,
 		durationMs: f.DurationMs, failuresOmitted: int64(f.FailuresOmitted),
 		finishedAt: store.EncodeTime(f.FinishedAt), position: at.packed, log: f.Log,
+		logLines: int64(f.LogLines), tailCut: f.TailCut,
+	}
+	if f.Tests != nil {
+		e.testsTotal = sql.NullInt64{Int64: int64(f.Tests.Total), Valid: true}
+		e.testsFailed, e.testsSkipped = int64(f.Tests.Failed), int64(f.Tests.Skipped)
 	}
 	if f.ExitCode != nil {
 		e.exitCode = sql.NullInt64{Int64: int64(*f.ExitCode), Valid: true}
@@ -354,7 +363,7 @@ func joinCheck(ctx context.Context, tx *sql.Tx, at applyContext, key CheckKey, p
 		q.defsOID, q.required, q.runIn, q.timeoutSeconds, e.reason, r.runner, r.placement, r.box, e.reporter,
 		q.queuedAt, r.startedAt, e.finishedAt, e.durationMs, e.exitCode, e.failuresOmitted,
 		q.position, e.position, row.rowBytes(), q.overdueAt(), e.url, e.summary, q.def, e.failures,
-		e.tail); err != nil {
+		e.tail, e.testsTotal, e.testsFailed, e.testsSkipped, e.logLines, e.tailCut); err != nil {
 		return 0, fmt.Errorf("gitlet: write check %s of %s at %s: %w", key.Name, key.OID, at.position, err)
 	}
 	if !ended {
@@ -394,7 +403,8 @@ func readCheckRow(ctx context.Context, tx *sql.Tx, key CheckKey) (checkRow, bool
 		&e.state, &q.purpose, &q.changeID, &q.revision, &q.candidateID, &q.entryID, &q.base,
 		&q.defsOID, &q.required, &q.runIn, &q.timeoutSeconds, &e.reason, &run.runner, &run.placement, &run.box,
 		&e.reporter, &q.queuedAt, &run.startedAt, &e.finishedAt, &e.durationMs, &e.exitCode,
-		&e.failuresOmitted, &q.position, &e.position, &e.url, &e.summary, &q.def, &e.failures, &e.tail)
+		&e.failuresOmitted, &q.position, &e.position, &e.url, &e.summary, &q.def, &e.failures, &e.tail,
+		&e.testsTotal, &e.testsFailed, &e.testsSkipped, &e.logLines, &e.tailCut)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return checkRow{}, false, nil
@@ -508,7 +518,8 @@ const (
 	readCheckSQL = `SELECT state, purpose, change_id, revision, candidate_id, entry_id, base_oid,
 		defs_oid, required, run_in, timeout_seconds, reason, runner_node, placement, box_handle,
 		reporter, queued_at, started_at, finished_at, duration_ms, exit_code, failures_omitted,
-		queued_position, finished_position, url, summary, def, failures, tail
+		queued_position, finished_position, url, summary, def, failures, tail, tests_total, tests_failed,
+		tests_skipped, log_lines, tail_cut
 		FROM code_checks INDEXED BY ` + checksKey + `
 		WHERE repo_id = ? AND commit_oid = ? AND target_ref = ? AND name = ? AND attempt = ?`
 	// writeCheckSQL writes a row whole, the join's: every column the join
@@ -518,9 +529,10 @@ const (
 			change_id, revision, candidate_id, entry_id, target_ref, base_oid, defs_oid, required, run_in,
 			timeout_seconds, reason, runner_node, placement, box_handle, reporter, queued_at,
 			started_at, finished_at, duration_ms, exit_code, failures_omitted, queued_position,
-			finished_position, row_bytes, overdue_at, url, summary, def, failures, tail)
+			finished_position, row_bytes, overdue_at, url, summary, def, failures, tail, tests_total,
+			tests_failed, tests_skipped, log_lines, tail_cut)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?)
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (repo_id, commit_oid, target_ref, name, attempt) DO UPDATE SET
 			state = excluded.state, purpose = excluded.purpose, change_id = excluded.change_id,
 			revision = excluded.revision, candidate_id = excluded.candidate_id, entry_id = excluded.entry_id,
@@ -534,7 +546,9 @@ const (
 			queued_position = excluded.queued_position, finished_position = excluded.finished_position,
 			row_bytes = excluded.row_bytes, overdue_at = excluded.overdue_at, url = excluded.url,
 			summary = excluded.summary,
-			def = excluded.def, failures = excluded.failures, tail = excluded.tail`
+			def = excluded.def, failures = excluded.failures, tail = excluded.tail,
+			tests_total = excluded.tests_total, tests_failed = excluded.tests_failed,
+			tests_skipped = excluded.tests_skipped, log_lines = excluded.log_lines, tail_cut = excluded.tail_cut`
 	dropCheckLogSQL = `DELETE FROM code_check_logs
 		WHERE repo_id = ? AND commit_oid = ? AND target_ref = ? AND name = ? AND attempt = ?`
 	writeCheckLogSQL = `INSERT INTO code_check_logs (repo_id, commit_oid, target_ref, name, attempt, object, hash,

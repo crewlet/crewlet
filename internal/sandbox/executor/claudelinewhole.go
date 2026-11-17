@@ -89,7 +89,7 @@ func decodeThreadLine(n int, raw []byte) (threadLine, error) {
 		return threadLine{}, &threadLineError{N: n, Err: err, Fault: faultHead, Type: kindOf(w.Type),
 			Size: len(raw) + 1, Bytes: lineBytesOf(raw)}
 	}
-	return threadLine{N: n, Raw: raw, Size: len(raw) + 1, Bytes: lineBytesOf(raw), Head: head,
+	return threadLine{N: n, Size: len(raw) + 1, Bytes: lineBytesOf(raw), Head: head,
 		f: factsOf(&w, head)}, nil
 }
 

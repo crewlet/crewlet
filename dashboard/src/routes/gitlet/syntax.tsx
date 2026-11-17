@@ -412,3 +412,29 @@ export function useDiffTokens(args: {
     };
   }, [present, binary, hunks, gb, lb, sb, fb, ga, la, sa, fa]);
 }
+
+/**
+ * A few lines' spans with no blob read (an excerpt, a suggestion): each side
+ * walked from the first line drawn, as a search hit's lines are.
+ */
+export function useHunkTokens(
+  path: string,
+  hunks: readonly DiffHunk[],
+): ((side: Side, n: number) => readonly DiffSpan[] | null) | undefined {
+  const grammar = useGrammar(path);
+  return useMemo(() => {
+    if (!grammar) return undefined;
+    const texts = { before: patchLines(hunks, "before"), after: patchLines(hunks, "after") };
+    const states = {
+      before: hunkStates(grammar, hunks, "before"),
+      after: hunkStates(grammar, hunks, "after"),
+    };
+    return (side, n) => {
+      const text = texts[side].get(n);
+      if (text === undefined || text.length > SYNTAX_MAX_LINE) return null;
+      return grammar
+        .line(text, states[side].get(n) ?? "")
+        .tokens.map((t) => ({ end: t.end, className: t.kind ? SYNTAX_CLASS[t.kind] : null }));
+    };
+  }, [grammar, hunks]);
+}

@@ -970,8 +970,9 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Check: &gitlet.CheckDetail{CheckRow: gitlet.CheckRow{CheckKey: gitlet.CheckKey{RepoID: ref.ID,
 				OID: "6666666666666666666666666666666666666666", Target: "refs/heads/main", Name: "lint", Attempt: 1},
 				State: gitlet.CheckStatePassed}, Def: &gitlet.CheckDef{Name: "lint", Run: "make lint",
-				TimeoutSeconds: 60}, Tail: "ok", Failures: []gitlet.CheckFailure{{Path: "a.go", Line: 3,
-				TestID: "lint/a", Message: "unused"}},
+				TimeoutSeconds: 60}, Tail: "ok", Tests: &gitlet.CheckTests{Total: 9, Failed: 1, Skipped: 2},
+				LogLines: 40, TailFirstLine: 40, TailCut: true, Failures: []gitlet.CheckFailure{{Path: "a.go",
+					Line: 3, TestID: "lint/a", Message: "unused"}},
 				Log: &gitlet.CheckLog{Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte("l")), Size: 9}},
 			// A MERGE QUEUE'S ENTRIES, ITS TRAINS, A TARGET'S LANDINGS AND ITS
 			// GREEN ROW, every field of each.
@@ -1012,6 +1013,16 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	}
 	if got := d.last(); !reflect.DeepEqual(got, proposal) {
 		t.Errorf("the committer was proposed %+v, want %+v", got, proposal)
+	}
+	// AN ATTEMPT'S, its one command refused by a protection, carrying the commits it offered.
+	tried := proposalTo(ref.ID, "019a0c2e-0000-7000-8000-00000000a11e")
+	tried.Commands[0].Result, tried.Commands[0].Reason = gitlet.ResultNG, gitlet.RefusalProtectedDirect
+	tried.Commands[0].Detail, tried.Offered = "takes no direct push", 2
+	if _, err = seam.Propose(ctx, tried); err != nil {
+		t.Fatalf("propose an attempt: %v", err)
+	}
+	if got := d.last(); !reflect.DeepEqual(got, tried) {
+		t.Errorf("the committer was proposed %+v, want the attempt %+v", got, tried)
 	}
 
 	// A COMPACTION'S PROPOSAL, every field of it and of its answer — a
@@ -1152,10 +1163,10 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		}
 	}
 
-	// A MERGE QUEUE'S TWO WRITES, every field of each — the principal the
-	// committer stamps among them, which crosses whole whoever set it — and
-	// every field of the answer, the preconditions a gate_unmet names among
-	// them.
+	// A MERGE QUEUE'S TWO WRITES AND THE HOME'S EJECT, every field of each —
+	// the principal the committer stamps among them, which crosses whole
+	// whoever set it — and every field of the answer, the preconditions a
+	// gate_unmet names among them.
 	for name, p := range map[string]gitlet.QueueProposal{
 		"an enqueue": {Enqueue: &gitlet.Enqueue{RepoID: ref.ID, EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
 			ChangeID: item.ChangeID, TargetRef: "refs/heads/main",
@@ -1163,6 +1174,11 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			DeleteSource: true, CloseTask: true, Principal: seat}},
 		"a dequeue": {Dequeue: &gitlet.Dequeue{RepoID: ref.ID, EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
 			Principal: seat}},
+		"an eject naming the train it failed on": {Eject: &gitlet.Eject{RepoID: ref.ID, Entries: []gitlet.Ejection{{
+			EntryID: "019a0c2e-0000-7000-8000-0000000000f1", Reason: gitlet.EjectCheckFailed, Checks: []string{"e2e"},
+			TestedIn: &gitlet.EjectionTrain{CandidateID: "019a0c2e-0000-7000-8000-0000000000f7",
+				BaseOID:   "6666666666666666666666666666666666666666",
+				CommitOID: "8888888888888888888888888888888888888888"}}}}},
 	} {
 		p.OpID, p.Asker, p.Seen, p.WrittenFor = "019a0c2e-0000-7000-8000-0000000000f0.code_merge_change", seat, at,
 			carrier
@@ -1306,6 +1322,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Reason: gitlet.CheckReasonExit, ExitCode: &exit, DurationMs: 61_000, Summary: "2 of 40 failed",
 			Tail: "--- FAIL: TestRetry", Failures: []gitlet.CheckFailure{{Path: "upload/retry_test.go", Line: 12,
 				TestID: "TestRetry", Message: "want 2, got 3"}}, FailuresOmitted: 4,
+			Tests: &gitlet.CheckTests{Total: 40, Failed: 2, Skipped: 1}, LogLines: 1201, TailCut: true,
 			Log: &gitlet.CheckLog{Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte("log")), Size: 900},
 			URL: "https://ci.example.com/run/1", FinishedAt: created}},
 	} {

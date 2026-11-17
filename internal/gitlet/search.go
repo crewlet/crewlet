@@ -39,6 +39,15 @@ const (
 	// on a rune's boundary: enough to read the match in its line, and what
 	// keeps a minified file's one long line from filling an answer alone.
 	MaxSearchLineBytes = 256
+	// MaxSearchContext is the most lines a search answers on each side of a
+	// hit: the screen draws three, and each costs a hit MaxSearchLineBytes more.
+	MaxSearchContext = 3
+	// MaxSearchContextHits is the most hits a search asking context answers:
+	// with six lines more each, 100 weigh at worst what MaxSearchHits bare hits do.
+	MaxSearchContextHits = 100
+	// MaxSearchHitMatches is the most matches a hit names: past that many in
+	// MaxSearchLineBytes, a highlight reads as the whole line.
+	MaxSearchHitMatches = 32
 	// MaxIndexedFileBytes is the largest file either path reads: a file past
 	// it is skipped by the index (codeindex.MaxFileBytes) and dropped from
 	// git grep's answer by its size, so both paths answer the same lines.
@@ -47,7 +56,9 @@ const (
 	// git included: the state log's resolve budget, the time a person waits
 	// on a write's answer. A search that runs it out answers the hits it
 	// found by then, Truncated — never nothing, and never late: a search's
-	// cost is the corpus's, which another node would read as slowly.
+	// cost is the corpus's, which another node would read as slowly. A grep
+	// search asking context reads its hits' files after it, until its answer
+	// falls due, answering the files read by then.
 	SearchBudget = statelog.DefaultResolveBudget
 )
 
@@ -87,6 +98,12 @@ type SearchQuery struct {
 	// Limit is the most hits answered, 1 to MaxSearchHits; 0 is
 	// MaxSearchHits.
 	Limit int `json:"limit,omitempty"`
+	// Context is how many lines of the file on each side of a hit it answers,
+	// 0 to MaxSearchContext; 0 is none. Near hits share them ([SearchHit.Before]).
+	Context int `json:"context,omitempty"`
+	// PerFile is the most hits answered of one file, 0 to MaxSearchHits; 0 is
+	// every one. Set, each hit names its file's total ([SearchHit.FileMatches]).
+	PerFile int `json:"per_file,omitempty"`
 	// After, where set, is the place in the search's order the answer
 	// continues from: only lines AFTER it are answered, so Limit counts the
 	// lines past it alone ([SearchAfter]). The domain landed on main with it,
@@ -130,21 +147,45 @@ func (q SearchQuery) Query() codeindex.Query {
 	return codeindex.Query{Text: q.Text, Mode: q.Mode, IgnoreCase: q.IgnoreCase, Paths: q.Paths, Ref: q.Ref}
 }
 
-// Hits is the most hits q answers.
+// Hits is the most hits q answers: its Limit, or where it names none,
+// MaxSearchContextHits for a search asking context and MaxSearchHits for another.
 func (q SearchQuery) Hits() int {
-	if q.Limit == 0 {
-		return MaxSearchHits
+	switch {
+	case q.Limit != 0:
+		return q.Limit
+	case q.Context > 0:
+		return MaxSearchContextHits
 	}
-	return q.Limit
+	return MaxSearchHits
 }
 
-// validate refuses a search the Gitlet node would refuse: codeindex's grammar
-// and plan (Query.Validate, which names what to change), a limit past
-// MaxSearchHits, and a place to continue after that names no line.
-func (q SearchQuery) validate() error {
-	if q.Limit < 0 || q.Limit > MaxSearchHits {
+// ValidateBounds refuses a limit, a context or a per-file bound past what a
+// search answers ([ErrInvalid], naming the field): what every surface that
+// builds a search checks first.
+func (q SearchQuery) ValidateBounds() error {
+	switch {
+	case q.Limit < 0 || q.Limit > MaxSearchHits:
 		return fmt.Errorf("%w: search.limit: %d is not 1 to %d (0 is %d)", ErrInvalid, q.Limit, MaxSearchHits,
 			MaxSearchHits)
+	case q.Context < 0 || q.Context > MaxSearchContext:
+		return fmt.Errorf("%w: search.context: %d is not 0 to %d lines", ErrInvalid, q.Context, MaxSearchContext)
+	case q.PerFile < 0 || q.PerFile > MaxSearchHits:
+		return fmt.Errorf("%w: search.per_file: %d is not 0 to %d (0 is every matching line)", ErrInvalid,
+			q.PerFile, MaxSearchHits)
+	case q.Context > 0 && q.Limit > MaxSearchContextHits:
+		return fmt.Errorf("%w: search.limit: %d is past the %d hits a search answering context lines may",
+			ErrInvalid, q.Limit, MaxSearchContextHits)
+	}
+	return nil
+}
+
+// validate refuses a search the Gitlet node would refuse: a bound past what
+// a search answers (ValidateBounds), codeindex's grammar and plan
+// (Query.Validate, which names what to change), and a place to continue
+// after that names no line.
+func (q SearchQuery) validate() error {
+	if err := q.ValidateBounds(); err != nil {
+		return err
 	}
 	if err := q.Query().Validate(); err != nil {
 		return fmt.Errorf("%w: search: %w", ErrInvalid, err)
@@ -160,9 +201,10 @@ func (q SearchQuery) validate() error {
 // SearchAnswer is a search's lines: every line of the commit searched the
 // expression matches — after the query's After, where it names one — in the
 // order of their paths' bytes and then their numbers, as many as the query's
-// limit. A search that stops early stops in that order, so its hits are
-// always the FIRST lines of what it searched: every line before its last is
-// among them.
+// limit; each hit with where it matched, and the lines around it and its
+// file's total where the query asked them. A search that stops early stops in
+// that order, so its hits are always the FIRST lines of what it searched:
+// every line before its last is among them.
 type SearchAnswer struct {
 	Hits []SearchHit `json:"hits"`
 	// Tip is the commit searched, whole; Ref the whole ref the query's Ref
@@ -175,7 +217,8 @@ type SearchAnswer struct {
 	// admit, the search did not read for their size (past
 	// MaxIndexedFileBytes) — and, on the index path, as binaries, which git
 	// grep -I passes over unsaid — plus every file a line of which was past
-	// what a search runs its expression on (codeindex.Plan.LineBytes).
+	// what a search runs its expression on (codeindex.Plan.LineBytes). It
+	// counts files the search passed, which can lie past a truncated answer's last hit.
 	SkippedFiles int `json:"skipped_files,omitempty"`
 	// Truncated says the search stopped before it had read every file that
 	// could match: at its limit of hits, or at SearchBudget. Hits is then
@@ -196,4 +239,17 @@ type SearchHit struct {
 	// Blob is the id of the file's object, whole: what a file read at it
 	// names, and the same at every commit holding the same bytes.
 	Blob string `json:"blob"`
+	// Matches are where the expression matched in Text: byte offsets
+	// [start, end) into Text as answered, in order, none empty or past Text's
+	// cut, at most MaxSearchHitMatches. Absent is none answered.
+	Matches [][2]int `json:"matches,omitempty"`
+	// Before and After are the file's lines just before and after this one,
+	// the query's Context of each at most, each cut as Text is. A line a nearer
+	// hit of the same answer carries is not carried again, so Before starts
+	// after the previous hit's After and After ends before the file's next hit.
+	Before []string `json:"before,omitempty"`
+	After  []string `json:"after,omitempty"`
+	// FileMatches is how many lines of the file matched, where the query
+	// asked PerFile and the search read the whole file; absent otherwise.
+	FileMatches int `json:"file_matches,omitempty"`
 }

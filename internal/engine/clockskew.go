@@ -15,16 +15,15 @@ import (
 //
 // # Why it is measured at all
 //
-// Two deletions judge an instant one machine stamped by another machine's
-// clock: the object collector deletes an object once its key, minted by the
-// node that uploaded it, is a day old by the collector's clock, while a write
-// may still name a key twelve hours old by the deciding node's; and Gitlet's
-// code-retention duty sweeps a retired pack's row once the instant the
-// broker stamped on its retirement is a day old by the duty holder's clock.
-// Both were sized against objstore.AssumedClockSkew and were safe only while
-// that held, which nothing in the engine measured: a node whose NTP had died,
-// or a virtual machine restored from a snapshot hours off, deleted objects
-// early with nothing to say so.
+// Every rule objstore.AssumedClockSkew's doc lists judges an instant one
+// machine stamped by another machine's clock — the object collector's grace,
+// Gitlet's retired-pack sweep and the rest — and each was sized against that
+// hour and is safe only while it holds, which nothing in the engine measured:
+// a node whose NTP had died, or a virtual machine restored from a snapshot
+// hours off, deleted objects early, or misjudged any other rule on that list,
+// with nothing to say so. The list is that doc's and deployment.md's ("Every
+// machine's clock"), never restated here, so a rule added there is covered by
+// this measure without a second list to keep beside it.
 //
 // # Why off the register the heartbeat already reads, and nothing else
 //

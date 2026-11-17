@@ -227,7 +227,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"unicode"
 	"unicode/utf8"
 )
@@ -2241,8 +2240,13 @@ func trimDebris(s string) string {
 // above pending in its turn, and held back the whole text — a live view of it
 // showed nothing — reading it again for each line: over 32 KiB in lines of 256
 // bytes, 47 to 75 times what [Secrets] costs over it.
-func valueHolds(text string) []valueHold {
-	valueHoldsRead.Add(int64(len(text)))
+//
+// read is added the bytes of text, for [settle] to report what Settled read:
+// a count its caller keeps, and not a counter of the package's, because the
+// package's tests call Settled side by side, and a shared count would add
+// their reads to the one a test is judging.
+func valueHolds(text string, read *int) []valueHold {
+	*read += len(text)
 	var holds []valueHold
 	var prior [][2]int
 	for from := 0; ; {
@@ -2265,16 +2269,6 @@ func valueHolds(text string) []valueHold {
 	}
 	return holds
 }
-
-// valueHoldsRead counts the bytes [valueHolds] has been handed, for the test
-// that holds [Settled] to one read of its text. That property was timed
-// first, against [Secrets] and then against Settled itself over a text eight
-// times smaller, and both ratios were a claim about how busy the runner was:
-// each passed on a quiet machine and failed in CI's race job beside the other
-// packages. A count of what the text cost to read is the property itself. It
-// is one atomic add a call, and Settled makes one call, or two where the keys
-// were read beside the values.
-var valueHoldsRead atomic.Int64
 
 // valueHold is a password key [valueHolds] reports: where it begins, where the
 // line that decided its value begins, and whether a text cut before that line
@@ -5444,13 +5438,33 @@ func inBase64(c byte) bool {
 // settled: a credential is matched by its whole shape, and half a token on
 // screen is a line that changes when its other half lands.
 func Settled(text string) int {
+	settled, _ := settle(text)
+	return settled
+}
+
+// settle is [Settled], and the bytes it handed its readers to read: the keys'
+// ([readKeys]), the back hold's ([backHold]), the password's rule's
+// ([passwordInput]) and the holds' ([valueHolds]), each over the text once,
+// and the last two once more where the keys were read beside the values
+// ([claims]). A reader called again for every line the text holds is the
+// cost this counts; a rescan inside one reader is that reader's own test's.
+//
+// THE COUNT IS WHAT THE TEST OF ONE READ JUDGES, not the time Settled takes.
+// Read again in every prefix a hold cut the text at, Settled cost its lines
+// times its length, and that was timed first, against [Secrets] and then
+// against Settled itself over a text eight times smaller: both ratios were a
+// claim about how busy the runner was, and each passed on a quiet machine and
+// failed in CI's race job beside the other packages. The bytes the holds read
+// are the property itself, and no scheduler moves them.
+func settle(text string) (settled, read int) {
 	end := strings.LastIndexByte(text, '\n') + 1
 	if end == 0 {
-		return 0
+		return 0, 0
 	}
 	whole := text[:end]
-	spans, open, c := readKeys(whole)
-	back := backHold(whole)
+	reading := func(s string) string { read += len(s); return s }
+	spans, open, c := readKeys(reading(whole))
+	back := backHold(reading(whole))
 	keys := func(settled int) (int, bool) {
 		moved := false
 		if open >= 0 && settled > lineStart(whole, open) {
@@ -5466,7 +5480,7 @@ func Settled(text string) int {
 		}
 		return settled, moved
 	}
-	settled := end
+	settled = end
 	for moved := true; moved; {
 		settled, moved = keys(settled)
 	}
@@ -5476,8 +5490,8 @@ func Settled(text string) int {
 	// END closes — and a password's value decided on such a line may be
 	// decided again once it reads otherwise ([passwordInput]).
 	rewritable := settled
-	input := passwordInput(whole, spans)
-	holds := valueHolds(input.text)
+	input := passwordInput(reading(whole), spans)
+	holds := valueHolds(input.text, &read)
 	for k, h := range holds {
 		holds[k].start, holds[k].decided = input.at(h.start), input.at(h.decided)
 	}
@@ -5487,8 +5501,8 @@ func Settled(text string) int {
 	// is held with it, since the text after the cut is read with no claim
 	// on that value, and an END there reads it back as the key's.
 	if c != nil && c.read {
-		raw := passwordInput(whole, nil)
-		for _, h := range valueHolds(raw.text) {
+		raw := passwordInput(reading(whole), nil)
+		for _, h := range valueHolds(raw.text, &read) {
 			h.start, h.decided = raw.at(h.start), raw.at(h.decided)
 			holds = append(holds, h)
 		}
@@ -5502,7 +5516,7 @@ func Settled(text string) int {
 			}
 		}
 		if !moved {
-			return settled
+			return settled, read
 		}
 	}
 }

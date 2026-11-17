@@ -1,5 +1,5 @@
 /**
- * Whom a person's message reached and who answered, under its words: the
+ * Whom a person's message reached and who answered, after its words: the
  * engine's own routing as it kept it, worded here and drawn with uilet's
  * `DeliveryReceipt`.
  */
@@ -142,7 +142,7 @@ describe("the words", () => {
   });
 });
 
-describe("under a person's message", () => {
+describe("on a person's message", () => {
   function mount(view: Record<string, unknown>) {
     const answers: Partial<Record<QueryName, unknown>> = {
       chat_channel: { ...served, channel, revision: 3, message_seq: 1, member: true, members: [] },

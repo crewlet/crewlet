@@ -192,9 +192,10 @@ func (s *keepsOutcomeLost) seen() (bool, int) {
 // capture begun and never finished. The keep stamps what came of the capture
 // within one record's budget, and a store that never answers it in that time
 // leaves the capture begun on the run's row with nothing to settle it: the
-// turn's end waits on it for as long as the turn's last capture could still
-// land ([endCaptureWait]), reading the row once a [captureWaitTick], and then
-// records the end naming it.
+// turn's end waits on it for its whole life from the moment the end first saw
+// it ([captureLife], [Coordinator.awaitEndCaptures]), reading the row once a
+// [captureWaitTick] and once more once that has passed, and then records the
+// end naming it.
 //
 // IN THE BUBBLE, as every case of the rig runs ([inBubble]). On the machine's
 // clock a runner starved through the rig's 200 ms record budget inside that
@@ -204,8 +205,8 @@ func (s *keepsOutcomeLost) seen() (bool, int) {
 //
 // Mutation: run the case off the bubble, and the rig refuses it; read the row
 // on any tick shorter than production's, and the wait reads it more often than
-// once a tick; hold the end's wait to a capture's own budget, and the end is
-// recorded before its wait ran out.
+// once a tick; give up on a capture short of its life from first sight, and the
+// end is recorded before its wait ran out.
 func TestAnEndWaitsOutAKeepWhoseOutcomeTheStoreNeverTook(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -234,13 +235,13 @@ func TestAnEndWaitsOutAKeepWhoseOutcomeTheStoreNeverTook(t *testing.T) {
 			t.Fatalf("the end names %+v unkept, want the capture whose outcome the store never took, begun "+
 				"and never finished", u)
 		}
-		if waited < endCaptureWait {
+		if waited < captureLife {
 			t.Errorf("the end was recorded %s into the stop's retry, before its wait of %s for the capture "+
-				"ran out", waited, endCaptureWait)
+				"ran out", waited, captureLife)
 		}
-		if most := int(endCaptureWait / captureWaitTick); waits == 0 || waits > most {
-			t.Errorf("the end's wait read the row %d times, want it read once a %s for %s: at most %d",
-				waits, captureWaitTick, endCaptureWait, most)
+		if most := int(captureLife/captureWaitTick) + 1; waits == 0 || waits > most {
+			t.Errorf("the end's wait read the row %d times, want it read once a %s for %s, and once more "+
+				"once its bound has passed: at most %d", waits, captureWaitTick, captureLife, most)
 		}
 		if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
 			t.Fatal("the stopped run's record was left behind its end")

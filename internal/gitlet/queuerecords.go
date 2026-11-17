@@ -80,7 +80,8 @@ import (
 // says: the domain landed on main with them, with a land's apply setting
 // code_queue.close_op, and with the values they add to closed sets
 // (`merged_via` queue on a change's row, `via` queue on a push's and `kind`
-// queue on a landing's). None is a gate.
+// queue on a landing's). None is a gate. An ejection's `tested_in` is version
+// 7 ([TestedInVersion]); an eject carrying none is base format.
 
 // The queue's bounds.
 const (
@@ -276,7 +277,7 @@ type TrainCandidate struct {
 // Eject puts live entries out of their queue: the record of op eject on the
 // repository's subject.
 //
-// BASE FORMAT, as this file's head says.
+// BASE FORMAT but [Ejection.TestedIn], as this file's head says.
 type Eject struct {
 	RepoID  string     `json:"repo_id"`
 	Entries []Ejection `json:"entries"`
@@ -289,12 +290,25 @@ type Eject struct {
 
 // Ejection is one entry an eject puts out: why ([EjectReasons]), and what of
 // it a person reads first — the required checks that failed on what it was
-// tested in, or the paths its merge conflicted on.
+// tested in, or the paths its merge conflicted on. A bisected culprit's
+// ejection also names the train it failed on.
 type Ejection struct {
 	EntryID string         `json:"entry_id"`
 	Reason  QueueEndReason `json:"reason"`
 	Checks  []string       `json:"checks,omitempty"`
 	Paths   []string       `json:"paths,omitempty"`
+	// TestedIn is the train a bisected culprit's checks failed on, stamped by its home, since the
+	// train's rows go with the eject; nil on every other ejection and before [TestedInVersion].
+	TestedIn *EjectionTrain `json:"tested_in,omitempty"`
+}
+
+// EjectionTrain is the train an ejection's checks failed on: its candidate, the commit that
+// candidate was merged onto (the target's tip, for a train's first) and the commit the checks
+// failed on, the candidate's merge up to the entry. VERSION 7 ([TestedInVersion]).
+type EjectionTrain struct {
+	CandidateID string `json:"candidate_id"`
+	BaseOID     string `json:"base_oid"`
+	CommitOID   string `json:"commit_oid"`
 }
 
 // Land lands a queue's entries on their target in one record: the record of op
@@ -581,7 +595,8 @@ func (c Candidate) validate(opID string) error {
 // [MaxLandEntries]; an entry that is no bare UUIDv7 or named twice; a reason
 // not one of [EjectReasons]; checks named but for a failed check — at most
 // MaxRequiredChecks, each a check's name — and paths but for a conflict, at
-// most [MaxEjectedPaths] within [MaxConflictBytes], each one a record carries.
+// most [MaxEjectedPaths] within [MaxConflictBytes], each one a record carries;
+// a train named but for a failed check naming its checks, or not whole.
 func (e Eject) validate() error {
 	if err := validRepoID("eject.repo_id", e.RepoID); err != nil {
 		return err
@@ -623,6 +638,9 @@ func (e Eject) validate() error {
 			return badField(field+".paths", "the list is %d bytes of JSON, past the %d an ejection names "+
 				"(MaxConflictBytes)", ConflictsCost(x.Paths), MaxConflictBytes)
 		}
+		if err := x.TestedIn.validate(field+".tested_in", x); err != nil {
+			return err
+		}
 		for j, name := range x.Checks {
 			if !config.ValidCodeCheckName(name) {
 				return badField(fmt.Sprintf("%s.checks[%d]", field, j), "%q is not a check name", name)
@@ -633,6 +651,33 @@ func (e Eject) validate() error {
 				return badField(fmt.Sprintf("%s.paths[%d]", field, j), "%q is no path a record carries", p)
 			}
 		}
+	}
+	return nil
+}
+
+// validate refuses a train x names that no home stamps: one beside any reason but a failed
+// check or naming no checks, a candidate that is no bare UUIDv7, an object id that is not whole,
+// or a commit that is its own base. A nil train is valid.
+func (t *EjectionTrain) validate(field string, x Ejection) error {
+	switch {
+	case t == nil:
+		return nil
+	case x.Reason != EjectCheckFailed:
+		return badField(field, "only a failed check's ejection names the train it failed on")
+	case len(x.Checks) == 0:
+		return badField(field, "an ejection names the checks that failed on its train")
+	}
+	if err := bareUUIDv7(field+".candidate_id", t.CandidateID); err != nil {
+		return err
+	}
+	switch {
+	case !wholeOID(t.BaseOID):
+		return badField(field+".base_oid", "%q is no whole object id", t.BaseOID)
+	case !wholeOID(t.CommitOID):
+		return badField(field+".commit_oid", "%q is no whole object id", t.CommitOID)
+	case t.CommitOID == t.BaseOID:
+		return badField(field+".commit_oid", "a merge onto %s is not %s itself", short(t.BaseOID),
+			short(t.CommitOID))
 	}
 	return nil
 }

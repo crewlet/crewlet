@@ -364,8 +364,9 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	if _, err = store.InsertRows(ctx, tx, at.maxVariables,
 		`INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, actor_seat,
 			via, turn_id, work_backend, work_key, model, run_id, harness, node, atomic, commands,
-			pack_id, pack_bytes, introduced, introduced_count, received_at, row_bytes, working_for) VALUES `,
-		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ``,
+			pack_id, pack_bytes, introduced, introduced_count, offered, received_at, row_bytes,
+			working_for) VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ``,
 		len(pushRows), func(i int) []any {
 			e := pushRows[i]
 			packID, size := "", int64(0)
@@ -376,7 +377,7 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 			return []any{e.PushID, p.RepoID, at.packed, at.at(), e.Principal.Actor(),
 				string(e.Principal.Kind), e.Principal.Seat, string(e.Via), run.TurnID, run.WorkBackend,
 				run.WorkKey, run.Model, run.RunID, run.Harness, e.Node, e.Atomic, wide[i].commands, packID, size,
-				wide[i].introduced, e.IntroducedCount, store.EncodeTime(e.ReceivedAt), wide[i].bytes,
+				wide[i].introduced, e.IntroducedCount, e.Offered, store.EncodeTime(e.ReceivedAt), wide[i].bytes,
 				wide[i].madeFor}
 		}); err != nil {
 		return 0, fmt.Errorf("gitlet: write the pushes at %s: %w", at.position, err)
@@ -1169,9 +1170,9 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // MaxProtectionsPerRepo rules, MaxPathOwners path owners (one row each, their
 // globs packed into it) and a published chain of at most MaxPublishedLayers
 // layers of MaxLayerParts parts each: with the name claim, the row, its kind's
-// count, its repository tally row and the marker that is PurgePartRows +
-// MaxProtectionsPerRepo + MaxPathOwners + MaxPublishedLayers × (1 +
-// MaxLayerParts) + 5 rows, which the limits test holds within MaxRecordRows. A change's revisions, authors, body
+// count, its repository tally row, its viewed key and the marker that is
+// PurgePartRows + MaxProtectionsPerRepo + MaxPathOwners + MaxPublishedLayers ×
+// (1 + MaxLayerParts) + 6 rows, which the limits test holds within MaxRecordRows. A change's revisions, authors, body
 // and conversation go before the changes, through which alone they are found.
 //
 // AN OLD NAME a rename left redirecting to the repository is NOT released
@@ -1208,7 +1209,7 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 		purgeAllFactsSQL, purgeAllBodiesSQL, purgeAllMergeabilitySQL, purgeAllConversationsSQL,
 		purgeAllChangesSQL, purgeAllCheckLogsSQL, purgeAllChecksSQL, purgeAllDispatchesSQL, purgeAllCheckTargetsSQL,
 		purgeAllQueueSQL, purgeAllCandidatesSQL, purgeAllLandingsSQL, purgeAllGreenSQL, purgeAllTipsDueSQL,
-		purgeAllLayerPartsSQL, purgeAllLayersSQL, clearProtectionsSQL, clearPathOwnersSQL,
+		purgeAllLayerPartsSQL, purgeAllLayersSQL, clearProtectionsSQL, clearPathOwnersSQL, purgeViewedKeySQL,
 	} {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := tx.ExecContext(ctx, stmt, p.RepoID)
@@ -1478,4 +1479,8 @@ const (
 			(repo_id, name, at, by, reason, purge_record_id, rejects, last_reject_at, version)
 		VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?)
 		ON CONFLICT (repo_id) DO NOTHING`
+	// purgeViewedKeySQL deletes the key the repository's viewed marks were digested under, after
+	// which those marks, which are each person's and stay, name no file once the log is trimmed
+	// past the key's record.
+	purgeViewedKeySQL = `DELETE FROM code_viewed_keys WHERE repo_id = ?`
 )

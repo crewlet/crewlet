@@ -56,15 +56,18 @@ var widestInstant = time.Date(9999, 12, 31, 23, 59, 59, 999_999_999, time.UTC)
 
 // changePageMax is the most rows one page of a change read may ask for.
 func (q ReadQuery) changePageMax() int {
-	if q.FindingPaths {
+	switch {
+	case q.FindingPaths:
 		return MaxFindingPathsPerPage
+	case q.Viewed:
+		return MaxViewedPerPage
 	}
 	return q.Part.maxPerPage()
 }
 
 // pagesDetail reports a change read whose first page carries the change's detail: its
-// revisions, never its findings by path.
-func (q ReadQuery) pagesDetail() bool { return q.Part.detailed() && !q.FindingPaths }
+// revisions, never its findings by path or its asker's viewed files.
+func (q ReadQuery) pagesDetail() bool { return q.Part.detailed() && !q.FindingPaths && !q.Viewed }
 
 // participantsIn is change id's participants by handle, at most MaxDetailParticipants, and how
 // many more: one walk of the key, and a covering count only where the walk filled its bound.

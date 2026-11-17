@@ -630,3 +630,23 @@ func (p *Plan) Confirm(ctx context.Context, blob []byte, hit func(Hit) bool) (lo
 	}
 	return long, nil
 }
+
+// Matches is every non-empty match of p's expression in line that starts
+// before within, in order: what a caller highlights of a line Confirm
+// answered. It asks the regexp for at most 2*within+2 matches, empty ones
+// included, so a line's cost is bounded by within as well as by its length.
+func (p *Plan) Matches(line []byte, within int) [][2]int {
+	if within <= 0 {
+		return nil
+	}
+	var out [][2]int
+	for _, m := range p.re.FindAllIndex(line, 2*within+2) {
+		if m[0] >= within {
+			break
+		}
+		if m[1] > m[0] {
+			out = append(out, [2]int{m[0], m[1]})
+		}
+	}
+	return out
+}

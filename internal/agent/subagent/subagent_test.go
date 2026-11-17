@@ -2334,29 +2334,63 @@ func TestADependentIsSkippedWhenItsInputDidNotSucceed(t *testing.T) {
 func TestASkipIsNotReclassifiedByADeadline(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
+	// inside is the hung task's model having been asked: the moment the
+	// claim is about, and the one the call's end waits for.
+	var inside chan struct{}
 	p := &provider{name: "sub", reply: func(ctx context.Context, _ int, req modelView) (llmtest.Response, error) {
 		if strings.Contains(userText(req), "hangs") {
+			// A SEND THE CONTEXT ENDS TOO, so a call nobody expected is
+			// released with the run rather than blocked on a full channel.
+			select {
+			case inside <- struct{}{}:
+			case <-ctx.Done():
+			}
 			<-ctx.Done()
 			return llmtest.Response{}, ctx.Err()
 		}
 		return answer("fine", 1, 1), nil
 	}}
 	cfg := baseConfig(t, w, p)
-	// THE CALL'S OWN CAP IS WHAT FIRES, and it fires during wave 0 — so
-	// by the time the dependent is considered, the context is already
-	// done. That is precisely the case the ordering rule is for: a
-	// deadline-first classifier would report the dependent as
-	// `never_started` (a retry-unchanged failure) instead of naming the
-	// chain that actually broke.
-	cfg.Limits.TaskTimeout = 2 * time.Second
-	cfg.Limits.CallTimeout = 50 * time.Millisecond
+	// THE CALL'S OWN DEADLINE IS WHAT ENDS IT, during wave 0, so by the
+	// time the dependent is considered the context is already done. That
+	// is precisely the case the ordering rule is for: a deadline-first
+	// classifier would report the dependent as `never_started` (a
+	// retry-unchanged failure) instead of naming the chain that broke.
+	//
+	// THE CASE ENDS THE CALL, with the cap's own cause, once the hung
+	// task's model is asked, and neither configured cap ever decides. A
+	// 50 ms cap covered the harness starting and dialling its tool session
+	// as well as the hang, and a loaded runner spent all of it before the
+	// model was reached: the dial failed with `i/o timeout`, the task was
+	// `failed` rather than `timed_out`, and a healthy build went red. The
+	// cause is what every status is read from, so ending the call with it
+	// is classified exactly as the cap's own timer firing is.
+	cfg.Limits.TaskTimeout = 10 * time.Second
+	cfg.Limits.CallTimeout = 10 * time.Second
 
 	for i := range 3 {
-		results := run(t, cfg, subagent.Request{Tasks: []subagent.Task{
+		inside = make(chan struct{}, 1)
+		ctx, expire := context.WithCancelCause(t.Context())
+		go func(inside <-chan struct{}) {
+			select {
+			case <-inside:
+				expire(subagent.ErrCallDeadline)
+			case <-ctx.Done():
+			}
+		}(inside)
+		results, err := subagent.Run(ctx, cfg, subagent.Request{Tasks: []subagent.Task{
 			{ID: "gather", SystemPrompt: "s", Prompt: "hangs"},
 			{ID: "synth", SystemPrompt: "s", Prompt: "reconcile", After: []string{"gather"}},
 		}})
-		if results[0].Status != subagent.StatusTimedOut {
+		expire(nil)
+		if err != nil {
+			t.Fatalf("run %d: Run: %v", i, err)
+		}
+		// The CALL's deadline, by name: a task cap firing instead would
+		// leave the call's context live, and the dependent would be
+		// skipped by any classifier, the deadline-first one included.
+		if results[0].Status != subagent.StatusTimedOut ||
+			!strings.Contains(results[0].Error, "delegate call") {
 			t.Fatalf("run %d: the hung task = %+v", i, results[0])
 		}
 		if results[1].Status != subagent.StatusSkipped {

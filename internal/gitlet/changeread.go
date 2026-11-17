@@ -35,6 +35,10 @@ import (
 //   - a need of a person: code_mergeability_waits_idx (replicated 0106), the
 //     changes whose stored readiness waits on a person, each kept only where
 //     the readiness the read judges still does (conversationread.go);
+//   - a readiness of ready, where no reviewer or need leads and no sort by
+//     update is asked: code_mergeability_ready_idx, the changes whose stored
+//     readiness is ready, each kept only where the bucket the read judges is
+//     still ready (changereadiness.go);
 //   - a reviewer, or a need of a review: code_reviewers_reviewer_idx
 //     (replicated 0100), the changes whose ask of that reviewer stands —
 //     the set a reviewer is asked to work through, newest change first
@@ -78,7 +82,9 @@ import (
 // without bound, where a page that reads LIMIT rows and keeps what passes reads
 // what its limit says. So a page is the rows it READ, its cursor the last of
 // them, and it may be short, or empty with a cursor, as a seat's listing of
-// repositories is; a client pages until no cursor comes back.
+// repositories is; a client pages until no cursor comes back. The bucket a
+// change's judged readiness stands in ([ReadQuery.Readiness]) is tested on each
+// row the same way, once the page's readiness is judged.
 //
 // # Held to the grant
 //
@@ -150,7 +156,7 @@ const (
 	// [logCursor] of the two.
 	byOpening
 	// byID is the changes a reviewer is asked to review, or whose stored
-	// readiness waits on a person, newest first by the change's id; its
+	// readiness waits on a person or is ready, newest first by the change's id; its
 	// cursor is the last id a page read.
 	byID
 	// byMove is the changes that moved within a window, or a live state's
@@ -211,6 +217,9 @@ func walkLedBy(q ReadQuery, repoID string) changeWalk {
 	case q.Reviewer != "" || q.Needs == NeedReview:
 		return changeWalk{index: reviewerAsksKey, keys: []any{q.waitedOn()}, order: byID, repo: named,
 			state: q.State != "", owner: q.Owner != "", work: q.Work != "", live: q.Needs == NeedReview}
+	case q.Readiness == BucketReady && q.Needs == "" && q.ChangeSort != ChangeSortUpdated:
+		return changeWalk{index: readyKey, order: byID, repo: named, state: q.State != "",
+			owner: q.Owner != "", work: q.Work != "", live: true}
 	case q.ChangeSort == ChangeSortUpdated && q.State.Live():
 		if named {
 			return changeWalk{index: changesRepoLiveMovedKey, keys: []any{repoID, string(q.State)}, order: byMove,
@@ -253,6 +262,7 @@ func walkLedBy(q ReadQuery, repoID string) changeWalk {
 // the walk of the half the page was read from, the second half's behind
 // [fixHalf] — so a caller never learns how a walk spells one.
 func (q ReadQuery) ChangesCursor(s ChangeSummary) string {
+	q = q.readying()
 	prefix := ""
 	switch q.Needs {
 	case NeedMe:
@@ -350,6 +360,8 @@ func (w changeWalk) readIndex(ctx context.Context, tx *sql.Tx, cursor string, li
 			fmt.Sprintf("asking %v", w.keys[0]))
 	case waitsKey:
 		return w.readByID(ctx, tx, changesWaitingSQL, changesWaitingAfterSQL, cursor, limit, "waiting on a person")
+	case readyKey:
+		return w.readByID(ctx, tx, changesReadySQL, changesReadyAfterSQL, cursor, limit, "ready to merge")
 	case changesWorkKey:
 		return w.readBy(ctx, tx, changesOfWorkSQL, changesOfWorkAfterSQL, cursor, limit)
 	case changesOwnerKey:
@@ -473,6 +485,8 @@ func resolvingIn(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, cp 
 func (r *Reader) changes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, cp statelog.Position,
 	out *ReadAnswer) error {
 
+	q = q.readying()
+	out.NarrowedTo = q.Readiness
 	switch q.Needs {
 	case NeedMe:
 		return r.changesWaitingOnMe(ctx, tx, q, chart, cp, out)
@@ -530,14 +544,15 @@ func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 	// EVERY KEPT CHANGE'S READINESS, judged in this transaction against
 	// this read's one chart — the rows of all of them read a kind at a time
 	// ([gateFactsIn]) — before the page is cut, since what waits on a
-	// person is a filter of what is judged.
+	// person, and the bucket a change stands in, are filters of what is judged.
 	readiness, err := readinessIn(ctx, tx, kept, repos, chart, q.Asker, r.limits().MergeByFloor)
 	if err != nil {
 		return err
 	}
 	var listed []changeRow
 	for _, row := range kept {
-		if judged := readiness[row.id]; !walk.person || (judged != nil && judged.WaitsPerson()) {
+		judged := readiness[row.id]
+		if (!walk.person || (judged != nil && judged.WaitsPerson())) && q.Readiness.holds(judged) {
 			listed = append(listed, row)
 		}
 	}
@@ -682,6 +697,9 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	}
 	if q.FindingPaths {
 		return r.changeFindingPaths(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)
+	}
+	if q.Viewed {
+		return r.changeViewed(ctx, tx, q, repo.ref.ID, ChangeRef(repo.ref.Name, row.number), row, out)
 	}
 	switch q.Part {
 	case PartReviewers:
@@ -920,10 +938,12 @@ func (s *factsScan) row() (*RevisionFactsRow, error) {
 // reviewer by a seat's handle; and a need in a live state, whose one it waits
 // on it names or its asker's seat is — a reviewer for a review, an owner for
 // a fix, and for what waits on the asker neither, as that is the asker's own.
+// A bucket ([ReadQuery.Readiness]) names the open state, empty read as open.
 func (q ReadQuery) validateChanges() error {
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
-	case q.Repo == "" && q.Work == "" && q.State == "" && q.Reviewer == "" && q.Needs == "" && q.Window == "":
+	case q.Repo == "" && q.Work == "" && q.State == "" && q.Reviewer == "" && q.Needs == "" && q.Window == "" &&
+		q.Readiness == "":
 		return refused("state", "a listing of changes names a repository, a work item, a state, a reviewer, "+
 			"what its changes wait on or a window they moved in, which the indexes it walks are each led by — "+
 			"no index holds every change the company has, and an owner's changes are kept by state")
@@ -944,6 +964,11 @@ func (q ReadQuery) validateChanges() error {
 	case q.Needs != "" && q.State != "" && !q.State.Live():
 		return refused("state", fmt.Sprintf("needs=%s lists live changes, and a %s change waits on nobody",
 			q.Needs, q.State))
+	case q.Readiness != "" && !q.Readiness.Valid():
+		return refused("readiness", fmt.Sprintf("%q is not one of %s", q.Readiness, words.Or(ReadinessBuckets())))
+	case q.Readiness != "" && q.State != "" && q.State != ChangeStateOpen:
+		return refused("state", fmt.Sprintf("readiness=%s lists open changes by where their merge stands, "+
+			"and a %s change stands in no bucket", q.Readiness, q.State))
 	case q.Needs == NeedFix && q.Reviewer != "":
 		return refused("reviewer", "needs=fix lists an owner's changes awaiting their fix; the changes awaiting "+
 			"a reviewer's review are needs=review")
@@ -960,10 +985,10 @@ func (q ReadQuery) validateChanges() error {
 	case q.ChangeSort == ChangeSortUpdated && (q.Reviewer != "" || q.Needs != ""):
 		return refused("change_sort", "updated lists a live state's changes by when they last moved; a listing "+
 			"of a reviewer's asks or of what its changes wait on is read in the order of those asks")
-	case q.ChangeSort == ChangeSortUpdated && walkLedBy(q, q.Repo).order != byMove:
+	case q.ChangeSort == ChangeSortUpdated && walkLedBy(q.readying(), q.Repo).order != byMove:
 		return refused("change_sort", "updated lists the changes of a live state, state=draft or state=open, "+
 			"by when they last moved, or a window nothing else leads, which is listed so already")
-	case q.ChangeSort == ChangeSortOpened && walkLedBy(q, q.Repo).order == byMove:
+	case q.ChangeSort == ChangeSortOpened && walkLedBy(q.readying(), q.Repo).order == byMove:
 		return refused("change_sort", "a window that nothing else leads lists its changes by when they last "+
 			"moved; name a live state, a repository, a work item or a reviewer to list them by when they were "+
 			"opened")

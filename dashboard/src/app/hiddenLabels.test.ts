@@ -48,11 +48,6 @@ const DECLARED: Declared[] = [
     why: "The column's own heading names the group.",
   },
   {
-    where: "routes/gitlet/Changes.tsx",
-    element: "Meter",
-    why: "The Readiness column head names it, and its count is drawn beside it.",
-  },
-  {
     where: "routes/agents/SeatPeek.tsx",
     element: "Meter",
     why: "The term beside it (`dt`) names the budget.",

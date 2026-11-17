@@ -4656,7 +4656,9 @@ var ACTIONS = {
 			"repo",
 			"change",
 			"expected_version",
-			"draft"
+			"draft",
+			"title",
+			"body"
 		],
 		domain: "code",
 		apps: ["gitlet"],

@@ -55,10 +55,10 @@ import type {
 } from "~/protocol/index.ts";
 import { CodeList, useDayGroups, type ListDay } from "../CodeList.tsx";
 import { commitHref, repoHref } from "../paths.ts";
-import { ChangeRefPill } from "../Changes.tsx";
+import { ChangeRefPill } from "../ChangeRow.tsx";
 import { CheckRollupMark, Face, GITLET, ShaChip, TagChip, useWhoName, type Who } from "../ui.tsx";
 import { REFUSED_CODES, useCommitMarks, type MarksFailure } from "./marks.ts";
-import { RefPicker, revisionWord, type Revisions } from "./refs.tsx";
+import { RefPicker, revisionWord } from "./refs.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import "~/styles/gitlet.css";
 
@@ -393,10 +393,9 @@ function MessageSearch({ q }: { q: string }) {
 
 /**
  * The history at the revision, of the path the address names or of every
- * path, newest first. Its picker lists the branches and tags its page read
- * once ([useRevisions]).
+ * path, newest first.
  */
-export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: Revisions }) {
+export function Commits({ repo }: { repo: CodeRepoDetail }) {
   const now = useNow();
   const [rev, setRev] = useParam("ref", "", "filter");
   const [path, setPath] = useParam("path", "", "filter");
@@ -481,7 +480,7 @@ export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: 
     ) : (
       <>
         <PageToolbar>
-          <RefPicker repo={repo} revisions={revisions} value={rev} onChoose={setRev} />
+          <RefPicker repo={repo} value={rev} onChoose={setRev} />
         </PageToolbar>
         <p className="muted">{noDefaultHead(repo)}</p>
       </>
@@ -490,7 +489,7 @@ export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: 
   return (
     <>
       <PageToolbar>
-        <RefPicker repo={repo} revisions={revisions} value={rev} onChoose={setRev} />
+        <RefPicker repo={repo} value={rev} onChoose={setRev} />
         <Select
           size="sm"
           width="auto"

@@ -1,21 +1,27 @@
 /**
  * GITLET'S PAGES, LAID OUT: a comparison's title stays clear of the files'
- * sticky toolbar under it, the clone panel shows its whole address, and code
- * coloured by kind keeps the box it had plain.
+ * sticky toolbar under it, the revision picker and the clone panel stay inside
+ * the viewport, code coloured by kind keeps the box it had plain, and a file's
+ * tree scrolls alone beside it.
  */
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { page } from "vitest/browser";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
-import { InertWebSocket, LayoutClient } from "~/test/layout.tsx";
+import { InertWebSocket, LayoutClient, overflowing, sidewaysScrollers } from "~/test/layout.tsx";
 import { eventually } from "~/test/settle.ts";
+import { SessionReading } from "~/lib/frameSession.ts";
 import { DiffView, type DiffHunk } from "~/components/DiffView.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import type { CodeChangeSummary } from "~/protocol/index.ts";
-import { ChangesGrid } from "./Changes.tsx";
+import { ChangeRows, ChangeStateTag } from "./ChangeRow.tsx";
+import { Changes } from "./Changes.tsx";
 import { BranchChip } from "./ui.tsx";
 import { ComparePage } from "./commit/ComparePage.tsx";
 import { RepositoryPage } from "./repo/RepositoryPage.tsx";
+import { Repositories } from "./Repositories.tsx";
+import { forgetTreeChoice } from "./repo/FileView.tsx";
+import { forgetTrees } from "./repo/tree.ts";
 import { SYNTAX_CLASS } from "./syntax.tsx";
 
 const POSITION = { stream: "CREWLET_CODE_LOG", generation: 1, seq: 12 };
@@ -43,9 +49,38 @@ const MAIN_GO = [
   "",
 ];
 
+/** Ten branches by when each moved, one named past any panel's width. */
+const MOVED = [
+  "main",
+  `feature/${"a-very-long-branch-name-".repeat(5)}end`,
+  ...Array.from({ length: 8 }, (_, i) => `topic/${i}`),
+].map((name, i) => ({
+  ref: `refs/heads/${name}`,
+  oid: BASE,
+  position: POSITION,
+  moved_at: new Date(Date.UTC(2026, 10, 1, 12 - i)).toISOString(),
+  ...(name === "main"
+    ? { protection: { patterns: ["refs/heads/main"], direct_push: "none" } }
+    : {}),
+}));
+
+/** The changes Gitlet › Changes lists and the repositories its pickers offer, where a case sets them. */
+let listed: CodeChangeSummary[] | null = null;
+let repos: string[] | null = null;
+
 /** The engine, for one repository's comparison of feature into main, and one file. */
 function answer(url: URL): Response {
   switch (url.pathname) {
+    case "/query/code_changes":
+      if (!listed) break;
+      return json({
+        changes: url.searchParams.has("limit") ? [] : listed,
+        position: POSITION,
+        level: "session",
+      });
+    case "/query/code_repos":
+      if (!repos) break;
+      return json({ repos: repos.map((name) => ({ name })), position: POSITION, level: "session" });
     case "/query/code_blob":
       if (url.searchParams.get("path") !== "cmd/main.go") break;
       return json({
@@ -67,6 +102,7 @@ function answer(url: URL): Response {
       });
     case "/query/code_repo":
       return json({
+        clone_url: "https://crewlet.example.com/git/web.git",
         repo: {
           id: "repo-web",
           name: "web",
@@ -93,6 +129,9 @@ function answer(url: URL): Response {
         level: "session",
       });
     case "/query/code_refs":
+      if (url.searchParams.get("detail") === "true") {
+        return json({ refs_detail: MOVED, position: POSITION, level: "session" });
+      }
       return json({
         refs: [
           { ref: "refs/heads/feature", oid: HEAD, position: POSITION },
@@ -126,11 +165,15 @@ function answer(url: URL): Response {
         kind: "tree",
         tree: {
           tree: BASE,
-          entries: [
-            { mode: "040000", type: "tree", oid: HEAD, path: "cmd" },
-            { mode: "100644", type: "blob", oid: HEAD, path: "go.mod", size: 1200 },
-          ],
-          total: 2,
+          // THE ROOT, and `cmd` for the file view's tree.
+          entries:
+            url.searchParams.get("path") === "cmd"
+              ? [{ mode: "100644", type: "blob", oid: HEAD, path: "cmd/main.go", size: 120 }]
+              : [
+                  { mode: "040000", type: "tree", oid: HEAD, path: "cmd" },
+                  { mode: "100644", type: "blob", oid: HEAD, path: "go.mod", size: 1200 },
+                ],
+          total: url.searchParams.get("path") === "cmd" ? 1 : 2,
         },
         position: POSITION,
         level: "session",
@@ -167,6 +210,10 @@ afterEach(() => {
   host?.remove();
   root = null;
   host = null;
+  listed = null;
+  repos = null;
+  forgetTrees();
+  forgetTreeChoice();
   vi.unstubAllGlobals();
   location.hash = "";
 });
@@ -213,26 +260,26 @@ test("a comparison's title stays clear of the files' toolbar", async () => {
   expect(band.top).toBeGreaterThanOrEqual(Math.floor(under.bottom));
 });
 
-// THE CLONE PANEL SHOWS ITS WHOLE ADDRESS, with no sideways scroll once it
-// focuses its copy button. Mutation: `.code-clone { width: 30rem }` fails it.
+// THE CODE MENU SHOWS ITS WHOLE ADDRESS and its actions, with no sideways
+// scroll once it focuses its copy button. Mutation: `.code-clone { width: 30rem }` fails it.
 for (const width of [1440, 390]) {
   test(`the clone panel holds its whole address, inside its card and the viewport, at ${width}px`, async () => {
     await page.viewport(width, 900);
     location.hash = "#/gitlet/repos/web";
     mount(<RepositoryPage repo="web" />, width);
-    const clone = await eventually(() => {
-      const button = [...document.querySelectorAll("button")].find(
-        (b) => b.textContent === "Clone",
+    const code = await eventually(() => {
+      const button = [...document.querySelectorAll('button[aria-haspopup="dialog"]')].find(
+        (b) => b.textContent === "Code",
       );
       expect(button).toBeTruthy();
-      return button!;
+      return button as HTMLElement;
     });
     const card = await eventually(() => {
       const listing = document.querySelector(".code-browser");
       expect(listing?.textContent).toContain("go.mod");
       return listing!;
     });
-    clone.click();
+    code.click();
     // Measured once placed and focused: the focus is what scrolled it.
     const panel = await eventually(() => {
       const el = document.querySelector<HTMLElement>('.crewlet-popover[aria-label="Clone web"]');
@@ -245,20 +292,72 @@ for (const width of [1440, 390]) {
     expect(panel.scrollLeft).toBe(0);
     const box = panel.getBoundingClientRect();
     for (const part of panel.querySelectorAll(
-      ".code-clone__head, .code-clone__url, .code-clone__note",
+      ".code-clone__head, .code-clone__url, .code-clone__note, .code-clone__act",
     )) {
       const at = part.getBoundingClientRect();
       expect(at.left).toBeGreaterThanOrEqual(box.left);
       expect(at.right).toBeLessThanOrEqual(box.right);
     }
     const head = panel.querySelector(".code-clone__head")!;
-    expect(head.textContent).toBe("Clone with HTTPS");
+    expect(head.textContent).toBe("Clone");
     expect(head.scrollWidth).toBeLessThanOrEqual(head.clientWidth);
+    const command = [...panel.querySelectorAll<HTMLElement>(".code-clone__act")].find(
+      (a) => a.textContent === "Copy the clone command",
+    )!;
+    expect(command.scrollWidth).toBeLessThanOrEqual(command.clientWidth);
+    expect(command.getBoundingClientRect().height).toBeLessThan(40);
     expect(box.left).toBeGreaterThanOrEqual(0);
     expect(box.right).toBeLessThanOrEqual(window.innerWidth);
     const under = card.getBoundingClientRect();
     expect(box.left).toBeGreaterThanOrEqual(Math.floor(under.left));
     expect(box.right).toBeLessThanOrEqual(Math.ceil(under.right));
+  });
+}
+
+// THE PICKER'S PANEL STAYS IN THE VIEWPORT with no sideways scroll, a long
+// branch name ellipsed on one line. Mutation: a name that wraps, or
+// `.code-picker { width: 24rem }`, fails it.
+for (const width of [1440, 1024, 390]) {
+  test(`the branch picker's panel stays inside the viewport and does not scroll sideways at ${width}px`, async () => {
+    await page.viewport(width, 900);
+    location.hash = "#/gitlet/repos/web";
+    mount(<RepositoryPage repo="web" />, width);
+    const picker = await eventually(() => {
+      const button = document.querySelector<HTMLElement>('[aria-label="Branch or tag: main"]');
+      expect(button).toBeTruthy();
+      return button!;
+    });
+    picker.click();
+    const panel = await eventually(() => {
+      const el = document.querySelector<HTMLElement>(
+        '.crewlet-popover[aria-label="Switch branches or tags"]',
+      );
+      expect(el).toBeTruthy();
+      expect(el!.style.visibility).not.toBe("hidden");
+      expect(document.activeElement?.getAttribute("aria-label")).toBe("Find a branch");
+      expect(el!.querySelectorAll("[role=option]")).toHaveLength(10);
+      return el!;
+    });
+    const list = panel.querySelector<HTMLElement>("[role=listbox]")!;
+    for (const box of [panel, list]) {
+      expect(box.scrollWidth).toBeLessThanOrEqual(box.clientWidth);
+      expect(box.scrollLeft).toBe(0);
+    }
+    const at = panel.getBoundingClientRect();
+    expect(at.left).toBeGreaterThanOrEqual(0);
+    expect(at.right).toBeLessThanOrEqual(window.innerWidth);
+    expect(at.width).toBeGreaterThanOrEqual(260);
+    for (const row of panel.querySelectorAll("[role=option], .code-picker__foot")) {
+      const r = row.getBoundingClientRect();
+      expect(r.left).toBeGreaterThanOrEqual(at.left);
+      expect(r.right).toBeLessThanOrEqual(at.right);
+    }
+    const long = [...panel.querySelectorAll<HTMLElement>(".code-picker__name")].find((n) =>
+      n.textContent?.startsWith("feature/"),
+    )!;
+    expect(long.scrollWidth).toBeGreaterThan(long.clientWidth);
+    const main = panel.querySelector<HTMLElement>(".code-picker__name")!;
+    expect(long.getBoundingClientRect().height).toBe(main.getBoundingClientRect().height);
   });
 }
 
@@ -378,21 +477,20 @@ function summary(number: number, state: string): CodeChangeSummary {
 
 const NONE = "rgba(0, 0, 0, 0)";
 
-// A CHIP ON A SELECTED ROW DRAWS NO GROUND (`aria-current` on its overlay or on
-// the row), and a state pill paints the kit's fill. Mutation: drop either arm
-// of the selected-row rule, or the merged pill's rule, and this fails.
+// A CHIP ON A SELECTED ROW DRAWS NO GROUND (the list's peeked row, or a grid's
+// `aria-current` row), and a state pill paints the kit's fill. Mutation: drop either
+// selected-row rule, or the merged pill's rule, and this fails.
 test("a branch chip draws no ground on a selected row, and a state pill paints its fill", async () => {
-  location.hash = "#/gitlet/changes?peek=change:web!42";
+  location.hash = "#/gitlet?peek=change:web!42";
   mount(
-    <ChangesGrid
-      rows={[summary(42, "open"), summary(41, "merged")]}
-      onLoadMore={undefined}
-      loadedNote={undefined}
-    />,
+    <>
+      <ChangeRows rows={[summary(42, "open"), summary(41, "merged")]} label="Changes" />
+      <ChangeStateTag state="merged" />
+    </>,
   );
   const rowOf = (ref: string) =>
     eventually(() => {
-      const row = [...document.querySelectorAll<HTMLElement>('[role="row"]')].find((r) =>
+      const row = [...document.querySelectorAll<HTMLElement>(".code-list__row")].find((r) =>
         r.textContent?.includes(ref),
       );
       expect(row).toBeTruthy();
@@ -400,6 +498,7 @@ test("a branch chip draws no ground on a selected row, and a state pill paints i
     });
   const picked = await rowOf("web!42");
   const other = await rowOf("web!41");
+  expect(picked.hasAttribute("data-current")).toBe(true);
   const grounds = (row: HTMLElement) =>
     [...row.querySelectorAll(".code-branch-chip")].map((c) => getComputedStyle(c).backgroundColor);
   expect(grounds(picked)).toEqual([NONE, NONE]);
@@ -407,7 +506,7 @@ test("a branch chip draws no ground on a selected row, and a state pill paints i
   const probe = document.createElement("span");
   probe.style.background = "var(--color-change-merged-fill)";
   host!.append(probe);
-  const pill = other.querySelector<HTMLElement>('.code-state[data-state="merged"]')!;
+  const pill = document.querySelector<HTMLElement>('.code-state[data-state="merged"]')!;
   expect(getComputedStyle(pill).backgroundColor).toBe(getComputedStyle(probe).backgroundColor);
   expect(getComputedStyle(probe).backgroundColor).not.toBe(NONE);
   flushSync(() => root?.unmount());
@@ -432,25 +531,24 @@ test("a branch chip draws no ground on a selected row, and a state pill paints i
   expect(getComputedStyle(chip).backgroundColor).toBe(NONE);
 });
 
-// A STATE PILL'S WORD IS CENTRED ON ITS GLYPH, the phone's stacked grid too,
-// whose kit rule sets a pictured value's words on their baseline. Mutation:
-// drop the pill word's `align-self`, and at 390px the word rides 4px high.
+// A STATE PILL'S WORD IS CENTRED ON ITS GLYPH at either width, where the kit's
+// stacked grid sets a pictured value's words on their baseline. Mutation:
+// drop the pill word's `align-self`, and the word rides high.
 for (const width of [1440, 390]) {
   test(`a state pill's word is centred on its glyph, at ${width}px`, async () => {
     await page.viewport(width, 900);
-    const states = ["open", "draft", "merged", "closed"];
+    const states = ["open", "draft", "merged", "closed"] as const;
     mount(
-      <ChangesGrid
-        rows={states.map((s, i) => summary(i + 1, s))}
-        onLoadMore={undefined}
-        loadedNote={undefined}
-      />,
+      <span>
+        {states.map((s) => (
+          <ChangeStateTag key={s} state={s} />
+        ))}
+      </span>,
       width,
     );
     const pills = await eventually(() => {
       const found = [...document.querySelectorAll<HTMLElement>(".code-state")];
       expect(found).toHaveLength(states.length);
-      if (width === 390) expect(document.querySelector("[data-stacked]")).not.toBeNull();
       return found;
     });
     const middle = (el: Element) => {
@@ -689,6 +787,122 @@ for (const [viewport, column] of [
         const hit = document.elementFromPoint(at.left + at.width / 2, at.top + at.height / 2);
         expect(control.contains(hit), control.getAttribute("aria-label") ?? "").toBe(true);
       }
+    }
+  });
+}
+
+/** Five repositories with every fact: one a 63-byte scratch name, one a 300-character description. */
+function withRepositories() {
+  const row = (name: string, extra: Record<string, unknown> = {}) => ({
+    id: `id-${name}`,
+    name,
+    status: "active",
+    managed_by: "config",
+    kind: "project",
+    owner: { kind: "unit", ref: "engineering" },
+    visibility: "company",
+    search: "indexed",
+    default_branch: "main",
+    refs: 3,
+    live_packs: 2,
+    live_bytes: 19_293_798,
+    live_objects: 40,
+    position: POSITION,
+    head: BASE,
+    pushes: 214,
+    last_push_at: "2026-11-15T09:00:00Z",
+    description: "The storefront: a React app and the Go server that renders it",
+    change_counts: { live: 4, open: 3, draft: 1, closed: 0, merged: 9 },
+    card: {
+      push_mirrored: true,
+      last_push: {
+        push_id: "p1",
+        at: "2026-11-15T09:00:00Z",
+        actor: "jane",
+        actor_kind: "person",
+        actor_seat: "jane",
+        via: "git",
+        outcome: { moved: 1 },
+      },
+      tip_checks: { state: "passed", counts: { passed: 3 }, required: 2, required_passed: 2 },
+    },
+    spark: [9, 14, 6, 1, 3, 12, 17, 11, 8, 15, 19, 7, 13, 8],
+    ...extra,
+  });
+  const repos = [
+    row("web"),
+    row("api", { card: {}, change_counts: { live: 12, open: 12, draft: 0, closed: 0, merged: 0 } }),
+    row("docs", { description: "A".repeat(300), search: "grep" }),
+    row("infra", { visibility: "unit", spark: Array<number>(14).fill(0) }),
+    row(`jane.${"s".repeat(58)}`, { kind: "scratch", owner: { kind: "seat", ref: "jane" } }),
+  ];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), location.origin);
+      // WHO IS SIGNED IN is left unanswered, as the screen's own suite leaves it.
+      if (url.pathname === "/auth/session") return new Promise<Response>(() => {});
+      if (url.pathname === "/query/code_repos") {
+        return json({
+          repos,
+          repos_total: { repos: 5, live_bytes: 96_468_990 },
+          position: POSITION,
+          level: "session",
+        });
+      }
+      return answer(url);
+    }),
+  );
+}
+
+// THE REPOSITORIES HOLD THEIR WIDTH, THEIR FACTS IN FIXED TRACKS: at 1440 each fact's left edge
+// is the same down the card and on the title's line; at 640 the facts sit under the meta. Mutation:
+// make the tracks `auto` (the edges differ), or drop the phone rule (the row overflows).
+for (const [viewport, column] of [
+  [1440, 1150],
+  [640, 608],
+] as const) {
+  test(`the repositories hold their width, their facts aligned, at ${viewport}px`, async () => {
+    await page.viewport(viewport, 900);
+    withRepositories();
+    location.hash = "#/gitlet/repos";
+    mount(
+      <SessionReading>
+        <Repositories />
+      </SessionReading>,
+      column,
+    );
+    const rows = await eventually(() => {
+      const found = [...document.querySelectorAll<HTMLElement>(".code-list__row")];
+      expect(found).toHaveLength(5);
+      return found;
+    });
+    const content = document.querySelector<HTMLElement>(".crewlet-app-shell__content")!;
+    const list = document.querySelector<HTMLElement>(".code-list__rows")!;
+    for (const el of [content, list]) {
+      expect(el.scrollWidth, el.className).toBeLessThanOrEqual(el.clientWidth);
+    }
+    const edges = (cell: string) =>
+      rows.map((row) => Math.round(row.querySelector(cell)!.getBoundingClientRect().left));
+    for (const cell of [
+      ".code-repo-facts__changes",
+      ".code-repo-facts__checks",
+      ".code-repo-facts__spark",
+    ]) {
+      if (column >= 640) expect(new Set(edges(cell)).size, cell).toBe(1);
+    }
+    for (const row of rows) {
+      const box = row.getBoundingClientRect();
+      expect(row.scrollWidth, row.dataset.key).toBeLessThanOrEqual(row.clientWidth);
+      const title = row.querySelector(".code-list__title")!.getBoundingClientRect();
+      const meta = row.querySelector(".code-list__meta")!.getBoundingClientRect();
+      const facts = row.querySelector(".code-repo-facts")!.getBoundingClientRect();
+      expect(facts.right, row.dataset.key).toBeLessThanOrEqual(box.right + 0.5);
+      expect(title.right, row.dataset.key).toBeLessThanOrEqual(box.right + 0.5);
+      if (column >= 640) expect(facts.top, row.dataset.key).toBeLessThan(title.bottom);
+      else expect(facts.top, row.dataset.key).toBeGreaterThanOrEqual(meta.bottom - 0.5);
+      const spark = row.querySelector(".code-repo-facts__spark")!.getBoundingClientRect();
+      expect(spark.width, row.dataset.key).toBeGreaterThan(40);
     }
   });
 }
@@ -956,5 +1170,441 @@ for (const [viewport, column] of [
     const box = list.getBoundingClientRect();
     expect(box.left).toBeGreaterThanOrEqual(0);
     expect(box.right).toBeLessThanOrEqual(window.innerWidth);
+  });
+}
+
+/** A change with its card, its title as long as `title` says. */
+function carded(number: number, title = `Change ${number}`): CodeChangeSummary {
+  return {
+    ...summary(number, "open"),
+    title,
+    source_ref: `refs/heads/feature/${"stream-".repeat(number % 3)}shell`,
+    revision: 3,
+    open_findings: number % 2,
+    work_item: { backend: "worklet", id: `t-${number}`, key: `ENG-${number}` },
+    readiness: {
+      met: 2,
+      total: 3,
+      first: "",
+      preconditions: [
+        { kind: "facts", state: "met", detail: "" },
+        {
+          kind: "approval",
+          state: "unmet",
+          detail: "",
+          waits_on: [{ handle: "jane", kind: "person" }],
+        },
+        { kind: "mergeable", state: "met", detail: "" },
+      ],
+    },
+    card: {
+      comments: number * 7,
+      reviews: 1,
+      changes_requested: 0,
+      reviewers: [{ handle: "jane", kind: "person", verdict: "approve", verdict_revision: 1 }],
+      checks: { state: "passed", counts: { passed: 2 }, required: 2, required_passed: 2 },
+    },
+  } as CodeChangeSummary;
+}
+
+/** A change whose branch is long enough that its meta wraps on a wide screen. */
+const WRAPPED = {
+  ...carded(105),
+  source_ref: `refs/heads/feature/${"stream-the-product-page-".repeat(6)}shell`,
+} as CodeChangeSummary;
+
+const ROWS = [
+  carded(42, "render: stream the product page's shell before its data"),
+  carded(7),
+  WRAPPED,
+];
+
+/** Each row's body and facts boxes, once the list has drawn. */
+const rowBoxes = () =>
+  eventually(() => {
+    const rows = [...document.querySelectorAll<HTMLElement>(".code-list__row")];
+    expect(rows).toHaveLength(ROWS.length);
+    return rows.map((row) => ({
+      row,
+      body: row.querySelector(".code-list__body")!.getBoundingClientRect(),
+      facts: row.querySelector(".code-list__facts")!.getBoundingClientRect(),
+      slots: [...row.querySelectorAll(".code-change-fact")].map(
+        (s) => s.getBoundingClientRect().left,
+      ),
+    }));
+  });
+
+// A CHANGE ROW'S FACTS LINE UP DOWN THE LIST, on the title's line however the meta wraps.
+// Mutation: size the slots by their content, or centre the facts on the row.
+test("a change row keeps its facts on its title's line at 1440 px, in columns down the card", async () => {
+  await page.viewport(1440, 900);
+  mount(<ChangeRows rows={ROWS} label="Changes" />, 1200);
+  const boxes = await rowBoxes();
+  for (const { row } of boxes) {
+    const title = row.querySelector(".code-list__title")!.getBoundingClientRect();
+    const facts = row.querySelector(".code-change-facts")!.getBoundingClientRect();
+    expect(Math.abs(facts.top - title.top)).toBeLessThanOrEqual(2);
+  }
+  const wrapped = boxes.at(-1)!.row.querySelector(".code-list__meta")!.getBoundingClientRect();
+  expect(wrapped.height).toBeGreaterThan(40);
+  const [first, ...rest] = boxes;
+  for (const other of rest) expect(other.slots).toEqual(first!.slots);
+});
+
+// A CHANGE ROW FOLDS WHERE ITS FACTS WOULD CRUSH ITS WORDS, a list under 820 px of its own.
+// Mutation: fold change rows at the phone's width alone, and a 720 px list keeps them beside.
+test("a change row stacks its facts under its words in a 720 px list", async () => {
+  await page.viewport(1440, 900);
+  mount(<ChangeRows rows={ROWS} label="Changes" />, 720);
+  const boxes = await rowBoxes();
+  for (const { row, body, facts } of boxes) {
+    expect(facts.top).toBeGreaterThanOrEqual(body.bottom - 1);
+    expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth);
+  }
+});
+
+// ON A PHONE THE FACTS GO UNDER THE WORDS, and nothing is wider than the column.
+// Mutation: drop the fold's facts rules, and the slots' fixed widths overflow the row.
+test("a change row stacks its facts under its words at 390 px, and nothing overflows", async () => {
+  await page.viewport(390, 900);
+  const long = carded(9, `render: ${"stream the product page's shell before its data ".repeat(4)}`);
+  mount(<ChangeRows rows={[...ROWS.slice(0, 2), long]} label="Changes" />, 358);
+  const boxes = await rowBoxes();
+  for (const { row, body, facts } of boxes) {
+    expect(facts.top).toBeGreaterThanOrEqual(body.bottom - 1);
+    expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth);
+  }
+  const list = document.querySelector<HTMLElement>(".code-list__rows")!;
+  expect(list.scrollWidth).toBeLessThanOrEqual(list.clientWidth);
+  // A MIDDLE DOT ENDS THE LINE ITS PART ENDS, never a line of its own.
+  const dots = [...document.querySelectorAll<HTMLElement>(".code-change-meta__dot")];
+  expect(dots.length).toBeGreaterThan(0);
+  for (const dot of dots) {
+    const range = document.createRange();
+    range.selectNodeContents(dot.parentElement!);
+    range.setEndBefore(dot);
+    const before = [...range.getClientRects()].filter((r) => r.width > 0).at(-1)!;
+    const at = dot.getBoundingClientRect();
+    expect(Math.abs(before.top + before.height / 2 - (at.top + at.height / 2))).toBeLessThan(
+      at.height / 2,
+    );
+  }
+});
+
+// THE ROW FOLDS BY ITS OWN LIST'S WIDTH, so Home's narrow card stacks it on a wide screen.
+// Mutation: fold on the page's container, and a 370 px card at 1440 keeps its facts beside.
+test("a change row folds by its own width in a 370 px card at 1440 px", async () => {
+  await page.viewport(1440, 900);
+  mount(<ChangeRows rows={ROWS} label="Changes" density="compact" />, 370);
+  const boxes = await rowBoxes();
+  for (const { row, body, facts } of boxes) {
+    expect(facts.top).toBeGreaterThanOrEqual(body.bottom - 1);
+    expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth);
+  }
+});
+
+/** Every option of the open list, once it holds `count`. */
+const optionsOf = (count: number) =>
+  eventually(() => {
+    const found = [...document.querySelectorAll<HTMLElement>('[role="option"]')];
+    expect(found).toHaveLength(count);
+    return found;
+  });
+
+/** Whether a point on the element's middle lands on it, nothing clipping or covering it. */
+function reachable(el: HTMLElement): boolean {
+  const box = el.getBoundingClientRect();
+  return el.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+}
+
+const FIVE = ["api", "docs", "infra", "mobile", "web"];
+
+// THE HEAD'S PICKER HANGS ITS LIST PAST A SHORT CARD: only the rows clip.
+// Mutation: clip the card that holds the head, and the list is cut off under one row.
+test("the Repository picker's list hangs whole past a card of one row", async () => {
+  await page.viewport(1440, 900);
+  listed = [carded(42)];
+  // FOUR AND EVERY REPOSITORY, as many rows as the bounded list shows without scrolling.
+  repos = FIVE.slice(0, 4);
+  location.hash = "#/gitlet";
+  mount(<Changes />, 1200);
+  await eventually(() => expect(document.querySelectorAll(".code-list__row")).toHaveLength(1));
+  const field = document.querySelector<HTMLInputElement>(
+    '.code-list__head input[aria-label="Repository"]',
+  )!;
+  field.click();
+  const options = await optionsOf(5);
+  for (const option of options) expect(reachable(option), option.textContent ?? "").toBe(true);
+});
+
+// NEW CHANGE'S REPOSITORIES STAND IN ITS POPOVER, in the flow, never under its scroll box.
+// Mutation: draw the picker's popup list inside the popover, and its rows are past its bottom.
+test("New change's repository list stands inside its popover", async () => {
+  await page.viewport(1440, 900);
+  listed = [carded(42)];
+  repos = FIVE;
+  location.hash = "#/gitlet";
+  mount(<Changes />, 1200);
+  const button = await eventually(() => {
+    const found = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === "New change",
+    );
+    expect(found).toBeTruthy();
+    return found!;
+  });
+  button.click();
+  const options = await optionsOf(FIVE.length);
+  for (const option of options) expect(reachable(option), option.textContent ?? "").toBe(true);
+});
+
+/** The shell's scroller at `height` holding the content column, so `100cqb` and the sticky pane resolve. */
+function mountScrolled(node: React.ReactNode, width: number, height: number) {
+  host = document.createElement("div");
+  host.className = "app";
+  host.innerHTML = `<main class="crewlet-app-shell__main" style="display:block;block-size:${height}px;overflow-y:auto"><div class="crewlet-app-shell__content" style="display:flex;flex-direction:column;width:${width}px"></div></main>`;
+  document.body.append(host);
+  root = createRoot(host.querySelector(".crewlet-app-shell__content")!);
+  flushSync(() =>
+    root!.render(
+      <LayoutClient answers={{}} org={ORG}>
+        {node}
+      </LayoutClient>,
+    ),
+  );
+  return host.querySelector<HTMLElement>("main")!;
+}
+
+const LONG_NAME = "a-file-named-past-any-pane-".padEnd(120, "x") + ".go";
+
+/** A root of 60 entries, one named past the pane, and cmd/web/main.go of 400 lines, line 3 wide. */
+function withFileView() {
+  const blob = (path: string) => ({ mode: "100644", type: "blob", oid: HEAD, path, size: 10 });
+  const levels: Record<string, unknown[]> = {
+    "": [
+      { mode: "040000", type: "tree", oid: HEAD, path: "cmd" },
+      blob(LONG_NAME),
+      ...Array.from({ length: 58 }, (_, i) => blob(`file-${String(i).padStart(2, "0")}.go`)),
+    ],
+    cmd: [{ mode: "040000", type: "tree", oid: HEAD, path: "cmd/web" }],
+    "cmd/web": [blob("cmd/web/main.go")],
+  };
+  const lines = Array.from({ length: 400 }, (_, i) =>
+    i === 2 ? `var wide = "${"w".repeat(300)}"` : `// line ${i + 1}`,
+  );
+  const resolved = { ref: { ref: "refs/heads/main", oid: BASE } };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), location.origin);
+      const p = url.searchParams;
+      switch (url.pathname) {
+        case "/query/code_tree": {
+          const entries = levels[p.get("path") ?? ""] ?? [];
+          return json({
+            repo: "web",
+            kind: "tree",
+            tree: { tree: BASE, entries, total: entries.length },
+            resolved,
+          });
+        }
+        case "/query/code_blob":
+          if (p.get("path") !== "cmd/web/main.go") break;
+          return json({
+            repo: "web",
+            kind: "blob",
+            blob: {
+              path: "cmd/web/main.go",
+              oid: HEAD,
+              size: lines.join("\n").length + 1,
+              lines: lines.length,
+              start_line: 1,
+              end_line: lines.length,
+              text: lines.join("\n") + "\n",
+            },
+            resolved,
+          });
+        case "/query/code_log":
+          return json({
+            repo: "web",
+            kind: "log",
+            log: {
+              commits: [
+                {
+                  oid: BASE,
+                  author: "Jane Founder",
+                  authored_at: "2026-11-15T10:00:00Z",
+                  committed_at: "2026-11-15T10:00:00Z",
+                  subject: "server: wait for requests in flight before exiting",
+                },
+              ],
+              scanned: 1,
+            },
+          });
+        case "/query/code_find":
+          return json({
+            repo: "web",
+            kind: "find",
+            find: {
+              tree: BASE,
+              matches: [{ path: "cmd/web/main.go", oid: HEAD, mode: "100644", spans: [[8, 12]] }],
+              total: 1,
+              files: 60,
+            },
+          });
+      }
+      return answer(url);
+    }),
+  );
+}
+
+/** The file view of cmd/web/main.go in a scroller of `height`, once its tree has drawn. */
+async function fileView(viewport: number, column: number, height: number) {
+  await page.viewport(viewport, height);
+  withFileView();
+  location.hash = "#/gitlet/repos/web?path=cmd%2Fweb%2Fmain.go";
+  const main = mountScrolled(<RepositoryPage repo="web" />, column, height);
+  await eventually(() => {
+    expect(document.querySelector("#L400")).toBeTruthy();
+    expect(document.querySelector(".code-latest__subject")).toBeTruthy();
+  });
+  return main;
+}
+
+const treeDrawn = () =>
+  eventually(() => {
+    const list = document.querySelector<HTMLElement>(".code-tree__scroll");
+    expect(list?.querySelector('[aria-current="page"]')).toBeTruthy();
+    return list!;
+  });
+
+// A FILE'S TREE SCROLLS ALONE BESIDE THE FILE, sticky in the page's scroller. Mutation: drop the
+// list's `min-block-size: 0` (the pane grows past the view), or `position: sticky`, and this fails.
+test("a file's tree scrolls alone beside the file, at 1440px", async () => {
+  const main = await fileView(1440, 1150, 700);
+  const list = await treeDrawn();
+  const pane = document.querySelector<HTMLElement>(".code-tree")!;
+  expect(list.scrollHeight).toBeGreaterThan(list.clientHeight);
+  const current = list.querySelector('[aria-current="page"]')!.getBoundingClientRect();
+  const view = list.getBoundingClientRect();
+  expect(current.top).toBeGreaterThanOrEqual(view.top - 0.5);
+  expect(current.bottom).toBeLessThanOrEqual(view.bottom + 0.5);
+
+  const card = document.querySelector<HTMLElement>(".code-blob")!;
+  const cardTop = card.getBoundingClientRect().top;
+  main.scrollTop = 2000;
+  await eventually(() => expect(card.getBoundingClientRect().top).toBeLessThan(cardTop - 1000));
+  const step =
+    parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--spacing-4")) || 16;
+  expect(
+    Math.abs(pane.getBoundingClientRect().top - main.getBoundingClientRect().top),
+  ).toBeLessThanOrEqual(step + 1);
+  // STUCK, THE PANE ENDS INSIDE THE VIEW: its list, not the pane, holds the rest.
+  expect(pane.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    main.getBoundingClientRect().bottom + 0.5,
+  );
+
+  const at = main.scrollTop;
+  list.scrollTop = 300;
+  list.dispatchEvent(new Event("scroll"));
+  expect(list.scrollTop).toBeGreaterThan(0);
+  expect(main.scrollTop).toBe(at);
+});
+
+// A FILE'S VIEW HOLDS ITS WIDTH: only the code scrolls sideways, a long name ellipses in its row,
+// and a phone hides the pane until asked, then draws it above the file at half the view. Mutation:
+// the row's name without `min-width: 0`, the phone rule dropped, or the pane drawn unmeasured.
+for (const [viewport, column] of [
+  [640, 608],
+  [1440, 1150],
+] as const) {
+  test(`a file's view holds its width at ${viewport}px`, async () => {
+    const main = await fileView(viewport, column, 800);
+    const view = document.querySelector<HTMLElement>(".code-file-view")!;
+    const card = document.querySelector<HTMLElement>(".code-blob")!;
+    const check = () => {
+      expect(overflowing(view)).toEqual([]);
+      const content = document.querySelector(".crewlet-app-shell__content")!;
+      expect(view.getBoundingClientRect().right).toBeLessThanOrEqual(
+        content.getBoundingClientRect().right + 0.5,
+      );
+      expect(sidewaysScrollers(card.querySelector(".code-source")!)).toEqual([
+        expect.stringContaining("code-source"),
+      ]);
+      expect(sidewaysScrollers(card)).toEqual([]);
+      const frame = card.getBoundingClientRect();
+      for (const el of card.querySelectorAll<HTMLElement>(".code-blob__actions > *")) {
+        expect(el.getBoundingClientRect().right).toBeLessThanOrEqual(frame.right + 0.5);
+      }
+    };
+    if (viewport === 1440) {
+      const list = await treeDrawn();
+      const long = [...list.querySelectorAll<HTMLElement>(".code-ftree__name")].find((n) =>
+        n.textContent?.startsWith("a-file-named"),
+      )!;
+      expect(long.scrollWidth).toBeGreaterThan(long.clientWidth);
+      expect(long.getClientRects()).toHaveLength(1);
+      check();
+      return;
+    }
+    expect(document.querySelector(".code-tree")).toBeNull();
+    // A HIDDEN PANE NEVER MOUNTED, so it asked for no directory.
+    const treeReads = vi
+      .mocked(fetch)
+      .mock.calls.filter(([u]) => String(u).includes("/query/code_tree?"));
+    expect(treeReads).toEqual([]);
+    check();
+    await page.getByRole("button", { name: "Show the file tree" }).click();
+    const list = await treeDrawn();
+    expect(list.clientHeight).toBeLessThanOrEqual(main.clientHeight / 2 + 1);
+    const pane = document.querySelector<HTMLElement>(".code-tree")!;
+    expect(pane.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      card.getBoundingClientRect().top,
+    );
+    check();
+  });
+}
+
+// GO TO FILE'S LIST STAYS IN THE VIEWPORT from the pane too. Mutation: a fixed width on the
+// pane's field, and this fails.
+test("Go to file's list stays inside the viewport from a file's tree at 1440px", async () => {
+  await fileView(1440, 1150, 800);
+  await treeDrawn();
+  await page.getByRole("combobox", { name: "Go to file" }).fill("main");
+  const list = await eventually(() => {
+    const found = document.querySelector<HTMLElement>("[role=listbox]");
+    expect(found?.textContent).toContain("cmd/web/main.go");
+    return found!;
+  });
+  const box = list.getBoundingClientRect();
+  expect(box.left).toBeGreaterThanOrEqual(0);
+  expect(box.right).toBeLessThanOrEqual(window.innerWidth);
+});
+
+// A PICKED LINE KEEPS THE PLAIN LINE'S BOX: the tint and the run's menu change no
+// height, and the menu sits in the gutter left of the number. Mutation: put the
+// trigger in the line's flow, or another ground, and this fails.
+for (const width of [1440, 390]) {
+  test(`a picked line keeps the plain line's box, at ${width}px`, async () => {
+    await page.viewport(width, 900);
+    location.hash = "#/gitlet/repos/web?path=cmd%2Fmain.go&lines=1";
+    mount(<RepositoryPage repo="web" />, width);
+    const trigger = await eventually(() => {
+      const found = document.querySelector<HTMLElement>("#L1 .code-source__gutter button");
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    const picked = document.querySelector<HTMLElement>("#L1")!;
+    const plain = document.querySelector<HTMLElement>("#L3")!;
+    expect(picked.hasAttribute("data-picked")).toBe(true);
+    expect(picked.getBoundingClientRect().height).toBe(plain.getBoundingClientRect().height);
+    const probe = document.createElement("span");
+    probe.style.background = "var(--color-surface-selected)";
+    picked.append(probe);
+    expect(getComputedStyle(picked).backgroundColor).toBe(getComputedStyle(probe).backgroundColor);
+    probe.remove();
+    const number = picked.querySelector(".code-source__number")!.getBoundingClientRect();
+    const box = trigger.getBoundingClientRect();
+    expect(box.right).toBeLessThanOrEqual(number.left + 0.5);
+    expect(box.left).toBeGreaterThanOrEqual(picked.getBoundingClientRect().left - 0.5);
   });
 }

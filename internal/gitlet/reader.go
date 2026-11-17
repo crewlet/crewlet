@@ -67,8 +67,14 @@ type Reader struct {
 	// refsScanned and activeCounted bound a refs listing's scan and its active
 	// count: MaxRefsScanned and MaxActiveBranchesCounted, or a test's.
 	refsScanned, activeCounted int
+	// pushesScanned bounds a narrowed push history's page: MaxPushesScanned, or a test's.
+	pushesScanned int
 	// spokenScanned bounds a live state's conversation side: MaxSpokenScanned, or a test's.
 	spokenScanned int
+	// standingCounted bounds a standing count's places a state: MaxStandingCounted, or a test's.
+	standingCounted int
+	// queueCounted bounds a queue read's and a counts read's walks: MaxQueueCounted, or a test's.
+	queueCounted int
 }
 
 // ReaderOptions configure a reader.
@@ -107,13 +113,16 @@ func NewReader(o ReaderOptions) (*Reader, error) {
 	r := &Reader{log: o.Log, limits: o.Limits, roster: o.Roster, now: o.Now, pageRows: MaxSnapshotItems,
 		pageBytes: MaxPageBytes, tipWindow: MaxTipLandings, refsScanned: MaxRefsScanned,
 		activeCounted: MaxActiveBranchesCounted, spokenScanned: MaxSpokenScanned}
+	r.pushesScanned = MaxPushesScanned
 	if r.limits == nil {
 		r.limits = DefaultLimits
 	}
+	r.standingCounted = MaxStandingCounted
 	if r.now == nil {
 		r.now = time.Now
 	}
 	r.reposSized, r.lastPushWalk = MaxReposSized, MaxLastPushWalk
+	r.queueCounted = MaxQueueCounted
 	return r, nil
 }
 
@@ -1260,7 +1269,7 @@ func scanPush(s scanner) (PushRow, int, error) {
 	if err := s.Scan(&row.PushID, &row.RepoID, &position, &at, &row.Actor, &row.ActorKind,
 		&row.ActorSeat, &via, &row.Run.TurnID, &row.Run.WorkBackend, &row.Run.WorkKey, &row.Run.Model,
 		&row.Run.RunID, &row.Run.Harness, &row.Node, &row.Atomic, &commands, &row.PackID, &row.PackBytes,
-		&introduced, &row.IntroducedCount, &received); err != nil {
+		&introduced, &row.IntroducedCount, &row.Offered, &received); err != nil {
 		return PushRow{}, 0, err
 	}
 	if row.Via = PushVia(via); !row.Via.Valid() {
@@ -1850,6 +1859,9 @@ func (q ReadQuery) validate() error {
 	case q.FindingPaths && (q.Part != "" || q.DetailOnly || q.Brief || len(q.FindingIDs) > 0):
 		return fmt.Errorf("%w: finding_paths: a change's findings by path are a page of their own, "+
 			"named by no part, detail_only, brief or finding_ids", ErrInvalid)
+	case q.Viewed && (q.Part != "" || q.DetailOnly || q.Brief || len(q.FindingIDs) > 0 || q.FindingPaths):
+		return fmt.Errorf("%w: viewed: a change's viewed files are a page of their own, named by no part, "+
+			"detail_only, brief, finding_ids or finding_paths", ErrInvalid)
 	}
 	switch {
 	case q.Kind == ReadInbox && q.Repo != "":
@@ -1935,6 +1947,11 @@ func (q ReadQuery) validate() error {
 			return err
 		}
 	}
+	if q.PushFilter != nil {
+		if err := q.validatePushFilter(); err != nil {
+			return err
+		}
+	}
 	bound := map[ReadKind]int{ReadRepos: MaxReposPerPage, ReadPushes: MaxPushesPerPage,
 		ReadRefs: MaxRefsPerPage, ReadChanges: MaxChangesPerPage, ReadChange: q.changePageMax(),
 		ReadChangeRouting: MaxRoutedRecordsPerPage, ReadReviews: MaxReviewsPerPage,
@@ -1953,11 +1970,11 @@ func (q ReadQuery) validate() error {
 }
 
 // kindOwnedField refuses a field that one kind a principal reads alone reads
-// (a commit, an inbox, an inbox page's cards, a history page's commits, the
+// (a commit, a queue read's trains, an inbox, an inbox page's cards, a history page's commits, the
 // narrowing of a listing of repositories to the ones a rule protects, the
 // parts a counts read names, a repository's facts, a listing of changes'
-// order, a change's findings by path) on a read of any other
-// kind, the engine's own reads included ([ReadQuery.validate]).
+// order, a change's findings by path, a change's viewed files) on a read of
+// any other kind, the engine's own reads included ([ReadQuery.validate]).
 func (q ReadQuery) kindOwnedField() error {
 	switch {
 	case q.Protected && q.Kind != ReadRepos:
@@ -1969,6 +1986,8 @@ func (q ReadQuery) kindOwnedField() error {
 		return fmt.Errorf("%w: cards: only a listing of changes carries each change's card", ErrInvalid)
 	case q.FindingPaths && q.Kind != ReadChange:
 		return fmt.Errorf("%w: finding_paths: only a change read counts its findings by path", ErrInvalid)
+	case q.Viewed && q.Kind != ReadChange:
+		return fmt.Errorf("%w: viewed: only a change read answers the files its asker marked viewed", ErrInvalid)
 	case q.Inbox != nil && q.Kind != ReadInbox:
 		return fmt.Errorf("%w: inbox: only an inbox read names whose inbox it reads", ErrInvalid)
 	case len(q.NoticeCards) > 0 && q.Kind != ReadNoticeCards:
@@ -1977,6 +1996,9 @@ func (q ReadQuery) kindOwnedField() error {
 	case q.ChangeSort != "" && q.Kind != ReadChanges:
 		return fmt.Errorf("%w: change_sort: only a listing of changes is ordered by when its changes were "+
 			"opened or last moved", ErrInvalid)
+	case q.Readiness != "" && q.Kind != ReadChanges:
+		return fmt.Errorf("%w: readiness: only a listing of changes is narrowed to where their merge stands",
+			ErrInvalid)
 	case q.RefListing != nil && q.Kind != ReadRefs:
 		return fmt.Errorf("%w: ref_listing: only a refs listing is ordered, narrowed or read in detail",
 			ErrInvalid)
@@ -1985,6 +2007,8 @@ func (q ReadQuery) kindOwnedField() error {
 			ErrInvalid)
 	case q.Counts != nil && q.Kind != ReadCounts:
 		return fmt.Errorf("%w: counts: only a counts read names the parts it counts", ErrInvalid)
+	case q.PushFilter != nil && q.Kind != ReadPushes:
+		return fmt.Errorf("%w: push_filter: only a push history is narrowed to one pusher or a window", ErrInvalid)
 	case len(q.DayBounds) > 0 && q.Kind != ReadRepos && q.Kind != ReadRepo && q.Kind != ReadPushes:
 		return fmt.Errorf("%w: day_bounds: only a listing of repositories, a read of one and a push history "+
 			"count pushes by the asker's days", ErrInvalid)
@@ -1996,6 +2020,8 @@ func (q ReadQuery) kindOwnedField() error {
 	case q.RepoSort != "" && q.Kind != ReadRepos:
 		return fmt.Errorf("%w: repo_sort: only a listing of repositories is ordered by name or last push",
 			ErrInvalid)
+	case q.Trains && q.Kind != ReadQueue:
+		return fmt.Errorf("%w: trains: only a queue read answers its trains and ejections", ErrInvalid)
 	}
 	return nil
 }
@@ -2938,18 +2964,14 @@ const detailRowSQL = `SELECT drop_epoch, expunge_id, expunge_request, expunge_re
 // only approximates the order (replicated 0084). The history is the
 // repository's contents, so an asker that may not read the repository is
 // answered [ErrNotPermitted], and one whose ceiling may not [ErrAboveCeiling],
-// as [Reader.repo] answers them.
+// as [Reader.repo] answers them. Each row names the change its record merged
+// ([PushRow.Change]); a narrowed history is [Reader.pushesNarrowed]'s.
 func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
-	id, found, err := claimIn(ctx, tx, q.Repo)
+	repo, err := readableIn(ctx, tx, q.Repo, q.Asker, q.CeilingSeat, chart)
 	if err != nil {
 		return err
 	}
-	if !found {
-		return fmt.Errorf("%w: %s", ErrRepoNotFound, q.Repo)
-	}
-	if err = mayReadIn(ctx, tx, id, q.Asker, q.CeilingSeat, chart); err != nil {
-		return err
-	}
+	id := repo.ref.ID
 	if q.Push != "" {
 		// ONE PUSH, WHOLE, by its key — and only one this repository's
 		// history holds: another repository's push, or one past
@@ -2961,7 +2983,13 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 			return fmt.Errorf("gitlet: read %s's push %s: %w", q.Repo, q.Push, err)
 		}
 		if found && row.RepoID == id {
-			out.Pushes = []PushRow{row}
+			rows := []PushRow{row}
+			var named mergedNames
+			named.add(0, row)
+			if _, err = named.name(ctx, tx, repo.ref, rows); err != nil {
+				return err
+			}
+			out.Pushes = rows
 		}
 		return nil
 	}
@@ -2973,12 +3001,15 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		}
 		out.PushDays = days[id]
 	}
+	if q.PushFilter != nil {
+		return r.pushesNarrowed(ctx, tx, q, repo.ref, out)
+	}
 	limit := limitOr(q.Limit, defaultPushLimit)
 	var rows *sql.Rows
 	if q.Cursor == "" {
 		rows, err = tx.QueryContext(ctx, pushesFirstSQL, id, limit)
 	} else {
-		position, pushID, ok := cutLogCursor(q.Cursor)
+		position, pushID, ok := cutHistoryCursor(q.Cursor)
 		if !ok {
 			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 		}
@@ -2989,11 +3020,19 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	}
 	defer func() { _ = rows.Close() }()
 	pg := page{maxRows: limit, maxB: r.pageBytes}
+	var (
+		named   mergedNames
+		charges []int
+	)
 	for rows.Next() {
-		row, commands, err := scanPush(rows)
-		if err != nil {
+		var (
+			row      PushRow
+			commands int
+		)
+		if row, commands, err = scanPush(rows); err != nil {
 			return fmt.Errorf("gitlet: read %s's pushes: %w", q.Repo, err)
 		}
+		named.add(len(out.Pushes), row)
 		// A ROW IN BRIEF IS CHARGED THE ROW IT READ — every command and
 		// every introduced id, read and decoded whole to be cut and counted —
 		// or what it sends where that is the larger: a page held to what it
@@ -3007,12 +3046,28 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 			charge = max(charge, row.encodedBytes(row.commandsBytes()))
 		}
 		out.Pushes = append(out.Pushes, row)
+		charges = append(charges, charge)
 		if pg.add(charge) {
 			out.Next = logCursor(row.Position.Packed(), row.PushID)
 			break
 		}
 	}
-	return rows.Err()
+	if err = rows.Close(); err != nil {
+		return fmt.Errorf("gitlet: read %s's pushes: %w", q.Repo, err)
+	}
+	if err = rows.Err(); err != nil {
+		return fmt.Errorf("gitlet: read %s's pushes: %w", q.Repo, err)
+	}
+	grew, err := named.name(ctx, tx, repo.ref, out.Pushes)
+	if err != nil {
+		return err
+	}
+	if kept := recut(charges, grew, limit, r.pageBytes); kept < len(out.Pushes) {
+		out.Pushes = out.Pushes[:kept]
+		last := out.Pushes[kept-1]
+		out.Next = logCursor(last.Position.Packed(), last.PushID)
+	}
+	return nil
 }
 
 // refsListing serves one page of a repository's LIVE refs under a prefix, by
@@ -4686,7 +4741,7 @@ const (
 		ORDER BY retired_position, pack_id, part LIMIT ?`
 	pushColumns = `push_id, repo_id, position, at, actor, actor_kind, actor_seat, via, turn_id,
 		work_backend, work_key, model, run_id, harness, node, atomic, commands, pack_id, pack_bytes,
-		introduced, introduced_count, received_at`
+		introduced, introduced_count, offered, received_at`
 	pushSQL        = `SELECT ` + pushColumns + ` FROM code_pushes WHERE push_id = ?`
 	pushesFirstSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ?
 		ORDER BY position DESC, push_id DESC LIMIT ?`

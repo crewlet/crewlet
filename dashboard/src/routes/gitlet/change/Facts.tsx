@@ -15,12 +15,13 @@ import { Card, EmptyValue, Stack, Tag } from "@crewlethq/ui";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { changePath, codeReasonPhrase, commitPath, refName, shortOID } from "~/lib/code.ts";
+import { codeReasonPhrase, commitPath, refName, shortOID } from "~/lib/code.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type { CodeChangeDetail, CodeRevisionRow } from "~/protocol/index.ts";
+import { changeHref, type ChangeAt } from "../paths.ts";
 import { Byline, Face, ShaChip } from "../ui.tsx";
 import { TimelineCard, TimelineList } from "./Timeline.tsx";
 import { CHANGE_POLL_MS } from "./reads.ts";
@@ -31,7 +32,7 @@ import "~/styles/gitlet.css";
  * and when, its head with its copy, the facts its home recorded, and the way
  * to its files and to what it changed since the revision before it.
  */
-export function Commits({
+export function Revisions({
   change,
   revisions,
 }: {
@@ -40,8 +41,8 @@ export function Commits({
 }) {
   const now = useNow();
   if (revisions.length === 0) return <p className="muted">No revision is recorded yet.</p>;
-  const files = (at: Record<string, string>) =>
-    href(changePath(change.repo, change.number), { tab: "files", ...at });
+  const files = (at: Omit<ChangeAt, "tab">) =>
+    changeHref(change.repo, change.number, { tab: "files", ...at });
   return (
     <TimelineList label="Revisions">
       {revisions.map((r) => (
@@ -60,14 +61,11 @@ export function Commits({
               <a className="t-link" href={href(commitPath(change.repo, r.head))}>
                 Its head commit →
               </a>
-              <a
-                className="t-link"
-                href={files(r.n === change.revision ? {} : { rev: String(r.n) })}
-              >
+              <a className="t-link" href={files(r.n === change.revision ? {} : { rev: r.n })}>
                 Its files →
               </a>
               {r.n > 1 && (
-                <a className="t-link" href={files({ rev: String(r.n), since: String(r.n - 1) })}>
+                <a className="t-link" href={files({ rev: r.n, since: r.n - 1 })}>
                   What it changed since revision {r.n - 1} →
                 </a>
               )}
