@@ -928,6 +928,19 @@ func (f ReviewerFace) encodedBytes() int {
 	if f.Reason != "" {
 		n += field("reason", stringBytes(string(f.Reason)), false)
 	}
+	return n + ownedPathsBytes(f.OwnedPaths, f.OwnedPathsOmitted)
+}
+
+// ownedPathsBytes is the length of an ask's globs and their count as a row or a face encodes them,
+// each where set, neither first.
+func ownedPathsBytes(paths []string, omitted int) int {
+	n := 0
+	if len(paths) > 0 {
+		n += field("owned_paths", stringsBytes(paths), false)
+	}
+	if omitted != 0 {
+		n += field("owned_paths_omitted", intBytes(int64(omitted)), false)
+	}
 	return n
 }
 
@@ -1085,7 +1098,11 @@ func (f RevisionFactsRow) encodedBytes() int {
 	if !f.Classes.IsZero() {
 		n += field("classes", f.Classes.encodedBytes(), false)
 	}
-	n += field("node", stringBytes(f.Node), false) + field("owners_digest", stringBytes(f.OwnersDigest), false)
+	n += field("node", stringBytes(f.Node), false)
+	if !f.MeasuredAt.IsZero() {
+		n += field("measured_at", timeBytes(f.MeasuredAt), false)
+	}
+	n += field("owners_digest", stringBytes(f.OwnersDigest), false)
 	if len(f.RequestedOwners) > 0 {
 		owners := 2
 		for i, o := range f.RequestedOwners {
@@ -1147,7 +1164,7 @@ func (r ReviewerRow) encodedBytes() int {
 	if !r.At.IsZero() {
 		n += field("at", timeBytes(r.At), false)
 	}
-	return n
+	return n + ownedPathsBytes(r.OwnedPaths, r.OwnedPathsOmitted)
 }
 
 // encodedBytes is the length of the comment's JSON encoding.

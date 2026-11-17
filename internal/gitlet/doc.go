@@ -246,7 +246,13 @@
 // owners on its chart, asks those who may review (code_reviewers, reason
 // [ReviewerPathOwner]), skips the rest by [SkipReason], and stamps whom else
 // the facts concern, so the apply judges nothing again; code_revision_facts
-// keeps one row a revision, and a change read's revisions carry it.
+// keeps one row a revision, and a change read's revisions carry it. Since
+// [OwnedPathsVersion] it carries when its home read the facts
+// ([Revise.MeasuredAt]) and each matched owner's globs ([MatchedOwner], none
+// where the revision touches all); the writer stamps the globs each ask is for
+// ([OwnerAsk], code_reviewers.owned_paths), and the facts keep each owner's
+// first glob and how many more ([TouchedOwner]), which the merge gate's
+// sentence names.
 //
 // A CHANGE'S MERGE READINESS IS JUDGED, NEVER TRUSTED (readiness.go): one pure
 // [ReadinessOf] over the rows one snapshot holds and the chart one epoch holds

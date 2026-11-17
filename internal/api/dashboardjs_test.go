@@ -2683,7 +2683,12 @@ const (
 	// 6631.3 KiB (6,790,461 bytes), 12,721 over main: 6632 KiB.
 	// A comment's draft beside its pin, its picture fitted in a well, on kit 0.146.0: 6633.1 KiB
 	// (6,792,312 bytes), 1,851 over main: 6634 KiB.
-	treeBudget = 5<<20 + 1514<<10
+	// A repository's branches and tags as tables, on kit 0.146.0: 6652.0 KiB (6,811,622 bytes), 19,310 over main: 6652 KiB.
+	// Codex's, Muse Code's and Kimi Code's vendor marks, on kit 0.147.0: 6643.3 KiB
+	// (6,802,790 bytes), 10,478 over main: 6644 KiB.
+	// The model alias versions and harness marks train, on kit 0.147.0: 6662.4 KiB
+	// (6,822,314 bytes), 10,692 over main: 6663 KiB.
+	treeBudget = 5<<20 + 1543<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

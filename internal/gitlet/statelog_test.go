@@ -58,9 +58,10 @@ var suiteAt = time.Unix(1_700_000_000, 0).UTC()
 // production encoder, which stamps it at the field's version: each a seat's
 // write made for the person's seat founder — a routing's beside its agent
 // actor on a dequeue, a push entry's routing's on the change the push merges,
-// an enqueue's own, and a seat's push entry's own. A new op's row is a record
-// of it: founder's viewed marks on their own subject, and a repository's
-// viewed key on its own.
+// an enqueue's own, and a seat's push entry's own; or a revise on its change's
+// subject carrying one of gitlet.OwnedPathsVersion's fields alone. A new op's
+// row is a record of it: founder's viewed marks on their own subject, and a
+// repository's viewed key on its own.
 func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 	const repo = "0190f3c4-0000-7000-8000-00000000c0de"
 	founder := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}
@@ -73,6 +74,14 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 	entry := gitlet.PushEntry{PushID: "push-carrying", Principal: seat, Via: gitlet.ViaEngine, Node: "suite-node",
 		Commands:   []gitlet.Command{{Ref: mainRef, Old: oidOf("A"), New: oidOf("B"), Result: gitlet.ResultOK}},
 		ReceivedAt: suiteAt, Day: suiteAt.Format(time.DateOnly)}
+	const change = "0190f3c4-0000-7000-8000-0000000000c1"
+	revise := gitlet.Revise{RepoID: repo, ChangeID: change, N: 1, HeadOID: oidOf("B"), TargetRef: mainRef,
+		TargetOID: oidOf("A"), TargetPosition: statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 2},
+		BaseOID: oidOf("A"), BaseTree: oidOf("the tree of A"), HeadTree: oidOf("the tree of B"),
+		Touched: []string{"upload/retry.go"}, Node: "suite-node", OwnersDigest: gitlet.OwnersDigest(nil),
+		HumanPathsDigest: oidOf("human paths")}
+	platform := gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Platform"}
+	lead := gitlet.Reviewer{Handle: "plat-lead", Kind: gitlet.PartyAgent}
 	var (
 		op      gitlet.OpKind
 		payload any
@@ -95,6 +104,20 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 	case "PushEntry.WorkingFor":
 		entry.WorkingFor = founder
 		op, payload = gitlet.OpPush, gitlet.PushBatch{RepoID: repo, Pushes: []gitlet.PushEntry{entry}}
+	case "Revise.MeasuredAt":
+		revise.MeasuredAt = suiteAt
+		op, payload = gitlet.OpRevise, revise
+	case "MatchedOwner.Paths":
+		revise.RequestedOwners = []gitlet.MatchedOwner{{Owner: platform, Paths: []string{"upload/**"}}}
+		op, payload = gitlet.OpRevise, revise
+	case "OwnerAsk.Paths":
+		revise.Asked = []gitlet.OwnerAsk{{Reviewer: lead, Paths: []string{"upload/**"}}}
+		op, payload = gitlet.OpRevise, revise
+	case "OwnerAsk.PathsOmitted":
+		// A COUNT ALONE, without the globs every ask this build stamps names it beside: carrying exactly
+		// the one field, the record is stamped by its own path.
+		revise.Asked = []gitlet.OwnerAsk{{Reviewer: lead, PathsOmitted: 1}}
+		op, payload = gitlet.OpRevise, revise
 	case "RecordEnvelope.Op viewed":
 		key := gitlet.ViewedKey(strings.Repeat("ab", gitlet.ViewedKeyBytes))
 		op, payload = gitlet.OpViewed, gitlet.ViewedMarks{Handle: "founder",
@@ -107,6 +130,10 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 			Key: gitlet.ViewedKey(strings.Repeat("ab", gitlet.ViewedKeyBytes))}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
+	}
+	// A revise is on its change's subject, scoped to the repository and the change, as the writer's is.
+	if op == gitlet.OpRevise {
+		subject, scope = gitlet.ChangeSubject(change), gitlet.Scope{gitlet.RepoPath(repo), gitlet.ChangePath(change)}
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

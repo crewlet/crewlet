@@ -3041,7 +3041,8 @@ carries its `fix`.
 
 ```json
 {"source": "models.dev", "fetched_at": "…", "provider": "anthropic",
- "aliases": [{"id": "sonnet", "name": "Sonnet", "detail": "The harness's latest Sonnet"}],
+ "aliases": [{"id": "sonnet", "name": "Sonnet", "detail": "The harness's latest Sonnet",
+   "model": "claude-sonnet-5-5", "version": "5.5"}],
  "models": [{"id": "claude-opus-5-5", "name": "Claude Opus 5.5", "family": "claude-opus",
    "released": "2026-…", "tool_call": true}],
  "docs_url": "https://code.claude.com/docs/en/model-config"}
@@ -3052,7 +3053,9 @@ key: no credential leaves the engine to name models, and whether a plan reaches
 one is what the test call says. Claude Code reads provider `anthropic`, Codex
 `openai`, Gemini CLI `google` and Grok `xai`; OpenCode and Pi name their
 `provider` and are offered `<provider>/<id>`. Every other built-in harness names
-its own models, and is answered its aliases and page with `"source": "none"`. A copy
+its own models, and is answered its aliases and page with `"source": "none"`. An
+alias's `model` and `version` are what it resolves to on the vendor's own service,
+from the harness profile, and are absent where the profile does not know. A copy
 is kept for a day and revalidated; a catalogue that cannot be read keeps the
 last copy and says how old it is in `reason`, and with no copy the answer is
 `"source": "none"` with `models: []` and the `reason`. `400 bad_params` for an
@@ -10250,7 +10253,8 @@ the same vocabulary:
 
 `?cards=true` on `GET /gitlet/changes` answers each listed change's `card`:
 `comments`, `reviews` and `changes_requested`; `reviewers` (at most 8, each
-`handle`, `kind`, `verdict`, `verdict_revision`, `asked` and `reason`) and
+`handle`, `kind`, `verdict`, `verdict_revision`, `asked`, `reason`,
+`owned_paths` and `owned_paths_omitted`) and
 `reviewers_omitted`; `checks`, a check rollup of its head for its target
 (`state`, `counts`, `required`, `required_passed`, `last_ended`,
 `running_since`, `failing`, `failing_more`, `more`), absent where no attempt is
@@ -10259,6 +10263,16 @@ change's newest queue entry was put out in the last day. An older data node
 refuses `cards` and another answers; a card never reads as zeros where it was
 not answered. `cards=` other than `true` or `false` is `400 bad_params`, and
 `cards=true` on any other question is refused naming it.
+
+Each reviewer row of `?part=reviewers` carries `owned_paths` where a
+revision's facts asked the reviewer as a path owner: the globs of every owner
+resolving to them that the revision touched, sorted, at most 32 and 1 KiB of
+them, and `owned_paths_omitted`, how many more. An ask by name carries none,
+and asking a path owner again by name drops them. A card's face carries the
+same where that ask waits, was answered by their review or ended with the
+change. Each revision's `facts` carry `measured_at`, when its home read them
+by its own clock, to the microsecond. Facts and asks recorded before this
+build carry none of them, and neither does an older data node's answer.
 
 `?part=finding_paths` on `GET /gitlet/repos/{name}/changes/{n}` answers
 `finding_paths`: the change's findings counted by `path`, `state` and

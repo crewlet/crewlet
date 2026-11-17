@@ -42,6 +42,34 @@ func TestClaudeCodesLevelsFollowItsModel(t *testing.T) {
 	}
 }
 
+// EVERY CLAUDE CODE ALIAS NAMES THE MODEL IT RESOLVES TO, in its own family, and
+// that model takes the alias's levels: the levels table holds the current models
+// at every level and narrows only older ones, so an alias read as an old model fails.
+func TestClaudeCodesAliasesNameTheModelsTheyFollow(t *testing.T) {
+	t.Parallel()
+	p, ok := Builtin("claude-code")
+	if !ok {
+		t.Fatal("no claude-code profile")
+	}
+	if len(p.ModelAliases) == 0 {
+		t.Fatal("claude-code offers no aliases")
+	}
+	for _, a := range p.ModelAliases {
+		if a.Model == "" || a.Version == "" {
+			t.Errorf("%s: model %q, version %q; Claude Code's model page names both", a.ID, a.Model, a.Version)
+			continue
+		}
+		if !strings.HasPrefix(a.Model, "claude-"+a.ID+"-") {
+			t.Errorf("%s resolves to %q, outside its own family", a.ID, a.Model)
+		}
+		follows, _ := p.EffortLevels(a.ID)
+		levels, narrowed := p.EffortLevels(a.Model)
+		if narrowed || !slices.Equal(levels, follows) {
+			t.Errorf("%s resolves to %q, which takes %v (narrowed %v) where the alias takes %v", a.ID, a.Model, levels, narrowed, follows)
+		}
+	}
+}
+
 // A REFUSAL SAYS WHAT THE HARNESS TAKES, and a harness with no setting why it has none.
 func TestAnEffortProblemSaysWhatTheHarnessTakes(t *testing.T) {
 	t.Parallel()

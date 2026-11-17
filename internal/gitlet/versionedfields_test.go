@@ -23,6 +23,8 @@ func TestAClosedCodeRecordVersionGainsNoField(t *testing.T) {
 	closed := map[int][]string{
 		gitlet.WorkingForVersion: {"ChangeRouting.WorkingFor", "Mutation.WorkingFor",
 			"PushEntry.Routing.WorkingFor", "PushEntry.WorkingFor"},
+		gitlet.OwnedPathsVersion: {"MatchedOwner.Paths", "OwnerAsk.Paths", "OwnerAsk.PathsOmitted",
+			"Revise.MeasuredAt"},
 		gitlet.ViewedVersion: {"RecordEnvelope.Op viewed", "RecordEnvelope.Op viewed_key"},
 	}
 	got := map[int][]string{}
