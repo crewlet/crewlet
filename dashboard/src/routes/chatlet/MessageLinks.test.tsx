@@ -16,7 +16,8 @@ import { MAX_IN_FLIGHT_QUERIES } from "~/contract/wire.ts";
 import { SERVED } from "~/test/chatAccess.ts";
 
 import { mountInFrame } from "./frameKit.tsx";
-import { MessageUnfurls } from "./MessageLinks.tsx";
+import { MessageUnfurls, unfurlSource } from "./MessageLinks.tsx";
+import { render } from "@testing-library/react";
 
 afterEach(() => {
   cleanup();
@@ -57,4 +58,17 @@ test("a screenful of previews asks one wave at a time, and the next as each answ
     while (pending.length > 0) pending.shift()!();
   });
   await waitFor(() => expect(asked()).toBe(messages));
+});
+
+// AN ARTIFACT'S PREVIEW CARRIES ITS KIND'S GLYPH (the engine sends the kind as
+// `meta`); every one was drawn with a design's palette.
+test("an artifact's preview is marked with its own kind's glyph", () => {
+  const glyph = (meta: string) =>
+    render(<>{unfurlSource("artifact", meta).mark}</>).container.innerHTML;
+  expect(glyph("slides")).not.toBe(glyph("design"));
+  expect(glyph("doc")).toBe(
+    render(<>{unfurlSource("artifact", "doc").mark}</>).container.innerHTML,
+  );
+  expect(glyph("doc")).not.toBe(glyph("sheet"));
+  expect(unfurlSource("artifact", "doc").name).toBe("Artifacts");
 });
