@@ -147,7 +147,7 @@ func (t *codeMarkInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if bad != "" {
 		return failed(bad), nil
 	}
-	seen, bad := markFloor(args, topics.CodeLogStream, "code log", "code")
+	seen, bad := markFloor(args, topics.CodeLogStream, "code log", "pass the `position` of a code notice")
 	if bad != "" {
 		return failed(bad), nil
 	}
@@ -179,15 +179,15 @@ func (t *codeMarkInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return answer, nil
 }
 
-// markFloor is a mark's `seen` argument as a position on stream — the log of
-// the domain whose notices the mark names, called logName in a refusal, whose
-// notices are kind's — the zero position where the call names none, or why it
-// is not one. ONE PARSER FOR BOTH INBOX TOOLS (mark_inbox and code_mark_inbox),
+// markFloor is a mark's `seen` argument as a position on stream, the log of
+// the domain whose notices the mark names, called logName in a refusal that
+// ends with hint, what to pass instead: the zero position where the call names
+// none, or why it is not one. ONE PARSER FOR BOTH INBOX TOOLS (mark_inbox and code_mark_inbox),
 // since the floor is the same claim over either log. A position on another
 // log is refused here rather than waited for: a coordinate on one domain's log
 // says nothing of how far another's was read, and each writer would refuse it
 // anyway (gitlet.MarkWrite.Validate, worklet.Writer.MarkInbox).
-func markFloor(args map[string]any, stream, logName, kind string) (statelog.Position, string) {
+func markFloor(args map[string]any, stream, logName, hint string) (statelog.Position, string) {
 	raw := strings.TrimSpace(argString(args, "seen"))
 	if raw == "" {
 		return statelog.Position{}, ""
@@ -197,8 +197,8 @@ func markFloor(args map[string]any, stream, logName, kind string) (statelog.Posi
 		return statelog.Position{}, "seen: " + err.Error()
 	}
 	if at.Stream != stream {
-		return statelog.Position{}, fmt.Sprintf("seen: %s is a position on another log than the %s "+
-			"(%s) — pass the `position` of a %s notice", raw, logName, stream, kind)
+		return statelog.Position{}, fmt.Sprintf("seen: %s is a position on another log than the %s (%s): %s",
+			raw, logName, stream, hint)
 	}
 	return at, ""
 }
@@ -220,6 +220,8 @@ func markRefused(tool string, res gitlet.MarkResult) tools.Result {
 	case gitlet.MarkInvalid:
 		return refusedBy(tools.RefusalInvalid, cause, said+" Change the arguments — the same ones are refused "+
 			"again.")
+	case gitlet.MarkEnded:
+		return refusedBy(tools.RefusalConflict, cause, said+" That change takes no viewed marks now.")
 	case gitlet.MarkBusy, gitlet.MarkUnavailable:
 		return refusedBy(tools.RefusalUnavailable, cause, said+" Nothing was written; make the same call again "+
 			"— it is the same write.")
