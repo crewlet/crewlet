@@ -14,6 +14,7 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
   useLayoutEffect,
   useMemo,
@@ -33,6 +34,7 @@ import {
   type StatusFilter,
 } from "~/lib/seatLive.ts";
 import { sameValue } from "~/protocol/equal.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
 
 /** Whether two readings of a seat say the same. Its org entry is compared by identity. */
 function sameReading(a: SeatLive, b: SeatLive): boolean {
@@ -186,4 +188,13 @@ export function useSeatDimmed(): (view: Partial<SeatRef> | undefined) => boolean
     }
     return !kept.has(view.saved?.handle ?? view.handle);
   };
+}
+
+/** A running seat's look as the engine serves it, by handle: what an unauthored part is drawn as. */
+export type ServedLook = (handle: string) => AgentAvatar | null | undefined;
+
+/** The [ServedLook] of the running chart; nothing before the chart has arrived. */
+export function useServedLook(): ServedLook {
+  const index = useLiveValue((live) => live?.index ?? null);
+  return useCallback((handle: string) => index?.byHandle.get(handle)?.avatar, [index]);
 }

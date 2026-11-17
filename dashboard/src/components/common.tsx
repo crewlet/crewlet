@@ -84,8 +84,8 @@ export function SeatChip({
    * returns now, which is one spread and cannot be half-applied.
    */
   kind?: SeatKind;
-  /** How an agent is drawn, where the chart holds the seat: also off [seatLookup]. */
-  avatar?: AgentAvatar | null | undefined;
+  /** How an agent is drawn, where the chart holds the seat: also off [seatLookup]. Required. */
+  avatar: AgentAvatar | null | undefined;
   size?: "sm" | "md";
 }) {
   const target = handle || name;

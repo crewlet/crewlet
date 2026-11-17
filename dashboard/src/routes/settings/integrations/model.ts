@@ -263,6 +263,7 @@ export interface IssueAgent {
   handle: string;
   name: string;
   kind: "agent" | "human";
+  avatar: AgentAvatar | null | undefined;
 }
 
 /** A seat on the chart, by its handle: its name and kind, or nothing for a handle it does not have. */
@@ -752,7 +753,7 @@ export function useIntegrations(): Model {
   const seatOf = useCallback<SeatOf>(
     (handle) => {
       const seat = index.byHandle.get(handle);
-      return seat ? { name: seat.name, kind: seat.kind } : undefined;
+      return seat ? { name: seat.name, kind: seat.kind, avatar: seat.avatar } : undefined;
     },
     [index],
   );

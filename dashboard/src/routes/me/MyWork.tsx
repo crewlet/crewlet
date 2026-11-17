@@ -139,6 +139,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PriorityQueue } from "./Priorities.tsx";
 import { listTotal, useOwnQueueCount, useQueueCountRead } from "~/lib/useQueueCount.ts";
 import { ago } from "~/lib/ago.ts";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 /**
  * What the Queue OPENS on, as the list's own parameters.
@@ -906,6 +907,7 @@ export function whoseDayOptions(
   const row = (seat: Seat, group: string): SelectOption => ({
     value: seat.handle,
     label: seat.name,
+    leading: <ChoiceFace seat={seat} />,
     description: describe(seat.handle),
     group,
     // WHAT THE SEARCH MATCHES. A reader types either the name they know or

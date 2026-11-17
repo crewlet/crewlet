@@ -52,7 +52,7 @@ import type {
   PageSummary,
   QueryRefusal,
 } from "~/protocol/index.ts";
-import { PageTags, usePeople, type Who } from "./parts.tsx";
+import { Face, PageTags, usePeople, type Who } from "./parts.tsx";
 import { firstLines } from "./page/body.ts";
 import { PAGES_WINDOW } from "./usePagedPages.ts";
 import { ownerSentence, useSpaceOwners, type SpaceOwners } from "./spaceOwners.ts";
@@ -396,7 +396,16 @@ function pageFacts(detail: PageDetail, who: Who, now: number): Fact[] {
     { label: "Space", value: page.container, path: ["doclet", page.container] },
     // AN AUTHOR OF NOBODY IS THE ENGINE (a sync, the tool-skill catalogue),
     // which is a fact rather than a missing one.
-    { label: "Author", value: author ? who(author).name : "The engine" },
+    {
+      label: "Author",
+      value: author ? (
+        <>
+          <Face handle={author} who={who} /> {who(author).name}
+        </>
+      ) : (
+        "The engine"
+      ),
+    },
     {
       label: "Last saved",
       // THE NEWEST REVISION, never the page's `updated_at`: a comment or a

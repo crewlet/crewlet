@@ -132,7 +132,7 @@ describe("the faint rung is decoration", () => {
       why: "A work item's type mark: a `NamedGlyph` with an `.sr-only` name beside it and a `title`.",
     },
     {
-      selector: ".work-nobody",
+      selector: ".seat-nobody",
       why:
         'The unassigned mark: a UserGlyph with an `.sr-only` "Unassigned". ' +
         "Where the name is also drawn it is a `.muted` span BESIDE the square, " +

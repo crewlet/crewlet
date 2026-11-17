@@ -15,8 +15,8 @@
 
 import { useLayoutEffect, useRef, useState, type HTMLAttributes } from "react";
 import { Callout, Tag, cx, peekClickHandler } from "@crewlethq/ui";
-import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
-import { CalendarGlyph, CircleAlertGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
+import { NobodyFace, SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import { CalendarGlyph, CircleAlertGlyph } from "@crewlethq/icons/glyphs";
 // STILL OURS: a task TYPE's mark is named by the company's own type table as a
 // value, and uilet's glyphs are components. The name -> drawing lookup stays in
 // `~/ui/Icon.tsx`, which is where one change moves every caller at once.
@@ -232,7 +232,8 @@ export function Assignee({
   handle?: string;
   seatName?: (handle: string) => string;
   seatKind?: (handle: string) => SeatKind | undefined;
-  seatAvatar?: (handle: string) => AgentAvatar | null | undefined;
+  /** Required, so no surface draws an agent holder without its character. */
+  seatAvatar: ((handle: string) => AgentAvatar | null | undefined) | undefined;
   size?: "sm" | "md";
   name?: boolean;
   /**
@@ -244,20 +245,11 @@ export function Assignee({
 }) {
   if (!handle) {
     // THE SQUARE IS A FIXED 20px BOX, so the word goes BESIDE it, never in
-    // it: printed inside, "Unassigned" ran 44px past the box's edge, and a
-    // grid measuring whether a column cuts its values short read that as a
-    // squeezed Assignee column and dropped every droppable column in the
-    // table to make room for a word no width could fit.
-    const square = (
-      <span className="work-nobody" title="Unassigned">
-        <UserGlyph size="xs" />
-        {!showName && <span className="sr-only">Unassigned</span>}
-      </span>
-    );
-    if (!showName) return square;
+    // it: a word inside overran the box and read as a squeezed column.
+    if (!showName) return <NobodyFace label="Unassigned" />;
     return (
       <span className="row gap-1" title="Unassigned">
-        {square}
+        <NobodyFace />
         <span className="muted truncate">Unassigned</span>
       </span>
     );
@@ -265,28 +257,14 @@ export function Assignee({
   const label = seatName?.(handle) ?? handle;
   return (
     <span className="row gap-1" title={label}>
-      {/* `decorative` ONLY WHERE THE NAME IS PRINTED BESIDE IT. Ours was
-          `aria-hidden` either way and leant on a `title` on the wrapper, which
-          a screen reader is free to ignore — so the four columns that draw the
-          badge alone announced the assignee as nothing at all.
-
-          AND THE OUTLINE IS THE ONE VARIANT A BADGE HAS: `linkedSeat` drew it
-          from the kind it was handed and this cell could not be handed one,
-          so the same human seat was drawn two ways on the two column sets of
-          ONE grid. A kind the chart does not hold takes the kit's default,
-          the agent's squircle. */}
+      {/* `decorative` ONLY WHERE THE NAME IS PRINTED BESIDE IT; alone, the
+          badge's accessible name is the assignee. A kind the chart does not
+          hold takes the kit's default, the agent's squircle. */}
       <SeatAvatar
         name={label}
         size={size}
         kind={seatKind?.(handle) === "human" ? "human" : "agent"}
-        // A BADGE DRAWN ALONE IS ITS SEAT'S INITIALS. Every agent that chose
-        // no look carries the same one (the original Crewlet, in purple), so a
-        // column of badges with no names beside them drew seven agents as one
-        // picture, and Agent CTO could not be told from Agent SWE without
-        // hovering. The identity rule's initials tell them apart; where the
-        // name is printed beside the badge, the character the seat chose is
-        // decoration and is drawn.
-        avatar={showName ? seatAvatar?.(handle) : undefined}
+        avatar={seatAvatar?.(handle)}
         decorative={showName}
         status={status}
       />

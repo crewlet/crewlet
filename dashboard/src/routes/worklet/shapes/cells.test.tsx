@@ -115,8 +115,14 @@ function mount(
                   row={row}
                   chrome={{ seatName }}
                   seats={[
-                    { handle: "jane", name: "Jane Founder", human: true },
-                    { handle: "maya", name: "Maya Ops", human: true },
+                    { handle: "jane", name: "Jane Founder", kind: "human", avatar: null },
+                    { handle: "maya", name: "Maya Ops", kind: "human", avatar: null },
+                    {
+                      handle: "qa",
+                      name: "QA Engineer",
+                      kind: "agent",
+                      avatar: { character: "flasklet", color: "amber" },
+                    },
                   ]}
                   named
                   readOnly={<span>{seatName(row.assignee!)}</span>}
@@ -141,6 +147,22 @@ function choose(cell: string, option: string) {
 }
 
 describe("a writer", () => {
+  // THE ASSIGNEE PICKER SHOWS WHO: every option wears its face, an agent its
+  // character and a person their initials, and Nobody the empty-assignee mark.
+  test("every assignee option draws its face, and Nobody the empty mark", async () => {
+    mount();
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: /Assignee of ENG-1$/ }));
+    const option = (name: string) => screen.getByRole("menuitemradio", { name });
+    expect(option("Nobody").querySelector(".seat-nobody")).not.toBeNull();
+    const agent = option("QA Engineer").querySelector(".crewlet-avatar")!;
+    expect(agent.classList.contains("crewlet-avatar--character")).toBe(true);
+    expect(agent.classList.contains("crewlet-avatar--hue-amber")).toBe(true);
+    const person = option("Maya Ops").querySelector(".crewlet-avatar")!;
+    expect(person.classList.contains("crewlet-avatar--character")).toBe(false);
+    expect(person.textContent).toBe("MO");
+  });
+
   // CONDITIONAL ON THE ROW AS DRAWN: `if_match` is the version the list read,
   // so a change somebody made a second ago is refused rather than overwritten.
   test("an inline edit carries if_match for each of the three fields", async () => {

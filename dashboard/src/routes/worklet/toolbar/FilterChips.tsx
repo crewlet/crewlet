@@ -30,10 +30,13 @@ export function FilterChips({
   onRemove,
   onClear,
   add,
+  face,
 }: {
   chips: FilterChipSpec[];
   /** Clears one URL key — the one the chip names. */
   onRemove: (param: string) => void;
+  /** A seat's face by handle ("" for nobody), before a chip's value that names one. */
+  face?: (handle: string) => ReactNode;
   onClear: () => void;
   /**
    * The control that adds a narrowing — the Filter menu — drawn after the
@@ -62,6 +65,7 @@ export function FilterChips({
               // A NARROWING THIS SHAPE SETS ASIDE SAYS SO in its own sentence,
               // muted, rather than standing in the row as though it applied.
               value={chip.inert ? `${chip.value ?? ""} (${chip.inert})` : chip.value}
+              valueLeading={chip.seat !== undefined && face ? face(chip.seat) : undefined}
               className={chip.inert ? "work-chip-inert" : undefined}
               onRemove={() => onRemove(chip.param)}
             />
