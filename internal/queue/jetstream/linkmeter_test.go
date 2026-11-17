@@ -130,6 +130,13 @@ func (m *LinkMeter) openedSockets() int {
 	return m.opened
 }
 
+// heldSockets is how many sockets the meter holds open.
+func (m *LinkMeter) heldSockets() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.conns)
+}
+
 // incompressibleMiB is a mebibyte of random bytes: what a compressing link
 // carries whole.
 func incompressibleMiB(t *testing.T) []byte {
@@ -550,4 +557,52 @@ func TestAnExternalDialsMeterCountsWhatCrossesIt(t *testing.T) {
 		return meter.openedSockets() > opened && peer.IsConnected()
 	})
 	crossing(1)
+}
+
+// AN EXTERNAL DIAL CLOSES THE SOCKET ITS CLIENT GAVE UP: nats.go's reconnect
+// loop moves on past a handshake that failed without closing the socket it
+// opened, which a metered dialer would otherwise hold for ever — a
+// descriptor, and one more socket read at every reading, each failed attempt.
+// Three dials through one dialer, as three passes of the loop: the two sockets
+// handed out before are closed at their far end, and the meter holds the one
+// the client has.
+//
+// Mutant: the dialer keeps what it handed out before — the first two stay
+// open, and the meter holds three.
+func TestAnExternalDialClosesTheSocketItsClientGaveUp(t *testing.T) {
+	t.Parallel()
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	accepted := make(chan net.Conn, 3)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { _ = c.Close() })
+			accepted <- c
+		}
+	}()
+	meter := newLinkMeter()
+	t.Cleanup(meter.close)
+	d := newInfoDialer(externalHandshake, meter)
+	servers := make([]net.Conn, 3)
+	for i := range servers {
+		c, err := d.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatalf("dial %d: %v", i, err)
+		}
+		t.Cleanup(func() { _ = c.Close() })
+		servers[i] = <-accepted
+	}
+	for i, s := range servers[:2] {
+		closedWithin(t, s, fmt.Sprintf("the socket of dial %d, which the client gave up", i))
+	}
+	if n := meter.heldSockets(); n != 1 {
+		t.Errorf("the meter holds %d sockets after three dials, want the one the client has", n)
+	}
 }

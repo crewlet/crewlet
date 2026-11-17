@@ -264,6 +264,18 @@ func (d *memberDialer) dialMember(ctx context.Context, network, address string) 
 // dialer opens — the first, every reconnect, and a second connection's —
 // counts into one meter, and a dial that is not the node's data link (a
 // command's) is handed none.
+//
+// # A dial closes the socket the one before it opened
+//
+// One client dials through a dialer, and asks it for a socket only once it has
+// given up the last: at its connect, and at each pass of its reconnect loop.
+// But that loop moves on past a handshake that failed — no INFO within the
+// term, a -ERR, a TLS failure — without closing the socket it opened (nats.go
+// v1.55.0, doReconnect after processConnectInit), and leaves it to the
+// runtime's finalizer, which a meter holding the socket ([LinkMeter]) would
+// keep from it for ever: one descriptor and one more socket read at every
+// reading, each failed attempt. So the dialer closes what it handed out
+// before it dials again.
 type infoDialer struct {
 	memberDialer
 	// meter counts every connection the dialer opens; nil for none.
@@ -272,6 +284,9 @@ type infoDialer struct {
 	mu     sync.Mutex
 	sealed bool
 	opened []*infoConn
+	// last is the socket the dialer handed its client last, closed when
+	// the client asks for the next.
+	last net.Conn
 }
 
 // newInfoDialer is the dialer an external dial goes through, each attempt at
@@ -284,6 +299,15 @@ func newInfoDialer(budget time.Duration, meter *LinkMeter) *infoDialer {
 // Dial opens one connection to the member at address, metered, and recording
 // the line it reads first until the dial seals the dialer.
 func (d *infoDialer) Dial(network, address string) (net.Conn, error) {
+	// THE CLIENT GAVE THE LAST ONE UP: see [infoDialer]'s "A dial closes
+	// the socket the one before it opened".
+	d.mu.Lock()
+	given := d.last
+	d.last = nil
+	d.mu.Unlock()
+	if given != nil {
+		_ = given.Close()
+	}
 	// NO CALLER'S CONTEXT reaches a dial the client makes for itself, a
 	// reconnect's among them: the attempt's budget bounds it.
 	c, err := d.dialMember(context.Background(), network, address)
@@ -293,12 +317,13 @@ func (d *infoDialer) Dial(network, address string) (net.Conn, error) {
 	c = d.meter.wrap(c)
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.sealed {
-		return c, nil
+	if !d.sealed {
+		recorded := &infoConn{Conn: c}
+		d.opened = append(d.opened, recorded)
+		c = recorded
 	}
-	recorded := &infoConn{Conn: c}
-	d.opened = append(d.opened, recorded)
-	return recorded, nil
+	d.last = c
+	return c, nil
 }
 
 // sealedInfo is the INFO line read by the connection whose server_id is
