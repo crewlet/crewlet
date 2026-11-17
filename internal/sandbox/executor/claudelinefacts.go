@@ -32,10 +32,11 @@ import (
 //
 // A FRAME ITS RECORD'S TYPE DOES NOT READ IS EMPTY: a message is filled on a
 // user or an assistant record alone, a toolUseResult on a user record, an
-// attachment on an attachment record, compactMetadata on a compaction's
-// boundary, retractedMessageUuids on a user, an assistant or a refusal's
-// fallback, replacements on a content-replacement record and batchToolUses on
-// an assistant record: the records each accessor answers on. Every other
+// attachment, and the record's stored rendering its estimate reads, on an
+// attachment record, compactMetadata on a compaction's boundary,
+// retractedMessageUuids on a user, an assistant or a refusal's fallback,
+// replacements on a content-replacement record and batchToolUses on an
+// assistant record: the records each accessor answers on. Every other
 // record's accessor answers as it does on a record without the key, so what
 // the line holds there is never read.
 //
@@ -102,6 +103,12 @@ type messageFacts struct {
 	// ([threadLine.Message]), neither naming the record.
 	content    threadMessage
 	contentErr error
+	// estimate is what Claude Code estimates the record at, and estimateErr
+	// why its own estimate throws on the content ([threadLine.Estimate]),
+	// read only of a content its rule reads, so neither is filled where
+	// contentErr is.
+	estimate    threadEstimate
+	estimateErr error
 }
 
 // object is the error every accessor of the message answers before it reads a
@@ -150,6 +157,11 @@ type attachmentFacts struct {
 	// entriesKept is whether `entries` is a list whose every element is an
 	// entry a withheld memory keeps ([withheldKept]).
 	entriesKept bool
+	// estimate is what Claude Code estimates the record at, by what the
+	// record stores as its rendering or, of a PDF read, its pages, and
+	// estimated whether that reads ([threadLine.AttachmentEstimate]).
+	estimate  threadEstimate
+	estimated bool
 }
 
 // compactFacts is a compaction's boundary's `compactMetadata`

@@ -43,6 +43,7 @@ type threadWire struct {
 	ReplacesSpan  json.RawMessage `json:"replacesSpan"`
 	Message       json.RawMessage `json:"message"`
 	Attachment    json.RawMessage `json:"attachment"`
+	Rendered      json.RawMessage `json:"rendered"`
 	Origin        json.RawMessage `json:"origin"`
 	ToolUseResult json.RawMessage `json:"toolUseResult"`
 	APIError      json.RawMessage `json:"isApiErrorMessage"`
@@ -117,15 +118,15 @@ func factsOf(w *threadWire, h threadHead) *lineFacts {
 	}
 	switch h.Type {
 	case recordUser:
-		f.message = messageOf(w.Message, blockToolResult)
+		f.message = messageOf(w.Message, blockToolResult, w.TaskDelivery)
 		f.result = toolResultOf(w.ToolUseResult)
 		f.retracted, f.retractedErr = retractedOf(w.Retracted)
 	case recordAssistant:
-		f.message = messageOf(w.Message, blockToolUse)
+		f.message = messageOf(w.Message, blockToolUse, w.TaskDelivery)
 		f.retracted, f.retractedErr = retractedOf(w.Retracted)
 		f.batch = batchOf(w.Batch)
 	case recordAttachment:
-		f.attachment = attachmentOf(w.Attachment)
+		f.attachment = attachmentOf(w.Attachment, w.Rendered)
 	case recordSystem:
 		switch h.Subtype {
 		case subtypeCompactBoundary:
@@ -141,9 +142,11 @@ func factsOf(w *threadWire, h threadHead) *lineFacts {
 
 // messageOf is a user or assistant record's `message`, raw, read once: its
 // kind, its small values as written, and its content, its blocks of kind
-// call its calls ([messageContent]). ONE DECODE of the message's object,
-// which every accessor of the message reads.
-func messageOf(raw json.RawMessage, call string) messageFacts {
+// call its calls ([messageContent]), and what Claude Code estimates the
+// record at, the images the record's `taskDelivery`, delivery, carries among
+// it ([messageEstimate]). ONE DECODE of the message's object, which every
+// accessor of the message reads.
+func messageOf(raw json.RawMessage, call string, delivery json.RawMessage) messageFacts {
 	m := messageFacts{kind: kindOfValue(raw)}
 	if m.kind != '{' {
 		return m
@@ -162,6 +165,9 @@ func messageOf(raw json.RawMessage, call string) messageFacts {
 	m.id, m.model, m.stopReason, m.usage, m.contextManagement = wire.ID, wire.Model, wire.StopReason, wire.Usage,
 		wire.ContextManagement
 	m.content, m.contentErr = messageContent(wire.Content, call)
+	if m.contentErr == nil {
+		m.estimate, m.estimateErr = messageEstimate(wire.Content, delivery)
+	}
 	return m
 }
 
@@ -175,10 +181,11 @@ func toolResultOf(raw json.RawMessage) toolResultFacts {
 }
 
 // attachmentOf is an attachment record's `attachment`, raw, read once: its
-// kind, its small values as written, and what each attachment's shape rule
-// asks of its lists ([threadLine.AttachmentWellFormed]), every rule's at
-// once, so the accessor picks by the attachment's type.
-func attachmentOf(raw json.RawMessage) attachmentFacts {
+// kind, its small values as written, what each attachment's shape rule asks
+// of its lists ([threadLine.AttachmentWellFormed]), every rule's at once, so
+// the accessor picks by the attachment's type, and what Claude Code estimates
+// the record at, by the record's own `rendered` ([attachmentEstimate]).
+func attachmentOf(raw, rendered json.RawMessage) attachmentFacts {
 	a := attachmentFacts{kind: kindOfValue(raw)}
 	if a.kind != '{' {
 		return a
@@ -191,6 +198,10 @@ func attachmentOf(raw json.RawMessage) attachmentFacts {
 		Content   json.RawMessage `json:"content"`
 		Names     json.RawMessage `json:"names"`
 		Entries   json.RawMessage `json:"entries"`
+		// A PDF read's reads and a queued command's delivery, which its
+		// estimate reads.
+		Reads        json.RawMessage `json:"reads"`
+		TaskDelivery json.RawMessage `json:"taskDelivery"`
 	}
 	if a.err = wireDecode(raw, &wire); a.err != nil {
 		return a
@@ -202,6 +213,7 @@ func attachmentOf(raw json.RawMessage) attachmentFacts {
 	a.skillsShaped = everyElement(wire.Skills, func(raw json.RawMessage) bool { return raw[0] == '{' || raw[0] == '[' })
 	a.namesKept, a.namesErr = skillNamesKept(wire.Names)
 	a.entriesKept = everyElement(wire.Entries, withheldEntryKept)
+	a.estimate, a.estimated = attachmentEstimate(wire.Type, wire.Reads, wire.TaskDelivery, rendered)
 	return a
 }
 
