@@ -112,6 +112,9 @@ function detail(extra: Record<string, unknown> = {}) {
   };
 }
 
+/** The address the engine answers a repository is cloned from, on the deployment's own address. */
+const CLONE_URL = "https://crewlet.example.com/git/web.git";
+
 const json = (payload: unknown, status = 200) =>
   new Response(JSON.stringify(payload), {
     status,
@@ -412,8 +415,9 @@ function stubEngine(
         case "/query/code_repo": {
           // THE PATH OWNERS AND THE GATES ONLY TO A QUESTION THAT ASKS, as
           // the engine answers them, who set each rule beside the gates.
-          const { gates, rule_sources, path_owners, ...row } = repo;
+          const { gates, rule_sources, path_owners, clone_url = CLONE_URL, ...row } = repo;
           return json({
+            ...(clone_url ? { clone_url } : {}),
             repo: {
               ...row,
               ...(p.get("gates") === "true" ? { gates, rule_sources } : {}),
@@ -1169,6 +1173,85 @@ test("a refused moved listing says the engine's sentence and lists nothing by na
   expect(
     reads(asked, "code_refs").filter((u) => u.searchParams.get("detail") !== "true"),
   ).toHaveLength(0);
+});
+
+const openCode = async () => {
+  const button = await waitFor(() => {
+    const found = screen
+      .getAllByRole("button", { name: "Code" })
+      .find((b) => b.getAttribute("aria-haspopup") === "dialog");
+    expect(found).toBeTruthy();
+    return found!;
+  });
+  fireEvent.click(button);
+  return screen.findByRole("dialog", { name: "Clone web" });
+};
+
+// THE ADDRESS IS THE ENGINE'S, never the page's own origin, and the command is
+// the whole git clone of it. Mutation: build the address from location.origin,
+// and this fails.
+test("the Code menu gives the engine's clone address and its command", async () => {
+  let written = "";
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: (t: string) => ((written = t), Promise.resolve()) },
+  });
+  stubEngine();
+  mount("#/gitlet/repos/web");
+
+  const panel = await openCode();
+  expect(within(panel).getByText(CLONE_URL)).toBeTruthy();
+  expect(within(panel).getByRole("button", { name: "Copy the clone address" })).toBeTruthy();
+  fireEvent.click(within(panel).getByRole("button", { name: "Copy the clone command" }));
+  await waitFor(() => expect(written).toBe(`git clone ${CLONE_URL}`));
+  expect(
+    await within(panel).findByRole("button", { name: "Copied the clone command" }),
+  ).toBeTruthy();
+});
+
+// A DEPLOYMENT WITH NO ADDRESS OF ITS OWN SAYS SO, never the browser's guess,
+// and holds the command with the reason; so does the empty repository's card.
+// Mutation: fall back to the page's origin, and this fails.
+test("a deployment with no address says so and holds the command", async () => {
+  stubEngine(detail({ clone_url: null }));
+  mount("#/gitlet/repos/web");
+
+  const panel = await openCode();
+  expect(panel.querySelector(".code-clone__missing")?.textContent).toMatch(
+    /names no address of its own.*api\.external_url/,
+  );
+  expect(within(panel).queryByText(/git asks for a password/)).toBeNull();
+  const held = within(panel).getByRole("button", { name: "Copy the clone command" });
+  expect(held.getAttribute("aria-disabled")).toBe("true");
+  const why = document.getElementById(held.getAttribute("aria-describedby") ?? "");
+  expect(why?.textContent).toMatch(/names no address of its own/);
+  cleanup();
+
+  stubEngine(detail({ clone_url: null, head: undefined, branches: 0 }));
+  mount("#/gitlet/repos/web");
+  expect(await screen.findByText("This repository is empty")).toBeTruthy();
+  expect(screen.getAllByText(/names no address of its own/).length).toBeGreaterThan(0);
+  expect(screen.queryByText(/git remote add origin/)).toBeNull();
+});
+
+// THE EMPTY REPOSITORY CLONES FROM THE ENGINE'S ADDRESS, and Code is at the
+// root's bar only. Mutation: draw the menu under a path, and this fails.
+test("the empty repository clones from the engine's address, and Code is at the root only", async () => {
+  stubEngine(detail({ head: undefined, branches: 0 }));
+  mount("#/gitlet/repos/web");
+  expect(await screen.findByText("This repository is empty")).toBeTruthy();
+  expect(screen.getByText(CLONE_URL)).toBeTruthy();
+  cleanup();
+
+  stubEngine();
+  mount("#/gitlet/repos/web?path=src");
+  expect(await screen.findByRole("link", { name: "app.go" })).toBeTruthy();
+  expect(
+    screen
+      .queryAllByRole("button", { name: "Code" })
+      .filter((b) => b.getAttribute("aria-haspopup") === "dialog"),
+  ).toHaveLength(0);
+  expect(screen.getByRole("button", { name: "Branch or tag: main" })).toBeTruthy();
 });
 
 // THE LINES AN ADDRESS PICKS ARE MARKED, a press on a number writes its line

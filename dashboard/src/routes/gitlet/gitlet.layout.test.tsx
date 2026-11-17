@@ -82,6 +82,7 @@ function answer(url: URL): Response {
       });
     case "/query/code_repo":
       return json({
+        clone_url: "https://crewlet.example.com/git/web.git",
         repo: {
           id: "repo-web",
           name: "web",
@@ -231,26 +232,26 @@ test("a comparison's title stays clear of the files' toolbar", async () => {
   expect(band.top).toBeGreaterThanOrEqual(Math.floor(under.bottom));
 });
 
-// THE CLONE PANEL SHOWS ITS WHOLE ADDRESS, with no sideways scroll once it
-// focuses its copy button. Mutation: `.code-clone { width: 30rem }` fails it.
+// THE CODE MENU SHOWS ITS WHOLE ADDRESS and its actions, with no sideways
+// scroll once it focuses its copy button. Mutation: `.code-clone { width: 30rem }` fails it.
 for (const width of [1440, 390]) {
   test(`the clone panel holds its whole address, inside its card and the viewport, at ${width}px`, async () => {
     await page.viewport(width, 900);
     location.hash = "#/gitlet/repos/web";
     mount(<RepositoryPage repo="web" />, width);
-    const clone = await eventually(() => {
-      const button = [...document.querySelectorAll("button")].find(
-        (b) => b.textContent === "Clone",
+    const code = await eventually(() => {
+      const button = [...document.querySelectorAll('button[aria-haspopup="dialog"]')].find(
+        (b) => b.textContent === "Code",
       );
       expect(button).toBeTruthy();
-      return button!;
+      return button as HTMLElement;
     });
     const card = await eventually(() => {
       const listing = document.querySelector(".code-browser");
       expect(listing?.textContent).toContain("go.mod");
       return listing!;
     });
-    clone.click();
+    code.click();
     // Measured once placed and focused: the focus is what scrolled it.
     const panel = await eventually(() => {
       const el = document.querySelector<HTMLElement>('.crewlet-popover[aria-label="Clone web"]');
@@ -263,15 +264,20 @@ for (const width of [1440, 390]) {
     expect(panel.scrollLeft).toBe(0);
     const box = panel.getBoundingClientRect();
     for (const part of panel.querySelectorAll(
-      ".code-clone__head, .code-clone__url, .code-clone__note",
+      ".code-clone__head, .code-clone__url, .code-clone__note, .code-clone__act",
     )) {
       const at = part.getBoundingClientRect();
       expect(at.left).toBeGreaterThanOrEqual(box.left);
       expect(at.right).toBeLessThanOrEqual(box.right);
     }
     const head = panel.querySelector(".code-clone__head")!;
-    expect(head.textContent).toBe("Clone with HTTPS");
+    expect(head.textContent).toBe("Clone");
     expect(head.scrollWidth).toBeLessThanOrEqual(head.clientWidth);
+    const command = [...panel.querySelectorAll<HTMLElement>(".code-clone__act")].find(
+      (a) => a.textContent === "Copy the clone command",
+    )!;
+    expect(command.scrollWidth).toBeLessThanOrEqual(command.clientWidth);
+    expect(command.getBoundingClientRect().height).toBeLessThan(40);
     expect(box.left).toBeGreaterThanOrEqual(0);
     expect(box.right).toBeLessThanOrEqual(window.innerWidth);
     const under = card.getBoundingClientRect();

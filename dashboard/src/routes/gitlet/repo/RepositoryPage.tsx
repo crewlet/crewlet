@@ -229,7 +229,7 @@ export function RepositoryPage({ repo }: { repo: string }) {
         aria-labelledby={tabId(panelId, tab)}
         tabIndex={0}
       >
-        {tab === "code" && <Code repo={detail} />}
+        {tab === "code" && <Code repo={detail} cloneURL={read.data?.clone_url} />}
         {tab === "changes" && <RepoChanges repo={detail} />}
         {tab === "commits" && <Commits repo={detail} />}
         {tab === "branches" && <Branches repo={detail} />}
@@ -430,10 +430,10 @@ function RepoHeader({ repo }: { repo: CodeRepoDetail }) {
  * landing does; under a path — a directory or a file, read wide — the files
  * take the page's width.
  */
-function Code({ repo }: { repo: CodeRepoDetail }) {
+function Code({ repo, cloneURL }: { repo: CodeRepoDetail; cloneURL: string | undefined }) {
   const ownerName = useOwnerName();
   const [path] = useParam("path", "", "filter");
-  const files = <Files repo={repo} />;
+  const files = <Files repo={repo} cloneURL={cloneURL} />;
   if (path !== "") return files;
   return (
     <AsideLayout
