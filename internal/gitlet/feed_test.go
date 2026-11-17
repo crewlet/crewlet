@@ -596,3 +596,31 @@ func TestACodeWakeIsAboutItsChange(t *testing.T) {
 		}
 	}
 }
+
+// A VIEWED KEY RECORD WAKES NOBODY, UNREAD: a repository's viewed key routes nobody, so its record is
+// acknowledged off its envelope, and the feed never decodes the record that carries a key; the same
+// bytes on another repository record are decoded and refused.
+//
+// Mutation: drop the viewed key's arm in wakesAnybody, and the record is decoded and refused, red.
+func TestAViewedKeyRecordWakesNobodyUnread(t *testing.T) {
+	t.Parallel()
+	record := func(op gitlet.OpKind) changefeed.Record {
+		t.Helper()
+		body, err := json.Marshal(map[string]any{"v": gitlet.RecordVersion, "op_id": "op-" + string(op),
+			"subject": gitlet.RepoSubject("repo-web"), "op": op, "mutation": "not a payload"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return changefeed.Record{Key: "repo.repo-web", Payload: body, Position: 7,
+			Stream: gitlet.Domain{}.Stream().Name}
+	}
+	if d, relayed, err := gitlet.NewTranslator().Translate(t.Context(), record(gitlet.OpViewedKey)); relayed ||
+		err != nil {
+		t.Errorf("a viewed_key record is relayed as %+v (%v) or refused (%v), want it acknowledged without its "+
+			"payload read", d, relayed, err)
+	}
+	if _, relayed, err := gitlet.NewTranslator().Translate(t.Context(), record(gitlet.OpChangeClose)); err == nil {
+		t.Errorf("a close whose payload is no payload was acknowledged (relayed %v): a repository's record "+
+			"other than its viewed key is decoded", relayed)
+	}
+}

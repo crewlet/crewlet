@@ -1390,6 +1390,10 @@ type ReadQuery struct {
 	// ChangeSort orders a `changes` listing ([ChangeSort]); "" is its walk's own order. A request
 	// field, so an older build refuses it unread and the router asks the next node.
 	ChangeSort ChangeSort `json:"change_sort,omitempty"`
+	// Readiness narrows a `changes` listing to the open changes standing in one bucket
+	// ([Readiness.Bucket]); refused on every other kind. A request field, so an older build
+	// refuses it unread and the router asks the next node.
+	Readiness ReadinessBucket `json:"readiness,omitempty"`
 	// Part is the list a `change` read pages beside the change — its
 	// revisions, which "" names too, its reviewers, its comments, its
 	// reviews, its findings or the asker's own standing findings
@@ -1457,6 +1461,10 @@ type ReadQuery struct {
 	// ([ReadAnswer.FindingPaths]), paged by Limit and Cursor; refused on every other kind and beside
 	// a part, detail_only, brief or finding_ids. A key of its own, so an older build refuses it unread.
 	FindingPaths bool `json:"finding_paths,omitempty"`
+	// Viewed asks a `change` read for the asker's own viewed marks on its files ([ReadAnswer.Viewed]),
+	// paged by Limit and Cursor in digest order; refused on every other kind and beside a part,
+	// detail_only, brief, finding_ids or finding_paths. A key of its own, so an older build refuses it unread.
+	Viewed bool `json:"viewed,omitempty"`
 	// Introduced is an `introduced` read's range: REQUIRED for that kind,
 	// refused on every other.
 	Introduced *IntroducedQuery `json:"introduced,omitempty"`
@@ -1639,6 +1647,9 @@ type ReadAnswer struct {
 	// versionedFields row. The domain landed on main with it, as with
 	// [ReadQuery.Brief].
 	ChangeBrief *ChangeSummary `json:"change_brief,omitempty"`
+	// NarrowedTo is, on every page of a `changes` listing narrowed by [ReadQuery.Readiness], the
+	// bucket it was narrowed to: a page without it was read with no such narrowing.
+	NarrowedTo ReadinessBucket `json:"narrowed_to,omitempty"`
 	// Resolved is the repository the read's name resolved to, on a read that
 	// asks for it ([ReadQuery.Resolve]): its row as a `repo` read resolves
 	// it, at the answer's checkpoint, naming the name it redirects from where
@@ -1654,12 +1665,17 @@ type ReadAnswer struct {
 	Reviews   []ReviewRow   `json:"reviews,omitempty"`
 	Findings  []FindingRow  `json:"findings,omitempty"`
 	// FindingPaths is a `finding_paths` page of a change ([ReadQuery.FindingPaths]).
-	FindingPaths []FindingPathRow       `json:"finding_paths,omitempty"`
-	Routed       *RoutedPage            `json:"routed,omitempty"`
-	Introduced   []IntroducedRow        `json:"introduced,omitempty"`
-	Due          []CompactionCandidate  `json:"due,omitempty"`
-	Publish      []PublicationCandidate `json:"publish,omitempty"`
-	Expunge      []ExpungeCandidate     `json:"expunge,omitempty"`
+	FindingPaths []FindingPathRow `json:"finding_paths,omitempty"`
+	// Viewed is a `viewed` page of a change ([ReadQuery.Viewed]): the asker's own marks.
+	Viewed []ViewedRow `json:"viewed,omitempty"`
+	// ViewedKey is the change's repository's viewed key, beside a Viewed page holding a mark: what the
+	// asker's screen digests the files it shows under, to match the page.
+	ViewedKey  ViewedKey              `json:"viewed_key,omitempty"`
+	Routed     *RoutedPage            `json:"routed,omitempty"`
+	Introduced []IntroducedRow        `json:"introduced,omitempty"`
+	Due        []CompactionCandidate  `json:"due,omitempty"`
+	Publish    []PublicationCandidate `json:"publish,omitempty"`
+	Expunge    []ExpungeCandidate     `json:"expunge,omitempty"`
 	// Imports is an `imports_due` read's page, Mirrors a `mirrors_due`
 	// read's.
 	Imports []ImportCandidate `json:"imports,omitempty"`

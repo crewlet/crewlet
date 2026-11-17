@@ -8838,6 +8838,8 @@ export interface CodeChangeCard {
 export interface CodeChangesAnswer extends CodePage {
   /** Absent on a page that holds none. */
   changes?: CodeChangeSummary[];
+  /** The bucket a `readiness=` page was narrowed to, on every such page; absent where it was not narrowed, as an older node answers. */
+  narrowed_to?: string;
 }
 
 /** One author of a change (`gitlet.ChangeAuthor`), from the revision they first wrote. */
@@ -9105,8 +9107,9 @@ export interface CodeDiffAnswer {
  * `files` and `diff` a revision's files or one file's patch (`diff`), read by
  * object id on its home Gitlet node; `findings` placed in the revision asked
  * about (`placed`, by the finding's id); `finding_paths`, its findings counted
- * by path, state and revision; and `excerpts`, the lines around each finding of
- * a findings page as its own revision's diff marks them.
+ * by path, state and revision; `viewed`, the asker's own viewed files, and
+ * `viewed_key`; and `excerpts`, the lines around each finding of a findings page
+ * as its own revision's diff marks them.
  */
 export interface CodeChangeAnswer extends CodePage {
   change?: CodeChangeDetail;
@@ -9117,6 +9120,10 @@ export interface CodeChangeAnswer extends CodePage {
   findings?: CodeFindingRow[];
   /** The `finding_paths` part: its findings counted by path, state and revision. */
   finding_paths?: CodeFindingPathRow[];
+  /** The `viewed` part: the asker's own viewed marks on the change's files, in `path_digest` order. */
+  viewed?: CodeViewedRow[];
+  /** The repository's viewed key beside a `viewed` page holding a mark: 32 bytes in lowercase hex. */
+  viewed_key?: string;
   /** The `files` and `diff` parts: the revision read at, and the one read since. */
   revision?: number;
   since_revision?: number;
@@ -9170,6 +9177,16 @@ export interface CodeFindingPathRow {
   state: string;
   revision: number;
   findings: number;
+}
+
+/**
+ * One file the asker marked viewed (`gitlet.ViewedRow`): HMAC-SHA256 digests under `viewed_key` of its
+ * path, and of its path, a NUL, `new_oid`, a NUL and `new_mode` as marked (both empty for a deletion).
+ */
+export interface CodeViewedRow {
+  path_digest: string;
+  file_digest: string;
+  at: string;
 }
 
 /** One handle a record about a change reached (`gitlet.RoutedRecipient`). */

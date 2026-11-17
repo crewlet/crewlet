@@ -645,6 +645,8 @@ func codeSweepArgs() map[string]map[string]any {
 		"name": "lint", "status": "failed", "summary": "2 lint errors", "url": "https://ci.example.com/runs/1"}
 	out[builtin.CodePurgeUnreachableTool] = map[string]any{"repo": repo}
 	out[builtin.CodeMarkInboxTool] = map[string]any{"read": []any{"r-1"}}
+	out[builtin.CodeMarkViewedTool] = map[string]any{"repo": repo, "change": "7",
+		"viewed": []any{map[string]any{"path": "a.txt", "blob_oid": mainOID, "mode": "100644"}}}
 	out[builtin.CodeRepoReadersTool] = map[string]any{"repo": repo}
 	out[builtin.FleetHealthTool] = map[string]any{}
 	out[builtin.CodeStatusTool] = map[string]any{}

@@ -1853,6 +1853,9 @@ func (q ReadQuery) validate() error {
 	case q.FindingPaths && (q.Part != "" || q.DetailOnly || q.Brief || len(q.FindingIDs) > 0):
 		return fmt.Errorf("%w: finding_paths: a change's findings by path are a page of their own, "+
 			"named by no part, detail_only, brief or finding_ids", ErrInvalid)
+	case q.Viewed && (q.Part != "" || q.DetailOnly || q.Brief || len(q.FindingIDs) > 0 || q.FindingPaths):
+		return fmt.Errorf("%w: viewed: a change's viewed files are a page of their own, named by no part, "+
+			"detail_only, brief, finding_ids or finding_paths", ErrInvalid)
 	}
 	switch {
 	case q.Kind == ReadInbox && q.Repo != "":
@@ -1959,8 +1962,8 @@ func (q ReadQuery) validate() error {
 // (a commit, an inbox, an inbox page's cards, a history page's commits, the
 // narrowing of a listing of repositories to the ones a rule protects, the
 // parts a counts read names, a repository's facts, a listing of changes'
-// order, a change's findings by path) on a read of any other
-// kind, the engine's own reads included ([ReadQuery.validate]).
+// order, a change's findings by path, a change's viewed files) on a read of
+// any other kind, the engine's own reads included ([ReadQuery.validate]).
 func (q ReadQuery) kindOwnedField() error {
 	switch {
 	case q.Protected && q.Kind != ReadRepos:
@@ -1972,6 +1975,8 @@ func (q ReadQuery) kindOwnedField() error {
 		return fmt.Errorf("%w: cards: only a listing of changes carries each change's card", ErrInvalid)
 	case q.FindingPaths && q.Kind != ReadChange:
 		return fmt.Errorf("%w: finding_paths: only a change read counts its findings by path", ErrInvalid)
+	case q.Viewed && q.Kind != ReadChange:
+		return fmt.Errorf("%w: viewed: only a change read answers the files its asker marked viewed", ErrInvalid)
 	case q.Inbox != nil && q.Kind != ReadInbox:
 		return fmt.Errorf("%w: inbox: only an inbox read names whose inbox it reads", ErrInvalid)
 	case len(q.NoticeCards) > 0 && q.Kind != ReadNoticeCards:
@@ -1980,6 +1985,9 @@ func (q ReadQuery) kindOwnedField() error {
 	case q.ChangeSort != "" && q.Kind != ReadChanges:
 		return fmt.Errorf("%w: change_sort: only a listing of changes is ordered by when its changes were "+
 			"opened or last moved", ErrInvalid)
+	case q.Readiness != "" && q.Kind != ReadChanges:
+		return fmt.Errorf("%w: readiness: only a listing of changes is narrowed to where their merge stands",
+			ErrInvalid)
 	case q.RefListing != nil && q.Kind != ReadRefs:
 		return fmt.Errorf("%w: ref_listing: only a refs listing is ordered, narrowed or read in detail",
 			ErrInvalid)
