@@ -2111,6 +2111,10 @@ grant reads and costs the same however many changes the company holds. A
 build that changes how they are counted recounts them from the changes at
 its first boot, on every data node.
 
+The `queue` part counts the live entries, waiting or testing, of the scope's
+merge queues. It is counted when read, at most 10 000 entries, and says when
+it stopped there.
+
 A deleted repository's changes leave the company's count, and a restore
 brings them back under the owner it returns with. A count is exact at the
 position it is read at, so a `session` read after a write includes it. A
@@ -2932,8 +2936,9 @@ grant on the repository as every other read of it is:
   it: its head's, or a commit it names, checked for its own target, by name
   and attempt; one commit's, for every branch it was checked for; or — naming
   no repository — every repository's the reader may read whose attempts ended
-  since a moment, newest ended first. Each is a page of at most 200 attempts
-  (50 unless asked), resuming exactly where the page before ended;
+  since a moment, newest ended first; or, asked, where each check stands
+  ([Where a check stands](#where-a-check-stands)). Each is a page of at most
+  200 attempts (50 unless asked), resuming exactly where the page before ended;
 - **`check`**: one attempt whole, named by its commit, its target branch, its
   check and its number — its row, the definition it ran under, the last of
   its output, the failures its ending named and its kept log;
@@ -3017,6 +3022,34 @@ keeps no snapshot of it:
 - a person's reason for merging past the gate, where one did.
 
 A push's merge has no gate: who pushed it is the push's.
+
+### Where a check stands
+
+A `checks` read asked where each check stands (`standing`) lists each
+check's latest attempt for a branch, of a live subject: the head of an open
+or draft change, the newest queue entry of such a change, tested by the
+candidate the queue last tested it in, or a protected branch's tip. An
+attempt a later one reran, a head the change moved on from, a branch it no
+longer merges into, a tip the branch moved past and a bisection never stand.
+A head's attempt judges the live change at that head, whichever change's
+dispatch queued it.
+
+It lists in one of two orders: `recent`, what runs now and what waits first,
+then every ending newest first; or `failing`, the failures, the errors, what
+runs, what waits, the cancellations, the passes and the skips, each newest
+ended first. Running and queued attempts are listed beside the ended ones,
+across every repository too. A check's name narrows the listing, and so does
+a state, any of the seven, queued and running in the window too. A page is the attempts it read, so one may be
+short, or empty with a cursor, where the grant or a dead subject kept none.
+
+It reads one repository or every repository the reader may read, within a
+window that starts at a moment and ends now; an attempt not yet ended is in
+every window. Its first page counts the standing attempts by state, by a
+check's name where one narrows it and never by a state, each state counted
+among its newest 128 places and saying when it stopped there. Each row names
+the change it judges, that change's branch and the head it was checked at:
+the entry's head for a candidate, which was checked merged onto its branch.
+A data node of an older build refuses `standing`, and another answers.
 
 ### Check boxes
 
@@ -7611,6 +7644,26 @@ so a rising share of `bisected` is changes queued red; and
 `crewlet.code.queue.ejected` counts what it put out, by reason.
 `crewlet.code.queue.round.duration` is each landed round, timed from the
 same two instants the alarm prices a round at.
+
+#### Reading every queue at once
+
+A queue read names each entry's change by its number, title and source
+branch, and only for the repositories the reader may read.
+
+Naming no repository, a read with `trains=true` also answers the trains
+testing the branches its page reaches, and, on its first page, what every
+queue the reader may read put out in the last day: the newest 50, and their
+total, counted up to 10 000 and marked as a floor past that. Past that bound
+the newest 50 are taken from the ejections counted, so the rows and the total
+cover the same ejections. A read of one
+repository answers its trains and ejections unasked, and `trains=true` adds
+their total. Each ejection says how its entry was to land, its merge method
+and whether it deletes its source branch and closes its work item, which is
+what a re-queue sends again.
+
+A data node of a build that does not read `trains` refuses the read unread,
+and another node answers it, so no answer leaves the trains out silently
+([`GET /gitlet/queue`](../reference/api-endpoints.md#merge-queues-and-checks)).
 
 ### Tip checks and code_green
 

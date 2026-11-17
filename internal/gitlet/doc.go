@@ -188,6 +188,7 @@
 // ITS COUNTS (apply_counts.go, counts.go): code_repos counts each repository's changes by
 // state and code_change_tallies those in use by owner and visibility, kept by every apply and
 // re-derived when their rules change; a counts read sums the tallies the asker's grant reads.
+// The queue part counts the live entries at read time, within MaxQueueCounted.
 //
 // # A change's conversation is rows on its own subject
 //

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/uuid"
@@ -1600,76 +1601,91 @@ func TestAnAuditStoppedBeforeItsSecondLooksHasNotRunToItsEnd(t *testing.T) {
 }
 
 // A STORE THAT FAILS QUESTION AFTER QUESTION STOPS THE AUDIT, with its own
-// error, once it has failed a window of them with none answered between — its
-// listing, and then the questions by name a failed listing turns the audit to
-// — and the audit returns only once every question it asked has ended: a
-// question to the store never outlives the pass that asked it. The findings
-// the last audit made stand, and none of the failed questions is taken for a
-// finding.
+// error, once it has failed a window of them with none answered between: its
+// listing, and then the questions by name a failed listing turns the audit to.
+// The audit returns only once every question it asked has ended: a question
+// to the store never outlives the pass that asked it. The findings the last
+// audit made stand, and none of the failed questions is taken for a finding.
+//
+// THE CASE RUNS IN A BUBBLE, because the bound it holds the audit to counts
+// from the store's last answer, and the run is "in a row" in the order the
+// audit TAKES the answers in. The five answers have to be taken in before the
+// first failure is, or one of them ends the run partway and the store is
+// rightly asked another window. On the machine's clock the failures' 5 ms
+// only made that likely: on a loaded race runner a goroutine whose stat had
+// already been answered was not scheduled again until some twenty-five
+// failures had been counted, its answer then ended the run, and the store was
+// asked about all 97 objects (#1420). In the bubble the failures' moment
+// passes only once every goroutine is blocked, by which time the answers'
+// goroutines have returned, so the bound holds on every runner:
+// the five, the run of [failedInARow], and at most a window handed out while
+// that run's failures came back.
 func TestAStoreThatFailsQuestionAfterQuestionStopsTheAudit(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t)
-	lost := h.file("lost.md", "lost")
-	if err := h.store.Delete(t.Context(), lost.Key); err != nil {
-		t.Fatal(err)
-	}
-	if r, err := h.c.Audit(t.Context()); err != nil || r.Found == nil || r.Found.Missing != 1 {
-		t.Fatalf("the first audit = %+v, %v", r, err)
-	}
-	for i := range 3 * auditConcurrency {
-		h.file(fmt.Sprintf("%03d.md", i), fmt.Sprintf("object %d", i))
-	}
-	broke := errors.New("the store stopped answering")
-	h.backend.mu.Lock()
-	h.backend.listErr = broke
-	h.backend.mu.Unlock()
-	var (
-		mu       sync.Mutex
-		asked    int
-		inFlight atomic.Int64
-	)
-	h.backend.onStat = func(ctx context.Context, _ string, _ int) error {
+	synctest.Test(t, func(t *testing.T) {
+		h := newHarness(t)
+		lost := h.file("lost.md", "lost")
+		if err := h.store.Delete(t.Context(), lost.Key); err != nil {
+			t.Fatal(err)
+		}
+		if r, err := h.c.Audit(t.Context()); err != nil || r.Found == nil || r.Found.Missing != 1 {
+			t.Fatalf("the first audit = %+v, %v", r, err)
+		}
+		for i := range 3 * auditConcurrency {
+			h.file(fmt.Sprintf("%03d.md", i), fmt.Sprintf("object %d", i))
+		}
+		broke := errors.New("the store stopped answering")
+		h.backend.mu.Lock()
+		h.backend.listErr = broke
+		h.backend.mu.Unlock()
+		var (
+			mu       sync.Mutex
+			asked    int
+			inFlight atomic.Int64
+		)
+		h.backend.onStat = func(ctx context.Context, _ string, _ int) error {
+			mu.Lock()
+			asked++
+			n := asked
+			mu.Unlock()
+			if n <= 5 {
+				return nil
+			}
+			inFlight.Add(1)
+			defer inFlight.Add(-1)
+			// A REQUEST TAKES A MOMENT TO FAIL, so the questions beside the
+			// one that stops the audit are still out when it does, and an
+			// audit that returned without waiting for them is caught with
+			// them running.
+			select {
+			case <-time.After(5 * time.Millisecond):
+			case <-ctx.Done():
+				time.Sleep(20 * time.Millisecond)
+				return ctx.Err()
+			}
+			return broke
+		}
+		h.clock.advance(AuditInterval)
+		r, err := h.c.Audit(t.Context())
+		if !errors.Is(err, broke) || !errors.Is(err, errStoreFailing) || r.Completed ||
+			!strings.Contains(r.Error, broke.Error()) {
+			t.Fatalf("Audit = %+v, %v; want it failed as a failing store, with the store's own error", r, err)
+		}
+		if n := inFlight.Load(); n != 0 {
+			t.Fatalf("%d questions were still running when the audit returned", n)
+		}
 		mu.Lock()
-		asked++
 		n := asked
 		mu.Unlock()
-		if n <= 5 {
-			return nil
+		if n > 5+failedInARow+auditConcurrency {
+			t.Fatalf("a store that answered nothing after its first 5 was asked %d questions; want the "+
+				"audit stopped within a window of its run of %d", n, failedInARow)
 		}
-		inFlight.Add(1)
-		defer inFlight.Add(-1)
-		// A REQUEST TAKES A MOMENT TO FAIL, so the questions beside the
-		// one that stops the audit are still out when it does — and an
-		// audit that returned without waiting for them is caught with them
-		// running.
-		select {
-		case <-time.After(5 * time.Millisecond):
-		case <-ctx.Done():
-			time.Sleep(20 * time.Millisecond)
-			return ctx.Err()
+		if r.Found == nil || r.Found.Missing != 1 || r.Found.Unanswered != 0 ||
+			r.Found.MissingFiles[0].NamedBy != "ENG/lost.md" {
+			t.Fatalf("the findings after a failed audit = %+v; want the last whole audit's", r.Found)
 		}
-		return broke
-	}
-	h.clock.advance(AuditInterval)
-	r, err := h.c.Audit(t.Context())
-	if !errors.Is(err, broke) || !errors.Is(err, errStoreFailing) || r.Completed ||
-		!strings.Contains(r.Error, broke.Error()) {
-		t.Fatalf("Audit = %+v, %v; want it failed as a failing store, with the store's own error", r, err)
-	}
-	if n := inFlight.Load(); n != 0 {
-		t.Fatalf("%d questions were still running when the audit returned", n)
-	}
-	mu.Lock()
-	n := asked
-	mu.Unlock()
-	if n > 5+failedInARow+auditConcurrency {
-		t.Fatalf("a store that answered nothing was asked %d questions; want the audit stopped "+
-			"within a window of its run of %d", n, failedInARow)
-	}
-	if r.Found == nil || r.Found.Missing != 1 || r.Found.Unanswered != 0 ||
-		r.Found.MissingFiles[0].NamedBy != "ENG/lost.md" {
-		t.Fatalf("the findings after a failed audit = %+v; want the last whole audit's", r.Found)
-	}
+	})
 }
 
 // ONE OBJECT THE STORE KEEPS FAILING IS UNANSWERED, AND THE AUDIT RUNS TO ITS

@@ -345,10 +345,14 @@ func (r CheckRow) encodedBytes() int {
 		key, value string
 	}{
 		{"candidate_id", r.CandidateID}, {"entry_id", r.EntryID}, {"base", r.Base}, {"defs_oid", r.DefsOID},
+		{"source_ref", r.SourceRef}, {"change_head", r.ChangeHead},
 	} {
 		if s.value != "" {
 			n += field(s.key, stringBytes(s.value), false)
 		}
+	}
+	if r.Change != nil {
+		n += field("change", r.Change.encodedBytes(), false)
 	}
 	if r.Required {
 		n += field("required", trueBytes, false)

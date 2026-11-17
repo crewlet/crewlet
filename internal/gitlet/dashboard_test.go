@@ -352,6 +352,17 @@ func TestTheDashboardKnowsEveryPreconditionOfAChange(t *testing.T) {
 	}
 }
 
+// THE DASHBOARD COUNTS EVERY PUSHER KIND: a repository's rail draws each
+// pusher by its kind (`PUSHER_KINDS`, `contract/code.ts`), Gitlet by its mark.
+// Mutation: drop a kind from either side, or reorder the dashboard's, and this fails.
+func TestTheDashboardCountsEveryPusherKind(t *testing.T) {
+	t.Parallel()
+	got, want := theDashboardsList(t, "PUSHER_KINDS"), spelledOut(gitlet.PusherKinds())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's PUSHER_KINDS is %v, want the engine's, in order: %v", got, want)
+	}
+}
+
 // THE DASHBOARD RAISES FINDINGS IN THE ENGINE'S WORDS: the weights and the
 // subjects a change page's finding composer offers, which its review sends
 // back as code_review_change's `severity` and `category`, in the engine's
