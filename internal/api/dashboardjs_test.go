@@ -2703,7 +2703,9 @@ const (
 	// 11,582 over main: 6712 KiB.
 	// A repository's rail: its open changes, pushers, push spark, mirror and newest tag, on kit
 	// 0.150.1: 6728.1 KiB (6,889,605 bytes), 17,006 over the picker's: 6729 KiB.
-	treeBudget = 5<<20 + 1609<<10
+	// Gitlet's repositories as rows with their changes, checks and pushes by day: 6734.7 KiB
+	// (6,896,363 bytes), 6,758 over the rail's: 6735 KiB.
+	treeBudget = 5<<20 + 1615<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
