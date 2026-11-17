@@ -149,6 +149,13 @@ hours of each other:
   clock runs more than a day behind another's counts a seat's pushes on a day
   already forgotten, from nothing, and can land them past
   `code.limits.pushes_per_seat_day`.
+- A read of a [box on another node's host](../concepts/code-sandbox.md#local-sandboxes)
+  carries how long its asker waits, which the host counts on its own clock,
+  and the host takes it until the asker's deadline, by the asker's clock, and
+  two hours more by its own. A host whose clock runs ahead of its asker's by
+  more than those two hours and the read's wait refuses every such read, and
+  its asker hears a host that did not answer: a collection is handed back and
+  asked again, and a stop waits for the host.
 
 NTP keeps machines within milliseconds of each other; a host without it drifts,
 and a virtual machine restored from a snapshot can come back hours off.
@@ -168,10 +175,10 @@ stream. So while no node raises it, every data node and that member keep
 within an hour of the fleet's clock, and any two of them — every member of an
 embedded broker among them — within two hours of each other, inside every
 margin above. A rule judged on the clock of a node that runs seats, a turn's
-hold above, rests on a clock the alarm measures only where that node holds
-data too: a node without the `data` role writes no row to the register, so
-nothing measures its clock, and NTP on it is all that keeps it inside the
-bound. With two data nodes neither clock outvotes the other, so both are
+hold or a box read's admission above, rests on a clock the alarm measures
+only where that node holds data too: a node without the `data` role writes no
+row to the register, so nothing measures its clock, and NTP on it is all that
+keeps it inside the bound. With two data nodes neither clock outvotes the other, so both are
 named once they stand more than two hours apart. The alarm names a clock that
 has already drifted rather than keeping one from drifting, and it cannot see
 the other servers of an external NATS cluster disagree with the one it reads,

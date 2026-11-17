@@ -377,4 +377,7 @@ licenses is not a write run again as the actor it names. So the allowance is
 PER CHANNEL, never one loosening for every channel, and zero unless a channel
 states one: a channel built without it judges the sender's deadline on the
 taking node's clock exactly as before, and each states its own once the record
-that owns it has weighed what a replay there does.
+that owns it has weighed what a replay there does. The box read is the first to
+state one (`sandbox.BoxReadClockAllowance`, two hours), weighed in ADR-0065's
+amendment "a box read carries its asker's wait, and its host takes it as it
+arrives".
