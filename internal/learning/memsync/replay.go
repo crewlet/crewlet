@@ -506,8 +506,8 @@ func (s *Syncer) stall(maxBytes int) time.Duration {
 // placed again past what it received ([placedGone]); a reader that died
 // leaves its consumer that long, which costs the broker one idle consumer.
 // Across a metered link the end barrier is held while the link moves
-// ([Syncer.waits]), and the threshold carries that too: 774 s across a link
-// at the shipped lease. It outlasts the longest a replay waits for a word on a
+// ([Syncer.waits]), and the threshold carries that too: 774 s across a
+// metered link. It outlasts the longest a replay waits for a word on a
 // moving link as well ([Syncer.quietCap], 253 s), since a pull the replay is
 // still waiting on ended at its expiry.
 func (s *Syncer) reapAfter() time.Duration {

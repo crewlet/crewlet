@@ -49,7 +49,7 @@ request bound across a link read the meter is a separate change.
 ## Why the obvious alternative is wrong
 
 **A timeout derived from what may sit ahead.** Messages are not bounded to a
-heartbeat's crossing (#1035, Route A): an event, a fleet record, an estate
+window's crossing (#1035, Route A): an event, a fleet record, an estate
 answer each ride whole up to the transport's 8 MiB, and any number of them may
 be ahead. A finite bound either refuses a busy link — the seat, again — or,
 capped at one ceiling message each way, is eight minutes at the floor.

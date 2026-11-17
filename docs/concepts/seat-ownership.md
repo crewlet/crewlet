@@ -484,8 +484,8 @@ node's first `/ready`, which waits for its first pass. Across a moving link
 those waits are the longer ones above: a replay that hears nothing waits up to
 its 253-second cap, where a still link refuses it at its 9.1-second stall, and its
 identity reads, barriers and consumer creations up to 248 seconds past their
-bounds, about 278 seconds where they ended at 30 (294 for an end barrier,
-where it ended at 45.5). That is
+bounds, about 278 seconds where they ended at 30 (282 for an end barrier,
+where it ended at 34.2). That is
 the price of not refusing a seat behind traffic that is crossing, and only a
 copy or a link that stops answering while other traffic keeps the link moving
 pays it in full; a link that falls still ends the wait within a stall and a
