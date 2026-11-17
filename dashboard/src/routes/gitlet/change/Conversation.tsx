@@ -19,6 +19,7 @@
  * over every page loaded, so a reply on a later page joins its root.
  */
 
+import { useEffect, useRef, useState } from "react";
 import { AsideLayout, Button, Stack, Tag, Textarea, useSendOnEnter } from "@crewlethq/ui";
 import { GitBranchGlyph } from "@crewlethq/icons/glyphs";
 import { useDraftBox } from "~/app/assistant/boxes.ts";
@@ -39,6 +40,7 @@ import type {
 } from "~/protocol/index.ts";
 import { changeHref } from "../paths.ts";
 import { Byline, Face, ShaChip } from "../ui.tsx";
+import { Description } from "./Description.tsx";
 import { MergeBox } from "./Merge.tsx";
 import { ChangeRail } from "./Rail.tsx";
 import { TimelineCard, TimelineEvent, TimelineList } from "./Timeline.tsx";
@@ -94,6 +96,7 @@ export function Conversation({
   revisions: readonly CodeRevisionRow[];
 }) {
   const now = useNow();
+  const [quoted, setQuoted] = useState<Quote | null>(null);
   const reviews = usePagedReviews(change);
   const comments = usePagedComments(change);
   const entries = timelineOf(reviews.items, comments.items, revisions);
@@ -114,18 +117,10 @@ export function Conversation({
       aside={<ChangeRail change={change} revisions={revisions} reviews={reviews.items} />}
     >
       <Stack gap={5}>
-        <section aria-label="Description" className="code-description">
-          <div className="code-description__head">
-            <Byline who={change.owner} verb="opened this change" at={change.opened_at} now={now} />
-          </div>
-          <div className="code-description__body">
-            {change.body ? (
-              <div className="prose md">{renderMarkdown(change.body)}</div>
-            ) : (
-              <p className="muted">No description.</p>
-            )}
-          </div>
-        </section>
+        <Description
+          change={change}
+          onQuote={(text) => setQuoted((was) => ({ text, n: (was?.n ?? 0) + 1 }))}
+        />
         <MergeBox change={change} />
         <section aria-label="Timeline" className="code-activity">
           <h2 className="code-activity__title">Activity</h2>
@@ -153,7 +148,7 @@ export function Conversation({
           {/* A PAGE THAT FAILED is said beside the press that asks it again. */}
           {pageError && <PageFailed error={pageError} />}
         </section>
-        <CommentComposer change={change} />
+        <CommentComposer change={change} quote={quoted} />
       </Stack>
     </AsideLayout>
   );
@@ -370,11 +365,30 @@ export function ReplyComposer({
   );
 }
 
+/** Words quoted into the comment box; `n` counts the presses, so each lands once. */
+interface Quote {
+  text: string;
+  n: number;
+}
+
 /** A comment of its own on the change, which starts a thread. */
-function CommentComposer({ change }: { change: CodeChangeDetail }) {
+function CommentComposer({ change, quote }: { change: CodeChangeDetail; quote: Quote | null }) {
   const viewer = useViewer();
   const write = useAct("code_comment_on_change");
   const [body, setBody] = useDraftState("");
+  const field = useRef<HTMLTextAreaElement>(null);
+  const landed = useRef(0);
+  // A QUOTE IS APPENDED ONCE per press, and the box takes focus at its end.
+  useEffect(() => {
+    if (!quote || quote.n === landed.current) return;
+    landed.current = quote.n;
+    setBody((was) => (was && !was.endsWith("\n") ? `${was}\n\n` : was) + quote.text);
+    const box = field.current;
+    if (box) {
+      box.focus();
+      queueMicrotask(() => box.setSelectionRange(box.value.length, box.value.length));
+    }
+  }, [quote, setBody]);
   useDraftBox({
     path: "comment",
     label: `Comment on ${change.ref}`,
@@ -398,6 +412,7 @@ function CommentComposer({ change }: { change: CodeChangeDetail }) {
       {viewer.owner && <Face who={viewer.owner} size="sm" />}
       <div className="code-compose__box">
         <Textarea
+          ref={field}
           aria-label="Comment"
           aria-describedby={keys.describedBy}
           placeholder="Comment on the change"

@@ -317,9 +317,10 @@ function ChangeTabs({
 /**
  * The change page's ONE DRAFT for the person's own assistant: every box open
  * on it (`app/assistant/boxes.ts`), the comment on the change, each reply box
- * of a thread or a finding, and a finding being written on picked lines.
- * The review, ask and close dialogs are modal, and the drawer is inert while
- * one holds the page, so none of their fields is among them.
+ * of a thread or a finding, its title and description being edited, and a
+ * finding being written on picked lines. The review, ask and close dialogs
+ * are modal, and the drawer is inert while one holds the page, so none of
+ * their fields is among them.
  */
 function ChangeDraft({ boxes, change }: { boxes: DraftBoxes; change: CodeChangeDetail }) {
   const open = useOpenBoxes(boxes);
@@ -330,9 +331,9 @@ function ChangeDraft({ boxes, change }: { boxes: DraftBoxes; change: CodeChangeD
       scope: `What you are writing on ${change.ref} (not sent)`,
       help:
         `Every box open on ${change.ref} is a field: the comment on the change, the reply ` +
-        "box of each thread and finding, and a finding being written on picked lines. You " +
-        "can propose text for any of them; commenting, replying and adding a finding to " +
-        "the review stay the person's.",
+        "box of each thread and finding, its title and description being edited, and a " +
+        "finding being written on picked lines. You can propose text for any of them; " +
+        "sending, saving and adding a finding to the review stay the person's.",
     }),
   );
   return null;

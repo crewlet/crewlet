@@ -30,6 +30,7 @@ import { settled } from "~/test/settle.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { ChangePage } from "./ChangePage.tsx";
+import { EDIT_MOVED } from "./Description.tsx";
 import { CHANGE_POLL_MS } from "./reads.ts";
 
 beforeEach(() => sessionStorage.clear());
@@ -994,6 +995,144 @@ test("a moved base asks the tab row's counts again once", async () => {
   expect(files()).toBe(2);
 });
 
+/** The detail with a description. */
+const described = (extra: Record<string, unknown> = {}) =>
+  detail({ body: "Retry with a backoff.\nUp to three times.", ...extra });
+
+/** Opens the description's menu and presses Edit. */
+async function edit() {
+  fireEvent.click(await screen.findByRole("button", { name: "More actions on the description" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Edit" }));
+  return screen.findByRole("form", { name: "Edit web!42" });
+}
+
+// EDIT IS ONE UPDATE of the fields that moved, against the version on screen.
+// Mutation: send both fields always, and the second press sends the title too.
+test("Edit sends the title and the description in one update against the version on screen", async () => {
+  let acted = stubEngine(described(), () => json({ outcome: "applied" }));
+  mount();
+  let form = await edit();
+  const title = within(form).getByRole("textbox", { name: "Title" });
+  expect(document.activeElement).toBe(title);
+  fireEvent.change(title, { target: { value: "Retry the upload with a backoff" } });
+  fireEvent.change(within(form).getByRole("textbox", { name: "Description" }), {
+    target: { value: "Three tries." },
+  });
+  fireEvent.click(within(form).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_update_change",
+    args: {
+      change: "web!42",
+      expected_version: 5,
+      title: "Retry the upload with a backoff",
+      body: "Three tries.",
+    },
+  });
+  await waitFor(() => expect(screen.queryByRole("form", { name: "Edit web!42" })).toBeNull());
+  cleanup();
+
+  acted = stubEngine(described(), () => json({ outcome: "applied" }));
+  mount();
+  form = await edit();
+  fireEvent.change(within(form).getByRole("textbox", { name: "Description" }), {
+    target: { value: "Three tries." },
+  });
+  fireEvent.submit(form);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]!.args).toEqual({ change: "web!42", expected_version: 5, body: "Three tries." });
+});
+
+// EDIT IS HELD while nothing moved, without a title, and when the words on
+// screen moved under the reader; a push's version alone holds nothing.
+// Mutation: hold on a moved version, and the push case is held.
+test("Edit is held while nothing moved, without a title, and when the words changed under the reader", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  let version = 5;
+  let body = "Retry with a backoff.\nUp to three times.";
+  const acted = stubEngine(
+    () => detail({ version, body }),
+    () => json({ outcome: "applied" }),
+  );
+  mount();
+  const form = await edit();
+  const save = within(form).getByRole("button", { name: "Save" });
+  await waitFor(() =>
+    expect(save.getAttribute("title")).toBe("Change the title or the description first."),
+  );
+  const title = within(form).getByRole("textbox", { name: "Title" });
+  fireEvent.change(title, { target: { value: "  " } });
+  expect(save.getAttribute("title")).toBe("A change needs a title.");
+  fireEvent.change(title, { target: { value: "Retry, with a backoff" } });
+  expect(save.getAttribute("title")).toBeNull();
+
+  // A PUSH moves the version and nothing the reader is editing.
+  version = 6;
+  const details = () => changeAsked.filter((u) => !u.searchParams.get("part")).length;
+  let before = details();
+  await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
+  await waitFor(() => expect(details()).toBeGreaterThan(before));
+  await settled(() => changeAsked.length);
+  expect(save.getAttribute("title")).toBeNull();
+
+  // A SEAT'S EDIT of the description, under the reader.
+  body = "Retry three times.";
+  before = details();
+  await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
+  await waitFor(() => expect(save.getAttribute("title")).toBe(EDIT_MOVED));
+  fireEvent.click(save);
+  expect(acted).toHaveLength(0);
+  fireEvent.click(within(form).getByRole("button", { name: "Start again from the latest" }));
+  expect(
+    (within(form).getByRole("textbox", { name: "Description" }) as HTMLTextAreaElement).value,
+  ).toBe("Retry three times.");
+  expect((title as HTMLInputElement).value).toBe("Retry the flaky upload");
+});
+
+// A REFUSED EDIT KEEPS THE READER'S WORDS and says why. Mutation: close the
+// form on any answer, and the words are lost.
+test("a refused edit keeps the reader's words and says the engine's reason", async () => {
+  const acted = stubEngine(described(), () =>
+    json({ error: "stale_version", detail: "It changed since you loaded it." }, 409),
+  );
+  mount();
+  const form = await edit();
+  fireEvent.change(within(form).getByRole("textbox", { name: "Title" }), {
+    target: { value: "Mine" },
+  });
+  fireEvent.click(within(form).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(await within(form).findByText(/changed since you loaded it/i)).toBeTruthy();
+  expect(screen.getByRole("form", { name: "Edit web!42" })).toBeTruthy();
+  expect((within(form).getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toBe(
+    "Mine",
+  );
+});
+
+// A FINISHED CHANGE OFFERS NO EDIT, and its link and Quote stay; Quote puts the
+// description in the comment box as `> ` lines and focuses it.
+// Mutation: offer Edit on every state, and the merged change offers it.
+test("a merged or closed change offers no Edit, and Copy link and Quote stay", async () => {
+  for (const state of ["merged", "closed"]) {
+    stubEngine(described({ state, readiness: undefined }), () => json({}));
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "More actions on the description" }));
+    const items = (await screen.findAllByRole("menuitem")).map((i) => i.textContent);
+    expect(items, state).toEqual(["Copy link", "Quote"]);
+    cleanup();
+  }
+  stubEngine(described(), () => json({}));
+  mount();
+  const box = (await screen.findByRole("textbox", { name: "Comment" })) as HTMLTextAreaElement;
+  fireEvent.change(box, { target: { value: "Agreed." } });
+  fireEvent.click(await screen.findByRole("button", { name: "More actions on the description" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Quote" }));
+  await waitFor(() =>
+    expect(box.value).toBe("Agreed.\n\n> Retry with a backoff.\n> Up to three times.\n\n"),
+  );
+  expect(document.activeElement).toBe(box);
+});
+
 // A FINISHED CHANGE OFFERS ONLY WHAT STILL APPLIES: a merged change takes no
 // review, no ask and no close from anybody, so its bar draws none of them and
 // its Revert stands where the merge controls were; a closed one offers its
@@ -1185,6 +1324,10 @@ test.each([
   }
   fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
   expect(screen.getByRole("button", { name: "Comment" }).getAttribute("title")).toBe(reason);
+  fireEvent.click(screen.getByRole("button", { name: "More actions on the description" }));
+  const editItem = await screen.findByRole("menuitem", { name: /^Edit/ });
+  expect(editItem.getAttribute("aria-disabled")).toBe("true");
+  expect(editItem.textContent).toContain(reason);
   cleanup();
 
   mount("#/gitlet/repos/web/changes/42?tab=files&file=app.go", viewer);

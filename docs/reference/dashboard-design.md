@@ -8745,7 +8745,10 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   node, the change's version and the revision's head and the base its facts
   record (which a retarget's new facts move after the version), and the
   change's and its conversation's versions for every other part.
-  **Conversation** is the description, a card its owner opened; then the
+  **Conversation** is the description, a card its owner opened, whose menu holds
+  **Edit** (the title and the description in one `code_update_change`, only the
+  fields that moved, held while the words on screen moved under the reader),
+  **Copy link** and **Quote** (into the comment box); then the
   MERGE BOX, under it as a code host's is: across its head a check where every
   condition is met (in the success state's ink, the one state it wears) and a
   dashed ring while one is not, with the count and what it waits on; then

@@ -523,6 +523,9 @@ it came from and whom it notified. A seat reads the
 same with `code_get_change`, a part at a time ([Reading a
 conversation](../concepts/gitlet.md#reading-a-conversation)).
 
+**Edit it.** **Edit**, in the description's menu, changes the change's title and
+description; a seat or your assistant does the same with `code_update_change`.
+
 **Review it.** On the head revision, pick lines by their numbers and draft a
 finding under them: how much it weighs (`blocker`, `major`, `minor`, `nit`),
 what it is about, a title, a body and, on the new side, the lines you suggest
