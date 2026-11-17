@@ -133,8 +133,10 @@ the page lands, adds its first file with **Add a file**, the root commit that
 makes its default branch, so it needs no clone to start; beside it, the
 address to clone it from and the two commands that push a repository you
 already have into it. Its **Code** tab lists each entry with the commit that
-last changed it; press `t`, or **Go to file**, to find a file by name. Its
-README and its LICENSE are tabs under the files. From then on the
+last changed it; press `t`, or **Go to file**, to find a file by name. Pick a
+branch or a tag from the button before the files; **Find a branch** matches
+any part of a name. Its README and its LICENSE are tabs under the files. From
+then on the
 repository's page writes it from the browser, each write one commit or one
 ref moved, as you:
 
@@ -238,7 +240,8 @@ and a service account is created with it (`crewlet iam create -kind machine
 ## Clone, fetch and push
 
 The address is the API's own, on `api.port` — never the public listener —
-and a repository's page offers it under **Clone**, at the end of the bar above its files:
+and a repository's page offers it under **Code**, at the end of the bar above
+its files, with a button that copies the whole `git clone` command:
 
 ```sh
 git clone https://crewlet.example.com/git/web.git
@@ -247,6 +250,7 @@ git clone https://crewlet.example.com/git/web.git
 The engine answers that address as the repository's `clone_url`
 (`GET /gitlet/repos/{name}`), built from `api.external_url`, so a dashboard
 reached through another address still shows the one git must use.
+A deployment that sets no `api.external_url` shows no address there.
 
 git asks for a user name and a password: the password is the token, and the
 user name is ignored. So that git never asks, give it a credential helper.
@@ -366,6 +370,9 @@ exact line git prints and what to do about it is in [What git prints, and what
 it means](../concepts/gitlet.md#what-git-prints-and-what-it-means).
 
 ## Download a file or a commit
+
+**Code** › **Download ZIP** downloads every file of the commit on show, as
+`/git/{name}/-/archive.zip` serves it.
 
 Anybody who may fetch a repository may download one file of a commit, or the
 whole commit as a ZIP, without git: from the dashboard, signed in, once its
