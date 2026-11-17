@@ -4,8 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go"
 
 	"github.com/crewlet/crewlet/internal/coord/kv/kvtest"
 	"github.com/crewlet/crewlet/internal/jsapi"
@@ -100,12 +104,12 @@ func TestAWindowAcrossALinkCrossesWithinARequestsTerm(t *testing.T) {
 // message onto its link (a subscription on the leaf sees each as the leaf
 // routes it), a fleet-store read is sent behind them.
 //
-// DECIDED BY ORDER, NEVER BY THE CLOCK. A subscription on the member counts
-// the upload's messages as they arrive there, and the read is answered with
-// the count of those that crossed while it waited: every one crossed ahead of
-// the read's request, which the link carries behind them, and a message sent
-// after it needs the floor's 3.75 seconds to cross where the answer needs
-// milliseconds. Those messages must cross the floor within what the read's
+// DECIDED BY ORDER, NEVER BY THE CLOCK. The member counts the upload's
+// messages as the link delivers them, and the count is taken again where the
+// read's request arrives among them ([watchReadArrival]): the messages that
+// arrived after the read was sent and before it are those it crossed behind,
+// however late the case reads the count, and a message sent after the request
+// arrives after it. Those messages must cross the floor within what the read's
 // term leaves after its own round trip ([requestBudget]), which is what
 // decides whether a read sent behind a full window is answered inside
 // [jsapi.RequestTerm] at the floor, and is so on a link whose pacing a loaded
@@ -121,7 +125,7 @@ func TestAReadSentBehindAFullWindowIsAnsweredInsideItsTerm(t *testing.T) {
 	b := openWith(t, client(t, across.LeafBroker), natsobj.Config{MaxBytes: testCeiling, Replicas: 1,
 		AcrossLink: true})
 	sent := watchPieces(t, client(t, across.LeafBroker).Conn())
-	arrived := watchPieces(t, client(t, across.MemberBroker).Conn())
+	arrived := watchReadArrival(t, client(t, across.MemberBroker).Conn())
 	window := b.Window()
 
 	// FOUR MESSAGES MORE THAN A WINDOW, so the put still holds its window
@@ -142,7 +146,7 @@ func TestAReadSentBehindAFullWindowIsAnsweredInsideItsTerm(t *testing.T) {
 	}()
 	sent.await(t, window)
 
-	before := len(arrived.all())
+	before := arrived.pieces.Load()
 	// A LIVENESS BOUND, deciding nothing: the claim is the count below.
 	ctx, cancel := context.WithTimeout(t.Context(), objstore.Stall)
 	defer cancel()
@@ -150,7 +154,13 @@ func TestAReadSentBehindAFullWindowIsAnsweredInsideItsTerm(t *testing.T) {
 		t.Fatalf("a fleet-store read sent behind a full window of %d messages on a link at the floor "+
 			"was not answered within the %v the case waits for it: %v", window, objstore.Stall, err)
 	}
-	ahead := len(arrived.all()) - before
+	var atRead int64
+	select {
+	case atRead = <-arrived.atRead:
+	case <-ctx.Done():
+		t.Fatal("the read was answered, and the member's watch never saw its request arrive")
+	}
+	ahead := int(atRead - before)
 	if ahead < 1 {
 		t.Fatalf("none of the upload's messages crossed the link while the read waited: the case sent "+
 			"it behind nothing, its window of %d messages already across", window)
@@ -160,4 +170,57 @@ func TestAReadSentBehindAFullWindowIsAnsweredInsideItsTerm(t *testing.T) {
 			"its full window, %v at the floor: the read is answered past the %v its %v term leaves "+
 			"after its own round trip", ahead, c, requestBudget, jsapi.RequestTerm)
 	}
+}
+
+// readArrival is what [watchReadArrival] sees on the member: the upload's
+// messages so far, and how many had arrived when the first leader read of a
+// KV bucket did.
+type readArrival struct {
+	pieces atomic.Int64
+	atRead chan int64
+}
+
+// watchReadArrival watches nc, a connection of the member, for the upload's
+// messages and the fleet store's leader reads (the only KV bucket reads
+// across the link while the case runs), in the order the link delivered them:
+// every subscription feeds one channel, which nats.go fills from the
+// connection's one read loop in the order the server sent, so the count at
+// the read's arrival is the link's order and never when a goroutine ran. A
+// leaf's read names the fleet's domain, which the member maps to its own API,
+// so both spellings are watched.
+func watchReadArrival(t *testing.T, nc *nats.Conn) *readArrival {
+	t.Helper()
+	w := &readArrival{atRead: make(chan int64, 1)}
+	msgs := make(chan *nats.Msg, 1<<12)
+	for _, subject := range []string{"$O." + natsobj.Bucket + ".C.>",
+		"$JS.API.STREAM.MSG.GET.>", "$JS.*.API.STREAM.MSG.GET.>"} {
+		sub, err := nc.ChanSubscribe(subject, msgs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = sub.Unsubscribe() })
+	}
+	if err := nc.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done) })
+	go func() {
+		read := false
+		for {
+			select {
+			case m := <-msgs:
+				switch {
+				case strings.HasPrefix(m.Subject, "$O."):
+					w.pieces.Add(1)
+				case !read && strings.Contains(m.Subject, ".KV_"):
+					read = true
+					w.atRead <- w.pieces.Load()
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+	return w
 }
