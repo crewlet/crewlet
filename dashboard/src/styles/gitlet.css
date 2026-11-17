@@ -11,17 +11,77 @@
    glyphs and their names, a seat by its own face, a picked line by a rule at
    its edge. */
 
-/* GITLET › CHANGES' "NEEDS A PERSON" BAND: the changes an agent company cannot
-   move on its own, above the grid. A ruled box rather than a callout, since
-   nothing here is a fault: it is a list, read first. */
-.code-person-band {
+/* GITLET › CHANGES' "WAITING ON YOU": what waits on the reader, above the list. The list's
+   own card with its head band, not a callout, since nothing here is a fault. */
+.code-wait {
+  margin-block-end: var(--spacing-4);
+}
+.code-wait__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  inline-size: 100%;
+}
+.code-wait__title {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+.code-wait__count {
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+.code-wait__all {
+  margin-inline-start: auto;
+}
+.code-wait__reason {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+/* IN TRACKS OF THEIR OWN WIDTH, so the meters and the actions line up down the box. */
+.code-wait__facts {
+  display: grid;
+  grid-template-columns: 7.5rem 6rem;
+  align-items: center;
+  justify-items: end;
+  gap: var(--spacing-4);
+}
+.code-wait__fact {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* THE LIST'S HEAD: the state tabs, then the pickers at the end of the line; each wraps. */
+.code-changes-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  inline-size: 100%;
+}
+.code-changes-head__pickers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-inline-start: auto;
+}
+
+/* NEW CHANGE without a repository: which repository's branches to compare. */
+.code-new-change {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
-  margin-block-end: var(--spacing-4);
-  padding: var(--spacing-3) var(--spacing-4);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
+  min-inline-size: 16rem;
+  padding: var(--spacing-3);
+}
+.code-new-change__lab {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
 }
 
 /* A live change's readiness: a segment per condition, of its slot's width, beside its count. */
@@ -2280,13 +2340,13 @@
   white-space: nowrap;
 }
 
-/* SPACED BY ITS OWN MARGIN, so a row with nothing below keeps no gap for it. */
-.code-list__below {
 /* A CHANGE'S FACTS STAND ON ITS TITLE'S LINE however its meta wraps. */
 .code-list__facts:has(> .code-change-facts) {
   align-self: start;
 }
 
+/* SPACED BY ITS OWN MARGIN, so a row with nothing below keeps no gap for it. */
+.code-list__below {
   grid-area: below;
   min-width: 0;
   margin-block-start: var(--spacing-2);
@@ -2376,18 +2436,6 @@
     white-space: normal;
   }
 
-  .code-change-facts,
-  .code-list--compact .code-change-facts {
-    grid-template-columns: repeat(4, auto);
-    justify-content: start;
-  }
-
-  .code-change-fact--updated,
-  .code-list--compact .code-change-fact--updated {
-    grid-column: 1 / -1;
-    justify-self: start;
-  }
-
   .code-list--timeline .code-list__group,
   .code-list--timeline .code-list__foot {
     padding-inline-start: 0;
@@ -2464,12 +2512,6 @@
 .code-change-fact--updated {
   grid-column: 1 / -1;
   justify-self: end;
-}
-.code-list--compact .code-change-facts {
-  grid-template-columns: 3.5rem 7.5rem 5rem 2.75rem 9rem;
-}
-.code-list--compact .code-change-fact--updated {
-  grid-column: auto;
 }
 
 .code-change-checks,

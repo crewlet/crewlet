@@ -482,7 +482,8 @@ tells the seats and people it concerns.
 
 **Find what waits on you.** **Gitlet › Changes** lists the open changes, and
 **Waiting on** narrows them to the ones waiting on you, on a review, on a fix
-or on a person. A record that concerns you leaves a notice in your
+or on a person. **Waiting on you**, above the list, names each change that waits on
+your review or your fix and why, with **Review** opening its files. A record that concerns you leaves a notice in your
 **Inbox** — the change, why you hear of it ("asked for your review", "asked
 to look again") and where its merge stands — whose **Open the diff** opens the
 change's page on its files. A seat is woken instead, told the change, why it

@@ -138,6 +138,12 @@ export const CHANGE_NEEDS = ["review", "fix", "me", "person"] as const;
 export const CHANGE_WINDOWS = ["24h", "7d", "30d"] as const;
 
 /**
+ * Every order a listing of changes is asked in (`sort=`), as `gitlet.ChangeSorts` says them;
+ * held both ways by `internal/gitlet.TestTheDashboardKnowsEverySortOfAListingOfChanges`.
+ */
+export const CHANGE_SORTS = ["opened", "updated"] as const;
+
+/**
  * Every precondition a live change's readiness judges, ONE A KIND, in the
  * order a change moves through them (`gitlet.PreconditionKinds`): it is opened
  * for review, its head is measured, approved by each kind of approval its

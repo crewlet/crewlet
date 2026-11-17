@@ -294,7 +294,7 @@ func TestTheDashboardKnowsEveryStateOfAChange(t *testing.T) {
 //
 // Gitlet › Changes offers `CHANGE_NEEDS` (`contract/code.ts`) as the `needs` its
 // listing narrows to — waiting on me, on a review, on a fix, on a person —
-// and its "Needs a person" band asks the last. A need the engine grew that
+// and its Waiting on you box asks me, or person for a reader bound to no seat. A need the engine grew that
 // the list lacks is a listing nobody can ask for; one the list keeps that the
 // engine dropped is a choice refused `bad_params` on every press.
 //
@@ -327,12 +327,23 @@ func TestTheDashboardKnowsEveryWindowOfAListingOfChanges(t *testing.T) {
 	}
 }
 
+// THE DASHBOARD ORDERS A LISTING OF CHANGES IN THE ENGINE'S WORDS (`CHANGE_SORTS`), both
+// ways, in order.
+// Mutation: drop a sort from either side, or reorder the dashboard's, and this fails.
+func TestTheDashboardKnowsEverySortOfAListingOfChanges(t *testing.T) {
+	t.Parallel()
+	got, want := theDashboardsList(t, "CHANGE_SORTS"), spelledOut(gitlet.ChangeSorts())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's CHANGE_SORTS is %v, want the engine's, in order: %v", got, want)
+	}
+}
+
 // THE DASHBOARD KNOWS EVERY PRECONDITION A CHANGE'S READINESS JUDGES, in the
 // engine's order, and every state one stands in.
 //
 // A change's readiness is its preconditions, one a kind, in the order a
-// change moves through them ([gitlet.PreconditionKinds]); the Changes grid's
-// Meter counts them and a change's readiness names each, in words keyed on
+// change moves through them ([gitlet.PreconditionKinds]); a change row's
+// segmented meter draws them and a change's readiness names each, in words keyed on
 // `PRECONDITION_KINDS` and `PRECONDITION_STATES` (`contract/code.ts`). A kind
 // the engine grew — the merge gate adds its own — that the list lacks is a
 // precondition drawn as its raw word; one the list keeps that the engine
