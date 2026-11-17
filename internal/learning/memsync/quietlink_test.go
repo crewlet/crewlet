@@ -42,19 +42,41 @@ func meteredSyncer(t *testing.T, db *store.DB, copies *fakeCopies, link Link) (*
 	return s, js
 }
 
+// mutes is n placements whose copies say nothing at all.
+func mutes(n int) []copyScript {
+	scripts := make([]copyScript, n)
+	for i := range scripts {
+		scripts[i].mute = true
+	}
+	return scripts
+}
+
+// oneMute is a replay's one placement, on copies that say nothing at all.
+func oneMute(*Syncer) []copyScript { return mutes(1) }
+
+// mutedPastBehind is how many placements, one each pull's stall, a quiet
+// replay on a moving link must be placed on copies that say nothing for its
+// last to come more than [behindWait] after its first: the fewest that would
+// refuse it were its placements to arm the behind clock, so a case that
+// expects it to complete across them holds them to arming none, whatever the
+// window makes the stall.
+func mutedPastBehind(s *Syncer) int {
+	return int(behindWait/s.stall(s.pullBound())) + 2
+}
+
 // A REPLAY HEARING NOTHING ON A MOVING LINK IS PLACED AGAIN PAST ONE TRANSPORT
 // PULL, AND REFUSED AT ITS TIME CAP.
 //
-// Across a link at the shipped lease, the diary's copies say nothing at all —
-// no delivery, no heartbeat, no answer to their consumer's info — while the
-// link moves:
+// Across a link, the diary's copies say nothing at all — no delivery, no
+// heartbeat, no answer to their consumer's info — while the link moves:
 //
 //   - on a link reading ten megabytes a second, past one message at the
 //     transport's bound and a window at each stall, the replay is placed
-//     again at each stall, four times, on copies that say nothing, and the
-//     fifth hands the notes over: the hydration completes, a minute and more
-//     after it last heard anything, since a placement for the link's
-//     movement arms no behind clock;
+//     again at each stall on copies that say nothing, as many times as span
+//     more than [behindWait] from the first placement to the last (eight at
+//     the window's 9.1 s stall), and the next hands the notes over: the
+//     hydration completes, a minute and more after it last heard anything,
+//     since a placement for the link's movement arms no behind clock;
 //   - on a link reading a kilobyte a second, never past that, the replay is
 //     neither placed again nor refused for silence: it is refused at the stall
 //     of one pull at the transport's bound since it was placed, and not a
@@ -80,7 +102,8 @@ func TestAReplayHearingNothingOnAMovingLinkIsPlacedAgainPastOneTransportPull(t *
 		// stillFrom is when a moving link falls still, nil for never.
 		stillFrom func(s *Syncer) time.Duration
 		rate      float64
-		scripts   []copyScript
+		// scripts is how each placement of the diary's replay answers.
+		scripts func(s *Syncer) []copyScript
 		// carried is the notes the hydration carries, or -1 for a refusal.
 		carried int
 		// ends is when the hydration ends, read off the syncer.
@@ -90,20 +113,24 @@ func TestAReplayHearingNothingOnAMovingLinkIsPlacedAgainPastOneTransportPull(t *
 	}{
 		{
 			name: "past what one message and a window carry", moving: true, rate: 10 << 20,
-			scripts: []copyScript{{mute: true}, {mute: true}, {mute: true}, {mute: true}, {}},
+			scripts: func(s *Syncer) []copyScript {
+				return append(mutes(mutedPastBehind(s)), copyScript{})
+			},
 			carried: 5,
-			ends:    func(s *Syncer) time.Duration { return 4 * s.stall(s.pullBound()) },
+			ends: func(s *Syncer) time.Duration {
+				return time.Duration(mutedPastBehind(s)) * s.stall(s.pullBound())
+			},
 		},
 		{
 			name: "creeping under it", moving: true, rate: 1 << 10,
-			scripts: []copyScript{{mute: true}},
+			scripts: oneMute,
 			carried: -1,
 			ends:    func(s *Syncer) time.Duration { return s.stall(s.pullBytes()) },
 			says:    []string{"while the link kept moving", "no copy said anything to it"},
 		},
 		{
 			name: "still", moving: false, rate: 0,
-			scripts: []copyScript{{mute: true}},
+			scripts: oneMute,
 			carried: -1,
 			ends:    func(s *Syncer) time.Duration { return s.stall(s.pullBound()) },
 			says:    []string{"the link carried nothing at the floor", "(0 rows carried)"},
@@ -111,7 +138,7 @@ func TestAReplayHearingNothingOnAMovingLinkIsPlacedAgainPastOneTransportPull(t *
 		{
 			name: "falling still past its stall", moving: true, rate: 1 << 10,
 			stillFrom: func(s *Syncer) time.Duration { return s.stall(s.pullBound()) + 1500*time.Millisecond },
-			scripts:   []copyScript{{mute: true}},
+			scripts:   oneMute,
 			carried:   -1,
 			ends:      func(s *Syncer) time.Duration { return s.stall(s.pullBound()) + 2*quietWait },
 			says:      []string{"the link carried nothing at the floor"},
@@ -124,7 +151,6 @@ func TestAReplayHearingNothingOnAMovingLinkIsPlacedAgainPastOneTransportPull(t *
 				log := newFakeChangelog()
 				ids := notesOnto(t, log, "n", 5, 512)
 				copies := newFakeCopies(log)
-				copies.scripts["agent_diary"] = c.scripts
 				start := time.Now()
 				var s *Syncer
 				link := fakeLink{
@@ -134,6 +160,8 @@ func TestAReplayHearingNothingOnAMovingLinkIsPlacedAgainPastOneTransportPull(t *
 					read: func() uint64 { return uint64(c.rate * time.Since(start).Seconds()) },
 				}
 				s, _ = meteredSyncer(t, db, copies, link)
+				scripts := c.scripts(s)
+				copies.scripts["agent_diary"] = scripts
 				ends := c.ends(s)
 				h := hydrating(t.Context(), s)
 				time.Sleep(ends - time.Nanosecond)
@@ -159,8 +187,8 @@ func TestAReplayHearingNothingOnAMovingLinkIsPlacedAgainPastOneTransportPull(t *
 						h.err, len(ids))
 				}
 				opened := copies.openedFor("agent_diary")
-				if len(opened) != len(c.scripts) {
-					t.Fatalf("the diary's replay was placed %d times, want %d", len(opened), len(c.scripts))
+				if len(opened) != len(scripts) {
+					t.Fatalf("the diary's replay was placed %d times, want %d", len(opened), len(scripts))
 				}
 				stall := s.stall(s.pullBound())
 				for i := 1; i < len(opened); i++ {
