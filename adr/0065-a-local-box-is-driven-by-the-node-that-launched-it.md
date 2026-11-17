@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/sandbox`
-- **Enforced-by:** `internal/sandbox.TestEachWaiterDrivesOnlyTheBoxesItCanReach`, `internal/sandbox.TestAPauseIsReapedOnlyOnItsBoxsHost`, `internal/sandbox.TestACollectionOfABoxOnAnotherHostIsAskedOfThatHost`, `internal/sandbox.TestAHostThatDoesNotAnswerHandsTheClaimBackUncounted`, `internal/sandbox.TestAnEndingOnAnotherNodeLeavesTheBoxToItsHost`, `internal/sandbox.TestARelaunchAwayFromTheBoxsHostStartsFresh`, `internal/sandbox.TestARelaunchOnTheBoxsHostContinuesInIt`, `internal/sandbox.TestAStopOfARelaunchBeforeItsBoxReadsNoJobAndLeavesTheBoxToItsHost`, `internal/sandbox.TestAStopOfARunWhoseBoxIsOnAnotherHostIsReadThere`, `internal/sandbox.TestAHostReclaimsTheBoxesNoRunNamesAnyMore`, `internal/sandbox.TestALaunchNodeGoneForTheBoxTimeoutHasItsJobLost`, `internal/sandbox.TestALaunchNodeBackWithinTheBoxTimeoutKeepsItsRuns`, `internal/sandbox.TestAJobKilledWithItsEngineIsLost`, `internal/sandbox.TestAJobFoundRunningAfterARestartIsWatchedByTheNewEngine`, `internal/sandbox.TestAJobItsEngineRestartKilledIsRecordedLostAndAnnounced`, `internal/sandbox.TestALostJobsRoundIsCarriedOnNotCollected`, `internal/sandbox.TestACompletionAfterTheHostWasFoundGoneCarriesTheRoundOn`, `internal/agent/runner.TestALostJobsRoundIsCarriedOnInAFreshSession`, `internal/agent/runner.TestARoundLostTooOftenIsNotStartedAgain`, `internal/sandbox.TestALocalBoxsTailIsReadOnTheNodeThatLaunchedIt`, `internal/engine.TestABoxOnAnotherHostIsReadBackByThatHost`, `internal/engine.TestABoxReadTheFleetDidNotSignReadsNothing`, `internal/engine.TestBothWaitersKeepARunsTokenFileCurrent`, `internal/engine.TestAHostBehindItsAskersClockReadsOnlyItsShareOfTheAskersWait`, `internal/engine.TestAHostAheadOfItsAskersClockStillReadsWithinTheAllowance`, `internal/engine.TestABoxReadAnotherBuildCannotReadWholeReadsNothing`, `internal/engine.TestAHostTakesEveryBoxReadAsItArrives`, `internal/engine.TestABoxReadWhoseShareIsSpentIsRefusedAndFreesItsSlot`, `internal/engine.TestAnAskThatNeverLeftThisNodeIsOneItCouldNotMake`
+- **Enforced-by:** `internal/sandbox.TestEachWaiterDrivesOnlyTheBoxesItCanReach`, `internal/sandbox.TestAPauseIsReapedOnlyOnItsBoxsHost`, `internal/sandbox.TestACollectionOfABoxOnAnotherHostIsAskedOfThatHost`, `internal/sandbox.TestAHostThatDoesNotAnswerHandsTheClaimBackUncounted`, `internal/sandbox.TestAnEndingOnAnotherNodeLeavesTheBoxToItsHost`, `internal/sandbox.TestARelaunchAwayFromTheBoxsHostStartsFresh`, `internal/sandbox.TestARelaunchOnTheBoxsHostContinuesInIt`, `internal/sandbox.TestAStopOfARelaunchBeforeItsBoxReadsNoJobAndLeavesTheBoxToItsHost`, `internal/sandbox.TestAStopOfARunWhoseBoxIsOnAnotherHostIsReadThere`, `internal/sandbox.TestAHostReclaimsTheBoxesNoRunNamesAnyMore`, `internal/sandbox.TestALaunchNodeGoneForTheBoxTimeoutHasItsJobLost`, `internal/sandbox.TestALaunchNodeBackWithinTheBoxTimeoutKeepsItsRuns`, `internal/sandbox.TestAJobKilledWithItsEngineIsLost`, `internal/sandbox.TestAJobFoundRunningAfterARestartIsWatchedByTheNewEngine`, `internal/sandbox.TestAJobItsEngineRestartKilledIsRecordedLostAndAnnounced`, `internal/sandbox.TestALostJobsRoundIsCarriedOnNotCollected`, `internal/sandbox.TestACompletionAfterTheHostWasFoundGoneCarriesTheRoundOn`, `internal/agent/runner.TestALostJobsRoundIsCarriedOnInAFreshSession`, `internal/agent/runner.TestARoundLostTooOftenIsNotStartedAgain`, `internal/sandbox.TestALocalBoxsTailIsReadOnTheNodeThatLaunchedIt`, `internal/engine.TestABoxOnAnotherHostIsReadBackByThatHost`, `internal/engine.TestABoxReadTheFleetDidNotSignReadsNothing`, `internal/engine.TestBothWaitersKeepARunsTokenFileCurrent`, `internal/engine.TestAHostBehindItsAskersClockReadsOnlyItsShareOfTheAskersWait`, `internal/engine.TestAHostAheadOfItsAskersClockStillReadsWithinTheAllowance`, `internal/engine.TestABoxReadAnotherBuildCannotReadWholeReadsNothing`, `internal/engine.TestAHostTakesEveryBoxReadAsItArrives`, `internal/engine.TestABoxReadWhoseShareIsSpentIsRefusedAndFreesItsSlot`, `internal/engine.TestAnAskThatNeverLeftThisNodeIsOneItCouldNotMake`, `internal/sandbox.TestAStopGivesASilentHostUpOnTheAskingNodesOwnClock`, `internal/sandbox.TestAStopsRetryOnANodeAheadOfItsDeciderStillAsksItsHost`, `internal/sandbox.TestAStopIsGivenUpByItsAbsoluteBoundWhereNoFrameCountsItsSilence`, `internal/sandbox.TestAnAskThatOutlivesItsSeatWritesNothingOffShortOfTheBoxTimeout`
 - **Cost-when-tried:** the fleet's one waiter polled every running job from whichever node held its duty. A `direct` or `container` box on another node's host is not there to reconnect to, so the duty's node failed every tick, gave the box up after `ConnectGiveUp` (60 s), and settled a job that was still working as lost; its keepalive never reached the box either. An ending or a relaunch on a node the seat had moved to reached for the box the same way, and found nothing.
 - **Tag-status:** unreleased
 
@@ -201,3 +201,93 @@ must understand moves the version. No state-log record, record version or
   where main might still have read it in time from the broker's buffer.
 - A seats-only host's clock is measured by nothing (the `clock_skew` alarm
   holds the data nodes and the register's member); this makes it no worse.
+
+## Amendment: a stop gives a silent host up on the asking node's own clock
+
+A person's stop of a run whose box is on another node's host is read there,
+and a host that gives no account of the box keeps the stop: it is asked again
+rather than having the run's spend written off. It was given up once
+`now − Ending.At` reached the box timeout, the bound after which the fleet
+takes a silent launch node for gone. But `Ending.At` is the clock of the node
+whose store handle DECIDED the stop, and the node asking may be any other: the
+seat's next holder after a move. One whose clock ran ahead of the decider's by
+more than the box timeout gave the host up on its very first ask and wrote the
+run's spend off, and one behind waited past the stated bound.
+
+**The decision.** A stop's read that brings no account of the run
+(`sandbox.ErrBoxHostSilent`) keeps the stop and is asked again, until either
+bound holds, judged as each such ask returns (`Coordinator.hostGivenUp`):
+
+- ONE CLOCK: this node has heard nothing from the host for the box timeout, by
+  its own clock, since the START of its first ask under this ending that
+  reached the broker and came back with nothing (`Coordinator.hostSilence`).
+  The silence is kept on the stop's retry series (`answerRetry.silent`), keyed
+  by the ending. A host that answered busy (`sandbox.ErrBoxHostBusy`) is there,
+  and the silence is cleared; an ask this node could not make
+  (`sandbox.ErrBoxNotAsked`) says nothing of the host, and neither starts it
+  nor advances it. The silence is never carried to the seat's next holder,
+  which counts from its own first silent ask, as the fleet's waiter counts a
+  launch node's absence again from its own first sight when its duty moves; a
+  frame with no series — a seat's retirement, or an ask whose series the
+  seat's move dropped while it ran — counts its own ask's silence, which is
+  what it measured.
+- AN ABSOLUTE BOUND: the stop is the box timeout and twice
+  `objstore.AssumedClockSkew` old by this node's clock, on any ask that brought
+  no account — silent, busy or not asked. On any two clocks within the bound
+  the engine assumes, it never fires before the stop is the box timeout old in
+  real time, and it ends the wait across every seat move, restart and
+  retirement tick, none of which carries the silence over.
+
+The absolute bound is what a retirement needs. A stop on a retiring seat was
+decided under the seat's lease by its holder, and the retirement comes at least
+a day after a sweep first saw the seat absent; each retirement tick asks the
+host for no longer than its own budget, and its release drops every series of
+the seat, so silence alone would never give a dead host up there, and the run's
+record and the seat's mailbox would be kept for good. With the bound, every
+retirement but one whose stop a node serving a day-stale revision decided meets
+a stop more than two hours and a quarter old, and gives it up at its first
+tick.
+
+No give-up is fenced to the seat's holder: an ending is finished by whoever
+reads it next, its collection is recorded once per ending
+(`PendingStore.CollectStop`), and a node whose ask outlived its seat measured
+its own silence on one clock, which is the evidence the rule asks for.
+
+**Why the obvious alternatives are wrong.**
+
+- AN ATTEMPT COUNT AT A STATED PACE, on the row, states a time it does not
+  measure: one attempt lasts from nothing (an ask this node could not make) to
+  the whole stop's read, about eighty-one minutes, and each count is a fenced
+  write.
+- SILENT TIME ACCUMULATED ON THE ROW needs a new field of the recorded ending,
+  its mixed-build story and a write per attempt, for a sum the bound it
+  mirrors does not keep: the fleet's waiter counts again when its duty moves.
+- ASKING THE WAITER'S VERDICT — the host's presence lease absent for the box
+  timeout — holds the stop, and the seat's mail behind it, for good on a host
+  that is PRESENT and silent: a key it lacks, a clock past the box read's
+  allowance, an older build refusing the newer read.
+- THE SILENCE FROM THE END OF THE FIRST SILENT ASK waits a second whole ask —
+  about one hundred and sixty-two minutes in all — for a host already silent
+  for eighty-one, since one stop's ask outlasts the box timeout alone.
+- THE SILENCE FROM THE SERIES' FIRST ATTEMPT counts an ask this node could not
+  make as the host's silence.
+- ONE MAP PER NODE KEYED BY THE ENDING, shared by the retry and a retirement's
+  ticks, would carry a retirement's silence from tick to tick, at the cost of
+  entries a seat's release cannot drop without dropping the retirement's, so
+  pruned at the absolute bound's horizon; with the absolute bound, a
+  retirement's stop is given up by its first tick in every case but a
+  day-stale revision's.
+
+**What it leaves.**
+
+- A STOP YOUNGER THAN ITS ABSOLUTE BOUND AT A SEAT'S RETIREMENT waits up to
+  that bound — two hours and a quarter after its decision, by the retiring
+  node's clock — rather than the box timeout. That needs a stop decided by a
+  node serving a day-stale revision.
+- A HOST THAT ANSWERS BUSY for longer than the absolute bound has its stop
+  written off by that bound; a busy host is past sixty-four reads of its boxes
+  and sixty-four waiting, each bounded by its own share.
+- Across every frame, a silent host is given up no sooner than the box timeout
+  of real time after the decision and, on clocks within the bound, no later
+  than the box timeout and four times `objstore.AssumedClockSkew` after it,
+  plus one ask's wait. On the deciding node nothing changes.

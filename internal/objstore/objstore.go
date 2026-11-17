@@ -356,7 +356,12 @@ const RecordWithin = 12 * time.Hour
 //   - a box read's admission (sandbox.BoxReadClockAllowance): the asking
 //     node's deadline, stamped by its clock, admitted by the box's host until
 //     twice this past it by the host's own, so a host ahead of its asker by
-//     less than that still takes the read; argued at the allowance.
+//     less than that still takes the read; argued at the allowance;
+//   - a stop's give-up of a silent host (sandbox's Coordinator.hostGivenUp):
+//     the stop's decision, dated by the deciding node's clock, given up by the
+//     node asking the box's host once it is the box timeout and twice this old
+//     by that node's own clock, so it never comes before the box timeout has
+//     passed in real time; argued at the rule.
 //
 // # Two readings, and every rule takes the second
 //
@@ -372,11 +377,12 @@ const RecordWithin = 12 * time.Hour
 // write against the node running the collector, the node sweeping a retired
 // row against the member that stamped its retirement, the node holding a
 // repository against the node passing over it, one committer against another,
-// the node asking a box read against the box's host — so each is held to
-// twice it. Not every one of them is a machine the alarm holds: a rule judged
-// on the clock of a node that runs seats, a turn's hold on a repository or a
-// box read's admission, rests on a clock the alarm measures only where that
-// node holds data too, since a node without the data role writes no row to the
+// the node asking a box read against the box's host, the node asking a
+// stopped run's host against the node that decided the stop — so each is held
+// to twice it. Not every one of them is a machine the alarm holds: a rule
+// judged on the clock of a node that runs seats, a turn's hold on a
+// repository, a box read's admission or a stop's give-up, rests on a clock the
+// alarm measures only where that node holds data too, since a node without the data role writes no row to the
 // register. The servers of an external NATS cluster are not nodes, and
 // nothing measures them but the one leading the register. Those clocks are
 // the operator's to keep, so NTP runs on every node and every server, not
@@ -391,7 +397,8 @@ const RecordWithin = 12 * time.Hour
 // threshold falls short of the idle window it is defined from by exactly the
 // two hours, and a seat's push days leave a whole day against those two
 // hours; a ref drop's fourteen days, a policy's edge, move by at most them;
-// and a box read's admission allows exactly the two hours.
+// and a box read's admission and a stop's give-up allow exactly the two
+// hours.
 const AssumedClockSkew = time.Hour
 
 // identifier is what a declared table or column may be spelled as, since each

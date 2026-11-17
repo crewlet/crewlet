@@ -156,6 +156,14 @@ hours of each other:
   more than those two hours and the read's wait refuses every such read, and
   its asker hears a host that did not answer: a collection is handed back and
   asked again, and a stop waits for the host.
+- A person's stop of a run whose box is on another node's host is given up
+  with nothing read once that host has been silent for the box timeout by the
+  clock of the node asking it, or once the stop is the box timeout and two
+  hours old by that clock, judged against the instant the deciding node's clock
+  stamped on it. The two hours keep the second from ever coming before the box
+  timeout has passed in real time, so a node whose clock runs further ahead of
+  the decider's than that gives a host up early, and writes off the stopped
+  run's spend while the host may still be restarting.
 
 NTP keeps machines within milliseconds of each other; a host without it drifts,
 and a virtual machine restored from a snapshot can come back hours off.
@@ -175,8 +183,8 @@ stream. So while no node raises it, every data node and that member keep
 within an hour of the fleet's clock, and any two of them — every member of an
 embedded broker among them — within two hours of each other, inside every
 margin above. A rule judged on the clock of a node that runs seats, a turn's
-hold or a box read's admission above, rests on a clock the alarm measures
-only where that node holds data too: a node without the `data` role writes no
+hold, a box read's admission or a stop's give-up above, rests on a clock the
+alarm measures only where that node holds data too: a node without the `data` role writes no
 row to the register, so nothing measures its clock, and NTP on it is all that
 keeps it inside the bound. With two data nodes neither clock outvotes the other, so both are
 named once they stand more than two hours apart. The alarm names a clock that

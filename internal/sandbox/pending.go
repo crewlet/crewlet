@@ -366,8 +366,11 @@ type RecordedEnding struct {
 	// announcement is published under ([endingEventID]).
 	ID string `json:"id"`
 
-	// At is when the ending was decided, on the store's clock, and the
-	// instant its announcement carries.
+	// At is when the ending was decided, on the clock of the node whose store
+	// handle decided it, and the instant its announcement carries. Only that
+	// node reads it as an age on one clock: any other node's clock may stand
+	// apart from it by up to twice objstore.AssumedClockSkew, which is what a
+	// stop's give-up of a silent host allows it ([Coordinator.hostGivenUp]).
 	At time.Time `json:"at"`
 
 	// Reason and Detail are what it announces; an empty Reason announces
