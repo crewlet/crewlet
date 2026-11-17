@@ -48,8 +48,11 @@
 // DEFAULT BUILD, where the jsonv2 experiment is on: since Go 1.27, where encoding/json/v2 and jsontext joined
 // the standard library, encoding/json is built on jsontext, json.Valid is jsontext's own read of one value
 // under AllowDuplicateNames and AllowInvalidUTF8, and every string either decodes is unquoted by the one
-// function both share. A build with GOEXPERIMENT=nojsonv2 compiles encoding/json's own decoder instead (its
-// files carry `//go:build !goexperiment.jsonv2`), and the agreement then rests on the fuzzing alone.
+// function both share. NO BUILD WITHOUT THE EXPERIMENT COMPILES THIS PACKAGE'S TESTS OR THE ENGINE: under
+// GOEXPERIMENT=nojsonv2 encoding/json/jsontext does not exist (its files carry `//go:build
+// goexperiment.jsonv2`), and the tests hold the scanner to it while the engine's thread layer decodes through
+// it. The scanner imports neither decoder, but nothing that reads with it builds there, and no build runs the
+// fuzzing against the decoder encoding/json compiles in that build instead.
 //
 // WHERE THEY EVER DO, THE SCANNER FOLLOWS JSONTEXT: the thread layer's acceptance must not change by a single
 // line, and a tool result's text it digests is compared with a log's output, so a decoded text that moved
