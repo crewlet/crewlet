@@ -417,35 +417,19 @@ func (s *Syncer) pullBytes() int {
 // queues first in first out — has its answer wait behind whatever of the
 // pull's reply is still crossing. A pull of the transport's 8 MiB at the
 // floor every link is promised ([objstore.MiBPace]) holds such a request four
-// minutes.
-// Windowed, it waits behind at most four seconds of this hydration's pulls at
-// the floor, since a replay keeps one pull out at a time ([tableReplay.pull]),
-// and is still answered inside its term: the rule internal/objstore/natsobj
-// windows an upload by (linkWindow), counted in bytes here because a row has
-// no fixed size.
+// minutes. Windowed, it waits behind at most four seconds of this hydration's
+// pulls at the floor, since a replay keeps one pull out at a time
+// ([tableReplay.pull]), and is still answered inside its term: the rule
+// internal/objstore/natsobj windows an upload by (linkWindow), counted in
+// bytes here because a row has no fixed size.
 //
 // Its price is round trips on a fast distant link: a year of episodes, 1 380
 // windows, takes about two and a half minutes with its writes across 100 ms at
-// 100 Mbit/s, where 8 MiB pulls took about half a minute and windows sized by
-// the shipped lease's heartbeat (512 KiB) about a minute.
+// 100 Mbit/s, where 8 MiB pulls took about half a minute.
 //
-// # What the window does not cover
-//
-// The window is this hydration's alone: the object store's upload window is a
-// budget of its own on the same connection (natsobj, linkWindow), and an
-// upload's bytes cross the link outbound while a pull's cross it inbound, so a
-// request whose bytes cross behind an upload's window and whose reply crosses
-// behind a pull's waits behind both — 7.75 seconds at the floor beyond its own
-// round trip, past its term. (A node hydrates one seat at a time: the seat
-// host's placement pass claims them one after another.) Nothing windows the
-// rest of what crosses the link toward the node: a download holds four of the
-// object store's 128 KiB messages in hand (natsobj, readAhead), fifteen
-// seconds at the floor, for each download in flight, and an event delivered
-// to one of the node's seats crosses whole. A reply queued behind them waits
-// for all of it — a pull's next row among them, which past the replay's stall
-// ([Syncer.stall], 9.1 s across a link) refuses the seat, to be taken again
-// from the start of its memory (crewlet/crewlet#1035). One row larger than the
-// window crosses alone, holding the link for its own crossing.
+// What the window does not cover is the package doc's ("A window across a
+// link"). One row larger than the window crosses alone, holding the link for
+// its own crossing.
 func (s *Syncer) pullBound() int {
 	bound := s.pullBytes()
 	if s.window > 0 {
@@ -471,9 +455,9 @@ const pullWindow = int(int64(jsapi.WindowCrossing) * objstore.MiB / int64(objsto
 // of a word are one pull's at most, and the figure allows one other message
 // at the transport's bound beside them. Nothing bounds the rest — any number
 // of events and records may be ahead of a word, and the object store's
-// transfers ride the same connection, unwindowed — so once the link has read
+// downloads ride the same connection, unwindowed — so once the link has read
 // that much since the replay last heard anything, a copy afresh is judged
-// cheaper than waiting on: 8.9 MB at the shipped lease, under a second at
+// cheaper than waiting on: 8.5 MB across a link, under a second at
 // 100 Mbit/s. A word queued behind more is placed again needlessly, and the
 // placement, which the behind clock does not read ([tableReplay.again]),
 // costs the seat a consumer; at worst the replay is refused at its time cap

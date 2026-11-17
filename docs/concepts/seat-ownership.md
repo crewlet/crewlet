@@ -431,7 +431,7 @@ hold the wait:
 
 - **Placed again past one message and a window.** Once the link has read one
   message at the broker's limit and one of the replay's pulls since the replay
-  last heard anything (8.9 MB at the shipped lease), the replay is placed
+  last heard anything (8.5 MB across a link), the replay is placed
   again on a copy the broker chooses afresh (`memory_replay_placed_again`,
   `why=quiet`): on a link of 100 Mbit/s, under a second's worth. The figure is
   a choice, not a bound on what the link may carry ahead of a word: the
@@ -482,7 +482,7 @@ removed, a re-pin, a shed for capacity. So does anything else that takes that
 seat's lock, a sandbox apply preparing the held seats among them, and a seats
 node's first `/ready`, which waits for its first pass. Across a moving link
 those waits are the longer ones above: a replay that hears nothing waits up to
-its 253-second cap, where its stall used to refuse it at 20.5 seconds, and its
+its 253-second cap, where a still link refuses it at its 9.1-second stall, and its
 identity reads, barriers and consumer creations up to 248 seconds past their
 bounds, about 278 seconds where they ended at 30 (294 for an end barrier,
 where it ended at 45.5). That is
@@ -513,19 +513,19 @@ round trip needs, at every lease TTL, as the object store windows an upload. A
 row larger than the window crosses alone, in a pull of one message at the
 broker's limit. The window's price is round trips on a fast distant link: a
 year of episodes takes 1,380 pulls, about two and a half minutes with its
-writes across 100 ms at 100 Mbit/s. What it does not cover: the window is the
-hydration's own, and the object store's upload window is another on the same
-connection, so a request whose bytes cross behind an upload and whose reply
-crosses behind a pull waits behind both, 7.75 seconds at the floor beyond its
-own round trip, past its term, a lease renewal sent there among them; nothing
-windows the rest of what crosses the link toward the node — a download holds
-four of the object store's 128 KiB messages in hand, fifteen seconds at the
-floor, for each download in flight, and an event for one of the node's seats
-crosses whole — so a pull's next row can wait behind them past the 9.1
-seconds a hydration across a link waits for one, which refuses the seat until
-the next placement sweep takes it again
-([#1035](https://github.com/crewlet/crewlet/issues/1035)); and one row larger
-than the window holds the link for its own crossing. A memory row is bounded only by the broker (an episode keeps its ask whole), so a pull
+writes across 100 ms at 100 Mbit/s. What it does not cover
+([#1035](https://github.com/crewlet/crewlet/issues/1035)): the window is the
+hydration's own, one for the link's inbound direction, and the object store's
+upload window is another, for its outbound, so a request whose bytes cross
+behind an upload and whose reply crosses behind a pull waits behind both, 7.75
+seconds at the floor beyond its own round trip, past its term, a lease renewal
+sent there among them; and nothing windows the rest of what crosses the link
+toward the node — a download holds four of the object store's 128 KiB messages
+in hand, fifteen seconds at the floor, for each download in flight, and an
+event for one of the node's seats crosses whole — so a request whose reply
+crosses behind them waits for all of it, a lease renewal among them. A pull's
+next row waiting there refuses no seat: the replay waits while the link moves
+(above). One row larger than the window holds the link for its own crossing. A memory row is bounded only by the broker (an episode keeps its ask whole), so a pull
 bounded by its rows alone
 held up to 256 rows of 8 MiB each, 2 GiB, inside seat acquisition
 ([#1052](https://github.com/crewlet/crewlet/issues/1052)). The broker sends a

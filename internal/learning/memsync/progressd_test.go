@@ -327,15 +327,12 @@ func TestTheReplaysKnobsHoldTheirReasons(t *testing.T) {
 
 // A PULL ACROSS A LINK CROSSES WITHIN A REQUEST'S TERM.
 //
-// A replay's pull rides the coordination connection, and across a link the
-// requests sent after it, a lease renewal's among them wherever the renewals
-// share that link, wait behind whatever of its reply is still crossing. Such
-// a request is answered within its term ([jsapi.RequestTerm]) only if the
-// pull crosses the floor ([objstore.MiBPace]) in what the term leaves after
-// the request's own round trip, one [jsprovision.ReadTerm]: four seconds,
-// 139 810 bytes, whatever lease the node holds. So a pull across a link is
-// bounded by the widest window that crosses within that, and one in a
-// member's own process by no window at all.
+// Across a link the requests sent after a pull, a lease renewal's among them,
+// wait behind whatever of its reply is still crossing, and are answered within
+// their term ([jsapi.RequestTerm]) only if the pull crosses the floor
+// ([objstore.MiBPace]) in what the term leaves after the request's own round
+// trip, one [jsprovision.ReadTerm]: four seconds, 139 810 bytes, whatever
+// lease the node holds. In a member's own process there is no window.
 //
 // Mutation: size the window by the whole five-second term, leaving the
 // request no round trip of its own, and this goes red.

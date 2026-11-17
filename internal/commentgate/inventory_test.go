@@ -162,7 +162,7 @@ var excessInventory = map[string]int{
 	"internal/knowledge":                            74,
 	"internal/learning":                             610,
 	"internal/learning/memread":                     24,
-	"internal/learning/memsync":                     835,
+	"internal/learning/memsync":                     826,
 	"internal/logging":                              226,
 	"internal/maintenance":                          306,
 	"internal/mattermost":                           345,
