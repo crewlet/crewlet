@@ -270,7 +270,7 @@ type Sources struct {
 	Insights coord.InsightRecords
 
 	// Analysis is the fleet's records of the advisor's analyst and Analyst
-	// what it runs on (ADR-0156); either nil leaves `advisor_analysis` unregistered.
+	// what it runs on (ADR-0157); either nil leaves `advisor_analysis` unregistered.
 	Analysis analyst.Records
 	Analyst  analyst.Models
 

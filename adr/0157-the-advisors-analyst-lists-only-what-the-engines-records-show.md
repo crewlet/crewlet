@@ -1,4 +1,4 @@
-# ADR-0156: The advisor's analyst lists only what the engine's records show
+# ADR-0157: The advisor's analyst lists only what the engine's records show
 
 - **Status:** accepted
 - **Authority:** `internal/advisor/analyst`

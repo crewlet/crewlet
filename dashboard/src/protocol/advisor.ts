@@ -177,7 +177,7 @@ export type AnalysisStatus = "running" | "done" | "ceiling" | "refused" | "faile
 /** How a person answered an analyst finding. */
 export type AnalystVerdict = "useful" | "wrong" | "known";
 
-/** One analyst run, as the fleet keeps the last one (ADR-0156). */
+/** One analyst run, as the fleet keeps the last one (ADR-0157). */
 export interface AdvisorAnalysis {
   id: string;
   status: AnalysisStatus;

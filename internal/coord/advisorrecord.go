@@ -2,7 +2,7 @@ package coord
 
 import "context"
 
-// AdvisorRecords holds the advisor analyst's records (ADR-0156): its last run
+// AdvisorRecords holds the advisor analyst's records (ADR-0157): its last run
 // and the answers people gave its findings, each internal/advisor's value,
 // written only at the revision it was read at, so two nodes never both run.
 type AdvisorRecords interface {

@@ -8,7 +8,7 @@ import (
 )
 
 // Advisor is the setup advisor's own settings: its analyst, which reads the
-// company's records with a model and lists only what it can cite (ADR-0156).
+// company's records with a model and lists only what it can cite (ADR-0157).
 type Advisor struct {
 	Analyst AdvisorAnalyst `yaml:"analyst,omitempty" json:"analyst,omitzero" desc:"The advisor's analyst: a run on the company's own models that reads the week's records and lists problems no rule names, each with the records and numbers it rests on. Absent = off."`
 }

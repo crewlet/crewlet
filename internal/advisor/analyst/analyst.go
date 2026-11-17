@@ -1,6 +1,6 @@
 // Package analyst runs the setup advisor's analyst: one model run over the
 // week's records, served as read tools, that submits findings the engine then
-// grounds ([advisor.Ground]) before anything is listed (ADR-0156).
+// grounds ([advisor.Ground]) before anything is listed (ADR-0157).
 //
 // # What the model reads
 //

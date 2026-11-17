@@ -17,7 +17,7 @@ import (
 // maxAnalysisAnswerBytes bounds an answer's body: a fingerprint and a word.
 const maxAnalysisAnswerBytes = 1 << 10
 
-// mountAnalysis registers the analyst's two writes (ADR-0156): a run now, and
+// mountAnalysis registers the analyst's two writes (ADR-0157): a run now, and
 // a person's answer to one of its findings. Neither writes config or a credential.
 func (a *App) mountAnalysis(mux authz.Mux) error {
 	router := authz.NewRouter(mux, authz.ContextGuard(authz.NoChart{}))

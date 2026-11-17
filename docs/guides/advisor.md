@@ -114,7 +114,7 @@ If a server cannot read the week's budget refusals or its merge decisions, the a
 
 ## Found by the analyst
 
-The rules above name what somebody already wrote a rule for. The **analyst** reads the same week of records on the company's own models and lists problems no rule names, under the rule-based list, in a section of its own. It is off until you name a model for it ([ADR-0156](../../adr/0156-the-advisors-analyst-lists-only-what-the-engines-records-show.md)):
+The rules above name what somebody already wrote a rule for. The **analyst** reads the same week of records on the company's own models and lists problems no rule names, under the rule-based list, in a section of its own. It is off until you name a model for it ([ADR-0157](../../adr/0157-the-advisors-analyst-lists-only-what-the-engines-records-show.md)):
 
 ```yaml
 advisor:

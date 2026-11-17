@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// THE ANALYST'S FINDINGS (ADR-0156): nothing a model submits is listed until every
+// THE ANALYST'S FINDINGS (ADR-0157): nothing a model submits is listed until every
 // record and number it cites is one the run's own tools answered and the engine
 // has built its fix. No model and no I/O here; internal/advisor/analyst runs it.
 

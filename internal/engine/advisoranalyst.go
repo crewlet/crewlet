@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 )
 
-// AnalystModels is what the advisor's analyst runs on (ADR-0156): the running
+// AnalystModels is what the advisor's analyst runs on (ADR-0157): the running
 // company's `advisor.analyst.llm`, every round recorded as background spend on
 // no seat and charged to the company's windows alone, and this process's tool host.
 func AnalystModels(e *Engine) analyst.Models { return analystModels{e: e} }

@@ -513,7 +513,7 @@ const (
 	ActionModelsRetry Action = "models.retry"
 	// ActionAdvisorRun starts the advisor's analyst now, or records an answer
 	// to one of its findings (`POST /advisor/analysis`, `.../answers`): runtime
-	// records the company keeps, never config or a credential (ADR-0156).
+	// records the company keeps, never config or a credential (ADR-0157).
 	ActionAdvisorRun Action = "advisor.run"
 	// ActionToolsRetry restarts an MCP server now, on every node or on the
 	// node holding one seat (`POST /mcp-servers/{name}/retry`). Like a

@@ -2576,7 +2576,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Channels: e.Backends().Fleet,
 			// The fleet's record of the operating insights it shares (ADR-0119).
 			Insights: e.Backends().Fleet,
-			// The advisor's analyst: the fleet's records of it, and its models (ADR-0156).
+			// The advisor's analyst: the fleet's records of it, and its models (ADR-0157).
 			Analysis: e.Backends().Fleet,
 			Analyst:  engine.AnalystModels(e),
 			// The company's ONE knowledge backend, behind the same seam a

@@ -101,7 +101,7 @@ var namedRoutes = []struct {
 	// THE CHANGE AN ACCESS REQUEST WOULD MAKE, `seat=` and `access=`.
 	{method: "GET", pattern: "/advisor/access", what: "advisor_access"},
 	{method: "GET", pattern: "/advisor/review", what: "go_live_review"},
-	// THE ANALYST'S LAST RUN AND ITS FINDINGS (ADR-0156).
+	// THE ANALYST'S LAST RUN AND ITS FINDINGS (ADR-0157).
 	{method: "GET", pattern: "/advisor/analysis", what: "advisor_analysis"},
 	// WHAT DELEGATES DECIDED, the rules and limits they decide under, the
 	// day's digest and the week's spot-checks (ADR-0125).

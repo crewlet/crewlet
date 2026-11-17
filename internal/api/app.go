@@ -67,7 +67,7 @@ type App struct {
 	insights     *insights.Sharer
 	stopInsights func()
 
-	// analyst is the advisor's analyst (ADR-0156), nil where the fleet keeps
+	// analyst is the advisor's analyst (ADR-0157), nil where the fleet keeps
 	// no record of it; stopAnalyst ends its cadence and waits for a run.
 	analyst     *analyst.Service
 	stopAnalyst func()
@@ -1100,7 +1100,7 @@ func New(opts Options) (*App, error) {
 	if err := a.mountDeployment(mux); err != nil {
 		return nil, fmt.Errorf("api: mount the deployment's controls: %w", err)
 	}
-	// The advisor's analyst: a run now and an answer to a finding (ADR-0156).
+	// The advisor's analyst: a run now and an answer to a finding (ADR-0157).
 	if err := a.mountAnalysis(mux); err != nil {
 		return nil, err
 	}

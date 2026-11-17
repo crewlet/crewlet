@@ -148,7 +148,7 @@ const (
 	// windows by the turn's own meter like any turn's.
 	AuxAssistantBrief AuxPurpose = "assistant_brief"
 	// AuxAdvisorAnalysis is a round of the setup advisor's analyst: company
-	// background spend on no seat, charged to the company's windows (ADR-0156).
+	// background spend on no seat, charged to the company's windows (ADR-0157).
 	AuxAdvisorAnalysis AuxPurpose = "advisor_analysis"
 )
 
