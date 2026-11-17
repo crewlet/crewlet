@@ -69,6 +69,7 @@ import {
 } from "./Work.tsx";
 import { factLabel, KINDS, RELATIONS, SOURCE_KINDS, USES, WORDS, entries } from "./words.ts";
 import { ago } from "~/lib/ago.ts";
+import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 
 const TABS = ["overview", "relations", WORK_TAB, "sources", "history"] as const;
 type Tab = (typeof TABS)[number];
@@ -250,6 +251,13 @@ function Holders({ entry, now }: { entry: AtlasEntry; now: number }) {
       <ul className="atlas-list">
         {(entry.holders ?? []).map((holder) => (
           <li key={`${holder.seat}:${holder.lane}`}>
+            <SeatAvatar
+              name={seatBadge(holder.seat).name}
+              kind={seatBadge(holder.seat).kind === "human" ? "human" : "agent"}
+              avatar={seatBadge(holder.seat).avatar}
+              size="text"
+              decorative
+            />{" "}
             <Link href={href(["company", "org", "seats", holder.seat])}>
               {seatBadge(holder.seat).name}
             </Link>{" "}

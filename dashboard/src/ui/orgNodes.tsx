@@ -22,7 +22,8 @@ import {
   type TreeCardTone,
 } from "@crewlethq/ui";
 import { CrewletCharacter } from "@crewlethq/icons/characters";
-import { DEFAULT_AVATAR, type AgentAvatar, type AvatarCharacter } from "~/lib/avatar.ts";
+import type { AgentAvatar, AvatarCharacter } from "~/lib/avatar.ts";
+import { AVATAR_CHARACTERS } from "~/contract/avatar.ts";
 import {
   BuildingComplexGlyph,
   ChevronDownGlyph,
@@ -158,7 +159,7 @@ export function NodeGlyph({
 }: {
   kind: NodeGlyphKind;
   size?: GlyphSize;
-  /** The Crewlet character an agent is drawn as; the original where it names none. */
+  /** The Crewlet character an agent is drawn as; the Crewlet mark where no look reached the node. */
   character?: AvatarCharacter;
 }) {
   if (kind === "company") return <BuildingComplexGlyph size={size} />;
@@ -169,7 +170,7 @@ export function NodeGlyph({
   // keyline and the visor gap would be hairlines a screen blurs.
   return (
     <CrewletCharacter
-      character={character ?? DEFAULT_AVATAR.character}
+      character={character ?? AVATAR_CHARACTERS[0]}
       detail="compact"
       width={side}
       height={side}
@@ -179,7 +180,7 @@ export function NodeGlyph({
 
 /**
  * The hue an agent seat is drawn in, on a chart's node and a table's row: the
- * colour its author chose for it ([AgentAvatar]), purple where it names none.
+ * colour of its resolved look ([AgentAvatar]), neutral where none reached it.
  * It is the same colour as the seat's avatar everywhere else, so an agent is
  * one colour wherever it appears; a person, a unit and the company stay on
  * the chart's neutral surface.
@@ -188,7 +189,7 @@ export function seatTone(
   kind: string | undefined,
   avatar: AgentAvatar | null | undefined,
 ): TreeCardTone | undefined {
-  return kind === "human" ? undefined : (avatar ?? DEFAULT_AVATAR).color;
+  return kind === "human" ? undefined : avatar?.color;
 }
 
 /**

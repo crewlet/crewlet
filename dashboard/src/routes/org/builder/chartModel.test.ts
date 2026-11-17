@@ -216,6 +216,7 @@ describe("structure", () => {
       checked: { sent, derived },
       current: false,
       warnings: new Map(),
+      served: () => undefined,
     });
     const rewrite = (data: Partial<Record<string, string>>) => ({
       ...checkedDraft,

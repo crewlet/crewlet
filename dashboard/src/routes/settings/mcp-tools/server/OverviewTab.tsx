@@ -22,6 +22,7 @@ import {
   TableTextCell,
   Text,
   Tooltip,
+  TableEntityCell,
 } from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import type { McpApproval, McpMemberServerStatus } from "~/contract/mcp.ts";
@@ -32,6 +33,7 @@ import { ApprovalCard } from "../flows/ApprovalCard.tsx";
 import type { OnFlow } from "../parts.tsx";
 import { Alarms } from "../servers/Alarms.tsx";
 import { failureWords, INSTANCE } from "../words.ts";
+import { plainSeat } from "~/app/frame/cells.tsx";
 
 /** Each state, the one to look at first: a failed instance leads the default order. */
 const STATE_ORDER: readonly ServerDetail["instances"][number]["state"][] = [
@@ -74,7 +76,12 @@ function InstanceGrid({
           // Who it is is the point of the list: it keeps a readable width.
           floor: "12rem",
           sortValue: who,
-          cell: (i) => <TableTextCell>{who(i)}</TableTextCell>,
+          cell: (i) =>
+            i.seat ? (
+              <TableEntityCell {...plainSeat(data.seat(i.seat))} />
+            ) : (
+              <TableTextCell>{who(i)}</TableTextCell>
+            ),
         },
         {
           key: "node",

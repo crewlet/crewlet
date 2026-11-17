@@ -50,7 +50,9 @@ import type {
   ExecutorEntry,
 } from "~/protocol/index.ts";
 import { wholeReferenceName } from "~/lib/references.ts";
-import { activityOf } from "~/lib/seats.ts";
+import { activityOf, type SeatBadge } from "~/lib/seats.ts";
+import { lookOf, type AgentAvatar } from "~/lib/avatar.ts";
+import { kindOf } from "./model/operations.ts";
 import { keyOfHandle } from "./chartModel.ts";
 import { placeDerivation, type CheckedDocument, type PlacedDerivation } from "./model/document.ts";
 import { COMPANY_KEY, isMintedKey, type NodeKey } from "./model/keys.ts";
@@ -134,6 +136,21 @@ export function seatLabels(draft: Draft): Map<string, string> {
       const handle = handleOf(seat);
       const name = seat.data.name || handle;
       return [handle, (count.get(seat.data.name) ?? 0) > 1 ? `${name} (@${handle})` : name];
+    }),
+  );
+}
+
+/** Each seat of the draft by handle, as its face is drawn beside its name in a picker. */
+export function seatFaces(
+  draft: Draft,
+  served: (handle: string) => AgentAvatar | null | undefined,
+): Map<string, Pick<SeatBadge, "name" | "kind" | "avatar">> {
+  return new Map(
+    [...allSeats(draft)].map(({ seat }) => {
+      const handle = handleOf(seat);
+      const kind = kindOf(seat.data);
+      const avatar = kind === "agent" ? lookOf(seat.data.avatar, served(handle)) : null;
+      return [handle, { name: seat.data.name || handle, kind, avatar }];
     }),
   );
 }

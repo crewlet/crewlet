@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/textindex"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -487,6 +488,9 @@ func (r *Reader) changes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Ros
 
 	q = q.readying()
 	out.NarrowedTo = q.Readiness
+	if q.textLeads() {
+		return r.changesByWords(ctx, tx, q, chart, cp, out)
+	}
 	switch q.Needs {
 	case NeedMe:
 		return r.changesWaitingOnMe(ctx, tx, q, chart, cp, out)
@@ -540,6 +544,13 @@ func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 		if _, listed := repos[row.repoID]; listed && walk.keeps(row, q, repoID) && (!walk.fix || fixing[row.id]) {
 			kept = append(kept, row)
 		}
+	}
+	// A LISTING NARROWED BY ITS WORDS that another walk leads keeps the rows holding them.
+	if q.Text != "" {
+		if kept, err = holdingWords(ctx, tx, kept, textindex.Terms(q.Text)); err != nil {
+			return err
+		}
+		out.ChangesText = &ChangesText{}
 	}
 	// EVERY KEPT CHANGE'S READINESS, judged in this transaction against
 	// this read's one chart — the rows of all of them read a kind at a time
@@ -943,9 +954,9 @@ func (q ReadQuery) validateChanges() error {
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
 	case q.Repo == "" && q.Work == "" && q.State == "" && q.Reviewer == "" && q.Needs == "" && q.Window == "" &&
-		q.Readiness == "":
+		q.Readiness == "" && q.Text == "":
 		return refused("state", "a listing of changes names a repository, a work item, a state, a reviewer, "+
-			"what its changes wait on or a window they moved in, which the indexes it walks are each led by — "+
+			"what its changes wait on, a window they moved in or the words they hold, which the indexes it walks are each led by — "+
 			"no index holds every change the company has, and an owner's changes are kept by state")
 	case q.Window != "" && !q.Window.Valid():
 		return refused("window", fmt.Sprintf("%q is not one of %s", q.Window, words.Or(ChangeWindows())))
@@ -996,6 +1007,11 @@ func (q ReadQuery) validateChanges() error {
 	if q.Work != "" {
 		if _, _, why := cutWork(q.Work); why != "" {
 			return refused("work", why)
+		}
+	}
+	if q.Text != "" {
+		if why := wordsProblem(q.Text); why != "" {
+			return refused("text", why)
 		}
 	}
 	return nil

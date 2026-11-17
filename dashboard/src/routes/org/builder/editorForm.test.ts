@@ -42,7 +42,7 @@ describe("an untouched form", () => {
     expect(
       unitParts("unit:engineering", unitForm(unit), unitForm(unit), { editableKey: false }),
     ).toEqual([]);
-    const form = seatForm(dev(), "developer");
+    const form = seatForm(dev(), "developer", undefined);
     expect(seatParts("seat:dev", dev(), form, form, { editableHandle: false })).toEqual([]);
   });
 
@@ -53,7 +53,7 @@ describe("an untouched form", () => {
   // its schedules and makes every agent under it onboard again.
   test("a name the document stored with spaces is not a rename until somebody types", () => {
     const padded: ConfigRole = { name: " Dev ", goal: "Build" };
-    const initial = seatForm(padded, "");
+    const initial = seatForm(padded, "", undefined);
     expect(
       seatParts(
         "seat:dev",
@@ -109,7 +109,7 @@ describe("an untouched form", () => {
         mattermost: { channel: " eng", username: "dev-bot " },
       },
     };
-    const initial = seatForm(padded, "");
+    const initial = seatForm(padded, "", undefined);
     expect(
       seatParts(
         "seat:dev",
@@ -160,7 +160,7 @@ describe("an untouched form", () => {
 
 describe("a seat", () => {
   test("names only the fields that changed, and an emptied field removes it", () => {
-    const initial = seatForm(dev(), "");
+    const initial = seatForm(dev(), "", undefined);
     const form = {
       ...initial,
       goal: "",
@@ -187,7 +187,7 @@ describe("a seat", () => {
       manages: ["SRE"],
       schedules: [{ name: "digest", cron: "0 8 * * *", task: "Digest" }],
     };
-    const initial = seatForm(data, "developer");
+    const initial = seatForm(data, "developer", undefined);
     const form = {
       ...initial,
       name: "Developer",
@@ -204,7 +204,7 @@ describe("a seat", () => {
   });
 
   test("an existing seat's handle is never written, however the form holds it", () => {
-    const initial = seatForm(dev(), "");
+    const initial = seatForm(dev(), "", undefined);
     const form = { ...initial, handle: "renamed" };
     expect(seatParts("seat:dev", dev(), initial, form, { editableHandle: false })).toEqual([]);
     expect(seatParts("new:x", dev(), initial, form, { editableHandle: true })).toEqual([
@@ -217,7 +217,7 @@ describe("a seat", () => {
   // emptied is that key removed, which is how the engine spells "no ceiling".
   test("a token budget writes each window it changed, and an emptied window is removed", () => {
     const data: ConfigRole = { name: "Dev", token_budget: { day: 100, week: 700 } };
-    const initial = seatForm(data, "");
+    const initial = seatForm(data, "", undefined);
     expect(initial.tokenBudget).toEqual({ day: "100", week: "700", month: "" });
     expect(
       seatParts(
@@ -243,7 +243,7 @@ describe("a seat", () => {
   test("a stored ceiling above 2^53-1 is shown, and emptying its box removes it", () => {
     const huge = 2 ** 60;
     const data: ConfigRole = { name: "Dev", token_budget: { month: huge } };
-    const initial = seatForm(data, "");
+    const initial = seatForm(data, "", undefined);
     expect(initial.tokenBudget.month).toBe(String(huge));
     expect(
       seatParts(
@@ -263,7 +263,9 @@ describe("a seat", () => {
   test("a ceiling of 0 or a malformed one is refused before Apply, naming the window", () => {
     // A typed 0 is refused before Apply, whatever the document holds:
     // whatever number it holds is shown, so it can be corrected.
-    expect(seatForm({ name: "X", token_budget: { day: 0 } }, "").tokenBudget.day).toBe("0");
+    expect(seatForm({ name: "X", token_budget: { day: 0 } }, "", undefined).tokenBudget.day).toBe(
+      "0",
+    );
     expect(tokenBudgetError("day", "0")).toBe(
       "A ceiling of 0 is refused: leave it empty for no daily ceiling.",
     );
@@ -292,13 +294,13 @@ describe("a seat", () => {
     expect(llmChain({ default: "fast", review: ["smart"] })).toBeNull();
 
     const single: ConfigRole = { name: "A", llm: "fast" };
-    const one = seatForm(single, "");
+    const one = seatForm(single, "", undefined);
     expect(
       seatParts("seat:a", single, one, { ...one, llm: ["smart"] }, { editableHandle: false }),
     ).toEqual([{ type: "updateSeat", target: "seat:a", set: [{ path: ["llm"], value: "smart" }] }]);
 
     const listed: ConfigRole = { name: "A", llm: ["fast", "smart"] };
-    const two = seatForm(listed, "");
+    const two = seatForm(listed, "", undefined);
     expect(
       seatParts("seat:a", listed, two, { ...two, llm: ["smart"] }, { editableHandle: false }),
     ).toEqual([
@@ -306,7 +308,7 @@ describe("a seat", () => {
     ]);
 
     const mapped: ConfigRole = { name: "A", llm: { default: "fast" } };
-    const form = seatForm(mapped, "");
+    const form = seatForm(mapped, "", undefined);
     expect(seatParts("seat:a", mapped, form, form, { editableHandle: false })).toEqual([]);
   });
 
@@ -314,7 +316,7 @@ describe("a seat", () => {
   // vendor's block for it: the engine refuses `integrations.jira` as an
   // unknown key, so a form that wrote one was refused on every check.
   test("the integration fields write inside the seat's own blocks, and what it owns beside them", () => {
-    const initial = seatForm(dev(), "");
+    const initial = seatForm(dev(), "", undefined);
     const form = {
       ...initial,
       codeAccess: "review",
@@ -344,7 +346,7 @@ describe("a seat", () => {
   // wrote one was refused as an unknown key.
   test("a seat's project and space are read and written at the top of the seat", () => {
     const owner: ConfigRole = { name: "Dev", project: "OPS", space: "DOCS" };
-    const initial = seatForm(owner, "");
+    const initial = seatForm(owner, "", undefined);
     expect([initial.project, initial.space]).toEqual(["OPS", "DOCS"]);
     const form = { ...initial, project: " SUP ", space: "" };
     expect(seatParts("seat:dev", owner, initial, form, { editableHandle: false })).toEqual([
@@ -369,9 +371,16 @@ describe("a seat", () => {
   // HOW AN AGENT IS DRAWN is written a half at a time, so a change of colour
   // leaves the character to whatever the document says, its default included.
   test("an agent's profile icon writes only the half that changed; a person has none", () => {
-    const initial = seatForm(dev(), "");
-    expect(initial.avatar).toEqual({ character: "crewlet", color: "purple" });
-    const recoloured = { ...initial, avatar: { character: "crewlet", color: "amber" } as const };
+    // A SEAT THAT CHOSE NOTHING OPENS ON THE LOOK THE RUNNING SEAT IS SERVED.
+    const served = { character: "conelet", color: "rose" } as const;
+    const initial = seatForm(dev(), "", served);
+    expect(initial.avatar).toEqual(served);
+    // NOTHING SERVED AND NOTHING WRITTEN: no look yet, and nothing is written.
+    expect(seatForm(dev(), "", undefined).avatar).toBeNull();
+    const recoloured = {
+      ...initial,
+      avatar: { character: initial.avatar!.character, color: "amber" } as const,
+    };
     expect(seatParts("seat:dev", dev(), initial, recoloured, { editableHandle: false })).toEqual([
       {
         type: "updateSeat",
@@ -392,7 +401,7 @@ describe("a seat", () => {
     ]);
 
     const person: ConfigRole = { name: "Dev", kind: "human", contact: { github_login: "dev" } };
-    expect(seatForm(person, "").avatar).toBeNull();
+    expect(seatForm(person, "", undefined).avatar).toBeNull();
   });
 });
 
@@ -462,7 +471,7 @@ describe("a unit and the company", () => {
 
 test("the parts record as one edit that applies what the form says", () => {
   const state = keyedState(fixtureCompany());
-  const initial = seatForm(dev(), "developer");
+  const initial = seatForm(dev(), "developer", undefined);
   const form = { ...initial, name: "Developer", goal: "Ship", manages: ["SRE"] };
   const next = builderReducer(state, {
     type: "record",
@@ -487,7 +496,7 @@ test("the parts record as one edit that applies what the form says", () => {
 describe("a seat's advanced settings", () => {
   test("each is written as the document spells it, and only when it changed", () => {
     const data = { ...dev(), learning_enabled: false, llm_auxiliary: "fast", workers: ["a"] };
-    const initial = seatForm(data, "");
+    const initial = seatForm(data, "", undefined);
     expect(initial.learning).toBe("off");
     expect(initial.phaseModels.llm_auxiliary).toEqual(["fast"]);
     expect(seatParts("seat:dev", data, initial, initial, { editableHandle: false })).toEqual([]);
@@ -519,7 +528,7 @@ describe("a seat's advanced settings", () => {
 
   test("a chain written as a per-phase mapping is shown and never written", () => {
     const data = { ...dev(), llm_review: { plan: "smart" } } as unknown as ConfigRole;
-    const initial = seatForm(data, "");
+    const initial = seatForm(data, "", undefined);
     expect(initial.phaseModels.llm_review).toBeNull();
     expect(seatParts("seat:dev", data, initial, initial, { editableHandle: false })).toEqual([]);
   });

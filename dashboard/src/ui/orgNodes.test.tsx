@@ -28,15 +28,14 @@ describe("what a node is called", () => {
 
 describe("how a seat is toned and marked", () => {
   /*
-   * AN AGENT IS ITS OWN COLOUR on the chart, the colour its author chose and
-   * its avatar wears everywhere else; one that chose none is purple, as every
-   * agent was before a seat could choose. A person keeps the neutral surface
-   * whatever is written for them.
+   * AN AGENT IS ITS OWN COLOUR on the chart, the colour of the look it is
+   * served and its avatar wears everywhere else; one no look reached stays
+   * neutral. A person keeps the neutral surface whatever is written for them.
    */
-  test("an agent seat takes its own colour, purple where it names none, and a person none", () => {
+  test("an agent seat takes its own colour, none where no look reached it, and a person none", () => {
     expect(seatTone("agent", { character: "hexlet", color: "cyan" })).toBe("cyan");
-    expect(seatTone("agent", null)).toBe("purple");
-    expect(seatTone(undefined, undefined)).toBe("purple");
+    expect(seatTone("agent", null)).toBeUndefined();
+    expect(seatTone(undefined, undefined)).toBeUndefined();
     expect(seatTone("human", { character: "hexlet", color: "cyan" })).toBeUndefined();
   });
 

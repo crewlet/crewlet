@@ -174,7 +174,7 @@ test("a stack of the seats a schedule wakes draws each seat's own badge", () => 
     fs: "Agent Frontend SWE",
     as: "Agent AI Systems Engineer",
   };
-  const who = (h: string) => ({ name: names[h]!, kind: "agent" as const });
+  const who = (h: string) => ({ name: names[h]!, kind: "agent" as const, avatar: undefined });
   const { container } = render(
     <Router>
       <Wakes runners={["swe", "fs", "as"]} who={who} />
@@ -189,7 +189,11 @@ test("a stack of the seats a schedule wakes draws each seat's own badge", () => 
 // SEVERAL SEATS ARE A COUNT AND FACES. A chip per seat in a column that never
 // wraps cut three names to "A" and "Age…"; the names are still said.
 test("a schedule waking several seats says how many, and names them for a screen reader", () => {
-  const who = (h: string) => ({ name: `Agent ${h.toUpperCase()}`, kind: "agent" as const });
+  const who = (h: string) => ({
+    name: `Agent ${h.toUpperCase()}`,
+    kind: "agent" as const,
+    avatar: undefined,
+  });
   const { container } = render(
     <Router>
       <Wakes runners={["swe", "fs", "as"]} who={who} />
@@ -219,7 +223,7 @@ test("a schedule waking several seats says how many, and names them for a screen
  * agent-pm`.
  */
 const NAMES: Record<string, string> = { ceo: "Chief Executive", swe: "Agent SWE" };
-const who = (h: string) => ({ name: NAMES[h] ?? h, kind: "agent" as const });
+const who = (h: string) => ({ name: NAMES[h] ?? h, kind: "agent" as const, avatar: undefined });
 
 test("the header's Wakes names the seats, never their handles", () => {
   const wakes = scheduleFacts(row({ runners: ["ceo"] }), NOW, who).find(

@@ -59,13 +59,31 @@
 // the declared census is several times the entire supported vector corpus,
 // and the knowledge base's own embeddings are what would pay for it. ADR-0071
 // is the record of that decision and of what admitting chat to one half and
-// not the other cost the last time it happened.
+// not the other cost the last time it happened. Gitlet's changes have a third
+// keyword index of their own here ([ChangeIndexer], ADR-0156), unranked, since a listing
+// of changes keeps its order.
+//
+// # The index of changes' words
+//
+// [ChangeIndexer] indexes Gitlet changes' titles and descriptions
+// (ADR-0156). It walks forward over code_changes.position no further than
+// the code log's applied prefix, so a record this node retains is never
+// passed. Each document is numbered by this node and keeps its repository,
+// owner, state and a hash that keeps a head move from rewriting its
+// postings; its postings are one range of the postings key (the number
+// shifted 16 bits), so an edit or a purge removes them with no term list
+// kept. A purged repository is dropped by a rotation, and a replaced estate
+// is rebuilt as chat's is. [ChangeIndexer.Holding] reads the narrowest of a
+// search's scope and words first and answers the newest changes holding
+// every word, with how far the walk reached and the code log's position its
+// writes were decided from, which the reader compares with its own snapshot.
 //
 // # A read of another domain's table is a named, exported statement
 //
-// This package reads tables it does not own — the tracker's tasks and
-// relations, the knowledge base's page heads — for the lexical index, the
-// embedding duty, the backlinks and the window report. Each of those
+// This package reads tables it does not own (the tracker's tasks and
+// relations, the knowledge base's page heads, Gitlet's changes) for the
+// lexical index, the embedding duty, the backlinks, the window report and the
+// index of changes' words. Each of those
 // statements is a function returning the statement and its arguments
 // ([TaskVersionsRead], [PageSelection], [LinkedTasksRead] and the rest), and
 // it is the one the reader runs, so the gate of the package that owns the

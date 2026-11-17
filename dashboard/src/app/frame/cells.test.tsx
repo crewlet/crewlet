@@ -165,7 +165,9 @@ test("no module spells an absent value with a dash of its own", () => {
  */
 test("a seat's badge is its initials, the same ones the board draws", () => {
   const { container } = render(
-    <TableEntityCell {...linkedSeat({ handle: "frontend-engineer", name: "Frontend Engineer" })} />,
+    <TableEntityCell
+      {...linkedSeat({ handle: "frontend-engineer", name: "Frontend Engineer", avatar: undefined })}
+    />,
   );
   // FE, from the name — and `getInitials` would give FE from the handle too,
   // since it splits on hyphens. Either way it is a mark that identifies.
@@ -178,13 +180,17 @@ test("a seat's badge is its initials, the same ones the board draws", () => {
 // every grid in the product.
 test("a human seat is drawn as a person and an agent as an agent", () => {
   const { container } = render(
-    <TableEntityCell {...linkedSeat({ handle: "ada", name: "Ada Lovelace", kind: "human" })} />,
+    <TableEntityCell
+      {...linkedSeat({ handle: "ada", name: "Ada Lovelace", kind: "human", avatar: null })}
+    />,
   );
   const badge = container.querySelector(".crewlet-avatar")!;
   expect(badge.classList.contains("crewlet-avatar--human")).toBe(true);
   expect(badge.classList.contains("crewlet-avatar--agent")).toBe(false);
   cleanup();
-  const agent = render(<TableEntityCell {...plainSeat({ name: "Agent CTO", kind: "agent" })} />);
+  const agent = render(
+    <TableEntityCell {...plainSeat({ name: "Agent CTO", kind: "agent", avatar: undefined })} />,
+  );
   const mark = agent.container.querySelector(".crewlet-avatar")!;
   expect(mark.classList.contains("crewlet-avatar--agent")).toBe(true);
   expect(mark.classList.contains("crewlet-avatar--human")).toBe(false);
@@ -233,13 +239,15 @@ test("no module draws an identity badge of its own", async () => {
 // A SEAT LINKS TO ITS PAGE, and a seat with no handle is nobody: the link is
 // the seat's, so a name alone draws the absence rather than a dead link.
 test("a linked seat goes to its page, and no handle is the Nobody absence", () => {
-  render(<TableEntityCell {...linkedSeat({ handle: "cto", name: "Agent CTO" })} />);
+  render(
+    <TableEntityCell {...linkedSeat({ handle: "cto", name: "Agent CTO", avatar: undefined })} />,
+  );
   expect(screen.getByRole("link", { name: "Agent CTO" }).getAttribute("href")).toBe(
     "#/company/org/seats/cto",
   );
   cleanup();
   const { container } = render(
-    <TableEntityCell {...linkedSeat({ handle: null, name: "Ghost" })} />,
+    <TableEntityCell {...linkedSeat({ handle: null, name: "Ghost", avatar: undefined })} />,
   );
   expect(container.textContent).toBe(`${EMPTY_VALUE}Nobody`);
 });
@@ -249,9 +257,11 @@ test("a linked seat goes to its page, and no handle is the Nobody absence", () =
 // column could only be read by opening the seat. A handle the chart does not
 // name is said once. Mutation: title a linked seat by its handle alone.
 test("a linked seat's hover gives its whole name and its handle", () => {
-  expect(linkedSeat({ handle: "cto", name: "Agent CTO" }).title).toBe("Agent CTO · @cto");
-  expect(linkedSeat({ handle: "departed" }).title).toBe("@departed");
-  expect(linkedSeat({ handle: "cto", name: "Agent CTO", title: "via a token" }).title).toBe(
-    "via a token",
+  expect(linkedSeat({ handle: "cto", name: "Agent CTO", avatar: undefined }).title).toBe(
+    "Agent CTO · @cto",
   );
+  expect(linkedSeat({ handle: "departed", avatar: undefined }).title).toBe("@departed");
+  expect(
+    linkedSeat({ handle: "cto", name: "Agent CTO", title: "via a token", avatar: undefined }).title,
+  ).toBe("via a token");
 });

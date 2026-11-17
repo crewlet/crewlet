@@ -27,6 +27,7 @@ import {
   defineWidgets,
   type WidgetChoices,
 } from "~/routes/home/board/kit.tsx";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 /** Every seat the chart holds, by name: what an Agent card can follow. */
 function useSeatChoices(): WidgetChoices {
@@ -36,7 +37,7 @@ function useSeatChoices(): WidgetChoices {
     return {
       loading: org === null,
       options: seats
-        .map((s) => ({ value: s.handle, label: s.name }))
+        .map((s) => ({ value: s.handle, label: s.name, leading: <ChoiceFace seat={s} /> }))
         .sort((a, b) => a.label.localeCompare(b.label)),
       empty: "No seats on the org chart yet.",
     };
