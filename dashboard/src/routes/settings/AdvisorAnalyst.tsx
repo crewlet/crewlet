@@ -71,11 +71,11 @@ function AnalystBody({ answer, refetch }: { answer: AdvisorAnalysisAnswer; refet
   const last = answer.last;
   const running = last?.status === "running";
 
-  const post = async (path: string, body: unknown) => {
+  const send = async (call: () => Promise<unknown>) => {
     setBusy(true);
     setRefused("");
     try {
-      await rest.post(path, body);
+      await call();
       refetch();
     } catch (err) {
       setRefused(
@@ -90,21 +90,27 @@ function AnalystBody({ answer, refetch }: { answer: AdvisorAnalysisAnswer; refet
 
   if (!answer.on) {
     return (
-      <Callout variant="neutral" title="The analyst is off">
+      <Callout
+        variant="neutral"
+        title="The analyst is off"
+        action={
+          <Link href={href(["settings", "config"])} size="caption">
+            Open the settings
+          </Link>
+        }
+      >
         <Text as="p">
           It reads the week&rsquo;s records on your own models, under a token ceiling of its own,
           and lists only what it can cite. Name a model under{" "}
           <InlineCode>advisor.analyst.llm</InlineCode> to turn it on
           {answer.suggest ? (
             <>
-              , such as Ask Crewlet&rsquo;s <InlineCode>{answer.suggest}</InlineCode>
+              , such as Ask Crewlet&rsquo;s <InlineCode close=".">{answer.suggest}</InlineCode>
             </>
-          ) : null}
-          .
+          ) : (
+            "."
+          )}
         </Text>
-        <Link href={href(["settings", "config"])} size="caption">
-          Open the settings
-        </Link>
       </Callout>
     );
   }
@@ -113,7 +119,7 @@ function AnalystBody({ answer, refetch }: { answer: AdvisorAnalysisAnswer; refet
     <Button
       size="small"
       disabled={busy || running}
-      onClick={() => void post("/advisor/analysis", {})}
+      onClick={() => void send(() => rest.post("/advisor/analysis", {}))}
     >
       {running ? "Running" : "Run now"}
     </Button>
@@ -125,11 +131,12 @@ function AnalystBody({ answer, refetch }: { answer: AdvisorAnalysisAnswer; refet
 
   return (
     <div className="col gap-2">
-      <div className="row gap-2 items-center">
+      <div className="row gap-2">
         <Text as="p" tone="secondary">
           {last ? (
             <>
-              Last run <AgoTime value={last.started} /> on <InlineCode>{last.model}</InlineCode>,{" "}
+              Last run <AgoTime value={last.started} /> on{" "}
+              <InlineCode close=",">{last.model}</InlineCode>{" "}
               {plural(last.input_tokens + last.output_tokens, "token")} of{" "}
               {last.ceiling.toLocaleString()}. {schedule}
             </>
@@ -166,7 +173,9 @@ function AnalystBody({ answer, refetch }: { answer: AdvisorAnalysisAnswer; refet
               f,
               setOpen,
               (verdict) =>
-                void post("/advisor/analysis/answers", { fingerprint: f.fingerprint, verdict }),
+                void send(() =>
+                  rest.post("/advisor/analysis/answers", { fingerprint: f.fingerprint, verdict }),
+                ),
             ),
           )}
           labels={{
