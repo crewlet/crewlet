@@ -100,40 +100,17 @@ func (r *coordRig) abandoned() bool {
 }
 
 // A SEAT'S RECOVERY PASS AND THE CLAIMS OF ITS RUNS ON THIS NODE EXCLUDE EACH
-// OTHER. The pass reads a claim it finds as one whose node stopped, and reaps
-// it as abandoned, or revives its answer. But an apply that brings the code-work
-// runtime up on a seat already held runs that pass with the seat's admission
-// open, so a signal's re-fire, a delivery or an owed answer's attempt claimed a
-// run while the pass ran, and a completion past its deadline is claimed with no
-// admission on any road, the acquisition's included: the pass then fenced this
-// node's own live claim, read it again as a resumed tail and reaped it, ending
-// the turn under the review still running it (or reviving the answer the
-// attempt was resuming with). Every claim passes one gate that refuses it while
-// the pass runs, and what it refuses is carried: a re-fire, a held completion's
-// backstop and an owed answer by the pass when it is done, and a delivery by the
-// queue, handed back as the node's failure. A claim the gate let through before
-// the pass began is the attempt's, which the reap refuses to touch: for as long
-// as that attempt is out, and for its own run alone, so a claim whose attempt
-// has returned, and a dead claim beside a live one, are still tails the pass
-// reaps.
+// OTHER (recoverygate.go): every claim passes one gate refused while the pass
+// runs and carried past it, and a claim let through before is the attempt's,
+// for as long as it is out and for its own run alone. Each case orders the
+// claim inside the pass with a store that holds the pass's fence until the
+// claim settled and a won claim until the pass read the row again
+// ([fencedUnderClaim]), never by the odds of a race.
 //
-// Each case orders the claim inside the pass with a store that holds the pass's
-// fence until the claim settled and a claim that won until the pass has read
-// the row again ([fencedUnderClaim]), never by the odds of a race.
-//
-// Mutation: drop the gate from the completion's claim, and a re-fire, a
-// delivery and a deadline's claim each take the run inside the pass, which reaps
-// it; from the answer's claim, and the pass revives the answer the attempt is
-// resuming; open the gate before the control topic is attached, or never close
-// it, and a claim lands inside the pass; keep a refused re-fire for its
-// backstop, and the job waits five minutes past the pass; leave a refused
-// answer or a held completion's backstop to nothing, and neither is carried;
-// hand a refused delivery back as the message's, and it counts toward its
-// poison; let the reap end a claim this node's own attempt holds, and a claim
-// let through before the pass is reaped under its turn; never count an attempt
-// off, and the claim of one that returned is reaped by no later pass; count
-// attempts by the seat rather than the run, and a dead claim beside a live one
-// is never reaped.
+// Mutation, each red: drop the gate from a completion's or an answer's claim;
+// open it before the control topic or never close it; keep a refused re-fire
+// for its backstop; carry nothing refused; NAK a delivery as the message's;
+// reap a live claim; never count an attempt off, or count by seat.
 func TestASeatsRecoveryAndTheClaimsOfItsRunsExcludeEachOther(t *testing.T) {
 	t.Parallel()
 

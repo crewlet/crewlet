@@ -367,20 +367,14 @@ func TestAStopAfterTheCompletionWasClaimedLeavesTheClaim(t *testing.T) {
 	}
 }
 
-// A JOB ITS COLLECTION ALREADY HANDED TO ITS TURN IS THE TURN'S. A completion
-// whose resume the seat's budget held, or whose resume was handed back for a
-// retry, goes back to running with its job read and charged; the turn's resume
-// has charged the work item the job's spend under its own segment, or will.
-// Ended by the stop, its turn's close charged that spend to the item again
-// under the stop's segment. So the stop leaves it — no second read of the box,
-// no reclaim, no close, no announcement — and the turn's own fence ends the
-// resume when it comes round, as it ends a claimed one. A job this node keeps
-// for its hold comes round at once: the stop re-fires it, ending the wait
-// (TestAStopEndsTheWaitOfACollectedJobsResume), and that re-fire is the turn's
-// resume, whose collection under its own claim is the turn's, not the stop's.
+// A JOB ITS COLLECTION ALREADY HANDED TO ITS TURN IS THE TURN'S: back in
+// running read and charged, its spend is the turn's resume's to charge, so the
+// stop leaves it, no second read, reclaim, close or announcement, and the
+// turn's fence ends the resume. A job kept for its hold comes round at once
+// (TestAStopEndsTheWaitOfACollectedJobsResume), its re-fire being the turn's.
 //
-// Mutation: drop the store's refusal and StopSeat's skip, and the box is read
-// a second time, reclaimed, and the turn closed on the stop.
+// Mutation: drop the store's refusal and StopSeat's skip, and the box is read a
+// second time, reclaimed, and the turn closed on the stop.
 func TestAStopLeavesAJobItsCollectionHandedToItsTurn(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -602,18 +596,11 @@ func TestAStopWaitsForASilentHostAndNeverWritesItsSpendOff(t *testing.T) {
 	}
 }
 
-// A STOP WHOSE HOST ALONE HAS A SILENT STORE WAITS FOR IT AS FOR A SILENT HOST.
-// The host is up, and so is the box: only the host's read of the run's row,
-// which licenses the read, goes unanswered, while this node's own store answers
-// every step of the stop's ending, as in a partition that cuts the host off from
-// the store's leader and not this node. That is no verdict about the box, and
-// its spend is not written off for it at once: the stop is kept, its session
-// closed, nothing charged, announced or closed, and asked again, and once the
-// store answers the host, it reads the box and the stop charges what it read.
-// But only the host can read the box, and a host that cannot for the box
-// timeout, by this node's clock since it first asked it, is as good as away:
-// past it the stop is ended with nothing read, as a silent host's is. Unbounded, it held the seat's mail for as
-// long as the partition lasted, while every write of the ending's would land.
+// A STOP WHOSE HOST ALONE HAS A SILENT STORE WAITS FOR IT AS FOR A SILENT HOST:
+// kept, its session closed and nothing charged, until the host reads the box,
+// or the box timeout by this node's clock since it first asked, when it ends
+// with nothing read. Unbounded, it would hold the seat's mail for the
+// partition.
 //
 // Mutation: read the store's silence as the box's failure in readStopped, and
 // the stop finishes on its first retry with its spend lost; drop the bound, and
@@ -728,23 +715,14 @@ func (s *silentFromDecision) CollectStop(ctx context.Context, turnID string, c S
 }
 
 // A STOP WHOSE NODE SHARES ITS HOST'S STORE SILENCE IS KEPT, AND NEVER SAID
-// ENDED. Where this node's own store does not answer either, nothing the stop's
-// ending writes would land, so the bound a host that alone cannot read the box
-// is held to never ends it: past the box timeout too, the stop is kept, its
-// spend still on the box and charged once the stores answer. Nor does its log
-// say it was ended all the same on any attempt, which the record's write,
-// failing, would then belie. The attempt staged here is the one that meets it:
-// the retry read the row and decided the ending again, and the silence began
-// as that decision landed, so the attempt's own read of the row is the first
-// step this node's store does not answer, and the next attempt's read of the
-// row keeps the stop before any read of the box.
+// ENDED, past the box timeout too. The staged attempt's own read of the row is
+// the first step this node's store does not answer, after the retry decided the
+// ending again.
 //
-// Mutation: bound the host's store's silence whatever the attempt's own read of
-// the row met (readStopped), or hand readStopped a read that answered whatever
-// it met (finishEnding), and nothing says the stop waits on a silence both
-// nodes share: its read is taken for a host given up, and the stop is kept
-// only by its record's write failing. (Said ended it never is, which is the
-// record's to say: [TestAStopIsSaidEndedUnreadOnlyOnceItsRecordSaysSo].)
+// Mutation: bound the host's silence whatever the attempt's own row read met
+// (readStopped), or hand readStopped a read that answered (finishEnding), and
+// the stop is kept only by its record's write failing.
+// ([TestAStopIsSaidEndedUnreadOnlyOnceItsRecordSaysSo] holds the saying.)
 //
 // Not parallel: it captures the process-wide logger ([captureLogs]).
 func TestAStopWhoseNodeSharesItsHostsStoreSilenceIsKeptAndNeverSaidEnded(t *testing.T) {
@@ -812,18 +790,10 @@ func (s *recordUnansweredOnce) CollectStop(ctx context.Context, turnID string, c
 	return s.PendingStore.CollectStop(ctx, turnID, c)
 }
 
-// A STOP IS SAID ENDED UNREAD ONLY ONCE ITS RECORD SAYS SO. A stop whose read of
-// its box comes to nothing (the box gone, or unreadable on this node's own
-// host, or its host or its host's store given up, here by the stop's age: the
-// box timeout and twice objstore.AssumedClockSkew by this node's clock) is
-// ended with nothing charged by its record of that (CollectStop): a
+// A STOP IS SAID ENDED UNREAD ONLY ONCE ITS RECORD SAYS SO (CollectStop): a
 // write of this node's store, which can fall silent after the attempt's own
-// read of the run's row answered. The stop is then kept for this node's retry,
-// which reads the box again and charges whatever that read finds. Said before
-// the write, the log told an operator that a stop still kept had ended with
-// its spend written off, whatever its read had come to, and a stop kept on a
-// silence both nodes share was said ended all the same. So it is said once
-// the record lands, and only then, with what the read came to.
+// read; the stop is then kept for the retry. Here the read comes to nothing by
+// the stop's age: the box timeout and twice objstore.AssumedClockSkew.
 //
 // Mutation: say it before the record is written, and the kept stop is said
 // ended; never say it, and a stop ended unread is never said to be.

@@ -522,26 +522,15 @@ func (h *holdStep) Hold(ctx context.Context, handle string, inbox queue.Attachme
 }
 
 // AN OWED RUN HOLDS ITS SEAT'S MAIL ONLY BEHIND A SERIES RECORDED AND ARMED TO
-// DRIVE IT. Each way this node owes a seat's run for a series' retry records the
-// series, owes the run and arms the series' attempt in one step of the lock: an
-// answer by turn or a recovered seat's owed answer ([Coordinator.queueOwed]), an
-// ending that did not finish ([Coordinator.oweEndingAfter]), a dead claim's
-// revival that did not land ([Coordinator.oweRevival]) and an answer left to its
-// job's owed release ([Coordinator.leaveToRelease]). A seat's release
-// ([Coordinator.ReleaseSeat]) drops the series, its attempt and the seat's owed
-// runs, and a run owed in a step of its own after the one that recorded its
-// series was owed again with nothing to drive it: the seat's mail held on this
-// node until a settle of that run or the seat's next release. The attempt is
-// armed under the lock, so the case reads, as it is armed, whether the run is
-// owed yet; and the hold is taken once the step is over, so it reads the series
-// as the step left it.
+// DRIVE IT: each way a run is owed for a series' retry
+// ([Coordinator.queueOwed], [Coordinator.oweEndingAfter],
+// [Coordinator.oweRevival], [Coordinator.leaveToRelease]) records the series,
+// owes the run and arms the attempt in one step, since a seat's release drops
+// all three. The attempt is armed under the lock, so the case reads whether the
+// run is owed yet; the hold is taken after the step.
 //
-// Mutation: owe the seat's run in a step after the one that records the series
-// and arms its attempt, as leaveToRelease did, and the run is not owed yet when
-// its series is armed; owe it and arm the series in steps after the one that
-// records it, as queueOwed, oweEndingAfter and oweRevival did, and the hold is
-// taken behind a series nothing has armed. Either split, at any of the four,
-// turns that one's case red.
+// Mutation: owe the run in a later step than the series, or owe it and arm the
+// series in steps after the one that records it, and that one's case goes red.
 // ([TestASeatReleasedAsAnAnswerIsLeftToItsReleaseOwesItNothing] releases the
 // seat between leaveToRelease's two steps.)
 func TestAnOwedRunIsHeldBehindOnlyASeriesRecordedAndArmed(t *testing.T) {

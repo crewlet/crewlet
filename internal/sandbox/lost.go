@@ -10,37 +10,14 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// A run whose job was LOST with the host it ran on, and the round carried on.
-//
-// A JOB CAN GO WITHOUT ENDING. A `direct` box's job dies with its engine's
-// restart ([JobState]), a box root that did not outlive its node takes the job
-// with it, a VM is reclaimed while the engine is away past the box timeout, and
-// a node that leaves the fleet for good takes every local box it held
-// ([Waiter.goneAfter]). None of those is a run that finished, or one that
-// failed: the job was cut off mid-step by something outside it, with nothing
-// written to say how far it got. Collected, its partial output was judged as
-// the round's result — a run that "did not succeed" for reasons it never had —
-// and where its box was gone the run ended the turn, which the park had
-// already acknowledged, so nothing would ever start it again. And a job whose
-// box only its node's host can read, on a node cut off from the coordination
-// store for the box timeout, is as lost to the turn as one whose node left,
-// whether or not it finished ([Coordinator.loseWithHost]).
-//
-// SO A LOST JOB'S ROUND IS CARRIED ON, as a parked run's is once its question
-// is answered ([ResumeRequest.Lost], [ResumeRequest.Asked]): the turn resumes
-// and relaunches its executor for the same round, its calls so far kept on the
-// row ([PendingRun.Continues]), in the box the lost job used where that box is
-// still there and this node may continue in it — its working tree as the job
-// left it — and in a fresh one from whatever the job pushed otherwise. What the
-// job spent up to then is read off its box where the box is left, charged and
-// published as its own record, exactly once, as a finished job's is.
-//
-// NOT FOREVER. A round whose jobs keep being lost is a run that takes its own
-// host down — it exhausts the memory its container is held to, say, which on a
-// Kubernetes node with cgroup v2 kills every process in the container, the
-// engine included — and every relaunch takes the node's other seats down with
-// it again. So a round is carried on after at most [MaxRoundLosses] losses, and
-// the next ends its executor phase, and so its turn, saying why.
+// A run whose job was lost with the host it ran on, and the round carried on. A
+// job cut off by its engine's restart, its box root, a reclaimed VM, a departed
+// node ([Waiter.goneAfter]), or a host cut off from the store for the box
+// timeout ([Coordinator.loseWithHost]) neither finished nor failed. Its round
+// is carried on ([ResumeRequest.Lost]), in the same box where it is left, its
+// spend read and charged once; at most [MaxRoundLosses] times, since a round
+// whose jobs keep being lost takes its host down. See the package doc, "Lost
+// jobs".
 
 // MaxRoundLosses is how many of one round's jobs may be lost with their hosts
 // and the round still carried on: the next loss ends the turn.
@@ -146,31 +123,15 @@ type LostRun struct {
 	Losses, Limit int
 }
 
-// carryOnLost is a completion's claim of a lost job carried on: what the job
-// did up to then read off its box where its box is left, charged and published
-// once, and the turn resumed to carry the job's round on ([LostRun]) — or, where
-// the job had asked a person something before it went, parked on that question
-// as a finished job is.
-//
-// THE READ IS ASKED AGAIN like any collection ([Coordinator.collectFailed]): a
-// box that did not answer for a moment hands the claim back for the completion's
-// retry, so the job's spend is not lost to one transport blip. One that is gone
-// by now, or has not answered for the give-up window, is no reason to hold the
-// round any longer: it is carried on without the read, and the line says the
-// job's spend went with its box. A coordination store that did not answer one
-// of the read's steps is no box that did not answer: the claim is handed back
-// for as long as the store is silent, and the round is not carried on without
-// the read for it, unless the silence is the box's host's alone and has lasted
-// the box timeout, as a silent host's would ([Coordinator.collectGivenUp]). A
-// read that failed is judged ONCE, at one reading of the clock, and the
-// hand-back acts on that verdict ([collectVerdict]).
-//
-// IT RESUMES NOTHING ITSELF: it returns the carry for its caller, the frame
-// that claimed the completion under the node's admission
-// ([Coordinator.completeAdmitted]), to resume the turn with — the one frame
-// that may, so this road to a turn passes the admission as every other does
-// (ADR-0063). A nil carry with a nil error is a claim this settled already:
-// handed back for the completion's retry, or parked on the job's question.
+// carryOnLost is a completion's claim of a lost job carried on: its spend read
+// off its box where left, charged and published once, and the turn resumed to
+// carry the round on ([LostRun]), or parked on a question the job asked. The
+// read is asked again like any collection ([Coordinator.collectFailed]); a gone
+// box or one past the give-up is carried on without it, and a store's silence
+// is not, unless the host's alone for the box timeout. One verdict per failure
+// ([collectVerdict]). It resumes nothing itself: its caller under the node's
+// admission does (ADR-0063); a nil carry with nil error is settled already. See
+// the package doc, "Lost jobs".
 func (c *Coordinator) carryOnLost(ctx context.Context, run PendingRun) (*lostCarry, error) {
 	loss := *run.Lost
 	var (
@@ -288,17 +249,11 @@ func cutOff(result Result, cause LossCause) Result {
 
 // collectVerdict is what one collection attempt decided about a failure of its
 // read: whether it is past asking again ([Coordinator.collectGivenUp]), and,
-// where the failure is the box's host answering that its coordination store did
-// not answer it, for how long that host has ([hostUnsettled]).
-//
-// DECIDED ONCE PER ATTEMPT, at one reading of the clock, by the step that judges
-// the failure first, and handed to every step after it that acts on the same
-// failure. A lost job's read is judged by its carry ([Coordinator.carryOnLost]),
-// which asks again where the read is not past asking again, through the
-// collection's hand-back ([Coordinator.collectFailed]); each judged the failure
-// at its own reading of the clock, so a bound crossed between the two had the
-// hand-back give up, and end as unreachable, the run of a lost job whose carry
-// had just found its read too young to carry the round on without it.
+// where the box's host answered that its store did not answer it, for how long
+// ([hostUnsettled]). Decided once per attempt, at one reading of the clock, and
+// handed to every later step acting on that failure: judged twice, a bound
+// crossed between a lost job's carry and its hand-back ended the run as
+// unreachable just after the carry found its read too young to skip.
 type collectVerdict struct {
 	// at is the reading of the clock the attempt was judged at.
 	at time.Time
@@ -318,33 +273,13 @@ type collectVerdict struct {
 func (v collectVerdict) lostWithHost() bool { return v.givenUp && v.unsettled }
 
 // collectGivenUp is the verdict on a collection that failed with cause, at now
-// ([collectVerdict]): whether it is past asking again, which it is where its box
-// is gone, or where it has failed for [MinConnectFailures] attempts spanning
-// [ConnectGiveUp] since the last collection that read the box, the waiter's
-// own bound on an unreachable box. See [Coordinator.collectFailed].
-//
-// NEVER A STEP THE COORDINATION STORE DID NOT ANSWER ([ErrStoreSilent]),
-// whatever the window counted before it: the bound is on a box that does not
-// answer, and the store's silence says nothing about the box. The host's read
-// of the run's row comes before the box is asked at all, and every other such
-// step comes after the box's read, where the job's box is read at all (a lost
-// job whose box went with its host has none); a read the box answered ends the
-// run of failures behind it as the claim goes back ([Release.BoxAnswered]).
-// Given up, a lost job's round was carried on without its read
-// ([Coordinator.carryOnLost]), uncharged for what its box still held.
-//
-// BUT A HOST WHOSE STORE ALONE IS SILENT IS GIVEN UP AS A SILENT HOST IS: one
-// that has answered this node's collections of the job, for the box timeout,
-// that its store did not answer its read of the run's row, while this node's
-// own store answered the claim each collection was made under ([hostUnsettled]).
-// The box is up, but only that host can read it, and a host that cannot for
-// that long is as good as away, as the fleet takes a launch node absent for the
-// box timeout to be ([Waiter.goneAfter]): the job is LOST with it, its round
-// carried on, and never ended as a box that could not be read
-// ([collectVerdict.lostWithHost]). Never given up, the collection was handed
-// back for as long as the partition lasted, its seat held behind it. Every
-// other step the store did not answer is this node's own store's, and no bound
-// of a host's ends it: nothing this node writes would land.
+// ([collectVerdict]): past asking again where its box is gone, or after
+// [MinConnectFailures] attempts spanning [ConnectGiveUp] since the last read of
+// the box. Never for a step the store did not answer ([ErrStoreSilent]), which
+// says nothing of the box; but a host whose store alone is silent for the box
+// timeout is given up as a silent host is, its job lost with it
+// ([collectVerdict.lostWithHost]). See [Coordinator.collectFailed] and the
+// package doc, "Lost jobs".
 func (c *Coordinator) collectGivenUp(run PendingRun, cause error, now time.Time) collectVerdict {
 	verdict := collectVerdict{at: now}
 	switch {
@@ -365,42 +300,14 @@ func (c *Coordinator) collectGivenUp(run PendingRun, cause error, now time.Time)
 	return verdict
 }
 
-// loseWithHost records a job LOST with the host its box is on, on the claim its
-// collection holds ([LossLaunchNodeStoreSilent]), and answers the claim as that
-// left it, for the frame that took it to carry the job's round on as it carries
-// on every job the row holds lost ([Coordinator.carryOnLost]): or, at the turn's
-// deadline, to end it there as it ends one ([Coordinator.completeAtDeadline]).
-//
-// ITS COLLECTION IS PAST ASKING AGAIN: the box's host has answered every
-// collection of it, for the box timeout, that its coordination store did not
-// answer its read of the run's row, while this node's store answered the claim
-// each was made under ([collectVerdict.lostWithHost]). Only that host can read
-// the box, and a host that cannot for that long is as good as away, as the fleet
-// takes a launch node absent for the box timeout to be: the fleet's waiter
-// records such a node's running jobs lost with it, a finished job whose
-// completion nobody claimed yet among them, and the seat's holder carries each
-// one's round on in a box of its own ([Waiter.goneAfter]). Ended instead as a box
-// that could not be read (collect_unreachable), a job that finished had its turn
-// thrown away, where the round's calls, its submission among them where it made
-// one, and its pushed branch are all still there to carry on from.
-//
-// RECORDED ON THE CLAIM BEFORE ANYTHING IS CARRIED ON ([PendingStore.MarkClaimLost]),
-// as the waiter records a loss before it announces one: the relaunch that carries
-// the round on counts the loss toward the round's ([MaxRoundLosses]), and a claim
-// this node does not get to resume is carried on, never collected, by whichever
-// claim of the job comes next. A verdict the store does not take is a step this
-// node's own store did not answer, handed back uncounted with the clock on the
-// host kept, so the next collection records it at once; and one the claim no
-// longer holds (a newer lease took the run, or its ending was decided) is that
-// party's to settle, and answers the claim unlost with no error.
-//
-// THE CLOCK ON THE HOST IS KEPT PAST A VERDICT THAT LANDS, until the run
-// settles ([hostUnsettled]): the round is still to be carried on, by a carry
-// or a resume that can fail and be handed back, and the host's waiter, which
-// reads the run's row through the silent store, announces the job no more than
-// before. While the clock runs, every such hand-back's completion is renewed
-// (renew.go); dropped here, a carry that failed for longer than one delivery's
-// budget left the run, and its seat, with nothing to drive it.
+// loseWithHost records a job lost with the host its box is on, on the claim its
+// collection holds ([LossLaunchNodeStoreSilent], [PendingStore.MarkClaimLost]),
+// and answers the claim so, for its frame to carry the round on
+// ([Coordinator.carryOnLost]) or end it at the turn's deadline. Recorded before
+// anything is carried on, so the relaunch counts the loss ([MaxRoundLosses]); a
+// verdict the store does not take is handed back uncounted, the clock kept. The
+// clock on the host is kept past a verdict that lands, until the run settles
+// ([hostUnsettled]). See the package doc, "Lost jobs".
 func (c *Coordinator) loseWithHost(ctx context.Context, run PendingRun, cause error,
 	verdict collectVerdict,
 ) (PendingRun, error) {

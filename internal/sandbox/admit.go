@@ -199,42 +199,15 @@ type keptRefire struct {
 	stop func() bool
 }
 
-// keepLocked keeps kept for its condition, in place of anything kept for its
-// run before, and arms its own re-fire ([Coordinator.keptRefireIn]): at the
-// instant its refusal named for the clock to lift it, no later than
-// [answerWaitBackstop] unless this node holds the completion off itself until
-// that instant, and at that backstop where it named none or one already past;
-// and at the instant the hold on its run's row lifts where its resume was held
-// there, never sooner. A completion held here until an instant still has its
-// timer at the backstop, which before that instant re-fires nothing but asks
-// what an announcement would ([Coordinator.recheckHeld]). The caller holds c.mu
-// and has checked the coordinator is not closed.
-//
-// # Why a kept completion has a timer of its own
-//
-// Its condition's signal re-fires it ([Coordinator.Readmit]), and the waiter
-// that drives its box announces it again on its schedule. But a condition can
-// lift on the clock with no edge anything signals (a seat's lease merely stale
-// from a late renew, a provider's limit whose instant came with no park to
-// release), and while the coordination store does not answer the host of the
-// job's box that waiter announces nothing. Kept for the signal and the waiter
-// alone, such a completion waited on this node, with no restart and no seat
-// move to re-arm it from its record, for as long as that store's silence
-// lasted: never lost, but with no bound. So every keep arms a re-fire of its
-// own, as an answer's wait does ([Coordinator.waitOwed]), on the same rule:
-// the refusal's instant where it names one, and no wait longer than the
-// backstop, which bounds a signal that never came at the cost of one ask of
-// this node's gate per kept completion per five minutes; save a completion
-// this node holds off itself until its instant, whose re-fire waits for that
-// instant, its backstop before it asking only whether its turn's deadline has
-// passed ([Coordinator.keptRefireIn], [Coordinator.recheckHeld]). Re-fired, it is
-// offered to [Coordinator.OnCompleted] as a signal's re-fire is: admitted, it
-// is carried; refused, it is kept again with a timer of its own.
-//
-// NOT COUNTED AS WORK IN FLIGHT ([Coordinator.inflight]): an armed re-fire
-// is no work yet, and [Coordinator.Stop] cancels it rather than wait out a
-// backstop. Its callback re-fires under c.mu only while the coordinator is
-// open, and that re-fire is counted from there ([Coordinator.refireLocked]).
+// keepLocked keeps kept for its condition, replacing anything kept for its run,
+// and arms its own re-fire ([Coordinator.keptRefireIn]): at the refusal's
+// instant, no later than [answerWaitBackstop] unless this node holds the
+// completion off until that instant; at the backstop where it named none or one
+// past; and never sooner than a hold on the run's row lifts. A keep needs a
+// timer because a condition can lift with no signal, and a silent host store
+// stops the waiter. The re-fire is no work in flight, and [Coordinator.Stop]
+// cancels it. The caller holds c.mu and has checked the coordinator is open.
+// See the package doc, "Kept completions".
 func (c *Coordinator) keepLocked(kept refusedCompletion) {
 	turnID := kept.ev.TurnID
 	c.dropKeptLocked(turnID)
@@ -277,35 +250,12 @@ func (c *Coordinator) recheckHeldLocked(kept refusedCompletion, armed *keptRefir
 }
 
 // recheckHeld is the backstop of a completion this node holds off itself until
-// an instant ([Coordinator.keptRefireIn]), before that instant: it does what an
-// announcement of the job does here and nothing more ([Coordinator.OnCompleted]):
-// still held, it asks whether the job's turn is past its deadline
-// ([Coordinator.pastDeadline]), and ends the run if so
-// ([Coordinator.completeAtDeadline]); and it keeps the hold and arms the next
-// backstop, or re-fires the completion where its instant has come meanwhile.
-// armed is the re-fire this backstop was, so a keep that went or was replaced
-// meanwhile is the keep's that replaced it.
-//
-// # Why a hold has a backstop at all
-//
-// Its re-fire waits for its instant, since a re-fire drops the hold and resumes
-// the job into the limit that held it. But the turn's deadline is not that
-// instant: past it, nothing waits ([Coordinator.completeAtDeadline]), and an
-// announcement made then ends the run. Where no waiter announces the job (its
-// box's host's store silent) nothing asked, and a turn whose deadline passed
-// while its job was held here waited for the hold's instant, up to the hour a
-// vendor's window is benched for, holding its seat. So the backstop asks what
-// an announcement would, at most [answerWaitBackstop] apart: the run ends within
-// a backstop of its deadline, at the cost of one read of the run's row per
-// held completion per five minutes, and never a claim or a resume before the
-// instant.
-//
-// AN ENDING THAT DID NOT SETTLE, its claim's collection not answered, say,
-// keeps the completion held, its next backstop armed, unless something else
-// keeps it since: nothing announces the job where no waiter can, and the next
-// backstop asks again.
-//
-// ITS LIFETIME IS THE COORDINATOR'S, for the reason [Coordinator.refire] gives.
+// an instant, before that instant: it asks only what an announcement would
+// ([Coordinator.OnCompleted]), ending the run if its turn is past its deadline
+// ([Coordinator.completeAtDeadline]), and otherwise keeps the hold and arms the
+// next backstop, or re-fires where the instant has come. armed is the re-fire
+// this backstop was. Its lifetime is the coordinator's. See the package doc,
+// "Kept completions".
 //
 //nolint:contextcheck // the coordinator's own lifetime (c.life), never a caller's; see [Coordinator.refire]
 func (c *Coordinator) recheckHeld(kept refusedCompletion, armed *keptRefire) {
@@ -362,36 +312,14 @@ func (c *Coordinator) recheckHeld(kept refusedCompletion, armed *keptRefire) {
 }
 
 // keptRefireIn is how long kept waits for its own re-fire
-// ([Coordinator.keepLocked]): until the instant its refusal named for the
-// clock to lift it, no longer than [answerWaitBackstop], and that backstop
-// where it named none or one already past; and, for a completion whose resume
-// is held on its run's row, until the instant that hold lifts, uncapped and
-// never sooner ([Coordinator.keepHeldOnRow]): before it the store refuses the
-// claim a re-fire makes, and a re-fire that claims nothing settles nothing and
-// leaves nothing kept. An instant already past is a re-fire at once, since the
-// claim no longer refuses the row then.
-//
-// # A completion held here is re-fired at its instant, never the backstop
-//
-// One whose resume was refused after its claim, on a condition the gate could
-// not see, is held here until the instant its refusal names
-// ([Coordinator.stillRefused]): the gate admitted it and would again, so a
-// re-fire before that instant claimed it, woke its box to collect it and ran
-// its review into the same refusal. A re-fire drops what is kept, the hold
-// with it, so one made at the backstop resumed the job into the limit every
-// five minutes for as long as the limit lasted, up to the hour a vendor's
-// window is benched for, where the seat's park did not refuse it first. Its
-// re-fire comes at the instant instead: the signal that ends the wait sooner
-// re-fires it as it re-fires any kept completion, and this node refuses every
-// announcement of the job until then.
-//
-// BUT ITS TIMER STILL FIRES AT THE BACKSTOP, where the instant is further off,
-// and before the instant what fires is no re-fire: it asks only what an
-// announcement of the job asks here, whether its turn's deadline has passed,
-// which ends the run, and keeps the hold, its timer armed again
-// ([Coordinator.recheckHeld]). Armed for the instant alone, a turn whose
-// deadline passed while no waiter announced the job (its box's host's store
-// silent) waited for the hold's instant, up to that hour, rather than ending.
+// ([Coordinator.keepLocked]): until its refusal's instant, no longer than
+// [answerWaitBackstop], or that backstop where it named none or one past; for a
+// completion held on its run's row, until that hold lifts, uncapped and never
+// sooner ([Coordinator.keepHeldOnRow]). A completion this node holds itself is
+// re-fired at its instant, never at the backstop, which would resume it into
+// the same limit; its timer still fires at the backstop to ask about the
+// deadline ([Coordinator.recheckHeld]). See the package doc, "Kept
+// completions".
 func (c *Coordinator) keptRefireIn(kept refusedCompletion) time.Duration {
 	now := c.now()
 	if !kept.heldOnRow.IsZero() {
@@ -421,124 +349,14 @@ func (c *Coordinator) dropKeptLocked(turnID string) {
 
 // keepRefused keeps a completion refused on refusal's condition, for
 // [Coordinator.Readmit] to re-fire the moment that condition clears, and, where
-// held, holds its announcements off on this node until refusal.Until.
-//
-// # Why it is kept, when the waiter announces it again anyway
-//
-// The waiter that drives the run's box (the fleet's, or the box host's own,
-// boxhost.go) re-announces a finished run for as long as its row is
-// running, on its schedule (reannounce.go), and that is what makes
-// acknowledging a refused completion safe: nothing is lost with the delivery.
-// But the next announcement is up to [reannounceCeilingPolls] poll intervals
-// away, and the end of a condition is an event the
-// engine already observes (a seat's turn ending, a renew proving ownership
-// again, a provider's limit lifting). So the clearing re-fires the completion
-// itself, and the poll is the backstop for a clearing nothing signals, beside
-// the keep's own re-fire at the refusal's instant or [answerWaitBackstop],
-// which bounds the wait where no waiter announces the job
-// ([Coordinator.keepLocked]). Any of them may arrive together: the claim is
-// at-most-once, so the run resumes once.
-//
-// # Unless no waiter can announce it
-//
-// THE WAITER IS THE BACKSTOP WHILE THE STORE ANSWERS THE BOX'S HOST, AND THE
-// BROKER IS WHILE IT DOES NOT. While this node keeps a clock on the store of
-// the host of the job's box ([Coordinator.hostClocked]), or the run's row says
-// what such a clock would ([Coordinator.unannouncedJob]), that host's waiter
-// reads the run's row through a store that does not answer it and announces
-// nothing, and what is kept here is this node's memory alone: a restart, a
-// letting go of the seat, or a clearing nothing signals would leave the job
-// with nothing to announce it. So the refusal is still kept for the signalled
-// re-fire, and its delivery is handed back as well, never acknowledged, and
-// renewed before its last ([ErrUnannounced], renew.go). And where neither says
-// so yet, the refusal its delivery's acknowledgement leaves this node owing is
-// written on the job's record first ([Coordinator.oweRefused]), so a restart
-// or the seat's next holder owes it as this node did ([Coordinator.rearmOwed]). A duplicate is
-// harmless, since the claim is made once, and the re-fire announces nothing
-// afresh while that delivery is in flight ([Coordinator.refire]).
-//
-// A RESUME REFUSED AFTER ITS CLAIM is kept the same way: one whose models were
-// all at their limit before its turn wrote anything is reverted, so the run is
-// back to running as the gate would have left it, and its refusal names the
-// condition ([Coordinator.OnCompleted]).
-//
-// # Why one refused after its claim is also held here
-//
-// The gate admitted it, and would admit its next announcement too: a
-// completion's gate asks no limit its models know, since its job is collected
-// first and its resume refused once it is (the engine's), and a review on a
-// ready member of the seat's reviewer chain that sent the run back to runners
-// every one of which sits out met the limit a round in, at its relaunch. Asked
-// again, the gate says the same, and every announcement of the job collected
-// its box and ran the review again into the same refusal, for as long as the
-// limit lasted. So such a completion is kept held (held, and
-// the refusal's Until is the instant): its announcements are refused HERE,
-// before the gate and the claim ([Coordinator.stillRefused]), until that
-// instant, and the signal that ends the wait re-fires it as it does any kept
-// completion; its own re-fire comes at that instant, never at the backstop,
-// which would drop the hold before it ([Coordinator.keptRefireIn]), and its
-// backstop before the instant only asks, as an announcement does, whether its
-// turn's deadline has passed ([Coordinator.recheckHeld]). A refusal
-// that names no instant holds nothing: the gate is asked
-// again on every announcement, as for a completion it refused itself.
-//
-// THE HOLD IS IN THIS NODE'S MEMORY, NEVER ON THE RUN'S ROW. (What the row
-// keeps is that a refusal was acknowledged and is owed its re-fire
-// ([Coordinator.oweRefused]): an obligation the seat's next holder honours by
-// asking its own gate, never a hold anybody reads.) The refusal is this node's
-// models', whose limits are its own: the sit-out is not shared with the fleet,
-// and a restart, or the seat moving to a peer, asks the models again on the
-// first delivery (ADR-0064). The row is read by every node, and a hold written
-// there silenced every waiter until its instant, whoever held the seat next: a
-// restarted node, or the seat's next holder, whose models may know of no limit
-// at all, left the job unannounced for up to the hour a vendor's window is
-// benched for. Held here, it goes with the node: its restart forgets it, and
-// so does its letting go of the seat ([Coordinator.ReleaseSeat]), so the job's
-// next announcement asks whoever holds the seat then. The waiter announces the
-// job on its schedule meanwhile, as it does for any refused completion; each
-// announcement costs this node a lookup, not a collection and a review, and
-// the job's box, which the collection paused, is left asleep, since the job was
-// read back already ([Waiter.reach]). A seat's budget, which every node reads
-// alike, holds on the row instead ([HeldError]), and the completion is kept
-// here for that hold's instant and its signal ([Coordinator.keepHeldOnRow]).
-//
-// A SIGNAL THAT LANDS WHILE THE GATE IS REFUSING IS NOT LOST. Readmit re-fires
-// only what is kept when it runs, so a condition that cleared between the
-// gate's answer and the keep would leave the completion kept for a signal that
-// has already been and gone, until the waiter's next announcement of it. So the
-// caller reads what was signalled BEFORE it asks the gate (seen), and the keep,
-// under the lock Readmit takes, re-fires at once instead of keeping when the
-// condition has been signalled for the seat since: the same rule
-// [Coordinator.waitOwed] applies to an answer.
-//
-// NOR IS A PERSON'S STOP. A stop ends a collected job's wait by re-firing what is
-// kept for it ([Coordinator.endCollectedWait]), and it leaves a run whose
-// resume is out to that resume's turn. A resume refused after its claim
-// returns minutes on, its review's call refused as the stop landed: kept then,
-// its hold outlived the stop, and the stopped seat's work stayed open until the
-// limit's instant, up to the hour an entry is benched for. So a stop is
-// signalled for its seat too ([stopLanded]), and a keep that finds the seat
-// stopped since it was asked re-fires at once, into a gate that admits a
-// stopped seat's completion and a turn its fence closes as stopped.
-//
-// A refusal that names no condition is not kept: nothing would signal its end.
-// Nor is one for a seat this node lets go of ([Coordinator.ReleaseSeat]): the
-// waiter that drives its box announces it to the seat's next holder, or, while
-// no waiter can, the delivery handed back for it does; and an acknowledged one
-// is on the job's record, which that holder's recovery re-arms
-// ([Coordinator.rearmOwed]). A drain's ([Draining]) is kept, re-fired by
-// nothing but its own backstop, which the draining gate refuses again, until
-// that release drops it: nothing signals a drain's end.
-//
-// NOR ONE THAT LANDS AFTER THAT RELEASE. The release waits for no resume, and a
-// resume refused after its claim returns once its review has run, minutes on:
-// kept then, its hold outlived the seat here, and the seat, back on this node
-// inside the limit's window, had the job's announcements refused until the
-// instant, by a hold the release was to have forgotten. The seat's lease is
-// asked once the keep is made, outside the lock as every lease read here is:
-// the seat host lets go of a seat before the release drops what is kept for
-// it, so a keep that finds the seat held is one the release drops, and one
-// that finds it gone is dropped now.
+// held, holds its announcements off on this node until refusal.Until. The
+// waiter's re-announcement is the backstop; the keep re-fires sooner. Where no
+// waiter can announce the job its delivery is handed back and renewed, and an
+// acknowledged refusal is written on the job's record first. The hold stays in
+// this node's memory, never on the row. A signal or a stop that lands while the
+// gate refuses re-fires at once (seen); a refusal with no condition, or for a
+// seat this node lets go of, is not kept. See the package doc, "Kept
+// completions".
 func (c *Coordinator) keepRefused(ev types.ExecutorFinished, trigger *events.Event, refusal Refusal,
 	held bool, seen map[signal]uint64,
 ) {
@@ -567,57 +385,15 @@ func (c *Coordinator) keepRefused(ev types.ExecutorFinished, trigger *events.Eve
 	}
 }
 
-// keepHeldOnRow keeps the completion of run's job, whose resume its seat's
-// budget refused once it ran and whose claim was handed back holding the
-// run's row until hold.Until ([HeldError], [Coordinator.unclaimHeld]): kept
-// UNHELD here, for a re-fire of its own at that instant and never sooner
-// ([Coordinator.keptRefireIn]), and for hold's condition's signal, which lifts
-// the row's hold and then re-fires it ([Coordinator.liftAndRefire]). trigger is
-// the completion's event, or nil for one rebuilt from the row
-// ([announcementOf]); seen is what was signalled before the resume that met
-// the hold was admitted ([Coordinator.resumeAndSettle]), or before a claim the
-// hold refused was admitted ([Coordinator.keepHeldClaim]),
-// or before a recovery read the held row ([Coordinator.keepHeldRows]); and
-// recovered is whether the caller is that recovery, which keeps nothing and
-// re-fires nothing for a job this node already carries
-// ([Coordinator.carriedLocked]), decided under the lock the keep is made under.
-// Reports whether the completion was kept for the hold's instant: not where it
-// was re-fired at once, was carried already, the coordinator is closed or this
-// node no longer holds the seat.
-//
-// # Why a hold on the row is kept in memory too
-//
-// The completion's delivery is acknowledged, spent by the hold, because the
-// waiter that drives the job's box announces the job again once the hold has
-// lifted (or, where no waiter can, the delivery is handed back, renew.go). But
-// that waiter reads the run's row through its node's coordination store, and a
-// silence of that store's runs alone has no bound. Before the instant nothing
-// else carried the job: the claim refuses a held row, the waiter passes one
-// over, a signal only lifted the hold ([Coordinator.liftHoldsLocked]), and a
-// recovery re-armed only a refusal owed on the job's record. So with that
-// host's store silent, and no restart and no seat move, the job waited after
-// its hold had lifted for as long as the silence lasted. Kept here, it is
-// re-fired by this node as a refused completion is ([Coordinator.keepLocked]).
-//
-// NOT HELD HERE, and never re-fired before the instant: the row holds it, for
-// every node alike, and a re-fire before the hold lifts claims nothing, which
-// settles nothing and drops the keep.
-//
-// NOR LOST TO A CLAIM THE HOLD REFUSES: a delivery of the completion admitted
-// leaves the keep standing ([Coordinator.forgetAdmitted]), and a claim the hold
-// refuses where nothing is kept for the job, what was kept in the keep's place
-// re-fired into the hold, keeps it again from the row
-// ([Coordinator.keepHeldClaim]).
-//
-// A SIGNAL THAT LANDED BEFORE THE KEEP IS NOT LOST, as for a refused completion
-// ([Coordinator.keepRefused]): one whose listing of the runs ran before the
-// hold was written, or was not answered, lifted nothing, so a condition or a
-// person's stop signalled for the seat since seen lifts the hold here and
-// re-fires at once. Seen is read before the resume's admission, never once
-// the resume has returned: a signal during the resume, after its budget
-// refused it, found the row the claim with no hold to lift, and read after it
-// the job waited for the hold's instant, until the budget's window turned.
-// The cost is one review re-run at once for a signal the budget still refuses.
+// keepHeldOnRow keeps the completion of run's job whose resume its seat's
+// budget refused and whose claim was handed back holding the row until
+// hold.Until ([HeldError], [Coordinator.unclaimHeld]): kept unheld here, for a
+// re-fire at that instant and never sooner, and for the condition's signal,
+// which lifts the row's hold and re-fires ([Coordinator.liftAndRefire]).
+// trigger is the event, or nil for one rebuilt from the row; seen is what was
+// signalled before the admission; recovered says the caller is a seat's
+// recovery. It reports whether it kept the completion for the hold's instant.
+// See the package doc, "Kept completions".
 func (c *Coordinator) keepHeldOnRow(run PendingRun, trigger *events.Event, hold Refusal,
 	seen map[signal]uint64, recovered bool,
 ) bool {
@@ -652,55 +428,11 @@ func (c *Coordinator) keepHeldOnRow(run PendingRun, trigger *events.Event, hold 
 // oweRefused is answer, what a delivery of ev's completion leaves with the
 // control topic, once a refusal the topic acknowledges is recorded on the job's
 // record as this holder's obligation ([PendingStore.OweRefusal],
-// [LaunchRecord.RefusalOwed]); every other answer is returned as it is.
-//
-// # Why an acknowledged refusal is written down
-//
-// Acknowledging a refusal is safe while the waiter that drives the job's box
-// announces the job again, and the completion is kept here for the refusal's
-// signal besides ([Coordinator.keepRefused]). But that waiter reads the run's
-// row through its node's coordination store, and a silence of the store's runs
-// alone has no bound: its node's lease and presence are another stream, so no
-// watchdog ends it and no peer finds it gone. A kept completion is this node's
-// memory, which its restart, or its letting go of the seat, forgets; one
-// acknowledged before any collection of the job had found that silence left
-// nothing anywhere that owed the job a re-fire, for as long as the silence
-// lasted. So the obligation is durable state, on the row every holder of the
-// seat reads at its recovery ([Coordinator.RecoverSeat]), written by ONE write
-// before the delivery is let go, and only where the record owes none yet, so a
-// re-announcement refused again writes nothing: each acknowledged refusal
-// costs one read of the row, and the first of a job's a write besides.
-//
-// # Which refusals
-//
-// EVERY ONE THE TOPIC ACKNOWLEDGES, wherever the job's box is hosted: a refusal
-// that names a condition (internal/engine's controlOutcome), the gate's own,
-// a completion this node holds off itself ([Coordinator.stillRefused]) and a
-// resume reverted on a wait after its claim alike. Not one handed back marked
-// [ErrUnannounced], which is renewed and so carried by its delivery; not a
-// store's silence; and neither of the two conditions the caller hands on to
-// the seat's next holder rather than acknowledging, [SeatLost] and [Draining],
-// since a delivery handed on leaves nothing owed here. A drain's refusal
-// recorded cost a write per job its deferred delivery never needed, and a
-// record the store did not take made it the store's silence, handed back to
-// the node that is leaving rather than on.
-//
-// # Where the record does not land
-//
-// The refusal is NOT acknowledged. The answer is then the store's silence
-// alone ([ErrStoreSilent], the node's failure, as every step the store does
-// not answer is), which the caller hands back, so the delivery comes back to
-// be recorded; or, where this node's own context ended, that cause
-// ([storeSilent]), which the caller hands back as the node's as well. Never the
-// refusal: nothing it hands on reaches the write, so every refusal here is one
-// the caller would acknowledge. The completion is still kept here for its
-// signal either way. A row a newer lease owns refuses the write
-// ([ErrSeatNotHeld]), which the caller names [SeatLost] where this node no
-// longer holds the seat ([Coordinator.lost]), so the delivery goes on to the
-// holder, and hands back while this node's own lease still says it holds the
-// seat, for the heartbeat that settles which is right ([SeatLost]); and a seat
-// this node let go of before the write is deferred the same way, never
-// acknowledged by a node that owes nothing any more.
+// [LaunchRecord.RefusalOwed]); every other answer is returned as it is. Every
+// acknowledged refusal is recorded, not one marked [ErrUnannounced], a store's
+// silence, [SeatLost] or [Draining]. Where the record does not land the refusal
+// is not acknowledged: the answer is the store's silence, or this node's ended
+// context. See the package doc, "Owed refusals".
 func (c *Coordinator) oweRefused(ctx context.Context, ev types.ExecutorFinished, answer error) error {
 	var refused *TurnRefused
 	if !errors.As(answer, &refused) || refused.Condition == "" || refused.Condition == SeatLost ||
@@ -738,23 +470,13 @@ func (c *Coordinator) oweRefused(ctx context.Context, ev types.ExecutorFinished,
 	return answer
 }
 
-// keepAgain keeps kept once more, its own re-fire armed afresh
-// ([Coordinator.keepLocked]), after a re-fire of it that neither settled it
-// nor was kept again by a refusal: unless something is kept for its run
-// already (a refusal's keep, or a recovery's re-arm still standing), which
-// owns the re-fire, and unless this node no longer holds the seat, whose
-// next holder owes the completion from the job's record.
-//
-// KEPT UNHELD, FOR THE BACKSTOP ALONE. What re-fired it ended whatever its
-// refusal held it to (the condition's signal, a person's stop, the instant
-// itself), and what it met since is a step that settled nothing, which names
-// no instant of its own. Kept again as it was, a completion held here until a
-// limit's instant ([Coordinator.stillRefused]), re-fired by the signal that
-// ended the limit and then not answered by the store, was held again: the
-// waiter's announcements of the job refused here, and its re-fire armed for
-// the instant the signal had ended, up to the hour a vendor's window is
-// benched for. Nor is a hold on the run's row it was kept for: a re-fire is
-// made once that hold is lifted or past ([Coordinator.liftAndRefire]).
+// keepAgain keeps kept once more, its re-fire armed afresh
+// ([Coordinator.keepLocked]), after a re-fire that neither settled it nor was
+// kept again by a refusal: unless something is kept for its run already, or
+// this node no longer holds the seat. Kept unheld, for the backstop alone: what
+// re-fired it ended whatever its refusal held it to, and kept as it was a held
+// completion would wait for an instant its signal had already ended. See the
+// package doc, "Kept completions".
 func (c *Coordinator) keepAgain(kept refusedCompletion) {
 	kept.heldUntil, kept.reason, kept.until, kept.heldOnRow = time.Time{}, "", time.Time{}, time.Time{}
 	c.keepUnlessKept(kept)
@@ -826,18 +548,12 @@ func (c *Coordinator) forgetRefused(turnID string) {
 }
 
 // forgetAdmitted drops what is kept for ev's run once a delivery of ev's
-// completion has been admitted, for the claim the delivery goes on to make,
-// which settles the job whichever announcement carried it
-// ([Coordinator.forgetRefused]).
-//
-// SAVE A KEEP FOR THE HOLD ON THE RUN'S ROW OF EV'S OWN JOB, short of the
-// hold's instant ([Coordinator.keepHeldOnRow]): the store refuses that claim
-// while the hold stands, so it settles nothing, and the keep is this node's
-// one carrier of the job while the waiter that drives the job's box reads a
-// silent store. Dropped here, it went with a delivery of the completion queued
-// behind the resume that held the job, which the claim refuses, and the job
-// waited, after its hold had lifted, for as long as that store's silence
-// lasted. A claim that wins drops it ([Coordinator.completeAdmitted]).
+// completion has been admitted, for the claim the delivery goes on to make
+// ([Coordinator.forgetRefused]). Save a keep for the hold on the row of ev's
+// own job, short of the hold's instant ([Coordinator.keepHeldOnRow]): the store
+// refuses that claim, and the keep is this node's one carrier of the job while
+// the box host's store is silent. A claim that wins drops it
+// ([Coordinator.completeAdmitted]).
 func (c *Coordinator) forgetAdmitted(ev types.ExecutorFinished) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -849,36 +565,13 @@ func (c *Coordinator) forgetAdmitted(ev types.ExecutorFinished) {
 }
 
 // keepHeldClaim keeps ev's completion where a claim of it under fence the store
-// refused finds nothing kept here for ev's job and the run's row still holding
-// the job running, under no newer lease: for the hold on the row where it holds
-// the job's resume ([PendingRun.Held]), as the resume that wrote the hold keeps
-// it ([Coordinator.keepHeldOnRow]), against seen, what was signalled before the
-// delivery's admission was asked; and for the backstop where it no longer does
-// ([Coordinator.keepAgain]). trigger is the completion's event.
-//
-// # Why a refused claim reads the row
-//
-// The keep made where the hold was written is this node's one carrier of the
-// job while the waiter that drives the job's box reads a silent store, and a
-// run has one keep: a refusal of the node's gate is kept in its place
-// ([Coordinator.keepRefused]), and a re-fire that settled nothing, the
-// signal's re-fire of a hold whose release this node still owed among them, is
-// kept again unheld, for the backstop ([Coordinator.keepAgain]). Each one's
-// re-fire met the hold with its claim, settled nothing and left nothing kept,
-// so the job waited, after its hold had lifted, for as long as that store's
-// silence lasted. So a claim refused with nothing kept for its job reads the
-// run's row, one read, and a hold on it keeps the completion for the hold's
-// instant and its signal again.
-//
-// A ROW STILL RUNNING THE JOB AND HELD NO LONGER keeps it for the backstop: the
-// claim met a hold since lifted, its condition's lift of every hold on it
-// landing between the claim and the read, with nothing kept for that signal to
-// re-fire; or a row that moved under the claim. Either way the claim settled
-// nothing and the row still owes the job its resume. So does A ROW THE STORE
-// DOES NOT ANSWER: nothing says it does not hold the job. A row that holds
-// another job, this one claimed or settled, or a newer lease's, is no longer
-// this delivery's: the claim refuses a row a newer lease owns, whose holder
-// recovers it.
+// refused finds nothing kept here for ev's job and the row still running the
+// job under no newer lease: for the row's hold where it holds the job's resume
+// ([PendingRun.Held], [Coordinator.keepHeldOnRow]), against seen; and for the
+// backstop where it no longer does, or the store did not answer
+// ([Coordinator.keepAgain]). trigger is the completion's event. A refused claim
+// reads the row because the keep made where the hold was written may have been
+// replaced. See the package doc, "Kept completions".
 func (c *Coordinator) keepHeldClaim(ctx context.Context, ev types.ExecutorFinished, trigger *events.Event,
 	fence Fence, seen map[signal]uint64,
 ) {
@@ -941,18 +634,11 @@ func (c *Coordinator) liftAndRefireLocked(kept refusedCompletion) {
 }
 
 // liftAndRefire is a signalled re-fire of a completion whose resume is held on
-// its run's row: the hold for kept's condition lifted first
-// ([PendingStore.LiftHold]), and the completion re-fired once that write has
-// landed, or found the row held for it no longer ([Coordinator.refire]).
-//
-// THE LIFT FIRST, because the claim refuses a held row: re-fired beside the
-// lift ([Coordinator.liftHoldsLocked] lists and lifts every hold on the
-// condition in the background), the re-fire's claim met the hold still
-// standing, claimed nothing, and left nothing kept. A lift the store does not
-// answer leaves the completion kept as it was, for its re-fire at the hold's
-// instant ([Coordinator.keepUnlessKept]), when no claim is refused for it.
-//
-// ITS LIFETIME IS THE COORDINATOR'S, for the reason [Coordinator.refire] gives.
+// its run's row: the hold lifted first ([PendingStore.LiftHold]), since the
+// claim refuses a held row, and the completion re-fired once that lands
+// ([Coordinator.refire]). A lift the store does not answer leaves the
+// completion kept for the hold's instant ([Coordinator.keepUnlessKept]). Its
+// lifetime is the coordinator's, for the reason [Coordinator.refire] gives.
 //
 //nolint:contextcheck // the coordinator's own lifetime (c.life), never a caller's; see [Coordinator.refire]
 func (c *Coordinator) liftAndRefire(kept refusedCompletion) {
@@ -979,52 +665,14 @@ func (c *Coordinator) liftAndRefire(kept refusedCompletion) {
 	c.refire(kept)
 }
 
-// refireLifted re-fires the completion of run's job once a signal's lift of
-// the hold on its row for cond has landed ([Coordinator.liftHoldsLocked]), on
-// a goroutine of the coordinator's own lifetime, as the lift of a hold this
-// node keeps the completion for re-fires it ([Coordinator.liftAndRefire]).
-//
-// # Why every lift re-fires
-//
-// The completion's delivery was spent by the hold, and the waiter that drives
-// the job's box, which announces the job once its hold has lifted, reads the
-// run's row through its host's coordination store, whose silence has no bound.
-// A lift that found nothing kept here for the job left it to that waiter
-// alone: a signal that landed while the seat's recovery ran, its lift landing
-// before the recovery's fence read the row ([Coordinator.RecoverSeat]), so the
-// row the recovery took over was held no longer and nothing was kept for it;
-// or a keep replaced by a refusal's ([Coordinator.keepRefused]) and dropped
-// since.
-//
-// BUT NOT A JOB THIS NODE ALREADY CARRIES ([Coordinator.carriedLocked]): one a
-// re-fire of is on its way, the keep this signal released among them, which the
-// signal lifts and re-fires itself ([Coordinator.liftAndRefire]); and one it
-// keeps a completion of for anything but this hold, whose own re-fire, signal
-// and backstop carry it. Re-fired beside either, the job was re-fired twice at
-// once: a seat's recovery that read the row held before this lift landed kept
-// the job and, the signal landing since, lifted and re-fired it, while this
-// lift re-fired it too; and a keep's own lift raced this one, each re-firing
-// the job. A keep replaced by a refusal's re-fires within that refusal's
-// backstop at the latest, and asks the gate that refused it, which this
-// re-fire would ask too.
-//
-// # A keep for the hold this lift cleared is re-fired in its place
-//
-// The signal re-fired every keep for its condition the moment it landed
-// ([Coordinator.refireRefusedLocked]). So a keep for this hold that the lift
-// finds was made since: by a seat's recovery, or after a claim the hold
-// refused, that read the row held before this lift landed and read what was
-// signalled after the signal, so it found no signal since
-// ([Coordinator.keepHeldOnRow]). It waits for the hold's instant, the budget's
-// window turning, and skipped as a job the node carries, the job waited that
-// long after its hold was gone while the box's host's store was silent. So it
-// is re-fired here, in the keep's place ([Coordinator.refireHeldKeepLocked]).
-// A re-fire on its way whose claim met the hold, and whose read of the row came
-// before this lift, makes the same keep, so the lift is left to that re-fire's
-// end, which re-fires the job where it left it kept for this hold
-// ([Coordinator.refired]), unless a claim of the job has won since
-// ([Coordinator.forgetRefused]). Either way one re-fire is on its way at a
-// time.
+// refireLifted re-fires the completion of run's job once a signal's lift of the
+// hold on its row for cond has landed ([Coordinator.liftHoldsLocked]), on a
+// goroutine of the coordinator's lifetime: the hold spent the delivery, so the
+// lift must re-fire. Not a job this node already carries
+// ([Coordinator.carriedLocked]), save a keep for the very hold this lift
+// cleared, which is re-fired in its place ([Coordinator.refireHeldKeepLocked]),
+// so one re-fire is on its way at a time. See the package doc, "Kept
+// completions".
 func (c *Coordinator) refireLifted(run PendingRun, cond Condition) {
 	ev, trigger := announcementOf(run)
 	c.mu.Lock()
@@ -1106,76 +754,25 @@ func (c *Coordinator) refired(turnID string) {
 }
 
 // carriedLocked reports whether this node already carries turnID's job: it
-// keeps a completion of it ([Coordinator.refused]), whose own re-fire, signal
-// and backstop carry it, or a re-fire of it is on its way
-// ([Coordinator.refiring]). A frame that would start a re-fire of the job from
-// outside both, a signal's lift of the job's hold ([Coordinator.refireLifted])
-// or a recovery's keep or re-arm of it from its row ([Coordinator.keepHeldRows],
-// [Coordinator.rearmOwed]), starts none where it does; save that the lift
-// re-fires a keep for the very hold it cleared in its place, and hands itself
-// to the end of a re-fire on its way, since such a keep waits for an instant
-// the lift ended ([Coordinator.refireHeldKeepLocked]). The caller holds c.mu.
-//
-// # Why a lift or a recovery starts no second re-fire
-//
-// Two re-fires of one job race each other through the claim, and the claim
-// is at-most-once, so only one resumes it; but the other is not nothing. It
-// asks this node's gate, claims, and, refused, reads the run's row for a hold
-// to keep the job for ([Coordinator.keepHeldClaim]), all for a job the first
-// carries already; and it meets whatever the first left on the row at that
-// moment, a claim, or a hold the first's resume met again and wrote, which it
-// keeps the job for a second time. A signal's lift of a hold this node kept
-// the job for raced the keep's own lift and re-fire of it, and a seat's
-// recovery that read the row held before the signal's lift landed raced that
-// lift's re-fire, each pair re-firing the one job twice. So the claim's
-// at-most-once decides which re-fire resumes the job, and this decides that
-// there is one to decide.
+// keeps a completion of it ([Coordinator.refused]) or a re-fire of it is on its
+// way ([Coordinator.refiring]). A signal's lift or a recovery's keep or re-arm
+// starts no re-fire where it does, since a second re-fire claims, reads and
+// keeps for a job the first carries; save that a lift re-fires a keep for the
+// hold it cleared ([Coordinator.refireHeldKeepLocked]). The caller holds c.mu.
+// See the package doc, "Kept completions".
 func (c *Coordinator) carriedLocked(turnID string) bool {
 	_, kept := c.refused[turnID]
 	return kept || c.refiring[turnID] > 0
 }
 
-// refire offers a kept completion to [Coordinator.OnCompleted] again, under
-// the coordinator's own lifetime, as the waiter's next announcement would. A
-// refusal keeps it again. ANY OTHER FAILURE KEEPS IT TOO, for its own re-fire
-// at the backstop ([Coordinator.keepAgain]): the store not answering its
-// claim, or this node's gate failing to ask the seat's lease, settles nothing,
-// and left to the waiter's next announcement the completion waited with no
-// bound wherever that waiter's store was silent and nothing had found so.
-//
-// BUT NO WAITER ANNOUNCES A JOB WHOSE BOX'S HOST FINDS ITS STORE SILENT, and a
-// re-fire has no delivery in hand for the broker to bring back. Where its own
-// attempt started this node's clock on that host's store
-// ([Coordinator.hostClocked]), its claim won and its read of the box found
-// that store silent first ([startingClock]), the delivery that carried the
-// completion was acknowledged when it was kept, no clock running then, so the
-// re-fire's completion is announced afresh at once, whatever the hand-back
-// (renew.go),
-// and a renewal the broker does not take is said here, as what it leaves: no
-// delivery to make it again on, so this node makes it again on its own timer
-// until one lands or this node settles the run, whoever holds the seat by then
-// ([refirePublish]).
-// WHERE THE CLOCK RAN BEFORE IT, OR THE RUN'S ROW SAID WHAT IT WOULD, NOTHING
-// IS ANNOUNCED: the delivery refused then was handed back, never acknowledged,
-// and is in flight still, renewed on its own budget, so an announcement made
-// here beside it would leave two in flight, and one more with every refusal
-// and re-fire after it. NOR WHERE ANOTHER ATTEMPT STARTED THE CLOCK while this
-// one ran, its claim losing to that attempt's, or refused while that
-// attempt's release was out, or winning after it to find the clock running:
-// that attempt was a delivery's, handed back and in flight, which carries the
-// completion. Renewed wherever the clock ran once the attempt was done, such a
-// re-fire put a second announcement beside it. NOR WHERE ITS OWN ATTEMPT
-// SETTLED THE RUN after starting the clock, its hand-back refused and the run
-// ended, which drops the clock ([Coordinator.runSettled]): the clock it
-// started must still run once the attempt is done. Renewed on the start
-// alone, such a re-fire announced the completion of a run already ended, and
-// a refusal of that announcement was made again on this node's timer with no
-// settle left to drop it.
-//
-// ITS LIFETIME IS THE COORDINATOR'S (c.life, ended by [Coordinator.Stop]),
-// never a caller's: a re-fire runs on a goroutine of its own after the
-// delivery, the signal or the seat's release that started it has returned,
-// so no caller's context reaches it.
+// refire offers a kept completion to [Coordinator.OnCompleted] again, under the
+// coordinator's own lifetime. A refusal keeps it again, and so does any other
+// failure ([Coordinator.keepAgain]). Where its own attempt started this node's
+// clock on the box host's store ([startingClock]), its completion is announced
+// afresh at once (renew.go, [refirePublish]); not where the clock ran before,
+// another attempt started it, or its attempt settled the run. Its lifetime is
+// c.life, ended by [Coordinator.Stop], since it outlives its caller. See the
+// package doc, "Kept completions".
 //
 //nolint:contextcheck // the coordinator's own lifetime (c.life), never a caller's; see above
 func (c *Coordinator) refire(kept refusedCompletion) {

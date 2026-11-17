@@ -363,42 +363,16 @@ func TestAResumeAnotherBuildCanMakeIsCountedOnlyOnceNoLiveNodeCan(t *testing.T) 
 }
 
 // A RESUME FAILING ON A CONDITION ONLY AN OPERATOR CLEARS IS RAISED FOR THE
-// OPERATOR while the run waits. The give-up never ends such a run (the failure
-// is the node's), so its seat waits for as long as the condition lasts, and
-// each attempt's error line, repeated on every announcement, was the only
-// sign of it. The coordinator counts the run with its seat, the condition's
-// kind and when the first such failure in a row was met, an attempt that
-// meets the condition again keeping that instant; and takes it out once a
-// resume gets past the condition, once one fails for anything else, once the
-// run settles, and once the seat is let go of. COUNTED ONCE THE ATTEMPT'S
-// HAND-BACK LANDS: an attempt whose own hand-back failed ends the run, and one
-// whose run had its ending decided by another path while the resume ran (a
-// person's stop of the run the turn relaunched) finds it moved on, and counted
-// as the failure was met, or as the attempt returned, after that ending had
-// taken it out, a run that was over held the alarm up until its seat moved. A
-// resume whose turn relaunched before it failed is out, its hand-back finding
-// the turn's next job on the row. A hand-back the store answers late counts the
-// run once it lands, and an ending
-// that lands beside it, before its answer is taken, leaves it uncounted; a run
-// an earlier attempt counted stays counted, from its first failure's instant,
-// while a later attempt's hand-back is owed. AND
-// ONLY WHILE THIS NODE HOLDS THE SEAT UNDER THE LEASE THE ATTEMPT'S CLAIM WAS
-// TAKEN WITH: nothing cuts a resume's frame short at the seat's release, and
-// one that meets its failure after it, its hand-back landing before a newer
-// holder fences the row, counts nothing and leaves nothing behind; and once
-// this node takes the seat back under a newer lease, the run is counted from
-// that holding's own attempts. A failure of the node's that a wait clears (a
-// coordination store that did not answer) is never counted.
+// OPERATOR while the run waits ([blockedResume]): counted with its seat, kind
+// and first failure's instant once the hand-back lands, under the claim's
+// lease; out once a resume gets past it or fails otherwise, the run settles or
+// the seat is let go. A failure a wait clears is never counted. See the package
+// doc, "Resumes blocked on an operator".
 //
-// Mutation: record no failure, keep the latest instant rather than the first,
-// drop the record on any one of the ways out, count the failure as it is met
-// or as the attempt returns rather than once its hand-back lands, count it in
-// the step that takes the landing's answer whatever settled before it, keep it
-// where the hand-back did not land, count it under a lease this node no longer
-// holds the seat by, keep it in memory once that lease is gone, carry an
-// earlier holding's instant into a later one, or stop counting a run an
-// earlier attempt counted while the next attempt's hand-back is out, and a row
-// goes red.
+// Mutation, each red: record nothing; keep the latest instant; drop a way out;
+// count at the failure or return, or whatever settled first; keep an unlanded
+// hand-back; count under a lost lease or keep it after; carry an instant across
+// holdings; drop an earlier count while a hand-back is out.
 func TestAResumeOnlyAnOperatorClearsIsRaisedWhileTheRunWaits(t *testing.T) {
 	t.Parallel()
 	full := errors.New("write: no space left on device")

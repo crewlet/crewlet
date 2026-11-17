@@ -287,39 +287,17 @@ func (r *renewRig) resumedOnTheBroker(t *testing.T) {
 }
 
 // A COMPLETION WHOSE BOX'S HOST ALONE FINDS THE STORE SILENT IS RENEWED BEFORE
-// ITS DELIVERY RUNS OUT. Only that host can read the box, and its own waiter,
-// the only one that announces the job again, reads the run's row through the
-// silent store, so the broker's redelivery is all that asks again. Its budget
-// is shorter than the box timeout, so NAK'd and nothing more, the completion was
-// dead-lettered before the bound that records the job lost with its host, and
-// the seat was held behind a run nothing drove again. So node-b announces the
-// completion afresh before the delivery in hand is its last, publishes that
-// before acknowledging the delivery, and the wait goes on until the host's
-// store answers or the bound gives the job up, and past the bound until the
-// job's round is carried on: a recorded loss settles nothing while its carry
-// can still fail, and its host's waiter announces nothing either. A re-fire,
-// which has no delivery in hand, renews at once, unless its own attempt
-// settled the run it started the clock on; and a hand-back this node's own
-// store made is NAK'd and nothing more, since the waiter announces that job
-// again.
+// ITS DELIVERY RUNS OUT, through the bound and past it until the round is
+// carried on; a re-fire renews at once unless its attempt settled the run, and
+// a hand-back this node's own store made is NAK'd only. See the package doc, "A
+// completion is renewed while the clock on its box's host runs". The memory
+// twin hands a NAK'd message back at once, so time moves on the host's own
+// answers, a minute each, on the bubble's clock.
 //
-// The memory twin hands a NAK'd message back at once, so time moves on the
-// host's own answers, a minute each, on the bubble's clock.
-//
-// Mutation: renew nothing, and the job is never recorded lost, a dead letter
-// left; NAK the delivery a renewal replaced, and the topic holds a growing
-// pile of announcements; renew on every hand-back, or only on the last
-// delivery, and the deliveries per announcement are not the reserve's; renew
-// under the delivery's own id, and no fresh announcement is delivered; ack a
-// delivery whose renewal the broker refused, and the job is left with none;
-// leave a re-fire unrenewed, or a loss this node's store did not take, and
-// nothing carries the completion on; renew a re-fire whose own attempt
-// started the clock and then ended the run, and a settled run's completion is
-// announced, its refusal made again on this node's timer with nothing left to
-// drop it; drop the clock at the recorded loss, and
-// a carry that fails after it runs a budget out with nothing renewing it;
-// renew a hand-back this node's own store made, and its delivery is never
-// spent.
+// Mutation: renew nothing (a dead letter); NAK a renewed delivery (a growing
+// pile); renew on every hand-back or the last only, or under the delivery's id;
+// ack a refused renewal; skip a re-fire or an untaken loss; renew a re-fire
+// that ended its run; drop the clock at the loss; renew this node's own.
 func TestACompletionWhoseHostAloneFindsTheStoreSilentIsRenewed(t *testing.T) {
 	t.Parallel()
 	if (renewBudget+1)*readWait >= DefaultBoxTimeout {
@@ -643,20 +621,13 @@ func (h *hostReads) ReadBox(ctx context.Context, run PendingRun, read BoxRead) (
 }
 
 // EVERY HAND-BACK OF A COMPLETION IS RENEWED WHILE THE CLOCK ON ITS BOX'S HOST
-// RUNS, WHATEVER ITS KIND. The clock is this node's word that the host's
-// waiter, the one thing that would announce the job again, reads the run's row
-// through a coordination store that does not answer it: the broker's
-// redelivery is then all that asks again, and its budget is shorter than the
-// box timeout. A claim this node's own store does not answer, a claim refused
-// while a release this node owes is out, and a host that does not answer the
-// read at all are hand-backs within that same wait, and each one's delivery is
-// NAK'd and renewed before its last, never acknowledged: the completion
-// outlives one message's budget, and the turn resumes once the host's store
-// answers, each renewal leaving one announcement in flight.
+// RUNS, WHATEVER ITS KIND: a claim this node's store does not answer, a claim
+// refused for a release owed, and a host that does not answer are each NAK'd
+// and renewed before their last, never acknowledged, each renewal leaving one
+// announcement in flight.
 //
-// Mutation: renew only the host's own answer that its store did not answer,
-// and a claim the store did not answer, a claim refused for a release owed or
-// a host that did not answer runs one message's budget out to its dead letter;
+// Mutation: renew only the host's own answer that its store did not answer, and
+// the other hand-backs run one message's budget out to its dead letter;
 // acknowledge a host that did not answer while the clock runs, and nothing
 // announces the job again.
 func TestEveryHandBackIsRenewedWhileTheClockOnItsHostRuns(t *testing.T) {
@@ -747,33 +718,16 @@ func delivery(ctx context.Context, ev *events.Event) context.Context {
 }
 
 // A REFUSAL WHILE THE CLOCK ON ITS BOX'S HOST RUNS IS HANDED BACK, NEVER
-// ACKNOWLEDGED. A completion the node's gate refuses on a condition that clears
-// by waiting is acknowledged where the waiter that drives its box stands behind
-// it, announcing the job again on its schedule, and is kept for the signal that
-// the condition cleared. While this node keeps a clock on the store of the
-// box's host, that waiter reads the run's row through the silent store and
-// announces nothing, and the kept completion is this node's memory alone,
-// which a restart or a seat let go of forgets and a clearing nothing signals
-// never re-fires. So the refusal's delivery is handed back, marked as no
-// waiter's to announce again ([ErrUnannounced]), and renewed before its last,
-// beside being kept. So is a completion this node holds off itself after its
-// resume met a limit, and an answer that settled nothing while the clock runs:
-// a resume the run's row holds for the seat's budget, whose host's waiter
-// would announce it again once the hold lifts and cannot. And a re-fire made
-// while such a delivery is in flight announces nothing afresh: the delivery
-// carries the completion, and a second announcement would make two in flight.
+// ACKNOWLEDGED ([ErrUnannounced]), renewed before its last beside being kept:
+// the host's waiter announces nothing and the keep is this node's memory alone.
+// So are a completion held here after its resume met a limit and an answer that
+// settled nothing. A re-fire announces afresh only where its own attempt
+// started the clock, never beside a delivery in flight.
 //
-// And a re-fire whose claim lost to a delivery whose collection started the
-// clock meanwhile announces nothing either: that delivery, handed back, is in
-// flight, so a re-fire announces afresh only where its own attempt started the
-// clock, its claim having read the box.
-//
-// Mutation: acknowledge a refusal while the clock runs, and a clearing nothing
-// signals leaves the job unannounced for good; acknowledge an answer that
-// settled nothing while the clock runs, and a resume its row holds is never
-// announced again; renew a re-fire whenever the clock runs after it, or
-// wherever it started after the re-fire began, and the completion has two
-// announcements in flight.
+// Mutation: acknowledge a refusal, or an answer that settled nothing, while the
+// clock runs, and the job is never announced again; renew a re-fire whenever
+// the clock runs after it, or wherever it started after the re-fire began, and
+// the completion has two announcements in flight.
 func TestARefusalWhileTheClockOnItsHostRunsIsHandedBack(t *testing.T) {
 	t.Parallel()
 
@@ -979,19 +933,16 @@ func renewedOn(rig *coordRig) []*events.Event {
 	return renewed
 }
 
-// A RENEWAL THE BROKER DOES NOT TAKE IS SAID BY WHAT IT LEAVES. On a delivery,
-// the delivery is handed back to make the renewal again when it comes back, and
-// its line says so (sandbox_completion_renew_failed). A re-fire has no delivery
-// to come back on: its own line says this node publishes the completion again
-// on its timer, and when (sandbox_completion_refire_unsettled), and nothing
-// says a delivery was handed back, since a reader told so waits for a delivery
-// that never comes.
+// A RENEWAL THE BROKER DOES NOT TAKE IS SAID BY WHAT IT LEAVES: on a delivery,
+// handed back to make it again (sandbox_completion_renew_failed); on a re-fire,
+// published again on this node's timer (sandbox_completion_refire_unsettled),
+// never said as a hand-back, since a reader told so waits for a delivery that
+// never comes.
 //
 // Not parallel: it captures the process-wide logger ([captureLogs]).
 //
-// Mutation: say the delivery's line wherever a renewal is refused, and a
-// re-fire's refusal says it handed back a delivery it never had; say it
-// nowhere, and a renewal refused on a delivery is said by nothing.
+// Mutation: say the delivery's line wherever a renewal is refused, or say it
+// nowhere.
 func TestARefusedRenewalIsSaidByWhatItLeaves(t *testing.T) {
 	t.Run("a delivery in hand is handed back to make it again", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
@@ -1070,27 +1021,16 @@ func brokerTakes(rig *coordRig) {
 	rig.queue.err = nil
 }
 
-// A RE-FIRE'S ANNOUNCEMENT THE BROKER REFUSED IS PUBLISHED AGAIN. A re-fire has
-// no delivery in hand, so a renewal the broker does not take has nothing to come
-// back on: left so, the completion of a job whose box's host cannot read the
-// store waited for that store, its host's waiter announcing nothing. So this
-// node publishes it again on its own timer, on the hand-back's spacing (a
-// second, doubling to thirty), until one lands, and KEEPS IT PAST THE SEAT'S
-// RELEASE AND A LEASE IT LOST: the publish goes to the seat's control topic,
-// which needs no lease and which whoever holds the seat next reads, and
-// nothing else carries the completion there, the delivery it was kept from
-// acknowledged and the host's waiter silent. It drops it once this node
-// settles the run, when announcing the job is no longer anybody's to do, or
-// once a later re-fire's own announcement afresh lands, which carries the
-// completion in its place, one announcement in flight.
+// A RE-FIRE'S ANNOUNCEMENT THE BROKER REFUSED IS PUBLISHED AGAIN on this node's
+// timer, on the hand-back's spacing (a second, doubling to thirty), until one
+// lands, kept past the seat's release and a lost lease, and dropped once this
+// node settles the run or a later re-fire's announcement lands
+// ([refirePublish]).
 //
-// Mutation: leave a refused re-fire's announcement unmade, and nothing carries
-// the completion; arm it again at a fixed spacing; drop it at the seat's
-// release, or at a lease this node lost, and the seat's next holder is never
-// told of a job no waiter announces; keep it past the run's settle, and this
-// node announces a completion that is no longer anybody's to announce; keep it
-// past a later re-fire's announcement that landed, and the completion has two
-// in flight.
+// Mutation: leave it unmade; arm it at a fixed spacing; drop it at the seat's
+// release or a lost lease, and the next holder is never told; keep it past the
+// run's settle, or past a later re-fire's announcement that landed, and the
+// completion has two in flight.
 func TestARefiresRefusedAnnouncementIsPublishedAgain(t *testing.T) {
 	t.Parallel()
 
@@ -1282,22 +1222,16 @@ func (r *coordRig) restart(t *testing.T, q Publisher, node string, fence Fence, 
 }
 
 // A JOB NO WAITER ANNOUNCES IS RENEWED BY WHAT ITS ROW SAYS, NOT BY ONE NODE'S
-// MEMORY. The clock on the store of the host of a job's box is in the
-// collecting node's memory: a restart forgets it, and the seat's next holder
-// starts with none. But that host's waiter reads the run's row through its
-// silent store and announces nothing either way, so a delivery that node
-// acknowledged, or NAK'd and nothing more, was the completion's last copy. So
-// a job recorded LOST with that host keeps its completion renewed until its
-// round is carried on ([LossLaunchNodeStoreSilent]), and so does one whose
-// record says that host last found its store silent
-// ([LaunchRecord.HostStoreSilentSince]), which every claim's release writes: a
-// node that keeps no clock reads the row before it acknowledges a delivery.
+// MEMORY: the clock does not survive a restart or a seat move, so a job
+// recorded lost with its host ([LossLaunchNodeStoreSilent]) keeps its
+// completion renewed until its round is carried on, and so does one whose
+// record says the host's store was silent
+// ([LaunchRecord.HostStoreSilentSince]).
 //
-// Mutation: key the renewal on this node's clock alone, and a carry that fails
-// after a restart runs one message's budget out to its dead letter, and a
-// refusal after a restart, or on the seat's next holder, is acknowledged with
-// nothing left to announce the job; write no record of the host's silence on
-// the release, and the refusals are acknowledged the same way.
+// Mutation: key the renewal on this node's clock alone, and a carry failing
+// after a restart dead-letters and a refusal after a restart or on the next
+// holder is acknowledged; write no record of the silence on the release, and
+// the refusals are acknowledged the same way.
 func TestAJobNoWaiterAnnouncesIsRenewedByItsRow(t *testing.T) {
 	t.Parallel()
 	// past is how many refusals or failed carries a case goes on for: past one
@@ -1441,24 +1375,15 @@ func (r *renewRig) waiterAnnounces(t *testing.T) uuid.UUID {
 }
 
 // A WAITER'S ANNOUNCEMENT MADE SINCE THE CLOCK STARTED ENDS IT, AND A RENEWAL
-// NEVER DOES. The waiter that drives a box announces its job only having read
-// the run's row through its store, and says when it asked for that read
-// ([rowAskedField]), so its announcement made from a read asked after the
-// clock on that store started says the store answered since: it ends this
-// node's clock and, on the release a claim of it makes, the job's record of the
-// silence, and a refusal of it is acknowledged as any is where a waiter stands
-// behind it. A renewal reads no row and says no read, so it says nothing of
-// that store. Unheard, the clock and its record stood through every
-// announcement the waiter made once its store answered again, and while a
-// refusal that settles nothing lasted, each was handed back and renewed beside
-// the chain already in flight: one more chain for every announcement.
+// NEVER DOES ([rowAskedField], [announcedAfter]): it ends this node's clock,
+// and the job's record at the release a claim of it makes. A renewal says no
+// read.
 //
-// Mutation: stamp a renewal with a read of its own, and the chain the
-// renewals carry is acknowledged at its first refusal with nothing left to
-// resume the turn; never end the clock at the waiter's announcement, and the
-// chains in flight grow by one for each; leave the job's record standing at the
-// release of a claim the waiter's announcement made, and a restarted node goes
-// on renewing a job whose host's store answers.
+// Mutation: stamp a renewal with a read of its own, and the chain is
+// acknowledged at its first refusal; never end the clock at the waiter's
+// announcement, and the chains in flight grow by one each; leave the record
+// standing at that release, and a restarted node renews a job whose host's
+// store answers.
 func TestAWaiterAnnouncementMadeSinceTheClockEndsIt(t *testing.T) {
 	t.Parallel()
 
@@ -1543,22 +1468,14 @@ func TestAWaiterAnnouncementMadeSinceTheClockEndsIt(t *testing.T) {
 }
 
 // AN ANNOUNCEMENT MADE FROM A READ ASKED BEFORE THE CLOCK STARTED ENDS NOTHING,
-// HOWEVER LATE IT WAS MADE. The waiter that drives a box reads the run's row,
-// then polls the box, then announces the job: a poll can take a minute
-// ([pollBound]) after the wait for a slot, so a silence of its store that
-// begins between the read and the announcement, and that a collection finds
-// meanwhile, starts a clock before the announcement is stamped. The stamp says
-// nothing of that silence, and the read it was made from says the store
-// answered before it ([rowAskedField]). So the clock stands through it and a
-// refusal of it is handed back, to be renewed, and a claim of it whose
-// collection learns nothing of the host's store leaves the job's record of the
-// silence standing.
+// HOWEVER LATE IT WAS MADE: the waiter's poll after its read can take
+// [pollBound], so a silence found meanwhile starts a clock before the stamp.
+// The clock stands, a refusal of it is handed back, and a claim learning
+// nothing of the host's store leaves the record.
 //
 // Mutation: compare the announcement's own stamp with the clock's start, and a
-// refusal of it is acknowledged with its host's store still silent and the
-// clock ended, and a claim of it the host does not answer clears the record, so
-// that every refusal after it is acknowledged with no waiter able to announce
-// the job.
+// refusal of it is acknowledged with the store still silent, and a claim the
+// host does not answer clears the record.
 func TestAnAnnouncementFromAReadBeforeTheClockEndsNothing(t *testing.T) {
 	t.Parallel()
 	// readBefore makes ev the host's waiter's announcement made a minute after

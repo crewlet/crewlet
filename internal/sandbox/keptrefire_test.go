@@ -39,19 +39,11 @@ func (g *clockedGate) count() int {
 	return g.asked
 }
 
-// A KEPT COMPLETION IS RE-FIRED WITHOUT A SIGNAL, AT ITS REFUSAL'S INSTANT OR AT
-// THE BACKSTOP. A completion the node's gate refuses on a condition that clears
-// by waiting is acknowledged and kept for the condition's signal, and the waiter
-// that drives its box announces it again on its schedule. But some conditions
-// lift on the clock with no edge anything signals: a seat's lease merely stale
-// from a late renew, which the gate names one heartbeat on, and a provider's
-// limit whose instant comes with no park to release. While the coordination
-// store does not answer the host of the job's box, that waiter announces
-// nothing (these rigs run no waiter at all), and on the node that keeps the
-// seat, with no restart and no seat move to re-arm it from its record, the
-// completion waited with no bound. So every keep arms a re-fire of its own: at
-// the instant its refusal names, never later than [answerWaitBackstop], and at
-// the backstop where it names none.
+// A KEPT COMPLETION IS RE-FIRED WITHOUT A SIGNAL, AT ITS REFUSAL'S INSTANT OR
+// AT THE BACKSTOP: some conditions lift on the clock with no edge (a stale
+// lease, a provider's limit at its instant), and while the box host's store is
+// silent no waiter announces the job (these rigs run no waiter at all). So
+// every keep arms its own re-fire, no later than [answerWaitBackstop].
 //
 // Mutation: keep a refused completion without arming its re-fire, and none of
 // these is ever carried.
@@ -126,23 +118,16 @@ func TestAKeptCompletionIsReFiredWithoutASignal(t *testing.T) {
 	}
 }
 
-// A COMPLETION THIS NODE HOLDS IS RE-FIRED AT ITS INSTANT, AND NEVER SOONER. A
-// resume refused after its claim, on a limit that names the instant it lifts,
-// is held here until then ([Coordinator.stillRefused]): the gate admitted it
-// and would again, so every re-fire before the instant claimed the job again,
-// woke its box to collect it and ran its review into the same refusal. Its own
-// re-fire is the keep's, and fired at the backstop it dropped the keep, the
-// hold with it, so the re-fire found nothing held and resumed the job into the
-// limit every five minutes until the instant. Armed for the instant, it comes
-// once, when the limit lifts with nothing to signal it.
+// A COMPLETION THIS NODE HOLDS IS RE-FIRED AT ITS INSTANT, AND NEVER SOONER
+// ([Coordinator.stillRefused]): re-fired at the backstop it would drop its hold
+// and resume the job into the same limit every five minutes. Its timer fires at
+// each backstop before the instant and re-fires nothing there
+// (TestAHeldCompletionPastItsDeadlineEndsWithinTheBackstop), so the case runs
+// on the bubble's clock, which every one of those reads.
 //
-// Its timer fires at each backstop before the instant, and re-fires nothing
-// there (TestAHeldCompletionPastItsDeadlineEndsWithinTheBackstop), so the case
-// runs on the bubble's clock, which every one of those reads.
-//
-// Mutation: re-fire a held completion no later than the backstop, as the
-// gate's own refusals are, and the job is resumed again five minutes on, into
-// the same limit.
+// Mutation: re-fire a held completion no later than the backstop, as the gate's
+// own refusals are, and the job is resumed again five minutes on, into the same
+// limit.
 func TestACompletionHeldHereIsReFiredAtItsInstantAndNeverSooner(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -169,16 +154,10 @@ func TestACompletionHeldHereIsReFiredAtItsInstantAndNeverSooner(t *testing.T) {
 	})
 }
 
-// A RE-FIRE THE STORE DID NOT ANSWER IS KEPT FOR ITS BACKSTOP. A kept
-// completion's re-fire, a recovery's at once from the job's record or a
-// signal's, has no delivery the broker brings back when it fails, and the
-// waiter that would announce the job again announces nothing while its store
-// is silent. A recovery's re-arm whose re-fire failed before the claim was
-// kept on the recorded condition, whose signal this holder may never see; a
-// re-fire the gate admitted and whose claim the store did not answer was kept
-// by nothing at all. Either way the completion waited, on the node that holds
-// the seat, for an announcement that did not come. So both are kept with a
-// re-fire of their own at the backstop.
+// A RE-FIRE THE STORE DID NOT ANSWER IS KEPT FOR ITS BACKSTOP: a re-fire has no
+// delivery to come back on and the waiter is silent, so a recovery's re-arm
+// that failed before its claim, and a re-fire whose claim the store did not
+// answer, are both kept with a re-fire of their own at the backstop.
 //
 // Mutation: keep a recovery's re-arm without its re-fire, or drop a re-fire's
 // completion when its claim fails, and the completion is never carried.
@@ -765,59 +744,18 @@ func budgetHeldOnRow(t *testing.T, rig *coordRig, until time.Time) {
 	}
 }
 
-// A COMPLETION ITS SEAT'S BUDGET HELD ON ITS ROW IS KEPT FOR THE HOLD. A
-// resume the budget refused once it ran hands its claim back holding the run's
-// row until the window turns over, and its delivery is spent: the waiter that
-// drives the job's box announces it again once the hold lifts. But that waiter
-// reads the row through its host's coordination store, and before the instant
-// nothing else carried the job: the claim refuses a held row, a signal only
-// lifted the hold, and a recovery re-armed only an owed refusal. So with that
-// store silent, no restart and no seat move, the job waited with no bound. It
-// is kept on this node, unheld: re-fired at the hold's instant and never
-// sooner, since before it the claim takes nothing; and on its condition's
-// signal once the lift of the hold has landed, and not before, since a re-fire
-// beside the lift met the hold still standing and dropped the keep; and every
-// lift its signal makes re-fires the job, unless this node carries it already,
-// kept for anything but that hold or a re-fire of it on its way, so it is
-// re-fired once: a keep for the hold the lift cleared is re-fired in its place,
-// and a re-fire on its way that leaves the job kept for that hold is followed by
-// one as it returns, unless a claim of the job won meanwhile. A claim the hold
-// refuses leaves it kept: a delivery queued behind the resume that held the job
-// leaves it standing, and the re-fire of whatever was kept in its place keeps it
-// again from the row.
+// A COMPLETION ITS SEAT'S BUDGET HELD ON ITS ROW IS KEPT FOR THE HOLD, unheld
+// here: re-fired at the hold's instant and never sooner, or on its signal once
+// the lift lands; every lift re-fires the job once, unless this node carries
+// it; a claim the hold refuses leaves it kept or keeps it again from the row.
+// See the package doc, "Kept completions".
 //
-// Mutation: keep nothing for a hold on the row, and the job is never carried;
-// arm its re-fire no later than the backstop, and it is armed sooner than the
-// instant; re-fire it on its signal without lifting the hold first, and its
-// claim meets the hold; re-fire it after a lift the store did not answer, its
-// signal's or a stop's, and the job is claimed into the hold before its
-// instant; drop it as every keep is dropped once a delivery is admitted, and a
-// delivery the hold refuses reads the row to keep it again; leave it standing
-// once a claim of it wins, and its re-fire is still armed for an instant the
-// job no longer waits for; keep nothing from the row where a claim meets the
-// hold with nothing kept for the job, and a refusal of the node's gate kept in
-// the hold's place leaves nothing kept once its re-fire meets the hold, nor
-// anything for the backstop where that claim's row is not read or its hold
-// lifted between the claim and the read; keep it for the backstop whatever
-// lease owns the row, and a node whose lease the row has passed keeps re-firing
-// a job another holder owns; lift a hold on its signal and leave the job to the
-// waiter, and a lift with nothing kept for the job, whether dropped or never
-// made by a recovery the signal raced, leaves it unannounced; leave a held row
-// out of a recovery, and nothing is kept; read what was signalled only once the
-// recovery has listed the seat's runs, and a signal during it whose listing of
-// the holds the store does not answer leaves the job kept for the hold's
-// instant; keep a held resume against what was signalled once it returned, or
-// once its gate admitted it, and a signal that landed during it, or while the
-// gate was asked, the row still unheld, is counted as seen and lifts nothing;
-// write the hold without owing the completion on the job's record, and a
-// restart after a lift of the hold leaves the job owed nothing; re-fire the
-// job on a signal's lift while this node keeps it for another condition or a
-// re-fire of it is on its way, or keep it from the row in a recovery while that
-// lift's re-fire is, and it is re-fired twice at once; leave a keep for the hold
-// the lift cleared as it is, or a lift that lands under a re-fire unasked when
-// that re-fire returns, and a keep made against a read of the row from before
-// the lift waits for the hold's instant; keep that lift through a claim that
-// won, and the job is re-fired into the hold its resume met again.
+// Mutation, each red: keep nothing; arm before the instant; re-fire before or
+// without the lift; drop it at an admitted delivery or keep it past a won
+// claim; keep nothing from the row on a refused claim; keep under another's
+// lease; leave a lift to the waiter; skip a held row in a recovery; read seen
+// late; write the hold owing nothing; re-fire a carried job twice; leave a keep
+// the lift cleared waiting for the instant.
 func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 	t.Parallel()
 
@@ -1499,15 +1437,10 @@ func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 }
 
 // A RESUME ITS SEAT'S BUDGET HELD ON ITS ROW IS HELD NO LATER THAN ITS TURN'S
-// DEADLINE. Past the deadline nothing waits, and a resume that meets anything
-// then ends the run. But nothing reached a held row to end it: the waiter
-// passes it over and the claim refuses it, an ending at the deadline's claim
-// among them, and the backstop that ends a completion held past its deadline
-// is for one this node holds in memory. So a capped turn whose review met the
-// budget minutes before its cap held its seat until the budget's window
-// turned, a day, a week or a month on. The hold is written until the
-// deadline, where it is sooner than the window's turn, and the keep made for
-// it re-fires the job at the deadline, whose resume past it ends the run.
+// DEADLINE: nothing reaches a held row to end it, so held until the window
+// turned a capped turn would hold its seat a day, a week or a month on. The
+// hold is written until the deadline where sooner, and its keep re-fires the
+// job there, whose resume past the deadline ends the run.
 //
 // Mutation: hold the row until the refusal's instant alone, and the job is
 // re-fired, and the run ended, only once the window turns.
@@ -1553,19 +1486,13 @@ func bubbleRig(t *testing.T) *coordRig {
 	return rig
 }
 
-// A HELD COMPLETION PAST ITS TURN'S DEADLINE ENDS WITHIN THE BACKSTOP. A
-// completion whose resume met a limit after its claim is held here until the
-// limit's instant, and its own re-fire waits for that instant. But past its
-// turn's deadline nothing waits: an announcement then ends the run. Where no
-// waiter announces the job (these rigs run none, as a host whose store is
-// silent announces nothing), nothing asked, and the turn whose deadline passed
-// waited for the hold's instant, up to the hour a vendor's window is benched
-// for. So the held keep's backstop asks what an announcement asks: before the
-// deadline it keeps the hold, resuming nothing, and arms the next backstop;
-// past it, the run is ended.
+// A HELD COMPLETION PAST ITS TURN'S DEADLINE ENDS WITHIN THE BACKSTOP: with no
+// waiter announcing it (these rigs run none), the held keep's backstop asks
+// what an announcement would, keeping the hold and arming the next before the
+// deadline, and ending the run past it.
 //
-// Mutation: arm a held completion's timer for its instant alone, and the run
-// is still held past its deadline and a backstop; re-fire it at the backstop
+// Mutation: arm a held completion's timer for its instant alone, and the run is
+// still held past its deadline and a backstop; re-fire it at the backstop
 // instead of asking, and it is resumed into the limit; ask without arming the
 // next backstop, or without asking for the deadline, and the run is never
 // ended.

@@ -550,27 +550,15 @@ func worstRow(t *testing.T) PendingRun {
 		evidence[i] = decision.Evidence{Kind: "link", Ref: markup(decision.MaxEvidenceRef),
 			Label: markup(decision.MaxEvidenceLabel)}
 	}
-	// TEN NOTES (internal/agent/steer's MaxTurnNotes), each sealed at the
-	// bound the store holds a note's seal to, each served to a job before it
-	// was read, and read by a take that named itself — the engine's takes name
-	// themselves by a fresh UUID — and was settled unanswered, and then by a
-	// launch's brief that told it again, keeping that take's read beside its
-	// own: every field of both reads at its widest, marked restarted too. And
-	// each served to one job's hooks as often as a note may be
-	// ([MaxNoteServes]), every serve lost to a cancel, at the widest step, and
-	// keeping the call it answered at the widest the store keeps one, through
-	// the rule that keeps it ([keptCallOf]): each half at [MaxNoteCallBytes]
-	// in the id charset, which the encoder writes as itself, the id a JSON
-	// string, whose two quotes are the only bytes of a kept call it escapes.
-	//
-	// EVERY COUNTER AT THE WIDTH OF WHAT IT COUNTS. A read's and a serve's
-	// iteration is its job's, which the launch's own record below holds at
-	// math.MaxInt, turn_engine.max_iterations having no ceiling. A note's and
-	// an item's Seq is the turn's numbering ([RunSteer.Seq], at math.MaxInt
-	// below): a relaunch keeps it while its write removes every item, so the
-	// items a turn's jobs file push it past any index of the twenty the row
-	// holds. A read's round is the review's, which takes a handful, or a
-	// job's one: 99 is past both.
+	// TEN NOTES (internal/agent/steer's MaxTurnNotes), each sealed at its
+	// bound, served before read, read by a self-named take (a fresh UUID)
+	// settled unanswered and by a brief telling it again, every field of both
+	// reads at its widest and marked restarted; each served [MaxNoteServes]
+	// times, every serve lost at the widest step, its call kept at the widest
+	// [keptCallOf] keeps. Every counter at the width of what it counts: a
+	// read's and a serve's iteration and a note's Seq at math.MaxInt
+	// (max_iterations has no ceiling, and a relaunch keeps Seq), a read's round
+	// at 99, past a review's and a job's.
 	widestCall := NoteCall{Session: plain(MaxNoteCallBytes), ID: `"` + plain(MaxNoteCallBytes-2) + `"`}
 	if keptCallOf(&widestCall) == nil {
 		t.Fatalf("the store keeps no call at its widest, %+v", widestCall)
@@ -1004,42 +992,17 @@ func TestARunsValuesAreBudgetedToWhatOneKeyOfTheStoreHolds(t *testing.T) {
 	}
 }
 
-// THE WHOLE ROW FITS ITS BUDGET: the arithmetic in rowbytes.go, held to the
-// row's own encoder. Every field is at its bound in the bytes that escape the
-// most — the three a person or a tool supplies included, a recorded answer and
-// the copies of a let-go one each at its share and a held call's sealed
-// arguments at theirs, the turn's read of its conversation at its bound, and
-// what the job may do on Gitlet at the most its writers take — and the
-// parked state is at its share. The state weighs no more than
-// [ExecuteStateBytes] and the rest no more than [RestBytes] less the room left
-// for what a later build adds; the whole, with that room, no more than
-// [RowBytes]. And the handed set kept beside the row, at the most a launch
-// keeps, sealed, is a value well within [RowBytes] too.
+// THE WHOLE ROW FITS ITS BUDGET: rowbytes.go's arithmetic, held to the row's
+// own encoder, every field at its bound in its most-escaping bytes and the
+// handed set within [RowBytes]. And the table's measured figures
+// ([measuredOtherFields], [measuredSpare]) are compared exactly, since the
+// worst row weighs the same on every run: a figure only read goes stale.
 //
-// AND THE FIGURES THE TABLE STATES ARE THE ONES THE ROW WEIGHS: every other
-// field ([measuredOtherFields]) and what the rest's share leaves to spare
-// ([measuredSpare]), compared exactly, since the worst row weighs the same on
-// every run: its ids and its held result's seal are new on every run, each of
-// a fixed width, its instants are one, and its keys are written in order. A
-// figure only read, never compared, went stale the first time the row grew
-// and nothing said so; pinned, a change that moves either, a field the row
-// gains above all, restates both and the table in the change that moves them.
-//
-// Mutation: raise MaxAnswerBytes, MaxHeldArgsBytes or ConversationBaseMaxBytes
-// past what the rest has room for, raise MaxRunRepos, MaxConePaths or
-// MaxCodeHolds far enough, or let a note's seal or a held call's result grow,
-// and the rest overruns its share; raise MaxKeptLeads far enough, and the
-// job's marks of its leads overrun the rest; and raise maxIncarnationBytes to
-// 700,000, and the row's incarnations at that bound (its owner's, and the taker
-// and the standby's taker of each capture it holds) overrun it too.
-// Grow or shrink a note's seal by a byte, and every other field no longer
-// weighs the figure the table states; grow or shrink the turn's read of its
-// conversation by a byte, and the rest no longer leaves the spare it states.
-//
-// And hold a served call to its length alone (keptCallOf's raw-length rule
-// before the id charset), which keeps a call its encoder escapes, and the
-// worst row refuses to be built: its calls would no longer be measured at
-// their widest.
+// Mutation: raise a share or a bound past the rest's room (answers, held args,
+// the conversation, repos, cone paths, holds, leads, incarnations at 700,000),
+// or grow a seal or result, and the rest overruns; change a seal or the
+// conversation read by a byte, and a measured figure is off; hold a served call
+// to its length alone, and the worst row refuses to be built.
 func TestTheWholeRowFitsItsBudget(t *testing.T) {
 	t.Parallel()
 	run := worstRow(t)

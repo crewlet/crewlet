@@ -197,22 +197,13 @@ type Release struct {
 	ResumeFailedAt time.Time
 
 	// Hold, where set, holds the run's resume back until the refusal lifts
-	// ([PendingRun.HeldFor]): the claim is handed back because the seat's
-	// conditions refused the resumed turn, not because it failed, and the
-	// next attempt waits for them. Nil hands back a claim to be retried as
-	// the job's completion comes round, and clears any hold an earlier
-	// release put on it.
-	//
-	// A HOLD ALSO OWES THE COMPLETION ON THE JOB'S RECORD
-	// ([LaunchRecord.RefusalOwed]), its condition, where the record owes
-	// none yet. The hold spent the completion's delivery, and the row is
-	// all a restart or the seat's next holder reads: while the hold stands
-	// its recovery keeps the job for the hold's instant, but a lift clears
-	// the hold, and a lift whose re-fire had not yet claimed the job (one
-	// the store did not answer, kept again in memory alone) left that
-	// recovery nothing to keep or re-arm, the job announced by nothing
-	// while the box's host's store was silent. Owed, it is re-armed and
-	// offered to the recovering holder's gate at once ([Coordinator.rearmOwed]).
+	// ([PendingRun.HeldFor]): the seat's conditions refused the resumed turn,
+	// and the next attempt waits for them. Nil hands back a claim to be retried
+	// as the job's completion comes round, and clears any earlier hold. A hold
+	// also owes the completion on the job's record ([LaunchRecord.RefusalOwed])
+	// where it owes none yet, since the hold spent the delivery and a lift can
+	// leave a recovery nothing else to re-arm ([Coordinator.rearmOwed]). See
+	// the package doc, "Holding a refused resume".
 	Hold *Refusal
 
 	// RelaunchRefusedIn, where it names a window, is the budget window the
@@ -245,24 +236,14 @@ type Release struct {
 	// does not hold one already.
 	CollectedAt time.Time
 
-	// BoxAnswered is whether the claim's collection READ THE JOB'S BOX BACK
-	// and was handed back UNCOUNTED by a step after the read: one the
-	// coordination store did not answer ([ErrStoreSilent]), or one this node
-	// cut short by stopping. It ENDS the job's run of failed collections as
-	// Collected does (the release clears [LaunchRecord.CollectFailures] and
-	// [LaunchRecord.CollectFailingSince]) and records nothing more: the job
-	// is not collected ([LaunchRecord.Collected]), so it stays stoppable, and
-	// the collection made again charges and records it.
-	//
-	// The bound is on failures OF THE BOX, consecutive, and a box that
-	// answered while the store was silent is a box that answered. Left open
-	// behind it, the run of failures from before the silence was measured
-	// across it, and the first failure after it gave up as lost a box that
-	// had answered every read in between. A release that counts a failed
-	// collection cannot say it too, and one that does is refused: a counted
-	// failure continues the run of failures it is counted onto, or a
-	// collection that always outlasted its delivery after reading the box
-	// would start a run of its own each time and never be given up.
+	// BoxAnswered is whether the claim's collection read the job's box back and
+	// was handed back uncounted by a later step: one the coordination store did
+	// not answer ([ErrStoreSilent]), or one this node cut short by stopping. It
+	// ends the job's run of failed collections as Collected does, and records
+	// nothing more, so the job stays stoppable. The bound is on consecutive
+	// failures of the box, and a box that answered while the store was silent
+	// answered. A release that counts a failed collection cannot say it too,
+	// and one that does is refused. See the package doc, "Collection failures".
 	BoxAnswered bool
 
 	// HarnessEnd, where set, is how the job's harness ended as the claim's read
@@ -326,16 +307,11 @@ const MaxOwedConditionBytes = 32
 // nothing has settled yet, which an acknowledged refusal of it leaves owed
 // ([PendingStore.OweRefusal]): the job running, or claimed for its completion
 // ([CompletionTail]). The caller matches the job, and writes live, which
-// refuses a run whose ending is decided ([ErrRunEnding]).
-//
-// A CLAIM SETTLES NOTHING BY ITSELF. A kept completion is re-fired the moment
-// its condition is signalled, so a re-fire's claim can land between the gate's
-// refusal of a delivery and that refusal's record, and a claim handed back,
-// its attempt cut short before its collection heard from the box's host, puts
-// the completion back as it was: owed only where the job was unclaimed, the
-// refusal acknowledged meanwhile was owed by nothing once it was. A RECORDED
-// ANSWER'S CLAIM is not one: the job it holds parked on its question, which
-// settled its completion, and its answer carries the run on.
+// refuses a run whose ending is decided ([ErrRunEnding]). A claim settles
+// nothing by itself: a re-fire's claim can land between a refusal and its
+// record, and a claim handed back puts the completion back as it was. A
+// recorded answer's claim is not one: its job parked on its question, which
+// settled its completion.
 func (r PendingRun) completionUnsettled() bool {
 	return r.Status == StatusRunning || (r.Status == StatusResumed && r.Answer == nil)
 }
@@ -2004,26 +1980,14 @@ type PendingRun struct {
 	LaunchNode string `json:"launch_node,omitempty"`
 
 	// Lost is the verdict that this job was lost with the host it ran on
-	// ([JobLoss]): a RUNNING job, before anything could see it end, killed
-	// with its engine by a restart, its box gone from its host, or its launch
-	// node gone from the fleet for good; or a job, finished or not, whose box
-	// only its node's host can read, on a node that could not read the run's
-	// row off the coordination store for the box timeout
-	// ([LossLaunchNodeStoreSilent]). Nil for every other run.
-	//
-	// A VERDICT, RECORDED, because the one who reaches it is not always the
-	// one who acts on it: the waiter that drives the job's box finds the
-	// first three, and the seat's holder carries the job's round on from the
-	// completion the waiter announces for it ([Coordinator.carryOnLost]) —
-	// which waits on the seat's control topic for the seat's next holder
-	// where no node holds it, and is announced again on the waiter's
-	// schedule until a claim takes it (reannounce.go). The fourth the seat's
-	// holder finds itself, and records on the claim its collection holds
-	// before it carries the round on ([Coordinator.loseWithHost]), so a claim
-	// of the job that comes after carries it on rather than collecting it.
-	// On the row rather than in that announcement, so a completion anybody
-	// could put on the broker cannot have a run's round started again.
-	// Cleared by a relaunch: the verdict was about the job before it.
+	// ([JobLoss]): a running job killed with its engine by a restart, its box
+	// gone, or its launch node gone for good; or a job whose box only its
+	// node's host can read, on a node that could not read the run's row for the
+	// box timeout ([LossLaunchNodeStoreSilent]). Nil for every other run.
+	// Recorded because the one who reaches it is not always the one who acts on
+	// it ([Coordinator.carryOnLost], [Coordinator.loseWithHost]), and on the
+	// row so a completion anybody could publish cannot restart a round. Cleared
+	// by a relaunch. See the package doc, "Lost jobs".
 	Lost *JobLoss `json:"lost,omitempty"`
 
 	// RoundLosses is how many jobs of the current round were lost before
@@ -2902,36 +2866,17 @@ type PendingStore interface {
 	// claimable as before.
 	ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence) (PendingRun, bool, error)
 
-	// ReleaseClaim hands a claimed run back to the status it was claimed
-	// from, reporting whether THIS call did.
-	//
-	// Only while the claim still stands: the run is resumed, holds the
-	// release's launch, and no newer lease outranks the release's fence.
-	// Anything else means the run has moved on from the claim (see
-	// [Release]), and a retry of the signal has nothing left to take.
-	//
-	// The claim's charge is recorded IN THE SAME WRITE, and never cleared
-	// by one: a run is reopened to a retry with its record or not at all
-	// (see [PendingRun.Charged]).
-	//
-	// AND A RECORDED ANSWER THE CLAIM'S TURN TOOK IS THE RUN'S AGAIN
-	// ([RecordedAnswer.TakenAt] cleared): a resume whose turn gives its
-	// claim back has reported that nothing it did reached anybody, which is
-	// what makes the retry safe, and the retry hands the same answer to a
-	// turn of its own. A claim whose answer an ending has already let go of
-	// is not released to [StatusAnswered] at all: an answered run carries
-	// its answer, and one that did not would be owed a resume nobody could
-	// make.
-	//
-	// A RELEASE THAT HOLDS THE RESUME ([Release.Hold]) RECORDS THE
-	// COMPLETION AS OWED in the same write, the hold's condition and the
-	// store's instant, where the job's record owes none yet
-	// ([LaunchRecord.RefusalOwed]).
-	//
-	// FALSE IS NOT AN ERROR: it is a run that moved on, or a row that is
-	// gone. A release to a status outside [Claimable] is an error, because
-	// no claim ever takes a run out of one, and so is a hold whose condition
-	// is past [MaxOwedConditionBytes].
+	// ReleaseClaim hands a claimed run back to the status it was claimed from,
+	// reporting whether this call did; only while the claim still stands (see
+	// [Release]). The claim's charge is recorded in the same write, and never
+	// cleared by one ([PendingRun.Charged]). A recorded answer the claim's turn
+	// took is the run's again ([RecordedAnswer.TakenAt] cleared); a claim whose
+	// answer an ending let go is not released to [StatusAnswered]. A release
+	// that holds the resume ([Release.Hold]) records the completion as owed in
+	// the same write ([LaunchRecord.RefusalOwed]). False is not an error; a
+	// release to a status outside [Claimable], or a hold whose condition is
+	// past [MaxOwedConditionBytes], is. See the package doc, "Releasing a
+	// claim".
 	ReleaseClaim(ctx context.Context, turnID string, release Release) (bool, error)
 
 	// LiftHold clears the hold a release put on a run's resume
@@ -2942,19 +2887,14 @@ type PendingStore interface {
 	LiftHold(ctx context.Context, turnID string, cond Condition) (bool, error)
 
 	// OweRefusal records on job launch's record that the seat's holder
-	// acknowledged a delivery of its completion it refused, and owes the
-	// completion its re-fire ([LaunchRecord.RefusalOwed]), reporting whether
-	// THIS call wrote it: ONE WRITE, made only where the row still holds that
-	// job with its completion unsettled, running or claimed for its
-	// completion, with no ending decided, since a claim handed back puts the
-	// completion back as it was, and its record owes no refusal yet, so a
-	// re-announcement refused again writes nothing and the record keeps the
-	// first refusal's condition and instant. Under the
-	// holder's fence: a row a newer lease owns refuses it with
-	// [ErrSeatNotHeld]. A refusal that names no condition, or one past
-	// [MaxOwedConditionBytes], or no instant, is an error and writes nothing.
-	// FALSE IS NOT AN ERROR: the job moved on, its ending was decided, or
-	// the row is gone, and nothing is owed for it.
+	// acknowledged a refused delivery of its completion and owes its re-fire
+	// ([LaunchRecord.RefusalOwed]), reporting whether this call wrote it: one
+	// write, only where the row still holds that job with its completion
+	// unsettled and no ending decided, and its record owes none yet, so the
+	// first refusal's condition and instant stand. Under the holder's fence
+	// ([ErrSeatNotHeld]). A refusal with no condition, one past
+	// [MaxOwedConditionBytes], or no instant is an error and writes nothing.
+	// False is not an error: nothing is owed.
 	OweRefusal(ctx context.Context, turnID, launch string, owed OwedRefusal, fence Fence) (bool, error)
 
 	// MarkAwaiting parks a run on a question, freeing the seat. A
@@ -3091,22 +3031,15 @@ type PendingStore interface {
 	// store handle writes the loss.
 	MarkLost(ctx context.Context, turnID, launch string, loss JobLoss) (bool, error)
 
-	// MarkClaimLost records on a job CLAIMED for its collection the verdict
-	// that it was lost with the host its box is on ([PendingRun.Lost]): the
-	// claim's own collection's, which found that host unable to read the
-	// job's row for the box timeout ([LossLaunchNodeStoreSilent]), so that the
-	// claim carries the job's round on and the relaunch that does counts the
-	// loss ([PendingRun.RoundLosses]). Reports whether the row carries a
-	// verdict for the job now, written by this call or by an earlier one,
-	// which stands.
-	//
-	// PINNED TO THE CLAIM the caller holds: the job (launch), the claim
-	// ([StatusResumed]) under fence, which a newer lease outranks, and, for a
-	// box on one node's host, that node (loss.Node). A job still running is
-	// the waiter's to judge ([PendingStore.MarkLost]), and a claim of another
-	// job, given back, outranked, or whose ending is decided is a claim no
-	// collection holds: false with no error, as is a row that is gone. A zero
-	// loss.At is the store's clock.
+	// MarkClaimLost records on a job claimed for its collection the verdict
+	// that it was lost with the host its box is on ([PendingRun.Lost],
+	// [LossLaunchNodeStoreSilent]), so the claim carries its round on and the
+	// relaunch counts the loss ([PendingRun.RoundLosses]). It reports whether
+	// the row carries a verdict for the job now, this call's or an earlier
+	// one's. Pinned to the claim the caller holds: the job, [StatusResumed]
+	// under fence, and for a box on one node's host, that node. A running job
+	// is the waiter's to judge ([PendingStore.MarkLost]); any other claim, or a
+	// gone row, is false with no error. A zero loss.At is the store's clock.
 	MarkClaimLost(ctx context.Context, turnID, launch string, loss JobLoss, fence Fence) (bool, error)
 
 	// AttachSandbox records the box and the command a run is using. An
@@ -3767,34 +3700,15 @@ type PendingStore interface {
 	ClearHandBack(ctx context.Context, turnID string, ids []string) (bool, error)
 
 	// FileNote files a person's note on a run's record ([RunSteer]), waiting,
-	// and answers what became of it with the record as it was written or —
-	// for any other answer — as the filing found it.
-	//
-	// IN EVERY LIVE STATUS, while the record exists and its ending is not
-	// decided: a note to a turn whose run is working, parked on a question
-	// or being collected is held for whatever reads the turn next. A note
-	// whose id the record holds is [NoteDuplicate], and nothing is added; a
-	// turn that holds [NoteFiling.MaxNotes] notes is [NoteSpent], and one with
-	// [NoteFiling.MaxWaiting] waiting [NoteFull]; a decided ending, or no
-	// record at all, is [NoteClosed]. NONE OF THOSE IS AN ERROR.
-	//
-	// THE TWO BOUNDS ARE A PERSON'S: they count a person's notes alone, and
-	// toward the waiting bound a note a hook's live serve handed to the
-	// record's job ([RunNote.LiveServe]) no longer waits, its hook's answer
-	// having handed it to the model at the step it answered; a note a poll
-	// served still waits until its harness confirms it. An item for one job
-	// the record holds ([RunNote.For]) counts toward neither.
-	//
-	// A PERSON'S NOTE ALONE: a filing that names a job ([RunNote.For]) is
-	// refused with [ErrNoteKind] before anything is read or written, whatever
-	// the record holds. An item for one job is the store's to file, in its
-	// own writes of the record, never a filer's.
-	//
-	// NO FENCE, as [PendingStore.AppendBridgeCall] takes none: a note is an
-	// append to the turn, never an ownership decision. The note must carry
-	// its id and its seal, a seal within [MaxNoteSealedBytes]
-	// ([ErrNoteTooLarge]); the store opens nothing, and files it waiting and
-	// served to nobody, whatever reads or serves the filing hands in.
+	// in every live status with no ending decided, and answers what became of
+	// it: [NoteDuplicate], [NoteSpent] past [NoteFiling.MaxNotes], [NoteFull]
+	// past [NoteFiling.MaxWaiting], or [NoteClosed], none of them an error. The
+	// bounds count a person's notes alone, and a note a hook's live serve
+	// handed over ([RunNote.LiveServe]) no longer waits. A filing that names a
+	// job ([RunNote.For]) is refused with [ErrNoteKind]. No fence: a note is an
+	// append, never an ownership decision. The seal must be within
+	// [MaxNoteSealedBytes] ([ErrNoteTooLarge]). See the package doc, "Filing
+	// and serving notes".
 	FileNote(ctx context.Context, turnID string, filing NoteFiling) (NoteFiled, PendingRun, error)
 
 	// TakeNotes records the notes a take names read, where its Read says,
@@ -3810,21 +3724,15 @@ type PendingStore interface {
 	// racing, nor without a record; a hook's is a serve ([PendingStore.ServeHook]).
 	TakeNotes(ctx context.Context, turnID string, take NoteTake) ([]RunNote, error)
 
-	// ServeNotes records the notes a serve names SERVED to its job
-	// ([RunNote.Served]) — each still waiting, the record still on that job,
-	// in a status the serve names, its ending undecided ([NoteServe]) — and
-	// answers every one of them that waits served to that job, marked by this
-	// call or an earlier one, in the record's order. A serve that fails its
-	// pin, a note no longer waiting, an item for another job
-	// ([RunNote.IsFor]), and a record that is gone or whose ending is decided
-	// are each nothing served, never an error; a serve that names no job or
-	// no status is an error.
-	//
-	// THE MARK BEFORE THE HANDOVER: a caller hands a harness a note to deliver
-	// itself only once this has answered it served, so a note the harness may
-	// have delivered is never one the record says nothing of — a harness gone
-	// before it confirmed the delivery ([PendingStore.TakeNotes]) leaves the
-	// note waiting, and served.
+	// ServeNotes records the notes a serve names served to its job
+	// ([RunNote.Served]), pinned to the job, a status the serve names and an
+	// undecided ending ([NoteServe]), and answers every one waiting served to
+	// that job, in the record's order. A failed pin, a note no longer waiting,
+	// an item for another job ([RunNote.IsFor]), and a gone or ending record
+	// serve nothing, never an error; a serve naming no job or status is one.
+	// The mark comes before the handover, so a note a harness may have
+	// delivered is never one the record says nothing of
+	// ([PendingStore.TakeNotes]).
 	ServeNotes(ctx context.Context, turnID string, serve NoteServe) ([]RunNote, error)
 
 	// SettleTake settles a take whose TakeNotes answered an error, by the
@@ -3843,69 +3751,26 @@ type PendingStore interface {
 	// true whoever holds the record and whatever its status or its ending.
 	SettleTake(ctx context.Context, turnID string, settle NoteSettle) ([]RunNote, error)
 
-	// ServeHook records the notes a hook's serve names SERVED to its job's
-	// hook ([HookServed]), and answers the ones THIS CALL served, each with its
-	// serves. Pinned to the serve's job, its statuses and an undecided ending
-	// ([HookServe]); a serve that fails its pin, and a record that is gone,
-	// are each nothing served, never an error; one that names no job, no
-	// status or no take is an error. In ONE write, on the record as it stands:
-	//
-	//   - a waiting note's live serve to the job ([RunNote.LiveServe]) that
-	//     answered a call the serve names cancelled ([HookServe.Cancelled]) is
-	//     lost to the cancel ([ServeCancelled]);
-	//   - a waiting note's serve to the job of a take the serve names
-	//     unanswered ([HookServe.Unanswered]) is removed, its hook having been
-	//     answered nothing, so it spends nothing of the bound;
-	//   - then every note named that waits, is for the job ([RunNote.IsFor]),
-	//     holds no live serve to it and fewer than [MaxNoteServes] serves to it
-	//     (a list of another job's counting none, and replaced) is served: the
-	//     serve appended at the writer's clock, its call kept whole within
-	//     [MaxNoteCallBytes] and the id charset or as none ([NoteCall]),
-	//     [RunNote.Served] naming the job, and a note no hook was served before
-	//     placed at the write's own place among the reads ([RunNote.Place]),
-	//     the record's count of them moved once.
-	//
-	// [RunNote.Served] is cleared wherever the first two steps leave no live
-	// serve to the job, and the record is written where any step changed it.
-	//
-	// A SERVE, NEVER A READ: a caller answers a hook a note only once this has
-	// answered it served, and nothing here records it read, the job's own
-	// session being what says whether the hook took it
-	// ([PendingStore.SettleHook]). So a note a harness may hold is never one
-	// the record says nothing of, nor one it says was read while the session
-	// lacks it.
+	// ServeHook records the notes a hook's serve names served to its job's hook
+	// ([HookServed]) in one write, and answers the ones this call served, each
+	// with its serves; pinned to the serve's job, its statuses and an undecided
+	// ending ([HookServe]). A live serve that answered a cancelled call is lost
+	// to the cancel ([ServeCancelled]), a serve of an unanswered take is
+	// removed, then each eligible note is served, up to [MaxNoteServes] serves.
+	// A serve, never a read: the job's session says whether the hook took it
+	// ([PendingStore.SettleHook]). See the package doc, "Filing and serving
+	// notes".
 	ServeHook(ctx context.Context, turnID string, serve HookServe) ([]RunNote, error)
 
 	// SettleHook settles the serves of a waiting note to the job the settle
-	// names ([HookSettle]), and acts on no other note, in this order:
-	//
-	//   - the serve of a take named UNANSWERED is removed, its hook having
-	//     been answered nothing, so no session holds the note from it;
-	//   - a note one of whose serves is of a take named HELD is READ, at its
-	//     place among the reads ([RunNote.Place]), off the EARLIEST such serve:
-	//     that serve's take, step and instant, [RunNote.Served] naming the job
-	//     and its serves kept as the read's history. One with no serve of a
-	//     take held and one of a take named RESTARTED is read so, marked
-	//     ([NoteRead.Restarted]). The session outranks a cancel and an
-	//     absence: a note read so is read whatever its serves lost;
-	//   - on a note not read so, a live serve that answered a call named
-	//     CANCELLED is lost to the cancel, and a serve, live or lost to a
-	//     cancel, of a take named ABSENT is lost absent ([ServeAbsent]).
-	//
-	// [RunNote.Served] is cleared wherever no live serve to the job is left. It
-	// answers every note it changed and, where it names a take held or
-	// restarted, every note on the record read off a serve to the job, an
-	// earlier settle's read included: so a settle made again, finding its
-	// verdict landed, answers what it read.
-	//
-	// WRITTEN ONLY WHERE IT CHANGED SOMETHING, but for a take named unanswered
-	// that no serve on the record names: that take's write may still be in
-	// flight, so the record is written all the same, and the serve,
-	// conditioned on a version before this one, never lands after it. NO PIN
-	// AND NO FENCE: what a hook's serve handed over is a fact about the job,
-	// true whoever holds the record and whatever its status or its ending. A
-	// record that is gone, before the settle or under it, answers nothing,
-	// never an error; a settle that names no job is an error.
+	// names ([HookSettle]): an unanswered take's serve is removed, a note
+	// served by a take named held (or restarted) is read off its earliest such
+	// serve, and on a note not read so a cancelled live serve is lost to the
+	// cancel and an absent take's serve lost absent ([ServeAbsent]). It answers
+	// every note it changed, and every note read off a serve to the job where
+	// it names a take held or restarted, so a settle made again answers what it
+	// read. No pin and no fence: it states a fact about the job. See the
+	// package doc, "Filing and serving notes".
 	SettleHook(ctx context.Context, turnID string, settle HookSettle) ([]RunNote, error)
 
 	// MarkPulled records that the job named has asked for its notes at least
@@ -4931,75 +4796,27 @@ type LaunchRecord struct {
 	EndedAtDeadline bool `json:"ended_at_deadline,omitempty"`
 
 	// HostStoreSilentSince, where set, says the host of this job's box last
-	// answered a collection of it that its own coordination store did not
-	// answer its read of the run's row ([BoxReadReply.Unsettled]), and has
-	// answered nothing since that says its store answers, and is when the
-	// collecting node's clock on that store started, by that node's clock:
-	// the DURABLE TWIN of that clock ([hostUnsettled]), written by the
-	// release of every claim whose collection found it so
-	// ([Release.HostStoreSilentSince]), the latest such clock's start
-	// replacing an earlier one, and cleared by the release of one that
-	// learned that store answers ([Release.HostStoreAnswered]). A release
-	// that learned nothing of that store, a host that did not answer at all
-	// among them, leaves it as it stands, and the job's next launch starts
-	// without it.
-	//
-	// AN INSTANT, NOT A FLAG, because a waiter's announcement of the job made
-	// from a read of its row asked after it ends it ([announcedAfter]), and
-	// one whose read was asked before it does not: that waiter read the row
-	// through the store this records as silent, and says when it asked
-	// ([rowAskedField]), so a read asked later says the store answered since,
-	// while one asked earlier says nothing of it, however late its
-	// announcement was made or delivered.
-	//
-	// ON THE JOB'S RECORD because the clock is in one node's memory: while
-	// that host's store is silent its waiter announces nothing, so a
-	// completion's delivery is the one copy of it, and a node that restarted,
-	// or the seat's next holder, refused that delivery on a condition and
-	// acknowledged it before any collection of its own had started a clock,
-	// which left the job announced by nothing until that store answered. Every
-	// node reads the row before it acknowledges a delivery no clock of its own
-	// covers, and hands back and renews one whose job this says is unannounced
-	// (renew.go).
+	// answered a collection that its own store did not answer its read of the
+	// row ([BoxReadReply.Unsettled]), and is when the collecting node's clock
+	// on that store started: the durable twin of that clock ([hostUnsettled]),
+	// written and cleared by claim releases ([Release.HostStoreSilentSince],
+	// [Release.HostStoreAnswered]). An instant, not a flag, since an
+	// announcement from a read asked after it ends it ([announcedAfter]). On
+	// the record because the clock is one node's memory, and the node that next
+	// acknowledges a delivery reads it (renew.go). See the package doc,
+	// "Unannounced jobs".
 	HostStoreSilentSince time.Time `json:"host_store_silent_since,omitzero"`
 
-	// RefusalOwed, where set, says the seat's holder ACKNOWLEDGED a delivery
-	// of this job's completion that it refused on this condition, and owes
-	// the completion its re-fire; RefusalOwedSince is when it did, by that
-	// holder's clock. Both or neither. Written by the one write
-	// [PendingStore.OweRefusal] makes before the delivery is acknowledged,
-	// and by the release that holds the job's resume on the row
-	// ([Release.Hold]), whose hold spends its delivery as an acknowledgement
-	// does, with the hold's condition and the store's instant; each only
-	// where the record owes none yet, so the first refusal's condition
-	// and instant stand through every re-announcement refused after it;
-	// cleared by the write that settles the completion: the park on the
-	// job's question ([PendingStore.MarkAwaiting]), the turn's next launch,
-	// which starts the job's record afresh, or the run's end, which deletes
-	// the row. A claim leaves it: a claim handed back puts the completion
-	// back, still owed, and one whose resume settles it reaches one of those
-	// three writes. And a refusal acknowledged while another attempt holds
-	// the job's claim is written on the claimed row, for that reason.
-	//
-	// ON THE JOB'S RECORD, NEVER IN ONE NODE'S MEMORY ALONE. An acknowledged
-	// refusal is safe because the waiter that drives the job's box
-	// announces the job again; but that waiter reads the row through its
-	// node's coordination store, and a silence of the store's runs alone
-	// has no bound (the node's lease and presence are another stream, so no
-	// watchdog ends it and no peer finds it gone), while the completion the
-	// holder kept for the refusal's signal went with its restart, or with
-	// the seat moving to its next holder, and nothing announced the job
-	// again. So the seat's recovery reads this and owes the completion as
-	// the holder did ([Coordinator.RecoverSeat]): re-armed for the
-	// condition's signal, and offered to the recovering holder's own gate at
-	// once.
-	//
-	// AN OBLIGATION, NEVER A HOLD: nothing reads it as a reason to refuse or
-	// to hold off the job's announcements, and the condition is the holder's
-	// that refused; the recovering holder asks its own gate (ADR-0064). A
-	// build that predates it keeps both keys in [LaunchRecord.Extra] and
-	// writes them back as they are, and neither writes, reads nor clears
-	// them.
+	// RefusalOwed, where set, says the seat's holder acknowledged a delivery of
+	// this job's completion that it refused on this condition, and owes its
+	// re-fire; RefusalOwedSince is when, by that holder's clock. Both or
+	// neither. Written by [PendingStore.OweRefusal] and by a release that holds
+	// the resume ([Release.Hold]), only where none is owed yet; cleared by the
+	// write that settles the completion. On the record, because the holder's
+	// memory does not survive its restart or the seat's move
+	// ([Coordinator.RecoverSeat]). An obligation, never a hold; an older build
+	// keeps both keys in [LaunchRecord.Extra]. See the package doc, "Re-arming
+	// owed refusals and holds".
 	RefusalOwed      Condition `json:"refusal_owed,omitempty"`
 	RefusalOwedSince time.Time `json:"refusal_owed_since,omitzero"`
 

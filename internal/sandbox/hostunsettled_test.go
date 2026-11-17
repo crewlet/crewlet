@@ -140,42 +140,17 @@ func (s *movedOnBeforeLoss) MarkClaimLost(ctx context.Context, turnID, launch st
 }
 
 // A COLLECTION WHOSE HOST ALONE HAS A SILENT STORE IS GIVEN UP AS A SILENT HOST
-// IS. The box is up, and so is its host; only the host's read of the run's row,
-// which licenses reading the box, goes unanswered, while this node's own store
-// answers every claim, every release and every other step, as in a partition
-// that cuts the host off from the store's leader and not this node. That is no
-// verdict about the box, so each collection is handed back uncounted and asked
-// again, and once the host's store answers, the box is read and the turn
-// resumed. But only the host can read the box, and a host that cannot for the
-// box timeout is as good as away: past it the job is LOST with that host, as a
-// host absent for the box timeout has its jobs taken for lost. A finished job is
-// recorded lost on the claim its collection holds and its round carried on in a
-// box of its own, and a lost job's round is carried on without its read. Handed
-// back with no bound, it held the run, and its seat, for as long as the
-// partition lasted; and given up as a box that could not be read, it ENDED the
-// run of a job that had finished, collect_unreachable, where the round's calls
-// and its pushed branch were there to carry on from. The clock is the host's
-// silence one answer after another: a host that answered in between starts it
-// again, and a host that did not answer at all says nothing of its store and
-// leaves it running, its collection handed back for the delivery's retry and
-// never acknowledged, since the host's own waiter reads the run through the
-// silent store. A step this node's own store did not answer is never
-// given up on it, the record of the loss included, which keeps the clock for
-// the next collection to record it at once; a collection this node itself cut
-// short is handed back uncounted, never judged lost; a claim the record finds
-// moved on (a newer lease took the run, or its ending was decided) is left to
-// whoever moved it, nothing recorded or carried on from it; and at its turn's
-// deadline a job lost with its host is ended as a lost job is, never as
-// unreachable.
+// IS: handed back uncounted until the box timeout of the host's silence, one
+// answer after another, then lost with that host and carried on, never ended
+// unreachable. A host that answered resets the clock; one that did not answer
+// keeps it, never acknowledged; this node's own silence, a collection it cut
+// short and a moved claim are never judged lost; at its deadline the run ends
+// as a lost job. See the package doc, "The clock on a box host's store".
 //
-// Mutation: drop the bound (collectGivenUp gives up no store's silence); keep
-// the clock through a host whose store answered; start it again at a host that
-// did not answer, or acknowledge that host's collection; judge a step this node's own store did not answer by the
-// host's clock; end the run as unreachable past the bound, or hand it back
-// unlost; carry the round on with nothing recorded on the claim; forget the
-// clock before the loss lands; judge a collection this node cut short; carry a
-// round on from a claim the record found moved on; or leave a lost run unended
-// at its deadline. Each turns a case red.
+// Mutation, each red: drop the bound; mis-keep, mis-start or mis-drop the
+// clock; judge this node's own silence or a cut collection; end unreachable,
+// hand back unlost, carry on unrecorded or from a moved claim, or leave it
+// unended at its deadline.
 func TestACollectionWhoseHostAloneHasASilentStoreIsGivenUpAsASilentHostIs(t *testing.T) {
 	t.Parallel()
 	timeout := DefaultBoxTimeout
@@ -453,17 +428,11 @@ func TestASeatLetGoOfForgetsTheClockOnItsHostsStore(t *testing.T) {
 }
 
 // NO PARTY BUT THIS NODE ENDS A RUN WHOSE HOST'S STORE IT CLOCKS WHILE IT HOLDS
-// THE SEAT, which is what lets the clock go only where this node settles the
-// run, or at the seat's release ([Coordinator.hostClocked]): every ending is
-// decided by a coordinator's own [Coordinator.endRun], which drops the clock on
-// the node that decides it, under a license fenced to the seat's lease. The
-// collection that started the clock claimed the job under this node's lease,
-// stamping its epoch on the row, so the seat's earlier holder, a person's stop
-// reaching it while it still takes itself for the seat's holder, is outranked
-// and ends nothing; and once it knows it lost the seat it refuses the stop up
-// front. Ended there, the clock here would have outlived the run, and every
-// delivery of its completion would have been handed back and renewed for as
-// long as this node held the seat.
+// THE SEAT ([Coordinator.hostClocked]): every ending is decided by
+// [Coordinator.endRun] under a license fenced to the seat's lease, and the
+// clocking collection stamped this node's epoch on the row, so the earlier
+// holder's stop is outranked. Ended there, the clock would outlive the run and
+// renew its completion for as long as this node held the seat.
 //
 // Mutation: let a decision under an older lease than the row's land, and the
 // earlier holder's stop ends the run under this node's clock.
@@ -502,19 +471,12 @@ func TestNoOtherPartyEndsARunWhoseHostThisNodeClocks(t *testing.T) {
 	}
 }
 
-// A CLOCK ON A HOST'S STORE IS KEPT UNTIL ITS RUN SETTLES, and goes there,
-// whatever that comes to. It is this node's, kept in memory per job to bound a
-// collection the box's host keeps handing back unread, and while it runs the
-// host's waiter announces nothing, so it also says the job's completion is to be
-// renewed. It means nothing once the run's collection has landed its outcome:
-// the turn launched its next job, or the run's end was decided, at its turn's
-// end or its deadline, a lost job's round carried on included. Kept until the
-// seat was let go, it outlived every such run, on a seat a node may hold for
-// weeks. But a failed attempt is no settle: a lost job's round whose resume
-// failed is collected again, and a job recorded lost with its host whose carry
-// fails is carried on again, and the clock is kept for each: the next
-// collection finds the bound passed at once, rather than a box timeout later,
-// and every hand-back meanwhile is renewed.
+// A CLOCK ON A HOST'S STORE IS KEPT UNTIL ITS RUN SETTLES, and goes there: the
+// turn's next launch, or the run's end decided, a landed carry's included. A
+// failed attempt is no settle: a lost round's failed resume, or a failed carry,
+// keeps it, so the next collection finds the bound passed at once and every
+// hand-back meanwhile is renewed. See the package doc, "The clock on a box
+// host's store".
 //
 // Mutation: keep the clock through the turn's next launch, or past the run's
 // end decided, a landed carry's included; or drop it at the recorded loss, or

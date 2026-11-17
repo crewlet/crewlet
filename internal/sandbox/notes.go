@@ -14,57 +14,14 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// A person's notes to a turn whose executor is out, on the run's own record.
-//
-// # Who has to agree on them: the whole company, now
-//
-// From a run's launch to its turn's end, the notes a person sends the turn wait
-// here, on the run's record in the coordination store — the same record that
-// carries its bridged calls, and for the same reason. The node a person's
-// request reaches, the node serving the run's tool bridge (the seat's holder),
-// the node that resumes the turn and the node that finishes the run's ending
-// can be four different processes across a restart and a seat moving, and each
-// of them already reads this record. A note held in one node's memory would be
-// lost with that node, or reachable from it alone.
-//
-// # What this package decides, and what it does not
-//
-// The record's shape, and the conditions every change to it is taken on: a
-// note filed while the run's ending is undecided, taken only by the job the
-// taker names and only while the run is in a status the taker names, every read
-// recorded by the write that hands the note over — and a take whose answer was
-// lost settled by its identity, its reads answered to a reader that can still
-// hand them over or marked unanswered where its reader never had them
-// ([PendingStore.SettleTake]).
-//
-// A HOOK'S SERVE IS NO READ. A harness answered its notes by a hook is SERVED
-// them, in a write before its answer that keeps the call it answered
-// ([PendingStore.ServeHook]), and a note so served is read only once the job's
-// own session shows the hook took it: a verdict settled by the serve's take,
-// beside the serves its harness cancelled or answered nothing
-// ([PendingStore.SettleHook]). The first serve of a note fixes its place among
-// the turn's reads ([RunNote.Place]), and every later read of it is recorded
-// there. And an ITEM FOR ONE JOB ([RunNote.For]) is handed over only to a
-// reader inside that job, and removed by the write of the launch that opens
-// the next.
-//
-// What a note SAYS it never
-// reads: a note is sealed by the engine under the fleet keyring before it is
-// filed ([RunNote.Sealed]), and opened by the engine before anything of it
-// reaches a model (internal/engine, runsteer.go, and ADR-0067). The store keeps
-// the seal as the bytes it was handed, as it keeps an answer's
-// ([RecordedAnswer.Sealed]). A FILING IS A PERSON'S NOTE ALONE
-// ([PendingStore.FileNote]): an item for one job is the store's to file, in
-// its own writes of the record, never a filer's, so a filing that names a job
-// is refused ([ErrNoteKind]) and no filer can hand one job words a person's
-// note would not reach it with.
-//
-// # Bounds are the caller's
-//
-// How many notes may wait, and how many a turn takes in all, are
-// internal/agent/steer's ([NoteFiling]): this package must not import the
-// agent layer, and a second copy of the two numbers here would be one that
-// drifts.
+// A person's notes to a turn whose executor is out, on the run's own record in
+// the coordination store, since the nodes that file, serve, resume and end can
+// all differ. This package decides the record's shape and the conditions on
+// every change: a hook's serve is no read ([PendingStore.ServeHook],
+// [PendingStore.SettleHook]); an item for one job ([RunNote.For]) reaches only
+// that job; a note is sealed and never read here ([RunNote.Sealed]), and a
+// filing is a person's note alone ([ErrNoteKind]). The bounds are
+// internal/agent/steer's ([NoteFiling]). See the package doc, "A turn's notes".
 
 // RunSteer is the notes a person sent the run's turn: on the record from the
 // run's launch to its turn's end.
@@ -139,18 +96,13 @@ type RunNote struct {
 	Read *NoteRead `json:"read,omitempty"`
 
 	// Served is the job the run's bridge last served the note to while it
-	// waited: by a poll ([PendingStore.ServeNotes]), since a harness that
-	// polls for its notes (OpenCode's plugin) is answered one only once this
-	// records it, and the note is recorded read only once the harness
-	// confirms delivering it; or by a hook's serve ([PendingStore.ServeHook]),
-	// the note read only once the job's own session shows the hook took it
-	// ([PendingStore.SettleHook]). So a note served and not read may have been
-	// delivered all the same, its confirmation lost or its harness cut off
-	// before it landed, and a launch that continues a session tells it as a
-	// note the session may already show (internal/agent/runner). CLEARED where
-	// a settle leaves the note no live hook serve to that job: every one lost,
-	// or removed as answered nothing. Kept once the note is read; the latest
-	// job served it, where more than one was.
+	// waited: by a poll ([PendingStore.ServeNotes]), read once the harness
+	// confirms it, or by a hook's serve ([PendingStore.ServeHook]), read once
+	// the job's session shows the hook took it ([PendingStore.SettleHook]). So
+	// a note served and not read may have been delivered, and a continuing
+	// launch tells it as one the session may show (internal/agent/runner).
+	// Cleared where a settle leaves no live hook serve to that job; kept once
+	// read; the latest job, where several.
 	Served string `json:"served,omitempty"`
 
 	// Place is the note's place among the turn's reads ([RunSteer.Reads]),
@@ -170,18 +122,14 @@ type RunNote struct {
 	Serves []HookServed `json:"serves,omitempty"`
 
 	// For is the one job the item is for, where the store made it that job's
-	// alone. FILED BY THE STORE ALONE, in its own writes of the record, never
-	// handed in by a filer: [PendingStore.FileNote] files a person's note
-	// and refuses one that names a job ([ErrNoteKind]), since an item tells a
-	// job something on the store's account rather than a person's. This
-	// build's store files none, and a record holds one only where a store's
-	// write put it there: wherever it does, it is counted apart from a
-	// person's notes ([MaxJobItems]), handed over by every write only to a
-	// reader inside that job ([RunNote.IsFor]), passed over by every reader
-	// of a person's notes (the ending, the carry, the review, a launch's
-	// brief, the capture's cursor), and removed by the write of the launch
-	// that opens the next job ([openNotes]). Empty for a person's note, an
-	// item of the whole turn.
+	// alone. Filed by the store alone, never by a filer
+	// ([PendingStore.FileNote] refuses one with [ErrNoteKind]); this build's
+	// store files none. Wherever one is, it is counted apart ([MaxJobItems]),
+	// handed over only inside that job ([RunNote.IsFor]), passed over by every
+	// reader of a person's notes (the ending, the carry, the review, a launch's
+	// brief, the capture's cursor), and removed by the launch that opens the
+	// next job ([openNotes]). Empty for a person's note, an item of the whole
+	// turn.
 	For string `json:"for,omitempty"`
 
 	// LostTake is TRANSIENT, and set on a note a launch's brief carries
@@ -303,27 +251,13 @@ type NoteCall struct {
 func (c NoteCall) is(other NoteCall) bool { return c.Session == other.Session && c.ID == other.ID }
 
 // keptCallOf is call as a serve keeps it: whole where its session is of the id
-// charset (letters, digits, `-` and `_`, [ValidCallID]'s) and its id is a JSON
-// integer's text or a JSON string of that charset, each at most
-// [MaxNoteCallBytes], a string's quotes counted; and NONE otherwise, as where
-// it names no session or no id.
-//
-// ONE RULE, THE STORE'S. The call is the box's word, which the bridge hands on
-// as it read it, so the write that serves holds every writer to the rule,
-// whatever bridge, or build, handed the call, as the log holds the id a
-// bridged call keeps ([keptCallID]).
-//
-// THE CHARSET REFUSES NOTHING REAL, AND HOLDS THE ROW. Claude Code numbers its
-// JSON-RPC calls with integers, and the session is the bridge's own, which
-// go-sdk mints as rand.Text, in base32. A kept call is then written as itself,
-// each half costing the row its length and a string id's two quotes a byte
-// more each, where the store's encoder writes a byte it escapes as six
-// (`\u003c`): so the row's worst serve carries a call at its length
-// (TestTheWholeRowFitsItsBudget).
-//
-// NEVER CUT: a cut call could match another call cut alike, and lose a serve
-// its harness kept. A serve kept with no call is settled by its job's session
-// alone.
+// charset ([ValidCallID]'s) and its id a JSON integer's text or a JSON string
+// of that charset, each at most [MaxNoteCallBytes], quotes counted; none
+// otherwise. The store's one rule, whatever bridge or build handed the call, as
+// with [keptCallID]. The charset refuses nothing real (Claude Code's integer
+// ids, go-sdk's base32 sessions) and holds the row's worst case
+// (TestTheWholeRowFitsItsBudget). Never cut, since cut calls could match. See
+// the package doc, "A turn's notes".
 func keptCallOf(call *NoteCall) *NoteCall {
 	if call == nil || !validNoteSession(call.Session) || !validNoteCallID(call.ID) {
 		return nil
@@ -413,63 +347,14 @@ type EndedNote struct {
 }
 
 // EndedNotes is every note on the run's record that no step reported reading,
-// each as what the record knows became of it: what the run's ending reports
-// ([CoordinatorOptions.SteersEnded]), decided in this order of precedence.
-//
-//   - DELIVERED: read by a launch's brief that told it again ([NoteRead.Retold])
-//     after a take that recorded it read was marked unanswered, where that
-//     job started. Its harness was handed the note in its brief; the step that
-//     took it first never handed it over, and nothing reported the telling.
-//   - UNCONFIRMED: SERVED to a job's harness ([RunNote.Served]) and read by no
-//     step that handed it over: still waiting, or read only by a take marked
-//     unanswered or by the brief of a job that never started. The session it
-//     was handed into may hold it, and nothing says it does; a note that may
-//     have reached the run is never said to have reached nothing. At the hook's
-//     serve that was live before those reads, where a hook was served it
-//     ([EndedNote.Serve]), the step it was handed over at; else at the job a
-//     poll served it to.
-//   - MISSED: read by a take marked UNANSWERED ([NoteRead.Unanswered]), and
-//     told again by no launch whose job started: the take's write landed, its
-//     answer never reached its reader, and no later write records the note
-//     handed to a harness. A launch that tells it again records the telling
-//     and clears the mark ([PendingRun.RetoldNotes]), keeping the marked
-//     take's read beside it ([NoteRead.Retold]): so a note still marked is one
-//     no launch recorded telling again, and one whose telling's job never
-//     started is missed all the same, at that take, since the brief handed
-//     nothing over. And SERVED TO A JOB'S HOOKS AND EVERY SERVE LOST
-//     ([HookServed.Lost]), read by nothing since: its harness cancelled the
-//     call, or its session proves it never took the note. At the last of
-//     those serves ([EndedNote.Serve]).
-//   - EXPIRED: still WAITING, or read by the BRIEF OF THE RECORD'S CURRENT JOB
-//     where that job never started and that brief was the first to tell it:
-//     the job's record never took its command ([LaunchRecord.Started]),
-//     because the launch failed, or was ended, between the write that opened
-//     the job and the job's start.
-//
-// A note any other step read is none of them: that step published it delivered
-// as it read it, and the ending reports nothing of it. NOR IS AN ITEM FOR ONE
-// JOB ([RunNote.For]): the ending reports what became of a person's notes, and
-// a job's item is the store's, filed in its own writes of the record, so what
-// becomes of it is the store's to say.
-//
-// NEVER THE ROW'S COMMAND ([PendingRun.CommandID]): that is the box's, and goes
-// with the box — a park's teardown and an expired pause clear it from a job
-// that ran — so a turn ending after either would report expired the notes its
-// job's brief carried, which its runner had already recorded delivered.
-//
-// THE RECORD IS THE ONE WITNESS. A launch records its brief's notes read in the
-// write that opens its job ([PendingStore.BeginLaunch]), before it knows whether
-// the job will run, and every way it can then fail ends the record
-// ([Coordinator.abandon]) — or meets an ending another party decided, which
-// finishes in its place. So the ending is the one party that sees both what the
-// brief took and that no job ran with it, and it reports those notes under the
-// same ids as the waiting ones: a launch that reported them itself could not
-// tell a note its own brief took from one another node's ending had already
-// reported, and published one twice. And the same holds of a take whose
-// answer was lost, which reports nothing as it is lost; of a note a brief told
-// again, whose job is known to have started only once the launch has returned;
-// and of a note a harness was handed and never confirmed, which nothing else
-// sees unconfirmed.
+// each as what the record knows became of it
+// ([CoordinatorOptions.SteersEnded]), in this precedence: delivered (told again
+// by a brief whose job started), unconfirmed (served to a harness, never
+// confirmed), missed (read by a take marked unanswered and told by no started
+// launch, or every hook serve lost), expired (waiting, or first told by a brief
+// whose job never started). Items for one job are not reported, and never the
+// row's command. The record is the one witness, since only the ending sees what
+// a brief took and that no job ran. See the package doc, "A turn's notes".
 func (r PendingRun) EndedNotes() []EndedNote {
 	var out []EndedNote
 	for _, n := range r.Steer.Notes {
@@ -1361,42 +1246,12 @@ func (s *CoordStore) WatchNotes(ctx context.Context, turnID string) (<-chan Note
 }
 
 // openNotes is the write a launch makes of the turn's notes on the record it
-// opens, under the job it opens ([PendingStore.BeginLaunch]), in this order:
-//
-//   - every ITEM FOR ONE JOB ([RunNote.For]) is removed first: the job this
-//     write opens is new, so every item on the record was the job before it's
-//     alone, and nothing in this one will read it. An item for the job this
-//     write opens is the store's to file after it, held to [MaxJobItems];
-//     the steps below are a person's notes';
-//   - the brief's notes ([PendingRun.BriefNotes]) are recorded READ by the job:
-//     a note the record already holds, still waiting, is recorded read; one it
-//     holds read by the take the brief names as lost ([RunNote.LostTake]) is
-//     recorded read by the job in that take's place, the brief being the first
-//     to tell it, and at that take's own place among the reads, which this
-//     write leaves as it was; one it holds read otherwise is left as it was
-//     read; and any other — a turn's first segment's own, which the record has
-//     never held — is added already read, numbered as if filed now. Every
-//     other read this write records takes its place among the record's reads
-//     ([RunSteer.Reads]), but a waiting note a hook's serve placed, which is
-//     read at its own place ([RunNote.Place]), ahead of every note a person
-//     filed after it;
-//   - the notes the brief tells again ([PendingRun.RetoldNotes]) are recorded
-//     read by the job, told again: each one the record holds read by a take
-//     marked unanswered, in that take's place and at that take's own place
-//     among the reads, which this write leaves as it was, the take's read kept
-//     beside the telling ([NoteRead.Retold]). A note the record holds
-//     otherwise is left as it is, and one it does not hold is never added:
-//     there is nothing to tell again;
-//   - then the notes the first segment's box still held ([PendingRun.HandedNotes])
-//     are filed WAITING, numbered after them — so they are on the record from
-//     the write that creates it, ahead of every note a person files there once
-//     it exists. A note the record already holds is left as it is.
-//
-// The handed notes are filed WHATEVER THE TURN'S BOUNDS SAY: the box answered
-// each one accepted under the same two bounds ([NoteFiling]), so each is a note
-// the person was told the turn holds, and a hand-over that refused one would
-// turn an accepted note into an expiry. They count against the bounds for every
-// filing after them.
+// opens ([PendingStore.BeginLaunch]), in order: every item for one job removed;
+// the brief's notes ([PendingRun.BriefNotes]) recorded read by the job; the
+// notes it tells again ([PendingRun.RetoldNotes]) recorded read, told again;
+// then the notes the first segment's box held ([PendingRun.HandedNotes]) filed
+// waiting, whatever the turn's bounds say, since the box accepted each under
+// them. See the package doc, "A turn's notes".
 func openNotes(steer *RunSteer, run PendingRun, launch string, at time.Time) {
 	steer.Notes = slices.DeleteFunc(steer.Notes, func(held RunNote) bool { return held.For != "" })
 	order := steer.Reads + 1

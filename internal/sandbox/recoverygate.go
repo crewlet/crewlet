@@ -7,74 +7,17 @@ import (
 	"sync"
 )
 
-// A SEAT'S RECOVERY PASS IS EXCLUSIVE WITH EVERY CLAIM OF THE SEAT'S RUNS ON
-// THIS NODE.
-//
-// The pass ([Coordinator.RecoverSeat]) fences each run of the seat to this
-// node's lease, reads it again and takes it over as it found it: a claim it
-// finds, a resumed tail, is one whose node stopped, and it is reaped as
-// abandoned ([Coordinator.reapTail]), or its answer revived. That reading is
-// right only where no process of this node's holds the claim. The acquisition
-// made it so by the node's own admission: a seat still establishing admits no
-// turn ([seat.Host.MayStart]), so no completion or answer of the seat's was
-// claimed while its recovery ran. But not every claim asks that admission, and
-// not every pass runs inside the acquisition:
-//
-//   - a completion past its turn's deadline is claimed without it
-//     ([Coordinator.completeAtDeadline]), and is claimed precisely because the
-//     admission refused it;
-//   - an apply that brings the code-work runtime up on a seat already held
-//     runs the seat's recovery with the seat established, so a delivery of a
-//     completion, a re-fire of one on a signal, or an owed answer's attempt is
-//     admitted and claims while the pass runs.
-//
-// Each such claim the pass then fenced, read again as resumed, and reaped as
-// abandoned while this node's own attempt was collecting or resuming it: an
-// ending decided under a live attempt, which that attempt, finishing, kept
-// retrying, and a resumed turn ended under the review that was still running.
-//
-// # The rule, at one place
-//
-// So every claim of a seat's run on this node passes ONE gate before the store
-// is asked ([Coordinator.claimGateLocked]): a completion's claim
-// ([Coordinator.claimCompletion]), for its resume or its ending at the
-// deadline, whichever announcement carried it (a delivery, a signal's re-fire,
-// a re-fire armed by a recovery's re-arm or keep, a held completion's
-// backstop), and an owed answer's claim ([Coordinator.resumeOwedAdmitted]).
-// While a recovery pass of the seat runs on this node the gate refuses the
-// claim ([ErrSeatRecovering]): the acquisition's MayStart rule, carried to every
-// claim. And the gate counts every claim it lets through as this node's live
-// attempt on the run until the attempt returns, so the pass, which marks the
-// seat in the same lock, never reaps a claim this node's own attempt holds
-// ([Coordinator.liveHereLocked]): a claim let through before the mark is left
-// to the attempt that holds it, and no claim is let through after it.
-//
-// THE MARK COMES BEFORE THE CONTROL TOPIC, so the pass has no window before it.
-// The seat's control topic is attached inside the pass, once the seat is marked
-// ([Coordinator.RecoverSeat]'s attach): attached before the pass, a delivery
-// could be admitted and claim between the two, live when the pass read the row.
-//
-// # A claim the gate refuses is never lost
-//
-// Each road states who carries it:
-//
-//   - A DELIVERY is handed back to the queue as this node's failure
-//     (internal/engine's controlOutcome NAKs [ErrSeatRecovering] as the node's),
-//     and the broker brings it back on its backoff, past the pass.
-//   - A RE-FIRE (a signal's, a lift's, a recovery's re-arm or keep, a kept
-//     completion's own timer) is handed to the pass ([Coordinator.carryPastRecovery])
-//     and re-fired at its end, before the pass re-arms and keeps from the rows
-//     it read, which start no second re-fire of a job one is on its way for
-//     ([Coordinator.carriedLocked]).
-//   - A HELD COMPLETION'S BACKSTOP that found its turn past the deadline is
-//     re-fired at the pass's end the same way, and the re-fire, still held here
-//     and past the deadline, ends the run ([Coordinator.recheckHeld]).
-//   - AN OWED ANSWER'S ATTEMPT is handed to the pass, and its series is armed
-//     at once at the pass's end, the seat's mail held behind it meanwhile
-//     ([Coordinator.resumeOwedAdmitted]).
-//
-// Handed over in the lock the pass ends in, so a refusal that lands as the pass
-// ends is carried at once rather than appended to a pass that is over.
+// A seat's recovery pass is exclusive with every claim of the seat's runs on
+// this node: the pass reaps or revives a claim it finds, which is right only
+// where no attempt of this node's holds it, and the node's admission does not
+// keep every claim out. So every claim passes one gate
+// ([Coordinator.claimGateLocked]), refused with [ErrSeatRecovering] while a
+// pass runs and counted as a live attempt otherwise
+// ([Coordinator.liveHereLocked]); the mark comes before the control topic is
+// attached. A refused claim is never lost: a delivery is NAK'd, a re-fire, a
+// backstop or an owed answer is carried past the pass
+// ([Coordinator.carryPastRecovery]). See the package doc, "The seat's recovery
+// gate".
 
 // ErrSeatRecovering reports a claim of a seat's run refused because a recovery
 // pass of the seat is under way on this node ([Coordinator.RecoverSeat]). It is
@@ -156,7 +99,8 @@ func (c *Coordinator) endRecovery(ctx context.Context, handle string) {
 // passes before the store is asked: refused with [ErrSeatRecovering] while a
 // recovery pass of handle's seat runs here, and otherwise counted as this
 // node's live attempt on turnID until the attempt calls the done it returns,
-// once, on every way out. See the top of this file. The caller holds c.mu.
+// once, on every way out. See the package doc, "The seat's recovery gate".
+// The caller holds c.mu.
 func (c *Coordinator) claimGateLocked(handle, turnID string) (done func(), err error) {
 	if c.recovering[handle] != nil {
 		return nil, fmt.Errorf("sandbox: claiming run %s of seat %q: %w", turnID, handle, ErrSeatRecovering)

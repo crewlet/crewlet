@@ -8,40 +8,14 @@ import (
 	"sync"
 )
 
-// A run's record keeps what this build cannot read, AT EVERY LEVEL THAT GROWS.
-//
-// The record is read, modified and written whole by every node that touches it
-// ([PendingRun.Extra]), so a key this build does not know survives a write of
-// this build's only where the decode kept it. A key at the top of the record is
-// kept in [PendingRun.Extra]. A key INSIDE a section was not: the decode put the
-// section into its struct, which dropped every key the struct does not declare,
-// and the next status flip, lease, bridged call or note wrote the section back
-// without it — so a field a later build added to a note, to where a note was
-// read, to the notes section itself or to a bridged call was gone from the
-// record within seconds of that build writing it, on a fleet running both
-// builds, and nothing said so.
-//
-// So each section that a later build may add fields to carries an Extra of its
-// own, filled by its decode and written back by its encode under the rule the
-// record's top follows: [RunSteer], [RunNote], [NoteRead], a hook's serve of a
-// note ([HookServed]) and the call it answered ([NoteCall]), [BridgeCall],
-// [ElidedCall], [SessionCapture], [HeldCall], [ConversationBase] with its
-// [BaseSession] and each [BaseSibling], and [LaunchRecord] — the job's own
-// record, which grows a fact about the job with nearly every piece that touches
-// launching, and which every write but a relaunch's hands back; and the measure
-// inside it, [SessionMeasure], whose word on where a figure came from a later
-// build may add to. A section that does not is extended the other way, with a
-// key of its own at the top of the record (as [PendingRun.Stop] is, beside
-// [RecordedEnding]). And the log kept beside the record, [BridgeLog], is a
-// value of its own with an Extra of its own at its top, under the same rule.
-// So is the handed part kept beside it ([handedSet]), and the set it seals
-// ([HandedSecrets]): the attach of each job writes its own whole, but every
-// token the completion poll renews in the job's box is a read of the part, an
-// open of the set, a change and a write back of both ([CoordStore.AddHanded],
-// [Coordinator.addHanded]), on whichever node polls the box, every few minutes
-// of a long run. And the leads kept beside the record ([leadsPart]), with each
-// [KeptLead] it keeps: every take of a job's leads rewrites the part whole, so
-// each carries an Extra of its own, under the same rule.
+// A run's record keeps what this build cannot read, at every level that grows.
+// The record is read, modified and written whole by every node, so a key this
+// build does not know survives only where the decode kept it: at the top in
+// [PendingRun.Extra], and in each section a later build may add fields to in an
+// Extra of its own, under the same rule. The log ([BridgeLog]), the handed part
+// ([handedSet], [HandedSecrets]) and the leads ([leadsPart], [KeptLead]), each
+// written whole, carry their own. A section without one is extended with a key
+// at the record's top instead. See the package doc, "Keys a later build adds".
 
 // wireKeys is every wire key a struct type declares, read off its own json tags
 // so a field added to the struct is known the moment it exists — a hand-kept

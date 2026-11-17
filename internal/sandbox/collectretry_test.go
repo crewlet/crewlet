@@ -432,24 +432,12 @@ func heldThroughSilence(t *testing.T, rig *coordRig) {
 	}
 }
 
-// A STORE THAT DOES NOT ANSWER A COLLECTION NEVER COUNTS AGAINST ITS BOX. A
-// collection makes steps the coordination store must answer and that it cannot
-// go on without: the read of the run's row that licenses a read of its box on
-// its host, the drain's watch of the run's log (and the watch made again after
-// one that stopped hearing), and the record of the sessions a job ran out of
-// context in or whose request its provider refused. None of them is the box's,
-// which answered every read. So a store
-// silent for longer than the give-up window hands the claim back uncounted,
-// the completion retried, and leaves the run claimable with its result in its
-// box: the collection made once the store answers resumes the turn on it,
-// through a remote host's reply as on this node. Counted, the window's last
-// silence settled the run as unreachable, "its result is lost", while its box
-// held the result throughout.
-//
-// AND A LOST JOB'S CARRY is handed back for it too, never carried on without
-// its read: a box that failed one read before the store went silent has a run
-// of failures the window counts, and given up there, the round went on
-// uncharged for what its box still held.
+// A STORE THAT DOES NOT ANSWER A COLLECTION NEVER COUNTS AGAINST ITS BOX: the
+// host's row read, the drain's watches and the session retirements are the
+// store's steps, so a silence past the give-up window hands the claim back
+// uncounted and the next collection resumes the turn, on a remote host as on
+// this node. A lost job's carry is handed back for it too, never carried on
+// uncharged.
 //
 // Mutation: count the silence in collectFailed; leave any one step unwrapped
 // (the host's row read, either watch, the retirement); drop the reply's flag,
@@ -626,18 +614,10 @@ func (s *outlastedStore) RetireSessions(ctx context.Context, turnID string, sess
 }
 
 // A COLLECTION THAT RAN OUT OF ITS DELIVERY'S TIME IS COUNTED, WHICHEVER STEP
-// THE TIME RAN OUT IN. A step of the store's that the delivery's own deadline
-// cut is the deadline's, not the store's silence: taken for the store's, a
-// collection whose read takes the delivery's time up to its last store step
-// would be handed back uncounted and asked again for ever, as one whose read
-// always outlasts the delivery would be if that were not counted. Every step
-// the store's silence is judged at is held to it on its own, since each judges
-// its own context: the host's read of the run's row (cut there by the
-// delivery's deadline, which bounds the host's read, and answered as the read
-// running out of time, never as the store's silence), the drain's watch of the
-// run's log and the watch made again after one that stopped hearing, and the
-// record of the sessions the job ran out of context in or whose request its
-// provider refused.
+// THE TIME RAN OUT IN: a store step the delivery's deadline cut is the
+// deadline's, or a read that always outlasts its delivery is asked for ever.
+// Each step judges its own context: the host's row read (answered as the read
+// running out of time), both drain watches, and the session retirements.
 //
 // Mutation: wrap any one step's error in ErrStoreSilent whatever its context
 // says, or have storeSilent wrap every step's so, and the attempt the deadline

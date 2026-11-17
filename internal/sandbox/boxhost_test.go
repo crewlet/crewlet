@@ -278,17 +278,12 @@ func (s stopsAtTheRow) Get(ctx context.Context, turnID string) (PendingRun, bool
 	return PendingRun{}, false, fmt.Errorf("sandbox: read run %s: %w", turnID, ctx.Err())
 }
 
-// A HOST THAT STOPS AS IT READS IS A HOST THAT DID NOT ANSWER. A host reads a
-// box for its asker under its answerer's own lifetime, which its withdrawal
-// cancels as it drains or restarts, and the reply it has by then still crosses
-// the broker. Answered in the host's own words alone, the cut read was the
-// box's failure to be read: the asker, its own context live, counted it
-// against a box that is up, whichever step the withdrawal cut, and a stop was
-// ended on it with its spend written off. So the reply says the host stopped
-// (`withdrawn`), and the asker reads it as a host that did not answer
-// (ErrBoxHostSilent): a collection hands its claim back uncounted, and a stop
-// is kept and asked again until the host reads it. A read its share of the
-// asker's time cut is that time's, and counted, as one this node makes.
+// A HOST THAT STOPS AS IT READS IS A HOST THAT DID NOT ANSWER: its withdrawal
+// cancels the read, and the reply says so (`withdrawn`), read by the asker as
+// ErrBoxHostSilent, so a collection hands its claim back uncounted and a stop
+// is kept and asked again. Read as the box's failure, a box that is up is
+// counted and a stop ended with its spend written off. A read its share of the
+// asker's time cut is counted, as one this node makes.
 //
 // Mutation: drop the flag AnswerBoxRead sets, its key on the wire or Err's
 // reading of it, and the withdrawn host's read is counted and its stop ended
@@ -449,18 +444,10 @@ func TestAHostsSilentStoreCrossesTheWireAsOne(t *testing.T) {
 	}
 }
 
-// A REPLY'S FLAG IS SAID ONCE, AS WHAT IT IS. A failure the host flags crosses
-// in the host's own words, which hold the sentinel's sentence wherever their
-// text was built around the sentinel (a refused read's and the store's
-// silence's always are, as is this case's gone box's), and the asker's reading
-// of the flag added it again: its log said the read refused or the store
-// silent twice in one line, and a silent store's reply read "could not read the
-// box", the box's failure, which is exactly what the flag exists to say it is
-// not. Words that do not hold it (a backend's own sentence for a box that is
-// gone, a read the host's withdrawal cut) are said with it once. So each
-// flagged reply reads as what its flag names, the sentinel's sentence once, the
-// host's words kept whole, and errors.Is still answering the sentinel and no
-// other.
+// A REPLY'S FLAG IS SAID ONCE, AS WHAT IT IS. A flagged failure crosses in the
+// host's words, which often already hold the sentinel's sentence; the asker
+// says the sentinel once, keeps the host's words whole, never words a silent
+// store as the box's failure, and errors.Is answers that sentinel and no other.
 //
 // Mutation: word an unsettled reply as the box's failure again, or append a
 // flag's sentence whatever the host's words hold, and its case goes red.

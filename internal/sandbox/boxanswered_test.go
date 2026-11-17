@@ -48,16 +48,11 @@ func (s *cancelledAtTheDrain) answering() {
 }
 
 // A BOX THAT ANSWERED ENDS THE RUN OF FAILURES BEHIND IT, WHATEVER STEP FAILS
-// AFTER ITS READ. The bound on a collection's retries is on CONSECUTIVE failures
-// of the box, and a box that answered while a later step of its collection
-// failed uncounted (a store that did not answer the drain's watch or the record
-// of the sessions its job ran out of context in or whose request its provider
-// refused, or a read of what the run pushed or a drain this node cut short) is
-// a box that answered. Handed back
-// with that run left open, the failures from before were measured across every
-// read it answered, and once the store was back the first blip gave up as lost
-// a box that had answered each time: collect_unreachable, "its result is lost",
-// or for a lost job its round carried on without its read, uncharged.
+// AFTER ITS READ: the bound is on consecutive failures of the box, and a later
+// step that failed uncounted (the store's silence at the drain's watch or the
+// session retirements, the push read, a drain this node cut short) leaves a box
+// that answered. Left open, the first blip after gives the box up as lost, or
+// carries a lost job's round on uncharged.
 //
 // Mutation: drop the release's end of the run (the store's clear, or the field
 // from the release), or the mark the read sets on a collection or on a lost

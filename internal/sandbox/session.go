@@ -1476,52 +1476,13 @@ func openPlaces(calls BridgeLog, last int) []int {
 }
 
 // notesHeld is the last note read ([RunSteer.Reads]) run's record says a
-// session packed from its job holds ([SessionCapture.NoteCursor]): every one
-// the record says was read, where its harness ended its own run, up to the
-// first read it marks unanswered or restarted, or the place of a note a hook
-// was served and nothing read; and NONE where it was cut off.
-//
-// NEVER PAST A READ MARKED UNANSWERED ([NoteRead.Unanswered]): its take's write
-// landed and its answer never reached the harness, so the session lacks that
-// note however cleanly it ended — while it holds the answered reads after it.
-// One number cannot say both, so the cursor stops before the unanswered read,
-// and a launch that continues the session tells every note past it, as notes it
-// may already show (internal/agent/runner's keptSession). WHICHEVER JOB'S TAKE
-// it was: a later launch whose brief told the note again records it read by
-// its job, unmarked ([NoteRead.Retold]), and records only a note its brief
-// told as marked. A mark made off the take's frame can land after a brief was
-// built, held past the next launch by a store's bad moment, and that brief did
-// not tell it as marked; so a read still marked unanswered stops the cursor of
-// every capture after it, told again rather than never. An older build, which
-// tells a continuation every note past the cursor with no header, tells the
-// unanswered note too.
-//
-// NEVER PAST A NOTE A HOOK WAS SERVED AND NO STEP HAS READ ([RunNote.Place]):
-// served and never confirmed, or its serve lost to a cancel or to its
-// session's own record, it sits at its first serve's place among the reads,
-// and the session may lack it while it holds the reads after it. So the cursor
-// stops before that place, and a launch that continues the session tells it
-// and every note past it as notes it may already show, as for an unanswered
-// read. NOR PAST A READ MARKED RESTARTED ([NoteRead.Restarted]): the session
-// shows the hook took the note only before its last restart, and a resume
-// rebuilds its conversation from that restart on.
-//
-// AN ITEM FOR ONE JOB ([RunNote.For]) stops nothing: whatever its read, a
-// continuation is told the turn's notes, and an item is no person's note.
-//
-// NONE, NOT THE NOTES BEFORE THE JOB'S LAST SERVE. A hook's serve is recorded
-// in the write that answers the harness's ask, before the answer is handed
-// back (internal/engine's note hooks), so a harness cut off between the two
-// never had its last serve's notes; but neither is such a session known to hold its
-// job's brief, the message that told the notes the session it continued
-// lacked, an earlier job's among them: no probe has measured whether Claude
-// Code 2.1.310 writes the message a continued session is handed before it
-// answers a call, and no record says which notes that brief told. A cursor
-// stopped before the job's last take said the session held the notes that
-// brief told, which may never have reached it. A launch that continues a
-// session cut off tells it every note the turn has read, as notes it may
-// already show, whatever its cursor (internal/agent/runner's keptSession); an
-// older build, which tells it every note past its cursor, tells it every one.
+// session packed from its job holds ([SessionCapture.NoteCursor]): every read
+// where its harness ended its own run, up to the first read marked unanswered
+// ([NoteRead.Unanswered]) or restarted ([NoteRead.Restarted]), or the place of
+// a note a hook was served and nothing read ([RunNote.Place]); none where it
+// was cut off. A continuation tells every note past it as notes the session may
+// already show (internal/agent/runner's keptSession). An item for one job stops
+// nothing. See the package doc, "A turn's notes".
 func notesHeld(run PendingRun, cutOff bool) int {
 	if cutOff {
 		return 0
