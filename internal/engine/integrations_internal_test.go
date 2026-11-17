@@ -12,8 +12,7 @@ import (
 
 // sealingNode is an Engine holding what every node [New] builds holds for the
 // integration loop: a fleet store, and the keyring the loop's sink seals
-// under. A harness that left them out used to be handed a read-only sink; now
-// it is handed the fault an engine with no secret store is.
+// under.
 func sealingNode(t *testing.T) *Engine {
 	t.Helper()
 	_, cipher := testKeyring(t)
@@ -34,15 +33,9 @@ func (p *countingPass) Run(context.Context, setup.PassInput) ([]integration.Find
 	return nil, nil
 }
 
-// A NODE WITH NO ACTIVE REVISION CONVERGES NOTHING, and says so with the
-// sentinel the loop already handles.
-//
-// This is the ordinary boot posture, not an error: a node runs with no company
-// before one is ever imported, and keeps running when the fleet's revision
-// cannot be read. Every surface is then UNCONFIGURED, which makes the loop
-// forget the row rather than record a fault against a company that does not
-// exist — and the pass must not run at all, because there is no document to
-// tell it what to converge.
+// A NODE WITH NO ACTIVE REVISION CONVERGES NOTHING: it answers the sentinel
+// the loop forgets a row on (the ordinary boot posture, not a fault), and the
+// pass never runs, having no document to converge.
 func TestTheLoopConvergesNothingWithoutACompany(t *testing.T) {
 	t.Parallel()
 	pass := &countingPass{kind: integration.KindGitLab}
@@ -61,15 +54,10 @@ func TestTheLoopConvergesNothingWithoutACompany(t *testing.T) {
 	}
 }
 
-// A PASS THAT CANNOT BE HANDED A SEALING SINK DOES NOT RUN, AND SAYS WHY AS A
-// FAULT.
-//
-// The loop used to fall back to a read-only sink here, for a node with no
-// keyring, and every pass then reported that posture as the operator's work.
-// There is no such node now: every node holds the keyring its sink seals
-// under, so a sink that cannot be built is an engine wired without its secret
-// store — a fault the loop records and retries, never a state to converge in
-// with nothing sealed.
+// A PASS THAT CANNOT BE HANDED A SEALING SINK DOES NOT RUN, AND IS A FAULT:
+// every node holds the keyring, so an unbuildable sink is an engine wired
+// without its secret store, recorded and retried, never a state to converge
+// in with nothing sealed.
 func TestAPassWithNoSinkToSealIntoIsAFault(t *testing.T) {
 	t.Parallel()
 	pass := &countingPass{kind: integration.KindGitLab}
@@ -102,14 +90,10 @@ func (p *capturingPass) Run(_ context.Context, in setup.PassInput) ([]integratio
 	return nil, nil
 }
 
-// THE LOOP HANDS A PASS THE VENDORS' ADDRESS AND THE KEY IT IS READ FROM.
-//
-// A pass with no address reports `ingress_blocked` naming the setting to fill
-// in, and only the engine knows which one that is: behind a public listener it
-// is `api.public.external_url`, which every vendor used to name as
-// `api.external_url` — a key that was set, that nothing building a vendor URL
-// reads, on a deployment whose webhooks are served only on the other socket.
-// So the key travels beside the address, from the same Tier A block.
+// THE LOOP HANDS A PASS THE VENDORS' ADDRESS AND THE KEY IT IS READ FROM, so
+// a pass with no address reports `ingress_blocked` naming the right setting:
+// behind a public listener `api.public.external_url`, not `api.external_url`,
+// which only the engine knows.
 func TestTheLoopHandsAPassTheVendorsAddressAndItsKey(t *testing.T) {
 	t.Parallel()
 	pass := &capturingPass{kind: integration.KindDatadog}
@@ -140,9 +124,9 @@ func TestTheConvergerReportsThePassesKind(t *testing.T) {
 }
 
 // WHICH SURFACES A PASS CONVERGES IS A PROPERTY OF THE BUILD, answered on a
-// node with no coordination store as on any other. The roll-up reads it to
-// tell a surface waiting for its first report from one that will never get
-// one. Every surface is the first: Slack's pass converges its agents' apps.
+// node with no coordination store as on any other: the roll-up reads it to
+// tell a surface awaiting its first report from one that will never get one.
+// Every surface has a pass.
 func TestConvergesIsTheBuildsPassList(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}

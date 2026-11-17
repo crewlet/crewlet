@@ -23,9 +23,8 @@ import (
 )
 
 // THE DASHBOARD ASSISTANT'S ORCHESTRATOR, wired: the seams internal/assistant
-// declares, each satisfied by what this engine already runs. Its state log and
-// its two sides are assistantregister.go's; this file is the model chain a turn
-// runs on, the meter it charges and the records it writes.
+// declares, satisfied by what this engine runs. Its state log and two sides are
+// assistantregister.go's; here are a turn's model chain, meter and records.
 
 // AssistantToolSessions is where a turn serves its tools to the harness its model
 // runs in: this process's one [toolsession.Host], the seats' own (ADR-0049).
@@ -37,15 +36,13 @@ func AssistantModels(e *Engine) assistant.Models { return assistantModels{e: e} 
 
 type assistantModels struct{ e *Engine }
 
-// Chain resolves `assistant.llm` through the ONE accessor that hands it out
+// Chain resolves `assistant.llm` through its ONE accessor
 // ([config.Company.AssistantChain], which refuses a chain the assistant's rules
-// do not admit), and wraps every member so each completion is RECORDED on the
-// auxiliary-spend ledger under use, as the person's spend on the operator
-// stage, and CHARGED NOWHERE: the turn's own meter ([AssistantBudget]) charges
-// a round, so it is counted once.
-//
-// EVERY MEMBER IS RECORDED UNDER ITS OWN KEY, then chained, so a round a
-// fallback served is filed under the entry that served it.
+// do not admit) and wraps every member so each completion is RECORDED on the
+// auxiliary-spend ledger under use, as the person's spend on the operator stage,
+// and CHARGED NOWHERE: the turn's own meter ([AssistantBudget]) charges a round,
+// so it is counted once. Each member is recorded under its own key, then
+// chained, so a round a fallback served is filed under the entry that served it.
 func (m assistantModels) Chain(_ context.Context, person iam.Principal,
 	use auxspend.Use, strength assistant.Strength) (llm.Provider, string, error) {
 
@@ -88,9 +85,8 @@ func (m assistantModels) Chain(_ context.Context, person iam.Principal,
 func (m assistantModels) Unready(ctx context.Context, strength assistant.Strength) error {
 	_, _, providers, err := m.entries(strength)
 	if err != nil {
-		// A chain that does not resolve is the turn's own refusal
-		// ([assistantModels.Chain]) and `/viewer`'s no_model, not a state
-		// of a model's.
+		// An unresolved chain is the turn's own refusal ([assistantModels.Chain])
+		// and `/viewer`'s no_model, not a model's state.
 		return nil //nolint:nilerr // see above: not a model's state
 	}
 	return chain.Unready(ctx, providers)
@@ -139,18 +135,17 @@ type orgCharger interface {
 	PostChargeOrg(ctx context.Context, tokens int, windows coord.Windows) (coord.Usage, error)
 }
 
-// Meter is a meter on the COMPANY's windows and, where the company caps a
-// person (`assistant.token_budget`), on that PERSON's own
-// ([coord.PersonScope]), pinned to the ceilings and clock as the turn starts,
-// and having read the counter once, so a window already full, the company's
-// or the person's, refuses the turn before its first round is sent. Nil on a
+// Meter is a meter on the COMPANY's windows and, where the company caps a person
+// (`assistant.token_budget`), on that PERSON's own ([coord.PersonScope]), pinned
+// to the ceilings and clock as the turn starts and having read the counter once,
+// so a window already full refuses the turn before its first round. Nil on a
 // node with no coordination store to count on.
 //
-// A CAPPED PERSON IS A SEAT'S METER on the person's scope: every round is
-// charged to the company and the person in one judged charge, the company
-// first, exactly as a seat's round is (one implementation of the gate, not a
-// second one for people). An uncapped person is charged to the company alone
-// ([companyMeter]), so the listing holds no row no ceiling can judge.
+// A CAPPED PERSON IS A SEAT'S METER on the person's scope: each round is one
+// judged charge to company and person, company first, exactly as a seat's
+// round (one gate, not a second for people).
+// An uncapped person is charged to the company alone ([companyMeter]), so the
+// listing holds no row no ceiling can judge.
 func (b assistantBudget) Meter(ctx context.Context, person iam.Principal) (toolloop.BudgetMeter, error) {
 	if b.e.backends == nil || b.e.backends.Fleet == nil {
 		return nil, nil

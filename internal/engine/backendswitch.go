@@ -9,43 +9,22 @@ import (
 
 // A native backend changes at a restart, and the node says so.
 //
-// # Why a switch is not live
-//
-// A node's native runtime — Worklet's, Doclet's and Chatlet's read and write
-// sides over the core's logs, Gitlet's committer and git surface,
-// the index, the feeds — is built ONCE per process ([Engine.startNative], or
-// [Engine.startRemote] on a node without `data`), from whichever company
-// started it, and it follows the fleet's logs rather than a revision. The
-// logs themselves are the core's and run from boot whatever the company says
-// (core.go). Tearing a half down or bringing one up at an apply would rebuild
-// the index and the feeds and re-run every boot reconcile on a configuration
-// edit; so a revision that turns a native half on or off activates normally,
-// reports `ok`, and changes nothing here until the process restarts.
-//
-// # Why it is said, once per activation
-//
-// That was always the rule, and nothing said so: a revision that moved
-// `tracker.backend` from worklet to jira left every node serving Worklet's
-// tools with no word anywhere, and one that turned Doclet on on a node built
-// on Confluence served no page tool, with nothing saying why. [Engine.reconcileNative] runs once per apply and an apply once
-// per activation per node, so each activation that still asks for a switch
-// says it once — a re-activation of the same document is somebody asking
-// again — and a restart's reapply compares against the runtime that restart
-// built from it, which agrees, so it says nothing. That last clause rests on
-// `crewlet run` booting a node on the revision its store holds rather than on
-// its -company file, and holds for every node that held the revision when it
-// restarted; one that did not (down at the activation, or a data node joining
-// with an empty store) boots on the company it had, says it once more at its
-// first apply, and agrees after its next restart.
+// The native runtime (Worklet, Doclet, Chatlet, Gitlet, the index, the feeds)
+// is built ONCE per process ([Engine.startNative], [Engine.startRemote]) and
+// follows the core's logs, run from boot whatever the company says (core.go):
+// rebuilding it at an apply would rebuild the index and feeds and re-run every
+// boot reconcile on a config edit. So a revision turning a native half on or
+// off activates `ok`, changes nothing until a restart, and is warned about by
+// [Engine.reconcileNative] at each activation asking for it (a re-activation
+// is somebody asking again). A restart's reapply agrees with the runtime it
+// built, since `crewlet run` boots on the store's revision; a node that missed
+// the revision boots on its old company and says it once more at first apply.
 
 // builtWith is the native-backend choices a runtime was built with: the
-// company that started it, never a later revision. A runtime is built once
-// per process ([Engine.startNative], [Engine.startRemote]), so these are what
-// it serves until a restart, whatever an activation says — and
-// [backendSwitches] is how an activation that says otherwise is told so.
-//
-// THE BACKEND VALUES, not whether each is native, so the line can name what
-// the node was started on; the comparison reads only their native-ness.
+// company that started it, never a later revision, since a runtime is built
+// once per process; [backendSwitches] tells an activation that differs. It
+// holds the backend values, not their native-ness, so the line can name what
+// the node was started on.
 type builtWith struct {
 	tracker   config.TrackerBackend
 	knowledge config.KnowledgeBackend
@@ -79,8 +58,7 @@ type backendSwitch struct {
 	// Half is what the runtime builds natively for that field, as a person
 	// reads it: "Worklet", "Doclet", "Chatlet", "Gitlet".
 	Half string
-	// Running is the field's value the runtime was built with — what this
-	// node serves until a restart.
+	// Running is the value the runtime was built with, served until a restart.
 	Running string
 	// Activated is the value the revision says.
 	Activated string
@@ -105,14 +83,12 @@ func (s backendSwitch) detail() string {
 }
 
 // backendSwitches is every choice c makes that a runtime built with b does not
-// serve: a choice of WHETHER a half is native, since that is what the runtime
-// was built around. Moving between two vendors (jira to none) is not one — a
-// vendor's parser is rebuilt live by its reconciler — and neither is any other
-// field. In a fixed order: tracker, then knowledge, then chat, then
-// Gitlet — whose axis names no vendor, so any change of it is one.
-//
-// PURE, so the rule is tested without an engine; [Engine.sayBackendSwitches]
-// says each one.
+// serve: a change of WHETHER a half is native, the one thing the runtime was
+// built around. Moving between two vendors (jira to none) is not one, since a
+// vendor's parser is rebuilt live by its reconciler. In a fixed order:
+// tracker, knowledge, chat, then Gitlet, whose axis names no vendor, so any
+// change of it is one. PURE, so the rule is tested without an engine;
+// [Engine.sayBackendSwitches] says each.
 func backendSwitches(b builtWith, c *config.Company) []backendSwitch {
 	var out []backendSwitch
 	if tracker := c.TrackerBackendFor(); b.runsTracker() != (tracker == config.TrackerWorklet) {
@@ -149,23 +125,17 @@ func (s backendSwitch) service() string {
 }
 
 // AwaitingRestart is which of Crewlet's own services c turns ON that this
-// node's native runtime was built without, each as the org projection's
-// `services` names it (tracker, knowledge, chat, code), in that order; empty
-// on a node that serves everything c asks for, and on one running no runtime
-// yet, whose first apply builds it from the company it meets.
+// node's native runtime was built without, as the org projection's `services`
+// names them (tracker, knowledge, chat, code), in that order; empty on a node
+// serving everything c asks for, and on one running no runtime yet, whose
+// first apply builds it from the company it meets.
 //
-// THE HALF OF [backendSwitches] SOMEBODY IS REFUSED BY. A service the revision
-// turned off goes on being served until the restart, and no reader meets a
-// refusal for it; one it turned on has nothing to answer with here, so every
-// question about it is refused on this node until the process restarts. The
-// log line said that to whoever reads the node's log, and nothing said it to
-// the person looking at a workspace whose every screen was refused: the API
-// names these on the org projection and answers their questions
-// `native_backend_needs_restart`.
-//
-// OF c, NEVER OF THE CURRENT EPOCH READ AGAIN: a caller describing one
-// company asks about that company, so the services it reports and the ones it
-// says wait for a restart cannot straddle a publish.
+// Only the turned-on half of [backendSwitches]: a service turned off is still
+// served until the restart, while one turned on has nothing to answer with, so
+// the API names these on the org projection and refuses their questions with
+// `native_backend_needs_restart`. Read OF c, never of the current epoch again,
+// so the services a caller reports and those awaiting a restart cannot
+// straddle a publish.
 func (e *Engine) AwaitingRestart(c *config.Company) []string {
 	built, runs := e.runtimeBuilt()
 	if !runs || c == nil {
@@ -187,11 +157,9 @@ func awaitingRestart(b builtWith, c *config.Company) []string {
 }
 
 // runtimeBuilt is what this node's native runtime was built with, and whether
-// it runs one at all — a data node's or a stateless node's, whichever it is.
-//
-// THE ONE READING of whether a runtime exists that [Engine.reconcileNative]
-// guards on, so the line below it and the parsers it swaps are judged by one
-// answer rather than two.
+// it runs one at all (a data node's or a stateless node's). It is the one
+// reading [Engine.reconcileNative] guards on, so the line and the parsers it
+// swaps are judged by one answer.
 func (e *Engine) runtimeBuilt() (builtWith, bool) {
 	if n := e.native.Load(); n != nil {
 		return n.built, true
@@ -203,14 +171,10 @@ func (e *Engine) runtimeBuilt() (builtWith, bool) {
 }
 
 // sayBackendSwitches warns, once, about every native-backend choice c makes
-// that a runtime built with built does not serve.
-//
-// Only ever said over a runtime that EXISTS: its caller returns first on a
-// node running none. Nor could such a node have anything to say — an apply
-// starts the runtime from its own company at its `native` stage
-// ([Engine.startNativeFor]), whatever backends that company names, before the
-// stage that says this, so the first runtime an apply meets always agrees with
-// it.
+// that a runtime built with built does not serve. Its caller says it only over
+// a runtime that EXISTS: an apply starts a missing runtime from its own
+// company at its `native` stage ([Engine.startNativeFor]), before this stage,
+// so the first runtime an apply meets always agrees with it.
 func (e *Engine) sayBackendSwitches(ctx context.Context, built builtWith, c *Company) {
 	for _, s := range backendSwitches(built, c.Config) {
 		log.WarnContext(ctx, "native_backend_needs_restart", "field", s.Field,

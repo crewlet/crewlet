@@ -21,17 +21,15 @@ import (
 // A CREDENTIAL IS PLACED BY ITS LOGIN'S NAMESPACE, AND ONLY THERE (ADR-0109).
 //
 // A turn a credential acting as no seat woke is worked for it as THIS node
-// resolves it: a `token:` login by this node's own Tier A — a token another
-// node declares is nobody here, whatever the identity directory holds under
-// the same name — and any other login by the directory alone, as a service
-// account bound to no seat that may act. A token the directory binds to a seat
-// is the person's, so it never stands here as itself. Every principal placed
-// holds apps alone, never admin; a directory this node cannot vouch for is
-// unknown, never a stranger.
+// resolves it: a `token:` login by this node's Tier A alone (another node's
+// token is nobody here, whatever the directory holds), any other login by the
+// directory alone, as an active service account bound to no seat. A token
+// bound to a seat is the person's. Every principal placed holds apps, never
+// admin; a directory this node cannot vouch for is unknown, never a stranger.
 //
-// Mutation: consult the directory for a `token:` login Tier A does not declare
-// — the token another node declares is placed with the directory's admin row;
-// drop the seat check on a service account — the bound account is placed.
+// Mutation: consult the directory for an undeclared `token:` login — another
+// node's token is placed with the directory's admin row; drop the seat check
+// on a service account — the bound account is placed.
 func TestACredentialIsPlacedByItsLoginsNamespaceAlone(t *testing.T) {
 	t.Parallel()
 	machineRow := func(id, login, seat string, stage iam.Stage, grants ...iam.Grant) iamdomain.Sighting {

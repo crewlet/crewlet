@@ -68,21 +68,14 @@ roles:
 }
 
 // A BLOCKED TOOL IS NOT OFFERED, LISTED OR CALLABLE, THROUGH THE RELAY OR THE
-// BRIDGE, ON A SHARED SERVER OR A PER-AGENT ONE. The engine hands a server's
-// levels to the MCP client with its start, which never files a blocked tool:
-// so the seat's surface, which a phase on the engine host serves through its
-// tool session (the relay) and an executor's box reaches through the bridge,
-// never holds it, however a phase asks for it. Proved end to end, against real
-// servers: the shared server's instance and the seat's own child of the
-// per-agent one each list a tool the entry blocks and one it allows; a phase's
-// surface advertises the allowed two alone; a scripted harness over the real
-// tool session has the allowed calls answered by the servers and the blocked
-// ones answered by nobody, since its session lists no such tool; and a
-// harness's MCP client dialling the bridge, at the job's endpoint and at each
-// server's own (mcpbridge.ServerURL), lists the allowed tool of each server
-// and no blocked one, and has only the allowed ones answered. The fleet's
-// listing names the blocked tools, flagged, for an administrator to let
-// through again.
+// BRIDGE, ON A SHARED SERVER OR A PER-AGENT ONE: the MCP client is handed a
+// server's levels with its start and never files a blocked tool, so the seat's
+// surface never holds it. End to end against real servers, each listing one
+// blocked and one allowed tool: a phase's surface advertises the allowed alone;
+// a scripted harness over the real tool session has only allowed calls
+// answered; an MCP client dialling the bridge, at the job's endpoint and each
+// server's own (mcpbridge.ServerURL), lists and is answered only allowed ones;
+// the fleet's listing names the blocked tools, flagged, for an administrator.
 //
 // Mutation: drop Levels from serverSpec, or have toolsFor file a blocked tool,
 // and every half of this is red.
@@ -245,12 +238,11 @@ func TestABlockedToolIsNotOfferedListedOrCallableThroughTheRelayOrTheBridge(t *t
 }
 
 // A BOX IS GIVEN NO SERVER THAT HOLDS A TOOL BACK. The harness in a box dials
-// a server it is given itself, past the engine, so a level could not hold
-// there: a server any tool of which is at a level other than allow is left
-// out of the box, whatever the seat's listing says, and so is one whose entry
-// sets no default, whose tools start at the levels their hints give them,
-// most at approve. Admission refuses the listing, so a stored revision is what
-// carries one. A server whose default and levels all allow is given as ever.
+// its servers itself, past the engine, so no level holds there: a server with
+// any tool at a level other than allow is left out, whatever the seat's listing
+// says, and so is one setting no default (its tools start at their hints'
+// levels, most at approve). Admission refuses such a listing, so only a stored
+// revision carries one. A server whose default and levels all allow is given.
 //
 // Mutation: drop the check from sandboxMCP, and this is red.
 func TestABoxIsGivenNoServerThatHoldsAToolBack(t *testing.T) {

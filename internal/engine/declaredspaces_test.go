@@ -12,14 +12,12 @@ import (
 // THE KNOWLEDGE BASE DECLARES EXACTLY THE SPACES THE CHART MAKES CONTAINERS OF.
 //
 // A page is created only in a declared space (doclet.Reserved.Declared), and
-// the containers a company has are [chartContainers]'s. Declared from a second
-// walk of the chart, the two lists would drift — a seat's own `space:` left out
-// of one, a key in another spelling — and a page would be refused a space whose
-// container the Doclet rail lists, or created in one nobody made. So the
-// declared list IS that walk's keys, every unit's and seat's space and the
-// root and the skills container among them, the reserved two still come from
-// their own accessors, and a node running no company declares nothing — which
-// refuses every create until a chart says where pages go.
+// the containers are [chartContainers]'s; a second walk of the chart would
+// drift from it (a seat's `space:` left out, a key spelled differently) and a
+// page would be refused a space the Doclet rail lists, or created in one
+// nobody made. So the declared list IS
+// that walk's keys, the reserved two still come from their own accessors, and
+// a node running no company declares nothing, refusing every create.
 func TestReservedContainersDeclareEveryChartSpace(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{

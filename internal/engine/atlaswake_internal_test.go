@@ -9,14 +9,12 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// A SEAT THAT TAKES NO WORK IS NOT WOKEN ABOUT ITS ATLAS ENTRY (ADR-0143):
-// the duty asks before it claims the day's wake, and a paused seat, a seat
-// parked on a spent budget, a person's seat and a handle the chart does not
-// hold all answer no.
+// A SEAT THAT TAKES NO WORK IS NOT WOKEN ABOUT ITS ATLAS ENTRY (ADR-0143): the
+// duty asks before it claims the day's wake, and a paused seat, a seat parked
+// on a spent budget and a handle the chart does not hold all answer no.
 //
-// Mutation: drop the pause or the budget reading in seatTakesWork and its
-// case answers yes, so the seat's one wake of the day is spent on mail it
-// cannot read.
+// Mutation: drop the pause or the budget reading in seatTakesWork and its case
+// answers yes, spending the seat's one wake of the day on mail it cannot read.
 func TestASeatThatCannotStartATurnTakesNoAtlasWake(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

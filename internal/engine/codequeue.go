@@ -18,64 +18,22 @@ import (
 )
 
 // queueTasks is the merge queue's step 2 (M5-D27): a landed change's work
-// item closed AS THE ENTRY'S ENQUEUER, never on the queue's own account — the
-// home's queue worker hands it each landed entry that asked it
+// item closed as the entry's enqueuer, never on the queue's own account
 // (internal/gitlet/home's Tasks).
 func (e *Engine) queueTasks() gitlethome.Tasks { return queueCloser{engine: e} }
 
-// queueCloser closes a landed change's work item as its enqueuer.
-//
-// THE ENQUEUER'S OWN WRITE, DECIDED AS THEM. The close lands on Worklet
-// through the writer every seat's tool and every person's route writes
-// through, attributed to the enqueuer — a seat by its handle, a person by the
-// seat they hold with the credential they enqueued through beside it, the
-// actor [builtin.CodeAskerOf] reads the other way — and the authority table is
-// asked `update_work_item` for them first, on the principal a turn's requester
-// is composed as ([turnRequesters]): a seat that left the chart, or a person
-// removed since they enqueued, closes nothing, and a person is held to the
-// apps their own grants name now, as every write of theirs is. The enqueue
-// decided nothing of Worklet, and a decision made then would be stale at the
-// landing.
-//
-// AND FOR WHOM THE ENQUEUE WAS MADE (ADR-0109). A seat's enqueue made in a
-// turn somebody woke is that turn's write, and the close is the same turn's
-// write made late, after the turn ended, as a run's change its collection
-// opens is: written for them ([types.ForTurn] of the entry's carrier,
-// [gitlethome.TaskClose.WorkingFor]), and decided within what they may use —
-// the ceiling the carrier composes AGAIN on this node, by the one composition
-// every call of a turn is decided under ([builtin.WorkingForCeiling],
-// [authz.DecideWithinApps]) — so a revocation since the enqueue applies, a
-// credential's apps are narrowed again by this node's resolution, and a person
-// without Worklet who had a seat merge a change into a queue does not have its
-// item closed for them, as the seat's direct merge in their turn would not
-// close it either. A requester the organisation no longer holds, or one who
-// may not use Worklet, is answered NOT CLOSED, naming them, which the change's
-// authors and its enqueuer hear, for that requester too (internal/gitlet's
-// close_settled routing). A close made for nobody — the seat's own work, a
-// person's enqueue, an entry from before the carrier — is decided for the
-// enqueuer alone, as before the carrier.
-//
-// ONLY WORKLET is closed here. A change whose work item is a
-// vendor's (a Jira issue, a GitHub issue) is closed by whoever closes it there
-// — the engine holds no credential of the enqueuer's on a vendor's tracker,
-// and its own on their behalf would put somebody else's name on the close — so
-// it is answered NOT CLOSED ([gitlethome.NotClosed]) naming the item, which
-// the queue settles and tells the change's authors and its enqueuer: the
-// change has landed whatever becomes of its item.
-//
-// WHAT IS FINAL AND WHAT IS NOT: a vendor's item, an enqueuer bound to no
-// seat, a seat the chart no longer holds — the enqueuer's, or the requester's
-// whom the enqueue was made for — an authority refusal, for the enqueuer or
-// within the requester's apps, and a close Worklet itself refuses by its
-// marks ([closeFailed]: the item gone, not the enqueuer's to write, or its
-// content or its state refusing the close) are answered NotClosed, since
-// asking again changes none of them; every other failure — no tracker on this
-// node, a read or a write that failed, a requester this node could not
-// compose, an outcome nobody can state — is a plain error, which leaves the
-// close owed for the queue's next turn on whichever home. So is a requester
-// named by a kind this build does not know, which this build cannot judge at
-// all ([gitlet.KindUnknownToThisBuild]): the close is deferred, never decided,
-// until a home of the build that knows the kind takes it.
+// queueCloser closes a landed change's work item as its enqueuer: a seat by
+// its handle, a person as their human seat with their enqueuing credential
+// beside it (the inverse of [builtin.CodeAskerOf]), composed as a turn's
+// requester ([turnRequesters]). Who may close is decided at the landing, since
+// one decided at the enqueue is stale: [mayClose], and for a seat's enqueue in
+// a turn somebody woke, within the apps of whom it was made for, composed again
+// on this node and written for them (ADR-0109, [types.ForTurn]). Only Worklet
+// is closed: the engine holds no credential of the enqueuer's on a vendor's
+// tracker, and its own would put another name on the close. A refusal asking
+// again cannot change is [gitlethome.NotClosed], told to the change's authors,
+// enqueuer and any refused requester (internal/gitlet's close_settled); any
+// other failure is a plain error, leaving the close owed for the next turn.
 type queueCloser struct{ engine *Engine }
 
 // errQueueCloseNotWorklet is a work item Worklet does not hold.
@@ -88,15 +46,11 @@ var errQueueCloseNotWorklet = errors.New("engine: the work item is not on Workle
 // left as it is.
 func (q queueCloser) CloseWorkItem(ctx context.Context, c gitlethome.TaskClose) error {
 	item := c.WorkItem
-	// A REQUESTER THIS BUILD CANNOT JUDGE, BEFORE ANY OTHER RULE: whom the
-	// enqueue was made for is named by a kind only a newer build composes,
-	// as the entry's row holds it (internal/gitlet's storedCarrier, which
-	// never rewrites one). This build decides nothing of such a close — not
-	// even that it will never be made, which a home of the build that knows
-	// the kind might answer otherwise — so it stays owed, as the one rule
-	// answers such a carrier everywhere (gitlet.KindUnknownToThisBuild), and
-	// the home logs why at WARN on every turn until one of that build takes
-	// the repository.
+	// A REQUESTER THIS BUILD CANNOT JUDGE, BEFORE ANY OTHER RULE: a kind only
+	// a newer build composes (internal/gitlet's storedCarrier keeps it as
+	// written). Not even NotClosed, which that build might answer otherwise:
+	// the close stays owed (gitlet.KindUnknownToThisBuild), and the home logs
+	// it at WARN each turn until a build that knows the kind takes it.
 	if gitlet.KindUnknownToThisBuild(c.WorkingFor) {
 		return fmt.Errorf("engine: close work item %s: the fleet's builds differ: whom its enqueue was made "+
 			"for is named by a kind this build does not know (%q), so the close stays owed for a home of "+
@@ -106,11 +60,9 @@ func (q queueCloser) CloseWorkItem(ctx context.Context, c gitlethome.TaskClose) 
 		return &gitlethome.NotClosed{Why: fmt.Sprintf("%s is a %s work item, which is closed where it lives",
 			workItemName(item), item.Backend), Err: errQueueCloseNotWorklet}
 	}
-	// DECIDED BEFORE THIS NODE'S TRACKER IS ASKED FOR: who closes the item,
-	// and whether they may, is read off the company's chart and directory,
-	// never off this node's tracker, so a close that will never be made is
-	// settled by whichever home decides it, and only one that may be made
-	// waits for a node that writes to a tracker.
+	// DECIDED BEFORE THIS NODE'S TRACKER IS ASKED FOR, off the chart and the
+	// directory: a close that will never be made is settled by whichever home
+	// decides it, and only one that may be made waits for a node with a tracker.
 	actor, err := decideClose(ctx, turnRequesters(q), ChartAuthorityOf(q.engine), c, time.Now())
 	if err != nil {
 		return err
@@ -120,8 +72,8 @@ func (q queueCloser) CloseWorkItem(ctx context.Context, c gitlethome.TaskClose) 
 		return fmt.Errorf("engine: close work item %s: this node writes to no tracker of the engine's own",
 			item.ID)
 	}
-	// LINEARIZABLE, as every read a seat or an operator decides from: the
-	// status read is what says whether the close is still owed.
+	// LINEARIZABLE, as every read a seat or an operator decides from: this
+	// status says whether the close is still owed.
 	before, err := halves.reader.Task(ctx, item.ID, worklet.DetailWants{},
 		statelog.Freshness{Level: statelog.DefaultReadLevel(statelog.SurfaceSeat)})
 	if err != nil {
@@ -147,14 +99,11 @@ func (q queueCloser) CloseWorkItem(ctx context.Context, c gitlethome.TaskClose) 
 	return nil
 }
 
-// decideClose is who closes c's work item and whether they may now, decided
-// on this node from r's composition of them and chart: the entry's enqueuer,
-// written for whom its enqueue was made for ([enqueuerActor] of c.As and
-// c.WorkingFor, the carrier the home read off the entry's row), and
-// [mayClose] of that very actor — so the close is decided for the principal
-// it is then written as, never for one of them alone. A principal bound to no
-// seat is answered NotClosed, as every refusal no asking again changes is;
-// [mayClose]'s answers are its own.
+// decideClose is who closes c's work item and whether they may now: the
+// enqueuer written for whom the enqueue was made for ([enqueuerActor] of c.As
+// and the row's carrier c.WorkingFor), held to [mayClose] as that very actor,
+// so the close is decided for the principal it is written as. A principal
+// bound to no seat is NotClosed.
 func decideClose(ctx context.Context, r builtin.Requesters, chart authz.Chart, c gitlethome.TaskClose,
 	now time.Time) (builtin.Actor, error) {
 
@@ -169,22 +118,18 @@ func decideClose(ctx context.Context, r builtin.Requesters, chart authz.Chart, c
 	return actor, nil
 }
 
-// mayClose is whether actor — a landed change's enqueuer, written for whom
-// its enqueue was made for ([enqueuerActor]) — may close item now, decided on
-// this node from r's composition of them and chart: nil where it may; a
-// [gitlethome.NotClosed], naming who may not and why, where asking again
+// mayClose is whether actor ([enqueuerActor]) may close item now, decided on
+// this node from r's composition and chart: nil where it may; a
+// [gitlethome.NotClosed] naming who may not and why, where asking again
 // changes nothing; any other error where this node cannot say yet, which
 // leaves the close owed.
 //
-// THE ENQUEUER FIRST, then WITHIN WHOM THE CLOSE IS WRITTEN FOR: the
-// enqueuer's own authority to update a work item ([authz.Decide], what a
-// close made for nobody is decided by alone), and then, where the actor
-// states somebody, whether they use the app the verb belongs to, held to the
-// ceiling their carrier composes on this node ([builtin.WorkingForCeiling],
-// [authz.DecideWithinApps]) — the decision a call of the enqueuing turn would
-// get now. A seat the organisation no longer holds, the enqueuer's or the
-// requester's, is the composer's definitive answer ([errNoSuchSeat], wrapped),
-// told apart from a read that failed.
+// The enqueuer's own authority first (all a close made for nobody is decided
+// by), then, where the actor writes for somebody, the ceiling their carrier
+// composes on this node ([builtin.WorkingForCeiling],
+// [authz.DecideWithinApps]): what a call of the enqueuing turn would get now.
+// A seat the organisation no longer holds is the composer's definitive answer
+// ([errNoSuchSeat]), told apart from a read that failed.
 func mayClose(ctx context.Context, r builtin.Requesters, chart authz.Chart, item types.WorkItem,
 	actor builtin.Actor, now time.Time) error {
 
@@ -223,12 +168,10 @@ func mayClose(ctx context.Context, r builtin.Requesters, chart authz.Chart, item
 	return nil
 }
 
-// refusedWithin is the sentence a close refused within the apps of whom,
-// for whom enqueuer queued the change, reads beside `merged` to the change's
-// authors and its enqueuer: somebody the company does not know, who uses no
-// app; somebody who may not act in the company now; or somebody who does not
-// use the app the close needs, named, since an administrator giving it to
-// them is what changes the answer.
+// refusedWithin is the sentence the change's authors and enqueuer read beside
+// `merged` for a close refused within the apps of whom, for whom enqueuer
+// queued it. A missing app is named, since an administrator granting it is
+// what changes the answer.
 func refusedWithin(whom, enqueuer string, d authz.Decision) string {
 	switch {
 	case d.Ceiling == authz.CeilingStranger:
@@ -266,19 +209,16 @@ func requesterNamed(w types.WorkingFor) string {
 }
 
 // closeFailed is how a tracker's failure to read or close item as handle
-// reads to the queue. A refusal Worklet MARKS as one no asking again changes
-// — the item gone ([worklet.ErrNoTask]: the read is linearizable, so it is
-// gone, not unapplied), not the enqueuer's to write ([worklet.ErrForbidden]),
-// a close its content or its state refuses ([worklet.ErrInvalid],
-// [worklet.ErrState]: a project's rule for done, an item in the trash) — is
+// reads to the queue. A refusal Worklet marks final — the item gone
+// ([worklet.ErrNoTask]; the read is linearizable, so gone, not unapplied), not
+// the enqueuer's to write ([worklet.ErrForbidden]), or a close its content or
+// state refuses ([worklet.ErrInvalid], [worklet.ErrState]) — is
 // [gitlethome.NotClosed], so its people hear it once rather than the queue
-// asking it every turn for the queue's whole history; every other failure is
-// the node's own, which the queue asks again.
+// asking every turn; any other failure is the node's own, asked again.
 //
-// THE ENGINE'S OWN SENTENCE, one a mark, never Worklet's refusal text: the
-// sentence is read by a person in their Inbox and by a seat in its wake, and
-// a refusal's words are worded for one reader (ADR-0060). Err keeps the
-// refusal for the log.
+// Why is the engine's own sentence per mark, never Worklet's refusal text,
+// which is worded for one reader while this reaches a person's Inbox and a
+// seat's wake (ADR-0060); Err keeps the refusal for the log.
 func closeFailed(item types.WorkItem, handle, doing string, err error) error {
 	name := workItemName(item)
 	var why string
@@ -307,13 +247,11 @@ func workItemName(item types.WorkItem) string {
 }
 
 // enqueuerActor is who a queued merge's step 2 writes as: a seat as itself,
-// written for whom its enqueue was made for (workingFor, nil for nobody: the
-// close is the enqueuing turn's write made late, [types.ForTurn] of it, as
-// the turn's own writes state), and a person as the human seat they hold with
-// the credential they enqueued through beside it, who writes for nobody but
-// themselves. A credential bound to no seat enqueues nothing (a merge is a
-// bound principal's act), so one here is refused rather than given a name of
-// its own.
+// written for whom its enqueue was made for ([types.ForTurn] of workingFor,
+// nil for nobody), and a person as their human seat with their credential
+// beside it, writing for nobody but themselves. A credential bound to no seat
+// cannot have enqueued (a merge is a bound principal's act), so one is refused
+// rather than given a name of its own.
 func enqueuerActor(p gitlet.Principal, workingFor *types.WorkingFor) (builtin.Actor, error) {
 	switch {
 	case p.Kind == gitlet.PrincipalAgent && p.Seat != "":

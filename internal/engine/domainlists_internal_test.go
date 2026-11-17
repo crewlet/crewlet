@@ -12,13 +12,11 @@ import (
 
 // THE STORE'S SCHEMA SUITE CERTIFIES EVERY REGISTERED DOMAIN.
 //
-// internal/store's TestTheShippedSchemaAcceptsTheFrameworksOwnStatements holds
-// each domain's shipped DDL to the statements the framework generates, over a
-// list of domains it cannot read off the register: the store's tests do not
-// import the engine. A domain registered here and missing there is a log whose
-// deferral and ledger tables nothing checks against the migration, and nothing
-// says so, which is how a per-domain list fails silently when a domain joins.
-// So the list is read here, from that test's source, and held to the register.
+// internal/store's TestTheShippedSchemaAcceptsTheFrameworksOwnStatements lists
+// its domains by hand (the store's tests cannot import the engine), and a
+// registered domain missing there has deferral and ledger tables nothing checks
+// against the migration, silently. So that list is read from the test's source
+// and held to the register.
 //
 // Mutation: drop atlasdomain.Domain{} from the store test's list and this names
 // the atlas.

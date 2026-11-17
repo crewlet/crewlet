@@ -34,13 +34,12 @@ func (h *recordingHold) Hold(_ context.Context, _ *turnctx.Turn, call tools.Held
 }
 
 // A TOOL AT NEEDS APPROVAL IS OFFERED, AND NO PHASE MAKES THE CALL (ADR-0077).
-// A server whose entry sets no level files its unannotated tool at approve, so
-// the tool is in the seat's registry and on every surface, marked. Proved end
-// to end against a real server: a phase on the engine host, through its real
-// tool session (the relay), is refused the call as forbidden, told the seat's
-// own run may ask, and the server never answers it; the executor's surface,
-// through a real bridge, hands it to its holder, the harness's client is told
-// it was held, and the server never answers it either.
+// A server entry setting no level files its unannotated tool at approve, so it
+// is on every surface, marked. Against a real server: a phase on the engine
+// host, through its real tool session, is refused the call as forbidden and
+// told the seat's own run may ask; the executor's surface, through a real
+// bridge, hands it to its holder and tells the harness's client it was held.
+// The server answers neither.
 //
 // Mutation: drop the approval mark from Registry.RegisterMCP, and the server
 // answers both calls.

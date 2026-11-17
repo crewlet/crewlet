@@ -46,14 +46,10 @@ func launchedEnv(t *testing.T, c *Company, seat *org.Role) (map[string]string, s
 
 // AN EXECUTOR'S BOX IS HANDED ITS ENTRY'S WHOLE ENV, IN EVERY CELL.
 //
-// An entry's env is extra environment for every invocation of its harness, and
-// the executor's run is one. Built from the entry's sign-in alone, a run on an
-// entry that reaches its model through a company gateway called the vendor's
-// own endpoint with nothing it accepts — the gateway's bearer token is no
-// Anthropic credential — and a remote one was refused before its box existed
-// as signed in to nothing, while the same entry's reviewer worked. The
-// gateway's bearer token is a Claude Code sign-in, so it is what lets the
-// remote run start.
+// An entry's env is extra environment for every invocation of its harness,
+// the executor's run included: an entry reaching its model through a company
+// gateway needs the gateway's address and bearer token in the box, and that
+// token is the Claude Code sign-in that lets a remote run start.
 //
 // Mutation: hand the box the entry's credential names alone, and the gateway's
 // address goes missing in both cells and the e2b launch is refused.
@@ -79,10 +75,9 @@ func TestAnExecutorsBoxIsHandedItsEntrysEnvInEveryCell(t *testing.T) {
 
 // THE SEAT'S OWN VARIABLE WINS ITS NAME, and only its name.
 //
-// The entry's env lies beneath what the seat's config assembled: a seat that
-// points its runs at another gateway, or another region, names that variable
-// in role.sandbox.env and means it, and the rest of the entry's env is still
-// its runs'.
+// The entry's env lies beneath the seat's role.sandbox.env: a seat naming
+// another gateway or region means it, and the rest of the entry's env is
+// still its runs'.
 //
 // Mutation: lay the entry's env over the seat's, and the seat's address is
 // replaced by the entry's.
@@ -105,17 +100,14 @@ func TestASeatsOwnVariableWinsOverItsEntrysByName(t *testing.T) {
 // A SEAT SIGNED IN BY ITS OWN TOKEN REPLACES THE ENTRY'S SIGN-IN WHOLE, AND
 // KEEPS THE ENTRY'S ROUTE.
 //
-// Claude Code ranks its sign-ins by name — a cloud toggle above a key, a key
-// above a plan token — so the entry's sign-in beside a seat's own plan token
-// moved the seat onto the company's account; every part of it stays out: the
-// metered key, the gateway's bearer token, the cloud toggle and the cloud's
-// own key, which with the toggle gone no request reads. What is not a sign-in
-// still lies beneath the seat's: the base URL and the region say where the
-// run's requests go, not whom they are made as.
+// Claude Code ranks its sign-ins by name (a cloud toggle above a key, a key
+// above a plan token), so any part of the entry's sign-in beside a seat's own
+// token would move the seat onto the company's account: the metered key, the
+// gateway's bearer token, the cloud toggle and the cloud's key all stay out.
+// The base URL and region still lie beneath: they say where requests go.
 //
-// Mutation: drop the entry's whole env for such a seat, as its sign-in once
-// was, and the gateway's address goes missing; drop nothing, and the
-// company's key rides beside the seat's token.
+// Mutation: drop the entry's whole env for such a seat, and the gateway's
+// address goes missing; drop nothing, and the company's key rides along.
 func TestASeatsOwnTokenReplacesTheEntrysSignInAndKeepsItsRoute(t *testing.T) {
 	t.Parallel()
 	env := gatewayEnv()

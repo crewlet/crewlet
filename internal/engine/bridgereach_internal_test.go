@@ -21,18 +21,15 @@ func hostOnlyBridge(t *testing.T) *mcpbridge.Bridge {
 }
 
 // A DIRECT BOX DIALS THE NODE'S OWN LISTENER, AND A BOX ELSEWHERE IS REFUSED
-// NAMING THE VARIABLE IT NEEDS. The quickstart's company is one `direct` cell
-// and no CREWLET_MCP_BRIDGE_URL, and every turn of it used to be refused for
-// the variable; a box on the host can always dial the host's own socket, so it
-// launches on that. A box in any other cell cannot, so its refusal names the
-// variable and the cell, never api.port, which is set, and is classed as the
-// configuration it is: the variable is the operator's to set, and no wait sets
-// it.
+// NAMING THE VARIABLE IT NEEDS. A box on the host can always dial the host's
+// own socket, so the quickstart's company (one `direct` cell, no
+// CREWLET_MCP_BRIDGE_URL) launches on it. A box in any other cell cannot, so
+// its refusal names the variable and the cell, never api.port, which is set,
+// and is classed as configuration: the operator sets it, and no wait does.
 //
 // Mutation: open every session off the host and the direct row is refused;
-// open every session on it and the e2b row launches a box that dials a
-// loopback it cannot reach; drop the cell refusal's class and the e2b row
-// goes red.
+// open every session on it and the e2b row dials a loopback it cannot reach;
+// drop the cell refusal's class and the e2b row goes red.
 func TestALaunchDialsTheBridgeWhereItsCellReachesIt(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -85,14 +82,12 @@ func TestALaunchDialsTheBridgeWhereItsCellReachesIt(t *testing.T) {
 	}
 }
 
-// A CONTAINER CELL'S FIX SAYS WHAT A LOOPBACK ADDRESS NEEDS THERE. The line
-// tells the operator to set the fleet's address, and that a loopback one
-// reaches a container box on this host under its runtime's name for the host,
-// which is so wherever the bridge hears that name: on Docker Desktop and
-// Podman's machine it arrives on the host's loopback, which the bridge admits,
-// and on Linux it arrives from the bridge network, which a loopback bind never
-// hears. A line without that condition sent an operator on Linux to a value
-// that leaves every executor without its tools.
+// A CONTAINER CELL'S FIX SAYS WHAT A LOOPBACK ADDRESS NEEDS THERE: it reaches
+// a container box on this host under the runtime's name for the host only where
+// the bridge hears that name. On Docker Desktop and Podman's machine it arrives
+// on the host's loopback, which the bridge admits; on Linux it arrives from the
+// bridge network, which a loopback bind never hears, so without the condition a
+// Linux operator sets a value that leaves every executor without its tools.
 //
 // Mutation: drop the Linux clause from the fix and the bind goes unnamed.
 func TestAContainerCellsFixSaysWhatALoopbackAddressNeeds(t *testing.T) {
@@ -147,9 +142,8 @@ roles:
 `
 
 // A NODE WITH NO BRIDGE AT ALL REFUSES AN EXECUTOR, naming the fleet's
-// address, and opens nothing: a box with none of the seat's tools would burn
-// its run producing prose nothing collects. Classed as configuration, which an
-// operator's setting clears and no wait does.
+// address, and opens nothing: a box without the seat's tools burns its run on
+// prose nothing collects. Classed as configuration, which no wait clears.
 //
 // Mutation: drop the class from the refusal and this goes red.
 func TestAnExecutorIsRefusedOnANodeWithNoBridge(t *testing.T) {
@@ -169,13 +163,12 @@ func TestAnExecutorIsRefusedOnANodeWithNoBridge(t *testing.T) {
 	refusedCleanly(t, e, "t1", jobs)
 }
 
-// AN UNREACHABLE CELL IS SAID ONCE, AT APPLY, PER CELL. Every launch in it is
-// refused naming the same fix, and the line that says so before the first turn
-// is the one an operator needs — so each cell the company's executors launch
-// in is weighed against the fleet's reach rule: nothing where this node serves
-// the API on no listener, the fleet's address alone where it has no bridge, a
-// direct cell on the node's own listener, any other cell on the variable
-// alone. A fallback member's cell is a cell a launch reaches too.
+// AN UNREACHABLE CELL IS SAID ONCE, AT APPLY, PER CELL, since every launch in
+// it is refused with the same fix. Each cell the company's executors launch
+// in, a fallback member's included, is weighed against the fleet's reach rule:
+// nothing where this node serves the API on no listener, the fleet's address
+// alone where it has no bridge, a direct cell on the node's own listener, any
+// other cell on the variable alone.
 //
 // Mutation: weigh only the catalogue's default and the e2b row is never said;
 // give every cell the host address and the e2b row reads as reachable.

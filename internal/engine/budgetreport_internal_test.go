@@ -29,11 +29,9 @@ func meteringReporter(t *testing.T, now time.Time) (*budgetReporter, *coordmem.F
 }
 
 // A CAPPED COMPANY'S FRAME IS WHAT THE SHARED COUNTERS READ, from the first
-// frame on: every node of a fleet charges the windowed counters, so there is
-// no reading to wait for before this node's is the fleet's.
-//
-// Asked of [budgetReporter.frame], the decision [budgetReporter.publish]
-// sends or does not send.
+// frame on: every node charges the windowed counters, so there is no reading
+// to wait for. Asked of [budgetReporter.frame], the decision
+// [budgetReporter.publish] acts on.
 func TestACappedCompanyPublishesWhatItsCountersRead(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, time.September, 23, 12, 0, 0, 0, time.UTC)
@@ -68,15 +66,11 @@ func (unreadableUsage) Usage(context.Context, coord.Windows) ([]coord.Usage, err
 	return nil, errors.New("the coordination store is unreachable")
 }
 
-// A COMPANY THAT CAPS NOTHING IS PUBLISHED, AND READS NOTHING TO SAY SO.
-//
-// Its frame is "there is no ceiling", which the dashboard must be able to tell
-// from "no node has reported yet" — so it is sent, where it used to be
-// withheld and the two collapsed into one empty meter that told the operator
-// of a CAPPED company, for the first interval after every start, that it had
-// no budget. And it is sent without reading the counters, because an empty
-// list of windows holds no figure a reading could make wrong: the counters
-// here cannot be read at all.
+// A COMPANY THAT CAPS NOTHING IS PUBLISHED, AND READS NOTHING TO SAY SO: its
+// frame, "there is no ceiling", must be told apart from "no node has reported
+// yet", or a capped company reads as uncapped for the first interval after
+// every start. It needs no reading, since an empty list of windows holds no
+// figure a reading could make wrong: the counters here cannot be read at all.
 func TestAnUncappedCompanyPublishesItsNoCeilingWithoutAReading(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, time.September, 23, 12, 0, 0, 0, time.UTC)

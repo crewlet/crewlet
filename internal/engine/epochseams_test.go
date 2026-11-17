@@ -27,52 +27,22 @@ type seamClass string
 const (
 	// seamGrant is an AUTHORIZATION judged from the serving node's
 	// configuration — who may do something. Being asked last cannot make
-	// one sound: told to answer anyway, a node behind would judge it by the
-	// chart the fleet replaced, which may be the revision that revoked it.
-	// So a grant field is judged only where a node behind the
-	// configuration REFUSES it rather than answers it last. NINE exist. Seven
-	// are the chart a SEAT is judged by on the serving node: gitlet.ReaderOptions.Roster,
-	// a read of the rows; query.Options.Roster, a read by object id on a Gitlet
-	// node; host.Options.Roster, an engine write a Gitlet node builds;
-	// gitlet.CommitterOptions.SeatRules, a seat's push on the committer that
-	// decides it; gitlet.ChangeWriterOptions.SeatRules, a seat's write of a
-	// change's conversation, and every reviewer an ask names, on the change
-	// writer beside it; gitlet.ChecksWriterOptions.SeatRules, a seat's rerun of
-	// a check on the checks writer beside them; and gitlet.StoreOptions.SeatRules, a tool's lifecycle
-	// request — a person's as well as a seat's, since a create's owner is
-	// judged against the chart too — on the lifecycle store that decides it,
-	// refused there by its own gate, gitlet.StoreOptions.Current, and by the
-	// estate's declaration on code.lifecycle. The other two are whether the
-	// PERSON holding a human seat uses Gitlet (ADR-0110), read through the
-	// identity directory and that chart: gitlet.ChangeWriterOptions.People, for
-	// every human reviewer an ask names, and gitlet.StoreOptions.People, for the
-	// seat a push mirror pushes as, each refused by the gates of the seat rules
-	// beside it. The Gitlet node's own gates,
-	// query.Options.Current and host.Options.Current, refuse a seat's read
-	// and a seat's write there themselves (unready, behind_config) rather
-	// than judging them; the committer's, the change writer's and the checks
-	// writer's, gitlet.CommitterOptions.Current, gitlet.ChangeWriterOptions.Current
-	// and gitlet.ChecksWriterOptions.Current, refuse such a write there as a
-	// node that ran nothing, so the
-	// repository's next committing node decides it, even when this node is
-	// asked last; a data node refuses a seat's read of the rows by the
-	// operation's own declaration (the estate's op.judgesGrant on code.read
-	// and code.resolve_ref, held by
-	// estate.TestEveryOperationThatJudgesAGrantIsDeclared), even asked last
-	// (M3-O8's hard arm). The tracker's own permission checks read an
-	// authority the ASKING node forms from its own.
+	// one sound: a node behind would judge it by the chart the fleet
+	// replaced, which may be the revision that revoked it. So a grant is
+	// judged only where a node behind the configuration REFUSES it: by the
+	// seamGate field beside it (unready, behind_config, or handed to the
+	// repository's next committing node), and on a data node by the
+	// operation's own op.judgesGrant declaration, held by
+	// estate.TestEveryOperationThatJudgesAGrantIsDeclared, even asked last
+	// (M3-O8's hard arm). The tracker's
+	// permission checks read an authority the ASKING node forms.
 	seamGrant seamClass = "grant"
 
 	// seamValue is a value or a routing read from the serving node's
-	// epoch — a person a people field names, a lead a wake falls back to,
-	// a day cut on the company's clock, a unit a read renders, a search's
-	// scope and the container it leaves out, the model a query is embedded
-	// in, a size limit. A stale one is a state that arises anyway: a
-	// handle removed just after the write, a wake to a previous lead, a
-	// repository over a limit a revision lowered. So the whole answer is
-	// that a node behind the configuration is asked LAST
-	// ([estate.Backend.Current]) and answers when no current data node
-	// does.
+	// epoch — a person a people field names, a lead a wake falls back to, a
+	// size limit. A stale one arises anyway (a handle removed just after the
+	// write), so a node behind the configuration is asked LAST
+	// ([estate.Backend.Current]) and answers when no current data node does.
 	seamValue seamClass = "value"
 
 	// seamGate is the predicate itself: whether this node serves the
@@ -89,22 +59,14 @@ func (c seamClass) valid() bool {
 	return slices.Contains([]seamClass{seamGrant, seamValue, seamGate, seamNone}, c)
 }
 
-// servingSeams is every struct a serving data node's decide is handed what it
-// reads through: the tracker writer's dependencies, the estate's backend and
-// the serving node's own seams — and the options struct each half a
-// [estate.Backend] field holds is BUILT from, where one is, since that is where
-// what the half reads is decided: Gitlet's committer, change writer,
-// lifecycle store and reader options, the knowledge searcher's, the page
-// reader's and the page store's, the identity directory's reader's, the
-// artifacts estate's and its datastore's readers' and writers', and the item
-// search's ranker and the fan-out it and the knowledge searcher answer through.
-// (The tracker's reader, the link index and the usage reader take what they
-// read as arguments, which their Backend rows name.) A Backend row that only
-// named its half would see nothing added to the options behind it: the
-// knowledge searcher read the epoch's skills container and embedding model
-// through options no row covered. And a GITLET node's query server's options and
-// its git surface's: it serves a seat's read of a repository by object id, and
-// builds a seat's engine write, from its own epoch's chart, which is the same
+// servingSeams is every struct a serving data node's decide reads through:
+// the tracker writer's deps, the estate's backend, the serving node's seams,
+// and the options each [estate.Backend] half is BUILT from, since that is
+// where what the half reads is decided — a Backend row naming only its half
+// would miss a field added behind it. (The tracker's reader, the link index
+// and the usage reader take what they read as arguments, which their Backend
+// rows name.) A GITLET node's query and host options are here too: it judges a
+// seat's read and builds a seat's write from its own epoch's chart, the same
 // question a serving decide's grant is.
 var servingSeams = []reflect.Type{
 	reflect.TypeFor[worklet.WriterDeps](),
@@ -434,20 +396,13 @@ var classified = map[string]struct {
 
 // EVERY SEAM A SERVING DECIDE READS IS CLASSIFIED.
 //
-// A data node the control plane has confirmed behind the company's
-// configuration goes on serving the estate: every operation is asked of it
-// last ([estate.Backend.Current]), because what it supplies from its own epoch
-// is the configuration the fleet replaced — a VALUE whose stale reading arises
-// anyway, and which a current data node answers first. That is sound only for
-// as long as every seam a serving decide reads is such a value: one that judged
-// a GRANT from the chart would be decided, by the last resort, against the
-// revision that revoked it. Which a seam is was an audit of every field these
-// structs carry; this test is that audit kept current. A field added to any of
-// them without a row fails here, and so does a row naming a field that is gone,
-// so the classification cannot drift from the code.
-//
-// A seam reached through another one of these structs — an embedded one — is
-// classified by that struct's own rows rather than twice.
+// A data node behind the company's configuration goes on serving, asked last
+// ([estate.Backend.Current]). That is sound only while every seam a serving
+// decide reads is a VALUE whose stale reading arises anyway: one judging a
+// GRANT from the chart would be decided, as the last resort, against the
+// revision that revoked it. A field added to these structs without a row fails
+// here, as does a row naming a field that is gone. An embedded struct of the
+// list is classified by its own rows rather than twice.
 func TestEveryEpochSeamAServingDecideReadsIsClassified(t *testing.T) {
 	t.Parallel()
 	seen := map[string]bool{}

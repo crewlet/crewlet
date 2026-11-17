@@ -10,31 +10,13 @@ import (
 
 // ChartAuthority answers [authz.Chart] against the epoch this node is running.
 //
-// # Why it is three-valued, and what the two-valued one cost
-//
-// This replaces `LeadsProjectOf`, whose seam was `func(ctx, actor, project)
-// bool` and whose body opened with:
-//
-//	c := e.Company()
-//	if c == nil || c.Org == nil { return false }
-//
-// A node holds no company while it is booting, before its first revision is
-// applied, and while it is installing one. Every one of those moments
-// answered "you do not lead this project" about a person who leads it
-// — so a lead was locked out of their own project's policy by a node that was
-// merely lagging, the refusal named the project rather than the lag, and the
-// node reported itself healthy throughout. The two facts are opposite and were
-// wearing one value.
-//
-// So absent is an ERROR here. [authz.Decide] turns it into an UNKNOWN
-// decision, which a surface answers 503 to rather than 403, and the admin
-// path is checked before the chart is asked at all — an admin is never told
-// "I cannot tell".
-//
-// PER CALL, which is the one thing the old seam got right: the writer outlives
-// a revision, and a chart captured once would answer for a company that has
-// since moved. The relations themselves are internal/authz/orgchart's, over
-// whichever tree this node is running at the call.
+// No company (booting, before the first revision, or installing one) is an
+// ERROR, never "you do not lead them": [authz.Decide] turns it into an UNKNOWN
+// decision, which a surface answers 503 rather than 403, so a lagging node does
+// not lock a lead out of their own project. The admin path is checked before
+// the chart, so an admin is never told "I cannot tell". The chart is read PER
+// CALL, because the writer outlives a revision; the relations are
+// internal/authz/orgchart's.
 type ChartAuthority struct{ engine *Engine }
 
 var _ authz.Chart = ChartAuthority{}
@@ -110,11 +92,8 @@ func (c ChartAuthority) SeatGranted(ctx context.Context, actor string, grant aut
 	return chart.SeatGranted(ctx, actor, grant)
 }
 
-// chart is the running company's chart, or why this node cannot answer.
-//
-// ONE PLACE, because every method needs it and the whole point of this type is
-// that "no chart" is never a `false` — written once per method, one of them
-// eventually returns the zero value and the collapse is back.
+// chart is the running company's chart, or why this node cannot answer: in one
+// place, so no method can collapse "no chart" into `false`.
 func (c ChartAuthority) chart() (authz.Chart, error) {
 	if c.engine == nil {
 		return nil, fmt.Errorf("engine: %w", authz.ErrNoChart)

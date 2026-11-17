@@ -19,12 +19,8 @@ import (
 // A NODE THAT BOOTED WITH NO COMPANY BRINGS ITS NATIVE BACKENDS UP WITH THE
 // FIRST ONE IT IS HANDED — the tracker, the knowledge base, their tools, the
 // chart's projects and spaces, and the loops a boot arms beside them — with no
-// restart.
-//
-// The quickstart's own path: start a node, then `PUT /config` or create the
-// company from the dashboard. The runtime was built by boot alone, so a node
-// started that way had none of it until the process restarted: every tool
-// said the backend was not wired, and no project existed to file work into.
+// restart: the quickstart's own path (start a node, then `PUT /config` or
+// create the company from the dashboard).
 func TestAFirstCompanyBringsUpTheNativeBackendsWithoutARestart(t *testing.T) {
 	t.Parallel()
 	e := unconfiguredEngine(t)
@@ -104,21 +100,14 @@ func TestAFirstCompanyBringsUpTheNativeBackendsWithoutARestart(t *testing.T) {
 	}
 }
 
-// A NODE'S FIRST COMPANY IS CLAIMED AT ONCE, NOT AT THE SWEEP'S NEXT TICK.
+// A NODE'S FIRST COMPANY IS CLAIMED AT ONCE, NOT AT THE SWEEP'S NEXT TICK: an
+// apply changes the seat set and knows it has, so it asks placement to claim
+// rather than leave the seats for up to [seat.SweepInterval].
 //
-// An apply is the one thing that changes the seat set and the one that knows
-// it has, and nothing passed that on: a node started with no company, then
-// handed one, ran none of its seats until placement's next tick noticed them,
-// up to [seat.SweepInterval] later — every time a company was created from the
-// dashboard.
-//
-// THE SWEEP'S NEXT TICK IS AN HOUR AWAY here, so nothing but the apply's own
-// ask can claim, and the bound below is only how long a claim takes once the
-// apply has returned. A deadline raced against the shipped five-second tick
-// measured the APPLY instead: a node's first apply brings up the native
-// backends over the logs the core started at boot, which takes most of five
-// seconds on a loaded runner, and the case failed with the ask working exactly
-// as it should.
+// THE SWEEP'S NEXT TICK IS AN HOUR AWAY here, so only the apply's own ask can
+// claim, and the deadline counts from the apply's return. Against the shipped
+// five-second tick it would measure the apply instead, whose first native
+// bring-up takes most of five seconds on a loaded runner.
 func TestAFirstCompanysSeatsAreClaimedWithoutWaitingForTheSweep(t *testing.T) {
 	t.Parallel()
 	e, err := engine.New(t.Context(), engine.WithSweepEvery(engine.Options{

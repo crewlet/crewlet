@@ -20,11 +20,9 @@ import (
 // A DONOR THAT STOPPED DIALS AGAIN, PROMPTLY AFTER IT HAD BEEN SERVING AND
 // MORE SLOWLY WHILE IT CANNOT.
 //
-// The arithmetic apart from the loop, so it is checked without a clock: a
-// refusal at the dial doubles towards the snapshot loop's own retry, and a
-// connection closed under a donor that was serving starts again from the base
-// however many refusals came before it — that close is a new outage, and the
-// redial after it is the one a peer that needs a donor is waiting on.
+// Without a clock: a refusal at the dial doubles towards the snapshot loop's
+// retry, and a connection closed under a serving donor starts again from the
+// base however many refusals came before, since that close is a new outage.
 //
 // Mutation: drop the reset on ErrDonorConnectionClosed and the last row goes
 // red; stop doubling and the middle rows do.
@@ -56,18 +54,11 @@ func TestADonorThatStoppedDialsAgainOnItsOwnSchedule(t *testing.T) {
 
 // A DONOR WHOSE CONNECTION IS CLOSED UNDER IT SERVES AGAIN.
 //
-// The NATS client closes a connection for good on an error it does not retry —
-// a chunk past a max_payload lowered under the node, a credential the server
-// stopped accepting — and the donor's connection is the one that carries the
-// largest messages this node sends. Served once, a donor whose connection
-// closed was subscribed to nothing for the rest of the node's life while the
-// snapshot register went on advertising its artefact. And it must not take the
-// node with it, since a donor serves peers; so the loop that serves it is what
-// brings it back.
-//
-// Staged on a real broker and a real donor: the case closes the connection the
-// donor dialled, which is what the client does when it gives up on one, and
-// asks for an offer again.
+// The NATS client closes a connection for good on an error it does not retry
+// (a chunk past a lowered max_payload, a revoked credential); the loop must
+// bring the donor back without taking the node with it. On a real broker and
+// donor, the case closes the donor's connection as the client would, and asks
+// for an offer again.
 //
 // Mutation: serve the donor once rather than in keepDonorServing's loop, or
 // let Serve go on waiting on its context alone, and the second offer never
@@ -138,9 +129,8 @@ func offered(t *testing.T, nc *nats.Conn, node, what string) {
 	if err != nil {
 		t.Fatalf("encode an offer request: %v", err)
 	}
-	// THE DIAL'S OWN BUDGET AND THEN SOME: an embedded broker's handshake
-	// is given its listener budget on a loaded host, and the wait ends the
-	// moment the donor answers.
+	// Past the dial's own listener budget on a loaded host; the wait ends
+	// the moment the donor answers.
 	deadline := time.Now().Add(time.Minute)
 	for time.Now().Before(deadline) {
 		msg, err := nc.Request(statelog.SubjectOffer, ask, 200*time.Millisecond)

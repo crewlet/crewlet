@@ -22,70 +22,22 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// Putting the company's MCP servers in front of its agents.
+// Putting the company's MCP servers in front of its agents: the one seam
+// joining config (parses `mcp_servers:`), mcp (spawns and supervises children)
+// and tools (holds a surface), which know nothing of each other.
 //
-// This is the seam between three packages that each deliberately know nothing
-// about the others: config parses `mcp_servers:` and validates it, mcp spawns
-// and supervises children and hands back registrations, and tools holds a
-// surface. Nothing joins them except this file, and until it existed the
-// config surface was parsed, validated and published into the JSON Schema
-// while doing nothing at all — every seat ran with the builtins alone, so no
-// agent could post to chat, comment on an issue, or read a tracker.
-//
-// # Two lifetimes, because there are two kinds of server
-//
-// A SHARED server is one child for the company. It has no seat's credentials
-// in it, every seat may call it, and it lives as long as the epoch — so it is
-// reconciled during the apply, into the epoch's own registry, and stopped when
-// a revision no longer declares it.
-//
-// A PER-ROLE server is a TEMPLATE. Each role that declares mcp_env for it gets
-// its own child carrying that seat's credentials, and those children are tied
-// to the SEAT rather than to the epoch: this node spawns one only for a seat
-// whose lease it holds, and kills it on release. Two reasons, and either alone
-// would be enough. A fleet claims a slice of the company per node, so a node
-// that spawned every seat's children would run the whole company's processes
-// N times over. And the credentials in a child ARE one seat's identity, so a
-// child that outlived its seat's lease would let this node keep acting as a
-// seat a peer now runs.
-//
-// Tied to the lease is not FROZEN at the claim, though. While the seat is held
-// every apply reconciles its children too — against the spec the new epoch
-// and the secret snapshot that apply refreshed produce — and a child that
-// would not start is retried; see seatservers.go. Both kinds of server
-// therefore follow one rule: a child whose resolved spec is unchanged is left
-// running, and one whose spec moved, a sealed or rotated credential included,
-// is restarted.
-//
-// # Why a seat needs its own registry
-//
-// Two children of one template publish the SAME tool names, and that
-// collides twice over — once in a registry and once in the bridge's own
-// catalogue, which keys tools by name across every server it runs and
-// SHADOWS the loser. Either collision has the same consequence: every seat
-// calls whichever child won, acting under another seat's identity in the
-// tracker or the chat backend, invisibly, because the call looks identical
-// from the engine's side.
-//
-// So a claimed seat gets BOTH of its own — its own bridge, holding only its
-// own children, and its own registry, cloned from the epoch's surface. That
-// also makes teardown total: releasing a seat stops one bridge, and there is
-// no way to leave a child of a seat this node no longer holds. [Engine.ToolsFor]
-// is what a turn is built against.
-//
-// # What a failure means
-//
-// A server that will not start does NOT fail the apply or the claim. It costs
-// that server's tools and nothing else: the seat still has its builtins, the
-// other servers still work, and the operator surface shows the group missing
-// rather than the builtins mysteriously shrinking. Refusing the seat instead
-// would take a company offline because one vendor's harness was slow to install.
+// A SHARED server is one child for the company, tied to the epoch. A PER-ROLE
+// server is a template with one child per granted seat, carrying that seat's
+// credentials and tied to the seat's LEASE: spawned only for a seat this node
+// holds, killed on release, reconciled on every apply while held
+// (seatservers.go). A claimed seat gets its own bridge and registry, since two
+// children of one template publish the same tool names. A server that will not
+// start costs only its tools, never the apply or the claim (package doc, "MCP
+// servers").
 
-// startSharedServers brings up the company-wide children for an epoch.
-//
-// Called from the apply, so a revision that adds, removes or re-points a
-// shared server — or rotates a credential one resolves — takes effect on the
-// next turn without a restart.
+// startSharedServers brings up the company-wide children for an epoch. Called
+// from the apply, so a revision that adds, removes or re-points a shared
+// server, or rotates a credential one resolves, takes effect on the next turn.
 func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 	if c == nil || e.mcp == nil {
 		return
@@ -95,18 +47,16 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 	var outcomes []mcpOutcome
 	for i := range c.Config.MCPServers {
 		server := &c.Config.MCPServers[i]
-		// A SERVER TURNED OFF is not resolved either: its references are
-		// nobody's concern until it is turned back on, and one that does
-		// not resolve is not a missing credential to report. Retired below
-		// if it was running.
+		// A SERVER TURNED OFF is not resolved either, so a reference of its
+		// that does not resolve is no missing credential to report. Retired
+		// below if running.
 		if !server.IsShared() || !server.IsEnabled() {
 			continue
 		}
 		// HELD TO ITS REFERENCES like a seat's child (toolcredentials.go):
-		// a shared server whose key does not resolve is not handed to the
-		// bridge, whose supervision would retry a start for a value nothing
-		// is about to supply — the next apply, which every change to the
-		// snapshot is, starts it.
+		// one whose key does not resolve is kept from the bridge, whose
+		// retries would wait on a value nothing is about to supply; the next
+		// apply (every snapshot change is one) starts it.
 		values, missing := resolveServer(server, "", server.Name, nil, env, nil)
 		if missing != nil {
 			outcomes = append(outcomes, mcpOutcome{server: server.Name, err: missing})
@@ -119,12 +69,11 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 			outcomes = append(outcomes, mcpOutcome{server: server.Name, err: err})
 			continue
 		}
-		// SIGNED IN TO WITH OAUTH: started under the company's grant, read
-		// afresh at each pass, and held back while nobody holds one (or its
-		// vendor refused to renew it), which a person ends by signing in
-		// (mcpoauth.go); or as its service identity, whose tokens are issued
-		// as it is used (mcpserviceidentity.go). Retired below if it was
-		// running.
+		// SIGNED IN TO WITH OAUTH: under the company's grant, read afresh
+		// each pass and held back while there is none (or its vendor refused
+		// to renew it) until a person signs in (mcpoauth.go); or as its
+		// service identity, tokens issued on use (mcpserviceidentity.go).
+		// Retired below if running.
 		if server.OAuth != nil {
 			bearer, needed := e.tokenSourceFor(ctx, server, env)
 			if needed != nil {
@@ -136,18 +85,13 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 		specs = append(specs, spec)
 	}
 	outcomes = e.withheldForCredentials(ctx, outcomes)
-	// RETIRED FIRST, because Reconcile is driven by the specs the CURRENT
-	// config names and therefore never visits a server the revision
-	// DELETED. Left alone, that child — holding the company's credentials
-	// — runs until the engine stops, and a RENAME runs two of them. Both
-	// contradict this function's own contract: an apply that removes a
-	// shared server is supposed to take effect on the next turn.
-	//
-	// Before startAll rather than after, so a rename frees the name and
-	// the tools it published before the replacement files its own.
-	// e.mcp holds only shared servers — a seat's children live on their
-	// own bridge — so every absentee here is genuinely one this revision
-	// dropped, or one whose credential has stopped resolving.
+	// RETIRED FIRST: Reconcile visits only the servers the current config
+	// names, so a child the revision DELETED (holding the company's
+	// credentials) would run until the engine stops, and a RENAME would run
+	// two. Before startAll, so a rename frees the name and its tools before
+	// the replacement files its own. e.mcp holds only shared servers (a
+	// seat's children have their own bridge), so every absentee is one this
+	// revision dropped or whose credential stopped resolving.
 	desired := make(map[string]struct{}, len(specs))
 	for _, spec := range specs {
 		desired[spec.Name] = struct{}{}
@@ -158,10 +102,8 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 		if _, keep := desired[name]; keep {
 			continue
 		}
-		// The Change is discarded rather than filed: c.Tools is the epoch's
-		// BRAND-NEW registry, which has not been told about any shared
-		// server yet, so there is nothing here to unregister. What startAll
-		// files below is the surviving servers' catalogue.
+		// The Change is discarded: c.Tools is the epoch's BRAND-NEW
+		// registry, told of no shared server yet, so nothing is unregistered.
 		if _, err := e.mcp.Stop(ctx, name); err != nil {
 			log.WarnContext(ctx, "mcp_server_retire_failed", "server", name, "error", err,
 				"detail", "its tools are gone from the catalogue; the child may have "+
@@ -169,9 +111,9 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 			continue
 		}
 		if missing, ok := withheld[name]; ok {
-			// A STOPPED CREDENTIAL STOPS THE SERVER, by the rule that
-			// would not start it: a key deleted from the store would leave
-			// a child running on the value it was started with.
+			// A STOPPED CREDENTIAL STOPS THE SERVER, by the rule that would
+			// not start it: else a key deleted from the store would leave the
+			// child running on the old value.
 			log.InfoContext(ctx, "mcp_server_retired", "server", name,
 				"detail", "a value the server is started with no longer resolves, so it "+
 					"is not left running on the one it was started with: "+missing.reason())
@@ -190,15 +132,13 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 		log.InfoContext(ctx, "mcp_server_retired", "server", name,
 			"detail", "the revision no longer declares this shared server")
 	}
-	// RECONCILED, not added. This runs on every apply against a bridge
-	// whose children are already up — and the epoch it is filling is a
-	// brand-new registry that has to be told about them again. Add refuses
-	// a name it already runs, which cost the applied epoch every shared
-	// server's tools; see Bridge.Reconcile.
+	// RECONCILED, not added: after the first apply the bridge's children are
+	// already up, and the brand-new registry must be told of them again. Add
+	// refuses a name it already runs, which would cost the epoch every shared
+	// server's tools (Bridge.Reconcile).
 	outcomes = append(outcomes, startAll(ctx, c.Tools, specs, e.mcp, e.mcp.Reconcile)...)
-	// REPLACED WHOLE, per apply: the outcomes describe the servers THIS
-	// revision declares, and a server a revision dropped must leave the
-	// status record with it rather than be reported as still started.
+	// REPLACED WHOLE per apply, so a server the revision dropped leaves the
+	// status record rather than reading as still started.
 	e.mcpMu.Lock()
 	stampSince(e.mcpShared, outcomes, e.now())
 	e.mcpShared = outcomes
@@ -219,12 +159,9 @@ func signInHeld(outcomes []mcpOutcome, server string) *signInNeeded {
 // serversTurnedOff names the servers cfg declares and turns off
 // ([config.MCPServer.IsEnabled]), by their configured name.
 //
-// FOR THE RETIREMENT'S SENTENCE ALONE: what a pass starts is decided by
-// [config.MCPServer.IsEnabled] and [config.MCPServer.Grants] where each spec is
-// built, and a server turned off simply gets none. Which reason a child that is
-// no longer wanted is retired for is a question only the retirement asks, and
-// "the revision no longer declares it" would send the reader looking for an
-// entry that is still there.
+// ONLY FOR THE RETIREMENT'S LOG LINE: what a pass starts is decided where each
+// spec is built ([config.MCPServer.Grants]); this keeps a retired child from
+// being logged as "no longer declared" while its entry is still there.
 func serversTurnedOff(cfg *config.Company) map[string]struct{} {
 	if cfg == nil {
 		return nil
@@ -257,11 +194,9 @@ func serverDescriptions(cfg *config.Company) map[string]string {
 const turnedOffDetail = "the revision turns this server off: its entry and everything " +
 	"naming it are kept, and nothing runs it until it is turned back on"
 
-// stopSharedServers tears down what startSharedServers brought up.
-//
-// Every server, per-role children included: this runs when the engine stops,
-// and a child left behind is a process holding a seat's credentials after the
-// engine that vouched for it is gone.
+// stopSharedServers tears down what startSharedServers brought up, per-role
+// children included: this runs when the engine stops, and a child left behind
+// holds a seat's credentials after the engine that vouched for it is gone.
 func (e *Engine) stopSharedServers(ctx context.Context) {
 	for _, s := range e.takeAllSeatChildren() {
 		e.retireSeatChildren(ctx, s)
@@ -280,13 +215,10 @@ func (e *Engine) stopSharedServers(ctx context.Context) {
 // mcpOutcome is what one start of one MCP instance concluded, kept for the
 // node's status record ([coord.NodeStatusRecord.MCP]).
 //
-// Recorded at the start, and not only asked of the bridge on each beat,
-// because a FAILED start can leave nothing in the bridge to ask: a seat's
-// bridge keeps nothing of a start whose discovery failed (see [mcp.Bridge.Add];
-// the seat's runner retries it), and a spec whose ${VAR} references did not
-// resolve never reached a bridge at all. A report read off the bridges alone
-// would show such a server as one that was never configured — the one row an
-// operator opening the settings screen is looking for.
+// Recorded at the start because a FAILED start can leave nothing in a bridge
+// to ask (a seat's bridge keeps nothing of a failed discovery, [mcp.Bridge.Add];
+// an unresolved ${VAR} never reaches a bridge), and off the bridges alone such
+// a server would read as never configured: the row an operator looks for.
 type mcpOutcome struct {
 	server string    // the config's own name, never an instance name
 	seat   uuid.UUID // the seat's agent id, uuid.Nil for a shared server
@@ -296,28 +228,23 @@ type mcpOutcome struct {
 	unlisted []string
 	err      error
 
-	// since is when the instance stopped serving, or first failed to start
-	// or was held back: stamped when the outcome is stored, and carried over
-	// from the outcome it replaces while the instance is still not serving
-	// ([stampSince]), so a retry does not restart the clock. Zero for a start
-	// that succeeded, whose bridge says since when it serves.
+	// since is when the instance stopped serving, or first failed or was
+	// held back, carried across retries while it stays down ([stampSince]).
+	// Zero for a successful start, whose bridge dates its serving.
 	since time.Time
 
-	// bridge and instance name the server this start handed to a bridge,
-	// whose supervision then owns what happens to it: a child that started
-	// can die, and a start that failed can be retried into one that came
-	// up. [Engine.mcpStatus] reports what the bridge says NOW wherever it
-	// still supervises the instance, and this start's conclusion only where
-	// it does not. Nil for a spec that never reached a bridge.
+	// bridge and instance name where this start was handed, whose
+	// supervision then owns it (a started child can die, a failed start be
+	// retried up): [Engine.mcpStatus] reports the bridge's view while it
+	// supervises the instance, this conclusion otherwise. Nil for a spec
+	// that never reached a bridge.
 	bridge   *mcp.Bridge
 	instance string
 }
 
-// stampSince dates each outcome of next that is not a start that succeeded:
-// since the outcome of prev for the same server and seat, where that one was
-// not a success either, and since now otherwise. An instance that stays down
-// across passes and applies keeps the instant it went down, which is what an
-// outage is measured from.
+// stampSince dates each unsuccessful outcome of next (failed or held back) by
+// prev's unsuccessful one for the same server and seat, else now, so an
+// instance down across passes and applies keeps the instant it went down.
 func stampSince(prev, next []mcpOutcome, now time.Time) {
 	for i := range next {
 		if next[i].err == nil {
@@ -339,53 +266,18 @@ func (o *mcpOutcome) observe(bridge *mcp.Bridge, instance string) {
 	o.unlisted = bridge.UnlistedOverrides(instance)
 }
 
-// mcpStatus is this node's MCP servers as its status record publishes them: one
-// row per configured server, its instances counted, read off the same
-// [mcpReading] of each instance a server's page is answered from
-// ([Engine.MCPInstances]).
+// mcpStatus is this node's MCP servers for its status record, sorted by
+// server: a row per configured server off the same [mcpReading]s as
+// [Engine.MCPInstances], with restarts summed, tools lost to names ([unfiled])
+// and the DownSince and WaitingSince the MCP alarms measure from; every choice
+// follows the readings' order (server, then seat), so same facts, same bytes.
 //
-// AS THEY ARE, not as they started: an instance its bridge still supervises
-// is reported by the bridge's own record, so a child that died since its
-// start counts as failed, with what took it down, until it is back.
-//
-// A seat's child held back for a credential a provisioning pass has not sealed
-// yet is WAITING, a count of its own: it never reached a bridge, so its
-// outcome is the only record of it, and counted as failed it would read as a
-// fault on the one screen an operator connecting an integration is watching.
-//
-// AND JUDGED AGAIN ON EVERY READING — each pass of the node's status record —
-// against what the integration minting it last
-// recorded ([credentialMissing.judged]). The pass that held it back ran at
-// the claim, which on a first boot comes before that integration's first pass,
-// and nothing about a person acting on an integration — or failing to —
-// reaches a seat's pass: so a child the pass could only call waiting becomes a
-// failure here the moment the integration reports that its own credential is
-// missing, or that this seat's account is switched off, and stops being one
-// when that clears. A reading that cannot read the record keeps the judgement
-// the seat's pass stored with the outcome, not the previous reading's; one with
-// nothing waiting reads nothing ([Engine.mintingStates]).
-//
-// AND WHAT EACH INSTANCE'S TOOLS LOST TO THEIR NAMES ([unfiled]), read off
-// its bridge and the surface it is filed into at the reading, as its tools are:
-// a restart that lists differently, or a refile, moves both.
-//
-// AND HOW LONG THE SERVER HAS BEEN DOWN HERE AND HOW OFTEN IT CAME BACK: the
-// earliest instant a failed instance stopped serving, the class of the failure
-// the row names, and the restarts of its instances summed, all bounded; and
-// the earliest instant a waiting instance was held back. The two instants are
-// what the MCP alarms measure an outage and a wait against.
-//
-// THE INSTANCE THE ROW NAMES IS THE ONE ITS INSTANT DATES: the failure is the
-// instance down longest, and the wait the instance waiting longest, so the
-// error, its seat, its class and DownSince are one instance's facts, and so
-// are the wait, its seat and WaitingSince. Named by the first failure by seat
-// id instead, a row said one agent's error beside another's outage, and the
-// alarm that quotes both described an instance that does not exist. Ties, and
-// instances nothing dated, go to the lower seat id.
-//
-// Sorted by server, with every choice above made on the readings' own order
-// (server, then seat), so a beat that re-sends the same facts sends the same
-// bytes.
+// A child held back for a credential not sealed yet is WAITING, not failed (a
+// fault on the screen an operator connecting the integration watches), JUDGED
+// AGAIN EACH READING ([credentialMissing.judged]): its pass ran at the claim,
+// on a first boot before the minting integration's, so it turns failed while
+// that integration reports its credential missing or the seat's account off;
+// an unreadable record keeps the pass's judgement ([Engine.mintingStates]).
 func (e *Engine) mcpStatus(ctx context.Context) []coord.MCPServerStatus {
 	var out []coord.MCPServerStatus
 	// unlistedBy counts, per key, the started instances of the current row
@@ -400,9 +292,8 @@ func (e *Engine) mcpStatus(ctx context.Context) []coord.MCPServerStatus {
 		row := &out[len(out)-1]
 		notes.settle(row)
 		// A KEY IS UNLISTED BY THE SERVER only where NO started instance
-		// lists it. One instance's listing is not the server's: a child
-		// serves what its seat's credentials reach, so a key one seat's
-		// child does not list may be exactly right for the next.
+		// lists it: a child serves what its seat's credentials reach, so one
+		// seat's listing is not the server's.
 		for key, n := range unlistedBy {
 			if n == row.Started {
 				row.Unlisted = append(row.Unlisted, key)
@@ -423,15 +314,18 @@ func (e *Engine) mcpStatus(ctx context.Context) []coord.MCPServerStatus {
 		switch r.state {
 		case coord.MCPInstanceWaiting:
 			row.Waiting++
-			// THE LONGEST WAIT, dated as the outage is ([stampSince]): a
-			// pass that holds the instance back again keeps the instant it
-			// was first held, so `mcp_server_waiting_long` measures the whole
-			// wait rather than the latest pass's share of it.
+			// THE LONGEST WAIT names the row, dated as an outage is
+			// ([stampSince]), so `mcp_server_waiting_long` measures the whole
+			// wait and the wait, its seat and WaitingSince are one instance's.
 			if row.Wait == "" || datedBefore(r.since, row.WaitingSince) {
 				row.Wait, row.WaitSeat, row.WaitingSince = r.wait.Error(), r.seat, r.since
 			}
 		case coord.MCPInstanceFailed:
 			row.Failed++
+			// THE LONGEST OUTAGE names the row, so the error, its seat, class
+			// and DownSince are one instance's facts and an alarm quoting them
+			// describes a real instance. Ties and undated instances go to the
+			// lower seat id, the readings' order.
 			if row.Error == "" || datedBefore(r.since, row.DownSince) {
 				// REDACTED, as a page's instance is: the row is on a lease
 				// every node reads, and a failure can carry what a
@@ -464,18 +358,15 @@ type filedOutcome struct {
 	surface *tools.Registry
 }
 
-// unfiled is every tool of o's instance that is not offered under its name:
-// the ones its bridge refused ([mcp.Bridge.RefusedTools]) or shadowed for
-// another server's ([mcp.Bridge.ShadowedTools]), and the ones surface, the
-// registry the instance is filed into, holds another tool under. A built-in
-// there is [mcp.NameBuiltin], since built-ins are filed first; another
-// server's tool there (a shared server's, against a seat's own child) shadows
-// it.
+// unfiled is every tool of o's instance not offered under its name: those its
+// bridge refused ([mcp.Bridge.RefusedTools]) or shadowed for another server's
+// ([mcp.Bridge.ShadowedTools]), and those surface (the registry it is filed
+// into) holds another tool under: a built-in ([mcp.NameBuiltin], built-ins
+// file first) or another server's tool, which shadows it.
 //
-// READ AT THE BEAT, never kept: a registry is refiled by an apply, a restart
-// and a catalogue change alike, and whichever tool holds a name now is the
-// answer. A name surface holds for a tool of the same server is that server's
-// own tool not refiled yet, not a collision.
+// READ AT THE BEAT, never kept: an apply, a restart or a catalogue change
+// refiles a registry. A name surface holds for the same server's tool is that
+// tool not refiled yet, not a collision.
 func unfiled(o mcpOutcome, surface *tools.Registry) ([]mcp.RefusedTool, []mcp.ShadowedTool) {
 	refused := o.bridge.RefusedTools(o.instance)
 	shadowed := o.bridge.ShadowedTools(o.instance)
@@ -547,13 +438,12 @@ func (n *toolNotes) settle(row *coord.MCPServerStatus) {
 }
 
 // SharedServers names the company-wide MCP servers this node's bridge
-// supervises: serving, or down and being brought back — a child that died, or
-// a start that failed and is being retried, which has no process at all.
+// supervises: serving, or down and being brought back (a dead child, or a
+// failed start being retried, which has no process).
 //
-// The BRIDGE's own record rather than the config's, which is the whole point:
-// what a revision declares and what this process supervises are different
-// facts, and only the second one says whether a server a revision removed was
-// actually stopped. Whether one is answering is [mcp.Bridge.Health]'s.
+// The BRIDGE's record, not the config's: only it says whether a server a
+// revision removed was actually stopped. Whether one answers is
+// [mcp.Bridge.Health]'s.
 func (e *Engine) SharedServers() []string {
 	if e.mcp == nil {
 		return nil
@@ -561,24 +451,21 @@ func (e *Engine) SharedServers() []string {
 	return e.mcp.Servers()
 }
 
-// ToolsFor is the surface one seat's turns run against on this node.
-//
-// On the [Engine] rather than the [Company] because the answer depends on
-// which seats THIS node holds: a fleet claims a slice of the company each,
-// and only the node holding a seat's lease has its per-role children.
+// ToolsFor is the surface one seat's turns run against on this node: on the
+// [Engine] rather than the [Company] because only the node holding a seat's
+// lease has its per-role children.
 func (e *Engine) ToolsFor(handle string) *tools.Registry {
 	return e.seatRegistry(e.Company(), handle)
 }
 
-// seatRegistry is [Engine.ToolsFor] for a caller that already holds the
-// epoch, so the surface and the company a turn is built from are the same
-// pair rather than two reads an apply can land between.
+// seatRegistry is [Engine.ToolsFor] for a caller already holding the epoch,
+// so a turn's surface and company are one pair, not two reads an apply can
+// land between.
 //
-// The seat's own registry when this node has claimed it and started its
-// per-role children, and the epoch's shared one as the seat holds it otherwise
+// The seat's own registry once this node has claimed it and started its
+// per-role children, else the epoch's shared one as the seat holds it
 // ([grantedSurface]). Never nil for a live epoch: a seat with no per-role
-// children still has the builtins, and answering nil would fail the turn
-// rather than run it with the tools it does have.
+// children still has the builtins, and nil would fail the turn.
 func (e *Engine) seatRegistry(c *Company, handle string) *tools.Registry {
 	e.mcpMu.Lock()
 	reg := e.seatTools[handle]
@@ -592,18 +479,15 @@ func (e *Engine) seatRegistry(c *Company, handle string) *tools.Registry {
 	return grantedSurface(c, c.Org.AgentSeatByHandle(handle))
 }
 
-// grantedSurface is the epoch's surface as seat holds it: a clone of it without
-// the tools of each shared server the seat is not granted
-// ([config.MCPServer.Grants]), each tool held to what the limits on the way
-// down to the seat hold it to ([limitSurface]).
+// grantedSurface is the epoch's surface as seat holds it: a clone without the
+// tools of each shared server the seat is not granted
+// ([config.MCPServer.Grants]), held to the seat's limits ([limitSurface]).
 //
-// ONE INSTANCE, FILED ONCE, HELD BY SOME: a shared server runs one instance for
-// the company and files its tools into the epoch's registry, and a seat's
-// surface is cut from that registry, so a server granted to chosen seats is cut
-// out here for every other one. Every surface a seat's turn is built against
-// comes through this: a held seat's ([seatSurface]) and the fallback for a seat
-// this node holds no children for. A seat the epoch does not have (nil) holds no
-// shared server.
+// Cut here because a shared server runs and files one instance for the
+// company, so one granted to chosen seats is removed from every other seat's
+// copy. Every surface a seat's turn is built against comes through this: a
+// held seat's ([seatSurface]) and the fallback for a seat with no children
+// here. A seat the epoch does not have (nil) holds no shared server.
 func grantedSurface(c *Company, seat *org.Role) *tools.Registry {
 	reg := sharedSurface(c, seat)
 	limitSurface(reg, seat)
@@ -625,22 +509,16 @@ func sharedSurface(c *Company, seat *org.Role) *tools.Registry {
 }
 
 // limitSurface holds each MCP tool on reg to the seat's limits
-// ([org.Role.LimitOn]): a tool a limit blocks is taken off the surface, and one
-// it holds at approve waits for a person's answer before each call.
+// ([org.Role.LimitOn]): a tool a limit blocks is taken off, and one it holds
+// at approve waits for a person's answer before each call.
 //
-// THE STRICTER OF THE TWO, ALWAYS. The surface already holds each tool to its
-// entry's level, applied where the server's tools are filed: a tool its entry
-// blocks was never filed, so no limit can bring it back, and one at approve
-// stays there whatever a limit says. A limit only takes a tool away or adds the
-// wait, so a seat is never offered more than its entry gives it.
-//
-// HERE, ON THE SEAT'S OWN COPY, and not where the tools are filed: one shared
-// instance is filed once for every seat it reaches, and each seat's limits are
-// its own. Every surface a seat's turn, its executor's bridge and its held
-// calls are built from is cut here ([grantedSurface], [seatSurface]), a seat's
-// own children's tools included, so none of them reaches a tool past its
-// limits. A server a limit turns off is not on the surface at all
-// ([config.MCPServer.Grants]): none of its children starts for the seat.
+// THE STRICTER OF THE TWO: the entry's level was applied where the tools were
+// filed, and a limit only removes a tool or adds the wait, so a seat never
+// gets more than its entry gives. HERE, on the seat's own copy, because one
+// shared instance is filed once for every seat and limits are per seat; every
+// surface a seat's turn, executor bridge and held calls use is cut here
+// ([grantedSurface], [seatSurface]), its own children's tools included. A
+// server a limit turns off is not on the surface ([config.MCPServer.Grants]).
 func limitSurface(reg *tools.Registry, seat *org.Role) {
 	if seat == nil || len(seat.Limits) == 0 {
 		return
@@ -665,25 +543,16 @@ func limitSurface(reg *tools.Registry, seat *org.Role) {
 }
 
 // startAll brings a set of servers up CONCURRENTLY and files what they
-// contribute into reg in SPEC ORDER.
+// contribute into reg in SPEC ORDER, returning each start's outcome in spec
+// order for the status record.
 //
-// Concurrent because each one is a subprocess spawn, a protocol handshake and
-// a tools/list (hundreds of milliseconds at best and seconds against a vendor
-// that is slow or absent), and they have nothing to do with each other. Done
-// one at a time, an apply with three servers took three times as long as its
-// slowest one, and no turn is built on the epoch until the apply is done. A
-// seat's own children are brought up the same way, by [bringUp].
-//
-// Filed in SPEC ORDER regardless of which finished first, because the registry
-// is keyed by tool name and a collision is resolved by who registered last.
-// Filing in completion order would hand a seat a different surface depending
-// on which vendor happened to answer first (a company whose behaviour changes
-// between restarts for no reason anybody can see).
-//
-// What each start concluded is returned, in spec order, for the status record.
-// The tool count is the BRIDGE's for that instance rather than the change's:
-// a change also names tools of other servers that a start un-shadowed, and
-// the question the count answers is what this server serves.
+// Concurrent because each is a spawn, handshake and tools/list (seconds
+// against a slow vendor), independent of the others, and no turn is built on
+// the epoch until the apply is done; a seat's children start the same way
+// ([bringUp]). In spec order because a name collision goes to whoever
+// registered last, so completion order would change a seat's surface between
+// restarts. The tool count is the BRIDGE's for the instance, not the change's,
+// which also names other servers' tools a start un-shadowed.
 func startAll(ctx context.Context, reg *tools.Registry, specs []mcp.Spec, bridge *mcp.Bridge,
 	start func(context.Context, mcp.Spec) (mcp.Change, error),
 ) []mcpOutcome {
@@ -711,35 +580,28 @@ func startAll(ctx context.Context, reg *tools.Registry, specs []mcp.Spec, bridge
 	return outcomes
 }
 
-// file applies one bridge change to one registry.
+// file applies one bridge change to one registry. The registrations carry
+// their own origin, so a server's tool is never filed as a builtin (which
+// would make a failed server look like a missing builtin).
 //
-// The registrations carry their own origin, so nothing here can file a
-// server's tool as a builtin — which is the reading that makes a failed
-// server look like a missing builtin instead.
-//
-// A server that is DOWN ([mcp.ErrNotRunning]: its child died, or its start
-// failed, and its bridge is bringing it back) has its change filed BESIDE the
-// error. Its tools stay listed and refuse until it is back, and they are filed
-// here, in spec order, rather than appended when the epoch is published: a
-// registry renders a prompt in the order it was filed, and the same revision
-// applied while the server was up must list the same tools in the same order.
+// A server that is DOWN ([mcp.ErrNotRunning]: its child died or its start
+// failed, and its bridge is bringing it back) still has its change filed, so
+// its tools stay listed and refuse until it is back; filed here, in spec
+// order, so the registry renders the prompt as it would with the server up.
 func file(ctx context.Context, reg *tools.Registry, server string, change mcp.Change, err error) {
 	down := errors.Is(err, mcp.ErrNotRunning)
 	if err != nil && !down {
-		// Logged, not returned. One vendor's server failing to start
-		// costs that server's tools; failing the apply over it would
-		// take the whole company down with it.
+		// Logged, not returned: one vendor's failing server costs its
+		// tools, not the whole company's apply.
 		log.ErrorContext(ctx, "mcp_server_failed", "server", server, "error", err,
 			"detail", "this server's tools are absent; its group is missing from the "+
 				"catalogue rather than the builtins shrinking")
 		return
 	}
-	// REMOVED FIRST. A name that moved between servers appears in both
-	// lists, and registering before unregistering would file the new
-	// object and then delete it by name. And ONLY AN MCP TOOL: a server's
-	// tool that collided with a builtin was refused when it was filed, so
-	// the name in this registry is the builtin's, and unregistering by name
-	// alone took the builtin with it when the server stopped offering it.
+	// REMOVED FIRST: a name that moved between servers is in both lists, and
+	// registering first would file the new tool and then delete it. And ONLY
+	// AN MCP TOOL: a server's tool that collided with a builtin was refused,
+	// so the name here is the builtin's, and removing by name would drop it.
 	for _, name := range change.Removed {
 		if entry, ok := reg.Lookup(name); ok {
 			if _, fromMCP := entry.FromMCP(); fromMCP {
@@ -765,20 +627,17 @@ func file(ctx context.Context, reg *tools.Registry, server string, change mcp.Ch
 	log.InfoContext(ctx, "mcp_server_started", "server", server, "tools", filed)
 }
 
-// seatSpecs is every per-role child this seat needs.
+// seatSpecs is every per-role child this seat needs, keyed off
+// [config.MCPServer.Grants] as the org projection is: a `shared: false` server
+// gets a child for each agent seat its grant reaches, whatever `mcp_env`
+// blocks the seat holds, and a server turned off gets none.
 //
-// Keyed off [config.MCPServer.Grants], the rule the org projection publishes
-// too: a `shared: false` server gets a child for each agent seat its grant
-// reaches and for no other, whatever `mcp_env` blocks the seat holds, and a
-// server turned off gets none for anybody.
-//
-// A child one of whose values references a variable that resolves to nothing
-// — the seat's block or the template's own, under a key not declared optional
-// — gets no spec: it comes back as an outcome carrying a [credentialMissing],
-// which the pass judges and logs ([Engine.withheldForCredentials]) — see
-// toolcredentials.go. So does a template that does not resolve into a
-// launchable spec. Either way the status record reports the server rather than
-// leaving it out as though the seat never declared it.
+// A child with a value (the seat's block or the template's, under a key not
+// declared optional) whose variable resolves to nothing gets no spec but an
+// outcome carrying a [credentialMissing], judged and logged by
+// [Engine.withheldForCredentials] (toolcredentials.go); so does a template
+// that resolves to no launchable spec. Either way the status record still
+// reports the server.
 func seatSpecs(
 	c *Company, seat *org.Role, env *config.Resolver, mint *seatMint,
 ) ([]mcp.Spec, []mcpOutcome) {
@@ -786,9 +645,8 @@ func seatSpecs(
 	var unconfigured []mcpOutcome
 	for i := range c.Config.MCPServers {
 		server := &c.Config.MCPServers[i]
-		// The epoch runs the shared ones; a template this seat is not
-		// granted is not this seat's to run, and one turned off is granted
-		// to nobody.
+		// The epoch runs the shared ones; an ungranted template is not this
+		// seat's, and one turned off is granted to nobody.
 		if server.IsShared() || !server.Grants(seat) {
 			continue
 		}
@@ -853,19 +711,15 @@ func seatSigner(
 }
 
 // withheldForCredentials judges every server a pass held back for its
-// credentials — a seat's children, or an apply's shared servers — against what
-// the integrations minting them last recorded, logs each at the level its
-// story earns, and hands back the outcomes judged.
+// credentials (a seat's children, or an apply's shared servers) against what
+// the minting integrations last recorded, logs each, and returns the outcomes
+// judged.
 //
-// NAMES ONLY: a variable is what an operator acts on, and what it would have
-// held is the credential.
-//
-// WAITING IS INFO, once per pass. A pass runs at the claim, at each apply and
-// when a seal refreshes this node's snapshot, and a child held back arms no
-// retry, so this is written as often as something could have changed it and
-// no more often — where the failure it replaced was an error line and a retry
-// line on every attempt of the restart schedule. The rest is an ERROR: the
-// operator's secret is missing, or the integration that would mint it waits
+// NAMES ONLY: an operator acts on a variable, and its value is the credential.
+// WAITING IS INFO, once per pass: a pass runs at the claim, at each apply and
+// when a seal refreshes this node's snapshot, and a held child arms no retry,
+// so this logs only as often as something could have changed. The rest is an
+// ERROR: the operator's secret is missing, or the minting integration waits
 // on a person.
 func (e *Engine) withheldForCredentials(ctx context.Context, outcomes []mcpOutcome) []mcpOutcome {
 	var missing []*credentialMissing
@@ -904,27 +758,15 @@ func (e *Engine) withheldForCredentials(ctx context.Context, outcomes []mcpOutco
 // serverSpec turns one config entry into a launchable spec, from the values
 // [resolveServer] resolved for this start of it.
 //
-// TAKING THEM RESOLVED is what keeps the rule in one place: the ${VAR}
-// references are resolved at the edge, by resolveServer, and never inside
-// internal/mcp — that package must not be able to read the secret store,
-// which is what keeps a tool server's credentials on one path with one audit
-// point — and no spec can be built from values that did not pass it.
-//
-// INTO WHAT THE TRANSPORT AUTHENTICATES WITH: the environment of a stdio
-// child, the headers of an http connection, which is where resolveServer laid
-// the seat's own block over the template's. A seat's block once went into Env
-// whatever the transport, and an http connection reads no environment
-// ([mcp.Spec.Headers]), so every seat's child of a per-role http server — the
-// remote GitHub server a seat reaches with its own `Authorization: Bearer …` —
-// connected with the template's headers alone. A harness's box is given
-// the same server from the same values ([sandboxMCP]).
-//
-// AND AT THE ADDRESS IT WILL BE DIALLED AT, held to the rule a document is
-// ([config.MCPAddressProblem]): an address written with a ${VAR} in it is
-// only seen here, resolved, and one the rule refuses is not dialled, so the
-// server's credentials never travel over plain http to a public host
-// whatever the variable held. Said without the address, which can carry a
-// secret once resolved.
+// TAKEN RESOLVED so ${VAR} references resolve at the edge, never inside
+// internal/mcp, which must not read the secret store: a tool server's
+// credentials keep one path and one audit point. They go where the transport
+// authenticates: a stdio child's environment, an http connection's headers
+// (which read no environment, [mcp.Spec.Headers]); a harness's box gets the
+// same server from the same values ([sandboxMCP]). The resolved address is
+// held to [config.MCPAddressProblem], since a ${VAR} in it is only seen here,
+// so credentials never travel plain http to a public host; the error omits the
+// address, which can carry a secret once resolved.
 func serverSpec(server *config.MCPServer, instance string, v serverValues) (mcp.Spec, error) {
 	if instance == "" {
 		return mcp.Spec{}, fmt.Errorf("engine: mcp server %q has no instance name", server.Name)
@@ -969,14 +811,12 @@ func withheldByInstance(outcomes []mcpOutcome) map[string]*credentialMissing {
 }
 
 // toolLevels converts the entry's tool levels ([config.MCPToolPolicy]) into
-// what the MCP client files the server's tools by: a blocked tool is never
-// filed and a tool at approve asks a person before each call, on this server's
-// every instance, shared or a seat's own child.
+// what the MCP client files the server's tools by, on every instance: a
+// blocked tool is never filed, one at approve asks a person before each call.
 //
-// AN UNSET DEFAULT STAYS UNSET: it leaves each tool the levels do not name at
-// the level its hints start it at, which only the server's listing can say,
-// so it is decided where the tools are filed ([mcp.Levels.Of]) and never
-// written out here as one level for every tool.
+// AN UNSET DEFAULT STAYS UNSET: an unnamed tool starts at the level its hints
+// give, which only the server's listing says, so it is decided where the tools
+// are filed ([mcp.Levels.Of]).
 func toolLevels(p config.MCPToolPolicy) mcp.Levels {
 	out := mcp.Levels{Default: mcp.Level(p.Default)}
 	if len(p.Levels) > 0 {
@@ -988,11 +828,10 @@ func toolLevels(p config.MCPToolPolicy) mcp.Levels {
 	return out
 }
 
-// annotationOverrides converts the operator's per-tool hints.
-//
-// Tri-state on both sides and deliberately so: an UNSET toggle must arrive as
-// Unknown rather than as No, because "the operator said nothing" and "the
-// operator said this is not read-only" send the sub-agent guard opposite ways.
+// annotationOverrides converts the operator's per-tool hints, tri-state on
+// both sides: an UNSET toggle must arrive as Unknown, not No, because "the
+// operator said nothing" and "said not read-only" send the sub-agent guard
+// opposite ways.
 func annotationOverrides(in map[string]config.ToolAnnotations) map[string]mcp.Annotations {
 	if len(in) == 0 {
 		return nil
@@ -1020,10 +859,8 @@ func hint(t config.Toggle) mcp.Hint {
 }
 
 // mcpTimeout converts a config duration, treating 0 as "take mcp's default".
-//
-// NOT engine.seconds, which floors at nothing: this one has to hand a literal
-// zero through, because zero is how a Spec asks for the package's own default
-// rather than for no timeout at all.
+// NOT engine.seconds: a literal zero must pass through, because zero is how a
+// Spec asks for the package's default rather than no timeout.
 func mcpTimeout(v float64) time.Duration {
 	if v <= 0 {
 		return 0

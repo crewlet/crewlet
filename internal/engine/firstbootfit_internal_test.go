@@ -104,22 +104,13 @@ func TestTheFitThePagesPrintIsTheBootsOwn(t *testing.T) {
 	}
 }
 
-// THE PAGES PRINT THE CEILINGS A FIRST BOOT CREATES: every figure of the fit —
-// what a fresh node's first boot creates each state log with on a given volume
-// under the embedded broker and the default `nats` bucket, with every field
-// unset, without the code log, and with the code log at its floor — is
-// computed here by the boot's own arithmetic ([firstBootFit]) and held on
-// every page that prints it: docs/guides/replication.md's table of what the
-// code log's reservation costs and the prose around it, docs/guides/
-// deployment.md's bullets, docs/guides/retention.md's re-embedding excursion,
-// Tier A's code log field, [StreamBudgetShare]'s reason and the reason the
-// code log's derived share is two thirds (config.DerivedCodeLogNumerator).
-//
-// Nothing held them before, and when the share moved from a half to five
-// eighths the pages were restated by hand and the field's own doc was missed:
-// it went on pricing the code log's reservation at 500 GiB and 12.5 GiB
-// rather than 626 GiB and 9.9 (#379). Now a change to the register, an ask,
-// the share, the bucket or the floor fails here naming each figure to restate.
+// THE PAGES PRINT THE CEILINGS A FIRST BOOT CREATES: every figure of what a
+// fresh node's first boot creates each state log with (embedded broker, default
+// `nats` bucket; every field unset, without the code log, and with it at its
+// floor) is computed by the boot's own arithmetic ([firstBootFit]) and held on
+// every page that prints it: replication.md's table and prose, deployment.md's
+// bullets, retention.md's re-embedding excursion, Tier A's code log field, and
+// the reasons on [StreamBudgetShare] and config.DerivedCodeLogNumerator.
 //
 // Mutation: move [StreamBudgetShare], [MinDomainCeiling],
 // config.DerivedCodeLogNumerator or the bucket's quarter, or restate one
@@ -177,18 +168,16 @@ func TestThePagesPrintTheCeilingsAFirstBootCreates(t *testing.T) {
 	fitLineWithout := leastFree(t, holds(unset, codeLog, peak), true)
 
 	// A FIFTH SHORTER: how much shorter the code log makes the mutation log a
-	// first boot creates, which is the same fraction wherever the same logs
-	// are scaled with it and without it, and the range of volumes it holds
-	// on — the whole gibibytes on which it prints as it does at 100 GiB.
+	// first boot creates, the same fraction wherever the same logs are scaled
+	// with it and without it.
 	shorter := func(free int64) float64 {
 		return 1 - float64(fit(unset, free, "")[trackerLog].Bytes)/
 			float64(fit(unset, free, codeLog)[trackerLog].Bytes)
 	}
-	//
-	// THE RUN AROUND 100 GiB, walked outward from it, because the fraction
-	// rises past the band and comes back down through it on its way to
-	// nothing: a volume far above the band printing the same figure is the
-	// descent, not the range the guide names.
+	// THE BAND: the whole gibibytes around 100 GiB on which the fraction
+	// prints as it does there, walked outward from it, because it rises past
+	// the band and comes back down through it: a far volume printing the same
+	// figure is the descent, not the range the guide names.
 	band := fmt.Sprintf("%.1f", 100*shorter(100*gib))
 	inBand := func(free int64) bool { return fmt.Sprintf("%.1f", 100*shorter(free)) == band }
 	from, to := 100*gib, 100*gib
@@ -328,12 +317,10 @@ func TestThePagesPrintTheCeilingsAFirstBootCreates(t *testing.T) {
 		}
 	}
 
-	// THE REASON THE SHARE IS TWO THIRDS, as the guide and the share's own
-	// doc (config.DerivedCodeLogNumerator) give it: below where every ask
-	// fits, the code log's ask is room the other logs give up, and the
-	// vector changelog beside it still holds a year-five re-embedding on
-	// 100 GiB free. Unheld, it went on saying 626 GiB and a fifth to spare
-	// from the first boot of eight logs, through every log added since.
+	// THE REASON THE SHARE IS TWO THIRDS, as the guide and
+	// config.DerivedCodeLogNumerator give it: below where every ask fits, the
+	// code log's ask is room the other logs give up, and the vector changelog
+	// beside it still holds a year-five re-embedding on 100 GiB free.
 	if left(fit(unset, 100*gib, "")[vectors].Bytes) <= 0 {
 		t.Errorf("a first boot on 100 GiB free creates the vector changelog with no room for "+
 			"the year-five re-embedding of %d bytes, which the pages say still fits: reword them",
@@ -407,41 +394,18 @@ func TestThePagesPrintTheCeilingsAFirstBootCreates(t *testing.T) {
 	}
 }
 
-// THE HALF THE PAGES SET IS HALF THE MUTATION LOG CREATED BESIDE IT.
+// THE HALF THE PAGES SET IS HALF THE MUTATION LOG CREATED BESIDE IT, not half
+// its ask: a code log set at a figure comes off the logs' share whole while the
+// mutation log is scaled into what it leaves, so half the ask (a quarter of the
+// free space) sets the code log above the derived two thirds it was meant to
+// lower. Every figure is computed by the boot's own fit and held on
+// replication.md and config.DerivedCodeLogNumerator; the printed share (over
+// half the table's figure, as the room given back lengthens the mutation log
+// too; rounded UP, since under half the code log fills first) and cap set it
+// at half to 0.52 of the mutation log beside it on every volume the table prints.
 //
-// A company whose code log takes at most half of what its mutation log takes a
-// day sets the code log at half the mutation log's ceiling, which then fills
-// no sooner under a blocked trim — and half of WHICH ceiling is the whole
-// instruction. A code log set at a figure comes off the logs' share whole and
-// is never scaled, while the mutation log is scaled with the other derived
-// logs into what it leaves. The pages said "half the mutation log's ceiling",
-// which config's vocabulary reads as its ask, a quarter of the free space: at
-// 100 GiB free that set the code log at 12½ GiB beside a mutation log created
-// at 7.7, above the derived two thirds (6.6 GiB) it was meant to lower, and
-// every other log shorter for it.
-//
-// So every figure of the instruction is computed here by the boot's own fit
-// and held on both pages that give it, docs/guides/replication.md and
-// config's DerivedCodeLogNumerator: the volume below which half the ask is
-// more than half of what the mutation log is created with, and the example of
-// it; the share of the table's mutation-log figure that creates the code log
-// at half the mutation log beside it — a little more than half, because the
-// room the code log gives back lengthens the mutation log too — and that it is
-// ONE share on every volume the table prints below the cap; the cap, half the
-// mutation log's clamped ask, which takes over where the half scales nothing;
-// and the example at 100 GiB.
-//
-// And an operator who follows the guide is held to the half on every volume
-// its table prints: the share and the cap the guide prints, of the figure it
-// prints for the volume, create the code log at no less than half the
-// mutation log a first boot creates beside it — under half it would fill
-// first, which is why the share is printed rounded UP — and at less than 0.52
-// of it, the most the rounding of the printed figures can add. Halving the ask
-// made it 1.6.
-//
-// Mutation: print the share as 50 % (half the table's figure, which creates
-// the code log at 0.47 of the mutation log) or as 60 %, or the cap as 48 GiB,
-// and the guide's code log is under half or past its rounding of it.
+// Mutation: print the share as 50 % or 60 %, or the cap as 48 GiB, and the
+// guide's code log is under half or past its rounding of it.
 func TestTheHalfThePagesSetIsHalfTheMutationLogCreatedBesideIt(t *testing.T) {
 	t.Parallel()
 	unset := config.Stream{}
@@ -510,12 +474,11 @@ func TestTheHalfThePagesSetIsHalfTheMutationLogCreatedBesideIt(t *testing.T) {
 	}
 	pageCap := gibValue(t, printedCap[1])
 
-	// ONE SHARE, UNDER THE CAP: the rule the pages print is the half on every
-	// volume the table prints, to a two-hundredth. Not to a thousandth: the
-	// share moves by a fifth of a percent between 50 and 600 GiB free (52.35
-	// to 52.46 %), because the chat log's ask stops growing at 128 GiB free
-	// while the mutation log's goes on, and the operator's rounding UP to the
-	// printed whole percent covers it, which the check below holds.
+	// ONE SHARE, UNDER THE CAP: the printed rule is the half on every volume
+	// the table prints to a two-hundredth, not a thousandth: the share moves a
+	// fifth of a percent between 50 and 600 GiB free, since the chat log's ask
+	// stops growing at 128 GiB while the mutation log's goes on, and rounding
+	// UP to the printed whole percent covers it (held below).
 	for _, row := range fitTable(t) {
 		rule := min(int64(float64(table(row.free))*share/100), limit)
 		if exact := half(row.free); math.Abs(float64(rule-exact)) > float64(exact)/200 {
@@ -585,42 +548,27 @@ func TestTheHalfThePagesSetIsHalfTheMutationLogCreatedBesideIt(t *testing.T) {
 	}
 }
 
-// A SHARE AT THE CODE LOG'S BYTE RATE COSTS EVERY COMPANY FAR MORE.
+// A SHARE AT THE CODE LOG'S BYTE RATE COSTS EVERY COMPANY FAR MORE: the derived
+// share is reserved before the company document says whether it hosts code,
+// so its reason is its cost to the logs beside it, not the code log's rate
+// (two to nine times the mutation log's day, internal/worklet's
+// TestTheDocsPrintTheMeasuredDay). The pages print, and this computes by the
+// boot's own fit at 100 GiB free, a code log set at k = 2 and 3 times the
+// mutation log beside it: how much shorter that mutation log is than without
+// the code log, and whether a year-five re-embedding still fits. k = 2, the
+// reference day's least ratio, is also the pre-boot step's printed ceiling.
 //
-// The code log's derived share, two thirds of the mutation log's ceiling, is a
-// reservation every node makes before the company document says whether it
-// hosts any code, so its reason is what it costs the logs beside it, not the
-// code log's byte rate: a reference company whose seats work through changes
-// writes two to nine times the mutation log's day there (internal/worklet's
-// TestTheDocsPrintTheMeasuredDay), and a share at that rate would be taken
-// from every company, codeless ones included. The pages that give the reason
-// print what such a share costs, and this computes it with the boot's own fit:
-// a code log set at k times the mutation log a first boot on 100 GiB free
-// creates beside it, for k two and three — the least set ceiling at which it
-// is, since each byte more of it is a byte less for the derived logs — how
-// much shorter that mutation log is than without the code log, and whether
-// the vector changelog beside it still holds a year-five re-embedding.
-//
-// THE SAME FIT IS WHAT THE PRE-BOOT STEP COSTS. Before the first boot no log
-// exists and the company has no byte rate of its own to read, so one whose
-// seats will work through changes sets the code log at the reference day's
-// ratio, twice the mutation log at its least — the set ceiling k two finds —
-// and the pages that tell it to print that ceiling on 100 GiB free and what
-// the mutation log and the vector changelog are created at beside it.
-//
-// Mutation: compare against the mutation log beside a derived code log
-// rather than without one, and the figures the pages print fall by about a
-// third; hold the share at k one and a half, and the re-embedding fits;
-// print the pre-boot step at k one, and its ceiling and logs move off what
-// the pages say.
+// Mutation: compare against a mutation log beside a derived code log, hold k
+// at 1.5 or print the pre-boot step at k 1, and the pages' figures move.
 func TestAShareAtTheCodeLogsByteRateCostsEveryCompanyFarMore(t *testing.T) {
 	t.Parallel()
 	trackerLog, vectors, codeLog := worklet.Domain{}.Name(), search.Domain{}.Name(), gitlet.Domain{}.Name()
 	const example = 100 * gib
 	without := firstBootFit(t, config.Stream{}, example, codeLog)[trackerLog].Bytes
 	// AT K TIMES: the least code log set at no less than k times the
-	// mutation log beside it, and the mutation log and the vector changelog
-	// a first boot creates beside that ceiling.
+	// mutation log beside it (each byte more is a byte less for the derived
+	// logs, so the sides cross once), and the mutation log and the vector
+	// changelog a first boot creates beside that ceiling.
 	at := func(k int64) (codeCeiling, mutation, vectorLog int64) {
 		lo, hi := config.CodeLogMaxBytesFloor, config.CodeLogMaxBytesCeiling
 		for lo < hi {

@@ -12,30 +12,19 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
-// CHATLET CONTRIBUTES BOTH HALVES OF THE INBOUND EDGE, and each half is
-// silent when it is missing.
+// CHATLET CONTRIBUTES BOTH HALVES OF THE INBOUND EDGE, each silent when
+// missing: without the parser a company's messages commit and wake nobody;
+// without the prompt, or with a zero `chatlet.Prompt{}` ([notify.NewPrompts]
+// skips an empty Source), chat wakes render through the generic fallback,
+// which names none of the tools a turn discharges its obligation with.
 //
-// A wake is only ever delivered to the source whose PARSER registered it, and
-// only ever rendered by the PROMPT whose Source matches. Drop the parser arm
-// and a company's messages commit, feed and wake nobody — every seat simply
-// never hears about its own rooms. Drop the prompt arm, or write it as a zero
-// `chatlet.Prompt{}`, and [notify.NewPrompts] skips it on an empty Source: every
-// chat wake then renders through the generic fallback, which names none of the
-// tools a turn discharges its obligation with. Neither failure logs anything.
-//
-// The arm is reached on a runtime field rather than a booted engine, because
-// what is under test is the WIRING and not the store: [chatlet.NewStore]'s own
-// refusals are its package's.
-//
-// AND ON A NODE THAT HOLDS NO DATA TOO. Every node pulls the inbound group, so
-// a chat wake lands on a stateless node as often as on a data node — and one
-// with no chat parser acknowledges it unparsed and drops it, so the seat it was
-// for is never woken. A parser reads the record's own routing snapshot and
-// never a row, so the stateless node routes it exactly as a data node does.
+// The arm is reached on a runtime field, not a booted engine: the WIRING is
+// under test, not [chatlet.NewStore]. And on a node holding no data too: every
+// node pulls the inbound group, and a stateless node without the parser drops
+// the wake unparsed; a parser reads only the record's routing snapshot.
 func TestChatletContributesBothAParserAndAPrompt(t *testing.T) {
 	t.Parallel()
-	// BOTH SIDES, as a data node running Chatlet builds them: the halves a
-	// node runs are read off its read sides ([Engine.nativeHalves]).
+	// A node's halves are read off its read sides ([Engine.nativeHalves]).
 	data := &Engine{}
 	data.native.Store(chatRuntime(&native{}))
 	stateless := &Engine{}
@@ -57,9 +46,8 @@ func chatContributesBothHalves(t *testing.T, e *Engine) {
 	t.Helper()
 	parsers, prompts := e.nativeParsers(&Company{})
 
-	// THE ARMS EVERY NODE REGISTERS ASIDE, whatever halves its company runs
-	// ([Engine.nativeParsers]): this case holds that the halves' parsers are
-	// chat's and nothing else.
+	// Set aside the arms every node registers ([Engine.nativeParsers]): the
+	// halves' parsers are chat's and nothing else.
 	var sources []string
 	for _, p := range parsers {
 		if !everyNodeRoutes(p.Source()) {
@@ -87,12 +75,9 @@ func chatContributesBothHalves(t *testing.T, e *Engine) {
 			"discharges its obligation with", sources, chatlet.Source)
 	}
 
-	// AND IT IS THE CONSTRUCTED PROMPT rather than a `chatlet.Prompt{}`. The
-	// source would survive that — the package declares Source on the type
-	// for exactly this reason — but the EMBEDDED value would not: a zero
-	// [notify.ChatPrompt.Address] reads a direct conversation as an
-	// ordinary room, so a person's consecutive messages in a DM land in as
-	// many turns as they typed and nothing anywhere reports it.
+	// The CONSTRUCTED prompt, not a `chatlet.Prompt{}`: the Source would
+	// survive that, but a zero [notify.ChatPrompt.Address] reads a DM as a
+	// room, so a person's consecutive messages land in as many turns, silently.
 	built, isChats := chats[0].(chatlet.Prompt)
 	if !isChats {
 		t.Fatalf("the chat prompt is a %T, which is not this package's", chats[0])

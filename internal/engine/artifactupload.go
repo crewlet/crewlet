@@ -15,13 +15,11 @@ import (
 )
 
 // THE ARTIFACT UPLOAD PIPELINE'S ENGINE WIRING: one per node, over the object
-// store every node holds, the fleet's coordination store for the reservations,
-// and the artifacts estate through the router, so a node without `data` takes
-// uploads and publishes exactly as a data node does.
-//
-// BUILT ON FIRST USE, not at boot: it needs the estate router and the object
-// store, both of which [New] builds, and nothing about a node's boot should
-// wait on, or fail for, a surface no caller has asked for yet.
+// store every node holds, the fleet's coordination store for reservations and
+// the artifacts estate through the router, so a node without `data` takes
+// uploads and publishes as a data node does. BUILT ON FIRST USE, not at boot:
+// it needs the router and object store [New] builds, and no node's boot should
+// wait on, or fail for, a surface nobody has asked for yet.
 
 // artifactUploads is the node's pipeline, built once.
 type artifactUploads struct {
@@ -107,18 +105,16 @@ func (e *Engine) artifactLimits() artifacts.Limits {
 	return e.boot.Artifacts.Stamp()
 }
 
-// embeddedKits is the artifact kit releases this build embeds: the tree is
-// compiled into the binary, so it is read once and answers the same for the
-// life of the process.
+// embeddedKits is the artifact kit releases this build embeds, read once: the
+// tree is compiled into the binary.
 var embeddedKits = sync.OnceValues(func() (artifactupload.ReleaseSet, error) {
 	return embeddedReleases(kitTree)
 })
 
 // kitVersion is the newest artifact kit release this build embeds, the one
 // version a page linked now is sure to be served at: what a seat's skill names
-// as `${crewlet_kit_version}` and what get_company_brand answers. Empty for a
-// build whose kit tree cannot be read, which the pipeline refuses to be built
-// over anyway; that reason is logged here once per call.
+// as `${crewlet_kit_version}` and what get_company_brand answers. Empty, and
+// logged, for a build whose kit tree cannot be read (the pipeline refuses one).
 func kitVersion() string {
 	kits, err := embeddedKits()
 	if err != nil {

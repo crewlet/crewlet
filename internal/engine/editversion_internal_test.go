@@ -18,11 +18,10 @@ import (
 )
 
 // editedThread is a running node's private room where ceo asked ada something
-// (the root), ada answered (the reply) in a turn for omar, then edited that
-// answer to name ceo, and then said something more (the trigger). Every record is a raw peer
-// record this node's own applier committed, as another node's writer
-// publishes it, and the node's own chat feed relays their wakes, which the
-// rig keeps.
+// (the root), ada answered (the reply) in a turn for omar, edited that answer
+// to name ceo, then said more (the trigger). Every record is a raw peer record
+// this node's applier committed, and the rig keeps the wakes its chat feed
+// relays.
 type editedThread struct {
 	e                    *Engine
 	room                 string
@@ -89,8 +88,8 @@ func newEditedThread(t *testing.T) *editedThread {
 // forOmar is whom ada's reply, and the turns that work it, were written for.
 var forOmar = &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "omar"}
 
-// trigger is ada's newest message in the thread, as its wake hands it to ceo:
-// written for whom.
+// triggerFor is ada's newest message in the thread, as its wake hands it to
+// ceo: written for whom.
 func (th *editedThread) triggerFor(whom *types.WorkingFor) *events.Event {
 	ev := events.New(types.ExternalNotification{
 		NotificationSource: chatlet.Source, SourceEventType: string(chatlet.OpPost),
@@ -157,13 +156,12 @@ func (th *editedThread) read(t *testing.T) notify.Transcript {
 	return got
 }
 
-// AN EDIT'S WAKE NAMES THE VERSION THE THREAD READ SHOWS. The mark a turn makes
-// of an edited message names the version its thread read handed over, and the
-// drop keys an edit's wake on the trigger position the change feed relayed it
-// with. The applier stamps the row from its checkpoint, and the feed stamps
-// the trigger from the delivery and the generation its writer stamped — two
-// derivations, so this is the one case that holds them to each other, through
-// the node's own applier, feed and reader.
+// AN EDIT'S WAKE NAMES THE VERSION THE THREAD READ SHOWS. A turn's mark names
+// the version its read handed over, and the drop keys an edit's wake on the
+// trigger the feed relayed. The applier stamps the row from its checkpoint and
+// the feed stamps the trigger from the delivery and the writer's generation:
+// two derivations, held to each other here through the node's own applier,
+// feed and reader.
 //
 // Mutation: hand the reply's version over as anything but the position of the
 // record that last wrote it, and the wake's trigger and the read disagree.
@@ -188,12 +186,10 @@ func TestAnEditsWakeNamesTheVersionTheThreadReadShows(t *testing.T) {
 }
 
 // A TURN RECORDS THE EDIT IT WAS SHOWN OF A WAITING REPLY, through the real
-// [Engine.runTurn] on a Chatlet thread. Ada's trigger, written for omar, wakes
-// ceo's turn; the turn is shown ada's earlier reply waiting at its edit, and
-// reports the reply's own key and the key of that version for omar — the
-// turn's own carrier, the one its ceiling is composed from. Nothing but
-// runTurn fills WorkedThrough, so every dispatcher case that sets it by hand
-// would keep passing with the line that fills it gone.
+// [Engine.runTurn]: ada's trigger, written for omar, wakes ceo's turn, which
+// reports the reply's key and its version's key for omar (the turn's carrier).
+// Only runTurn fills WorkedThrough, so dispatcher cases that set it by hand
+// would pass with the line that fills it gone.
 //
 // Mutation: mark with no carrier, or drop the version from the read, and the
 // reported keys differ.
@@ -219,11 +215,9 @@ func TestATurnRecordsTheEditItWasShownOfAWaitingReply(t *testing.T) {
 }
 
 // A TURN'S THREAD BLOCK IS TOLD WHOM THE TURN WORKS FOR, through the real
-// [Engine.runTurn]: its own carrier, from which its ceiling is composed, never
-// derived again. Ada's reply was written for omar. A turn ada's trigger woke
-// for omar works it through; a turn her trigger woke for nobody else works for
-// ada herself, and leaves omar's reply to a turn of its own, held to omar's
-// apps, rather than answering it inside ada's.
+// [Engine.runTurn]: its own carrier, never derived again. A turn woken for
+// omar works omar's waiting reply through; one woken for nobody else works for
+// ada, and leaves omar's reply to a turn held to omar's apps.
 //
 // Mutation: hand the prefetch no carrier, or compare the sender alone, and a
 // row goes red.

@@ -19,28 +19,17 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE CAPACITY COORDINATOR: what drives [statelog.PermitPhase] against a real
-// broker and a real fleet.
+// THE CAPACITY COORDINATOR drives [statelog.PermitPhase] against a real broker
+// and fleet. It states no transitions of its own: it reaches every phase by
+// offering evidence to the table, so the procedure has one executable copy.
 //
-// It states no transitions of its own. Every phase it reaches, it reaches by
-// offering evidence and being told where it stands — which is what makes the
-// table executable rather than descriptive, and what stops this file becoming
-// the fifth prose copy of a procedure that has already forked four times.
-//
-// # Where it runs
-//
-// In a MAINTENANCE-MODE node, because the verb needs a broker and no
-// publisher, and on the default topology the broker binds no socket so there
-// is nowhere else it could run at all. WHICH maintenance-mode node is not
-// decided anywhere, and that is the design rather than an omission: the
-// operation RECORD is both the operation and the exclusion, so two operators
-// calling two nodes contend on its compare-and-set create — one opens the
-// window, and the other is either told who holds it or handed the same one
-// back to resume, because the target is immutable and matching it IS the
-// resume. A coordinator lease beside that record would be a second thing to
-// hold, with an expiry of its own, over state that deliberately has none: an
-// interrupted drive is picked up by whoever calls next with the same target,
-// and nothing has to decide whether the previous caller is alive.
+// It runs in a MAINTENANCE-MODE node, because the verb needs a broker and no
+// publisher (on the default topology the broker binds no socket). Which one is
+// deliberately undecided: the operation RECORD is both the operation and the
+// exclusion, so two callers contend on its compare-and-set create, and matching
+// its immutable target IS the resume. A coordinator lease would be a second
+// thing to hold, with its own expiry, over state that has none: whoever calls
+// next with the same target picks up an interrupted drive.
 
 // CapacityRequest is what an operator asked for.
 type CapacityRequest struct {
@@ -48,11 +37,9 @@ type CapacityRequest struct {
 	Stream         string
 	TargetMaxBytes uint64
 
-	// By names the operator, for the record — the AUTHOR, internal/iam's
-	// ActorFor name — and OperatorID the credential they acted through,
-	// kept apart for the reason every other trail keeps them apart: a
-	// person's machine token is swept a week after it lapses, and an
-	// operation that named only `pat:<id>` would name nobody by then.
+	// By names the operator (the AUTHOR, iam's ActorFor name) and OperatorID the
+	// credential they acted through, kept apart because a machine token is swept a
+	// week after it lapses, and `pat:<id>` alone would then name nobody.
 	By         string
 	OperatorID string
 
@@ -64,14 +51,10 @@ type CapacityRequest struct {
 // SetCapacity drives one capacity operation as far as the current mode allows,
 // and reports where it stands.
 //
-// # What "as far as the current mode allows" means
-//
-// The procedure needs three fleet-wide restarts and this call runs inside one
-// of them. From MAINTENANCE mode it opens, baselines, applies and stops —
-// the next step is the operator restarting the fleet into seal mode. From SEAL
-// mode it collects the barrier, retires the journal, seals, verifies and
-// confirms. That is not a state machine of its own: it is the same table,
-// advanced with whatever evidence this mode can produce.
+// The procedure needs three fleet-wide restarts and this call runs inside one:
+// from MAINTENANCE mode it opens, baselines, applies and stops; from SEAL mode
+// it collects the barrier, retires the journal, seals, verifies and confirms.
+// Both advance the same table with whatever evidence the mode can produce.
 func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 	coord.MaintenanceOperation, error) {
 
@@ -97,12 +80,8 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 			"a capacity target of zero would be an unbounded log, which is a " +
 				"real setting this verb doesn't set")
 	}
-	// AND A TARGET PAST int64 IS THE SAME SETTING WEARING A LARGE NUMBER.
-	// A stream's ceiling is an int64 on the wire, so anything above that
-	// wraps NEGATIVE on the way out — and a negative MaxBytes is how
-	// JetStream spells "unbounded". Refused for the reason zero is, and
-	// with the ceiling named, because the two produce an identical stream
-	// from opposite-looking inputs.
+	// A TARGET PAST int64 wraps negative on the wire, which is how JetStream
+	// spells "unbounded": refused for zero's reason, naming the ceiling.
 	if req.TargetMaxBytes > math.MaxInt64 {
 		return coord.MaintenanceOperation{}, refused(
 			"a capacity target of %d is past the %d bytes a stream's ceiling "+
@@ -110,10 +89,8 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 				"unbounded log is spelled, the one setting this verb doesn't set",
 			req.TargetMaxBytes, int64(math.MaxInt64))
 	}
-	// AN EXTERNAL BROKER IS ONE THE ENGINE DOES NOT OWN, so it cannot
-	// establish who else holds a connection to it. A refusal an operator
-	// can override knowingly is honest; a check that quietly proves
-	// nothing is not.
+	// AN EXTERNAL BROKER is one the engine cannot tell who else is connected to,
+	// so only the operator's explicit assertion stands in for the exclusion.
 	if e.dialsExternalBroker() && !req.Assert {
 		return coord.MaintenanceOperation{}, refused(
 			"this fleet dials an external NATS cluster, so stopping every " +
@@ -124,10 +101,8 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 				"where the exclusion is structural")
 	}
 
-	// READ ONCE, HERE. The original ceiling is what an operator is shown
-	// beside the target and what an abandon returns to, and the domain was
-	// already resolved above — a second lookup inside the open path was
-	// the same map read written twice, with only one of them guarded.
+	// READ ONCE, HERE: the original ceiling is shown beside the target and is
+	// what an abandon returns to.
 	stats, err := running.log.Stats(ctx)
 	if err != nil {
 		return coord.MaintenanceOperation{}, fmt.Errorf(
@@ -143,27 +118,22 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 // capacityLog is the two calls a capacity window makes on the log it resizes:
 // set its ceiling, and read its ceiling and usage back.
 //
-// DECLARED HERE, AS THEIR CONSUMER, so the window's whole drive (the request,
-// the seal, the verify and the release) runs against a log a test holds,
-// where the concrete broker log tied every step past the baseline to a
-// running cluster and the tests forged the phases those steps write instead.
-// A nil one is a drive in a mode or a phase that touches no log.
+// Declared here, as its consumer, so the whole drive (request, seal, verify,
+// release) runs against a log a test holds. A nil one is a drive in a mode or a
+// phase that touches no log.
 type capacityLog interface {
 	SetMaxBytes(ctx context.Context, maxBytes uint64) error
 	Stats(ctx context.Context) (jetstream.LogStats, error)
 }
 
-// growthRoom is how far the broker will let a running log's ceiling grow, as
-// far as this node can read it, and unstated where it cannot.
+// growthRoom is how far this node's broker, the one holding the stream being
+// resized ([Engine.capacityHost]), will let a log's ceiling grow, or unstated
+// where it cannot be read (an engine with no core runtime has no such stream).
 //
-// ASKED OF THIS NODE'S OWN BROKER, which is the one holding the stream being
-// resized — see [Engine.capacityHost]. An engine with no core runtime has no
-// such stream either, so the two absences are the same one.
-//
-// UNREAD IS UNSTATED, and the window still opens. The check this feeds only
-// spares an operator the restarts of learning a refusal late; the broker is the
-// authority either way and still refuses a raise it cannot reserve, while a
-// window refused because a read failed would block a raise it would grant.
+// UNREAD IS UNSTATED, and the window still opens: the check only spares an
+// operator restarts spent learning a refusal late. The broker still refuses a
+// raise it cannot reserve, while refusing on a failed read would block a raise
+// it would grant.
 func (e *Engine) growthRoom(ctx context.Context) jetstream.StorageBudget {
 	unstated := jetstream.StorageBudget{Limit: -1, Source: jetstream.BudgetUnstated}
 	host := e.capacityHost()
@@ -184,16 +154,12 @@ func (e *Engine) growthRoom(ctx context.Context) jetstream.StorageBudget {
 // capacityBounds is what a capacity target on the domain log named stream is
 // held to: how its ceiling divides between ordinary writes and the gate
 // reserve ([statelog.ReservationOf]), and the floor Tier A holds its ceiling
-// field to, with the field's name — both properties of the DOMAIN, so read
+// field to, with the field's name. Both are properties of the DOMAIN, so read
 // from the register rather than from a running log.
 //
-// THE FLOOR IS THE FIELD'S, read off the register entry that declares the
-// field ([domainCeiling.Floor]), and never one number for every log: the
-// verb refused every target under a gibibyte on every log, calling it the
-// floor Tier A enforces, while Tier A takes the identity estate's and the
-// usage log's down to 64 MiB ([config.IamLogMaxBytesFloor],
-// [config.UsageLogMaxBytesFloor]) — so the one way to give either log back a
-// reservation was refused, with a reason that was not true of it.
+// THE FLOOR IS THE FIELD'S ([domainCeiling.Floor]), never one number for every
+// log: Tier A takes the identity estate's and the usage log's down to 64 MiB
+// ([config.IamLogMaxBytesFloor], [config.UsageLogMaxBytesFloor]).
 func capacityBounds(stream string) (statelog.Reservation, domainCeiling, bool) {
 	for _, domain := range registeredDomains() {
 		if domain.Stream().Name != stream {
@@ -203,9 +169,8 @@ func capacityBounds(stream string) (statelog.Reservation, domainCeiling, bool) {
 		if !found || entry.Ceiling == nil {
 			return statelog.Reservation{}, domainCeiling{}, false
 		}
-		// THE FIELD'S DECLARATION, which does not depend on what the
-		// field is set to or on the volume: an unset stream and no free
-		// bytes name the field and its floor as well as any.
+		// The declaration does not depend on the field's value or the volume, so
+		// an unset stream and no free bytes serve.
 		return statelog.ReservationOf(domain), entry.Ceiling(config.Stream{}, 0), true
 	}
 	return statelog.Reservation{}, domainCeiling{}, false
@@ -215,13 +180,11 @@ func capacityBounds(stream string) (statelog.Reservation, domainCeiling, bool) {
 // whose ordinary writes are not refused the moment it applies, and never below
 // floor.
 //
-// SEARCHED rather than solved, because the reserve is the larger of two terms
-// and each rounds ([statelog.Reservation.Bytes]): a closed form is right to
-// within a byte either way, and a number an operator is told to type has to be
-// the exact one. The ordinary ceiling never falls as the target grows, so the
-// least target above bytes is found by bisection — between bytes, whose
-// ordinary ceiling is at most bytes, and bytes plus its own reserve, which is
-// above it — in sixty-odd steps at any size.
+// SEARCHED rather than solved: the reserve is the larger of two rounded terms
+// ([statelog.Reservation.Bytes]), so a closed form is off by a byte either way,
+// and an operator is told to type the exact number. The ordinary ceiling never
+// falls as the target grows, so bisection between bytes and bytes plus its own
+// reserve finds it in sixty-odd steps.
 func smallestTargetAbove(bytes uint64, reservation statelog.Reservation, floor uint64) uint64 {
 	low := bytes
 	high := bytes + 1 + reservation.Bytes(2*(bytes+1)) + statelog.GateRoom
@@ -242,17 +205,12 @@ func smallestTargetAbove(bytes uint64, reservation statelog.Reservation, floor u
 // openCapacity takes the exclusion, or resumes the operation already holding
 // it.
 //
-// THE ID IS MINTED ONCE and reused across create attempts, because an unknown
-// create establishes nothing: the request may never have been received and may
-// still be outstanding, so a retry with a fresh id would open a SECOND window
-// on a stream that may already have one.
+// THE ID IS MINTED ONCE and reused across create attempts: an unknown create
+// may still be outstanding, so a fresh id could open a SECOND window.
 //
-// IT READS NO ADMISSION BEFORE THE RECORD EXISTS. The window's record is this
-// side's half of the handshake, so it is written before the admissions are
-// read ([Engine.keepOpen]). Read before the record existed, they were a check
-// a node could slip past (it admitted itself after the read and found no
-// window before the create), and they kept the window shut over a dead node's
-// admission, which only an exclusion on an open window can withdraw.
+// IT READS NO ADMISSION BEFORE THE RECORD EXISTS: the record is this side's
+// half of the handshake ([Engine.admissionsClear]), so admissions are read only
+// after it is written ([Engine.keepOpen]).
 func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 	current jetstream.LogStats, room jetstream.StorageBudget) (coord.MaintenanceOperation, error) {
 
@@ -274,22 +232,18 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 		return held, nil
 	}
 
-	// A CEILING ALREADY AT THE TARGET HAS NOTHING TO CHANGE, and a window
-	// opened for it costs the fleet three restarts to reach the number it
-	// started at. The ordinary way here is the verb run again after its own
-	// window closed, its answer lost on the way back, which is the retry
-	// an operator reaches for.
+	// A CEILING ALREADY AT THE TARGET opens no window, which would cost three
+	// restarts to reach the starting number; the usual case is the verb retried
+	// after its own window closed and its answer was lost.
 	if req.TargetMaxBytes == current.MaxBytes {
 		return coord.MaintenanceOperation{}, refused("%s's ceiling is already "+
 			"%d bytes, so there's nothing to change and no window was opened",
 			req.Stream, current.MaxBytes)
 	}
 
-	// A TARGET BELOW THE LOG'S OWN FLOOR is refused as Tier A refuses one
-	// on an explicit value of that log's field: below it the log is a
-	// window that refuses appends before anybody could act, and the floor
-	// is the field's, so it differs by log. A resume is not asked, for the
-	// reason the usage below is not.
+	// A TARGET BELOW THE LOG'S OWN FLOOR is refused as Tier A refuses that
+	// field's explicit value: below it the log refuses appends before anybody
+	// could act. A resume is not asked, for the reason the usage below is not.
 	reservation, field, known := capacityBounds(req.Stream)
 	if !known {
 		return coord.MaintenanceOperation{}, &UnknownStreamError{Stream: req.Stream,
@@ -303,18 +257,13 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 			req.TargetMaxBytes, field.Floor, req.Stream, field.Field, field.Floor)
 	}
 
-	// A TARGET WHOSE ORDINARY CEILING IS AT OR BELOW WHAT THE LOG HOLDS IS A
-	// FULL LOG the moment it applies: every ordinary append and every
-	// linearizable read refused, fleet-wide, after three restarts spent
-	// reaching it. On a log that keeps a gate reserve that ceiling is the
-	// target less the reserve ([statelog.Reservation.Ordinary]), since that is
-	// where ordinary writes are refused; a target that only the reserve is
-	// above leaves a log an eviction can reach and nothing else can. The
-	// usage is what a resize is decided against, and in this mode nothing
-	// moves it, so it is decided here, once, before the exclusion is taken.
-	// A resume is not asked again: its target was accepted when the window
-	// opened, and refusing it now would strand a window whose request may
-	// already be in flight.
+	// A TARGET WHOSE ORDINARY CEILING ([statelog.Reservation.Ordinary]) IS AT OR
+	// BELOW WHAT THE LOG HOLDS is a full log the moment it applies: every ordinary
+	// append and linearizable read refused fleet-wide, a log only an eviction can
+	// reach. In this mode nothing moves the usage, so it is decided here, once,
+	// before the exclusion is taken. A resume is not asked again: its target was
+	// accepted at the open, and refusing now would strand a window whose request
+	// may already be in flight.
 	if ordinary := reservation.Ordinary(req.TargetMaxBytes); ordinary <= current.Bytes {
 		held := ""
 		if reservation.Kept {
@@ -330,13 +279,11 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 			smallestTargetAbove(current.Bytes, reservation, uint64(field.Floor)))
 	}
 
-	// AND A RAISE THE BROKER CANNOT RESERVE, for the same reason at the other
-	// end. The broker refuses that update when the window applies it, and an
-	// apply that returned an error is an unknown only the seal retires, so the
-	// operator would spend the window's restarts, and its attempts, learning
-	// a number this node can read now. Only a limit read exactly is held
-	// against the target ([jetstream.Queue.GrowthBudget]); an unstated one
-	// opens the window and leaves the broker to answer.
+	// AND A RAISE THE BROKER CANNOT RESERVE: the broker would refuse it at apply,
+	// and a failed apply is an unknown only the seal retires, so the operator would
+	// spend the window's restarts learning a number readable now. Only an exact
+	// limit is held against the target ([jetstream.Queue.GrowthBudget]); an
+	// unstated one leaves the broker to answer.
 	if req.TargetMaxBytes > current.MaxBytes {
 		grow := req.TargetMaxBytes - current.MaxBytes
 		if left := room.Available(); left >= 0 && grow > uint64(left) {
@@ -408,10 +355,8 @@ func (e *Engine) driveCapacity(ctx context.Context, resized capacityLog,
 	for range len(coord.MaintenancePhases) + 1 {
 		next, err := e.advanceCapacity(ctx, resized, op)
 		if err != nil {
-			// THE WINDOW AS THE STEP LEFT IT, where the step wrote it before
-			// it refused (a read-back that isn't the target, a verify out of
-			// attempts): the caller shows it beside the refusal, and the one
-			// this pass read would show a window from before the step.
+			// THE WINDOW AS THE STEP LEFT IT, when the step wrote before refusing,
+			// so the caller shows it beside the refusal rather than a stale one.
 			if next.OperationID != "" {
 				return next, err
 			}
@@ -423,10 +368,8 @@ func (e *Engine) driveCapacity(ctx context.Context, resized capacityLog,
 		op = next
 	}
 	// AN INVARIANT BREACH, NOT A REFUSAL: every transition the table answers
-	// moves to a later phase, so nothing an operator asked for can loop, and
-	// told as a refusal it answered 409 "the capacity change was refused" in
-	// the table's own terms. Untold, the route answers it as the fault it is
-	// and sends the reader to the status read.
+	// moves to a later phase, so this is returned as a plain error, which the
+	// route answers as a fault rather than a 409 in the table's terms.
 	return op, fmt.Errorf("engine: the capacity operation on %s didn't settle "+
 		"in %d transitions, more than the table has phases",
 		op.Stream, len(coord.MaintenancePhases)+1)
@@ -468,23 +411,16 @@ func (e *Engine) advanceCapacity(ctx context.Context, resized capacityLog,
 		"wrote it", op.Stream, op.Phase)
 }
 
-// request sends the window's configuration request, and records who is running
-// immediately before it leaves: [Engine.recordRequest], then [Engine.apply], in
-// one step and never apart.
+// request records who is running and sends the window's configuration request:
+// [Engine.recordRequest], then [Engine.apply], in one step and never apart.
 //
-// # Why the record and the request are one step
-//
-// The seal's evidence is that the process each participant was running when a
-// request left is gone ([statelog.SealRestarts]): an acknowledgement from seal
-// mode by any other process. That holds only if the processes it compares
-// against are the ones running as the request left. They were recorded once,
-// at the baseline, and the request was a later step: a coordinator that stopped
-// between them left the request to whoever ran the verb next, maybe much later,
-// and a node restarted into seal mode in between was running as that request
-// left while differing from its baseline, so the seal passed on a restart
-// older than the request. So every request, the first and every resumed one, is
-// sent by the step that has just recorded who is running, with its own journal
-// record, and a resumed window is recorded again before its request leaves.
+// The seal's evidence is that the process each participant ran when a request
+// left is gone ([statelog.SealRestarts]), which holds only if the processes it
+// compares against are the ones running as the request left. Recorded at the
+// baseline and sent later, a node restarted into seal mode in between would
+// pass the seal on a restart older than the request. So every request, first
+// or resumed, is sent by the step that has just recorded who is running, with
+// its own journal record.
 func (e *Engine) request(ctx context.Context, resized capacityLog,
 	op coord.MaintenanceOperation) (coord.MaintenanceOperation, error) {
 
@@ -495,31 +431,18 @@ func (e *Engine) request(ctx context.Context, resized capacityLog,
 	return e.apply(ctx, resized, recorded, record)
 }
 
-// recordRequest persists the participant set, every participant's incarnation
-// and a journal record for the request about to leave, BEFORE it is issued:
-// from `opened` that is the baseline, and from `baselined` it records again for
-// a request a resumed window sends.
+// recordRequest persists the participant set, each participant's incarnation
+// and a journal record for the request about to leave, BEFORE it is issued
+// (from `opened` the baseline, from `baselined` a resumed request): recorded
+// after, a crash would leave a write with nothing to compare against. At
+// `opened` it reads the admissions ([Engine.admissionsClear]): the first step
+// with the window's record written and the last before a request. No later
+// step reads one: a node booting in service finds the window and withdraws.
 //
-// The order is the whole of it. Recorded after the read-back, a crash in
-// between leaves an operation that may have written with nothing to compare
-// against, and an abandonment before any apply has no defined outcome at all.
-//
-// AT `opened` IT IS WHERE THE ADMISSIONS ARE READ ([Engine.admissionsClear]),
-// because it is the last step before the first request leaves and the first
-// that runs with the window's record already written. Past it no step reads
-// one: a node that boots in service finds the window and withdraws.
-//
-// # Who takes part is taken again here
-//
-// The set the window recorded UNION the set the fleet shows now
-// ([Engine.capacityParticipants]). A window can wait at `opened` for as long as
-// an admission or a missing acknowledgement holds it, and at `baselined` for as
-// long as its coordinator is gone, and a broker member that came up in the
-// meantime holds the request this step is about to send as surely as one that
-// was there at the open: left out, the seal never waited for its restart, and
-// its broker could apply the request after the window confirmed. Never
-// narrowed, because a node recorded earlier that has gone silent since is a
-// process nobody has shown stopped; only an exclusion waives one.
+// PARTICIPANTS ARE THE RECORDED SET UNION THE FLEET NOW: a broker member that
+// came up while the window waited holds the request too and, left out, could
+// apply it after confirmation. Never narrowed: a node gone silent is a process
+// nobody showed stopped; only an exclusion waives one.
 func (e *Engine) recordRequest(ctx context.Context, op coord.MaintenanceOperation) (
 	coord.MaintenanceOperation, coord.JournalRecord, error) {
 
@@ -567,32 +490,18 @@ func (e *Engine) recordRequest(ctx context.Context, op coord.MaintenanceOperatio
 	return recorded, record, err
 }
 
-// keepOpen decides whether a window this node has just opened may stand, now
-// that its record is written and the admissions can be read against it: the
-// coordinator's half of the handshake is to write the window and then read the
-// admissions ([Engine.admissionsClear] says why that order).
+// keepOpen decides whether a window this node just opened may stand, now its
+// record is written and the admissions can be read against it (the handshake's
+// order is [Engine.admissionsClear]'s).
 //
-// # A running publisher closes it again
-//
-// A node whose admission names the process holding its presence is running,
-// and may be publishing ([Engine.judgeAdmissions]). A window left open over it
-// would refuse every node that started in service meanwhile and tell it to
-// restart into maintenance mode, taking a serving node out of service, while
-// the fleet went on writing beneath a window whose alarm says nothing is. So
-// the window is closed again at the revision it was opened at, which sends
-// nothing since nothing has been sent at `opened`, and the verb is refused as
-// it was before the window existed. A presence or an admission this node
-// cannot read closes it too: nobody can say the fleet stopped.
-//
-// # A stopped one keeps it open
-//
-// An admission whose process isn't running is a node that stopped without
-// giving it back, the case the window exists to get past: it stays open at
-// `opened`, where the node's restart into maintenance mode or an operator's
-// exclusion retires the claim, and the baseline names it until then.
-//
-// A CLOSE THAT DOES NOT LAND leaves the window standing, and the refusal says
-// how to close it, since a running publisher is still behind it.
+// A RUNNING PUBLISHER CLOSES IT ([Engine.judgeAdmissions]): left open, the
+// window would take every node booting in service out of service while the
+// fleet kept writing beneath it. It closes at the revision it opened at, which
+// sends nothing, and the verb is refused; an unreadable presence or admission
+// closes it too. A STOPPED ONE KEEPS IT OPEN at `opened`, the case the window
+// exists to get past, until the node's restart into maintenance mode or an
+// exclusion retires the claim. A close that does not land leaves the window
+// standing, and the refusal says how to close it.
 func (e *Engine) keepOpen(ctx context.Context, op coord.MaintenanceOperation) (
 	coord.MaintenanceOperation, error) {
 
@@ -637,10 +546,9 @@ type admissionStanding struct {
 	// publishing.
 	running []string
 	// silent is every node whose admission names a process nobody can see
-	// running, because nobody holds the node's presence: a process that
-	// stopped without giving its admission back, or one still starting
-	// that has not taken its lease yet. Only a restart of the node or an
-	// operator's word can retire it.
+	// running (nobody holds the node's presence): stopped without giving it
+	// back, or still starting. Only a restart of the node or an operator's
+	// word can retire it.
 	silent []string
 }
 
@@ -648,16 +556,13 @@ type admissionStanding struct {
 // holds each node's presence now ([Engine.presenceHolders]), the evidence
 // [Engine.supersede] reads at boot.
 //
-// AN ADMISSION WHOSE NODE ANOTHER PROCESS NOW HOLDS IS WITHDRAWN HERE. The
-// process it names is gone on that evidence, and a boot that could not see it
-// yet is the ordinary case: a node restarted into maintenance mode inside its
-// crashed process's lease TTL found the old process still present and left
-// its claim, and nothing else would come back for it. Withdrawn conditional on
-// the incarnation it names, so a newer process's claim is never touched.
+// AN ADMISSION WHOSE NODE ANOTHER PROCESS NOW HOLDS IS WITHDRAWN HERE, on the
+// incarnation it names so a newer claim is never touched: a node restarted
+// inside its crashed process's lease TTL saw the old process still present at
+// boot and left its claim, and nothing else would come back for it.
 //
-// UNREADABLE IS AN ERROR, the admissions or the presence alike: an admission
-// nobody can read may be a publisher's, and a presence nobody can read makes
-// every process look stopped.
+// UNREADABLE IS AN ERROR: an unread admission may be a publisher's, and an
+// unread presence makes every process look stopped.
 func (e *Engine) judgeAdmissions(ctx context.Context, op coord.MaintenanceOperation) (
 	admissionStanding, error) {
 
@@ -701,30 +606,15 @@ func (e *Engine) judgeAdmissions(ctx context.Context, op coord.MaintenanceOperat
 // admissionsClear refuses while any node the window has not excluded holds an
 // admission: a process that may be publishing.
 //
-// # Read with the window's record already written, and that is the rule
+// READ WITH THE WINDOW'S RECORD ALREADY WRITTEN: a node writes its admission
+// then reads the window ([Engine.admit]); the coordinator writes the window then
+// reads the admissions ([Engine.keepOpen], and here), so whichever write lands
+// second, its writer's read sees the other's. The reverse is a check-then-act.
 //
-// The handshake is two writes and two reads. A node writes its admission and
-// then reads the window ([Engine.admit]); the coordinator writes the window and
-// then reads the admissions, at its open ([Engine.keepOpen]) and again here,
-// before the first request. Whichever write lands second, its writer's read
-// sees the other's, so either the node refuses to publish or this refuses to
-// issue a request. The opposite order on this side (read the admissions, then
-// write the window) was a check-then-act: a node could admit itself just after
-// the read, find no window just before the create, and publish through the
-// resize unseen.
-//
-// # And it leaves the window open
-//
-// A window at `opened` has issued nothing, so keeping it while an admission
-// stands costs no request, and keeping it is what gives the operator a way
-// out: a node restarted into a maintenance mode retires its own last
-// process's admission ([Engine.supersede], or [Engine.judgeAdmissions] here
-// once the restart holds the node's presence), and one that will never come
-// back is excluded on the operator's word ([Engine.ExcludeParticipant]), which
-// only an open window can record. Refused before the window existed, a dead
-// node's admission kept the fleet out of every window for good. What it does
-// cost is every boot in service, which an open window refuses, so the refusal
-// names the abandonment that closes it.
+// AND IT LEAVES THE WINDOW OPEN: `opened` has issued nothing, and only an open
+// window lets a restart ([Engine.supersede]) or [Engine.ExcludeParticipant]
+// retire a dead node's admission. It refuses every boot in service meanwhile,
+// so the refusal names the abandonment.
 func (e *Engine) admissionsClear(ctx context.Context, op coord.MaintenanceOperation) error {
 	standing, err := e.judgeAdmissions(ctx, op)
 	if err != nil {
@@ -842,14 +732,10 @@ func (e *Engine) apply(ctx context.Context, resized capacityLog,
 	if err != nil || next == coord.PhaseApplied {
 		return recorded, err
 	}
-	// A READ-BACK THAT ISN'T THE TARGET ENDS THE DRIVE, with the request it
-	// sent left issued for the seal. The window stays at `baselined`, which
-	// in this mode is a step that sends a request, so the drive's next pass
-	// sent another, and another, each with a journal record the seal then had
-	// to retire, until the drive gave up on seven transitions and answered a
-	// window doing what the broker made it do as a fault. One drive sends one
-	// request: what settles this one is the seal, which retires it and checks
-	// the ceiling again.
+	// A READ-BACK THAT ISN'T THE TARGET ENDS THE DRIVE, its request left issued
+	// for the seal: the window stays at `baselined`, which in this mode sends a
+	// request, so each further pass would send another. One drive sends one
+	// request; the seal retires it and checks the ceiling again.
 	return recorded, refused("%s's ceiling reads back as %d bytes, not the %d "+
 		"this window asked for, and its request may still land, so nothing more "+
 		"is sent from here. Restart every node with `crewlet run -mode seal`, "+
@@ -861,21 +747,14 @@ func (e *Engine) apply(ctx context.Context, resized capacityLog,
 // applyFailure is what an operator is told when the configuration request did
 // not succeed, and the two answers are not the same fact.
 //
-// A REFUSAL IS AN ANSWER. The broker checked the new ceiling against its limit
-// and declined to propose it, so nothing was written and nothing is in flight
-// — and the number that was wrong is nameable. Reported as an unknown, that
-// sent an operator to the seal for evidence they already had, with the one
-// number they needed left out.
+// A REFUSAL ([jetstream.ErrInsufficientStorage]) IS AN ANSWER: the broker
+// declined to propose the ceiling, so nothing is in flight, and the number
+// that was wrong is named. EVERYTHING ELSE IS AN UNKNOWN: a transport error
+// may still have landed, and the barrier resolves it.
 //
-// EVERYTHING ELSE IS AN UNKNOWN, and the journal record stays `issued` for it:
-// a request that returned a transport error may still have landed, and what
-// resolves that is the barrier rather than a guess.
-//
-// THE JOURNAL RECORD STAYS `issued` ON BOTH, which is why even the terminal
-// half tells the operator to abandon rather than to walk away: the record
-// cannot distinguish THIS attempt's refusal from an earlier attempt's
-// outstanding request, and abandoning from any phase past `opened` still
-// crosses the barrier. What changes is what they are told went wrong.
+// The journal record stays `issued` on both, so even a refusal says abandon:
+// the record cannot tell this attempt's refusal from an earlier attempt's
+// outstanding request, and abandoning past `opened` still crosses the barrier.
 func (e *Engine) applyFailure(ctx context.Context, op coord.MaintenanceOperation,
 	err error) error {
 
@@ -884,9 +763,8 @@ func (e *Engine) applyFailure(ctx context.Context, op coord.MaintenanceOperation
 			"and the operation stays open. Restart the fleet with `-mode seal` to "+
 			"retire it", op.Stream, op.TargetMaxBytes)
 	}
-	// THE ABANDONMENT NAMED IN FULL, its confirmation included: the node
-	// refuses one that doesn't repeat the operation's id, so the command
-	// this named was refused as written.
+	// THE ABANDONMENT NAMED IN FULL, with its -confirm: the node refuses one
+	// that doesn't repeat the operation's id.
 	return stopped(err, "the broker refused to set %s's ceiling to %d and "+
 		"wrote nothing%s. A target is chosen once for the life of an operation, "+
 		"so abandon this one with `crewlet retention maintenance abandon "+
@@ -910,17 +788,11 @@ func (e *Engine) streamVolume() string {
 // capacityHost is the broker a capacity question is put to, or nil on an
 // engine that runs no core runtime.
 //
-// ASSERTED OFF THE ENGINE'S OWN QUEUE rather than read from a copy the state
-// log keeps. It was that copy, and the copy had ONE writer — a field in one
-// struct literal — which the literal did not set, so this answered nil on
-// every node that ran a log and the preflight it feeds was dead code from the
-// day it was written. A cached type assertion of a handle its owner holds for
-// the life of the process is state that can only ever be wrong; deriving it
-// here is what makes that omission unrepresentable rather than merely fixed.
-//
-// The state log is still what decides WHETHER to ask: a node with none has no
-// stream to resize, and the assertion cannot fail behind that guard, since
-// startStateLog refuses to build one on a broker that does not satisfy this.
+// ASSERTED OFF THE ENGINE'S OWN QUEUE on every call, never cached: a copy
+// needs a writer to set it, and one missed silently turns the preflight off.
+// The state log decides WHETHER to ask (a node with none has no stream to
+// resize), and behind that guard the assertion cannot fail, since
+// startStateLog refuses a broker that does not satisfy domainHost.
 func (e *Engine) capacityHost() domainHost {
 	if _, err := e.stateLogOf(); err != nil || e.backends == nil {
 		return nil
@@ -930,29 +802,20 @@ func (e *Engine) capacityHost() domainHost {
 }
 
 // capacityRefusal is what the broker had left to grant when it refused the
-// raise, or nothing at all where this node cannot ask.
+// raise, or nothing where this node cannot ask.
 //
-// THE GROWTH BUDGET, not the create budget, because a raise is what was
-// refused: the broker checks an update against the server leading the metadata
-// group rather than against placement, which is the whole of
-// [jetstream.Queue.GrowthBudget]'s distinction. Read AT the refusal rather than
-// carried from the window's opening, because an operation spans restarts and
-// the number that matters is what the broker had when it said no.
-//
-// AN EMPTY CLAUSE IS THE HONEST ANSWER where this node has nothing to read:
-// the refusal it would decorate already carries the broker's own error, and a
-// sentence invented here would be numbers nobody read. An unstated limit is
-// the same case — an external broker's account may set none, and "the limit is
-// -1" is not a sentence.
+// THE GROWTH BUDGET, not the create budget: an update is checked against the
+// metadata leader rather than placement ([jetstream.Queue.GrowthBudget]). Read
+// AT the refusal, because an operation spans restarts and what matters is what
+// the broker had when it said no. EMPTY where nothing was read or the limit is
+// unstated: the refusal already carries the broker's own error.
 func (e *Engine) capacityRefusal(ctx context.Context, want uint64) string {
 	room := e.growthRoom(ctx)
 	if room.Limit < 0 {
 		return ""
 	}
-	// THE SAME SENTENCE THE PROVISIONING REFUSAL BUILDS, over the budget
-	// this call just read. A second wording here would be the rule written
-	// twice, and a second READ would be a message about a different moment
-	// than the one it explains.
+	// THE PROVISIONING REFUSAL'S SENTENCE ([roomLeft]) over the budget just
+	// read: one wording of the rule, about the moment it explains.
 	return fmt.Sprintf(". It asked to reserve %d bytes, and %s",
 		want, roomLeft(room, nil, e.streamVolume()))
 }
@@ -960,19 +823,15 @@ func (e *Engine) capacityRefusal(ctx context.Context, want uint64) string {
 // seal collects the barrier, retires the journal against it, and asks the
 // table whether the seal holds.
 //
-// # Retirement runs BEFORE the predicate
-//
-// That ordering is what breaks the cycle a journal-as-veto produced: the
-// barrier needs nothing from the journal, it runs, it retires what it covered,
-// and only then is the seal tested against a journal with no unresolved
-// entries left.
+// RETIREMENT RUNS BEFORE THE PREDICATE, which breaks the cycle a
+// journal-as-veto makes: the barrier needs nothing from the journal, so the
+// seal is tested against a journal with nothing unresolved.
 func (e *Engine) seal(ctx context.Context, resized capacityLog,
 	op coord.MaintenanceOperation) (coord.MaintenanceOperation, error) {
 
 	if e.mode != statelog.ModeSeal {
-		// THIS MODE CANNOT ESTABLISH THE BARRIER, and saying so is the
-		// answer rather than an error: the operator's next step is the
-		// second of the three restarts.
+		// THIS MODE CANNOT ESTABLISH THE BARRIER, which is the answer rather than
+		// an error: the operator's next step is the second restart.
 		return op, nil
 	}
 	acks, err := e.backends.Fleet.MaintenanceAcks(ctx, op.Stream)
@@ -1009,11 +868,9 @@ func (e *Engine) seal(ctx context.Context, resized capacityLog,
 		log.InfoContext(ctx, "capacity_seal_pending", "stream", op.Stream,
 			"operation", op.OperationID, "attempt", op.Attempt, "missing", missing)
 	}
-	// A PASS THAT MOVED NOTHING WRITES NOTHING. A seal still waiting on a
-	// node is the answer to the verb run before every node restarted into
-	// this mode, and the drive takes an unchanged window as settled: written
-	// back on every pass, it never settled, and the verb answered a window
-	// doing what it should as an operation that "didn't settle", a fault.
+	// A PASS THAT MOVED NOTHING WRITES NOTHING: the drive takes an unchanged
+	// window as settled, and a seal still waiting on a node is a normal answer,
+	// not one that "didn't settle".
 	if out.Phase == op.Phase && !retired && out.ObservedMaxBytes == op.ObservedMaxBytes {
 		return op, nil
 	}
@@ -1069,21 +926,15 @@ func (e *Engine) verify(ctx context.Context, resized capacityLog,
 
 // release deletes the record, which is the one write that ends the exclusion.
 //
-// # A delete that lost its race is not a release
+// A DELETE THAT LOST ITS RACE IS NOT A RELEASE: the delete is conditional on
+// the revision this drive read, so a window changed since (an exclusion, an
+// abandonment, another coordinator) refuses it with [coord.ErrMaintenanceMoved].
+// That is resolved by reading, like a lost answer: gone or another operation's
+// is released; still this one is handed back at its current revision for the
+// drive to decide again.
 //
-// The delete is conditional on the revision this drive read, so a window
-// somebody changed since (an exclusion or an abandonment landing after the
-// verify, or a second coordinator's write) refuses it with
-// [coord.ErrMaintenanceMoved]. That refusal was taken as the release: the node
-// logged that the exclusion was released while the record still held the fleet,
-// and the drive's next pass asked to delete it at no revision, which the store
-// refuses, so the verb answered a fault for a window still open. It is read
-// instead, like a delete whose answer was lost: gone, or holding another
-// operation, is released; still this operation is handed back at the revision
-// it is now at, and the drive decides again from where it stands.
-//
-// A WINDOW THIS DRIVE ALREADY RELEASED HAS NO REVISION, and asking the store to
-// delete it again asked a question its answer was already known to.
+// A WINDOW THIS DRIVE ALREADY RELEASED HAS NO REVISION, and is not deleted
+// again.
 func (e *Engine) release(ctx context.Context, op coord.MaintenanceOperation) (
 	coord.MaintenanceOperation, error) {
 
@@ -1124,24 +975,15 @@ func (e *Engine) release(ctx context.Context, op coord.MaintenanceOperation) (
 
 // AbandonCapacity is the operator's exit.
 //
-// FROM `opened` IT CLEARS OUTRIGHT — no request has been issued, so there is
-// nothing to retire — and answers no operation, since there is no window left
-// to show: answered at the phase it cleared from, the harness printed a window at
-// `opened` and told the operator to run set-capacity again for the window they
-// had just abandoned. From everywhere else it ENTERS THE SEAL: abandoning
-// changes what the operation is trying to reach, never the barrier it must
-// cross, and a paused coordinator's request is outstanding whether or not a
-// person has read a status page.
+// FROM `opened` IT CLEARS OUTRIGHT (no request has been issued) and answers no
+// operation, since no window is left to show. From everywhere else it ENTERS
+// THE SEAL: abandoning changes what the operation reaches, never the barrier
+// it must cross, since a paused coordinator's request may be outstanding.
 //
-// OPERATIONID IS THE CONFIRMATION, checked against the operation this read
-// finds BEFORE anything changes: it says the person read which window they are
-// abandoning, so one that names another operation abandons nothing
-// ([ConfirmMismatchError]). Checked by the caller after the fact, as the harness
-// did, it reported a mismatch for an abandonment that had already run.
-//
-// BY IS WHO ABANDONED IT, recorded on the operation while it lives
-// ([coord.MaintenanceOperation.AbandonedBy]) and on the log line when it does
-// not.
+// OPERATIONID IS THE CONFIRMATION that the person read which window they
+// abandon, checked against the operation read here BEFORE anything changes
+// ([ConfirmMismatchError]). BY is recorded on the operation while it lives
+// ([coord.MaintenanceOperation.AbandonedBy]) and on the log line when not.
 func (e *Engine) AbandonCapacity(ctx context.Context, stream, operationID string,
 	by iam.Actor) (coord.MaintenanceOperation, error) {
 
@@ -1214,17 +1056,12 @@ func (e *ConfirmMismatchError) Tell() string {
 // ExcludeParticipant records an operator's assertion that a participant's
 // process is stopped and holds no outstanding request.
 //
-// THE ONLY THING THAT WAIVES AN ACKNOWLEDGEMENT. An eviction does not: that is
-// about whose records apply, and this is about whose process is running.
-//
-// AND THE ONE WAY A DEAD NODE'S ADMISSION IS WITHDRAWN: a node that never boots
-// again never retires its last process's claim ([Engine.supersede]), so the
-// window opens with the claim standing, sends nothing while it does
-// ([Engine.admissionsClear]), and the exclusion withdraws it. A node need not
-// be a participant to be excluded for that.
-//
-// BY IS WHO ASSERTED IT, recorded against the node it names
-// ([coord.MaintenanceOperation.ExcludedBy]).
+// THE ONLY THING THAT WAIVES AN ACKNOWLEDGEMENT (an eviction is about whose
+// records apply, not whose process runs), and the one way a dead node's
+// admission is withdrawn: one that never boots again never retires its claim
+// ([Engine.supersede]), so the window opens with it standing and sends nothing
+// ([Engine.admissionsClear]). A node need not be a participant to be excluded.
+// BY is recorded against the node ([coord.MaintenanceOperation.ExcludedBy]).
 func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string,
 	by iam.Actor) (coord.MaintenanceOperation, error) {
 
@@ -1243,9 +1080,8 @@ func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string,
 	if !contains(op.Excluded, node) {
 		out.Excluded = append(cloneStrings(op.Excluded), node)
 	}
-	// THE LATEST ASSERTION'S AUTHOR, because repeating one is making it
-	// again: whoever last said the process is stopped is who the seal is
-	// taking it from.
+	// THE LATEST ASSERTION'S AUTHOR: repeating one makes it again, and the seal
+	// takes it from whoever said it last.
 	out.ExcludedBy = maps.Clone(op.ExcludedBy)
 	if out.ExcludedBy == nil {
 		out.ExcludedBy = map[string]coord.MaintenanceParty{}
@@ -1269,10 +1105,8 @@ func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string,
 // it holds one.
 //
 // ONE IT CANNOT READ OR CLEAR IS LOGGED AND LEFT: the window passes over an
-// excluded node's admission ([statelog.AdmissionBlocks]), so the key no longer
-// stops anything and the warning is the whole of what it leaves behind. It
-// read the admissions through a helper that answered a failed read as no
-// admission at all, so a failure here withdrew nothing and said nothing.
+// excluded node's admission ([statelog.AdmissionBlocks]), so the key stops
+// nothing, but the failure is never silent.
 func (e *Engine) withdrawExcluded(ctx context.Context, node string) {
 	held, found, err := heldAdmission(ctx, e.backends.Fleet, node)
 	if err == nil && found {
@@ -1287,11 +1121,8 @@ func (e *Engine) withdrawExcluded(ctx context.Context, node string) {
 // window or the absence of one, and the two registers its next step reads,
 // each as read or with why it couldn't be.
 //
-// EACH PART IS ITS OWN ANSWER. The window is read first and the
-// acknowledgements and the admissions after it, and one failing after the
-// window answered still leaves the window known: folded into one error, the
-// page said it couldn't tell whether a window was open on a log it had just
-// read one open on.
+// EACH PART IS ITS OWN ANSWER: an acknowledgement or admission read that fails
+// after the window was read still leaves the window known.
 type CapacityState struct {
 	// Op is the window, and Found whether there is one.
 	Op    coord.MaintenanceOperation
@@ -1343,15 +1174,10 @@ func (e *Engine) CapacityAcks(ctx context.Context, stream string) (
 // CapacityWindows is every capacity window open on a log, the oldest first,
 // and every log whose window this node couldn't read.
 //
-// IT IS WHAT STANDS BETWEEN THE FLEET AND SERVICE once a gesture has closed a
-// window: a node refuses to start in service while any log has a window open,
-// and while it can't read whether one has ([Engine.admit]). So the step that
-// returns the fleet to service is one a client says only when both are empty.
-// Said after every close, it sent an operator resizing two logs to restart in
-// service while the second window was still open, and every node refused to
-// boot. It is the one read every reader of a window takes ([readWindows]),
-// which never reads an unreadable log as one with no window, for admit's
-// reason.
+// IT IS WHAT STANDS BETWEEN THE FLEET AND SERVICE: a node refuses to start in
+// service while any log has a window open or unreadable ([Engine.admit]), so a
+// client says to return to service only when both are empty, never after each
+// close. It is the one read every reader of a window takes ([readWindows]).
 func (e *Engine) CapacityWindows(ctx context.Context) (open []coord.MaintenanceOperation,
 	unread []string) {
 
@@ -1369,11 +1195,9 @@ func (e *Engine) CapacityWindows(ctx context.Context) (open []coord.MaintenanceO
 }
 
 // windowStream refuses a stream no capacity window can ever be open on with an
-// [UnknownStreamError] naming the logs one can be: a window is only ever opened
-// on a registered domain's log ([Engine.SetCapacity]), so a name outside them is
-// a mistyped one. Read as a log that has no window, it answered an abandonment
-// and an exclusion "there's no capacity operation on X" and a status an empty
-// window, and the operator who mistyped it was never told so.
+// [UnknownStreamError] naming the logs one can be: a window is only opened on a
+// registered domain's log ([Engine.SetCapacity]), so another name is a typo,
+// which read as a log with no window the operator would never be told.
 func windowStream(stream string) error {
 	streams := maintenanceStreams()
 	if !slices.Contains(streams, stream) {
@@ -1397,35 +1221,18 @@ func (e *Engine) reread(ctx context.Context, stream string) (
 	return op, nil
 }
 
-// capacityParticipants is who must acknowledge: read when the window opens, and
-// again before every request it sends, where the two are joined
-// ([Engine.recordRequest]).
+// capacityParticipants is who must acknowledge: read when the window opens and
+// again before every request, where the two are joined ([Engine.recordRequest]).
 //
 // EVERY NODE THE FLEET HAS A POSITION FOR, union every live node whose PROCESS
-// could hold an outstanding request, union this node — NOT the retention
-// counted set, which is about whose position pins the trim. This set is about
-// whose process could hold a request the seal has to retire, and a node that
-// was evicted from the first is still a machine that can run one.
-//
-// # Two questions among the live nodes, asked apart
-//
-// The seal's proof is that every BROKER process restarted, because a request
-// the broker has already queued is retired by the process holding it going
-// away, and every PUBLISHER must be admitted. So a live node takes part if it
-// holds the estate — it publishes records ([capacityHolders]) — or if its
-// broker is a member, which holds queued
-// requests whatever its roles ([capacityMembers]). Counted over data nodes
-// alone, a member that holds no data was never waited for, and the seal could
-// pass while its broker still held a request that would resize the log after
-// it.
-//
-// A node whose presence does not say what its broker is counts as a member:
-// excluding it could pass a seal it should hold, where including one that is
-// not a member only waits for an acknowledgement an operator can exclude.
-//
-// A leaf that holds no data takes no part: its broker runs no JetStream and
-// queues nothing, and its seats publish through a data node, which is admitted
-// in its own right.
+// could hold an outstanding request, union this node; NOT the retention counted
+// set (whose position pins the trim), since an evicted node can still run one.
+// The seal needs every BROKER process restarted and every PUBLISHER admitted,
+// so a live node takes part if it holds the estate ([capacityHolders]) or its
+// broker is a member, which queues requests whatever its roles
+// ([capacityMembers]); one whose presence does not say counts as a member,
+// since leaving it out could pass a seal that should hold. A leaf holding no
+// data runs no JetStream, and its seats publish through a data node.
 func (e *Engine) capacityParticipants(ctx context.Context) ([]string, error) {
 	seen := map[string]bool{}
 	rows, err := e.backends.Fleet.Positions(ctx)
@@ -1448,34 +1255,24 @@ func (e *Engine) capacityParticipants(ctx context.Context) ([]string, error) {
 			seen[id] = true
 		}
 	}
-	// AND THIS NODE AS IT IS, whether or not its presence lease has
-	// landed yet and whether or not it has published a position. It is in
-	// a maintenance mode, and a node there KEEPS its presence — which is
-	// how the members that hold no data are found above, since their
-	// presence is the only record they leave (see maintenance_mode.go).
+	// AND THIS NODE AS IT IS, whether or not its presence or a position has
+	// landed. A maintenance-mode node KEEPS its presence, which is how members
+	// holding no data are found above (maintenance_mode.go).
 	seen[e.id] = true
 	return sortedKeys(seen), nil
 }
 
-// capacityHolders is every live node holding the replicated estate — the
-// publishers of its records — as its presence says: every data node holds the
-// one estate whole.
+// capacityHolders is every live node holding the replicated estate (every data
+// node holds it whole), as its presence says: the publishers of its records.
 //
-// PRESENCE AND THE POSITIONS REGISTER BETWEEN THEM, because neither alone sees
-// every publisher. A drain gives presence up at its first step while the
-// node's state log still runs, and a node that has not yet heartbeated its
-// first position is on presence alone; the register's rows
-// ([Engine.capacityParticipants]) cover the first and presence the second. A
-// presence whose roles this build cannot read is read as every role, so the
-// node is counted: a publisher that went uncounted is the one thing this set
-// exists to prevent.
-//
-// A DATA NODE IS A PUBLISHER WHATEVER ITS COMPANY KEEPS: the core runs every
-// registered log on every node holding the estate from boot — with no company,
-// in a maintenance mode, on a vendor's tracker and wiki ([Engine.startCore]) —
-// so a presence that holds data is exactly a node that publishes records, and
-// [placement.NodeProfile.HoldsData] is the whole test. A node without `data`
-// runs no log and is found only as a broker member ([capacityMembers]).
+// PRESENCE AND THE POSITIONS REGISTER BETWEEN THEM, since neither alone sees
+// every publisher: a drain gives presence up while its state log still runs
+// (the register's rows, [Engine.capacityParticipants], cover it), and a node
+// not yet heartbeating a position is on presence alone. Presence whose roles
+// this build cannot read counts as every role: an uncounted publisher is what
+// this set exists to prevent. A data node publishes whatever its company
+// keeps, since the core runs every registered log on it from boot
+// ([Engine.startCore]), so [placement.NodeProfile.HoldsData] is the whole test.
 func capacityHolders(held []coord.Lease) []string {
 	out := make([]string, 0, len(held))
 	for _, lease := range held {
@@ -1506,22 +1303,16 @@ func capacityMembers(held []coord.Lease) []string {
 
 // capacityIncarnations is each participant's identity as a request is about to
 // leave, read from the acknowledgements every maintenance-mode node writes for
-// this log at boot: bound to the window open when it booted, or WINDOWLESS
-// where none was, which is the ordinary case for a fleet restarted before the
-// verb ran. Either names the process, and that is all the record of who is
-// running needs; which one the seal takes is [statelog.SealRestarts]'
-// question.
+// this log at boot, bound to the window open then or WINDOWLESS (the ordinary
+// case for a fleet restarted before the verb ran). Either names the process;
+// which one the seal takes is [statelog.SealRestarts]' question.
 //
-// A PARTICIPANT WITH NO ACKNOWLEDGEMENT HAS NO RESTART RECORDED into the mode
-// ([statelog.BaselineMissing], the one rule the status pages read too), and is
-// refused rather than recorded at an empty string: the record names the
-// process each participant was running as the request left, and an empty one
-// names none, so a request sent past it leaves with nobody shown to have
-// reached the procedure's first restart on that node. A request leaves only
-// once every participant's process is named. Said as no restart RECORDED
-// rather than as no restart, because a node that restarted and could not write
-// its acknowledgement (its boot could not read the window, or the write
-// failed) is the same refusal, and its own log says which.
+// A PARTICIPANT WITH NO ACKNOWLEDGEMENT HAS NO RESTART RECORDED
+// ([statelog.BaselineMissing], the rule the status pages read too) and is
+// refused rather than recorded as "": a request leaves only once every
+// participant's process is named. "Recorded", because a node that restarted
+// but could not write its acknowledgement is refused the same, and its own
+// log says why.
 func (e *Engine) capacityIncarnations(ctx context.Context, op coord.MaintenanceOperation) (
 	map[string]string, []string, error) {
 
@@ -1564,13 +1355,10 @@ func (e *Engine) capacityIncarnations(ctx context.Context, op coord.MaintenanceO
 // completeJournal marks one request's own record completed, on its own
 // read-back.
 //
-// THAT RECORD AND NO OTHER, matched on its attempt, its issuer and the instant
-// it was written. A process that runs the verb twice issues two requests, each
-// with its own record, and the first may have ended with its outcome unknown:
-// completed on the second's read-back, it would be resolved by a value the
-// second request set while it may still be in flight, which is the retirement
-// by value the journal refuses ([coord.JournalRetired]). Only the seal
-// resolves it.
+// THAT RECORD AND NO OTHER, matched on attempt, issuer and instant: completing
+// an earlier request whose outcome is unknown on a later one's read-back would
+// retire it by value, which the journal refuses ([coord.JournalRetired]); only
+// the seal resolves it.
 func completeJournal(journal []coord.JournalRecord, record coord.JournalRecord) []coord.JournalRecord {
 	out := cloneJournal(journal)
 	for i := range out {
@@ -1624,12 +1412,8 @@ func sleep(ctx context.Context, d time.Duration) {
 }
 
 // dialsExternalBroker reports whether this fleet's stream lives on a broker
-// the engine does not run.
-//
-// It is what decides whether stopping every Crewlet node establishes anything:
-// on the embedded topology the broker binds no socket, so the exclusion is
-// structural; on an external cluster the engine cannot know who else holds a
-// connection, and saying so is more honest than a check that proves nothing.
+// the engine does not run, where stopping every Crewlet node establishes no
+// exclusion (the embedded broker binds no socket; see [Engine.SetCapacity]).
 func (e *Engine) dialsExternalBroker() bool {
 	return e.backends != nil && e.backends.Queue != nil &&
 		e.backends.Queue.Backend() != "jetstream-embedded"

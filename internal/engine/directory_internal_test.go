@@ -24,19 +24,11 @@ import (
 )
 
 // A SUSPENSION WITHDRAWS A SEAT'S CONTACT IDENTITIES WITHIN ONE APPLY, with no
-// configuration change anywhere.
-//
-// The whole path, from the identity applier the register builds to the
-// registry every inbound delivery resolves through: one status record is
-// applied and committed, the applier's post-commit signal wakes this node's
-// directory trigger, and the registry it rebuilds — for the SAME company,
-// because nothing about the company moved — no longer attributes the
-// founder's Slack account to their seat.
-//
-// THE CONTROL is the registry every node built before the directory existed:
-// the org view alone. It keeps routing to the suspended founder, which is the
-// defect, and it is built here from the very company the rebuilt registry
-// answers for.
+// configuration change: one status record committed through the applier the
+// register builds signals the directory trigger, and the registry it rebuilds,
+// for the SAME company, no longer attributes the founder's Slack account to
+// their seat. THE CONTROL, the org view alone built from that same company,
+// still routes to the suspended founder.
 func TestASuspensionWithdrawsContactIdentitiesWithinOneApply(t *testing.T) {
 	t.Parallel()
 	rig := newDirectoryRig(t)
@@ -66,9 +58,8 @@ func TestASuspensionWithdrawsContactIdentitiesWithinOneApply(t *testing.T) {
 	}
 }
 
-// REINSTATING THEM RESTORES THEIR IDENTITIES, through the same trigger and
-// again with no configuration change: the withdrawal is a reading of the directory,
-// not a state the registry was left in.
+// REINSTATING THEM RESTORES THEIR IDENTITIES through the same trigger: the
+// withdrawal is a reading of the directory, not a state the registry was left in.
 func TestUnsuspendingRestoresThem(t *testing.T) {
 	t.Parallel()
 	rig := newDirectoryRig(t)
@@ -83,24 +74,19 @@ func TestUnsuspendingRestoresThem(t *testing.T) {
 	if _, ok := rig.engine.Registry().Withholding(founderSeat); ok {
 		t.Error("a reinstated seat is still reported withheld")
 	}
-	// AND THE OTHER HUMAN SEAT WAS NEVER TOUCHED, which is what a WHOLE
-	// rebuild buys: a diff against a fresh registry would have dropped
-	// every identity the suspension did not name.
+	// AND THE OTHER HUMAN SEAT WAS NEVER TOUCHED, which a WHOLE rebuild buys
+	// and a diff against a fresh registry would not.
 	if _, ok := rig.engine.Registry().ByExternalID("slack", colleagueSlack); !ok {
 		t.Error("a rebuild lost the colleague's identity it had nothing to do with")
 	}
 }
 
-// EVERY DATA NODE READS ITS OWN DIRECTORY, WHATEVER ITS ROLES — decided by the
-// wiring a running node goes through, not asserted of a hand-built engine.
-//
-// A data node runs the identity domain whatever its company and its other
-// roles, so it reads its OWN rows, gated on its own applier's position. The
-// node that serves no API is the case that matters: it consumes inbound
-// deliveries and runs seats like every other node, so a registry built there
-// from anything but the directory would attribute a suspended person's
-// messages to their seat. Mutation: narrow the identity domain to the nodes
-// that serve the API and the second case opens no reader.
+// EVERY DATA NODE READS ITS OWN DIRECTORY, WHATEVER ITS ROLES, through the
+// wiring a running node boots with: its OWN rows, gated on its own applier's
+// position. The node serving no API matters most: it consumes inbound
+// deliveries too, so a chart-built registry there would attribute a suspended
+// person's messages to their seat. Mutation: narrow the identity domain to the
+// nodes that serve the API and the second case opens no reader.
 func TestEveryDataNodeReadsItsOwnDirectoryWhateverItsRoles(t *testing.T) {
 	t.Parallel()
 	for name, roles := range map[string][]string{
@@ -127,20 +113,14 @@ func TestEveryDataNodeReadsItsOwnDirectoryWhateverItsRoles(t *testing.T) {
 }
 
 // A NODE WITHOUT `data` READS A DATA NODE'S DIRECTORY, through the estate
-// router, with no position to gate on.
-//
-// It runs no applier (ADR-0025), so it has no rows of its own to read and no
-// signal that they moved: a registry built from the chart instead would route
-// a suspended person's word to their seat for as long as the node ran. So it
-// is handed the directory a data node answers for it, re-read on the
-// registry's own timer. Mutation: hand it the local reader's shape, or a
+// router, re-read on the registry's timer with no position to gate on: it runs
+// no applier (ADR-0025), and a chart-built registry would route a suspended
+// person's word to their seat. Mutation: hand it the local reader's shape, or a
 // position gate, and this fails.
 //
-// WHAT THIS HOLDS IS THE HAND-OVER'S BODY, called by hand on a rig: a node
-// without `data` needs a leaf link to a data member to boot, which only
-// internal/e2e stands up. That [New] calls it on such a node — and that a
-// suspension written on a data node then reaches the stateless node's registry
-// — is internal/e2e's TestAStatelessNodesPartyRegistryReadsTheDirectory.
+// This calls the hand-over's body on a rig, since booting such a node needs a
+// leaf link only internal/e2e stands up; that [New] calls it, end to end, is
+// internal/e2e's TestAStatelessNodesPartyRegistryReadsTheDirectory.
 func TestANodeWithoutDataReadsTheDirectoryThroughTheRouter(t *testing.T) {
 	t.Parallel()
 	e, _ := statelessOver(t)
@@ -154,13 +134,10 @@ func TestANodeWithoutDataReadsTheDirectoryThroughTheRouter(t *testing.T) {
 	}
 }
 
-// AN ENGINE HANDED NO DIRECTORY IS CHART-ONLY, and a signal changes nothing.
-//
-// That is `crewlet validate`, and a test: neither the core runtime nor the
-// routed hand-over a node without `data` gets ran, so the registry consults no
-// directory and the trigger has nothing to rebuild from — not even the
-// pointer, which is what a reader holding the live registry compares. No
-// engine [New] builds is in this posture.
+// AN ENGINE HANDED NO DIRECTORY IS CHART-ONLY, and a signal changes nothing,
+// not even the pointer a reader holding the live registry compares. Only
+// `crewlet validate` and a test are in this posture, never an engine [New]
+// builds.
 func TestAnEngineHandedNoDirectoryIsChartOnly(t *testing.T) {
 	t.Parallel()
 	e := &Engine{directoryNudge: make(chan struct{}, 1)}
@@ -184,16 +161,11 @@ func TestAnEngineHandedNoDirectoryIsChartOnly(t *testing.T) {
 }
 
 // THE TWO REBUILD TRIGGERS SWAP WHOLE REGISTRIES, never a half-built one and
-// never a diff, however they interleave.
-//
-// A published company (an apply's trigger) and a directory signal both
-// rebuild one pointer, and the second rebuilds for the SAME company the first
-// built for. Run together under the race detector, with a reader resolving the
-// seat the directory never touches on every registry it can see: that seat
-// vanishing even once is a registry published half-built or patched rather
-// than rebuilt. At the end the registry answers for the LAST company published
-// and the LAST reading taken — the rebuild that read the directory first must
-// never be the one that lands last.
+// never a diff, however they interleave. A publish and a directory signal run
+// together under the race detector while a reader resolves the seat the
+// directory never touches: its vanishing once is a registry published
+// half-built or patched. At the end the registry answers for the LAST company
+// published and the LAST reading, never the rebuild that read first.
 func TestTheTwoRebuildTriggersSwapWholeRegistries(t *testing.T) {
 	t.Parallel()
 	e := &Engine{directoryNudge: make(chan struct{}, 1)}
@@ -266,13 +238,9 @@ func TestTheTwoRebuildTriggersSwapWholeRegistries(t *testing.T) {
 	}
 }
 
-// AN UNREADABLE DIRECTORY CARRIES THE LAST READING FORWARD.
-//
-// Neither alternative is safe: chart-only hands every suspended person's seat
-// back to the chart for the length of a store blip, and withholding every human
-// seat silences the company over the same blip. What the node last KNEW is the
-// reading the live registry was built from — including across a newly
-// published company, which is where a stale reading would otherwise be lost.
+// AN UNREADABLE DIRECTORY CARRIES THE LAST READING FORWARD
+// ([Engine.readStandingLocked]), across a newly published company too, where a
+// stale reading would otherwise be lost.
 func TestAnUnreadableDirectoryCarriesTheLastReadingForward(t *testing.T) {
 	t.Parallel()
 	e := &Engine{directoryNudge: make(chan struct{}, 1)}
@@ -298,8 +266,7 @@ func TestAnUnreadableDirectoryCarriesTheLastReadingForward(t *testing.T) {
 	if _, ok := e.Registry().ByExternalID("slack", colleagueSlack); !ok {
 		t.Error("a directory that could not be read withheld a seat nobody suspended")
 	}
-	// AND THE NET IS OWED A RETRY, which the periodic tick honours however
-	// still the applier's position is.
+	// AND THE NET IS OWED A RETRY, however still the applier's position is.
 	e.notify.rebuilding.Lock()
 	owed := e.notify.directoryFailed
 	e.notify.rebuilding.Unlock()
@@ -308,15 +275,10 @@ func TestAnUnreadableDirectoryCarriesTheLastReadingForward(t *testing.T) {
 	}
 }
 
-// A NODE THAT HAS NEVER READ ITS DIRECTORY FAILS CLOSED.
-//
-// The first registry is built at boot, with no live registry to carry a
-// reading from. What it carried used to be the zero Standing — chart-only —
-// so a directory unreadable at that moment registered every suspended,
-// retired and removed holder's accounts until the net's re-read landed. It now
-// withholds every human seat instead, and the net's first successful read is
-// what routes them: the control is that very read, which must restore the
-// seats a reading does not withhold.
+// A NODE THAT HAS NEVER READ ITS DIRECTORY FAILS CLOSED: the boot registry,
+// with nothing to carry, withholds every human seat rather than going
+// chart-only. The control is the net's first successful read, which must route
+// the seats a reading does not withhold.
 func TestAnUnreadableFirstReadingWithholdsEveryHumanSeat(t *testing.T) {
 	t.Parallel()
 	e := &Engine{directoryNudge: make(chan struct{}, 1)}
@@ -348,7 +310,7 @@ func TestAnUnreadableFirstReadingWithholdsEveryHumanSeat(t *testing.T) {
 	}
 
 	// A SECOND UNREADABLE PASS keeps it closed, even for a newly published
-	// company: an unread reading carried forward is still an unread one.
+	// company: an unread reading carried forward is still unread.
 	e.refreshParties(t.Context(), directoryCompany(t, e))
 	if _, ok := e.Registry().ByExternalID("slack", colleagueSlack); ok {
 		t.Error("a second unreadable pass reopened contact routing")
@@ -395,8 +357,7 @@ func bootDirectoryNode(t *testing.T, roles []string) *Engine {
 }
 
 // bootDirectoryNodeWith is [bootDirectoryNode] with the node's Tier A amended
-// before it boots, for a case about what a node reads from its own
-// configuration.
+// before it boots.
 func bootDirectoryNodeWith(t *testing.T, roles []string,
 	amend func(*config.Bootstrap)) *Engine {
 
@@ -408,8 +369,8 @@ func bootDirectoryNodeWith(t *testing.T, roles []string,
 	if amend != nil {
 		amend(&b)
 	}
-	// A RECORDER, as `crewlet run` always hands one: a node booted without
-	// one silently drops every gauge a case might read.
+	// A RECORDER, as `crewlet run` hands one: without it a node drops every
+	// gauge a case might read.
 	rec, err := metrics.New()
 	if err != nil {
 		t.Fatalf("recorder: %v", err)
@@ -482,8 +443,7 @@ func newDirectoryRig(t *testing.T) *directoryRig {
 	}
 	e.useDirectory(iamDirectory{reader: reader}, reader.At)
 
-	// THROUGH THE REGISTER, so the signal this case depends on is the one
-	// a running node wires rather than one the test hands in.
+	// THROUGH THE REGISTER, so the signal is the one a running node wires.
 	entry, ok := registrationFor(iamdomain.Domain{}.Name())
 	if !ok {
 		t.Fatal("the register has no identity domain")
@@ -508,9 +468,8 @@ func newDirectoryRig(t *testing.T) *directoryRig {
 	return &directoryRig{engine: e, company: company, db: db, applier: applier}
 }
 
-// bindFounder enrols the founder, active and bound to their seat, in the one
-// directory record that does both — the state every case starts from —
-// answering their person id.
+// bindFounder enrols the founder, active and bound to their seat, in one
+// directory record, answering their person id.
 func (r *directoryRig) bindFounder(t *testing.T) string {
 	t.Helper()
 	id := uuid.NewString()
@@ -582,9 +541,8 @@ func (r *directoryRig) apply(t *testing.T, subject iamdomain.Subject,
 	r.applier.Committed(t.Context())
 }
 
-// awaitRouting waits for this node's registry to route — or stop routing — the
-// founder's Slack account, which the directory trigger does on its own
-// goroutine after the commit.
+// awaitRouting waits for this node's registry to route, or stop routing, the
+// founder's Slack account: the trigger rebuilds on its own goroutine.
 func (r *directoryRig) awaitRouting(t *testing.T, routes bool, what string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)

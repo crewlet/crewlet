@@ -14,20 +14,11 @@ import (
 )
 
 // countingForge answers one identity endpoint, counts the calls, and holds the
-// FIRST of them open until the test says otherwise.
-//
-// The hold is what makes this a test of the cache rather than of the
-// scheduler: two goroutines racing a miss overlap only sometimes, which is why
-// the e2e case that covers this caught the race about one run in ten, while
-// holding the first lookup open makes the overlap the overwhelmingly likely
-// interleaving rather than a rare one.
-//
-// OVERWHELMINGLY LIKELY IS NOT CERTAIN, and this says so rather than claiming
-// otherwise: the hold is released once the FIRST request lands, and nothing
-// here observes the second caller, so a second caller that is not scheduled
-// until the first has stored is an ordinary cache hit and never reaches the
-// waiting path. [TestAWaiterIsProvablyParkedOnAPeersClaim] is the case with an
-// actual barrier behind it; these three are the breadth across the surfaces.
+// FIRST of them open until the test says otherwise, so two racing misses
+// overlap almost always rather than sometimes. Almost always is not always: a
+// second caller not scheduled until the first has stored is an ordinary cache
+// hit. [TestAWaiterIsProvablyParkedOnAPeersClaim] is the case with a real
+// barrier; these three are the breadth across the surfaces.
 type countingForge struct {
 	url   string
 	calls atomic.Int64
@@ -61,16 +52,9 @@ func startCountingForge(t *testing.T, path, body string) *countingForge {
 // unblockOnCleanup returns a function that closes gate exactly once, and
 // arranges for the test's end to call it if the test never did.
 //
-// REGISTERED AFTER the server's own Close, because [testing.T.Cleanup] runs
-// LAST-REGISTERED-FIRST and the order is the whole point: a handler parked on
-// this gate is an outstanding request, and [httptest.Server.Close] waits for
-// those for ever. A test that fails BEFORE its own release — a barrier that
-// timed out, an assertion that fataled — would otherwise hang rather than
-// fail. Measured: a forced early failure in the parked-waiter case turned a
-// one-line FAIL into a 45-second timeout panic, and CI runs the suite at
-// -timeout 30m.
-//
-// ONCE, so the test's own release and this one cannot double-close.
+// Register it AFTER the server's own Close: cleanups run last-registered-first,
+// and [httptest.Server.Close] waits for ever on a handler parked on this gate,
+// so a test that fails before its own release would hang rather than fail.
 func unblockOnCleanup(t *testing.T, gate chan struct{}) func() {
 	t.Helper()
 	var once sync.Once
@@ -80,14 +64,9 @@ func unblockOnCleanup(t *testing.T, gate chan struct{}) func() {
 }
 
 // raceTwo runs resolve twice at once against f, releasing the held lookup only
-// once it is in flight, and returns WHAT EACH CALLER SAW when its own resolve
-// returned.
-//
-// Each caller's own observation, rather than one reading taken afterwards:
-// the caller that waited is the one this is about, and a reading taken after
-// both have finished is satisfied by the holder's store no matter what the
-// waiter did. Measured — a version of this that read the cache at the end
-// passed against a resolve that never waited at all.
+// once it is in flight, and returns what each caller saw when its own resolve
+// returned: a reading taken after both finish is satisfied by the holder's
+// store whatever the waiter did.
 func raceTwo(t *testing.T, f *countingForge, resolve func() string) []string {
 	t.Helper()
 	seen := make([]string, 2)
@@ -105,29 +84,17 @@ func raceTwo(t *testing.T, f *countingForge, resolve func() string) []string {
 	return seen
 }
 
-// ONE CREDENTIAL IS BOUGHT ONCE, HOWEVER MANY CALLERS WANT IT.
+// ONE CREDENTIAL IS BOUGHT ONCE, HOWEVER MANY CALLERS WANT IT, as each cache's
+// doc promises. Two concurrent callers is the ordinary case: every surface's
+// start path and rewire path both run at boot (startIntegrations' reconcile
+// pass and startNotifications).
 //
-// Each cache's own doc promises it — "A rotated token is a cache miss and
-// costs exactly one request" — and it did not hold. resolve read the map under
-// the lock, RELEASED it around the network lookup, and re-locked to store, so
-// two callers that both missed on one credential both bought it.
+// AND A CALLER THAT WAITED HAS THE ANSWER when resolve returns: every call site
+// registers the seat from this cache's snapshot straight after, so returning
+// while a peer's lookup is in flight binds that seat to nobody, a misroute no
+// later pass reports because the next resolve is a hit.
 //
-// Two concurrent callers is the ordinary case rather than a contrived one.
-// Every surface has a start path and a rewire path and both run at boot:
-// startIntegrations arms the reconcile loop (whose pass reaches rewire*)
-// twenty-six lines before startNotifications reaches the start path, and the
-// two were measured ~11 ms apart.
-//
-// AND A CALLER THAT WAITED HAS THE ANSWER when resolve returns. Every one of
-// the six call sites goes on to register the seat from this cache's own
-// snapshot, in the same call with nothing re-resolving in between, so
-// returning early while a peer's lookup was still in flight would bind that
-// seat to nobody — a misroute no later pass reports, because the cache is
-// populated by then and the next resolve is a hit.
-//
-// ALL THREE CACHES, because all three carried the identical shape and
-// therefore the identical race: a fix to one would have left two copies of the
-// bug behind the same promise.
+// All three caches, because all three share the shape.
 func TestOneCredentialIsResolvedOnceForConcurrentCallers(t *testing.T) {
 	t.Parallel()
 	const email = "ceo@example.com"
@@ -194,15 +161,10 @@ func TestOneCredentialIsResolvedOnceForConcurrentCallers(t *testing.T) {
 	}
 }
 
-// A LOOKUP THAT FAILED RELEASES ITS CLAIM, so the next pass buys it again.
-//
-// This is the one way a single-flight cache can be worse than the race it
-// removes: a claim kept after a failure makes that credential permanently
-// unbuyable, and every later caller either blocks on it for ever or returns
-// with nothing while the cache reports itself busy. The surfaces' own contract
-// is the opposite — "a seat whose lookup FAILS is left unresolved rather than
-// failing the boot: the instance may be briefly down, and the next pass
-// retries" — so a failure must leave the cache exactly as it found it.
+// A LOOKUP THAT FAILED RELEASES ITS CLAIM, so the next pass buys it again: a
+// claim kept after a failure makes that credential permanently unbuyable,
+// against the surfaces' contract that a failed lookup leaves the seat
+// unresolved for the next pass to retry.
 func TestAFailedLookupIsRetriedByTheNextPass(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int64
@@ -238,13 +200,9 @@ func TestAFailedLookupIsRetriedByTheNextPass(t *testing.T) {
 	}
 }
 
-// AND A CALLER IS NOT HELD BY A PEER'S SLOW INSTANCE PAST ITS OWN DEADLINE.
-//
-// The wait exists so a caller registers what it asked for, not so it inherits
-// somebody else's patience: the holder's lookup runs under the holder's
-// context, and a waiter whose own caller has given up returns with nothing —
-// exactly as a failed lookup does — rather than blocking on an instance that
-// is not answering.
+// AND A CALLER IS NOT HELD BY A PEER'S SLOW INSTANCE PAST ITS OWN DEADLINE: the
+// holder's lookup runs under the holder's context, and a waiter whose own
+// context is done returns with nothing, as a failed lookup does.
 func TestAWaiterIsNotHeldPastItsOwnDeadline(t *testing.T) {
 	t.Parallel()
 	forge := startCountingForge(t, "/api/v4/user", `{"username":"ceo-bot"}`)
@@ -270,12 +228,9 @@ func TestAWaiterIsNotHeldPastItsOwnDeadline(t *testing.T) {
 		defer close(done)
 		ids.resolve(cancelled, forge.url, []string{"glpat-ceo"})
 	}()
-	// WELL INSIDE THE HOLDER'S OWN TIMEOUT, which is the whole point: the
-	// vendor clients carry one, so a window longer than it is satisfied by
-	// the holder giving up rather than by the waiter respecting its own
-	// deadline. Measured — at thirty seconds this passed against a resolve
-	// that ignored the waiter's context entirely, because the held lookup
-	// timed out at ten and released the claim.
+	// WELL INSIDE THE HOLDER'S OWN TIMEOUT (the vendor clients' ten seconds):
+	// a longer window passes against a resolve that ignores the waiter's
+	// context, once the holder times out and releases the claim.
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
@@ -285,22 +240,16 @@ func TestAWaiterIsNotHeldPastItsOwnDeadline(t *testing.T) {
 	forge.let()
 	<-held
 
-	// AND NOTHING IS ASSERTED ABOUT THE FORGE HERE. A request issued on an
-	// already-cancelled context fails before it dials, so a count taken
-	// after this proves nothing about whether the waiter tried: it reads 1
-	// against this implementation and against one with no single-flight at
-	// all. What this case uniquely holds is the release above; the request
-	// count is [TestOneCredentialIsResolvedOnceForConcurrentCallers]'s.
+	// NOTHING IS ASSERTED ABOUT THE FORGE HERE: a request on an
+	// already-cancelled context fails before it dials, so the count reads 1
+	// with or without single-flight. The count is
+	// [TestOneCredentialIsResolvedOnceForConcurrentCallers]'s.
 }
 
-// A WAITER THAT IS PROVABLY PARKED ON A PEER'S CLAIM, with a barrier behind
-// the word rather than a likely interleaving.
-//
-// The barrier is a SECOND CREDENTIAL that the waiter itself owns. resolve
-// walks its keys under the lock — claiming what is free, collecting what a
-// peer holds — and only then issues its own lookups, so the waiter's request
-// for its own credential CANNOT reach the forge until it has already decided
-// to wait for the peer's. That request arriving is the proof, and it is what
+// A WAITER THAT IS PROVABLY PARKED ON A PEER'S CLAIM. The barrier is a second
+// credential the waiter owns: resolve claims and collects under the lock before
+// issuing its own lookups, so the waiter's request for its own credential
+// reaching the forge proves it already decided to wait for the peer's, and
 // releases the hold.
 func TestAWaiterIsProvablyParkedOnAPeersClaim(t *testing.T) {
 	t.Parallel()
@@ -329,9 +278,7 @@ func TestAWaiterIsProvablyParkedOnAPeersClaim(t *testing.T) {
 		_, _ = w.Write([]byte(`{"username":"` + token + `"}`))
 	}))
 	t.Cleanup(srv.Close)
-	// AFTER Close, so it runs BEFORE it: the holder's handler is parked on
-	// hold, and a barrier below that fatals would otherwise leave Close
-	// waiting on it for the rest of the suite's timeout.
+	// After Close, so it runs before it (unblockOnCleanup).
 	let := unblockOnCleanup(t, hold)
 
 	ids := &gitlabIdentities{}
@@ -383,16 +330,11 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// ONE CALL THAT NAMES A CREDENTIAL TWICE STILL RETURNS.
-//
-// resolve claims what is free and collects what is already claimed, and the
-// second mention of a repeated credential collects THIS CALL'S OWN claim —
-// whose channel only this call's own store loop will close. So the lookups
-// must run before the wait, and that ordering is load-bearing rather than
-// tidy: moved the other way this self-deadlocks, for ever against a caller
-// whose context has no deadline, which is what most of the production call
-// sites' ancestors amount to. Nothing else in this suite passes a repeated
-// key, so nothing else pins it.
+// ONE CALL THAT NAMES A CREDENTIAL TWICE STILL RETURNS. The second mention
+// collects this call's own claim, whose channel only this call's store loop
+// closes, so the lookups must run before the wait: the other way round it
+// self-deadlocks, for ever under a context with no deadline. Nothing else here
+// passes a repeated key.
 func TestACredentialNamedTwiceInOneCallResolvesOnce(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int64
@@ -425,14 +367,9 @@ func TestACredentialNamedTwiceInOneCallResolvesOnce(t *testing.T) {
 	}
 }
 
-// SNAPSHOT HANDS OUT A COPY, and that is a data race rather than a nicety.
-//
-// register and unresolved walk every seat in the org against what this
-// returns, while the OTHER boot path — the concurrency this cache exists for —
-// can be inside the store loop writing the same map. Handing out the live map
-// makes that a genuine concurrent map read and write, reported by the detector
-// only on the interleavings that happen to overlap: the same one-run-in-ten
-// symptom this whole change removes, reintroduced one layer down.
+// SNAPSHOT HANDS OUT A COPY: register and unresolved walk it while the other
+// boot path may be in the store loop writing the same map, a concurrent map
+// read and write the race detector catches only on overlapping interleavings.
 func TestASnapshotIsACopyTheCallerMayHold(t *testing.T) {
 	t.Parallel()
 	ids := &gitlabIdentities{identityCache[string]{known: map[string]string{"glpat-ceo": "ceo-bot"}}}

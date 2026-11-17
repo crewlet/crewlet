@@ -14,14 +14,11 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// The embed seams, as an apply wires them.
-//
-// Every learning path that embeds — the turn-start prefetch, the pull tools
-// that re-run it, the episodist — reads the engine's CURRENT embedder when it
-// is called. These tests reach that through the real apply step (equip) and a
-// real provider over a stand-in endpoint, because the bug they guard was an
-// ORDER inside the apply: the tools were built before the embedder they were
-// meant to use was stored, so they ran one epoch behind for their whole life.
+// The embed seams, as an apply wires them: every learning path that embeds
+// (the turn-start prefetch, the pull tools, the episodist) reads the engine's
+// CURRENT embedder when called, because the apply builds the tools before it
+// stores their embedder. Hence the real apply step (equip) and a real provider
+// over a stand-in endpoint: the ORDER inside the apply is what is held.
 
 // keyedEmbeddings is an OpenAI-compatible embeddings endpoint that records
 // which credential each request carried.
@@ -114,9 +111,8 @@ func recallByMeaning(t *testing.T, c *Company) string {
 }
 
 // THE FIRST EPOCH A NODE APPLIES CAN SEARCH BY MEANING. Its tools are built
-// before its embedder is stored, so a seam captured at build held nothing: for
-// the whole of a node's first epoch query_episodes told every seat "no
-// embeddings are configured" on a company that configured them.
+// before its embedder is stored, so a seam captured at build holds nothing and
+// query_episodes says "no embeddings are configured" for the whole epoch.
 func TestTheBootEpochsPullToolsSearchWithItsEmbedder(t *testing.T) {
 	t.Parallel()
 	api := newKeyedEmbeddings(t, 64)
@@ -135,12 +131,11 @@ func TestTheBootEpochsPullToolsSearchWithItsEmbedder(t *testing.T) {
 	}
 }
 
-// A ROTATED KEY REACHES THE PULL TOOLS. Re-activating an unchanged revision is
-// the documented way to rotate a credential, and it builds the new epoch's
-// tools before it stores the provider holding the new key — so a seam captured
-// at build went on sending the retired key until the NEXT apply. The tools of
-// the epoch before it are reached through seat clones until those are refiled,
-// so they too must embed with what is current.
+// A ROTATED KEY REACHES THE PULL TOOLS. Re-activating an unchanged revision
+// rotates a credential, building the new epoch's tools before it stores the
+// provider with the new key, so a seam captured at build sends the retired key
+// until the NEXT apply. The previous epoch's tools, still reached through seat
+// clones until those are refiled, must embed with what is current too.
 func TestARotatedKeyReachesThePullTools(t *testing.T) {
 	t.Parallel()
 	api := newKeyedEmbeddings(t, 64)

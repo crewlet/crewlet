@@ -10,11 +10,9 @@ import (
 )
 
 // A PERSON'S CREATE LANDS WHERE THEIR SEAT'S WORK DOES, on the chart CURRENT
-// when it is filed. The operator surface is not rebuilt for a new chart, and
-// it used to be handed a stub answering "" for everybody — so a bound
-// founder's create that named no project was refused while `viewer` promised
-// it a project. Read per call: before any epoch there is no chart and no
-// project, and an apply that moves the seat moves the answer.
+// when it is filed: the operator surface is not rebuilt for a new chart, so it
+// reads per call. Before any epoch there is no chart and no project, and an
+// apply that moves the seat moves the answer.
 func TestAPersonsDefaultProjectIsReadFromTheCurrentChart(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
@@ -43,11 +41,9 @@ func TestAPersonsDefaultProjectIsReadFromTheCurrentChart(t *testing.T) {
 
 // THE CONTAINERS A SEAT'S WRITE IS HELD BACK FROM ARE THE CURRENT COMPANY'S.
 // Both are Tier B and the knowledge base's store is built once per node, so it
-// reads them at each write through exactly this expression (the store's
-// [doclet.Options.Reserved]): before any epoch nothing is reserved, and an
-// apply that moves the skills container moves what is held back with it. The
-// API used to evaluate its own copy of this rule once, when it built its
-// catalogue.
+// reads them at each write through exactly this expression
+// ([doclet.Options.Reserved]): before any epoch nothing is reserved, and an
+// apply that moves the skills container moves what is held back with it.
 func TestTheReservedContainersAreTheCurrentCompanys(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}

@@ -245,11 +245,10 @@ func modellessCompany(t *testing.T) (*Company, *org.Role) {
 	return chainCompany(t, chainMember{key: "api", agent: "claude-code"})
 }
 
-// A BRIDGED CODE WRITE NAMES ITS LAUNCH'S MODEL: an executor's harness
-// makes its calls through the bridge, in rounds the engine never sees, so each
-// bridged call is made on the model the run's launch pointed the CLI at — the
-// one a seat's code write names on its push, as a tool loop round's call names
-// its round's — and a launch that named none names none.
+// A BRIDGED CODE WRITE NAMES ITS LAUNCH'S MODEL: the engine never sees an
+// executor's rounds, so each bridged write names the model the launch pointed
+// the CLI at, as a tool loop round's call names its round's, and a launch that
+// named none names none.
 //
 // Mutation: the bridge leaving the call's context unset → the first write
 // names no model, red.
@@ -452,12 +451,10 @@ func suspendRun(t *testing.T) suspendedRun {
 		done: done}
 }
 
-// A SUSPENDED TURN HOLDS THE SCRATCH REPOSITORY IT WROTE: a turn writes a
-// scratch repository — held in its memory, it has no row — and then launches
-// its executor's run: the launch carries the turn's holds onto the row it
-// opens, so once the turn's frame has returned the pass reads the repository
-// held from the row. The turn the run's collection resumes, built from the
-// row, writes a second scratch repository, held on the same row before its
+// A SUSPENDED TURN HOLDS THE SCRATCH REPOSITORY IT WROTE: a turn holds what it
+// wrote in memory, with no row, until its launch carries the holds onto the
+// row it opens, so the pass reads the repository held once the frame returns;
+// the resumed turn, built from the row, holds a second on that row before its
 // write.
 //
 // Mutation: the launch handing the row no holds (LaunchRequest.CodeHolds

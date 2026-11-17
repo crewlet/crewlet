@@ -112,10 +112,9 @@ roles:
 		t.Fatalf("Activate: %v", err)
 	}
 
-	// A company no activation has named — the file a node booted with —
-	// cannot say it is the fleet's. On a node with no reconciler that is
-	// where every node starts: unknown, and the quiet kind, as a reconciler
-	// that has not ticked is.
+	// A company no activation has named (the file a node booted with) cannot
+	// say it is the fleet's: unknown, and the quiet kind, as a reconciler that
+	// has not ticked is.
 	if handles, err := e.activeSeats(t.Context()); err == nil ||
 		!errors.Is(err, maintenance.ErrRevisionPropagating) {
 		t.Fatalf("a company no activation named, on a node with no reconciler, produced "+
@@ -130,10 +129,9 @@ roles:
 	if err != nil {
 		t.Fatalf("NewReconciler: %v", err)
 	}
-	// A company applied from an EARLIER activation is behind the fleet: its
-	// seats may be stale. Still applying the newer one, it is unknown and
-	// the quiet kind — every node is here for the seconds of every
-	// activation.
+	// A company applied from an EARLIER activation may hold stale seats. Still
+	// applying the newer one, it is unknown and the quiet kind: every node is
+	// here for the seconds of every activation.
 	company.ActivatedAt = earlier.At
 	r.publish(applyProgress{applied: activation.Epoch - 1, target: activation.Epoch,
 		behindSince: time.Now()})
@@ -165,9 +163,8 @@ roles:
 	if err != nil {
 		t.Fatalf("a node serving the fleet's activation: %v", err)
 	}
-	// Agent seats only: a human seat has no mailbox to retire or keep. And
-	// each carries the ID its mailbox is named by, because the sweep builds
-	// every one of those names from it.
+	// Agent seats only (a human seat has no mailbox), each carrying the ID the
+	// sweep builds its mailbox's name from.
 	var named []string
 	for _, s := range handles {
 		if s.ID == uuid.Nil {
@@ -180,9 +177,9 @@ roles:
 	if !slices.Equal(named, []string{"ceo", "swe"}) {
 		t.Fatalf("roster = %v, want the agent seats", named)
 	}
-	// AHEAD of the pointer it read — the pointer moved after the read, and
-	// this node had already applied what it moved to — it serves a truer
-	// revision than the one read, as the posture reads the same race.
+	// AHEAD of the pointer it read (the pointer moved after the read, to what
+	// this node had already applied), it serves a truer revision, as the
+	// posture reads the same race.
 	company.ActivatedAt = activation.At.Add(time.Second)
 	r.publish(applyProgress{applied: activation.Epoch + 1, target: activation.Epoch + 1})
 	if handles, err := e.activeSeats(t.Context()); err != nil || len(handles) != 2 {

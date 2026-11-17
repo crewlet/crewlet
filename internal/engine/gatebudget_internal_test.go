@@ -6,13 +6,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A CLIENT WAITS PAST THE NODE'S OWN BOUND ON A GESTURE, by the part of the
-// request that bound does not cover: the round trip around the node's answer.
-// A client that gave up at [GateAnswerBudget] itself would report a gesture
-// the node answered a moment later as unanswered, which is the failure every
-// client's own wait was written to end — and the answer it would miss is the
-// one that says, per log, what to do about the logs the gesture did not
-// finish.
+// A CLIENT WAITS PAST THE NODE'S OWN BOUND ON A GESTURE, by at least one round
+// trip around the node's answer: a client that gave up at [GateAnswerBudget]
+// would report as unanswered a gesture the node answered a moment later, and
+// miss the per-log account of what the gesture did not finish.
 //
 // Mutation: make GateClientWait the answer budget alone and this fails.
 func TestAClientWaitsPastTheGateAnswerBudget(t *testing.T) {

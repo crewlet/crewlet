@@ -9,25 +9,12 @@ import (
 )
 
 // A NODE THAT STOPS VOUCHING FOR ITS IDENTITY ROWS NAMES EVERYONE, once, at the
-// instant its request path stops serving them.
+// instant its request path stops serving them, or each open socket is served on
+// its last decision for as long as the node runs ([vouching]).
 //
-// An applier halted on a record it cannot read — the removal or the
-// company-wide invalidation meant to end an open socket's credential, signed
-// under a key this node lacks — commits no batch, so no move is ever said
-// about it; and an applier frozen behind an unreachable broker says nothing
-// either. What changes is the identity log's lag: its checkpoint stops moving
-// while it owes records, and past the stall grace every identity read on the
-// node answers unknown, so REST answers 503. The open sockets have to be closed
-// at that same instant, or each is served on its last decision for as long as
-// the node runs.
-//
-// The log here is a running log whose checkpoint was last seen moving at
-// t0 with records owed — the figure the identity reader is built with — and
-// the listener is the one the API registers. At exactly the grace the guard
-// still serves (it compares PAST the grace), so nothing is said; one second
-// past it everyone is; staying past it says nothing more; a node that catches
-// up and stalls again says it again. Nothing rebuilds contact routing, which
-// is rebuilt from rows a stall did not write.
+// At exactly the grace the guard still serves, so nothing is said; one second
+// past it everyone is; staying past it says nothing more; catching up and
+// stalling again says it again. Nothing rebuilds contact routing.
 //
 // Mutations: fire on every stalled reading and the third reading is heard
 // twice; compare at the grace rather than past it and the first reading is

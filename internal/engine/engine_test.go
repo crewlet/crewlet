@@ -53,9 +53,8 @@ func company(t *testing.T, doc string) *engine.Company {
 
 func TestAnEpochBuildsWithoutReachingTheNetwork(t *testing.T) {
 	t.Parallel()
-	// Building an epoch must be something a `validate` command can do. A
-	// constructor that dialled a provider would make config validation
-	// depend on the vendor being up.
+	// `crewlet validate` builds an epoch, so it must not depend on a vendor
+	// being up.
 	c := company(t, companyDoc)
 	if c.Org == nil || c.Models == nil || c.Tools == nil {
 		t.Fatalf("epoch = %+v", c)
@@ -67,9 +66,8 @@ func TestAnEpochBuildsWithoutReachingTheNetwork(t *testing.T) {
 
 func TestOnlyAgentSeatsArePlaced(t *testing.T) {
 	t.Parallel()
-	// A human seat is addressable and never spawned. Including one would
-	// make the fleet try to claim a lease for something no node can run,
-	// and then report the company permanently under capacity.
+	// A human seat is never spawned; placing one would report the company
+	// permanently under capacity.
 	c := company(t, companyDoc)
 	var handles []string
 	for _, s := range c.Seats() {
@@ -82,9 +80,8 @@ func TestOnlyAgentSeatsArePlaced(t *testing.T) {
 
 func TestTheSeatListIsStable(t *testing.T) {
 	t.Parallel()
-	// It feeds the placement math, and the sweep compares its own answer
-	// across ticks. A fleet that reshuffled its eligibility list every tick
-	// would churn seats for no reason.
+	// The sweep compares its answer across ticks; a reshuffled list would
+	// churn seats.
 	c := company(t, companyDoc)
 	first := c.Seats()
 	for range 30 {
@@ -110,17 +107,15 @@ func TestARunnerIsBuiltPerSeat(t *testing.T) {
 	}); err != nil {
 		t.Errorf("RunnerFor(ceo): %v", err)
 	}
-	// AND NEVER WITHOUT A LAUNCHER: every executor is a launched run, so a
-	// runner assembled with none is refused where it is assembled, naming
-	// what is missing, rather than failing the seat's first turn.
+	// Never without a launcher: refused where assembled, naming it, rather
+	// than failing the seat's first turn.
 	_, err := c.RunnerFor(t.Context(), "ceo", nil, engine.RunnerInput{Task: "post it", Reply: turn.NoReply(),
 		Sessions: toolSessions(t)})
 	if err == nil || !strings.Contains(err.Error(), "Launcher") {
 		t.Errorf("a runner with no executor launcher = %v, want it refused naming the launcher", err)
 	}
-	// AND NEVER A PICKUP'S WITHOUT THE READ OF ITS ANSWER (ADR-0122):
-	// with none, the submission check would hold the turn to nothing on its
-	// item, so it is refused where it is assembled.
+	// Never a pickup's without the read of its answer (ADR-0122), or the
+	// submission check holds the turn to nothing on its item.
 	pickup := turn.ToolReply("")
 	pickup.Item = "t-1"
 	_, err = c.RunnerFor(t.Context(), "ceo", nil, engine.RunnerInput{Task: "pick it up", Reply: pickup,
@@ -135,8 +130,7 @@ func TestARunnerIsBuiltPerSeat(t *testing.T) {
 		}}); err != nil {
 		t.Errorf("a pickup's runner with its answer read: %v", err)
 	}
-	// A human seat has no runner, and the refusal must name the seat —
-	// "not an agent seat" sent to the wrong place is a debugging session.
+	// A human seat has no runner, and the refusal names the seat.
 	_, err = c.RunnerFor(t.Context(), "founder", nil, engine.RunnerInput{})
 	if err == nil {
 		t.Fatal("a human seat got a runner")
@@ -151,9 +145,8 @@ func TestARunnerIsBuiltPerSeat(t *testing.T) {
 
 func TestTurnSettingsComeFromTheEpochNotALiveCell(t *testing.T) {
 	t.Parallel()
-	// An in-flight turn holds the epoch it started under until it ends,
-	// which is what makes the mid-turn config swap unrepresentable rather
-	// than merely guarded against.
+	// An in-flight turn holds the epoch it started under, so a mid-turn
+	// config swap is unrepresentable.
 	c := company(t, companyDoc+"\nturn_engine:\n  max_iterations: 7\n  delegation_depth_limit: 2\n")
 	got := c.TurnSettings(time.Time{})
 	if got.MaxIterations != 7 || got.DelegationDepthLimit != 2 {
@@ -162,8 +155,7 @@ func TestTurnSettingsComeFromTheEpochNotALiveCell(t *testing.T) {
 	if !slices.Contains(got.SkipNames, toolname.Activate) {
 		t.Errorf("skip names = %v, want the meta-tools", got.SkipNames)
 	}
-	// The wall-clock cap comes off the TURN, not the epoch: a scheduled fire
-	// carries one, fixed when the turn began, and every other trigger none.
+	// The wall-clock deadline comes off the TURN, not the epoch.
 	if !got.Deadline.IsZero() {
 		t.Errorf("an uncapped turn produced a deadline of %s", got.Deadline)
 	}
@@ -182,15 +174,10 @@ func TestAnEmptyCompanyIsRefusedRatherThanHalfBuilt(t *testing.T) {
 
 func TestAnUnvalidatedConfigIsValidatedHere(t *testing.T) {
 	t.Parallel()
-	// A Company is an exported struct an embedder can build directly, so
-	// the invariants everything below relies on are only guaranteed if this
-	// checks them. An epoch assembled from an invalid config is a company
-	// that boots and then fails at its first turn.
-	// A company-level rule, deliberately: an empty name is ALSO caught
-	// building the organization, so it proves nothing about this check. A
-	// negative token budget is refused by Company.Validate alone — found by
-	// mutation, where removing the validation still failed the empty-name
-	// case and looked fine.
+	// A hand-built Company bypasses ParseCompany, so NewCompany must
+	// validate it. A negative token budget, because only Company.Validate
+	// refuses it: an empty name is also caught building the organization,
+	// so it would pass with the validation removed.
 	handbuilt := config.DefaultCompany()
 	handbuilt.Name = "Acme"
 	negative := -1
@@ -204,9 +191,8 @@ func TestAnUnvalidatedConfigIsValidatedHere(t *testing.T) {
 		t.Error("an invalid hand-built config produced an epoch")
 	}
 
-	// The counterfactual: the same config with a legal budget builds.
-	// Without it this passes for a constructor that refuses everything
-	// hand-built.
+	// The counterfactual: with a legal budget it builds, so this does not
+	// pass for a constructor that refuses everything hand-built.
 	handbuilt.TokenBudget = config.TokenBudget{}
 	if _, err := engine.NewCompany(&handbuilt); err != nil {
 		t.Errorf("a valid hand-built config was refused: %v", err)
@@ -215,10 +201,8 @@ func TestAnUnvalidatedConfigIsValidatedHere(t *testing.T) {
 
 func TestTheExtensionJudgeIsOnUnlessTurnedOff(t *testing.T) {
 	t.Parallel()
-	// The config documents it as on by default, and an unset Toggle is
-	// exactly the case that decides it: reading a zero Toggle as false
-	// would disable round-cap extensions for every company that never
-	// mentioned them.
+	// Documented as on by default: reading an unset Toggle as false would
+	// disable round-cap extensions for every company that never set it.
 	c := company(t, companyDoc)
 	if got, err := c.RunnerFor(t.Context(), "ceo", nil, engine.RunnerInput{Reply: turn.NoReply(),
 		Launcher: noLaunch{}, Sessions: toolSessions(t)}); err != nil {
@@ -239,9 +223,8 @@ func TestTheExtensionJudgeIsOnUnlessTurnedOff(t *testing.T) {
 
 func TestAProviderBuildsWithoutALogin(t *testing.T) {
 	// It must BUILD without credentials: the call then fails with the
-	// vendor's own "not authenticated", which names the harness, while a
-	// constructor that refused to exist would take the whole company down
-	// at boot over one provider's login.
+	// vendor's own "not authenticated", where a refusing constructor would
+	// take the whole company down at boot over one provider's login.
 	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	c, err := config.ParseCompany([]byte(`
 name: Acme
@@ -301,11 +284,10 @@ func TestStateDirsAreDerivedPerProviderKey(t *testing.T) {
 	}
 }
 
-// The documented fallback: an entry that names no token still gets one from
-// the profile's own variable, through the resolver — which reads the secret
-// store BEFORE the environment. Without it, every operator would have to wire
-// up a ${VAR} by hand for a value `crewlet llm login -capture-token` just
-// wrote into the store itself.
+// The documented fallback: an entry that names no token gets one from the
+// profile's own variable, through the resolver (secret store before the
+// environment), so a value `crewlet llm login -capture-token` stored needs no
+// hand-wired ${VAR}.
 func TestAnEntryReadsItsConventionalTokenWhenItNamesNone(t *testing.T) {
 	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-from-the-convention")
@@ -335,9 +317,8 @@ roles:
 	}
 }
 
-// toolSessions is the session directory a runner serves its phases' tools
-// from, for one case, removed when it ends: what the engine hands every
-// runner it builds ([engine.RunnerInput.Sessions]).
+// toolSessions is one case's session directory for a runner's phases' tools
+// ([engine.RunnerInput.Sessions]), removed when the case ends.
 func toolSessions(t *testing.T) *toolsession.Host {
 	t.Helper()
 	host, err := toolsession.NewHost()

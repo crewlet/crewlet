@@ -8,12 +8,9 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 )
 
-// THE COLLECT DUTY READS EVERY REGISTERED VENDOR AND THE SERVERS: the SSH
-// source is no vendor package's registration, since it runs its commands
-// through this node's runner, so the engine adds it, once, beside the others.
-//
-// Mutation: hand the duty the registry alone, and no server that opts in is
-// ever read for the atlas.
+// The collect duty reads every registered vendor and, once, the SSH source
+// the engine adds beside them. Mutation: hand the duty the registry alone,
+// and no server that opts in is ever read for the atlas.
 func TestTheCollectDutyReadsTheServersBesideEveryVendor(t *testing.T) {
 	t.Parallel()
 	var kinds []integration.Kind

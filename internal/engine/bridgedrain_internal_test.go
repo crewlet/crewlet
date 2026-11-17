@@ -53,16 +53,12 @@ func closedNow(ch <-chan struct{}) bool {
 	}
 }
 
-// A DRAIN GIVES ITS SEATS BACK, THEN WAITS FOR THEIR BRIDGED CALLS. A stopping
-// node releases every seat it holds, and the release ends the bridge sessions
-// of the seat's executor runs, waiting for no call still running on them: the
-// box is answered that its call is still running, and the seat's lease is
-// given back while the call still runs. The call runs on here and writes its
-// record through the store and the broker the stop's teardown closes, so the
-// drain waits for it, once its seats are given back, and returns once it is
-// recorded — where the release used to wait for it while holding the seat's
-// lease. Read off the line the bridge's wait writes as it begins, so the order
-// is the drain's own and no clock's.
+// A DRAIN GIVES ITS SEATS BACK, THEN WAITS FOR THEIR BRIDGED CALLS. Releasing a
+// seat ends its runs' bridge sessions without waiting: the box is told its call
+// still runs, and the lease goes back. The call runs on here and records
+// through the store and broker the teardown closes, so the drain waits for it
+// once the seats are back. The order is read off the line the bridge's wait
+// logs, not a clock.
 //
 // NOT IN PARALLEL: it reads the process's log ([captureEngineLogs]).
 //

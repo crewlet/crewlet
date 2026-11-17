@@ -22,11 +22,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE SEAT'S ACCESS, TOLD, over a running node: what a turn's dispatch tells
-// the seat, read against what the access log says it was last told, and the
-// told record its first launch writes. The company's policies are part of a
-// seat's snapshot, so a revision that changes one is a change of access with
-// no vendor to stand up.
+// THE SEAT'S ACCESS, TOLD, over a running node. The company's policies are
+// part of a seat's snapshot, so a revision that changes one is a change of
+// access with no vendor to stand up.
 
 // capabilityCompany is the test company with policies.
 func capabilityCompany(t *testing.T, policies ...string) *Company {

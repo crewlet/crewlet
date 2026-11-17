@@ -15,54 +15,27 @@ import (
 	"github.com/crewlet/crewlet/internal/period"
 )
 
-// Enforcing the token budget.
-//
-// The seam existed and nothing supplied it: runner.Config.Budget was nil on
-// every turn, so a company with a `token_budget:` spent without limit and the
-// number in its config was decoration. Money leaves the building for every
-// token, which is why this fails CLOSED — a counter that cannot be reached
-// stops the round rather than silently un-capping the company.
-//
-// CAPS AND THE CLOCK ARE READ OFF THE EPOCH, usage off the fleet's shared
-// counters, and the split is the design: a revision that raises a ceiling or
-// moves the company's clock takes effect on the next turn (both travel in on
-// every call), while each window's counter has to be one number across the
-// fleet or N nodes each spend the whole allowance — which is exactly what a
-// counter on the node's own database was. The windows a round is charged in
-// are cut at the moment it is charged, on the clock of the epoch the turn is
-// pinned to, so a turn that runs across midnight charges its later rounds to
-// the new day (ADR-0019).
-//
-// EVERY SEAT IS COUNTED, a seat nothing caps included ([Engine.meterFor]), so a
-// ceiling set mid-window judges the spend the window already holds. And a seat
-// whose capped window refuses is not handed work it cannot run: it is PARKED
-// on its inbox until the window turns over (budgetpark.go).
-//
-// ONE CLOCK FOR EVERY WINDOW THE ENGINE CUTS ([Engine.now]). The ZONE is the
-// epoch's and the INSTANT is the engine's, and every site that turns the two
-// into windows reads the instant there: a round's charge and the headroom
-// reader (the meter), an auxiliary pass's record (built from that meter), the
-// park's question and the alarm it arms, the live meter's frame, a collected
-// launch's charge and a person's answer. Each of them used to call
-// time.Now for itself, and the park carried a clock of its own beside them, so
-// no two could be held to one window: a case that charged through one and read
-// the windows back through another failed whenever a midnight fell between the
-// two reads, and a case that pinned the park's clock still had a meter reading
-// the wall's.
+// Enforcing the token budget, which fails CLOSED: money leaves for every
+// token, so an unreachable counter stops the round rather than un-capping the
+// company. Caps and the zone are read off the turn's pinned epoch, so a
+// revision takes effect on the next turn; usage is the fleet's shared
+// counters, since a per-node counter lets N nodes each spend the whole
+// allowance. A round is charged in the windows current when it is charged, so
+// a turn across midnight charges its later rounds to the new day (ADR-0019).
+// Every seat is counted, uncapped ones included ([Engine.meterFor]), so a
+// ceiling set mid-window judges the spend already in it; a seat whose capped
+// window refuses is parked until it turns over (budgetpark.go). Every site
+// that cuts a window reads its instant from one clock, [Engine.now], so a
+// charge and the read that checks it fall in one window.
 
 // now is the instant the engine cuts its budget windows at: [Engine.clock], or
 // the wall clock where none is set.
 //
-// NOT AN [Options] FIELD, because the wall clock is the only calendar a running
-// engine can honestly be on. It shares its process with the API, whose budgets
-// answer and live projection judge the same windows on the wall clock, and with
-// the coordination store, which stamps a refusal with it — so an engine handed
-// another instant would cut the gate's day on one calendar while its own
-// process drew that day on a second, a node no deployment produces. The seam is
-// this package's cases', which pin it to put a charge and the read that checks
-// it in one window. A case that runs a whole node keeps the wall clock and moves
-// where the company's day falls instead, with the company's `timezone`, which
-// every reader of a window reads alike.
+// NOT AN [Options] FIELD: the API and the coordination store in this process
+// judge and stamp the same windows on the wall clock, so an engine on another
+// instant would cut the gate's day on a second calendar. The seam is for this
+// package's cases; a case that runs a whole node moves the company's
+// `timezone` instead.
 func (e *Engine) now() time.Time {
 	if e.clock != nil {
 		return e.clock()
@@ -72,22 +45,12 @@ func (e *Engine) now() time.Time {
 
 // budgetCounter is the slice of the fleet's counters a meter calls.
 //
-// Declared here, by the consumer: a turn's meter charges its rounds, reads the
-// counters, and post-charges the turn's AUXILIARY calls ([meter.Record]) —
-// never a round, because Charge counts the round it refuses, so a refused
-// round is on the counter without a second write. An auxiliary call has no
-// verdict to wait on (its size is known only from its answer, and nothing is
-// left to stop by then), and is post-charged through the meter rather than
-// beside it so the window it fills is one the turn's next round is held on.
-//
-// And it RECORDS A REFUSAL IT MADE ITSELF ([meter.Refused]): a call the meter
-// stops before it is made is turned away by the gate as surely as a charge
-// the counter refuses, and the charge that would have stamped the window is
-// the one the stop prevents, so the meter stamps it ([coord.Budgets.Refuse]).
-// Every other gate that turns work away on a reading of these counters before
-// any call is made — a delivery parked, a person's question refused, a
-// reflection pass declined — records its refusal the same way
-// ([meter.turnAway]).
+// Charge counts the round it refuses, so a refused round needs no second
+// write. PostCharge is only for a turn's AUXILIARY calls ([meter.Record]),
+// whose size is known only from the answer; it goes through the meter so the
+// window it fills is one the turn's next round is held on. Refuse stamps a
+// refusal a gate made with no charge ([meter.Refused], [meter.turnAway]): the
+// charge that would have stamped the window is the one the gate prevented.
 type budgetCounter interface {
 	Charge(ctx context.Context, req coord.ChargeRequest) (coord.Spend, error)
 	PostCharge(ctx context.Context, seat string, tokens int, windows coord.Windows) (coord.Spend, error)
@@ -96,15 +59,11 @@ type budgetCounter interface {
 }
 
 // noticedCounter is the counter every gate on this node charges and refuses
-// through, telling the live meters ([refusalLatch]) what each answer says
-// about refusals: a refused charge names the window it refused in, a
-// recorded refusal ([coord.Budgets.Refuse]) every window it stamped, and an
-// admitted charge of any tokens clears the stamps of both scopes it charged.
-//
-// AT THE COUNTER'S ANSWER, which is the one point every refusal passes —
-// a turn's round, a call its meter holds, a parked delivery, a person's
-// question, a reflection declined — so no gate can refuse without the
-// header hearing of it, and none has to remember to say so.
+// through, telling the live meters ([refusalLatch]) what each answer says: a
+// refused charge names the window it refused in, a recorded refusal
+// ([coord.Budgets.Refuse]) every window it stamped, and an admitted charge of
+// any tokens clears both scopes' stamps. At the counter's answer because every
+// refusal passes it, so no gate has to remember to tell the header.
 type noticedCounter struct {
 	budgetCounter
 	refusals *refusalLatch
@@ -117,12 +76,10 @@ func (n noticedCounter) Charge(ctx context.Context, req coord.ChargeRequest) (co
 		return got, err
 	}
 	if got.OK {
-		// ONLY A CHARGE OF SOMETHING. A charge of nothing is admitted
-		// without the counter looking and writes nothing
-		// ([coord.Budgets.Charge]), so it clears no stamp — and a latch
-		// that forgot the window anyway would hear the next refusal in it
-		// as a first and wake the meters again, once per phase whose
-		// provider reports no usage.
+		// Only a charge of something: a charge of nothing writes nothing
+		// ([coord.Budgets.Charge]) so clears no stamp, and forgetting the
+		// window anyway would hear its next refusal as a first and wake
+		// the meters again.
 		if req.Tokens > 0 {
 			n.refusals.admitted(coord.OrgScope, req.Seat)
 		}
@@ -158,12 +115,11 @@ func (e *Engine) budgets() budgetCounter {
 }
 
 // budgetBasis is what one epoch says a seat's spend is judged by: the
-// company's ceilings, the seat's own, the clock their windows are cut on, and
-// the static floor of an executor launch
-// (turn_engine.executor_min_budget_tokens), beside which a launch's brief is
-// counted ([launchFloor]): the one threshold below "full" a window can turn a
-// seat's turns away at before a launch of them is refused below a floor of its
-// own ([floorOf]).
+// company's ceilings, the seat's own, the zone their windows are cut in, and
+// the static executor launch floor (turn_engine.executor_min_budget_tokens):
+// the one threshold below "full" at which a window turns a seat's turns away
+// (a launch's brief is counted beside it, [launchFloor]; a launch's own floor
+// is [floorOf]).
 type budgetBasis struct {
 	org, seat coord.Caps
 	zone      *time.Location
@@ -172,10 +128,9 @@ type budgetBasis struct {
 
 // basisOf reads a seat's budget basis off one epoch.
 //
-// The ROLE's ceilings, not the unit's: a unit budget would need a third
-// counter scope and a rule for which of three caps a refusal names, and no
-// config field declares one. Stated because the absence looks like an
-// oversight otherwise.
+// The ROLE's ceilings, deliberately not the unit's: a unit budget would need a
+// third counter scope and a rule for which cap a refusal names, and no config
+// field declares one.
 func basisOf(c *Company, seat *org.Role) budgetBasis {
 	b := budgetBasis{zone: time.UTC}
 	if c == nil {
@@ -199,42 +154,16 @@ func (b budgetBasis) capped() bool { return len(b.org) > 0 || len(b.seat) > 0 }
 
 // meter charges one seat's rounds against the shared counters.
 //
-// Per turn, holding the caps and the clock the turn was PINNED to — so a
-// mid-turn config change cannot move the ceiling a round is judged against or
-// the day it is counted in, which is the same rule every other epoch read
-// follows. What it does not pin is the instant: each round is charged to the
-// windows current when it is charged.
-//
-// ONE METER SERVES THE WHOLE TURN — every phase, the round-cap judge and every
-// worker the turn delegates to charge it, and every auxiliary call the turn
-// makes is post-charged through it ([meter.Record]) — which is what lets it
-// answer [toolloop.BudgetMeter.Refused] for all of them: a window it has seen
-// full stays full for the rest of the turn, because the ceilings are pinned and
-// nothing takes spend back off a counter, until the window turns over on the
-// turn's pinned clock ([meter.Refused] names the one edge of that).
-//
-// THE TURN'S AUXILIARY CALLS ARE TWO OF ITS INPUTS. The context assembly,
-// every rewrite the prior-work ledger, the judge's evidence and the tools ask
-// for: each reaches the same counters, by post-charge, and the meter used to
-// learn only from its own charges' answers — so a window one of them filled
-// was one the turn's next round was sent into, billed, and refused. Charged
-// here, its answer is kept like a round's ([meter.keepFilled]), and every call
-// after it, a round or another auxiliary call ([meter.Held]), is held instead
-// of made.
-//
-// A HELD CALL IS A REFUSAL, AND IT IS RECORDED AS ONE. The window's refusal
-// stamp on the shared counter (coord.WindowUsage.RefusedAt) is what `refused_at`,
-// "last refused" and `crewlet budgets show` report, and it used to be written
-// only by a refused charge — the charge a hold exists to prevent. So a window
-// the turn's own context assembly filled refused the executor's first round,
-// and every call after it, with no stamp at all. The meter stamps it the first
-// time it holds a call there ([meter.Refused]).
-//
-// AND IT KNOWS WHAT ITS TURN SPENT, window by window ([meter.chargedIn]):
-// everything its turn charged before an executor launch is in the windows that
-// launch's floor is read against, its context assembly on every dispatch, its
-// review and its rewrites before every relaunch, so the most room a window can
-// ever leave the launch is its ceiling less that ([windowRoom]).
+// One per turn segment, holding the caps and clock the turn was PINNED to, so
+// a mid-turn config change cannot move a round's ceiling or day; each round is
+// still charged to the windows current when it is charged. Every phase, judge,
+// worker and auxiliary call of the turn charges through it ([meter.Record]), so
+// a window it has seen full is held for the rest of the turn ([meter.Refused])
+// rather than sent a call that is billed and refused. A held call is a refusal
+// and is stamped as one (coord.WindowUsage.RefusedAt), or `refused_at` and
+// `crewlet budgets show` miss it. It tallies its turn's own spend per window
+// ([meter.chargedIn]), so a launch's room is at most its ceiling less what the
+// turn already charged ([windowRoom]).
 type meter struct {
 	budgets    budgetCounter
 	agentScope string
@@ -248,18 +177,14 @@ type meter struct {
 	// refusal it makes certain. See [meter.Refused].
 	full []toolloop.SpendOutcome
 	// recorded is every window whose refusal this meter has handed the
-	// counter, or is handing it now: a refusal is one event, so it is
-	// written once per window however often the meter is asked. Once per
-	// METER, which is once per segment of a turn: a turn resumed from its
-	// executor is charged through a meter of its own, and its first held
-	// call in a window still full is a refusal of its own too. See
-	// [meter.Refused].
+	// counter, or is handing it now: a refusal is one event, written once
+	// per window per METER, so a resumed segment's own meter records its
+	// own. See [meter.Refused].
 	recorded map[heldWindow]bool
-	// charged is what this meter has put on the counter in each window: every
-	// round its [meter.Spend] charged, admitted or refused alike, since the
-	// counter records both, and every auxiliary call its [meter.Record]
-	// posted, each as the counter answered it. Once per METER, as recorded
-	// is: a resumed segment's own spend is its own. See [meter.chargedIn].
+	// charged is what this meter has put on the counter in each window:
+	// every round [meter.Spend] charged, admitted or refused (the counter
+	// records both), and every auxiliary call [meter.Record] posted. Per
+	// meter, as recorded is. See [meter.chargedIn].
 	charged map[chargedWindow]int
 }
 
@@ -295,16 +220,11 @@ func (m *meter) windows() coord.Windows {
 // fitted, in ONE operation. See coord.Budgets.Charge, which counts a round it
 // refuses as it counts one it admits.
 //
-// THE WRITE OUTLIVES THE CALLER'S CONTEXT, because the round was billed when
-// its reply arrived: a turn cancelled between that reply and this write — a
-// node draining, a turn's own deadline — is spend the counter would
-// otherwise never hear of, which is the leak a refusal that
-// counted nothing used to be. The CALLER is still told it hung up, exactly as
-// a charge on its own dead context told it, so it stops where it stopped
-// before and never runs the round's tools; only the record is new. It cannot
-// hang in the caller's place: the counter races other nodes' writes for a
-// bounded number of attempts, sized for the nodes writing it (coord/kv's
-// casline.go), and the client bounds every request made on a context with no
+// THE WRITE OUTLIVES THE CALLER'S CONTEXT: the round was billed when its reply
+// arrived, so a turn cancelled before this write would leak its spend. The
+// caller is still told it hung up, so it never runs the round's tools. It
+// cannot hang: the counter retries a bounded number of times (coord/kv's
+// casline.go), and the client bounds every request on a context with no
 // deadline.
 func (m *meter) Spend(ctx context.Context, tokens int) (_ toolloop.SpendOutcome, err error) {
 	defer origin.Stamp(&err)
@@ -314,25 +234,17 @@ func (m *meter) Spend(ctx context.Context, tokens int) (_ toolloop.SpendOutcome,
 		OrgCaps: m.basis.org, SeatCaps: m.basis.seat,
 	})
 	if err != nil {
-		// NOT a refusal. The caller must tell "the company is out of
-		// tokens" from "the counter is unreachable": the first is a
-		// budget event an operator acts on, the second is an outage.
+		// NOT a refusal: "out of tokens" is a budget event an operator
+		// acts on, "the counter is unreachable" an outage.
 		return toolloop.SpendOutcome{}, fmt.Errorf("engine: budget: %w", err)
 	}
-	// IN THE WINDOWS IT WAS CHARGED IN, refused or not: the counter counts
-	// a round it refuses as it counts one it admits.
+	// Tallied refused or not: the counter counts both.
 	m.tally(windows, tokens)
-	// WHAT THE ANSWER MAKES CERTAIN is kept before the caller is told
-	// anything, a caller that hung up included: the window is full whether
-	// or not this caller is still listening, and the turn's next call is
-	// made by somebody else.
-	//
-	// The refused window AND every other capped window the round left
-	// full, of either scope: a refusal names one window, and the round it
-	// recorded can have filled another — a round the seat refuses that
-	// leaves the company's day at its ceiling, whose next charge the
-	// company refuses, since it is judged first. Kept from the refusal
-	// alone, the turn reported the seat for a refusal the company makes.
+	// Kept before the caller is told anything, even one that hung up: the
+	// window is full regardless, and the turn's next call is somebody
+	// else's. Kept too is every other capped window the round left full,
+	// of either scope: a round the seat refuses can leave the company's day
+	// at its ceiling, and the company, judged first, refuses the next one.
 	outcome := toolloop.SpendOutcome{OK: true}
 	if !got.OK {
 		outcome = toolloop.SpendOutcome{
@@ -350,27 +262,17 @@ func (m *meter) Spend(ctx context.Context, tokens int) (_ toolloop.SpendOutcome,
 	return outcome, nil
 }
 
-// Record post-charges an AUXILIARY call of the turn — tokens it has already
-// spent, in the windows current at the instant it returned, on the turn's
-// pinned clock — refusing nothing, and keeps every capped window the answer
-// shows with no room left, exactly as a round's answer is kept. See
-// [auxspend.Budget.Record].
+// Record post-charges an AUXILIARY call of the turn — tokens already spent, in
+// the windows current when it returned, on the turn's pinned clock — refusing
+// nothing, and keeps every capped window the answer shows full, as a round's
+// answer is kept. See [auxspend.Budget.Record].
 //
-// RECORDED WHOLE, past a ceiling included: the call happened, and a refusal
-// here would leave the counter under its ceiling with the money gone, which
-// is the leak the auxiliary seam exists to close. What the call changes is the
-// turn's NEXT call, which [meter.Refused] and [meter.Held] now hold — and that
-// hold, not this post-charge, is what stamps the window refusing: a
-// post-charge is not a decision about room.
-//
-// A partial write ([coord.SeatUncountedError]: the company counted it and the
-// seat did not) answers no counters, so nothing is kept from it, and the next
-// round's charge is the gate as it is after any answer the meter cannot read.
-// Nor is it tallied as the turn's spend ([meter.chargedIn]): a launch of this
-// turn then reckons the company's window to leave it that much more room than
-// it can, and where the difference decides its floor, that floor is past what
-// the window has left, so the launch waits past that window for the next, the
-// side a floor errs on.
+// RECORDED WHOLE, past a ceiling included: the call happened, and refusing it
+// would leave the money gone and the counter short. The hold on the turn's
+// NEXT call ([meter.Refused], [meter.Held]) stamps the refusal, not this. A
+// partial write ([coord.SeatUncountedError]) is neither kept, so the next
+// charge is the gate, nor tallied ([meter.chargedIn]), so a launch may reckon
+// more room than there is and wait a window longer: the side a floor errs on.
 func (m *meter) Record(ctx context.Context, tokens int, at time.Time) error {
 	windows := coord.WindowsAt(at, m.basis.zone)
 	got, err := m.budgets.PostCharge(ctx, m.agentScope, tokens, windows)
@@ -397,13 +299,10 @@ func (m *meter) tally(w coord.Windows, tokens int) {
 	}
 }
 
-// chargedIn is what this meter has charged in each window of w, by period, zero
-// for a window it charged nothing in: what its turn has spent there, which the
-// counters hold whatever else reaches those windows.
-//
-// BY THE WINDOW'S LABEL, never by its period alone: a turn that ran across a
-// boundary spent its earlier rounds in the window before, which the window now
-// current never held.
+// chargedIn is what this meter has charged in each window of w, by period,
+// zero where it charged nothing: its turn's own share of what the counters
+// hold. By the window's LABEL, not its period alone: a turn across a boundary
+// spent its earlier rounds in the window before.
 func (m *meter) chargedIn(w coord.Windows) map[period.Period]int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -424,76 +323,14 @@ func (m *meter) Held(ctx context.Context) error { return toolloop.Refusal(ctx, m
 // Refused reports the refusal every further charge of this turn is certain to
 // meet, if this meter has seen one. See [toolloop.BudgetMeter.Refused].
 //
-// From answers the counter already gave, and never a read: every capped
-// window a charge's answer showed with no room left for a single token — the
-// same "refusing" [windowRefuses] parks a seat on. That is the window a
-// REFUSAL named, whose refused round is counted so it reads past its ceiling,
-// and every other window the same round filled, of either scope, since a
-// refusal answers both counters ([coord.Spend.Org]); and every window an
-// ADMITTED round left at its ceiling exactly. Each is final until that window
-// turns over on the turn's pinned clock, because the meter's ceilings are the
-// turn's pinned ones and a counter only grows within a window
-// (coord.SeatUncountedError: nothing is taken back).
-//
-// THE PINNED CLOCK IS THE ONE EDGE. The counter is shared, and a slot never
-// rolls back (coord's package doc): a peer whose clock leads this node's
-// across a boundary, or one on a newer epoch after the company's timezone
-// moved east, rolls the slot onto the next window before this turn's clock
-// says the held one is over. The turn's next charge would then be counted in
-// that next window, and could be admitted while the meter still holds the
-// refusal — for the skew, which is seconds, or after a timezone moved east
-// for as long as the two calendars' boundaries differ, which is hours.
-//
-// It is left so deliberately. A turn's rounds are counted on the calendar it
-// was pinned to, and on that calendar the window IS full; a round the counter
-// places in a peer's next window is the skew it resolves in the closed
-// direction itself (a round charged early costs the next window a round). A
-// read before every hold would trade the turn's own calendar for whichever
-// peer moved the slot. And the hold fails closed the way a refusal does: the
-// turn ends budget_exhausted, the budget park reads the counter on the current
-// calendar, finds nothing refusing and parks nothing, and the delivery runs
-// again — or, for a turn that had already written outside the engine, is
-// recorded, exactly as after a real refusal. What a false hold costs is the
-// turn's work so far, never a call billed and then refused.
-//
-// NAMED BY THE COUNTER'S OWN RULE over the full windows still current: the
-// company's before the seat's — the company is judged first, so while one of
-// its windows is full every charge is the company's refusal, whichever scope
-// refused the round that filled it — and within a scope the window that ends
-// last ([coord.Outlasts]), which is when that scope next has room without a
-// ceiling being raised. A window with some room left, but less than the next
-// call would need, refuses that call too, and the counter would name whichever
-// of the two ends last; the meter does not know the call's size, so it names
-// the full one — a refusal the call is certain to meet, if not always the one
-// the counter would have chosen.
-//
-// AND RECORDED, the first time it names a window. Every caller asks this
+// From answers the counter already gave, never a read ([meter.standing]):
+// each full window is final until it turns over on the turn's pinned clock,
+// because the ceilings are pinned and a counter only grows (package doc,
+// "Budget holds on the pinned clock", for the one edge). Every caller asks
 // immediately before a call and makes none on true, so a true answer is the
-// gate turning that call away — and the call it stops is the one whose charge
-// would have stamped the window's refusal on the shared counter. So the meter
-// stamps it ([coord.Budgets.Refuse]) on the scope the refusal names, the
-// company's before the seat's, which stamps every window of that scope with no
-// room for a single token, judged against the counter as it stands rather
-// than against what the meter holds. Without it, a window an in-turn auxiliary
-// call, a launch's post-charge or an admitted round filling it exactly took
-// to its ceiling refused every call of the turn while `refused_at` — "refusing
-// since" on every screen, and `crewlet budgets show` — said nothing had ever
-// been refused.
-//
-// ONCE PER WINDOW PER METER, claimed before the write, so concurrent callers
-// (a fan-out's workers, the judge beside a round) write it once between them:
-// a refusal is one event, not one write per question. Every window that write
-// stamps is claimed with it. The write is on a context that outlives the
-// caller's, because the refusal happened whatever the caller does next, and is
-// bounded by the counter's attempts and the client's request timeout. A
-// write that fails is logged and is never anything else: the refusal stands
-// either way, and what failed is the report of it, so it is not retried on the
-// next question — a counter that cannot be written is one the turn's next
-// charge fails closed on anyway.
-//
-// The answer is named again once the write's answer is kept, since it is the
-// counter's current reading of the scope: the figure a turn's budget_exhausted
-// reports is then the spend at the refusal rather than at the last charge.
+// gate turning that call away, and the first per window is stamped as a
+// refusal ([meter.record]). The answer is then named again from the stamp's
+// reading, so budget_exhausted reports the spend at the refusal.
 func (m *meter) Refused(ctx context.Context) (toolloop.SpendOutcome, bool) {
 	named, found := m.standing()
 	if found && m.claim(named) {
@@ -503,9 +340,13 @@ func (m *meter) Refused(ctx context.Context) (toolloop.SpendOutcome, bool) {
 	return named, found
 }
 
-// standing is the refusal this meter holds, named by the counter's rule over
-// the full windows still current on its clock. It asks the counter nothing and
-// records nothing. See [meter.Refused].
+// standing is the refusal this meter holds, asking the counter nothing and
+// recording nothing: of the capped windows an answer showed with no room for a
+// single token ([windowRefuses]) still current on its clock, the one the
+// counter's own rule names ([namesBefore]). A window with some room but less
+// than the next call needs refuses it too, but the meter does not know the
+// call's size, so it names the full one: certain, if not always the counter's
+// choice. See [meter.Refused].
 func (m *meter) standing() (toolloop.SpendOutcome, bool) {
 	now := m.now()
 	m.mu.Lock()
@@ -514,8 +355,7 @@ func (m *meter) standing() (toolloop.SpendOutcome, bool) {
 	found := false
 	for _, full := range m.full {
 		if !now.Before(full.ResetsAt) {
-			// Turned over: the window this was is gone, and the next
-			// charge is judged against a fresh one.
+			// Turned over: the next charge meets a fresh window.
 			continue
 		}
 		if !found || namesBefore(full, named) {
@@ -526,7 +366,9 @@ func (m *meter) standing() (toolloop.SpendOutcome, bool) {
 }
 
 // claim reports whether this is the first time the meter refuses a call in the
-// window named, marking it so: true exactly once per window.
+// window named, marking it so: true exactly once per window, claimed before
+// the write so concurrent callers (a fan-out's workers, the judge beside a
+// round) stamp one refusal between them.
 func (m *meter) claim(named toolloop.SpendOutcome) bool {
 	key := heldWindow{scope: named.Scope, period: named.Period, window: named.Window}
 	m.mu.Lock()
@@ -541,9 +383,12 @@ func (m *meter) claim(named toolloop.SpendOutcome) bool {
 	return true
 }
 
-// record stamps the refusal the meter just made on the counter of the scope it
-// names, keeps what the counter answers, and claims every window that write
-// stamped. See [meter.Refused].
+// record stamps the refusal the meter just made ([coord.Budgets.Refuse]) on the
+// scope it names, keeps what the counter answers, and claims every window that
+// write stamped. Without it, a window an auxiliary call, a launch's
+// post-charge or an admitted round filled refuses every call of the turn
+// while `refused_at` and `crewlet budgets show` say nothing was refused. See
+// [meter.Refused].
 func (m *meter) record(ctx context.Context, named toolloop.SpendOutcome) {
 	var (
 		scope string
@@ -574,26 +419,13 @@ func (m *meter) record(ctx context.Context, named toolloop.SpendOutcome) {
 }
 
 // turnAway records a refusal a GATE made on r, a reading [meter.refusing]
-// answered: work it turned away before any call was made, because a window had
-// no room left for a single token — a delivery the budget park deferred
-// ([Engine.budgetPark]), a person's question refused ([answerBudget.Refusing]),
-// a reflection pass declined ([Engine.reflectionRoom]).
-//
-// A REFUSAL LIKE A CHARGE'S, and the charge that would have stamped the window
-// is the one the gate exists not to make. Each of those gates used to turn its
-// work away with no stamp at all, so a window a launch's post-charge, a
-// background pass or a person's answers had filled refused every delivery,
-// every question and every pass while `refused_at` — "last refused" on every
-// screen, and `crewlet budgets show` — said nothing had ever been refused.
-//
-// ON THE SCOPE A CHARGE WOULD BE REFUSED BY ([refusal.By]), the company's
-// before the seat's, which the counter stamps on every window of that scope
-// with no room for a single token, judged against the counter as it stands
-// ([coord.Budgets.Refuse]). Once per refusal: each gate builds a meter per
-// question and asks it once, so a gate's refusal is one write, as a refused
-// charge is. Every caller makes no call once it is told no, which is what
-// makes this a record of the gate's decision rather than of a question asked
-// to look.
+// answered: work turned away before any call because a window had no room for
+// a single token — a delivery the budget park deferred ([Engine.budgetPark]), a
+// person's question refused ([answerBudget.Refusing]), a reflection pass
+// declined ([Engine.reflectionRoom]). The charge that would have stamped the
+// window is the one the gate exists not to make, so it is stamped here, on the
+// scope a charge would be refused by ([refusal.By]). Once per refusal: each
+// gate builds a meter per question, asks once and makes no call on a no.
 func (m *meter) turnAway(ctx context.Context, r refusal) {
 	caps := m.basis.seat
 	if r.By == coord.OrgScope {
@@ -602,16 +434,15 @@ func (m *meter) turnAway(ctx context.Context, r refusal) {
 	m.stamp(ctx, r.By, caps, r.Window.Period, r.Window.Label)
 }
 
-// stamp hands the counter a refusal the gate made without a charge
-// ([coord.Budgets.Refuse]) on scope, judged under caps, and answers the
-// scope's counter as the write left it — or false where the write failed,
-// which it logs and which is never anything else: the refusal stands either
-// way, and what failed is the report of it. p and window name the refusal the
-// caller made, for that log line.
-//
-// On a context that outlives the caller's, because the refusal happened
-// whatever the caller does next, bounded by the counter's attempts and the
-// client's request timeout.
+// stamp hands the counter a refusal made without a charge
+// ([coord.Budgets.Refuse]) on scope under caps, judged against the counter as
+// it stands, and answers the scope's counter as the write left it, or false
+// where it failed. A failure is only logged, never retried: the refusal stands
+// and only its report failed, and a counter that cannot be written fails the
+// turn's next charge closed anyway. p and window name the refusal for that
+// log line. On a context that outlives the caller's, since the refusal
+// happened whatever the caller does next; the counter's attempts and the
+// client's request timeout bound it.
 func (m *meter) stamp(ctx context.Context, scope string, caps coord.Caps, p period.Period, window string) (coord.Usage, bool) {
 	usage, err := m.budgets.Refuse(context.WithoutCancel(ctx), scope, caps, m.windows())
 	if err != nil {
@@ -653,11 +484,9 @@ func (m *meter) keepFull(full toolloop.SpendOutcome) {
 
 // keepFilled records every capped window a charge left with no room, in the
 // counters its answer carries — an admission's and a refusal's alike
-// ([coord.Spend.Org]). An admitted round fitted, so nothing refused it, and a
-// refused one is refused in one window only — but nothing will fit after
-// either in any window it filled, and this is the one moment the meter is
-// told so without paying for a call to find out. A counter the answer does
-// not carry (the zero Usage) shows nothing full.
+// ([coord.Spend.Org]): nothing fits after either in a window it filled, and
+// this is the one moment the meter learns so without paying for a call. A
+// counter the answer does not carry (the zero Usage) shows nothing full.
 func (m *meter) keepFilled(got coord.Spend) {
 	m.keepFullIn("org", got.Org, m.basis.org)
 	m.keepFullIn("agent", got.Agent, m.basis.seat)
@@ -682,17 +511,11 @@ func (m *meter) keepFullIn(name string, usage coord.Usage, caps coord.Caps) {
 // already full, so a turn whose meter has charged nothing yet still knows a
 // refusal the counter has made certain.
 //
-// FOR A RESUMED TURN, which is the one segment the budget park does not ask
-// first: a fresh delivery is parked before its turn starts when a window is
-// refusing, but a launch's completion resumes its turn straight from the
-// sandbox coordinator — and the coordinator has just post-charged the launch,
-// which can take a window past its ceiling with no refusal (a post-charge
-// never refuses). The resumed executor's first round was then billed and
-// refused. Read here, it is refused before it is sent.
-//
-// AN UNREADABLE COUNTER KEEPS NOTHING, for the reason the park lets a turn
-// run on one: this is a saving, never the gate, and the next charge fails
-// closed on the same counter.
+// For a RESUMED turn, the one segment the budget park does not ask first: the
+// sandbox coordinator resumes it right after post-charging the launch, which
+// can take a window past its ceiling without refusing, so the executor's first
+// round would be billed and then refused. An unreadable counter keeps nothing:
+// this is a saving, never the gate, and the next charge fails closed.
 func (m *meter) observe(ctx context.Context) {
 	windows := m.windows()
 	for _, scope := range []struct {
@@ -716,23 +539,14 @@ func (m *meter) observe(ctx context.Context) {
 }
 
 // Remaining is this seat's headroom, in tokens: the least room left in any
-// capped window of either scope.
+// capped window of either scope, since a charge is admitted only while every
+// one has room.
 //
-// THREE-VALUED, and the third value is the whole reason this is not an int.
-// [subagent.Config.ParentRemaining] reads ZERO AS UNCAPPED, so a counter that
-// answered 0 for "I could not reach the store" would hand a fan-out no ceiling
-// at all — the fail-OPEN direction, on the one path where money leaves the
-// building per token. The error travels, and the caller refuses the spawn.
-//
-// The TIGHTEST window of both scopes, because a charge is admitted only while
-// every capped window of both has room: a seat with a week to spare under its
-// own cap but nothing left in the company's day has no room.
-//
-// A meter over a basis that caps nothing answers 0 with no counter read, which
-// is the "no ceiling" [runner.Remaining]'s readers take a zero for — but they
-// never ask it: [Engine.remainingFor] hands them no reader at all for such a
-// seat, so a zero with a nil error from a reader they ARE handed always means
-// an exhausted window.
+// THREE-VALUED: [subagent.Config.ParentRemaining] reads ZERO AS UNCAPPED, so
+// answering 0 for an unreachable store would fail OPEN; the error travels and
+// the caller refuses the spawn. A basis that caps nothing answers 0 unread,
+// but [Engine.remainingFor] hands no reader for such a seat, so a zero with a
+// nil error always means an exhausted window.
 func (m *meter) Remaining(ctx context.Context) (int, error) {
 	windows := m.windows()
 	headroom, capped := 0, false
@@ -751,12 +565,9 @@ func (m *meter) Remaining(ctx context.Context) (int, error) {
 			return 0, fmt.Errorf("engine: budget headroom for %s: %w", scope.key, err)
 		}
 		for p, ceiling := range scope.caps {
-			// TRACKED WITH A FLAG, not by testing headroom against
-			// zero: a window that has spent its whole allowance HAS
-			// zero headroom, and reading that as "not set yet" would
-			// let another window's room overwrite it — turning an
-			// exhausted company into an uncapped one at exactly the
-			// moment the cap matters.
+			// Tracked with a flag, not headroom == 0: an exhausted
+			// window HAS zero headroom, and reading that as unset would
+			// let another window's room overwrite it.
 			if left := max(ceiling-usage.In(p).Used, 0); !capped || left < headroom {
 				headroom, capped = left, true
 			}
@@ -780,38 +591,26 @@ type refusal struct {
 	Limit  int
 
 	// By is the scope a charge would be refused by now, coord.OrgScope or
-	// the seat's own — the one a gate's refusal on this reading is recorded
-	// on ([meter.turnAway]). The company's wherever any of its capped
-	// windows has no room, else the seat's, because the counter judges the
-	// company first and a seat it refuses for gets no verdict of its own.
-	// NOT ALWAYS Scope, which is the window the seat WAITS on: a seat's own
-	// month can outlast the company's full day, and it is still the company
-	// that turns the next charge away.
+	// the seat's own, which a gate's refusal is recorded on
+	// ([meter.turnAway]): the company's wherever any of its capped windows
+	// is full, since the counter judges the company first. Not always
+	// Scope: a seat's own month can outlast the company's full day, and the
+	// company still refuses the next charge.
 	By string
 }
 
 // refusing reports the capped window of either scope that turns the seat's
 // next charge away, if any.
 //
-// A window REFUSES when it has no room left for a single token, which the gate
-// would refuse on the next charge whatever its size ([windowRefuses]) — and a
-// window the gate has refused a round in always has none, because the refused
-// round is counted. Never on the refusal stamp alone: after a ceiling is
-// raised the stamp outlives the refusal until an admitted charge clears it,
-// and a park taken on it would hold the seat back from every charge that
-// could. Where several windows refuse it is the one that ENDS LAST, across
-// every capped window of both scopes, by [coord.Outlasts] — the tie-break the
-// counter's own refusal names its window by: the seat can run nothing until
-// that one turns over, and naming an earlier one would wake it into a
-// refusal. A full window need carry no stamp at all — a month a collected
-// launch post-charged past its ceiling carries none until the gate turns
-// work away in it — and this read writes none: a caller that refuses on the
-// answer records its refusal with [meter.turnAway].
+// A window refuses when it has no room for a single token ([windowRefuses]),
+// never on its refusal stamp alone, which outlives a raised ceiling until an
+// admitted charge clears it. Among several it names the one that ENDS LAST
+// ([coord.Outlasts], the counter's own tie-break): the seat runs nothing until
+// it turns over. This read stamps nothing; a caller that refuses on it records
+// with [meter.turnAway].
 //
-// THREE-VALUED. An unreachable counter is an error, never "not refusing" and
-// never "refusing": the caller decides what an unknown answer is worth, and
-// for the park the answer is to let the turn run, because its own meter is the
-// gate and fails closed.
+// THREE-VALUED: an unreachable counter is an error, and the park lets the turn
+// run on one, because its own meter is the gate and fails closed.
 func (m *meter) refusing(ctx context.Context) (refusal, bool, error) {
 	windows := m.windows()
 	var out refusal
@@ -836,9 +635,8 @@ func (m *meter) refusing(ctx context.Context) (refusal, bool, error) {
 				continue
 			}
 			if !found || coord.Outlasts(slot.Window, out.Window) {
-				// The company is read first, so the scope of the
-				// first full window found is the one a charge is
-				// refused by.
+				// The company is read first, so the first full
+				// window's scope is the one that refuses.
 				by := out.By
 				if !found {
 					by = scope.key
@@ -852,17 +650,11 @@ func (m *meter) refusing(ctx context.Context) (refusal, bool, error) {
 }
 
 // starved reports the capped window of either scope that leaves the seat less
-// room than floor, the tokens an executor launch needs ([launchFloor]), when
-// none is refusing outright — the window a launch's floor refusal waits on.
-//
-// THE SAME WINDOWS THE LAUNCH'S FLOOR READS ([meter.Remaining]): the launch is
-// refused when the tightest capped window of either scope has less than the
-// floor left, so the seat is starved by exactly the windows that have. Where
-// several do it is the one that ENDS LAST, by the tie-break [meter.refusing]
-// names a refusal by: no launch fits until every one of them has turned over.
-//
-// No floor is no starvation, and a basis that caps nothing has no window to be
-// short in. THREE-VALUED for the reason refusing is.
+// room than floor ([launchFloor]) when none is refusing outright: the window a
+// launch's floor refusal waits on. The same windows [meter.Remaining] reads,
+// and among several the one that ENDS LAST, as [meter.refusing] names: no
+// launch fits until every one has turned over. No floor or no cap is no
+// starvation. THREE-VALUED for the reason refusing is.
 func (m *meter) starved(ctx context.Context, floor int) (refusal, bool, error) {
 	if floor <= 0 {
 		return refusal{}, false, nil
@@ -899,18 +691,13 @@ func (m *meter) starved(ctx context.Context, floor int) (refusal, bool, error) {
 	return out, found, nil
 }
 
-// remainingFor is the seat's headroom reader, or nil.
+// remainingFor is the seat's headroom reader, or nil where the seat has no
+// ceiling in any window, or no meter: the spawner and the sandbox's floor read
+// nil as uncapped, which it is. The meter still COUNTS such a seat
+// ([Engine.meterFor]).
 //
-// Nil where the seat has no ceiling in any window of either scope, and where
-// there is no meter at all: with no ceiling there is no headroom to read, and
-// the spawner and the sandbox's floor treat nil as uncapped — which is exactly
-// what the seat is. The meter itself still COUNTS such a seat ([Engine.meterFor]);
-// what it has no answer for is how much room is left under a ceiling nobody
-// set.
-//
-// A NIL INTERFACE, never an interface holding a nil *meter: the spawner and
-// the sandbox's floor both test the reader against nil to mean "uncapped", and
-// a typed nil passes that test and panics on its first read.
+// A NIL INTERFACE, never one holding a nil *meter, which passes their nil test
+// and panics on its first read.
 func (e *Engine) remainingFor(c *Company, handle string) runner.Remaining {
 	m := e.meterFor(c, handle)
 	if m == nil || !m.basis.capped() {
@@ -950,30 +737,16 @@ func (m *meter) auxiliary() auxspend.Budget {
 
 // meterFor builds the meter for one seat's turn, or nil.
 //
-// EVERY SEAT IS COUNTED, capped or not, wherever there is a fleet to count on.
-// Nil only with no coordination store, or for a handle the epoch does not name
-// as an agent seat — there is then no shared counter or no scope to charge.
+// EVERY SEAT IS COUNTED, capped or not, wherever there is a fleet: nil only
+// with no coordination store or for a handle the epoch does not name as an
+// agent seat. Counting an uncapped seat is what lets a ceiling set mid-window
+// judge the spend already in it, and every counter reader (`crewlet budgets`,
+// the live meter) show a true figure; the round trip is the price.
 //
-// It used to be nil for a company with no ceiling too, on the argument that a
-// meter answering "yes" to every round is a round trip with no question behind
-// it. The question was the COUNT. A ceiling added mid-window then started from
-// zero, because nothing had counted the window before it existed, so a company
-// that capped its day at noon was handed the whole day again on top of what
-// the morning had already spent; and every reader of the counters — the budgets
-// answer, the live meter, `crewlet budgets` — showed an uncapped company as
-// having spent nothing at all. A charge with no caps is admitted by the counter
-// without a refusal to decide, and the round trip is the price of a figure that
-// is true when somebody sets a ceiling on it.
-//
-// The basis — the company's ceilings, the seat's own and the clock the windows
-// are cut on — is the epoch's c, which is the one the turn was PINNED to. The
-// instant each charge is cut at is the engine's ([Engine.now]), which every
-// reader built from the meter — [Engine.spendFor], [Engine.remainingFor], the
-// park — inherits with it.
-//
-// The concrete *meter, so a caller that needs its headroom or its windows has
-// them without an assertion; [meter.budget] and [meter.auxiliary] are how it
-// becomes an interface, nil where it is nil.
+// The basis is the epoch c, the one the turn was PINNED to; the instant is
+// [Engine.now], which every reader built from the meter inherits. Concrete so
+// callers reach its headroom and windows; [meter.budget] and [meter.auxiliary]
+// make it an interface, nil where it is nil.
 func (e *Engine) meterFor(c *Company, handle string) *meter {
 	if e.backends == nil || e.backends.Fleet == nil || c == nil || c.Org == nil {
 		return nil

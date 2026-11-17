@@ -19,19 +19,16 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 )
 
-// IN A TEST, GITLET IS SIZED BY ITS CASE: a test's Gitlet node whose company
-// hosts code refuses to build Gitlet with gitlet.cache_max_bytes or
-// gitlet.max_transfers unset, naming each one it lacks, brokertest.GitletCacheIn and
-// the one way out — and builds it with both declared. A node booted under
-// engine.SizedByTheMachine passes the check, its case being the derivation
-// itself, so only the volume's own room may still refuse it there — and its
-// broker may derive its limit too, the context carrying jetstream's own
-// opt-out; and a node whose company hosts no code builds no host and is not
-// asked.
+// IN A TEST, GITLET IS SIZED BY ITS CASE: a code-hosting test node refuses to
+// build Gitlet with gitlet.cache_max_bytes or gitlet.max_transfers unset,
+// naming each one it lacks, brokertest.GitletCacheIn and the way out, and
+// builds it with both declared. Under engine.SizedByTheMachine it passes the
+// check (only the volume's room may still refuse it) and its broker may derive
+// its limit too; a company hosting no code builds no host and is not asked.
 //
-// Mutations: build Gitlet without the check (the undeclared rows
-// boot); ask for the budget alone (the lane's row boots); ignore the opt-out
-// (the derivation rows are refused); leave jetstream's opt-out off the context
+// Mutations: build Gitlet without the check (the undeclared rows boot); ask
+// for the budget alone (the lane's row boots); ignore the opt-out (the
+// derivation rows are refused); leave jetstream's opt-out off the context
 // SizedByTheMachine makes (the broker's row is refused at the broker).
 func TestATestsGitletIsSizedByItsCase(t *testing.T) {
 	t.Parallel()
@@ -104,17 +101,12 @@ func TestATestsGitletIsSizedByItsCase(t *testing.T) {
 	}
 }
 
-// IN A TEST, A NODE ON AN EXTERNAL BROKER IS SIZED BY THE BROKER'S ACCOUNT: a
-// test's node that dials an external broker whose account states no
-// JetStream limit refuses to open its backends, naming externaltest.Start and
-// the one way out, because it would reserve its bucket and size its logs from
-// the runner's free disk while the server holds them to a cap of the case's.
-// It refuses BEFORE IT RESERVES ANYTHING, which that row's server holds: its
-// cap is below the smallest bucket a node derives, so a check made only once
-// the bucket is asked for meets the broker's refusal of it first, on any
-// machine. It opens on a broker whose account states its limit, and under
-// engine.SizedByTheMachine, whose case is that derivation, it is not refused
-// as undeclared.
+// IN A TEST, A NODE ON AN EXTERNAL BROKER IS SIZED BY THE BROKER'S ACCOUNT:
+// one whose account states no JetStream limit refuses to open its backends,
+// naming externaltest.Start and the way out, BEFORE IT RESERVES ANYTHING: the
+// unstated row's server caps below the smallest bucket a node derives, so a
+// later check would meet the broker's refusal first. It opens on a stated
+// limit, and under engine.SizedByTheMachine is not refused as undeclared.
 //
 // Mutations: open the backends without the check, or check only once the
 // bucket is made (the unstated row meets the broker's refusal instead);

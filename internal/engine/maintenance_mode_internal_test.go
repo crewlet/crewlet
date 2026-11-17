@@ -18,19 +18,12 @@ import (
 
 // A NODE IN A CAPACITY WINDOW APPENDS NOTHING TO ITS LOGS.
 //
-// Its logs still run — they apply, heartbeat and serve every read that
-// appends nothing — because a window is measured against them and an operator
-// reads the fleet through them. But the mode exists so those logs hold still
-// while they are measured, and a seal-mode acknowledgement is evidence
-// precisely because nothing on the node writes. So every append a surface can
-// reach on this node is asked for — a linearizable read on each log, which
-// proves the log's end with a barrier; an eviction and a readmission, which
-// are gate records on every identity log; and a reanchor, which is a
-// generation record — and each is refused naming the mode, with every log
-// ending where it began. And the one thing that would append on its own: the
-// object store's collector, which pins the estate with a barrier on a schedule
-// of its own, is not running at all — started, every pass would fail at its
-// pin and retry for the life of the window.
+// Its logs still apply, heartbeat and serve every read that appends nothing.
+// Every append a surface can reach is asked for (a linearizable read's
+// barrier on each log, an eviction and a readmission, a reanchor) and each is
+// refused naming the mode, with every log ending where it began. The object
+// store's collector, which pins the estate with a barrier on its own
+// schedule, is not running at all.
 func TestANodeInACapacityWindowAppendsNothingToItsLogs(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []statelog.MaintenanceMode{statelog.ModeMaintenance, statelog.ModeSeal} {
@@ -161,14 +154,9 @@ const scheduledNativeCompany = nativeCleanupCompany + `    schedules:
 
 // AN APPLY ON A NODE IN A MAINTENANCE MODE STARTS NO PUBLISHER EITHER.
 //
-// The constructor keeps every publisher off such a node behind one gate — the
-// notification spine and the scheduler among them — and an apply reached
-// both past it: the integrations stage started the inbound edge on any node
-// that had none, which is every node in a maintenance mode, and the scheduler
-// stage armed the cron loop for any revision declaring a schedule. So an
-// activation during a capacity window put the fleet-wide inbound consumer and
-// the scheduler's duty on every node in the window, routing deliveries and
-// firing crons onto mailboxes while the fleet was meant to be holding still.
+// The constructor's one publisher gate binds an apply too: it starts neither
+// the inbound edge (the fleet-wide consumer routing deliveries onto
+// mailboxes) nor the cron loop a revision's schedule would arm.
 //
 // THE CONTROL is the same revision on a node that publishes and booted with
 // no company, which starts both: without it, a revision that started neither

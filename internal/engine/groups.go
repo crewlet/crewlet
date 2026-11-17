@@ -11,23 +11,14 @@ import (
 // The fleet-wide consumer groups this engine competes in, and whether each
 // needs the node to hold data.
 //
-// A FLEET-WIDE GROUP is one every node may attach: a message on it goes to
-// whichever member takes it first. That is the opposite of a seat's mailbox,
-// which only the seat's holder attaches, and on a fleet where some nodes hold
-// no data the difference is the whole hazard — "whichever member" includes a
-// node without `data`, which would take its share of the messages and answer
-// each from a store deleted at its last boot, or from no estate at all. Nothing
-// fails when that happens; the work is simply done wrong a fraction of the
-// time, in proportion to how many such nodes the fleet runs.
-//
-// So every fleet-wide group says ONCE, here, whether its handler needs data —
-// reads or writes the replicated estate, or keeps a record that has to outlive
-// the process — and [Engine.joins] is the one door every attachment passes:
-// a node without `data` joins no group that needs it, and nobody joins a group
-// this table does not name. The gate in groups_internal_test.go holds the table
-// against the tree in BOTH directions: every fleet-wide group the code
-// subscribes is declared here, and every group declared here is subscribed
-// somewhere.
+// A FLEET-WIDE GROUP's message goes to whichever member takes it first, unlike
+// a seat's mailbox, so a node without `data` in it silently answers its share
+// from a store deleted at its last boot, or no estate at all. So each group
+// says ONCE, here, whether its handler needs data (reads or writes the
+// replicated estate, or keeps a record that must outlive the process), and
+// [Engine.joins] is the one door every attachment passes: a node without
+// `data` joins no group that needs it, and nobody joins an undeclared group.
+// groups_internal_test.go holds the table against the tree in BOTH directions.
 
 // fleetGroup is one fleet-wide consumer group.
 type fleetGroup struct {

@@ -199,16 +199,15 @@ func nameless(g jetstream.MetaGroup, node string) jetstream.MetaGroup {
 }
 
 // THE TWO RECORDS OF THE BROKER'S MEMBERSHIP ARE HELD AGAINST EACH OTHER, and
-// every disagreement is named: a voter no live node is (the member that is gone
-// for good, which every election goes on counting), a voter whose node came
-// back as a leaf, a node advertising a member the group does not count, and a
-// presence that does not say. A leaf reads the group through a member.
+// every disagreement is named: a voter no live node is (a member gone for good,
+// which every election still counts), a voter whose node came back as a leaf, a
+// node advertising a member the group does not count, and a presence that does
+// not say. A leaf reads the group through a member.
 //
 // BY PEER ID: a voter the answering member cannot name is still the live node
-// whose id hashes to it — a leaf now, so a dead member by its node id — and a
-// voter nobody can name and no live node is, is a dead member by its peer id
-// alone. A live member counted under a name the answer does not carry is
-// counted, not "not in the group".
+// whose id hashes to it (a leaf now, so a dead member by its node id); one no
+// live node is, is a dead member by its peer id alone. A live member counted
+// under a name the answer lacks is counted, not "not in the group".
 func TestTheBrokerListingNamesEveryDisagreement(t *testing.T) {
 	t.Parallel()
 	fleet := newBrokerFleet(t)
@@ -264,10 +263,9 @@ func TestTheBrokerListingNamesEveryDisagreement(t *testing.T) {
 }
 
 // THE BROKER VIEW NAMES THE ANSWERING NODE'S OWN CLIENT LISTENER, and nobody
-// else's: it is where an operator on that node's host points the nats tool,
-// reachable from that host alone. A member that opens none — and a node with no
-// broker of its own to ask — names none, rather than an address that is not
-// there.
+// else's: it is where an operator on that host points the nats tool, reachable
+// from that host alone. A member that opens none, and a node with no broker of
+// its own, names none rather than an address that is not there.
 //
 // Mutation: omit the field → the member's row, red.
 func TestTheBrokerViewNamesThisNodesClientListener(t *testing.T) {
@@ -298,9 +296,8 @@ func TestTheBrokerViewNamesThisNodesClientListener(t *testing.T) {
 }
 
 // ONE EMBEDDED MEMBER AND NO OTHER IS A STATE, NOT A FAILED READ: a solo
-// broker has no metadata group by design, and the listing said so as an
-// error chained from the broker's refusal, which the screen drew as a warning.
-// The control is two members whose group cannot be read, still an error.
+// broker has no metadata group by design, so the listing reports no error. The
+// control is two members whose group cannot be read, still an error.
 func TestASoloMemberIsSaidToRunUnclusteredRatherThanToHaveFailed(t *testing.T) {
 	t.Parallel()
 	fleet := newBrokerFleet(t)
@@ -449,10 +446,9 @@ func TestAVoterNobodyCanNameIsRemovedByItsPeerID(t *testing.T) {
 }
 
 // A NODE ALIVE AS A LEAF OR A CLIENT UNDER A VOTER'S NAME IS REMOVED WITHOUT
-// FORCE. The member it was is gone for good — its broker runs no JetStream now
-// and never rejoins the group — so the live-lease refusal, which exists
-// because a running MEMBER rejoins at its next restart, has nothing to protect,
-// and the command the listing prints for it must work as printed.
+// FORCE: its broker runs no JetStream and never rejoins the group, so the
+// live-lease refusal (a running MEMBER rejoins at its next restart) protects
+// nothing, and the command the listing prints for it must work as printed.
 func TestANodeAliveAsALeafUnderAVotersNameIsRemovedWithoutForce(t *testing.T) {
 	t.Parallel()
 	fleet := newBrokerFleet(t)
@@ -554,11 +550,10 @@ func TestASilentCarrierEndsTheRemovalAsUnknown(t *testing.T) {
 	}
 }
 
-// A LISTING IS NOT HELD UP BY A SILENT MEMBER. Every member is asked at once
+// A LISTING IS NOT HELD UP BY A SILENT MEMBER: every member is asked at once
 // and the first report of the group answers, so a member that died inside its
-// lease costs nothing while another answers — asked one after another, it
-// would spend the whole wait of the command line and the dashboard, which is
-// ten seconds each.
+// lease costs nothing while another answers; asked in turn, it would spend the
+// command line's and the dashboard's whole wait, ten seconds each.
 func TestAListingIsNotHeldUpByASilentMember(t *testing.T) {
 	t.Parallel()
 	fleet := newBrokerFleet(t)
@@ -634,13 +629,11 @@ func TestTheBrokerFindingKindsAreClosed(t *testing.T) {
 }
 
 // A REMOVAL THE FLEET DID NOT SIGN REMOVES NOTHING. A member removes a voter
-// through its own system account, so a request anything the broker admitted
-// could write would change the quorum every election runs on — past
-// the grant, the step-up, the confirmation and the live-member refusal, which
-// all run on the asking node. Three ways to try — no signature, a signature
-// under the fleet's key id with somebody else's material, and the fleet's
-// signature over a request altered after it was made — and each is answered
-// that nothing ran, bound to no request, with nothing removed.
+// through its own system account, so an unsigned request would change the
+// quorum past the grant, step-up, confirmation and live-member refusal, which
+// all run on the asking node. No signature, the fleet's key id over somebody
+// else's material, and the fleet's signature over an altered request are each
+// answered that nothing ran, bound to no request, with nothing removed.
 func TestARemovalTheFleetDidNotSignRemovesNothing(t *testing.T) {
 	t.Parallel()
 	fleet := newBrokerFleet(t)

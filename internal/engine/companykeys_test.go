@@ -17,11 +17,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// peopleDoc is [companyDoc] with a human seat for each person these cases
-// create, beside the founder's: every person holds a human seat for as long as
-// they are here (ADR-0032), so a create names one nobody holds — and each
-// person gets their own, so a case expecting the blind-key refusal is not
-// answered by the seat instead.
+// peopleDoc is [companyDoc] with a free human seat for each person these cases
+// create (ADR-0032), so a case expecting the blind-key refusal is not refused
+// over the seat instead.
 const peopleDoc = companyDoc + `
   - name: Ada Lovelace
     handle: ada-lovelace
@@ -51,14 +49,9 @@ func identityEngine(t *testing.T) (*engine.Engine, *fleetsecrets.Estate) {
 }
 
 // enrolAddress creates one person with an address on a human seat through the
-// node's own writer, which holds admin — the record an
-// administrator's create publishes, and the one that blinds the address.
-//
-// THE PERSON IS THE OPERATION'S, derived from its key as the create surface
-// derives it ([iamdomain.CreatedPersonID]), and the key is MINTED, carrying its
-// instant, for the reason [statelog.NewOpID] gives: one with none is read as
-// older than every loss the ledger has had and answered `unknown` unpublished
-// once a sweep has run.
+// node's own admin writer, the record that blinds the address. The person is
+// derived from the operation's key ([iamdomain.CreatedPersonID]), and the key
+// is MINTED with its instant, for the reason [statelog.NewOpID] gives.
 func enrolAddress(t *testing.T, e *engine.Engine, login, email, seat string) (string, error) {
 	t.Helper()
 	key := statelog.NewOpID(time.Now(), "")
@@ -78,18 +71,13 @@ func enrolAddress(t *testing.T, e *engine.Engine, login, email, seat string) (st
 // THE FIRST ADDRESS A COMPANY BLINDS MINTS ITS KEY, and every later blind is
 // derived under the stored one.
 //
-// Nothing minted the identity estate's blind-index key, and the node read it
-// once at boot and answered nil when it was absent — so on every deployment
-// every enrolment with an address, every invitation and every sign-in by
-// address was refused for a key that did not exist, while the estate's own
-// suite passed on a writer handed a key by the test. This boots a real node
-// and creates somebody through its own writer.
+// A real node and its own writer, not a writer handed a key by the test: an
+// enrolment with an address on a fresh company must mint the key itself.
 func TestTheFirstAddressAnEngineBlindsMintsTheCompanysKey(t *testing.T) {
 	t.Parallel()
 	e, store := identityEngine(t)
 
-	// THE CONTROL: a fresh company has no key, so what follows is a mint
-	// and not a read of something the boot already wrote.
+	// THE CONTROL: a fresh company has no key, so what follows is a mint.
 	if _, err := store.Get(t.Context(), iamdomain.BlindKeyName); !errors.Is(err,
 		secrets.ErrNotFound) {
 		t.Fatalf("a fresh company already holds %s (%v)", iamdomain.BlindKeyName, err)
@@ -104,9 +92,7 @@ func TestTheFirstAddressAnEngineBlindsMintsTheCompanysKey(t *testing.T) {
 		t.Fatalf("the enrolment minted no key: %v", err)
 	}
 
-	// THE NODE DERIVES UNDER THE STORED KEY, which is the only key a peer
-	// can read: a sign-in by address on this node resolves the person the
-	// enrolment wrote, and a blinder built from the store agrees with it.
+	// THE NODE DERIVES UNDER THE STORED KEY, the only one a peer can read.
 	blinder, err := e.PersonBlinder().Blinder(t.Context())
 	if err != nil {
 		t.Fatalf("resolve the blinder: %v", err)
@@ -135,12 +121,10 @@ func TestTheFirstAddressAnEngineBlindsMintsTheCompanysKey(t *testing.T) {
 
 // A MISSING KEY IS NEVER MINTED OVER AN ESTATE THAT USED ONE.
 //
-// No blind can be derived without the key, so an estate holding one means the
-// key existed and was deleted. A fresh key then would orphan every address in
-// the directory and let a second person claim each of them — the claim
-// arbitrates on the blind, and a new key is a new subject. So the node refuses
-// by name, stores nothing, and every address write is refused until an
-// operator restores the key.
+// An estate holding a blind had a key, so a fresh one would orphan every
+// address and let a second person claim each (the claim arbitrates on the
+// blind). The node refuses by name, stores nothing, and refuses every address
+// write until an operator restores the key.
 func TestAMissingBlindKeyIsNeverMintedOverAnEstateThatUsedOne(t *testing.T) {
 	t.Parallel()
 	e, store := identityEngine(t)
@@ -148,9 +132,8 @@ func TestAMissingBlindKeyIsNeverMintedOverAnEstateThatUsedOne(t *testing.T) {
 		"ada-lovelace"); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}
-	// DELETED UNDER THE ENGINE, in the coordination store itself: no
-	// surface of the engine's deletes its own key, which is exactly why a
-	// deletion is somebody else's mistake the mint has to survive.
+	// DELETED UNDER THE ENGINE, in the coordination store: no engine surface
+	// deletes the key, so a deletion is somebody else's mistake.
 	if removed, err := e.Backends().Fleet.DeleteSecret(t.Context(),
 		iamdomain.BlindKeyName); err != nil || !removed {
 		t.Fatalf("delete the key: removed=%v, %v", removed, err)

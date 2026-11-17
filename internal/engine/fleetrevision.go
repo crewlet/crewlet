@@ -12,97 +12,41 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A JUDGEMENT THAT CANNOT BE UNDONE, MADE AGAINST THE ACTIVE REVISION, IS MADE
-// ONLY ON A NODE THAT SERVES THE REVISION THE FLEET'S ACTIVATION POINTER NAMES.
-//
-// Three such judgements exist, and each acts for the whole fleet:
-//
-//   - the MAILBOX RETIREMENT judges a seat absent from the revision and deletes
-//     its mail ([Engine.activeSeats]);
-//   - the CLEARING OF A REMOVED SEAT'S PAUSE judges a seat absent and deletes a
-//     pause a person placed ([Engine.clearRemovedSeatPauses]);
-//   - the CODE-RETENTION PURGE judges a repository deleted longer than the
-//     revision's code.deleted_retention_days and removes it ([codeRetentionDuty]).
-//
-// A node that has not applied the pointer's activation — propagation, a
-// refused apply, a node stuck on an older revision — judges against a
-// revision the fleet has replaced. For traffic that is the posture's business,
-// and lag alone never sheds (configplane). These cannot wait for a posture: a
-// seat the fleet has just added back would lose its mail or its pause, and a
-// revision that lengthens the retention to save a deleted repository would be
-// defeated by a duty holder that failed to apply it. None has an undo.
-//
-// STRONGER THAN [Reconciler.Admits], on purpose: the posture admits a node
-// still converging and fails open on what it cannot read, which is right for
-// work that a later apply corrects and wrong for work nothing corrects. What
-// declining costs here is a judgement made later — a retirement a sweep later;
-// a pause cleared by the apply that catches this node up; a purge a reconcile
-// interval later on a node still applying the revision, and one tick of its
-// duty later on a node that failed it — by this node once it catches up or by
-// whichever node holds the duty and serves the fleet's revision, against a
-// grace and a retention measured in hours and days.
-//
-// ONE RULE ([fleetCompanyAt]), because it is written once: two copies of "does
-// this node serve the fleet's revision" are two places for the reads below to
-// be reordered or for one of the three answers to be collapsed.
-//
-// # Compared on the activation's instant
-//
-// WHETHER A COMPANY IS THE POINTER'S is read off the company itself
-// ([fleetCompanyAt]): the instant of the activation it was applied from
-// ([Company.ActivatedAt]) against the one the pointer publishes, strictly later
-// on every activation ([coord.ActivationAt]). So a re-activation of an
-// unchanged revision — the rotation gesture — is a different activation here
-// too, and a company applied from the pointer's own activation is accepted
-// even while the reconciler is still inside the apply that publishes it, which
-// is where the pause clearing runs ([Engine.followCompany]). A company no
-// activation has named yet — a Tier B file a node booted with — is not the
-// pointer's until the reconciler's first apply. The reconciler is asked only
-// to say what a company that is NOT the pointer's means: still propagating, or
-// a lag it confirms.
-//
-// # Behind is not yet a fault
-//
-// EVERY node is behind the pointer for a moment at every activation — the
-// nudge reaches it in milliseconds and its apply takes seconds — and at every
-// boot, until its reconciler is built and has ticked once. Neither is a fault,
-// and a reader that reported either as one would raise a warning on every
-// deploy and every configuration write, which teaches whoever reads it to
-// ignore the one a node that failed the fleet's apply raises. So the third
-// answer says WHICH it is, by the posture's own rule
-// ([configplane.FleetView.LagConfirmed], over [applyProgress.selfView]): a lag
-// CONFIRMED — an attempt of this node's at the epoch concluded in failure, or
-// it has been behind on it longer than propagation explains — or ordinary
-// propagation, which every reader treats as "not yet", quietly.
+// AN IRREVERSIBLE JUDGEMENT AGAINST THE ACTIVE REVISION RUNS ONLY ON A NODE
+// SERVING THE ACTIVATION THE FLEET'S POINTER NAMES ([fleetCompanyAt], the one
+// rule): the mailbox retirement ([Engine.activeSeats]), the clearing of a
+// removed seat's pause ([Engine.clearRemovedSeatPauses]) and the code-retention
+// purge ([codeRetentionDuty]). Each acts for the whole fleet and has no undo: a
+// lagging node would delete the mail or pause of a seat just added back, or
+// purge a repository a lengthened code.deleted_retention_days saves. Stricter than
+// [Reconciler.Admits] on purpose: the posture admits a converging node and
+// fails open, right for work a later apply corrects (lag alone never sheds,
+// configplane) and wrong here, where declining only delays the judgement by a
+// sweep, an apply or a duty tick, against a grace measured in hours and days.
 
 // errBehindFleet is a node that does not serve the activation the fleet's
-// pointer names, and how far it has got: whether it has a reconciler at all,
-// whether that reconciler has read the activation pointer, the epoch it serves,
-// and whether its lag is confirmed or still propagation.
+// pointer names, and how far it has got. Every node is behind for a moment at
+// every activation and every boot, so it says whether the lag is CONFIRMED
+// ([configplane.FleetView.LagConfirmed] over [applyProgress.selfView]: an
+// attempt at the epoch failed, or it is behind longer than propagation
+// explains) or propagation, which every reader treats as a quiet "not yet": a
+// warning on every deploy teaches readers to ignore the one a failed apply
+// raises.
 type errBehindFleet struct {
 	applied, target int64
-	// reconciler is whether this node has a reconciler yet, and read
-	// whether its tick has read the activation pointer at least once. Both
-	// are false on a node still booting: `crewlet run` builds the
-	// reconciler after the engine, ticks it once before it serves, and
-	// exits if it cannot build one — so no running node lacks one for
-	// longer than its boot.
+	// reconciler is whether this node has a reconciler yet, and read whether
+	// its tick has read the activation pointer. Both are false only while
+	// booting: `crewlet run` builds the reconciler after the engine, ticks it
+	// once before serving, and exits if it cannot build one.
 	reconciler, read bool
-	// confirmed is whether the reconciler confirms the lag
-	// ([configplane.FleetView.LagConfirmed]). Never true of a node that has
-	// not read the pointer: what it has not seen it has neither tried nor
-	// been behind on, and the posture reads such a node as waiting — so a
-	// node with no reconciler yet reads as one whose reconciler has not
-	// ticked, which is what it is.
+	// confirmed is [configplane.FleetView.LagConfirmed]; never true of a node
+	// that has not read the pointer, which the posture reads as waiting.
 	confirmed bool
 	// served is what this node's company was applied from against the
-	// pointer, by INSTANT ([servedAgainst]), which the epochs above cannot
-	// say: an epoch is the reconciler's count, and a node with no reconciler
-	// or one that has not read the pointer has none to give, while the
-	// instant is on the company itself. A decline that a person reads
-	// ([chatPrune.tick] logs it every tick it lasts) has to name which
-	// activation this node serves and which one the fleet is on, or the
-	// one it is waiting for cannot be told from the one it failed.
+	// pointer, by instant ([servedAgainst]): a node with no reconciler, or one
+	// that has not read the pointer, has no epoch to give. A decline a person
+	// reads ([chatPrune.tick] logs it every tick) must name both activations,
+	// or waiting cannot be told from failing.
 	served string
 }
 
@@ -129,37 +73,18 @@ func (err *errBehindFleet) Is(target error) bool {
 	return target == maintenance.ErrRevisionPropagating && !err.confirmed
 }
 
-// servedFleetRevision is the company this node serves, where it serves the
-// revision the fleet's activation pointer names — THREE ANSWERS, never two:
+// servedFleetRevision is the company this node serves where it serves the
+// revision the fleet's pointer names — THREE ANSWERS, never two: the company
+// and nil ([fleetCompanyAt]); [maintenance.ErrNoActiveRevision] when nothing
+// is activated, NOT CURRENT here (unlike the traffic posture), since a node
+// boots on a company nobody activated; or any other error, UNKNOWN or BEHIND
+// ([errBehindFleet], confirmed or [maintenance.ErrRevisionPropagating], which
+// every reader must tell apart).
 //
-//   - the company and a nil error: the company this node publishes was applied
-//     from the pointer's activation or a later one ([fleetCompanyAt]);
-//   - [maintenance.ErrNoActiveRevision]: nothing has been activated. NOT
-//     CURRENT for this rule, unlike the reconciler's posture, which judges
-//     traffic and reads an unconfigured deployment as converged: a node boots
-//     on a company file, or its store's company, before its first reconcile
-//     tick activates anything, and an irreversible judgement against a
-//     revision nobody activated is exactly what this exists to refuse. A
-//     fresh deployment meets it for the seconds before its first activation;
-//   - any other error: UNKNOWN or BEHIND — the pointer could not be read, or
-//     this node does not serve the pointer's activation ([errBehindFleet]: it
-//     runs no reconciler yet, its reconciler has not read the pointer yet, or
-//     it serves an older epoch, naming both) — and that last says whether the
-//     lag is CONFIRMED or still propagation ([errBehindFleet.confirmed],
-//     [maintenance.ErrRevisionPropagating]), which every reader must tell
-//     apart: a node is behind for a moment at every activation and every
-//     boot.
-//
-// The reads are ordered so the company can only be NEWER than the pointer it
-// is checked against, never older: the pointer first, the company after it.
-// The pointer only ever moves forward, so a company applied from a LATER
-// activation than the one read is only ever a truer one — the pointer moved
-// after it was read and this node had already applied what it moved to, the
-// posture's own reading of that race. Where the company is not the pointer's,
-// the reconciler's progress says why, and the company is read once more AFTER
-// that progress: an apply installs its company before the reconciler records
-// its epoch, so a progress that has reached the pointer's epoch is one whose
-// company the second read sees.
+// The pointer is read before the company, so the company can only be newer
+// (the pointer only moves forward); where it is not the pointer's, it is read
+// again AFTER the reconciler's progress, since an apply installs its company
+// before the reconciler records its epoch.
 func (e *Engine) servedFleetRevision(ctx context.Context) (*Company, error) {
 	if e.backends == nil || e.backends.Fleet == nil {
 		return nil, fmt.Errorf("engine: this node has no fleet store to read the activation pointer from")
@@ -192,14 +117,12 @@ func (e *Engine) servedFleetRevision(ctx context.Context) (*Company, error) {
 	return fleetCompanyAt(target, e.Company())
 }
 
-// fleetCompany is nil when c is the company of the activation the fleet is
-// pointed at, or a later one, and otherwise an error saying why that is
-// unknown — for a caller judging a company it holds rather than the one this
-// node publishes:
-// the clearing of a removed seat's pause, which runs on the company an apply
-// is about to publish ([Engine.clearRemovedSeatPauses]), and the model
-// catalogue's retry, on the one it is about to install. Every other reader
-// asks [Engine.servedFleetRevision].
+// fleetCompany is nil when c is the company of the activation the fleet's
+// pointer names or a later one, else an error saying why — for a caller
+// judging a company it holds rather than the one this node publishes (the
+// pause clearing in [Engine.clearRemovedSeatPauses], on the company an apply
+// is about to publish; the model catalogue's retry, on the one it is about to
+// install). Every other reader asks [Engine.servedFleetRevision].
 func (e *Engine) fleetCompany(ctx context.Context, c *Company) error {
 	if e.backends == nil || e.backends.Fleet == nil {
 		return fmt.Errorf("engine: this node has no fleet store to read the activation pointer from")
@@ -216,8 +139,14 @@ func (e *Engine) fleetCompany(ctx context.Context, c *Company) error {
 }
 
 // fleetCompanyAt is c when it was applied from target's activation or a later
-// one — COMPARED ON THE ACTIVATION'S INSTANT, in the precision the store keeps
-// it in, for the reason this file gives — or an error saying it is not.
+// one, else an error saying it is not. It compares INSTANTS ([Company.ActivatedAt]
+// against [coord.ActivationAt], strictly later on every activation) in the
+// precision the store keeps, not epochs: a re-activation of an unchanged
+// revision (rotation) is a new activation, and a company applied from the
+// pointer's own activation is accepted while the reconciler is still inside
+// the apply publishing it, where the pause clearing runs
+// ([Engine.followCompany]). A company no activation named (a booted Tier B
+// file) is not the pointer's until the reconciler's first apply.
 func fleetCompanyAt(target coord.Activation, c *Company) (*Company, error) {
 	if c != nil && !c.ActivatedAt.IsZero() &&
 		store.EncodeTime(c.ActivatedAt) >= store.EncodeTime(target.At) {
@@ -226,11 +155,9 @@ func fleetCompanyAt(target coord.Activation, c *Company) (*Company, error) {
 	return nil, errors.New("engine: " + servedAgainst(target, c))
 }
 
-// servedAgainst says which activation c was applied from and which one the
-// fleet's pointer names, each by its instant — the words every answer that
-// this node does not serve the fleet's revision carries, from
-// [fleetCompanyAt] and [errBehindFleet] alike, so a reader is told the same
-// thing whichever of the two noticed.
+// servedAgainst names, by instant, the activation c was applied from and the
+// one the fleet's pointer names: the words [fleetCompanyAt] and
+// [errBehindFleet] both carry, so a reader is told the same whichever noticed.
 func servedAgainst(target coord.Activation, c *Company) string {
 	fleet := fmt.Sprintf("the fleet is on activation epoch %d of %s",
 		target.Epoch, target.At.Format(time.RFC3339Nano))

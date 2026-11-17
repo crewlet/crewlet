@@ -32,13 +32,10 @@ func freshFits(t *testing.T, stream config.Stream, free int64) bool {
 	return reserved <= host.budget.Limit
 }
 
-// A FRESH NODE'S FLOOR IS WHAT THE SIZING ITSELF NEEDS, to the byte.
-//
-// The floor is quoted by a refused boot, by `crewlet validate` and by the
-// deployment guide, and every one of them is wrong the day it disagrees with
-// what a boot actually reserves. So the floor of the default document is held
-// to the real sizing on both sides of it: a volume with FreeAtDefault free
-// boots, and one a mebibyte smaller does not.
+// A FRESH NODE'S FLOOR IS WHAT THE SIZING ITSELF NEEDS, to the byte: a refused
+// boot, `crewlet validate` and the deployment guide all quote it, so the default
+// document's floor is held to the real sizing on both sides. A volume with
+// FreeAtDefault free boots, and one a mebibyte smaller does not.
 func TestAFreshNodesFloorIsWhatItsSizingNeeds(t *testing.T) {
 	t.Parallel()
 	boot := config.DefaultBootstrap()
@@ -96,12 +93,9 @@ func TestTheFloorFollowsTheSettingsThatMoveIt(t *testing.T) {
 	}
 }
 
-// THE GUIDES QUOTE THE FLOOR THIS BUILD COMPUTES.
-//
-// The figures there are what an operator sizes a host by, so they are read
-// from [BrokerFloorFor] and asserted here rather than restated by hand: the
-// two artifact logs raised the floor by two gibibytes, and a guide written
-// before them would have sized a host that refuses to boot.
+// THE GUIDES QUOTE THE FLOOR THIS BUILD COMPUTES: an operator sizes a host by
+// those figures, so they are read from [BrokerFloorFor] and asserted here,
+// never restated by hand.
 func TestTheGuidesQuoteTheFloor(t *testing.T) {
 	t.Parallel()
 	read := func(name string) string {
@@ -135,13 +129,11 @@ func TestTheGuidesQuoteTheFloor(t *testing.T) {
 	}
 }
 
-// A BROKER LIMIT WRITTEN BELOW THE FLOOR IS SAID BEFORE THE BOOT REFUSES IT.
-//
-// stream.store_max_bytes accepts six gibibytes, and a fresh node of the default
-// document needs more than ten, so a value the schema takes is one the boot
-// refuses. Said only where it is exact: a data node on its own embedded broker,
-// whose limit is the number written. Anywhere else the limit is a volume or an
-// account this judgement cannot see, and it says nothing rather than guess.
+// A BROKER LIMIT WRITTEN BELOW THE FLOOR IS SAID BEFORE THE BOOT REFUSES IT:
+// the schema accepts a stream.store_max_bytes the default document's fresh node
+// cannot boot in. Said only where it is exact (a data node on its own embedded
+// broker); elsewhere the limit is a volume or an account this judgement cannot
+// see, and it says nothing rather than guess.
 func TestAStoreLimitBelowTheFloorIsAnAdvisory(t *testing.T) {
 	t.Parallel()
 	base := config.DefaultBootstrap()
@@ -198,41 +190,14 @@ func TestAStoreLimitBelowTheFloorIsAnAdvisory(t *testing.T) {
 }
 
 // THE ASSISTANT'S LOG RESERVES ONLY ITS FLOOR ON A FRESH NODE, so a deployment
-// sized for everything else boots with it. Its unset 512 MiB counted in full
-// raised the least a fresh node reserves past the broker limit
-// crewlet-operator gives the smallest data volume it admits, the one its
-// getting-started company runs on, and every such node refused to boot on
-// CREWLET_ASSISTANT_LOG. Scaled, it counts its field's 64 MiB floor, and that
-// limit holds the whole fresh node again.
-//
-// THAT LIMIT IS 12 GiB, three quarters of a 16Gi volume. It was 9 GiB, of
-// 12Gi, when the assistant's scaling was written; then the chat log joined the
-// register at the gibibyte every corpus-sized log is scaled no lower than
-// ([config.ChatLogMaxBytesFloor]), and a fresh node reserved 10826896725 bytes,
-// three quarters of a 14Gi volume. Chat does not give way on a short broker as
-// the assistant does: it is not a feature a company may never turn on — it is
-// the company's chat unless a vendor's is declared — and the room a 9 GiB
-// limit leaves it, 192 MiB beside the eight other logs at their floors and the
-// bucket, is less than the one min_age window of messages a healthily trimming
-// chat log keeps, about 225 MB at its declared census. Then Gitlet's log
-// joined at the same gibibyte ([config.CodeLogMaxBytesFloor]): it is the
-// write-ahead log of every repository the company hosts, which gives way on a
-// short broker no more than chat does, and a fresh node reserved 12258552490
-// bytes, past 15Gi's 11.25 GiB. So the least a fresh node needs moved with the
-// register, as it did when the artifact logs joined, and crewlet-operator's
-// smallest volume moved with it. Then the executor log joined at its own
-// 64 MiB floor, scaled down to it as the assistant's is
-// ([TestTheExecutorLogFitsBesideTheOtherLogsAtTheOperatorsSmallestVolumes]):
-// 85.3 MiB more with the bucket's quarter beside it, which 16Gi still holds.
-//
-// SO THE SCALING DECIDES AGAIN WHETHER THAT VOLUME BOOTS. Counted at its
-// 512 MiB, a fresh node needed one byte less than 16Gi's limit before the
-// executor log joined; beside it, it needs more than that limit, by just under
-// the executor log's 85.3 MiB, which this case states. And the scaling still
-// decides the floor itself, the least a broker boots a fresh node in, which it
-// lowers by the 448 MiB it gives way and the bucket's quarter beside them: a
-// broker stated at that floor boots a fresh node with the assistant's log
-// scaled and refuses one counting it in full.
+// sized for everything else boots with it. crewlet-operator states 12 GiB, three
+// quarters of its smallest data volume (16Gi), and a fresh node fits it only
+// with the assistant's unset 512 MiB scaled to its field's 64 MiB floor: counted
+// in full it overshoots by just under the executor log's 85.3 MiB. The scaling
+// also decides the floor itself: a broker stated at that floor boots a fresh
+// node with the log scaled and refuses one counting it in full. The least a
+// fresh node needs grows as the register does, and crewlet-operator's smallest
+// volume moves with it.
 func TestTheAssistantLogCountsOnlyItsFloorTowardAFreshNode(t *testing.T) {
 	t.Parallel()
 	boot := config.DefaultBootstrap()
@@ -288,16 +253,12 @@ func TestTheAssistantLogCountsOnlyItsFloorTowardAFreshNode(t *testing.T) {
 	}
 }
 
-// THE SIZE A TEST BROKER DECLARES BOOTS A FRESH NODE OF THE FIXTURES.
-//
-// The suites size their brokers from brokertest.StoreMaxBytes rather than from
-// the runner's free disk, so that a boot passes or fails on the code and not on
-// the machine. That holds only while the figure is above the floor of the
-// fixtures' own Tier A, and the floor grows whenever a log joins the register:
-// past it, every node boot in every suite is refused on every machine. This
-// case fails beside them, as the one that names the cause, both figures and
-// the constant to raise — and through Tier A's own validation, so the figure
-// is one an operator could write.
+// THE SIZE A TEST BROKER DECLARES BOOTS A FRESH NODE OF THE FIXTURES. Suites
+// size brokers from brokertest.StoreMaxBytes, not the runner's disk, so a boot
+// passes or fails on the code; once the floor grows past it (a log joins the
+// register) every suite's node boot is refused. This case names the cause, both
+// figures and the constant to raise, and goes through Tier A's own validation
+// so the figure is one an operator could write.
 func TestTheTestBrokerSizeHoldsAFreshNode(t *testing.T) {
 	t.Parallel()
 	boot := testBootstrap(t)
@@ -315,28 +276,17 @@ func TestTheTestBrokerSizeHoldsAFreshNode(t *testing.T) {
 }
 
 // THE EXECUTOR LOG FITS BESIDE THE OTHER LOGS AT THE OPERATOR'S SMALLEST
-// VOLUMES, as a fresh node and as a node whose other logs already exist.
+// VOLUMES, fresh or with the other logs already there: 12Gi with objects in S3
+// and 16Gi on the nats bucket, three quarters stated as the broker's limit. A
+// log the register gains is created at an existing node's next boot from what
+// the others leave (448 MiB on either), so it scales to its 64 MiB floor
+// ([config.ExecutorLogMaxBytesFloor]); the 85.3 MiB it adds to a fresh node's
+// floor (the bucket's quarter included) crewlet-operator's own floors follow.
+// The others are read off the register, so a later log is held without an edit.
 //
-// crewlet-operator admits no data volume smaller than 12Gi with the objects in
-// S3 and 16Gi on the nats bucket, and states three quarters of it as the
-// broker's limit. A log the register gains is created on every existing node at
-// its next boot, out of whatever the logs already there leave — 448 MiB on
-// either volume, beside the bucket on 16Gi — and a ceiling that does not fit
-// refuses the boot. So the executor log reserves its 64 MiB floor there
-// ([config.ExecutorLogMaxBytesFloor], what its register entry scales to), and a
-// fresh node of the default document still boots on either volume: the
-// operator's minimum volume classes do not move for it. What does move is the
-// least a fresh node boots in — 64 MiB more of logs, and on the nats bucket the
-// bucket's quarter beside it, 85.3 MiB in all — which crewlet-operator's own
-// fresh-node floors follow.
-//
-// THE OTHERS ARE READ OFF THE REGISTER, never counted here, so a log the
-// register gains after this one is held beside it without an edit.
-//
-// Mutation: drop ScalesTo from the executor's register entry, so it holds at
-// the gibibyte every corpus-sized log does, and the node whose other logs
-// exist is refused it on both volumes; raise the floor past 448 MiB and the
-// same.
+// Mutation: drop ScalesTo from the executor's register entry, or raise its
+// floor past 448 MiB, and the node whose other logs exist is refused it on
+// both volumes.
 func TestTheExecutorLogFitsBesideTheOtherLogsAtTheOperatorsSmallestVolumes(t *testing.T) {
 	t.Parallel()
 	executor := executordomain.Domain{}.Name()

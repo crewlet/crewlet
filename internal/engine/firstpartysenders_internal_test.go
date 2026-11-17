@@ -54,12 +54,11 @@ func firstPartyChart(t *testing.T) *org.Organization {
 // EVERY SOURCE THE ENGINE HOSTS IS A NAMESPACE WHOSE IDS ARE HANDLES, on the
 // one registry this node builds.
 //
-// A native source left off [firstPartySources] fails nothing: its every
-// sender reads as an outside party, so the learning profile files a person
-// under a platform id, the thread block fences a colleague as a stranger, and
-// a turn a person woke acts for nobody. So the list is held to the parsers the
-// node registers for a company that runs every half natively, rather than to
-// a second list beside it.
+// A native source left off [firstPartySources] fails nothing by itself: its
+// every sender reads as an outside party, so the learning profile files a
+// person under a platform id, the thread block fences a colleague as a
+// stranger, and a turn a person woke acts for nobody. So the list is held to
+// the parsers the node registers for a company running every half natively.
 func TestEveryNativeSourceNamesItsSendersByHandle(t *testing.T) {
 	t.Parallel()
 	o := firstPartyChart(t)
@@ -94,18 +93,15 @@ func TestEveryNativeSourceNamesItsSendersByHandle(t *testing.T) {
 // A TURN A PERSON WOKE ON THE ENGINE'S OWN SURFACES ACTS FOR THEM.
 //
 // The requester ceiling bounds an agent's artifact tools by whoever woke its
-// turn, and a turn whose sender nobody could name is a stranger's, refused
-// every read. A native sender is a seat handle, which no vendor namespace
-// holds — so read through a registry that did not know the engine's own
-// sources were handles, a person's comment on a task, remark on a page or
-// message in a room woke a turn that could not read for them an artifact
-// shared with them. Each case runs the source's own parser and the
-// notification service's real delivery, then the turn's identity as the
-// runner is handed it, then the tool.
-//
-// AND THE CEILING STILL HOLDS: the same wake from somebody the artifact is not
-// shared with is refused, so what admits ada is her relation to it and not a
-// ceiling lifted.
+// turn, and a sender nobody can name is a stranger, refused every read. A
+// native sender is a seat handle, which no vendor namespace holds, so a
+// registry not knowing the engine's own sources name handles would leave a
+// person's task comment, page remark or room message waking a turn that cannot
+// read an artifact shared with them. Each case runs the source's parser, the
+// notification service's real delivery, the turn identity the runner is
+// handed, then the tool. AND THE CEILING STILL HOLDS: the same wake from
+// somebody the artifact is not shared with is refused, so what admits ada is
+// her relation to it.
 func TestATurnAPersonWokeOnAFirstPartySurfaceActsForThem(t *testing.T) {
 	t.Parallel()
 	o := firstPartyChart(t)
@@ -143,11 +139,10 @@ func TestATurnAPersonWokeOnAFirstPartySurfaceActsForThem(t *testing.T) {
 
 // A CHATLET THREAD FENCES ITS COLLEAGUES AS COLLEAGUES.
 //
-// The thread block names every speaker as an author of the fence it writes,
-// and a speaker the party registry does not know is an outside party — which
-// a Chatlet author, a seat's handle, was on every Chatlet thread. Read through
-// the registry the engine builds, a person and the seat itself are the
-// company's, and the fence says so.
+// The thread block names every speaker as an author of its fence, and a
+// speaker the party registry does not know is an outside party. A Chatlet
+// author is a seat's handle, so through the registry the engine builds a
+// person and the seat itself are the company's, and the fence says so.
 func TestAChatletThreadFencesItsColleaguesAsColleagues(t *testing.T) {
 	t.Parallel()
 	o := firstPartyChart(t)
