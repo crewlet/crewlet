@@ -392,7 +392,9 @@ func TestAFIFOLinkReadsNoMoreThanItsInflightAheadOfWhatItCarried(t *testing.T) {
 			ahead = max(ahead, c.Count.Read-c.Count.Carried)
 			n++
 			mu.Unlock()
-			time.Sleep(hold)
+			// ON THE BUBBLE'S CLOCK: every arm calls bounded inside its
+			// synctest bubble, whose link runs the watcher.
+			time.Sleep(hold) //fixedwait:simulated a case holding each crossing while it samples a node's socket
 		})
 		return func() (int64, int) {
 			mu.Lock()
