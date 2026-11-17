@@ -384,6 +384,10 @@ var sortingStatements = map[string]string{
 	"due rechecks": "one repository's live changes behind a moved target, at most one a live branch " +
 		"(code_changes_open_idx), so MaxRefsPerRepo bounds them: no index orders a repository's changes by " +
 		"when their merge was recorded without one written by the records of two subjects (changesdue.go)",
+	"every repository's ejections counted": "at most MaxQueueCounted index entries of the day's ejections: " +
+		"the inner LIMIT bounds what the group sorts",
+	"every repository's live entries counted": "at most MaxQueueCounted index entries of the live entries: " +
+		"the inner LIMIT bounds what the group sorts",
 }
 
 // The PRIMARY KEY indexes the plans name, as the driver names them.
@@ -944,11 +948,15 @@ func registeredStatements() map[string]statement {
 		// index's leading column; the merge rate's enqueues of a target, one
 		// seek of code_queue_enqueued_idx answered from the index; a repository's
 		// ejections and a target's, each by the index partial on ejections
-		// that leads with what it names; a target's trains by
-		// code_candidates_train_idx; its landings above a place and its
-		// green row by their keys, and a repository's green rows; and a purge
-		// part's bounded deletes and the purge's whole ones, each by its
-		// table's key.
+		// that leads with what it names, and counted by the same indexes,
+		// covering; every repository's ejections counted and read newest
+		// first by the index partial on them that leads with the ending; the
+		// queue part's counts of live entries, a repository's and every
+		// repository's, covering seeks of code_queue_live_idx; a target's
+		// trains by code_candidates_train_idx; its landings above a place and
+		// its green row by their keys, and a repository's green rows; and a
+		// purge part's bounded deletes and the purge's whole ones, each by
+		// its table's key.
 		"queue entry": {entrySQL, []any{"repo-1", "entry-1"},
 			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
 		"live entries of changes": {liveEntriesSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
@@ -986,6 +994,19 @@ func registeredStatements() map[string]statement {
 			[]string{"code_queue_ejected_idx (repo_id=? AND ended_at>=?)"}},
 		"a target's ejections": {ejectedOfTargetSQL, []any{"repo-1", "refs/heads/main", 1000, MaxEjectionsShown},
 			[]string{"code_queue_target_ejected_idx (repo_id=? AND target_ref=? AND ended_at>=?)"}},
+		"a repository's ejections counted": {ejectedCountOfRepoSQL, []any{"repo-1", 1000, MaxQueueCounted},
+			[]string{"COVERING INDEX code_queue_ejected_idx (repo_id=? AND ended_at>=?)"}},
+		"a target's ejections counted": {ejectedCountOfTargetSQL, []any{"repo-1", "refs/heads/main", 1000,
+			MaxQueueCounted}, []string{"COVERING INDEX code_queue_target_ejected_idx (repo_id=? AND target_ref=? " +
+			"AND ended_at>=?)"}},
+		"every repository's ejections counted": {ejectedReposSQL, []any{1000, MaxQueueCounted},
+			[]string{"COVERING INDEX code_queue_ejected_recent_idx (ended_at>=?)"}},
+		"every repository's ejections": {ejectedEverywhereSQL, []any{1000, `["repo-1","repo-2"]`,
+			MaxEjectionsShown}, []string{"SCAN json_each", "code_queue_ejected_recent_idx (ended_at>=?)"}},
+		"a repository's live entries counted": {queueCountOfRepoSQL, []any{"repo-1", MaxQueueCounted},
+			[]string{"COVERING INDEX code_queue_live_idx (repo_id=?)"}},
+		"every repository's live entries counted": {queueCountsSQL, []any{MaxQueueCounted},
+			[]string{"COVERING INDEX code_queue_live_idx (repo_id>=?)"}},
 		"a target's trains": {trainsSQL, []any{"repo-1", "refs/heads/main"},
 			[]string{"code_candidates_train_idx (repo_id=? AND target_ref=?)"}},
 		// A GIVEN-UP TRAIN'S CHECKS (queuework.go): a repository's attempts
@@ -1188,10 +1209,13 @@ func registeredStatements() map[string]statement {
 		"changes by state": {changesByStateSQL, []any{"repo-1"}, []string{changesRepoStateKey + " (repo_id=?)"}},
 		// A CHANGE A PUSH OPENS: the repository's next number moved past
 		// the opens of a push record, by its key; and the numbers of the
-		// changes a batch's answers name, or a queue page's entries,
-		// driven from their list, one seek of the changes' key an element.
+		// changes a batch's answers name, or a queue page's entries, and
+		// their titles and source branches, driven from their list, one seek
+		// of the changes' key an element.
 		"next change after": {nextChangeAfterSQL, []any{4, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"change numbers": {changeNumbersSQL, []any{"repo-1", `["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", changeKey + " (id=?)"}},
+		"change labels": {changeLabelsSQL, []any{"repo-1", `["repo-1-change-000001","repo-1-change-000002"]`},
 			[]string{"SCAN json_each AS j", changeKey + " (id=?)"}},
 		// THE READS OF CHANGES: each walk a listing's filters choose
 		// (changeread.go's walkOf), a first page and a page after a cursor,
