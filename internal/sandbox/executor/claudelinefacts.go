@@ -17,14 +17,14 @@ import (
 // A FACT IS ONE OF FOUR SHAPES, by what its readers read of the value:
 //
 //   - A SMALL VALUE AS WRITTEN, its raw (a uuid, a timestamp, a reply's usage,
-//     an attachment's type), which its accessor holds to its type and reads
-//     by the layer's own code at each call, as it read the line's raw before.
+//     an attachment's type, a hook's event), which its accessor holds to its
+//     type and reads by the layer's own code at each call.
 //   - A VALUE'S KIND ([valueKind]) where its readers ask only what kind of
 //     JSON it is (an attachment's content is a string, or an object).
-//   - A FRAME'S ANSWERS: of a container its readers walk (a message's content,
-//     an attachment's lists, a record's own toolUseResult), what each reader
-//     asks of it, read by that reader's own rule, and the error that rule
-//     meets, worded as the accessor words it.
+//   - A FRAME'S ANSWERS: of a container or a text its readers read (a
+//     message's content, an attachment's lists, a record's own toolUseResult,
+//     the asked takes a hook's words name), what each reader asks of it, read
+//     by that reader's own rule, and the error that rule meets.
 //   - A LIST'S ENTRIES, each read by its rule, in order, up to the first that
 //     fails it, with that failure: its accessor replays them and then answers
 //     the failure, so a reader is handed what a walk of the list handed it
@@ -134,8 +134,15 @@ type attachmentFacts struct {
 	// read, before any key of it.
 	kind valueKind
 	err  error
-	// typ, toolUseID and by are its `type`, `toolUseID` and `by`, as written.
-	typ, toolUseID, by json.RawMessage
+	// typ, toolUseID, by and event are its `type`, `toolUseID`, `by` and
+	// `hookEvent`, as written.
+	typ, toolUseID, by, event json.RawMessage
+	// contentTokens and stdoutTokens are which asked take tokens
+	// ([threadReader.Asking]) its `content`, and a hook_success's `stdout`,
+	// name where each is a string ([textTakes]): bit i for token i. A uint64,
+	// since a reading asks at most (steer.MaxTurnNotes 10 +
+	// sandbox.MaxJobItems 10) x sandbox.MaxNoteServes 3 = 60 ([maxAskedTakes]).
+	contentTokens, stdoutTokens uint64
 	// content is its `content`'s kind; contentStrings and contentObjects
 	// whether that is a list whose every element is a string, or an object.
 	content                        valueKind

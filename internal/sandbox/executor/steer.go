@@ -318,6 +318,20 @@ func ClaudeHookAnswer(event string, notes []HookNote) string {
 	return strings.TrimSuffix(buf.String(), "\n")
 }
 
+// claudeTakePrefix opens the token that names a take in a hook's words
+// ([claudeTakeToken]).
+const claudeTakePrefix = "[crewlet take "
+
+// claudeTakeTokenLen is every take token's length: a take is named by a uuid's
+// 36 characters (internal/engine, takeName), so the reader of a hook's words
+// holds one token's length of them and no more ([textTakes]).
+const claudeTakeTokenLen = len(claudeTakePrefix) + 36 + len("]")
+
+// claudeTakeToken is the token naming take that a hook's answer carries and
+// its job's session then shows ([threadLine.HookTakes]): ONE definition, which
+// the answer, the cut and the ask all read.
+func claudeTakeToken(take string) string { return claudeTakePrefix + take + "]" }
+
 // OpenCodeInboxID is the id OpenCode admits a note under for a job: `msg_` and
 // the first 32 hex digits of a hash of the job and the note.
 //

@@ -22,8 +22,8 @@ import (
 // [answerOf], a list's entries' [replacedID], [batchEntryID],
 // [threadRetracted.entry] and [threadPreserved.list]...), and every text it
 // reads a property of is read by the automaton that reads it as it streams
-// ([textSays], [textNotice], [textHandback], [textResult], [textUnits]), so
-// what it fills is what any reading of the line by those rules fills.
+// ([textSays], [textNotice], [textHandback], [textResult], [textUnits],
+// [textTakes]), so what it fills is any reading's of the line by those rules.
 //
 // A line it refuses is classed by how Claude Code's load reads it
 // ([refusedFault]), which reads the line again, and only a refused line.
@@ -67,12 +67,13 @@ type threadWire struct {
 // head and its facts: ONE decode of the whole line ([wireDecode]), which
 // holds every byte of it to JSON, then the head's keys held to their types,
 // then the facts its accessors read ([factsOf]); and reads its byte facts
-// ([lineBytesOf]), a refused line's too. Nothing reads a
+// ([lineBytesOf]), a refused line's too; asked is the take tokens its reader
+// asks of a hook's words ([threadReader.Asking]). Nothing reads a
 // line before this has: no keyword decides which lines are decoded, since a
 // line no keyword marks can still be no record (a write that tore into
 // another), and a reader that passed it unread would decide from the thread
 // around it as though it were whole.
-func decodeThreadLine(n int, raw []byte) (threadLine, error) {
+func decodeThreadLine(n int, raw []byte, asked []string) (threadLine, error) {
 	// HELD TO AN OBJECT BEFORE IT IS DECODED: a JSON null decodes into a struct
 	// as nothing at all, with no error, and would pass for a record of no keys.
 	if trimmed := bytes.TrimLeft(raw, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '{' {
@@ -90,7 +91,7 @@ func decodeThreadLine(n int, raw []byte) (threadLine, error) {
 			Size: len(raw) + 1, Bytes: lineBytesOf(raw)}
 	}
 	return threadLine{N: n, Size: len(raw) + 1, Bytes: lineBytesOf(raw), Head: head,
-		f: factsOf(&w, head)}, nil
+		f: factsOf(&w, head, asked)}, nil
 }
 
 // head is the line's head, its keys held to their types by the head's rule
@@ -106,8 +107,9 @@ func (w threadWire) head() (threadHead, error) {
 // type reads, read by each reader's rule. A frame the type does not read is
 // left empty, so a record of another type never pays for reading a frame it
 // carries, an api-request-blob's whole request among them, though the line's
-// decode ([wireDecode]) still copies that frame's bytes.
-func factsOf(w *threadWire, h threadHead) *lineFacts {
+// decode ([wireDecode]) still copies that frame's bytes. asked is the take
+// tokens its reader asks of a hook's words ([threadReader.Asking]).
+func factsOf(w *threadWire, h threadHead, asked []string) *lineFacts {
 	f := &lineFacts{
 		uuid: w.UUID, version: w.Version, origin: w.Origin, apiError: w.APIError,
 		leafUUID: w.LeafUUID, explicit: w.Explicit, rewound: w.Rewound,
@@ -125,7 +127,7 @@ func factsOf(w *threadWire, h threadHead) *lineFacts {
 		f.retracted, f.retractedErr = retractedOf(w.Retracted)
 		f.batch = batchOf(w.Batch)
 	case recordAttachment:
-		f.attachment = attachmentOf(w.Attachment)
+		f.attachment = attachmentOf(w.Attachment, asked)
 	case recordSystem:
 		switch h.Subtype {
 		case subtypeCompactBoundary:
@@ -175,10 +177,11 @@ func toolResultOf(raw json.RawMessage) toolResultFacts {
 }
 
 // attachmentOf is an attachment record's `attachment`, raw, read once: its
-// kind, its small values as written, and what each attachment's shape rule
-// asks of its lists ([threadLine.AttachmentWellFormed]), every rule's at
-// once, so the accessor picks by the attachment's type.
-func attachmentOf(raw json.RawMessage) attachmentFacts {
+// kind, its small values as written, what each attachment's shape rule asks
+// of its lists ([threadLine.AttachmentWellFormed]), every rule's at once, so
+// the accessor picks by the attachment's type, and which of the asked take
+// tokens its words name ([takesOf]).
+func attachmentOf(raw json.RawMessage, asked []string) attachmentFacts {
 	a := attachmentFacts{kind: kindOfValue(raw)}
 	if a.kind != '{' {
 		return a
@@ -187,15 +190,23 @@ func attachmentOf(raw json.RawMessage) attachmentFacts {
 		Type      json.RawMessage `json:"type"`
 		ToolUseID json.RawMessage `json:"toolUseID"`
 		By        json.RawMessage `json:"by"`
+		HookEvent json.RawMessage `json:"hookEvent"`
 		Skills    json.RawMessage `json:"skills"`
 		Content   json.RawMessage `json:"content"`
+		Stdout    json.RawMessage `json:"stdout"`
 		Names     json.RawMessage `json:"names"`
 		Entries   json.RawMessage `json:"entries"`
 	}
 	if a.err = wireDecode(raw, &wire); a.err != nil {
 		return a
 	}
-	a.typ, a.toolUseID, a.by = wire.Type, wire.ToolUseID, wire.By
+	a.typ, a.toolUseID, a.by, a.event = wire.Type, wire.ToolUseID, wire.By, wire.HookEvent
+	if len(asked) > 0 {
+		a.contentTokens = takesOf(wire.Content, asked)
+		if typ, err := wireRequiredString("type", wire.Type); err == nil && typ == hookSuccess {
+			a.stdoutTokens = takesOf(wire.Stdout, asked)
+		}
+	}
 	a.content = kindOfValue(wire.Content)
 	a.contentStrings = everyElement(wire.Content, func(raw json.RawMessage) bool { return raw[0] == '"' })
 	a.contentObjects = everyElement(wire.Content, wireObject)
@@ -203,6 +214,22 @@ func attachmentOf(raw json.RawMessage) attachmentFacts {
 	a.namesKept, a.namesErr = skillNamesKept(wire.Names)
 	a.entriesKept = everyElement(wire.Entries, withheldEntryKept)
 	return a
+}
+
+// takesOf is which of asked, take tokens, raw names where it is a string,
+// decoded once as the layer reads one and read as it will stream
+// ([textTakes]): bit i for asked[i]; none for every other value.
+func takesOf(raw json.RawMessage, asked []string) uint64 {
+	var text string
+	if len(raw) == 0 || raw[0] != '"' || wireDecode(raw, &text) != nil {
+		return 0
+	}
+	takes := textTakes{asked: asked}
+	cut := textCut{text: text}
+	for p := cut.next(); p != nil; p = cut.next() {
+		takes.write(p)
+	}
+	return takes.bits
 }
 
 // compactOf is a compaction's boundary's `compactMetadata`, raw, read once

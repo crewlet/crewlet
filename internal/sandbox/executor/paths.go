@@ -59,7 +59,11 @@
 // only as a key ([threadLine.AttachmentToolUseID]), since a PostToolUse
 // hook's firing carries the id of the call it followed, and a task
 // notification's `<tool-use-id>` as the leg its text claims
-// ([threadMessage.Notification]), matched only against a call read. The
+// ([threadMessage.Notification]), matched only against a call read; and a
+// hook's words (a system message, a success's stdout) leave the layer only as
+// the asked take tokens they name ([threadReader.Asking],
+// [threadLine.HookTakes], [claudeTakeToken]), each whole and exactly, never as
+// bytes, alongside the hook's event ([threadLine.HookEvent]). The
 // take's context meter (measure.go) reads the main
 // thread through the layer too, in one walk of its whole lines
 // ([walkThread]): it decides what a continuation of the capture is told, by
