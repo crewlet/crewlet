@@ -18,7 +18,7 @@ import { plural } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type { CodeChangeDetail, CodePrecondition, CodeReadiness } from "~/protocol/index.ts";
-import { ChangeStateTag } from "./Changes.tsx";
+import { ChangeStateTag } from "./ChangeRow.tsx";
 import { preconditionSentence, readinessCount, readinessNext } from "./readinessWords.ts";
 import { BranchChip } from "./ui.tsx";
 import "~/styles/gitlet.css";

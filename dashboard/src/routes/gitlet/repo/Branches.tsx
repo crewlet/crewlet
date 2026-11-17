@@ -56,7 +56,7 @@ import {
   type CodeRepoDetail,
   type CodeTagRow,
 } from "~/protocol/index.ts";
-import { ChangeRefPill } from "../Changes.tsx";
+import { ChangeRefPill } from "../ChangeRow.tsx";
 import { useListKeys } from "../CodeList.tsx";
 import { commitHref, compareHref, repoHref } from "../paths.ts";
 import { BranchChip, CheckRollupMark, Face, GITLET, useWhoName, type Who } from "../ui.tsx";

@@ -219,20 +219,17 @@ test("a row's readiness, open findings and last move are the engine's, and a clo
 
   const grid = await screen.findByRole("table", { name: "Changes" });
   expect(within(grid).getByText("Merged")).toBeTruthy();
-  const meter = within(grid).getByRole("meter");
-  expect(meter.getAttribute("aria-valuenow")).toBe("2");
-  expect(meter.getAttribute("aria-valuemax")).toBe("5");
-  // THE COUNT IS DRAWN beside the meter, so the value reads without a hover,
-  // and the meter has a width of its own rather than its 4px min-content.
+  // ONE SEGMENT PER CONDITION, named by the count and what is next.
+  const meter = within(grid).getByRole("img", { name: /^2 of 5 conditions to merge met\./ });
+  expect(meter.closest(".code-readiness")).not.toBeNull();
   expect(within(grid).getByText("2/5")).toBeTruthy();
-  expect(meter.closest(".code-readiness__meter")).not.toBeNull();
   // THE ENGINE'S COUNTS, drawn as it sent them: the open findings of each
   // row, a merged change's none among them, and when each last moved.
   expect(within(grid).getByRole("columnheader", { name: "Open findings" })).toBeTruthy();
   expect(within(grid).getByRole("columnheader", { name: "Updated" })).toBeTruthy();
   expect(within(grid).getByText("3")).toBeTruthy();
   expect(within(grid).queryByRole("columnheader", { name: "Blockers" })).toBeNull();
-  expect(within(grid).getAllByText("Not live")).toHaveLength(1);
+  expect(grid.querySelectorAll(".code-readiness")).toHaveLength(1);
 });
 
 // A ROW'S STATE IS THE KIT'S CHANGE PILL with its glyph (an unknown state is its

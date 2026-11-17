@@ -56,19 +56,11 @@
  * the list, which is where a reader decides what to open next.
  */
 
-import { useMemo, type ComponentType } from "react";
-import {
-  GitMergeGlyph,
-  GitPullRequestClosedGlyph,
-  GitPullRequestDraftGlyph,
-  GitPullRequestGlyph,
-  type GlyphProps,
-} from "@crewlethq/icons/glyphs";
+import { useMemo } from "react";
 import {
   Button,
   EmptyState,
   EmptyValue,
-  Meter,
   peekRowActivation,
   Select,
   Skeleton,
@@ -79,39 +71,29 @@ import {
 } from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
-import { href, useParam } from "~/app/router.tsx";
+import { useParam } from "~/app/router.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import {
   CHANGE_NEED_FILTERS,
   CHANGE_STATE_FILTERS,
   EVERY_STATE,
-  changeLive,
-  changePath,
   changeStateWord,
-  firstUnready,
   CHANGE_WINDOW_FILTERS,
   isChangeNeed,
   isChangeWindow,
   isRepoName,
-  knownChangeState,
-  parseChangeRef,
   refName,
-  type KnownChangeState,
 } from "~/lib/code.ts";
 import { ago } from "~/lib/ago.ts";
 import { fmtCount, fmtDateTime, plural } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { codeRest, useCodeQuery, type CodeParams } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
-import type {
-  CodeChangeName,
-  CodeChangeState,
-  CodeChangeSummary,
-  CodeChangesAnswer,
-} from "~/protocol/index.ts";
+import type { CodeChangeState, CodeChangeSummary, CodeChangesAnswer } from "~/protocol/index.ts";
+import { ChangeStateTag, ReadinessMeter } from "./ChangeRow.tsx";
 import { REPO_PARAM, changeObject } from "./paths.ts";
-import { readinessCount, readinessNext } from "./readinessWords.ts";
+import { readinessNext } from "./readinessWords.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import { BranchChip, Face, useWhoName } from "./ui.tsx";
@@ -441,99 +423,6 @@ function ChangeCell({ change, now }: { change: CodeChangeSummary; now: number })
           <BranchChip name={refName(change.target_ref).name} />
         </span>
         {change.revision > 1 && <span>revision {change.revision}</span>}
-      </span>
-    </span>
-  );
-}
-
-/** Each state's glyph, the code host's own. */
-const STATE_GLYPHS: Readonly<Record<KnownChangeState, ComponentType<GlyphProps>>> = {
-  draft: GitPullRequestDraftGlyph,
-  open: GitPullRequestGlyph,
-  closed: GitPullRequestClosedGlyph,
-  merged: GitMergeGlyph,
-};
-
-/**
- * A change's state: the kit's change colours on its pill, with the state's
- * glyph and word (the seventh exception); a state this build does not know is
- * its word on the neutral outline.
- */
-export function ChangeStateTag({ state }: { state: CodeChangeState }) {
-  if (!knownChangeState(state)) return <Tag appearance="outline">{state}</Tag>;
-  const Glyph = STATE_GLYPHS[state];
-  return (
-    <Tag className="code-state" data-state={state} leadingIcon={<Glyph size="xs" />}>
-      {changeStateWord(state)}
-    </Tag>
-  );
-}
-
-/**
- * A change by its reference on its state's pill (`web!41`), opening the change:
- * how a commit or a branch names the change it belongs to.
- */
-export function ChangeRefPill({ change }: { change: CodeChangeName }) {
-  const at = parseChangeRef(change.ref);
-  const Glyph = knownChangeState(change.state) ? STATE_GLYPHS[change.state] : null;
-  const pill = Glyph ? (
-    <Tag className="code-state" data-state={change.state} leadingIcon={<Glyph size="xs" />}>
-      {change.ref}
-    </Tag>
-  ) : (
-    <Tag appearance="outline">{change.ref}</Tag>
-  );
-  const title = `Change ${change.ref}, ${changeStateWord(change.state).toLowerCase()}: ${change.title}`;
-  return at ? (
-    <a className="code-change-ref" href={href(changePath(at.repo, at.number))} title={title}>
-      {pill}
-    </a>
-  ) : (
-    <span title={title}>{pill}</span>
-  );
-}
-
-/**
- * How many of a live change's conditions to merge are met, of how many: a
- * meter with its count beside it, titled by what the reader acts on next, or
- * nothing for a change that is no longer live.
- *
- * THE METER HAS A WIDTH OF ITS OWN (`.code-readiness__meter`): the kit's
- * meter fills its box and has no intrinsic size, so in a shrink column it was
- * a 4px dot, and the count says the value without a hover.
- */
-export function ReadinessMeter({
-  change,
-  nameOf,
-}: {
-  change: Pick<
-    CodeChangeSummary,
-    "state" | "owner" | "owner_kind" | "revision" | "target_ref" | "readiness"
-  >;
-  nameOf: (handle: string) => string;
-}) {
-  const readiness = change.readiness;
-  if (!changeLive(change.state) || !readiness) return <EmptyValue label="Not live" />;
-  const next = firstUnready(readiness);
-  const said = readinessNext(readiness, { change, nameOf });
-  return (
-    <span className="code-readiness" title={said}>
-      <Meter
-        className="code-readiness__meter"
-        hideLabel
-        size="compact"
-        label="Readiness"
-        value={readiness.met}
-        max={Math.max(readiness.total, 1)}
-        // COLOUR IS STATE: a change every precondition of which is met is
-        // ready, and only that is drawn as done; a part-met readiness is a
-        // quantity, not a warning.
-        polarity="progress"
-        tone={next ? "neutral" : "success"}
-        valueText={`${readinessCount(readiness)}. ${said}`}
-      />
-      <span className="code-readiness__count" aria-hidden="true">
-        {readiness.met}/{readiness.total}
       </span>
     </span>
   );

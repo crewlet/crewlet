@@ -50,7 +50,7 @@ import { useServicesAsk } from "~/lib/services.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { CodeChangeSummary } from "~/protocol/index.ts";
 import { CODE_LIST_POLL_MS } from "~/routes/gitlet/ChangeList.tsx";
-import { ChangeStateTag } from "~/routes/gitlet/Changes.tsx";
+import { ChangeStateTag } from "~/routes/gitlet/ChangeRow.tsx";
 import { changeObject, changesHref } from "~/routes/gitlet/paths.ts";
 import { WidgetQuery } from "./board/kit.tsx";
 import "~/styles/gitlet.css";

@@ -32,6 +32,8 @@ export interface ReadinessSubject {
   change: Pick<CodeChangeRow, "state" | "owner" | "owner_kind" | "revision" | "target_ref">;
   /** The name the dashboard draws for a seat or a person, by handle. */
   nameOf: (handle: string) => string;
+  /** The reader's handle, whom "Waiting on" calls "you"; unset says every party by name. */
+  me?: string;
 }
 
 /** Names in a sentence: "Ada", "Ada and Bo", "Ada, Bo and Cy". */
@@ -41,8 +43,8 @@ function namesOf(parties: readonly CodeParty[], nameOf: (handle: string) => stri
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
-function waitingOn(p: CodePrecondition, nameOf: (handle: string) => string): string {
-  const who = namesOf(p.waits_on ?? [], nameOf);
+function waitingOn(p: CodePrecondition, { nameOf, me }: ReadinessSubject): string {
+  const who = namesOf(p.waits_on ?? [], (h) => (me && h === me ? "you" : nameOf(h)));
   return who ? ` Waiting on ${who}.` : "";
 }
 
@@ -54,8 +56,9 @@ type Kind = (typeof PRECONDITION_KINDS)[number];
  */
 export function preconditionSentence(
   p: CodePrecondition,
-  { change, nameOf }: ReadinessSubject,
+  subject: ReadinessSubject,
 ): string | null {
+  const { change, nameOf } = subject;
   if (p.state === "met") return null;
   const n = change.revision;
   const target = refName(change.target_ref).name;
@@ -79,38 +82,38 @@ export function preconditionSentence(
         waits[0]!.kind === change.owner_kind;
       return ownerOnly
         ? `No approval counts on revision ${n}, and nobody who may approve it has been asked. ${owner} asks a reviewer.`
-        : `No approval counts on revision ${n} yet.${waitingOn(p, nameOf)}`;
+        : `No approval counts on revision ${n} yet.${waitingOn(p, subject)}`;
     }
     case "human_approval":
       return computing
         ? `Which of ${target}'s person-approved paths revision ${n} touches is still being read.`
-        : `Revision ${n} touches paths of ${target} that take a person's approval.${waitingOn(p, nameOf)}`;
+        : `Revision ${n} touches paths of ${target} that take a person's approval.${waitingOn(p, subject)}`;
     case "owners_approval":
       return computing
         ? `Which path owners revision ${n} touches is still being read.`
-        : `Revision ${n} touches paths whose owners have not all approved.${waitingOn(p, nameOf)}`;
+        : `Revision ${n} touches paths whose owners have not all approved.${waitingOn(p, subject)}`;
     case "blocker": {
       const count = (p.blockers?.length ?? 0) + (p.blockers_omitted ?? 0);
       const standing =
         count > 0
           ? `${plural(count, "blocking finding")} ${count === 1 ? "stands" : "stand"}`
           : "A blocking finding stands";
-      return `${standing}. Its raiser, a maintainer of the repository or a person clears it.${waitingOn(p, nameOf)}`;
+      return `${standing}. Its raiser, a maintainer of the repository or a person clears it.${waitingOn(p, subject)}`;
     }
     case "check":
       return computing
         ? `The checks ${target} requires are still running.`
-        : `The checks ${target} requires have not all passed.${waitingOn(p, nameOf)}`;
+        : `The checks ${target} requires have not all passed.${waitingOn(p, subject)}`;
     case "mergeable":
       return computing
         ? `Whether revision ${n} merges cleanly into ${target} is still being read.`
         : `Revision ${n} conflicts with ${target}. ${owner} merges ${target} into it.`;
     case "merge_authority":
-      return `Merging into ${target} takes access you do not hold.${waitingOn(p, nameOf)}`;
+      return `Merging into ${target} takes access you do not hold.${waitingOn(p, subject)}`;
     case "queue":
       return `It is in ${target}'s merge queue, which lands it.`;
     default:
-      return computing ? "Still being judged." : `Not met yet.${waitingOn(p, nameOf)}`;
+      return computing ? "Still being judged." : `Not met yet.${waitingOn(p, subject)}`;
   }
 }
 

@@ -92,7 +92,8 @@ const ANYWHERE = new Set(["CODE_LIST_POLL_MS"]);
 
 /** The one module that writes each mark's class, and each token's. */
 const WRITERS: Record<string, string> = {
-  "code-state": "routes/gitlet/Changes.tsx",
+  "code-state": "routes/gitlet/ChangeRow.tsx",
+  "code-state-glyph": "routes/gitlet/ChangeRow.tsx",
   "code-branch-chip": "routes/gitlet/ui.tsx",
   ...Object.fromEntries(
     SYNTAX_INKS.map((ink) => [`code-syn-${kindOf(ink)}`, "routes/gitlet/syntax.tsx"]),
@@ -214,12 +215,14 @@ export function lazyPicks(path: string, text: string, lang: Lang): string[] {
 const MARK_TOKENS = /--color-(?:change-(?:open|merged|closed|draft)|code-ref)-[\w-]+/;
 const MARK_CLASSES = /\.code-(?:state|branch-chip)(?![\w-])/;
 
-/** The pill's and the chip's rules: the four states, the pill's word, the chip and its selected row. */
+/** The pill's, the glyph's and the chip's rules: the four states each, the pill's word, the chip and its selected rows. */
 const MARK_RULES = new Set([
   ...CHANGE_STATES.map(([state]) => `.code-state[data-state="${state}"]`),
+  ...CHANGE_STATES.map(([state]) => `.code-state-glyph[data-state="${state}"]`),
   ".code-state[data-state] > :last-child",
   ".code-branch-chip",
   '[role="row"]:is([aria-current="true"], :has([aria-current="true"])) .code-branch-chip',
+  ".code-list__row[data-current] .code-branch-chip",
 ]);
 
 /**
@@ -252,11 +255,12 @@ export function unmeasuredPaints(rules: readonly SheetRule[]): string[] {
       out.push(`${file} ${selector} ${property}: ${got}, not ${token}`);
     }
   };
-  for (const [state, fill, label] of CHANGE_STATES) {
+  for (const [state, fill, label, ink] of CHANGE_STATES) {
     const selector = `.code-state[data-state="${state}"]`;
     want(selector, "background", fill);
     want(selector, "color", label);
     if (state === "draft") want(selector, "border-color", CHANGE_DRAFT_CHIP[1]);
+    want(`.code-state-glyph[data-state="${state}"]`, "color", ink!);
   }
   want(".code-branch-chip", "background", CODE_REF[1]);
   want(".code-branch-chip", "color", CODE_REF[0]);
@@ -693,6 +697,9 @@ describe("it can tell", () => {
         '.code-state[data-state="draft"]',
         "border-color: var(--color-change-draft-edge); background: var(--color-change-draft-fill); color: var(--color-change-draft-label);",
       ),
+      ...CHANGE_STATES.map(([s, , , ink]) =>
+        rule("gitlet.css", `.code-state-glyph[data-state="${s}"]`, `color: var(${ink});`),
+      ),
       rule("gitlet.css", ".code-branch-chip", chip),
     ];
     const good =
@@ -718,6 +725,15 @@ describe("it can tell", () => {
       "gitlet.css .code-branch-chip background: --color-code-ref-ink, not --color-code-ref-fill",
       "gitlet.css .code-branch-chip color: --color-code-ref-fill, not --color-code-ref-ink",
     ]);
+    // A ROW'S STATE GLYPH in its pill's label step, which is measured on the fill, not the row.
+    const labelled = sheet(good, chip).map((r) =>
+      r.selector === '.code-state-glyph[data-state="open"]'
+        ? { ...r, body: "color: var(--color-change-open-label);" }
+        : r,
+    );
+    expect(unmeasuredPaints(labelled)).toEqual([
+      'gitlet.css .code-state-glyph[data-state="open"] color: --color-change-open-label, not --color-change-open-ink',
+    ]);
   });
 
   test("a pill's or a chip's colour read, or its class named, by another rule", () => {
@@ -736,11 +752,14 @@ describe("it can tell", () => {
         ),
         rule("screens.css", ".code-branch-chip", "background: none;"),
         rule("gitlet.css", ".code-ftree__status", "color: var(--color-change-mark);"),
+        rule("screens.css", ".code-list__row[data-current] .code-branch-chip", "background: none;"),
+        rule("gitlet.css", ".code-list__row[data-current] .code-branch-chip", "background: none;"),
       ]),
     ).toEqual([
       "gitlet.css .code-ftree__status",
       'gitlet.css [role="row"] .code-state[data-state="open"]',
       "screens.css .code-branch-chip",
+      "screens.css .code-list__row[data-current] .code-branch-chip",
     ]);
   });
 

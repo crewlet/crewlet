@@ -18,7 +18,7 @@
 import "~/styles/gitlet.css";
 
 import type { ComponentType, ReactNode } from "react";
-import { Copyable, Spinner, Tag, VisuallyHidden } from "@crewlethq/ui";
+import { Copyable, Spinner, Tag, VisuallyHidden, type AvatarVerdict } from "@crewlethq/ui";
 import { ProductMark } from "@crewlethq/icons/product-mark";
 import {
   BookOpenGlyph,
@@ -82,10 +82,16 @@ const MARK_SIZE = { xs: 20, sm: 26, md: 32, text: "1.15em" } as const;
 export function Face({
   who,
   size = "xs",
+  verdict,
+  ring,
 }: {
   who: Who;
   /** A step, or `text`: a face inside a line of code or prose, sized by the words around it. */
   size?: "xs" | "sm" | "md" | "text";
+  /** A reviewer's verdict on the kit's corner, in a change's row alone. */
+  verdict?: AvatarVerdict | undefined;
+  /** The reader's own face. */
+  ring?: "brand" | undefined;
 }) {
   const badge = useSeatBadgeOf();
   if (typeof who !== "string") {
@@ -106,6 +112,8 @@ export function Face({
       size={size}
       kind={seat.kind === "human" ? "human" : "agent"}
       avatar={seat.avatar}
+      verdict={verdict}
+      ring={ring}
       decorative
     />
   );
@@ -245,7 +253,7 @@ export function RefName({ gitRef }: { gitRef: string }) {
 }
 
 /** Each rollup state's glyph and ink: a cross only for a failure, never for an absence. */
-const ROLLUP_LOOK: Readonly<
+export const ROLLUP_LOOK: Readonly<
   Record<string, { glyph: ComponentType<GlyphProps> | "spinner"; tone: string }>
 > = {
   passed: { glyph: CircleCheckGlyph, tone: "success" },

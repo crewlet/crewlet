@@ -148,6 +148,10 @@ Outside Gitlet no diff wears them; the pill and chip appear only in its
 Changes grid (a task, a seat, My work), its peek, Home's code card and the
 Inbox's code notice (`styles/diffs.test.ts`, `codehost.test.ts`, `tone.test.ts`).
 
+**A readiness is a meter of its conditions, each in the tone of where it stands**: met in
+success, measured or waiting on an agent in info, waiting on a person in warning, a failed
+check or a conflict in danger, with the count beside it and the next sentence as its title and name.
+
 A seat's badge takes one of three **status glyphs**, or none, from what it is DOING,
 and what it is doing is the ENGINE'S word, never the dashboard's. Every seat row carries
 `activity` (`working`, `needs`, `stopped` or `idle`) and, when stopped, a
@@ -179,6 +183,11 @@ the engine's word. A badge drawn alone (a sidebar row, a work card's holder,
 a spend row) carries the glyph and, where it names itself, the state in its
 accessible name. A stack of badges carries none: each overlaps the one
 before it, and the sentence beside it says what they are doing.
+
+**A reviewer's face in a change's row wears the kit's verdict corner** in place of a status:
+a check on the success fill for an approval, a mark on the danger fill for changes requested,
+each said in its title too. It is held to Gitlet's rows (`SeatAvatar.test.tsx`); a verdict
+elsewhere stays words.
 
 | Status (pill tone) | `activity` | Label |
 |---|---|---|
@@ -13311,7 +13320,8 @@ to.
    Search and on a project's Lead panel. `ring="brand"` — the accent drawn as a
    ring round the neutral badge, meaning *selected* — is for the one badge that
    IS the reader, in the sidebar's own account row (unless it wears a `mark`,
-   whose notch is cut from the outline the ring would follow), and for nothing else in
+   whose notch is cut from the outline the ring would follow), and the reader's own
+   face among a change row's reviewers (where a verdict corner takes its place), and for nothing else in
    the dashboard (the kit's `CharacterPicker` wears it on the chosen
    character, which is the same word: selected). What a seat is DOING is its
    `status` (`statusOf`), the kit's corner glyph, never a ring and never a
