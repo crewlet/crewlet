@@ -177,19 +177,50 @@ func TestARetriedBatchKeepsItsIdentity(t *testing.T) {
 	}
 }
 
+// stalled is a broker that is away: whatever reaches it waits until the case
+// that made it ends.
+type stalled struct{ ended chan struct{} }
+
+func (s stalled) EnsureSubscription(context.Context, string, string) (bool, error) {
+	<-s.ended
+	return false, errors.New("the case ended")
+}
+
+func (s stalled) Publish(context.Context, string, *events.Event) error {
+	<-s.ended
+	return errors.New("the case ended")
+}
+
 // A FULL BUFFER DROPS AND NEVER BLOCKS: a turn must not wait on its own audit
 // trail, and what was dropped is counted rather than silent.
+//
+// DECIDED BY RETURNING, NOT BY A STOPWATCH: the broker here never answers
+// until the case ends, so a listener that reached it, or waited on anything a
+// full buffer could wait on, would never return. How long the 100 calls take
+// on a loaded runner says nothing about that, and a bound on it failed a
+// healthy build on CI (1.04 s on a race shard).
 func TestAFullCustodyBufferDropsAndNeverBlocks(t *testing.T) {
 	t.Parallel()
-	b := &broker{refuse: errors.New("no member answered")}
-	c := NewCustody(b)
+	away := stalled{ended: make(chan struct{})}
+	t.Cleanup(func() { close(away.ended) })
+	c := NewCustody(away)
 	c.buffered = 8
-	started := time.Now()
-	for range 100 {
-		c.Listen()(t.Context(), "crewlet.events.x", persisted(t))
+	evs := make([]*events.Event, 100)
+	for i := range evs {
+		evs[i] = persisted(t)
 	}
-	if took := time.Since(started); took > time.Second {
-		t.Fatalf("buffering 100 events took %v with the broker away", took)
+	listen, ctx := c.Listen(), t.Context()
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		for _, ev := range evs {
+			listen(ctx, "crewlet.events.x", ev)
+		}
+	}()
+	select {
+	case <-returned:
+	case <-time.After(time.Minute): //fixedwait:liveness
+		t.Fatal("a publish waited on custody while the broker was away: a full buffer must drop and return")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
