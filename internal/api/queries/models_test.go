@@ -19,6 +19,7 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/modelcatalog"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -393,6 +394,13 @@ func TestAModelStepIsOfferedTheCataloguesModels(t *testing.T) {
 		return a.ID == "sonnet"
 	}) {
 		t.Errorf("claude-code = %+v", got)
+	}
+	// AN ALIAS SAYS WHAT IT RESOLVES TO, as the harness's profile records it.
+	profile, _ := harnessprofile.Builtin("claude-code")
+	for i, a := range profile.ModelAliases {
+		if row := got.Aliases[i]; row.Model != a.Model || row.Version != a.Version || row.Version == "" {
+			t.Errorf("alias %s = %+v, want the profile's model %q and version %q", a.ID, row, a.Model, a.Version)
+		}
 	}
 	got = answer(t, s, "llm_models", map[string]any{"harness": "opencode",
 		"provider": "openrouter"}).(queries.ModelsAnswer)
