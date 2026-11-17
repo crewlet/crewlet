@@ -250,6 +250,10 @@ type native struct {
 	// own forward-only walk and its own loop.
 	chatIndex *search.ChatIndexer
 
+	// changeIndex is this node's index of Gitlet changes' words, built where the company hosts code;
+	// a forward walk of chat's shape, on its own loop.
+	changeIndex *search.ChangeIndexer
+
 	// searcher is Doclet's answer to the knowledge seam.
 	searcher *doclet.Searcher
 
@@ -425,6 +429,9 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			return fmt.Errorf("engine: this node runs no code domain, so its rows " +
 				"have no reader — the domain is in the register and its stream " +
 				"failed to come up")
+		}
+		if built.runsCode() {
+			n.changeIndex = search.NewChangeIndexer(e.backends.Store, e.domainEstate(), gitlet.Domain{})
 		}
 		// THE CURRENT EPOCH'S LIMITS, read per call: a repository's detail
 		// reports what a push to it is held to now, which is what an
@@ -711,6 +718,13 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		go func() {
 			defer n.done.Done()
 			n.chatIndex.Run(runCtx)
+		}()
+	}
+	if n.changeIndex != nil {
+		n.done.Add(1)
+		go func() {
+			defer n.done.Done()
+			n.changeIndex.Run(runCtx)
 		}()
 	}
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/search"
@@ -200,6 +201,40 @@ func TestAReplacedEstateRebuildsTheChatIndex(t *testing.T) {
 		t.Fatalf("the chat index still answers as caught up (%v, %v) over an estate "+
 			"that was replaced under it, so every search reads what it indexed "+
 			"from the copy that is gone", ready, err)
+	}
+}
+
+// A REPLACED ESTATE REBUILDS THE INDEX OF CHANGES' WORDS, as it rebuilds the chat index: a document
+// indexed from the copy an adoption replaced would answer a listing narrowed by words for as long as the
+// deployment lived.
+// Mutation: drop the change index's call from estateReplaced.
+func TestAReplacedEstateRebuildsTheChangeIndex(t *testing.T) {
+	t.Parallel()
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
+	t.Cleanup(func() { _ = db.Close() })
+	index := search.NewChangeIndexer(db, db.Replicated().Reader(), gitlet.Domain{})
+	for range 16 {
+		worked, err := index.Sweep(t.Context(), time.Now())
+		if err != nil {
+			t.Fatalf("sweep the change index: %v", err)
+		}
+		if worked == 0 {
+			break
+		}
+	}
+	held, err := index.Holding(t.Context(), search.ChangeQuery{Terms: []string{"login"}, Limit: 1})
+	if err != nil || held.Rebuilding {
+		t.Fatalf("the premise: the change index over an empty estate is rebuilding (%+v, %v)", held, err)
+	}
+
+	e := &Engine{directoryNudge: make(chan struct{}, 1)}
+	e.native.Store(&native{changeIndex: index})
+	s := &stateLog{applyHooks: e.applyHooks()}
+	s.estateReplaced()
+	if held, err = index.Holding(t.Context(), search.ChangeQuery{Terms: []string{"login"}, Limit: 1}); err != nil ||
+		!held.Rebuilding {
+		t.Fatalf("the change index still answers as built (%+v, %v) over an estate that was replaced "+
+			"under it", held, err)
 	}
 }
 

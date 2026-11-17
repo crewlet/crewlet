@@ -59,13 +59,16 @@
 // the declared census is several times the entire supported vector corpus,
 // and the knowledge base's own embeddings are what would pay for it. ADR-0071
 // is the record of that decision and of what admitting chat to one half and
-// not the other cost the last time it happened.
+// not the other cost the last time it happened. Gitlet's changes have a third
+// keyword index of their own here ([ChangeIndexer]), unranked, since a listing
+// of changes keeps its order.
 //
 // # A read of another domain's table is a named, exported statement
 //
-// This package reads tables it does not own — the tracker's tasks and
-// relations, the knowledge base's page heads — for the lexical index, the
-// embedding duty, the backlinks and the window report. Each of those
+// This package reads tables it does not own (the tracker's tasks and
+// relations, the knowledge base's page heads, Gitlet's changes) for the
+// lexical index, the embedding duty, the backlinks, the window report and the
+// index of changes' words. Each of those
 // statements is a function returning the statement and its arguments
 // ([TaskVersionsRead], [PageSelection], [LinkedTasksRead] and the rest), and
 // it is the one the reader runs, so the gate of the package that owns the

@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -137,6 +138,13 @@ func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 					"does not use it", index)
 			}
 			claimed[index] = true
+		})
+	}
+	for name, st := range searchReads() {
+		t.Run(name, func(t *testing.T) {
+			for _, index := range held(t, name, st) {
+				used[index] = true
+			}
 		})
 	}
 	for _, index := range storetest.IndexesOn(t, db, covered) {
@@ -1947,6 +1955,22 @@ func claimedReads() map[string]statement {
 		"code_notifications_inbox_idx": {`SELECT record_id FROM code_notifications
 			WHERE recipient = ? ORDER BY log_seq DESC LIMIT ?`, []any{"founder", 50},
 			[]string{"code_notifications_inbox_idx (recipient=?)"}},
+	}
+}
+
+// searchReads is internal/search's reads of this package's tables, by name: each the exported
+// statement the search package runs (its rule for a read of another domain's table), held to its exact
+// seek and no sort here and judged for scans by the read gate, as a registered statement is.
+func searchReads() map[string]statement {
+	reach, reachArgs := search.ChangeReachRead(0, search.ChangeIndexBatchRows)
+	batch, batchArgs := search.ChangeBatchRead(0, 1<<40)
+	repos, reposArgs := search.ChangeReposRead([]string{"repo-1", "repo-2"})
+	return map[string]statement{
+		"the index of changes' words' reach": {reach, reachArgs,
+			[]string{"code_changes_position_idx (position>?)"}},
+		"the index of changes' words' batch": {batch, batchArgs,
+			[]string{"code_changes_position_idx (position>? AND position<=?)", bodyKey + " (change_id=?)"}},
+		"the index of changes' words' repositories": {repos, reposArgs, []string{repoKey + " (id=?)"}},
 	}
 }
 
