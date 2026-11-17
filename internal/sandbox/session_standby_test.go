@@ -1112,7 +1112,9 @@ func TestAReadStandingByTakesOverACaptureBegunPastItsBudget(t *testing.T) {
 // log does not answer, the standby keeps its own all the same, a session that
 // may be kept twice rather than one nobody keeps. Every way the log is read at
 // that last decision alone, never while the capture is still within its
-// budget.
+// budget. Where node-a's stamp names no taker, one an older build wrote, the
+// capture is decided by its age alone: the log is not read, even holding its
+// record, and the standby takes the place after it and keeps its own.
 //
 // ON THE LOG'S WORD ALONE: where the row names the capture and the run's
 // record does not take the landed settle, the standby keeps nothing all the
@@ -1140,7 +1142,8 @@ func TestAReadStandingByTakesOverACaptureBegunPastItsBudget(t *testing.T) {
 // answers held, and it uploads a second time where the store cannot say of
 // node-a's lease; stand down where the row names any stamp the read settled,
 // the save beside the capture included, and the final session is kept by
-// nobody. (A takeover asked after the settle whatever it found is refused by
+// nobody; admit a stamp that names no taker to that last read, and the log is
+// read for a capture every account leaves to its age. (A takeover asked after the settle whatever it found is refused by
 // the store, which takes over no capture that landed: [PendingStore.TakeOver].)
 func TestAReadStandingByKeepsNothingWhereTheLogTookTheCaptureItStoodByFor(t *testing.T) {
 	t.Parallel()
@@ -1164,6 +1167,9 @@ func TestAReadStandingByKeepsNothingWhereTheLogTookTheCaptureItStoodByFor(t *tes
 		// puts the SAVE's record on the turn's row on the log: the log took
 		// the save and not the final take the standby stands by for.
 		saveTook bool
+		// noTaker stamps node-a's capture with no taker, as an older build
+		// wrote it, its record on the log all the same.
+		noTaker bool
 	}{
 		{name: "the log took the capture's record, its stamp never on the run's row", took: true},
 		{name: "the log holds no record of the capture"},
@@ -1173,6 +1179,7 @@ func TestAReadStandingByKeepsNothingWhereTheLogTookTheCaptureItStoodByFor(t *tes
 		{name: "the log took the capture's record, and the store cannot say of its taker's lease", took: true,
 			leaseUnread: true},
 		{name: "the log took the record of the save the capture overtook", saveTook: true},
+		{name: "the log took the capture's record, its stamp naming no taker", took: true, noTaker: true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -1197,6 +1204,9 @@ func TestAReadStandingByKeepsNothingWhereTheLogTookTheCaptureItStoodByFor(t *tes
 					begun = SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
 						State: CaptureBegun, Final: true, At: rig.coordinator.now(), Taker: takingProcess,
 						TakerEpoch: lease.Epoch, Harness: "claude-code", SessionID: "s-1"}
+					if c.noTaker {
+						begun.Taker, begun.TakerEpoch = "", 0
+					}
 					if took, err := rig.pending.StampCapture(t.Context(), "t1", begun); err != nil || !took {
 						t.Fatalf("stamping node-a's begun capture = %v, %v", took, err)
 					}
@@ -1235,11 +1245,15 @@ func TestAReadStandingByKeepsNothingWhereTheLogTookTheCaptureItStoodByFor(t *tes
 				if held := heldBy(t, store, takingProcess); held == nil || held.Epoch != lease.Epoch {
 					t.Fatalf("the premise: node-a's taker lease is %+v, want it still held at %d", held, lease.Epoch)
 				}
-				if read := restore.askedFor(); len(read) != 1 {
+				switch read := restore.askedFor(); {
+				case c.noTaker && len(read) != 0:
+					t.Errorf("the turn's row on the log was read %v for a stamp that names no taker, want it "+
+						"left to the capture's age", read)
+				case !c.noTaker && len(read) != 1:
 					t.Errorf("the turn's row on the log was read %v, want once, at the standby's last decision",
 						read)
 				}
-				if !c.took {
+				if !c.took || c.noTaker {
 					if got == nil || got.NotKept != "" {
 						t.Fatalf("the standby's keep came to %+v, want its own session kept in the next place", got)
 					}
