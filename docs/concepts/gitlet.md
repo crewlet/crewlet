@@ -5997,9 +5997,12 @@ sequenceDiagram
   repositories through the same reads a seat's tools make, judging the
   asker's grant to each from its own chart. So the request is signed under
   the fleet's keyring in key domains of the search's own, bound to an id and
-  a deadline that a node takes once: a request the fleet did not sign, or one
-  replayed, is answered by nobody, and one signed under a key a node does not
-  hold is answered with the sentence naming the keys it holds.
+  a deadline: a request the fleet did not sign is answered by nobody, and one
+  signed under a key a node does not hold is answered with the sentence naming
+  the keys it holds. A node refuses an id it has taken for as long as that
+  deadline could still admit the request; a node that restarted inside that
+  window has forgotten the ids it took, and answers a replay there again, as
+  the asker the request names and with only what that asker may read.
 - **A runner-up, once.** A repository whose node did not answer it — silent,
   busy, behind, or building its index — is asked once more of the next node
   of its order (an indexed repository's second index holder) in a second
