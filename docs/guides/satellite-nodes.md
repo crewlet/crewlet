@@ -517,7 +517,10 @@ the dependency surface before choosing a host for it:
   are not such proxies. The same holds for every node's dial to an
   [external NATS server](deployment.md#an-external-nats-server). Inside the node
   the link passes through a tunnel the engine runs on loopback for itself,
-  which needs nothing from you and opens no port anybody else may use.
+  which needs nothing from you: its port serves the node's own leaf alone,
+  refuses every other caller on the host, and closes a connection that
+  sends it nothing, so nothing on the host that holds connections open to
+  it can keep the leaf from linking.
 - **The harness of every model its seats name, installed and signed in
   on that host.** Each [`providers.llm` entry](../concepts/llm-backends.md)
   is a harness the node runs, and it calls its own vendor over outbound HTTPS. A

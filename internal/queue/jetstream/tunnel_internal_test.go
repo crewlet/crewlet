@@ -73,10 +73,10 @@ func recordingDialer(r *dialRecord, lookup func(string) ([]string, error), fail 
 // the case ends, and the death it declares.
 func openTunnel(t *testing.T, dialer memberDialer) (*tunnel, *Death) {
 	t.Helper()
-	return openTunnelWith(t, dialer, tunnelConnectTerm)
+	return openTunnelWith(t, dialer, tunnelCredentialTerm)
 }
 
-// openTunnelWith is [openTunnel] whose connect term is term.
+// openTunnelWith is [openTunnel] that waits term for a connection's CONNECT.
 func openTunnelWith(t *testing.T, dialer memberDialer, term time.Duration) (*tunnel, *Death) {
 	t.Helper()
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
@@ -85,7 +85,7 @@ func openTunnelWith(t *testing.T, dialer memberDialer, term time.Duration) (*tun
 	}
 	death := newDeath()
 	tun := newTunnel(t.Context(), ln, dialer, newLinkMeter(), death)
-	tun.connectTerm = term
+	tun.credentialTerm = term
 	tun.start()
 	t.Cleanup(tun.close)
 	return tun, death
@@ -369,14 +369,18 @@ func TestTheTunnelDialsAMemberAsTheExternalDialDoes(t *testing.T) {
 
 // THE TUNNEL HOLDS NOTHING FOR A CALLER THAT SENDS NO CONNECT: a request is
 // read no further than its header bound and the connection ended, one that
-// sends nothing is closed at the leaf's own connect term, and while
-// [tunnelHandshakes] connections are in their handshake one more is closed
-// unread, its CONNECT never answered — so nothing that reaches the loopback
-// port holds the tunnel's goroutines or descriptors.
+// sends nothing is closed at a read's term, and while [tunnelHandshakes]
+// connections wait to show the credential the next one taken closes the
+// oldest of them — so nothing that reaches the loopback port holds the
+// tunnel's goroutines or descriptors, and no number of callers holding
+// connections idle keeps the leaf's own CONNECT from being served.
 //
 // Mutant: the request read without its bound — the tunnel reads a caller's
-// stream for its whole term. Mutant: no deadline on the handshake. Mutant: no
-// cap on the connections in their handshake.
+// stream for its whole term. Mutant: no deadline on the request. Mutant: no
+// cap on the connections waiting to show the credential — the oldest idle
+// one is held. Mutant: the newest connection closed at the cap, as the
+// tunnel first did — the leaf's CONNECT is never answered. Mutant: a place
+// held through the dial — one more is held once the leaf is served.
 func TestTheTunnelHoldsNothingForACallerThatSendsNoConnect(t *testing.T) {
 	t.Parallel()
 	member, _ := echoMember(t, "")
@@ -420,7 +424,7 @@ func TestTheTunnelHoldsNothingForACallerThatSendsNoConnect(t *testing.T) {
 				"bound and every socket buffer between", w, tunnelHeaderMax)
 		}
 	})
-	t.Run("a_silent_caller_is_closed_at_the_term", func(t *testing.T) {
+	t.Run("a_silent_caller_is_closed_at_a_reads_term", func(t *testing.T) {
 		t.Parallel()
 		var rec dialRecord
 		tun, _ := openTunnelWith(t, recordingDialer(&rec, nil, nil), 200*time.Millisecond)
@@ -429,50 +433,51 @@ func TestTheTunnelHoldsNothingForACallerThatSendsNoConnect(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer c.Close()
-		closedWithin(t, c, "a connection that sent nothing, past the connect term")
+		closedWithin(t, c, "a connection that sent nothing, past its read's term")
 	})
-	t.Run("a_caller_past_the_handshake_places_is_closed_unread", func(t *testing.T) {
+	t.Run("a_leafs_connect_is_served_while_idle_callers_hold_connections", func(t *testing.T) {
 		t.Parallel()
 		var rec dialRecord
-		tun, _ := openTunnel(t, recordingDialer(&rec, nil, nil))
-		// EVERY PLACE HELD by a caller that says nothing; the accept loop
-		// takes connections in the order they arrive, so they hold their
-		// places before the next is taken.
-		for range tunnelHandshakes {
+		// NO TERM TO END AN IDLE CALLER, so only the cap closes one.
+		tun, _ := openTunnelWith(t, recordingDialer(&rec, nil, nil), time.Hour)
+		idle := make([]net.Conn, tunnelHandshakes)
+		for i := range idle {
 			c, err := net.Dial("tcp", tun.ln.Addr().String())
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer c.Close()
+			idle[i] = c
 		}
-		over, err := net.Dial("tcp", tun.ln.Addr().String())
-		if err != nil {
+		until(t, "the tunnel to take every idle caller", func() bool {
+			return tun.unprovenHeld() == tunnelHandshakes
+		})
+		c, br, status := connect(t, tun, member, basic(tun.user, tun.pass))
+		if !strings.HasPrefix(status, "200") {
+			t.Fatalf("the leaf's CONNECT beside %d idle callers was answered %q, want 200",
+				tunnelHandshakes, status)
+		}
+		if _, err := io.WriteString(c, "ping\n"); err != nil {
 			t.Fatal(err)
 		}
-		defer over.Close()
-		if _, err := io.WriteString(over, "CONNECT "+member+" HTTP/1.1\r\nHost: "+member+
-			"\r\nProxy-Authorization: "+basic(tun.user, tun.pass)+"\r\n\r\n"); err != nil {
-			t.Fatal(err)
+		if line, err := br.ReadString('\n'); err != nil || line != "ping\n" {
+			t.Fatalf("the leaf's link beside idle callers echoed (%q, %v), want ping", line, err)
 		}
-		got := make(chan []byte, 1)
-		go func() {
-			b, _ := io.ReadAll(over)
-			got <- b
-		}()
-		bound := time.NewTimer(10 * time.Second) //fixedwait:liveness
-		defer bound.Stop()
-		select {
-		case b := <-got:
-			if len(b) != 0 {
-				t.Errorf("a CONNECT past the handshake places was answered %q, want closed unread", b)
-			}
-		case <-bound.C:
-			t.Fatal("a connection past the handshake places is still open")
-		}
-		if d := rec.dials(); len(d) != 0 {
-			t.Errorf("the tunnel dialled %v past its handshake places", d)
+		closedWithin(t, idle[0], "the oldest idle caller, once the cap was reached")
+		if n := tun.unprovenHeld(); n != tunnelHandshakes-1 {
+			t.Errorf("the tunnel holds %d connections that showed no credential once the leaf's was "+
+				"served, want %d: every idle caller but the oldest, and not the leaf's", n,
+				tunnelHandshakes-1)
 		}
 	})
+}
+
+// unprovenHeld is how many connections the tunnel holds that have not shown
+// its credential.
+func (t *tunnel) unprovenHeld() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.unproven)
 }
 
 // fakeListener is a listener whose Accept answers what a case queues.

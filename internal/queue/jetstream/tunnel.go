@@ -42,6 +42,13 @@ const tunnelConnectTerm = jsapi.RequestTerm
 // would be cut by the leaf first and leave it only a timeout to log.
 const tunnelDial = tunnelConnectTerm - jsprovision.ReadTerm
 
+// tunnelCredentialTerm bounds how long the tunnel waits for a connection's
+// CONNECT, up to its credential: a read's term ([jsprovision.ReadTerm]). The
+// leaf writes its request the moment its dial to the tunnel returns, on
+// loopback, so it is read within microseconds; a caller that sends nothing
+// is closed a second later rather than at the leaf's whole connect term.
+const tunnelCredentialTerm = jsprovision.ReadTerm
+
 // tunnelHeaderMax bounds a CONNECT request the tunnel reads, request line and
 // headers together: nats-server's is a request line naming a host and port,
 // a Host header and the Proxy-Authorization header, under 300 bytes for the
@@ -50,11 +57,19 @@ const tunnelDial = tunnelConnectTerm - jsprovision.ReadTerm
 const tunnelHeaderMax = 4 << 10
 
 // tunnelHandshakes is how many connections the tunnel holds before they have
-// shown its credential: the leaf server dials its one remote through it, one
-// attempt at a time, so two cover an attempt beside the one it abandoned. A
-// connection past them is closed unread, so nothing that reaches the loopback
-// port can hold the tunnel's goroutines or descriptors by sending nothing.
-const tunnelHandshakes = 2
+// shown its credential. At that many, the next connection the tunnel takes
+// closes the OLDEST of them, never the new one: a caller that opens
+// connections and sends nothing — anything that reaches the loopback port,
+// a box sharing it among them — holds no place a leaf's attempt then needs.
+// The leaf's connection carries its CONNECT as it is taken, and leaves the
+// places once its credential is read ([tunnel.handshake]), so it is closed
+// only where the tunnel takes this many more connections between taking it
+// and reading the request already waiting in its socket. 64 makes that a
+// flood of connections at a pace that already starves any loopback
+// listener's backlog, and holds 64 descriptors and goroutines, for a second
+// each ([tunnelCredentialTerm]), at most: nothing a node can measure, where
+// the leaf itself needs two (an attempt beside the one it abandoned).
+const tunnelHandshakes = 64
 
 // tunnelBuffer is what each direction of a tunnelled link is copied through:
 // one buffer of 32 KiB, which reads no more ahead of what its far side has
@@ -93,7 +108,10 @@ const (
 // one that presents its credential: a user and password minted at each start
 // that only the in-process leaf server holds. It FORWARDS WHEREVER ITS
 // CREDENTIAL'S HOLDER ASKS, which is why nothing else holds it — a box
-// sharing the host's loopback reaches the port, and is answered 407. It
+// sharing the host's loopback reaches the port, and is answered 407. A
+// caller that connects and says nothing is closed a second later, and the
+// oldest such is closed at once when [tunnelHandshakes] are held, so no
+// number of idle connections keeps the leaf's own from being served. It
 // dials the host the CONNECT names as the external dial does
 // ([memberDialer]): resolved, its addresses shuffled, the budget shared. A
 // dial that fails is answered 502 with the dial's own error, so the leaf's
@@ -127,9 +145,9 @@ type tunnel struct {
 	death       *Death
 	log         *slog.Logger
 	connectTerm time.Duration
-	// handshakes holds a place for each connection that has not yet shown
-	// the credential ([tunnelHandshakes]).
-	handshakes chan struct{}
+	// credentialTerm bounds the read of a connection's CONNECT
+	// ([tunnelCredentialTerm]).
+	credentialTerm time.Duration
 
 	// stop is closed when the tunnel is, and ctx, which every dial runs
 	// under, ended by cancel.
@@ -142,7 +160,10 @@ type tunnel struct {
 	// conns is every connection the tunnel holds: each side of every link it
 	// carries, and every one still in its handshake.
 	conns map[net.Conn]struct{}
-	wg    sync.WaitGroup
+	// unproven is every connection that has not yet shown the credential,
+	// oldest first: [tunnelHandshakes] at most.
+	unproven []net.Conn
+	wg       sync.WaitGroup
 }
 
 // startTunnel listens on loopback for a leaf's CONNECTs, metering every link
@@ -154,7 +175,9 @@ type tunnel struct {
 func startTunnel(ctx context.Context, death *Death) (*tunnel, error) {
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
-		return nil, fmt.Errorf("jetstream: the leaf's link tunnel cannot listen on loopback: %w", err)
+		return nil, fmt.Errorf("jetstream: the leaf's link tunnel cannot listen on loopback (127.0.0.1): %w; "+
+			"a leaf needs a loopback interface it may bind a free port on — check the host's or "+
+			"the pod's lo is up and the process is not out of file descriptors", err)
 	}
 	t := newTunnel(context.WithoutCancel(ctx), ln, newMemberDialer(tunnelDial), newLinkMeter(), death)
 	t.start()
@@ -171,11 +194,11 @@ func newTunnel(ctx context.Context, ln net.Listener, dialer memberDialer, meter 
 		ctx: ctx, cancel: cancel,
 		ln: ln, user: "leaf", pass: rand.Text(),
 		dialer: dialer, meter: meter, death: death,
-		log:         logging.Get("queue.jetstream"),
-		connectTerm: tunnelConnectTerm,
-		handshakes:  make(chan struct{}, tunnelHandshakes),
-		stop:        make(chan struct{}),
-		conns:       map[net.Conn]struct{}{},
+		log:            logging.Get("queue.jetstream"),
+		connectTerm:    tunnelConnectTerm,
+		credentialTerm: tunnelCredentialTerm,
+		stop:           make(chan struct{}),
+		conns:          map[net.Conn]struct{}{},
 	}
 }
 
@@ -254,14 +277,7 @@ func (t *tunnel) accept() {
 			continue
 		}
 		backoff = 0
-		select {
-		case t.handshakes <- struct{}{}:
-		default:
-			_ = c.Close()
-			continue
-		}
-		if !t.hold(c) {
-			<-t.handshakes
+		if !t.take(c) {
 			_ = c.Close()
 			return
 		}
@@ -288,11 +304,49 @@ func (t *tunnel) hold(c net.Conn) bool {
 	return true
 }
 
+// take holds c, a connection just accepted, as one that has not yet shown
+// the credential, closing the oldest such where [tunnelHandshakes] are held
+// already; and answers false once the tunnel is closing, when c is not held.
+func (t *tunnel) take(c net.Conn) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closing {
+		return false
+	}
+	if len(t.unproven) == tunnelHandshakes {
+		// ITS SERVER'S READ ENDS ON THE CLOSE, and drops it from conns.
+		_ = t.unproven[0].Close()
+		t.unproven = t.unproven[1:]
+	}
+	t.unproven = append(t.unproven, c)
+	t.conns[c] = struct{}{}
+	return true
+}
+
+// proven gives up c's place among the connections that have not shown the
+// credential, where it holds one.
+func (t *tunnel) proven(c net.Conn) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.unprovenLocked(c)
+}
+
+// unprovenLocked removes c from t.unproven; t.mu held.
+func (t *tunnel) unprovenLocked(c net.Conn) {
+	for i, u := range t.unproven {
+		if u == c {
+			t.unproven = append(t.unproven[:i], t.unproven[i+1:]...)
+			return
+		}
+	}
+}
+
 // drop closes c and forgets it.
 func (t *tunnel) drop(c net.Conn) {
 	_ = c.Close()
 	t.mu.Lock()
 	delete(t.conns, c)
+	t.unprovenLocked(c)
 	t.mu.Unlock()
 }
 
@@ -301,7 +355,6 @@ func (t *tunnel) drop(c net.Conn) {
 func (t *tunnel) serve(down net.Conn) {
 	defer t.wg.Done()
 	up, pending, ok := t.handshake(down)
-	<-t.handshakes
 	if !ok {
 		t.drop(down)
 		return
@@ -335,10 +388,10 @@ func (t *tunnel) serve(down net.Conn) {
 // dials the member it names: up is the metered upstream socket, and pending
 // what down sent after its request that the read took in with it.
 func (t *tunnel) handshake(down net.Conn) (up net.Conn, pending io.Reader, ok bool) {
-	// THE WHOLE EXCHANGE WITHIN THE LEAF'S OWN TERM, and the request held
-	// to its bound, so a connection that sends nothing, or anything but a
-	// CONNECT, holds nothing for long.
-	_ = down.SetDeadline(time.Now().Add(t.connectTerm))
+	// THE REQUEST WITHIN A READ'S TERM, and held to its bound, so a
+	// connection that sends nothing, or anything but a CONNECT, holds
+	// nothing for long; the leaf's is in its socket as it is taken.
+	_ = down.SetDeadline(time.Now().Add(t.credentialTerm))
 	br := bufio.NewReader(io.LimitReader(down, tunnelHeaderMax))
 	req, err := http.ReadRequest(br)
 	if err != nil {
@@ -353,6 +406,11 @@ func (t *tunnel) handshake(down net.Conn) (up net.Conn, pending io.Reader, ok bo
 		tunnelAnswer(down, http.StatusMethodNotAllowed, "")
 		return nil, nil, false
 	}
+	// PROVEN, so its place goes to the next caller before the dial, and
+	// the rest of the exchange — the dial, the answer — is the leaf's own
+	// term.
+	t.proven(down)
+	_ = down.SetDeadline(time.Now().Add(t.connectTerm))
 	up, err = t.dialer.dialMember(t.ctx, "tcp", req.Host)
 	if err != nil {
 		t.log.Warn("leaf_tunnel_dial_failed", "member", req.Host, "error", err.Error(),
