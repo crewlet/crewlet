@@ -15,6 +15,20 @@
 // [sandbox.CoordStore]. The record operations it is built on are certified on
 // both coordination backends by coordtest, and this suite certifies every
 // conditional flip built on top of them.
+//
+// # A later build's keys
+//
+// The pending-run record is rewritten whole by every node that touches it, so
+// a field a newer build adds to the notes section, to one note, to where a
+// note was read, to a hook's serve of a note, to the call that serve answered
+// or to the job's own record is gone the moment this build writes the record
+// back, unless every level that can grow keeps what it does not know. The log
+// beside the record ([sandbox.BridgeLog]) is rewritten whole by every append,
+// so the same holds at its top, in each bridged call it keeps and in each
+// identity of a call it dropped: nine levels in all. One loss is meant: a
+// relaunch's reset replaces the job's record whole, so the key a later build
+// added to it goes with the job it was about. Every level is held by
+// testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite (notes.go).
 package sandboxtest
 
 import (

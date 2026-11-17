@@ -134,15 +134,14 @@ func placeItem(t *testing.T, runs coord.SandboxRuns, turnID, id, job string) {
 	}
 }
 
-// A HOOK'S SERVE RECORDS THE SERVE AND NO READ. A harness answered its notes by
-// a hook is served them in a write before its answer, and nothing records them
-// read: only its job's own session says whether the hook took them. So a serve
-// leaves each note waiting and served to the job, its serve appended; the
-// first serve of a note places it among the turn's reads, one place a write
-// whatever it serves; a serve answers only what it served, never a note
+// A HOOK'S SERVE RECORDS THE SERVE AND NO READ: only the job's own session
+// says whether the hook took the notes it was served in a write before its
+// answer. So a serve leaves each note waiting and served to the job, its serve
+// appended; a note's first serve places it among the turn's reads, one place a
+// write whatever it serves; a serve answers only what it served, never a note
 // live-served to the job already; a note is served to one job at most
-// [sandbox.MaxNoteServes] times, at the place its first serve took; and a serve
-// is pinned as a take is, a serve naming no job, status or take refused.
+// [sandbox.MaxNoteServes] times, at its first serve's place; and a serve is
+// pinned as a take is, one naming no job, status or take refused.
 //
 // Mutation: record a read at the serve, serve a note live-served to the job,
 // ignore the bound or stop one short of it, place a note served again, or give
@@ -734,16 +733,15 @@ func testAVerdictLandsWhateverTheRunsStatusOrEnding(t *testing.T, s sandbox.Pend
 	}
 }
 
-// A CANCEL AND A VERDICT COMMUTE. The harness's cancel is heard by the inbox
-// and settled off the hook's path, and the session's verdict is written at the
-// job's collection, by two parties in either order: each decides on the record
-// as it stands, so either order ends in one record as every reader reads it:
-// the note's read, the job it is served to, and, while it waits, its serves and
-// what lost them. A cancel after a verdict acts on no read note and on no serve
-// a verdict lost, and a verdict after a cancel reads what the session shows and
-// loses what it proves absent. (A read note keeps its serves as the history its
-// read was confirmed from, a cancel heard before the verdict among them, which
-// no reader of a read note reads.)
+// A CANCEL AND A VERDICT COMMUTE. The inbox settles the harness's cancel off
+// the hook's path, the session's verdict is written at the job's collection,
+// and they land in either order, each deciding on the record as it stands; so
+// both orders end in one record as every reader reads it: the note's read, the
+// job it is served to, and, while it waits, its serves and what lost them. A
+// cancel after a verdict acts on no read note and on no serve a verdict lost,
+// and a verdict after a cancel reads what the session shows and loses what it
+// proves absent. (A read note keeps its serves, a cancel heard before the
+// verdict among them, as the history its read was confirmed from.)
 //
 // Mutation: let a cancel act on a serve a verdict settled, or a verdict skip a
 // serve a cancel lost, and the two orders end apart.
@@ -847,16 +845,14 @@ func testEveryReadOfAPlacedNoteTakesItsPlace(t *testing.T, s sandbox.PendingStor
 // A FILING COUNTS NO HOOK-SERVED NOTE AS WAITING. The five that may wait are
 // five a step has still to read, and a hook's answer handed its notes to the
 // model at the step it answered: so a note a hook's live serve handed to the
-// record's job leaves room, a note whose serve was lost counts again, and a
-// note a poll served counts until its harness confirms it at its next step.
-// AND ONLY THE RECORD'S OWN JOB'S SERVE: a note an earlier job's hook was
-// served, which nothing read before the record moved on, was never handed to
-// the record's job, so it waits for that job's next step, whose hook serves
-// it again, and counts.
+// record's job leaves room, one whose serve was lost counts again, and one a
+// poll served counts until its harness confirms it at its next step. AND ONLY
+// THE RECORD'S OWN JOB'S SERVE: a note an earlier job's hook was served, unread
+// before the record moved on, was never handed to the record's job: it waits
+// for that job's next step, whose hook serves it again, and counts.
 //
-// Mutation: count a note live-served to the job, stop counting one whose
-// serve was lost, or let a live serve to any job leave room, and a filing
-// goes wrong.
+// Mutation: count a note live-served to the job, stop counting one whose serve
+// was lost, or let a live serve to any job leave room, and a filing goes wrong.
 func testAFilingCountsNoHookServedNoteAsWaiting(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	const turn = "t-full-served"
