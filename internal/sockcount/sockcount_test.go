@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -43,19 +44,36 @@ func pair(t *testing.T) (sender, peer net.Conn) {
 	return sender, peer
 }
 
-// fill writes to sender as much as the two sockets take while the peer reads
-// nothing, and answers how much: the write ends at its deadline with the rest
-// unsent, every byte it wrote held in the sender's socket or taken by the
-// peer's kernel and none read.
+// fill writes to sender until the two sockets take no more while the peer
+// reads nothing, and answers how much: every byte it wrote held in the
+// sender's socket or taken by the peer's kernel, none read, and some of them
+// unacknowledged.
+//
+// FULL IS DECIDED BY THE SOCKET, never by the clock: a write is cut by its
+// deadline only once the send buffer stayed full for it, and is taken as the
+// end only where bytes then stand unacknowledged — a write a starved runner
+// cut before the peer's window shut leaves every byte acknowledged, and
+// writes again.
 func fill(t *testing.T, sender net.Conn) int {
 	t.Helper()
-	if err := sender.SetWriteDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
-		t.Fatal(err)
+	sent := 0
+	for sent < 1<<30 {
+		if err := sender.SetWriteDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+			t.Fatal(err)
+		}
+		n, err := sender.Write(make([]byte, 4<<20))
+		sent += n
+		switch {
+		case err == nil:
+			continue
+		case !errors.Is(err, os.ErrDeadlineExceeded):
+			t.Fatalf("write to a peer that reads nothing: %v", err)
+		}
+		if held, err := sockcount.Unacked(sender); err == nil && held > 0 {
+			return sent
+		}
 	}
-	sent, _ := sender.Write(make([]byte, 4<<20))
-	if sent == 0 {
-		t.Fatal("the sockets took none of four mebibytes")
-	}
+	t.Fatalf("the sockets took %d bytes and still left none unacknowledged", sent)
 	return sent
 }
 
