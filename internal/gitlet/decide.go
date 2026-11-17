@@ -65,9 +65,9 @@ import (
 // ([Attempted]): a push git received every command of which is refused, one by
 // a rule on who may move which ref, recorded moving nothing and storing no
 // pack, so its history says who tried, and counted against a seat's day; any
-// other writes nothing. A push checked
-// at another drop epoch than the repository's meets none of these rules: it
-// is refused whole before them (below).
+// other writes nothing. A push checked at another drop epoch than the
+// repository's meets none of these rules: it is refused whole before them
+// (below).
 //
 // # A seat's push is held to its grant, recorded, and to its day, not
 //
@@ -75,16 +75,16 @@ import (
 // tried to move what past their grant is an audit fact, kept beside the
 // commands that land or, where none does, as an attempt. The receiving node's
 // own check of the grant before the bytes moved makes this rule's own refusal
-// rare: it arises only where the chart moved between the two. The day's quota is NOT
-// ([RefusalPushQuota]): a seat whose pushes this company day — every
-// repository together, [Limits.PushesPerSeatDay] — reach the bound has its
+// rare: it arises only where the chart moved between the two. The day's quota
+// is NOT ([RefusalPushQuota]): a seat whose pushes this company day (every
+// repository together, [Limits.PushesPerSeatDay]) reach the bound has its
 // push refused WHOLE, no entry of the record, the batch's other entries going
 // on, because a recorded refusal would cost the log a record a push of a
 // seat pushing in a loop, the very cost the quota bounds. The quota is judged
-// on a push that would otherwise be an entry — after every rule of the push's
+// on a push that would otherwise be an entry: after every rule of the push's
 // own, so a stale, protected, oversized or --atomic push is told the reason
-// running it again tomorrow would not change; an attempt counts, and one past
-// the bound is told its own refusals and recorded nowhere — and before the
+// running it again tomorrow would not change (an attempt counts, and one past
+// the bound is told its own refusals and recorded nowhere), and before the
 // pack bound, so a push past both is told the bound that lasts a day rather
 // than sent to run again in a minute.
 //
@@ -783,12 +783,12 @@ func (q seatQuota) count(p Proposal) {
 }
 
 // quotaDetail is the sentence of a seat's push refused push_quota: who, how
-// many pushes it has made since its company day began, the bound, and the
-// instant the count starts again — the day's end on the company's calendar,
-// in its zone. Formed by the push decide alone, the one judge of the count.
+// many pushes it has made since its company day began (attempts a rule
+// refused among them), the bound, and the instant the count starts again:
+// the day's end on the company's calendar, in its zone. Formed by the push decide alone, the one judge of the count.
 func quotaDetail(seat string, pushed, limit int, day period.Window) string {
-	return fmt.Sprintf("seat %s has landed %s since %s began on the company's calendar, and "+
-		"code.limits.pushes_per_seat_day lets a seat land %s a day: nothing was decided; the count starts "+
+	return fmt.Sprintf("seat %s has made %s, refused attempts included, since %s began on the company's calendar, "+
+		"and code.limits.pushes_per_seat_day lets a seat make %s a day: nothing was decided; the count starts "+
 		"again at %s", seat, pushCount(pushed), day.Label, pushCount(limit), day.End.Format(time.RFC3339))
 }
 

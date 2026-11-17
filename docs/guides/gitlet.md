@@ -1264,8 +1264,9 @@ push](../concepts/gitlet.md#a-seats-push)):
 - **A seat outside the owning unit fills at most half** of the repository's
   refs and half its bytes, so the owners always keep room to push
   (`repo_refs`, `repo_size`).
-- **A seat lands at most `code.limits.pushes_per_seat_day` pushes a day**
-  ([The daily quota](#the-daily-quota), `push_quota`).
+- **A seat makes at most `code.limits.pushes_per_seat_day` pushes a day**,
+  a push a rule refused whole among them ([The daily quota](#the-daily-quota),
+  `push_quota`).
 - **A data node behind the company's configuration decides no seat's push**:
   the revision it failed to apply may be the one that took the seat's grant
   away, so the repository's next committer decides it.
@@ -1347,10 +1348,11 @@ repositories](#declare-repositories)).
 
 ### The daily quota
 
-A seat lands at most `code.limits.pushes_per_seat_day` pushes a day on the
+A seat makes at most `code.limits.pushes_per_seat_day` pushes a day on the
 company's [calendar](../getting-started/configuration.md#the-companys-clock),
-every repository together and every push it lands — built by its tools or sent
-from its coding box: 1 000 unless set, about thirty-three times the thirty
+every repository together and every push it lands, built by its tools or sent
+from its coding box, as well as every push a rule refused whole, which is
+recorded as an attempt: 1 000 unless set, about thirty-three times the thirty
 pushes a seat of the reference company makes a day. It is a bound on a seat
 pushing in a loop, not a budget, and your pushes are never counted:
 
@@ -1363,7 +1365,9 @@ code:
 Past it, a push is refused whole as `push_quota`, its sentence naming when the
 count starts again — the company's next midnight — and **nothing records it**:
 a record of every refusal of a runaway seat would cost the code log what the
-quota exists to bound, so a refused push is not in the push history. A seat
+quota exists to bound, so a refused push is not in the push history. An
+attempt past the day is told its own rule, not `push_quota`, and is not
+recorded either. A seat
 that meets it is pushing in a loop: read what its turns are doing before you
 raise the bound. Its git work is already done by then — the pack it built is
 stored, named by nothing, and deleted by the object collector a day later.
