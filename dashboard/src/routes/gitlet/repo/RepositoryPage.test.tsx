@@ -33,6 +33,7 @@ import { afterMicrotasks } from "~/test/settle.ts";
 import { modules } from "~/test/source.ts";
 import { DECLARED, DECLARED_LIFE, PERSON_ONLY, PURGE_KEEPERS } from "~/lib/repoWrites.ts";
 import { SYNTAX_MAX_BYTES, load } from "~/lib/syntax/index.ts";
+import { forgetDownloadProbes } from "./downloads.ts";
 import { sinceOf } from "./History.tsx";
 import { RepositoryPage } from "./RepositoryPage.tsx";
 
@@ -49,6 +50,7 @@ vi.mock("~/lib/syntax/index.ts", async (real) => {
 
 afterEach(() => {
   cleanup();
+  forgetDownloadProbes();
   vi.useRealTimers();
   vi.unstubAllGlobals();
   location.hash = "";
@@ -111,6 +113,9 @@ function detail(extra: Record<string, unknown> = {}) {
     ...extra,
   };
 }
+
+/** The address the engine answers a repository is cloned from, on the deployment's own address. */
+const CLONE_URL = "https://crewlet.example.com/git/web.git";
 
 const json = (payload: unknown, status = 200) =>
   new Response(JSON.stringify(payload), {
@@ -412,8 +417,9 @@ function stubEngine(
         case "/query/code_repo": {
           // THE PATH OWNERS AND THE GATES ONLY TO A QUESTION THAT ASKS, as
           // the engine answers them, who set each rule beside the gates.
-          const { gates, rule_sources, path_owners, ...row } = repo;
+          const { gates, rule_sources, path_owners, clone_url = CLONE_URL, ...row } = repo;
           return json({
+            ...(clone_url ? { clone_url } : {}),
             repo: {
               ...row,
               ...(p.get("gates") === "true" ? { gates, rule_sources } : {}),
@@ -759,7 +765,7 @@ test("the About rail says when the repository was pushed in words, the latest co
   vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
   stubEngine();
   mount("#/gitlet/repos/web");
-  expect(await screen.findByText("Pushed yesterday")).toBeTruthy();
+  expect((await screen.findByText(/^Last pushed/)).textContent).toBe("Last pushed yesterday");
   await waitFor(() =>
     expect(document.querySelector(".code-latest__when")?.textContent).toBe("6d ago"),
   );
@@ -954,17 +960,19 @@ test("refused or failed last commits are said once under the entries, and a fail
   expect(reads(asked, "code_tree_commits")).toHaveLength(2);
 });
 
-// THE BRANCHES AND TAGS ARE READ ONCE FOR THE PAGE, never once a picker: a
-// move from the root to a path draws another picker, and so does the
-// Commits tab, and none of them asks either listing again — each is up to a
-// thousand refs. Mutation: let each picker read its own listings, and this
-// fails.
-test("the revision picker's branches and tags are read once while the reader moves", async () => {
+// THE PICKER READS NOTHING UNTIL IT OPENS: the Code tab, a directory and
+// Commits ask no listing; an opening asks one page of the tab it shows.
+// Mutation: read the listings on the page again, and this fails.
+test("the revision picker reads nothing until it opens, and then one page of the tab it shows", async () => {
   const asked = stubEngine();
   mount("#/gitlet/repos/web");
 
+  // THE RAIL'S OWN READS at the root, the default branch's find and the newest tag, are not the picker's.
+  const picker = (query: "code_refs" | "code_tags") =>
+    reads(asked, query).filter(
+      (u) => !u.searchParams.has("contains") && u.searchParams.get("limit") !== "1",
+    );
   await screen.findByRole("link", { name: "src" });
-  await waitFor(() => expect(reads(asked, "code_refs")).toHaveLength(2));
   act(() => {
     location.hash = "#/gitlet/repos/web?path=src";
   });
@@ -973,9 +981,398 @@ test("the revision picker's branches and tags are read once while the reader mov
     location.hash = "#/gitlet/repos/web?tab=commits";
   });
   expect(await screen.findByRole("group", { name: "History of main" })).toBeTruthy();
+  expect(picker("code_refs")).toHaveLength(0);
+  expect(picker("code_tags")).toHaveLength(0);
 
-  const listings = reads(asked, "code_refs").map((u) => u.searchParams.get("prefix"));
-  expect(listings.sort()).toEqual([null, "refs/tags/"]);
+  fireEvent.click(screen.getByRole("button", { name: "Branch or tag: main" }));
+  const panel = await screen.findByRole("dialog", { name: "Switch branches or tags" });
+  await within(panel).findByRole("option", { name: /^feature/ });
+  const moved = picker("code_refs");
+  expect(moved).toHaveLength(1);
+  expect(Object.fromEntries(moved[0]!.searchParams)).toMatchObject({
+    order: "moved",
+    detail: "true",
+    limit: "10",
+  });
+  fireEvent.click(within(panel).getByRole("tab", { name: /Tags/ }));
+  await within(panel).findByRole("option", { name: /^v3/ });
+  expect(picker("code_tags").map((u) => u.searchParams.get("limit"))).toEqual(["10"]);
+
+  fireEvent.click(within(panel).getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Branch or tag: main" }));
+  await screen.findByRole("option", { name: /^feature/ });
+  expect(picker("code_refs")).toHaveLength(2);
+});
+
+/** Six branches by when each moved, main on the page's second row. */
+const MOVED = [
+  ["frontend/stream-shell", "2026-10-27T11:00:00Z"],
+  ["main", "2026-10-27T10:00:00Z"],
+  ["backend/network-token", "2026-10-27T09:00:00Z"],
+  ["frontend/badge-cache", "2026-10-27T08:00:00Z"],
+  ["release/2026.11", "2026-10-26T08:00:00Z"],
+  ["sre/drain", "2026-10-26T07:00:00Z"],
+].map(([name, at]) => ({
+  ref: `refs/heads/${name}`,
+  oid: name === "main" ? HEAD : OTHER,
+  position: POSITION,
+  moved_at: at,
+  ...(name === "main" || name === "release/2026.11"
+    ? { protection: { patterns: [`refs/heads/${name}`], direct_push: "none" } }
+    : {}),
+}));
+
+const openPicker = async (name = "Branch or tag: main") => {
+  fireEvent.click(await screen.findByRole("button", { name }));
+  return screen.findByRole("dialog", { name: "Switch branches or tags" });
+};
+
+const optionNames = (panel: HTMLElement) =>
+  within(panel)
+    .getAllByRole("option")
+    .map((o) => o.querySelector(".code-picker__name")?.textContent ?? o.textContent);
+
+// THE DEFAULT BRANCH IS PINNED FIRST with Default, the rest by when each moved,
+// the protected with their shield named by the rules. Mutation: list the page
+// in its own order, or drop the shield's words, and this fails.
+test("the picker pins the default branch with Default and lists the rest by when they moved, the protected with their shield", async () => {
+  stubListing((p) => json(refsListing(p, MOVED)), detail({ branches: 6 }));
+  mount("#/gitlet/repos/web");
+
+  const panel = await openPicker();
+  await within(panel).findByRole("option", { name: /^sre\/drain/ });
+  expect(optionNames(panel)).toEqual([
+    "main",
+    "frontend/stream-shell",
+    "backend/network-token",
+    "frontend/badge-cache",
+    "release/2026.11",
+    "sre/drain",
+  ]);
+  const main = within(panel).getAllByRole("option")[0]!;
+  expect(main.getAttribute("aria-current")).toBe("true");
+  expect(main.querySelector(".code-picker__check")).not.toBeNull();
+  expect(within(main).getByText("Default")).toBeTruthy();
+  expect(within(main).getByRole("img").getAttribute("aria-label")).toBe(
+    "Protected by main: no force-push, no delete, pushes through changes only",
+  );
+  const when = main.querySelector("time")!;
+  expect(when.getAttribute("datetime")).toBe("2026-10-27T10:00:00Z");
+  expect(when.getAttribute("title")).toBeTruthy();
+  const shields = within(panel)
+    .getAllByRole("img")
+    .map((s) => s.closest("[role=option]")?.querySelector(".code-picker__name")?.textContent);
+  expect(shields).toEqual(["main", "release/2026.11"]);
+  expect(within(panel).getAllByRole("option")[1]!.getAttribute("aria-current")).toBeNull();
+});
+
+// A BRANCH IS CHOSEN FROM THE FIELD: the arrows move the highlight, Enter takes
+// it, the panel closes and its button has the focus back. Mutation: move focus
+// into the list, or leave the panel open, and this fails.
+test("a branch is chosen by the keys, and the panel gives focus back to its button", async () => {
+  stubListing((p) => json(refsListing(p, MOVED)), detail({ branches: 6 }));
+  mount("#/gitlet/repos/web");
+
+  const panel = await openPicker();
+  await within(panel).findByRole("option", { name: /^sre\/drain/ });
+  const field = within(panel).getByRole("combobox", { name: "Find a branch" });
+  await waitFor(() => expect(document.activeElement).toBe(field));
+  fireEvent.keyDown(field, { key: "ArrowDown" });
+  fireEvent.keyDown(field, { key: "ArrowDown" });
+  expect(field.getAttribute("aria-activedescendant")).toBe(
+    within(panel).getAllByRole("option")[2]!.id,
+  );
+  fireEvent.keyDown(field, { key: "Enter" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(new URLSearchParams(location.hash.split("?")[1]).get("ref")).toBe("backend/network-token");
+  const button = await screen.findByRole("button", {
+    name: "Branch or tag: backend/network-token",
+  });
+  await waitFor(() => expect(document.activeElement).toBe(button));
+
+  const again = await openPicker("Branch or tag: backend/network-token");
+  fireEvent.keyDown(within(again).getByRole("combobox"), { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(new URLSearchParams(location.hash.split("?")[1]).get("ref")).toBe("backend/network-token");
+});
+
+// A FIND IS THE ENGINE'S, asked once the typing rests, and an empty page that
+// the engine stopped short offers to keep looking. Mutation: ask on every key,
+// or say "none" of a page the engine cut short, and this fails.
+test("a find asks the engine once the typing stops, and says when nothing matches", async () => {
+  const asked = stubListing(
+    (p) => {
+      if (p.get("contains") === "zzz" && !p.get("cursor")) {
+        return json({ refs_detail: [], next: "c2", position: POSITION, level: "session" });
+      }
+      return json(refsListing(p, MOVED));
+    },
+    detail({ branches: 6 }),
+  );
+  mount("#/gitlet/repos/web");
+
+  const panel = await openPicker();
+  await within(panel).findByRole("option", { name: /^sre\/drain/ });
+  const field = within(panel).getByRole("combobox", { name: "Find a branch" });
+  fireEvent.change(field, { target: { value: "front" } });
+  expect(within(panel).getByText("Looking for “front”…")).toBeTruthy();
+  expect(listed(asked).filter((u) => u.searchParams.get("contains"))).toHaveLength(0);
+  await within(panel).findByRole("option", { name: /^frontend\/badge-cache/ });
+  expect(optionNames(panel)).toEqual(["frontend/stream-shell", "frontend/badge-cache"]);
+  expect(listed(asked).map((u) => u.searchParams.get("contains"))).toEqual([null, "front"]);
+
+  fireEvent.change(field, { target: { value: "nothing" } });
+  expect(await within(panel).findByText("No branch name holds “nothing”")).toBeTruthy();
+  expect(within(panel).getByText("A find matches any part of a name, in any case.")).toBeTruthy();
+
+  fireEvent.change(field, { target: { value: "zzz" } });
+  expect(await within(panel).findByText("None among the branches read so far")).toBeTruthy();
+  fireEvent.mouseDown(within(panel).getByRole("option", { name: "Keep looking" }));
+  await waitFor(() =>
+    expect(listed(asked).map((u) => u.searchParams.get("cursor"))).toContain("c2"),
+  );
+  expect(await within(panel).findByText("No branch name holds “zzz”")).toBeTruthy();
+});
+
+// TAGS ARE NEWEST FIRST, Latest on the first only, dated in View all tags' words, chosen
+// by whole ref; a tag's find asks the names under refs/tags/ and says it carries no date.
+// Mutation: write a tag's short name, or Latest every row, and this fails.
+test("tags are newest first with Latest, and a tag is chosen by its whole ref", async () => {
+  const asked = stubEngine();
+  mount("#/gitlet/repos/web");
+
+  const panel = await openPicker();
+  fireEvent.click(within(panel).getByRole("tab", { name: /Tags/ }));
+  await within(panel).findByRole("option", { name: /^v1/ });
+  expect(optionNames(panel)).toEqual(["v3", "v2", "v1"]);
+  expect(within(panel).getAllByText("Latest")).toHaveLength(1);
+  const [, late, undated] = within(panel).getAllByRole("option");
+  expect(within(late!).getByText("after the year 9999")).toBeTruthy();
+  expect(within(undated!).getByText("undated").getAttribute("title")).toMatch(/no date of its own/);
+
+  const field = within(panel).getByRole("combobox", { name: "Find a tag" });
+  fireEvent.change(field, { target: { value: "v" } });
+  expect(await within(panel).findByText("Found by name; dates are on View all tags.")).toBeTruthy();
+  const found = reads(asked, "code_refs").find((u) => u.searchParams.get("contains") === "v")!;
+  expect(found.searchParams.get("prefix")).toBe("refs/tags/");
+  fireEvent.mouseDown(await within(panel).findByRole("option", { name: /^v1/ }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(new URLSearchParams(location.hash.split("?")[1]).get("ref")).toBe("refs/tags/v1");
+  expect(await screen.findByRole("button", { name: "Branch or tag: v1" })).toBeTruthy();
+});
+
+// A REFUSED MOVED LISTING SAYS THE ENGINE'S SENTENCE and lists nothing by name
+// instead. Mutation: fall back to the listing by name, and this fails.
+test("a refused moved listing says the engine's sentence and lists nothing by name", async () => {
+  const asked = stubListing(() =>
+    json({ error: "bad_params", detail: "order is not a key this build reads" }, 400),
+  );
+  mount("#/gitlet/repos/web");
+
+  const panel = await openPicker();
+  expect(
+    await within(panel).findByText(
+      "Listing branches by when they moved is unavailable: order is not a key this build reads",
+    ),
+  ).toBeTruthy();
+  expect(within(panel).queryAllByRole("option")).toHaveLength(0);
+  expect(
+    reads(asked, "code_refs").filter((u) => u.searchParams.get("detail") !== "true"),
+  ).toHaveLength(0);
+});
+
+const openCode = async () => {
+  const button = await waitFor(() => {
+    const found = screen
+      .getAllByRole("button", { name: "Code" })
+      .find((b) => b.getAttribute("aria-haspopup") === "dialog");
+    expect(found).toBeTruthy();
+    return found!;
+  });
+  fireEvent.click(button);
+  return screen.findByRole("dialog", { name: "Clone web" });
+};
+
+// THE ADDRESS IS THE ENGINE'S, never the page's own origin, and the command is
+// the whole git clone of it. Mutation: build the address from location.origin,
+// and this fails.
+test("the Code menu gives the engine's clone address and its command", async () => {
+  let written = "";
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: (t: string) => ((written = t), Promise.resolve()) },
+  });
+  stubEngine();
+  mount("#/gitlet/repos/web");
+
+  const panel = await openCode();
+  expect(within(panel).getByText(CLONE_URL)).toBeTruthy();
+  expect(within(panel).getByRole("button", { name: "Copy the clone address" })).toBeTruthy();
+  fireEvent.click(within(panel).getByRole("button", { name: "Copy the clone command" }));
+  await waitFor(() => expect(written).toBe(`git clone ${CLONE_URL}`));
+  expect(
+    await within(panel).findByRole("button", { name: "Copied the clone command" }),
+  ).toBeTruthy();
+});
+
+// A DEPLOYMENT WITH NO ADDRESS OF ITS OWN SAYS SO, never the browser's guess,
+// and holds the command with the reason; so does the empty repository's card.
+// Mutation: fall back to the page's origin, and this fails.
+test("a deployment with no address says so and holds the command", async () => {
+  stubEngine(detail({ clone_url: null }));
+  mount("#/gitlet/repos/web");
+
+  const panel = await openCode();
+  expect(panel.querySelector(".code-clone__missing")?.textContent).toMatch(
+    /names no address of its own.*api\.external_url/,
+  );
+  expect(within(panel).queryByText(/git asks for a password/)).toBeNull();
+  const held = within(panel).getByRole("button", { name: "Copy the clone command" });
+  expect(held.getAttribute("aria-disabled")).toBe("true");
+  const why = document.getElementById(held.getAttribute("aria-describedby") ?? "");
+  expect(why?.textContent).toMatch(/names no address of its own/);
+  cleanup();
+
+  stubEngine(detail({ clone_url: null, head: undefined, branches: 0 }));
+  mount("#/gitlet/repos/web");
+  expect(await screen.findByText("This repository is empty")).toBeTruthy();
+  expect(screen.getAllByText(/names no address of its own/).length).toBeGreaterThan(0);
+  expect(screen.queryByText(/git remote add origin/)).toBeNull();
+});
+
+/** The engine as stubEngine answers it, the archive's probe answered `status`; every probe kept. */
+function stubArchive(status: number, repo: Record<string, unknown> = detail()) {
+  const asked = stubEngine(repo);
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  const probes: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname !== "/git/web/-/archive.zip") return engine(input, init);
+      probes.push(init?.method ?? "GET");
+      return new Response(null, { status });
+    }),
+  );
+  return { asked, probes };
+}
+
+const zipOf = (panel: HTMLElement) =>
+  within(panel)
+    .getAllByText("Download ZIP")
+    .map((t) => t.closest("a, button") as HTMLElement)[0]!;
+
+// DOWNLOAD ZIP IS THE LISTING'S COMMIT, whole, never the branch's name, which
+// the route refuses. Mutation: link `rev=` to the address's ref, and this fails.
+test("Download ZIP downloads the commit the listing resolved", async () => {
+  stubArchive(405);
+  mount("#/gitlet/repos/web?ref=feature");
+
+  const panel = await openCode();
+  await waitFor(() => expect(zipOf(panel).tagName).toBe("A"));
+  const link = zipOf(panel) as HTMLAnchorElement;
+  expect(link.getAttribute("href")).toBe(`/git/web/-/archive.zip?rev=${HEAD}`);
+  expect(link.hasAttribute("download")).toBe(true);
+  expect(link.getAttribute("title")).toBe("Every file of 0123456, as a ZIP");
+});
+
+// AN OLDER FLEET HOLDS THE DOWNLOAD WITH ITS REASON, asked once per name, on the
+// menu's first opening. Mutation: draw the link on a 404, or probe on the page's
+// mount or on every opening, and this fails.
+test("Download ZIP is held on a fleet that does not serve it, and the probe is asked once", async () => {
+  const { probes } = stubArchive(404);
+  mount("#/gitlet/repos/web");
+  await screen.findByRole("link", { name: "src" });
+  expect(probes).toEqual([]);
+
+  let panel = await openCode();
+  const held = await waitFor(() => {
+    const zip = zipOf(panel);
+    expect(zip.getAttribute("aria-disabled")).toBe("true");
+    const why = document.getElementById(zip.getAttribute("aria-describedby") ?? "");
+    expect(why?.textContent).toBe("Downloading a ZIP is not available on this fleet yet.");
+    return zip;
+  });
+  expect(held.tagName).toBe("BUTTON");
+  fireEvent.keyDown(panel, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  panel = await openCode();
+  await waitFor(() => expect(zipOf(panel).getAttribute("aria-disabled")).toBe("true"));
+  expect(probes).toEqual(["HEAD"]);
+});
+
+// A COMMIT NOT YET KNOWN IS NO DOWNLOAD: held, saying what it waits for.
+test("Download ZIP is held while the listing's commit is unknown", async () => {
+  const { asked } = stubArchive(405);
+  let release = () => {};
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/query/code_tree") {
+        asked.push(url);
+        await new Promise<void>((done) => (release = done));
+      }
+      return engine(input, init);
+    }),
+  );
+  mount("#/gitlet/repos/web");
+
+  const panel = await openCode();
+  const zip = zipOf(panel);
+  expect(zip.getAttribute("aria-disabled")).toBe("true");
+  expect(document.getElementById(zip.getAttribute("aria-describedby") ?? "")?.textContent).toBe(
+    "Waiting for the commit to download.",
+  );
+  release();
+  await waitFor(() => expect(zipOf(panel).tagName).toBe("A"));
+});
+
+// A LISTING THAT FAILED IS NO DOWNLOAD: held, saying the commit could not be read.
+// Mutation: say it waits for the commit instead, and this fails.
+test("Download ZIP is held with its reason when the listing fails", async () => {
+  stubArchive(405);
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
+      new URL(String(input)).pathname === "/query/code_tree"
+        ? engineJson({ error: "query_failed" }, 500)
+        : engine(input, init),
+    ),
+  );
+  mount("#/gitlet/repos/web");
+
+  const panel = await openCode();
+  await waitFor(() => {
+    const zip = zipOf(panel);
+    expect(zip.getAttribute("aria-disabled")).toBe("true");
+    expect(document.getElementById(zip.getAttribute("aria-describedby") ?? "")?.textContent).toBe(
+      "The commit could not be read, so there is nothing to download yet.",
+    );
+  });
+});
+
+// THE EMPTY REPOSITORY CLONES FROM THE ENGINE'S ADDRESS, and Code is at the
+// root's bar only. Mutation: draw the menu under a path, and this fails.
+test("the empty repository clones from the engine's address, and Code is at the root only", async () => {
+  stubEngine(detail({ head: undefined, branches: 0 }));
+  mount("#/gitlet/repos/web");
+  expect(await screen.findByText("This repository is empty")).toBeTruthy();
+  expect(screen.getByText(CLONE_URL)).toBeTruthy();
+  cleanup();
+
+  stubEngine();
+  mount("#/gitlet/repos/web?path=src");
+  expect(await screen.findByRole("link", { name: "app.go" })).toBeTruthy();
+  expect(
+    screen
+      .queryAllByRole("button", { name: "Code" })
+      .filter((b) => b.getAttribute("aria-haspopup") === "dialog"),
+  ).toHaveLength(0);
+  expect(screen.getByRole("button", { name: "Branch or tag: main" })).toBeTruthy();
 });
 
 // THE LINES AN ADDRESS PICKS ARE MARKED, a press on a number writes its line
@@ -2206,7 +2603,7 @@ test.each([
 // AN IMPORTING REPOSITORY SAYS HOW FAR ITS IMPORT WENT, and where its mirrors
 // stand, on the About rail beside its code. Mutation: drop the import's
 // progress or the pull mirror's line from the rail, and this fails.
-test("the About rail says how far an import went and where the mirrors stand", async () => {
+test("the About rail says how far an import went, and its Mirror where the mirror stands", async () => {
   const source = { url: "https://forge.example.com/acme/web.git" };
   stubEngine(
     detail({
@@ -2222,9 +2619,10 @@ test("the About rail says how far an import went and where the mirrors stand", a
       "Importing from https://forge.example.com/acme/web.git: 3 chunks landed so far.",
     ),
   ).toBeTruthy();
-  expect(
-    screen.getByText("Follows https://forge.example.com/acme/web.git; not synced yet."),
-  ).toBeTruthy();
+  // THE PULL MIRROR IS THE RAIL'S MIRROR: its address, then what it does.
+  const mirror = screen.getByRole("region", { name: "Mirror" });
+  expect(within(mirror).getByRole("link", { name: "forge.example.com/acme/web" })).toBeTruthy();
+  expect(within(mirror).getByText(/^Follows it;/).textContent).toBe("Follows it; not synced yet.");
 });
 
 /** A person the engine serves every repository and branch write for. */
@@ -2473,7 +2871,7 @@ test("a repository whose default branch holds nothing reads its other branches",
   ).toBeTruthy();
   expect(screen.queryByText(/Nobody has pushed/)).toBeNull();
   expect(screen.queryByText("This repository is empty")).toBeNull();
-  expect(screen.getByLabelText("Revision")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Branch or tag: main" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Add a file" })).toBeNull();
 });
 

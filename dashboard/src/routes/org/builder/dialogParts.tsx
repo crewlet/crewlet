@@ -664,10 +664,13 @@ export function BuilderWarnings({
   draft,
   title,
   label,
+  surface,
 }: {
   draft: DraftWarnings;
   title?: (count: number) => ReactNode;
   label?: string;
+  /** A standing banner's name, so it rests closed and remembers being opened. */
+  surface?: string;
 }) {
   return (
     <ConfigWarnings
@@ -675,6 +678,7 @@ export function BuilderWarnings({
       seat={draft.seat}
       title={title}
       label={label}
+      surface={surface}
       actionFor={(w) => {
         const link = draft.linkOf(w);
         return link === null ? null : (
@@ -685,6 +689,14 @@ export function BuilderWarnings({
       }}
     />
   );
+}
+
+/** A warning's short title with its sentence behind it, where the engine titled it; the sentence alone otherwise. */
+function placedWords(p: PlacedProblem): { title: ReactNode; detail?: ReactNode } {
+  const title = p.severity === "warning" && "title" in p.source ? p.source.title : undefined;
+  return title
+    ? { title: engineWords(title), detail: engineWords(p.message) }
+    : { title: engineWords(p.message) };
 }
 
 /**
@@ -706,12 +718,18 @@ export function NodeProblems({ problems }: { problems: readonly PlacedProblem[] 
     // default, because a screen reader arriving at a page would otherwise read
     // out every static banner on it; this one appears in ANSWER to a check the
     // operator just ran, and a refusal is what stops the save.
-    <Callout variant={critical ? "danger" : "warning"} role={critical ? "alert" : undefined}>
+    // Warnings are advisories, drawn quiet and one line each as the page banner's are.
+    <Callout
+      variant={critical ? "danger" : "warning"}
+      appearance={critical ? "tinted" : "quiet"}
+      role={critical ? "alert" : undefined}
+    >
       <NoticeList
+        compact={!critical}
         notices={groupNotices(
           problems.map((p) => ({
             kind: `${p.link ?? ""}\u0000${p.message}`,
-            title: engineWords(p.message),
+            ...placedWords(p),
             action:
               p.link === null ? null : (
                 <ScreenLink to={p.link} standalone>

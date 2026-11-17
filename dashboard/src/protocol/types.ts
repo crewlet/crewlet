@@ -63,6 +63,7 @@ import type {
   FINDING_SEVERITIES,
   PRECONDITION_KINDS,
   PRECONDITION_STATES,
+  PUSHER_KINDS,
   REPO_STATUSES,
 } from "../contract/code.ts";
 import type { LimitsAnswer } from "../contract/limits.ts";
@@ -9301,7 +9302,7 @@ export interface CodePushers {
 
 /** One pusher (`gitlet.PusherPushes`): a seat by its handle, a person by the human seat they hold, or Gitlet. */
 export interface CodePusher {
-  kind: "agent" | "person" | "gitlet" | (string & {});
+  kind: (typeof PUSHER_KINDS)[number] | (string & {});
   handle?: string;
   pushes: number;
 }

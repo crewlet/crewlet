@@ -40,7 +40,7 @@ export interface RepoAt {
   lens?: "blame";
   lines?: string;
   doc?: "license";
-  view?: "tags";
+  view?: "tags" | "all";
   by?: string;
   when?: "today" | "7d" | "30d" | "90d";
   q?: string;

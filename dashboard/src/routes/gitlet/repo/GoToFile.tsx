@@ -25,7 +25,7 @@ const FIND_MAX_BYTES = 256;
 const utf8 = new TextEncoder();
 
 /** The text cut to the engine's bound at a code point: the field's length counts code units. */
-function withinBound(text: string): string {
+export function withinBound(text: string): string {
   if (utf8.encode(text).length <= FIND_MAX_BYTES) return text;
   let bytes = 0;
   let cut = "";

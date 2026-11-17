@@ -509,6 +509,7 @@ var contract = []Entry{
 	{"CHANGE_WINDOWS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryWindowOfAListingOfChanges"},
 	{"PRECONDITION_KINDS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryPreconditionOfAChange"},
 	{"PRECONDITION_STATES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryPreconditionOfAChange"},
+	{"PUSHER_KINDS", ReadLiteral, "internal/gitlet.TestTheDashboardCountsEveryPusherKind"},
 	{"FINDING_SEVERITIES", ReadLiteral, "internal/gitlet.TestTheDashboardRaisesFindingsInTheEnginesWords"},
 	{"FINDING_CATEGORIES", ReadLiteral, "internal/gitlet.TestTheDashboardRaisesFindingsInTheEnginesWords"},
 	{"CODE_PHRASES", ReadLiteral, "internal/gitlet.TestEveryCodeReasonReadsAsEnglishOnTheClient"},

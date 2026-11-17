@@ -1,6 +1,6 @@
 /**
- * The engine's warnings about a company, as one callout: each kind said once,
- * with the seats, teams and items it applies to listed under it.
+ * The engine's warnings about a company, as one quiet callout: each kind one
+ * line with its one action, its specifics and explanation opened on demand.
  */
 
 import { useMemo, type ReactNode } from "react";
@@ -10,6 +10,7 @@ import { warningWords, type SeatNamer } from "~/protocol/configAnswer.ts";
 import type { ConfigWarning } from "~/protocol/types.ts";
 import { marked } from "~/ui/Problems.tsx";
 import { useOrgIndex } from "~/lib/seats.ts";
+import { STORAGE_KEYS } from "~/lib/storage.ts";
 
 /** An engine sentence as drawn in a notice: sentence case, its keys and values as code. */
 export function engineWords(text: string): ReactNode {
@@ -60,8 +61,8 @@ export function subjectCount(warnings: readonly ConfigWarning[], seat: SeatNamer
   };
 }
 
-/** The default title: how many things there are to know, after repeats merge. */
-export const toKnow = (n: number) => `${plural(n, "warning")} to know about`;
+/** The default title: how many warnings there are, after repeats merge. */
+export const counted = (n: number) => plural(n, "configuration warning");
 /** A write the engine takes, with warnings. */
 export const accepted = (n: number) => `The engine accepts this, with ${plural(n, "warning")}`;
 /** What a change would add to what the engine already warns about. */
@@ -101,6 +102,11 @@ interface ConfigWarningsProps {
   operator?: boolean;
   /** The group's name for a screen reader. */
   label?: string | undefined;
+  /**
+   * A standing page banner's name: it rests closed as one line and remembers
+   * the reader's choice. Without one the warnings answer an action and rest open.
+   */
+  surface?: string | undefined;
   className?: string;
 }
 
@@ -109,9 +115,10 @@ function Drawn({
   seat,
   actionFor,
   action,
-  title = toKnow,
+  title = counted,
   label = "Warnings",
   operator = false,
+  surface,
   className,
 }: ConfigWarningsProps & { seat: SeatNamer }) {
   const notices = groupNotices(configWarningEntries(warnings, seat, actionFor, operator), {
@@ -121,13 +128,17 @@ function Drawn({
   return (
     <Callout
       variant="warning"
+      appearance="quiet"
+      collapsible
+      defaultOpen={surface === undefined}
+      storageKey={surface === undefined ? undefined : `${STORAGE_KEYS.warningsOpen}${surface}`}
       role="group"
       aria-label={label}
       title={title(notices.length)}
       action={action}
       className={className}
     >
-      <NoticeList notices={notices} />
+      <NoticeList compact notices={notices} />
     </Callout>
   );
 }

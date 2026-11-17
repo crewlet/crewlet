@@ -741,8 +741,9 @@ describe("checking the draft", () => {
     expect(banner.className).toContain("warning");
     expect(banner.className).not.toContain("danger");
     expect(banner.getAttribute("role")).toBe("group");
-    expect(within(banner).getByText("1 warning to know about")).toBeDefined();
+    expect(within(banner).getByText("1 configuration warning")).toBeDefined();
     expect(within(banner).getByText(/runs as the engine/).textContent).toMatch(/^A /);
+    fireEvent.click(within(banner).getByRole("button", { name: "1 configuration warning Review" }));
     expect(within(banner).getByRole("link", { name: "Open Models" }).getAttribute("href")).toBe(
       href(["settings", "models"]),
     );
@@ -806,13 +807,21 @@ describe("checking the draft", () => {
     const lines = (list: HTMLElement) =>
       within(list)
         .getAllByRole("listitem")
-        .map((li) => [...li.querySelectorAll("p, a")].map((e) => e.textContent).join(" / "));
+        .map((li) =>
+          [
+            li.querySelector(".crewlet-notice-list__toggle")!.textContent,
+            ...[...li.querySelectorAll(".crewlet-notice-list__panel p")].map((p) => p.textContent),
+            ...[...li.querySelectorAll("a")].map((a) => a.textContent),
+          ].join(" / "),
+        );
     const said = [
       "Agents run their work directly on the engine's own server. / Open Models",
-      "2 agents: Reflection and summaries run on the same model as the agent's own work. / CEO, Designer / Open Models",
+      "Reflection and summaries run on the same model as the agent's own work. 2 agents / CEO, Designer / Open Models",
     ];
     const banner = await screen.findByRole("group", { name: "Warnings about the configuration" });
-    expect(within(banner).getByText("2 warnings to know about")).toBeDefined();
+    fireEvent.click(
+      within(banner).getByRole("button", { name: "2 configuration warnings Review" }),
+    );
     expect(lines(banner)).toEqual(said);
     expect(banner.textContent).not.toMatch(/providers|llm_|direct`|container`/);
 
