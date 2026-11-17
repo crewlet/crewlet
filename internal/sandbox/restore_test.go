@@ -53,10 +53,16 @@ var (
 	errUnreadable = errors.New("the session's object is unreadable")
 )
 
-func (k *keptRestore) Session(_ context.Context, handle, turn string) (executorkeep.TurnRow, error) {
+func (k *keptRestore) Session(ctx context.Context, handle, turn string) (executorkeep.TurnRow, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.asked = append(k.asked, handle+"/"+turn)
+	// A READ UNDER A CONTEXT THAT ENDED IS NOT ANSWERED, as the estate
+	// router's is not: a fake that answered it settled what a wait whose
+	// time had run out could not have read.
+	if err := ctx.Err(); err != nil {
+		return executorkeep.TurnRow{}, err
+	}
 	if k.unreadRows != nil {
 		return executorkeep.TurnRow{}, k.unreadRows
 	}
