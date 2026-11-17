@@ -26,7 +26,7 @@ import type { IssueReportsAnswer } from "./issueReports.ts";
 import type { GoLiveReviewAnswer } from "./goLive.ts";
 import type { TurnOutcomesAnswer } from "./turnOutcomes.ts";
 import type { InsightsAnswer } from "./insights.ts";
-import type { AccessFixAnswer, AdvisorAnswer } from "./advisor.ts";
+import type { AccessFixAnswer, AdvisorAnalysisAnswer, AdvisorAnswer } from "./advisor.ts";
 import type {
   ModelCheck,
   ModelDevice,
@@ -8258,6 +8258,7 @@ export interface QueryMap {
   turn_outcomes: TurnOutcomesAnswer;
   diagnostics_insights: InsightsAnswer;
   advisor: AdvisorAnswer;
+  advisor_analysis: AdvisorAnalysisAnswer;
   advisor_access: AccessFixAnswer;
   /** The administrator's reading, or a member's: narrow on `reading`. */
   mcp_servers_status: McpServersStatusAnswer | McpMemberServersStatusAnswer;

@@ -116,7 +116,7 @@ export interface AdvisorFinding {
   class: string;
   severity: AdvisorSeverity;
   actor: AdvisorActor;
-  source: "static" | "evidence" | "reconcile" | "atlas";
+  source: "static" | "evidence" | "reconcile" | "atlas" | "analyst";
   area: string;
   subject: AdvisorSubject;
   title: string;
@@ -169,6 +169,54 @@ export interface AdvisorAnswer {
    * so a short list never reads as all clear.
    */
   unread: string[];
+}
+
+/** How an analyst run ended, or that it is running. */
+export type AnalysisStatus = "running" | "done" | "ceiling" | "refused" | "failed" | (string & {});
+
+/** How a person answered an analyst finding. */
+export type AnalystVerdict = "useful" | "wrong" | "known";
+
+/** One analyst run, as the fleet keeps the last one (ADR-0156). */
+export interface AdvisorAnalysis {
+  id: string;
+  status: AnalysisStatus;
+  started: string;
+  ended?: string;
+  /** `schedule` or `person`, and the person who pressed Run now. */
+  trigger: string;
+  by?: string;
+  /** The providers.llm entry it ran on, and its token ceiling. */
+  model: string;
+  ceiling: number;
+  input_tokens: number;
+  output_tokens: number;
+  /** How many submitted findings were not listed, by why. */
+  dropped: Record<string, number>;
+  unread: string[];
+  reason?: string;
+}
+
+/** One listed analyst finding, with the fingerprint an answer names. */
+export interface AnalystFinding extends AdvisorFinding {
+  fingerprint: string;
+  answer?: AnalystVerdict;
+}
+
+/** `GET /advisor/analysis`: whether the analyst is on, its last run and that run's findings. */
+export interface AdvisorAnalysisAnswer {
+  on: boolean;
+  model?: string;
+  cadence: "daily" | "weekly" | "off" | (string & {});
+  hour: number;
+  ceiling: number;
+  /** The entry to turn it on with, where it is off. */
+  suggest?: string;
+  last?: AdvisorAnalysis;
+  stale: boolean;
+  findings: AnalystFinding[];
+  /** The last run's findings people answered wrong or already known. */
+  set_aside: number;
 }
 
 /** `GET /advisor/access`: the change that grants an agent one access it asked for. */
