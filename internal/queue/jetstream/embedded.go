@@ -226,6 +226,19 @@ type embeddedServer struct {
 	// production. Set by this package's own tests and nothing else — see
 	// [readiness].
 	ready readiness
+	// tunnel is a leaf's way to the members, whose upstream socket its meter
+	// reads ([tunnel], [LinkMeter]); nil on a member. Started before the
+	// server and closed after it.
+	tunnel *tunnel
+}
+
+// linkMeter is the meter of this broker's link to the members: a leaf's
+// tunnel's, and nil on a member, which crosses no link.
+func (e *embeddedServer) linkMeter() *LinkMeter {
+	if e == nil || e.tunnel == nil {
+		return nil
+	}
+	return e.tunnel.meter
 }
 
 // readiness is the bound on the waits for the fleet to serve this broker:
@@ -927,8 +940,25 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 		}
 	}
 
+	// THE BROKER'S DEATH, made before anything that can declare it: the
+	// server's logger, and a leaf's tunnel — see [Death].
+	death := newDeath()
+	// A LEAF'S LINK TO THE MEMBERS DIALS THROUGH ITS TUNNEL, which is
+	// listening before the server is built from options naming it, and is
+	// closed only after the server has stopped — see [tunnel].
+	var tun *tunnel
+	if len(opts.LeafNode.Remotes) > 0 {
+		if tun, err = startTunnel(ctx, death); err != nil {
+			dirLock.Release()
+			removeScratch(scratch)
+			return nil, err
+		}
+		tun.proxy(opts.LeafNode.Remotes)
+	}
+
 	ns, err := server.NewServer(opts)
 	if err != nil {
+		tun.close()
 		dirLock.Release()
 		removeScratch(scratch)
 		return nil, fmt.Errorf("configure embedded server: %w", err)
@@ -941,7 +971,6 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	//
 	// AND IT IS HOW A FATALF REACHES THIS FUNCTION: the logger declares the
 	// broker's death, and the waits below end on it — see [Death].
-	death := newDeath()
 	ns.SetLoggerV2(newNATSLogger(cfg.ServerName, death), cfg.Debug, false, false)
 	// EVERYTHING READ OFF THE OPTIONS IS READ BEFORE Start: the server
 	// writes what it resolves — the ports it bound — back into these same
@@ -993,6 +1022,7 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	})
 	if err != nil {
 		shutdownAndClean(ns, started, scratch)
+		tun.close()
 		dirLock.Release()
 		return nil, err
 	}
@@ -1003,7 +1033,7 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	return &embeddedServer{
 		ns: ns, started: started, death: death,
 		scratch: scratch, dirLock: dirLock, clustered: clustered, leaf: leaf,
-		auth: auth,
+		auth: auth, tunnel: tun,
 	}, nil
 }
 
@@ -1532,8 +1562,13 @@ func (e *embeddedServer) connect(at watched) (*nats.Conn, error) {
 // writing. What it cannot cover is the one write [Server.Shutdown] says can
 // land after the server reports it has stopped — a consumer's state write
 // already in flight — which nats-server itself gives no way to wait for.
+//
+// A LEAF'S TUNNEL CLOSES AFTER ITS SERVER, which has closed the link through
+// it by then: closed first, the tunnel would cut a link the server still
+// held, and the server would dial it again into a listener that is gone.
 func (e *embeddedServer) shutdown() {
 	shutdownAndClean(e.ns, e.started, e.scratch)
+	e.tunnel.close()
 	e.dirLock.Release()
 }
 
@@ -1658,7 +1693,9 @@ func leafRemotes(urls []string, seed string) ([]*server.RemoteLeafOpts, error) {
 // reconnect policy, held to the transport's contract. The caller owns the
 // connection and must close it; at says where a close NATS makes for good is
 // recorded, and is the zero value where the caller is the one to notice — see
-// [watched].
+// [watched]. meter counts every socket the connection opens, its reconnects'
+// included, as the node's data link ([LinkMeter]); nil for a dial that is not
+// it.
 //
 // UNEXPORTED, because a caller outside this package reaches it through a
 // queue: [Queue.DialOwned] is how a subsystem gets a second connection with
@@ -1666,8 +1703,8 @@ func leafRemotes(urls []string, seed string) ([]*server.RemoteLeafOpts, error) {
 // already proved. An exported Dial beside it was kept for a caller that would
 // otherwise reimplement the option list, and none ever existed — it was code
 // with no caller, indistinguishable from code whose caller nobody had found.
-func dial(cfg Config, at watched) (*nats.Conn, error) {
-	opts, recorded, err := dialOptions(cfg)
+func dial(cfg Config, at watched, meter *LinkMeter) (*nats.Conn, error) {
+	opts, recorded, err := dialOptions(cfg, meter)
 	if err != nil {
 		return nil, err
 	}
@@ -1788,13 +1825,14 @@ var externalWriteDeadline = jsapi.Sending(
 // server with `verify: true` and a generated certificate chain — and would
 // then be testing that NATS honours its own documented option rather than
 // that this package passes it.
-func dialOptions(cfg Config) ([]nats.Option, *infoDialer, error) {
+func dialOptions(cfg Config, meter *LinkMeter) ([]nats.Option, *infoDialer, error) {
 	// THE CLIENT'S OWN DIALER'S BUDGET, kept: a custom one replaces it, and
 	// the client divides its Timeout among a name's addresses only for the
 	// dialer it builds. So the client skips its lookup and hands the
 	// member's name to the dialer, which resolves it and shares the same
-	// [externalHandshake] among its addresses: see [infoDialer].
-	recorded := newInfoDialer(externalHandshake)
+	// [externalHandshake] among its addresses: see [memberDialer]. Every
+	// socket it opens is the meter's ([infoDialer]).
+	recorded := newInfoDialer(externalHandshake, meter)
 	opts := []nats.Option{
 		nats.SetCustomDialer(recorded),
 		nats.SkipHostLookup(),

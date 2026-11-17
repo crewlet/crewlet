@@ -489,6 +489,23 @@ the dependency surface before choosing a host for it:
   every lap of the seats
   ([#1040](https://github.com/crewlet/crewlet/issues/1040); see
   [what a crash and a handoff lose](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
+- **A leaf link that reaches the members' own sockets.** A message on
+  the link can be megabytes, and at the slowest pace the engine allows
+  one takes minutes to cross; the node tells a link that is carrying such
+  a message from one that carries nothing by reading its own socket — the
+  bytes it read, and the bytes the member's kernel acknowledged — never
+  by a timeout. A proxy that terminates TCP on the way acknowledges what
+  it has buffered rather than what the member took, so behind one the
+  node cannot tell a member that stopped reading from a buffer still
+  draining. Send the leaf link to the members' leaf port (7422 by
+  default) directly: exclude that port from a service mesh's capture
+  (Istio's `traffic.sidecar.istio.io/excludeOutboundPorts`, Linkerd's
+  `config.linkerd.io/skip-outbound-ports`), and put no load balancer that
+  buffers in front of it. NAT, a firewall and a VPN that forwards packets
+  are not such proxies. The same holds for every node's dial to an
+  [external NATS server](deployment.md#an-external-nats-server). Inside the node
+  the link passes through a tunnel the engine runs on loopback for itself,
+  which needs nothing from you and opens no port anybody else may use.
 - **The harness of every model its seats name, installed and signed in
   on that host.** Each [`providers.llm` entry](../concepts/llm-backends.md)
   is a harness the node runs, and it calls its own vendor over outbound HTTPS. A

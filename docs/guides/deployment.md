@@ -813,6 +813,14 @@ headless Kubernetes service naming every pod of the cluster — shares those 2
 seconds among them, tried in a random order so a fleet's connections spread
 across the members, rather than taking 2 seconds for each.
 
+**Nothing on the way may terminate TCP.** The node reads its own sockets to
+tell a link that is still carrying a large message from one that carries
+nothing — what it read, and what the server's kernel acknowledged — so a
+proxy that buffers between the node and the servers, a service mesh's
+sidecar among them, acknowledges for the servers and hides which one it is.
+Exclude the servers' client port from mesh capture, as a
+[satellite's leaf link](satellite-nodes.md#what-a-satellite-still-needs) does.
+
 **A connection the client gives up on is a node restart.** Reconnecting for
 ever covers a server that goes away and comes back. It does not cover the
 cases where the NATS client itself closes the connection *for good* and stops

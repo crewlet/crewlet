@@ -885,19 +885,24 @@ func TestAMembersDeadLettersAreReadGivenTheHandlingOfTheLargestReply(t *testing.
 // Mutation: pace a member's own connection, leave a leaf's or an external
 // cluster's unpaced, take an external dial for a leaf's link or a leaf's for
 // none, and its row goes red; give a member's record read no handling, or a
-// crossing, and its log's does.
+// crossing, and its log's does; hand a member a meter, or a leaf or an
+// external cluster's client none, and its row goes red.
 func TestOnlyAMembersOwnConnectionCrossesNoLink(t *testing.T) {
 	t.Parallel()
+	// THE METER IS THE LINK'S: a leaf's tunnel's, the external dial's own,
+	// and none for a member, whatever a dial would have handed it.
+	tunnelled, dialled := &LinkMeter{}, &LinkMeter{}
 	for _, c := range []struct {
 		name     string
 		embedded *embeddedServer
 		want     link
 	}{
 		{"a member's own client", &embeddedServer{}, link{}},
-		{"a leaf's client", &embeddedServer{leaf: true}, link{pace: objstore.MiBPace, leaf: true}},
-		{"a client of an external cluster", nil, link{pace: objstore.MiBPace}},
+		{"a leaf's client", &embeddedServer{leaf: true, tunnel: &tunnel{meter: tunnelled}},
+			link{pace: objstore.MiBPace, leaf: true, meter: tunnelled}},
+		{"a client of an external cluster", nil, link{pace: objstore.MiBPace, meter: dialled}},
 	} {
-		if got := linkOf(c.embedded); got != c.want {
+		if got := linkOf(c.embedded, dialled); got != c.want {
 			t.Errorf("%s: its connection crosses %+v, want %+v", c.name, got, c.want)
 		}
 	}
