@@ -1,13 +1,17 @@
 package query_test
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/cache"
 	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 	"github.com/crewlet/crewlet/internal/gitlet/query"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -196,7 +201,9 @@ func TestIndexAndGrepAnswerTheSameHits(t *testing.T) {
 // hits, lines 4 to 6 after line 3, and lines 7 and 8 before line 9, never
 // line 6 again; the two needles of line 9 are two matches. A per-file bound of
 // one answers line 2 alone, its total 3, and lines 3 to 5 after it: a line
-// past the bound is not answered, so it is a context line. Both paths alike.
+// past the bound is not answered, so it is a context line. A limit of one
+// answers line 2 with nothing after it: line 3 is the next page's first hit,
+// never this page's context. Both paths alike.
 //
 // Mutation: bound After by the next line that matched rather than the next
 // answered (withContext's next), or let Before reach back past the line
@@ -223,6 +230,8 @@ func TestANearHitsLinesAreCarriedOnce(t *testing.T) {
 		}},
 		{"per file 1", gitlet.SearchQuery{Text: "needle", Mode: codeindex.ModeLiteral, Context: 3, PerFile: 1},
 			[]lines{{2, []string{"line 1"}, []string{"needle three", "line 4", "line 5"}, [][2]int{{0, 6}}, 3}}},
+		{"limit 1", gitlet.SearchQuery{Text: "needle", Mode: codeindex.ModeLiteral, Context: 3, Limit: 1},
+			[]lines{{2, []string{"line 1"}, nil, [][2]int{{0, 6}}, 0}}},
 	} {
 		for name, s := range map[string]*query.Server{"index": x.server(0, query.Options{}),
 			"grep": x.server(0, query.Options{Cache: grepOnly{x.f.Nodes()[0].Cache()}})} {
@@ -528,11 +537,13 @@ func TestASearchHitNamesWhereItsLineMatched(t *testing.T) {
 // answers the first two of a file of seven and the one of a file of one, each
 // naming its file's total, untruncated; a page continued after the first
 // file's first line answers its second, still naming 7, since the lines before
-// the place count in the total. Both paths alike.
+// the place count in the total. Both paths alike. A grep whose git ends after
+// the file's third line answers its two lines with no total, Truncated: a
+// count short of the file's is never answered.
 //
 // Mutation: count from the place rather than the file's first line (drop the
 // place's own file's lines before add on the grep path, or count after the
-// answered check), red.
+// answered check); leave the file a cut grep stopped in uncut (viaGrep): red.
 func TestAPerFileSearchCountsEveryLineOfAFile(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -561,6 +572,123 @@ func TestAPerFileSearchCountsEveryLineOfAFile(t *testing.T) {
 			t.Errorf("%s continued after f/a.txt:1 answered %v, want %v", name, got, want)
 		}
 	}
+	cut := x.server(0, query.Options{Git: cutGrep{Pool: x.f.Nodes()[0].Pool(), lines: 3},
+		Cache: grepOnly{x.f.Nodes()[0].Cache()}})
+	a := mustRead(t, cut, searchQ(repo, q)).Search
+	var got []string
+	for _, h := range a.Hits {
+		got = append(got, h.Path+":"+strconv.Itoa(h.Line)+"/"+strconv.Itoa(h.FileMatches))
+	}
+	if want := []string{"f/a.txt:1/0", "f/a.txt:2/0"}; !reflect.DeepEqual(got, want) || !a.Truncated {
+		t.Errorf("a grep cut after three lines answered %v (truncated %t), want %v truncated", got, a.Truncated, want)
+	}
+}
+
+// cutGrep is a query.Pool whose git grep passes on its first lines alone and
+// then ends as a process the read's git budget ended.
+type cutGrep struct {
+	query.Pool
+	lines int
+}
+
+func (p cutGrep) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
+	if c.Args[0] != "grep" {
+		return p.Pool.Run(ctx, c)
+	}
+	var all bytes.Buffer
+	out := c.Stdout
+	c.Stdout = &all
+	res, err := p.Pool.Run(ctx, c)
+	if err != nil {
+		return res, err
+	}
+	recs := bytes.SplitAfter(all.Bytes(), []byte{'\n'})
+	for _, r := range recs[:min(p.lines, len(recs))] {
+		if _, err := out.Write(r); err != nil {
+			return res, err
+		}
+	}
+	return res, fmt.Errorf("git grep ran past its deadline: %w", gitproc.ErrDeadline)
+}
+
+// A CONTEXT PASS CUT SHORT ANSWERS THE FILES IT READ. A grep search asking
+// context reads its hits' files after git grep ends (withHeldContext); a pass
+// that the read's git running out, or its answer falling due, ends after its
+// first file answers that file's hit with its context, Truncated, and
+// memoizes nothing: the next search reads anew and answers every hit.
+//
+// Mutation: answer a pass the due instant cut as the read's failure (drop
+// passCut from searchRead's budget case), or memoize a cut pass (searchRead's
+// !budget), red.
+func TestAContextPassCutShortAnswersTheFilesItRead(t *testing.T) {
+	t.Parallel()
+	x, repo, _ := searchFixture(t)
+	q := searchQ(repo, gitlet.SearchQuery{Text: "status", Mode: codeindex.ModeLiteral, Context: 1})
+	lines := func(a gitlet.GitAnswer) []string {
+		var out []string
+		for _, h := range a.Search.Hits {
+			out = append(out, h.Path+":"+strconv.Itoa(h.Line)+":"+strings.Join(h.After, "|"))
+		}
+		return out
+	}
+	for _, due := range []bool{false, true} {
+		ctx, cancel := context.WithCancel(t.Context())
+		if due {
+			// Two seconds on: far past a warm grep of the fixture, so the
+			// instant falls during the pass.
+			ctx, cancel = gitlet.AnswerBy(t.Context(), time.Now().Add(gitlet.ReplyMargin+2*time.Second))
+		}
+		s := x.server(0, query.Options{Git: &cutPass{Pool: x.f.Nodes()[0].Pool(), due: due}})
+		a, err := s.Read(ctx, q)
+		cancel()
+		if err != nil {
+			t.Fatalf("a search whose context pass was cut (due %t) = %v, want the files it read", due, err)
+		}
+		if got := lines(a); !reflect.DeepEqual(got, []string{"a/one.go:3:var Status = 1"}) ||
+			!a.Search.Truncated || a.Memo {
+			t.Errorf("a search whose context pass was cut (due %t) answered %v, truncated %t, from the memo %t: "+
+				"want a/one.go's hit with its context, truncated", due, got, a.Search.Truncated, a.Memo)
+		}
+	}
+	b := mustRead(t, x.server(0, query.Options{}), q)
+	if got := lines(b); len(got) != 3 || b.Search.Truncated || b.Memo {
+		t.Errorf("the next search answered %v, truncated %t, from the memo %t: want all 3, read anew", got,
+			b.Search.Truncated, b.Memo)
+	}
+}
+
+// cutPass is a query.Pool whose cat-file after a git grep (the grep path's
+// context pass) reads the first blob asked, then ends: at the read's due
+// instant where due is set, otherwise as a process the read's git budget ended.
+type cutPass struct {
+	query.Pool
+	due     bool
+	mu      sync.Mutex
+	grepped bool
+}
+
+func (p *cutPass) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
+	p.mu.Lock()
+	pass := p.grepped && c.Args[0] == "cat-file"
+	p.grepped = p.grepped || c.Args[0] == "grep"
+	p.mu.Unlock()
+	if !pass {
+		return p.Pool.Run(ctx, c)
+	}
+	first, err := bufio.NewReader(c.Stdin).ReadString('\n')
+	if err != nil {
+		return gitproc.Result{}, err
+	}
+	c.Stdin = strings.NewReader(first)
+	res, err := p.Pool.Run(ctx, c)
+	switch {
+	case err != nil:
+		return res, err
+	case !p.due:
+		return res, fmt.Errorf("git cat-file ran past its deadline: %w", gitproc.ErrDeadline)
+	}
+	<-ctx.Done()
+	return res, context.Cause(ctx)
 }
 
 // A SEARCH ANSWER HOLDS ITS BOUND (gitlet.MaxGitAnswerBytes), on both paths:

@@ -10,8 +10,8 @@ import (
 )
 
 // shortestLines is a search's answer of n of the shortest lines that carry
-// text — a one-byte repository and path, and one byte of text, fenced, which
-// matched — of a search that stopped at them, each with context one-byte
+// text (a one-byte repository and path, and one byte of text, fenced, which
+// matched) of a search that stopped at them, each with context one-byte
 // lines on each side.
 func shortestLines(n, context int) codesearch.Answer {
 	a := codesearch.Answer{Tips: map[string]string{"a": strings.Repeat("c", 40)},
@@ -30,9 +30,9 @@ func shortestLines(n, context int) codesearch.Answer {
 // A PAGE OF code_search ASKS FOR WHAT ONE PAGE HOLDS (searchPageHits, and
 // searchContextPageHits for a page asking three lines of context): one tool
 // answer, as sent, holds at least that many of the shortest lines that carry
-// text, each with its match, and fewer than a twentieth more — so the search
+// text, each with its match, and fewer than a twentieth more, so the search
 // is never asked for lines no page of them can carry, nor cut into pages
-// shorter than an answer holds — and a page that holds every line its search
+// shorter than an answer holds; and a page that holds every line its search
 // answered, the search having stopped at them, names the page after it:
 // lines may follow.
 //

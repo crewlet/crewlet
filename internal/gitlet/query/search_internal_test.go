@@ -1,10 +1,12 @@
 package query
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/codeindex"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -124,16 +126,36 @@ func TestAHitsMatchesAreOffsetsIntoItsText(t *testing.T) {
 
 // A FILE THE SEARCH STOPPED IN NAMES NO TOTAL: a per-file search answers each
 // hit's FileMatches only of a file it confirmed to its end, so a file its
-// budget or its limit cut part way names none rather than a count short of
-// the file's.
+// budget ended part way (here on the grep path, a line at a time, the fourth
+// line confirmed under an ended context) names none rather than a count short
+// of the file's.
 //
-// Mutation: set FileMatches whatever the file's cut (flush), red.
+// Mutation: set FileMatches whatever the file's cut (flush), or leave the file
+// uncut where Confirm ends with an error (add), red.
 func TestAFileTheSearchStoppedInNamesNoTotal(t *testing.T) {
 	t.Parallel()
+	plan, err := gitlet.SearchQuery{Text: "hit", Mode: codeindex.ModeLiteral}.Query().Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ended, end := context.WithCancel(t.Context())
+	end()
 	for _, cut := range []bool{false, true} {
-		s := &searching{perFile: 2, limit: 10, room: 1 << 20, answer: gitlet.SearchAnswer{Hits: []gitlet.SearchHit{}}}
-		s.file = pendingFile{path: "a", matched: 5, cut: cut,
-			kept: []gitlet.SearchHit{{Path: "a", Line: 1, Text: "x"}, {Path: "a", Line: 2, Text: "x"}}}
+		s := &searching{plan: plan, perFile: 2, limit: 10, room: 1 << 20,
+			answer: gitlet.SearchAnswer{Hits: []gitlet.SearchHit{}}}
+		s.open("a", "blob")
+		for line := 1; line <= 5; line++ {
+			ctx := t.Context()
+			if cut && line == 4 {
+				ctx = ended
+			}
+			if err := s.add(ctx, []byte("a hit"), line); err != nil {
+				if !cut {
+					t.Fatal(err)
+				}
+				break
+			}
+		}
 		s.flush(nil)
 		want := 5
 		if cut {

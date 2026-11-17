@@ -147,14 +147,16 @@ func codeSearchQuery(p Params) (codesearch.Query, error) {
 	for _, n := range []struct {
 		name string
 		into *int
-	}{{"limit", &q.Limit}, {"context", &q.Context}, {"per_file", &q.PerFile}} {
+		most int
+	}{{"limit", &q.Limit, gitlet.MaxSearchHits}, {"context", &q.Context, gitlet.MaxSearchContext},
+		{"per_file", &q.PerFile, gitlet.MaxSearchHits}} {
 		if !p.Has(n.name) {
 			continue
 		}
 		v, whole := p.WholeInt(n.name)
-		if !whole || v < 0 || v > gitlet.MaxSearchHits {
+		if !whole || v < 0 || v > int64(n.most) {
 			return codesearch.Query{}, fmt.Errorf("%w: %s: %q is not a whole number from 0 to %d", ErrBadParams,
-				n.name, p.String(n.name), gitlet.MaxSearchHits)
+				n.name, p.String(n.name), n.most)
 		}
 		*n.into = int(v)
 	}

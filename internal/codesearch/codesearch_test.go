@@ -517,10 +517,12 @@ func TestARepositoryNamedTwiceIsSearchedOnce(t *testing.T) {
 // AN UNSIGNED SEARCH IS REFUSED: a request sealed under a key that is not the
 // fleet's, and the same request replayed, run nothing and answer nothing; a
 // request signed under a key the node does not hold runs nothing and answers
-// that it could not verify it; and the fleet's own request is answered.
+// that it could not verify it, at the request's own protocol; and the fleet's
+// own request is answered.
 //
 // Mutation: answer a request whatever Admit concluded, and the forged one
-// reads alpha as the person it names, red.
+// reads alpha as the person it names; answer Unverified at Protocol whatever
+// the request's: red.
 func TestAnUnsignedSearchIsRefused(t *testing.T) {
 	t.Parallel()
 	r := indexed("alpha", "git-a")
@@ -542,7 +544,9 @@ func TestAnUnsignedSearchIsRefused(t *testing.T) {
 		t.Errorf("a request the fleet did not sign answered %q, %v", reply, err)
 	}
 	other := recordseal.OneKey("k2", "a key this node does not hold")
-	unknown, err := wire(t, other).SealRequest(codesearch.Request{Version: req.Version, ID: "req-2",
+	// A plain search at the older protocol, whose asker drops a reply of another version.
+	plain := codesearch.ContextProtocol - 1
+	unknown, err := wire(t, other).SealRequest(codesearch.Request{Version: plain, ID: "req-2",
 		Deadline: req.Deadline, Asker: person, Search: req.Search, Assign: req.Assign})
 	if err != nil {
 		t.Fatal(err)
@@ -552,9 +556,9 @@ func TestAnUnsignedSearchIsRefused(t *testing.T) {
 		t.Fatalf("a request under a key this node does not hold = %v, want an answer that says so", err)
 	}
 	rep, why, err := wire(t, fleetRing).OpenReply(raw, "req-2")
-	if err != nil || why != "" || rep.Unverified == "" || len(rep.Repos) != 0 {
-		t.Errorf("the answer to a request under an unknown key = %+v (%q, %v), want Unverified and nothing read",
-			rep, why, err)
+	if err != nil || why != "" || rep.Unverified == "" || len(rep.Repos) != 0 || rep.Version != plain {
+		t.Errorf("the answer to a request under an unknown key = %+v (%q, %v), want Unverified at protocol %d "+
+			"and nothing read", rep, why, err, plain)
 	}
 	if len(n.asked) != 0 {
 		t.Fatalf("an unverified request read %v", n.asked)

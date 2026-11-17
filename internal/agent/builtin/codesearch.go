@@ -216,8 +216,8 @@ func (t *codeSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 // searchPageHits is the most lines a page of code_search asks the search for
 // (codesearch.Query.Limit): what one tool answer holds of the SMALLEST lines
-// a search answers that carry text — a one-byte repository, path and line,
-// fenced, and its one match — measured as sent by
+// a search answers that carry text (a one-byte repository, path and line,
+// fenced, and its one match), measured as sent by
 // TestCodeSearchAsksForWhatOnePageHolds. Asked
 // for more, a page would have the Gitlet nodes find, confirm and send lines no
 // page of them can carry, which the next page reads again; asked for fewer, a

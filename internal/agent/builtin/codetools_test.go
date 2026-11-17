@@ -2076,7 +2076,8 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // once in the tool's — the cost codeReadsCatalogueBudget pays too, since
 // every seat carries it; ~6% headroom again. And code_log took `until` and
 // `pushed_by` within it, deliberately, with their measured cost: 41 167 →
-// 41 556, 389 bytes (~97 tokens).
+// 41 556, 389 bytes (~97 tokens). And code_search took `context` and
+// `per_file` and named its `matches`: 41 888 → 42 235, 347 bytes (~87 tokens).
 const codeCatalogueBudget = 57_500
 
 // codeReadsCatalogueBudget is the most bytes the thirteen code reads'
@@ -2101,7 +2102,9 @@ const codeCatalogueBudget = 57_500
 // 1 796 bytes (~449 tokens), its grammar said once in `query`'s description
 // and its answer's shape once in its own; ~6% headroom again. And code_log
 // took `until` and `pushed_by` within it, deliberately, with their measured
-// cost: 17 097 → 17 486 (~4 372 tokens), 389 bytes (~97 tokens).
+// cost: 17 097 → 17 486 (~4 372 tokens), 389 bytes (~97 tokens). And
+// code_search took `context` and `per_file` and named its `matches`: 17 818 →
+// 18 165 (~4 542 tokens), 347 bytes (~87 tokens).
 const codeReadsCatalogueBudget = 22_100
 
 // codeReviewCatalogueBudget is the most bytes a review seat's code tools may

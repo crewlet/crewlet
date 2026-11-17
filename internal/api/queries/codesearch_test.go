@@ -255,10 +255,11 @@ func TestCodeSearchReadsOneGrammar(t *testing.T) {
 // A CODE SEARCH ASKS FOR CONTEXT AND A PER-FILE BOUND as it is asked:
 // `context` and `per_file` reach the search, neither asks the zeros, and a
 // value past its bound, not a whole number, or a limit past
-// gitlet.MaxSearchContextHits beside context is bad_params naming its field,
-// before anything is searched.
+// gitlet.MaxSearchContextHits beside context is bad_params naming its field
+// and its own range, before anything is searched.
 //
-// Mutation: read `per_file` into Context, red.
+// Mutation: read `per_file` into Context, or bound `context` by
+// gitlet.MaxSearchHits (context=x names 0 to 500), red.
 func TestACodeSearchAsksForContextAndPerFile(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -278,18 +279,20 @@ func TestACodeSearchAsksForContextAndPerFile(t *testing.T) {
 		}
 	}
 	for _, tc := range []struct {
-		params map[string]any
-		field  string
+		params      map[string]any
+		field, says string
 	}{
-		{map[string]any{"q": "needle", "context": "4"}, "context"},
-		{map[string]any{"q": "needle", "per_file": "-1"}, "per_file"},
-		{map[string]any{"q": "needle", "context": "x"}, "context"},
-		{map[string]any{"q": "needle", "context": "1", "limit": "200"}, "limit"},
+		{map[string]any{"q": "needle", "context": "4"}, "context", "0 to 3"},
+		{map[string]any{"q": "needle", "per_file": "-1"}, "per_file", "0 to 500"},
+		{map[string]any{"q": "needle", "context": "x"}, "context", "0 to 3"},
+		{map[string]any{"q": "needle", "context": "1", "limit": "200"}, "limit", "limit"},
 	} {
 		s := &stubCode{}
 		_, err := askNative(t, queries.Sources{Code: s}, "code_search", tc.params)
-		if !errors.Is(err, queries.ErrBadParams) || !strings.Contains(err.Error(), tc.field) {
-			t.Errorf("code_search %v answered %v, want bad_params naming %s", tc.params, err, tc.field)
+		if !errors.Is(err, queries.ErrBadParams) || !strings.Contains(err.Error(), tc.field) ||
+			!strings.Contains(err.Error(), tc.says) {
+			t.Errorf("code_search %v answered %v, want bad_params naming %s and %q", tc.params, err, tc.field,
+				tc.says)
 		}
 		if len(s.searched) != 0 {
 			t.Errorf("code_search %v searched, want refused before", tc.params)

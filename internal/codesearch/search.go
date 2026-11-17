@@ -201,7 +201,9 @@ const MaxGrepRepos = 8
 // seat git-work share (gitlet.GitShareWait, 2 s), then the search's own budget
 // (gitlet.SearchBudget, 5 s) — and a reply's margin each way
 // (gitlet.ReplyMargin), so a node whose read ran its whole budget answers
-// while the asker listens. A SUM OF WHOLE BUDGETS (M3-O6), 9 s; a round ends
+// while the asker listens; a grep search's context pass, read after its
+// budget, ends at the answer's due instant, inside the same sum. A SUM OF
+// WHOLE BUDGETS (M3-O6), 9 s; a round ends
 // sooner, as soon as every node it asked has answered, and a search takes two
 // rounds only where a node did not answer the first.
 const RoundBudget = gitlet.GitShareWait + gitlet.SearchBudget + 2*gitlet.ReplyMargin

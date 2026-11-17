@@ -56,7 +56,9 @@ const (
 	// git included: the state log's resolve budget, the time a person waits
 	// on a write's answer. A search that runs it out answers the hits it
 	// found by then, Truncated — never nothing, and never late: a search's
-	// cost is the corpus's, which another node would read as slowly.
+	// cost is the corpus's, which another node would read as slowly. A grep
+	// search asking context reads its hits' files after it, until its answer
+	// falls due, answering the files read by then.
 	SearchBudget = statelog.DefaultResolveBudget
 )
 
@@ -215,7 +217,8 @@ type SearchAnswer struct {
 	// admit, the search did not read for their size (past
 	// MaxIndexedFileBytes) — and, on the index path, as binaries, which git
 	// grep -I passes over unsaid — plus every file a line of which was past
-	// what a search runs its expression on (codeindex.Plan.LineBytes).
+	// what a search runs its expression on (codeindex.Plan.LineBytes). It
+	// counts files the search passed, which can lie past a truncated answer's last hit.
 	SkippedFiles int `json:"skipped_files,omitempty"`
 	// Truncated says the search stopped before it had read every file that
 	// could match: at its limit of hits, or at SearchBudget. Hits is then

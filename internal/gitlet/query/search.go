@@ -48,7 +48,9 @@ import (
 // share is taken: a search that runs it out answers what it found, in order,
 // Truncated, and memoizes nothing — its page is no function of its
 // arguments. One that stops at its limit of hits, or at the answer's bound,
-// is, and is memoized under the commit it read.
+// is, and is memoized under the commit it read. The grep path's context pass
+// alone runs past it, until the read's answer falls due or its git runs out:
+// a pass either ends answers the files it read, Truncated, memoizing nothing.
 //
 // A SEARCH CONTINUED AFTER A PLACE (gitlet.SearchQuery.After) drops every line
 // at or before the place before its limit counts it, so a later page of a
@@ -148,9 +150,10 @@ func (r *read) searchRead(ctx context.Context) (gitlet.GitAnswer, error) {
 	budget := false
 	switch {
 	case err == nil:
-	case ctx.Err() == nil && (sctx.Err() != nil || errors.Is(err, gitlet.ErrSliceTooLarge)):
+	case (ctx.Err() == nil || s.passCut) && (sctx.Err() != nil || errors.Is(err, gitlet.ErrSliceTooLarge)):
 		// The search's own budget, or its git's, ran out while its asker
-		// still listens: what it found is the answer.
+		// still listens (a cut context pass ends at the answer's due
+		// instant, before the asker's): what it found is the answer.
 		budget, s.answer.Truncated = true, true
 	default:
 		return gitlet.GitAnswer{}, err
@@ -260,9 +263,13 @@ type searching struct {
 	limit int
 	// context and perFile are the query's (gitlet.SearchQuery.Context, PerFile).
 	context, perFile int
-	// readCtx is the read's own context: the grep path's context pass runs
-	// under it, so a search its own budget ended still answers its hits whole.
+	// readCtx is the read's own context, ending when its answer falls due: the
+	// grep path's context pass runs under it, so a search its own budget ended
+	// still answers its hits whole.
 	readCtx context.Context
+	// passCut is that the answer's due instant or the read's git ended the
+	// context pass: what it read is the answer, as a budget's end is.
+	passCut bool
 	// room is what the hits may encode to: the answer's bound less its
 	// envelope's stamps and its own fields at their widest.
 	room   int
@@ -313,8 +320,8 @@ func (p *searchPlace) answered(path string, line int) bool {
 	return p != nil && (path < p.path || path == p.path && line <= p.line)
 }
 
-// add confirms lines of the open file (s.file) — a whole blob, or (grep) one
-// line of it numbered line — and keeps every hit past the place the search
+// add confirms lines of the open file (s.file), a whole blob or (grep) one
+// line of it numbered line, and keeps every hit past the place the search
 // continues from, within its limit and the query's per-file bound. Once the
 // limit is reached it marks the search full and stops confirming the file,
 // unless per_file asks for its total and the file holds kept hits.
@@ -589,7 +596,8 @@ func (s *searching) viaGrep(ctx context.Context, tip string) error {
 // cat-file, attaching to each file's hits the lines around them and emitting
 // them in order. It runs under the read's own context, not the search's
 // budget, so a search its budget ended still answers its hits whole; a pass
-// that ends part way emits no file past the first whose bytes did not arrive.
+// the answer's due instant or the read's git ends (passCut) emits no file past
+// the first whose bytes did not arrive, and searchRead answers what it read.
 func (s *searching) withHeldContext() error {
 	held := s.held
 	s.held = nil
@@ -615,6 +623,7 @@ func (s *searching) withHeldContext() error {
 	if done < len(held) {
 		s.answer.Truncated = true
 	}
+	s.passCut = err != nil && (gitlet.AnswerDue(s.readCtx) || errors.Is(err, gitlet.ErrSliceTooLarge))
 	return err
 }
 
