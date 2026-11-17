@@ -1,7 +1,6 @@
 package queries
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -14,21 +13,15 @@ import (
 func refListingParams(p Params) (*gitlet.RefListingQuery, error) {
 	q := gitlet.RefListingQuery{Order: gitlet.RefOrder(strings.TrimSpace(p.String("order"))),
 		Contains: p.String("contains")}
+	var err error
 	for _, instant := range []struct {
 		key string
 		at  *time.Time
 	}{{"moved_since", &q.MovedSince}, {"moved_before", &q.MovedBefore}, {"active_since", &q.ActiveSince}} {
-		v := strings.TrimSpace(p.String(instant.key))
-		if v == "" {
-			continue
+		if *instant.at, err = instantParam(p, instant.key); err != nil {
+			return nil, err
 		}
-		at, err := time.Parse(time.RFC3339Nano, v)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %s %q is not an RFC 3339 instant", ErrBadParams, instant.key, v)
-		}
-		*instant.at = at
 	}
-	var err error
 	if q.Detail, err = askedFor(p, "detail"); err != nil {
 		return nil, err
 	}

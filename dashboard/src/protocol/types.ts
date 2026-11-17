@@ -8625,6 +8625,13 @@ export interface CodePushRow {
    */
   commands: CodePushCommand[] | null;
   /**
+   * The change its own record merged on a branch it set (`gitlet.PushRow.Change`): a merge's or a merge queue's
+   * landing's, else the lowest-numbered a push merged; absent where it merged none, or an older engine answered.
+   */
+  change?: CodeChangeName;
+  /** How many more changes its record merged beside `change`; absent at none. */
+  changes_more?: number;
+  /**
    * The ref updates a row read in brief leaves out of `commands`, counted by
    * what became of each; absent where nothing is left out, so `commands` and
    * this are every update the push asked for.
@@ -8663,8 +8670,18 @@ export interface CodeReposAnswer extends CodePage {
 export interface CodePushesAnswer extends CodePage {
   /** Absent on a page that holds none. */
   pushes?: CodePushRow[];
+  /**
+   * On every page of a history narrowed by `pusher_kind`, `pusher`, `since` or `until` (`gitlet.PushScan`); absent
+   * on an unnarrowed page, and where an engine that predates the narrowing answered, which then narrowed nothing.
+   */
+  push_scan?: CodePushScan;
   /** The repository's pushes on each of the asker's days, oldest first, zeros included, where `day_bounds` asks (`gitlet.ReadAnswer.PushDays`); absent where not answered, as an older node answers. */
   push_days?: number[];
+}
+
+/** How far a narrowed page read: `to`, on a page with a `next`, the instant of the push it ended at. */
+export interface CodePushScan {
+  to?: string;
 }
 
 /**

@@ -451,6 +451,9 @@ func TestAFieldOneKindReadsIsRefusedOnEveryOther(t *testing.T) {
 			q.Readiness = gitlet.BucketReady
 		}},
 		{"cards", []gitlet.ReadKind{gitlet.ReadChanges}, func(q *gitlet.ReadQuery) { q.Cards = true }},
+		{"push_filter", []gitlet.ReadKind{gitlet.ReadPushes}, func(q *gitlet.ReadQuery) {
+			q.PushFilter = &gitlet.PushFilter{Since: harnessAt}
+		}},
 		{"day_bounds", []gitlet.ReadKind{gitlet.ReadRepos, gitlet.ReadRepo, gitlet.ReadPushes},
 			func(q *gitlet.ReadQuery) {
 				day := harnessAt.Truncate(gitlet.PushSlot)

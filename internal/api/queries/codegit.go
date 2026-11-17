@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitref"
@@ -544,15 +543,11 @@ func (s Sources) codeLog(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	l := gitlet.LogQuery{Path: path, PathB64: b64, Grep: p.String("grep")}
-	if since := strings.TrimSpace(p.String("since")); since != "" {
-		if l.Since, err = time.Parse(time.RFC3339Nano, since); err != nil {
-			return nil, fmt.Errorf("%w: since %q is not an RFC 3339 instant", ErrBadParams, since)
-		}
+	if l.Since, err = instantParam(p, "since"); err != nil {
+		return nil, err
 	}
-	if until := strings.TrimSpace(p.String("until")); until != "" {
-		if l.Until, err = time.Parse(time.RFC3339Nano, until); err != nil {
-			return nil, fmt.Errorf("%w: until %q is not an RFC 3339 instant", ErrBadParams, until)
-		}
+	if l.Until, err = instantParam(p, "until"); err != nil {
+		return nil, err
 	}
 	l.PushedBy = strings.TrimSpace(p.String("pushed_by"))
 	if p.Has("limit") {
