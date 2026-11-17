@@ -264,6 +264,14 @@ import (
 // may still wait to open it, and an hour more for a step of the machine's own
 // clock ([Coordinator.sweepSpools]).
 //
+// A RECORD SENT AND NEVER ANSWERED is asked again whatever its object's age
+// reads on the asking node's clock: the log decides the window a record may
+// name an object in (objstore.RecordWithin) on its own clock, from the instant
+// another node's clock minted the object's key ([Coordinator.settleCapture]).
+// A reader holds such a capture as awaiting that answer until the window and
+// two hours have passed on its own clock ([pastRecordWithin]), past which the
+// log, on any clock the engine holds, refuses it.
+//
 // # And every turn's end, owed on the row until the log takes it
 //
 // How the turn ended — completed or failed, the reviewer's decision, whether
@@ -552,8 +560,10 @@ const (
 
 	// CaptureUnresolved is a capture uploaded whose record was sent and not
 	// answered: it may have landed. Asked again under its own operation by
-	// the turn's end, and read as refused once its object is past
-	// objstore.RecordWithin, which no record may name.
+	// the turn's end and a relaunch whatever its object's age, the log
+	// refusing a record past objstore.RecordWithin by its own clock; read as
+	// awaiting that answer until no node's clock can read its object within
+	// the window ([pastRecordWithin]).
 	CaptureUnresolved CaptureState = "unresolved"
 )
 
@@ -3073,31 +3083,38 @@ func (c *Coordinator) askRecord(ctx context.Context, what, turn string, budget t
 // settleCapture asks again, under its own operation, a capture whose record was
 // sent and not answered, and stamps what the log answers: landed, refused, or
 // still unresolved — the stamp never past by, where a caller's own wait bounds
-// it (zero for none: [Coordinator.settleContext]). One whose object is past
-// objstore.RecordWithin is refused without asking: no record may name it any
-// more, and the collector may already be reclaiming it.
+// it (zero for none: [Coordinator.settleContext]).
+//
+// ASKED WHATEVER ITS KEY'S AGE READS ON THIS NODE'S CLOCK. The key was minted on
+// the clock of the node that spooled the capture, and the log refuses a record
+// naming an object past objstore.RecordWithin by its own deciding clock
+// (internal/executordomain's ErrUploadStale), which the engine holds only within
+// two hours of this one (objstore.AssumedClockSkew, twice). Refused unasked on
+// this node's reading, as it once was, a record the log would still have taken
+// never landed, and the turn's end tombstoned the turn ahead of it, losing the
+// session. The ask costs one record's budget, and the log's refusal of a stale
+// one is definite, so it is never asked again; and the collector's grace
+// outlasts the window by more than twice the skew, so the object an ask names
+// is never collected under it.
 func (c *Coordinator) settleCapture(ctx context.Context, by time.Time, run PendingRun,
 	last SessionCapture) SessionCapture {
 
-	if pastRecordWithin(last.Object, c.now()) {
-		last.State, last.Reason = CaptureRefused, fmt.Sprintf("its record was never answered within the "+
-			"%s an object may be named in", objstore.RecordWithin)
-	} else {
-		last.State, last.Reason, _ = c.recordCapture(ctx, run, last, nil)
-		last.Reason = stampReason(last.Reason)
-	}
+	last.State, last.Reason, _ = c.recordCapture(ctx, run, last, nil)
+	last.Reason = stampReason(last.Reason)
 	c.stampSettled(ctx, by, run.TurnID, last)
 	return last
 }
 
-// pastRecordWithin reports whether a capture's object, named by object, is
-// past objstore.RecordWithin as of now: no record may name it any more, so an
-// ask of its record is refused unasked ([Coordinator.settleCapture]), and no
-// reader waits on its answer ([captureAwaitsAnswer]). An object whose key does
-// not parse is not: its record is asked as any other's is.
+// pastRecordWithin reports whether a capture's object, named by object, is past
+// objstore.RecordWithin and twice objstore.AssumedClockSkew as of now: past the
+// window by any node's clock that the engine holds within two hours of now's, so
+// the log, which decides the window on its own clock, refuses a record naming
+// it, and no reader waits on that record's answer ([captureAwaitsAnswer]).
+// Nothing refuses an ask by it: the ask is the log's to decide
+// ([Coordinator.settleCapture]). An object whose key does not parse is not.
 func pastRecordWithin(object string, now time.Time) bool {
 	key, err := objstore.ParseKey(object)
-	return err == nil && now.Sub(key.Minted()) > objstore.RecordWithin
+	return err == nil && now.Sub(key.Minted()) > objstore.RecordWithin+2*objstore.AssumedClockSkew
 }
 
 // settleUnresolved asks run's newest capture again where its record was sent

@@ -1208,8 +1208,9 @@ func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 // final capture and whose turn has not begun, a capture still being kept, one
 // whose record awaits the log's answer, which the relaunch asks again and
 // continues where it landed — but for an earlier job's, which no relaunch
-// continues, one whose object is past the window a record may name it in,
-// which the ask refuses unasked, and in a company that keeps no session,
+// continues, one whose object is past the window a record may name it in and
+// twice the skew, past which the log refuses it on any clock the engine holds,
+// and in a company that keeps no session,
 // whose relaunch asks nothing — a target that cannot be said, a round lost a
 // second time, and a collected job's
 // resume, which carries its round on in its box only where its sign-in was
@@ -1352,7 +1353,9 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 			}},
 		"a capture whose record went unanswered past the window a record may name it in": {target: target,
 			decided: true, in: ContinuesInParkedBox, whyHolds: "its record was never answered",
-			run: func(r *PendingRun) { r.Capture = unanswered(now.Add(-objstore.RecordWithin - time.Minute)) }},
+			run: func(r *PendingRun) {
+				r.Capture = unanswered(now.Add(-objstore.RecordWithin - 2*objstore.AssumedClockSkew - time.Minute))
+			}},
 		"an earlier job's capture whose record awaits its answer": {target: target, decided: true,
 			in: ContinuesInParkedBox, whyHolds: "has left no capture", run: func(r *PendingRun) {
 				r.LaunchSeq, r.Capture = 3, unanswered(now.Add(-time.Minute))
@@ -1407,7 +1410,8 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 // read would, nor where the job still works, its capture is still being kept
 // or awaits its record's answer, or its turn has ended, which decide without
 // the row's capture. A capture unanswered past the window a record may name it
-// in awaits nothing, and its row is read again.
+// in and twice the skew, past which the log refuses it on any clock the engine
+// holds, awaits nothing, and its row is read again.
 //
 // Mutation: read every live row again, or none, and a case goes red.
 func TestARowIsReadAgainOnlyWhereThatCanChangeItsAnswer(t *testing.T) {
@@ -1445,7 +1449,7 @@ func TestARowIsReadAgainOnlyWhereThatCanChangeItsAnswer(t *testing.T) {
 		"a row whose newest capture awaits its record's answer": {row: naming(3),
 			run: unanswered(now.Add(-time.Minute))},
 		"a row whose newest capture went unanswered past its window": {row: naming(3),
-			run: unanswered(now.Add(-objstore.RecordWithin - time.Minute)), again: true},
+			run: unanswered(now.Add(-objstore.RecordWithin - 2*objstore.AssumedClockSkew - time.Minute)), again: true},
 	} {
 		if got := RereadsRow(tc.row, tc.run, now); got != tc.again {
 			t.Errorf("%s: read again %v, want %v", name, got, tc.again)

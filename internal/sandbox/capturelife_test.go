@@ -116,6 +116,122 @@ func TestACapturesAgeIsReadAsAnyTwoNodesClocksAllow(t *testing.T) {
 	}
 }
 
+// AN UNANSWERED RECORD IS ASKED AGAIN WHATEVER ITS KEY'S AGE READS HERE. A
+// capture's key is minted on the clock of the node that spooled it, and the
+// executor log refuses a record naming it past objstore.RecordWithin by its own
+// deciding clock, which the engine holds only within two hours of the asking
+// node's. So the turn's end asks the record again whatever its key's age reads
+// on the end's clock, and the log decides: the end's clock two hours ahead of
+// the log's, a key eleven hours old to the log is asked and lands, and one past
+// the window to the log is asked and refused, the end naming it unkept for the
+// log's reason. And a reader holds a capture whose record awaits its answer
+// until the window and two hours have passed on its own clock, and no longer.
+//
+// Mutation: refuse the record unasked once its key reads past the window on the
+// asker's clock, and the end names unkept a capture the log would have taken;
+// read the reader's window without the skew, and a capture the log may still
+// take is read as answered.
+func TestAnUnansweredRecordIsAskedWhateverItsKeysAgeReadsHere(t *testing.T) {
+	t.Parallel()
+	ahead := 2 * objstore.AssumedClockSkew
+	for _, c := range []struct {
+		name string
+		// logAge is how long before the log's clock the key was minted.
+		logAge time.Duration
+		landed bool
+	}{
+		{"a key the log reads within its window", 11 * time.Hour, true},
+		{"a key the log reads past its window", objstore.RecordWithin + time.Minute, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				rig, writes, _ := keepingRig(t)
+				rig.launchKept(t, "t1")
+				minted := rig.now
+				session := rig.runner.Session
+				writes.answer(errors.New("estate: the write was sent to a data node that did not answer"))
+				rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+				collectHeld(t, rig, "t1")
+				if run := rig.get("t1"); run.Capture == nil || run.Capture.State != CaptureUnresolved {
+					t.Fatalf("the row holds %+v, want the capture's record unanswered", run.Capture)
+				}
+
+				writes.answer(nil)
+				logNow := minted.Add(c.logAge)
+				rig.coordinator.sessions = windowedLog{sessionWrites: writes, now: func() time.Time { return logNow }}
+				rig.now = logNow.Add(ahead)
+				asked := len(writes.captured())
+				ctx := t.Context()
+				if _, err := rig.coordinator.OweEnd(ctx, "t1", executorkeep.Ending{
+					Outcome: executorkeep.OutcomeCompleted}); err != nil {
+					t.Fatalf("OweEnd: %v", err)
+				}
+				if _, err := rig.coordinator.publishEnd(ctx, rig.get("t1")); err != nil {
+					t.Fatalf("publishEnd: %v", err)
+				}
+				if again := len(writes.captured()) - asked; again != 1 {
+					t.Fatalf("the end asked the record %d times, want it asked once more, whatever its key's "+
+						"age reads %s ahead of the log", again, ahead)
+				}
+				ends := writes.endedRecords()
+				if len(ends) != 1 {
+					t.Fatalf("recorded %d ends, want the turn's one", len(ends))
+				}
+				unkept := ends[0].Ending.Unkept
+				switch run := rig.get("t1"); {
+				case c.landed && (unkept != nil || run.Kept == nil || run.Kept.State != CaptureLanded):
+					t.Fatalf("the end names %+v unkept and the row keeps %+v, want the capture the log took "+
+						"kept and nothing unkept", unkept, run.Kept)
+				case !c.landed && (unkept == nil || !strings.Contains(unkept.Reason, staleUpload)):
+					t.Fatalf("the end names %+v unkept, want the capture the log refused, for its reason", unkept)
+				}
+			})
+		})
+	}
+
+	readAt := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
+	window := objstore.RecordWithin + ahead
+	for _, c := range []struct {
+		name   string
+		age    time.Duration
+		awaits bool
+	}{
+		{"a record within the window and two hours", window - time.Minute, true},
+		{"a record past the window and two hours", window + time.Minute, false},
+	} {
+		run := PendingRun{LaunchSeq: 1, Capture: &SessionCapture{LaunchSeq: 1, CaptureSeq: 1,
+			State: CaptureUnresolved, Object: objstore.KeyAt(readAt.Add(-c.age)).String()}}
+		if got := captureAwaitsAnswer(run, readAt); got != c.awaits {
+			t.Errorf("%s: a capture whose key reads %v old awaits its record's answer %t, want %t", c.name, c.age,
+				got, c.awaits)
+		}
+	}
+}
+
+// staleUpload is what [windowedLog] says of a record whose object it reads past
+// objstore.RecordWithin.
+const staleUpload = "the session's object is too old to name"
+
+// windowedLog is the executor log's capture as the log decides it on its own
+// clock, now: a record whose object's key was minted more than
+// objstore.RecordWithin before it is refused (internal/executordomain's
+// ErrUploadStale); any other is [sessionWrites]'s to answer.
+type windowedLog struct {
+	*sessionWrites
+	now func() time.Time
+}
+
+func (w windowedLog) Capture(ctx context.Context, c CaptureRecord) (LogAnswer, error) {
+	answer, err := w.sessionWrites.Capture(ctx, c)
+	//fixedwait:stated the case states the log's clock, and the rig's stepped clock minted the key
+	if answer == LogLanded && w.now().Sub(c.Object.Key.Minted()) > objstore.RecordWithin {
+		return LogRefused, fmt.Errorf("%s: object %s was minted more than %s ago", staleUpload, c.Object.Key,
+			objstore.RecordWithin)
+	}
+	return answer, err
+}
+
 // pacedKeep is a keep whose upload notes the instant it began and its
 // context's deadline, on the case's clock, and is otherwise [sessionKeep].
 type pacedKeep struct {

@@ -326,11 +326,12 @@ func followedCapture(run PendingRun, follows int64) (SessionCapture, string) {
 // capture REFUSED: a stamp decided with its record's landing out of its sight
 // — a record its taker had already handed on before its lease's window closed,
 // which the log took only after another node's settle had read the row
-// (session.go, "WHAT THE FENCE CANNOT REACH"), or one sent and never answered,
-// refused unasked once its object was past objstore.RecordWithin
-// ([Coordinator.settleCapture]). The row's place is that capture's: the log
-// takes a turn's captures only in the order of their places, and the record
-// holds one take at each ([stampOnto]).
+// (session.go, "WHAT THE FENCE CANNOT REACH"). One sent and never answered is
+// no such stamp: its ask goes to the log whatever its object's age
+// ([Coordinator.settleCapture]), and is stamped landed where the log holds it.
+// The row's place is that capture's: the log takes a turn's captures only in
+// the order of their places, and the record holds one take at each
+// ([stampOnto]).
 //
 // THE LOG KEEPS IT, AND NO RELAUNCH OF THAT JOB CONTINUES IT. A relaunch
 // continues only a capture its run's record keeps, and the record keeps no
@@ -610,7 +611,8 @@ type ReadContinuity struct {
 // not name beside it. Once the turn has said, the row is decided on what it
 // said, its review included. now is the reader's clock, against which a begun
 // capture is in flight ([captureInFlight]) and an unanswered one's object
-// within the window a record may name it in ([pastRecordWithin]).
+// within the window a record may name it in as any node's clock may read it
+// ([pastRecordWithin]).
 //
 // As far as the engine can know before a box is chosen: whether the box a
 // launch gets runs a harness release that takes the session up, and whether
@@ -909,8 +911,9 @@ func jobWorking(run PendingRun) bool {
 
 // captureAwaitsAnswer reports whether run's newest capture is one of the job a
 // relaunch would follow whose record was sent and never answered, which an ask
-// may still land: its object not past objstore.RecordWithin
-// ([pastRecordWithin]), past which the ask refuses it unasked. A relaunch asks
+// may still land: its object not past objstore.RecordWithin and twice
+// objstore.AssumedClockSkew ([pastRecordWithin]), past which no node's clock
+// can read the record as one the log may still take. A relaunch asks
 // that record again under its own operation before it decides what it
 // continues ([Coordinator.settleUnresolved]) and continues the capture where
 // it landed ([Coordinator.ContinuedCapture]), so until then no reader can say
