@@ -190,6 +190,30 @@
 // removed — exactly as the seat's tracker inbox, pins and personal views pass.
 // It ends when the seat leaves the company, never when its holder does; see
 // chatread.go for why neither a person id nor an agent id is the key.
+//
+// # A seat's save ledger lives in the uploads bucket
+//
+// [SaveAllowances] keeps one ledger per seat of the executor sessions its runs
+// saved as they worked (internal/sandbox). The WHOLE COMPANY has to agree on
+// it: a save uploads a session's archive to the object store the fleet
+// shares, and the archive it supersedes stays there, named by nothing, until
+// the object collector could have deleted it. The ledger counts those bytes
+// against the seat's session budget. Any node that drives one of the seat's
+// jobs may save it, and a handover moves a job between nodes, so nodes
+// counting alone would let a seat hold its budget once per node; one value
+// written by compare-and-set lets two saves racing for the last of an
+// allowance never both win.
+//
+// It is a third key class of the UPLOADS BUCKET, `save.<seat>`, which neither
+// the upload ledger's one segment nor an upload record (`upload.<id>`) can
+// spell. What it counts is what an upload reservation counts, bytes nothing
+// names until the collector could have deleted them, and the bucket's age
+// ([UploadRetention]) is that hold already: a ledger nobody wrote for that
+// long holds only lapsed entries, and a removed seat's ledger goes on its own,
+// with no sweep.
+//
+// Every error is UNKNOWN, and the safe direction is not to save: a save its
+// node could not count is one that may pass the seat's budget.
 package coord
 
 import (

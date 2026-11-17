@@ -11,13 +11,18 @@ import (
 
 // ---- the upload reservations ------------------------------------------ //
 
-// The uploads bucket holds two classes of key: the ONE ledger of every hold the
-// company has outstanding, and one record per upload. Two segments for a record
-// and one for the ledger, so no upload id can ever spell the ledger's key.
+// The uploads bucket holds three classes of key: the ONE ledger of every hold
+// the company has outstanding, one record per upload, and one save ledger per
+// seat ([coord.SaveAllowances]). Two segments for a record or a save ledger,
+// each under its own class, and one for the ledger, so no upload id or seat
+// handle can ever spell another class's key.
 const uploadLedgerKey = "ledger"
 
 // uploadRecordKey is one upload's record key.
 func uploadRecordKey(upload string) string { return coord.DocumentKey("upload", upload) }
+
+// saveLedgerKey is one seat's save ledger key.
+func saveLedgerKey(seat string) string { return coord.DocumentKey("save", seat) }
 
 // UploadLedger reads the reservation ledger from the stream LEADER, for the
 // reason every single-key read here does ([getLatest]): a replica behind the
@@ -80,6 +85,28 @@ func (f *FleetStore) DeleteUploadRecord(ctx context.Context, upload string, revi
 	default:
 		return false, unavailable("delete the upload record", err)
 	}
+}
+
+// SaveLedger reads one seat's save ledger from the stream leader, for the
+// upload ledger's reason: a replica behind the last save would hand the next
+// one a count it has already spent.
+func (f *FleetStore) SaveLedger(ctx context.Context, seat string) ([]byte, uint64, error) {
+	if seat == "" {
+		return nil, 0, errors.New("coord/kv: a save ledger needs a seat")
+	}
+	return f.uploadValue(ctx, saveLedgerKey(seat), "read the seat's save ledger")
+}
+
+// SwapSaveLedger writes one seat's save ledger while it is still at revision,
+// 0 creating it ([coord.SaveAllowances]).
+func (f *FleetStore) SwapSaveLedger(ctx context.Context, seat string, value []byte, revision uint64) (uint64, error) {
+	switch {
+	case seat == "":
+		return 0, errors.New("coord/kv: a save ledger needs a seat")
+	case len(value) == 0:
+		return 0, errors.New("coord/kv: a save ledger needs a value")
+	}
+	return f.swapUpload(ctx, saveLedgerKey(seat), value, revision, "write the seat's save ledger")
 }
 
 // uploadValue reads one key of the uploads bucket as the leader holds it,

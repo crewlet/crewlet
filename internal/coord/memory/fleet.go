@@ -95,6 +95,11 @@ type Fleet struct {
 	uploadLedger versioned
 	uploads      map[string]versioned
 
+	// saveLedgers is each seat's save ledger by its handle, kept apart from
+	// the upload ledger and records as the KV keeps it under a class of its
+	// own in the uploads bucket.
+	saveLedgers map[string]versioned
+
 	// nodeStatuses is each node's status record as the KV keeps it, its
 	// bytes, by node id: decoded on every read, so a reader meets what a
 	// real store hands back.
@@ -222,6 +227,7 @@ func NewFleet() *Fleet {
 		mailboxes:         map[uuid.UUID]coord.MailboxRecord{},
 		pauses:            map[uuid.UUID]coord.SeatPause{},
 		uploads:           map[string]versioned{},
+		saveLedgers:       map[string]versioned{},
 		nodeStatuses:      map[string][]byte{},
 		retries:           newRetryRecords(),
 		signIns:           newSignInRecords(),

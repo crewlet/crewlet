@@ -512,9 +512,9 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	uploads    the longest hold an upload reservation keeps, thirty hours:
 //	           a reservation holds bytes nothing names until the object
 //	           collector could have deleted them, a day and two passes past
-//	           the upload's last transfer, and a record the bucket ages out
-//	           is one whose hold has lapsed, so an abandoned upload's record
-//	           goes on its own, with no sweep and no index of what to sweep
+//	           the upload's last transfer; a seat's save ledger counts such
+//	           bytes too. A record the bucket ages out has lapsed and goes on
+//	           its own, with no sweep and no index of what to sweep
 //	positions  none at all, and this is the one where an age would be
 //	           worst: a node's position is what the trim reads to decide
 //	           what every other node may delete, and a key that expired
@@ -917,7 +917,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 			"Crewlet stateless-node event custody; the bucket TTL outlasts the event log's retention",
 			cfg.CustodyRetention},
 		{&store.uploads, uploadsSuffix,
-			"Crewlet artifact upload reservations; the bucket TTL outlasts the longest hold a reservation keeps",
+			"Crewlet artifact upload reservations and seat save ledgers; the bucket TTL outlasts the longest hold either keeps",
 			cfg.UploadRetention},
 		{&store.positions, positionsSuffix,
 			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0},
