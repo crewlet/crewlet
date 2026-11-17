@@ -310,7 +310,7 @@ func TestThePostureMatrix(t *testing.T) {
 		// stream is unknown — which is the handler speaking, after the
 		// authority layer let the request through.
 		{"moving the trim's backup floor", "POST",
-			"/worklet/retention/ack?stream=CREWLET_TRACKER_LOG&position=1", "",
+			"/worklet/retention/ack?stream=CREWLET_TRACKER_LOG&position=1&taken_at=2020-01-01T00:00:00Z", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, forbd, absent, unath, forbd, forbd, absent, unath, forbd, stepUp}},
 		// ADMITTED AS A 200: every API is handed a node gate — the
 		// engine's core, on every node from boot — and this fixture's

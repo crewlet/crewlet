@@ -161,6 +161,12 @@ export const PRECONDITION_KINDS = [
 ] as const;
 
 /**
+ * Whom a push counts as among a repository's pushers (`gitlet.PusherKinds`): a seat, a person by
+ * the human seat they hold, or Gitlet. HELD BOTH WAYS by `TestTheDashboardCountsEveryPusherKind`.
+ */
+export const PUSHER_KINDS = ["agent", "person", "gitlet"] as const;
+
+/**
  * Where one precondition stands (`gitlet.PreconditionStates`): met; unmet,
  * waiting on somebody it names; or still being computed by the engine — a
  * revision's facts or its merge its home has not recorded — which waits on

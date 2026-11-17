@@ -1554,6 +1554,10 @@ type ReadQuery struct {
 	// versionedFields row: a node of a build that predates the kinds refuses
 	// the read as a kind it does not know.
 	Target string `json:"target,omitempty"`
+	// Trains asks a `queue` read for its trains and ejections across every repository it
+	// lists, and any queue read for EjectedTotal ([ReadAnswer.EjectedTotal]); refused on every
+	// other kind. A request field, so an older build refuses it unread and the router asks the next.
+	Trains bool `json:"trains,omitempty"`
 
 	// Inbox is an `inbox` read's question: whose inbox, and how it is
 	// narrowed ([InboxQuery]). Only that kind reads it.
@@ -1729,6 +1733,8 @@ type ReadAnswer struct {
 	// none the repositories holding one in DueRepos.
 	Checks []CheckRow   `json:"checks,omitempty"`
 	Check  *CheckDetail `json:"check,omitempty"`
+	// StandingCounts is a standing listing's first page's attempts by state ([CheckQuery.Standing]).
+	StandingCounts *StandingCounts `json:"standing_counts,omitempty"`
 	// Runnable is a page of a `checks_queued` read: the attempts waiting for
 	// a runner, oldest queued first.
 	Runnable []RunnableCheck `json:"runnable,omitempty"`
@@ -1744,15 +1750,20 @@ type ReadAnswer struct {
 	BranchChanges []BranchChange `json:"branch_changes,omitempty"`
 	// Queue is a page of a `queue` read's live entries, in queue order;
 	// Trains a `queue` read's candidates of the trains testing the targets
-	// its page reaches; Ejected, on a named repository's first page, the
-	// entries its queues put out lately ([EjectedRow]), newest first;
-	// Landings a page of a `landings` read; and Green the target's green
-	// row a `landings` read starts above, or a `green` read's rows.
+	// its page reaches, a named repository's always and every repository's
+	// where [ReadQuery.Trains] asks; Ejected, on a first page, the entries a
+	// named repository's queues put out lately, or every repository's where
+	// Trains asks ([EjectedRow]), newest first; Landings a page of a
+	// `landings` read; and Green the target's green row a `landings` read
+	// starts above, or a `green` read's rows.
 	Queue    []QueueRow     `json:"queue,omitempty"`
 	Trains   []CandidateRow `json:"trains,omitempty"`
 	Ejected  []EjectedRow   `json:"ejected,omitempty"`
 	Landings []LandingRow   `json:"landings,omitempty"`
 	Green    []GreenRow     `json:"green,omitempty"`
+	// EjectedTotal counts what Ejected is the newest of, on a first page asked with
+	// [ReadQuery.Trains]; nil where not asked.
+	EjectedTotal *EjectedTotal `json:"ejected_total,omitempty"`
 	// Commit is a `commit` read's changes of its commit, beside Repo.
 	Commit *CommitChanges `json:"commit,omitempty"`
 	// Inbox is an `inbox` read's page: the person's notices and their marks.
@@ -2379,6 +2390,11 @@ type CheckRow struct {
 	Revision    int    `json:"revision,omitempty"`
 	CandidateID string `json:"candidate_id,omitempty"`
 	EntryID     string `json:"entry_id,omitempty"`
+	// Change, SourceRef and ChangeHead are the change the attempt judges, on a standing listing
+	// alone: the live change at a head's commit, or a candidate's entry's, at its enqueued head.
+	Change     *ChangeName `json:"change,omitempty"`
+	SourceRef  string      `json:"source_ref,omitempty"`
+	ChangeHead string      `json:"change_head,omitempty"`
 	// Base is what its diff is read against, and DefsOID the checks file its
 	// definition came from — the file of the branch it is checked for, its
 	// key's Target.
@@ -2509,6 +2525,10 @@ type CheckQuery struct {
 	// AN ESTATE REQUEST'S FIELD, as State is: the domain landed on main with
 	// it ([RecordVersion]).
 	Until time.Time `json:"until,omitzero"`
+	// Standing lists where each check stands, in its order ([StandingOrder]): each key's latest
+	// attempt of a live change's head, its newest queue entry or a branch's tip, running ones
+	// included; "" is the listing above. A request field, so an older build refuses it unread.
+	Standing StandingOrder `json:"standing,omitempty"`
 }
 
 // ChecksDueQuery is a `checks_due` read's question, REQUIRED as a
