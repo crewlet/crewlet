@@ -25,9 +25,10 @@ export const PAUSED_SEAT_CLASSES = [
 ] as const;
 
 /**
- * The dashboard pages an `open_page` fix is taken on, each one gesture there:
- * `backups` is Backups & retention's Take a backup. Held to the engine's own
- * `advisor.Pages`, in both directions: a page the engine names that this list
- * lacks is a finding whose row offers no way to take its step.
+ * The dashboard pages an `open_page` fix is taken on: `backups` is Backups &
+ * retention's Take a backup, `item` a work item and `seat` an agent's page, each
+ * opened on the fix's `target`. Held to the engine's own `advisor.Pages`, in
+ * both directions: a page the engine names that this list lacks is a finding
+ * whose row offers no way to take its step.
  */
-export const ADVISOR_PAGES = ["backups"] as const;
+export const ADVISOR_PAGES = ["backups", "item", "seat"] as const;
