@@ -33,6 +33,7 @@ import { afterMicrotasks } from "~/test/settle.ts";
 import { modules } from "~/test/source.ts";
 import { DECLARED, DECLARED_LIFE, PERSON_ONLY, PURGE_KEEPERS } from "~/lib/repoWrites.ts";
 import { SYNTAX_MAX_BYTES, load } from "~/lib/syntax/index.ts";
+import { forgetDownloadProbes } from "./downloads.ts";
 import { sinceOf } from "./History.tsx";
 import { RepositoryPage } from "./RepositoryPage.tsx";
 
@@ -49,6 +50,7 @@ vi.mock("~/lib/syntax/index.ts", async (real) => {
 
 afterEach(() => {
   cleanup();
+  forgetDownloadProbes();
   vi.useRealTimers();
   vi.unstubAllGlobals();
   location.hash = "";
@@ -1232,6 +1234,120 @@ test("a deployment with no address says so and holds the command", async () => {
   expect(await screen.findByText("This repository is empty")).toBeTruthy();
   expect(screen.getAllByText(/names no address of its own/).length).toBeGreaterThan(0);
   expect(screen.queryByText(/git remote add origin/)).toBeNull();
+});
+
+/** The engine as stubEngine answers it, the archive's probe answered `status`; every probe kept. */
+function stubArchive(status: number, repo: Record<string, unknown> = detail()) {
+  const asked = stubEngine(repo);
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  const probes: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname !== "/git/web/-/archive.zip") return engine(input, init);
+      probes.push(init?.method ?? "GET");
+      return new Response(null, { status });
+    }),
+  );
+  return { asked, probes };
+}
+
+const zipOf = (panel: HTMLElement) =>
+  within(panel)
+    .getAllByText("Download ZIP")
+    .map((t) => t.closest("a, button") as HTMLElement)[0]!;
+
+// DOWNLOAD ZIP IS THE LISTING'S COMMIT, whole, never the branch's name, which
+// the route refuses. Mutation: link `rev=` to the address's ref, and this fails.
+test("Download ZIP downloads the commit the listing resolved", async () => {
+  stubArchive(405);
+  mount("#/gitlet/repos/web?ref=feature");
+
+  const panel = await openCode();
+  await waitFor(() => expect(zipOf(panel).tagName).toBe("A"));
+  const link = zipOf(panel) as HTMLAnchorElement;
+  expect(link.getAttribute("href")).toBe(`/git/web/-/archive.zip?rev=${HEAD}`);
+  expect(link.hasAttribute("download")).toBe(true);
+  expect(link.getAttribute("title")).toBe("Every file of 0123456, as a ZIP");
+});
+
+// AN OLDER FLEET HOLDS THE DOWNLOAD WITH ITS REASON, asked once per name, on the
+// menu's first opening. Mutation: draw the link on a 404, or probe on the page's
+// mount or on every opening, and this fails.
+test("Download ZIP is held on a fleet that does not serve it, and the probe is asked once", async () => {
+  const { probes } = stubArchive(404);
+  mount("#/gitlet/repos/web");
+  await screen.findByRole("link", { name: "src" });
+  expect(probes).toEqual([]);
+
+  let panel = await openCode();
+  const held = await waitFor(() => {
+    const zip = zipOf(panel);
+    expect(zip.getAttribute("aria-disabled")).toBe("true");
+    const why = document.getElementById(zip.getAttribute("aria-describedby") ?? "");
+    expect(why?.textContent).toBe("Downloading a ZIP is not available on this fleet yet.");
+    return zip;
+  });
+  expect(held.tagName).toBe("BUTTON");
+  fireEvent.keyDown(panel, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  panel = await openCode();
+  await waitFor(() => expect(zipOf(panel).getAttribute("aria-disabled")).toBe("true"));
+  expect(probes).toEqual(["HEAD"]);
+});
+
+// A COMMIT NOT YET KNOWN IS NO DOWNLOAD: held, saying what it waits for.
+test("Download ZIP is held while the listing's commit is unknown", async () => {
+  const { asked } = stubArchive(405);
+  let release = () => {};
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/query/code_tree") {
+        asked.push(url);
+        await new Promise<void>((done) => (release = done));
+      }
+      return engine(input, init);
+    }),
+  );
+  mount("#/gitlet/repos/web");
+
+  const panel = await openCode();
+  const zip = zipOf(panel);
+  expect(zip.getAttribute("aria-disabled")).toBe("true");
+  expect(document.getElementById(zip.getAttribute("aria-describedby") ?? "")?.textContent).toBe(
+    "Waiting for the commit to download.",
+  );
+  release();
+  await waitFor(() => expect(zipOf(panel).tagName).toBe("A"));
+});
+
+// A LISTING THAT FAILED IS NO DOWNLOAD: held, saying the commit could not be read.
+// Mutation: say it waits for the commit instead, and this fails.
+test("Download ZIP is held with its reason when the listing fails", async () => {
+  stubArchive(405);
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
+      new URL(String(input)).pathname === "/query/code_tree"
+        ? engineJson({ error: "query_failed" }, 500)
+        : engine(input, init),
+    ),
+  );
+  mount("#/gitlet/repos/web");
+
+  const panel = await openCode();
+  await waitFor(() => {
+    const zip = zipOf(panel);
+    expect(zip.getAttribute("aria-disabled")).toBe("true");
+    expect(document.getElementById(zip.getAttribute("aria-describedby") ?? "")?.textContent).toBe(
+      "The commit could not be read, so there is nothing to download yet.",
+    );
+  });
 });
 
 // THE EMPTY REPOSITORY CLONES FROM THE ENGINE'S ADDRESS, and Code is at the

@@ -231,6 +231,7 @@ function RootListing({ repo, cloneURL, rev, path, onRev }: Place) {
         onRev={onRev}
         target={targetOf(rev, first.data)}
         commit={commit}
+        unread={Boolean(first.error)}
         dir
       />
       <Card padding="none" className="code-browser">
@@ -645,6 +646,7 @@ function FilesBar({
   target,
   commit,
   dir = false,
+  unread = false,
 }: Place & {
   /** Where a commit from here lands ([targetOf]). */
   target: CommitTarget;
@@ -652,6 +654,8 @@ function FilesBar({
   commit: string;
   /** The path is a directory (or the root), which takes a new file. */
   dir?: boolean;
+  /** The path's read failed, so its commit is not known. */
+  unread?: boolean;
 }) {
   const at = (p: string) => repoHref(repo.name, { ref: rev, path: p });
   return (
@@ -687,7 +691,9 @@ function FilesBar({
       <span className="code-bar-end">
         {dir && <GoToFile repo={repo.name} rev={rev} commit={commit} />}
         {dir && <NewFileButton repo={repo} target={target} dir={path} />}
-        {path === "" && <CodeMenu repo={repo} cloneURL={cloneURL} />}
+        {path === "" && (
+          <CodeMenu repo={repo} cloneURL={cloneURL} commit={commit} failed={unread} />
+        )}
       </span>
     </PageToolbar>
   );
