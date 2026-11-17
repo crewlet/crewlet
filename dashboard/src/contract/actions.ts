@@ -785,10 +785,9 @@ export const ACTIONS = {
     scope: "person",
   },
   code_update_change: {
-    // READY FOR REVIEW on a draft (`draft: false`), against the version on
-    // screen, so a mark that raced a push or an edit is refused rather than
-    // readying what the reader did not see.
-    args: ["repo", "change", "expected_version", "draft"],
+    // READY FOR REVIEW on a draft (`draft: false`), or a new title and
+    // description, against the version on screen.
+    args: ["repo", "change", "expected_version", "draft", "title", "body"],
     domain: "code",
     apps: ["gitlet"],
     refreshes: [],

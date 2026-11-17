@@ -2456,7 +2456,7 @@ answer, and what each answer does:
 
 **A finding's excerpt** is the lines of the blob it points at around its
 range, three either side unless the reader asks for up to ten, marked as the
-change's Files tab marks that file: added, deleted or kept, the deleted lines
+change's Files changed tab marks that file: added, deleted or kept, the deleted lines
 of the old side shown between the new side's, and a file the revision renamed
 diffed against where it was. An excerpt holds at most 40 lines, so a longer
 range shows its first, and each line up to 1 KiB; a longer line is described
@@ -6337,9 +6337,12 @@ sequenceDiagram
   repositories through the same reads a seat's tools make, judging the
   asker's grant to each from its own chart. So the request is signed under
   the fleet's keyring in key domains of the search's own, bound to an id and
-  a deadline that a node takes once: a request the fleet did not sign, or one
-  replayed, is answered by nobody, and one signed under a key a node does not
-  hold is answered with the sentence naming the keys it holds.
+  a deadline: a request the fleet did not sign is answered by nobody, and one
+  signed under a key a node does not hold is answered with the sentence naming
+  the keys it holds. A node refuses an id it has taken for as long as that
+  deadline could still admit the request; a node that restarted inside that
+  window has forgotten the ids it took, and answers a replay there again, as
+  the asker the request names and with only what that asker may read.
 - **A runner-up, once.** A repository whose node did not answer it — silent,
   busy, behind, or building its index — is asked once more of the next node
   of its order (an indexed repository's second index holder) in a second
@@ -7493,7 +7496,10 @@ change as whoever enqueued it.
   or not. A branch holds one train: a candidate abandons the one before it,
   whose candidates are removed and whose entries wait again.
 - An **eject** puts live entries of one branch out — `check_failed` (naming
-  the checks), `conflict` (naming up to 100 paths), `gate_unmet`,
+  the checks, and for a bisected culprit the train they failed on: its
+  candidate, the commit it was merged onto and the commit they ran on, kept on
+  the entry since the train's rows go with it), `conflict` (naming up to 100
+  paths), `gate_unmet`,
   `head_moved`, `not_fast_forward` or `repo_mirrored` (the repository is a
   [pull mirror](#mirrors-and-imports), which nothing merges into: its home
   ejects every live entry rather than build a train) — and abandons the train
@@ -7644,7 +7650,8 @@ holds.
   between the last known good (the train's base where no commit passed) and
   the first known red is queued the failed checks (`purpose: bisect`), until
   the first red commit follows a good one. Its entry is the culprit, ejected
-  `check_failed` naming the checks; the eject abandons the train, and the
+  `check_failed` naming the checks and the commit they failed on, the train's
+  merge onto the branch at its base; the eject abandons the train, and the
   next turn builds it again without that change. A batch of `batch` changes
   finds its culprit in log₂ `batch` more rounds, and while it does nothing
   behind it lands, since every later candidate holds the culprit too. That
@@ -7654,6 +7661,10 @@ holds.
   and 12 at eight, while a queue that never batches falls further behind
   with every red candidate. A larger batch spends a few fewer check runs a
   landed change (0.98 at two, 0.95 at four, 0.94 at eight) for that wait.
+  A data node of an earlier build holds back an ejection that names its
+  train, and every later record of its repository, until it is upgraded
+  ([Which records an upgrade holds
+  back](../guides/replication.md#which-records-an-upgrade-holds-back)).
 - **Cancel what a given-up train still runs.** An eject, a dequeue, a person
   moving the branch and a new train each give the branch's train up, and
   its candidates' and probes' checks still queued or running measure commits

@@ -8837,6 +8837,15 @@ export interface CodeReviewerFace {
   owned_paths_omitted?: number;
 }
 
+/** The train an ejection's checks failed on (`gitlet.EjectionTrain`). */
+export interface CodeEjectionTrain {
+  candidate_id: string;
+  /** The commit the candidate was merged onto: the branch's tip, for a train's first. */
+  base_oid: string;
+  /** The commit the checks failed on, the candidate's merge up to the entry. */
+  commit_oid: string;
+}
+
 /** Why and when a queue last put a live change out (`gitlet.CardEjection`). */
 export interface CodeCardEjection {
   reason: string;
@@ -8844,6 +8853,8 @@ export interface CodeCardEjection {
   /** The required checks that failed, at most 8, and how many more. */
   checks?: string[];
   checks_more?: number;
+  /** The train they failed on, where its ejection names one. */
+  tested_in?: CodeEjectionTrain;
 }
 
 /** What a listing's row draws beside its readiness (`gitlet.ChangeCard`). */
@@ -9958,7 +9969,7 @@ export interface CodeCandidateRow {
 /**
  * One entry a queue put out lately (`gitlet.EjectedRow`): the change, who
  * enqueued it, why, and the required checks that failed on what it was tested
- * in or the paths its merge conflicted on.
+ * in, and the train they failed on, or the paths its merge conflicted on.
  */
 export interface CodeEjectedRow {
   repo_id: string;
@@ -9981,6 +9992,11 @@ export interface CodeEjectedRow {
   paths?: string[];
   enqueued_at: string;
   ejected_at: string;
+  /**
+   * The train its checks failed on: its run is code_check at commit_oid for
+   * target_ref. Absent on every other ejection and from an older build.
+   */
+  tested_in?: CodeEjectionTrain;
 }
 
 /**

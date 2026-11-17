@@ -586,9 +586,10 @@ var codeLogNegligible = map[gitlet.OpKind]string{
 		"failed on what they were tested in, their merge conflicted, their gate no longer held, their head " +
 		"moved or a fast-forward was none: at most once an enqueue, since an ejected entry has ended and " +
 		"only another enqueue queues its change again, each a record naming the entries, why — the failed " +
-		"checks or the conflicted paths — and each change's routing; the bisect that finds a red " +
-		"candidate's culprit probes its batch at that rate too. The reference company's queued changes " +
-		"merge cleanly onto their targets and pass their checks, so its day ejects none",
+		"checks and the train they failed on, or the conflicted paths — and each change's routing; the " +
+		"bisect that finds a red candidate's culprit probes its batch at that rate too. The reference " +
+		"company's queued changes merge cleanly onto their targets and pass their checks, so its day " +
+		"ejects none",
 	// AN IMPORT AND A PULL MIRROR'S SYNCS fill a repository from another
 	// host, which the reference company's day never does: its repositories
 	// are its own, and its pushes go to those it already has

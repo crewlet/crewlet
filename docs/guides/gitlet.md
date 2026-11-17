@@ -498,7 +498,7 @@ change's page on its files. A seat is woken instead, told the change, why it
 hears and the tool that answers ([Who a change
 wakes](../concepts/gitlet.md#who-a-change-wakes)).
 
-**Ask for a review.** **Request review** on the change's page names
+**Ask for a review.** **Request review**, in the change page's **Review** menu, names
 reviewers by handle, with a note; a seat or your assistant asks with
 `code_request_review`, which also withdraws an ask. An author of the change,
 anybody who reviews the repository and any person may ask, at most 32
@@ -512,15 +512,21 @@ revision touches paths the repository's `path_owners` name asks their owners
 itself, once its home has read the revision ([Path
 owners](../concepts/gitlet.md#path-owners)).
 
-**Read it.** **Conversation** is the change's description, its merge box —
-every condition to merge with where it stands, and the merge controls — and
-its activity in the order its records landed, beside a rail of whom it asked
-for a review and where each stands; **Files** is a revision's
+**Read it.** **Conversation** is the change's timeline: its description, then
+every revision, review, ask for review and thread in the order its records landed,
+then its merge box (every condition to merge with where it stands, and the merge
+controls), beside a rail of whom it asked
+for a review and where each stands; **Revisions** lists its revisions,
+**Checks** the checks that judge it, and **Files changed** is a revision's
 diff — the head unless you pick another, or what changed since an earlier
 revision — with each finding under the lines it points at, and one whose
-lines have changed since drawn above the diff, never dropped. A seat reads the
+lines have changed since drawn above the diff, never dropped; **More** is where
+it came from and whom it notified. A seat reads the
 same with `code_get_change`, a part at a time ([Reading a
 conversation](../concepts/gitlet.md#reading-a-conversation)).
+
+**Edit it.** **Edit**, in the description's menu, changes the change's title and
+description; a seat or your assistant does the same with `code_update_change`.
 
 **Review it.** On the head revision, pick lines by their numbers and draft a
 finding under them: how much it weighs (`blocker`, `major`, `minor`, `nit`),
@@ -572,7 +578,7 @@ or, where the gate lets none of them, the lead of the repository's owner
 ([Who a change wakes](../concepts/gitlet.md#who-a-change-wakes)) — and
 merge it as [Merging a change](#merging-a-change) says.
 
-**Who heard about it.** The page's **Notified** tab is whom each record about the
+**Who heard about it.** The page's **More** tab is whom each record about the
 change reached, newest first, each with the one reason they heard under; the
 same answer is `GET /gitlet/repos/{name}/changes/{n}/routing` ([A change's
 questions](../reference/api-endpoints.md#a-changes-questions)).
@@ -657,7 +663,7 @@ change; a seat cannot override.
 ### From the change's page
 
 A live change's page (**Gitlet › Changes**, then the change) carries the same
-call in its **Conversation**'s merge box, under the description, each control
+call in its **Conversation**'s merge box, after its timeline, each control
 made as you and never ahead of the engine's answer:
 
 - **Where its gate stands** — how many of its conditions are met, each
@@ -674,7 +680,7 @@ made as you and never ahead of the engine's answer:
 - **Override**, a person's alone: a dialog that asks your reason, says what
   the gate still waits on, and merges directly past it — even into a branch
   whose merges land through its queue. The reason is kept with the merge
-  (the change's Provenance tab shows it) and the override is audited.
+  (the change's More tab shows it) and the override is audited.
 - **Re-run checks** — every check of the change's head whose latest attempt
   did not pass, each at its next attempt (`code_rerun_checks` with
   `all_failed`).
@@ -688,7 +694,9 @@ made as you and never ahead of the engine's answer:
 A merged change shows **Revert** in their place ([Reverting a
 change](#reverting-a-change)): a confirmation that says what it opens, with a
 box to merge the revert once it is open. A finding that still stands is
-answered on the **Files** tab with **Answer finding**: Resolved, Won't fix or
+answered under its review or on the **Files changed** tab: **Resolve** in one press, for
+an author of the change, or
+**Answer** with Resolved, Won't fix or
 Disputed by an author, or Dismiss by its raiser, a maintainer or a person
 (`code_resolve_finding`).
 

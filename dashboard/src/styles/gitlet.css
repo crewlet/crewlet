@@ -115,7 +115,7 @@
 /* THE BYLINE under the title: who wants to merge which revision of which
    branch into which, the branches as chips that open their code. */
 .code-change-byline {
-  display: block;
+  display: inline-block;
   margin-block-start: var(--spacing-1);
 }
 
@@ -229,6 +229,82 @@
   text-decoration: none;
 }
 
+/* THE HEADER'S SENTENCE: the state pill, then the byline, wrapping as one line;
+   one atomic box, so the description's clamp never cuts it. */
+.code-change-byline__state {
+  display: inline-flex;
+  margin-inline-end: var(--spacing-2);
+  vertical-align: middle;
+}
+
+.code-change-byline > .code-byline {
+  display: inline;
+}
+
+.code-change-byline > .code-byline > * {
+  margin-inline-end: var(--spacing-2);
+  vertical-align: middle;
+}
+
+.code-change-byline__source {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.code-change-byline__at::before {
+  content: "·";
+  margin-inline-end: var(--spacing-1);
+}
+
+.code-change-byline__work {
+  display: inline-flex;
+  border-radius: var(--radius-pill);
+  text-decoration: none;
+}
+
+/* THE TAB ROW'S NOTE: the head's lines added and removed, five squares told by
+   shape (filled added, hollow removed); the diff colours stay a diff's own. */
+.code-diffstat {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.code-diffstat__squares {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.code-diffstat__squares > span {
+  box-sizing: border-box;
+  inline-size: 8px;
+  block-size: 8px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+}
+
+.code-diffstat__squares > [data-kind="added"] {
+  background: currentColor;
+}
+
+/* MORE: where the change came from, then whom its records notified. */
+.code-more {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+
+.code-more__title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+}
+
 /* THE DESCRIPTION: a card its owner opened, the first thing on the page. */
 .code-description {
   border: 1px solid var(--color-border-default);
@@ -238,6 +314,10 @@
 }
 
 .code-description__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
   padding: var(--spacing-2) var(--spacing-4);
   background: var(--color-surface-subtle);
   border-block-end: 1px solid var(--color-border-default);
@@ -357,29 +437,31 @@
   color: var(--color-text-secondary);
 }
 
-/* THE ACTIVITY: a heading, then the rail of what was said and done. */
+/* THE TIMELINE: the rail of what was said and done, then a break before the merge box. */
 .code-activity {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
 }
 
-.code-activity__title {
+.code-tl-break {
   margin: 0;
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-semibold);
+  border: 0;
+  border-block-start: 2px solid var(--color-border-default);
 }
 
-/* THE RAIL: a line down the side every record hangs on, in log order. A card
-   stands to its right; a line's glyph sits on the rail itself, on the ground
-   that masks it. Nothing on it is a state, so nothing takes a hue. */
+/* THE RAIL: a line down the face column's centre, every record hung on it in
+   log order. A card stands to the right of its writer's face; a row's disc
+   sits on the rail itself. Only a review's disc takes a hue (rule C7). */
 .code-timeline {
+  --tl-col: 32px;
+  --tl-gap: var(--spacing-3);
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-3);
+  gap: var(--spacing-4);
   margin: 0;
-  padding: 0 0 0 var(--spacing-8);
+  padding: 0 0 0 calc(var(--tl-col) + var(--tl-gap));
   list-style: none;
 }
 
@@ -387,13 +469,23 @@
   content: "";
   position: absolute;
   inset-block: 0;
-  inset-inline-start: var(--spacing-4);
+  inset-inline-start: calc(var(--tl-col) / 2 - 1px);
   border-inline-start: 2px solid var(--color-border-default);
 }
 
 .code-timeline__item {
   position: relative;
   min-width: 0;
+}
+
+/* A WRITER'S FACE on the rail, beside the card's head. */
+.code-tl-face {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: calc(-1 * (var(--tl-col) + var(--tl-gap)));
+  display: grid;
+  place-items: center;
+  inline-size: var(--tl-col);
 }
 
 .code-tl-card {
@@ -428,28 +520,163 @@
   border-block-start: 1px solid var(--color-border-default);
 }
 
-/* A LINE ON THE RAIL: its glyph on the rail, the sentence beside it. */
+/* A ROW ON THE RAIL: its disc on the rail, the sentence, its end pushed right. */
 .code-tl-event {
-  display: flex;
-  align-items: center;
-  min-height: var(--size-row-sm);
   font-size: var(--font-size-sm);
 }
 
-.code-tl-event__glyph {
+.code-tl-event__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-height: var(--tl-col);
+}
+
+.code-tl-event__disc {
   position: absolute;
-  inset-inline-start: calc(var(--spacing-4) - var(--spacing-8) - var(--spacing-3) + 1px);
-  display: inline-grid;
+  inset-block-start: 0;
+  inset-inline-start: calc(-1 * (var(--tl-col) + var(--tl-gap)));
+  display: grid;
   place-items: center;
-  inline-size: var(--spacing-6);
-  block-size: var(--spacing-6);
-  border-radius: var(--radius-pill);
-  background: var(--color-surface-inset);
-  color: var(--color-text-secondary);
+  inline-size: var(--tl-col);
+  block-size: var(--tl-col);
 }
 
 .code-tl-event__said {
   min-width: 0;
+}
+
+.code-tl-event__end {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-3);
+  margin-inline-start: auto;
+}
+
+.code-tl-event__under {
+  margin-block-start: var(--spacing-2);
+}
+
+/* A BYLINE'S OWN TIME IN A TIMELINE SENTENCE, or a finding's on its line, follows a middot. */
+.code-timeline .code-byline > .code-byline__when::before,
+.code-finding__by .code-byline > .code-byline__when::before {
+  content: "·";
+  margin-inline-end: var(--spacing-1);
+}
+
+/* THE DISC: a glyph on a round ground; neutral, or a review's verdict (C7). */
+.code-disc {
+  display: inline-grid;
+  place-items: center;
+  box-sizing: border-box;
+  inline-size: 32px;
+  block-size: 32px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-tertiary);
+}
+
+.code-disc[data-size="small"] {
+  inline-size: 24px;
+  block-size: 24px;
+}
+
+.code-disc[data-tone="success"] {
+  border-color: var(--color-feedback-success-line);
+  background: var(--color-feedback-success-soft);
+  color: var(--color-feedback-success-ink);
+}
+
+.code-disc[data-tone="danger"] {
+  border-color: var(--color-feedback-danger-line);
+  background: var(--color-feedback-danger-soft);
+  color: var(--color-feedback-danger-ink);
+}
+
+.code-tl-strong {
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-tl-compare {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+.code-tl-whom {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+/* A PATH AN OWNER'S ASK IS FOR, as code in the sentence. */
+.code-tl-path {
+  padding: 0 var(--spacing-1);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+}
+
+.code-tl-note {
+  margin: 0;
+  padding-inline-start: var(--spacing-3);
+  border-inline-start: 2px solid var(--color-border-default);
+  color: var(--color-text-secondary);
+}
+
+/* A REVIEW'S BOX: its summary and findings, hung under its row's words. */
+.code-review-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) var(--spacing-4);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
+}
+
+/* THE DESCRIPTION'S HEAD: the Author tag and its menu at the end; the edit form. */
+.code-description__marks {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-inline-start: auto;
+}
+
+.code-description__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--spacing-2);
+}
+
+@container page (width < 640px) {
+  .code-timeline {
+    --tl-col: 24px;
+    --tl-gap: var(--spacing-2);
+  }
+  .code-tl-face {
+    transform: scale(0.75);
+    transform-origin: top center;
+  }
+  .code-disc {
+    inline-size: 24px;
+    block-size: 24px;
+  }
+  .code-disc[data-size="small"] {
+    inline-size: 20px;
+    block-size: 20px;
+  }
+  .code-tl-event__end {
+    flex-basis: 100%;
+    margin-inline-start: 0;
+  }
 }
 
 /* A THREAD, as a card: its first comment, its replies, then a reply of the
@@ -491,6 +718,13 @@
   padding: var(--spacing-3) var(--spacing-4);
   border-block-start: 1px solid var(--color-border-default);
   font-size: var(--font-size-sm);
+}
+
+.code-thread__said {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
 }
 
 .code-thread__foot {
@@ -794,8 +1028,8 @@
   margin-inline-start: auto;
 }
 
-/* A FINDING ON A LINE, as a card under it: its weight, its subject, its
-   title and who raised it across its head. */
+/* A FINDING, as a card under its review or its line: its weight, subject,
+   title and state across its head, then its lines, words and suggestion. */
 .code-finding {
   display: flex;
   flex-direction: column;
@@ -815,7 +1049,37 @@
 
 .code-finding__title {
   min-width: 0;
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
   overflow-wrap: anywhere;
+}
+
+.code-finding__state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  margin-inline-start: auto;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.code-finding__where {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-size: var(--font-size-xs);
+}
+
+.code-finding__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-finding__end {
+  margin-inline-start: auto;
 }
 
 .code-finding__by {
@@ -827,12 +1091,57 @@
 }
 
 .code-suggestion {
-  margin: 0;
-  padding: var(--spacing-2);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-sm);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.code-suggestion__head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.code-suggestion__where {
+  margin-inline-start: auto;
+}
+
+/* AN EXCERPT: a few lines of the diff at the code's 12 px, scrolled in its own box. */
+.code-excerpt {
+  min-width: 0;
+  overflow-x: auto;
+  font-size: var(--font-size-xs);
+}
+
+.code-excerpt--reading {
+  min-block-size: 4.5rem;
+}
+
+/* A LINE TOO LONG TO SHOW is said in words, in the ink a reader reads past. */
+.code-excerpt__elided {
+  color: var(--color-text-tertiary);
+}
+
+/* A REVIEW'S FINDINGS: a head that counts them, then each card. */
+.code-review-findings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+
+.code-review-findings__head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-size: var(--font-size-sm);
+}
+
+.code-review-findings__open {
+  margin-inline-start: auto;
+  color: var(--color-text-secondary);
 }
 
 /* PROVENANCE: a label and its value a row, the labels one column. */

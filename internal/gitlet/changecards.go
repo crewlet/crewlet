@@ -54,12 +54,15 @@ type ReviewerFace struct {
 }
 
 // CardEjection is why and when a queue last put the change out, and the required
-// checks that failed, at most MaxCardEjectionChecks, ChecksMore how many more.
+// checks that failed, at most MaxCardEjectionChecks, ChecksMore how many more, and
+// the train they failed on.
 type CardEjection struct {
 	Reason     QueueEndReason `json:"reason"`
 	At         time.Time      `json:"at"`
 	Checks     []string       `json:"checks,omitempty"`
 	ChecksMore int            `json:"checks_more,omitempty"`
+	// TestedIn is the train its checks failed on, where its ejection names one.
+	TestedIn *EjectionTrain `json:"tested_in,omitempty"`
 }
 
 // MaxCardReviewers is the most faces a card carries: a row draws a handful, and eight
@@ -286,7 +289,8 @@ func (r *Reader) cardEjectionsIn(ctx context.Context, tx *sql.Tx, live [][2]stri
 		e := &CardEjection{Reason: QueueEndReason(reason), At: store.DecodeTime(endedAt)}
 		if detail != "" {
 			var x struct {
-				Checks []string `json:"checks"`
+				Checks   []string       `json:"checks"`
+				TestedIn *EjectionTrain `json:"tested_in"`
 			}
 			if err = json.Unmarshal([]byte(detail), &x); err != nil {
 				return fmt.Errorf("change %s's ejection: %w", change, err)
@@ -295,7 +299,7 @@ func (r *Reader) cardEjectionsIn(ctx context.Context, tx *sql.Tx, live [][2]stri
 				e.ChecksMore = len(x.Checks) - MaxCardEjectionChecks
 				x.Checks = x.Checks[:MaxCardEjectionChecks]
 			}
-			e.Checks = x.Checks
+			e.Checks, e.TestedIn = x.Checks, x.TestedIn
 		}
 		c.Ejected = e
 		return nil

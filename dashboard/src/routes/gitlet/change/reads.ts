@@ -48,6 +48,7 @@ import {
   type CodeChangeAnswer,
   type CodeChangeDetail,
   type CodeCommentRow,
+  type CodeExcerpt,
   type CodeFindingRow,
   type CodeReviewRow,
   type CodeReviewerRow,
@@ -65,7 +66,7 @@ import {
 export const CHANGE_POLL_MS = 60_000;
 /** A part of a change, as the page asks for it. */
 export type ChangePartName =
-  "reviewers" | "comments" | "reviews" | "findings" | "standing" | "files" | "diff";
+  "reviewers" | "comments" | "reviews" | "findings" | "excerpts" | "standing" | "files" | "diff";
 
 /** What a part's question is asked with: the change, the part, its page's bound where it lists, and `extra`. */
 export function changePartParams(
@@ -88,7 +89,8 @@ export function changePartParams(
  * reader names nothing finer: the change's version for `files` and `diff`,
  * which no conversation record moves; for `reviews` and `comments`, when
  * somebody last wrote on the change (`spoken_at`) beside how many rows the
- * part holds; and the change's and its conversation's versions for every other
+ * part holds, and `said` for the conversation's findings, whose placements it
+ * draws none of; and the change's and its conversation's versions for every other
  * part.
  *
  * A REVIEW OR A COMMENT ROW IS WRITTEN ONLY BY A RECORD SOMEBODY WROTE — a
@@ -102,10 +104,17 @@ export function changePartParams(
  * records apart that the broker stamped in one microsecond (the resolution an
  * instant is kept at) where one of them added a row.
  */
-export function partMovedBy(change: CodeChangeDetail, part: ChangePartName): string {
+export function partMovedBy(change: CodeChangeDetail, part: ChangePartName | "said"): string {
   if (part === "files" || part === "diff") return String(change.version);
   const conversation = change.conversation;
-  if (part === "reviews") return `${conversation?.spoken_at ?? ""}/${conversation?.reviews ?? 0}`;
+  // A FINDING ROW is raised or superseded by a review and moved by an answer: each speaks.
+  if (part === "said") {
+    const { spoken_at = "", reviews = 0, open_findings = 0 } = conversation ?? {};
+    return `${spoken_at}/${reviews}/${open_findings}`;
+  }
+  // AN EXCERPT IS A FUNCTION OF A FINDING'S OWN REVISION AND LINES, and findings are raised by reviews.
+  if (part === "reviews" || part === "excerpts")
+    return `${conversation?.spoken_at ?? ""}/${conversation?.reviews ?? 0}`;
   if (part === "comments") return `${conversation?.spoken_at ?? ""}/${conversation?.comments ?? 0}`;
   return `${change.version}/${conversation?.version ?? 0}`;
 }
@@ -138,11 +147,30 @@ export function useAskAgainWhenMoved(moved: string, enabled: boolean, again: () 
   }, [moved, enabled, again]);
 }
 
+/**
+ * Why a part's first page drew nothing once it is refused: the engine's sentence,
+ * "" where it wrote none; null while it reads, holds rows, or waits on a node catching up.
+ */
+export function partRefusal(
+  part: Pick<Paged<unknown, unknown>, "error" | "refusal" | "items">,
+): string | null {
+  if (!part.error || part.items.length > 0) return null;
+  const refusal = part.refusal as { retryAfter?: number | null; detail?: string | null } | null;
+  if (part.error === "unavailable" && (refusal?.retryAfter ?? 0) > 0) return null;
+  return refusal?.detail ?? "";
+}
+
+/** A refusal said after `lead`, with the engine's sentence where it wrote one. */
+export function refusedWords(lead: string, sentence: string): string {
+  return sentence ? `${lead}: ${sentence.replace(/\.$/, "")}.` : `${lead}.`;
+}
+
 /** The rows a page of a conversation's part carries, and each row's id. */
 const reviewsOf = (a: CodeChangeAnswer) => a.reviews ?? [];
 const commentsOf = (a: CodeChangeAnswer) => a.comments ?? [];
 const findingsOf = (a: CodeChangeAnswer) => a.findings ?? [];
 const reviewersOf = (a: CodeChangeAnswer) => a.reviewers ?? [];
+const excerptsOf = (a: CodeChangeAnswer) => Object.values(a.excerpts ?? {});
 const rowId = (row: { id: string }) => row.id;
 // A REVIEWER IS ASKED ONCE A CHANGE: the engine keys its row by the handle.
 const reviewerId = (row: CodeReviewerRow) => `${row.kind}:${row.reviewer}`;
@@ -159,7 +187,7 @@ const partNext = (a: CodeChangeAnswer) => a.next ?? "";
  */
 function usePagedPart<T>(
   change: CodeChangeDetail,
-  part: "reviews" | "comments" | "findings" | "reviewers",
+  part: "reviews" | "comments" | "findings" | "excerpts" | "reviewers",
   pick: (a: CodeChangeAnswer) => readonly T[],
   idOf: (row: T) => string,
   extra: Readonly<Record<string, string | number | undefined>>,
@@ -224,6 +252,14 @@ export function usePagedFindings(
   moved: string,
 ): Paged<CodeFindingRow, CodeChangeAnswer> {
   return usePagedPart(change, "findings", findingsOf, rowId, { revision }, moved);
+}
+
+/**
+ * The lines around each finding, a page beside each page of findings (the same
+ * bound and order), asked again only when somebody reviews.
+ */
+export function usePagedExcerpts(change: CodeChangeDetail): Paged<CodeExcerpt, CodeChangeAnswer> {
+  return usePagedPart(change, "excerpts", excerptsOf, rowId, {}, partMovedBy(change, "excerpts"));
 }
 
 /**

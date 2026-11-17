@@ -655,6 +655,10 @@ const CODE_DIFFS: { file: string; why: string }[] = [
     why: "A change's files, each read in its revision's diff, with its findings.",
   },
   {
+    file: "routes/gitlet/change/Finding.tsx",
+    why: "A finding's lines as its revision's diff marks them, and its suggestion as a small diff.",
+  },
+  {
     file: "routes/gitlet/commit/DiffFiles.tsx",
     why: "A commit's files and a comparison's, each read in its diff.",
   },
