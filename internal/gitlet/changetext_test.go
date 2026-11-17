@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -547,7 +548,8 @@ func TestAChangeEditedAMomentAgoIsFoundByItsNewWords(t *testing.T) {
 // A WORDS LISTING SAYS HOW FAR BACK ITS INDEX REACHES: while this copy's first build walks back, every
 // page its words lead carries the instant the build's floor was minted at, in UTC to the millisecond;
 // none once the build is whole, none from an index it does not use, and none on a page another walk
-// leads. A floor carrying no instant is building.
+// leads. A floor carrying no instant is building. So it is over the real index, whose first batch ends
+// past its byte budget.
 // Mutation: drop the field, set it where the build is whole, or set it on a page another walk leads.
 func TestAWordsListingSaysHowFarBackItsIndexReaches(t *testing.T) {
 	t.Parallel()
@@ -601,5 +603,38 @@ func TestAWordsListingSaysHowFarBackItsIndexReaches(t *testing.T) {
 				t.Errorf("%s: page %d says back to %v, want UTC to the millisecond", tc.name, i+1, at)
 			}
 		}
+	}
+	// THE REAL INDEX: ten descriptions of 30 KiB, so the first backward batch stops at the ninth newest.
+	m := newNode(t)
+	m.chart = testChart()
+	c, _ := committerOn(t, m, m.pub)
+	repo := changeRepo(t, m, "web")
+	var opened []string
+	for i := range 10 {
+		source := fmt.Sprintf("refs/heads/topic-%d", i)
+		pushedBy(t, c, repo, ada, update(source, gitlet.ZeroOID, oidOf(source)))
+		p := opening(repo, source, mainRef, dev)
+		p.Open.Body = strings.Repeat("words ", 30<<10/6)
+		res, err := c.ProposeChange(t.Context(), p)
+		requireChanged(t, res, err)
+		opened = append(opened, res.ChangeID)
+	}
+	slices.Sort(opened)
+	x := search.NewChangeIndexer(m.nodeDB, m.db.Reader(), gitlet.Domain{})
+	if _, err := x.Sweep(t.Context(), time.Now()); err != nil {
+		t.Fatalf("sweep the index of changes' words once: %v", err)
+	}
+	indexed := wordsReader(t, m, x)
+	ninth, _ := statelog.OpMintedAt(opened[1])
+	listed, text := wordsListed(wordsPages(t, indexed, gitlet.ReadQuery{Asker: ada, Text: "upload"}, 50))
+	if text == nil || !text.IndexedBackTo.Equal(ninth) || text.Building || len(listed) != 9 {
+		t.Errorf("one batch into the first build the page lists %d changes and says %+v, want nine and back "+
+			"to %v", len(listed), text, ninth)
+	}
+	sweepWords(t, x)
+	listed, text = wordsListed(wordsPages(t, indexed, gitlet.ReadQuery{Asker: ada, Text: "upload"}, 50))
+	if text == nil || *text != (gitlet.ChangesText{}) || len(listed) != 10 {
+		t.Errorf("once whole the page lists %d changes and says %+v, want ten and a whole search", len(listed),
+			text)
 	}
 }

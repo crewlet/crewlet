@@ -22,8 +22,8 @@ const (
 	// MaxChangeTextTerms is the most words one search of changes takes: a title is a sentence, and each
 	// word is one bounded count and one more key read per document the index reads.
 	MaxChangeTextTerms = 8
-	// MaxChangeTextCandidates is the most matches one search reads from the index, newest first as the
-	// index took them in: five of the largest page, each one key read of its change and its conversation.
+	// MaxChangeTextCandidates is the most matches one search reads from the index, newest minted first:
+	// five of the largest page, each one key read of its change and its conversation.
 	MaxChangeTextCandidates = 1_000
 	// MaxChangeTextTail is the most changes moved past the index's watermark a read judges itself:
 	// at the bound their descriptions weigh 3 MiB; a lag past it is the index building, which it says.
@@ -33,7 +33,8 @@ const (
 // ChangesText is how wholly a listing narrowed by its words searched; an answer's field, no record's.
 type ChangesText struct {
 	// Building: this node's index of changes' words is behind the rows the read holds, is being rebuilt,
-	// or was built from another copy, so a change holding the words may be missing.
+	// was built from another copy, or has not begun its first build, so a change holding the words may
+	// be missing.
 	Building bool `json:"building,omitempty"`
 	// IndexedBackTo: this node's first build of the index has reached back to the changes minted at this
 	// instant and is still indexing older ones, so one minted at or before it may be missing.

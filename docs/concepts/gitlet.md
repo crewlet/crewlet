@@ -2139,9 +2139,8 @@ index of changes' words leads**. It reads the newest 5 000 changes of the
 narrowest of the listing's repository, owner, state and rarest word, keeps the
 newest 1 000 holding every word, and judges each in the read, beside every
 change moved since the index last caught up, so a change opened or retitled a
-moment ago is found at once and pages are full. Newest is the order the node's
-index took the changes in: newest opened on a node whose index keeps up, and,
-among the changes its first build found, most recently moved. Beside a
+moment ago is found at once and pages are full. Newest is when a change's open
+was asked, the instant its id carries, the same on every node. Beside a
 reviewer, a need, a work item or a readiness bucket, that walk leads and the
 words are judged on each change it reads, a page still being the rows it read.
 
@@ -2153,14 +2152,23 @@ back to the changes opened at that instant, so one opened at or before it may
 be missing; and `building` that this node's index is behind the rows it holds,
 is being rebuilt, or is holding back behind a record this node keeps for a
 newer build, so a change holding the words may be missing. Never read either
-as "no change holds them". A page without `changes_text` was answered by a node that
-does not read `text=`, and is the listing unnarrowed. Each data node builds its
-index from the rows it holds, after an upgrade and when it joins, and says
-`building` until its walk catches up. The index costs every data node about
-8 KB a change of 150 distinct words, kept as long as the change's repository:
-about 120 GB a year at 40 000 such changes a day. Its first build walks them at
-about 6 ms a change with 10 000 indexed and 15 ms by 30 000, slower as the
-index outgrows memory, so a year of them takes days. In a search across
+as "no change holds them". A page without `changes_text` was answered by a
+node that does not read `text=`, and is the listing unnarrowed.
+
+Each data node builds its index from the rows it holds, after an upgrade, when
+it joins and when its copy of the estate is replaced: **newest first**, beside
+every change that moves meanwhile, so the changes opened lately are searchable
+within minutes and older ones fill in behind until `indexed_back_to` is gone.
+At 40 000 changes a day of 150 distinct words, the last day is searchable after
+about 14 minutes, the last week after about 2 hours, the last month after about
+8 hours and a year after about 4 days, each a lower bound that grows where the
+index outgrows the node's memory. A replaced copy keeps the documents it had:
+the build rewrites only those whose change moved, at about 0.2 ms a change
+otherwise, and removes those the copy does not hold. The index costs every data
+node about 10.4 KB a change of 150 distinct words, kept as long as the change's
+repository: about 152 GB a year at 40 000 such changes a day. Each batch is held
+to about two seconds of writing, and the smaller batches a large index takes
+cost more, about 11 KB a change at 32 KiB batches. In a search across
 repositories, a deleted repository's changes count toward the 5 000 and the
 1 000 until its purge, though none is listed. A listing by words is held to
 the reader's grant as every listing is

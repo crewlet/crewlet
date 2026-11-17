@@ -50,6 +50,8 @@ func TestEveryChangeIndexServesARegisteredQuery(t *testing.T) {
 		// held is a search's candidate read: it drives on its first step, sorts nothing and is not
 		// decorrelated.
 		held bool
+		// unsorted is a read of the table's own key in its order: it sorts nothing.
+		unsorted bool
 	}
 	const (
 		docsKey     = "change_docs_id_idx (id=?)"
@@ -60,21 +62,27 @@ func TestEveryChangeIndexServesARegisteredQuery(t *testing.T) {
 	key := parsed[:]
 	scopeValue := map[string]any{"repo_id": "r001", "owner": "ada", "state": "open"}
 	registered := map[string]registration{
-		"the index's state":   {statement: search.ChangeStateStatement, reaches: []string{rowKey}},
-		"the walk's advance":  {statement: search.ChangeAdvanceStatement, args: []any{1, 2, 3, 4}, reaches: []string{rowKey}},
+		"the index's state":  {statement: search.ChangeStateStatement, reaches: []string{rowKey}},
+		"the walk's advance": {statement: search.ChangeAdvanceStatement, args: []any{1, 2, 3}, reaches: []string{rowKey}},
+		"the first build's batch": {statement: search.ChangeBackStatement, args: []any{1, "x", 1, 2, 3},
+			reaches: []string{rowKey}},
 		"a purge drop's seen": {statement: search.ChangeSeenStatement, args: []any{1, 2}, reaches: []string{rowKey}},
-		"a rebuild's mark":    {statement: search.ChangeBeginRebuildStatement, args: []any{2}, reaches: []string{rowKey}},
-		"the copy a fresh index records": {statement: search.ChangeRecordInstanceStatement,
-			args: []any{"instance", 2}, reaches: []string{rowKey}},
-		"a rebuild's end": {statement: search.ChangeRebuiltStatement, args: []any{2}, reaches: []string{rowKey}},
+		"a build's restart": {statement: search.ChangeRestartStatement, args: []any{"instance", 2},
+			reaches: []string{rowKey}},
 		"what the index holds for a change": {statement: search.ChangeHeldDocStatement, args: []any{key},
 			reaches: []string{docsKey}},
+		"the documents of a backward batch's ids": {statement: search.ChangeHeldInRangeStatement,
+			args: []any{key, key}, reaches: []string{"change_docs_id_idx (id>=? AND id<?)"}, unsorted: true},
+		"the keys taken in a natural key's window": {statement: search.ChangeDocKeysStatement,
+			args: []any{1 << 45, 1<<45 + search.ChangeDocProbe}, reaches: []string{rowKey}, unsorted: true},
+		"the arena's highest key": {statement: search.ChangeDocArenaTopStatement, args: []any{1 << 45},
+			reaches: []string{rowKey}, unsorted: true},
 		"a document's write": {statement: search.ChangeDocInsertStatement,
 			args: []any{1, key, "r001", "ada", "open", key}},
 		"a document's postings": {statement: search.ChangePostingsInsert + " (?, ?)", args: []any{1 << 16, "x"}},
 		"a document's rewrite": {statement: search.ChangeDocRewriteStatement,
-			args: []any{"open", key, 1}, reaches: []string{rowKey}},
-		"a document's state": {statement: search.ChangeDocStateStatement, args: []any{"open", 1},
+			args: []any{"r001", "ada", "open", key, 1}, reaches: []string{rowKey}},
+		"a document's scope": {statement: search.ChangeDocScopeStatement, args: []any{"r001", "ada", "open", 1},
 			reaches: []string{rowKey}},
 		"a document's removal": {statement: search.ChangeRemoveDocStatement, args: []any{1},
 			reaches: []string{rowKey}},
@@ -84,10 +92,6 @@ func TestEveryChangeIndexServesARegisteredQuery(t *testing.T) {
 			reaches: []string{"change_docs_repo_idx (repo_id>?)"}},
 		"a purged repository's documents": {statement: search.ChangeRepoDocsStatement,
 			args: []any{"r001", search.ChangeDropBatch}, reaches: []string{"change_docs_repo_idx (repo_id=?)"}},
-		"a rebuild's next batch": {statement: search.ChangeDropBatchStatement, args: []any{search.ChangeDropBatch},
-			walks: "change_docs"},
-		"a rebuild's drop of what is left": {statement: search.ChangeRebuiltDropStatement,
-			walks: "change_postings"},
 		"a word's count": {statement: search.ChangeTermCountStatement, args: []any{"migration", 5_001},
 			reaches: []string{postingsKey + " (term=?)"}},
 		"a word's floor": {statement: search.ChangeTermFloorStatement, args: []any{"migration", 4_999},
@@ -187,6 +191,9 @@ func TestEveryChangeIndexServesARegisteredQuery(t *testing.T) {
 				t.Errorf("%s does not reach %s:\n%s", name, index, joined)
 			}
 		}
+		if r.unsorted && (strings.Contains(joined, "SORTER") || strings.Contains(joined, "TEMP B-TREE")) {
+			t.Errorf("%s sorts what it reads:\n%s", name, joined)
+		}
 		if !r.held {
 			continue
 		}
@@ -197,8 +204,8 @@ func TestEveryChangeIndexServesARegisteredQuery(t *testing.T) {
 		if strings.Contains(joined, "SORTER") || strings.Contains(joined, "TEMP B-TREE") {
 			t.Errorf("%s sorts what it reads before its limit:\n%s", name, joined)
 		}
-		if strings.Contains(r.statement, "CROSS JOIN change_docs") && !documentByNumber.MatchString(joined) {
-			t.Errorf("%s reaches a word's document other than by its number:\n%s", name, joined)
+		if strings.Contains(r.statement, "CROSS JOIN change_docs") && !documentByKey.MatchString(joined) {
+			t.Errorf("%s reaches a word's document other than by its key:\n%s", name, joined)
 		}
 		if n := strings.Count(r.statement, "EXISTS"); strings.Count(joined, termInSlotRange) < n {
 			t.Errorf("%s reaches another word other than by one seek of the term key over the document's "+
@@ -231,6 +238,8 @@ func TestEveryChangeIndexServesARegisteredQuery(t *testing.T) {
 		func() (string, []any) { return search.ChangeReachRead(0, 1) },
 		func() (string, []any) { return search.ChangeBatchRead(0, 1) },
 		func() (string, []any) { return search.ChangeReposRead([]string{"r001"}) },
+		func() (string, []any) { return search.ChangeBackReachRead("~", 1) },
+		func() (string, []any) { return search.ChangeBackBatchRead("~", "", 1) },
 	} {
 		text, _ := read()
 		texts = append(texts, normalSQL(text))
@@ -250,9 +259,9 @@ func TestEveryChangeIndexServesARegisteredQuery(t *testing.T) {
 	}
 }
 
-// documentByNumber is a plan step reaching a document by its number: the table's own key, or a scope
-// key's entry ending in it.
-var documentByNumber = regexp.MustCompile(`INTEGER PRIMARY KEY \(rowid=\?\)|change_docs_\w+_idx \(\w+=\? AND seq=\?\)`)
+// documentByKey is a plan step reaching a document by its key: the table's own, or a scope key's entry
+// ending in it.
+var documentByKey = regexp.MustCompile(`INTEGER PRIMARY KEY \(rowid=\?\)|change_docs_\w+_idx \(\w+=\? AND doc=\?\)`)
 
 // termInSlotRange is a plan step testing one word on one document by one seek of the term key.
 const termInSlotRange = "change_postings_term_idx (term=? AND slot>=? AND slot<?)"

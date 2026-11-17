@@ -251,7 +251,7 @@ type native struct {
 	chatIndex *search.ChatIndexer
 
 	// changeIndex is this node's index of Gitlet changes' words (ADR-0156), built where the company
-	// hosts code; a forward walk of chat's shape, on its own loop.
+	// hosts code: first built newest first, then walked forward as chat's is, on its own loop.
 	changeIndex *search.ChangeIndexer
 
 	// searcher is Doclet's answer to the knowledge seam.

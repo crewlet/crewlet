@@ -408,11 +408,15 @@ var classified = map[string]struct {
 
 	"search.ChangeIndexer.db":         {seamNone, "the node's own file the index is kept in"},
 	"search.ChangeIndexer.estate":     {seamNone, "the replicated rows the index walks"},
-	"search.ChangeIndexer.code":       {seamNone, "the code domain whose applied prefix bounds the walk"},
+	"search.ChangeIndexer.code":       {seamNone, "the code domain whose applied prefix bounds the walks"},
 	"search.ChangeIndexer.repoCursor": {seamNone, "how far the index's purge follower has walked"},
 	"search.ChangeIndexer.rebuild":    {seamNone, "whether the index must be built again"},
 	"search.ChangeIndexer.scan": {seamNone, "how many postings or documents of what drives one search " +
 		"reads"},
+	"search.ChangeIndexer.forward": {seamNone, "the description bytes the index's next forward batch takes"},
+	"search.ChangeIndexer.back":    {seamNone, "the description bytes the index's next backward batch takes"},
+	"search.ChangeIndexer.drop":    {seamNone, "how many documents the index's next purge drop step removes"},
+	"search.ChangeIndexer.since":   {seamNone, "the clock the index's writes are timed by"},
 
 	"engine.itemRanker.fan":   {seamNone, "the item search's fan-out, classified on search.FanOut"},
 	"engine.itemRanker.index": {seamNone, "the node's lexical index"},

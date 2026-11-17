@@ -66,17 +66,25 @@
 // # The index of changes' words
 //
 // [ChangeIndexer] indexes Gitlet changes' titles and descriptions
-// (ADR-0156). It walks forward over code_changes.position no further than
-// the code log's applied prefix, so a record this node retains is never
-// passed. Each document is numbered by this node and keeps its repository,
-// owner, state and a hash that keeps a head move from rewriting its
-// postings; its postings are one range of the postings key (the number
-// shifted 16 bits), so an edit or a purge removes them with no term list
-// kept. A purged repository is dropped by a rotation, and a replaced estate
-// is rebuilt as chat's is. [ChangeIndexer.Holding] reads the narrowest of a
-// search's scope and words first and answers the newest changes holding
-// every word, with how far the walk reached and the code log's position its
-// writes were decided from, which the reader compares with its own snapshot.
+// (ADR-0156). Its first build walks the changes newest first by id, over the
+// rows at or below the code log's applied prefix where it began, so the
+// changes opened lately are searchable within minutes and older ones fill in
+// behind; beside it a forward walk over code_changes.position, never past
+// that prefix, keeps every later move indexed, so a record this node retains
+// is never passed. Each document is keyed by the millisecond its change's id
+// was minted in and five bits of the id, so newest is the same on every
+// node, and keeps its repository, owner, state and a hash that keeps a head
+// move from rewriting its postings; its postings are one range of the
+// postings key (the key shifted 16 bits), so an edit or a purge removes them
+// with no term list kept. Two ids on one key take the next free one, and an
+// id with no plausible instant an arena below every natural key. Each walk's
+// batch, and a purge's drop step, halves after its own write over two seconds,
+// as the node file's busy wait is five. A purged repository is dropped by a
+// rotation; a replaced estate restarts the first build over the documents kept.
+// [ChangeIndexer.Holding] reads the narrowest of a search's scope and words
+// first and answers the newest minted changes holding every word, with how
+// far each walk reached and the code log's position its writes were decided
+// from, which the reader compares with its own snapshot.
 //
 // # A read of another domain's table is a named, exported statement
 //
