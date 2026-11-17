@@ -458,9 +458,12 @@ export interface ExpandLines {
   line: (n: number) => string | undefined;
   /** The blob's lines, once known. */
   total: number | null;
-  /** Make lines `from` to `to` readable: null once they are, else the refusal's sentence ("" for none). */
-  read: (from: number, to: number) => Promise<string | null>;
+  /** Make lines `from` to `to` readable, saying the blob's length; a refusal says its sentence ("" for none). */
+  read: (from: number, to: number) => Promise<LinesRead>;
 }
+
+/** What a read of a blob's lines came to: refused, or readable with the blob's length where known. */
+export type LinesRead = { failed: string } | { failed: null; total: number | null };
 
 /** Expand a diff's gaps from blob `oid`: `held` its whole lines where the syntax read holds them. */
 export function useExpandLines(
@@ -477,13 +480,14 @@ export function useExpandLines(
     [held, oid, version],
   );
   const total = held ? held.length : (at?.total ?? null);
-  const read = async (from: number, to: number): Promise<string | null> => {
-    if (held || !oid) return held ? null : "";
+  const read = async (from: number, to: number): Promise<LinesRead> => {
+    if (held) return { failed: null, total: held.length };
+    if (!oid) return { failed: "" };
     const range = kept.current.get(oid) ?? { lines: new Map<number, string>(), total: null };
     kept.current.set(oid, range);
     let want = from;
     while (want <= to && range.lines.has(want)) want++;
-    if (want > to) return null;
+    if (want > to) return { failed: null, total: range.total };
     try {
       let text = "";
       let cursor = "";
@@ -496,16 +500,16 @@ export function useExpandLines(
           ...(cursor ? { cursor } : {}),
         });
         const page = answer.blob;
-        if (!page || page.binary) return "";
+        if (!page || page.binary) return { failed: "" };
         range.total = page.lines;
         text += page.text ?? "";
         cursor = answer.next ?? "";
       } while (cursor);
       linesOf(text).forEach((t, i) => range.lines.set(want + i, t));
       readNew((n) => n + 1);
-      return null;
+      return { failed: null, total: range.total };
     } catch (err) {
-      return err instanceof QueryError ? (err.detail ?? "") : "";
+      return { failed: err instanceof QueryError ? (err.detail ?? "") : "" };
     }
   };
   return { line, total, read };

@@ -20,8 +20,13 @@ export function Diffstat({
       role="img"
       aria-label={`${plural(added, "line")} added and ${fmtCount(deleted)} removed ${label}`}
     >
-      <span className="code-diffstat__plus">+{fmtCount(added)}</span>
-      <span className="code-diffstat__minus">−{fmtCount(deleted)}</span>
+      {/* A SIDE WITH NO LINES is left out beside one with some: "+118". */}
+      {(added > 0 || deleted === 0) && (
+        <span className="code-diffstat__plus">+{fmtCount(added)}</span>
+      )}
+      {(deleted > 0 || added === 0) && (
+        <span className="code-diffstat__minus">−{fmtCount(deleted)}</span>
+      )}
       {lines > 0 && (
         <span className="code-diffstat__squares">
           {[0, 1, 2, 3, 4].map((i) => (

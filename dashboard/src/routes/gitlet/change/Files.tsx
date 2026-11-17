@@ -59,6 +59,7 @@ import { changeLive, refName, shortOID } from "~/lib/code.ts";
 import { fmtCount, plural } from "~/lib/format.ts";
 import { useReviewDrafts } from "~/lib/reviewDrafts.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
+import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import type {
   CodeChangeAnswer,
@@ -84,6 +85,9 @@ import {
   usePagedFindings,
 } from "./reads.ts";
 import "~/styles/gitlet.css";
+
+/** The page's width from which the tree sits beside the stack (the sheet's 720 px fold). */
+const TREE_BESIDE_FROM = 720;
 
 /** A whole number from 1 off the address, or null. */
 function wholeParam(value: string): number | null {
@@ -182,6 +186,19 @@ export function Files({
   const live = changeLive(change.state);
   const drafting = rev === change.revision && since === null && live;
   const drafts = useReviewDrafts(change.id, change.revision);
+  // WHAT LIES ON THE LINES, one object until it moves: each section is drawn
+  // again only when what it shows does.
+  const { drafts: drafted, add, remove, update, clear } = drafts;
+  const notes = useMemo(
+    () => ({
+      findings: findings.items,
+      placed,
+      comments: comments.items,
+      drafts: drafting ? { drafts: drafted, add, remove, update, clear } : null,
+      thread,
+    }),
+    [findings.items, placed, comments.items, drafting, drafted, add, remove, update, clear, thread],
+  );
   const listed = pagedFiles.items;
   // WHAT THE FILTERS KEEP: the words a path holds, the extensions shown, and
   // the files with a standing finding.
@@ -222,7 +239,11 @@ export function Files({
     const at = new Map(listed.map((f, i) => [fileKey(f), i]));
     return (f: CodeDiffFile) => at.get(fileKey(f)) ?? -1;
   }, [listed]);
-  const [treeShown, setTreeShown] = useState(true);
+  // THE TREE BESIDE THE STACK on a wide page; on a narrow one, once asked for.
+  const box = useRef<HTMLDivElement>(null);
+  const narrow = useNarrowerThan(box, TREE_BESIDE_FROM);
+  const [treeChoice, setTreeChoice] = useState<boolean | null>(null);
+  const treeShown = treeChoice ?? !narrow;
   const [current, setCurrent] = useState("");
   const [jump, setJump] = useState<StackJump | null>(null);
   const toast = useToast();
@@ -244,18 +265,38 @@ export function Files({
   // THE FILE THE ADDRESS NAMES, once it is listed: the stack opens at it.
   const arrived = useRef(false);
   const { more, paging, pageError, next } = pagedFiles;
+  const listsIt = listed.some((one) => one.path === file);
+  // A FILE THE PAGES LISTED LACK is asked alone first, so a path the diff does
+  // not change pages nothing; one it changes is listed by the pages after.
+  const namedParams = useMemo(
+    () =>
+      changePartParams({ repo: change.repo, number: change.number }, "diff", {
+        revision: rev,
+        file,
+        ...(since !== null ? { since_revision: since } : {}),
+      }),
+    [change.repo, change.number, rev, since, file],
+  );
+  const named = useCodeQuery("code_change", namedParams, {
+    enabled: file !== "" && !listsIt && more && !arrived.current,
+  });
+  const namedEntry = named.data?.diff?.files?.find((one) => one.path === file);
+  const unchanged =
+    file !== "" &&
+    !listsIt &&
+    !arrived.current &&
+    ((named.data !== undefined && !namedEntry) || (files.data !== undefined && !more));
   useEffect(() => {
     if (arrived.current || !file) return;
     const f = listed.find((one) => one.path === file);
-    // A FILE PAST THE PAGES LISTED is listed by the pages after them.
     if (!f) {
-      if (more && !paging && !pageError) next();
+      if (namedEntry && more && !paging && !pageError) next();
       return;
     }
     arrived.current = true;
     setCurrent(f.path);
     setJump({ key: fileKey(f), seq: 1 });
-  }, [file, listed, more, paging, pageError, next]);
+  }, [file, listed, namedEntry, more, paging, pageError, next]);
   const draftsOn = new Map<string, number>();
   if (drafting)
     for (const d of drafts.drafts) draftsOn.set(d.path, (draftsOn.get(d.path) ?? 0) + 1);
@@ -319,188 +360,201 @@ export function Files({
     </Button>
   );
   return (
-    <Stack gap={3}>
-      <PageToolbar className="code-files-bar">
-        <IconButton
-          label={treeShown ? "Hide the file tree" : "Show the file tree"}
-          icon={<PanelLeftGlyph />}
-          size="sm"
-          variant="ghost"
-          aria-pressed={treeShown}
-          onClick={() => setTreeShown((was) => !was)}
-        />
-        <Select
-          size="sm"
-          width="auto"
-          value={String(rev)}
-          onChange={(value) =>
-            setRev(String(value) === String(change.revision) ? "" : String(value))
-          }
-          options={revisions.map((n) => ({
-            value: String(n),
-            label: n === change.revision ? `Revision ${n} · head` : `Revision ${n}`,
-          }))}
-          ariaLabel="Revision"
-        />
-        <span className="code-files-bar__words">compared with</span>
-        <Select
-          size="sm"
-          width="auto"
-          value={since === null ? "" : String(since)}
-          onChange={(value) => setSince(String(value))}
-          options={[
-            { value: "", label: `${target} · base` },
-            ...revisions
-              .filter((n) => n < rev)
-              .map((n) => ({ value: String(n), label: `Revision ${n}` })),
-          ]}
-          ariaLabel="Compared with"
-          active={since !== null}
-        />
-        <GoToChanged files={listed} onGo={go} />
-        <span className="code-files-bar__end">
-          <span className="code-files-bar__layout">
-            <SegmentedControl
-              label="Layout"
-              semantics="radio"
-              size="sm"
-              value={layout === "split" ? "split" : "unified"}
-              onValueChange={(value) => setLayout(value)}
-              options={[
-                { value: "unified", label: "Unified", icon: <Rows2Glyph size="sm" /> },
-                { value: "split", label: "Split", icon: <Columns2Glyph size="sm" /> },
-              ]}
-            />
+    <div ref={box}>
+      <Stack gap={3}>
+        <PageToolbar className="code-files-bar">
+          <IconButton
+            label={treeShown ? "Hide the file tree" : "Show the file tree"}
+            icon={<PanelLeftGlyph />}
+            size="sm"
+            variant="ghost"
+            aria-pressed={treeShown}
+            onClick={() => setTreeChoice(!treeShown)}
+          />
+          <Select
+            size="sm"
+            width="auto"
+            value={String(rev)}
+            onChange={(value) =>
+              setRev(String(value) === String(change.revision) ? "" : String(value))
+            }
+            options={revisions.map((n) => ({
+              value: String(n),
+              label: n === change.revision ? `Revision ${n} · head` : `Revision ${n}`,
+            }))}
+            ariaLabel="Revision"
+          />
+          <span className="code-files-bar__words">compared with</span>
+          <Select
+            size="sm"
+            width="auto"
+            value={since === null ? "" : String(since)}
+            onChange={(value) => setSince(String(value))}
+            options={[
+              { value: "", label: `${target} · base` },
+              ...revisions
+                .filter((n) => n < rev)
+                .map((n) => ({ value: String(n), label: `Revision ${n}` })),
+            ]}
+            ariaLabel="Compared with"
+            active={since !== null}
+          />
+          <GoToChanged files={listed} onGo={go} />
+          <span className="code-files-bar__end">
+            <span className="code-files-bar__layout">
+              <SegmentedControl
+                label="Layout"
+                semantics="radio"
+                size="sm"
+                value={layout === "split" ? "split" : "unified"}
+                onValueChange={(value) => setLayout(value)}
+                options={[
+                  { value: "unified", label: "Unified", icon: <Rows2Glyph size="sm" /> },
+                  { value: "split", label: "Split", icon: <Columns2Glyph size="sm" /> },
+                ]}
+              />
+            </span>
+            {live && <FinishReview change={change} drafts={drafts.drafts.length} />}
           </span>
-          {live && <FinishReview change={change} drafts={drafts.drafts.length} />}
-        </span>
-      </PageToolbar>
-      {(findings.more || comments.more) && (
-        <Button
-          variant="secondary"
-          onClick={loadMoreSaid}
-          disabled={pagingSaid}
-          loading={pagingSaid}
+        </PageToolbar>
+        {(findings.more || comments.more) && (
+          <Button
+            variant="secondary"
+            onClick={loadMoreSaid}
+            disabled={pagingSaid}
+            loading={pagingSaid}
+          >
+            Load more findings and comments
+          </Button>
+        )}
+        {saidPageError && <PageFailed error={saidPageError} />}
+        {files.loading && !files.data && (
+          <Skeleton variant="text" rows={4} label="Loading the files" />
+        )}
+        <QueryState
+          error={files.error}
+          refusal={files.refusal}
+          detail={files.detail}
+          loading={files.loading && !files.data}
+          empty={
+            files.data && listed.length === 0 && !pagedFiles.more
+              ? {
+                  title: "No file changed",
+                  hint: "This revision changes nothing against what it is compared with.",
+                }
+              : undefined
+          }
         >
-          Load more findings and comments
-        </Button>
-      )}
-      {saidPageError && <PageFailed error={saidPageError} />}
-      {files.loading && !files.data && (
-        <Skeleton variant="text" rows={4} label="Loading the files" />
-      )}
-      <QueryState
-        error={files.error}
-        refusal={files.refusal}
-        detail={files.detail}
-        loading={files.loading && !files.data}
-        empty={
-          files.data && listed.length === 0 && !pagedFiles.more
-            ? {
-                title: "No file changed",
-                hint: "This revision changes nothing against what it is compared with.",
-              }
-            : undefined
-        }
-      >
-        <div className="code-files" data-tree={treeShown ? "shown" : "hidden"}>
-          {treeShown && (
-            <FilesPane
-              files={visible}
-              current={current || file}
-              onOpen={go}
-              badges={badges}
-              label={`Files changed in revision ${rev}`}
-              head={
-                <div className="code-files__filter">
-                  <Input
-                    inputSize="sm"
-                    aria-label="Filter files"
-                    placeholder="Filter files"
-                    leading={<ListFilterGlyph size="sm" />}
-                    value={q}
-                    onChange={(event) => setQ(event.target.value)}
-                    containerClassName="code-files__words"
-                  />
-                  <FilterOptions
-                    exts={exts}
-                    shown={shownExts}
-                    onExts={(next) =>
-                      setExt(next.length === exts.size ? "" : next.map(extToken).join(","))
-                    }
-                    only={only}
-                    onOnly={(next) => setOnly(next.join(","))}
-                    withFindings={listed.filter((f) => standing.has(f.path)).length}
-                    findingsHeld={
-                      pathsRefused !== null
-                        ? refusedWords("Findings by file are unavailable", pathsRefused)
-                        : !pathsRead
-                          ? "Findings by file are still being read."
-                          : undefined
-                    }
-                    narrowing={filtering}
-                    onClear={clearFilters}
-                  />
-                </div>
-              }
-              foot={
-                <>
-                  <ComparedWith
-                    change={change}
-                    rows={rows}
-                    rev={rev}
-                    since={since}
-                    target={target}
-                  />
-                  {pathsRefused !== null ? (
-                    <p className="code-tree__said">
-                      Findings by file are unavailable on this fleet yet.
-                    </p>
-                  ) : (
-                    (openFindings > 0 || drafts.drafts.length > 0) && (
+          <div className="code-files" data-tree={treeShown ? "shown" : "hidden"}>
+            {treeShown && (
+              <FilesPane
+                files={visible}
+                current={current || file}
+                onOpen={go}
+                badges={badges}
+                label={`Files changed in revision ${rev}`}
+                head={
+                  <div className="code-files__filter">
+                    <Input
+                      inputSize="sm"
+                      aria-label="Filter files"
+                      placeholder="Filter files"
+                      leading={<ListFilterGlyph size="sm" />}
+                      value={q}
+                      onChange={(event) => setQ(event.target.value)}
+                      containerClassName="code-files__words"
+                    />
+                    <FilterOptions
+                      exts={exts}
+                      shown={shownExts}
+                      onExts={(next) =>
+                        setExt(next.length === exts.size ? "" : next.map(extToken).join(","))
+                      }
+                      only={only}
+                      onOnly={(next) => setOnly(next.join(","))}
+                      withFindings={listed.filter((f) => standing.has(f.path)).length}
+                      findingsHeld={
+                        pathsRefused !== null
+                          ? refusedWords("Findings by file are unavailable", pathsRefused)
+                          : !pathsRead
+                            ? "Findings by file are still being read."
+                            : undefined
+                      }
+                      narrowing={filtering}
+                      onClear={clearFilters}
+                    />
+                  </div>
+                }
+                foot={
+                  <>
+                    <ComparedWith
+                      change={change}
+                      rows={rows}
+                      rev={rev}
+                      since={since}
+                      target={target}
+                    />
+                    {pathsRefused !== null ? (
                       <p className="code-tree__said">
-                        {[
-                          openFindings > 0 && `⚑ ${plural(openFindings, "open finding")}`,
-                          drafts.drafts.length > 0 &&
-                            `✎ your ${plural(drafts.drafts.length, "draft")}${drafting ? "" : ` on revision ${change.revision}`}`,
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")}
+                        Findings by file are unavailable on this fleet yet.
                       </p>
-                    )
+                    ) : (
+                      (openFindings > 0 || drafts.drafts.length > 0) && (
+                        <p className="code-tree__said code-files__counts">
+                          {openFindings > 0 && (
+                            <span>
+                              <FlagGlyph size="xs" aria-hidden="true" />
+                              {plural(openFindings, "open finding")}
+                            </span>
+                          )}
+                          {openFindings > 0 && drafts.drafts.length > 0 && " · "}
+                          {drafts.drafts.length > 0 && (
+                            <span>
+                              <PencilGlyph size="xs" aria-hidden="true" />
+                              {`your ${plural(drafts.drafts.length, "draft")}${drafting ? "" : ` on revision ${change.revision}`}`}
+                            </span>
+                          )}
+                        </p>
+                      )
+                    )}
+                    {showing}
+                  </>
+                }
+              >
+                {loadMoreFiles && <span>{loadMoreFiles}</span>}
+                {pagedFiles.pageError && <PageFailed error={pagedFiles.pageError} />}
+              </FilesPane>
+            )}
+            <FileStack
+              change={change}
+              head={head}
+              rev={rev}
+              since={since}
+              moved={diffMoved}
+              files={visible}
+              lead={
+                <>
+                  {unchanged && (
+                    <p className="muted" role="status">
+                      {since !== null
+                        ? `${file} is not among the files changed since revision ${since}.`
+                        : `${file} is not among the files revision ${rev} changes.`}
+                    </p>
                   )}
                   {showing}
                 </>
               }
-            >
-              {loadMoreFiles && <span>{loadMoreFiles}</span>}
-              {pagedFiles.pageError && <PageFailed error={pagedFiles.pageError} />}
-            </FilesPane>
-          )}
-          <FileStack
-            change={change}
-            head={head}
-            rev={rev}
-            since={since}
-            moved={diffMoved}
-            files={visible}
-            lead={showing}
-            indexOf={indexOf}
-            layout={layout === "split" ? "split" : "unified"}
-            notes={{
-              findings: findings.items,
-              placed,
-              comments: comments.items,
-              drafts: drafting ? drafts : null,
-              thread,
-            }}
-            jump={jump}
-            onCurrent={setCurrent}
-            foot={loadMoreFiles && <span>{loadMoreFiles}</span>}
-          />
-        </div>
-      </QueryState>
-    </Stack>
+              indexOf={indexOf}
+              layout={layout === "split" ? "split" : "unified"}
+              notes={notes}
+              jump={jump}
+              onCurrent={setCurrent}
+              foot={loadMoreFiles && <span>{loadMoreFiles}</span>}
+            />
+          </div>
+        </QueryState>
+      </Stack>
+    </div>
   );
 }
 

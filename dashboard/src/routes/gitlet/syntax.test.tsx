@@ -3,7 +3,7 @@ import { expect, test, vi } from "vitest";
 
 import type { DiffHunk } from "~/components/DiffView.tsx";
 import { engineJson } from "~/test/engineAnswer.ts";
-import { useExpandLines, useHunkTokens } from "./syntax.tsx";
+import { useExpandLines, useHunkTokens, type LinesRead } from "./syntax.tsx";
 
 const hunks: DiffHunk[] = [
   {
@@ -33,7 +33,7 @@ test("expanded lines are answered from the held blob with no request", async () 
   const fetched = vi.fn();
   vi.stubGlobal("fetch", fetched);
   const { result } = renderHook(() => useExpandLines("web", "b1", ["one", "two", "three"]));
-  expect(await result.current.read(1, 3)).toBeNull();
+  expect(await result.current.read(1, 3)).toEqual({ failed: null, total: 3 });
   expect(result.current.line(2)).toBe("two");
   expect(result.current.total).toBe(3);
   expect(fetched).not.toHaveBeenCalled();
@@ -59,11 +59,11 @@ test("expanded lines are read by the blob's id, one range, where no copy is held
     }),
   );
   const { result } = renderHook(() => useExpandLines("web", "b1", null));
-  let failed: string | null = "unset";
+  let got: LinesRead = { failed: "unset" };
   await act(async () => {
-    failed = await result.current.read(3, 4);
+    got = await result.current.read(3, 4);
   });
-  expect(failed).toBeNull();
+  expect(got).toEqual({ failed: null, total: 30 });
   expect(asked).toHaveLength(1);
   expect(asked[0]!.pathname).toBe("/query/code_blob");
   expect(Object.fromEntries(asked[0]!.searchParams)).toMatchObject({

@@ -170,6 +170,12 @@ const STACK = [
   `web/src/product/${"deeply/nested/".repeat(6)}Page.tsx`,
   "web/src/product/Shell.tsx",
 ].map((path) => ({ path, status: "A", added: 40, deleted: 0 }));
+// THE LAST FILE IS A RENAME from a long path, for the heads' phone case.
+STACK[4] = {
+  ...STACK[4]!,
+  old_path: `web/src/product/${"legacy/".repeat(4)}Shell.tsx`,
+  status: "R",
+};
 
 const added = (n: number) =>
   `@@ -0,0 +1,${n} @@\n${Array.from({ length: n }, (_, i) => `+line ${i + 1}`).join("\n")}\n`;
@@ -355,4 +361,44 @@ test("the Files changed tab holds its width at 390 px", async () => {
   expect(box.right).toBeLessThanOrEqual(390 + 0.5);
   const head = panel.querySelectorAll(".code-file__head")[3]!;
   expect(head.scrollWidth).toBeLessThanOrEqual(head.clientWidth);
+});
+
+/** The middle of an element's first line box, and of its last. */
+const lineMiddles = (el: Element) => {
+  const lines = [...el.getClientRects()];
+  const mid = (r: DOMRect) => r.top + r.height / 2;
+  return { first: mid(lines[0]!), last: mid(lines.at(-1)!), lines: lines.length };
+};
+const middle = (el: Element) => {
+  const r = el.getBoundingClientRect();
+  return r.top + r.height / 2;
+};
+
+// A HEAD KEEPS ITS COUNTS AND MENU AT ITS FIRST LINE'S END, however long its
+// path wraps. Mutation: let the head wrap as one row, and the counts drop below.
+test("a file's head keeps its counts on its first line with a long path, at 820 px", async () => {
+  await page.viewport(820, 800);
+  mount(820, FILES);
+  const content = await stacked();
+  const head = content.querySelectorAll(".code-file__head")[3]!;
+  const path = lineMiddles(head.querySelector("h3")!);
+  expect(path.lines).toBeGreaterThan(1);
+  const counts = head.querySelector(".code-diffstat")!;
+  expect(Math.abs(middle(counts) - path.first)).toBeLessThan(6);
+});
+
+// ON A PHONE A RENAME'S HEAD STARTS WITH ITS PATH beside the fold, and its copy
+// follows the path's last word. Mutation: make the lead a wrapping row, and the
+// fold stands alone on the first line.
+test("a renamed file's head keeps its fold and copy beside its path, at 390 px", async () => {
+  await page.viewport(390, 800);
+  mount(390, FILES);
+  const content = await stacked();
+  const head = content.querySelectorAll(".code-file__head")[4]!;
+  const path = lineMiddles(head.querySelector("h3")!);
+  expect(Math.abs(middle(head.querySelector(".code-file__fold")!) - path.first)).toBeLessThan(6);
+  const copy = [...head.querySelectorAll("button")].find((b) =>
+    b.getAttribute("aria-label")?.startsWith("Copy"),
+  )!;
+  expect(Math.abs(middle(copy) - path.last)).toBeLessThan(6);
 });

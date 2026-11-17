@@ -952,7 +952,7 @@ test("the files read for the counts is the Files changed tab's own first questio
   const files = () => changeAsked.filter((u) => u.searchParams.get("part") === "files");
   await waitFor(() => expect(files()).toHaveLength(1));
   fireEvent.click(screen.getByRole("tab", { name: /^Files changed/ }));
-  expect(await screen.findByRole("region", { name: "Changes to app.go" })).toBeTruthy();
+  expect(await screen.findByRole("region", { name: "app.go" })).toBeTruthy();
   expect(files().length).toBeGreaterThan(0);
   for (const u of files()) {
     expect([u.searchParams.get("revision"), u.searchParams.get("since_revision")]).toEqual([
@@ -1946,6 +1946,13 @@ test.each([
     const held = screen.getByRole("button", { name });
     expect(held.getAttribute("title"), String(name)).toBe(reason);
   }
+  // FINISH REVIEW'S VERDICTS, held the same.
+  fireEvent.click(screen.getByRole("button", { name: /^Finish your review of web!42/ }));
+  for (const name of ["Approve", "Request changes", "Comment"]) {
+    const item = await screen.findByRole("menuitem", { name: new RegExp(`^${name}`) });
+    expect(item.getAttribute("aria-disabled"), name).toBe("true");
+    expect(item.textContent, name).toContain(reason);
+  }
   expect(acted).toHaveLength(0);
 });
 
@@ -2033,7 +2040,7 @@ test("Close change folds on a phone, and Review stays", async () => {
 test("a change's Files tab opens on its first file", async () => {
   stubEngine(detail(), () => json({}));
   mount("#/gitlet/repos/web/changes/42?tab=files");
-  expect(await screen.findByRole("region", { name: "Changes to app.go" })).toBeTruthy();
+  expect(await screen.findByRole("region", { name: "app.go" })).toBeTruthy();
   expect(screen.queryByText("Choose a file to read its changes.")).toBeNull();
 });
 
@@ -2413,7 +2420,14 @@ const STACK_FILES = [
     old_oid: "o1",
     new_oid: "n1",
   },
-  { path: "internal/render/stream.go", status: "A", added: 3, deleted: 0, new_oid: "n2" },
+  {
+    path: "internal/render/stream.go",
+    status: "M",
+    added: 3,
+    deleted: 0,
+    old_oid: "o2",
+    new_oid: "n2",
+  },
   {
     path: "internal/server/routes.go",
     status: "M",
@@ -2436,7 +2450,7 @@ const STACK_FILES = [
 /** Each file's whole patch, as a read of it alone answers. */
 const STACK_PATCHES: Record<string, string> = {
   "internal/render/page.go": "@@ -1,2 +1,3 @@\n keep\n-old\n+new\n+more\n",
-  "internal/render/stream.go": "@@ -0,0 +1,3 @@\n+a\n+b\n+c\n",
+  "internal/render/stream.go": "@@ -1,1 +1,4 @@\n ctx\n+a\n+b\n+c\n",
   "internal/server/routes.go": "@@ -14,2 +14,2 @@ func New()\n keep14\n-old15\n+new15\n",
   "web/src/product/Page.tsx": "@@ -1,1 +1,1 @@\n-before\n+after\n",
   "web/src/product/Shell.tsx": "@@ -0,0 +1,2 @@\n+shell one\n+shell two\n",
@@ -2454,18 +2468,22 @@ const WALK = [
     {
       file: 1,
       path: STACK_FILES[1]!.path,
-      status: "A",
-      patch: "@@ -0,0 +1,3 @@\n+a\n+b\n",
+      status: "M",
+      patch: "@@ -1,1 +1,4 @@\n ctx\n+a\n+b\n",
       continues: true,
     },
   ],
   [
-    { file: 1, path: STACK_FILES[1]!.path, status: "A", patch: "+c\n" },
+    { file: 1, path: STACK_FILES[1]!.path, status: "M", patch: "+c\n" },
     ...STACK_FILES.slice(2).map((f, i) => ({
       file: i + 2,
       path: f.path,
       status: f.status,
-      patch: STACK_PATCHES[f.path],
+      // SHELL.TSX WALKS AS OTHER TEXT than its read alone, so a redraw shows.
+      patch:
+        f.path === "web/src/product/Shell.tsx"
+          ? "@@ -0,0 +1,2 @@\n+walk one\n+walk two\n"
+          : STACK_PATCHES[f.path],
     })),
   ],
 ];
@@ -2476,6 +2494,10 @@ const blobsAsked: URL[] = [];
 const BIG_BLOBS = new Set<string>();
 /** Blobs whose ranges the engine refuses. */
 const REFUSE_RANGES = new Set<string>();
+/** Walk cursors the engine refuses once, as a cursor it no longer resumes. */
+const REFUSE_WALK_ONCE = new Set<string>();
+/** Files whose read alone the engine refuses. */
+const REFUSE_ALONE = new Set<string>();
 
 /**
  * The engine for the stack: the listing `files`, the walk `walk` (cursor `w:<n>`)
@@ -2492,7 +2514,7 @@ function stubStack({
   walk?: readonly (readonly Record<string, unknown>[])[];
   walkRefused?: boolean;
   parts?: Readonly<Record<string, (url: URL) => Promise<Response> | Response>>;
-  change?: Record<string, unknown>;
+  change?: Record<string, unknown> | (() => Record<string, unknown>);
 } = {}) {
   blobsAsked.length = 0;
   const acted = stubEngine(
@@ -2505,6 +2527,9 @@ function stubStack({
         const diff = { base: HEAD, head: HEAD, total: files.length, added: 9, deleted: 3 };
         if (url.searchParams.get("patches") === "true") {
           if (walkRefused) return json({ error: "bad_params", detail: "unknown key patches" }, 400);
+          if (REFUSE_WALK_ONCE.delete(url.searchParams.get("cursor") ?? "")) {
+            return json({ error: "bad_params", detail: "cursor refused" }, 400);
+          }
           const n = Number((url.searchParams.get("cursor") ?? "w:0").slice(2));
           return json({
             ...at,
@@ -2513,6 +2538,8 @@ function stubStack({
           });
         }
         const path = url.searchParams.get("file") ?? "";
+        if (REFUSE_ALONE.has(path))
+          return json({ error: "not_found", detail: "no such file" }, 404);
         return json({
           ...at,
           diff: {
@@ -2606,7 +2633,8 @@ function holdSectionsFar() {
   vi.stubGlobal("IntersectionObserver", NearBy);
 }
 
-const section = (path: string) => screen.findByRole("region", { name: `Changes to ${path}` });
+/** A file's section, named by its head's path. */
+const section = (path: string) => screen.findByRole("region", { name: path });
 
 // EVERY LISTED FILE IS A SECTION, in git's order, under its head. Mutation:
 // sort the sections by path, and Page.tsx comes before Shell.tsx still but
@@ -2661,7 +2689,7 @@ test("the walk's next page is asked when the first file it has not finished come
 });
 
 // A FILE GOING ON PAST THE PAGE SAYS HOW MANY OF ITS CHANGED LINES ARE LEFT.
-// Mutation: count every line rather than the changed ones, and it says 1 too few or many.
+// Mutation: count its context line too, and it says "Load more lines".
 test("a file going on past the walk's page says how many lines are left and loads them", async () => {
   holdSectionsFar();
   stubStack();
@@ -2671,6 +2699,28 @@ test("a file going on past the walk's page says how many lines are left and load
   await within(stream).findByText("c");
   expect(diffAsked().walk).toEqual(["", "w:1"]);
   expect(within(stream).queryByRole("button", { name: /Load .*more line/ })).toBeNull();
+});
+
+// A FAILED PAGE OF THE WALK IS ASKED AGAIN ONLY BY ITS PRESS, a refused cursor
+// after the held pages are read again. Mutation: drop the pageError guard, and
+// the refused page is asked again at once, without end.
+test("a refused page of the walk is asked once, said, and asked again by its press", async () => {
+  holdSectionsFar();
+  REFUSE_WALK_ONCE.add("w:1");
+  stubStack();
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  const stream = await section("internal/render/stream.go");
+  await within(stream).findByText("ctx");
+  NearBy.near("internal/render/stream.go");
+  expect(
+    await within(stream).findByText("Could not read the next page (bad_params). Try again."),
+  ).toBeTruthy();
+  await settled();
+  await settled();
+  expect(diffAsked().walk).toEqual(["", "w:1"]);
+  fireEvent.click(within(stream).getByRole("button", { name: "Load 1 more line" }));
+  await within(stream).findByText("c");
+  expect(diffAsked().walk.filter((c) => c === "w:1")).toHaveLength(2);
 });
 
 // A JUMP PAST THE WALK READS THE FILE ALONE, and the walk never redraws it.
@@ -2691,6 +2741,7 @@ test("a jump past the walk reads that file alone and the walk's later page does 
   NearBy.near("internal/render/stream.go");
   await within(await section("internal/server/routes.go")).findByText("new15");
   expect(within(shell).getAllByText("shell one")).toHaveLength(1);
+  expect(within(shell).queryByText("walk one")).toBeNull();
 });
 
 // THE ADDRESS'S FILE OPENS THE STACK THERE. Mutation: drop the arrival jump, and nothing is read alone.
@@ -2770,7 +2821,7 @@ test("a file with no lines to draw says what became of it", async () => {
     await within(await section("web/public/hero.png")).findByText(/A binary file/),
   ).toBeTruthy();
   expect(
-    within(await section("internal/render/shell.go")).getByText(
+    within(await section("internal/render/old.go → internal/render/shell.go")).getByText(
       "Renamed from internal/render/old.go, its lines unchanged.",
     ),
   ).toBeTruthy();
@@ -2800,6 +2851,60 @@ test("a refused walk says so once, and each file is read when its reader asks", 
   fireEvent.click(within(routes).getByRole("button", { name: "Show its changes" }));
   await within(routes).findByText("new15");
   expect(diffAsked().alone).toEqual(["internal/server/routes.go"]);
+});
+
+// A READ ALONE REFUSED SAYS SO WITH RETRY, and a patch the walk cut short says
+// the rest is left out. Mutation: draw the refusal without Retry, and the file
+// cannot be read again.
+test("a file whose read alone is refused says so with Retry, and a patch cut short says so", async () => {
+  REFUSE_ALONE.add("internal/server/routes.go");
+  stubStack({ walkRefused: true });
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  const routes = await section("internal/server/routes.go");
+  fireEvent.click(await within(routes).findByRole("button", { name: "Show its changes" }));
+  expect(
+    await within(routes).findByText(/Its changes could not be read: no such file\./),
+  ).toBeTruthy();
+  REFUSE_ALONE.delete("internal/server/routes.go");
+  fireEvent.click(within(routes).getByRole("button", { name: "Retry" }));
+  await within(routes).findByText("new15");
+  cleanup();
+  const cut = {
+    file: 0,
+    path: STACK_FILES[0]!.path,
+    status: "M",
+    patch: "@@ -1,2 +1,3 @@\n keep\n",
+  };
+  stubStack({ walk: [[{ ...cut, continues: true, rest_omitted: true }]] });
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  const pageGo = await section("internal/render/page.go");
+  expect(
+    await within(pageGo).findByText(/The rest of this file's patch holds a line too long/),
+  ).toBeTruthy();
+  expect(within(pageGo).queryByRole("button", { name: /Load .*more line/ })).toBeNull();
+});
+
+// A MOVED DIFF ASKS EVERY HELD PAGE OF THE WALK AGAIN and forgets the lines
+// revealed on it. Mutation: keep revealed lines across the move, and line 13 stays.
+test("a moved diff asks every held page of the walk again and forgets the lines revealed", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  let version = 5;
+  BIG_BLOBS.add("n3");
+  stubStack({ change: () => detail({ version }) });
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  // NO OBSERVER IN JSDOM: every section is near, so the walk reaches its last page.
+  const routes = await section("internal/server/routes.go");
+  await within(routes).findByText("new15");
+  fireEvent.click(
+    await within(routes).findByRole("button", { name: "Expand 13 hidden lines above line 14" }),
+  );
+  await waitFor(() => expect(routes.textContent).toContain("line 13"));
+  expect(diffAsked().walk).toEqual(["", "w:1"]);
+  version = 6;
+  await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
+  await waitFor(() => expect(diffAsked().walk).toEqual(["", "w:1", "", "w:1"]));
+  await waitFor(() => expect(routes.textContent).not.toContain("line 13"));
+  BIG_BLOBS.delete("n3");
 });
 
 // A HUNK OPENS WITH GIT'S HEADER, and Expand reads the hidden lines of the
@@ -2862,6 +2967,43 @@ test("a gap whose lines are refused says so in its place", async () => {
   REFUSE_RANGES.delete("n3");
 });
 
+// THE LINES AFTER THE LAST HUNK OF A BLOB OF UNKNOWN LENGTH are read from the
+// last line shown, so the answer says the length: no line past the end, and no
+// refusal. Mutation: ask from the first hidden line, and the range starts at 29.
+test("the lines after the last hunk of a file without colouring stop at its blob's end", async () => {
+  const java = {
+    path: "src/Main.java",
+    status: "M",
+    added: 1,
+    deleted: 1,
+    old_oid: "oj",
+    new_oid: "nj",
+  };
+  const walkOf = (patch: string) => [[{ file: 0, path: java.path, status: "M", patch }]];
+  stubStack({ files: [java], walk: walkOf("@@ -28,1 +28,1 @@\n-old\n+new\n") });
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  const main = await section(java.path);
+  fireEvent.click(
+    await within(main).findByRole("button", { name: "Expand hidden lines below line 28" }),
+  );
+  await waitFor(() => expect(main.textContent).toContain("line 30"));
+  expect(main.textContent).not.toContain("line 31");
+  const ranged = blobsAsked.filter((u) => u.searchParams.has("end_line"));
+  expect(ranged.map((u) => u.searchParams.get("start_line"))).toEqual(["28"]);
+  expect(within(main).queryByRole("button", { name: /below line/ })).toBeNull();
+  cleanup();
+  stubStack({ files: [java], walk: walkOf("@@ -30,1 +30,1 @@\n-old\n+new\n") });
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  const ends = await section(java.path);
+  fireEvent.click(
+    await within(ends).findByRole("button", { name: "Expand hidden lines below line 30" }),
+  );
+  await waitFor(() =>
+    expect(within(ends).queryByRole("button", { name: /below line/ })).toBeNull(),
+  );
+  expect(ends.textContent).not.toContain("unavailable");
+});
+
 // THE TOOLBAR'S SPLIT SETS EVERY FILE; A FILE'S MENU SETS IT ALONE, held for
 // the visit. Mutation: write the file's choice to the address, and layout= moves.
 test("a file's menu draws that file alone split, and its head says so", async () => {
@@ -2911,9 +3053,9 @@ test("the tree draws each file's status in its ink's hook and in words, with its
     name: "internal/server/routes.go, modified, 1 line added and 1 removed",
   });
   expect(routes.querySelector(".code-ftree__status")!.getAttribute("data-status")).toBe("M");
-  const stream = within(tree).getByRole("treeitem", { name: /stream\.go, added/ });
-  expect(stream.querySelector(".code-ftree__status")!.getAttribute("data-status")).toBe("A");
-  expect(stream.querySelector(".code-ftree__counts")!.textContent).toBe("+3");
+  const shell = within(tree).getByRole("treeitem", { name: /Shell\.tsx, added/ });
+  expect(shell.querySelector(".code-ftree__status")!.getAttribute("data-status")).toBe("A");
+  expect(shell.querySelector(".code-ftree__counts")!.textContent).toBe("+2");
 });
 
 // THE TREE MARKS THE FILE WHOSE HEAD IS STUCK as the stack scrolls. Mutation:
@@ -2980,8 +3122,11 @@ test("Finish review is the tab's one primary, counts the drafts, and opens the r
     ]),
   );
   mount("#/gitlet/repos/web/changes/42?tab=files");
-  const finish = await screen.findByRole("button", { name: "Finish your review of web!42" });
-  expect(finish.textContent).toContain("2");
+  // THE COUNT IS IN THE BUTTON'S NAME, its figure drawn hidden. Mutation: drop it from the label.
+  const finish = await screen.findByRole("button", {
+    name: "Finish your review of web!42, 2 drafted findings",
+  });
+  expect(finish.querySelector(".code-finish__count")!.textContent).toBe("2");
   const primaries = [...document.querySelectorAll("button")].filter((b) =>
     b.className.includes("primary"),
   );
@@ -2997,7 +3142,7 @@ test("Finish review is the tab's one primary, counts the drafts, and opens the r
     }),
   });
   mount("#/gitlet/repos/web/changes/42?tab=files");
-  fireEvent.click(await screen.findByRole("button", { name: "Finish your review of web!42" }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Finish your review of web!42/ }));
   const approve = await screen.findByRole("menuitem", { name: /Approve/ });
   expect(approve.getAttribute("aria-disabled")).toBe("true");
 });
@@ -3128,7 +3273,7 @@ test("With findings keeps the files with a standing finding, and the tree badges
       name: "internal/server/routes.go, modified, 1 line added and 1 removed, 1 open finding",
     }),
   ).toBeTruthy();
-  expect(screen.getByText("⚑ 2 open findings")).toBeTruthy();
+  expect(document.querySelector(".code-files__counts")!.textContent).toBe("2 open findings");
 });
 
 // A REFUSED COUNT BY PATH draws no badge and holds the option with why.
@@ -3184,10 +3329,27 @@ test("a draft is a dashed card with Edit and Drop, and Edit saves it in place", 
         body: "",
         suggestion: "renamed15\n",
       },
+      {
+        id: "d2",
+        path: "internal/server/routes.go",
+        side: "new",
+        line_start: 3,
+        line_end: 3,
+        severity: "nit",
+        category: "style",
+        title: "Off the patch",
+        body: "",
+      },
     ]),
   );
   mount("#/gitlet/repos/web/changes/42?tab=files");
   const routes = await section("internal/server/routes.go");
+  // A DRAFT ON A LINE THE PATCH DOES NOT DRAW is drawn above it. Mutation: draw
+  // drafts only under drawn lines, and this one is nowhere.
+  expect(await within(routes).findByText("1 draft on lines not shown")).toBeTruthy();
+  expect(
+    within(routes).getByRole("article", { name: "Drafted finding: Off the patch" }),
+  ).toBeTruthy();
   const card = await within(routes).findByRole("article", {
     name: "Drafted finding: Name the route",
   });
@@ -3197,7 +3359,20 @@ test("a draft is a dashed card with Edit and Drop, and Edit saves it in place", 
   expect([...diff.querySelectorAll("[data-kind]")].map((r) => r.getAttribute("data-kind"))).toEqual(
     ["remove", "add"],
   );
+  // CANCEL GIVES THE FOCUS BACK TO EDIT. Mutation: drop the refocus, and the body has it.
   fireEvent.click(within(card).getByRole("button", { name: "Edit" }));
+  fireEvent.click(
+    within(
+      await within(routes).findByRole("form", { name: "Edit the finding on line 15" }),
+    ).getByRole("button", { name: "Cancel" }),
+  );
+  const again = await within(routes).findByRole("article", {
+    name: "Drafted finding: Name the route",
+  });
+  await waitFor(() =>
+    expect(document.activeElement).toBe(within(again).getByRole("button", { name: "Edit" })),
+  );
+  fireEvent.click(within(again).getByRole("button", { name: "Edit" }));
   const form = await within(routes).findByRole("form", { name: "Edit the finding on line 15" });
   const title = within(form).getByRole("textbox", { name: "Title" }) as HTMLInputElement;
   expect(title.value).toBe("Name the route");
@@ -3212,5 +3387,8 @@ test("a draft is a dashed card with Edit and Drop, and Edit saves it in place", 
     id: string;
     title: string;
   }[];
-  expect(kept.map((d) => [d.id, d.title])).toEqual([["d1", "Name the route for what it serves"]]);
+  expect(kept.map((d) => [d.id, d.title])).toEqual([
+    ["d1", "Name the route for what it serves"],
+    ["d2", "Off the patch"],
+  ]);
 });

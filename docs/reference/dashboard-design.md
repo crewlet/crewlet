@@ -8834,7 +8834,8 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   `gitlet.Categories`), a title, a body and, on the newer side, the lines it
   suggests in their place — and a draft is the TAB'S, kept in
   `sessionStorage` per change and revision, a dashed card a reviewer edits in
-  place or drops, until **Approve**, **Request
+  place or drops (one on a line the patch does not draw stands above its
+  diff), until **Approve**, **Request
   changes** or **Comment** (the page bar's Review, or **Finish review**, the
   tab's one primary, counting the drafts) sends every draft of the head in ONE
   `code_review_change` with the verdict, a summary and the reviewer's own

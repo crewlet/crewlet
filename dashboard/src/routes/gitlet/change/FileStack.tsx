@@ -1,11 +1,10 @@
 /**
- * Every file a revision changes as one stack: each a section under a head that
- * sticks below the files' toolbar, its patch in its own `DiffView`. Patches are
- * read as the reader reaches them, by the engine's walk of every file's patch
- * a page at a time (`part=diff&patches=true`); a file jumped to is read alone.
+ * Every file a revision changes as one stack of sticky-headed `DiffView`s, read
+ * as the reader reaches them by the engine's walk of every patch (`patches=true`).
  */
 
 import {
+  memo,
   useCallback,
   useEffect,
   useId,
@@ -28,9 +27,12 @@ import {
   Textarea,
   VisuallyHidden,
   useClipboard,
+  useToast,
 } from "@crewlethq/ui";
 import {
+  CheckGlyph,
   ChevronDownGlyph,
+  ChevronsUpDownGlyph,
   Columns2Glyph,
   CopyGlyph,
   EllipsisVerticalGlyph,
@@ -59,6 +61,7 @@ import { useViewer } from "~/lib/viewer.ts";
 import { EXPAND_STEP, expandHunks, gapsOf, type Revealed } from "~/lib/expand.ts";
 import { fmtCount, plural } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
+import { copyLink } from "~/lib/pageLink.ts";
 import { lineSide, parsePatch } from "~/lib/patch.ts";
 import { usePatchPages } from "~/lib/patchPages.ts";
 import type { DraftFinding, ReviewDrafts } from "~/lib/reviewDrafts.ts";
@@ -135,12 +138,24 @@ const walkPagesOf = (a: CodeChangeAnswer): readonly WalkPage[] =>
 const walkPageId = (p: WalkPage): string => p.next;
 const walkNext = (a: CodeChangeAnswer): string => a.next ?? "";
 
-/** One file's patch as the walk holds it. */
+/** One file's patch as the walk holds it, with the path it was walked under. */
 export interface WalkFile {
+  path: string;
+  pathB64: string | undefined;
   hunks: DiffHunk[];
   /** Its last fragment does not continue, or the rest was left out. */
   complete: boolean;
   restOmitted: boolean;
+}
+
+/** Whether the walk's patch is of the listed file `f`: a moved diff can list another there first. */
+export const walkedAs = (w: WalkFile, f: CodeDiffFile): boolean =>
+  w.path === f.path && w.pathB64 === f.path_b64;
+
+/** A file's fragments as the walk holds them, and what was made of them. */
+interface Parsed {
+  fragments: readonly CodeFilePatch[];
+  file: WalkFile;
 }
 
 /** The walk of every file's patch, as far as the reader has reached. */
@@ -182,23 +197,43 @@ export function useStackPatches(args: {
     walkNext,
   );
   useAskAgainWhenMoved(moved, true, paged.refresh);
-  // PARSED ONCE A PAGE ARRIVES, each file's fragments joined in order.
+  // A FILE IS PARSED AGAIN ONLY WHEN ITS FRAGMENTS CHANGE: an arriving page
+  // leaves every file it does not hold as it was.
+  const parsed = useRef<ReadonlyMap<number, Parsed>>(new Map());
   const files = useMemo(() => {
-    const texts = new Map<number, { text: string; complete: boolean; restOmitted: boolean }>();
+    const fragments = new Map<number, CodeFilePatch[]>();
     for (const page of paged.items) {
       for (const p of page.patches) {
-        const was = texts.get(p.file) ?? { text: "", complete: false, restOmitted: false };
-        texts.set(p.file, {
-          text: was.text + p.patch,
-          complete: !p.continues || Boolean(p.rest_omitted),
-          restOmitted: Boolean(p.rest_omitted),
-        });
+        const was = fragments.get(p.file);
+        if (was) was.push(p);
+        else fragments.set(p.file, [p]);
       }
     }
+    const kept = new Map<number, Parsed>();
     const out = new Map<number, WalkFile>();
-    for (const [at, t] of texts) {
-      out.set(at, { hunks: parsePatch(t.text), complete: t.complete, restOmitted: t.restOmitted });
+    for (const [at, parts] of fragments) {
+      const was = parsed.current.get(at);
+      const same =
+        was !== undefined &&
+        was.fragments.length === parts.length &&
+        was.fragments.every((p, i) => p === parts[i]);
+      const end = parts.at(-1)!;
+      const one: Parsed = same
+        ? was
+        : {
+            fragments: parts,
+            file: {
+              path: parts[0]!.path,
+              pathB64: parts[0]!.path_b64,
+              hunks: parsePatch(parts.map((p) => p.patch).join("")),
+              complete: !end.continues || Boolean(end.rest_omitted),
+              restOmitted: Boolean(end.rest_omitted),
+            },
+          };
+      kept.set(at, one);
+      out.set(at, one.file);
     }
+    parsed.current = kept;
     return out;
   }, [paged.items]);
   const last = paged.items.at(-1)?.patches.at(-1);
@@ -211,7 +246,7 @@ export function useStackPatches(args: {
           : last.file + 1
         : 0;
   const refused = paged.error !== null && paged.items.length === 0 && !paged.loading;
-  return { paged, files, frontier, refused };
+  return useMemo(() => ({ paged, files, frontier, refused }), [paged, files, frontier, refused]);
 }
 
 /** A line's number on one side of the diff: its newer one, or its older on a line the newer lacks. */
@@ -330,27 +365,50 @@ export function FileStack({
   }, [keys, observing]);
   // THE WALK GOES ON when its frontier's file comes near; a file near past it
   // while the frontier is far (a jump) is read alone.
+  const { frontier, refused, files: walked } = walk;
+  const { more, paging, pageError, next, refresh } = walk.paged;
   const frontierKey = useMemo(() => {
-    const f = files.find((one) => indexOf(one) === walk.frontier);
+    const f = files.find((one) => indexOf(one) === frontier);
     return f ? fileKey(f) : null;
-  }, [files, indexOf, walk.frontier]);
+  }, [files, indexOf, frontier]);
+  // A FAILED PAGE IS ASKED AGAIN ONLY BY ITS PRESS; a refused cursor reads the
+  // held pages again first, for a cursor the engine resumes.
+  const goOn = useCallback(() => {
+    if (pageError === "bad_params") refresh();
+    next();
+  }, [pageError, refresh, next]);
   useEffect(() => {
-    if (walk.refused) return;
-    if (frontierKey !== null && near.has(frontierKey) && walk.paged.more && !walk.paged.paging) {
-      walk.paged.next();
+    if (refused) return;
+    if (frontierKey !== null && near.has(frontierKey) && more && !paging && pageError === null) {
+      next();
     }
     for (const f of files) {
       const key = fileKey(f);
       if (!near.has(key) || alone.has(key) || !hasLines(f)) continue;
       if (f.added + f.deleted > FOLD_FROM_LINES) continue;
       const at = indexOf(f);
-      if (walk.files.get(at)?.complete) continue;
-      const past = at > walk.frontier && (frontierKey === null || !near.has(frontierKey));
+      const held = walked.get(at);
+      if (held?.complete && walkedAs(held, f)) continue;
+      const past = at > frontier && (frontierKey === null || !near.has(frontierKey));
       // THE WALK ENDED WITHOUT IT: a listing and a walk of different reads.
-      const missed = walk.frontier === Infinity;
+      const missed = frontier === Infinity;
       if (past || missed) readAlone(key);
     }
-  }, [near, files, indexOf, walk, frontierKey, alone, readAlone]);
+  }, [
+    near,
+    files,
+    indexOf,
+    walked,
+    frontier,
+    refused,
+    more,
+    paging,
+    pageError,
+    next,
+    frontierKey,
+    alone,
+    readAlone,
+  ]);
   // A JUMP: read the file alone if the walk does not hold it, then bring its head to the top.
   const jumped = useRef(0);
   useLayoutEffect(() => {
@@ -361,12 +419,13 @@ export function FileStack({
     if (!section) return;
     jumped.current = jump.seq;
     const f = files.find((one) => fileKey(one) === jump.key);
-    if (f && hasLines(f) && !walk.files.get(indexOf(f))?.complete) {
+    const held = f ? walked.get(indexOf(f)) : undefined;
+    if (f && hasLines(f) && !(held?.complete && walkedAs(held, f))) {
       if (f.added + f.deleted <= FOLD_FROM_LINES) readAlone(jump.key);
     }
     section.scrollIntoView?.({ block: "start" });
     section.querySelector<HTMLElement>("h3")?.focus({ preventScroll: true });
-  }, [jump, files, indexOf, walk.files, readAlone]);
+  }, [jump, files, indexOf, walked, readAlone]);
   // THE FILE WHOSE HEAD IS STUCK at the top, read on the scroller's scroll once a frame.
   useEffect(() => {
     const el = root.current;
@@ -394,18 +453,39 @@ export function FileStack({
       if (frame !== 0) cancelAnimationFrame(frame);
     };
   }, [onCurrent]);
-  const toggle = (set: typeof setFolded, key: string) =>
-    set((was) => {
-      const next = new Set(was);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+  // STABLE BY KEY, so a section draws again only when what it shows moves.
+  const onFold = useCallback(
+    (key: string) =>
+      setFolded((was) => {
+        const now = new Set(was);
+        if (now.has(key)) now.delete(key);
+        else now.add(key);
+        return now;
+      }),
+    [],
+  );
+  const onOpen = useCallback(
+    (key: string) => {
+      setOpened((was) => new Set([...was, key]));
+      readAlone(key);
+    },
+    [readAlone],
+  );
+  const onLayout = useCallback(
+    (key: string, to: "unified" | "split") =>
+      setSplit((was) => {
+        const map = new Map(was);
+        if (to === layout) map.delete(key);
+        else map.set(key, to);
+        return map;
+      }),
+    [layout],
+  );
   return (
     <div ref={root} className="code-stack">
       <VisuallyHidden as="h2">Files</VisuallyHidden>
       {lead}
-      {walk.refused && (
+      {refused && (
         <p className="muted" role="status">
           Every file's patch on one page is unavailable on this fleet yet: each file is read when
           you open it.
@@ -415,6 +495,11 @@ export function FileStack({
         const key = fileKey(f);
         const at = indexOf(f);
         const own = split.get(key);
+        const held = walked.get(at);
+        const fromWalk = !alone.has(key) && held && walkedAs(held, f) ? held : undefined;
+        // ONLY A SECTION THE WALK GOES ON FROM hears its paging.
+        const paces =
+          !refused && (at === frontier || (fromWalk !== undefined && !fromWalk.complete));
         return (
           <FileSection
             key={key}
@@ -424,27 +509,18 @@ export function FileStack({
             since={since}
             moved={moved}
             entry={f}
-            fromWalk={alone.has(key) ? undefined : walk.files.get(at)}
-            walk={walk}
+            fromWalk={fromWalk}
+            refused={refused}
+            walkPager={paces ? { goOn, paging, pageError } : null}
             alone={alone.has(key)}
-            onReadAlone={() => readAlone(key)}
+            onReadAlone={readAlone}
             layout={own ?? layout}
             ownLayout={own !== undefined && own !== layout}
-            onLayout={(next) =>
-              setSplit((was) => {
-                const map = new Map(was);
-                if (next === layout) map.delete(key);
-                else map.set(key, next);
-                return map;
-              })
-            }
+            onLayout={onLayout}
             folded={folded.has(key)}
-            onFold={() => toggle(setFolded, key)}
+            onFold={onFold}
             opened={opened.has(key)}
-            onOpen={() => {
-              setOpened((was) => new Set([...was, key]));
-              readAlone(key);
-            }}
+            onOpen={onOpen}
             notes={notes}
           />
         );
@@ -472,8 +548,15 @@ function modeWords(f: CodeDiffFile): string {
   return `Its mode changed from ${f.old_mode ?? "none"} to ${f.new_mode ?? "none"}.`;
 }
 
+/** The walk's paging, heard by the section it goes on from. */
+interface WalkPager {
+  goOn: () => void;
+  paging: boolean;
+  pageError: string | null;
+}
+
 /** One file of the stack: its sticky head, then its patch with what lies on its lines. */
-function FileSection({
+const FileSection = memo(function FileSection({
   change,
   head,
   rev,
@@ -481,7 +564,8 @@ function FileSection({
   moved,
   entry,
   fromWalk,
-  walk,
+  refused,
+  walkPager,
   alone,
   onReadAlone,
   layout,
@@ -500,21 +584,25 @@ function FileSection({
   moved: string;
   entry: CodeDiffFile;
   fromWalk: WalkFile | undefined;
-  walk: StackPatches;
+  /** The engine refused the walk: the file is read when its reader asks. */
+  refused: boolean;
+  walkPager: WalkPager | null;
   alone: boolean;
-  onReadAlone: () => void;
+  onReadAlone: (key: string) => void;
   layout: "unified" | "split";
   ownLayout: boolean;
-  onLayout: (layout: "unified" | "split") => void;
+  onLayout: (key: string, layout: "unified" | "split") => void;
   folded: boolean;
-  onFold: () => void;
+  onFold: (key: string) => void;
   opened: boolean;
-  onOpen: () => void;
+  onOpen: (key: string) => void;
   notes: StackNotes;
 }) {
   const path = entry.path;
+  const key = fileKey(entry);
   const headId = useId();
-  const clip = useClipboard();
+  const clip = useClipboard({ failedResetMs: null });
+  const toast = useToast();
   const lines = hasLines(entry);
   const large = entry.added + entry.deleted > FOLD_FROM_LINES;
   const params = useMemo(
@@ -550,14 +638,17 @@ function FileSection({
     sides.after.lines,
   );
   const expanded = useMemo(
-    () => expandHunks(hunks ?? [], revealed, blob.line),
-    [hunks, revealed, blob.line],
+    () => expandHunks(hunks ?? [], revealed, blob.line, blob.total),
+    [hunks, revealed, blob.line, blob.total],
   );
   const gaps = useMemo(() => gapsOf(hunks ?? [], blob.total), [hunks, blob.total]);
+  // AN ADDED FILE'S PATCH IS THE WHOLE FILE: nothing follows its last hunk.
   const trailingLeft =
-    gaps.trailing === null
-      ? null
-      : Math.max(0, gaps.trailing - (revealed.get(hunks?.length ?? 0) ?? 0));
+    entry.status === "A"
+      ? 0
+      : gaps.trailing === null
+        ? null
+        : Math.max(0, gaps.trailing - (revealed.get(hunks?.length ?? 0) ?? 0));
   const tokens = useDiffTokens({ sides, file: drawn ? entry : undefined, hunks: expanded.hunks });
   const [pick, setPick] = useState<LinePick | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
@@ -582,15 +673,21 @@ function FileSection({
       if (blob.total !== null) to = Math.min(to, blob.total);
     }
     if (to < from) return;
-    const failed = await blob.read(from, to);
-    if (failed !== null) {
+    // THE LINES AFTER THE LAST HUNK of a blob of unknown length are read from
+    // the last line shown, which it holds, so the answer says its length.
+    const unknown = gap === original.length && blob.total === null;
+    const got = await blob.read(unknown ? Math.max(1, from - 1) : from, to);
+    if (got.failed !== null) {
+      const failed = got.failed;
       setGapFailed((was) => new Map(was).set(gap, failed));
       return;
     }
+    const upTo = got.total !== null ? Math.min(to, got.total) : to;
+    if (upTo < from) return;
     setShown((was) => {
       const base = was.at === at ? was.revealed : new Map<number, number>();
       const next = new Map(base);
-      next.set(gap, (base.get(gap) ?? 0) + (to - from + 1));
+      next.set(gap, (base.get(gap) ?? 0) + (upTo - from + 1));
       return { at, revealed: next };
     });
   };
@@ -613,18 +710,31 @@ function FileSection({
       gap.hunk < expanded.hunks.length
         ? `above line ${firstAfter ?? 1}`
         : `below line ${expanded.hunks.at(-1)?.lines.findLast((l) => l.after !== null)?.after ?? 0}`;
-    const press = (take: number, words: string, name: string) => (
-      <Button
-        key={words}
-        size="small"
-        variant="ghost"
-        leadingIcon={<UnfoldVerticalGlyph size="sm" />}
-        aria-label={name}
-        onClick={() => void reveal(original, take)}
-      >
-        {words}
-      </Button>
-    );
+    // ABOVE A HUNK, glyphs in the numbers' gutter beside git's header; after
+    // the last, words, as nothing else is on that row.
+    const trailingGap = gap.hunk >= expanded.hunks.length;
+    const press = (take: number, words: string, name: string, all = false) =>
+      trailingGap ? (
+        <Button
+          key={words}
+          size="small"
+          variant="ghost"
+          leadingIcon={<UnfoldVerticalGlyph size="sm" />}
+          aria-label={name}
+          onClick={() => void reveal(original, take)}
+        >
+          {words}
+        </Button>
+      ) : (
+        <IconButton
+          key={words}
+          label={name}
+          icon={all ? <ChevronsUpDownGlyph /> : <UnfoldVerticalGlyph />}
+          size="sm"
+          variant="ghost"
+          onClick={() => void reveal(original, take)}
+        />
+      );
     if (gap.skipped === null) {
       return press(EXPAND_STEP, "Expand lines below", `Expand hidden lines ${where}`);
     }
@@ -632,7 +742,7 @@ function FileSection({
       return press(
         gap.skipped,
         `Expand ${plural(gap.skipped, "line")}`,
-        `Expand ${fmtCount(gap.skipped)} hidden lines ${where}`,
+        `Expand ${plural(gap.skipped, "hidden line")} ${where}`,
       );
     }
     return (
@@ -646,26 +756,41 @@ function FileSection({
           gap.skipped,
           `Expand all ${fmtCount(gap.skipped)}`,
           `Expand all ${fmtCount(gap.skipped)} hidden lines ${where}`,
+          true,
         )}
       </>
     );
   };
 
   const { findings, placed, comments, drafts, thread } = notes;
-  const ofFile = findings
-    .filter((f) => f.path === path)
-    .map((f) => ({ finding: f, place: placed[f.id] }));
-  const placedHere = ofFile.filter((p) => p.place && !p.place.outdated && !p.place.gone);
-  const outdated = ofFile.filter((p) => !p.place || p.place.outdated || p.place.gone);
-  const threads = threadsOf(comments).filter((t) => t.root.anchor?.path === path);
-  const threadsHere = threads.filter((t) => t.root.anchor?.revision === rev);
-  const threadsElsewhere = threads.filter((t) => t.root.anchor?.revision !== rev);
-  const repliesTo = (finding: string) => comments.filter((c) => c.finding_id === finding);
+  const { placedHere, outdated } = useMemo(() => {
+    const ofFile = findings
+      .filter((f) => f.path === path)
+      .map((f) => ({ finding: f, place: placed[f.id] }));
+    return {
+      placedHere: ofFile.filter((p) => p.place && !p.place.outdated && !p.place.gone),
+      outdated: ofFile.filter((p) => !p.place || p.place.outdated || p.place.gone),
+    };
+  }, [findings, placed, path]);
+  const { threadsHere, threadsElsewhere } = useMemo(() => {
+    const threads = threadsOf(comments).filter((t) => t.root.anchor?.path === path);
+    return {
+      threadsHere: threads.filter((t) => t.root.anchor?.revision === rev),
+      threadsElsewhere: threads.filter((t) => t.root.anchor?.revision !== rev),
+    };
+  }, [comments, path, rev]);
+  const repliesTo = useCallback(
+    (finding: string) => comments.filter((c) => c.finding_id === finding),
+    [comments],
+  );
   // A FINDING'S OWN LINES AS THE PATCH ON SCREEN DRAWS THEM, all of them or none.
-  const ownOf = (finding: Pick<CodeFindingRow, "side" | "line_start" | "line_end">): DiffLine[] => {
-    const own = expanded.hunks.flatMap((h) => h.lines.filter((l) => ownLine(finding, l)));
-    return own.length === finding.line_end - finding.line_start + 1 ? own : [];
-  };
+  const ownOf = useCallback(
+    (finding: Pick<CodeFindingRow, "side" | "line_start" | "line_end">): DiffLine[] => {
+      const own = expanded.hunks.flatMap((h) => h.lines.filter((l) => ownLine(finding, l)));
+      return own.length === finding.line_end - finding.line_start + 1 ? own : [];
+    },
+    [expanded.hunks],
+  );
   const threadRoot = threadsHere.find((t) => t.root.id === thread)?.root;
   const revealLine = useCallback(
     (line: DiffLine) => {
@@ -674,90 +799,164 @@ function FileSection({
     },
     [threadRoot],
   );
+  // THE DRAFT LAST EDITED gets the focus back on its Edit once its form closes.
+  const [backTo, setBackTo] = useState<string | null>(null);
+  const draftCard = useCallback(
+    (d: DraftFinding) =>
+      editing === d.id ? (
+        <FindingComposer
+          key={d.id}
+          pick={{ side: d.side, start: d.line_start, end: d.line_end }}
+          initial={d}
+          onAdd={(next) => {
+            drafts!.update(d.id, {
+              path: d.path,
+              side: d.side,
+              line_start: d.line_start,
+              line_end: d.line_end,
+              ...next,
+            });
+            setEditing(null);
+            setBackTo(d.id);
+          }}
+          onCancel={() => {
+            setEditing(null);
+            setBackTo(d.id);
+          }}
+        />
+      ) : (
+        <DraftNote
+          key={d.id}
+          draft={d}
+          own={ownOf({ ...d, side: d.side })}
+          onEdit={() => setEditing(d.id)}
+          remove={() => drafts!.remove(d.id)}
+          focusEdit={backTo === d.id}
+          onFocused={() => setBackTo(null)}
+        />
+      ),
+    [editing, drafts, ownOf, backTo],
+  );
+  // A DRAFT ON A LINE THE PATCH DOES NOT DRAW (a gap, or lines expanded on an
+  // earlier visit) is drawn above the diff, never lost.
+  const unplaced = useMemo(() => {
+    const drawn = { old: new Set<number>(), new: new Set<number>() };
+    for (const h of expanded.hunks) {
+      for (const l of h.lines) {
+        for (const side of ["old", "new"] as const) {
+          const n = numberOn(l, side);
+          if (n !== null) drawn[side].add(n);
+        }
+      }
+    }
+    return (drafts?.drafts ?? []).filter((d) => d.path === path && !drawn[d.side].has(d.line_end));
+  }, [drafts, expanded.hunks, path]);
 
-  const lineNotes = (line: DiffLine) => {
-    const out: ReactNode[] = [];
-    for (const side of ["new", "old"] as const) {
-      const n = numberOn(line, side);
-      if (n === null) continue;
-      for (const p of placedHere) {
-        if (p.finding.side === side && (p.place?.end ?? p.place?.start) === n) {
+  const lineNotes = useCallback(
+    (line: DiffLine) => {
+      const out: ReactNode[] = [];
+      for (const side of ["new", "old"] as const) {
+        const n = numberOn(line, side);
+        if (n === null) continue;
+        for (const p of placedHere) {
+          if (p.finding.side === side && (p.place?.end ?? p.place?.start) === n) {
+            out.push(
+              <FindingCard
+                key={p.finding.id}
+                change={change}
+                finding={p.finding}
+                place={p.place}
+                replies={repliesTo(p.finding.id)}
+                applicable={rev === change.revision && since === null}
+                own={ownOf(p.finding)}
+                where="line"
+              />,
+            );
+          }
+        }
+        for (const t of threadsHere) {
+          if (t.root.anchor?.side === side && t.root.anchor.line === n) {
+            out.push(
+              <div key={t.root.id} data-current={t.root.id === thread || undefined}>
+                <Thread root={t.root} replies={t.replies} change={change} />
+              </div>,
+            );
+          }
+        }
+        for (const d of drafts?.drafts ?? []) {
+          if (d.path !== path || d.side !== side || d.line_end !== n) continue;
+          out.push(draftCard(d));
+        }
+        if (drafts && pick && pick.side === side && pick.end === n) {
           out.push(
-            <FindingCard
-              key={p.finding.id}
-              change={change}
-              finding={p.finding}
-              place={p.place}
-              replies={repliesTo(p.finding.id)}
-              applicable={rev === change.revision && since === null}
-              own={ownOf(p.finding)}
-              where="line"
+            <FindingComposer
+              key="composer"
+              pick={pick}
+              onAdd={(draft) => {
+                drafts.add({
+                  ...draft,
+                  path,
+                  side: pick.side,
+                  line_start: pick.start,
+                  line_end: pick.end,
+                });
+                setPick(null);
+              }}
+              onCancel={() => setPick(null)}
             />,
           );
         }
       }
-      for (const t of threadsHere) {
-        if (t.root.anchor?.side === side && t.root.anchor.line === n) {
-          out.push(
-            <div key={t.root.id} data-current={t.root.id === thread || undefined}>
-              <Thread root={t.root} replies={t.replies} change={change} />
-            </div>,
-          );
-        }
+      return out.length > 0 ? <>{out}</> : null;
+    },
+    [
+      placedHere,
+      threadsHere,
+      drafts,
+      pick,
+      path,
+      change,
+      rev,
+      since,
+      thread,
+      repliesTo,
+      ownOf,
+      draftCard,
+    ],
+  );
+  const picked = useCallback(
+    (line: DiffLine) => {
+      if (pick) {
+        const n = numberOn(line, pick.side);
+        if (n !== null && n >= pick.start && n <= pick.end) return true;
       }
-      for (const d of drafts?.drafts ?? []) {
-        if (d.path !== path || d.side !== side || d.line_end !== n) continue;
-        out.push(
-          editing === d.id ? (
-            <FindingComposer
-              key={d.id}
-              pick={{ side: d.side, start: d.line_start, end: d.line_end }}
-              initial={d}
-              onAdd={(next) => {
-                drafts!.update(d.id, {
-                  path: d.path,
-                  side: d.side,
-                  line_start: d.line_start,
-                  line_end: d.line_end,
-                  ...next,
-                });
-                setEditing(null);
-              }}
-              onCancel={() => setEditing(null)}
-            />
-          ) : (
-            <DraftNote
-              key={d.id}
-              draft={d}
-              own={ownOf({ ...d, side: d.side })}
-              onEdit={() => setEditing(d.id)}
-              remove={() => drafts!.remove(d.id)}
-            />
-          ),
-        );
-      }
-      if (drafts && pick && pick.side === side && pick.end === n) {
-        out.push(
-          <FindingComposer
-            key="composer"
-            pick={pick}
-            onAdd={(draft) => {
-              drafts.add({
-                ...draft,
-                path,
-                side: pick.side,
-                line_start: pick.start,
-                line_end: pick.end,
-              });
-              setPick(null);
-            }}
-            onCancel={() => setPick(null)}
-          />,
-        );
-      }
-    }
-    return out.length > 0 ? <>{out}</> : null;
-  };
+      // A FINDING HANGS FROM ITS LAST LINE, which wears the accent bar.
+      return placedHere.some((p) => {
+        const n = numberOn(line, p.finding.side === "old" ? "old" : "new");
+        return n !== null && n === (p.place?.end ?? p.place?.start);
+      });
+    },
+    [pick, placedHere],
+  );
+  const onPick = useMemo(
+    () =>
+      drafts
+        ? (line: DiffLine, extend: boolean) => {
+            const where = lineSide(line);
+            if (!where) return;
+            setPick((was) =>
+              extend && was && was.side === where.side
+                ? {
+                    side: where.side,
+                    start: Math.min(was.start, where.n),
+                    end: Math.max(was.end, where.n),
+                  }
+                : { side: where.side, start: where.n, end: where.n },
+            );
+          }
+        : undefined,
+    [drafts],
+  );
 
   const viewHref =
     head && entry.status !== "D" ? repoHref(change.repo, { ref: head, path }) : undefined;
@@ -795,7 +994,7 @@ function FileSection({
     body = (
       <p className="code-file__note">
         This file changes {fmtCount(entry.added + entry.deleted)} lines.{" "}
-        <Button size="small" variant="secondary" onClick={onOpen}>
+        <Button size="small" variant="secondary" onClick={() => onOpen(key)}>
           Show its changes
         </Button>
       </p>
@@ -812,6 +1011,12 @@ function FileSection({
   } else if (hunks !== null) {
     body = (
       <>
+        {unplaced.length > 0 && (
+          <div className="code-file__unplaced">
+            <p className="code-file__note">{plural(unplaced.length, "draft")} on lines not shown</p>
+            {unplaced.map(draftCard)}
+          </div>
+        )}
         <DiffView
           hue="code"
           tokens={tokens}
@@ -822,48 +1027,23 @@ function FileSection({
           expand={expandable ? expand : undefined}
           trailing={trailingLeft}
           reveal={threadRoot ? revealLine : undefined}
-          onPick={
-            drafts
-              ? (line, extend) => {
-                  const where = lineSide(line);
-                  if (!where) return;
-                  setPick((was) =>
-                    extend && was && was.side === where.side
-                      ? {
-                          side: where.side,
-                          start: Math.min(was.start, where.n),
-                          end: Math.max(was.end, where.n),
-                        }
-                      : { side: where.side, start: where.n, end: where.n },
-                  );
-                }
-              : undefined
-          }
-          picked={(line) => {
-            if (pick) {
-              const n = numberOn(line, pick.side);
-              if (n !== null && n >= pick.start && n <= pick.end) return true;
-            }
-            // A FINDING HANGS FROM ITS LAST LINE, which wears the accent bar.
-            return placedHere.some((p) => {
-              const n = numberOn(line, p.finding.side === "old" ? "old" : "new");
-              return n !== null && n === (p.place?.end ?? p.place?.start);
-            });
-          }}
+          onPick={onPick}
+          picked={picked}
         />
         {alone ? (
           <PatchPager paged={paged} />
         ) : (
           fromWalk &&
-          !fromWalk.complete && (
+          !fromWalk.complete &&
+          walkPager && (
             <div className="code-file__pager">
               <Button
                 size="small"
                 variant="ghost"
                 leadingIcon={<UnfoldVerticalGlyph size="sm" />}
-                onClick={walk.paged.next}
-                disabled={walk.paged.paging}
-                loading={walk.paged.paging}
+                onClick={walkPager.goOn}
+                disabled={walkPager.paging}
+                loading={walkPager.paging}
               >
                 {(() => {
                   const left =
@@ -876,7 +1056,7 @@ function FileSection({
                   return left > 0 ? `Load ${plural(left, "more line")}` : "Load more lines";
                 })()}
               </Button>
-              {walk.paged.pageError && <PageFailed error={walk.paged.pageError} />}
+              {walkPager.pageError && <PageFailed error={walkPager.pageError} />}
             </div>
           )
         )}
@@ -892,12 +1072,28 @@ function FileSection({
         )}
       </>
     );
-  } else if (walk.refused && !alone) {
+  } else if (refused && !alone) {
     body = (
       <p className="code-file__note">
-        <Button size="small" variant="secondary" onClick={onReadAlone} disabled={unread}>
+        <Button size="small" variant="secondary" onClick={() => onReadAlone(key)} disabled={unread}>
           Show its changes
         </Button>
+      </p>
+    );
+  } else if (walkPager?.pageError && !alone) {
+    // THE WALK'S PAGE FOR THIS FILE FAILED: asked again only by this press.
+    body = (
+      <p className="code-file__note">
+        <Button
+          size="small"
+          variant="secondary"
+          onClick={walkPager.goOn}
+          disabled={walkPager.paging}
+          loading={walkPager.paging}
+        >
+          Load its changes
+        </Button>{" "}
+        <PageFailed error={walkPager.pageError} />
       </p>
     );
   } else {
@@ -914,62 +1110,67 @@ function FileSection({
     );
   }
 
+  const copyWord =
+    clip.state === "copied"
+      ? `Copied ${path}`
+      : clip.state === "failed"
+        ? "The browser refused the clipboard"
+        : "Copy the path";
   return (
-    <section
-      className="code-file"
-      aria-label={`Changes to ${path}`}
-      data-key={fileKey(entry)}
-      data-path={path}
-    >
+    <section className="code-file" aria-labelledby={headId} data-key={key} data-path={path}>
       <div className="code-file__head">
-        <IconButton
-          label={folded ? `Unfold ${path}` : `Fold ${path}`}
-          icon={<ChevronDownGlyph />}
-          size="sm"
-          variant="ghost"
-          aria-expanded={!folded}
-          className="code-file__fold"
-          onClick={onFold}
-        />
-        <h3 id={headId} className="code-file__path" tabIndex={-1}>
-          {unread ? (
-            <em>a path that is not valid text</em>
-          ) : entry.status === "R" && entry.old_path ? (
-            <>
-              <PathWords path={entry.old_path} /> → <PathWords path={path} />
-            </>
-          ) : (
-            <PathWords path={path} />
-          )}
-        </h3>
-        {!unread && (
+        <span className="code-file__lead">
           <IconButton
-            label="Copy the path"
-            icon={<CopyGlyph />}
+            label={folded ? `Unfold ${path}` : `Fold ${path}`}
+            icon={<ChevronDownGlyph />}
             size="sm"
             variant="ghost"
-            onClick={() => void clip.copy(path)}
+            aria-expanded={!folded}
+            className="code-file__fold"
+            onClick={() => onFold(key)}
           />
-        )}
-        <Tag size="xs" appearance="outline">
-          {word}
-        </Tag>
-        {ownLayout && (
-          <Tag
-            size="xs"
-            appearance="outline"
-            leadingIcon={
-              layout === "split" ? <Columns2Glyph size="xs" /> : <Rows2Glyph size="xs" />
-            }
-          >
-            {layout === "split" ? "Split" : "Unified"}
+          <h3 id={headId} className="code-file__path" tabIndex={-1}>
+            {unread ? (
+              <em>a path that is not valid text</em>
+            ) : entry.status === "R" && entry.old_path ? (
+              <>
+                <PathWords path={entry.old_path} /> → <PathWords path={path} />
+              </>
+            ) : (
+              <PathWords path={path} />
+            )}
+          </h3>
+          {!unread && (
+            <IconButton
+              label={copyWord}
+              icon={clip.state === "copied" ? <CheckGlyph /> : <CopyGlyph />}
+              size="sm"
+              variant="ghost"
+              onClick={() => void clip.copy(path)}
+            />
+          )}
+          <Tag size="xs" appearance="outline">
+            {word}
           </Tag>
-        )}
+          {ownLayout && (
+            <Tag
+              size="xs"
+              appearance="outline"
+              leadingIcon={
+                layout === "split" ? <Columns2Glyph size="xs" /> : <Rows2Glyph size="xs" />
+              }
+            >
+              {layout === "split" ? "Split" : "Unified"}
+            </Tag>
+          )}
+        </span>
         <span className="code-file__end">
           {entry.binary ? (
             <span className="code-file__binary">binary</span>
           ) : (
-            <Diffstat added={entry.added} deleted={entry.deleted} label={`in ${path}`} />
+            entry.added + entry.deleted > 0 && (
+              <Diffstat added={entry.added} deleted={entry.deleted} label={`in ${path}`} />
+            )
           )}
           <Menu
             label={`More actions on ${path}`}
@@ -991,14 +1192,22 @@ function FileSection({
                     {
                       key: "layout",
                       label: layout === "split" ? "View this file unified" : "View this file split",
-                      onSelect: () => onLayout(layout === "split" ? "unified" : "split"),
+                      onSelect: () => onLayout(key, layout === "split" ? "unified" : "split"),
                     },
                   ]
                 : []),
               {
                 key: "link",
                 label: "Copy a link to this file",
-                onSelect: () => void clip.copy(new URL(fileLink, location.href).href),
+                onSelect: () =>
+                  void copyLink(fileLink).then((said) =>
+                    said === "Copied"
+                      ? toast.ok(`Copied a link to ${path}`)
+                      : toast.show({
+                          variant: "warning",
+                          message: "The browser refused the clipboard",
+                        }),
+                  ),
               },
             ]}
           />
@@ -1007,33 +1216,35 @@ function FileSection({
       {!folded && (
         <div className="code-file__body">
           {(outdated.length > 0 || threadsElsewhere.length > 0) && (
-            <Disclosure
-              title={`${outdated.length + threadsElsewhere.length} outdated on this file`}
-            >
-              <Stack gap={2}>
-                {outdated.map((p) => (
-                  <FindingCard
-                    key={p.finding.id}
-                    change={change}
-                    finding={p.finding}
-                    place={p.place}
-                    replies={repliesTo(p.finding.id)}
-                    applicable={false}
-                    where="line"
-                  />
-                ))}
-                {threadsElsewhere.map((t) => (
-                  <Thread key={t.root.id} root={t.root} replies={t.replies} change={change} />
-                ))}
-              </Stack>
-            </Disclosure>
+            <div className="code-file__outdated">
+              <Disclosure
+                title={`${outdated.length + threadsElsewhere.length} outdated on this file`}
+              >
+                <Stack gap={2}>
+                  {outdated.map((p) => (
+                    <FindingCard
+                      key={p.finding.id}
+                      change={change}
+                      finding={p.finding}
+                      place={p.place}
+                      replies={repliesTo(p.finding.id)}
+                      applicable={false}
+                      where="line"
+                    />
+                  ))}
+                  {threadsElsewhere.map((t) => (
+                    <Thread key={t.root.id} root={t.root} replies={t.replies} change={change} />
+                  ))}
+                </Stack>
+              </Disclosure>
+            </div>
           )}
           {body}
         </div>
       )}
     </section>
   );
-}
+});
 
 /** A drafted finding: a dashed card of the reader's own, edited in place or dropped. */
 function DraftNote({
@@ -1041,13 +1252,24 @@ function DraftNote({
   own,
   onEdit,
   remove,
+  focusEdit,
+  onFocused,
 }: {
   draft: DraftFinding;
   own: readonly DiffLine[];
   onEdit: () => void;
   remove: () => void;
+  /** Its edit form just closed: Edit takes the focus back. */
+  focusEdit: boolean;
+  onFocused: () => void;
 }) {
   const viewer = useViewer();
+  const edit = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!focusEdit) return;
+    edit.current?.focus();
+    onFocused();
+  }, [focusEdit, onFocused]);
   const Category = CATEGORY_GLYPHS[draft.category];
   return (
     <article className="code-finding" data-draft="" aria-label={`Drafted finding: ${draft.title}`}>
@@ -1069,7 +1291,7 @@ function DraftNote({
         </Tag>
         <span className="code-finding__aside">sent with your review</span>
         <span className="code-finding__end">
-          <Button size="small" variant="ghost" onClick={onEdit}>
+          <Button ref={edit} size="small" variant="ghost" onClick={onEdit}>
             Edit
           </Button>
           <Button size="small" variant="ghost" onClick={remove}>

@@ -3,7 +3,7 @@
  * reader's access and authorship leave them, and the one dialog each opens.
  */
 import { useState, type ReactNode } from "react";
-import { Button, Count, Menu, Stack, Textarea, type MenuItem } from "@crewlethq/ui";
+import { Button, Menu, Stack, Textarea, type MenuItem } from "@crewlethq/ui";
 import {
   CheckGlyph,
   ChevronDownGlyph,
@@ -14,6 +14,7 @@ import { Modal } from "~/components/Modal.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { WriteButton } from "~/components/WriteButton.tsx";
 import { authoredBy } from "~/lib/code.ts";
+import { fmtCount, plural } from "~/lib/format.ts";
 import { draftedRevisions, findingOf, forgetDrafts, readDrafts } from "~/lib/reviewDrafts.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { menuHold, type WriteAccess } from "~/lib/useWriteAccess.ts";
@@ -214,11 +215,15 @@ export function FinishReview({ change, drafts }: { change: CodeChangeDetail; dra
   return (
     <>
       <Menu
-        label={`Finish your review of ${change.ref}`}
+        label={`Finish your review of ${change.ref}${drafts > 0 ? `, ${plural(drafts, "drafted finding")}` : ""}`}
         trigger={
           <span className="code-finish">
             Finish review
-            {drafts > 0 && <Count value={drafts} label={`${drafts} drafted`} />}
+            {drafts > 0 && (
+              <span className="code-finish__count" aria-hidden="true">
+                {fmtCount(drafts)}
+              </span>
+            )}
           </span>
         }
         trailingIcon={<ChevronDownGlyph size="sm" />}
