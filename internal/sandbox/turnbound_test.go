@@ -379,15 +379,22 @@ func TestAResumeAnotherBuildCanMakeIsCountedOnlyOnceNoLiveNodeCan(t *testing.T) 
 // resume whose turn relaunched before it failed is out, its hand-back finding
 // the turn's next job on the row. A hand-back the store answers late counts the
 // run once it lands, and an ending
-// that lands beside it, before its answer is taken, leaves it uncounted. A
-// failure of the node's that a wait clears (a coordination store that did not
-// answer) is never counted.
+// that lands beside it, before its answer is taken, leaves it uncounted. AND
+// ONLY WHILE THIS NODE HOLDS THE SEAT UNDER THE LEASE THE ATTEMPT'S CLAIM WAS
+// TAKEN WITH: nothing cuts a resume's frame short at the seat's release, and
+// one that meets its failure after it, its hand-back landing before a newer
+// holder fences the row, counts nothing and leaves nothing behind; and once
+// this node takes the seat back under a newer lease, the run is counted from
+// that holding's own attempts. A failure of the node's that a wait clears (a
+// coordination store that did not answer) is never counted.
 //
 // Mutation: record no failure, keep the latest instant rather than the first,
 // drop the record on any one of the ways out, count the failure as it is met
 // or as the attempt returns rather than once its hand-back lands, count it in
-// the step that takes the landing's answer whatever settled before it, or
-// keep it where the hand-back did not land, and a row goes red.
+// the step that takes the landing's answer whatever settled before it, keep it
+// where the hand-back did not land, count it under a lease this node no longer
+// holds the seat by, keep it in memory once that lease is gone, or carry an
+// earlier holding's instant into a later one, and a row goes red.
 func TestAResumeOnlyAnOperatorClearsIsRaisedWhileTheRunWaits(t *testing.T) {
 	t.Parallel()
 	full := errors.New("write: no space left on device")
@@ -551,6 +558,79 @@ func TestAResumeOnlyAnOperatorClearsIsRaisedWhileTheRunWaits(t *testing.T) {
 			t.Fatal("the premise: the attempt on a full disk is handed back")
 		}
 		blockedFor(t, rig, ResumesBlocked{})
+	})
+	// lettingGo has rig's lease seam answer by lost whether this node still
+	// holds the seat, under the lease every rig launch is made with, and has
+	// the next resume let the seat go of inside its frame, as a lease lost
+	// while the frame runs does: the node's admission ends a turn at a drain's
+	// cut alone, so the frame meets its failure after the seat's release.
+	lettingGo := func(rig *coordRig) {
+		var lost atomic.Bool
+		rig.coordinator.lease = func(string) (Fence, bool) {
+			if lost.Load() {
+				return Fence{}, false
+			}
+			return rigLease, true
+		}
+		rig.resumer.during = func(context.Context, PendingRun) {
+			lost.Store(true)
+			rig.coordinator.ReleaseSeat("swe")
+		}
+	}
+	t.Run("the seat let go of while its resume runs", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		waiting(t, rig)
+		lettingGo(rig)
+		if err := attempt(t, rig); err == nil {
+			t.Fatal("the premise: the attempt on a full disk is handed back")
+		}
+		if got := rig.get("t1"); got.Status != StatusRunning {
+			t.Fatalf("the premise: the hand-back landed after the seat's release, but the run is %s", got.Status)
+		}
+		blockedFor(t, rig, ResumesBlocked{})
+		rig.coordinator.mu.Lock()
+		_, kept := rig.coordinator.blocked["t1"]
+		rig.coordinator.mu.Unlock()
+		if kept {
+			t.Error("this node still keeps the run of a seat it let go of among its runs waiting for an operator")
+		}
+	})
+	t.Run("an earlier holding's run, with the seat taken back here", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		waiting(t, rig)
+		lettingGo(rig)
+		if err := attempt(t, rig); err == nil {
+			t.Fatal("the premise: the attempt on a full disk is handed back")
+		}
+		live := t.Context()
+		if err := rig.recoverSeat(live, "node-a:2", rigLease.Epoch+1); err != nil {
+			t.Fatalf("taking the seat back: %v", err)
+		}
+		blockedFor(t, rig, ResumesBlocked{})
+	})
+	t.Run("the seat taken back here under a newer lease", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		waiting(t, rig)
+		lettingGo(rig)
+		if err := attempt(t, rig); err == nil {
+			t.Fatal("the premise: the attempt on a full disk is handed back")
+		}
+		// TAKEN BACK before anything read the runs waiting: the earlier
+		// holding's count is no start for the next one's.
+		live := t.Context()
+		rig.resumer.during = nil
+		rig.now = rig.now.Add(time.Hour)
+		again := rig.now
+		if err := rig.recoverSeat(live, "node-a:2", rigLease.Epoch+1); err != nil {
+			t.Fatalf("taking the seat back: %v", err)
+		}
+		if err := attempt(t, rig); err == nil {
+			t.Fatal("the premise: the next holding's attempt on a full disk is handed back")
+		}
+		blockedFor(t, rig, ResumesBlocked{Runs: 1, Seat: "swe", Kind: "disk_full", Since: again})
 	})
 	t.Run("a failure of the node's a wait clears", func(t *testing.T) {
 		t.Parallel()

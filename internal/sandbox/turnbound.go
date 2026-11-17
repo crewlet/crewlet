@@ -304,10 +304,24 @@ func (c *Coordinator) runsOwnFailure(ctx context.Context, run PendingRun, err er
 // between the release's landing on the store and that step takes the entry
 // out before it is counted. An entry counted by an earlier attempt stays
 // counted while the next one's release is out.
+//
+// AND ONLY WHILE THIS NODE HOLDS THE SEAT UNDER fence, the lease the attempt's
+// claim was taken with ([fenceOf]). The seat's release takes the run out
+// ([Coordinator.ReleaseSeat]), but nothing cuts a resume's frame short there
+// (the node's admission ends a turn at a drain's cut alone), and a frame still
+// running here met its failure after the release, its hand-back landing on a
+// row no newer holder had fenced yet: counted, a run of a seat this node no
+// longer held stood in its status record, raised fleet-wide whatever the seat's
+// next holder made of it, until the node restarted or the run came back to it.
+// So [Coordinator.ResumesBlocked] counts a run only where the lease seam answers
+// that this node holds the seat under fence ([CoordinatorOptions.Lease]), and
+// lets go of one it no longer does; and an entry an earlier holding left is no
+// start for a later one's ([Coordinator.blockedHandBackLocked]).
 type blockedResume struct {
 	agent    string
 	kind     string
 	since    time.Time
+	fence    Fence
 	handBack *claimRelease
 	counted  bool
 }
@@ -341,19 +355,34 @@ type ResumesBlocked struct {
 // there (internal/engine's executorReading), since the node holding the seat
 // may be a satellite, which evaluates no alarm table of its own. FROM THIS
 // NODE'S OWN MEMORY of its attempts, which is exact for the seats it holds:
-// counted once the failed attempt's hand-back lands ([blockedResume]); a
-// resume of the run that gets past the condition, or fails for anything else,
-// takes it out, and so does a hand-back that does not land, the run's settling
-// ([Coordinator.runSettled]) and the seat's release, whose next holder says it
-// again from its own attempts. A restart forgets it until the run's next
-// attempt fails again.
+// counted once the failed attempt's hand-back lands, and only while this node
+// holds the seat under the lease that attempt's claim was taken with
+// ([blockedResume]); a resume of the run that gets past the condition, or
+// fails for anything else, takes it out, and so does a hand-back that does not
+// land, the run's settling ([Coordinator.runSettled]) and the seat's release,
+// whose next holder says it again from its own attempts. A restart forgets it
+// until the run's next attempt fails again.
 func (c *Coordinator) ResumesBlocked() ResumesBlocked {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	counted := make(map[string]blockedResume, len(c.blocked))
+	for turnID, b := range c.blocked {
+		if b.counted {
+			counted[turnID] = b
+		}
+	}
+	c.mu.Unlock()
 	var out ResumesBlocked
 	var oldest blockedResume
-	for _, b := range c.blocked {
-		if !b.counted {
+	var gone map[string]Fence
+	for turnID, b := range counted {
+		// ASKED OUTSIDE mu, as every write this coordinator makes on a
+		// seat's behalf asks it: the seat host answers under a lock of its
+		// own.
+		if fence, held := c.leaseOf(b.agent); !held || (fence.Fenced() && fence != b.fence) {
+			if gone == nil {
+				gone = map[string]Fence{}
+			}
+			gone[turnID] = b.fence
 			continue
 		}
 		out.Runs++
@@ -361,6 +390,17 @@ func (c *Coordinator) ResumesBlocked() ResumesBlocked {
 			(b.since.Equal(oldest.since) && b.agent < oldest.agent) {
 			oldest = b
 		}
+	}
+	if len(gone) > 0 {
+		// LET GO OF, unless an attempt under another lease recorded the run
+		// since: that holding says its own.
+		c.mu.Lock()
+		for turnID, fence := range gone {
+			if b, ok := c.blocked[turnID]; ok && b.fence == fence {
+				delete(c.blocked, turnID)
+			}
+		}
+		c.mu.Unlock()
 	}
 	if out.Runs > 0 {
 		out.Seat, out.Kind, out.Since = oldest.agent, oldest.kind, oldest.since
@@ -394,12 +434,16 @@ func (c *Coordinator) unblock(turnID string) {
 // failed on kind, a condition only an operator clears, as the release whose
 // landing counts its run in [Coordinator.ResumesBlocked] ([blockedResume]). A
 // run an earlier attempt counted keeps the instant of its first such failure in
-// a row, and stays counted while cr is out. Under mu.
+// a row, and stays counted while cr is out; but not one an earlier holding of
+// the seat counted, under another lease, which a frame of that holding left
+// behind it: the seat's next holder, this node again included, says it from
+// its own attempts. Under mu.
 func (c *Coordinator) blockedHandBackLocked(cr *claimRelease, kind string) {
 	run := cr.run
+	fence := fenceOf(run)
 	b, ok := c.blocked[run.TurnID]
-	if !ok {
-		b = blockedResume{agent: run.AgentHandle, since: c.now()}
+	if !ok || b.fence != fence {
+		b = blockedResume{agent: run.AgentHandle, fence: fence, since: c.now()}
 	}
 	b.kind, b.handBack = kind, cr
 	if c.blocked == nil {
