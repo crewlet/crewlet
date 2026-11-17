@@ -72,7 +72,7 @@ async function show(
           area="Doclet"
           reread="Reload."
           onApplied={() => {}}
-          helper="Helper."
+          hint="Hint."
           {...props}
         />
       </SettingsTable>
@@ -234,7 +234,10 @@ test("Save is held on the value the document already writes", async () => {
   await show({ ...SKILLS, value: "SKL", set: true }, "Tool skills");
   await press("Change Tool skills");
   const save = screen.getByRole("button", { name: "Save" });
-  expect(save.getAttribute("title")).toBe("This is the tool skills already.");
+  expect(save.getAttribute("aria-disabled")).toBe("true");
+  expect(save.getAttribute("aria-describedby")).toBeTruthy();
+  const reason = document.getElementById(save.getAttribute("aria-describedby")!.split(" ").pop()!);
+  expect(reason?.textContent).toBe("This is the tool skills already.");
   await submit(save);
   expect(calls).toEqual([]);
 });
@@ -263,4 +266,43 @@ test("a reader without the grant sees the pencil held, and its reason on keyboar
   expect(screen.getByRole("tooltip").textContent).toBe(
     `Change Tool skills. ${CONFIG_WRITE_REASONS.no_grant}`,
   );
+});
+
+// A RESET THE ENGINE WARNS OF opens the panel on the default, where the
+// warning is read and Save anyway stores it. Mutation: store the reset on a
+// warned check, or leave the warning unsaid, and this fails.
+test("a reset the engine warns about opens the panel, and is stored only after Save anyway", async () => {
+  const warning = "This moves the company's clock from Europe/Berlin to UTC.";
+  const calls = engine({ name: "Acme", timezone: "Europe/Berlin" } as unknown as CompanyDocument, [
+    {
+      kind: "advisory",
+      ref: "",
+      path: "timezone",
+      segments: ["timezone"],
+      seat: "",
+      unit: "",
+      from: "",
+      to: "",
+      message: warning,
+      introduced: true,
+    },
+  ]);
+  await show({ ...ZONE, value: "Europe/Berlin", set: true }, "Time zone");
+  const zone = screen.getByRole("row", { name: /Time zone/ });
+  fireEvent.click(within(zone).getByRole("button", { name: "Reset to default" }));
+  expect(zone.textContent).toContain("Reset to UTC?");
+  await act(async () => {
+    fireEvent.click(within(zone).getByRole("button", { name: "Reset" }));
+  });
+  await act(afterMicrotasks);
+  expect(saved(calls)).toBeUndefined();
+  expect(screen.getByText(warning)).toBeTruthy();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Save anyway" }));
+  });
+  await act(afterMicrotasks);
+  expect(saved(calls)!.body).toEqual({
+    timezone: null,
+    _summary: "Doclet: Time zone back to the default (timezone)",
+  });
 });

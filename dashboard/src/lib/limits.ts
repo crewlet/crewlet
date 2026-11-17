@@ -26,6 +26,12 @@
  * asks for.
  */
 
+import {
+  DURATION_UNIT_SECONDS,
+  durationValue,
+  type DurationUnit,
+  type DurationValue,
+} from "@crewlethq/ui";
 import type { LimitsAnswer, SettingRange } from "~/contract/limits.ts";
 import { fmtSetting, plural } from "~/lib/format.ts";
 import type { CompanyDocument, ConfigProblem } from "~/protocol/types.ts";
@@ -38,19 +44,88 @@ export type TypedLimit =
   | { readonly ok: true; readonly value: number | null }
   | { readonly ok: false; readonly error: string };
 
-/** What the field of a cap of this unit takes, as the line under it. */
-export function limitTyping(row: LimitRow): string {
+/** What a cap's field holds: text for a number, an amount and a unit for a duration. Empty is the default. */
+export type LimitDraft = string | DurationValue;
+
+/** The units a duration cap's field offers: each its range holds a whole one of, seconds only where needed. */
+export function durationUnits(row: LimitRow): DurationUnit[] {
+  const range = row.range;
+  const wholeMinutes = row.value % 60 === 0 && row.default % 60 === 0;
+  return (["days", "hours", "minutes", "seconds"] as const).filter((unit) => {
+    const size = DURATION_UNIT_SECONDS[unit];
+    if (range?.max !== undefined && range.max < size) return false;
+    return unit !== "seconds" || !wholeMinutes || range === undefined || range.min < 60;
+  });
+}
+
+/** A cap's field as the pencil opens it: empty for the default, else the value in the field's unit. */
+export function limitDraft(row: LimitRow): LimitDraft {
+  const atDefault = row.value === row.default;
+  if (row.unit === "seconds") {
+    return durationValue(atDefault ? null : row.value, row.default, durationUnits(row));
+  }
+  return atDefault ? "" : limitText(row, row.value);
+}
+
+/** The least and greatest a cap's field steps to, in the unit it is typed in. */
+export function limitBounds(row: LimitRow): { min?: number; max?: number } {
+  const range = row.range;
+  if (!range) return row.unit === "seconds" || row.unit === "fraction" ? { min: 0 } : {};
+  const scale = row.unit === "fraction" ? 100 : 1;
+  const step = row.unit === "seconds" ? 1 : 1 / scale;
+  const least = range.or_zero ? 0 : range.min_exclusive ? range.min + step : range.min;
+  return {
+    min: Math.round(least * scale * 100) / 100,
+    ...(range.max === undefined ? {} : { max: Math.round(range.max * scale * 100) / 100 }),
+  };
+}
+
+/** Common durations a duration's chips offer, in seconds. */
+const DURATION_LADDER = [
+  60, 300, 900, 1_800, 3_600, 7_200, 21_600, 43_200, 86_400, 259_200, 604_800, 1_209_600, 2_592_000,
+  7_776_000, 31_536_000,
+];
+
+/** Common numbers of days a day count's chips offer. */
+const DAYS_LADDER = [1, 7, 14, 30, 90, 180, 365, 730, 1_825, 3_650];
+
+/** Common shares a percentage's chips offer, as fractions of one. */
+const FRACTION_LADDER = [0.1, 0.25, 0.5, 0.75, 1];
+
+/**
+ * The values a cap's chips offer beside its default, in the cap's own unit:
+ * the four of a common ladder nearest the default that the range admits. A
+ * count has no common values, so it offers only its default.
+ */
+export function limitPresets(row: LimitRow): number[] {
+  const ladder =
+    row.unit === "seconds"
+      ? DURATION_LADDER
+      : row.unit === "days"
+        ? DAYS_LADDER
+        : row.unit === "fraction"
+          ? FRACTION_LADDER
+          : [];
+  const around = Math.log(Math.max(row.default, ladder[0] ?? 1));
+  return ladder
+    .filter((v) => v !== row.default && (!row.range || rangeAdmits(row.range, v)))
+    .sort((a, b) => Math.abs(Math.log(a) - around) - Math.abs(Math.log(b) - around))
+    .slice(0, 4)
+    .sort((a, b) => a - b);
+}
+
+/** The field's suffix for a cap of this unit. */
+export function limitUnitWords(row: LimitRow): string | undefined {
   switch (row.unit) {
-    case "seconds":
-      return "A duration: seconds, or with m, h or d (30m, 12h, 7d).";
     case "fraction":
-      return "A percentage, from 1 to 100.";
+      return "%";
     case "per_second":
-      return "A whole number per second.";
-    case "count":
-      return "A whole number.";
+      return "per second";
     case "days":
-      return "A whole number of days.";
+      return "days";
+    case "count":
+    case "seconds":
+      return undefined;
   }
 }
 
@@ -151,12 +226,43 @@ export function rangeWords(row: LimitRow, range: SettingRange, zeroWords?: strin
 }
 
 /**
+ * What a cap admits, short, as the line under its field: "1 to 100",
+ * "5 minutes to 30 days", "30 to 3,650 days, or 0 to keep them for ever".
+ */
+export function limitHint(row: LimitRow, zeroWords?: string, unit?: string): string | undefined {
+  return row.range ? rangeHint(row, row.range, zeroWords, unit) : undefined;
+}
+
+function rangeHint(row: LimitRow, range: SettingRange, zeroWords?: string, unit?: string): string {
+  if (range.or_zero === true) {
+    return `${rangeHint(row, { ...range, or_zero: false }, undefined, unit)}, or ${zeroWords ?? "0"}`;
+  }
+  // A COUNT OF A THING THE PAGE NAMES says it once, after both ends: "12 to 256 characters".
+  if (unit !== undefined && row.unit === "count" && !range.min_exclusive) {
+    const most = range.max === undefined ? "" : ` to ${range.max.toLocaleString()}`;
+    return `${range.max === undefined ? "At least " : ""}${range.min.toLocaleString()}${most} ${unit}`;
+  }
+  const node =
+    range.operator_max === true || range.operator_min === true ? " (this node’s limit)" : "";
+  const least = boundWords(row, range.min);
+  if (range.max === undefined) {
+    return `${range.min_exclusive ? "More than" : "At least"} ${least}${node}`;
+  }
+  const most = boundWords(row, range.max);
+  if (range.min_exclusive) return `More than ${least}, up to ${most}${node}`;
+  // ONE UNIT WORD FOR BOTH ENDS where they share it: "30 to 3,650 days".
+  const shared = row.unit === "days" || row.unit === "per_second";
+  return `${shared ? range.min.toLocaleString() : least} to ${most}${node}`;
+}
+
+/**
  * Reads what was typed for a cap. Empty is the default, which is always
  * admitted; any other value is held to its unit and then to the range the
  * engine holds the cap to.
  */
-export function readLimit(row: LimitRow, text: string, zeroWords?: string): TypedLimit {
-  const typed = text.trim().replace(/%$/, "").trim();
+export function readLimit(row: LimitRow, draft: LimitDraft, zeroWords?: string): TypedLimit {
+  if (typeof draft !== "string") return readDurationDraft(row, draft, zeroWords);
+  const typed = draft.trim().replace(/%$/, "").trim();
   if (typed === "") return { ok: true, value: null };
   if (row.unit === "seconds") return readDuration(row, typed, zeroWords);
   // A SIGN IS READ, so -2 is told the cap's range rather than that it is not
@@ -176,6 +282,18 @@ export function readLimit(row: LimitRow, text: string, zeroWords?: string): Type
       value = n;
       break;
   }
+  if (row.range && !rangeAdmits(row.range, value)) {
+    return { ok: false, error: rangeWords(row, row.range, zeroWords) };
+  }
+  return { ok: true, value };
+}
+
+/** A duration's amount, in the unit picked beside it. */
+function readDurationDraft(row: LimitRow, draft: DurationValue, zeroWords?: string): TypedLimit {
+  const typed = draft.amount.trim();
+  if (typed === "") return { ok: true, value: null };
+  if (!/^-?\d+(\.\d+)?$/.test(typed)) return { ok: false, error: `“${typed}” is not a number.` };
+  const value = Math.round(Number(typed) * DURATION_UNIT_SECONDS[draft.unit]);
   if (row.range && !rangeAdmits(row.range, value)) {
     return { ok: false, error: rangeWords(row, row.range, zeroWords) };
   }

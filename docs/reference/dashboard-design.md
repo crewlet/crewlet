@@ -10774,7 +10774,7 @@ delegation, notifications and a scheduled turn's timeout; a ceiling a cap is
 refused above, such as the most turns a worker may ask for, is a row beside
 it, so a refusal naming it names a value the page shows and changes). Each group is a
 card holding the kit's `SettingsTable` (the shape Settings › Sign-in policy
-takes too): the cap's name with its key in the company document under it, the
+takes too): the cap's name with the control that copies its key, the
 value in tabular figures, and its source, *Default* as a quiet word where the
 value is the engine's and a marked *Changed from* the default otherwise, *Off*
 rather than 0 where a value switches its limit off (the answer's `off` and
@@ -10798,12 +10798,23 @@ the document read beside a copy of a default: a number is a `limits` row
 (`queries.LimitRow`, with the range its validator holds it to), and any other
 value a `settings` row (`queries.SettingRow`: a line of text, a time zone, a
 space key, a list of space keys or a switch, with its default and whether the
-document sets it). Both are drawn and changed by `SettingEditor`: the row's
-name, key, value and source, and a pencil opening a panel whose field is the
-kind's, whose Save reads the document, checks the change with the engine
-(`PATCH /config?dry_run=true`), stops on any warning the change introduces
-with **Save anyway**, saves, and draws the saved value as applying until this
-node applies it. A number is held to its range as it is typed (a range may
+document sets it). Both are drawn and changed by `SettingEditor` on the
+kit's `SettingsTable`, which is DataGrid's anatomy (its column heads, row
+height, hairlines and hover, under a card head with its icon and count): the
+row's name, key, value and source, and at the row's end a pencil opening the
+kit's one-setting panel (`SettingForm`), whose Save reads the document, checks
+the change with the engine (`PATCH /config?dry_run=true`), stops on any
+warning the change introduces with **Save anyway**, saves, and draws the saved
+value as applying until this node applies it. The field needs no reading: a
+number is the kit's `NumberField` (steppers held to its range, the range said
+under it as "1 to 10"), a duration its `DurationField` (an amount and a unit
+picker, with common durations as chips), a share a percentage with common
+shares, a choice a segmented row or a select, and text a field; each shows its
+default as its placeholder and a **Default** chip or option, never a sentence.
+Beside the pencil, a value that differs from its default carries **Reset to
+default**, which asks inline first ("Reset to 3?") and then saves the default
+on the same checked path, opening the panel where the engine warns or refuses.
+A number is held to its range as it is typed (a range may
 admit 0 apart from its scale, as Chatlet's message horizon does: 0 keeps
 messages for ever, and 1 to 29 days is refused beside the field); no other
 kind copies a rule, and a refusal is the engine's, said in the words its rule

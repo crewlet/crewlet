@@ -4,6 +4,7 @@
  */
 
 import { Callout, Card, InlineCode, PageNote, SettingsTable } from "@crewlethq/ui";
+import { ClockGlyph, KeyGlyph, ServerGlyph } from "@crewlethq/icons/glyphs";
 import { LimitSetting } from "~/components/LimitSetting.tsx";
 import { TextSetting } from "~/components/TextSetting.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -51,7 +52,11 @@ function Policy({ answer, onApplied }: { answer: SignInPolicyAnswer; onApplied: 
   const idle = row(KEYS.idle);
   const stepUp = row(KEYS.stepUp);
   const held = heldWords(answer);
-  const limit = (cap: LimitRow | undefined, label: string, words?: (n: number) => string) =>
+  const limit = (
+    cap: LimitRow | undefined,
+    label: string,
+    counted?: { words: (n: number) => string; unit: string },
+  ) =>
     cap && (
       <LimitSetting
         cap={cap}
@@ -59,13 +64,13 @@ function Policy({ answer, onApplied }: { answer: SignInPolicyAnswer; onApplied: 
         area={AREA}
         reread={REREAD}
         onApplied={onApplied}
-        {...(words ? { words } : {})}
+        {...counted}
       />
     );
   return (
     <>
       <Card padding="none">
-        <Card.Header>
+        <Card.Header icon={<KeyGlyph size="sm" />} count={password ? 2 : 1}>
           <Card.Title id="sign-in-signing">Signing in</Card.Title>
         </Card.Header>
         <SettingsTable aria-labelledby="sign-in-signing">
@@ -77,13 +82,17 @@ function Policy({ answer, onApplied }: { answer: SignInPolicyAnswer; onApplied: 
             onApplied={onApplied}
             words={(v) => factorWords(v === true)}
             switchWords={{ on: "Required", off: "Optional" }}
-            helper="Required asks every password sign-in for a code from an authenticator app. Optional lets a password alone sign people in."
+            hint="Required asks every password sign-in for an authenticator code."
           />
-          {limit(password, "Shortest password", characters)}
+          {limit(password, "Shortest password", { words: characters, unit: "characters" })}
         </SettingsTable>
       </Card>
       <Card padding="none">
-        <Card.Header subtitle="A shorter limit ends sessions past it at their next request. A longer one applies to people who sign in after it.">
+        <Card.Header
+          icon={<ClockGlyph size="sm" />}
+          count={[lifetime, idle, stepUp].filter(Boolean).length}
+          subtitle="A shorter limit ends sessions past it at their next request. A longer one applies to people who sign in after it."
+        >
           <Card.Title id="sign-in-sessions">Sessions</Card.Title>
         </Card.Header>
         <SettingsTable aria-labelledby="sign-in-sessions">
@@ -101,7 +110,11 @@ function Policy({ answer, onApplied }: { answer: SignInPolicyAnswer; onApplied: 
         </Callout>
       )}
       <Card padding="none">
-        <Card.Header subtitle="Set in the node’s configuration file. The company’s choices stay within them.">
+        <Card.Header
+          icon={<ServerGlyph size="sm" />}
+          count={5}
+          subtitle="Set in the node’s configuration file. The company’s choices stay within them."
+        >
           <Card.Title id="sign-in-limits">This node&rsquo;s limits</Card.Title>
         </Card.Header>
         <SettingsTable aria-labelledby="sign-in-limits">
