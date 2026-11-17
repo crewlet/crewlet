@@ -67,13 +67,41 @@
 
 /* THE PANEL: a way to start, the filters, then one card per thread. */
 .artifact-comments,
-.artifact-comment-start,
-.artifact-comment-draft,
-.artifact-comment-picture {
+.artifact-comment-start {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
   min-width: 0;
+}
+/* THE DRAFT: its parts on one step of the spacing scale. Beside a pin it brings
+   the inset the kit's popover leaves to what it holds, at a composer's width. */
+.artifact-comment-draft {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.artifact-comment-draft[data-beside] {
+  box-sizing: border-box;
+  width: 22rem;
+  max-width: 100%;
+  padding: var(--spacing-3);
+}
+/* The picture's well: one height whatever it holds, the picture fitted whole
+   in its middle. Under the draft, so it outranks the kit card's own layout. */
+.artifact-comment-draft .artifact-comment-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 9rem;
+  min-width: 0;
+  overflow: hidden;
+}
+.artifact-comment-preview > .artifact-comment-note {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  text-align: center;
 }
 .artifact-comments {
   gap: var(--spacing-4);
@@ -108,6 +136,11 @@
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-sm);
   object-fit: contain;
+}
+.artifact-comment-preview > .artifact-comment-crop {
+  display: block;
+  align-self: center;
+  max-height: 100%;
 }
 .artifact-comment-threads {
   display: flex;

@@ -1468,6 +1468,10 @@ drops the commit. A repository
 setting refs faster than they go idle raises `code_refs_near_limit` before it
 reaches the 100 000 live refs it may hold ([alarms](../reference/alarms.md)).
 
+On a repository's **Branches** tab, Stale lists the branches nobody has
+moved in 90 days, each with who moved it last, while the push history still
+names them.
+
 ## Who read a unit's repository
 
 Every clone, fetch and download that sends a `visibility: unit` repository's

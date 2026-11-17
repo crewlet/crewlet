@@ -40,7 +40,11 @@ export function DraftPin({ x, y }: { x: number; y: number }) {
     <Popover
       label={`New comment: ${draft.label}`}
       open={beside}
+      // BESIDE THE PIN, level with it, so the draft never covers what it is about;
+      // as tall as it needs where the frame has room, and never past its edge.
+      side="right"
       align="start"
+      height="layer"
       onOpenChange={(open, reason) => {
         if (open) return;
         // ESCAPE LETS THE DRAFT GO; a pin carried out of view hands it to the
@@ -59,7 +63,7 @@ export function DraftPin({ x, y }: { x: number; y: number }) {
         />
       )}
     >
-      <DraftComposer />
+      <DraftComposer beside />
     </Popover>
   );
 }

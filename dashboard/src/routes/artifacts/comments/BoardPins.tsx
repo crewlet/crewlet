@@ -77,6 +77,7 @@ export function BoardPins({
     const { anchor, board } = hit;
     const seq = c.startDraft({ anchor, label: anchorLabel(anchor), crop: undefined });
     if (c.narrow) c.showPanel();
+    else c.stepAside();
     capture.current?.();
     capture.current = null;
     // A BOARD THAT IS NOT LIVE (off screen, or drawn too small to run) has no

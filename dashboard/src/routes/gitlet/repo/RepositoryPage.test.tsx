@@ -23,6 +23,7 @@ import { Router } from "~/app/router.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
+import { pinZoneForTest } from "~/lib/prefs.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
@@ -119,6 +120,96 @@ const json = (payload: unknown, status = 200) =>
 
 /** A revision as the engine resolves it: a whole ref as it is, a bare name as a branch. */
 const wholeRef = (rev: string) => (rev.startsWith("refs/") ? rev : `refs/heads/${rev}`);
+
+/** Where a commit's checks stand for `target`, as `code_commit_marks` answers it. */
+const rollup = (target: string, state: string) => ({
+  target,
+  state,
+  counts: state === "passed" ? { passed: 2 } : { passed: 1, running: 1 },
+  required: 2,
+  required_passed: state === "passed" ? 2 : 1,
+});
+
+/** The tags newest first, as `code_tags` answers them: one dated, one past 9999, one of a tree. */
+const TAG_ROWS = [
+  {
+    ref: "refs/tags/v3",
+    oid: HEAD,
+    type: "commit",
+    peeled: HEAD,
+    peeled_type: "commit",
+    date: "2026-10-28T07:00:00Z",
+  },
+  {
+    ref: "refs/tags/v2",
+    oid: OTHER,
+    type: "tag",
+    peeled: OTHER,
+    peeled_type: "commit",
+    date_unix: 253402300801,
+  },
+  {
+    ref: "refs/tags/v1",
+    oid: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c",
+    type: "tree",
+    peeled: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c",
+    peeled_type: "tree",
+  },
+];
+
+/** One head of a `code_tips` page, behind and ahead of its base. */
+const tipOf = (oid: string, behind?: number, ahead?: number) => ({
+  oid,
+  type: "commit",
+  peeled: oid,
+  peeled_type: "commit",
+  ...(behind === undefined ? { counts_out_of_time: true } : { behind, ahead }),
+});
+
+/** Who moved a branch, as the push history names the push. */
+const mover = (seat: string, via: string) => ({
+  push_id: `p-${seat}-${via}`,
+  actor: seat,
+  actor_kind: "agent",
+  actor_seat: seat,
+  via,
+});
+
+/** The branches by when each moved, as `code_refs` with `detail=true` answers them. */
+const REF_ROWS = [
+  {
+    ref: "refs/heads/feature",
+    oid: OTHER,
+    position: POSITION,
+    moved_at: "2026-10-27T11:00:00Z",
+    moved_by: mover("cto", "git"),
+    change: { number: 42, title: "Stream the shell", state: "open" },
+    may_delete: true,
+  },
+  {
+    ref: "refs/heads/main",
+    oid: HEAD,
+    position: POSITION,
+    moved_at: "2026-10-27T10:00:00Z",
+    moved_by: mover("cto", "merge"),
+    protection: { patterns: ["refs/heads/main"], direct_push: "persons" },
+    delete_refusal: "default_branch",
+    delete_detail: "main is web's default branch: it is never deleted",
+  },
+];
+
+/** A listing in detail of `rows`, found by any part of a name, its active count where asked. */
+function refsListing(p: URLSearchParams, rows: readonly Record<string, unknown>[] = REF_ROWS) {
+  const has = (p.get("contains") ?? "").toLowerCase();
+  return {
+    refs_detail: rows.filter((r) =>
+      String(r.ref).slice("refs/heads/".length).toLowerCase().includes(has),
+    ),
+    ...(p.get("active_since") ? { active_branches: { count: rows.length - 1 } } : {}),
+    position: POSITION,
+    level: "session",
+  };
+}
 
 /** A read of content by a ref, as the engine answers one: bare, with the ref it resolved. */
 const byRef = (url: URL, part: Record<string, unknown>) => ({
@@ -333,6 +424,7 @@ function stubEngine(
           });
         }
         case "/query/code_refs":
+          if (p.get("detail") === "true") return json(refsListing(p));
           return json({
             refs:
               p.get("prefix") === "refs/tags/"
@@ -479,7 +571,29 @@ function stubEngine(
         case "/query/code_pushes":
           return json({ position: POSITION, level: "session" });
         case "/query/code_commit_marks":
-          return json({ commit_marks: [], position: POSITION, level: "session" });
+          return json({
+            commit_marks: (p.get("commits") ?? "")
+              .split(",")
+              .filter((c) => c === HEAD)
+              .map((commit) => ({ commit, checks: [rollup("refs/heads/main", "passed")] })),
+            position: POSITION,
+            level: "session",
+          });
+        case "/query/code_tags":
+          return json({
+            repo: "web",
+            kind: "tags",
+            tags: { tags: TAG_ROWS.slice(0, Number(p.get("limit") ?? 50)), total: TAG_ROWS.length },
+          });
+        case "/query/code_tips":
+          return json({
+            repo: "web",
+            kind: "tips",
+            tips: {
+              base: p.get("base"),
+              tips: (p.get("oids") ?? "").split(",").map((oid) => tipOf(oid, 0, 3)),
+            },
+          });
         case "/query/code_tree_commits":
           return json({
             repo: "web",
@@ -1060,34 +1174,182 @@ test("a link past a file's end opens the file from its first line, saying so", a
   expect(bigStarts(asked, "code_blob")).toEqual(["3050", null]);
 });
 
-// A BRANCH OPENS ITS FILES: the default branch at the repository's own
-// address, any other by its name — and the tags under them, each at its whole
-// ref. Mutation: link the default branch by name, every branch to the
-// default, or a tag by its short name, and this fails.
-test("the branches are the engine's refs, each opening its files", async () => {
-  stubEngine();
-  mount("#/gitlet/repos/web?tab=branches");
+/** The engine answering `what` from `answer`, everything else as it answered before. */
+function stubQuery(asked: URL[], what: string, answer: (p: URLSearchParams) => Response) {
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname !== `/query/${what}`) return engine(input, init);
+      asked.push(url);
+      return answer(url.searchParams);
+    }),
+  );
+}
 
-  const grid = await screen.findByRole("table", { name: "Branches of web" });
-  expect(within(grid).getByText("default")).toBeTruthy();
-  const links = within(grid)
-    .getAllByRole("link")
-    .map((a) => a.getAttribute("href"));
-  expect(links).toContain("#/gitlet/repos/web?ref=feature");
-  expect(links).toContain("#/gitlet/repos/web");
-  // EACH BRANCH IS ITS CHIP beside its marks; a tag is its name, never a chip.
-  const chips = [...grid.querySelectorAll(".code-branch-chip")].map((c) => c.textContent);
-  expect(chips).toContain("feature");
-  expect(
-    within(grid).getByText("default").closest(".code-ref")?.querySelector(".code-branch-chip"),
-  ).not.toBeNull();
-  const tags = await screen.findByRole("table", { name: "Tags of web" });
-  expect(
-    within(tags)
+/** The engine answering `code_refs` in detail from `answer`, everything else as stubEngine does. */
+function stubListing(
+  answer: (p: URLSearchParams) => Response,
+  repo: Record<string, unknown> = detail(),
+  acted: Acted[] = [],
+) {
+  const asked = stubEngine(repo, acted);
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname !== "/query/code_refs" || url.searchParams.get("detail") !== "true")
+        return engine(input, init);
+      asked.push(url);
+      return answer(url.searchParams);
+    }),
+  );
+  return asked;
+}
+
+const listed = (asked: URL[]) =>
+  reads(asked, "code_refs").filter((u) => u.searchParams.get("order") === "moved");
+
+// A BRANCH OPENS ITS FILES: the default at the repository's own address, any other
+// by name; the Overview asks by when each moved since the reader's midnight 90 days
+// back. Mutation: link the default by name, or count the window from now.
+test("the branches are the engine's refs, each opening its files", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
+  pinZoneForTest("America/New_York");
+  try {
+    const asked = stubEngine();
+    mount("#/gitlet/repos/web?tab=branches");
+
+    const active = await screen.findByRole("table", { name: /^Active branches/ });
+    const first = listed(asked)[0]!.searchParams;
+    expect(first.get("detail")).toBe("true");
+    expect(first.get("moved_since")).toBe("2026-07-30T04:00:00.000Z");
+    expect(first.get("active_since")).toBe("2026-07-30T04:00:00.000Z");
+    const found = reads(asked, "code_refs").find((u) => u.searchParams.get("contains") === "main");
+    expect(found?.searchParams.get("detail")).toBe("true");
+
+    const main = await screen.findByRole("table", { name: "Default branch" });
+    expect(within(main).getByText("Default")).toBeTruthy();
+    expect(
+      within(main)
+        .getAllByRole("link")
+        .map((a) => a.getAttribute("href")),
+    ).toContain("#/gitlet/repos/web");
+    // THE DEFAULT BRANCH IS ITS OWN BOX, never one of the active ones.
+    const links = within(active)
       .getAllByRole("link")
-      .map((a) => a.getAttribute("href")),
-  ).toContain("#/gitlet/repos/web?ref=refs%2Ftags%2Fv1");
-  expect(tags.querySelector(".code-branch-chip")).toBeNull();
+      .map((a) => a.getAttribute("href"));
+    expect(links).toContain("#/gitlet/repos/web?ref=feature");
+    expect(links).not.toContain("#/gitlet/repos/web");
+    expect([...active.querySelectorAll(".code-branch-chip")].map((c) => c.textContent)).toEqual([
+      "feature",
+    ]);
+  } finally {
+    pinZoneForTest("");
+  }
+});
+
+// A CURSOR PAGE NEVER ASKS THE ACTIVE COUNT, which the engine refuses past a
+// first page. Mutation: spread the first page's parameters into the cursor's.
+test("a cursor page never asks the active count", async () => {
+  const asked = stubListing((p) =>
+    json({
+      ...refsListing(p, p.get("cursor") ? [REF_ROWS[1]!] : [REF_ROWS[0]!]),
+      ...(p.get("cursor") ? {} : { next: "m1" }),
+    }),
+  );
+  mount("#/gitlet/repos/web?tab=branches&view=active");
+  fireEvent.click(await screen.findByRole("button", { name: "Load more branches" }));
+  await waitFor(() => expect(listed(asked).some((u) => u.searchParams.get("cursor"))).toBe(true));
+  const [page1, page2] = [
+    listed(asked).find((u) => !u.searchParams.get("cursor"))!.searchParams,
+    listed(asked).find((u) => u.searchParams.get("cursor"))!.searchParams,
+  ];
+  expect(page1.get("active_since")).toBeTruthy();
+  expect(page2.get("cursor")).toBe("m1");
+  expect(page2.get("active_since")).toBeNull();
+  expect(page2.get("moved_since")).toBe(page1.get("moved_since"));
+});
+
+// WHO MOVED A BRANCH IS ITS PUSHER, Gitlet for a merge or a queue landing, and past
+// the push history it is said so. Mutation: draw the merger's or the queue's actor,
+// or call a mover past 181 days unknown.
+test("who moved a branch is its pusher's face, Gitlet's for a merge, and unknown past the history", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
+  const at = (days: number) => new Date(Date.parse("2026-10-28T12:00:00Z") - days * 86_400_000);
+  stubListing((p) =>
+    json(
+      refsListing(p, [
+        ...REF_ROWS,
+        {
+          ref: "refs/heads/landed",
+          oid: THIRD,
+          position: POSITION,
+          moved_at: "2026-10-27T09:00:00Z",
+          moved_by: mover("cto", "queue"),
+        },
+        { ref: "refs/heads/kept", oid: THIRD, position: POSITION, moved_at: at(100).toISOString() },
+        { ref: "refs/heads/gone", oid: THIRD, position: POSITION, moved_at: at(200).toISOString() },
+      ]),
+    ),
+  );
+  mount("#/gitlet/repos/web?tab=branches&view=all");
+  const all = await screen.findByRole("table", { name: /^All branches/ });
+  const updated = (name: string) =>
+    within(all).getByRole("link", { name }).closest("tr")!.querySelector(".code-refs__updated")!;
+  const merged = updated("main").querySelector<HTMLElement>(".code-byline")!;
+  expect(merged.textContent).toBe("Gitletyesterday");
+  expect(merged.title).toBe("Gitlet moved main when CTO merged a change");
+  expect(merged.querySelector(".code-face")).not.toBeNull();
+  const landed = updated("landed").querySelector<HTMLElement>(".code-byline")!;
+  expect(landed.textContent).toBe("Gitletyesterday");
+  expect(landed.title).toBe("Gitlet moved landed landing its merge queue's train, for CTO");
+  expect(landed.querySelector(".code-face")).not.toBeNull();
+  const pushed = updated("feature").querySelector<HTMLElement>(".code-byline")!;
+  expect(pushed.textContent).toBe("CTOyesterday");
+  expect(pushed.title).toBe("Pushed with git");
+  expect(pushed.querySelector(".code-face")).toBeNull();
+  expect(updated("kept").textContent).toMatch(/^Unknown/);
+  expect(updated("gone").textContent).toMatch(/^No longer kept/);
+  expect(updated("gone").querySelector<HTMLElement>(".code-byline")!.title).toBe(
+    "Who moved it is no longer kept: pushes are kept 181 days.",
+  );
+});
+
+// A BRANCH'S CHANGE IS ITS PILL, opening the change, and Protected names its
+// rules in words. Mutation: link the pill anywhere else, or drop a clause.
+test("a branch's change is its pill, and protection names its rules", async () => {
+  stubListing((p) =>
+    json(
+      refsListing(p, [
+        ...REF_ROWS,
+        {
+          ref: "refs/heads/release/2026.11",
+          oid: THIRD,
+          position: POSITION,
+          moved_at: "2026-10-26T10:00:00Z",
+          moved_by: mover("cto", "git"),
+          protection: { patterns: ["refs/heads/release/*"], direct_push: "none" },
+          change: { number: 41, title: "Cut the release", state: "merged" },
+          delete_refusal: "protected_delete",
+          delete_detail: "release/2026.11 is protected: its rule refuses a delete",
+        },
+      ]),
+    ),
+  );
+  mount("#/gitlet/repos/web?tab=branches&view=all");
+  const all = await screen.findByRole("table", { name: /^All branches/ });
+  const open = within(all).getByTitle("Change web!42, open: Stream the shell");
+  expect(open.getAttribute("href")).toBe("#/gitlet/repos/web/changes/42");
+  expect(within(all).getByTitle("Change web!41, merged: Cut the release")).toBeTruthy();
+  const release = within(all).getByRole("link", { name: "release/2026.11" }).closest("tr")!;
+  expect(within(release).getByText("Protected").closest("[title]")?.getAttribute("title")).toBe(
+    "Protected by release/*: no force-push, no delete, pushes through changes only",
+  );
 });
 
 // THE HISTORY IS READ AT THE REVISION AND THE PATH, with who pushed each
@@ -2065,9 +2327,133 @@ test("the default branch offers no delete, and every other branch does", async (
   stubEngine(detail({ managed_by: "tools" }), []);
   mount("#/gitlet/repos/web?tab=branches", "web", MAINTAINER);
 
-  const grid = await screen.findByRole("table", { name: "Branches of web" });
-  expect(await within(grid).findByRole("button", { name: "Delete feature" })).toBeTruthy();
-  expect(within(grid).queryByRole("button", { name: "Delete main" })).toBeNull();
+  await screen.findByRole("table", { name: "Default branch" });
+  expect(await screen.findByRole("button", { name: "Delete feature" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Delete main" })).toBeNull();
+});
+
+// EACH BRANCH'S CHECKS ARE ITS HEAD'S, asked once a page, for itself else for the
+// default; no rollup is never a cross, and past 30 days is said no longer kept.
+// Mutation: ask per row, read only the branch's own target, or drop the retention word.
+test("each branch's checks are its head's, for itself or for the default branch", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
+  const old = {
+    ref: "refs/heads/old",
+    oid: "4444444444444444444444444444444444444444",
+    position: POSITION,
+    moved_at: "2026-08-01T10:00:00Z",
+  };
+  const bare = {
+    ref: "refs/heads/bare",
+    oid: THIRD,
+    position: POSITION,
+    moved_at: "2026-10-26T10:00:00Z",
+  };
+  const asked = stubListing((p) => json(refsListing(p, [...REF_ROWS, bare, old])));
+  stubQuery(asked, "code_commit_marks", () =>
+    json({
+      commit_marks: [
+        { commit: HEAD, checks: [rollup("refs/heads/main", "passed")] },
+        { commit: OTHER, checks: [rollup("refs/heads/main", "running")] },
+      ],
+      position: POSITION,
+      level: "session",
+    }),
+  );
+  mount("#/gitlet/repos/web?tab=branches&view=all");
+  const all = await screen.findByRole("table", { name: /^All branches/ });
+  const checks = (name: string) =>
+    within(all)
+      .getByRole("link", { name })
+      .closest("tr")!
+      .querySelector<HTMLElement>(".code-refs__checks")!;
+  await waitFor(() => expect(checks("main").textContent).toBe("Passed 2 of 2"));
+  expect(checks("feature").textContent).toBe("Running");
+  expect(within(checks("bare")).getByText("No check ran")).toBeTruthy();
+  expect(checks("bare").querySelector(".code-check-mark")).toBeNull();
+  expect(within(checks("old")).getByText("Checks no longer kept")).toBeTruthy();
+  // The Checks tab's marker reads the head alone; the table asks once for every tip.
+  const marks = reads(asked, "code_commit_marks").filter(
+    (u) => u.searchParams.get("commits") !== HEAD,
+  );
+  expect(marks).toHaveLength(1);
+  expect(marks[0]!.searchParams.get("commits")).toBe([OTHER, HEAD, THIRD, old.oid].join(","));
+});
+
+// HOW FAR EACH BRANCH IS FROM THE DEFAULT is read once, by whole ids: the heads
+// against the default branch's own head. Mutation: name the base by its branch,
+// or draw a count the read ran out of time on.
+test("how far each branch is from the default is read once, by whole ids", async () => {
+  const slow = {
+    ref: "refs/heads/slow",
+    oid: THIRD,
+    position: POSITION,
+    moved_at: "2026-10-26T10:00:00Z",
+  };
+  const asked = stubListing((p) => json(refsListing(p, [...REF_ROWS, slow])));
+  stubQuery(asked, "code_tips", (p) =>
+    json({
+      repo: "web",
+      kind: "tips",
+      tips: {
+        base: HEAD,
+        tips: [tipOf(OTHER, 0, 3), tipOf(THIRD)].filter((t) =>
+          p.get("oids")!.split(",").includes(t.oid),
+        ),
+      },
+    }),
+  );
+  mount("#/gitlet/repos/web?tab=branches&view=all");
+  const all = await screen.findByRole("table", { name: /^All branches/ });
+  const drift = (name: string) =>
+    within(all)
+      .getByRole("link", { name })
+      .closest("tr")!
+      .querySelector<HTMLElement>(".code-refs__drift")!;
+  expect(
+    await within(all).findByRole("img", { name: "0 commits behind main, 3 ahead" }),
+  ).toBeTruthy();
+  expect(within(drift("slow")).getByText("Not counted in the read's time")).toBeTruthy();
+  expect(drift("main").textContent).toBe("");
+  const tips = reads(asked, "code_tips");
+  expect(tips).toHaveLength(1);
+  expect(tips[0]!.searchParams.get("base")).toBe(HEAD);
+  expect(tips[0]!.searchParams.get("oids")).toBe([OTHER, THIRD].join(","));
+});
+
+// DELETE IS HELD WITH THE ENGINE'S OWN SENTENCE where its rules refuse it, and
+// the client's own hold, which knows the reader's seat, wins over it.
+// Mutation: drop the listing's sentence, or let it win over the client's.
+test("Delete is held with the engine's own sentence", async () => {
+  const refused = {
+    ref: "refs/heads/release",
+    oid: THIRD,
+    position: POSITION,
+    moved_at: "2026-10-26T10:00:00Z",
+    delete_refusal: "protected_delete",
+    delete_detail: "release is protected: its rule refuses a delete",
+  };
+  stubListing((p) => json(refsListing(p, [...REF_ROWS, refused])), detail({ managed_by: "tools" }));
+  mount("#/gitlet/repos/web?tab=branches&view=all", "web", MAINTAINER);
+  const del = await screen.findByRole("button", { name: "Delete release" });
+  await waitFor(() =>
+    expect(del.getAttribute("title")).toBe("release is protected: its rule refuses a delete"),
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Delete feature" }).getAttribute("title")).toBeNull(),
+  );
+  cleanup();
+
+  stubListing(
+    (p) => json(refsListing(p, [...REF_ROWS, refused])),
+    detail({ managed_by: "tools", access: "write" }),
+  );
+  mount("#/gitlet/repos/web?tab=branches&view=all", "web", MAINTAINER);
+  const held = await screen.findByRole("button", { name: "Delete release" });
+  await waitFor(() =>
+    expect(held.getAttribute("title")).toBe("You write web; deleting a branch takes maintain."),
+  );
 });
 
 // A REPOSITORY WHOSE DEFAULT BRANCH HOLDS NOTHING IS NOT EMPTY while it holds
@@ -2177,17 +2563,213 @@ test("a deleted repository's settings offer no write but its restore", async () 
 // main's new-rule form would start from the engine's defaults; this fails.
 test("a protected branch leads to its rule, and another opens a new one", async () => {
   stubEngine(detail({ managed_by: "tools" }), []);
-  mount("#/gitlet/repos/web?tab=branches", "web", MAINTAINER);
+  mount("#/gitlet/repos/web?tab=branches&view=all", "web", MAINTAINER);
 
-  const grid = await screen.findByRole("table", { name: "Branches of web" });
-  const link = await within(grid).findByRole("link", { name: "Protection →" });
+  const all = await screen.findByRole("table", { name: /^All branches/ });
+  const link = await within(all).findByRole("link", { name: "Protection rule" });
   expect(link.getAttribute("href")).toContain("tab=settings");
-  expect(within(grid).getAllByRole("link", { name: "Protection →" })).toHaveLength(1);
-  expect(within(grid).getAllByRole("button", { name: "Protect" })).toHaveLength(1);
-  expect(within(grid).getByText("protected")).toBeTruthy();
+  expect(within(all).getAllByRole("link", { name: "Protection rule" })).toHaveLength(1);
+  expect(within(all).getAllByRole("button", { name: "Protect" })).toHaveLength(1);
   expect(
-    within(grid).getByText("protected").closest(".code-ref")?.querySelector(".code-branch-chip"),
-  ).not.toBeNull();
+    within(all).getByText("Protected").closest("tr")?.querySelector(".code-branch-chip")
+      ?.textContent,
+  ).toBe("main");
+});
+
+// THE VIEWS ARE THE ADDRESS, each its own window of when a branch moved.
+// Mutation: hold the view in state, or ask Stale with moved_since.
+test("the views are the address", async () => {
+  const asked = stubEngine();
+  mount("#/gitlet/repos/web?tab=branches");
+  await screen.findByRole("table", { name: /^Active branches/ });
+  fireEvent.click(screen.getByRole("radio", { name: "Stale" }));
+  await waitFor(() => expect(location.hash).toContain("view=stale"));
+  await screen.findByRole("table", { name: /^Stale branches/ });
+  const stale = listed(asked).at(-1)!.searchParams;
+  expect(stale.get("moved_before")).toBeTruthy();
+  expect(stale.get("moved_since")).toBeNull();
+  fireEvent.click(screen.getByRole("radio", { name: "All" }));
+  await screen.findByRole("table", { name: /^All branches/ });
+  const all = listed(asked).at(-1)!.searchParams;
+  expect(all.get("moved_before")).toBeNull();
+  expect(all.get("moved_since")).toBeNull();
+  expect(location.hash).toContain("view=all");
+  fireEvent.click(screen.getByRole("radio", { name: "Tags" }));
+  await waitFor(() => expect(location.hash).toContain("view=tags"));
+  await screen.findByRole("table", { name: /^Tags/ });
+  // Mutation: list the default branch in Active, and its rows outnumber the engine's count.
+  fireEvent.click(screen.getByRole("radio", { name: "Active" }));
+  const active = await screen.findByRole("table", { name: /^Active branches/ });
+  expect(screen.queryByRole("table", { name: "Default branch" })).toBeNull();
+  expect([...active.querySelectorAll(".code-branch-chip")].map((c) => c.textContent)).toEqual([
+    "feature",
+  ]);
+});
+
+// A FIND NARROWS EVERY VIEW BY ANY PART OF A NAME, written to the address once
+// typing rests; a page the engine's scan bound ended with nothing yet offers
+// to keep looking. Mutation: ask per keystroke, or draw an empty state there.
+test("a find narrows every view by any part of a name", async () => {
+  const asked = stubListing((p) =>
+    p.get("contains") === "zzz" && !p.get("cursor")
+      ? json({ refs_detail: [], next: "z1", position: POSITION, level: "session" })
+      : json(refsListing(p)),
+  );
+  mount("#/gitlet/repos/web?tab=branches");
+  await screen.findByRole("table", { name: /^Active branches/ });
+  const find = screen.getByRole("searchbox", { name: "Find a branch" });
+  fireEvent.change(find, { target: { value: "f" } });
+  fireEvent.change(find, { target: { value: "fea" } });
+  await waitFor(() => expect(location.hash).toContain("q=fea"));
+  const found = await screen.findByRole("table", { name: "Branches matching “fea”" });
+  expect(within(found).getAllByRole("link", { name: "feature" })).toHaveLength(1);
+  expect(listed(asked).filter((u) => u.searchParams.get("contains") === "f")).toHaveLength(0);
+
+  fireEvent.change(find, { target: { value: "zzz" } });
+  expect(await screen.findByText("None among the branches read so far")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Keep looking" })).toBeTruthy();
+  // Mutation: let Escape only empty the box, and the address keeps the find a pause longer.
+  fireEvent.keyDown(find, { key: "Escape" });
+  expect(location.hash).not.toContain("q=");
+  expect((find as HTMLInputElement).value).toBe("");
+});
+
+// THE OVERVIEW LEADS TO EVERY ACTIVE BRANCH only when the engine counts more than
+// it shows. Mutation: never draw the link, or draw it whatever the count.
+test("the Overview links to all active branches only past the rows it shows", async () => {
+  let count = 5;
+  stubListing((p) =>
+    json({
+      ...refsListing(p),
+      ...(p.get("active_since") ? { active_branches: { count } } : {}),
+    }),
+  );
+  mount("#/gitlet/repos/web?tab=branches");
+  const more = (await screen.findByRole("table", { name: /^Active branches/ })).closest("section")!;
+  expect(
+    within(more).getByRole("link", { name: "View all active branches" }).getAttribute("href"),
+  ).toBe("#/gitlet/repos/web?tab=branches&view=active");
+  cleanup();
+
+  count = 1;
+  mount("#/gitlet/repos/web?tab=branches");
+  const all = (await screen.findByRole("table", { name: /^Active branches/ })).closest("section")!;
+  expect(within(all).getByRole("link", { name: "feature" })).toBeTruthy();
+  expect(within(all).queryByRole("link", { name: "View all active branches" })).toBeNull();
+});
+
+// THE DEFAULT BRANCH IS FOUND PAST A FIND'S FIRST PAGE, and one never found is said
+// unread. Mutation: look only at the first page, and main is drawn unread.
+test("the default branch is found on a later page of its find, else drawn unread", async () => {
+  let found = true;
+  stubListing((p) => {
+    if (p.get("contains") !== "main") return json(refsListing(p));
+    if (!p.get("cursor")) return json({ refs_detail: [], next: "d1", position: POSITION });
+    return json({ refs_detail: found ? [REF_ROWS[1]] : [], position: POSITION });
+  });
+  mount("#/gitlet/repos/web?tab=branches");
+  const main = await screen.findByRole("table", { name: "Default branch" });
+  expect(within(main).getByText("Gitlet")).toBeTruthy();
+  expect(within(main).queryByText("Not read")).toBeNull();
+  cleanup();
+
+  found = false;
+  mount("#/gitlet/repos/web?tab=branches");
+  const unread = await screen.findByRole("table", { name: "Default branch" });
+  expect(within(unread).getByText("Not read")).toBeTruthy();
+});
+
+// TAGS ARE BY DATE, the newest Latest, each at its commit; the Overview shows three
+// and leads to the Tags view, which pages them all. Mutation: mark Latest on every
+// page's first row, or link a tag of a tree to a commit's page.
+test("tags are by date, the newest Latest, each at its commit", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
+  const asked = stubEngine();
+  mount("#/gitlet/repos/web?tab=branches");
+  const box = await screen.findByRole("table", { name: /^Tags/ });
+  expect(reads(asked, "code_tags")[0]!.searchParams.get("limit")).toBe("3");
+  expect(within(box).getByRole("link", { name: "View all" }).getAttribute("href")).toBe(
+    "#/gitlet/repos/web?tab=branches&view=tags",
+  );
+  cleanup();
+
+  const again = stubEngine();
+  mount("#/gitlet/repos/web?tab=branches&view=tags");
+  const tags = await screen.findByRole("table", { name: /^Tags/ });
+  expect(reads(again, "code_tags")[0]!.searchParams.get("limit")).toBe("50");
+  expect(screen.queryByRole("searchbox", { name: "Find a branch" })).toBeNull();
+  const rows = [...tags.querySelectorAll<HTMLElement>("tbody tr")];
+  expect(rows.map((r) => r.querySelector(".code-tag__name")?.textContent)).toEqual([
+    "v3",
+    "v2",
+    "v1",
+  ]);
+  expect(within(tags).getAllByText("Latest")).toHaveLength(1);
+  expect(within(rows[0]!).getByText("Latest")).toBeTruthy();
+  expect(within(rows[0]!).getByRole("link", { name: "v3" }).getAttribute("href")).toBe(
+    "#/gitlet/repos/web?ref=refs%2Ftags%2Fv3",
+  );
+  expect(
+    within(rows[0]!)
+      .getByRole("link", { name: HEAD.slice(0, 7) })
+      .getAttribute("href"),
+  ).toBe(`#/gitlet/repos/web/commits/${HEAD}`);
+  expect(rows[0]!.querySelector("time")?.textContent).toBe("5h ago");
+  expect(within(rows[1]!).getByText("after the year 9999")).toBeTruthy();
+  expect(within(rows[2]!).getByText("undated")).toBeTruthy();
+  expect(within(rows[2]!).queryByRole("link", { name: "0f1e2d3" })).toBeNull();
+  expect(
+    within(rows[0]!).getByRole("link", { name: "Compare v3 with main" }).getAttribute("href"),
+  ).toBe("#/gitlet/repos/web/compare?base=refs%2Ftags%2Fv3&head=main");
+});
+
+// J WALKS A BOX'S BRANCHES: j focuses the first row's name and Enter opens its
+// files. Mutation: drop the keys from the box.
+test("j walks a box's branches", async () => {
+  stubEngine();
+  mount("#/gitlet/repos/web?tab=branches&view=all");
+  const all = await screen.findByRole("table", { name: /^All branches/ });
+  fireEvent.keyDown(window, { key: "j" });
+  const link = within(all).getByRole("link", { name: "feature" });
+  expect(document.activeElement).toBe(link);
+  link.blur();
+  fireEvent.keyDown(window, { key: "Enter" });
+  await waitFor(() => expect(location.hash).toBe("#/gitlet/repos/web?ref=feature"));
+});
+
+// A REFUSED LISTING IS SAID IN ITS BOX, with the engine's sentence and no
+// table, never a fallback to the plain listing. Mutation: draw the rows of a
+// name listing in its place.
+test("a refused listing is said in its box", async () => {
+  const asked = stubListing(() =>
+    engineJson({ error: "unavailable", detail: "the node answering web runs an older build" }, 503),
+  );
+  mount("#/gitlet/repos/web?tab=branches&view=all");
+  expect(await screen.findByRole("heading", { name: "All branches" })).toBeTruthy();
+  await waitFor(() => expect(screen.queryByText(/older build/)).not.toBeNull());
+  expect(screen.queryByRole("table", { name: /All branches/ })).toBeNull();
+  expect(reads(asked, "code_refs").every((u) => u.searchParams.get("detail") === "true")).toBe(
+    true,
+  );
+});
+
+// REFUSED CHECKS AND DRIFT ARE SAID ONCE, above the boxes, and the rows draw
+// without them. Mutation: say it in every row, or drop the rows with it.
+test("refused checks and drift are said once, the rows drawn without them", async () => {
+  const asked = stubEngine();
+  const refuse = () =>
+    engineJson({ error: "unavailable", detail: "this node answers no marks yet" }, 503);
+  stubQuery(asked, "code_commit_marks", refuse);
+  stubQuery(asked, "code_tips", refuse);
+  mount("#/gitlet/repos/web?tab=branches");
+  expect(
+    await screen.findAllByText(
+      "Checks and how far each branch is from main are unavailable: this node answers no marks yet.",
+    ),
+  ).toHaveLength(1);
+  const active = await screen.findByRole("table", { name: /^Active branches/ });
+  expect(within(active).getByRole("link", { name: "feature" })).toBeTruthy();
 });
 
 // A FILE EDITED IN THE BROWSER IS ONE COMMIT ON THE BRANCH ON SCREEN, at the

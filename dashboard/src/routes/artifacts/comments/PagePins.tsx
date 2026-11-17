@@ -72,8 +72,10 @@ export function PagePins({ host, page }: { host: PageHost; page: string }) {
             crop: undefined,
           });
           capture.current = { id: host.captureComment(name ? { name } : { point }), seq };
-          // ON A PHONE THE DRAFT IS WRITTEN IN THE PANEL, which covers the page.
+          // ON A PHONE THE DRAFT IS WRITTEN IN THE PANEL, which covers the page;
+          // elsewhere it stands beside its pin, and a panel drawn over the page makes way.
           if (c.narrow) c.showPanel();
+          else c.stepAside();
         }
       }
     });

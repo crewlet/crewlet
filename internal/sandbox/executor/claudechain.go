@@ -5,7 +5,6 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
-	"errors"
 	"slices"
 	"sort"
 	"strings"
@@ -581,8 +580,9 @@ const chainPrefixBytes = 10
 // So the chain judges, of every thread whatever its size, whether it is
 // PATH-FREE ([threadChain.AnySize]): whether every one of those readers, of
 // either release, hands the load what its small path does. It judges on the
-// decode and on bytes held to it, conservatively, so only fewer threads are
-// path-free than the readers allow. A thread is path-free where:
+// decode and on what each line's bytes say as they stream past
+// ([threadBytes]), conservatively, so only fewer threads are path-free than
+// the readers allow. A thread is path-free where:
 //
 //   - no record is a compaction's boundary, at which the dispatch forgets the
 //     slots before it and indexes those after it otherwise, and from which
@@ -894,8 +894,8 @@ const chainPrefixBytes = 10
 // at least two records, each one block, so its blocks are at most about its
 // lines too. Two bounds rather than one sum, since a thread of ordinary calls
 // fills each about halfway. Past either, See files nothing more, the thread
-// is whyBound and the chain drops what it filed, and See still decodes and
-// hands back each user and assistant message, with pastChainBound.
+// is whyBound and the chain drops what it filed, and See still hands back
+// each user and assistant message, with pastChainBound.
 //
 // MEASURED on two cores, one case a process, in four runs
 // (BenchmarkAThreadChainAtItsBounds, whose doc says how each figure is read
@@ -916,7 +916,7 @@ const chainPrefixBytes = 10
 //     the resume makes as well; End took every other case at a bound in
 //     29 ms or less;
 //   - THE COINCIDENT WORST, the reading's worst line (one at [threadLineMax]
-//     of the smallest results a message holds) decoded by See beside the
+//     of the smallest results a message holds) read by See beside the
 //     chain at both bounds, before it passes them: 101 MiB held at most.
 //     Exact telling's reading, which reads that line after that thread in
 //     its own pass, holds 102 MiB at most there, measured the same way
@@ -955,8 +955,8 @@ const chainPrefixBytes = 10
 //     decode, 109 MiB held at most; its usage's one iteration's type, 93 to
 //     105 MiB; its one applied context edit's type, 93 MiB;
 //   - the reading's worst line beside the count: 101 to 102 MiB, the chain's
-//     own 101 to 102, since the count decodes nothing of a user record's
-//     results;
+//     own 101 to 102, since the count reads nothing of a user record's
+//     results, whose facts the line's one decode reads for every reading;
 //   - WHAT THE COUNT KEEPS from line to line at its most, a restart's uuid
 //     and a run's id each filling a line so, then the reading's worst line:
 //     149 to 150 MiB held at most while the count kept both as it decoded
@@ -1220,18 +1220,19 @@ func (c *threadChain) inTurn(n int) {
 
 // See files line, the thread's next whole line, and answers its handle
 // (noChainRecord for a line the load keeps no record of) and, for a user or
-// assistant record, its message, decoded once here so its caller decodes it
-// no second time; mErr is that decode's error, which the chain has already
-// taken for the thread's cannot tell (whyAdmission). It never fails the
+// assistant record, its message ([threadLine.Message]) and mErr, the
+// message's error, which the chain has already taken for the thread's cannot
+// tell (whyAdmission): handed back together, so its caller reads the message
+// the chain judged and the error the chain took of it. It never fails the
 // reading. PAST THE BOUND it files nothing more, the thread is cannot tell
-// (whyBound), and it still decodes and hands back every user and assistant
-// message, with pastChainBound as the handle. line.N must be the thread's
-// next line number: a line out of turn is the thread's cannot tell
-// (whyLineGap). See panics after End.
+// (whyBound), and it still hands back every user and assistant message, with
+// pastChainBound as the handle. line.N must be the thread's next line number:
+// a line out of turn is the thread's cannot tell (whyLineGap). See panics
+// after End.
 func (c *threadChain) See(line threadLine) (chainHandle, threadMessage, error) {
 	c.filing("See")
 	c.inTurn(line.N)
-	c.bytes += int64(len(line.Raw)) + 1
+	c.bytes += int64(line.Size)
 	var (
 		m    threadMessage
 		mErr error
@@ -1255,7 +1256,7 @@ func (c *threadChain) See(line threadLine) (chainHandle, threadMessage, error) {
 // replacement say, and whether a large-file reader may take the line for a
 // slot all the same (THE LARGE FILE).
 func (c *threadChain) another(line threadLine) {
-	if c.binds(line.Raw) {
+	if c.binds(&line.Bytes) {
 		c.smallOnly = true
 	}
 	switch line.Head.Type {
@@ -1281,7 +1282,9 @@ func (c *threadChain) another(line threadLine) {
 // its bytes as a line of no record is, since a large-file reader may take it
 // for a slot by them all the same (THE LARGE FILE): it binds the thread to
 // the small path where a reader may, but for a subagent's sidechain head. A
-// line handed with no bytes of its Size binds it. Unread panics after End.
+// line handed with byte facts of fewer bytes than its Size binds it, since no
+// reader can say what bytes it was not handed make of it. Unread panics after
+// End.
 func (c *threadChain) Unread(fault *threadLineError) {
 	c.filing("Unread")
 	if fault == nil {
@@ -1293,7 +1296,7 @@ func (c *threadChain) Unread(fault *threadLineError) {
 	c.bytes += int64(fault.Size)
 	switch {
 	case fault.Fault == faultSyntax, fault.Fault == faultNotObject, fault.Fault == faultHead && fault.Type == "":
-		if len(fault.Raw)+1 != fault.Size || c.binds(fault.Raw) {
+		if fault.Bytes.Len()+1 != int64(fault.Size) || c.binds(&fault.Bytes) {
 			c.smallOnly = true
 		}
 		return
@@ -1302,28 +1305,31 @@ func (c *threadChain) Unread(fault *threadLineError) {
 	c.cannotTell(whyLine)
 }
 
-// binds reports whether raw, a line the chain files no record of (one of no
-// record, or one the layer refuses that yields the load nothing), binds the
-// thread to the small path (THE LARGE FILE): where a large-file reader may
-// take it for a slot ([slotKeyed]), which may be the slot that reader starts
+// binds reports whether b, the byte facts of a line the chain files no record
+// of (one of no record, or one the layer refuses that yields the load
+// nothing), binds the thread to the small path (THE LARGE FILE): where a
+// large-file reader may take it for a slot ([threadBytes.SlotKeyed]), which
+// may be the slot that reader starts
 // from or one on its walk; but not, in a subagent's thread, where it says it
 // is a sidechain's right after its parent ([sidechainHeaded]), as every record
 // there must: every reader reads such a slot as a sidechain's, none starts
 // from it, and in a thread where none starts from any, each hands the load
 // every line.
-func (c *threadChain) binds(raw []byte) bool {
-	return slotKeyed(raw) && (c.agent == "" || !sidechainHeaded(raw))
+func (c *threadChain) binds(b *threadBytes) bool {
+	return b.SlotKeyed() && (c.agent == "" || !sidechainHeaded(b.Head()))
 }
 
-// sidechainHeaded reports whether raw says it is a sidechain's right after
-// its parent: `{"parentUuid":`, then null or a quoted lowercase canonical
-// uuid, then `,"isSidechain":true`. Every large-file reader marks such a line
-// a sidechain's: 2.1.322's dispatch by the first `"isSidechain":` within its
-// first 256 bytes, which these are (kl @293794950, `Ci`), 2.1.310's by those
-// bytes within its first 256 (@247178300), and both prunes by those bytes
-// anywhere in it (@293788960, @247172642).
-func sidechainHeaded(raw []byte) bool {
-	rest, ok := bytes.CutPrefix(raw, slotPrefix)
+// sidechainHeaded reports whether head, a line's first bytes
+// ([threadBytes.Head]), says the line is a sidechain's right after its
+// parent: `{"parentUuid":`, then null or a quoted lowercase canonical uuid,
+// then `,"isSidechain":true`, which a line's first [lineHeadBytes] hold.
+// Every large-file reader marks such a line a sidechain's: 2.1.322's dispatch
+// by the first `"isSidechain":` within its first 256 bytes, which these are
+// (kl @293794950, `Ci`), 2.1.310's by those bytes within its first 256
+// (@247178300), and both prunes by those bytes anywhere in it (@293788960,
+// @247172642).
+func sidechainHeaded(head []byte) bool {
+	rest, ok := bytes.CutPrefix(head, slotPrefix)
 	switch {
 	case !ok:
 		return false
@@ -1369,10 +1375,6 @@ func (c *threadChain) replacementsOf(line threadLine) {
 		c.cannotTell(whySpread)
 	}
 }
-
-// errChainFull ends a walk of a record's list, its retractions or the uuids
-// its boundary kept, that would pass the chain's bound.
-var errChainFull = errors.New("executor: a record's list runs past the chain's bound")
 
 // file files line, a record of the map, read as message m (mErr its error),
 // and answers its handle, or pastChainBound where it would pass a bound.
@@ -1423,7 +1425,7 @@ func (c *threadChain) file(line threadLine, m threadMessage, mErr error) chainHa
 	if mErr != nil {
 		c.cannotTell(whyAdmission)
 	}
-	if _, isText := m.Text(); isText && head.Type == recordAssistant {
+	if m.IsText() && head.Type == recordAssistant {
 		c.cannotTell(whyAdmission)
 	}
 	if head.Type == recordAssistant {
@@ -1548,155 +1550,43 @@ func (c *threadChain) row(h chainHandle, r chainRecord) {
 // boundary, where it does not begin `{"parentUuid":` and then the parent its
 // decode names, written null or as the quoted canonical uuid alone
 // ([slotHead]), where the readers key it by another uuid than its own
-// ([keyedBy]), and, in a subagent's thread, where it does not say it is a
-// sidechain's right after its parent. In the main thread it files too
+// ([threadBytes.KeyedBy]), and, in a subagent's thread, where it does not say
+// it is a sidechain's right after its parent. In the main thread it files too
 // whether the record holds a sidechain's bytes anywhere, which move every
-// reader's start where it is the last record.
+// reader's start where it is the last record. Each is read off the line's
+// byte facts ([threadBytes]), its head among them, which holds every byte a
+// reader of the head reads.
 func (c *threadChain) slotFacts(line threadLine, id string, written chainWritten, kind chainKind) {
-	raw := line.Raw
-	end := slotHead(raw, line.Head.Parent, written.named)
+	head := line.Bytes.Head()
+	end := slotHead(head, line.Head.Parent, written.named)
 	switch {
-	case end < 0, kind&kindBoundary != 0, !keyedBy(raw, id):
+	case end < 0, kind&kindBoundary != 0, !line.Bytes.KeyedBy(id):
 		c.smallOnly = true
-	case c.agent != "" && !bytes.HasPrefix(raw[end:], slotSidechainHead):
+	case c.agent != "" && !bytes.HasPrefix(head[end:], slotSidechainHead):
 		c.smallOnly = true
 	}
 	if c.agent == "" {
-		c.lastMarked = bytes.Contains(raw, slotSidechain)
+		c.lastMarked = line.Bytes.Has(markSidechain)
 	}
 }
 
-// slotHead is where, in raw, a record's line, the parent every large-file
-// reader reads off it ends, where that is the parent its decode reads: raw
-// begins `{"parentUuid":` and then parent, the value as written, which is null
-// or, named, a lowercase canonical uuid quoted with no escape. Those two alone
-// read alike to every reader, which reads a parent as the 36 bytes after the
-// key's opening quote or as null (2.1.322's kl in ike @293794950, 2.1.310's
-// Eo in HMt @247177994, and F1t's and FPt's keying). -1 for any other line.
-func slotHead(raw, parent []byte, named bool) int {
+// slotHead is where, in head, a record's line's first bytes
+// ([threadBytes.Head]), the parent every large-file reader reads off it ends,
+// where that is the parent its decode reads: head begins `{"parentUuid":` and
+// then parent, the value as written, which is null or, named, a lowercase
+// canonical uuid quoted with no escape. Those two alone read alike to every
+// reader, which reads a parent as the 36 bytes after the key's opening quote
+// or as null (2.1.322's kl in ike @293794950, 2.1.310's Eo in HMt
+// @247177994, and F1t's and FPt's keying). -1 for any other line.
+func slotHead(head, parent []byte, named bool) int {
 	if !bytes.Equal(parent, jsonNull) && (!named || len(parent) != 36+2) {
 		return -1
 	}
-	if !bytes.HasPrefix(raw, slotPrefix) || !bytes.HasPrefix(raw[len(slotPrefix):], parent) {
+	if !bytes.HasPrefix(head, slotPrefix) || !bytes.HasPrefix(head[len(slotPrefix):], parent) {
 		return -1
 	}
 	return len(slotPrefix) + len(parent)
 }
-
-// keyedBy reports whether the uuid every large-file reader keys raw, a
-// record's line, by is id, the record's own: the 36 bytes after the first
-// `"uuid":"` they follow with `","timestamp":"`, of several such the first at
-// the line's object depth one ([depthOneOf]), else the last of them, and where
-// none is, after the first `"uuid":"` (2.1.322's pa in ike @293793061, keyed
-// alike in F1t @293788207; 2.1.310's vs in HMt @247176207, alike in FPt
-// @247171899). A reader reads those bytes as latin1 and compares them as
-// written, so only the same bytes are the same uuid.
-func keyedBy(raw []byte, id string) bool {
-	first, good := -1, -1
-	var more []int
-	for from := 0; ; {
-		i := bytes.Index(raw[from:], slotUUIDKey)
-		if i < 0 {
-			break
-		}
-		i += from
-		if first < 0 {
-			first = i
-		}
-		if after := i + len(slotUUIDKey) + 36; after+len(slotTimeAfter) <= len(raw) &&
-			bytes.Equal(raw[after:after+len(slotTimeAfter)], slotTimeAfter) {
-			if good < 0 {
-				good = i
-			} else {
-				more = append(more, i)
-			}
-		}
-		from = i + len(slotUUIDKey)
-	}
-	at := first
-	switch {
-	case more != nil:
-		at = depthOneOf(raw, append([]int{good}, more...))
-	case good >= 0:
-		at = good
-	}
-	if at < 0 || at+len(slotUUIDKey)+36 > len(raw) {
-		return false
-	}
-	at += len(slotUUIDKey)
-	return string(raw[at:at+36]) == id
-}
-
-// slotKeyed reports whether raw, a line the chain files no record of (one the
-// load keeps no record of, or one the layer refuses), is one a large-file
-// dispatch may take for a slot all the same: it carries `"parentUuid":` at its
-// object's depth one, outside every string (2.1.322's N1t @293787634, 2.1.310's
-// Ipo @247171334), as a line that begins `{"parentUuid":`, the prune's slot,
-// does too. A line whose JSON fails is scanned by its bytes as the readers
-// scan it, so its depth is theirs.
-func slotKeyed(raw []byte) bool {
-	if !bytes.Contains(raw, slotParentKey) {
-		return false
-	}
-	var s jsonDepth
-	for i, b := range raw {
-		if s.one() && b == '"' && bytes.HasPrefix(raw[i:], slotParentKey) {
-			return true
-		}
-		s.step(b)
-	}
-	return false
-}
-
-// depthOneOf is the first of at, offsets into raw in their order, that lies
-// at the line's object depth one outside every string, else the last of them
-// (2.1.322's dzt @293787942, 2.1.310's $Mt @247171638).
-func depthOneOf(raw []byte, at []int) int {
-	var s jsonDepth
-	for i, k := 0, 0; k < len(at); i++ {
-		if i == at[k] {
-			if s.one() {
-				return at[k]
-			}
-			k++
-		}
-		s.step(raw[i])
-	}
-	return at[len(at)-1]
-}
-
-// jsonDepth is the scan both large-file readers make of a line's bytes where
-// they look for a key at its object's depth one: how many objects deep it
-// stands outside every string, a string ending at its next quote that no
-// backslash escapes (2.1.322's N1t and dzt, 2.1.310's Ipo and $Mt).
-type jsonDepth struct {
-	depth            int
-	inString, escape bool
-}
-
-// step reads b, the line's next byte.
-func (s *jsonDepth) step(b byte) {
-	switch {
-	case s.escape:
-		s.escape = false
-	case s.inString:
-		switch b {
-		case '\\':
-			s.escape = true
-		case '"':
-			s.inString = false
-		}
-	case b == '"':
-		s.inString = true
-	case b == '{':
-		s.depth++
-	case b == '}':
-		s.depth--
-	}
-}
-
-// one reports whether the scan stands at depth one, outside every string.
-func (s *jsonDepth) one() bool { return s.depth == 1 && !s.inString }
 
 // replyOf files a reply's id and whether its harness wrote it.
 func (c *threadChain) replyOf(line threadLine, r *chainRecord) {
@@ -1754,24 +1644,21 @@ func (c *threadChain) retractionsOf(line threadLine) bool {
 	if room < 0 {
 		return false
 	}
-	err := line.Retracted(func(entry string) error {
-		p, ok := chainPrefix(entry)
-		if !ok {
-			return nil
-		}
-		if len(c.scratch) >= room {
-			return errChainFull
-		}
-		c.scratch = append(c.scratch, p)
-		return nil
-	})
+	// THE ROOM BEFORE THE SHAPE: a list is read in order, so one whose
+	// prefixes pass the room before an entry in no shape is past the bound,
+	// and only one whose shape fails within it is in no shape. The list holds
+	// its prefixes up to an entry in no shape ([threadLine.Retracted]), and
+	// past threadChainMaxRecords of them says so, which is past every room.
+	r, err := line.Retracted()
+	held, all := r.Prefixes()
 	switch {
-	case errors.Is(err, errChainFull):
+	case !all || len(held) > room:
 		return false
 	case err != nil:
 		c.cannotTell(whyRetractionShape)
-		c.scratch = c.scratch[:0]
+		return true
 	}
+	c.scratch = append(c.scratch, held...)
 	return true
 }
 
@@ -1786,20 +1673,13 @@ func (c *threadChain) keptOf(line threadLine) (k chainKept, named, fits bool) {
 	c.keptScratch = c.keptScratch[:0]
 	// room is how many entries the list may hold beside the boundary itself.
 	room := threadChainMaxRecords - c.filed + c.kept.listed - 1
-	p, err := line.Preserved(func(entry string) error {
-		if k.listed >= room {
-			return errChainFull
-		}
-		k.listed++
-		if u, ok := uuidBytes(entry); ok {
-			c.keptScratch = append(c.keptScratch, u)
-		} else {
-			k.nowhere = true
-		}
-		return nil
-	})
+	// THE ROOM BEFORE THE SHAPE, as a retraction list's ([threadChain.retractionsOf]):
+	// every entry before one in no shape counts, so a list that passes the
+	// room before it is past the bound. A list of no entry passes no room,
+	// whatever the room left: the boundary's own room is judged below.
+	p, err := line.Preserved()
 	switch {
-	case errors.Is(err, errChainFull):
+	case p.More || p.Listed > max(room, 0):
 		return chainKept{}, false, false
 	case err != nil:
 		c.cannotTell(whyPreservedShape)
@@ -1807,10 +1687,10 @@ func (c *threadChain) keptOf(line threadLine) (k chainKept, named, fits bool) {
 	case !p.Named:
 		return chainKept{}, false, c.filed < threadChainMaxRecords
 	}
+	k.listed, k.nowhere = p.Listed, p.Nowhere
+	c.keptScratch = append(c.keptScratch, p.UUIDs...)
 	k.anchor, k.head, k.tail, k.segment = writtenUUID(p.Anchor), writtenUUID(p.Head), writtenUUID(p.Tail), p.Segment
-	// Each entry was held to the room as it was read, so no list grows past it
-	// in memory before it is refused; a list of none still needs the room the
-	// boundary itself takes.
+	// A list of none still needs the room the boundary itself takes.
 	return k, true, room >= 0
 }
 

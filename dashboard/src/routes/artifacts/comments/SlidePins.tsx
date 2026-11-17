@@ -150,6 +150,7 @@ export function SlidePins({
       crop: undefined,
     });
     if (c.narrow) c.showPanel();
+    else c.stepAside();
     // THE PICTURE IS OF THE SLIDE AS DRAWN, at its own size: the element's
     // box on screen, taken back through the stage's scale.
     const at = canvas.getBoundingClientRect();
