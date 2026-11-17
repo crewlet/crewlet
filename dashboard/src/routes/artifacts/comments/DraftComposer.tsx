@@ -1,11 +1,18 @@
 /** A new thread being written: beside its pin, or in the panel on a phone. */
 
 import { useState } from "react";
-import { Button, Checkbox, Composer } from "@crewlethq/ui";
+import { Button, Card, Checkbox, Composer, Spinner } from "@crewlethq/ui";
 import { openComment } from "~/lib/artifacts/api.ts";
 import { useComments, useCommentWrite } from "./state.tsx";
 
-export function DraftComposer() {
+/** Where the picture of the part is: being drawn, shown, or none could be drawn. */
+export type PictureState = "drawing" | "shown" | "none";
+
+export function pictureState(crop: string | null | undefined): PictureState {
+  return crop === undefined ? "drawing" : crop ? "shown" : "none";
+}
+
+export function DraftComposer({ beside = false }: { beside?: boolean }) {
   const c = useComments();
   const write = useCommentWrite();
   const [text, setTyped] = useState(() => c?.draftWords.current ?? "");
@@ -16,6 +23,7 @@ export function DraftComposer() {
   const [withCrop, setWithCrop] = useState(true);
   if (!c?.draft) return null;
   const d = c.draft;
+  const picture = pictureState(d.crop);
   const post = async () => {
     if (!text.trim() || write.busy) return;
     const crop = withCrop && d.crop ? d.crop : undefined;
@@ -36,34 +44,48 @@ export function DraftComposer() {
     }
   };
   return (
-    <div className="artifact-comment-draft">
+    <div className="artifact-comment-draft" data-beside={beside || undefined}>
       <p className="artifact-comment-where">
         <strong>{d.label}</strong> on v{c.version}
       </p>
       {d.quote && <blockquote className="artifact-comment-quote clamp">{d.quote}</blockquote>}
-      {d.crop === undefined ? (
-        <p className="artifact-comment-note">Drawing a picture of this part…</p>
-      ) : d.crop ? (
-        <div className="artifact-comment-picture">
+      {/* ONE HEIGHT IN EVERY STATE, so the panel does not jump when the picture arrives. */}
+      <Card
+        variant="inset"
+        padding="tight"
+        className="artifact-comment-preview"
+        data-picture={picture}
+        aria-busy={picture === "drawing" || undefined}
+      >
+        {picture === "shown" ? (
           <img
             className="artifact-comment-crop"
-            src={d.crop}
+            src={d.crop ?? undefined}
             alt="A picture of this part, as you see it"
           />
-          <Checkbox
-            size="sm"
-            label="Include this picture"
-            description="Everyone who can read the artifact sees it."
-            checked={withCrop}
-            onChange={(event) => setWithCrop(event.currentTarget.checked)}
-          />
-        </div>
-      ) : null}
+        ) : picture === "drawing" ? (
+          <p className="artifact-comment-note" role="status">
+            <Spinner size="sm" /> Drawing a picture of this part…
+          </p>
+        ) : (
+          <p className="artifact-comment-note">No picture of this part could be drawn.</p>
+        )}
+      </Card>
+      <Checkbox
+        size="sm"
+        label="Include this picture"
+        description="Everyone who can read the artifact sees it."
+        checked={withCrop && picture === "shown"}
+        disabled={picture !== "shown"}
+        onChange={(event) => setWithCrop(event.currentTarget.checked)}
+      />
       <Composer
         label={`Comment on ${d.label}`}
         value={text}
         onChange={setText}
         placeholder="Say what should change"
+        // THE ACTIONS KEEP ONE ROW at a draft's width; the field's description still names the keys.
+        sendHint={false}
         onSubmit={() => void post()}
         actions={
           <>
