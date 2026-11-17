@@ -39,7 +39,7 @@ import {
   TableDateCell,
   TableStatusCell,
 } from "@crewlethq/ui";
-import { PlusGlyph } from "@crewlethq/icons/glyphs";
+import { DatabaseGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { CoverageNote, missingFrom } from "~/components/CoverageNote.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -226,7 +226,7 @@ export function BackupRecord({
       </Card>
 
       <Card padding="none">
-        <Card.Header>
+        <Card.Header icon={<DatabaseGlyph size="sm" />} count={owner === undefined ? 1 : 2}>
           <Card.Title id="backup-policy">Backup policy</Card.Title>
         </Card.Header>
         <SettingsTable aria-labelledby="backup-policy">

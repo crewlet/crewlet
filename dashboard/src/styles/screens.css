@@ -774,12 +774,11 @@
   padding: 0;
   list-style: none;
 }
-/* The artifact a publishing call wrote, under the call's own row. */
+/* The artifact a publishing call wrote, under the call's own row, at a caption's size. */
 .tool-row-artifact {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
+  margin: 0;
   padding: 0 var(--spacing-3) var(--spacing-2);
+  font-size: var(--font-size-xs);
 }
 
 /* ---- Attention ---------------------------------------------------------- */
@@ -8962,31 +8961,17 @@ a.live-row:hover {
   margin-left: var(--spacing-1);
   color: var(--color-text-tertiary);
 }
-/* The panel a pencil opens: wide enough for the engine's own sentence about
-   a ceiling that can never refuse, and no wider than a phone leaves room for. */
-/* Taller than the kit's 360px panel: a check's warning is a paragraph, and a
-   panel that scrolled it hid Save anyway below the fold of a popover. */
-.crewlet-popover.ceiling-pop {
-  width: min(22rem, calc(100vw - 2 * var(--spacing-4)));
-  max-height: min(34rem, 85vh);
+/* A setting's value in its row, and the word that says a save is applying. */
+.setting-value {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--spacing-2);
+  min-width: 0;
 }
-.ceiling-edit {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  padding: var(--spacing-3);
-}
-.ceiling-edit-who {
-  margin: 0;
-  font-size: var(--font-size-compact);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-  overflow-wrap: anywhere;
-}
-.ceiling-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--spacing-2);
+.setting-value-applying {
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-tertiary);
 }
 .ceiling-status:empty {
   display: none;

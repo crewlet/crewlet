@@ -62,6 +62,7 @@ import {
   ArrowRightGlyph,
   ChevronLeftGlyph,
   ChevronRightGlyph,
+  GaugeGlyph,
   PencilGlyph,
   PlusGlyph,
   SearchGlyph,
@@ -674,7 +675,11 @@ function LimitsCard({
 }) {
   return (
     <Card padding="none">
-      <Card.Header subtitle="Past any of these, a request goes to people, whatever the agent decides.">
+      <Card.Header
+        icon={<GaugeGlyph size="sm" />}
+        count={answer.limits.length}
+        subtitle="Past any of these, a request goes to people, whatever the agent decides."
+      >
         <Card.Title id="delegated-limits">What Crewlet enforces</Card.Title>
       </Card.Header>
       <SettingsTable aria-labelledby="delegated-limits">

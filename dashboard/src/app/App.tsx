@@ -149,6 +149,7 @@ const AtlasEntry = lazyScreen("atlas", (m) => m.EntryPage);
 const AtlasChanges = lazyScreen("atlas", (m) => m.ChangesPage);
 const AtlasReview = lazyScreen("atlas", (m) => m.Review);
 const AtlasSources = lazyScreen("atlas", (m) => m.SourcesPage);
+const GeneralSettings = lazyScreen("settings", (m) => m.GeneralSettings);
 const Models = lazyScreen("settings", (m) => m.Models);
 const McpTools = lazyScreen("settings", (m) => m.McpTools);
 const Secrets = lazyScreen("settings", (m) => m.Secrets);
@@ -332,6 +333,8 @@ export function screenFor(route: Resolved): ReactNode {
       );
     case "secrets":
       return <Secrets key={route.name ?? ""} name={route.name} />;
+    case "general":
+      return <GeneralSettings />;
     case "limits":
       return <Limits />;
     case "ask-crewlet":

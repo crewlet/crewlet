@@ -360,6 +360,23 @@ describe("the comment layer", () => {
     expect(await call(h, "comments.layout", layout)).toMatchObject({ ok: true });
   });
 
+  test("tells the page the cursor to place by while placing, and on every hello", () => {
+    const { h, p } = attached();
+    const cursor = 'url("data:image/svg+xml,x") 3 21, crosshair';
+    h.setCommentMode("place", cursor);
+    const placing = { type: BRIDGE_MESSAGE.event, topic: "comments", mode: "place", cursor };
+    expect(p.posted.at(-1)).toEqual(placing);
+    const again = port();
+    h.attach(again.port);
+    expect(again.posted.at(-1)).toEqual(placing);
+    h.setCommentMode("show", cursor);
+    expect(again.posted.at(-1)).toEqual({
+      type: BRIDGE_MESSAGE.event,
+      topic: "comments",
+      mode: "show",
+    });
+  });
+
   test("hears where the anchors are only while it asked, and forgets it when it stops", async () => {
     const { h, heard } = attached();
     expect(await call(h, "comments.layout", layout)).toMatchObject({

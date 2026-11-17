@@ -225,7 +225,7 @@ test("a scratch setting is changed in place as a patch of its one key", async ()
       screen.getByRole("button", { name: "Change Idle scratch repositories are deleted after" }),
     );
   });
-  const field = screen.getByRole("textbox");
+  const field = screen.getByRole("spinbutton");
   fireEvent.change(field, { target: { value: "14" } });
   await act(async () => {
     fireEvent.submit(field.closest("form")!);
@@ -248,7 +248,7 @@ test("a value of days that is not a whole number is said beside the field before
       screen.getByRole("button", { name: "Change Idle scratch repositories are deleted after" }),
     );
   });
-  const field = screen.getByRole("textbox");
+  const field = screen.getByRole("spinbutton");
   fireEvent.change(field, { target: { value: "1.5" } });
   await act(async () => {
     fireEvent.submit(field.closest("form")!);
