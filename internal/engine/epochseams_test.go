@@ -281,6 +281,8 @@ var classified = map[string]struct {
 		"judged by: which repositories it lists, and whether it reads one"},
 	"gitlet.ReaderOptions.Now": {seamNone, "the clock a change's routing dates the notices still kept " +
 		"by"},
+	"gitlet.ReaderOptions.ChangeWords": {seamNone, "this node's own index of changes' words, a " +
+		"search.ChangeIndexer, classified there; every match is judged in the read's snapshot"},
 
 	"query.Options.NodeID": {seamNone, "this node's name, which a refusal about the node names"},
 	"query.Options.Cache": {seamNone, "the node's git cache, synced from the code log's rows like " +

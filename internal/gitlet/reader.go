@@ -75,6 +75,11 @@ type Reader struct {
 	standingCounted int
 	// queueCounted bounds a queue read's and a counts read's walks: MaxQueueCounted, or a test's.
 	queueCounted int
+	// words is this node's index of changes' words, nil where it keeps none.
+	words ChangeWords
+	// textCandidates and textTail bound a words listing: MaxChangeTextCandidates and MaxChangeTextTail,
+	// or a test's.
+	textCandidates, textTail int
 }
 
 // ReaderOptions configure a reader.
@@ -102,6 +107,10 @@ type ReaderOptions struct {
 	// question of how old they are NOW, on the node whose sweeps keep them.
 	// Nil reads the wall clock.
 	Now func() time.Time
+
+	// ChangeWords is this node's index of changes' words; nil where it keeps none, and a listing the
+	// words lead is then refused [ErrNotServing], so the estate asks a node that keeps one.
+	ChangeWords ChangeWords
 }
 
 // NewReader builds Gitlet's read side.
@@ -123,6 +132,7 @@ func NewReader(o ReaderOptions) (*Reader, error) {
 	}
 	r.reposSized, r.lastPushWalk = MaxReposSized, MaxLastPushWalk
 	r.queueCounted = MaxQueueCounted
+	r.words, r.textCandidates, r.textTail = o.ChangeWords, MaxChangeTextCandidates, MaxChangeTextTail
 	return r, nil
 }
 
@@ -1436,6 +1446,9 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 	if chartErr != nil {
 		return ReadAnswer{}, chartErr
 	}
+	if q.Kind == ReadChanges && q.textLeads() && r.words == nil {
+		return ReadAnswer{}, fmt.Errorf("%w: this node keeps no index of changes' words", ErrNotServing)
+	}
 	var (
 		out   ReadAnswer
 		query statelog.Query
@@ -1973,7 +1986,7 @@ func (q ReadQuery) validate() error {
 // (a commit, a queue read's trains, an inbox, an inbox page's cards, a history page's commits, the
 // narrowing of a listing of repositories to the ones a rule protects, the
 // parts a counts read names, a repository's facts, a listing of changes'
-// order, a change's findings by path, a change's viewed files) on a read of
+// order, a listing of changes' words, a change's findings by path, a change's viewed files) on a read of
 // any other kind, the engine's own reads included ([ReadQuery.validate]).
 func (q ReadQuery) kindOwnedField() error {
 	switch {
@@ -1999,6 +2012,8 @@ func (q ReadQuery) kindOwnedField() error {
 	case q.Readiness != "" && q.Kind != ReadChanges:
 		return fmt.Errorf("%w: readiness: only a listing of changes is narrowed to where their merge stands",
 			ErrInvalid)
+	case q.Text != "" && q.Kind != ReadChanges:
+		return fmt.Errorf("%w: text: only a listing of changes is narrowed by its changes' words", ErrInvalid)
 	case q.RefListing != nil && q.Kind != ReadRefs:
 		return fmt.Errorf("%w: ref_listing: only a refs listing is ordered, narrowed or read in detail",
 			ErrInvalid)

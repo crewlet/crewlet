@@ -126,7 +126,7 @@ type changeDriver struct {
 
 // Holding answers the newest changes this index holds every word of q for, in q's scope, with how far
 // the walk reached and what its writes were decided from, which the reader compares with its own
-// snapshot. It reads the narrowest of the scope and the words first and cuts within it.
+// snapshot (ADR-0156). It reads the narrowest of the scope and the words first and cuts within it.
 func (x *ChangeIndexer) Holding(ctx context.Context, q ChangeQuery) (ChangeHeld, error) {
 	if len(q.Terms) == 0 || q.Limit <= 0 {
 		return ChangeHeld{}, errors.New("search: a search of changes names its words and a limit")

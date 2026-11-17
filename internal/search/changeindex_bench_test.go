@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/search"
 )
 
 // BenchmarkTheChangeIndexBuild walks changes from an empty index, as a first build does, and reports
@@ -50,6 +52,38 @@ func BenchmarkTheChangeIndexBuild(b *testing.B) {
 			}
 			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*arm.changes), "ns/change")
 			b.ReportMetric(float64(grown)/float64(b.N*arm.changes), "bytes/change")
+		})
+	}
+}
+
+// BenchmarkAChangeSearchAtItsScanBound is one search whose every word and scope holds more changes
+// than one search reads: it reads the newest MaxChangeTextScan of what it drives on and judges the
+// rest of its words on each, answering the newest MaxChangeTextCandidates-sized page of ids.
+func BenchmarkAChangeSearchAtItsScanBound(b *testing.B) {
+	f := newChangeFixture(b)
+	f.addRepo("repo-a")
+	rows := make([]changeFixtureRow, 2*search.MaxChangeTextScan)
+	for i := range rows {
+		rows[i] = changeFixtureRow{id: changeUUID(i + 1), repo: "repo-a", owner: "ada", state: "open",
+			title: "fix the flaky login", body: "the cache drops a token under load"}
+	}
+	f.writeAll(rows)
+	f.sweepAll()
+	for _, arm := range []struct {
+		name string
+		q    search.ChangeQuery
+	}{
+		{"one word", search.ChangeQuery{Terms: []string{"login"}, Limit: 1_000}},
+		{"eight words in a repository", search.ChangeQuery{Terms: []string{"fix", "flaky", "login", "cache",
+			"drops", "token", "under", "load"}, RepoID: "repo-a", State: "open", Owner: "ada", Limit: 1_000}},
+	} {
+		b.Run(arm.name, func(b *testing.B) {
+			for b.Loop() {
+				if held := f.holding(arm.q); !held.Truncated || len(held.IDs) != 1_000 {
+					b.Fatalf("the search answered %d ids, truncated %v: not at its bound", len(held.IDs),
+						held.Truncated)
+				}
+			}
 		})
 	}
 }

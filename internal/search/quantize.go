@@ -60,7 +60,7 @@
 // and the knowledge base's own embeddings are what would pay for it. ADR-0071
 // is the record of that decision and of what admitting chat to one half and
 // not the other cost the last time it happened. Gitlet's changes have a third
-// keyword index of their own here ([ChangeIndexer]), unranked, since a listing
+// keyword index of their own here ([ChangeIndexer], ADR-0156), unranked, since a listing
 // of changes keeps its order.
 //
 // # A read of another domain's table is a named, exported statement

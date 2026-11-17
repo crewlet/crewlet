@@ -47,9 +47,9 @@ const ChangePurgeFollowRepos = 64
 // one search reads of what it drives on; past it the answer says Truncated (maxPostingScan's reason).
 const MaxChangeTextScan = 5_000
 
-// ChangeIndexer keeps this node's index of Gitlet changes' words in step with the replicated rows: a
-// forward walk over code_changes.position up to the code log's applied prefix, a purge follower, a
-// rebuild on a new copy.
+// ChangeIndexer keeps this node's index of Gitlet changes' words in step with the replicated rows
+// (ADR-0156): a forward walk over code_changes.position up to the code log's applied prefix, a
+// purge follower, a rebuild on a new copy.
 type ChangeIndexer struct {
 	db         *store.DB              // this node's own file, where the index is kept
 	estate     store.ReplicatedReader // the replicated rows it walks

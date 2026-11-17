@@ -71,6 +71,10 @@ func SetSpokenScanBound(r *Reader, n int) { r.spokenScanned = n }
 // SetQueueCountBound has r walk at most n entries a queue count: MaxQueueCounted as shipped.
 func SetQueueCountBound(r *Reader, n int) { r.queueCounted = n }
 
+// SetWordsBounds has r read at most candidates matches from its index of changes' words and judge at
+// most tail changes moved past it: MaxChangeTextCandidates and MaxChangeTextTail as shipped.
+func SetWordsBounds(r *Reader, candidates, tail int) { r.textCandidates, r.textTail = candidates, tail }
+
 // SetRetentionPace has r measure and pace its steps by clock and sleep, take
 // steps for budget, and read the listing page repositories at a time, rather
 // than the monotonic clock, a timer, RetentionPassBudget and retentionPage —

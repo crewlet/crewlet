@@ -1099,6 +1099,8 @@ func registeredStatements() map[string]statement {
 			[]string{"SCAN json_each AS j", "code_queue_change_idx (change_id=?)"}},
 		"changes named": {changesNamedSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
 			[]string{"SCAN json_each AS j", changeKey + " (id=?)"}},
+		"changes moved past a position": {changesMovedPastSQL, []any{int64(0), 101},
+			[]string{changesPositionKey + " (position>?)"}},
 		// A QUEUE BUILD'S DESCRIPTIONS (queuework.go): its changes' bodies
 		// and authors, each driven from the list by its table's key.
 		"queued changes' bodies": {changeBodiesNamedSQL,
@@ -1967,9 +1969,9 @@ func searchReads() map[string]statement {
 	repos, reposArgs := search.ChangeReposRead([]string{"repo-1", "repo-2"})
 	return map[string]statement{
 		"the index of changes' words' reach": {reach, reachArgs,
-			[]string{"code_changes_position_idx (position>?)"}},
+			[]string{changesPositionKey + " (position>?)"}},
 		"the index of changes' words' batch": {batch, batchArgs,
-			[]string{"code_changes_position_idx (position>? AND position<=?)", bodyKey + " (change_id=?)"}},
+			[]string{changesPositionKey + " (position>? AND position<=?)", bodyKey + " (change_id=?)"}},
 		"the index of changes' words' repositories": {repos, reposArgs, []string{repoKey + " (id=?)"}},
 	}
 }

@@ -250,8 +250,8 @@ type native struct {
 	// own forward-only walk and its own loop.
 	chatIndex *search.ChatIndexer
 
-	// changeIndex is this node's index of Gitlet changes' words, built where the company hosts code;
-	// a forward walk of chat's shape, on its own loop.
+	// changeIndex is this node's index of Gitlet changes' words (ADR-0156), built where the company
+	// hosts code; a forward walk of chat's shape, on its own loop.
 	changeIndex *search.ChangeIndexer
 
 	// searcher is Doclet's answer to the knowledge seam.
@@ -430,15 +430,19 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 				"have no reader — the domain is in the register and its stream " +
 				"failed to come up")
 		}
+		// A typed nil would read as an index that is there, so words is set only where one is.
+		var words gitlet.ChangeWords
 		if built.runsCode() {
 			n.changeIndex = search.NewChangeIndexer(e.backends.Store, e.domainEstate(), gitlet.Domain{})
+			words = n.changeIndex
 		}
 		// THE CURRENT EPOCH'S LIMITS, read per call: a repository's detail
 		// reports what a push to it is held to now, which is what an
 		// import chunks its pushes by.
 		if n.codeReader, err = gitlet.NewReader(gitlet.ReaderOptions{Log: running.reader, Limits: e.codeLimits,
-			Now:    e.now,
-			Roster: e.codeRoster}); err != nil {
+			Now:         e.now,
+			Roster:      e.codeRoster,
+			ChangeWords: words}); err != nil {
 			return fmt.Errorf("engine: code reader: %w", err)
 		}
 		// GITLET'S WRITE SIDE, where the company hosts code. Its log
