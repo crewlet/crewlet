@@ -76,17 +76,15 @@ import (
 //   - A HOOK'S FIRING IS NEVER A CALL'S ID: no id leaves this layer AS an id
 //     but a call's, through [threadMessage.Calls], and an attachment's
 //     `toolUseID` leaves it only as a key ([threadLine.AttachmentToolUseID]),
-//     since a PostToolUse hook's firing carries the id of the call it
-//     followed. An id written inside a record's text (a tool's output, a
-//     call's input) leaves it as bytes in a line's Raw, its reader's to
-//     parse and to hold to a rule of its own, or not at all: of a call's
-//     input, a result's text, a record's own toolUseResult and a message's
-//     text the layer hands out only the facts it reads of them
-//     ([threadCall], [threadLine.HandsBack], [threadLine.AgentAnswer],
-//     [threadMessage.NamesHandback]). A task notification's
-//     `<tool-use-id>`, the text's own claim, leaves it as the leg it names
-//     ([threadMessage.Notification]), which its one reader matches only
-//     against a call it read.
+//     since a PostToolUse hook's firing carries the id of the call it followed.
+//     An id written inside a record's text (a tool's output, a call's input)
+//     never leaves it as bytes: of a call's input, a result's text, a record's
+//     own toolUseResult and a message's text the layer hands out only the facts
+//     it reads of them ([threadCall], [threadLine.HandsBack],
+//     [threadLine.AgentAnswer], [threadMessage.NamesHandback]). A task
+//     notification's `<tool-use-id>`, the text's own claim, leaves it as the
+//     leg it names ([threadMessage.Notification]), which its one reader matches
+//     only against a call it read.
 //
 // What these rules were measured on is Claude Code 2.1.310 and 2.1.322, driven
 // as the engine drives a box's executor, and 2.1.118 beside 2.1.310 for a hook
@@ -551,16 +549,17 @@ func (e *threadLineError) Error() string {
 // Unwrap is what the line's decode met.
 func (e *threadLineError) Unwrap() error { return e.Err }
 
-// threadLine is one whole line of a thread: its place, its size, its bytes,
-// what a reader of its bytes reads of them ([threadBytes]) and its head,
-// beside the facts the accessors below read ([lineFacts]), all from the
-// line's one decode ([factsOf]).
+// threadLine is one whole line of a thread: its place, its size, what a
+// reader of its bytes reads of them ([threadBytes]) and its head, beside the
+// facts the accessors below read ([lineFacts]), all from the line's one
+// decode ([factsOf]).
 //
-// WHAT IT HANDS OUT RAW IS VALID UNTIL THE READER'S NEXT [threadReader.Next]:
-// the line's Raw. A reader that keeps it past that copies it, since the layer
-// may hand out a line's own bytes rather than a copy of them. Its byte facts
-// are a value of a fixed size, as a refused line's are ([threadLineError]),
-// a reader's to keep.
+// IT NEVER HANDS OUT THE LINE'S BYTES: every reader reads a line by its head,
+// its facts and its byte facts, so none holds what the reader's buffer held.
+// Its head and its facts are its own, shared with no other line
+// ([lineFacts]), and its byte facts are a value of a fixed size, as a refused
+// line's are ([threadLineError]), so a reader keeps a line as long as it
+// likes, and keeping one keeps no line's bytes.
 //
 // A VALUE AS LONG AS A LINE IT READS FOR ITS READERS, never hands out: what a
 // call's input, a result's text, a record's own toolUseResult and a message's
@@ -582,10 +581,6 @@ func (e *threadLineError) Unwrap() error { return e.Err }
 type threadLine struct {
 	// N is the line's place among the member's whole lines, from 1.
 	N int
-	// Raw is the line, its break dropped, valid until the reader's next Next
-	// (above). A carriage return before the break is the line's own, which
-	// JSON reads as whitespace.
-	Raw []byte
 	// Size is how many bytes of the member the line takes, its break
 	// included, as a refused line's Size is ([threadLineError]), so a reader
 	// that sums them sums the bytes the load reads.

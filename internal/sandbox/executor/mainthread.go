@@ -37,8 +37,8 @@ import (
 // readings ask of it: the count ([resumedReading]) and the meter's floor figure
 // ([contextReading]) now, and any later reading of the thread when it joins.
 type threadReading interface {
-	// line is the thread's next whole line that is one record. Its handouts
-	// are valid only while line runs ([threadLine]).
+	// line is the thread's next whole line that is one record, the
+	// reading's to keep ([threadLine]).
 	line(l threadLine)
 	// refused is the thread's next whole line that is no record: what it
 	// costs the reading is the reading's to decide (the layer's rule,
