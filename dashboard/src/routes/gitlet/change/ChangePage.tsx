@@ -401,10 +401,10 @@ function bylineVerb(change: CodeChangeDetail): ReactNode {
 }
 
 /** When the byline's act happened, and the word before it on a live change. */
-function bylineAt(change: CodeChangeDetail): { at: string; word: string } {
-  if (change.state === "merged") return { at: change.merged_at ?? change.opened_at, word: "" };
-  if (change.state === "closed") return { at: change.closed_at ?? change.opened_at, word: "" };
-  return { at: change.opened_at, word: "opened " };
+function bylineAt(change: CodeChangeDetail): { at: string; opened: boolean } {
+  if (change.state === "merged") return { at: change.merged_at ?? change.opened_at, opened: false };
+  if (change.state === "closed") return { at: change.closed_at ?? change.opened_at, opened: false };
+  return { at: change.opened_at, opened: true };
 }
 
 /**
@@ -436,7 +436,7 @@ function ChangeHeader({ change }: { change: CodeChangeDetail }) {
           </span>
           <Byline who={actor} verb={bylineVerb(change)} now={now}>
             <span className="code-change-byline__at">
-              {when.word}
+              {when.opened ? "opened " : ""}
               <time className="code-byline__when" dateTime={when.at} title={fmtDateTime(when.at)}>
                 {ago(when.at, now, { clock: true })}
               </time>

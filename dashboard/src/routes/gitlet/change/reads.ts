@@ -138,6 +138,24 @@ export function useAskAgainWhenMoved(moved: string, enabled: boolean, again: () 
   }, [moved, enabled, again]);
 }
 
+/**
+ * Why a part's first page drew nothing once it is refused: the engine's sentence,
+ * "" where it wrote none; null while it reads, holds rows, or waits on a node catching up.
+ */
+export function partRefusal(
+  part: Pick<Paged<unknown, unknown>, "error" | "refusal" | "items">,
+): string | null {
+  if (!part.error || part.items.length > 0) return null;
+  const refusal = part.refusal as { retryAfter?: number | null; detail?: string | null } | null;
+  if (part.error === "unavailable" && (refusal?.retryAfter ?? 0) > 0) return null;
+  return refusal?.detail ?? "";
+}
+
+/** A refusal said after `lead`, with the engine's sentence where it wrote one. */
+export function refusedWords(lead: string, sentence: string): string {
+  return sentence ? `${lead}: ${sentence.replace(/\.$/, "")}.` : `${lead}.`;
+}
+
 /** The rows a page of a conversation's part carries, and each row's id. */
 const reviewsOf = (a: CodeChangeAnswer) => a.reviews ?? [];
 const commentsOf = (a: CodeChangeAnswer) => a.comments ?? [];

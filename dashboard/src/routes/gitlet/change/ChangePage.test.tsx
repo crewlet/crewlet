@@ -1133,6 +1133,277 @@ test("a merged or closed change offers no Edit, and Copy link and Quote stay", a
   expect(document.activeElement).toBe(box);
 });
 
+// ---- The timeline ---------------------------------------------------------- //
+
+const at = (seq: number) => ({ ...POSITION, seq });
+const reviewRow = (id: string, seq: number, verdict: string, revision = 1, extra = {}) => ({
+  id,
+  revision,
+  reviewer: "cto",
+  reviewer_kind: "agent",
+  verdict,
+  summary: `Summary of ${id}`,
+  findings: 0,
+  position: at(seq),
+  at: "2026-10-27T11:00:00Z",
+  ...extra,
+});
+const askRow = (reviewer: string, seq: number, extra: Record<string, unknown> = {}) => ({
+  reviewer,
+  kind: "agent",
+  reason: "requested",
+  state: "requested",
+  requested_by: "dev",
+  requested_by_kind: "agent",
+  position: at(seq),
+  at: "2026-10-27T11:36:00Z",
+  ...extra,
+});
+const revisionRow = (n: number, seq: number) => ({
+  n,
+  head: HEAD,
+  pusher: "dev",
+  pusher_kind: "agent",
+  position: at(seq),
+  at: "2026-10-27T10:00:00Z",
+});
+const page = (rows: Record<string, unknown>) => () =>
+  json({ position: POSITION, level: "session", ...rows });
+
+/** An element's words, each text node apart, as a reader hears them. */
+function spoken(el: Element): string {
+  const words: string[] = [];
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) words.push(n.textContent ?? "");
+  return words
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .replace(/ ([,.])/g, "$1")
+    .trim();
+}
+
+/** The timeline's entries, in order, by a word each says. */
+function timelineWords(): string[] {
+  const list = screen.getByRole("list", { name: "What was said and done" });
+  return [...list.children].map(spoken);
+}
+
+// THE TIMELINE IS THE LOG'S ORDER across every part, the description first.
+// Mutation: sort by the records' clock times, and the old push lands last.
+test("the timeline starts with the description and draws every record in the order it landed", async () => {
+  stubEngine(described(), () => json({}), {
+    "": page({ change: described(), revisions: [revisionRow(2, 40), revisionRow(1, 10)] }),
+    reviews: page({ reviews: [reviewRow("r1", 20, "request_changes")] }),
+    comments: page({
+      comments: [
+        {
+          id: "c1",
+          thread_id: "c1",
+          author: "cto",
+          author_kind: "agent",
+          body: "Why three?",
+          position: at(30),
+          at: "2026-10-27T09:00:00Z",
+        },
+      ],
+    }),
+    reviewers: page({ reviewers: [askRow("sre", 50)] }),
+  });
+  mount();
+  await screen.findByText("Why three?");
+  await waitFor(() => expect(timelineWords()).toHaveLength(6));
+  const words = timelineWords();
+  expect(words[0]).toMatch(/^Engineer opened this change/);
+  expect(words[1]).toMatch(/pushed revision 1/);
+  expect(words[2]).toMatch(/requested changes on revision 1/);
+  expect(words[3]).toMatch(/commented/);
+  expect(words[4]).toMatch(/pushed revision 2/);
+  expect(words[5]).toMatch(/asked .*sre for a review/);
+});
+
+// A REVIEW'S DISC WEARS ITS VERDICT'S TONE, the verdict said in words beside
+// it (rule C7). Mutation: drop the Comment tag, and a comment reads as no verdict.
+test("a review's disc wears its verdict's tone, and the verdict is said in words", async () => {
+  stubEngine(detail(), () => json({}), {
+    reviews: page({
+      reviews: [
+        reviewRow("r1", 20, "request_changes", 1),
+        reviewRow("r2", 30, "approve", 2),
+        reviewRow("r3", 40, "comment", 2),
+      ],
+    }),
+  });
+  mount();
+  await screen.findByText("Summary of r3");
+  const rows = [...document.querySelectorAll<HTMLElement>(".code-tl-event")];
+  const said = rows.map((li) => [
+    li.querySelector(".code-disc")?.getAttribute("data-tone"),
+    spoken(li.querySelector(".code-tl-event__said")!),
+  ]);
+  expect(said).toEqual([
+    ["danger", expect.stringMatching(/^CTO requested changes on revision 1/)],
+    ["success", expect.stringMatching(/^CTO approved revision 2/)],
+    ["neutral", expect.stringMatching(/^CTO reviewed revision 2.*Comment$/)],
+  ]);
+  for (const disc of document.querySelectorAll(".code-disc")) {
+    expect(disc.getAttribute("aria-hidden")).toBe("true");
+  }
+});
+
+// AN ASK THAT STANDS IS DRAWN WHERE IT WAS MADE, with when; a path owner's
+// says which paths. Mutation: draw a reviewed ask, and a fourth row appears.
+test("an ask that stands is drawn where it was made, with when, and a path owner's says which paths", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-27T12:00:00Z"));
+  stubEngine(detail(), () => json({}), {
+    reviewers: page({
+      reviewers: [
+        askRow("cto", 20),
+        askRow("dev", 21, { reason: "path_owner", owned_paths: ["internal/server"] }),
+        askRow("sre", 22, {
+          reason: "path_owner",
+          owned_paths: ["a/**", "b/**", "c/**"],
+          owned_paths_omitted: 2,
+        }),
+        askRow("qa", 23, { reason: "path_owner" }),
+        askRow("ops", 24, { state: "reviewed" }),
+        askRow("ux", 25, { state: "ended" }),
+      ],
+    }),
+  });
+  mount();
+  await screen.findByText(/for a review/);
+  const asks = [...document.querySelectorAll<HTMLElement>(".code-tl-event__said")].map(spoken);
+  expect(asks).toEqual([
+    "Engineer asked CTO for a review 24 minutes ago",
+    "Engineer was asked to review, as the owner of internal/server 24 minutes ago",
+    // A HANDLE THE CHART DOES NOT HOLD is drawn by its initials and its handle.
+    "SR sre was asked to review, as the owner of a/**, b/**, c/** and 2 more 24 minutes ago",
+    "QA qa was asked to review, as an owner of paths it touches 24 minutes ago",
+  ]);
+});
+
+// PAST THE NOTICES' HORIZON an ask's time is said as earlier, never guessed.
+// Mutation: draw the time from the position, and "earlier" goes.
+test("an ask past the notices' horizon says it was asked earlier, never a time", async () => {
+  stubEngine(detail(), () => json({}), {
+    reviewers: page({
+      reviewers: [
+        askRow("cto", 20, { at: undefined }),
+        askRow("dev", 21, { at: undefined, reason: "path_owner", owned_paths: ["web/**"] }),
+      ],
+    }),
+  });
+  mount();
+  await screen.findByText(/for a review/);
+  const asks = [...document.querySelectorAll<HTMLElement>(".code-tl-event__said")];
+  expect(asks.map(spoken)).toEqual([
+    "Engineer asked CTO for a review earlier",
+    "Engineer was asked to review earlier, as the owner of web/**",
+  ]);
+  for (const a of asks) {
+    expect(within(a).getByText("earlier").getAttribute("title")).toBe(
+      "When this was recorded is not kept here: its notices have passed their horizon, or it told nobody.",
+    );
+    expect(a.querySelector("time")).toBeNull();
+  }
+});
+
+// A WITHDRAWN ASK SAYS SO, and a withdrawal tells nobody, so it carries no
+// time: none is drawn, not even "earlier". Mutation: drop withdrawn asks from
+// the timeline, or say "earlier" of a withdrawal, and this fails.
+test("a withdrawn ask says the reviewer is no longer asked", async () => {
+  stubEngine(detail(), () => json({}), {
+    reviewers: page({ reviewers: [askRow("cto", 20, { state: "withdrawn", at: undefined })] }),
+  });
+  mount();
+  expect(await screen.findByText("is no longer asked to review")).toBeTruthy();
+  const row = document.querySelector<HTMLElement>(".code-tl-event__said")!;
+  expect(spoken(row)).toBe("CTO is no longer asked to review");
+  expect(row.querySelector(".code-byline__when")).toBeNull();
+});
+
+// ASKS ONE RECORD MADE share its position, and each is its own row: one
+// request naming two reviewers draws both. Mutation: key an entry by its
+// position, and React's duplicate key fails the console gate.
+test("two asks one record made are two rows", async () => {
+  stubEngine(detail(), () => json({}), {
+    reviewers: page({ reviewers: [askRow("cto", 20), askRow("sre", 20)] }),
+  });
+  mount();
+  await waitFor(() =>
+    expect([...document.querySelectorAll<HTMLElement>(".code-tl-event__said")].map(spoken)).toEqual(
+      [
+        expect.stringMatching(/^Engineer asked CTO for a review/),
+        expect.stringMatching(/^Engineer asked SR sre for a review/),
+      ],
+    ),
+  );
+});
+
+// AN ASK AFTER THE REVIEWER'S OWN REVIEW is asked again, and names no asker:
+// the engine keeps the first ask's asker and note when it asks again.
+// Mutation: say the first asker, and the row reads as theirs at a later time.
+test("an ask after the reviewer's review says it was asked again, without the first asker", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-27T12:00:00Z"));
+  stubEngine(detail(), () => json({}), {
+    reviews: page({ reviews: [reviewRow("r1", 20, "request_changes", 1)] }),
+    reviewers: page({ reviewers: [askRow("cto", 30, { note: "Look at the retry" })] }),
+  });
+  mount();
+  await screen.findByText("Summary of r1");
+  const said = await waitFor(() => {
+    const rows = [...document.querySelectorAll<HTMLElement>(".code-tl-event__said")];
+    expect(rows).toHaveLength(2);
+    return rows.map(spoken);
+  });
+  expect(said[1]).toBe("CTO was asked to review again 24 minutes ago");
+  expect(screen.queryByText("Look at the retry")).toBeNull();
+});
+
+// WHO WAS ASKED, REFUSED, is said in the engine's words, never by its code.
+// Mutation: print the refusal's code, and "query_failed" is on the page.
+test("a refused reviewers read is said without its code", async () => {
+  stubEngine(detail(), () => json({}), {
+    reviewers: () => json({ error: "query_failed" }, 500),
+  });
+  mount();
+  expect(await screen.findByText("Who was asked to review is unavailable.")).toBeTruthy();
+  const timeline = screen.getByRole("region", { name: "Timeline" });
+  expect(timeline.textContent).not.toContain("query_failed");
+});
+
+// LOAD MORE ASKS EVERY PART'S NEXT PAGE at one press: reviews, comments and
+// whom it asked. Mutation: page the reviewers on the rail's press alone.
+test("Load more asks the next page of every part that has one", async () => {
+  stubEngine(detail(), () => json({}), {
+    reviews: (url) =>
+      url.searchParams.get("cursor")
+        ? page({ reviews: [reviewRow("r2", 60, "comment")] })()
+        : page({ reviews: [reviewRow("r1", 20, "comment")], next: "r1" })(),
+    reviewers: (url) =>
+      url.searchParams.get("cursor")
+        ? page({ reviewers: [askRow("dev", 70)] })()
+        : page({ reviewers: [askRow("cto", 30)], next: "a1" })(),
+  });
+  mount();
+  await screen.findByText("Summary of r1");
+  fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+  expect(await screen.findByText("Summary of r2")).toBeTruthy();
+  await waitFor(() =>
+    expect(
+      changeAsked
+        .filter((u) => u.searchParams.get("cursor"))
+        .map((u) => [u.searchParams.get("part"), u.searchParams.get("cursor")])
+        .sort(),
+    ).toEqual([
+      ["reviewers", "a1"],
+      ["reviews", "r1"],
+    ]),
+  );
+});
+
 // A FINISHED CHANGE OFFERS ONLY WHAT STILL APPLIES: a merged change takes no
 // review, no ask and no close from anybody, so its bar draws none of them and
 // its Revert stands where the merge controls were; a closed one offers its

@@ -511,9 +511,10 @@ revision touches paths the repository's `path_owners` name asks their owners
 itself, once its home has read the revision ([Path
 owners](../concepts/gitlet.md#path-owners)).
 
-**Read it.** **Conversation** is the change's description, its merge box —
-every condition to merge with where it stands, and the merge controls — and
-its activity in the order its records landed, beside a rail of whom it asked
+**Read it.** **Conversation** is the change's timeline: its description, then
+every revision, review, ask for review and thread in the order its records landed,
+then its merge box (every condition to merge with where it stands, and the merge
+controls), beside a rail of whom it asked
 for a review and where each stands; **Revisions** lists its revisions,
 **Checks** the checks that judge it, and **Files changed** is a revision's
 diff — the head unless you pick another, or what changed since an earlier
@@ -661,7 +662,7 @@ change; a seat cannot override.
 ### From the change's page
 
 A live change's page (**Gitlet › Changes**, then the change) carries the same
-call in its **Conversation**'s merge box, under the description, each control
+call in its **Conversation**'s merge box, after its timeline, each control
 made as you and never ahead of the engine's answer:
 
 - **Where its gate stands** — how many of its conditions are met, each

@@ -1,32 +1,40 @@
 /**
- * A change's conversation, as a code host lays one out: what it proposes —
- * its description, a card opened by its owner — then whether it may merge,
- * the merge box with every condition and the controls (`Merge.tsx`), then
- * everything said about it on a rail in the order it was said, a comment of
- * the reader's own at the foot, and beside it all the rail of whom it asked,
- * who wrote it, its work item and its branches (`Rail.tsx`).
+ * A change's conversation, as a code host lays one out: one timeline down a
+ * rail, its description first (a card opened by its owner), then everything
+ * said and done about it in the order it landed, then whether it may merge
+ * (the merge box, `Merge.tsx`) and a comment of the reader's own, and beside
+ * it all the rail of whom it asked, who wrote it, its work item and its
+ * branches (`Rail.tsx`).
  *
- * THE TIMELINE IS THE CODE LOG'S ORDER: each review, each comment and each
- * revision is a record, and they are drawn by the position each landed at,
- * never by a clock a node read. A comment's replies are drawn under the
- * comment that started its thread, as the engine keeps them (thread order).
- * A comment on a line is drawn where its line is, on the Files tab, and here
- * only as a pointer to it.
+ * THE TIMELINE IS THE CODE LOG'S ORDER: each review, each comment, each
+ * revision and each ask for review is a record, and they are drawn by the
+ * position each landed at, never by a clock a node read. A comment's replies
+ * are drawn under the comment that started its thread, as the engine keeps
+ * them (thread order).
  *
- * EVERY PAGE THE READER LOADS IS ONE TIMELINE: the engine pages reviews and
- * comments oldest first, so what one page leaves out is the newest, and Load
- * more asks each part's page after the one it holds. The timeline is built
- * over every page loaded, so a reply on a later page joins its root.
+ * EVERY PAGE THE READER LOADS IS ONE TIMELINE: the engine pages each part
+ * oldest first, so what one page leaves out is the newest, and Load more asks
+ * each part's page after the one it holds. The timeline is built over every
+ * page loaded, so a reply on a later page joins its root.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AsideLayout, Button, Stack, Tag, Textarea, useSendOnEnter } from "@crewlethq/ui";
-import { GitBranchGlyph } from "@crewlethq/icons/glyphs";
+import {
+  CheckGlyph,
+  EyeGlyph,
+  FileDiffGlyph,
+  GitCommitVerticalGlyph,
+  GitCompareGlyph,
+  MessageSquareGlyph,
+  ShieldUserGlyph,
+  UserGlyph,
+  UserPlusGlyph,
+} from "@crewlethq/icons/glyphs";
 import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { useDraftState } from "~/app/assistant/draft.ts";
 import { PageFailed } from "~/components/common.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
-import { verdictWord } from "~/lib/code.ts";
 import { useNow } from "~/lib/clock.ts";
 import { plural } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
@@ -36,15 +44,30 @@ import type {
   CodeChangeDetail,
   CodeCommentRow,
   CodeReviewRow,
+  CodeReviewerRow,
   CodeRevisionRow,
 } from "~/protocol/index.ts";
 import { changeHref } from "../paths.ts";
-import { Byline, Face, ShaChip } from "../ui.tsx";
+import { Byline, Face, ShaChip, useWhoName } from "../ui.tsx";
 import { Description } from "./Description.tsx";
 import { MergeBox } from "./Merge.tsx";
 import { ChangeRail } from "./Rail.tsx";
-import { TimelineCard, TimelineEvent, TimelineList } from "./Timeline.tsx";
-import { positionBefore, usePagedComments, usePagedReviews } from "./reads.ts";
+import {
+  Disc,
+  Said,
+  TimelineEvent,
+  TimelineItem,
+  TimelineList,
+  type DiscTone,
+} from "./Timeline.tsx";
+import {
+  partRefusal,
+  positionBefore,
+  refusedWords,
+  usePagedComments,
+  usePagedReviewers,
+  usePagedReviews,
+} from "./reads.ts";
 import "~/styles/gitlet.css";
 
 /** One entry of the timeline, by the record that made it. */
@@ -56,17 +79,21 @@ type Entry =
       root: CodeCommentRow;
       replies: CodeCommentRow[];
     }
-  | { kind: "revision"; at: CodeRevisionRow["position"]; revision: CodeRevisionRow };
+  | { kind: "revision"; at: CodeRevisionRow["position"]; revision: CodeRevisionRow }
+  | { kind: "ask"; at: CodeReviewerRow["position"]; ask: CodeReviewerRow; again: boolean };
 
 /**
  * The timeline's entries, in the order their records landed: each review, each
- * thread by its first comment with its replies under it, and each revision.
- * A thread on a finding is drawn with its finding, on the Files tab.
+ * thread by its first comment with its replies under it, each revision, and
+ * each ask that stands or was withdrawn. A thread on a finding is drawn with
+ * its finding; an answered or ended ask's position is the record that moved it.
+ * An ask after a review of the reviewer's own is one asked `again`.
  */
 export function timelineOf(
   reviews: readonly CodeReviewRow[],
   comments: readonly CodeCommentRow[],
   revisions: readonly CodeRevisionRow[],
+  asks: readonly CodeReviewerRow[] = [],
 ): Entry[] {
   const threads = new Map<string, { root: CodeCommentRow; replies: CodeCommentRow[] }>();
   for (const c of comments) {
@@ -82,10 +109,42 @@ export function timelineOf(
       at: revision.position,
       revision,
     })),
+    ...asks
+      .filter((ask) => ask.state === "requested" || ask.state === "withdrawn")
+      .map((ask) => ({
+        kind: "ask" as const,
+        at: ask.position,
+        ask,
+        again: reviews.some(
+          (r) =>
+            r.reviewer === ask.reviewer &&
+            r.reviewer_kind === ask.kind &&
+            positionBefore(r.position, ask.position),
+        ),
+      })),
   ];
   return entries.sort((a, b) =>
     positionBefore(a.at, b.at) ? -1 : positionBefore(b.at, a.at) ? 1 : 0,
   );
+}
+
+/** An entry's key: its record's identity, which one record's several asks do not share. */
+export function entryKey(entry: Entry): string {
+  switch (entry.kind) {
+    case "review":
+      return `review-${entry.review.id}`;
+    case "thread":
+      return `thread-${entry.root.id}`;
+    case "revision":
+      return `revision-${entry.revision.n}`;
+    case "ask":
+      return `ask-${entry.ask.kind}:${entry.ask.reviewer}`;
+  }
+}
+
+/** A review's disc tone: its verdict's, the verdict said in words beside it. */
+export function verdictTone(verdict: string): DiscTone {
+  return verdict === "request_changes" ? "danger" : verdict === "approve" ? "success" : "neutral";
 }
 
 export function Conversation({
@@ -99,45 +158,41 @@ export function Conversation({
   const [quoted, setQuoted] = useState<Quote | null>(null);
   const reviews = usePagedReviews(change);
   const comments = usePagedComments(change);
-  const entries = timelineOf(reviews.items, comments.items, revisions);
-  const more = reviews.more || comments.more;
-  const paging = reviews.paging || comments.paging;
-  const pageError = reviews.pageError ?? comments.pageError;
-  // BOTH PARTS' NEXT PAGES AT ONE PRESS: the timeline interleaves them by
-  // where each landed on the code log, so one part read further than the
-  // other would draw a gap the reader could not see.
+  // ONE READ for the timeline's asks and the rail's reviewers.
+  const asked = usePagedReviewers(change);
+  const entries = timelineOf(reviews.items, comments.items, revisions, asked.items);
+  const askedRefused = partRefusal(asked);
+  const parts = [reviews, comments, asked];
+  const more = parts.some((p) => p.more);
+  const paging = parts.some((p) => p.paging);
+  const pageError = parts.find((p) => p.pageError)?.pageError ?? null;
+  // EVERY PART'S NEXT PAGE AT ONE PRESS: the timeline interleaves them by
+  // where each landed on the code log, so one part read further than another
+  // would draw a gap the reader could not see.
   const loadMore = () => {
-    if (reviews.more) reviews.next();
-    if (comments.more) comments.next();
+    for (const p of parts) if (p.more) p.next();
   };
   return (
     <AsideLayout
       fit="page"
       asideLabel="About this change"
-      aside={<ChangeRail change={change} revisions={revisions} reviews={reviews.items} />}
+      aside={
+        <ChangeRail change={change} revisions={revisions} reviews={reviews.items} asked={asked} />
+      }
     >
       <Stack gap={5}>
-        <Description
-          change={change}
-          onQuote={(text) => setQuoted((was) => ({ text, n: (was?.n ?? 0) + 1 }))}
-        />
-        <MergeBox change={change} />
         <section aria-label="Timeline" className="code-activity">
-          <h2 className="code-activity__title">Activity</h2>
-          {entries.length === 0 ? (
-            <p className="muted">Nothing has been said about it yet.</p>
-          ) : (
-            <TimelineList label="What was said and done">
-              {entries.map((entry) => (
-                <TimelineEntry
-                  key={`${entry.kind}-${entry.at.generation}-${entry.at.seq}`}
-                  entry={entry}
-                  change={change}
-                  now={now}
-                />
-              ))}
-            </TimelineList>
-          )}
+          <TimelineList label="What was said and done">
+            <TimelineItem face={change.owner}>
+              <Description
+                change={change}
+                onQuote={(text) => setQuoted((was) => ({ text, n: (was?.n ?? 0) + 1 }))}
+              />
+            </TimelineItem>
+            {entries.map((entry) => (
+              <TimelineEntry key={entryKey(entry)} entry={entry} change={change} now={now} />
+            ))}
+          </TimelineList>
           {more && (
             <span>
               <Button variant="secondary" onClick={loadMore} disabled={paging} loading={paging}>
@@ -147,24 +202,83 @@ export function Conversation({
           )}
           {/* A PAGE THAT FAILED is said beside the press that asks it again. */}
           {pageError && <PageFailed error={pageError} />}
+          {askedRefused !== null && (
+            <p className="muted">
+              {refusedWords("Who was asked to review is unavailable", askedRefused)}
+            </p>
+          )}
         </section>
+        <hr className="code-tl-break" />
+        <MergeBox change={change} />
         <CommentComposer change={change} quote={quoted} />
       </Stack>
     </AsideLayout>
   );
 }
 
-/** What a review's verdict is called on its card: the outlined word, never a hue. */
-function verdictMark(verdict: string): string {
-  switch (verdict) {
-    case "approve":
-      return "Approved";
+/** Why an ask carries no time: said as what is known, never guessed. */
+export const EARLIER_TITLE =
+  "When this was recorded is not kept here: its notices have passed their horizon, or it told nobody.";
+
+/** An ask whose time is not kept: earlier than what follows it, and no more. */
+function Earlier() {
+  return (
+    <span className="code-byline__when" title={EARLIER_TITLE}>
+      earlier
+    </span>
+  );
+}
+
+/** A path owner's globs in words: `a`, `a and b`, `a, b and c`, `a, b, c and 2 more`. */
+export function pathsWords(paths: readonly string[], omitted = 0): ReactNode {
+  const named = paths.map((p) => (
+    <span key={p} className="code-tl-path mono">
+      {p}
+    </span>
+  ));
+  const parts: ReactNode[] = omitted > 0 ? [...named, `${omitted} more`] : named;
+  return parts.map((part, i) => (
+    <span key={i}>
+      {i === 0 ? "" : i === parts.length - 1 ? " and " : ", "}
+      {part}
+    </span>
+  ));
+}
+
+/** Why a path owner was asked: which paths it owns, or that its facts predate them. */
+function ownerWords(ask: CodeReviewerRow): ReactNode {
+  const paths = ask.owned_paths ?? [];
+  if (paths.length === 0) return <>as an owner of paths it touches</>;
+  return <>as the owner of {pathsWords(paths, ask.owned_paths_omitted)}</>;
+}
+
+/** What a review did, in words: the verdict is never told by the disc's tone alone. */
+function reviewVerb(review: CodeReviewRow, files: string): ReactNode {
+  const revision = (
+    <a className="prose-link code-tl-strong" href={files}>
+      revision {review.revision}
+    </a>
+  );
+  switch (review.verdict) {
     case "request_changes":
-      return "Changes asked";
+      return <>requested changes on {revision}</>;
+    case "approve":
+      return <>approved {revision}</>;
     case "comment":
-      return "Comment";
+      return <>reviewed {revision}</>;
   }
-  return verdict;
+  return (
+    <>
+      reviewed {revision} ({review.verdict})
+    </>
+  );
+}
+
+/** A review's disc glyph, by its verdict. */
+function reviewGlyph(verdict: string): ReactNode {
+  if (verdict === "request_changes") return <FileDiffGlyph size="sm" />;
+  if (verdict === "approve") return <CheckGlyph size="sm" />;
+  return <EyeGlyph size="sm" />;
 }
 
 /** One entry, as the timeline draws it. */
@@ -185,89 +299,203 @@ function TimelineEntry({
         ...(r.revision !== change.revision ? { rev: r.revision } : {}),
       });
       return (
-        <TimelineCard
-          label={`Review by ${r.reviewer}`}
-          head={
-            <Byline
-              who={r.reviewer}
-              verb={`${verdictWord(r.verdict)} on revision ${r.revision}`}
-              at={r.at}
-              now={now}
-            />
+        <TimelineEvent
+          disc={<Disc glyph={reviewGlyph(r.verdict)} tone={verdictTone(r.verdict)} />}
+          end={
+            <a className="t-link" href={files}>
+              View reviewed changes
+            </a>
           }
-          marks={<Tag appearance="outline">{verdictMark(r.verdict)}</Tag>}
-          foot={
-            r.findings > 0 ? (
-              <a className="t-link" href={files}>
-                {plural(r.findings, "finding")} on revision {r.revision} →
-              </a>
-            ) : undefined
+          under={
+            <article className="code-review-box" aria-label={`Review by ${r.reviewer}`}>
+              {r.summary ? (
+                <div className="prose md">{renderMarkdown(r.summary)}</div>
+              ) : (
+                <p className="muted">No summary.</p>
+              )}
+              {r.findings > 0 && (
+                <a className="t-link" href={files}>
+                  {plural(r.findings, "finding")} on revision {r.revision}
+                </a>
+              )}
+            </article>
           }
         >
-          {r.summary ? (
-            <div className="prose md">{renderMarkdown(r.summary)}</div>
-          ) : (
-            <p className="muted">No summary.</p>
-          )}
-        </TimelineCard>
-      );
-    }
-    case "revision": {
-      const v = entry.revision;
-      return (
-        <TimelineEvent glyph={<GitBranchGlyph size="sm" />}>
-          <Byline who={v.pusher} verb={`pushed revision ${v.n}`} at={v.at} now={now}>
-            <ShaChip oid={v.head} />
-            {v.n > 1 && (
-              // WHAT THE PUSH CHANGED, the engine's interdiff of this
-              // revision since the one before it.
-              <a
-                className="t-link"
-                href={changeHref(change.repo, change.number, {
-                  tab: "files",
-                  rev: v.n,
-                  since: v.n - 1,
-                })}
-              >
-                What it changed
-              </a>
+          <Byline who={r.reviewer} verb={reviewVerb(r, files)} at={r.at} now={now}>
+            {r.verdict === "comment" && (
+              <Tag size="sm" appearance="outline" leadingIcon={<MessageSquareGlyph size="xs" />}>
+                Comment
+              </Tag>
             )}
           </Byline>
         </TimelineEvent>
       );
     }
+    case "revision": {
+      const v = entry.revision;
+      const head = v.n === change.revision;
+      return (
+        <TimelineEvent
+          disc={<Disc glyph={<GitCommitVerticalGlyph size="sm" />} size="small" />}
+          end={
+            <>
+              {v.n > 1 && (
+                // WHAT THE PUSH CHANGED, the engine's interdiff since the revision before.
+                <a
+                  className="t-link code-tl-compare"
+                  href={changeHref(change.repo, change.number, {
+                    tab: "files",
+                    rev: v.n,
+                    since: v.n - 1,
+                  })}
+                >
+                  <GitCompareGlyph size="xs" /> Compare with revision {v.n - 1}
+                </a>
+              )}
+              <ShaChip oid={v.head} />
+            </>
+          }
+        >
+          <Byline
+            who={v.pusher}
+            verb={
+              <>
+                pushed{" "}
+                <a
+                  className="prose-link code-tl-strong"
+                  href={changeHref(change.repo, change.number, {
+                    tab: "files",
+                    ...(head ? {} : { rev: v.n }),
+                  })}
+                >
+                  revision {v.n}
+                </a>
+              </>
+            }
+            at={v.at}
+            now={now}
+          >
+            {head && (
+              <Tag size="sm" appearance="outline">
+                Head
+              </Tag>
+            )}
+          </Byline>
+        </TimelineEvent>
+      );
+    }
+    case "ask":
+      return <AskEntry ask={entry.ask} again={entry.again} now={now} />;
     case "thread":
       return (
-        <li className="code-timeline__item">
-          <Thread root={entry.root} replies={entry.replies} change={change} />
-        </li>
+        <TimelineItem face={entry.root.author}>
+          <Thread root={entry.root} replies={entry.replies} change={change} onRail />
+        </TimelineItem>
       );
   }
 }
 
 /**
- * A thread, as a card: its first comment — where it is about a line, which
- * line, since its line is on the Files tab — its replies under it, each with
- * its writer's face, and for a reader a Resolve and a reply of their own.
+ * An ask for review where it was made: by whom, of whom, why and when. One
+ * asked `again` names no asker: the engine keeps the first ask's asker and note.
+ */
+function AskEntry({ ask, again, now }: { ask: CodeReviewerRow; again: boolean; now: number }) {
+  const at = ask.at;
+  const when = at ? undefined : <Earlier />;
+  if (ask.state === "withdrawn") {
+    // A WITHDRAWAL TELLS NOBODY, so its time is mostly not kept: its place says when.
+    return (
+      <TimelineEvent disc={<Disc glyph={<UserGlyph size="sm" />} size="small" />}>
+        <Byline who={ask.reviewer} verb="is no longer asked to review" at={at} now={now} />
+      </TimelineEvent>
+    );
+  }
+  const asked = again ? "was asked to review again" : "was asked to review";
+  if (ask.reason === "path_owner") {
+    return (
+      <TimelineEvent disc={<Disc glyph={<ShieldUserGlyph size="sm" />} size="small" />}>
+        <Byline
+          who={ask.reviewer}
+          verb={
+            at ? (
+              <>
+                {asked}, {ownerWords(ask)}
+              </>
+            ) : (
+              <>
+                {asked} <Earlier />, {ownerWords(ask)}
+              </>
+            )
+          }
+          at={at}
+          now={now}
+        />
+      </TimelineEvent>
+    );
+  }
+  if (again) {
+    return (
+      <TimelineEvent disc={<Disc glyph={<UserPlusGlyph size="sm" />} size="small" />}>
+        <Byline who={ask.reviewer} verb={asked} at={at} now={now}>
+          {when}
+        </Byline>
+      </TimelineEvent>
+    );
+  }
+  return (
+    <TimelineEvent
+      disc={<Disc glyph={<UserPlusGlyph size="sm" />} size="small" />}
+      under={ask.note ? <blockquote className="code-tl-note">{ask.note}</blockquote> : undefined}
+    >
+      <Byline who={ask.requested_by} verb={<AskedWhom reviewer={ask.reviewer} />} at={at} now={now}>
+        {when}
+      </Byline>
+    </TimelineEvent>
+  );
+}
+
+/** "asked [face] Code Reviewer for a review". */
+function AskedWhom({ reviewer }: { reviewer: string }) {
+  const name = useWhoName()(reviewer);
+  return (
+    <span className="code-tl-whom">
+      asked <Face who={reviewer} />
+      <span className="code-byline__who">{name}</span> for a review
+    </span>
+  );
+}
+
+/**
+ * A thread, as a card: its first comment (where it is about a line, which
+ * line), its replies under it, each with its writer's face, and for a reader
+ * a reply of their own and Resolve conversation. `onRail`: its writer's face
+ * is on the timeline's rail, not in its head.
  */
 export function Thread({
   root,
   replies,
   change,
+  onRail = false,
 }: {
   root: CodeCommentRow;
   replies: readonly CodeCommentRow[];
   change: CodeChangeDetail;
+  onRail?: boolean;
 }) {
   const now = useNow();
   const resolve = useAct("code_comment_on_change");
+  const authors = new Set(change.authors.map((a) => a.author));
   const verb = root.anchor
     ? `commented on ${root.anchor.path}:${root.anchor.line} (revision ${root.anchor.revision})`
     : "commented";
   return (
     <article className="code-thread" aria-label={`Thread by ${root.author}`}>
       <div className="code-thread__head">
-        <Byline who={root.author} verb={verb} at={root.at} now={now} />
+        {onRail ? (
+          <Said who={root.author} verb={verb} at={root.at} now={now} />
+        ) : (
+          <Byline who={root.author} verb={verb} at={root.at} now={now} />
+        )}
         {root.resolved && <Tag appearance="outline">Resolved</Tag>}
       </div>
       <div className="code-thread__body">
@@ -277,7 +505,14 @@ export function Thread({
         <ol className="code-thread__replies" aria-label="Replies">
           {replies.map((c) => (
             <li key={c.id} className="code-thread__reply">
-              <Byline who={c.author} at={c.at} now={now} />
+              <span className="code-thread__said">
+                <Byline who={c.author} at={c.at} now={now} />
+                {authors.has(c.author) && (
+                  <Tag size="sm" appearance="outline">
+                    Author
+                  </Tag>
+                )}
+              </span>
               <div className="prose md">{renderMarkdown(c.body)}</div>
             </li>
           ))}
@@ -288,7 +523,8 @@ export function Thread({
         <WriteButton
           write={resolve}
           size="small"
-          variant="ghost"
+          variant="secondary"
+          leadingIcon={root.resolved ? undefined : <CheckGlyph size="sm" />}
           onPress={() =>
             void resolve.run(
               { change: change.ref, thread: root.id, resolve: !root.resolved },
@@ -296,7 +532,7 @@ export function Thread({
             )
           }
         >
-          {root.resolved ? "Reopen thread" : "Resolve"}
+          {root.resolved ? "Reopen thread" : "Resolve conversation"}
         </WriteButton>
       </div>
     </article>

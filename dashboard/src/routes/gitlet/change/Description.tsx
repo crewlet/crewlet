@@ -18,7 +18,7 @@ import { useAct } from "~/lib/useAct.ts";
 import { menuHold } from "~/lib/useWriteAccess.ts";
 import type { CodeChangeDetail } from "~/protocol/index.ts";
 import { changeHref } from "../paths.ts";
-import { Byline } from "../ui.tsx";
+import { Said } from "./Timeline.tsx";
 import "~/styles/gitlet.css";
 
 /** Why Save is held while the words on screen moved under the reader. */
@@ -88,7 +88,7 @@ export function Description({
   return (
     <section aria-label="Description" className="code-description">
       <div className="code-description__head" ref={head}>
-        <Byline who={change.owner} verb="opened this change" at={change.opened_at} now={now} />
+        <Said who={change.owner} verb="opened this change" at={change.opened_at} now={now} />
         <span className="code-description__marks">
           <Tag size="sm" appearance="outline">
             Author
@@ -185,7 +185,6 @@ function EditForm({ change, onDone }: { change: CodeChangeDetail; onDone: () => 
   };
   return (
     <form
-      className="code-description__form"
       aria-label={`Edit ${change.ref}`}
       onKeyDown={keys}
       onSubmit={(event: FormEvent) => {
