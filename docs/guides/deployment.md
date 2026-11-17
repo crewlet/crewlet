@@ -803,15 +803,22 @@ entire point of that distinction. The coordination KV rides this same
 connection on purpose — one connection, one fate. An outage that outlasts the
 lease TTL (45 s unless `coordination.lease_ttl_seconds` says otherwise) does
 hand this node's seats to a peer, and that is the intended behaviour rather
-than something a reconnect policy should paper over. Each attempt gets **2
-seconds** to connect, and 2 more for TLS and the NATS handshake, not the
-embedded member's listener budget: the loop tries the URLs in turn, and a
-member that silently drops packets holds every attempt at it for that long
-before a member that answers is asked, which is time the node spends not
-renewing its leases. A URL whose name resolves to several addresses — a
-headless Kubernetes service naming every pod of the cluster — shares those 2
-seconds among them, tried in a random order so a fleet's connections spread
-across the members, rather than taking 2 seconds for each.
+than something a reconnect policy should paper over. Each attempt gets **5
+seconds** to connect, and 5 more for TLS and the NATS handshake — a request's
+term, because the handshake's packets queue at the link's bottleneck like any
+request's, and a bottleneck the engine supports may hold four seconds of the
+link's rate; at the 2 seconds an attempt was once given, a node whose
+connection dropped behind a deep queue could not dial again while other
+traffic kept it deep. It is not the embedded member's listener budget either:
+the loop tries the URLs in turn, and a member that silently drops packets
+holds every attempt at it for that long before a member that answers is
+asked, which is time the node spends not renewing its leases — a pool of
+three with two silent members reaches the third within ten seconds, inside
+even the floor's 15-second lease. A URL whose name resolves to several
+addresses — a headless Kubernetes service naming every pod of the cluster —
+shares those 5 seconds among them, tried in a random order so a fleet's
+connections spread across the members, rather than taking 5 seconds for
+each.
 
 **Nothing on the way may terminate TCP.** The node reads its own sockets to
 tell a link that is still carrying a large message from one that carries

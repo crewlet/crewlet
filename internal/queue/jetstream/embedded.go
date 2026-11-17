@@ -1736,29 +1736,37 @@ func dial(cfg Config, at watched, meter *LinkMeter) (*nats.Conn, error) {
 
 // externalHandshake bounds each attempt to reach an EXTERNAL server, a phase
 // at a time: the TCP connect to a member — every address its name resolves
-// to together, each dialled with an equal share ([infoDialer]), after a
+// to together, each dialled with an equal share ([memberDialer]), after a
 // lookup bounded the same — and then the TLS handshake and INFO, CONNECT,
 // PING, PONG, which the client bounds with it.
 //
-// # Two seconds, and why the embedded member's budget does not transfer
+// # A request's term, and why the embedded member's budget does not transfer
 //
 // A connection to this process's own member takes the LISTENER budget
 // ([listenTimeout]), because that server has already answered
 // ReadyForConnections and a slow handshake there measures only the host's
-// contention. Nothing has answered for a remote one, and here the figure is
-// also how long the reconnect loop waits on each member of the pool: it tries
-// them in turn, and a member that silently drops packets — a partition, a host
-// that went away without closing anything — holds every attempt at it for
-// exactly this long before the next member is asked, however many addresses
-// its name resolves to: a name naming every pod of the cluster shares the
-// budget among them rather than taking it once for each. The coordination store
-// rides this connection, and an outage past the lease TTL (45 s by default)
-// hands this node's seats to a peer, so each second here is a second a node
-// with a healthy member in its pool spends not renewing them. Two seconds is
-// NATS's own figure for a remote server, and far above the handshake of a
-// reachable one; stated rather than inherited, so it is a decision a change
-// to either side has to read.
-const externalHandshake = 2 * time.Second
+// contention. Nothing has answered for a remote one, and the handshake
+// crosses the link: its SYN and SYN-ACK, and each line after them, queue at
+// the link's bottleneck like any other packet. Every request across a link
+// is sized to be answered within its term ([jsapi.RequestTerm]) behind what
+// that bottleneck may queue — up to four seconds of the link's rate across
+// its two directions together, and a round trip (crewlet/crewlet#1035) — so
+// a handshake is given the same term. Held to the two seconds it was, an
+// attempt across a link whose queue other flows kept deep failed every time,
+// and a node whose connection dropped there could never dial again while
+// they did.
+//
+// WHAT IT COSTS: it is also how long the reconnect loop waits on each member
+// of the pool, which it tries in turn, and a member that silently drops
+// packets — a partition, a host that went away without closing anything —
+// holds every attempt at it for exactly this long before the next member is
+// asked, however many addresses its name resolves to (a name naming every
+// pod of the cluster shares the budget among them rather than taking it once
+// for each). The coordination store rides this connection, and an outage past
+// the lease TTL (45 s by default, 15 s at its floor) hands this node's seats
+// to a peer; a pool of three members with two silent ones reaches the third
+// within ten seconds, inside either.
+const externalHandshake = jsapi.RequestTerm
 
 // externalWriteDeadline is how long one socket Write of an external dial's
 // client may take before the client gives the connection up

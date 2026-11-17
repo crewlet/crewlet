@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 
 	"github.com/crewlet/crewlet/internal/jsapi"
 )
@@ -590,16 +591,17 @@ func until(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// A LINK'S HANDSHAKE IS GIVEN A REQUEST'S TERM: its packets queue at the
-// link's bottleneck like any request's, which the engine sizes every request
-// across a link to wait behind, so a leaf's CONNECT through its tunnel gets
-// [jsapi.RequestTerm] — where nats-server's default is its one-second dial,
-// and a leaf whose link dropped behind a deep queue could never dial again.
-// The tunnel carries the leaf's data link, in the global account, and no
-// other remote.
+// A LINK'S HANDSHAKE IS GIVEN A REQUEST'S TERM, on a leaf and on an external
+// dial alike: its packets queue at the link's bottleneck like any request's,
+// which the engine sizes every request across a link to wait behind, so a
+// leaf's CONNECT through its tunnel and an external dial's connect and
+// handshake each get [jsapi.RequestTerm] — where nats-server's leaf default
+// is its one-second dial and the external dial had two seconds, and a node
+// whose link dropped behind a deep queue could never dial again. The tunnel
+// carries the leaf's data link, in the global account, and no other remote.
 //
-// Mutant: the tunnel's connect term at nats-server's one second. Mutant:
-// every remote proxied.
+// Mutant: the tunnel's connect term at nats-server's one second. Mutant: the
+// external handshake at two seconds. Mutant: every remote proxied.
 func TestALinksHandshakeIsGivenARequestsTerm(t *testing.T) {
 	t.Parallel()
 	var rec dialRecord
@@ -620,4 +622,18 @@ func TestALinksHandshakeIsGivenARequestsTerm(t *testing.T) {
 		t.Errorf("a remote in another account dials through %q, want directly", other.Proxy.URL)
 	}
 
+	opts, _, err := dialOptions(Config{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied := nats.GetDefaultOptions()
+	for _, opt := range opts {
+		if err := opt(&applied); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if applied.Timeout != jsapi.RequestTerm {
+		t.Errorf("an external dial's handshake is given %v, want the request term %v",
+			applied.Timeout, jsapi.RequestTerm)
+	}
 }
