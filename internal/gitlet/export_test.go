@@ -438,3 +438,6 @@ func LayerCut(sections [3]int64, i int) (start, size int64, runs [][3]int64) {
 	}
 	return cut.start, cut.size, runs
 }
+
+// SetStandingCountBound has r count at most n places a state: MaxStandingCounted as shipped.
+func SetStandingCountBound(r *Reader, n int) { r.standingCounted = n }

@@ -181,6 +181,9 @@ func TestTheCommitMarksStatementsReadNoUnnestedAggregate(t *testing.T) {
 			args: []any{oid("head-1-1"), "repo-1", MaxCommitChanges + 1}},
 		"when a page's reviewers last moved": {sql: reviewersMovedAtSQL,
 			args: []any{"repo-1-change-000001", "[3000,3001]"}},
+		"a standing page's facts": {sql: standingFactsSQL,
+			args: []any{`[["repo-1","` + oid("c") + `","refs/heads/main","unit",1]]`}},
+		"a standing page's entries": {sql: standingEntriesSQL, args: []any{`[["repo-1","entry-1"]]`}},
 	} {
 		plan := storetest.Plan(t, db, st.sql, st.args)
 		if line, unnested := storetest.Decorrelated(plan); unnested {
@@ -1550,7 +1553,12 @@ func registeredStatements() map[string]statement {
 		// its narrowing — a repository's in one state, and of one check in
 		// one state, at its first page's place above every ending; the
 		// window's in one ending, and of one check in one ending, from its
-		// end; and the home's
+		// end; a standing listing's places of the window's attempts not yet
+		// ended, a covering seek of the index partial on them; and, driven
+		// from a page's lists, its places' facts and rows by the key, a later
+		// attempt by the key's prefix, the live changes at its heads, and its
+		// entries and tips by their keys, an entry's later entry by
+		// code_queue_change_idx; and the home's
 		// due work — the due
 		// listing's statements, a head tested by its dispatch's key and its
 		// target's, and a target's reading by its key.
@@ -1578,6 +1586,21 @@ func registeredStatements() map[string]statement {
 			[]string{"COVERING INDEX code_checks_state_recent_idx (state=? AND finished_at<=? AND finished_at>=?)"}},
 		"window checks of a name": {windowNamePlacesSQL, []any{"unit", "passed", 1, 1000, "repo-1", oid("c"), "refs/heads/main", 1, 50},
 			[]string{"COVERING INDEX code_checks_name_recent_idx (name=? AND state=? AND finished_at<=? AND finished_at>=?)"}},
+		"window checks not yet ended": {windowUnendedPlacesSQL, []any{"running", int64(math.MaxInt64), "", "", "", "", 0, "", 50},
+			[]string{"COVERING INDEX code_checks_unended_idx (state=? AND finished_at<=?)"}},
+		"standing checks' facts": {standingFactsSQL, []any{`[["repo-1","` + oid("c") + `","refs/heads/main","unit",1]]`},
+			[]string{"SCAN json_each AS j",
+				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)",
+				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt>?)"}},
+		"standing checks' rows": {standingRowsSQL, []any{`[["repo-1","` + oid("c") + `","refs/heads/main","unit",1]]`},
+			[]string{"SCAN json_each AS j",
+				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
+		"standing checks' heads": {standingHeadsSQL, []any{`[["repo-1","refs/heads/main","` + oid("c") + `"]]`},
+			[]string{"SCAN json_each AS j", "code_changes_target_idx (repo_id=? AND target_ref=? AND head_oid=?)"}},
+		"standing checks' entries": {standingEntriesSQL, []any{`[["repo-1","entry-1"]]`},
+			[]string{"SCAN json_each AS j", queueKey + " (repo_id=? AND entry_id=?)", "code_queue_change_idx (change_id=? AND seq>?)"}},
+		"standing checks' tips": {standingTipsSQL, []any{`[["repo-1","refs/heads/main"]]`},
+			[]string{"SCAN json_each AS j", refsKey + " (repo_id=? AND ref=?)"}},
 		// THE HOME'S CHECK WORK (checksread.go, checksdispatch.go): a head's
 		// dispatch by the two rows' keys, its requeue by the partial index
 		// holding only the attempts their infrastructure ended and the next

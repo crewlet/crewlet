@@ -69,6 +69,8 @@ type Reader struct {
 	refsScanned, activeCounted int
 	// spokenScanned bounds a live state's conversation side: MaxSpokenScanned, or a test's.
 	spokenScanned int
+	// standingCounted bounds a standing count's places a state: MaxStandingCounted, or a test's.
+	standingCounted int
 }
 
 // ReaderOptions configure a reader.
@@ -110,6 +112,7 @@ func NewReader(o ReaderOptions) (*Reader, error) {
 	if r.limits == nil {
 		r.limits = DefaultLimits
 	}
+	r.standingCounted = MaxStandingCounted
 	if r.now == nil {
 		r.now = time.Now
 	}
