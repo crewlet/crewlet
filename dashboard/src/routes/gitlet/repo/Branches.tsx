@@ -38,7 +38,7 @@ import { PageFailed, QueryState } from "~/components/common.tsx";
 import { ago } from "~/lib/ago.ts";
 import { useClock, useNow } from "~/lib/clock.ts";
 import { CHECK_HISTORY_DAYS, rollupFor, rollupTitle } from "~/lib/checks.ts";
-import { PUSH_HISTORY_DAYS, changeRef, refName, repoPath, shortOID } from "~/lib/code.ts";
+import { changeRef, refName, repoPath, shortOID } from "~/lib/code.ts";
 import { civilAt, civilKey, fmtDateTime, plural, readerDay, relTime } from "~/lib/format.ts";
 import { zone } from "~/lib/prefs.ts";
 import { dayStartIn } from "~/lib/range.ts";
@@ -50,7 +50,6 @@ import {
   type CodeRefListing,
   type CodeTip,
   type CodeGitAnswer,
-  type CodeRefMover,
   type CodeRefProtection,
   type CodeRefsAnswer,
   type CodeRepoDetail,
@@ -58,8 +57,9 @@ import {
 } from "~/protocol/index.ts";
 import { ChangeRefPill } from "../Changes.tsx";
 import { useListKeys } from "../CodeList.tsx";
+import { moverOf } from "../movers.ts";
 import { commitHref, compareHref, repoHref } from "../paths.ts";
-import { BranchChip, CheckRollupMark, Face, GITLET, useWhoName, type Who } from "../ui.tsx";
+import { BranchChip, CheckRollupMark, Face, useWhoName } from "../ui.tsx";
 import { DeleteBranchButton, NewBranchButton } from "./BranchWrites.tsx";
 import { useCommitMarks } from "./marks.ts";
 import { ProtectButton } from "./Protect.tsx";
@@ -923,52 +923,6 @@ function Drift({ tip, most, base }: { tip: CodeTip | undefined; most: number; ba
       </span>
     </span>
   );
-}
-
-/** Who moved a branch, in a word and a sentence: Gitlet for a merge or a queue landing; never a guess. */
-function moverOf(
-  mover: CodeRefMover | undefined,
-  movedAt: string,
-  now: number,
-  name: string,
-  whoName: (who: Who) => string,
-): { who: Who | null; words: string; title: string } {
-  if (!mover) {
-    return now - Date.parse(movedAt) < PUSH_HISTORY_DAYS * DAY_MS
-      ? {
-          who: null,
-          words: "Unknown",
-          title: "Who moved it is unknown: one record moved it away and back.",
-        }
-      : {
-          who: null,
-          words: "No longer kept",
-          title: `Who moved it is no longer kept: pushes are kept ${PUSH_HISTORY_DAYS} days.`,
-        };
-  }
-  const by = mover.actor_seat || mover.actor;
-  switch (mover.via) {
-    case "merge":
-      return {
-        who: GITLET,
-        words: "Gitlet",
-        title: `Gitlet moved ${name} when ${whoName(by)} merged a change`,
-      };
-    case "queue":
-      return {
-        who: GITLET,
-        words: "Gitlet",
-        title: `Gitlet moved ${name} landing its merge queue's train, for ${whoName(by)}`,
-      };
-    case "mirror":
-      return { who: by, words: whoName(by), title: "Moved by the mirror's sync" };
-    case "import":
-      return { who: by, words: whoName(by), title: "Moved by the import" };
-    case "engine":
-      return { who: by, words: whoName(by), title: "Written by a Gitlet tool" };
-    default:
-      return { who: by, words: whoName(by), title: "Pushed with git" };
-  }
 }
 
 /** Who moved a branch and when, as a byline. */

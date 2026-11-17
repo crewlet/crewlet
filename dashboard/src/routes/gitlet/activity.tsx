@@ -4,7 +4,7 @@
  */
 
 import { useMemo, type ReactNode } from "react";
-import { Histogram } from "@crewlethq/ui";
+import { Histogram, VisuallyHidden } from "@crewlethq/ui";
 import { useClock } from "~/lib/clock.ts";
 import { civilAt, civilKey, fmtDateCompact, plural, readerDay } from "~/lib/format.ts";
 import { zone } from "~/lib/prefs.ts";
@@ -46,24 +46,27 @@ export function useDayBounds(days: number): readonly string[] {
 /**
  * Pushes a day as one series in the first data colour, inside a figure its caption names; the
  * first day and Today under the bars. `starts` are each count's day's first instant, oldest first.
+ * `compact`, a list row's: the caption said to assistive technology alone, and no ends row.
  */
 export function PushSpark({
   counts,
   starts,
   now,
   caption,
+  compact = false,
 }: {
   counts: readonly number[];
   starts: readonly string[];
   now: number;
   caption: ReactNode;
+  compact?: boolean;
 }) {
   const total = counts.reduce((a, b) => a + b, 0);
   const last = counts.length - 1;
   const day = (i: number) => (i === last ? "Today" : fmtDateCompact(starts[i], now));
   return (
-    <figure className="code-spark">
-      <figcaption>{caption}</figcaption>
+    <figure className={compact ? "code-spark code-spark--compact" : "code-spark"}>
+      <figcaption>{compact ? <VisuallyHidden>{caption}</VisuallyHidden> : caption}</figcaption>
       <Histogram
         bars={counts.map((v, i) => ({ t: Date.parse(starts[i] ?? ""), v }))}
         label={`Pushes a day over the last ${plural(counts.length, "day")}`}
@@ -73,10 +76,12 @@ export function PushSpark({
         }
         height={SPARK_HEIGHT}
       />
-      <div className="code-spark__ends" aria-hidden="true">
-        <span>{day(0)}</span>
-        <span>Today</span>
-      </div>
+      {!compact && (
+        <div className="code-spark__ends" aria-hidden="true">
+          <span>{day(0)}</span>
+          <span>Today</span>
+        </div>
+      )}
     </figure>
   );
 }
