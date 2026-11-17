@@ -103,16 +103,14 @@ import {
 } from "./logic.ts";
 import { GITHUB_ACCESS_NAMES, laneWords } from "./words.ts";
 
+/**
+ * What changes on one agent's lane, as labels and values. Turning the lane on
+ * or off is no row: the card's tag says it ("Turned on").
+ */
 function rows(lane: Lane, from: AccessDesired, to: AccessDesired): ChangeListRow[] {
   const out: ChangeListRow[] = [];
   const access = laneWords(lane.key).access;
   if (from.enabled !== to.enabled) {
-    out.push({
-      kind: "changed",
-      label: `On ${lane.name}`,
-      from: from.enabled ? "On" : "Off",
-      to: to.enabled ? "On" : "Off",
-    });
     if (!to.enabled) return out;
     // TURNED ON: what it is turned on with.
     if (lane.levels.length > 0)
@@ -262,6 +260,7 @@ function SeatReview({
   avatar: AgentAvatar | null;
 }) {
   const summary = changeSummary(lane, from, to);
+  const changes = rows(lane, from, to);
   const off = from.enabled && !to.enabled;
   return (
     <Card
@@ -287,7 +286,7 @@ function SeatReview({
           {summary.label}
         </Tag>
       </div>
-      <ChangeList rows={rows(lane, from, to)} />
+      {changes.length > 0 && <ChangeList rows={changes} />}
       {off && (
         <Text variant="caption" tone="secondary">
           {laneWords(lane.key).off}

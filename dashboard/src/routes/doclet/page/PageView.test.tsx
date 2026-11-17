@@ -524,6 +524,28 @@ test("History reads the newest revision, lists the others, and shows the page's 
   expect(notes).toEqual(["Adds the drain step"]);
 });
 
+// A REVISION IS NAMED ONCE: its full text is drawn under the title that names
+// it, with no pane heading saying "rev 14" again. Mutation: hand the full text
+// over as a pane, and this is red.
+test("a revision's full text is not headed by its revision again", async () => {
+  location.hash = `#/doclet/pages/${ID}`;
+  mount(<PageView id={ID} />, {
+    page: detail(),
+    page_reads: reads(),
+    page_revision: (p: Record<string, unknown>) =>
+      Promise.resolve({ page: ID, version: p.version, body: `body of ${String(p.version)}` }),
+    page_activity: { changes: [] },
+  });
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "History" }));
+  await settle();
+  fireEvent.click(screen.getByRole("radio", { name: "Full text" }));
+  await settle();
+  expect(screen.getByText("body of 14")).toBeTruthy();
+  expect(screen.getByRole("heading", { name: /Revision 14/ })).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "rev 14" })).toBeNull();
+});
+
 // THE WATCH IS THE PERSON'S OWN, as a save of nothing but the watch.
 test("Watch and Unwatch say what they do, act as the person, and a mute is not a watch", async () => {
   mount(<PageView id={ID} />, { page: detail(), page_reads: reads() });

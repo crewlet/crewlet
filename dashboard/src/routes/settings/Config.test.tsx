@@ -187,14 +187,14 @@ test("a change is drawn as its setting's lines, each kind said in words", async 
   const { container } = mount("#/config?lens=diff&revision=01JCFGAAAA0000000000000001");
 
   expect(await screen.findByText("integrations.datadog.route_to")).toBeDefined();
-  const lines = [...container.querySelectorAll<HTMLElement>(".diff-view__line")];
+  const lines = [...container.querySelectorAll<HTMLElement>(".crewlet-diff-view__line")];
   expect(lines.map((el) => el.getAttribute("data-kind"))).toEqual([
     "add",
     "remove",
     "add",
     "remove",
   ]);
-  expect(lines.map((el) => el.querySelector(".diff-view__path")?.textContent)).toEqual([
+  expect(lines.map((el) => el.querySelector(".crewlet-diff-view__path")?.textContent)).toEqual([
     "integrations.datadog.route_to",
     "integrations.gitlab.url",
     "integrations.gitlab.url",
@@ -202,7 +202,7 @@ test("a change is drawn as its setting's lines, each kind said in words", async 
   ]);
   // AND THE VALUE OF THE SIDE EACH LINE IS: the new for an addition, the old
   // for a removal, and both halves of the change on their own lines.
-  expect(lines.map((el) => el.querySelector(".diff-view__text")?.textContent)).toEqual([
+  expect(lines.map((el) => el.querySelector(".crewlet-diff-view__text")?.textContent)).toEqual([
     '"sre-lead"',
     '"a"',
     '"b"',
@@ -210,7 +210,7 @@ test("a change is drawn as its setting's lines, each kind said in words", async 
   ]);
   // IN WORDS as well as the glyph: the glyph is drawn, the word is what a
   // reader who hears the list receives.
-  expect(lines.map((el) => el.querySelector(".diff-view__mark")?.textContent)).toEqual([
+  expect(lines.map((el) => el.querySelector(".crewlet-diff-view__mark")?.textContent)).toEqual([
     "+Added",
     "−Removed",
     "+Added",
@@ -227,18 +227,18 @@ test("a change is drawn as its setting's lines, each kind said in words", async 
 // path got 23px and the value 13px. One component draws both now, and a diff
 // of settings is KEYED: its path takes the track the numbers take in a diff
 // of a text. jsdom lays nothing out, so the cascade over the rendered lines is
-// what is read — with every sheet the dashboard loads, in the order it loads
-// them: the entry's, then the diff's own, which arrives with the diff.
+// what is read, with the design system's sheet and the dashboard's in the
+// order the dashboard loads them.
 test("a diff's path and value are drawn whole, in the diff's own tracks", async () => {
-  const read = (name: string) => readFileSync(join(process.cwd(), "src/styles", name), "utf8");
+  const read = (name: string) => readFileSync(join(process.cwd(), name), "utf8");
   const style = document.createElement("style");
   style.textContent = [
-    "tokens.css",
-    "base.css",
-    "components.css",
-    "frame.css",
-    "screens.css",
-    "diff.css",
+    "node_modules/@crewlethq/ui/dist/styles.css",
+    "src/styles/tokens.css",
+    "src/styles/base.css",
+    "src/styles/components.css",
+    "src/styles/frame.css",
+    "src/styles/screens.css",
   ]
     .map(read)
     .join("\n");
@@ -256,16 +256,18 @@ test("a diff's path and value are drawn whole, in the diff's own tracks", async 
       changes_total: 1,
     });
     const path = await screen.findByText("mcp_servers[1]");
-    const diffView = container.querySelector<HTMLElement>(".diff-view")!;
-    const line = path.closest<HTMLElement>(".diff-view__line")!;
-    expect(diffView.classList.contains("diff-view--keyed")).toBe(true);
+    const diffView = container.querySelector<HTMLElement>(".crewlet-diff-view")!;
+    const line = path.closest<HTMLElement>(".crewlet-diff-view__line")!;
+    expect(diffView.classList.contains("crewlet-diff-view--keyed")).toBe(true);
     // EVERY ROW TAKES THE SAME TRACKS, so the values start at one edge: the
     // path's is the longest path's own width, published once on the diff.
     expect(getComputedStyle(line).gridTemplateColumns).toBe(
-      "2ch min(calc(var(--diff-path) * 1ch), 40%) minmax(0, 1fr)",
+      "2ch min(calc(var(--crewlet-diff-path) * 1ch), 40%) minmax(0, 1fr)",
     );
-    expect(diffView.style.getPropertyValue("--diff-path")).toBe(String("mcp_servers[1]".length));
-    const value = line.querySelector<HTMLElement>(".diff-view__text")!;
+    expect(diffView.style.getPropertyValue("--crewlet-diff-path")).toBe(
+      String("mcp_servers[1]".length),
+    );
+    const value = line.querySelector<HTMLElement>(".crewlet-diff-view__text")!;
     for (const cell of [path, value]) {
       expect(cell.classList.contains("truncate"), cell.className).toBe(false);
       expect(getComputedStyle(cell).textOverflow).not.toBe("ellipsis");
@@ -277,8 +279,10 @@ test("a diff's path and value are drawn whole, in the diff's own tracks", async 
     // Drawn as one line, the Revert dialog marked a removed seat on its first
     // row alone and hung the rest of it unmarked under the path.
     expect(getComputedStyle(value).whiteSpace).toBe("pre-wrap");
-    const lines = [...diffView.querySelectorAll<HTMLElement>(".diff-view__line")];
-    expect(lines.map((l) => l.querySelector(".diff-view__text")?.textContent).join("\n")).toBe(
+    const lines = [...diffView.querySelectorAll<HTMLElement>(".crewlet-diff-view__line")];
+    expect(
+      lines.map((l) => l.querySelector(".crewlet-diff-view__text")?.textContent).join("\n"),
+    ).toBe(
       JSON.stringify(
         { name: "docs", command: "uvx", args: ["mcp-server-docs", "--port", "0"] },
         null,
@@ -288,9 +292,9 @@ test("a diff's path and value are drawn whole, in the diff's own tracks", async 
     expect(lines.length).toBeGreaterThan(1);
     for (const l of lines) {
       expect(l.dataset.kind).toBe("remove");
-      expect(l.querySelector(".diff-view__mark")?.textContent).toBe("−Removed");
+      expect(l.querySelector(".crewlet-diff-view__mark")?.textContent).toBe("−Removed");
     }
-    expect(diffView.querySelectorAll(".diff-view__path")).toHaveLength(1);
+    expect(diffView.querySelectorAll(".crewlet-diff-view__path")).toHaveLength(1);
   } finally {
     style.remove();
   }

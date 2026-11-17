@@ -69,7 +69,7 @@ const show = (value: unknown) =>
       : String(value);
 
 /**
- * One change of the revision as the dashboard's one diff draws a setting
+ * One change of the revision as `DiffView` draws a setting
  * (`components/DiffView.tsx`, keyed by its path): a value that appeared is
  * its new value added, one that went its old value removed, and one that
  * changed is both, so the diff underlines what moved inside it. ONE HUNK A

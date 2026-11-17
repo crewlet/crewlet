@@ -743,7 +743,7 @@ function Proposal({
   return (
     <ProposalCard
       title={proposal.title}
-      subtitle={scopeLine(proposal.scope, state)}
+      subtitle={scopeLine(proposal.scope)}
       scope={proposal.scope}
       state={state}
       // A CHANGE PREPARED AFTER OUTSIDE TEXT SAYS SO FIRST (D25), naming the
@@ -787,21 +787,11 @@ function Proposal({
 }
 
 /**
- * Where a change lands, as the card's subtitle, in words true at its state: a
- * company change still waiting is not "Saved" yet.
+ * Where a change lands, as the card's subtitle. Only where: the card's tag
+ * says its state ("Needs your approval", "Saved"), so the line does not.
  */
-export function scopeLine(scope: AssistantProposalCard["scope"], state: ProposalState): string {
-  if (scope === "page") return "This page only";
-  switch (state) {
-    case "applied":
-      return "Saved for the company";
-    case "pending":
-    case "stepup":
-    case "applying":
-      return "For the company, once approved";
-    default:
-      return "For the company";
-  }
+export function scopeLine(scope: AssistantProposalCard["scope"]): string {
+  return scope === "page" ? "This page only" : "For the company";
 }
 
 /** A crumb that is a record's raw id (a UUID), which a person does not read. */

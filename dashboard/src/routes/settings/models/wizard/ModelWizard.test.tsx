@@ -294,6 +294,20 @@ test("an edit saved returns to where it was opened, never to the model's page", 
 });
 
 /**
+ * THE REVIEW SAYS ONCE WHAT SAVING MAKES: the lead says what the step shows,
+ * and the engine's acceptance that saving makes one revision. Mutation: say
+ * the revision in the lead again, and this is red.
+ */
+test("the review says once that saving makes one revision", async () => {
+  location.hash = "#/settings/models?flow=edit&entry=sonnet&step=signin&focus=credential";
+  show({ editing: "sonnet", target: { step: "signin", focus: "credential" } });
+  fireEvent.change(keyField(), { target: { value: "sk-ant-api03-rotated" } });
+  press("Review changes");
+  await screen.findByText("The engine accepts this change");
+  expect(document.body.textContent?.match(/one revision/g)).toHaveLength(1);
+});
+
+/**
  * A SAVE SAYS WHICH WRITE IS RUNNING. Storing a credential can run the harness
  * on the engine, which takes seconds: the form names the write it is waiting
  * on and counts the wait, so it never reads as stopped. Mutation: leave the

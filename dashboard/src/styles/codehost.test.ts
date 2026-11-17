@@ -8,12 +8,10 @@ import {
   CODE_GROUNDS,
   CODE_PICK,
   CODE_REF,
-  DIFF_HUNK,
-  DIFF_ROWS,
   SYNTAX_INKS,
 } from "@crewlethq/tokens/test/palette";
 
-import { declared, sheetRules, splitSelectors, type SheetRule } from "../test/sheets.ts";
+import { declared, sheetRules, type SheetRule } from "../test/sheets.ts";
 import {
   SRC,
   classWrites,
@@ -23,13 +21,13 @@ import {
   parse,
   resolveSource,
   shippedText,
+  spelled,
   stringValue,
   walk,
   type Lang,
   type Module,
   type Node,
 } from "../test/source.ts";
-import { spelled } from "../test/kit.ts";
 
 /**
  * THE CODE HOST'S COLOURS ARE GITLET'S (the one rule's seventh exception): its
@@ -37,7 +35,7 @@ import { spelled } from "../test/kit.ts";
  * by its token sheet alone, and its marks drawn by Gitlet's modules and hosts.
  */
 
-/** The change, syntax, ref and file families; the diff family is `diffs.test.ts`'s. */
+/** The change, syntax, ref and file families; the diff family is every diff's. */
 const FAMILY = /--color-(?:syntax|change-(?:open|merged|closed|draft)|code|file)-[\w-]+/g;
 
 /** Every code host token, the diff family's included. */
@@ -377,34 +375,22 @@ export function syntaxSites(path: string, text: string, lang: Lang): string[] {
 /** A class whose element holds coloured code: its grounds are the ones the inks are measured on. */
 const CODE_HOLDERS =
   /\.code-(?:source|blame|search-(?:file|lines|line))(?:__(?:line|text))?(?![\w-])/;
-/** A coloured diff, whose lines, hunk row and body hold coloured code. */
-const CODE_DIFF = /\.diff-view--code(?![\w-])/;
-const RUN = /\.diff-view__run(?![\w-])/;
-
 /**
  * A rule painting a ground under coloured code with anything but the kit's
- * code grounds, their hover or the pick (in a coloured diff its rows and hunk
- * row too, and a word tint on a changed run alone), as `file selector property: value`.
+ * code grounds, their hover or the pick, as `file selector property: value`.
+ * A diff's grounds are the design system's `DiffView`'s.
  */
 export function unmeasuredCodeGrounds(rules: readonly SheetRule[]): string[] {
   const allowed = new Set([...CODE_GROUNDS, "--color-surface-hover", CODE_PICK]);
-  const lines = new Set([...allowed, ...DIFF_ROWS.map((d) => d.row), DIFF_HUNK.row]);
-  const words = new Set(DIFF_ROWS.map((d) => d.word));
   const out: string[] = [];
   for (const rule of rules) {
-    const diff = CODE_DIFF.test(rule.selector);
-    if (!diff && !CODE_HOLDERS.test(rule.selector)) continue;
-    const run = diff && splitSelectors(rule.selector).every((s) => RUN.test(s));
+    if (!CODE_HOLDERS.test(rule.selector)) continue;
     for (const decl of rule.body.split(";")) {
       const at = /^\s*(background(?:-color)?)\s*:\s*([\s\S]*?)\s*$/.exec(decl);
       if (!at) continue;
       const value = at[2]!;
       const token = /^var\((--color-[\w-]+)\)$/.exec(value)?.[1];
-      const ok =
-        value === "none" ||
-        value === "transparent" ||
-        (token && (diff ? lines : allowed).has(token)) ||
-        (token && run && words.has(token));
+      const ok = value === "none" || value === "transparent" || (token && allowed.has(token));
       if (!ok) out.push(`${rule.file} ${rule.selector} ${at[1]}: ${value}`);
     }
   }
@@ -537,13 +523,10 @@ describe("in the palette", () => {
 
   test("the code the inks colour stands on the grounds they are measured on", () => {
     const rules = sheetRules();
-    // A VACUITY FLOOR: the search lines and a coloured diff's rows, runs, hunk row and pick.
+    // A VACUITY FLOOR: the search lines.
     expect(
       rules.filter((r) => /\.code-search-line(?![\w-])/.test(r.selector)).length,
     ).toBeGreaterThan(0);
-    expect(
-      rules.filter((r) => CODE_DIFF.test(r.selector) && /background/.test(r.body)).length,
-    ).toBeGreaterThanOrEqual(6);
     expect(unmeasuredCodeGrounds(rules)).toEqual([]);
   });
 
@@ -890,12 +873,11 @@ describe("it can tell", () => {
     expect(syntaxSites("routes/home/X.tsx", 'import "~/styles/gitlet-code.css";', "tsx")).toEqual([
       "routes/home/X.tsx:1 imports ~/styles/gitlet-code.css",
     ]);
-    // DiffView takes spans, never grammars, and so does the run it cuts them at.
-    for (const path of ["components/DiffView.tsx", "lib/wordDiff.ts"]) {
-      expect(syntaxSites(path, 'import { statesOf } from "~/lib/syntax/index.ts";', "tsx")).toEqual(
-        [`${path}:1 reaches ~/lib/syntax/index.ts`],
-      );
-    }
+    // DiffView takes spans, never grammars.
+    const path = "components/DiffView.tsx";
+    expect(syntaxSites(path, 'import { statesOf } from "~/lib/syntax/index.ts";', "tsx")).toEqual([
+      `${path}:1 reaches ~/lib/syntax/index.ts`,
+    ]);
   });
 
   test("a ground under coloured code the inks are not measured on", () => {
@@ -913,32 +895,10 @@ describe("it can tell", () => {
         rule("gitlet.css", ".code-search-line", "background: var(--color-brand-accent-soft);"),
         rule("gitlet.css", ".code-search-line:hover", "background: var(--color-surface-hover);"),
         rule("gitlet.css", ".code-search-line__number", "background: var(--color-surface-raised);"),
-        rule(
-          "diff.css",
-          '.diff-view--code .diff-view__line[data-kind="add"]',
-          "background: var(--color-diff-added-word);",
-        ),
-        rule(
-          "diff.css",
-          '.diff-view--code .diff-view__line[data-kind="remove"]',
-          "background: var(--color-feedback-danger-soft);",
-        ),
-        rule(
-          "diff.css",
-          '.diff-view--code .diff-view__line[data-kind="add"] .diff-view__run',
-          "background: var(--color-diff-added-word);",
-        ),
-        rule(
-          "diff.css",
-          ".diff-view--code .diff-view__skip",
-          "background: var(--color-diff-hunk-row);",
-        ),
       ]),
     ).toEqual([
       "gitlet.css .code-source__line[data-picked] background: var(--color-brand-accent-soft)",
       "gitlet.css .code-search-line background: var(--color-brand-accent-soft)",
-      'diff.css .diff-view--code .diff-view__line[data-kind="add"] background: var(--color-diff-added-word)',
-      'diff.css .diff-view--code .diff-view__line[data-kind="remove"] background: var(--color-feedback-danger-soft)',
     ]);
   });
 });

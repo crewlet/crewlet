@@ -201,6 +201,11 @@ export function walk(
   step(root, null, "");
 }
 
+/** The name an import or export specifier spells, as an identifier or a string. */
+export function spelled(node: Node): string {
+  return String(node.type === "Identifier" ? node.name : node.value);
+}
+
 /** Maps an offset in `text` to its 1-based line. */
 export function lineOf(text: string): (offset: number) => number {
   const starts = [0];
