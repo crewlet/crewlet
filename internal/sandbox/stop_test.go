@@ -373,7 +373,10 @@ func TestAStopAfterTheCompletionWasClaimedLeavesTheClaim(t *testing.T) {
 // Ended by the stop, its turn's close charged that spend to the item again
 // under the stop's segment. So the stop leaves it — no second read of the box,
 // no reclaim, no close, no announcement — and the turn's own fence ends the
-// resume when it comes round, as it ends a claimed one.
+// resume when it comes round, as it ends a claimed one. A job this node keeps
+// for its hold comes round at once: the stop re-fires it, ending the wait
+// (TestAStopEndsTheWaitOfACollectedJobsResume), and that re-fire is the turn's
+// resume, whose collection under its own claim is the turn's, not the stop's.
 //
 // Mutation: drop the store's refusal and StopSeat's skip, and the box is read
 // a second time, reclaimed, and the turn closed on the stop.
@@ -405,20 +408,42 @@ func TestAStopLeavesAJobItsCollectionHandedToItsTurn(t *testing.T) {
 			// collection does before it reads ([Coordinator.drainCalls]): what
 			// the stop ends is counted from here.
 			sessions := len(spies.endedRuns())
-			var reads atomic.Int32
+			// A READ IS THE STOP'S OR THE TURN'S, told by the row it is made
+			// on: the turn's own collection reads under its claim, and a
+			// stop's read under the ending it decided. The stop ends the wait
+			// of a job this node keeps for its hold by re-firing it
+			// ([Coordinator.endCollectedWait]), and that re-fire is the turn's
+			// resume, which collects the job again under its claim, as every
+			// resume of a handed-back claim does.
+			var stopReads, turnReads atomic.Int32
 			rig.runner.CollectFunc = func(context.Context) error {
-				reads.Add(1)
+				row, found, err := rig.pending.Get(context.Background(), "t1")
+				if err == nil && found && row.Status == StatusResumed && row.Ending == nil && row.Stop == nil {
+					turnReads.Add(1)
+				} else {
+					stopReads.Add(1)
+				}
 				return nil
 			}
 
 			rig.stop(t)
+			// NO STOP DECIDED, read before anything is waited for: a stop's
+			// ending goes on retrying on the coordinator's own lifetime, so
+			// a wait for it would never return.
+			if decided := rig.get("t1"); decided.Ending != nil || decided.Stop != nil {
+				t.Fatalf("the stop decided an ending of the collected job's run (ending %+v, stop %+v); "+
+					"it is its turn's", decided.Ending, decided.Stop)
+			}
+			// WHATEVER ELSE THE STOP SET GOING HAS RUN, so what it did is
+			// counted whole rather than by a race against the assertions.
+			rig.coordinator.inflight.Wait()
 
 			after := rig.get("t1")
 			if after.Status != StatusRunning || after.Ending != nil || after.Stop != nil {
 				t.Fatalf("the collected job's run became %s (ending %+v, stop %+v); it is its turn's",
 					after.Status, after.Ending, after.Stop)
 			}
-			if got := reads.Load(); got != 0 {
+			if got := stopReads.Load(); got != 0 {
 				t.Fatalf("the stop read the collected job's box again, %d times", got)
 			}
 			if got := rig.accountant.asked(); got != charges {
@@ -427,9 +452,13 @@ func TestAStopLeavesAJobItsCollectionHandedToItsTurn(t *testing.T) {
 			if slices.Contains(rig.provider.KilledIDs(), running.SandboxID) {
 				t.Fatal("the stop reclaimed the box its turn's resume continues in")
 			}
-			if len(spies.closedTurns()) != 0 || len(spies.endedRuns()) != sessions || len(rig.stopAnnouncements()) != 0 {
+			// EACH OF THE TURN'S COLLECTIONS ENDS THE JOB'S SESSION ITSELF
+			// before it reads, as the first one did: any more is the stop's.
+			turns := int(turnReads.Load())
+			if len(spies.closedTurns()) != 0 || len(spies.endedRuns()) != sessions+turns ||
+				len(rig.stopAnnouncements()) != 0 {
 				t.Fatalf("the stop closed %d turns, ended %d sessions and announced %d stops of a job it "+
-					"does not end", len(spies.closedTurns()), len(spies.endedRuns())-sessions,
+					"does not end", len(spies.closedTurns()), len(spies.endedRuns())-sessions-turns,
 					len(rig.stopAnnouncements()))
 			}
 		})
