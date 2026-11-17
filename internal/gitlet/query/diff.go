@@ -69,7 +69,8 @@ func (r *read) diffRead(ctx context.Context, objs found, at cursor, m *memoRun) 
 	}
 	file, _ := gitlet.GitPath("diff.file", q.File, q.FileB64, true)
 	return r.diffPages(ctx, diffAsk{kind: gitlet.GitDiff, base: base.peeled, head: head.peeled, file: file,
-		renames: q.Renames, filter: underFilter(q.Paths), narrowing: "name paths, or diff commits closer together"},
+		renames: q.Renames, patches: q.Patches, filter: underFilter(q.Paths),
+		narrowing: "name paths, or diff commits closer together"},
 		at, m)
 }
 
@@ -90,21 +91,26 @@ func diffable(baseField, baseRev string, base object, headField, headRev string,
 
 // diffAsk is the diff a read's pages are cut from: the kind that asks it — a
 // diff, or an interdiff, which is one — the two commits or trees, whole, the
-// one file a patch names or none, whether renames are detected, the files a
-// stat admits (filter), and what an asker whose stat its filter admits every
-// file of ran the read's budget out is told to narrow.
+// one file a patch names or none, whether renames are detected, whether every
+// file's patch is asked (patches), the files a stat admits (filter), and what
+// an asker whose stat its filter admits every file of ran the read's budget
+// out is told to narrow.
 type diffAsk struct {
 	kind       gitlet.GitReadKind
 	base, head string
 	file       string
 	renames    bool
+	patches    bool
 	filter     pathFilter
 	narrowing  string
 }
 
-// diffPages answers d: a page of its stat, or of its one file's patch — and,
-// where m takes them, every page of either after it.
+// diffPages answers d: a page of its stat, of its one file's patch, or of
+// every file's patch, and where m takes them the pages after it.
 func (r *read) diffPages(ctx context.Context, d diffAsk, at cursor, m *memoRun) (gitlet.GitAnswer, error) {
+	if d.patches {
+		return r.patchesRead(ctx, d, at, m)
+	}
 	if d.file != "" {
 		return r.patchRead(ctx, d, at, m)
 	}
@@ -120,7 +126,7 @@ func (r *read) diffPages(ctx context.Context, d diffAsk, at cursor, m *memoRun) 
 	if m != nil {
 		sp = &statPages{m: m, room: room, at: at, page: page}
 	}
-	st, err := r.stat(ctx, d.base, d.head, d.filter, d.renames, at.a, room, d.narrowing, sp)
+	st, err := r.stat(ctx, d.base, d.head, d.filter, d.renames, at.a, room, d.narrowing, sp, nil)
 	if err != nil {
 		return gitlet.GitAnswer{}, err
 	}
@@ -312,11 +318,11 @@ func widestFile(f gitlet.DiffFile) gitlet.DiffFile {
 // it is cut. narrowing is what a stat its filter admits every file of, whose
 // one diff-tree the deadline ended, tells its asker to do instead — naming
 // paths among it, where it can, since a stat that names them counts the files
-// they admit and no other.
+// they admit and no other. A patches walk hands feed its records and cuts no page.
 func (r *read) stat(ctx context.Context, base, head string, filter pathFilter, renames bool, start, left int,
-	narrowing string, sp *statPages) (statPage, error) {
+	narrowing string, sp *statPages, feed *patchFeed) (statPage, error) {
 
-	p := &statParser{filter: filter, start: start, left: left, keep: filter.filters(), pages: sp}
+	p := &statParser{filter: filter, start: start, left: left, keep: filter.filters(), pages: sp, feed: feed}
 	recs := newRecords(0, gitproc.MaxLine+gitlet.MaxGitPathBytes, p.record)
 	tail := []string{base, head}
 	if renames {
@@ -463,6 +469,8 @@ type statParser struct {
 	// decided whether the raw half has ended, which decides the asked page.
 	pages   *statPages
 	decided bool
+	// feed takes a patches walk's admitted records in place of any page.
+	feed *patchFeed
 }
 
 // rawEnded is the raw half's end — at the numstat half's first record where
@@ -680,6 +688,10 @@ func (p *statParser) took() {
 	p.matched++
 	if p.keep {
 		p.pairs.Write(p.entry.raw())
+	}
+	if p.feed != nil {
+		p.feed.take(m, p.entry)
+		return
 	}
 	if m < p.start || (p.full && p.pages == nil) {
 		return

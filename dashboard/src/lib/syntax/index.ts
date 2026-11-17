@@ -129,6 +129,29 @@ export function language(path: string): Lang | null {
   return Object.hasOwn(EXTENSIONS, extension) ? EXTENSIONS[extension]! : null;
 }
 
+/** A fence's words for a language that are no file's name or extension. */
+const INFO_WORDS: Readonly<Record<string, Lang>> = {
+  golang: "go",
+  gomod: "gomod",
+  typescript: "ts",
+  javascript: "ts",
+  python: "python",
+  rust: "rust",
+  shell: "shell",
+  make: "makefile",
+  docker: "dockerfile",
+  protobuf: "proto",
+  terraform: "hcl",
+};
+
+/** The language a Markdown fence's info string names by its first word; null is plain text. */
+export function languageOfInfo(info: string): Lang | null {
+  const word = (info.trim().split(" ")[0] ?? "").toLowerCase();
+  if (word === "") return null;
+  if (Object.hasOwn(INFO_WORDS, word)) return INFO_WORDS[word]!;
+  return language(word) ?? language(`x.${word}`);
+}
+
 const loading = new Map<Lang, Promise<Grammar>>();
 const ready = new Map<Lang, Grammar>();
 

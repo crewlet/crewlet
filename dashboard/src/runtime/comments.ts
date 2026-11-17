@@ -10,7 +10,7 @@ import {
   type CommentRequest,
   type CommentTarget,
 } from "./bridge.ts";
-import { drawRegion, padRegion, pointRegion, type CropRegion } from "./crop.ts";
+import { drawRegion, padRegion, pointRegion, windowAround, type CropRegion } from "./crop.ts";
 import { ARTIFACT_COMMENT_QUOTE_MAX_BYTES } from "../contract/artifactsworkspace.ts";
 
 /** The attribute a part is declared by. */
@@ -77,6 +77,8 @@ export class PageComments {
   private hover: string | null = null;
   private queued = false;
   private cursor: string | null = null;
+  private cursorSheet: CSSStyleSheet | null = null;
+  private placingCursor: string | null = null;
   private stops: (() => void)[] = [];
   private readonly win: Window;
 
@@ -111,7 +113,7 @@ export class PageComments {
 
   /** What the host asked on the `comments` topic. */
   receive(request: CommentRequest): void {
-    if ("mode" in request) this.setMode(request.mode);
+    if ("mode" in request) this.setMode(request.mode, request.cursor);
     else if ("reveal" in request) this.reveal(request.reveal);
     else void this.capture(request.capture.id, request.capture);
   }
@@ -172,31 +174,67 @@ export class PageComments {
     });
   }
 
-  private setMode(mode: CommentMode): void {
-    if (mode === this.mode) return;
+  private setMode(mode: CommentMode, cursor = "crosshair"): void {
+    if (mode === this.mode) {
+      if (mode === "place" && cursor !== this.placingCursor) {
+        this.hideCursor();
+        this.showCursor(cursor);
+      }
+      return;
+    }
     const was = this.mode;
     this.mode = mode;
     this.hover = null;
     if (was === "off") this.listen();
     if (mode === "off") this.unlisten();
-    const root = this.doc.documentElement;
-    if (mode === "place") {
-      this.cursor = root.style.cursor;
-      root.style.cursor = "crosshair";
-    } else if (was === "place") {
-      root.style.cursor = this.cursor ?? "";
-      this.cursor = null;
-    }
+    if (mode === "place") this.showCursor(cursor);
+    else if (was === "place") this.hideCursor();
     if (mode !== "off") this.send("comments.layout", { ...this.layout() });
   }
 
-  /** What moves an anchor: a scroll, a resize, a reflow, an anchor declared or let go. */
+  /**
+   * The placing cursor over the WHOLE page, a link's and a button's own
+   * included, since a click while placing presses neither. A value the
+   * browser refuses leaves the crosshair.
+   */
+  private showCursor(cursor: string): void {
+    this.placingCursor = cursor;
+    const root = this.doc.documentElement;
+    this.cursor = root.style.cursor;
+    root.style.cursor = "crosshair";
+    root.style.setProperty("cursor", cursor);
+    const Sheet = (this.win as Window & { CSSStyleSheet?: typeof CSSStyleSheet }).CSSStyleSheet;
+    if (typeof Sheet !== "function" || !Array.isArray(this.doc.adoptedStyleSheets)) return;
+    try {
+      const sheet = new Sheet();
+      sheet.insertRule("*, *::before, *::after {}");
+      const rule = sheet.cssRules[0] as CSSStyleRule;
+      rule.style.setProperty("cursor", "crosshair", "important");
+      rule.style.setProperty("cursor", cursor, "important");
+      this.doc.adoptedStyleSheets = [...this.doc.adoptedStyleSheets, sheet];
+      this.cursorSheet = sheet;
+    } catch {
+      // The page's own root keeps the cursor.
+    }
+  }
+
+  private hideCursor(): void {
+    this.placingCursor = null;
+    this.doc.documentElement.style.cursor = this.cursor ?? "";
+    this.cursor = null;
+    const sheet = this.cursorSheet;
+    if (sheet) this.doc.adoptedStyleSheets = this.doc.adoptedStyleSheets.filter((s) => s !== sheet);
+    this.cursorSheet = null;
+  }
+
+  /** What moves an anchor: a scroll of the page or of any element in it, a resize, a reflow, an anchor declared or let go. */
   private listen(): void {
     const win = this.win;
     const schedule = () => this.schedule();
-    win.addEventListener("scroll", schedule, { passive: true });
+    // CAPTURED, since an element's scroll does not bubble to the window.
+    win.addEventListener("scroll", schedule, { passive: true, capture: true });
     win.addEventListener("resize", schedule);
-    this.stops.push(() => win.removeEventListener("scroll", schedule));
+    this.stops.push(() => win.removeEventListener("scroll", schedule, { capture: true }));
     this.stops.push(() => win.removeEventListener("resize", schedule));
     const Resize = (win as Window & { ResizeObserver?: typeof ResizeObserver }).ResizeObserver;
     if (typeof Resize === "function") {
@@ -263,6 +301,8 @@ export class PageComments {
       this.element(target.name)?.scrollIntoView({ block: "center", behavior });
       return;
     }
+    // A POINT OF THE VIEWPORT is in view already.
+    if ("view" in target) return;
     const { w, h } = this.size();
     this.win.scrollTo({
       left: target.point.x * w - this.win.innerWidth / 2,
@@ -274,6 +314,12 @@ export class PageComments {
   /** The region a request names, in the document's own pixels. */
   regionOf(target: CommentTarget): CropRegion {
     const size = this.size();
+    if ("view" in target) {
+      return windowAround(
+        { x: target.view.x + this.win.scrollX, y: target.view.y + this.win.scrollY },
+        size,
+      );
+    }
     if ("name" in target) {
       const el = this.element(target.name);
       if (el) {

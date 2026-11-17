@@ -64,6 +64,7 @@ async function draw(
     frames = [] as Record<string, unknown>[],
     asked = [] as string[],
     services = undefined as Record<string, string> | undefined,
+    artifacts = {} as Record<string, { kind: string; title: string }>,
   } = {},
 ) {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
@@ -87,8 +88,12 @@ async function draw(
       rooms,
     },
   };
-  socket.query = ((what: string) => {
+  socket.query = ((what: string, params?: Record<string, unknown>) => {
     asked.push(what);
+    if (what === "artifact") {
+      const found = artifacts[String(params?.["id"])];
+      return found ? Promise.resolve(found) : Promise.reject(new Error("not_found"));
+    }
     return Promise.resolve(answers[what] ?? {});
   }) as typeof socket.query;
   const view = render(
@@ -718,5 +723,80 @@ describe("links in a chat message", () => {
   test("an address that would carry what it read is still its words", async () => {
     const el = await draw(md("Open https://evil.example.net/c?q=the%20secret now.", CHAT_WORDS));
     expect(el.querySelector("a")).toBeNull();
+  });
+});
+
+// AN ARTIFACT IS NAMED AS A TASK'S KEY IS: its kind's glyph and its title, however it
+// was written. Mutation: drop the `artifactAddress` branch in `AddressLink` and the
+// whole address is a globe and a host again.
+describe("an artifact named in prose", () => {
+  const PLAN = "0a1b2c3d-0000-4000-8000-000000000001";
+  const DECK = "0a1b2c3d-0000-4000-8000-000000000002";
+  const GONE = "0a1b2c3d-0000-4000-8000-000000000003";
+  const artifacts = {
+    [PLAN]: { kind: "doc", title: "Q4 strategy" },
+    [DECK]: { kind: "slides", title: "Launch deck" },
+  };
+  const whole = (id: string, query = "") =>
+    `${location.origin}${location.pathname}#/artifacts/${id}${query}`;
+  const refs = (el: Element) =>
+    [...el.querySelectorAll(".crewlet-inline-ref")].map((r) => ({
+      text: r.textContent,
+      href: r.getAttribute("href"),
+      mark: r.querySelector(".crewlet-inline-ref__mark svg") !== null,
+    }));
+
+  test("a labelled link and a whole address both draw the kind and the title, opening as written", async () => {
+    const asked: string[] = [];
+    const el = await draw(
+      md(`See [the plan](#/artifacts/${PLAN}) and ${whole(DECK, "?panel=comments")}.`),
+      {
+        artifacts,
+        asked,
+      },
+    );
+    expect(refs(el)).toEqual([
+      { text: "Doc: Q4 strategy", href: `#/artifacts/${PLAN}`, mark: true },
+      { text: "Slides: Launch deck", href: `#/artifacts/${DECK}?panel=comments`, mark: true },
+    ]);
+  });
+
+  test("in a chat message it opens rebuilt from its id, keeping the version it names", async () => {
+    const el = await draw(md(`[v2](#/artifacts/${PLAN}?version=2&panel=comments)`, CHAT_WORDS), {
+      artifacts,
+    });
+    expect(refs(el)).toEqual([
+      { text: "Doc: Q4 strategy, version 2", href: `#/artifacts/${PLAN}?version=2`, mark: true },
+    ]);
+  });
+
+  test("where links are checked it is live once read, and one the reader cannot see stays as written", async () => {
+    const el = await draw(
+      md(`[the plan](#/artifacts/${PLAN}) and [hidden](#/artifacts/${GONE})`, CHECKED_WORDS),
+      {
+        artifacts,
+      },
+    );
+    const drawn = refs(el);
+    expect(drawn[0]).toEqual({ text: "Doc: Q4 strategy", href: `#/artifacts/${PLAN}`, mark: true });
+    expect(el.querySelectorAll("a")).toHaveLength(1);
+    expect(el.textContent).toContain("hidden");
+  });
+
+  test("in a row's words it is its glyph and title, and no link", async () => {
+    const el = await draw(<p>{renderTokens(`From ${whole(DECK)} today`, "t", "text")}</p>, {
+      artifacts,
+    });
+    expect(el.querySelector("a")).toBeNull();
+    expect(refs(el)).toEqual([{ text: "Slides: Launch deck", href: null, mark: true }]);
+  });
+
+  test("one artifact named many times is asked about once", async () => {
+    const asked: string[] = [];
+    await draw(md(`[a](#/artifacts/${PLAN}), [b](#/artifacts/${PLAN}) and ${whole(PLAN)}`), {
+      artifacts,
+      asked,
+    });
+    expect(asked.filter((what) => what === "artifact")).toHaveLength(1);
   });
 });

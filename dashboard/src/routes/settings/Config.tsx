@@ -982,6 +982,7 @@ export function ConfigScreen({
                   plain
                   selectable
                   maxHeight="var(--record-view)"
+                  language="json"
                   label="The active company configuration, as JSON"
                   code={pretty}
                 />
@@ -1108,6 +1109,7 @@ export function ConfigScreen({
                       <CodeBlock
                         plain
                         selectable
+                        language="json"
                         label={`${entity}, as JSON`}
                         code={JSON.stringify(one.data.entity, null, 2)}
                       />

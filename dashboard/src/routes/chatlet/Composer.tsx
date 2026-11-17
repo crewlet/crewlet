@@ -61,6 +61,7 @@ import {
 } from "react";
 
 import {
+  AvatarStack,
   Button,
   caretPoint,
   Composer as KitComposer,
@@ -115,7 +116,7 @@ import { useQuiet } from "~/lib/useQuiet.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 
 import { AttachDialog, previewLinks, recordLink, type AttachKind } from "./Attach.tsx";
-import { ChatFace } from "./Face.tsx";
+import { ChatFace, stackMember } from "./Face.tsx";
 import { draftKey, useChatDrafts } from "./drafts.ts";
 import { useChatFrame, useChatNav } from "./nav.tsx";
 import { matchesPerson, useChatNames, useChatPeopleWhile } from "./people.ts";
@@ -417,6 +418,16 @@ export function Composer({
                 tense="draft"
                 announce
                 recipients={reachRecipients(draftReach, undefined, names.nameOf)}
+                faces={
+                  <AvatarStack
+                    members={(draftReach.recipients ?? []).map((r) =>
+                      stackMember(names.person(r.handle)),
+                    )}
+                    size="xs"
+                    max={4}
+                    decorative
+                  />
+                }
                 truncated={draftReach.truncated}
                 hint={quietHint(reach.data?.quiet)}
               />

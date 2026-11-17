@@ -69,13 +69,14 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 	// (MaxProtectionsPerRepo) and every path owner (MaxPathOwners, one row an
 	// owner), the published chain — which no part removes: MaxPublishedLayers
 	// layers of MaxLayerParts parts each — the name claim, the repository's
-	// row, its kind's count, its repository tally row and the deletion marker.
+	// row, its kind's count, its repository tally row, its viewed key and the
+	// deletion marker.
 	chain := gitlet.MaxPublishedLayers * (1 + gitlet.MaxLayerParts)
-	if final := gitlet.PurgePartRows + gitlet.MaxProtectionsPerRepo + gitlet.MaxPathOwners + chain + 5; final >
+	if final := gitlet.PurgePartRows + gitlet.MaxProtectionsPerRepo + gitlet.MaxPathOwners + chain + 6; final >
 		gitlet.MaxRecordRows {
 		t.Errorf("the final purge removes up to %d rows (PurgePartRows %d + MaxProtectionsPerRepo %d + "+
-			"MaxPathOwners %d + a chain's %d + 5 with its repository tally row), past the %d one record's "+
-			"apply may touch (MaxRecordRows)",
+			"MaxPathOwners %d + a chain's %d + 6 with its repository tally row and viewed key), past the %d one "+
+			"record's apply may touch (MaxRecordRows)",
 			final, gitlet.PurgePartRows, gitlet.MaxProtectionsPerRepo, gitlet.MaxPathOwners, chain,
 			gitlet.MaxRecordRows)
 	}
@@ -465,9 +466,9 @@ func TestTheBoundsFitTheRecordBudgets(t *testing.T) {
 	// THE BYTE-MAXIMAL PUSH IS ONE OF FORCED UPDATES, counted two rows a
 	// command — its ref, and the object it left — so ONE shares a record's
 	// rows with nothing of its size.
-	if rows := gitlet.RowBound(maximal); rows != 2*gitlet.MaxCommandsPerPush+2 {
+	if rows := gitlet.RowBound(maximal); rows != 2*gitlet.MaxCommandsPerPush+3 {
 		t.Errorf("a maximal push of forced updates bounds %d rows, want two a command (%d) + its row "+
-			"+ its pack", rows, 2*gitlet.MaxCommandsPerPush)
+			"+ its pack + its pusher's day", rows, 2*gitlet.MaxCommandsPerPush)
 	}
 	if got := gitlet.RecordRows(gitlet.RowBound(maximal)); got > gitlet.MaxRecordRows {
 		t.Errorf("a maximal push of forced updates bounds %d rows with the record's own (RecordRows), "+
@@ -486,9 +487,9 @@ func TestTheBoundsFitTheRecordBudgets(t *testing.T) {
 		c.Forced = false
 		forward.Commands = append(forward.Commands, c)
 	}
-	if rows := gitlet.RowBound(forward); rows != gitlet.MaxCommandsPerPush+2 {
+	if rows := gitlet.RowBound(forward); rows != gitlet.MaxCommandsPerPush+3 {
 		t.Errorf("a maximal push of fast-forward updates bounds %d rows, want MaxCommandsPerPush (%d) "+
-			"+ its row + its pack", rows, gitlet.MaxCommandsPerPush)
+			"+ its row + its pack + its pusher's day", rows, gitlet.MaxCommandsPerPush)
 	}
 	if got := gitlet.RecordRows(3 * gitlet.RowBound(forward)); got > gitlet.MaxRecordRows {
 		t.Errorf("three maximal pushes of fast-forward updates bound %d rows with the record's own "+
@@ -507,9 +508,9 @@ func TestTheBoundsFitTheRecordBudgets(t *testing.T) {
 	for _, c := range maximal.Commands {
 		deleting.Commands = append(deleting.Commands, gitlet.Command{Ref: c.Ref, Old: c.Old, New: gitlet.ZeroOID})
 	}
-	if rows := gitlet.RowBound(deleting); rows != 3*gitlet.MaxCommandsPerPush+2 {
+	if rows := gitlet.RowBound(deleting); rows != 3*gitlet.MaxCommandsPerPush+3 {
 		t.Errorf("a maximal push of deletions bounds %d rows, want three a deletion (%d) + its row + "+
-			"its pack", rows, 3*gitlet.MaxCommandsPerPush)
+			"its pack + its pusher's day", rows, 3*gitlet.MaxCommandsPerPush)
 	}
 	if got := gitlet.RecordRows(gitlet.RowBound(deleting)); got > gitlet.MaxRecordRows {
 		t.Errorf("a maximal push of deletions bounds %d rows with the record's own, past "+
@@ -709,5 +710,80 @@ func TestGitReadsFollowTheCodeLogsCeiling(t *testing.T) {
 		if got := gitlet.GitReadsPerDay(tc.ceiling, tc.minAge); got != tc.want {
 			t.Errorf("GitReadsPerDay(%d, %v) = %d, want %d", tc.ceiling, tc.minAge, got, tc.want)
 		}
+	}
+}
+
+// THE WIDEST REVISE FITS ITS RECORD: the widest revise a home of this build
+// sends, measured, touching MaxTouchedBytes of paths with every place classed
+// and every human path held, its MaxPathOwners owners each naming every glob
+// of theirs, just under MaxPathOwnersBytes of them, passes the conversation's
+// bound with the writer's widest stamp, an ask at its bound for each owner. A
+// revise refused for its bytes would leave its change due its facts for good.
+//
+// Mutation: price an ask at MaxPathOwnersBytes rather than MaxOwnedPathsBytes
+// (refused, red).
+func TestTheWidestReviseFitsItsRecord(t *testing.T) {
+	t.Parallel()
+	var touched []string
+	for i := range gitlet.MaxTouchedPaths {
+		touched = append(touched, fmt.Sprintf("t/%04d", i))
+	}
+	for pad := 1; ; pad++ {
+		wider := slices.Clone(touched)
+		for i := range wider {
+			wider[i] = fmt.Sprintf("t/%04d/", i) + strings.Repeat("p", pad)
+		}
+		if gitlet.TouchedCost(wider) > gitlet.MaxTouchedBytes {
+			break
+		}
+		touched = wider
+	}
+	places := make([]int, len(touched))
+	for i := range places {
+		places[i] = i
+	}
+	held := make([]int, gitlet.MaxTargetHumanPaths)
+	for i := range held {
+		held[i] = i
+	}
+	ownersOf := func(width int) []gitlet.PathOwner {
+		var owners []gitlet.PathOwner
+		for i := range gitlet.MaxPathOwners {
+			ref := fmt.Sprintf("u%02d", i)
+			po := gitlet.PathOwner{Owner: gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: ref + strings.Repeat("r", 64-len(ref))}}
+			for k := range gitlet.MaxPathOwnerPaths {
+				dir := fmt.Sprintf("o%02d/g%02d/", i, k)
+				po.Paths = append(po.Paths, dir+strings.Repeat("x", width-len(dir)-len("/**"))+"/**")
+			}
+			owners = append(owners, po)
+		}
+		return owners
+	}
+	width := gitref.MaxPathGlobBytes
+	for ; ; width-- {
+		encoded, err := json.Marshal(ownersOf(width))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(encoded) <= gitlet.MaxPathOwnersBytes {
+			break
+		}
+	}
+	owners := ownersOf(width)
+	digest := gitlet.OwnersDigest(owners)
+	var matched []gitlet.MatchedOwner
+	for _, po := range owners {
+		matched = append(matched, gitlet.MatchedOwner{Owner: po.Owner, Paths: po.Paths})
+	}
+	w := gitlet.ConversationWrite{OpID: statelog.NewOpID(time.Now(), ""), Revise: &gitlet.Revise{
+		RepoID: "0190f3c4-0000-7000-8000-00000000b0b0", ChangeID: "0190f3c4-0000-7000-8000-00000000c0c0", N: 1,
+		HeadOID: oidOf("B"), TargetRef: "refs/heads/main", TargetOID: oidOf("A"), BaseOID: oidOf("A"),
+		TargetPosition: statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 2}, PatchID: oidOf("patch"),
+		BaseTree: oidOf("base tree"), HeadTree: oidOf("head tree"),
+		Touched: touched, Classes: gitlet.RevisionClasses{WhitespaceOnly: places, Complete: true},
+		Node: strings.Repeat("n", 64), MeasuredAt: measuredAt, RequestedOwners: matched, OwnersDigest: digest,
+		HumanPaths: gitlet.HumanPathMatch{Held: held}, HumanPathsDigest: digest}}
+	if err := w.Validate(); err != nil {
+		t.Fatalf("the widest revise, its %d owners' globs %d bytes wide, is refused: %v", len(matched), width, err)
 	}
 }

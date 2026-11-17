@@ -134,6 +134,18 @@ func stringsBytes(ss []string) int {
 	return n
 }
 
+// int64sBytes is the length of a list of numbers.
+func int64sBytes(ns []int64) int {
+	n := 2
+	for i, v := range ns {
+		if i > 0 {
+			n++
+		}
+		n += intBytes(v)
+	}
+	return n
+}
+
 // encodedBytes is the length of the ref's JSON encoding.
 func (r RefRow) encodedBytes() int {
 	n := 2 + field("ref", stringBytes(r.Ref), true)
@@ -742,6 +754,9 @@ func (s RepoSummary) encodedBytes() int {
 	if !s.LastPushAt.IsZero() {
 		n += field("last_push_at", timeBytes(s.LastPushAt), false)
 	}
+	if len(s.Spark) > 0 {
+		n += field("spark", int64sBytes(s.Spark), false)
+	}
 	if s.ChangeCounts != nil {
 		n += field("change_counts", s.ChangeCounts.encodedBytes(), false)
 	}
@@ -913,6 +928,19 @@ func (f ReviewerFace) encodedBytes() int {
 	if f.Reason != "" {
 		n += field("reason", stringBytes(string(f.Reason)), false)
 	}
+	return n + ownedPathsBytes(f.OwnedPaths, f.OwnedPathsOmitted)
+}
+
+// ownedPathsBytes is the length of an ask's globs and their count as a row or a face encodes them,
+// each where set, neither first.
+func ownedPathsBytes(paths []string, omitted int) int {
+	n := 0
+	if len(paths) > 0 {
+		n += field("owned_paths", stringsBytes(paths), false)
+	}
+	if omitted != 0 {
+		n += field("owned_paths_omitted", intBytes(int64(omitted)), false)
+	}
 	return n
 }
 
@@ -1070,7 +1098,11 @@ func (f RevisionFactsRow) encodedBytes() int {
 	if !f.Classes.IsZero() {
 		n += field("classes", f.Classes.encodedBytes(), false)
 	}
-	n += field("node", stringBytes(f.Node), false) + field("owners_digest", stringBytes(f.OwnersDigest), false)
+	n += field("node", stringBytes(f.Node), false)
+	if !f.MeasuredAt.IsZero() {
+		n += field("measured_at", timeBytes(f.MeasuredAt), false)
+	}
+	n += field("owners_digest", stringBytes(f.OwnersDigest), false)
 	if len(f.RequestedOwners) > 0 {
 		owners := 2
 		for i, o := range f.RequestedOwners {
@@ -1128,7 +1160,11 @@ func (r ReviewerRow) encodedBytes() int {
 	if r.Note != "" {
 		n += field("note", stringBytes(r.Note), false)
 	}
-	return n + field("position", positionBytes(r.Position), false)
+	n += field("position", positionBytes(r.Position), false)
+	if !r.At.IsZero() {
+		n += field("at", timeBytes(r.At), false)
+	}
+	return n + ownedPathsBytes(r.OwnedPaths, r.OwnedPathsOmitted)
 }
 
 // encodedBytes is the length of the comment's JSON encoding.
@@ -1273,7 +1309,25 @@ func (f FindingRow) encodedBytes() int {
 	if !f.ResolvedPosition.IsZero() {
 		n += field("resolved_position", positionBytes(f.ResolvedPosition), false)
 	}
-	return n + field("position", positionBytes(f.Position), false)
+	n += field("position", positionBytes(f.Position), false)
+	if !f.RaisedAt.IsZero() {
+		n += field("raised_at", timeBytes(f.RaisedAt), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the group's JSON encoding.
+func (p FindingPathRow) encodedBytes() int {
+	return 2 + field("path", stringBytes(p.Path), true) +
+		field("state", stringBytes(string(p.State)), false) +
+		field("revision", intBytes(p.Revision), false) +
+		field("findings", intBytes(p.Findings), false)
+}
+
+// encodedBytes is the length of the mark's JSON encoding.
+func (r ViewedRow) encodedBytes() int {
+	return 2 + field("path_digest", stringBytes(r.PathDigest), true) +
+		field("file_digest", stringBytes(r.FileDigest), false) + field("at", timeBytes(r.At), false)
 }
 
 // encodedBytes is the length of the anchor's JSON encoding.

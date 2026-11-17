@@ -674,6 +674,31 @@ func TestACodeReadIsJudgedAsItsCaller(t *testing.T) {
 	}
 }
 
+// EVERY FILE'S PATCH IS ASKED BY ITS ARGUMENT: `patches` sets the diff's Patches, and beside
+// `file` it is refused before Gitlet is asked a git read.
+//
+// Mutation: drop Patches from code_diff's query → red.
+func TestCodeDiffAsksEveryPatchByItsArgument(t *testing.T) {
+	t.Parallel()
+	host := newGitletHost()
+	reg := codeRegistry(t, codeDeps(host))
+	turn := codeTurn(t)
+	callCode(t, reg, turn, builtin.CodeDiffTool, map[string]any{"repo": "site", "base": mainOID,
+		"head": featureOID, "patches": true})
+	_, _, gits := host.asked()
+	if len(gits) != 1 || gits[0].Diff == nil || !gits[0].Diff.Patches {
+		t.Fatalf("code_diff with patches asked %+v, want one diff of every file's patch", gits)
+	}
+	got := refusedCode(t, reg, turn, builtin.CodeDiffTool, map[string]any{"repo": "site", "base": mainOID,
+		"head": featureOID, "patches": true, "file": "a.txt"})
+	if !strings.Contains(got.Output, "patches") {
+		t.Errorf("code_diff with patches and file answered %q, want the refusal naming patches", got.Output)
+	}
+	if _, _, gits = host.asked(); len(gits) != 1 {
+		t.Errorf("a refused code_diff asked Gitlet a git read: %+v", gits[1:])
+	}
+}
+
 // mustActor is the actor the operator surface writes ctx's principal down as.
 func mustActor(ctx context.Context, t *testing.T) builtin.Actor {
 	t.Helper()

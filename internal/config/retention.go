@@ -450,7 +450,7 @@ const (
 	//     within a tenth of the 16 GiB in five years its declared ceiling is
 	//     sized at, worklet.TrackerLogMaxBytes), and 2.2 MB of barriers, its
 	//     seats' 12 500 reads and the object collector's 25;
-	//   - the code log 22.6–100.4 MB a day: 3 000 pushes at 1 667 bytes,
+	//   - the code log 22.7–100.5 MB a day: 3 000 pushes at 1 667 bytes,
 	//     MEASURED for a seat's coding box's push alone in its record, the
 	//     most a seat's push takes, at which every one of the reference
 	//     company's is priced (internal/gitlet's BenchmarkPushLogBytes, its
@@ -475,7 +475,7 @@ const (
 	//     seat's push three times, 9 000 a day, beside thirty people fetching
 	//     every three minutes of a working day (4 800) and, where one runs, a
 	//     CI polling ten repositories a minute (14 400); and the records of
-	//     its 300 changes a day, 14.6–86.5 MB — every push a revision of its
+	//     its 300 changes a day, 14.7–86.6 MB — every push a revision of its
 	//     executor's change, ten a change, each change opened by a seat's
 	//     tool, asked of one reviewer, reviewed asking for changes with two
 	//     findings, answered, commented on twice, a thread resolved, approved
@@ -499,7 +499,7 @@ const (
 	//
 	// Every figure is of SIGNED records (ADR-0031).
 	//
-	// So the code log takes 1.86–8.26 of the mutation log's day — 0.41 on
+	// So the code log takes 1.87–8.27 of the mutation log's day — 0.41 on
 	// its push records alone (0.50 of the tracker's records) — and TWO
 	// THIRDS IS BELOW THAT RANGE: under a blocked trim a code log at two
 	// thirds of the mutation log's ceiling fills in 0.36 of the mutation
@@ -536,7 +536,7 @@ const (
 	// MUTATION LOG TAKES A DAY, the same two bytes_per_day side by side, so
 	// a code log at half the mutation log's ceiling fills no sooner under a
 	// blocked trim. That is only ever a company whose seats open no changes:
-	// at the reference company the changes' records alone, 14.6 MB a day at
+	// at the reference company the changes' records alone, 14.7 MB a day at
 	// their least, are more than the mutation log's whole day.
 	//
 	// HALF IS OF THE CEILING THE MUTATION LOG IS CREATED WITH, never of its

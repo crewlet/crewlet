@@ -2198,6 +2198,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                               plain
                               copyable={false}
                               selectable
+                              language="json"
                               label="agent_turn_completed, as JSON"
                               code={summaryJSON}
                             />
@@ -2212,6 +2213,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                               plain
                               copyable={false}
                               selectable
+                              language="json"
                               label="turn_completed, as JSON"
                               code={learningJSON}
                             />

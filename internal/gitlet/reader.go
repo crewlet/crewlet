@@ -156,7 +156,7 @@ func (r *Reader) chartFor(asker Principal, readiness bool) (Roster, error) {
 // which the chart judges: a listing of changes, and a change's first page of
 // its revisions, which carries its detail.
 func (q ReadQuery) judgesReadiness() bool {
-	return q.Kind == ReadChanges || q.Kind == ReadChange && q.Cursor == "" && q.Part.detailed() && !q.Brief
+	return q.Kind == ReadChanges || q.Kind == ReadChange && q.Cursor == "" && q.pagesDetail() && !q.Brief
 }
 
 // resolves reports a read that may resolve the repository it names
@@ -1410,6 +1410,9 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 	if err := q.validate(); err != nil {
 		return ReadAnswer{}, err
 	}
+	if err := q.daysKept(r.now()); err != nil {
+		return ReadAnswer{}, err
+	}
 	fresh, levelErr := q.freshness()
 	if levelErr != nil {
 		return ReadAnswer{}, levelErr
@@ -1482,7 +1485,7 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// deferrals order them — unless it resolves the repository, a point
 		// read of it whatever its page, as a `repo` read is
 		// ([ReadQuery.Resolve]).
-		query = fresh.Resolved(resolver(q.Repo), !q.Resolve && (q.Cursor != "" || !q.Part.detailed()))
+		query = fresh.Resolved(resolver(q.Repo), !q.Resolve && (q.Cursor != "" || !q.pagesDetail()))
 		serve = func(tx *sql.Tx, cp statelog.Position) error { return r.change(ctx, tx, q, chart, cp, &out) }
 	case ReadChangeRouting:
 		// A SET READ of the repository whose records write the change, as a
@@ -1844,6 +1847,12 @@ func (q ReadQuery) validate() error {
 	case len(q.FindingIDs) > 0 && q.Limit != 0:
 		return fmt.Errorf("%w: finding_ids: the findings named are the read's rows, which no limit cuts",
 			ErrInvalid)
+	case q.FindingPaths && (q.Part != "" || q.DetailOnly || q.Brief || len(q.FindingIDs) > 0):
+		return fmt.Errorf("%w: finding_paths: a change's findings by path are a page of their own, "+
+			"named by no part, detail_only, brief or finding_ids", ErrInvalid)
+	case q.Viewed && (q.Part != "" || q.DetailOnly || q.Brief || len(q.FindingIDs) > 0 || q.FindingPaths):
+		return fmt.Errorf("%w: viewed: a change's viewed files are a page of their own, named by no part, "+
+			"detail_only, brief, finding_ids or finding_paths", ErrInvalid)
 	}
 	switch {
 	case q.Kind == ReadInbox && q.Repo != "":
@@ -1924,8 +1933,13 @@ func (q ReadQuery) validate() error {
 			return err
 		}
 	}
+	if q.DayBounds != nil {
+		if err := q.validateDayBounds(); err != nil {
+			return err
+		}
+	}
 	bound := map[ReadKind]int{ReadRepos: MaxReposPerPage, ReadPushes: MaxPushesPerPage,
-		ReadRefs: MaxRefsPerPage, ReadChanges: MaxChangesPerPage, ReadChange: q.Part.maxPerPage(),
+		ReadRefs: MaxRefsPerPage, ReadChanges: MaxChangesPerPage, ReadChange: q.changePageMax(),
 		ReadChangeRouting: MaxRoutedRecordsPerPage, ReadReviews: MaxReviewsPerPage,
 		ReadChecks: MaxChecksPerPage, ReadQueue: MaxQueueRowsPerPage, ReadLandings: MaxLandingsPerPage,
 		ReadInbox: inbox.MaxRows}[q.Kind]
@@ -1945,8 +1959,8 @@ func (q ReadQuery) validate() error {
 // (a commit, an inbox, an inbox page's cards, a history page's commits, the
 // narrowing of a listing of repositories to the ones a rule protects, the
 // parts a counts read names, a repository's facts, a listing of changes'
-// order) on a read of any other
-// kind, the engine's own reads included ([ReadQuery.validate]).
+// order, a change's findings by path, a change's viewed files) on a read of
+// any other kind, the engine's own reads included ([ReadQuery.validate]).
 func (q ReadQuery) kindOwnedField() error {
 	switch {
 	case q.Protected && q.Kind != ReadRepos:
@@ -1956,6 +1970,10 @@ func (q ReadQuery) kindOwnedField() error {
 		return fmt.Errorf("%w: commit: only a commit read names a commit", ErrInvalid)
 	case q.Cards && q.Kind != ReadChanges:
 		return fmt.Errorf("%w: cards: only a listing of changes carries each change's card", ErrInvalid)
+	case q.FindingPaths && q.Kind != ReadChange:
+		return fmt.Errorf("%w: finding_paths: only a change read counts its findings by path", ErrInvalid)
+	case q.Viewed && q.Kind != ReadChange:
+		return fmt.Errorf("%w: viewed: only a change read answers the files its asker marked viewed", ErrInvalid)
 	case q.Inbox != nil && q.Kind != ReadInbox:
 		return fmt.Errorf("%w: inbox: only an inbox read names whose inbox it reads", ErrInvalid)
 	case len(q.NoticeCards) > 0 && q.Kind != ReadNoticeCards:
@@ -1972,6 +1990,9 @@ func (q ReadQuery) kindOwnedField() error {
 			ErrInvalid)
 	case q.Counts != nil && q.Kind != ReadCounts:
 		return fmt.Errorf("%w: counts: only a counts read names the parts it counts", ErrInvalid)
+	case len(q.DayBounds) > 0 && q.Kind != ReadRepos && q.Kind != ReadRepo && q.Kind != ReadPushes:
+		return fmt.Errorf("%w: day_bounds: only a listing of repositories, a read of one and a push history "+
+			"count pushes by the asker's days", ErrInvalid)
 	case q.RepoFacts && q.Kind != ReadRepos && q.Kind != ReadRepo:
 		return fmt.Errorf("%w: repo_facts: only a listing of repositories and a read of one answer a "+
 			"repository's facts", ErrInvalid)
@@ -2659,6 +2680,10 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 		return err
 	}
 	limit := min(limitOr(q.Limit, defaultRepoLimit), r.pageRows)
+	if len(q.DayBounds) > 0 {
+		// The sparks' read is measured at this page at most, whatever the default.
+		limit = min(limit, MaxSparkReposPerPage)
+	}
 	listed, err := reposListed(ctx, tx, q, list, limit)
 	if err != nil {
 		return err
@@ -2694,6 +2719,16 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 			if out.ReposTotal, err = r.reposTotal(ctx, tx, q, chart, statuses, list); err != nil {
 				return err
 			}
+		}
+	}
+	// ITS PUSHES ON THE ASKER'S DAYS where DayBounds asks, before the cut so the page is measured with them.
+	if len(q.DayBounds) > 0 {
+		days, sparkErr := pushesOnDays(ctx, tx, ids, q.DayBounds)
+		if sparkErr != nil {
+			return sparkErr
+		}
+		for i := range out.Repos {
+			out.Repos[i].Spark = days[out.Repos[i].ID]
 		}
 	}
 	// MEASURED WITH THEIR RULES, which are read in one statement for the
@@ -2813,6 +2848,17 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster
 			return err
 		}
 	}
+	// ITS PUSHES ON THE ASKER'S DAYS AND WHO PUSHED, where DayBounds asks beside RepoFacts.
+	if len(q.DayBounds) > 0 {
+		var days map[string][]int64
+		if days, err = pushesOnDays(ctx, tx, []string{id}, q.DayBounds); err != nil {
+			return err
+		}
+		out.Repo.Spark = days[id]
+		if out.Repo.Pushers, err = pushersIn(ctx, tx, id, q.DayBounds, MaxPushersAnswered); err != nil {
+			return err
+		}
+	}
 	// AND ITS FACTS ONLY TO A READ THAT ASKS ([ReadQuery.RepoFacts]).
 	if q.RepoFacts {
 		if err = withFacts(ctx, tx, []*RepoSummary{&out.Repo.RepoSummary}); err != nil {
@@ -2923,6 +2969,14 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 			out.Pushes = []PushRow{row}
 		}
 		return nil
+	}
+	// THE REPOSITORY'S PUSHES ON THE ASKER'S DAYS where DayBounds asks, whatever the page holds.
+	if len(q.DayBounds) > 0 {
+		var days map[string][]int64
+		if days, err = pushesOnDays(ctx, tx, []string{id}, q.DayBounds); err != nil {
+			return err
+		}
+		out.PushDays = days[id]
 	}
 	limit := limitOr(q.Limit, defaultPushLimit)
 	var rows *sql.Rows

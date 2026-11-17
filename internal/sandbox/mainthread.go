@@ -30,10 +30,12 @@ import (
 //
 // FIFTEEN SECONDS, the ground the hook receipt's read of the same thread
 // stated: the main thread at its bound, a quarter of a gibibyte read a whole
-// line at a time with each line's head decoded, and on e2b streamed through
-// envd, on a loaded host. A read past it answers [CountUnread], the safe side:
-// a continuation told as one that may be cut off. It is held inside the box
-// read's budget ([BoxReadBudget]) for a Claude Code collection, before the
+// line at a time with each line decoded into every fact its readers read, in
+// 1.9 to 2.0 s on two cores of the engine host (the executor's
+// BenchmarkTheMainThreadReadAtItsBound), twice that on a loaded host, and on
+// e2b streamed through envd. A read past it answers [CountUnread], the safe
+// side: a continuation told as one that may be cut off. It is held inside the
+// box read's budget ([BoxReadBudget]) for a Claude Code collection, before the
 // take, so the take keeps its own.
 const MainThreadReadWait = 15 * time.Second
 

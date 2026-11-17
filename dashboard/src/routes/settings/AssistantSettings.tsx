@@ -17,6 +17,14 @@ import {
   withDraft,
 } from "@crewlethq/ui";
 import type { ReactNode } from "react";
+import {
+  BrainGlyph,
+  GaugeGlyph,
+  GlobeGlyph,
+  TelescopeGlyph,
+  WandSparklesGlyph,
+  WrenchGlyph,
+} from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { LimitSetting } from "~/components/LimitSetting.tsx";
@@ -124,7 +132,7 @@ function DocumentSetting<V>({
   fallback,
   normal = (value) => value,
   words,
-  helper,
+  hint,
   check,
   write,
   field,
@@ -140,7 +148,8 @@ function DocumentSetting<V>({
   /** What two values are compared by, where an edit holds more than it saves. */
   normal?: (value: V) => unknown;
   words: (value: V) => string;
-  helper: ReactNode;
+  /** A short line under the field, where the control alone does not say what the value does. */
+  hint?: string;
   /** Why a value cannot be saved, or null. */
   check?: (value: V) => string | null;
   /** What to write at the key: the value, or null to remove it. */
@@ -167,6 +176,8 @@ function DocumentSetting<V>({
       }}
       edit={{
         open: () => current,
+        defaultState: fallback,
+        defaultWords: words(fallback),
         read: (value): Typed<V> => {
           const error = check?.(value) ?? null;
           return error === null ? { ok: true, value } : { ok: false, error };
@@ -184,7 +195,7 @@ function DocumentSetting<V>({
           };
         },
         served: (value) => same(value, current),
-        helper,
+        hint,
         field: ({ id, state, set, busy }) => field({ id, value: state, set, busy }),
       }}
     />
@@ -287,7 +298,11 @@ export function AssistantSettings() {
         ) : (
           <>
             <Card padding="none">
-              <Card.Header subtitle="On or off for everybody, and the models it answers on">
+              <Card.Header
+                icon={<WandSparklesGlyph size="sm" />}
+                count={2}
+                subtitle="On or off for everybody, and the models it answers on"
+              >
                 <Card.Title as="h3" id="assistant-models">
                   Quick answers
                 </Card.Title>
@@ -300,7 +315,7 @@ export function AssistantSettings() {
                   current={enabled}
                   fallback={false}
                   words={onOff}
-                  helper="Off hides Ask for everybody. Conversations are kept on their usual retention."
+                  hint="Off hides Ask for everybody."
                   write={(on) => on}
                   onApplied={refetch}
                   field={({ id, value, set, busy }) => (
@@ -320,7 +335,7 @@ export function AssistantSettings() {
                   current={chain}
                   fallback={[]}
                   words={chainWords}
-                  helper="The first answers; each next one takes over when the one before is spent or cannot sign in."
+                  hint="The first answers; the next take over in order."
                   check={(next) =>
                     enabled && next.length === 0 ? "Ask Crewlet is on, so it needs a model." : null
                   }
@@ -349,7 +364,11 @@ export function AssistantSettings() {
             </Card>
 
             <Card padding="none">
-              <Card.Header subtitle="Think harder, one question at a time">
+              <Card.Header
+                icon={<BrainGlyph size="sm" />}
+                count={strong.length > 0 ? 2 : 1}
+                subtitle="Think harder, one question at a time"
+              >
                 <Card.Title as="h3" id="assistant-deliberate">
                   A stronger model for hard questions
                 </Card.Title>
@@ -362,7 +381,7 @@ export function AssistantSettings() {
                   current={strong}
                   fallback={[]}
                   words={chainWords}
-                  helper="Offered as Think harder in the drawer. None turns Think harder off."
+                  hint="None turns Think harder off."
                   write={(next) => (next.length === 0 ? null : next)}
                   onApplied={refetch}
                   field={({ id, value, set }) => (
@@ -383,7 +402,7 @@ export function AssistantSettings() {
                     current={read("assistant.deliberate.decision_briefs") === true}
                     fallback={false}
                     words={onOff}
-                    helper="Brief me on this decision runs on the stronger models too."
+                    hint="Decision briefs think harder too."
                     write={(on) => (on ? true : null)}
                     onApplied={refetch}
                     field={({ id, value, set, busy }) => (
@@ -401,7 +420,11 @@ export function AssistantSettings() {
             </Card>
 
             <Card padding="none">
-              <Card.Header subtitle="What one turn may take">
+              <Card.Header
+                icon={<GaugeGlyph size="sm" />}
+                count={turnBounds.length}
+                subtitle="What one turn may take"
+              >
                 <Card.Title as="h3" id="assistant-turns">
                   Turns
                 </Card.Title>
@@ -421,7 +444,11 @@ export function AssistantSettings() {
             </Card>
 
             <Card padding="none">
-              <Card.Header subtitle="It only narrows what each person's permissions offer">
+              <Card.Header
+                icon={<WrenchGlyph size="sm" />}
+                count={1}
+                subtitle="It only narrows what each person's permissions offer"
+              >
                 <Card.Title as="h3" id="assistant-tools">
                   Tools turned off
                 </Card.Title>
@@ -440,7 +467,7 @@ export function AssistantSettings() {
                           families.map((f) => TOOL_FAMILIES.find((t) => t.key === f)?.label ?? f),
                         )
                   }
-                  helper="A family turned off is never offered to the model, in any turn."
+                  hint="Never offered to the model, in any turn."
                   write={(families) => (families.length === 0 ? null : families)}
                   onApplied={refetch}
                   field={({ id, value, set, busy }) => (
@@ -468,7 +495,11 @@ export function AssistantSettings() {
             </Card>
 
             <Card padding="none">
-              <Card.Header subtitle="Vendor documentation, read through the engine">
+              <Card.Header
+                icon={<GlobeGlyph size="sm" />}
+                count={1}
+                subtitle="Vendor documentation, read through the engine"
+              >
                 <Card.Title as="h3" id="assistant-research">
                   Web research
                 </Card.Title>
@@ -485,7 +516,7 @@ export function AssistantSettings() {
                     const list = hostsOf(value);
                     return list.length === 0 ? "None" : listed(list);
                   }}
-                  helper="A page's text is the site's words, never an instruction. List only documentation hosts you trust; none turns web research off."
+                  hint="Only documentation hosts you trust. None turns web research off."
                   check={(value) => {
                     const list = hostsOf(value);
                     if (list.length > MAX_RESEARCH_HOSTS) {
@@ -523,7 +554,11 @@ export function AssistantSettings() {
             </Card>
 
             <Card padding="none">
-              <Card.Header subtitle="A large task, handed to a run with its own tools">
+              <Card.Header
+                icon={<TelescopeGlyph size="sm" />}
+                count={1 + (deep ? deepBounds.length : 0)}
+                subtitle="A large task, handed to a run with its own tools"
+              >
                 <Card.Title as="h3" id="assistant-deep">
                   Deep work
                 </Card.Title>
@@ -544,7 +579,7 @@ export function AssistantSettings() {
                   current={deep}
                   fallback=""
                   words={(key) => key || "None"}
-                  helper="A Claude Code model. With none, Ask answers in quick mode only."
+                  hint="A Claude Code model. None keeps Ask in quick mode."
                   write={(key) => (key ? key : null)}
                   onApplied={refetch}
                   field={({ id, value, set, busy }) => (

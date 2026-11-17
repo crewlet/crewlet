@@ -54,16 +54,18 @@
 // ([eachElement]), never decoded whole before its first element is checked,
 // and an object whose keys are open, as a map's are, a key at a time
 // ([eachKey]), never decoded into a map of every key first; a key only one
-// reader reads held to its type in that reader's accessor; and a hook's
-// firing handed out by [threadLine.Hook] alone, a call's id by
-// [threadMessage.Calls] alone, since a PostToolUse hook's firing carries the id
-// of the call it followed. The take's context meter (measure.go) reads the main
+// reader reads held to its type in that reader's accessor; and no id handed
+// out as a call's but by [threadMessage.Calls], an attachment's `toolUseID`
+// only as a key ([threadLine.AttachmentToolUseID]), since a PostToolUse
+// hook's firing carries the id of the call it followed, and a task
+// notification's `<tool-use-id>` as the leg its text claims
+// ([threadMessage.Notification]), matched only against a call read. The
+// take's context meter (measure.go) reads the main
 // thread through the layer too, in one walk of its whole lines
 // ([walkThread]): it decides what a continuation of the capture is told, by
-// what Claude Code counts the session at ([resumedReading]). Its one decode
-// outside the layer's options is the launch floor's figure, the last request's
-// input read off each whole line by the rule every capture's figure has been
-// read by ([contextReading]), so that figure does not move.
+// what Claude Code counts the session at ([resumedReading]), and reads the
+// launch floor's figure, the last request's input, off the last main-thread
+// reply's usage by the rule the count reads it by ([contextReading]).
 //
 // What Claude Code's resume hands its model of such a thread, which of its
 // records and in what order, is modelled once, by [threadChain]

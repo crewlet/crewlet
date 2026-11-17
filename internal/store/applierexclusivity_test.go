@@ -589,6 +589,7 @@ var allowedReplicatedWriter = []allowance{
 		Prefix: "internal/gitlet/apply", Kind: mechanism,
 		Why: "The code domain's applier — the record dispatch, a repository's " +
 			"lifecycle and the activation fence, the push with its horizons " +
+			"and the counts of its pushes by day and by pusher (apply_activity.go), " +
 			"and the purge's parts, a repository's changes and their " +
 			"conversations among what they take, a change's lifecycle and the " +
 			"revisions and authors a push writes of the changes it moves, a " +
@@ -603,7 +604,9 @@ var allowedReplicatedWriter = []allowance{
 			"row with its log and its horizon, the home's dispatch of a " +
 			"change head under its target's checks file (apply_dispatch.go), " +
 			"a person's marks over their own code notices on their own " +
-			"subject (apply_marks.go), and the counts of a repository's " +
+			"subject (apply_marks.go), a person's viewed files of a change on " +
+			"their own subject and a repository's viewed key on its own " +
+			"(apply_viewed.go), and the counts of a repository's " +
 			"changes and their tallies by owner, and their re-derivation " +
 			"(apply_counts.go), and the repositories tallied by owner, " +
 			"visibility, kind and status (apply_repotallies.go).",

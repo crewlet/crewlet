@@ -132,11 +132,15 @@ branch and which seats read it, and opens its page. Its **Code** tab, where
 the page lands, adds its first file with **Add a file**, the root commit that
 makes its default branch, so it needs no clone to start; beside it, the
 address to clone it from and the two commands that push a repository you
-already have into it. From then on the repository's page writes it from the
-browser, each write one commit or one ref moved, as you:
+already have into it. Its **Code** tab lists each entry with the commit that
+last changed it; press `t`, or **Go to file**, to find a file by name. Its
+README and its LICENSE are tabs under the files. From then on the
+repository's page writes it from the browser, each write one commit or one
+ref moved, as you:
 
-- **Code**, on a branch: **Edit** a text file of up to 256 KiB, **Delete
-  file**, or **New file** in a directory (`code_commit_files`), each at the
+- **Code**, on a branch: **Edit** a text file of up to 256 KiB (the README's
+  pencil too), **Delete file**, or **New file** in a directory
+  (`code_commit_files`), each at the
   commit the page read, so a push made since is refused rather than written
   over;
 - **Branches**: **New branch** at a branch, a tag or a commit
@@ -234,7 +238,7 @@ and a service account is created with it (`crewlet iam create -kind machine
 ## Clone, fetch and push
 
 The address is the API's own, on `api.port` — never the public listener —
-and a repository's page offers it under **Clone**, beside its files:
+and a repository's page offers it under **Clone**, at the end of the bar above its files:
 
 ```sh
 git clone https://crewlet.example.com/git/web.git
@@ -1388,6 +1392,9 @@ Endpoints](../reference/api-endpoints.md#gitlet-git-and-gitlet)). Going
 the other way, from a commit to whoever landed it, `code_landed_in`,
 `code_log` and `code_blame` name the push behind each commit ([Which push
 landed a commit](../concepts/gitlet.md#which-push-landed-a-commit)).
+On a repository's **Commits** tab the dashboard narrows the history to one
+seat's pushes and to recent days, and searches commit messages; each commit
+shows its checks and the change it landed with.
 
 ### Working in a clone
 
@@ -1460,6 +1467,10 @@ only until the repository's next [expunge](../concepts/gitlet.md#expunge)
 drops the commit. A repository
 setting refs faster than they go idle raises `code_refs_near_limit` before it
 reaches the 100 000 live refs it may hold ([alarms](../reference/alarms.md)).
+
+On a repository's **Branches** tab, Stale lists the branches nobody has
+moved in 90 days, each with who moved it last, while the push history still
+names them.
 
 ## Who read a unit's repository
 

@@ -206,7 +206,7 @@ const (
 	// bytes a push (internal/gitlet/compact's steady arm at the floor),
 	// 0.5 MB, the publications of their layers, 0.18–3.51 MB, its git
 	// clients' barriers at BarrierRecordBytes, 2.4–5.0 MB, and its changes'
-	// records, 14.6–86.5 MB (each MEASURED as its writer forms it,
+	// records, 14.7–86.6 MB (each MEASURED as its writer forms it,
 	// TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt), against
 	// the tracker's measured 9.9 MB of records and 2.2 MB of barriers, every
 	// record in its signed frame. Two thirds is below that day: a company
@@ -290,17 +290,19 @@ const (
 	// handle its routing tells and each change's count of them
 	// (noticeWrites): at their widest — a push whose routing fills what its
 	// own rows leave, 3 904 notices — they hold the lane 143 ms (doc.go's
-	// measured section). A record's change tallies come on top of it: its horizons
-	// are given what an older build's rows leave them (record.go).
+	// measured section). A record's change tallies and push activity come on top
+	// of it where its horizons fill it: they are given what an older build's rows
+	// leave them (record.go).
 	MaxRecordRows = statelog.ApplyTxRowBudget
 
 	// MaxCommandsPerPush is the most ref updates one push carries. A push's
-	// apply then writes at most 2 003 rows — its refs, the object each forced
-	// update or deletion left (code_ref_drops), its pack, its push row and the
-	// counters — and its record's row bound counts each command by the rows
-	// it may make the record touch (rowBound: a deletion three, for its
-	// tombstone, the old tombstone the sweep may take for it and its drop; a
-	// forced update two; any other one), so three maximal pushes of
+	// apply then writes at most 2 005 rows (its refs, the object each forced
+	// update or deletion left (code_ref_drops), its pack, its push row, the
+	// counters and the day and pusher rows it is counted in), and its record's
+	// row bound counts each command by the rows it may make the record touch
+	// (rowBound: a deletion three, for its tombstone, the old tombstone the
+	// sweep may take for it and its drop; a forced update two; any other one),
+	// so three maximal pushes of
 	// fast-forward updates fit one record's row budget, one of forced updates
 	// or of deletions, and two of either its byte budget (about 410 KiB each
 	// with plain refs at MaxRefNameBytes); an import chunks its refs at this
@@ -588,6 +590,11 @@ const (
 	// the longest an answer to a finding carries, kept on the finding's own
 	// narrow row for the same reason.
 	MaxReviewNoteBytes = 1 << 10
+
+	// MaxOwnedPathsBytes is the most a path owner's ask's globs weigh as JSON (code_reviewers.owned_paths),
+	// the globs past it counted: a note's bound, because the row holds one or the other and never both,
+	// so it stays the width replicated 0100 sized it to.
+	MaxOwnedPathsBytes = MaxReviewNoteBytes
 
 	// MaxCommentBytes is the longest comment on a change: as long as the
 	// change's own description (MaxChangeBodyBytes) and a comment on a task

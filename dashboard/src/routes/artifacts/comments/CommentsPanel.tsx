@@ -5,6 +5,7 @@ import {
   Button,
   ButtonLink,
   Callout,
+  CommentPinGlyph,
   CommentThread,
   Composer,
   EmptyState,
@@ -12,7 +13,7 @@ import {
   Skeleton,
   type CommentThreadComment,
 } from "@crewlethq/ui";
-import { CheckGlyph, MousePointer2Glyph, RotateCcwGlyph } from "@crewlethq/icons/glyphs";
+import { CheckGlyph, RotateCcwGlyph } from "@crewlethq/icons/glyphs";
 import { buildHash, useRoute } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { renderMarkdown } from "~/lib/markdown.ts";
@@ -164,7 +165,7 @@ function Start({ onPlace }: { onPlace: () => void }) {
             <Button
               size="small"
               variant={c.placing ? "primary" : "outline"}
-              leadingIcon={<MousePointer2Glyph size="sm" />}
+              leadingIcon={<CommentPinGlyph size="sm" />}
               aria-pressed={c.placing}
               onClick={onPlace}
             >

@@ -319,6 +319,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                   plain
                   copyable={false}
                   selectable
+                  language="json"
                   label="The event payload, as JSON"
                   code={JSON.stringify(data.payload, null, 2)}
                 />
@@ -462,6 +463,7 @@ export function EventPeek({ eventId }: { eventId: string }) {
                     plain
                     copyable={false}
                     selectable
+                    language="json"
                     label="The event payload, as JSON"
                     code={JSON.stringify(payload, null, 2)}
                   />
