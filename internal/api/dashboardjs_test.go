@@ -2717,7 +2717,9 @@ const (
 	// (6,924,733 bytes), 28,931 over main: 6763 KiB.
 	// Gitlet's changes as code-host rows wherever they are listed, with their cards, state totals
 	// and sort: 6780.7 KiB (6,943,394 bytes), 18,661 over main: 6781 KiB.
-	treeBudget = 5<<20 + 1661<<10
+	// A change's conversation as a timeline with finding excerpts: 6801.9 KiB (6,965,137 bytes),
+	// 21,743 over main: 6802 KiB.
+	treeBudget = 5<<20 + 1682<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
