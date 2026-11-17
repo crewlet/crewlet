@@ -314,7 +314,9 @@ func (h SessionHoldings) heldByID(c LoggedCall) (bool, string) {
 // holds the seat and a slot of the node's admission, so what it spends on a
 // kept session is thirty seconds, fifteen for its keep and fifteen for its
 // reading, and the one bounded step a reading may overrun its wait by
-// (below). An ordinary kept session is a mebibyte or two sealed: one
+// (below), beside the settle writes the keep's wait decides, each in its own
+// room past that wait where the store is slow to take it
+// ([Coordinator.ContinuedCapture]). An ordinary kept session is a mebibyte or two sealed: one
 // object-store read, and one pass over its lines. A reader checks the wait
 // between the bounded steps of its work ([HoldingsReader]), so a reading
 // overruns it by one such step at most; a reading past it is no reading, and

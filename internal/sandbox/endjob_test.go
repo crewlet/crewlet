@@ -514,7 +514,7 @@ func TestAStopWithTheSwitchOffEndsItsJobOffTheFrame(t *testing.T) {
 func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 	t.Parallel()
 	uncapped := PendingRun{TurnID: "t1"}
-	held := SessionTakeBudget + sessionRecordBudget + 2*discardGrace + boxReadChanges*coord.MaxValueCrossing
+	held := SessionTakeBudget + sessionRecordBudget + 3*discardGrace + boxReadChanges*coord.MaxValueCrossing
 	if got, want := BoxReadBudget(uncapped, BoxReadCollect),
 		pollBound+time.Duration(float64(held)/BoxReadAnswerShare); got != want {
 		t.Errorf("a collection's read of a turn with no cap waits %v, want the take alone, %v", got, want)
