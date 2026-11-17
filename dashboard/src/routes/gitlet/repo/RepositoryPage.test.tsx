@@ -759,7 +759,7 @@ test("the About rail says when the repository was pushed in words, the latest co
   vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
   stubEngine();
   mount("#/gitlet/repos/web");
-  expect(await screen.findByText("Pushed yesterday")).toBeTruthy();
+  expect((await screen.findByText(/^Last pushed/)).textContent).toBe("Last pushed yesterday");
   await waitFor(() =>
     expect(document.querySelector(".code-latest__when")?.textContent).toBe("6d ago"),
   );
@@ -963,8 +963,10 @@ test("the revision picker's branches and tags are read once while the reader mov
   const asked = stubEngine();
   mount("#/gitlet/repos/web");
 
+  // THE RAIL'S FIND OF THE DEFAULT BRANCH, in detail, is no listing of the picker's.
+  const listed = () => reads(asked, "code_refs").filter((u) => !u.searchParams.has("detail"));
   await screen.findByRole("link", { name: "src" });
-  await waitFor(() => expect(reads(asked, "code_refs")).toHaveLength(2));
+  await waitFor(() => expect(listed()).toHaveLength(2));
   act(() => {
     location.hash = "#/gitlet/repos/web?path=src";
   });
@@ -974,7 +976,7 @@ test("the revision picker's branches and tags are read once while the reader mov
   });
   expect(await screen.findByRole("group", { name: "History of main" })).toBeTruthy();
 
-  const listings = reads(asked, "code_refs").map((u) => u.searchParams.get("prefix"));
+  const listings = listed().map((u) => u.searchParams.get("prefix"));
   expect(listings.sort()).toEqual([null, "refs/tags/"]);
 });
 
@@ -2206,7 +2208,7 @@ test.each([
 // AN IMPORTING REPOSITORY SAYS HOW FAR ITS IMPORT WENT, and where its mirrors
 // stand, on the About rail beside its code. Mutation: drop the import's
 // progress or the pull mirror's line from the rail, and this fails.
-test("the About rail says how far an import went and where the mirrors stand", async () => {
+test("the About rail says how far an import went, and its Mirror where the mirror stands", async () => {
   const source = { url: "https://forge.example.com/acme/web.git" };
   stubEngine(
     detail({
@@ -2222,9 +2224,10 @@ test("the About rail says how far an import went and where the mirrors stand", a
       "Importing from https://forge.example.com/acme/web.git: 3 chunks landed so far.",
     ),
   ).toBeTruthy();
-  expect(
-    screen.getByText("Follows https://forge.example.com/acme/web.git; not synced yet."),
-  ).toBeTruthy();
+  // THE PULL MIRROR IS THE RAIL'S MIRROR: its address, then what it does.
+  const mirror = screen.getByRole("region", { name: "Mirror" });
+  expect(within(mirror).getByRole("link", { name: "forge.example.com/acme/web" })).toBeTruthy();
+  expect(within(mirror).getByText(/^Follows it;/).textContent).toBe("Follows it; not synced yet.");
 });
 
 /** A person the engine serves every repository and branch write for. */

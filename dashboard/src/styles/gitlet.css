@@ -1403,46 +1403,234 @@
   max-width: var(--size-measure);
 }
 
-/* THE ABOUT RAIL beside the code: the description, the counts, then the
-   properties. */
-.code-about {
+/* A REPOSITORY'S RAIL beside its code: sections ruled apart, each a head row (a title, a count, a
+   caption or a link at its end) and its body; every long text gives way in one line. */
+.code-repo-rail {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-4);
   min-width: 0;
 }
 
-.code-about__title {
+.code-repo-rail__sec {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+  padding-block: var(--spacing-4);
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-repo-rail__sec:first-child {
+  padding-block-start: 0;
+  border-block-start: none;
+}
+
+.code-repo-rail__head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+.code-repo-rail__about {
   margin: 0;
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);
 }
 
-.code-about__stats {
+.code-repo-rail__title {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-repo-rail__count,
+.code-repo-rail__pushes {
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+
+.code-repo-rail__end {
+  display: inline-flex;
+  margin-inline-start: auto;
+  font-size: var(--font-size-xs);
+}
+
+.code-repo-rail__caption,
+.code-repo-rail__note,
+.code-repo-rail__rest {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.code-repo-rail__facts,
+.code-repo-rail__list {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
+  min-width: 0;
   margin: 0;
   padding: 0;
   list-style: none;
-  font-size: var(--font-size-sm);
 }
 
-.code-about__stats > li {
+.code-repo-rail__fact {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--spacing-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
 }
 
-.code-about__glyph {
+.code-repo-rail strong {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.code-repo-rail__glyph {
+  display: inline-flex;
   flex: none;
   color: var(--color-text-tertiary);
 }
 
-.code-about__owner {
-  display: inline-flex;
+.code-repo-rail__words {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.code-repo-rail__pusher,
+.code-repo-rail__who,
+.code-repo-rail__address,
+.code-repo-rail__tag-name {
+  display: flex;
   align-items: center;
   gap: var(--spacing-2);
+  min-width: 0;
+  font-size: var(--font-size-sm);
+}
+
+.code-repo-rail__who {
+  flex: 1;
+}
+
+.code-repo-rail__name,
+.code-repo-rail__link {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-repo-rail__as {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  vertical-align: middle;
+}
+
+.code-repo-rail__mirror,
+.code-repo-rail__tag {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+/* AN OPEN CHANGE IN A LINE: its state's glyph, its title, then its reference and placing word,
+   then its owner. The change colours stay the state pill's. */
+.code-mini {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.code-mini:hover .code-mini__title {
+  text-decoration: underline;
+}
+
+.code-mini__state {
+  display: inline-flex;
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+
+.code-mini__body,
+.code-mini__meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+  flex: 1;
+}
+
+.code-mini__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+
+.code-mini__meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.code-mini__place,
+.code-mini__who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.code-mini__who {
+  flex-wrap: nowrap;
+}
+
+/* The placing word's ink says a state: a person is needed, it is working, or it is ready. */
+.code-mini__word[data-tone="warning"] {
+  color: var(--color-feedback-warning-ink);
+}
+.code-mini__word[data-tone="info"] {
+  color: var(--color-feedback-info-ink);
+}
+.code-mini__word[data-tone="success"] {
+  color: var(--color-feedback-success-ink);
+}
+
+.code-mini__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* PUSHES A DAY: one series in the kit chart's data fill, its first day and Today under it. */
+.code-spark {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+  margin: 0;
+}
+
+.code-spark__ends {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
 }
 
 /* A SECTION OF A TAB BELOW ITS FIRST, with a heading of its own. */

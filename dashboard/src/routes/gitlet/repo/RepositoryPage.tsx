@@ -38,10 +38,10 @@
  * of those writes: it takes no change but its restore. Every write is confirmed, never
  * optimistic: the page is redrawn from the read the write's floor brings.
  * The header's state pill says `importing` while an import runs, and the
- * About rail how far it went and where its mirrors stand.
+ * rail's About how far it went; its Mirror where its mirrors stand.
  */
 
-import { Fragment, useId, type ReactNode } from "react";
+import { Fragment, useId, useState, type ReactNode } from "react";
 import {
   AsideLayout,
   ButtonLink,
@@ -89,18 +89,20 @@ import {
   purgeStanding,
   pushMirrorStanding,
 } from "~/lib/repoWrites.ts";
-import type { CodeOwner, CodeRepoDetail } from "~/protocol/index.ts";
+import type { QueryResult } from "~/lib/useQuery.ts";
+import type { CodeCountsAnswer, CodeOwner, CodeRepoDetail } from "~/protocol/index.ts";
 import { ChangeList } from "../ChangeList.tsx";
 import { CodeNotFound } from "../NotFound.tsx";
 import { PushHistory } from "../Pushes.tsx";
 import { RepoChecks } from "../checks/RepoChecks.tsx";
 import { REPO_TABS, changesHref, compareHref, repoHref, type RepoTab } from "../paths.ts";
-import { About, managedWord, readByWord, searchWord } from "./About.tsx";
+import { RootDocs, managedWord, readByWord, searchWord } from "./About.tsx";
 import { Files } from "./Files.tsx";
 import { Branches } from "./Branches.tsx";
 import { Commits } from "./History.tsx";
 import { AddPathOwnerButton, PathOwnerControls } from "./PathOwners.tsx";
 import { ProtectButton, RuleControls } from "./Protect.tsx";
+import { RepoRail } from "./Rail.tsx";
 import { DeleteRepoControl, DeletedNotice } from "./RepoLife.tsx";
 import {
   ArchiveControl,
@@ -235,7 +237,7 @@ export function RepositoryPage({ repo }: { repo: string }) {
         aria-labelledby={tabId(panelId, tab)}
         tabIndex={0}
       >
-        {tab === "code" && <Code repo={detail} revisions={revisions} />}
+        {tab === "code" && <Code repo={detail} revisions={revisions} counts={counts} />}
         {tab === "changes" && <RepoChanges repo={detail} />}
         {tab === "commits" && <Commits repo={detail} revisions={revisions} />}
         {tab === "branches" && <Branches repo={detail} />}
@@ -432,29 +434,33 @@ function RepoHeader({ repo }: { repo: CodeRepoDetail }) {
 
 /**
  * The CODE tab: the files at the revision the address names. At the
- * repository's root they stand beside the About rail, as a code host's
+ * repository's root they stand beside its rail (`Rail.tsx`), as a code host's
  * landing does; under a path — a directory or a file, read wide — the files
  * take the page's width.
  */
 function Code({
   repo,
   revisions,
+  counts,
 }: {
   repo: CodeRepoDetail;
   revisions: ReturnType<typeof useRevisions>;
+  counts: QueryResult<CodeCountsAnswer>;
 }) {
-  const ownerName = useOwnerName();
   const [path] = useParam("path", "", "filter");
+  const [docs, setDocs] = useState("");
   const files = <Files repo={repo} revisions={revisions} />;
   if (path !== "") return files;
   return (
-    <AsideLayout
-      fit="page"
-      asideLabel="About this repository"
-      aside={<About repo={repo} ownerName={ownerName} />}
-    >
-      {files}
-    </AsideLayout>
+    <RootDocs.Provider value={setDocs}>
+      <AsideLayout
+        fit="page"
+        asideLabel="About this repository"
+        aside={<RepoRail repo={repo} counts={counts} docs={docs} pollMs={REPO_POLL_MS} />}
+      >
+        {files}
+      </AsideLayout>
+    </RootDocs.Provider>
   );
 }
 
