@@ -120,6 +120,49 @@
 // is in. That is a defect of its own (crewlet/crewlet#1035), which these
 // budgets do not fix.
 //
+// # What a link carries is read at its socket
+//
+// A node that crosses a link to the fleet's broker — a leaf, across its link
+// to the members; any node, across the network to an external cluster — has
+// to tell a link that is carrying something from one that carries nothing,
+// because a message on it can be megabytes (the transport's ceiling,
+// queue.MaxPayloadBytes) and one takes four minutes to cross at the slowest
+// pace the engine allows. No counter the libraries keep can say: nats-server
+// counts a connection's bytes in once its read loop has parsed a whole
+// message and out when it queues one, and nats.go counts a message once it is
+// whole, so for all four minutes every one of them stands still. The kernel's
+// do not. So the link's SOCKET is read (LinkMeter): the bytes the node read
+// off it, and the bytes the far end's kernel acknowledged of what it wrote
+// (internal/sockcount: TCP_INFO's tcpi_bytes_acked on Linux, written less
+// SO_NWRITE on darwin), every quarter of a read term, the last
+// objstore.Stall of readings kept. A link is MOVING when it carried, in
+// either direction, at least seven tenths of what the floor carries over the
+// span asked about: midway between the background a quiet link carries and
+// the floor a busy one does (movingShare).
+//
+// WHERE IT SITS. On an external broker, every connection the queue dials is
+// metered as one link, reconnects included (infoDialer). On a leaf, the
+// link to the members is dialled by nats-server, which gives no embedder its
+// socket, so the leaf dials it through a tunnel in the engine's own process
+// — an HTTP CONNECT proxy on loopback, nats-server's supported leaf-remote
+// Proxy option — whose upstream socket the meter reads (tunnel). A member
+// crosses no link and has no meter (Queue.LinkMeter).
+//
+// WHAT IT CANNOT SEE: a proxy between the node and the broker that
+// terminates TCP — a service mesh's sidecar on the leaf port, a load
+// balancer that buffers — acknowledges what it has buffered rather than what
+// the broker took, so behind one a broker that stopped reading looks like a
+// buffer still draining. The deployment guides state it as a requirement:
+// the link reaches the broker's own sockets.
+//
+// WHAT READS IT (ADR-0155): a wait across a link ends for silence only while
+// the link carries nothing at the floor. A seat's hydration
+// (internal/learning/memsync, handed the meter as its Config.Link) refuses a
+// replay that heard nothing for its stall only where the link did not move
+// over it, and holds its hedged requests' ceilings past their spans while it
+// moves (internal/jsprovision's Timing.Following), each wait capped by one
+// message at the transport's bound crossing at the floor.
+//
 // # A pull allocates for what it receives, never for what it may
 //
 // The client library's fetches size their delivery channels by the BATCH a

@@ -41,21 +41,11 @@ import { useDraftState } from "~/app/assistant/draft.ts";
 import { useParam } from "~/app/router.tsx";
 import { DiffView, type DiffLine } from "~/components/DiffView.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
-import { WriteButton } from "~/components/WriteButton.tsx";
-import {
-  CATEGORY_CHOICES,
-  SEVERITY_CHOICES,
-  categoryWord,
-  changeLive,
-  findingStateWord,
-  severityWord,
-} from "~/lib/code.ts";
+import { CATEGORY_CHOICES, SEVERITY_CHOICES, changeLive, severityWord } from "~/lib/code.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { lineSide } from "~/lib/patch.ts";
 import { usePatchPages } from "~/lib/patchPages.ts";
 import { useReviewDrafts, type DraftFinding, type ReviewDrafts } from "~/lib/reviewDrafts.ts";
-import { useNow } from "~/lib/clock.ts";
-import { useAct } from "~/lib/useAct.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import { useDiffTokens } from "../syntax.tsx";
@@ -72,9 +62,8 @@ import { fmtCount, plural } from "~/lib/format.ts";
 import { DiffHead, FileTree } from "../FileTree.tsx";
 import { PatchPager } from "../PatchPager.tsx";
 import { repoHref } from "../paths.ts";
-import { Byline } from "../ui.tsx";
-import { ReplyComposer, Thread } from "./Conversation.tsx";
-import { FindingAnswer } from "./FindingAnswer.tsx";
+import { Thread } from "./Conversation.tsx";
+import { FindingCard } from "./Finding.tsx";
 import {
   changePartParams,
   partMovedBy,
@@ -398,13 +387,14 @@ function FileDiff({
       for (const p of placedHere) {
         if (p.finding.side === side && (p.place?.end ?? p.place?.start) === n) {
           drawn.push(
-            <FindingNote
+            <FindingCard
               key={p.finding.id}
               change={change}
               finding={p.finding}
               place={p.place}
               replies={repliesTo(p.finding.id)}
               applicable={rev === change.revision && since === null}
+              where="line"
             />,
           );
         }
@@ -457,13 +447,14 @@ function FileDiff({
         <Disclosure title={`${outdated.length + threadsElsewhere.length} outdated on this file`}>
           <Stack gap={2}>
             {outdated.map((p) => (
-              <FindingNote
+              <FindingCard
                 key={p.finding.id}
                 change={change}
                 finding={p.finding}
                 place={p.place}
                 replies={repliesTo(p.finding.id)}
                 applicable={false}
+                where="line"
               />
             ))}
             {threadsElsewhere.map((t) => (
@@ -533,97 +524,6 @@ function threadsOf(comments: readonly CodeCommentRow[]) {
     else threads.get(c.parent_id)?.replies.push(c);
   }
   return [...threads.values()].filter((t) => t.root.anchor);
-}
-
-/**
- * One finding, where its line is: its weight, its subject and its state, what
- * it says, the lines it suggests and — on the head, while it is open — the
- * press that applies them, and its replies with a reply of the reader's own.
- */
-function FindingNote({
-  change,
-  finding,
-  place,
-  replies,
-  applicable,
-}: {
-  change: CodeChangeDetail;
-  finding: CodeFindingRow;
-  place: CodeFindingPlace | undefined;
-  replies: readonly CodeCommentRow[];
-  applicable: boolean;
-}) {
-  const now = useNow();
-  const apply = useAct("code_apply_suggestions");
-  const where = place?.gone
-    ? "its file is gone from this revision"
-    : place?.outdated
-      ? "its lines changed since it was raised"
-      : !place
-        ? "not placed in this revision"
-        : null;
-  return (
-    <article className="code-finding" aria-label={`Finding: ${finding.title}`}>
-      <div className="code-finding__head">
-        {/* COLOUR IS STATE: a blocker holds the change back, which is the one
-            weight that is a state of the change rather than a word about it. */}
-        <Tag size="sm" variant={finding.severity === "blocker" ? "danger" : "neutral"}>
-          {severityWord(finding.severity)}
-        </Tag>
-        <Tag size="sm" appearance="outline">
-          {categoryWord(finding.category)}
-        </Tag>
-        <strong className="code-finding__title">{finding.title}</strong>
-        <span className="code-finding__by">
-          <Byline
-            who={finding.raiser}
-            verb={`raised it on revision ${finding.revision}`}
-            now={now}
-          />
-          <span className="muted">· {findingStateWord(finding.state)}</span>
-        </span>
-      </div>
-      {where && (
-        <p className="muted mono">
-          {finding.path}:{finding.line_start}
-          {finding.line_end !== finding.line_start ? `–${finding.line_end}` : ""} · {where}
-        </p>
-      )}
-      {finding.body && <div className="prose md">{renderMarkdown(finding.body)}</div>}
-      {finding.suggestion !== undefined && (
-        <>
-          <pre className="code-suggestion mono">{finding.suggestion}</pre>
-          {applicable && finding.side === "new" && finding.state === "open" && (
-            <WriteButton
-              write={apply}
-              size="small"
-              variant="secondary"
-              onPress={() =>
-                void apply.run(
-                  { change: change.ref, findings: [finding.id], expected_head: change.head },
-                  { done: `Applied the suggestion of “${finding.title}”` },
-                )
-              }
-            >
-              Apply suggestion
-            </WriteButton>
-          )}
-        </>
-      )}
-      {replies.length > 0 && (
-        <ol className="code-thread__replies" aria-label="Replies">
-          {replies.map((c) => (
-            <li key={c.id} className="code-thread__reply">
-              <Byline who={c.author} at={c.at} now={now} />
-              <div className="prose md">{renderMarkdown(c.body)}</div>
-            </li>
-          ))}
-        </ol>
-      )}
-      <FindingAnswer change={change} finding={finding} />
-      <ReplyComposer change={change} target={{ finding: finding.id }} />
-    </article>
-  );
 }
 
 /** A drafted finding, marked as one, with the press that drops it. */

@@ -226,6 +226,19 @@ type embeddedServer struct {
 	// production. Set by this package's own tests and nothing else — see
 	// [readiness].
 	ready readiness
+	// tunnel is a leaf's way to the members, whose upstream socket its meter
+	// reads ([tunnel], [LinkMeter]); nil on a member. Started before the
+	// server and closed after it.
+	tunnel *tunnel
+}
+
+// linkMeter is the meter of this broker's link to the members: a leaf's
+// tunnel's, and nil on a member, which crosses no link.
+func (e *embeddedServer) linkMeter() *LinkMeter {
+	if e == nil || e.tunnel == nil {
+		return nil
+	}
+	return e.tunnel.meter
 }
 
 // readiness is the bound on the waits for the fleet to serve this broker:
@@ -742,6 +755,9 @@ func embeddedOptions(cfg Config, auth *brokerAuth) (*server.Options, string, err
 		opts.LeafNode.Host = cfg.LeafHost
 		opts.LeafNode.Port = cfg.LeafPort
 		opts.LeafNode.Advertise = cfg.LeafAdvertise
+		// A LEAF'S CONNECT CROSSES ITS LINK behind the member's INFO: see
+		// [leafHandshakeTerm].
+		opts.LeafNode.AuthTimeout = leafHandshakeTerm.Seconds()
 	}
 	var scratch string
 	if opts.StoreDir == "" {
@@ -927,8 +943,25 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 		}
 	}
 
+	// THE BROKER'S DEATH, made before anything that can declare it: the
+	// server's logger, and a leaf's tunnel — see [Death].
+	death := newDeath()
+	// A LEAF'S LINK TO THE MEMBERS DIALS THROUGH ITS TUNNEL, which is
+	// listening before the server is built from options naming it, and is
+	// closed only after the server has stopped — see [tunnel].
+	var tun *tunnel
+	if len(opts.LeafNode.Remotes) > 0 {
+		if tun, err = startTunnel(ctx, death); err != nil {
+			dirLock.Release()
+			removeScratch(scratch)
+			return nil, err
+		}
+		tun.proxy(opts.LeafNode.Remotes)
+	}
+
 	ns, err := server.NewServer(opts)
 	if err != nil {
+		tun.close()
 		dirLock.Release()
 		removeScratch(scratch)
 		return nil, fmt.Errorf("configure embedded server: %w", err)
@@ -941,7 +974,6 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	//
 	// AND IT IS HOW A FATALF REACHES THIS FUNCTION: the logger declares the
 	// broker's death, and the waits below end on it — see [Death].
-	death := newDeath()
 	ns.SetLoggerV2(newNATSLogger(cfg.ServerName, death), cfg.Debug, false, false)
 	// EVERYTHING READ OFF THE OPTIONS IS READ BEFORE Start: the server
 	// writes what it resolves — the ports it bound — back into these same
@@ -993,6 +1025,7 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	})
 	if err != nil {
 		shutdownAndClean(ns, started, scratch)
+		tun.close()
 		dirLock.Release()
 		return nil, err
 	}
@@ -1003,7 +1036,7 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	return &embeddedServer{
 		ns: ns, started: started, death: death,
 		scratch: scratch, dirLock: dirLock, clustered: clustered, leaf: leaf,
-		auth: auth,
+		auth: auth, tunnel: tun,
 	}, nil
 }
 
@@ -1532,8 +1565,13 @@ func (e *embeddedServer) connect(at watched) (*nats.Conn, error) {
 // writing. What it cannot cover is the one write [Server.Shutdown] says can
 // land after the server reports it has stopped — a consumer's state write
 // already in flight — which nats-server itself gives no way to wait for.
+//
+// A LEAF'S TUNNEL CLOSES AFTER ITS SERVER, which has closed the link through
+// it by then: closed first, the tunnel would cut a link the server still
+// held, and the server would dial it again into a listener that is gone.
 func (e *embeddedServer) shutdown() {
 	shutdownAndClean(e.ns, e.started, e.scratch)
+	e.tunnel.close()
 	e.dirLock.Release()
 }
 
@@ -1640,6 +1678,8 @@ func (e *embeddedServer) presentedKey() string {
 // CONNECT signs the member's nonce with the seed (server/leafnode.go, v2.15.1),
 // so what crosses the network is a public key and a signature. A userinfo would
 // be sent beside it, in clear.
+//
+// AND THE MEMBER'S FIRST WORDS WAITED FOR A REQUEST'S TERM ([leafHandshakeTerm]).
 func leafRemotes(urls []string, seed string) ([]*server.RemoteLeafOpts, error) {
 	parsed := make([]*url.URL, 0, len(urls))
 	for i, raw := range urls {
@@ -1651,14 +1691,45 @@ func leafRemotes(urls []string, seed string) ([]*server.RemoteLeafOpts, error) {
 		u.User = nil
 		parsed = append(parsed, u)
 	}
-	return []*server.RemoteLeafOpts{{URLs: parsed, Nkey: seed}}, nil
+	return []*server.RemoteLeafOpts{{URLs: parsed, Nkey: seed, FirstInfoTimeout: leafHandshakeTerm}}, nil
 }
+
+// leafHandshakeTerm bounds a leaf link's handshake, at both ends: how long a
+// leaf waits for the member's first words once its dial has connected
+// (nats-server's remote FirstInfoTimeout), and how long a member waits for a
+// leaf's CONNECT once it has taken the connection (its leaf listener's
+// AuthTimeout).
+//
+// A REQUEST'S TERM ([jsapi.RequestTerm]), each wait spanning the link's
+// crossings. The handshake is two round trips: the member's INFO and the
+// leaf's answering INFO, which settle the link's compression, then the
+// member's INFO again and the leaf's CONNECT. nats-server times the leaf's
+// wait over the first three of those crossings — it clears the deadline only
+// at the second INFO — and the member's over all four (measured at v2.15.2
+// behind a link lagging 1.5 s each way: the leaf's CONNECT left at 4.5 s and
+// arrived at 6). And once it has sent CONNECT the leaf gives the member's
+// answer a FIXED two seconds (leafnode.go's connectProcessTimeout, which no
+// option sets), so no leaf links across a round trip longer than that,
+// whatever these waits are: two such round trips are four seconds, inside a
+// term, and a term is the most either wait can use.
+//
+// LEFT TO nats-server, the leaf waits one second over three crossings and the
+// member two over four, so a leaf whose link dropped while other flows kept
+// its queue more than about a second deep, round trip, could not link again
+// for as long as they did. Behind a queue past nats-server's two seconds it
+// still cannot, and waits for the queue to drain (crewlet/crewlet#1035). What
+// the longer waits cost is a member that holds a connection that never says
+// CONNECT for five seconds rather than two, and a leaf that waits five on a
+// member that accepts and never says INFO, before its next attempt.
+const leafHandshakeTerm = jsapi.RequestTerm
 
 // dial opens a NATS connection to an external server with this package's own
 // reconnect policy, held to the transport's contract. The caller owns the
 // connection and must close it; at says where a close NATS makes for good is
 // recorded, and is the zero value where the caller is the one to notice — see
-// [watched].
+// [watched]. meter counts every socket the connection opens, its reconnects'
+// included, as the node's data link ([LinkMeter]); nil for a dial that is not
+// it.
 //
 // UNEXPORTED, because a caller outside this package reaches it through a
 // queue: [Queue.DialOwned] is how a subsystem gets a second connection with
@@ -1666,8 +1737,8 @@ func leafRemotes(urls []string, seed string) ([]*server.RemoteLeafOpts, error) {
 // already proved. An exported Dial beside it was kept for a caller that would
 // otherwise reimplement the option list, and none ever existed — it was code
 // with no caller, indistinguishable from code whose caller nobody had found.
-func dial(cfg Config, at watched) (*nats.Conn, error) {
-	opts, recorded, err := dialOptions(cfg)
+func dial(cfg Config, at watched, meter *LinkMeter) (*nats.Conn, error) {
+	opts, recorded, err := dialOptions(cfg, meter)
 	if err != nil {
 		return nil, err
 	}
@@ -1699,29 +1770,45 @@ func dial(cfg Config, at watched) (*nats.Conn, error) {
 
 // externalHandshake bounds each attempt to reach an EXTERNAL server, a phase
 // at a time: the TCP connect to a member — every address its name resolves
-// to together, each dialled with an equal share ([infoDialer]), after a
+// to together, each dialled with an equal share ([memberDialer]), after a
 // lookup bounded the same — and then the TLS handshake and INFO, CONNECT,
 // PING, PONG, which the client bounds with it.
 //
-// # Two seconds, and why the embedded member's budget does not transfer
+// # A request's term, and why the embedded member's budget does not transfer
 //
 // A connection to this process's own member takes the LISTENER budget
 // ([listenTimeout]), because that server has already answered
 // ReadyForConnections and a slow handshake there measures only the host's
-// contention. Nothing has answered for a remote one, and here the figure is
-// also how long the reconnect loop waits on each member of the pool: it tries
-// them in turn, and a member that silently drops packets — a partition, a host
-// that went away without closing anything — holds every attempt at it for
-// exactly this long before the next member is asked, however many addresses
-// its name resolves to: a name naming every pod of the cluster shares the
-// budget among them rather than taking it once for each. The coordination store
-// rides this connection, and an outage past the lease TTL (45 s by default)
-// hands this node's seats to a peer, so each second here is a second a node
-// with a healthy member in its pool spends not renewing them. Two seconds is
-// NATS's own figure for a remote server, and far above the handshake of a
-// reachable one; stated rather than inherited, so it is a decision a change
-// to either side has to read.
-const externalHandshake = 2 * time.Second
+// contention. Nothing has answered for a remote one, and the handshake
+// crosses the link: its SYN and SYN-ACK, and each line after them, queue at
+// the link's bottleneck like any other packet. Every request across a link
+// is sized to be answered within its term ([jsapi.RequestTerm]) behind what
+// that bottleneck may queue — up to four seconds of the link's rate across
+// its two directions together, and a round trip (crewlet/crewlet#1035) — so
+// a handshake is given the same term. Held to the two seconds it was, an
+// attempt across a link whose queue other flows kept deep failed every time,
+// and a node whose connection dropped there could never dial again while
+// they did.
+//
+// WHAT IT COSTS: it is also how long the reconnect loop waits on each member
+// of the pool, which it tries in turn. A member that silently drops packets —
+// a partition, a host that went away without closing anything — holds every
+// attempt at it for the dial's term before the next member is asked, however
+// many addresses its name resolves to (a name naming every pod of the cluster
+// shares the budget among them rather than taking it once for each); one that
+// takes the connection and never answers — a wedged process whose kernel
+// still completes the handshake — holds it for the handshake's term instead,
+// and one slow at both for both. So a pool of three with two such members
+// ahead of the live one reaches it ten seconds after a drop, and up to twenty
+// where both hang after accepting, where the two-second terms took four and
+// eight. The coordination store rides this connection, and an outage past the
+// lease TTL hands this node's seats to a peer: at the default 45 s that is far
+// off, but at the floor, 15 s renewed every 5 s, a drop just before a renewal
+// leaves 10 s, which two dead members ahead of the live one use up. A shorter
+// term would cut every attempt behind a deep queue instead, the link's
+// ordinary state at the floor, for a pool listing dead members; the deployment
+// guide says to list live ones at the floor lease.
+const externalHandshake = jsapi.RequestTerm
 
 // externalWriteDeadline is how long one socket Write of an external dial's
 // client may take before the client gives the connection up
@@ -1788,13 +1875,14 @@ var externalWriteDeadline = jsapi.Sending(
 // server with `verify: true` and a generated certificate chain — and would
 // then be testing that NATS honours its own documented option rather than
 // that this package passes it.
-func dialOptions(cfg Config) ([]nats.Option, *infoDialer, error) {
+func dialOptions(cfg Config, meter *LinkMeter) ([]nats.Option, *infoDialer, error) {
 	// THE CLIENT'S OWN DIALER'S BUDGET, kept: a custom one replaces it, and
 	// the client divides its Timeout among a name's addresses only for the
 	// dialer it builds. So the client skips its lookup and hands the
 	// member's name to the dialer, which resolves it and shares the same
-	// [externalHandshake] among its addresses: see [infoDialer].
-	recorded := newInfoDialer(externalHandshake)
+	// [externalHandshake] among its addresses: see [memberDialer]. Every
+	// socket it opens is the meter's ([infoDialer]).
+	recorded := newInfoDialer(externalHandshake, meter)
 	opts := []nats.Option{
 		nats.SetCustomDialer(recorded),
 		nats.SkipHostLookup(),

@@ -519,7 +519,7 @@ func TestAStartThatFailedOnALostConnectionCarriesTheCause(t *testing.T) {
 func TestAStartWaitsForTheCauseOfAConnectionAlreadyClosed(t *testing.T) {
 	t.Parallel()
 	srv := externaltest.Start(t, queue.MaxPayloadBytes)
-	nc, err := dial(Config{URL: srv.URL(), Token: externaltest.Token}, watched{})
+	nc, err := dial(Config{URL: srv.URL(), Token: externaltest.Token}, watched{}, nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
