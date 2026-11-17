@@ -536,6 +536,7 @@ function YamlDialog({ savedRevision, onClose }: { savedRevision: string; onClose
             plain
             wrap
             selectable
+            language="yaml"
             label="The company as YAML"
             code={state.text}
             maxHeight="var(--record-max)"

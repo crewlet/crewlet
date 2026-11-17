@@ -2688,6 +2688,8 @@ const (
 	// (6,802,790 bytes), 10,478 over main: 6644 KiB.
 	// The model alias versions and harness marks train, on kit 0.147.0: 6662.4 KiB
 	// (6,822,314 bytes), 10,692 over main: 6663 KiB.
+	// Chat receipts as marks, records coloured by kind and the coding harness marks, on kit
+	// 0.149.0: 6651.8 KiB, about 18.7 KiB over main: 6652 KiB.
 	treeBudget = 5<<20 + 1543<<10
 )
 
