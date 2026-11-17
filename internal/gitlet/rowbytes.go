@@ -1324,6 +1324,12 @@ func (p FindingPathRow) encodedBytes() int {
 		field("findings", intBytes(p.Findings), false)
 }
 
+// encodedBytes is the length of the mark's JSON encoding.
+func (r ViewedRow) encodedBytes() int {
+	return 2 + field("path_digest", stringBytes(r.PathDigest), true) +
+		field("file_digest", stringBytes(r.FileDigest), false) + field("at", timeBytes(r.At), false)
+}
+
 // encodedBytes is the length of the anchor's JSON encoding.
 func (a CommentAnchor) encodedBytes() int {
 	return 2 + field("revision", intBytes(a.Revision), true) +

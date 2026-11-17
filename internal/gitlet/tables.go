@@ -22,6 +22,11 @@ var ReproducibleTables = []string{
 	"code_repos", "code_names", "code_refs", "code_packs", "code_pushes",
 	"code_protections", "code_path_owners",
 
+	// A repository's viewed key, the 32 random bytes its persons' viewed marks digest each path and
+	// file under: written once by the viewed_key record on its own subject, and removed with the
+	// repository by its purge.
+	"code_viewed_keys",
+
 	// A repository's pushes by UTC day and quarter-hour and by pusher and UTC day: kept with
 	// code_pushes' rows by the applies and re-derived by the applier (apply_activity.go).
 	"code_push_days", "code_pusher_days",
@@ -106,6 +111,11 @@ var ReproducibleTables = []string{
 	// record's broker instant (marks.go): state a replay rebuilds like any
 	// other. Not a repository's, so no purge removes it.
 	"code_person_marks",
+
+	// The files a person marked viewed on a change, by keyed digests: written by the viewed records on
+	// their own subject alone (viewed.go). Not a repository's, so no purge removes them; its purge
+	// deletes the key, after which they name no file once the log is trimmed past the key's record.
+	"code_viewed_files",
 
 	// The activation fence: the configuration activation every
 	// config-managed record is held to.

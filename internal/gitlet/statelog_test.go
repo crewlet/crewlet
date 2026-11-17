@@ -59,7 +59,9 @@ var suiteAt = time.Unix(1_700_000_000, 0).UTC()
 // write made for the person's seat founder — a routing's beside its agent
 // actor on a dequeue, a push entry's routing's on the change the push merges,
 // an enqueue's own, and a seat's push entry's own; or a revise on its change's
-// subject carrying one of gitlet.OwnedPathsVersion's fields alone.
+// subject carrying one of gitlet.OwnedPathsVersion's fields alone. A new op's
+// row is a record of it: founder's viewed marks on their own subject, and a
+// repository's viewed key on its own.
 func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 	const repo = "0190f3c4-0000-7000-8000-00000000c0de"
 	founder := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}
@@ -84,6 +86,8 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		op      gitlet.OpKind
 		payload any
 	)
+	subject, scope := gitlet.RepoSubject(repo), gitlet.Scope{gitlet.RepoPath(repo)}
+	actor, actorKind, operatorID := "suite-node", gitlet.ActorSystem, ""
 	switch field.Name {
 	case "ChangeRouting.WorkingFor":
 		r := routing(founder)
@@ -114,11 +118,20 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		// the one field, the record is stamped by its own path.
 		revise.Asked = []gitlet.OwnerAsk{{Reviewer: lead, PathsOmitted: 1}}
 		op, payload = gitlet.OpRevise, revise
+	case "RecordEnvelope.Op viewed":
+		key := gitlet.ViewedKey(strings.Repeat("ab", gitlet.ViewedKeyBytes))
+		op, payload = gitlet.OpViewed, gitlet.ViewedMarks{Handle: "founder",
+			ChangeID: "0190f3c4-0000-7000-8000-0000000000c1", Viewed: []gitlet.ViewedMark{{
+				PathDigest: key.PathDigest("a.go"), FileDigest: key.FileDigest("a.go", oidOf("B"), "100644")}}}
+		subject, scope = gitlet.PersonSubject("founder"), gitlet.Scope{gitlet.ViewedPath("founder")}
+		actor, actorKind, operatorID = "founder", gitlet.ActorOperator, "pat:ada"
+	case "RecordEnvelope.Op viewed_key":
+		op, payload = gitlet.OpViewedKey, gitlet.ViewedKeyRecord{RepoID: repo,
+			Key: gitlet.ViewedKey(strings.Repeat("ab", gitlet.ViewedKeyBytes))}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}
 	// A revise is on its change's subject, scoped to the repository and the change, as the writer's is.
-	subject, scope := gitlet.RepoSubject(repo), gitlet.Scope{gitlet.RepoPath(repo)}
 	if op == gitlet.OpRevise {
 		subject, scope = gitlet.ChangeSubject(change), gitlet.Scope{gitlet.RepoPath(repo), gitlet.ChangePath(change)}
 	}
@@ -131,7 +144,7 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 			OpID: "suite-carrying", Subject: subject, Op: op, CreatedAt: suiteAt,
 			Gen: 1, Writer: "suite-node", Scope: scope,
 		},
-		Mutation: body, Actor: "suite-node", ActorKind: gitlet.ActorSystem,
+		Mutation: body, Actor: actor, ActorKind: actorKind, OperatorID: operatorID,
 	})
 }
 
