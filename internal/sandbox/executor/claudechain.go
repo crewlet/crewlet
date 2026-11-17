@@ -580,8 +580,9 @@ const chainPrefixBytes = 10
 // So the chain judges, of every thread whatever its size, whether it is
 // PATH-FREE ([threadChain.AnySize]): whether every one of those readers, of
 // either release, hands the load what its small path does. It judges on the
-// decode and on bytes held to it, conservatively, so only fewer threads are
-// path-free than the readers allow. A thread is path-free where:
+// decode and on what each line's bytes say as they stream past
+// ([threadBytes]), conservatively, so only fewer threads are path-free than
+// the readers allow. A thread is path-free where:
 //
 //   - no record is a compaction's boundary, at which the dispatch forgets the
 //     slots before it and indexes those after it otherwise, and from which
