@@ -87,6 +87,8 @@ test("a pin on a board asks its page for the picture at the board's pixels, whic
   expect(value.startDraft).toHaveBeenCalledWith(
     expect.objectContaining({ anchor: { kind: "design", board: BOARD.id, x: 30, y: 700 } }),
   );
+  // BESIDE ITS PIN, a panel drawn over the canvas makes way for the draft.
+  expect(value.stepAside).toHaveBeenCalled();
   expect(said.find((m) => "capture" in m)).toMatchObject({
     capture: { view: { x: 30, y: 700 } },
   });

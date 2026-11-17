@@ -2773,6 +2773,13 @@ bar drops the navigation toggle (the kit draws none without a sidebar) and
 Open in new tab, and its way back leads to the gallery rather than a folder,
 since the tab was opened beside the dashboard rather than from a place in it.
 
+**A comment's draft stands beside its pin**, in the kit's `Popover` with
+`side="right"` and `height="layer"`: on the pin's right, on its left where only
+that side has room, below or above where neither has, and never past the
+frame. Its picture is fitted whole in a well of one height, whether it is
+being drawn, shown or could not be drawn. On a phone it is written in the
+Comments panel.
+
 ### Asking an agent from a create page is a panel, not a mode
 
 Every kind's create page is the artifact being made: a doc's page, a deck's
