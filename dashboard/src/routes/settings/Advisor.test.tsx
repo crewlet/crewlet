@@ -94,6 +94,17 @@ const ENGINE: AdvisorFinding = {
   fix: { kind: "none", sentence: "The engine is reducing this.", options: [] },
 };
 
+/** The analyst, off: what a company that names no model for it reads. */
+const ANALYST_OFF = {
+  on: false,
+  cadence: "daily",
+  hour: 6,
+  ceiling: 200000,
+  stale: false,
+  findings: [],
+  set_aside: 0,
+};
+
 const SRE = { name: "SRE", handle: "sre", llm: "default" };
 const VALID = { kind: "valid", baseRevisionId: "r1", warnings: [], derived: null };
 
@@ -136,7 +147,15 @@ async function mount(
   const store = new Store();
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
-    Promise.resolve(what === "viewer" ? ADMIN_VIEWER : what === "go_live_review" ? review : answer);
+    Promise.resolve(
+      what === "viewer"
+        ? ADMIN_VIEWER
+        : what === "go_live_review"
+          ? review
+          : what === "advisor_analysis"
+            ? ANALYST_OFF
+            : answer,
+    );
   render(
     <ClientContext.Provider value={{ store, socket }}>
       <SessionReading>

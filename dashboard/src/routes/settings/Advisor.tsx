@@ -29,6 +29,7 @@ import {
 } from "@crewlethq/ui";
 import { FixDialog } from "~/components/advisorFix.tsx";
 import { GoLiveReview } from "./GoLiveReview.tsx";
+import { AdvisorAnalyst } from "./AdvisorAnalyst.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useAssistantControl, type AssistantControl } from "~/app/assistant/control.ts";
 import { ChunkRegion, lazyScreen } from "~/app/lazyScreen.ts";
@@ -118,6 +119,7 @@ export function Advisor() {
           />
         )}
       </QueryState>
+      <AdvisorAnalyst />
       {open?.fix.kind === "atlas_act" && (
         <ChunkRegion resetKey={open.class + open.path}>
           <Suspense fallback={null}>
@@ -355,7 +357,7 @@ function groupItem(
 }
 
 /** One finding as a row of the list: what is wrong, why, and its one action. */
-function findingItem(
+export function findingItem(
   f: AdvisorFinding,
   review: (() => void) | null,
   assistant: AssistantControl | null,
