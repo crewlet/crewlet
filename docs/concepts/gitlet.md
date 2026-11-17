@@ -2111,6 +2111,10 @@ grant reads and costs the same however many changes the company holds. A
 build that changes how they are counted recounts them from the changes at
 its first boot, on every data node.
 
+The `queue` part counts the live entries, waiting or testing, of the scope's
+merge queues. It is counted when read, at most 10 000 entries, and says when
+it stopped there.
+
 A deleted repository's changes leave the company's count, and a restore
 brings them back under the owner it returns with. A count is exact at the
 position it is read at, so a `session` read after a write includes it. A
@@ -7636,6 +7640,26 @@ so a rising share of `bisected` is changes queued red; and
 `crewlet.code.queue.ejected` counts what it put out, by reason.
 `crewlet.code.queue.round.duration` is each landed round, timed from the
 same two instants the alarm prices a round at.
+
+#### Reading every queue at once
+
+A queue read names each entry's change by its number, title and source
+branch, and only for the repositories the reader may read.
+
+Naming no repository, a read with `trains=true` also answers the trains
+testing the branches its page reaches, and, on its first page, what every
+queue the reader may read put out in the last day: the newest 50, and their
+total, counted up to 10 000 and marked as a floor past that. Past that bound
+the newest 50 are taken from the ejections counted, so the rows and the total
+cover the same ejections. A read of one
+repository answers its trains and ejections unasked, and `trains=true` adds
+their total. Each ejection says how its entry was to land, its merge method
+and whether it deletes its source branch and closes its work item, which is
+what a re-queue sends again.
+
+A data node of a build that does not read `trains` refuses the read unread,
+and another node answers it, so no answer leaves the trains out silently
+([`GET /gitlet/queue`](../reference/api-endpoints.md#merge-queues-and-checks)).
 
 ### Tip checks and code_green
 

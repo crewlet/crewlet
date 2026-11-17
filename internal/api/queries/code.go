@@ -345,6 +345,10 @@ func codeReadQuery(kind gitlet.ReadKind, asker gitlet.Principal, p Params) (gitl
 	if q.Cards, err = askedFor(p, "cards"); err != nil {
 		return gitlet.ReadQuery{}, err
 	}
+	// EVERY REPOSITORY'S TRAINS AND EJECTIONS on a queue read are asked, `trains=true`; the reader refuses them on any other read.
+	if q.Trains, err = askedFor(p, "trains"); err != nil {
+		return gitlet.ReadQuery{}, err
+	}
 	for v := range strings.SplitSeq(p.String("status"), ",") {
 		if v = strings.TrimSpace(v); v == "" {
 			continue

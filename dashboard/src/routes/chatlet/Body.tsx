@@ -53,7 +53,7 @@ export interface MessageBodyProps {
   nameOf: (handle: string) => string;
   /** A named person or agent, pressed: their profile. */
   onPerson?: (handle: string) => void;
-  /** Drawn at the end of the last line: "(edited)". */
+  /** Drawn at the end of the last line, a word of it: "(edited)", a delivery receipt. */
   after?: ReactNode;
 }
 
@@ -108,7 +108,12 @@ export function MessageBody({ message, viewer, nameOf, onPerson, after }: Messag
         ...CHAT_WORDS,
         prose: mentionProse(message, viewer, nameOf, onPerson),
       })}
-      {after ? <span className="chat-body-after">{after}</span> : null}
+      {after ? (
+        <>
+          {" "}
+          <span className="chat-body-after">{after}</span>
+        </>
+      ) : null}
     </Prose>
   );
 }

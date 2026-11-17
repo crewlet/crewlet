@@ -71,6 +71,8 @@ type Reader struct {
 	spokenScanned int
 	// standingCounted bounds a standing count's places a state: MaxStandingCounted, or a test's.
 	standingCounted int
+	// queueCounted bounds a queue read's and a counts read's walks: MaxQueueCounted, or a test's.
+	queueCounted int
 }
 
 // ReaderOptions configure a reader.
@@ -117,6 +119,7 @@ func NewReader(o ReaderOptions) (*Reader, error) {
 		r.now = time.Now
 	}
 	r.reposSized, r.lastPushWalk = MaxReposSized, MaxLastPushWalk
+	r.queueCounted = MaxQueueCounted
 	return r, nil
 }
 
@@ -1959,7 +1962,7 @@ func (q ReadQuery) validate() error {
 }
 
 // kindOwnedField refuses a field that one kind a principal reads alone reads
-// (a commit, an inbox, an inbox page's cards, a history page's commits, the
+// (a commit, a queue read's trains, an inbox, an inbox page's cards, a history page's commits, the
 // narrowing of a listing of repositories to the ones a rule protects, the
 // parts a counts read names, a repository's facts, a listing of changes'
 // order, a change's findings by path, a change's viewed files) on a read of
@@ -2007,6 +2010,8 @@ func (q ReadQuery) kindOwnedField() error {
 	case q.RepoSort != "" && q.Kind != ReadRepos:
 		return fmt.Errorf("%w: repo_sort: only a listing of repositories is ordered by name or last push",
 			ErrInvalid)
+	case q.Trains && q.Kind != ReadQueue:
+		return fmt.Errorf("%w: trains: only a queue read answers its trains and ejections", ErrInvalid)
 	}
 	return nil
 }
