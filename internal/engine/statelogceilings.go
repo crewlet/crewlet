@@ -79,16 +79,16 @@ func (c domainCeiling) scaleFloor() int64 {
 
 // StreamBudgetShare is how much of what the broker can grant the state logs
 // their ceilings may reserve between them, existing streams' ceilings included.
-//
-// AT MOST TWO THIRDS: the same broker holds the mailboxes, the coordination
-// buckets and the join snapshot, which reserve nothing, so what the logs leave
-// must cover at least the `nats` object bucket's quarter ([objectsBucketShare]),
-// taken of the limit first. AT LEAST 0.593: a re-embedding puts the whole corpus
-// in the vector changelog's window (8.46 GB at the reference company's fifth
-// year), which must fit beside the other logs' asks on a 64 GiB volume
-// (TestTheVectorChangelogIsCreatedToHoldAModelChange, which fails when a newly
-// registered log moves the bound). Five eighths is the smallest eighth past it
-// (docs/guides/replication.md, "What the code log's reservation costs").
+// AT MOST TWO THIRDS: the mailboxes, coordination buckets and join snapshot on
+// the same broker reserve nothing, so what the logs leave must cover the `nats`
+// object bucket's quarter ([objectsBucketShare]), taken of the limit first. AT
+// LEAST 0.593: a re-embedding puts the whole corpus in the vector changelog's
+// window (8.46 GB at the reference company's fifth year), which must fit beside
+// the other logs' asks on a 64 GiB volume (a newly registered log moves the
+// bound: TestTheVectorChangelogIsCreatedToHoldAModelChange). Five eighths is the
+// smallest eighth past it; under the default `nats` bucket the same re-embedding
+// fits from about 88 GiB free (docs/guides/replication.md, "What the code log's
+// reservation costs").
 const StreamBudgetShare = 0.625
 
 // MinDomainCeiling is the floor a scaled-down ceiling never goes below, unless
