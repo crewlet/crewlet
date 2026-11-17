@@ -19,7 +19,7 @@
 import "~/styles/gitlet.css";
 
 import type { ComponentType, ReactNode } from "react";
-import { Button, Copyable, InlineCode, Popover, Spinner, Tag } from "@crewlethq/ui";
+import { Button, Copyable, InlineCode, Popover, Spinner, Tag, VisuallyHidden } from "@crewlethq/ui";
 import { ProductMark } from "@crewlethq/icons/product-mark";
 import {
   BookOpenGlyph,
@@ -295,16 +295,18 @@ const ROLLUP_LOOK: Readonly<
 
 /**
  * Where a commit's checks stand: a glyph and a word, toned by the rollup's state.
- * `of` adds the required count to a pass: "Passed 2 of 2".
+ * `of` adds the required count to a pass: "Passed 2 of 2"; `bare` draws the glyph alone.
  */
 export function CheckRollupMark({
   rollup,
   title,
   of = false,
+  bare = false,
 }: {
   rollup: CodeCheckRollup;
   title: string;
   of?: boolean;
+  bare?: boolean;
 }) {
   const look = ROLLUP_LOOK[rollup.state];
   const Glyph = look?.glyph;
@@ -315,10 +317,14 @@ export function CheckRollupMark({
   return (
     <span className="code-check-mark" data-tone={look?.tone ?? "neutral"} title={title}>
       {Glyph === "spinner" ? <Spinner size="sm" /> : Glyph && <Glyph size="sm" aria-hidden />}
-      <span className="code-check-mark__word">
-        {rollupWord(rollup)}
-        {count}
-      </span>
+      {bare ? (
+        <VisuallyHidden>{rollupWord(rollup)}</VisuallyHidden>
+      ) : (
+        <span className="code-check-mark__word">
+          {rollupWord(rollup)}
+          {count}
+        </span>
+      )}
     </span>
   );
 }

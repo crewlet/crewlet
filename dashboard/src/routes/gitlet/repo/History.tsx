@@ -360,23 +360,32 @@ export function provenanceOf(
 /** How many parents a commit has, or null where the page says neither. */
 const parentsOf = (c: CodeLogCommit): number | null => c.parent_count ?? c.parents?.length ?? null;
 
+/** The landing whose merge commit this is, as the commit's marks name it. */
+const landingOf = (c: CodeLogCommit, mark: CodeCommitMark | null | undefined) =>
+  mark?.merged?.find((m) => m.merge_oid === c.oid);
+
 /** Gitlet wrote this merge commit: two parents or more, brought by a merge or a queue landing. */
-export function gitletWrote(c: CodeLogCommit, by: CodePushedBy | undefined): boolean {
-  const merged = by?.via === "merge" || by?.via === "queue";
+export function gitletWrote(
+  c: CodeLogCommit,
+  by: CodePushedBy | undefined,
+  mark?: CodeCommitMark | null,
+): boolean {
+  const merged = by?.via === "merge" || by?.via === "queue" || landingOf(c, mark) !== undefined;
   return merged && (parentsOf(c) ?? 0) >= 2 && c.engine_committed !== false;
 }
 
 /** The merge chip's title: which change Gitlet merged or landed, and for whom. */
-function mergeTitle(
+export function mergeTitle(
   c: CodeLogCommit,
-  by: CodePushedBy,
+  by: CodePushedBy | undefined,
   mark: CodeCommitMark | null | undefined,
   whoName: (who: Who) => string,
 ): string {
-  const pusher = by.principal.seat ?? by.principal.operator_id ?? "";
+  const landing = landingOf(c, mark);
+  const pusher = by?.principal.seat ?? by?.principal.operator_id ?? landing?.merged_by ?? "";
   const who = pusher ? whoName(pusher) : "a person";
   const change = mark?.merged?.[0]?.ref ?? mark?.heads?.[0]?.change.ref ?? "a change";
-  if (by.via === "queue") {
+  if ((by?.via ?? (landing?.merged_via === "queue" ? "queue" : "merge")) === "queue") {
     return `Gitlet wrote this commit when ${change} landed from the merge queue, queued by ${who}`;
   }
   const what = (parentsOf(c) ?? 0) >= 2 ? "merge commit" : "commit";
