@@ -256,7 +256,10 @@ func TestAQueuesEjectionsAreBoundedAndCounted(t *testing.T) {
 		t.Fatalf("a read of every repository answered %d ejections, want the newest %d", len(got.Ejected),
 			gitlet.MaxEjectionsShown)
 	}
-	if !slices.IsSortedFunc(got.Ejected, func(a, b gitlet.EjectedRow) int { return b.EjectedAt.Compare(a.EjectedAt) }) ||
+	newestFirst := func(a, b gitlet.EjectedRow) int {
+		return b.EjectedAt.Compare(a.EjectedAt) //fixedwait:stated the rows' recorded instants, no clock's
+	}
+	if !slices.IsSortedFunc(got.Ejected, newestFirst) ||
 		!got.Ejected[0].EjectedAt.Equal(harnessAt.Add(-time.Minute)) {
 		t.Errorf("the ejections are not the newest first, from a minute ago: first %s", got.Ejected[0].EjectedAt)
 	}
