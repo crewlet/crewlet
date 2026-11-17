@@ -629,12 +629,15 @@ func TestTheQueueLandsTheLongestGreenPrefix(t *testing.T) {
 // queued the failed check for the bisect; it passing, the next probe is
 // midway between it and the tip; that one failing, it is the first red
 // commit after the last good one, and its entry — the culprit, alone — is
-// ejected check_failed naming the check. The eject abandons the train, and the
-// next turn builds the three others onto main again, the culprit out.
+// ejected check_failed naming the check and the train it failed on: the
+// candidate, its base and the culprit's own commit, not the tip. The eject
+// abandons the train, and the next turn builds the three others onto main
+// again, the culprit out.
 //
 // Mutation: probe the tip rather than midway → the first probe is the failed
 // tip, red; eject the red commit's successor (or the whole batch) → red;
-// keep the ejected entry in the rebuilt chain → red.
+// keep the ejected entry in the rebuilt chain → red; name the candidate's tip
+// as the commit the checks failed on → red.
 func TestARedBatchIsBisected(t *testing.T) {
 	t.Parallel()
 	base := oid("b")
@@ -675,6 +678,10 @@ func TestARedBatchIsBisected(t *testing.T) {
 		t.Fatalf("the bisect ended in %+v, want entry 3 alone ejected check_failed naming unit",
 			records[len(records)-1])
 	}
+	want := gitlet.EjectionTrain{CandidateID: train[0].CandidateID, BaseOID: base, CommitOID: commits[2].Commit}
+	if got := eject.Entries[0].TestedIn; got == nil || *got != want {
+		t.Fatalf("the culprit's ejection names the train %+v, want %+v: entry 3's commit, not the tip", got, want)
+	}
 	if train, _ := rows.snapshot(); len(train) != 0 {
 		t.Fatalf("the culprit's eject left the train %+v standing", train)
 	}
@@ -686,6 +693,35 @@ func TestARedBatchIsBisected(t *testing.T) {
 			return c.EntryID == entries[2].EntryID
 		}) {
 		t.Fatalf("the train rebuilt after the eject is %+v, want the three others onto main", train)
+	}
+}
+
+// A LONE CULPRIT NAMES ITS OWN COMMIT: a candidate of one change whose tip fails is its own
+// culprit, no probe run, ejected check_failed naming the train it failed on, the candidate's
+// tip its commit.
+//
+// Mutation: eject the culprit naming no train (bisect's TestedIn left out) → red.
+func TestALoneCulpritsEjectionNamesItsTip(t *testing.T) {
+	t.Parallel()
+	base := oid("e")
+	rows := newQueueRows(base, 1, 1)
+	entries := rows.enqueue(t, 1)
+	l := queueLoop(t, rows, &queueChains{}, &queueTasks{})
+
+	turn(t, l, rows)
+	train, _ := rows.snapshot()
+	if len(train) != 1 || len(train[0].Commits) != 1 {
+		t.Fatalf("one change at depth 1 and batch 1 is %+v, want one candidate of one", train)
+	}
+	rows.ended(train[0].TipOID, "unit", gitlet.CheckStateFailed)
+	turn(t, l, rows)
+	records, queued := rows.asked()
+	eject := records[len(records)-1].Eject
+	want := gitlet.EjectionTrain{CandidateID: train[0].CandidateID, BaseOID: base, CommitOID: train[0].TipOID}
+	if len(queued) != 0 || eject == nil || len(eject.Entries) != 1 || eject.Entries[0].EntryID != entries[0].EntryID ||
+		eject.Entries[0].TestedIn == nil || *eject.Entries[0].TestedIn != want {
+		t.Fatalf("a lone red candidate queued %d checks and recorded %+v, want its entry ejected naming %+v and "+
+			"no probe", len(queued), records[len(records)-1], want)
 	}
 }
 
@@ -954,7 +990,7 @@ func TestTheQueueEjectsAnUnbuildableEntryAndKeepsTheUnreached(t *testing.T) {
 // gate no longer met, the third's head moved — ejects each for its own
 // refusal. And a train whose BASE's checks file defines the required check in
 // no form that runs can never be green, so its entries are ejected
-// `check_failed` naming the check, and nothing is queued on any tip.
+// `check_failed` naming the check and no train, and nothing is queued on any tip.
 //
 // Mutation: leave a conflicting merge unejected → no eject, red; eject
 // nothing a landing refuses head_moved → red; answer an undefined required
@@ -1090,10 +1126,12 @@ func TestTheQueueEjectsWhatItCannotLand(t *testing.T) {
 	if len(queued) != 0 || eject == nil || len(eject.Entries) != 2 || eject.Entries[0].EntryID != left[0].EntryID ||
 		eject.Entries[1].EntryID != left[1].EntryID ||
 		slices.ContainsFunc(eject.Entries, func(x gitlet.Ejection) bool {
-			return x.Reason != gitlet.EjectCheckFailed || !slices.Equal(x.Checks, []string{"unit"})
+			return x.Reason != gitlet.EjectCheckFailed || !slices.Equal(x.Checks, []string{"unit"}) ||
+				x.TestedIn != nil
 		}) {
 		t.Fatalf("a train whose base defines no unit queued %+v and recorded %+v, want nothing queued and "+
-			"both entries ejected check_failed naming unit", queued, records[len(records)-1])
+			"both entries ejected check_failed naming unit and no train, since nothing ran", queued,
+			records[len(records)-1])
 	}
 }
 

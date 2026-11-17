@@ -159,13 +159,13 @@
 // node builds ([Chains]) and one candidate record; a standing train's tips
 // queued the required checks the train's BASE defines; its longest green
 // prefix LANDED in one land record; a red first candidate BISECTED over its
-// entries' commits and its culprit ejected. Nothing of a train lives in the
-// worker: a home that takes a repository over resumes its queue from the
-// rows. Each landed entry that asked it has its work item closed as its
-// enqueuer, for whom its enqueue was made as the entry's row keeps it
-// ([TaskClose.WorkingFor]), through [Tasks] — the engine's tracker, which this
-// package does not import, and which decides the close within that
-// requester's apps. queue.go has the rules of each step.
+// entries' commits and its culprit ejected naming the train it failed on.
+// Nothing of a train lives in the worker: a home that takes a repository over
+// resumes its queue from the rows. Each landed entry that asked it has its
+// work item closed as its enqueuer, for whom its enqueue was made as the
+// entry's row keeps it ([TaskClose.WorkingFor]), through [Tasks] — the
+// engine's tracker, which this package does not import, and which decides the
+// close within that requester's apps. queue.go has the rules of each step.
 //
 // # Merge previews, beside the loop
 //

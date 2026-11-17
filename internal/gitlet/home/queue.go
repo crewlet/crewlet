@@ -742,7 +742,8 @@ func (w *queue) settle(ctx context.Context, repoID string, closes []gitlet.Settl
 //     the train's base, before the first, where none did: the base is the
 //     target's tip, which its queue landed green;
 //   - adjacent, red's entry is the culprit, EJECTED check_failed naming the
-//     checks that failed on it;
+//     checks that failed on it and the train they failed on: the candidate,
+//     its base and red's commit;
 //   - otherwise the commit midway between them is PROBED (purpose bisect).
 //
 // A probe still running, or one ended in a way only a person's rerun moves,
@@ -766,7 +767,8 @@ func (w *queue) bisect(ctx context.Context, repoID string, d gitlet.QueueDue, fa
 	}
 	if red == good+1 {
 		culprit := c.Commits[red]
-		x := gitlet.Ejection{EntryID: culprit.EntryID, Reason: gitlet.EjectCheckFailed}
+		x := gitlet.Ejection{EntryID: culprit.EntryID, Reason: gitlet.EjectCheckFailed,
+			TestedIn: &gitlet.EjectionTrain{CandidateID: c.CandidateID, BaseOID: c.BaseOID, CommitOID: culprit.Commit}}
 		for _, name := range failed {
 			if held, ok := culprit.Check(name); ok && held.State == gitlet.CheckStateFailed {
 				x.Checks = append(x.Checks, name)
