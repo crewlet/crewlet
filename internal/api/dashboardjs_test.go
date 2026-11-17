@@ -2683,7 +2683,8 @@ const (
 	// 6631.3 KiB (6,790,461 bytes), 12,721 over main: 6632 KiB.
 	// A comment's draft beside its pin, its picture fitted in a well, on kit 0.146.0: 6633.1 KiB
 	// (6,792,312 bytes), 1,851 over main: 6634 KiB.
-	treeBudget = 5<<20 + 1514<<10
+	// A repository's branches and tags as tables, on kit 0.146.0: 6652.0 KiB (6,811,622 bytes), 19,310 over main: 6652 KiB.
+	treeBudget = 5<<20 + 1532<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
