@@ -3778,3 +3778,14 @@
   gap: 2px;
   color: var(--color-text-secondary);
 }
+
+/* A DRAFTED FINDING: the reader's own, dashed until a review sends it. */
+.code-finding[data-draft] {
+  border-style: dashed;
+  background: var(--color-surface-subtle);
+}
+
+.code-finding__aside {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}

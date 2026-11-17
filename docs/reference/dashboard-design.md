@@ -8797,7 +8797,7 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   **Files changed** is the revision's files (`rev=`, the
   head by default; `since=` reads what changed since an earlier revision, the
   engine's interdiff), a page at a time — **Load more files** asks the page
-  after from the cursor the last one ended at — every file of the revision as
+  after from the cursor the last one ended at; every file of the revision as
   one STACK, each under a head that sticks below the files' toolbar, read by
   the engine's walk of every patch a page at a time as the reader reaches it, a
   file jumped to read alone, and a file past 400 changed lines folded until
@@ -8814,7 +8814,7 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   marked; each file's patch as git wrote it, under its head (its path, what
   became of it, its counts and a menu with the way to the file at the
   revision's head), in its own `DiffView`, drawn `layout=unified` or `split`
-  (or one file alone split from its menu) — a patch read alone
+  (or one file alone split from its menu), a patch read alone
   past one answer a page at a time, **Load more lines** asking the page
   after from the cursor the last one ended at, and the hunks drawn from every
   page read (`lib/patchPages.ts`); every finding
@@ -8833,7 +8833,8 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   (`FINDING_SEVERITIES`, `FINDING_CATEGORIES`, held to `gitlet.Severities` and
   `gitlet.Categories`), a title, a body and, on the newer side, the lines it
   suggests in their place — and a draft is the TAB'S, kept in
-  `sessionStorage` per change and revision, until **Approve**, **Request
+  `sessionStorage` per change and revision, a dashed card a reviewer edits in
+  place or drops, until **Approve**, **Request
   changes** or **Comment** (the page bar's Review, or **Finish review**, the
   tab's one primary, counting the drafts) sends every draft of the head in ONE
   `code_review_change` with the verdict, a summary and the reviewer's own

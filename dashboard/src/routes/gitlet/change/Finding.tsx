@@ -49,7 +49,7 @@ import { refusedWords } from "./reads.ts";
 import "~/styles/gitlet.css";
 
 /** Each category's glyph; a word the dashboard does not know draws none. */
-const CATEGORY_GLYPHS: Readonly<Record<string, ComponentType<GlyphProps>>> = {
+export const CATEGORY_GLYPHS: Readonly<Record<string, ComponentType<GlyphProps>>> = {
   correctness: TargetGlyph,
   security: ShieldGlyph,
   performance: GaugeGlyph,
@@ -79,14 +79,17 @@ export const NOT_AUTHOR_RESOLVE = "A finding is resolved by an author of the cha
 export type ExcerptRead = CodeExcerpt | "refused" | "reading" | "missing" | { failed: string };
 
 /** "line 19", or "lines 19 to 21". */
-function linesWord(f: Pick<CodeFindingRow, "line_start" | "line_end">): string {
+export function linesWord(f: Pick<CodeFindingRow, "line_start" | "line_end">): string {
   return f.line_start === f.line_end
     ? `line ${f.line_start}`
     : `lines ${f.line_start} to ${f.line_end}`;
 }
 
 /** Whether a line is one of the finding's own, on the side it is about. */
-export function ownLine(f: CodeFindingRow, line: DiffLine): boolean {
+export function ownLine(
+  f: Pick<CodeFindingRow, "side" | "line_start" | "line_end">,
+  line: DiffLine,
+): boolean {
   const n = f.side === "old" ? line.before : line.after;
   if (f.side === "old" && line.kind === "add") return false;
   if (f.side !== "old" && line.kind === "remove") return false;
@@ -108,7 +111,10 @@ function excerptHunks(excerpt: CodeExcerpt): DiffHunk[] {
 }
 
 /** The suggestion as one hunk: the finding's own lines removed, the suggested ones added. */
-function suggestionHunks(f: CodeFindingRow, own: readonly DiffLine[]): DiffHunk[] {
+function suggestionHunks(
+  f: Pick<CodeFindingRow, "side" | "line_start" | "suggestion">,
+  own: readonly DiffLine[],
+): DiffHunk[] {
   // A TRAILING NEWLINE ends the last line rather than adding an empty one.
   const added = f.suggestion ? f.suggestion.replace(/\n$/, "").split("\n") : [];
   const lines: DiffLine[] = [
@@ -167,7 +173,13 @@ function Excerpt({ finding, excerpt }: { finding: CodeFindingRow; excerpt: CodeE
 }
 
 /** What the finding suggests in place of its lines, as a small diff. */
-function Suggestion({ finding, own }: { finding: CodeFindingRow; own: readonly DiffLine[] }) {
+export function Suggestion({
+  finding,
+  own,
+}: {
+  finding: Pick<CodeFindingRow, "path" | "side" | "line_start" | "line_end" | "suggestion">;
+  own: readonly DiffLine[];
+}) {
   const hunks = useMemo(() => suggestionHunks(finding, own), [finding, own]);
   const tokens = useHunkTokens(finding.path, hunks);
   const removing = finding.suggestion === "";

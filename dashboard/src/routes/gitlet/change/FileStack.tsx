@@ -34,6 +34,7 @@ import {
   Columns2Glyph,
   CopyGlyph,
   EllipsisVerticalGlyph,
+  PencilGlyph,
   Rows2Glyph,
   UnfoldVerticalGlyph,
 } from "@crewlethq/icons/glyphs";
@@ -47,7 +48,14 @@ import {
   type DiffLine,
 } from "~/components/DiffView.tsx";
 import { PageFailed } from "~/components/common.tsx";
-import { CATEGORY_CHOICES, SEVERITY_CHOICES, shortOID, severityWord } from "~/lib/code.ts";
+import {
+  CATEGORY_CHOICES,
+  SEVERITY_CHOICES,
+  categoryWord,
+  shortOID,
+  severityWord,
+} from "~/lib/code.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { EXPAND_STEP, expandHunks, gapsOf, type Revealed } from "~/lib/expand.ts";
 import { fmtCount, plural } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
@@ -71,8 +79,9 @@ import { statusWord } from "../FileTree.tsx";
 import { PatchPager } from "../PatchPager.tsx";
 import { changeHref, repoHref } from "../paths.ts";
 import { useDiffSides, useDiffTokens, useExpandLines } from "../syntax.tsx";
+import { Face } from "../ui.tsx";
 import { Thread } from "./Conversation.tsx";
-import { FindingCard, ownLine } from "./Finding.tsx";
+import { CATEGORY_GLYPHS, FindingCard, Suggestion, ownLine } from "./Finding.tsx";
 import { changePartParams, refusedWords, useAskAgainWhenMoved } from "./reads.ts";
 import "~/styles/gitlet.css";
 
@@ -551,6 +560,7 @@ function FileSection({
       : Math.max(0, gaps.trailing - (revealed.get(hunks?.length ?? 0) ?? 0));
   const tokens = useDiffTokens({ sides, file: drawn ? entry : undefined, hunks: expanded.hunks });
   const [pick, setPick] = useState<LinePick | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
 
   const reveal = async (gap: number, take: number) => {
     const original = hunks ?? [];
@@ -652,7 +662,7 @@ function FileSection({
   const threadsElsewhere = threads.filter((t) => t.root.anchor?.revision !== rev);
   const repliesTo = (finding: string) => comments.filter((c) => c.finding_id === finding);
   // A FINDING'S OWN LINES AS THE PATCH ON SCREEN DRAWS THEM, all of them or none.
-  const ownOf = (finding: CodeFindingRow): DiffLine[] => {
+  const ownOf = (finding: Pick<CodeFindingRow, "side" | "line_start" | "line_end">): DiffLine[] => {
     const own = expanded.hunks.flatMap((h) => h.lines.filter((l) => ownLine(finding, l)));
     return own.length === finding.line_end - finding.line_start + 1 ? own : [];
   };
@@ -696,9 +706,35 @@ function FileSection({
         }
       }
       for (const d of drafts?.drafts ?? []) {
-        if (d.path === path && d.side === side && d.line_end === n) {
-          out.push(<DraftNote key={d.id} draft={d} remove={() => drafts!.remove(d.id)} />);
-        }
+        if (d.path !== path || d.side !== side || d.line_end !== n) continue;
+        out.push(
+          editing === d.id ? (
+            <FindingComposer
+              key={d.id}
+              pick={{ side: d.side, start: d.line_start, end: d.line_end }}
+              initial={d}
+              onAdd={(next) => {
+                drafts!.update(d.id, {
+                  path: d.path,
+                  side: d.side,
+                  line_start: d.line_start,
+                  line_end: d.line_end,
+                  ...next,
+                });
+                setEditing(null);
+              }}
+              onCancel={() => setEditing(null)}
+            />
+          ) : (
+            <DraftNote
+              key={d.id}
+              draft={d}
+              own={ownOf({ ...d, side: d.side })}
+              onEdit={() => setEditing(d.id)}
+              remove={() => drafts!.remove(d.id)}
+            />
+          ),
+        );
       }
       if (drafts && pick && pick.side === side && pick.end === n) {
         out.push(
@@ -999,23 +1035,53 @@ function FileSection({
   );
 }
 
-/** A drafted finding, marked as one, with the press that drops it. */
-function DraftNote({ draft, remove }: { draft: DraftFinding; remove: () => void }) {
+/** A drafted finding: a dashed card of the reader's own, edited in place or dropped. */
+function DraftNote({
+  draft,
+  own,
+  onEdit,
+  remove,
+}: {
+  draft: DraftFinding;
+  own: readonly DiffLine[];
+  onEdit: () => void;
+  remove: () => void;
+}) {
+  const viewer = useViewer();
+  const Category = CATEGORY_GLYPHS[draft.category];
   return (
-    <article className="code-finding" aria-label={`Drafted finding: ${draft.title}`}>
-      <p className="row gap-1 wrap">
-        <Tag size="sm" appearance="outline">
+    <article className="code-finding" data-draft="" aria-label={`Drafted finding: ${draft.title}`}>
+      <div className="code-finding__head">
+        {viewer.owner && <Face who={viewer.owner} size="xs" />}
+        <strong>You</strong>
+        <Tag size="xs" appearance="outline" leadingIcon={<PencilGlyph size="xs" />}>
           Draft
         </Tag>
-        <Tag size="sm" variant={draft.severity === "blocker" ? "danger" : "neutral"}>
+        <Tag size="xs" variant={draft.severity === "blocker" ? "danger" : "neutral"}>
           {severityWord(draft.severity)}
         </Tag>
-        <strong>{draft.title}</strong>
-        <Button size="small" variant="ghost" onClick={remove}>
-          Drop
-        </Button>
-      </p>
+        <Tag
+          size="xs"
+          appearance="outline"
+          leadingIcon={Category ? <Category size="xs" /> : undefined}
+        >
+          {categoryWord(draft.category)}
+        </Tag>
+        <span className="code-finding__aside">sent with your review</span>
+        <span className="code-finding__end">
+          <Button size="small" variant="ghost" onClick={onEdit}>
+            Edit
+          </Button>
+          <Button size="small" variant="ghost" onClick={remove}>
+            Drop
+          </Button>
+        </span>
+      </div>
+      <h4 className="code-finding__title">{draft.title}</h4>
       {draft.body && <div className="prose md">{renderMarkdown(draft.body)}</div>}
+      {draft.suggestion !== undefined && draft.side === "new" && (
+        <Suggestion finding={draft} own={own} />
+      )}
     </article>
   );
 }
@@ -1026,19 +1092,22 @@ function DraftNote({ draft, remove }: { draft: DraftFinding; remove: () => void 
  */
 function FindingComposer({
   pick,
+  initial,
   onAdd,
   onCancel,
 }: {
   pick: LinePick;
+  /** The draft being edited, its lines fixed. */
+  initial?: DraftFinding | undefined;
   onAdd: (draft: Omit<DraftFinding, "id" | "path" | "side" | "line_start" | "line_end">) => void;
   onCancel: () => void;
 }) {
-  const [severity, setSeverity] = useState("major");
-  const [category, setCategory] = useState("correctness");
-  const [title, setTitle] = useDraftState("");
-  const [body, setBody] = useDraftState("");
-  const [suggesting, setSuggesting] = useState(false);
-  const [suggestion, setSuggestion] = useDraftState("");
+  const [severity, setSeverity] = useState(initial?.severity ?? "major");
+  const [category, setCategory] = useState(initial?.category ?? "correctness");
+  const [title, setTitle] = useDraftState(initial?.title ?? "");
+  const [body, setBody] = useDraftState(initial?.body ?? "");
+  const [suggesting, setSuggesting] = useState(initial?.suggestion !== undefined);
+  const [suggestion, setSuggestion] = useDraftState(initial?.suggestion ?? "");
   const lines = pick.start === pick.end ? `line ${pick.start}` : `lines ${pick.start}–${pick.end}`;
   // THE FINDING'S BOXES AS FIELDS of the change page's one draft, so the
   // person's assistant reads and can fill what is being written here.
@@ -1076,7 +1145,7 @@ function FindingComposer({
   return (
     <form
       className="code-finding"
-      aria-label={`A finding on ${lines}`}
+      aria-label={initial ? `Edit the finding on ${lines}` : `A finding on ${lines}`}
       onSubmit={(event) => {
         event.preventDefault();
         if (!title.trim()) return;
@@ -1134,7 +1203,7 @@ function FindingComposer({
       )}
       <div className="row gap-2">
         <Button type="submit" size="small" variant="primary" disabled={!title.trim()}>
-          Add to review
+          {initial ? "Save" : "Add to review"}
         </Button>
         <Button size="small" variant="ghost" onClick={onCancel}>
           Cancel

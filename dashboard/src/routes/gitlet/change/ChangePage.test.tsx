@@ -3164,3 +3164,53 @@ test("going to a file a filter hides clears the filters", async () => {
   await section("web/src/product/Shell.tsx");
   expect(new URLSearchParams(location.hash.split("?")[1]).has("q")).toBe(false);
 });
+
+// A DRAFT IS A DASHED CARD EDITED IN PLACE, keeping its id. Mutation: let Edit
+// add a second draft, and two are held.
+test("a draft is a dashed card with Edit and Drop, and Edit saves it in place", async () => {
+  stubStack();
+  sessionStorage.setItem(
+    draftsKey("change-1", 2),
+    JSON.stringify([
+      {
+        id: "d1",
+        path: "internal/server/routes.go",
+        side: "new",
+        line_start: 15,
+        line_end: 15,
+        severity: "minor",
+        category: "correctness",
+        title: "Name the route",
+        body: "",
+        suggestion: "renamed15\n",
+      },
+    ]),
+  );
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  const routes = await section("internal/server/routes.go");
+  const card = await within(routes).findByRole("article", {
+    name: "Drafted finding: Name the route",
+  });
+  expect(card.hasAttribute("data-draft")).toBe(true);
+  expect(within(card).getByText("sent with your review")).toBeTruthy();
+  const diff = within(card).getByRole("group", { name: /The lines suggested in place of line 15/ });
+  expect([...diff.querySelectorAll("[data-kind]")].map((r) => r.getAttribute("data-kind"))).toEqual(
+    ["remove", "add"],
+  );
+  fireEvent.click(within(card).getByRole("button", { name: "Edit" }));
+  const form = await within(routes).findByRole("form", { name: "Edit the finding on line 15" });
+  const title = within(form).getByRole("textbox", { name: "Title" }) as HTMLInputElement;
+  expect(title.value).toBe("Name the route");
+  fireEvent.change(title, { target: { value: "Name the route for what it serves" } });
+  fireEvent.click(within(form).getByRole("button", { name: "Save" }));
+  expect(
+    await within(routes).findByRole("article", {
+      name: "Drafted finding: Name the route for what it serves",
+    }),
+  ).toBeTruthy();
+  const kept = JSON.parse(sessionStorage.getItem(draftsKey("change-1", 2)) ?? "[]") as {
+    id: string;
+    title: string;
+  }[];
+  expect(kept.map((d) => [d.id, d.title])).toEqual([["d1", "Name the route for what it serves"]]);
+});

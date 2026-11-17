@@ -518,8 +518,8 @@ then its merge box (every condition to merge with where it stands, and the merge
 controls), beside a rail of whom it asked
 for a review and where each stands; **Revisions** lists its revisions,
 **Checks** the checks that judge it, and **Files changed** is every file a
-revision changes on one page, beside its tree — the head unless you pick
-another, or what changed since an earlier revision — with each finding under the lines it points at, and one whose
+revision changes on one page, beside its tree (the head unless you pick
+another, or what changed since an earlier revision), with each finding under the lines it points at, and one whose
 lines have changed since drawn above the diff, never dropped; **More** is where
 it came from and whom it notified. A seat reads the
 same with `code_get_change`, a part at a time ([Reading a
@@ -533,10 +533,10 @@ finding under them: how much it weighs (`blocker`, `major`, `minor`, `nit`),
 what it is about, a title, a body and, on the new side, the lines you suggest
 in their place. Drafts stay in the browser tab until **Approve**, **Request
 changes** or **Comment** (the page bar's **Review**, or **Finish review** on
-Files changed) sends them all as ONE review with your summary — a
+Files changed) sends them all as ONE review with your summary: a
 review and every finding it raises are one record, never half there. A seat
 reviews with `code_review_change`. Anybody who reviews the repository, and
-any person, may review — never an author of the change. Filter the files by name, extension or findings,
+any person, may review, never an author of the change. Edit a draft where it stands; filter the files by name, extension or findings,
 and press `t` to go to a file.
 
 - **A request for changes stands until its reviewer reviews again.** A push
