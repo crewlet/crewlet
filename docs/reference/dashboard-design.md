@@ -86,15 +86,15 @@ A hash of a name is identity by accident; this is identity by CHOICE, so
 renaming the seat keeps it and it says exactly what somebody meant. It is held
 to exactly that. Its six colours are the design system's node hues
 (`--color-node-*`), a family no state, accent or data series draws from. A
-seat that chose nothing is the original Crewlet in purple, never a look the
-dashboard picked for it. Only an agent wears one: a person is drawn as
+part a seat left out is picked by the engine from the seat's handle, which is
+minted once and never changes, so agents that chose nothing are still told
+apart; the dashboard picks nothing and draws the look it is served. Only an agent wears one: a person is drawn as
 themself and a unit is neutral. It is drawn as the agent's own badge
 (`SeatAvatar`) and its node on the two charts, and nothing reads state from
 it, so the status glyph on its corner and the word beside it still say what
-the seat is doing. It is drawn only where the seat's name is printed beside
-it: a badge standing alone, as the work list's Assignee column and a board
-card's foot draw it, is the seat's initials, because every seat that chose
-nothing shares one look and a column of that one picture names nobody. The
+the seat is doing. It is drawn wherever the seat is, alone in a column or
+beside its name, with the name as the badge's accessible name and hover title
+where no word is printed beside it. The
 org builder's Add dialog suggests a character no agent in the draft wears yet
 and the next colour round the six, so a company growing one agent at a time is
 told apart before anybody has chosen; the suggestion is written into the new
@@ -2005,7 +2005,14 @@ four clauses that travel together because each one was got wrong separately:
   is drawn as itself instead**: its own Crewlet character on a plate of its own
   colour, the look its author chose (the one rule's third exception), where its
   initials would be. A person, and a handle the chart does not hold, keep the
-  initials. Beyond that its only variant is
+  initials. The look is a REQUIRED input of every shared piece that draws a
+  seat (`SeatAvatar`, `seatBadge`, `linkedSeat`, `plainSeat`, `SeatChip`,
+  `Assignee`), so a surface cannot leave an agent's character behind by
+  omission, and `faceOf` is the one translation of a look into the kit's.
+  Every picker that offers a seat draws its face beside its name
+  (`ChoiceFace`: a Select option's `leading`, a Menu item's `icon`, a filter
+  row's face), and its Nobody choice the empty-assignee mark. Source gates in
+  `ui/SeatAvatar.test.tsx` hold all three. Beyond that its only variant is
   STRUCTURAL — its outline, a circle for a person and a squircle for an agent —
   and **every** cell that draws a person resolves the kind and draws it. That is the same resolution as the name and it arrives with it:
   `seatLookup` answers both, the row chrome carries both, and the two cells a

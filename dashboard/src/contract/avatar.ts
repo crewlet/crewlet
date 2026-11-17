@@ -1,7 +1,7 @@
 /**
  * The Crewlet characters an agent seat can be drawn as, by id, in the order
- * the seat editor offers them. The FIRST is what a seat that names no
- * character is drawn as: the original Crewlet.
+ * the seat editor offers them. A seat that names none is drawn as one picked
+ * from its handle by the engine (`config.DefaultAvatar`).
  *
  * THE ENGINE'S SET AND THE DESIGN SYSTEM'S, held from both sides: against
  * `config.AvatarCharacters` by `internal/config/avatar_test.go`'s
@@ -44,8 +44,8 @@ export const AVATAR_CHARACTERS = [
 ] as const;
 
 /**
- * The six colours an agent seat can be drawn in, in the engine's order. The
- * FIRST is what a seat that names no colour is drawn in: purple.
+ * The six colours an agent seat can be drawn in, in the engine's order; one
+ * picked from the handle where a seat names none.
  *
  * Held as {@link AVATAR_CHARACTERS} is: against `config.AvatarColors`, and
  * against `@crewlethq/ui`'s `NODE_HUES`.

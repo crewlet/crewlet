@@ -22,7 +22,7 @@
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import type { AgentRow, CompanyDocument } from "~/protocol/index.ts";
+import type { AgentRow, CompanyDocument, ConfigRole, ConfigUnit } from "~/protocol/index.ts";
 import { indexOrg, nameOfIn } from "~/lib/seats.ts";
 import { seatLiveOf, type LiveOrg } from "~/lib/seatLive.ts";
 import { withDerived } from "~/test/org.ts";
@@ -58,6 +58,20 @@ import { menuEntryLabel } from "~/testing.tsx";
 import { parseHash } from "~/app/router.tsx";
 import { CHART_FIT_FLOOR, CHART_LEGIBLE_ZOOM } from "~/ui/canvasView.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
+
+/** The fixture with a purple Crewlet written on every agent seat that names no look. */
+function withLooks(doc: CompanyDocument): CompanyDocument {
+  const look = (role: ConfigRole): ConfigRole =>
+    role.kind === "human" || role.avatar
+      ? role
+      : { ...role, avatar: { character: "crewlet", color: "purple" } };
+  const unit = (u: ConfigUnit): ConfigUnit => ({
+    ...u,
+    ...(u.roles ? { roles: u.roles.map(look) } : {}),
+    ...(u.children ? { children: u.children.map(unit) } : {}),
+  });
+  return { ...doc, roles: doc.roles?.map(look), units: doc.units?.map(unit) };
+}
 
 let restore: () => void;
 beforeEach(() => {
@@ -335,10 +349,10 @@ describe("the tree", () => {
     expect(item("Dev").querySelector(`.${largeStep()}`)).not.toBeNull();
     expect(item("Dev").querySelector(".crewlet-avatar")).toBeNull();
     expect(within(item("CEO")).getByText("human · @ceo")).toBeDefined();
-    // And the agent's card is toned where the person's is not (see "an agent
-    // seat is toned" below).
+    // No look reached the agent (it chose none and runs nowhere here), so its
+    // card is neutral, as the person's is; "an agent seat is toned" covers a look.
     expect(chartCard(item("CEO")).getAttribute("data-tone")).toBeNull();
-    expect(chartCard(item("Dev")).getAttribute("data-tone")).toBe("purple");
+    expect(chartCard(item("Dev")).getAttribute("data-tone")).toBeNull();
   });
 
   test("a root seat placed by reference is a row of its unit, and a dangling reference is marked at the root", () => {
@@ -812,7 +826,7 @@ describe("an agent seat is toned, and nothing else is", () => {
   };
 
   test("on the structure chart every agent seat, and only an agent seat, is purple", () => {
-    const doc = fixtureCompany();
+    const doc = withLooks(fixtureCompany());
     doc.roles![0] = { name: "CEO", kind: "human", contact: { slack_user_id: "U0CEO" } };
     const { container } = mount(checkedEdit(doc));
     const { agents, others } = byKind(container);
@@ -833,7 +847,7 @@ describe("an agent seat is toned, and nothing else is", () => {
   });
 
   test("on the reporting chart the same rule holds", () => {
-    const { container } = mount(checkedEdit(fixtureCompany()), { chart: "reporting" });
+    const { container } = mount(checkedEdit(withLooks(fixtureCompany())), { chart: "reporting" });
     const { agents, others } = byKind(container);
     expect(agents.length).toBeGreaterThan(0);
     for (const card of agents)
@@ -1157,7 +1171,12 @@ describe("menus", () => {
     });
     fireEvent.click(chip);
     const answers = screen.getAllByRole("menuitemradio");
-    expect(answers.map((a) => [a.textContent, a.getAttribute("aria-checked")])).toEqual([
+    expect(
+      answers.map((a) => [
+        a.querySelector(".crewlet-menu__label")?.textContent,
+        a.getAttribute("aria-checked"),
+      ]),
+    ).toEqual([
       ["No one (inherits VP Engineering)", "true"],
       ["SRE", "false"],
       ["Designer", "false"],
@@ -1173,7 +1192,10 @@ describe("menus", () => {
     expect(
       screen
         .getAllByRole("menuitemradio")
-        .map((a) => [a.textContent, a.getAttribute("aria-checked")]),
+        .map((a) => [
+          a.querySelector(".crewlet-menu__label")?.textContent,
+          a.getAttribute("aria-checked"),
+        ]),
     ).toEqual([
       ["No one (inherits VP Engineering)", "false"],
       ["SRE", "true"],
@@ -1251,7 +1273,10 @@ describe("menus", () => {
     expect(
       screen
         .getAllByRole("menuitemradio")
-        .map((a) => [a.textContent, a.getAttribute("aria-checked")]),
+        .map((a) => [
+          a.querySelector(".crewlet-menu__label")?.textContent,
+          a.getAttribute("aria-checked"),
+        ]),
     ).toEqual([
       ["No one", "false"],
       ["Account Executive", "false"],

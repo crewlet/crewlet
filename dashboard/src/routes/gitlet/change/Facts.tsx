@@ -10,7 +10,7 @@
  * notices were swept with the turn detail they named.
  */
 
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { Card, EmptyValue, Stack, Tag } from "@crewlethq/ui";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { href } from "~/app/router.tsx";
@@ -107,7 +107,7 @@ export function Provenance({ change }: { change: CodeChangeDetail }) {
       label: "Opened by",
       value: (
         <>
-          {seatBadge(change.owner).name}
+          <Face who={change.owner} size="text" /> {seatBadge(change.owner).name}
           {change.owner_operator_id && (
             <span className="muted mono"> via {change.owner_operator_id}</span>
           )}
@@ -150,7 +150,12 @@ export function Provenance({ change }: { change: CodeChangeDetail }) {
     },
     {
       label: "Authors",
-      value: change.authors.map((a) => seatBadge(a.author).name).join(", "),
+      value: change.authors.map((a, i) => (
+        <Fragment key={a.author}>
+          {i > 0 && ", "}
+          <Face who={a.author} size="text" /> {seatBadge(a.author).name}
+        </Fragment>
+      )),
     },
     ...(change.state === "merged"
       ? [
@@ -160,7 +165,12 @@ export function Provenance({ change }: { change: CodeChangeDetail }) {
               <>
                 {change.merged_at && fmtDateTime(change.merged_at)}{" "}
                 {change.merged_via === "push" ? "by a push" : "through its gate"}
-                {change.merged_by && ` by ${seatBadge(change.merged_by).name}`}
+                {change.merged_by && (
+                  <>
+                    {" by "}
+                    <Face who={change.merged_by} size="text" /> {seatBadge(change.merged_by).name}
+                  </>
+                )}
                 {change.merge_oid && (
                   <>
                     {" "}

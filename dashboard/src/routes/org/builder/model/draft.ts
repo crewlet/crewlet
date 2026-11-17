@@ -22,7 +22,7 @@
  */
 
 import { AVATAR_CHARACTERS, AVATAR_COLORS } from "~/contract/avatar.ts";
-import { avatarOf, type AgentAvatar } from "~/lib/avatar.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
 import type { CompanyDocument, ConfigRole, ConfigUnit } from "~/protocol/index.ts";
 import { COMPANY_KEY, handleOfKey, isMintedKey, unitIdOfKey, type NodeKey } from "./keys.ts";
 
@@ -422,9 +422,18 @@ export function identitiesOf(draft: Draft): Set<string> {
  * change it in the same form. Once every character is worn the characters go
  * round again too, still in order.
  */
-export function suggestAvatar(draft: Draft): AgentAvatar {
+export function suggestAvatar(
+  draft: Draft,
+  served: (handle: string) => AgentAvatar | null | undefined = () => undefined,
+): AgentAvatar {
   const agents = [...allSeats(draft)].filter(({ seat }) => seat.data.kind !== "human");
-  const worn = new Set(agents.map(({ seat }) => avatarOf(seat.data.avatar).character));
+  // A CHARACTER IS WORN as written, or as the running seat is served.
+  const worn = new Set(
+    agents.map(({ seat }) => {
+      const written = (seat.data.avatar as { character?: unknown } | undefined)?.character;
+      return typeof written === "string" ? written : served(handleOf(seat))?.character;
+    }),
+  );
   const fresh = AVATAR_CHARACTERS.find((character) => !worn.has(character));
   return {
     character: fresh ?? AVATAR_CHARACTERS[agents.length % AVATAR_CHARACTERS.length]!,

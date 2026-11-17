@@ -300,7 +300,11 @@ function ParamField({
               aria-describedby={field.describedBy}
               value={value === "" ? undefined : value}
               placeholder={`Choose a ${param.label.toLowerCase()}`}
-              options={choices.options.map((o) => ({ value: o.value, label: o.label }))}
+              options={choices.options.map((o) => ({
+                value: o.value,
+                label: o.label,
+                ...(o.leading === undefined ? {} : { leading: o.leading }),
+              }))}
               onChange={(v) =>
                 onChange({ ...widget, params: { ...widget.params, [param.key]: String(v) } })
               }

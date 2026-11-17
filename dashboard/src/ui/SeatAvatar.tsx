@@ -11,19 +11,27 @@
  * its character and colour), which is drawn in place of the initials where the
  * chart holds one. A person is always drawn as themself.
  *
+ * ONE RULE FOR EVERY SURFACE: an agent the chart holds is its character
+ * wherever it is drawn, alone or beside its name; a person, and a key the chart
+ * does not hold, are initials. `avatar` is a required input so no caller can
+ * leave an agent's character behind by omission.
+ *
  * `status` is the engine's own word (`lib/seats.ts`' `statusOf`), drawn as the
  * kit's corner badge, never a ring round the plate.
  */
 
 import type { ComponentProps } from "react";
 import { Avatar, type AvatarStackMember } from "@crewlethq/ui";
-import type { AgentAvatar } from "~/lib/avatar.ts";
+import { UserGlyph } from "@crewlethq/icons/glyphs";
+import { faceOf, type AgentAvatar } from "~/lib/avatar.ts";
+import type { SeatBadge } from "~/lib/seats.ts";
 
 type AvatarProps = ComponentProps<typeof Avatar>;
 
 /**
- * A seat's badge. Takes the kit Avatar's props; `name` and `kind` are
- * required, and `avatar` is how an agent is drawn where the chart holds one.
+ * A seat's badge. Takes the kit Avatar's props; `name`, `kind` and `avatar`
+ * are required, `avatar` being the chart's answer (null for a person,
+ * undefined for a key the chart does not hold).
  */
 export function SeatAvatar({
   name,
@@ -33,17 +41,9 @@ export function SeatAvatar({
 }: Omit<AvatarProps, "name" | "kind" | "character" | "hue"> & {
   name: string;
   kind: "human" | "agent";
-  avatar?: AgentAvatar | null | undefined;
+  avatar: AgentAvatar | null | undefined;
 }) {
   return <Avatar {...rest} {...faceOf(kind, avatar)} name={name} kind={kind} />;
-}
-
-/** The kit's character and hue for an agent drawn as itself; nothing for anybody else. */
-export function faceOf(
-  kind: "human" | "agent",
-  avatar: AgentAvatar | null | undefined,
-): Pick<AvatarProps, "character" | "hue"> {
-  return kind === "agent" && avatar ? { character: avatar.character, hue: avatar.color } : {};
 }
 
 /**
@@ -55,8 +55,46 @@ export function faceOf(
 export function seatBadge(
   name: string,
   kind: string | undefined,
-  avatar?: AgentAvatar | null,
+  avatar: AgentAvatar | null | undefined,
 ): Pick<AvatarStackMember, "name" | "kind" | "character" | "hue"> & { kind: "human" | "agent" } {
   const k = kind === "human" ? "human" : "agent";
   return { name, kind: k, ...faceOf(k, avatar) };
+}
+
+/**
+ * A seat's face beside its name in a picker (a Select option's `leading`, a
+ * Menu item's `icon`), off the chart's [SeatBadge]; `null` is the Nobody choice.
+ * `text` sizes it to a line of words, as in a filter pill.
+ */
+export function ChoiceFace({
+  seat,
+  size = "xs",
+}: {
+  seat: Pick<SeatBadge, "name" | "kind" | "avatar"> | null;
+  size?: "xs" | "text";
+}) {
+  if (!seat) return <NobodyFace />;
+  return (
+    <SeatAvatar
+      name={seat.name}
+      kind={seat.kind === "human" ? "human" : "agent"}
+      avatar={seat.avatar}
+      size={size}
+      decorative
+    />
+  );
+}
+
+/**
+ * Nobody, as a face: the dashed empty square an unassigned task and a picker's
+ * "Nobody" choice draw, the size of the smallest badge. `label` names it where
+ * no word is printed beside it.
+ */
+export function NobodyFace({ label }: { label?: string | undefined }) {
+  return (
+    <span className="seat-nobody" title={label} aria-hidden={label ? undefined : true}>
+      <UserGlyph size="xs" />
+      {label && <span className="sr-only">{label}</span>}
+    </span>
+  );
 }
