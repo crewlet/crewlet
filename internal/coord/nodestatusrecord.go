@@ -110,15 +110,9 @@ type NodeStatusRecord struct {
 	// job finished and whose last resume here failed on a condition only an
 	// operator clears ([ResumesBlocked]). Nil is a node holding no such run,
 	// or one that does not say: one running no executor, or a build from
-	// before it.
-	//
-	// ON THE RECORD, because the node holding the seat is the only one that
-	// knows, and it may be one with no alarm table to raise it on: a
-	// satellite (`roles: [seats]`) runs no state log, so it evaluates none.
-	// So the executor_resume_blocked alarm is judged by every data node off
-	// the live records, as the model alarms are. THE COUNT, AND THE RUN
-	// WAITING LONGEST BY ITS SEAT, ITS CONDITION AND SINCE WHEN, never how
-	// long, which moves on every pass and would rewrite the record on each.
+	// before it. ON THE RECORD, since a satellite holding the seat evaluates
+	// no alarm; the count and the longest-waiting run, never how long it has
+	// waited (the package doc's "A node's runs waiting for an operator").
 	ResumesBlocked *ResumesBlocked
 }
 
@@ -326,20 +320,10 @@ func LiveNodeStatuses(records []NodeStatusRecord, presence []Lease) map[string]N
 // over and over, an alarm evaluation above all: last is what it counted on its
 // previous read, and a live node whose record is not counted now keeps the
 // record last holds for it while its presence stands at the epoch that record
-// was written under.
-//
-// A LIVE NODE WHOSE RECORD IS NOT COUNTED IS A NODE NOT SAYING, never one whose
-// rows went away: a record whose rewrites failed while the node lives ages out
-// of its bucket ([StatusFreshness]) before the presence lapses, and read as a
-// node holding nothing, a condition only that node held (a model's sit-out, a
-// server's outage, a run waiting for the operator) cleared for one evaluation
-// and was raised again on the next, with its lines and its wakes. A node whose
-// presence is gone, or was claimed again at a new epoch, keeps nothing: what it
-// held moves to holders that say their own, and a restarted node's memory went
-// with its process. A reader that decides once, rather than judging a standing
-// condition, reads [LiveNodeStatuses] itself, and one with a truer word for a
-// node than its last record, its own memory for the node it runs on, leaves
-// that node out of last.
+// was written under. A live node whose record is not counted is a node not
+// saying, never one whose rows went away; a node whose presence is gone or
+// moved to a new epoch keeps nothing (the package doc's "A live node not
+// saying keeps what it said").
 func LiveNodeStatusesKept(records []NodeStatusRecord, presence []Lease,
 	last map[string]NodeStatusRecord) map[string]NodeStatusRecord {
 	out := LiveNodeStatuses(records, presence)
