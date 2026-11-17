@@ -136,7 +136,13 @@ ground is still a swatch.
 The seventh is **code read in Gitlet**: its diffs (`hue="code"`), its code
 coloured by kind in its files, diffs and search hits, a change's state pill and
 a branch chip wear the kit's code host colours, each hue a kind beside its
-sign, word or glyph: never done, a fault or an action.
+sign, word or glyph: never done, a fault or an action. A **JSON or YAML record**
+the kit's `CodeBlock` draws with its `language` is code read too, wherever it
+is: Settings › Configuration's active document and its entities, an event's
+payload, a turn's records, a report or a record as it is sent, a call's
+arguments and the company's YAML colour each key, string, number, boolean,
+null and sign in the kit's syntax ink for its kind, and nothing else of the
+code host's family.
 
 Outside Gitlet no diff wears them; the pill and chip appear only in its
 Changes grid (a task, a seat, My work), its peek, Home's code card and the
@@ -361,6 +367,11 @@ colour. `styles/codehost.test.ts` keeps the inks to `gitlet-code.css`.
 A diff's lines take the state of their blob's line, read by its id, under
 256 KiB, and of their hunk's first line past it; a changed run keeps the code's
 own text. A search hit is coloured on its own line.
+
+Outside Gitlet a JSON or YAML record is coloured by the kit's `CodeBlock`
+itself, handed `language="json"` or `"yaml"`: its own tokenizer, one span of
+text a token and never markup, plain past 256 KiB. A block whose text may not
+be JSON (a tool's result, a model's words) is handed no language and stays plain.
 
 ---
 

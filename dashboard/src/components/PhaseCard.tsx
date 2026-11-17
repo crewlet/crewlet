@@ -240,7 +240,13 @@ function RunningRecords({ name, args }: { name: string; args: string }) {
       {args && (
         <>
           <div className="t-label">Arguments</div>
-          <CodeBlock plain selectable label={`${name} · arguments`} code={prettyArgs} />
+          <CodeBlock
+            plain
+            selectable
+            language="json"
+            label={`${name} · arguments`}
+            code={prettyArgs}
+          />
         </>
       )}
       <span className="t-caption">Still running: its result lands here when it returns.</span>
