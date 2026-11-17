@@ -31,10 +31,20 @@
  */
 
 import { useEffect, useState } from "react";
-import { Button, Callout, FormField, Input, Skeleton, Stack, Textarea } from "@crewlethq/ui";
+import {
+  Button,
+  Callout,
+  FormField,
+  Input,
+  Skeleton,
+  Stack,
+  Textarea,
+  VisuallyHidden,
+} from "@crewlethq/ui";
+import { PencilGlyph } from "@crewlethq/icons/glyphs";
 import { Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
-import { isWholeOID, refName, shortOID } from "~/lib/code.ts";
+import { baseName, isWholeOID, refName, shortOID } from "~/lib/code.ts";
 import { fmtBytes } from "~/lib/format.ts";
 import { branchWriteHeld, commitFormHeld } from "~/lib/repoWrites.ts";
 import { useAct } from "~/lib/useAct.ts";
@@ -153,6 +163,62 @@ export function FirstFileButton({ repo }: { repo: CodeRepoDetail }) {
   );
 }
 
+/** Why the editor does not open on a file: a binary one, or one past EDIT_MAX_BYTES. */
+function fileEditHeld(file: CodeBlobAnswer): string | undefined {
+  if (file.binary) return "A binary file is not edited here: commit it from a clone.";
+  if (file.size > EDIT_MAX_BYTES) {
+    return `This file is ${fmtBytes(file.size)}: the editor takes up to ${fmtBytes(EDIT_MAX_BYTES)}, so commit it from a clone.`;
+  }
+  return undefined;
+}
+
+/** A pencil opening the editor on a file shown elsewhere (the README), held as Edit is. */
+export function EditFileButton({
+  repo,
+  target,
+  path,
+  file,
+}: {
+  repo: CodeRepoDetail;
+  target: CommitTarget;
+  path: string;
+  /** The file's first page, or undefined while it is read. */
+  file: CodeBlobAnswer | undefined;
+}) {
+  const write = useAct("code_commit_files");
+  const viewer = useViewer();
+  const [editing, setEditing] = useState(false);
+  const held =
+    branchWriteHeld(repo, viewer) ??
+    targetHeld(target) ??
+    (file ? fileEditHeld(file) : "Still reading the file.");
+  return (
+    <>
+      <WriteButton
+        write={write}
+        size="small"
+        variant="ghost"
+        aria-label={`Edit ${baseName(path)}`}
+        leadingIcon={<PencilGlyph size="sm" />}
+        blocked={held}
+        onPress={() => setEditing(true)}
+      >
+        <VisuallyHidden>Edit</VisuallyHidden>
+      </WriteButton>
+      {editing && target.branch && (
+        <CommitDialog
+          repo={repo}
+          branch={target.branch}
+          head={target.head}
+          path={path}
+          existing
+          onClose={() => setEditing(false)}
+        />
+      )}
+    </>
+  );
+}
+
 /** "Edit" and "Delete file", in a file's bar. */
 export function FileWriteButtons({
   repo,
@@ -171,13 +237,7 @@ export function FileWriteButtons({
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const held = branchWriteHeld(repo, viewer) ?? targetHeld(target);
-  const editHeld =
-    held ??
-    (file.binary
-      ? "A binary file is not edited here: commit it from a clone."
-      : file.size > EDIT_MAX_BYTES
-        ? `This file is ${fmtBytes(file.size)}: the editor takes up to ${fmtBytes(EDIT_MAX_BYTES)}, so commit it from a clone.`
-        : undefined);
+  const editHeld = held ?? fileEditHeld(file);
   return (
     <>
       <WriteButton

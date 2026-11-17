@@ -813,3 +813,149 @@ test("a comment is italic and in its ink", async () => {
   expect(getComputedStyle(comment).color).toBe(getComputedStyle(probe).color);
   expect(getComputedStyle(comment).color).not.toBe(getComputedStyle(line).color);
 });
+
+/** A repository's root whose head row and first entry carry subjects far wider than a row. */
+function withHome() {
+  const at = "2026-11-15T10:00:00Z";
+  const commit = (oid: string, subject: string) => ({
+    oid,
+    author: "Jane Founder",
+    authored_at: at,
+    committed_at: at,
+    subject,
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), location.origin);
+      switch (url.pathname) {
+        case "/query/code_tree": {
+          const listed = (await answer(url).json()) as Record<string, unknown>;
+          return json({ ...listed, resolved: { ref: { ref: "refs/heads/main", oid: BASE } } });
+        }
+        case "/query/code_log":
+          return json({
+            repo: "web",
+            kind: "log",
+            log: { commits: [commit(BASE, "Merge: ".padEnd(160, "cache the badge "))], scanned: 1 },
+          });
+        case "/query/code_tree_commits":
+          return json({
+            repo: "web",
+            kind: "tree_commits",
+            tree_commits: {
+              tree: BASE,
+              entries: [
+                { path: "cmd", commit: HEAD },
+                { path: "go.mod", commit: BASE },
+              ],
+              commits: [
+                commit(HEAD, "render: ".padEnd(200, "stream the shell ")),
+                commit(BASE, "go.mod: bump to go 1.27"),
+              ],
+              total: 2,
+            },
+          });
+        case "/query/code_find":
+          return json({
+            repo: "web",
+            kind: "find",
+            find: {
+              tree: BASE,
+              matches: [
+                { path: "cmd/web/main.go", oid: HEAD, mode: "100644", spans: [[8, 12]] },
+                {
+                  path: "internal/render/main_test.go",
+                  oid: HEAD,
+                  mode: "100644",
+                  spans: [[16, 20]],
+                },
+              ],
+              total: 2,
+              files: 1204,
+            },
+          });
+      }
+      return answer(url);
+    }),
+  );
+}
+
+// A REPOSITORY'S HOME HOLDS ITS WIDTH: each entry's subject and the head row's give way, an
+// entry's age stays one line, and on a phone each row stacks its subject under its name and
+// age and the head row its id, time and History under its subject.
+// Mutation: drop the subject's `overflow: hidden`, the phone rule or the colgroup: this fails.
+for (const [viewport, column] of [
+  [1024, 740],
+  [640, 608],
+] as const) {
+  test(`a repository's home holds its width, its subjects giving way, at ${viewport}px`, async () => {
+    await page.viewport(viewport, 900);
+    withHome();
+    location.hash = "#/gitlet/repos/web";
+    mount(<RepositoryPage repo="web" />, column);
+    const table = await eventually(() => {
+      const found = document.querySelector<HTMLElement>(".code-entries");
+      expect(found?.querySelectorAll(".code-entries__subject")).toHaveLength(2);
+      expect(document.querySelector(".code-latest__subject")).toBeTruthy();
+      return found!;
+    });
+    const card = document.querySelector<HTMLElement>(".code-browser")!;
+    const content = document.querySelector<HTMLElement>(".crewlet-app-shell__content")!;
+    for (const el of [content, card, table]) {
+      expect(el.scrollWidth, el.className).toBeLessThanOrEqual(el.clientWidth);
+    }
+    const end = document.querySelector<HTMLElement>(".code-bar-end")!;
+    const bar = end.getBoundingClientRect();
+    expect(bar.right).toBeLessThanOrEqual(content.getBoundingClientRect().right + 0.5);
+    // THE END GROUP IS ONE LINE where there is room: Go to file never takes the whole group.
+    if (column >= 640) {
+      const tops = [...end.children].map((el) => Math.round(el.getBoundingClientRect().top));
+      expect(new Set(tops).size, tops.join(",")).toBe(1);
+    }
+    for (const row of table.querySelectorAll<HTMLElement>("tbody tr")) {
+      const box = row.getBoundingClientRect();
+      const name = row.querySelector(".code-entries__name")!.getBoundingClientRect();
+      const when = row.querySelector(".code-entries__when")!.getBoundingClientRect();
+      const subject = row.querySelector(".code-entries__subject")!.getBoundingClientRect();
+      expect(subject.right, row.dataset.key).toBeLessThanOrEqual(box.right + 0.5);
+      expect(row.querySelector("time")!.getClientRects()).toHaveLength(1);
+      if (column < 640) {
+        expect(Math.abs(name.top - when.top)).toBeLessThan(6);
+        expect(subject.top).toBeGreaterThanOrEqual(name.bottom - 0.5);
+      } else {
+        expect(subject.top).toBeLessThan(name.bottom);
+        // THE SUBJECT'S COLUMN IS THE WIDEST: the columns are not equal thirds.
+        const commit = row.querySelector(".code-entries__commit")!.getBoundingClientRect();
+        expect(commit.width, row.dataset.key).toBeGreaterThan(name.width);
+        expect(commit.width, row.dataset.key).toBeGreaterThan(when.width);
+      }
+    }
+    const latest = card.querySelector<HTMLElement>(".code-latest")!;
+    const head = latest.querySelector(".code-latest__subject")!.getBoundingClientRect();
+    const frame = card.getBoundingClientRect();
+    for (const part of [".code-sha", ".code-latest__when", "a[href*='tab=commits']"]) {
+      const at = latest.querySelector(part)!.getBoundingClientRect();
+      expect(at.right, part).toBeLessThanOrEqual(frame.right + 0.5);
+      if (column < 640) expect(at.top, part).toBeGreaterThanOrEqual(head.bottom - 0.5);
+      else expect(at.top, part).toBeLessThan(head.bottom);
+    }
+  });
+
+  // GO TO FILE'S LIST STAYS IN THE VIEWPORT. Mutation: a fixed width on the field, and this fails.
+  test(`Go to file's list stays inside the viewport at ${viewport}px`, async () => {
+    await page.viewport(viewport, 900);
+    withHome();
+    location.hash = "#/gitlet/repos/web";
+    mount(<RepositoryPage repo="web" />, column);
+    await page.getByRole("combobox", { name: "Go to file" }).fill("main");
+    const list = await eventually(() => {
+      const found = document.querySelector<HTMLElement>("[role=listbox]");
+      expect(found?.textContent).toContain("cmd/web/main.go");
+      return found!;
+    });
+    const box = list.getBoundingClientRect();
+    expect(box.left).toBeGreaterThanOrEqual(0);
+    expect(box.right).toBeLessThanOrEqual(window.innerWidth);
+  });
+}

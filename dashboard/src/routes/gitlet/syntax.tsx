@@ -3,6 +3,7 @@
  * ink (`styles/gitlet-code.css`), the seventh exception.
  */
 import {
+  Fragment,
   memo,
   useDeferredValue,
   useEffect,
@@ -15,9 +16,11 @@ import {
   SYNTAX_MAX_BYTES,
   SYNTAX_MAX_LINE,
   language,
+  languageOfInfo,
   load,
   loaded,
   statesOf,
+  type Lang,
 } from "~/lib/syntax/index.ts";
 import { KINDS, type Grammar, type Kind, type State, type Token } from "~/lib/syntax/types.ts";
 import { codeRest } from "~/lib/useCodeQuery.ts";
@@ -87,7 +90,11 @@ export function tokensOf(
 
 /** The grammar for a path once its chunk has arrived, or null (plain text, or still loading). */
 export function useGrammar(path: string): Grammar | null {
-  const lang = language(path);
+  return useLangGrammar(language(path));
+}
+
+/** A language's grammar once its chunk has arrived, or null (none, or still loading). */
+export function useLangGrammar(lang: Lang | null): Grammar | null {
   const [arrived, setArrived] = useState<{ lang: string; grammar: Grammar } | null>(null);
   useEffect(() => {
     if (!lang || loaded(lang)) return;
@@ -103,6 +110,40 @@ export function useGrammar(path: string): Grammar | null {
   }, [lang]);
   if (!lang) return null;
   return loaded(lang) ?? (arrived?.lang === lang ? arrived.grammar : null);
+}
+
+const utf8 = new TextEncoder();
+
+/** A Markdown fence coloured in its language: `md-code`'s box, its text unchanged. */
+export function PaintedFence({ text, lang, info }: { text: string; lang: Lang; info: string }) {
+  const grammar = useLangGrammar(lang);
+  const lines = useMemo(() => text.split("\n"), [text]);
+  const small = useMemo(() => utf8.encode(text).length < SYNTAX_MAX_BYTES, [text]);
+  // THE PLAIN PAINT FIRST, as a file's: the walk reads the deferred grammar.
+  const deferred = useDeferredValue(small ? grammar : null, null);
+  const tokens = useMemo(() => {
+    if (!deferred) return null;
+    const states = statesOf(deferred, lines, "");
+    return lines.map((line, i) => tokensOf(deferred, line, states[i]!));
+  }, [deferred, lines]);
+  return (
+    <pre className="md-code" data-lang={info}>
+      <code>
+        {lines.map((line, i) => (
+          <Fragment key={i}>
+            {i > 0 && "\n"}
+            <Painted text={line} tokens={tokens?.[i] ?? null} />
+          </Fragment>
+        ))}
+      </code>
+    </pre>
+  );
+}
+
+/** `renderMarkdown`'s fence hook: a fence in a known language coloured, any other left to `md-code`. */
+export function paintFence(text: string, info: string, key: string): ReactNode {
+  const lang = languageOfInfo(info);
+  return lang ? <PaintedFence key={key} text={text} lang={lang} info={info} /> : null;
 }
 
 /** A blob's lines read by its whole id, as far as they have been asked. */

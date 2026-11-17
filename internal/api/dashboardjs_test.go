@@ -2695,6 +2695,8 @@ const (
 	// 6650.0 KiB (6,809,588 bytes), 17,276 over main: 6651 KiB.
 	// Setting editors and SettingsTable on DataGrid's anatomy, on kit 0.150.0: 6661.5 KiB (6,821,388 bytes),
 	// 29,076 over main, the kit's editors in the settings editors' chunk and kit 0.147.0 to 0.150.0: 6662 KiB.
+	// A Gitlet repository's home as a code host, on kit 0.147.0: 6676.2 KiB
+	// (6,836,450 bytes), 14,136 over main: 6677 KiB.
 	treeBudget = 5<<20 + 1543<<10
 )
 

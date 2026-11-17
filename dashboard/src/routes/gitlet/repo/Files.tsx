@@ -2,10 +2,11 @@
  * A repository's files at a revision: a directory's listing, a file's lines
  * with the ones an address picks marked, and the blame of a file — drawn as a
  * code host draws them. A directory is one card: the latest commit that
- * touched it across its head, then its entries, each with its glyph; at the
- * root its README follows in a card of its own. A file is one card: its name,
- * its size and its lines across its head, with the switch between its lines
- * and its blame and what a reader does with it, then its lines.
+ * touched it across its head, then its entries, each with the commit that last
+ * changed it and when; at the root its README and LICENSE follow as tabs of
+ * one card under the files. A file is one card: its name, its size and its
+ * lines across its head, with the switch between its lines and its blame and
+ * what a reader does with it, then its lines.
  *
  * # The address is the place
  *
@@ -57,7 +58,7 @@
  * from line 1 (`routes/gitlet/syntax.tsx`); a larger one is drawn plain.
  */
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Button,
   ButtonLink,
@@ -65,27 +66,27 @@ import {
   Card,
   CodeBlock,
   Copyable,
-  EmptyValue,
   SegmentedControl,
   Skeleton,
   Stack,
-  TableNumberCell,
-  VisuallyHidden,
+  Tabs,
+  tabId,
 } from "@crewlethq/ui";
 import {
   BookOpenGlyph,
-  BookmarkGlyph,
   FileCodeGlyph,
+  ScaleGlyph,
   GitBranchGlyph,
   LinkGlyph,
   RotateCcwClockGlyph,
+  TagGlyph,
 } from "@crewlethq/icons/glyphs";
-import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { useParam } from "~/app/router.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { CODE_MAX_BLAME_LINES } from "~/contract/code.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import { useNow } from "~/lib/clock.ts";
+import { CHECK_HISTORY_DAYS, rollupFor, rollupTitle } from "~/lib/checks.ts";
 import {
   EARLIER_FILE_LINES,
   baseName,
@@ -110,32 +111,39 @@ import {
   type CodeBlameCommit,
   type CodeBlameLine,
   type CodeBlobAnswer,
+  type CodeCommitMark,
   type CodeGitAnswer,
+  type CodePushedBy,
   type CodeRepoDetail,
   type CodeTreeEntry,
 } from "~/protocol/index.ts";
 import { commitHref, repoHref } from "../paths.ts";
 import {
+  CheckRollupMark,
   CloneButton,
-  EntryGlyph,
   Face,
+  GITLET,
+  LICENSE_NAMES,
   README_NAMES,
   ShaChip,
   cloneURL,
-  entryKind,
   useWhoName,
 } from "../ui.tsx";
-import { Painted, tokensOf, useGrammar, useLineStates } from "../syntax.tsx";
-import { subjectOf } from "./History.tsx";
+import { Painted, paintFence, tokensOf, useGrammar, useLineStates } from "../syntax.tsx";
+import { gitletWrote, mergeTitle, subjectOf } from "./History.tsx";
+import { Entries } from "./Entries.tsx";
+import { useCommitMarks } from "./marks.ts";
 import { RefPicker, revisionWord, type Revisions } from "./refs.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import {
+  EditFileButton,
   FileWriteButtons,
   FirstFileButton,
   NewFileButton,
   targetOf,
   type CommitTarget,
 } from "./FileWrites.tsx";
+import { GoToFile } from "./GoToFile.tsx";
 import "~/styles/gitlet.css";
 
 /** What one page of a path read holds: a listing's entries, or one page of a file. */
@@ -218,15 +226,28 @@ function RootListing({ repo, revisions, rev, path, onRev }: Place) {
         path={path}
         onRev={onRev}
         target={targetOf(rev, first.data)}
+        commit={commit}
         dir
       />
       <Card padding="none" className="code-browser">
-        <LatestCommit repo={repo} rev={rev} path={path} commit={commit} />
-        <PathBody repo={repo} rev={rev} path={path} first={first} paged={paged} />
+        <LatestCommit
+          repo={repo}
+          rev={rev}
+          path={path}
+          commit={commit}
+          resolved={first.data?.resolved?.ref?.ref ?? ""}
+          by={first.data?.pushed_by?.[commit]}
+        />
+        <PathBody repo={repo} rev={rev} path={path} commit={commit} first={first} paged={paged} />
       </Card>
       {/* THE README OF THE REVISION ON SCREEN, read at the commit the
           listing was: the two are one revision. */}
-      <Readme repo={repo} entries={paged.items} commit={commit} />
+      <RepoDocs
+        repo={repo}
+        entries={paged.items}
+        commit={commit}
+        target={targetOf(rev, first.data)}
+      />
     </Stack>
   );
 }
@@ -286,6 +307,7 @@ function PathView({
         path={path}
         onRev={onRev}
         target={target}
+        commit={commit}
         dir={dir}
       />
       {file ? (
@@ -327,13 +349,27 @@ function PathView({
               onPick={onPick}
             />
           ) : (
-            <PathBody repo={repo} rev={rev} path={path} first={first} paged={paged} />
+            <PathBody
+              repo={repo}
+              rev={rev}
+              path={path}
+              commit={commit}
+              first={first}
+              paged={paged}
+            />
           )}
         </FileCard>
       ) : (
         <Card padding="none" className="code-browser">
-          <LatestCommit repo={repo} rev={rev} path={path} commit={commit} />
-          <PathBody repo={repo} rev={rev} path={path} first={first} paged={paged} />
+          <LatestCommit
+            repo={repo}
+            rev={rev}
+            path={path}
+            commit={commit}
+            resolved={first.data?.resolved?.ref?.ref ?? ""}
+            by={first.data?.pushed_by?.[commit]}
+          />
+          <PathBody repo={repo} rev={rev} path={path} commit={commit} first={first} paged={paged} />
         </Card>
       )}
     </Stack>
@@ -591,10 +627,10 @@ function FileLines({
 }
 
 /**
- * The bar above the code: the revision, the path back up to the root — the
- * repository's name first, every directory a link — and, at a directory, a
- * new file in it and, at the root, the clone. What a reader does with a file
- * is on the file's own card ([FileCard]).
+ * The bar above the code: the revision, the path back up to the root (the
+ * repository's name first, every directory a link) and, at a directory, Go
+ * to file and a new file in it and, at the root, the clone. What a reader
+ * does with a file is on the file's own card ([FileCard]).
  */
 function FilesBar({
   repo,
@@ -603,10 +639,13 @@ function FilesBar({
   path,
   onRev,
   target,
+  commit,
   dir = false,
 }: Place & {
   /** Where a commit from here lands ([targetOf]). */
   target: CommitTarget;
+  /** The commit the path's read resolved, whole, or none while it is read. */
+  commit: string;
   /** The path is a directory (or the root), which takes a new file. */
   dir?: boolean;
 }) {
@@ -617,16 +656,7 @@ function FilesBar({
       {path === "" ? (
         // AT THE ROOT the path is the repository the header names, so the bar
         // says what the picker picks among instead, each a link to its list.
-        <span className="code-ref-counts">
-          <a className="code-ref-counts__link" href={repoHref(repo.name, { tab: "branches" })}>
-            <GitBranchGlyph size="sm" className="code-glyph" />
-            {plural(repo.branches, "branch", "branches")}
-          </a>
-          <a className="code-ref-counts__link" href={repoHref(repo.name, { tab: "branches" })}>
-            <BookmarkGlyph size="sm" className="code-glyph" />
-            {plural(repo.tags, "tag")}
-          </a>
-        </span>
+        <RefCounts repo={repo} />
       ) : (
         <nav aria-label="Path" className="code-crumbs">
           <a className="code-crumbs__root" href={at("")}>
@@ -651,6 +681,7 @@ function FilesBar({
         </nav>
       )}
       <span className="code-bar-end">
+        {dir && <GoToFile repo={repo.name} rev={rev} commit={commit} />}
         {dir && <NewFileButton repo={repo} target={target} dir={path} />}
         {path === "" && <CloneButton repo={repo.name} />}
       </span>
@@ -658,27 +689,62 @@ function FilesBar({
   );
 }
 
+/** The branches and tags the picker picks among, each a link to its list on Branches. */
+function RefCounts({ repo, tags = true }: { repo: CodeRepoDetail; tags?: boolean }) {
+  return (
+    <span className="code-ref-counts">
+      <ButtonLink
+        size="small"
+        variant="ghost"
+        href={repoHref(repo.name, { tab: "branches" })}
+        leadingIcon={<GitBranchGlyph size="sm" />}
+      >
+        <span>
+          <strong>{fmtCount(repo.branches)}</strong> {repo.branches === 1 ? "Branch" : "Branches"}
+        </span>
+      </ButtonLink>
+      {tags && (
+        <ButtonLink
+          size="small"
+          variant="ghost"
+          href={repoHref(repo.name, { tab: "branches", view: "tags" })}
+          leadingIcon={<TagGlyph size="sm" />}
+        >
+          <span>
+            <strong>{fmtCount(repo.tags)}</strong> {repo.tags === 1 ? "Tag" : "Tags"}
+          </span>
+        </ButtonLink>
+      )}
+    </span>
+  );
+}
+
 /**
- * The latest commit that touched a directory, across the head of its card,
- * as a code host draws it: who wrote it, its subject — the link to the
- * commit — its id and when, and the way to the whole history of the path.
+ * The latest commit that touched a directory, across the head of its card, as
+ * a code host draws it: who wrote it (Gitlet where it wrote the merge), its
+ * subject as the link to the commit, its check, its id, when, and the history.
  *
  * ONE COMMIT OF THE PATH'S HISTORY (`code_log`, `limit` 1) at the commit the
- * listing was read at, where it resolved one, so the bar and the entries
- * under it are one revision; at a commit's whole id the answer is immutable
- * and the tab keeps it.
+ * listing was read at, and that commit's marks (`code_commit_marks`), so the
+ * row and the entries under it are one revision.
  */
 function LatestCommit({
   repo,
   rev,
   path,
   commit,
+  resolved,
+  by,
 }: {
   repo: CodeRepoDetail;
   rev: string;
   path: string;
   /** The commit the listing resolved, whole, or none while it is read. */
   commit: string;
+  /** The whole ref the listing's revision resolved, "" for a commit's id. */
+  resolved: string;
+  /** The push that introduced `commit`, where the listing's read names one. */
+  by: CodePushedBy | undefined;
 }) {
   const now = useNow();
   const whoName = useWhoName();
@@ -688,50 +754,118 @@ function LatestCommit({
   );
   const read = useCodeQuery("code_log", params, { enabled: commit !== "" });
   const latest = read.data?.log?.commits?.[0];
+  const pages = useMemo(() => (latest ? [[latest.oid]] : []), [latest]);
+  const marks = useCommitMarks(repo.name, pages);
   const history = repoHref(repo.name, { tab: "commits", ref: rev, path });
+  if (!latest) {
+    return (
+      <div className="code-latest">
+        {read.loading || commit === "" ? (
+          <Skeleton variant="text" rows={1} label="Reading the latest commit" />
+        ) : read.error ? (
+          <PageFailed error={read.error} />
+        ) : (
+          <span className="muted">
+            No commit of {revisionWord(repo, rev)} changed {path || "it"}.
+          </span>
+        )}
+      </div>
+    );
+  }
+  // THE LATEST'S OWN `by` only: the listing's push decorates the commit it resolved.
+  const pushed = latest.oid === commit ? by : undefined;
+  const mark = marks.failed ? null : marks.of(latest.oid);
+  const mayBeGitlet = (latest.parent_count ?? 0) >= 2 && latest.engine_committed === true;
+  const gitlet = gitletWrote(latest, pushed, mark);
+  const author = latest.author ?? `(${latest.author_bytes ?? 0} bytes)`;
+  const at = gitlet ? latest.committed_at : latest.authored_at;
+  const defaultRef = `refs/heads/${repo.default_branch}`;
+  const branch = resolved.startsWith("refs/heads/") ? resolved : defaultRef;
   return (
     <div className="code-latest">
-      {latest ? (
-        <>
-          <span className="code-latest__who">
-            <Face who={latest.author ?? ""} />
-            <span className="code-latest__author" title={latest.author_email}>
-              {latest.author ? whoName(latest.author) : `(${latest.author_bytes ?? 0} bytes)`}
-            </span>
-          </span>
-          <a className="code-latest__subject" href={commitHref(repo.name, latest.oid)}>
-            {subjectOf(latest)}
-          </a>
-          <span className="code-latest__end">
-            <ShaChip oid={latest.oid} />
-            <time
-              className="code-latest__when"
-              dateTime={latest.authored_at}
-              title={fmtDateTime(latest.authored_at)}
-            >
-              {relTime(latest.authored_at, now)}
-            </time>
-            <ButtonLink
-              size="small"
-              variant="ghost"
-              href={history}
-              leadingIcon={<RotateCcwClockGlyph size="sm" />}
-            >
-              History
-            </ButtonLink>
-          </span>
-        </>
-      ) : read.loading || commit === "" ? (
-        <Skeleton variant="text" rows={1} label="Reading the latest commit" />
-      ) : read.error ? (
-        <PageFailed error={read.error} />
+      {mayBeGitlet && mark === undefined ? (
+        // THE WRITER WAITS FOR THE MARKS where it may be Gitlet, so the name never changes.
+        <span className="code-latest__who">
+          <Skeleton variant="text" rows={1} label="Reading who wrote it" />
+        </span>
       ) : (
-        <span className="muted">
-          No commit of {revisionWord(repo, rev)} changed {path || "it"}.
+        <span
+          className="code-latest__who"
+          title={gitlet ? mergeTitle(latest, pushed, mark, whoName) : latest.author_email}
+        >
+          <Face who={gitlet ? GITLET : author} />
+          <span className="code-latest__author">{whoName(gitlet ? GITLET : author)}</span>
         </span>
       )}
+      <a
+        className="code-latest__subject"
+        href={commitHref(repo.name, latest.oid)}
+        title={subjectOf(latest)}
+      >
+        {subjectOf(latest)}
+      </a>
+      <span className="code-latest__end">
+        <span className="code-latest__check">
+          <LatestCheck
+            mark={mark}
+            failed={marks.failed !== null}
+            by={pushed}
+            branch={branch}
+            defaultRef={defaultRef}
+            now={now}
+          />
+        </span>
+        <ShaChip oid={latest.oid} />
+        <time className="code-latest__when" dateTime={at} title={fmtDateTime(at)}>
+          {relTime(at, now)}
+        </time>
+        <ButtonLink
+          size="small"
+          variant="ghost"
+          href={history}
+          leadingIcon={<RotateCcwClockGlyph size="sm" />}
+        >
+          History
+        </ButtonLink>
+      </span>
     </div>
   );
+}
+
+/**
+ * The latest commit's check as its glyph, or that checks are no longer kept;
+ * nothing until known, and nothing where the marks were refused or failed.
+ */
+function LatestCheck({
+  mark,
+  failed,
+  by,
+  branch,
+  defaultRef,
+  now,
+}: {
+  mark: CodeCommitMark | null | undefined;
+  /** The marks read was refused or failed: the engine said nothing of the checks. */
+  failed: boolean;
+  by: CodePushedBy | undefined;
+  branch: string;
+  defaultRef: string;
+  now: number;
+}) {
+  if (mark === undefined || failed) return null;
+  const rollup = rollupFor(mark, branch, defaultRef);
+  if (rollup) {
+    return <CheckRollupMark bare rollup={rollup} title={rollupTitle(rollup, branch, now)} />;
+  }
+  const pushed = Date.parse(by?.at ?? "");
+  if (!Number.isNaN(pushed) && now - pushed > CHECK_HISTORY_DAYS * 86_400_000) {
+    return (
+      <span className="t-caption" title={`Checks are kept ${CHECK_HISTORY_DAYS} days.`}>
+        Checks no longer kept
+      </span>
+    );
+  }
+  return null;
 }
 
 /**
@@ -834,12 +968,15 @@ function PathBody({
   repo,
   rev,
   path,
+  commit,
   first,
   paged,
 }: {
   repo: CodeRepoDetail;
   rev: string;
   path: string;
+  /** The commit the read resolved, whole, or none while it is read. */
+  commit: string;
   first: QueryResult<CodeGitAnswer>;
   paged: Paged<PathPart, CodeGitAnswer>;
 }) {
@@ -855,6 +992,7 @@ function PathBody({
     () => paged.items.filter((p): p is CodeTreeEntry => "mode" in p),
     [paged.items],
   );
+  const now = useNow();
   if (first.loading && !first.data) {
     return <Skeleton variant="text" rows={8} label={`Loading ${path || repo.name}`} />;
   }
@@ -869,11 +1007,14 @@ function PathBody({
     return <Source repo={repo.name} path={path} place={path} pages={pages} picked={null} />;
   return (
     <>
-      <Listing
+      <Entries
         repo={repo}
         rev={rev}
+        path={path}
+        commit={commit}
         entries={entries}
         total={first.data.tree?.total ?? entries.length}
+        now={now}
       />
       <Pager paged={paged} what="entries" />
     </>
@@ -904,91 +1045,6 @@ function Pager({
       )}
       {paged.pageError && <PageFailed error={paged.pageError} />}
     </div>
-  );
-}
-
-/**
- * A directory's entries, each opening its directory or its file, on the
- * grid every list is drawn with — the card's body, flush under the latest
- * commit. Each entry is its glyph and its name, its kind said to a screen
- * reader beside the name, and a file its size.
- *
- * IN GIT'S ORDER, AND SORTED BY ITS HEADS ONLY ONCE THE WHOLE DIRECTORY IS
- * HERE: the engine pages a long directory, and a sort of the pages loaded
- * would answer a different question from the one the heads ask. Git's order
- * is byte order, so a code host's directories-first is a sort of its own,
- * and the heads offer it once the directory is whole.
- */
-function Listing({
-  repo,
-  rev,
-  entries,
-  total,
-}: {
-  repo: CodeRepoDetail;
-  rev: string;
-  entries: readonly CodeTreeEntry[];
-  total: number;
-}) {
-  const whole = entries.length >= total;
-  const sorts = <K,>(by: (e: CodeTreeEntry) => K) => (whole ? by : undefined);
-  return (
-    <DataGrid<CodeTreeEntry>
-      name="files"
-      flush
-      rows={[...entries]}
-      rowKey={(e) => e.path}
-      serverSorted={!whole}
-      aria-label="Files"
-      loadedNote={
-        whole ? undefined : `${fmtCount(entries.length)} of ${plural(total, "entry", "entries")}`
-      }
-      empty={{ title: "This directory is empty", icon: "folder" }}
-      columns={[
-        {
-          key: "name",
-          header: "Name",
-          floor: "12rem",
-          phoneLead: true,
-          // DIRECTORIES FIRST, then by name: the order a reader scans a
-          // directory in, offered once the whole of it is here.
-          sortValue: sorts((e) => `${e.type === "tree" ? 0 : 1}${baseName(e.path).toLowerCase()}`),
-          cell: (e) => (
-            <span className="code-tree-entry">
-              <EntryGlyph entry={e} />
-              {e.type === "commit" ? (
-                // A SUBMODULE IS ANOTHER REPOSITORY'S COMMIT: nothing of it is
-                // here to open.
-                <span className="code-tree-entry__name" title={`${baseName(e.path)} @ ${e.oid}`}>
-                  {baseName(e.path)} <span className="muted mono">@ {shortOID(e.oid)}</span>
-                </span>
-              ) : (
-                <a
-                  className="code-tree-entry__name"
-                  href={repoHref(repo.name, { ref: rev, path: e.path })}
-                >
-                  {baseName(e.path)}
-                </a>
-              )}
-              <VisuallyHidden>{entryKind(e)}</VisuallyHidden>
-            </span>
-          ),
-        },
-        {
-          key: "size",
-          header: "Size",
-          shrink: true,
-          align: "right",
-          sortValue: sorts((e) => (e.type === "blob" ? (e.size ?? 0) : null)),
-          cell: (e) =>
-            e.type === "blob" ? (
-              <TableNumberCell value={e.size ?? 0} format={fmtBytes} />
-            ) : (
-              <EmptyValue label={entryKind(e) === "Directory" ? "A directory" : "Not a file"} />
-            ),
-        },
-      ]}
-    />
   );
 }
 
@@ -1381,57 +1437,73 @@ function Blame({
 }
 
 /**
- * The README at the root of the revision on screen, in a card of its own
- * under the files, as a code host draws it: the root's listing names it, and
- * its file is read at the commit that listing resolved, so the two are one
- * revision. Markdown is rendered by the dashboard's own renderer, which
- * builds every element itself, so text a pusher wrote cannot introduce one;
- * any other README is drawn as its text. A root with none says nothing: the
- * files above it are the answer.
+ * The README and LICENSE at the root, tabs of one card under the files
+ * (`doc=license`), read at the listing's commit, markdown by the dashboard's
+ * own renderer with its fences coloured. A root with neither draws nothing.
  */
-function Readme({
+function RepoDocs({
   repo,
   entries,
   commit,
+  target,
 }: {
   repo: CodeRepoDetail;
   /** What the root's listing holds, every page of it read so far. */
   entries: readonly PathPart[];
   /** The commit the listing resolved, whole. */
   commit: string;
+  target: CommitTarget;
 }) {
+  const [doc, setDoc] = useParam("doc", "", "filter");
+  const panelId = useId();
   const files = entries.filter((e): e is CodeTreeEntry => "mode" in e && e.type === "blob");
-  const entry = README_NAMES.map((name) =>
-    files.find((e) => baseName(e.path).toLowerCase() === name),
-  ).find(Boolean);
+  const firstOf = (names: readonly string[]) =>
+    names.map((name) => files.find((e) => baseName(e.path).toLowerCase() === name)).find(Boolean);
+  const docs = [
+    {
+      value: "readme",
+      label: "README",
+      icon: <BookOpenGlyph size="sm" />,
+      entry: firstOf(README_NAMES),
+    },
+    {
+      value: "license",
+      label: "LICENSE",
+      icon: <ScaleGlyph size="sm" />,
+      entry: firstOf(LICENSE_NAMES),
+    },
+  ].filter((d) => d.entry !== undefined);
+  const shown = docs.find((d) => d.value === (doc === "license" ? "license" : "readme")) ?? docs[0];
+  const entry = shown?.entry;
   const file = useCodeQuery(
     "code_blob",
     { name: repo.name, path: entry?.path ?? "", ...(commit ? { ref: commit } : {}) },
     { enabled: Boolean(entry) && commit !== "" },
   );
-  if (!entry) return null;
+  if (!shown || !entry) return null;
   const blob = file.data?.blob;
   return (
     <Card padding="none" className="code-readme" as="section" aria-label={baseName(entry.path)}>
-      <Card.Header
-        divided
-        icon={<BookOpenGlyph size="sm" />}
-        subtitle={<span className="mono">at {revisionWord(repo, commit)}</span>}
-        actions={
-          <ButtonLink
-            size="small"
-            variant="ghost"
-            href={repoHref(repo.name, { ref: commit, path: entry.path })}
-          >
-            Open the file
-          </ButtonLink>
-        }
+      <div className="code-docs__head">
+        <Tabs
+          variant="chip"
+          size="sm"
+          ariaLabel="The repository's documents"
+          value={shown.value}
+          onValueChange={(next) => setDoc(next === "license" ? "license" : "")}
+          panelId={panelId}
+          items={docs.map(({ value, label, icon }) => ({ value, label, icon }))}
+        />
+        <EditFileButton repo={repo} target={target} path={entry.path} file={blob} />
+      </div>
+      <div
+        className="code-docs__body"
+        role="tabpanel"
+        id={panelId}
+        aria-labelledby={tabId(panelId, shown.value)}
       >
-        <Card.Title as="h2">{baseName(entry.path)}</Card.Title>
-      </Card.Header>
-      <Card.Body padding="lg">
         {(file.loading && !blob) || commit === "" ? (
-          <Skeleton variant="text" rows={4} label="Loading the README" />
+          <Skeleton variant="text" rows={4} label={`Loading ${baseName(entry.path)}`} />
         ) : file.error ? (
           <QueryState
             error={file.error}
@@ -1444,14 +1516,14 @@ function Readme({
         ) : blob?.binary ? (
           <p className="muted">It is a binary file.</p>
         ) : /\.(md|markdown)$/i.test(entry.path) ? (
-          <div className="prose md">{renderMarkdown(blob?.text ?? "")}</div>
+          <div className="prose md">{renderMarkdown(blob?.text ?? "", { fence: paintFence })}</div>
         ) : (
           <pre className="code-readme__text">{blob?.text ?? ""}</pre>
         )}
         {file.data?.next && (
           <Callout variant="neutral">It runs past one page: open it to read the rest.</Callout>
         )}
-      </Card.Body>
+      </div>
     </Card>
   );
 }
@@ -1476,12 +1548,7 @@ function NoDefaultBranch({
     <Stack gap={3}>
       <PageToolbar>
         <RefPicker repo={repo} revisions={revisions} value="" onChoose={onRev} />
-        <span className="code-ref-counts">
-          <a className="code-ref-counts__link" href={repoHref(repo.name, { tab: "branches" })}>
-            <GitBranchGlyph size="sm" className="code-glyph" />
-            {plural(repo.branches, "branch", "branches")}
-          </a>
-        </span>
+        <RefCounts repo={repo} tags={false} />
       </PageToolbar>
       <Card className="code-setup">
         <Card.Header divided>
