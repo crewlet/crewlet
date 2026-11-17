@@ -268,24 +268,25 @@ func TestAChannelThatCannotSignIsNotBuilt(t *testing.T) {
 	}
 }
 
-// THE GUARD FORGETS AN ID ONLY ONCE ITS DEADLINE HAS PASSED — when the deadline
-// refuses it anyway — so what it holds is bounded by the requests still in
-// flight, and a replay is refused for as long as it could be taken.
-func TestTheGuardForgetsAnIDOnlyAtItsDeadline(t *testing.T) {
+// THE GUARD FORGETS AN ID ONLY ONCE ITS CHANNEL WOULD REFUSE IT ANYWAY — here,
+// a channel that allows two clocks nothing, at its deadline — so what it holds
+// is bounded by the requests still in flight, and a replay is refused for as
+// long as it could be taken.
+func TestTheGuardForgetsAnIDOnlyOnceItsChannelWouldRefuseIt(t *testing.T) {
 	t.Parallel()
 	g := NewGuard()
 	now := instant
-	if g.take("r-1", now.Add(time.Minute), now) != "" || g.take("r-1", now.Add(time.Minute), now) == "" {
+	if g.take("r-1", now.Add(time.Minute), 0, now) != "" || g.take("r-1", now.Add(time.Minute), 0, now) == "" {
 		t.Fatal("an id was not taken once and refused after")
 	}
 	// SHORT-LIVED REQUESTS fill the guard to its floor; the next admission
 	// after their deadlines sweeps them out and keeps what is in flight.
 	for i := range sweepFloor - 2 {
-		g.take("filler-"+strconv.Itoa(i), now.Add(time.Second), now)
+		g.take("filler-"+strconv.Itoa(i), now.Add(time.Second), 0, now)
 	}
 	later := now.Add(30 * time.Second)
-	g.take("r-2", later.Add(time.Minute), later)
-	g.take("r-3", later.Add(time.Minute), later)
+	g.take("r-2", later.Add(time.Minute), 0, later)
+	g.take("r-3", later.Add(time.Minute), 0, later)
 	g.mu.Lock()
 	held := len(g.seen)
 	_, stillHeld := g.seen["r-1"]
@@ -294,7 +295,78 @@ func TestTheGuardForgetsAnIDOnlyAtItsDeadline(t *testing.T) {
 		t.Fatalf("after a sweep the guard holds %d ids (r-1 held: %v), want the three still "+
 			"in flight", held, stillHeld)
 	}
-	if g.take("r-1", now.Add(time.Minute), later) == "" {
+	if g.take("r-1", now.Add(time.Minute), 0, later) == "" {
 		t.Fatal("an id still in flight was forgotten by the sweep")
+	}
+}
+
+// A REQUEST IS TAKEN ONCE UNTIL ITS DEADLINE PLUS ITS CHANNEL'S ALLOWANCE FOR
+// TWO CLOCKS, judged on the taking node's clock: up to the last instant before
+// that, a first arrival is admitted and a second is a replay; from it, every
+// arrival is stale, saying the allowance passed too. And the guard remembers an
+// id exactly as long — a sweep between the deadline and the end of the
+// allowance keeps it, or a replay arriving then would be taken again, which is
+// the window the allowance opens. A negative allowance builds no channel.
+func TestARequestIsTakenOnceUntilItsDeadlinePlusItsChannelsAllowance(t *testing.T) {
+	t.Parallel()
+	const apart = time.Hour
+	c, err := New[ask, answer]("test.channel", fleetRing, ClockAllowance(apart))
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard := NewGuard()
+	sent := sealed(t, c, removal)
+	last := removal.Deadline.Add(apart - time.Nanosecond)
+	if got := c.Admit(sent, guard, last); got.Disposition != Admitted {
+		t.Fatalf("a request arriving a nanosecond inside its deadline plus the channel's %v = %+v, "+
+			"want it admitted", apart, got)
+	}
+	if again := c.Admit(sent, guard, last); again.Disposition != Stale ||
+		!strings.Contains(again.Why, "taken already") {
+		t.Fatalf("the same request again at that instant = %+v, want it refused as taken already", again)
+	}
+	fresh := ask{ID: "r-fresh", Deadline: removal.Deadline, Do: removal.Do}
+	late := c.Admit(sealed(t, c, fresh), guard, removal.Deadline.Add(apart))
+	if late.Disposition != Stale || !strings.Contains(late.Why, "had passed") ||
+		!strings.Contains(late.Why, apart.String()) {
+		t.Fatalf("a fresh request arriving at its deadline plus the channel's %v = %+v, want it "+
+			"stale, naming the allowance that passed", apart, late)
+	}
+
+	// THE MEMORY MOVES WITH THE ADMISSION. A long request is taken, short ones
+	// fill the guard to its floor, and the next admission — after the long
+	// one's deadline, inside its allowance, past every short one's — sweeps.
+	swept := NewGuard()
+	long := ask{ID: "r-long", Deadline: instant.Add(2 * time.Hour), Do: removal.Do}
+	longSent := sealed(t, c, long)
+	if got := c.Admit(longSent, swept, instant); got.Disposition != Admitted {
+		t.Fatalf("the long request = %+v, want it admitted", got)
+	}
+	for i := range sweepFloor - 1 {
+		short := ask{ID: "short-" + strconv.Itoa(i), Deadline: instant.Add(time.Second), Do: removal.Do}
+		if got := c.Admit(sealed(t, c, short), swept, instant); got.Disposition != Admitted {
+			t.Fatalf("short request %d = %+v, want it admitted", i, got)
+		}
+	}
+	between := long.Deadline.Add(apart / 2)
+	sweeper := ask{ID: "r-sweeper", Deadline: between.Add(time.Minute), Do: removal.Do}
+	if got := c.Admit(sealed(t, c, sweeper), swept, between); got.Disposition != Admitted {
+		t.Fatalf("the request that sweeps = %+v, want it admitted", got)
+	}
+	if replay := c.Admit(longSent, swept, between); replay.Disposition != Stale ||
+		!strings.Contains(replay.Why, "taken already") {
+		t.Fatalf("a replay of the long request after a sweep past its deadline, inside its "+
+			"allowance = %+v, want it refused as taken already", replay)
+	}
+	swept.mu.Lock()
+	held := len(swept.seen)
+	swept.mu.Unlock()
+	if held != 2 {
+		t.Fatalf("after the sweep the guard holds %d ids, want 2 (the long request and the one "+
+			"that swept): the sweep did not run, so the replay above proved nothing", held)
+	}
+
+	if _, err := New[ask, answer]("test.channel", fleetRing, ClockAllowance(-time.Second)); err == nil {
+		t.Error("a channel allowing two clocks a negative distance was built")
 	}
 }

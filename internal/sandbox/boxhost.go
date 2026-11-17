@@ -2,12 +2,16 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/objstore"
 )
 
 // Who may touch a box.
@@ -74,15 +78,21 @@ func (r BoxRead) Valid() bool { return slices.Contains(BoxReads, r) }
 // asker fits the rest ([Coordinator.fitText]).
 //
 // THREE KINDS OF FAILURE, each told apart because each is handled apart: the
-// host said the box is gone (wrapping [ErrBoxGone]); the host did not answer
-// ([ErrBoxHostSilent]); and anything else the host said, which is the box's
-// own failure to be read, counted like one read here.
+// host said the box is gone (wrapping [ErrBoxGone]); the host gave no account
+// of the box ([ErrBoxHostSilent]) — it did not answer, or answered that it was
+// busy with other reads of its boxes ([ErrBoxHostBusy]), or this node could
+// not put the read to it at all ([ErrBoxNotAsked]), each of which says nothing
+// about the box and is handled as a host that did not answer; and anything
+// else the host said, which is the box's own failure to be read, counted like
+// one read here.
 type BoxReader interface {
 	ReadBox(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error)
 }
 
-// ErrBoxHostSilent is a box read the node whose host the box is on did not
-// answer: it is stopped, restarting, or gone.
+// ErrBoxHostSilent is a box read the node whose host the box is on gave no
+// account of the box: it is stopped, restarting, or gone — or it answered that
+// it was busy ([ErrBoxHostBusy]), or this node could not ask it
+// ([ErrBoxNotAsked]), which wrap this.
 //
 // NOT A FAILURE OF THE BOX, which is why a collection handed it gives its
 // claim back UNCOUNTED and acknowledges the completion: the host announces the
@@ -92,6 +102,15 @@ type BoxReader interface {
 // Counted, a host that restarted for a minute would have its runs given up as
 // unreadable.
 var ErrBoxHostSilent = errors.New("sandbox: the node whose host the box is on did not answer")
+
+// ErrBoxNotAsked is a box read this node could not put to the box's host at all
+// — its broker unreachable, or no time left to ask: no evidence about the box,
+// and none about its host.
+var ErrBoxNotAsked = fmt.Errorf("%w: this node could not ask it", ErrBoxHostSilent)
+
+// ErrBoxHostBusy is a box read the host answered without reading
+// ([BoxReadReply.Busy]): no evidence about the box, but the host is there.
+var ErrBoxHostBusy = fmt.Errorf("%w: it was busy with other reads of its boxes", ErrBoxHostSilent)
 
 // ErrBoxNotHosted is a box read refused by the node asked: the run is not one
 // whose box is on its host, or the run is not in the state the read is made
@@ -114,12 +133,17 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // [Coordinator.takeRecordsRoom]), and a third for the pause, its record and
 // the answer ([Coordinator.pauseRoom]). They are counted because the read is
 // where the session is taken out of the box, on the host and before the box is
-// paused: the host reads only for its share of the budget
-// ([BoxReadAnswerShare]), so all of it is counted at that share, and a take at
-// its bound fits a host's read whole rather than being cut by the host's own
-// deadline. Only the take: the upload and the record are made off the read,
-// from the moment the session is spooled ([Coordinator.keepCapture]), so no
-// asker waits on an upload.
+// paused: the host reads only for its share of the wait the request carries,
+// counted from the moment the request reaches it, on its own clock
+// ([BoxReadRequest.AnswerBudget]), so all of it is counted at that share, and
+// a take at its bound fits whole a read the host makes as the request arrives
+// rather than being cut by the host's own deadline. A read that first waited
+// for one of the reads a host makes at once is handed only what is left of the
+// share, so one that waited long may be cut by that deadline and answer that
+// it could not read the box: reading on would take the session out of the box
+// for an asker that had gone. Only the take: the upload and the record are
+// made off the read, from the moment the session is spooled
+// ([Coordinator.keepCapture]), so no asker waits on an upload.
 //
 // # Each change of the run's row the host's read makes, at the slowest crossing
 //
@@ -223,9 +247,27 @@ func (r BoxRead) mayEnd(run PendingRun) bool {
 	return false
 }
 
-// BoxReadAnswerShare is the part of [BoxReadBudget] a host's read may take,
-// leaving the rest for its answer to cross the broker before the asker stops
-// listening: [answerShare], a tail's.
+// BoxReadAnswerShare is the part of what its asker waits that a host's read may
+// take, counted from the moment the request reaches the host on the host's own
+// clock ([BoxReadRequest.AnswerBudget]), leaving the rest for the answer to
+// cross the broker before the asker stops listening: [answerShare], a tail's,
+// which a tail's owner applies to the wait its request carries the same way.
+//
+// THE QUARTER LEFT HOLDS THE CROSSINGS ALONE. Two clocks' distance needs none
+// of it, since the host counts the wait on its own clock from the request's
+// arrival, and nor does a wait for one of the host's reads at once, which is
+// counted against the share (internal/engine's box reads). What is left is the
+// request's two hops at the slowest pace the engine allows ([objstore.PaceFor]:
+// under a mebibyte, thirty seconds a hop) and the reply's two at the broker's
+// ceiling (eight mebibytes, four minutes a hop): nine minutes in all, against
+// more than nineteen, the quarter of the shortest wait a read asks at its
+// budget — an uncapped collection's, about seventy-eight minutes. An absolute
+// margin for the crossings would shorten a dead host's wait by about ten
+// minutes of those seventy-eight, at the cost of a second rule beside the
+// tail's for the same question, so the share stays the tail's.
+// A wait its asker's own context cuts far below its budget leaves a quarter no
+// share could fill at that pace; that is the cut's own defect, not the share's
+// (crewlet/crewlet#1405).
 const BoxReadAnswerShare = answerShare
 
 // BoxReadChannel names the signed channel a box read crosses
@@ -234,16 +276,53 @@ const BoxReadAnswerShare = answerShare
 // carries out for another.
 const BoxReadChannel = "sandbox.box_read"
 
-// BoxReadWireVersion is the request and reply shape this build speaks.
-// Evolution is ADDITIVE within a version.
-const BoxReadWireVersion = 1
+// BoxReadClockAllowance is how far apart the box-read channel allows the asking
+// and the answering node's clocks to stand (internal/signedask's
+// ClockAllowance): the most any two of the fleet's machines stand apart while
+// no node raises `clock_skew` ([objstore.AssumedClockSkew], twice). A host
+// ahead of its asker by up to that still takes the read, whose length the
+// request's own wait sets on the host's clock ([BoxReadRequest.BudgetMS]).
+// Past it, the host's clock is one the operator must fix, and the read is
+// refused as one whose asker has gone.
+//
+// What the two hours cost is a replay window two hours longer, at a node that
+// restarted inside it and so forgot the ids it took, for a read the run's row
+// licenses anyway ([Coordinator.ReadHostedBox]): a replayed collection, stop or
+// loss is made only where the row is still in the state that read is made in.
+const BoxReadClockAllowance = 2 * objstore.AssumedClockSkew
+
+// BoxReadWireVersion is the request and reply shape this build speaks, and the
+// only one its host answers.
+//
+// A MEMBER A LATER BUILD ADDS is refused by this build's host wherever a request
+// sets it, because the request decodes naming what it does not declare
+// ([BoxReadRequest.Unread]). So a later build leaves a field it adds out at its
+// zero, and a request that sets none is read as before. A change of what an
+// existing field MEANS, or a reply field an asker must understand, moves the
+// version. Version 2 is the request carrying its asker's wait as a duration
+// ([BoxReadRequest.BudgetMS]) and a host that may answer busy
+// ([BoxReadReply.Busy]).
+const BoxReadWireVersion = 2
 
 // BoxReadRequest is one box read, as it crosses the broker.
 type BoxReadRequest struct {
 	Version int `json:"v"`
-	// ID and Deadline bind the request: see internal/signedask.
+	// ID and Deadline bind the request against a replay: see
+	// internal/signedask. Deadline is the asker's instant, by its own clock,
+	// after which it no longer waits — the replay binding ONLY: the host
+	// never reads it as how long it may read, which on its own clock is the
+	// distance between two machines' clocks plus the wait ([BudgetMS]).
 	ID       string    `json:"id"`
 	Deadline time.Time `json:"deadline"`
+	// BudgetMS is how long the asker waits for the reply, in milliseconds, as
+	// its own clock measured it when it sealed the request: the read's budget
+	// ([BoxReadBudget]), or less where the asker's own context ends sooner.
+	// The host reads for its share of that wait, counted from the moment
+	// the request reached it, on the host's own clock
+	// ([BoxReadRequest.AnswerBudget]) — never from Deadline, the asker's
+	// instant, which only binds the request against a replay
+	// (internal/signedask). Zero is no wait, and refused.
+	BudgetMS int64 `json:"budget_ms,omitzero"`
 	// Node is the node asked — the one whose host the box is on
 	// ([PendingRun.LaunchNode]). Every node serves the subject and only
 	// that one answers.
@@ -252,10 +331,83 @@ type BoxReadRequest struct {
 	LaunchID  string  `json:"launch_id"`
 	SandboxID string  `json:"sandbox_id"`
 	Read      BoxRead `json:"read"`
+
+	// unread is every member of the request as it crossed that this build
+	// does not declare ([BoxReadRequest.UnmarshalJSON]): a request that
+	// carries one is refused rather than read short ([BoxReadRequest.Unread]).
+	unread []string
 }
 
-// Binding is the id and the deadline the request was minted under.
+// Binding is the id and the deadline the request was minted under: the replay
+// binding, never the length of the read ([BoxReadRequest.BudgetMS]).
 func (r BoxReadRequest) Binding() (string, time.Time) { return r.ID, r.Deadline }
+
+// AnswerBudget is how long the host may read for a request that reached it
+// waited ago, both on the host's own clock: what is left of its share, which
+// is [BoxReadAnswerShare] of the wait the request carried, counted from its
+// arrival — so whatever the read waited for one of the host's reads at once,
+// it ends by the arrival plus that share, and the last quarter of its asker's
+// wait is left whole for the request's and the answer's crossings. A share of
+// what the asker still waits instead would end a read that waited later the
+// longer it waited: at the waiting bound's end, three quarters of the way
+// through its asker's wait, it would read on for three quarters of the last
+// quarter, leaving a sixteenth of the wait for the crossings, under the nine
+// minutes [BoxReadAnswerShare] counts for them at the slowest pace, and the
+// host would take a session out of the box for an asker that had gone. Zero
+// once the share is spent. Not ok for a request that carries no wait, or one too
+// long to be a duration, which a host refuses as another build's.
+func (r BoxReadRequest) AnswerBudget(waited time.Duration) (time.Duration, bool) {
+	if r.BudgetMS <= 0 || r.BudgetMS > int64(math.MaxInt64/time.Millisecond) {
+		return 0, false
+	}
+	share := time.Duration(float64(time.Duration(r.BudgetMS)*time.Millisecond) * BoxReadAnswerShare)
+	return max(0, share-waited), true
+}
+
+// Unread is every top-level member of the request as it crossed that this
+// build does not declare, sorted; nil for a request this build reads whole.
+func (r BoxReadRequest) Unread() []string { return r.unread }
+
+// UnmarshalJSON decodes the request as json.Unmarshal would, and records the
+// members no field declares ([BoxReadRequest.Unread]).
+//
+// RECORDED RATHER THAN REFUSED HERE, so the request still decodes with the node
+// and the turn it names, and the host it names can log what it refused and for
+// which run; the host refuses it (internal/engine's box reads), as a data node
+// refuses an estate request whose arguments hold a key its build does not
+// declare (internal/estate's wire rule) rather than run it without them. WHICH
+// members are declared is the decoder's own answer, asked one member at a time
+// under its rule for a member no field declares, never a list of names kept
+// here beside the fields or a second spelling of how it matches them. The
+// request has no nested object, so its top-level members are all there is to
+// name.
+func (r *BoxReadRequest) UnmarshalJSON(data []byte) error {
+	type declared BoxReadRequest // the fields alone, without this method
+	if err := json.Unmarshal(data, (*declared)(r)); err != nil {
+		return err
+	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(data, &members); err != nil {
+		return err
+	}
+	r.unread = nil
+	for name := range members {
+		probe, err := json.Marshal(map[string]any{name: nil})
+		if err != nil {
+			return fmt.Errorf("sandbox: name the box read's member %q: %w", name, err)
+		}
+		if errors.Is(jsonv2.Unmarshal(probe, new(declared), boxReadMemberRule), jsonv2.ErrUnknownName) {
+			r.unread = append(r.unread, name)
+		}
+	}
+	slices.Sort(r.unread)
+	return nil
+}
+
+// boxReadMemberRule is json.Unmarshal's own decoding, refusing a member no
+// field declares and reporting it as the typed error that says so.
+var boxReadMemberRule = jsonv2.JoinOptions(json.DefaultOptionsV1(), jsonv2.RejectUnknownMembers(true),
+	json.ReportErrorsWithLegacySemantics(false))
 
 // BoxReadReply is a host's answer to one box read: the run's account read off
 // its box ([Coordinator.ReadHostedBox]), or why there is none.
@@ -279,6 +431,11 @@ type BoxReadReply struct {
 	Refused string `json:"refused,omitempty"`
 	// Error is a read that failed, in the host's own words.
 	Error string `json:"error,omitempty"`
+	// Busy is a host that made no read for this request: it was making as many
+	// reads of its boxes as it makes at once with as many waiting, or this
+	// request's share of its asker's wait ran out while it waited for one.
+	// Ask again; the host is there.
+	Busy bool `json:"busy,omitempty"`
 }
 
 // Answers is the id of the request this reply answers.
@@ -294,6 +451,8 @@ func (r BoxReadReply) Err() error {
 		return fmt.Errorf("%w: node %s: %s", ErrBoxNotHosted, r.Node, r.Refused)
 	case r.Error != "":
 		return fmt.Errorf("sandbox: node %s could not read the box: %s", r.Node, r.Error)
+	case r.Busy:
+		return fmt.Errorf("%w: node %s", ErrBoxHostBusy, r.Node)
 	case r.Result == nil:
 		return fmt.Errorf("sandbox: node %s answered the box read with no account of the run", r.Node)
 	}
