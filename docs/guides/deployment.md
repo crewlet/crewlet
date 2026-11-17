@@ -149,6 +149,35 @@ hours of each other:
   clock runs more than a day behind another's counts a seat's pushes on a day
   already forgotten, from nothing, and can land them past
   `code.limits.pushes_per_seat_day`.
+- A repository's [pushes by day](../concepts/gitlet.md#counting-pushes) are
+  kept as long as its push history, which drops a push once the broker's
+  instant on it is 181 days old, so a read's first day is refused once it is
+  181 days less two hours old by the clock of the node reading it. A reader
+  whose clock runs further behind the broker's than that is counted short for
+  the days the history already dropped.
+- A [narrowed push history](../concepts/gitlet.md#narrowing-a-push-history)
+  reads two hours past each end of a day or window it skips to or stops at,
+  since a push's instant, stamped by whichever broker member led the stream,
+  can stand before that of a push that landed earlier. A push stamped further
+  out of order than that can be left out of a narrowed page, while the
+  unnarrowed history lists it.
+- A [kept session's](../concepts/code-sandbox.md#each-launchs-session-kept)
+  capture is stamped on the run's record by the clock of the node taking it,
+  and any other node reads it as still being kept until its life and two
+  hours have passed by its own clock, about three hours and twelve minutes; a
+  read standing by beside it is read as standing until its window and two
+  hours have passed, about four hours and ten and a half minutes. Neither
+  wait holds that long on that reading alone: a turn's end holds each capture
+  for its life, and each standby for its window and its takeover's life, from
+  the moment it first sees it, on its own clock. A reader whose clock runs
+  further ahead of the taker's than the two hours can read a capture still
+  being kept as abandoned, or a read still standing by as gone.
+- A capture's record still to be answered names an object whose key the
+  spooling node's clock minted, and the executor log refuses it once it is
+  twelve hours old by the clock of the node deciding the record, so a reader
+  waits on the record's answer until the key is twelve hours and two hours
+  old by its own. A reader whose clock runs further ahead of the log's than
+  that stops waiting on a record the log may still take.
 - A read of a [box on another node's host](../concepts/code-sandbox.md#local-sandboxes)
   carries how long its asker waits, which the host counts on its own clock,
   and the host takes it until the asker's deadline, by the asker's clock, and
@@ -168,31 +197,37 @@ hours of each other:
 NTP keeps machines within milliseconds of each other; a host without it drifts,
 and a virtual machine restored from a snapshot can come back hours off.
 
+The same hour bounds one step of a single machine's own clock: a node removes
+a session spool a crash left behind only once it is an hour older than the
+longest a keep may wait to open it, by that machine's clock, so NTP stepping
+the clock forward by up to an hour to correct it never removes a spool a keep
+is still about to upload.
+
 Every data node reads the fleet's clocks on its position heartbeat, every ten
-seconds, off the position register in the coordination store, which it reads
-on that beat anyway. Each data node's row there carries the instant the node
-stamped on it and the instant the broker stored it at, so each row says how
-far that node's clock stands from the one broker member leading the register,
-which stores every row, and the median of them is the **fleet's clock**: the
-median of every data node's. A node whose own clock stands more than an hour
-from the fleet's raises [`clock_skew`](../reference/alarms.md) about itself,
-and every node raises it about the broker member once that member's clock does
-— on an embedded broker one of the data nodes, which then raises it about its
-own clock too; on an external NATS cluster the server leading the register's
-stream. So while no node raises it, every data node and that member keep
-within an hour of the fleet's clock, and any two of them — every member of an
-embedded broker among them — within two hours of each other, inside every
-margin above. A rule judged on the clock of a node that runs seats, a turn's
-hold, a box read's admission or a stop's give-up above, rests on a clock the
-alarm measures only where that node holds data too: a node without the `data` role writes no
-row to the register, so nothing measures its clock, and NTP on it is all that
-keeps it inside the bound. With two data nodes neither clock outvotes the other, so both are
-named once they stand more than two hours apart. The alarm names a clock that
-has already drifted rather than keeping one from drifting, and it cannot see
-the other servers of an external NATS cluster disagree with the one it reads,
-so run an NTP client (chrony, systemd-timesyncd) everywhere the engine or its
-broker runs. [Watching a fleet](fleet.md#watching-a-fleet) says how to read the
-alarm across the nodes.
+seconds, off the position register in the coordination store, which it reads on
+that beat anyway. Each data node's row there carries the instant the node
+stamped on it and the instant the broker stored it at, so each row says how far
+that node's clock stands from the one broker member leading the register, which
+stores every row, and the median of them is the **fleet's clock**: the median
+of every data node's. A node whose own clock stands more than an hour from the
+fleet's raises [`clock_skew`](../reference/alarms.md) about itself, and every
+node raises it about the broker member once that member's clock does — on an
+embedded broker one of the data nodes, which then raises it about its own clock
+too; on an external NATS cluster the server leading the register's stream. So
+while no node raises it, every data node and that member keep within an hour of
+the fleet's clock, and any two of them — every member of an embedded broker
+among them — within two hours of each other, inside every margin above. A rule
+judged on the clock of a node that runs seats, a turn's hold, a capture's or a
+standby's age, a box read's admission or a stop's give-up above, rests on a
+clock the alarm measures only where that node holds data too: a node without
+the `data` role writes no row to the register, so nothing measures its clock,
+and NTP on it is all that keeps it inside the bound. With two data nodes
+neither clock outvotes the other, so both are named once they stand more than
+two hours apart. The alarm names a clock that has already drifted rather than
+keeping one from drifting, and it cannot see the other servers of an external
+NATS cluster disagree with the one it reads, so run an NTP client (chrony,
+systemd-timesyncd) everywhere the engine or its broker runs. [Watching a
+fleet](fleet.md#watching-a-fleet) says how to read the alarm across the nodes.
 
 ### The room the stream's volume needs
 
