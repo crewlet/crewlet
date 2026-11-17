@@ -2717,7 +2717,9 @@ const (
 	// (6,924,733 bytes), 28,931 over main: 6763 KiB.
 	// Gitlet's changes as code-host rows wherever they are listed, with their cards, state totals
 	// and sort: 6780.7 KiB (6,943,394 bytes), 18,661 over main: 6781 KiB.
-	treeBudget = 5<<20 + 1661<<10
+	// Every person and agent drawn as their face, in every picker too, on kit 0.152.0:
+	// 6785.0 KiB (6,947,823 bytes), 4,429 over main: 6785 KiB.
+	treeBudget = 5<<20 + 1665<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
