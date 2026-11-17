@@ -11,6 +11,7 @@ import (
 	"io"
 	"math"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -20,14 +21,19 @@ import (
 // what the whole decode answers of it ([decodeThreadLine]): record or refused,
 // the fault, the kind of record a refused head names, the size, whether the
 // error is errNotOneRecord (a refused head's in its own words), the byte facts,
-// and for a record its head and every fact the pass reads. A value is read at
-// any length here: the bound a value is kept within is raised
-// ([scanReader.valueMax]), since the whole decode has none, and the bound's own
-// claims are [TestALateFaultBeatsWhatTheLineSaidBeforeIt]'s.
+// and for a record its head and every answer its accessors give of what the
+// pass reads. A value is read at any length here: the bound a value is kept
+// within is raised ([scanReader.valueMax]), since the whole decode has none,
+// and the bound's own claims are [TestALateFaultBeatsWhatTheLineSaidBeforeIt]'s.
+// Where the pass passes a frame over for the type a line wrote before it and
+// the line's last type reads it, the reading ends there, which the whole
+// decode, reading the line whole, never needs: the differential models it
+// from the line's keys in order ([scanWant]).
 
 // scanAnswer is what a reading answered of one line, line and err, as text:
 // for a record, its place, its size, its head, every small value the pass
-// keeps as written and whether it carries taskDelivery, and its byte facts;
+// keeps as written and whether it carries taskDelivery, its byte facts, and
+// every answer of its message's accessors ([scanMessage]);
 // for a line that is no record, its place, its fault, the kind of record its
 // head names, its size, whether its error is errNotOneRecord (a refused
 // head's in its words), and its byte facts; else what ended the reading.
@@ -64,6 +70,39 @@ func scanAnswer(line threadLine, err error) string {
 		fmt.Fprintf(&b, "%s: %q\n", kept.name, ctRaw(kept.raw))
 	}
 	fmt.Fprintf(&b, "taskDelivery: %t\nbytes: %s\n", f.taskDelivery, scanBytes(line.Bytes))
+	b.WriteString(scanMessage(line))
+	return b.String()
+}
+
+// scanMessage is every answer the accessors of line's message give, as text,
+// each by the accessor its readers call, never by the facts behind it: the
+// message or its error, and of a message whether it is one text, the
+// notification it names, whether it names the handback tool, its blocks
+// counted by kind, what it says and each call, its target, its failure and
+// its text's length and digests; and its stop reason, model, id, usage and
+// cleared results, each with its error.
+func scanMessage(line threadLine) string {
+	var b strings.Builder
+	if m, err := line.Message(); err != nil {
+		fmt.Fprintf(&b, "message: %v\n", err)
+	} else {
+		agent, leg, notice := m.Notification()
+		text, any := m.Says()
+		fmt.Fprintf(&b, "message: one text %t, notification %q %q %t, names the handback %t, %d blocks of kinds "+
+			"%06b, says text %t, says anything %t\n", m.IsText(), agent, leg, notice, m.NamesHandback(),
+			m.Blocks().Len(), m.Blocks().seen, text, any)
+		for _, c := range m.Calls() {
+			fmt.Fprintf(&b, "call: %q %q %q to %q, failed %t, text of %d bytes, opening %x, whole %x\n", c.Kind,
+				c.ID, c.Name, c.To, c.Failed, c.Text.Bytes(), c.Text.Opening, c.Text.Whole)
+		}
+	}
+	stop, stopErr := line.StopReason()
+	model, modelErr := line.Model()
+	id, idErr := line.MessageID()
+	usage, used, usageErr := line.Usage()
+	cleared, clearedErr := line.ToolResultsCleared()
+	fmt.Fprintf(&b, "stop reason %q, %v; model %q, %v; id %q, %v; usage %+v %t, %v; cleared %t, %v\n", stop,
+		stopErr, model, modelErr, id, idErr, usage, used, usageErr, cleared, clearedErr)
 	return b.String()
 }
 
@@ -98,41 +137,111 @@ func scanReading(ctx context.Context, r *scanReader) []string {
 	}
 }
 
-// checkScanReadsAsDecode reads text, one member, with a [scanReader] taking at
-// most chunk bytes of it at a time, its bound on a value raised, and holds
-// each line it reads to what the whole decode reads of the same line, text
-// split at its breaks: the same answer ([scanAnswer]); then the member's end,
-// torn exactly where a piece with no break ends it.
+// checkScanReadsAsDecode reads text, split at its breaks, with a [scanReader]
+// taking at most chunk bytes of it at a time, its bound on a value raised,
+// and holds each line it reads to what the whole decode reads of the same
+// line ([scanWant]): the same answer ([scanAnswer]), or the same end of the
+// reading where the pass passes over a frame the line's type reads. The
+// lines are read as one member up to each line that ends a reading, the
+// lines after it as the next member of the same reader ([scanReader.Reset]);
+// and the last member's end is torn exactly where a piece with no break ends
+// it.
 func checkScanReadsAsDecode(t testing.TB, text []byte, chunk int) {
 	t.Helper()
-	r := newScanReaderSize(bytes.NewReader(text), int64(len(text)), chunk)
-	r.valueMax = math.MaxInt
-	got := scanReading(t.Context(), r)
 	pieces := bytes.Split(text, []byte("\n"))
-	lines, last := pieces[:len(pieces)-1], pieces[len(pieces)-1]
-	if end := fmt.Sprintf("ended by EOF, then EOF, torn %t\n", len(last) > 0); len(got) != len(lines)+1 ||
-		got[len(lines)] != end {
-		t.Fatalf("a member of %d lines and %d bytes after its last break, read in pieces of %d bytes at most, "+
-			"reads as %d answers ending %q; want %d and %q", len(lines), len(last), chunk, len(got)-1,
-			got[len(got)-1], len(lines), end)
-	}
-	for i, line := range lines {
-		if want := scanAnswer(decodeThreadLine(i+1, line)); got[i] != want {
-			t.Fatalf("line %d, %.300q of %d bytes, read in one scanner pass in pieces of %d bytes at most:\n%s"+
-				"read whole:\n%s", i+1, line, len(line), chunk, got[i], want)
+	lines, rest := pieces[:len(pieces)-1], pieces[len(pieces)-1]
+	r := newScanReaderSize(bytes.NewReader(nil), 0, chunk)
+	r.valueMax = math.MaxInt
+	for from := 0; ; {
+		// The member: the lines up to the first a reading ends at, or to the
+		// last, and then what follows the last break.
+		var (
+			wants  []string
+			member []byte
+			end    string
+		)
+		to := from
+		for ; to < len(lines) && end == ""; to++ {
+			member = append(append(member, lines[to]...), '\n')
+			want, ends := scanWant(to-from+1, lines[to])
+			if ends != nil {
+				end = fmt.Sprintf("ended by %v, then %v, torn false\n", ends, ends)
+				continue
+			}
+			wants = append(wants, want)
 		}
+		last := end == ""
+		if last {
+			member = append(member, rest...)
+			end = fmt.Sprintf("ended by EOF, then EOF, torn %t\n", len(rest) > 0)
+		}
+		r.Reset(bytes.NewReader(member), int64(len(member)))
+		got := scanReading(t.Context(), r)
+		if len(got) != len(wants)+1 || got[len(wants)] != end {
+			t.Fatalf("lines %d to %d, the last %.300q, read in pieces of %d bytes at most, read as %d answers "+
+				"ending %q; want %d and %q", from+1, to, member[max(0, len(member)-301):], chunk, len(got)-1,
+				got[len(got)-1], len(wants), end)
+		}
+		for i, want := range wants {
+			if got[i] != want {
+				line := lines[from+i]
+				t.Fatalf("line %d, %.300q of %d bytes, read in one scanner pass in pieces of %d bytes at most:\n%s"+
+					"read whole:\n%s", from+i+1, line, len(line), chunk, got[i], want)
+			}
+		}
+		if last {
+			return
+		}
+		from = to
 	}
+}
+
+// scanWant is what a reading in one pass answers of raw, line n of its
+// member, as the whole decode reads it ([scanAnswer]); or, where the line's
+// last type reads its message and the pass passed that message over for the
+// type the line wrote before it ([scanPassedOver]), the error that ends the
+// reading there.
+func scanWant(n int, raw []byte) (string, error) {
+	line, err := decodeThreadLine(n, raw)
+	if err == nil && slices.Contains([]string{recordUser, recordAssistant}, line.Head.Type) &&
+		scanPassedOver(raw, "message", recordUser, recordAssistant) {
+		return "", fmt.Errorf("%w: line %d's message came before a later type made it a record that reads it",
+			errThreadBound, n)
+	}
+	return scanAnswer(line, err), nil
+}
+
+// scanPassedOver reports whether raw, one record, writes its last key named
+// frame after a `type` that is a string naming none of types, its keys read
+// in order ([eachKey]), as no reading of the whole decode reads them: the
+// frame a reading in one pass passes over before it knows the record's type.
+func scanPassedOver(raw []byte, frame string, types ...string) bool {
+	var typ json.RawMessage
+	passed := false
+	_ = eachKey(raw, func(name []byte, value json.RawMessage, _ int) error {
+		switch string(name) {
+		case "type":
+			typ = slices.Clone(value)
+		case frame:
+			s, err := wireRequiredString("type", typ)
+			passed = err == nil && !slices.Contains(types, s)
+		}
+		return nil
+	})
+	return passed
 }
 
 // A LINE READ IN ONE SCANNER PASS IS READ AS ITS WHOLE DECODE READS IT: every
 // line of the corpus ([scanCorpus]) answers, read in one pass, what the whole
 // decode answers ([scanAnswer]): record or refused, the fault, the kind of
 // record a refused head names, the size, whether the error is
-// errNotOneRecord, the byte facts, the head and every small value the pass
-// keeps as written. The corpus is read as one member, so nothing of a line
-// reaches the next, each line's answer printed only once every line is read,
-// and in pieces of 17 bytes, so every token of a short line meets a piece's
-// edge somewhere.
+// errNotOneRecord, the byte facts, the head, every small value the pass
+// keeps as written, and every answer of the message's accessors; and a line
+// whose type reads a message the pass passed over for the type before it
+// ends the reading there. The corpus is read as one member to each line that
+// ends a reading, so nothing of a line reaches the next, each line's answer
+// printed only once every line of its member is read; whole and in pieces of
+// 17 bytes, so every token of a short line meets a piece's edge somewhere.
 //
 // Mutation: keep a key's first occurrence rather than its last; classify a
 // line that is no object before the scanner's end of it; hand the scanner the
@@ -140,8 +249,15 @@ func checkScanReadsAsDecode(t testing.TB, text []byte, chunk int) {
 // without reading the line to its break; keep a line's parent in the pass's
 // buffer, which the next line's overwrites; read a byte order mark as a
 // fault of syntax; give errNotOneRecord to a line that opened an object; name
-// no kind for a refused head; or drop what of a piece the scanner had no room
-// left for.
+// no kind for a refused head; drop what of a piece the scanner had no room
+// left for; keep what a message, a content or a block read before a later
+// occurrence or a later block; decide a block at its type, before the keys
+// after it; read on after a block the rule refused; keep the calls of one
+// kind only as the blocks are read, or of both at the commit; read a text
+// no further than its first piece, or a result's list past its first
+// element; leave a notification's last line unread; pass no message over
+// for the type before it, or read a line whose type reads one passed over
+// as a record.
 func TestTheScanReadsEveryLineAsTheDecodeReadsIt(t *testing.T) {
 	t.Parallel()
 	lines := scanCorpus(t)
@@ -166,6 +282,9 @@ func FuzzTheScanReadsEveryLineAsTheDecodeReadsIt(f *testing.F) {
 		ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn), ctLastPrompt, ctMeta,
 		`{"type":"user","type":7}`, `{"type":7,"type":"user"}`, `{"\u0074ype":"user","Type":7}`,
 		`{"parentUuid":"x","parentUuid":null,"isSidechain":"no","isSidechain":true}`)
+	for _, line := range scanMessageLines() {
+		seeds = append(seeds, string(line))
+	}
 	for i, seed := range seeds {
 		f.Add([]byte(seed+"\n"), uint16(i))
 	}
@@ -180,9 +299,11 @@ func FuzzTheScanReadsEveryLineAsTheDecodeReadsIt(f *testing.F) {
 // cases ([byteFactLines]); the scanner's own fuzz seeds ([scanSeeds]), split
 // at their breaks; every line the layer's tests read as no record
 // ([ctBrokenLines], [ctRefusedLines]) and a record nested as deep as a line
-// is read; each kind of record mutated at every key the pass reads
-// ([scanMutations]); and lines whose keys, a key written twice or a fault
-// fall across the edge of what the member hands at once ([scanAcrossAFill]).
+// is read; records whose messages hold what the message's readers read at
+// its edges ([scanMessageLines]); each kind of record and each frame below
+// it mutated at every key the pass reads ([scanMutations]); and lines whose
+// keys, a key written twice or a fault fall across the edge of what the
+// member hands at once ([scanAcrossAFill]).
 func scanCorpus(t *testing.T) [][]byte {
 	t.Helper()
 	lines := byteFactLines(t)
@@ -195,6 +316,7 @@ func scanCorpus(t *testing.T) [][]byte {
 		}
 	}
 	lines = append(lines, []byte(ctDeep(10000)))
+	lines = append(lines, scanMessageLines()...)
 	lines = append(lines, scanMutations(lines)...)
 	return append(lines, scanAcrossAFill()...)
 }
@@ -244,23 +366,28 @@ func scanSpellings(key string) []string {
 	return []string{`"` + string(flipped) + `"`, fmt.Sprintf(`"\u%04x%s"`, key[0], key[1:])}
 }
 
+// scanFrames is each frame a reading reads below a record, by its path from
+// the record (a key; "*" every element of a list; "0" its first), and every
+// key a reading reads of it.
+var scanFrames = []struct{ path, keys []string }{
+	{[]string{"message"}, []string{"content", "id", "model", "stop_reason", "usage", "context_management"}},
+	{[]string{"message", "content", "*"},
+		[]string{"type", "id", "name", "input", "tool_use_id", "is_error", "content", "text"}},
+	{[]string{"message", "content", "*", "input"}, []string{"to"}},
+	{[]string{"message", "content", "*", "content", "0"}, []string{"type", "text"}},
+}
+
 // scanMutations is a record of each kind among lines (one a type and
-// subtype), mutated at every key a reading reads: the key moved first and
-// moved last; and a value of every kind written before the record's own and
-// after it, so a key written twice is read wholly by its last, whichever of
-// the two is the one the record wrote, and every key is read of every kind;
-// a key the record lacks among them; and after the record's own, a value of
-// every kind under the key's name with a letter's case changed, which is
-// another key, and under its name with a letter escaped, which is the key.
+// subtype), mutated at every key a reading reads ([scanReadKeys]), and each
+// frame below a record of each shape among lines ([scanFrames]) mutated at
+// every key a reading reads of it, the rest of its record as written: each
+// as [scanMutateObject] mutates an object.
 func scanMutations(lines [][]byte) [][]byte {
 	var out [][]byte
 	seen := map[string]bool{}
 	for _, line := range lines {
-		var members []scanMember
-		if eachKey(line, func(name []byte, value json.RawMessage, _ int) error {
-			members = append(members, scanMember{name: string(name), value: string(value)})
-			return nil
-		}) != nil {
+		members, ok := scanMembersOf(line)
+		if !ok {
 			continue
 		}
 		shape := ""
@@ -269,30 +396,209 @@ func scanMutations(lines [][]byte) [][]byte {
 				shape += m.name + "=" + m.value + " "
 			}
 		}
+		if !seen[shape] {
+			seen[shape] = true
+			out = append(out, scanMutateObject(members, scanReadKeys)...)
+		}
+		for _, frame := range scanFrames {
+			out = append(out, scanMutateAt(line, frame.path, frame.keys, shape+strings.Join(frame.path, "."), seen)...)
+		}
+	}
+	return out
+}
+
+// scanMutateAt is raw, a value, mutated at the object path leads to from it
+// ([scanFrames]) as [scanMutateObject] mutates it at keys, the rest of raw as
+// written: at every object path leads to whose shape (shape, beside the
+// object's own `type` and its `content`'s kind) is not yet in seen, which
+// takes it.
+func scanMutateAt(raw []byte, path, keys []string, shape string, seen map[string]bool) [][]byte {
+	members, isObject := scanMembersOf(raw)
+	if len(path) == 0 {
+		if !isObject {
+			return nil
+		}
+		for _, m := range members {
+			switch m.name {
+			case "type":
+				shape += " type=" + m.value
+			case "content":
+				shape += " content=" + m.value[:1]
+			}
+		}
 		if seen[shape] {
-			continue
+			return nil
 		}
 		seen[shape] = true
-		for _, key := range scanReadKeys {
-			var others []scanMember
-			for _, m := range members {
-				if m.name != key {
-					others = append(others, m)
-				} else {
-					out = append(out, scanObject(append([]scanMember{m}, others...)),
-						scanObject(append(append([]scanMember(nil), others...), m)))
-				}
+		return scanMutateObject(members, keys)
+	}
+	var out [][]byte
+	if isObject {
+		for i, m := range members {
+			if m.name != path[0] {
+				continue
 			}
-			for _, kind := range scanKinds {
-				written := scanMember{name: key, value: kind}
-				out = append(out, scanObject(append([]scanMember{written}, members...)),
-					scanObject(append(append([]scanMember(nil), members...), written)))
-				for _, spelled := range scanSpellings(key) {
-					out = append(out, scanObject(append(append([]scanMember(nil), members...),
-						scanMember{value: kind, quoted: spelled})))
-				}
+			for _, mutated := range scanMutateAt([]byte(m.value), path[1:], keys, shape, seen) {
+				changed := slices.Clone(members)
+				changed[i].value = string(mutated)
+				out = append(out, scanObject(changed))
 			}
 		}
+		return out
+	}
+	var elements [][]byte
+	if eachElement(raw, func(element json.RawMessage, _ int) error {
+		elements = append(elements, slices.Clone(element))
+		return nil
+	}) != nil {
+		return nil
+	}
+	for i, element := range elements {
+		if path[0] == "0" && i > 0 {
+			break
+		}
+		for _, mutated := range scanMutateAt(element, path[1:], keys, shape, seen) {
+			changed := slices.Clone(elements)
+			changed[i] = mutated
+			out = append(out, append(append([]byte{'['}, bytes.Join(changed, []byte(","))...), ']'))
+		}
+	}
+	return out
+}
+
+// scanMembersOf is raw's members, in order, where it is one object.
+func scanMembersOf(raw []byte) ([]scanMember, bool) {
+	var members []scanMember
+	if eachKey(raw, func(name []byte, value json.RawMessage, _ int) error {
+		members = append(members, scanMember{name: string(name), value: string(value)})
+		return nil
+	}) != nil {
+		return nil, false
+	}
+	return members, true
+}
+
+// scanMutateObject is an object of members mutated at each of keys: each
+// occurrence of the key moved first and moved last, the others in place; and
+// a value of every kind written before the object's own and after it, so a
+// key written twice is read wholly by its last, whichever of the two is the
+// one the object wrote, and every key is read of every kind; a key the object
+// lacks among them; and after the object's own, a value of every kind under
+// the key's name with a letter's case changed, which is another key, and
+// under its name with a letter escaped, which is the key.
+func scanMutateObject(members []scanMember, keys []string) [][]byte {
+	var out [][]byte
+	for _, key := range keys {
+		var own, others []scanMember
+		for _, m := range members {
+			if m.name == key {
+				own = append(own, m)
+			} else {
+				others = append(others, m)
+			}
+		}
+		for _, m := range own {
+			out = append(out, scanObject(append([]scanMember{m}, others...)),
+				scanObject(append(slices.Clone(others), m)))
+		}
+		for _, kind := range scanKinds {
+			written := scanMember{name: key, value: kind}
+			out = append(out, scanObject(append([]scanMember{written}, members...)),
+				scanObject(append(slices.Clone(members), written)))
+			for _, spelled := range scanSpellings(key) {
+				out = append(out, scanObject(append(slices.Clone(members), scanMember{value: kind, quoted: spelled})))
+			}
+		}
+	}
+	return out
+}
+
+// scanMessageLines is records whose messages hold what a message's readers
+// read at its edges: a task notification whose status is its last line and
+// one whose output file outgrows a piece, the handback's name across a
+// piece's edge, texts of space alone as JavaScript's trim() and Go's read it
+// apart, blocks whose text says something under every kind and one whose
+// text is written twice, sends to an agent and to none, a block after one
+// that held a key it lacks, results whose text is around 4 KiB and around
+// what a piece holds, every shape of a result's list, every refusal of a
+// block and a block refused after one that was not, calls of the kind the
+// record does not make, messages and contents of every kind and written
+// twice, a record whose type the line writes before its message, after it,
+// escaped and twice, and an applied context edit.
+func scanMessageLines() [][]byte {
+	quote := func(s string) string {
+		b, _ := jsontext.AppendQuote(nil, s)
+		return string(b)
+	}
+	user := func(content string) string {
+		return `{"type":"user","message":{"role":"user","content":` + content + `}}`
+	}
+	assistant := func(content string) string {
+		return `{"message":{"role":"assistant","content":` + content + `},"type":"assistant"}`
+	}
+	result := func(content string) string {
+		return user(`[{"type":"tool_result","tool_use_id":"toolu_r","content":` + content + `}]`)
+	}
+	notice := "<task-notification>\n<task-id>a1b2c3</task-id>\n<tool-use-id>toolu_01</tool-use-id>\n"
+	status := "<status>completed</status>"
+	lines := []string{
+		user(quote(notice + status)),
+		user(quote(notice + "<output-file>" + strings.Repeat("o", 9000) + "</output-file>\n" + status + "\n" +
+			claudeToolHandback)),
+		user(quote(notice + status + "\n" + strings.Repeat("z", textPieceBytes-8) + claudeToolHandback)),
+		user(quote(notice + "<output-file></output-file>\n" + strings.Repeat("s", textPieceBytes) + status)),
+		user(`"\u00a0\ufeff\u2028 \t"`), user(`"\u0085"`), user(`" "`), user(`""`),
+		assistant(`[{"type":"text","text":" "},{"type":"thinking","thinking":"t","text":"hi"}]`),
+		assistant(`[{"type":"thinking","text":"hi"},{"type":"text","text":"ok"}]`),
+		assistant(`[{"text":"hi","type":"text","text":" "}]`),
+		assistant(`[{"text":" ","type":"text","text":"hi"}]`),
+		assistant(`[{"type":"text","text":5},{"type":"redacted_thinking","data":"d"},{"type":"server_tool_use"}]`),
+		assistant(`[{"type":"text","text":"` + strings.Repeat(" ", 2*textPieceBytes) + `x"}]`),
+		assistant(`[{"type":"tool_use","id":"toolu_s","name":"SendMessage","input":{"to":"agent-1","message":"m"}},` +
+			`{"type":"tool_use","id":"toolu_b","name":"Bash"}]`),
+		assistant(`[{"type":"tool_use","id":"toolu_s","name":"SendMessage","input":{"to":"a/b"}},` +
+			`{"type":"tool_use","id":"toolu_t","name":"SendMessage","input":{"to":"agent-1","to":7}},` +
+			`{"type":"tool_use","id":"toolu_u","name":"SendMessage","input":"agent-1"},` +
+			`{"type":"tool_use","id":"toolu_v","name":"SendMessage","input":{"to":"agent-1"},"input":{}}]`),
+		user(`[{"type":"tool_result","tool_use_id":"toolu_1","is_error":true,"content":"e"},` +
+			`{"type":"tool_result","tool_use_id":"toolu_2","content":[{"type":"text","text":"` +
+			strings.Repeat("y", 5000) + `"}]}]`),
+		result(quote(strings.Repeat("r", 4095))), result(quote(strings.Repeat("r", 4096))),
+		result(quote(strings.Repeat("r", 4097))), result(quote(strings.Repeat("r", 2*textPieceBytes+1))),
+		result(`"a\u00e9\ud83d\ude00\ud800 \u0000"`), result("\"\xff\xfe\""),
+		result(`[{"type":"text","text":"a"},{"type":"text","text":"b"}]`), result(`[1]`), result(`[]`),
+		result(`[1,{"type":"text","text":"b"}]`), result(`[{"text":"a","type":"\u0074ext"}]`),
+		result(`[{"type":"text","text":"a","text":5}]`), result(`[{"type":"text","text":"a","text":"bb"}]`),
+		result(`[{"type":"image"}]`), result(`[{"type":"Text","text":"a"}]`), result(`null`), result(`{}`),
+		result(`[{"type":"text","text":"` + strings.Repeat("q", 5000) + `"}]`),
+		user(`[{"type":"tool_result","tool_use_id":"toolu_r","content":"a","content":[]}]`),
+		assistant(`[{"type":"text"},1,{"type":5}]`), assistant(`[{"type":5}]`), assistant(`[null]`),
+		assistant(`[{"type":"tool_use","name":"n"}]`), assistant(`[{"type":"tool_use","id":"","name":"n"}]`),
+		assistant(`[{"type":"tool_use","id":"t","name":7}]`),
+		user(`[{"type":"tool_result","tool_use_id":"t","is_error":"x"}]`),
+		user(`[{"type":"tool_result","tool_use_id":7}]`),
+		user(`[{"type":"tool_use","id":"toolu_u","name":"n"},{"type":"tool_result","tool_use_id":"toolu_r"}]`),
+		assistant(`[{"type":"tool_result","tool_use_id":"toolu_r"},{"type":"tool_use","id":"toolu_u","name":"n"}]`),
+		`{"type":"user","message":null}`, `{"type":"assistant","message":"x"}`, `{"type":"assistant","message":{}}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"n"}],"id":"m","model":"x",` +
+			`"stop_reason":"end_turn","usage":{"output_tokens":1}},"message":{"content":[]}}`,
+		`{"type":"user","message":{"content":[1],"content":"ok"}}`,
+		`{"type":"user","message":{"content":"ok","content":[{"type":"tool_result","tool_use_id":"t"}]}}`,
+		`{"type":"assistant","message":{"content":[],"context_management":{"applied_edits":[{"type":"` +
+			editClearToolUses + `","cleared_tool_uses":2}]},"usage":{"input_tokens":3,"output_tokens":1}}}`,
+		`{"type":"api-request-blob","message":{"content":[{"type":"image","source":{"data":"` +
+			strings.Repeat("A", 1000) + `"}}]}}`,
+		`{"type":"user","message":{"content":"hi"},"type":"x"}`,
+		`{"type":7,"message":{"content":"hi"},"type":"user"}`,
+		`{"type":"\u0075ser","message":{"content":"hi"}}`,
+		`{"type":"x","message":{"content":"a"},"type":"user","message":{"content":"b"}}`,
+		`{"type":"x","message":{"content":"hi"},"type":"user"}`,
+		`{"type":"user","message":{"content":"a"},"type":"x","message":{"content":"b"},"type":"assistant"}`,
+		`{"type":"` + strings.Repeat("u", 100) + `","message":{"content":"hi"},"type":"user"}`,
+	}
+	out := make([][]byte, len(lines))
+	for i, line := range lines {
+		out[i] = []byte(line)
 	}
 	return out
 }

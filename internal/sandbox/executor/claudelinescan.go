@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"io"
@@ -55,16 +56,43 @@ import (
 // EVERY MEMBER IS READ BY ITS DECODED NAME, exactly, case kept, as the whole
 // decode reads a key under [threadDecoding]: `"\u0074ype"` is `type`, and
 // `"Type"` is no key the layer reads. A key written twice is read by its
-// last value, wholesale: each occurrence of a key the pass keeps replaces
-// what the one before it kept.
+// last value, wholesale: each occurrence of a key the pass reads replaces
+// what the one before it left, a frame's all of it (a second `message`, a
+// block's second `content`), never merged with it.
 //
-// A VALUE IS KEPT, OR PASSED OVER UNHELD. Of the record itself, the head's
-// keys and the small values its accessors decode by the layer's own code
-// (a uuid, a timestamp, an origin) are captured as written, within
-// [threadValueMax] each, the bytes a json.RawMessage of the whole decode
-// holds ([jsonscan.Scanner.Capture]); every other member is passed over,
-// validated and held nowhere ([jsonscan.Scanner.Skip]). A value it keeps
-// that passes its bound fails the line closed, never read as a guess.
+// EVERY VALUE IS READ BY ONE OF THREE MEANS, or passed over unheld. A small
+// value a reader decodes by the layer's own code (a uuid, a timestamp, a
+// message's usage, a block's id) is CAPTURED as written, within
+// [threadValueMax], the bytes a json.RawMessage of the whole decode holds
+// ([jsonscan.Scanner.Capture]): copied into the line's facts where an
+// accessor reads it, or held in the reader's own buffers until its object
+// ends where the rule that decides the object reads it (a block's type, a
+// send's target). A container its readers walk is a FRAME, read member by
+// member, which keeps only what its readers ask of it (a message's kind, its
+// blocks counted by kind, its calls) and decides each object by the layer's
+// one rule of it ([blockCallOf]) once the object ends, when every key of it
+// has been met. A text its readers ask a property of (a prompt, a task
+// notification, a tool's result) STREAMS, read a piece at a time into the
+// automaton that answers exactly at any length ([textSays], [textNotice],
+// [textHandback], [textResult]), and is never held. Every other member is
+// passed over, validated and held nowhere ([jsonscan.Scanner.Skip]). A value
+// the pass captures that passes its bound fails the line closed, never read
+// as a guess.
+//
+// A RECORD'S TYPE GATES ITS FRAMES. A frame whose accessors answer on records
+// of some types alone (a message, on a user's or an assistant's) is passed
+// over unread where the `type` the line wrote before it is a string naming
+// none of them ([lineDecoder.admits]): an api-request-blob writes its type
+// first, and then a message that repeats a whole request, its media among
+// it. A record's type is known only at its end, though (an assistant record
+// writes its message before its type), so a frame met before any type, or
+// after one that is no string, is read; a line whose last type reads a frame
+// the pass passed over for an earlier one fails closed, never read as a
+// record that holds no such frame; and a frame the last type does not read
+// is dropped at the commit ([settle]). Which kind of call a
+// message's blocks make turns on the type too (a user's results, an
+// assistant's uses), so the pass keeps both kinds and the commit keeps the
+// type's.
 
 // threadValueMax is the most of one value the layer reads whole: a raw value
 // it keeps for an accessor to decode (a uuid, a timestamp, a reply's usage,
@@ -154,9 +182,10 @@ func (t *scanReader) Reset(r io.Reader, maxBytes int64) {
 //     whatever the scanner made of it ([threadReader.Next] says why);
 //     [scanReader.Torn] says it was there.
 //   - errThreadBound once the member runs past the reader's bound, EVEN
-//     WHERE THE BOUND FALLS RIGHT AFTER A LINE BREAK, or once a value the
-//     line keeps runs past [threadValueMax]. The reading is over, and stays
-//     over.
+//     WHERE THE BOUND FALLS RIGHT AFTER A LINE BREAK, once a value the line
+//     keeps runs past [threadValueMax], or once a line's type reads a frame
+//     the pass passed over for the type the line wrote before it. The
+//     reading is over, and stays over.
 //   - a *threadLineError for a whole line that is not one record, classed as
 //     Claude Code's load reads it ([scanReader.commit]): the reader stays
 //     usable.
@@ -217,9 +246,11 @@ func (t *scanReader) Torn() bool { return t.torn }
 //  3. A head the head's rule refuses ([headOf]), judged on each key's last
 //     occurrence and under the last `type`: faultHead, its Type the kind of
 //     record that `type` names ([kindOf]).
-//  4. A value the line keeps past [threadValueMax]: errThreadBound, and the
-//     reading is over.
-//  5. Else the record.
+//  4. A value the line keeps past [threadValueMax], or a frame the record's
+//     type reads that the pass passed over for the type written before it
+//     ([lineDecoder.passedOver]): errThreadBound, and the reading is over.
+//  5. Else the record, each frame settled to its type
+//     ([settle]).
 //
 // Steps 1 to 3 come before the bound, so a line past it is classed exactly
 // where its grammar or its head refuses it.
@@ -255,6 +286,12 @@ func (t *scanReader) commit(scanned error, facts *lineFacts) (threadLine, error)
 			t.n, t.dec.over, t.valueMax)
 		return threadLine{}, t.end
 	}
+	if frame := t.dec.passedOver(head); frame != "" {
+		t.end = fmt.Errorf("%w: line %d's %s came before a later type made it a record that reads it",
+			errThreadBound, t.n, frame)
+		return threadLine{}, t.end
+	}
+	settle(facts, head)
 	// The parent as written is the line's own: the pass's buffer is the next
 	// line's.
 	if keys.parent.kind == '"' {
@@ -435,6 +472,77 @@ type lineDecoder struct {
 	// over is the first value the pass kept that ran past valueMax, by its
 	// key; "" where none did.
 	over string
+	// typed is whether the last `type` read so far is a string, and typeText
+	// its decoded text, empty where the string ran past valueMax, which names
+	// no record ([lineDecoder.admits]).
+	typed    bool
+	typeText []byte
+	// missed is each gated frame whose last occurrence the pass passed over
+	// for the type read before it ([lineDecoder.passedOver]).
+	missed gatedFrames
+	// text is the buffer every streamed text is read through, a piece at a
+	// time.
+	text [textPieceBytes]byte
+	// says, notice and handback read a message's content that is one string
+	// ([threadMessage.Says], [threadMessage.Notification],
+	// [threadMessage.NamesHandback]).
+	says     textSays
+	notice   textNotice
+	handback textHandback
+	// block is the content block being read, and result the text of a
+	// tool_result's content being read.
+	block  blockScan
+	result textResult
+}
+
+// The frames a record's type gates ([lineDecoder.admits]), each a member of a
+// gatedFrames.
+type gatedFrames uint8
+
+const (
+	// gateMessage is a user's or an assistant's `message` ([messageTypes]).
+	gateMessage gatedFrames = 1 << iota
+)
+
+// messageTypes is the types of record whose accessors read a message
+// ([threadLine.Message]).
+var messageTypes = []string{recordUser, recordAssistant}
+
+// blockScan is the content block being read, until it ends, where the one
+// rule of a block decides it from what it holds ([blockCallOf]): each key the
+// rule reads, as written, in a buffer the reader keeps across blocks, empty
+// where the block lacks the key; its input's kind and that input's `to`;
+// whether its `text` says anything; and its content's text.
+type blockScan struct {
+	typ, id, name, toolUseID, isError []byte
+	input                             valueKind
+	to                                []byte
+	says                              textSays
+	text                              threadResultText
+	// resultType is the `type` of its content's first element, as written.
+	resultType []byte
+}
+
+// reset makes b a block not yet read, its buffers kept.
+func (b *blockScan) reset() {
+	b.typ, b.id, b.name, b.toolUseID, b.isError = b.typ[:0], b.id[:0], b.name[:0], b.toolUseID[:0], b.isError[:0]
+	b.input, b.to, b.says, b.text = 0, b.to[:0], textSays{}, threadResultText{}
+}
+
+// keys is what the rule of a block reads of b ([blockKeys]), its keys the
+// buffers b holds, valid until b reads its next block.
+func (b *blockScan) keys() blockKeys {
+	return blockKeys{typ: present(b.typ), id: present(b.id), name: present(b.name), toolUseID: present(b.toolUseID),
+		isError: present(b.isError), to: sendTargetOf(b.input, present(b.to)), text: b.text}
+}
+
+// present is raw, a value as written, or nil, an absent key, where it holds
+// no byte: no value as written is empty.
+func present(raw []byte) json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+	return raw
 }
 
 // scannedKey is one key's last occurrence as the pass read it: kind its
@@ -453,6 +561,7 @@ func (d *lineDecoder) reset(valueMax int) {
 	for i := range d.head {
 		d.head[i] = scannedKey{raw: d.head[i].raw[:0]}
 	}
+	d.typed, d.typeText, d.missed = false, d.typeText[:0], 0
 }
 
 // headKeys is the head's keys as the line wrote them last ([headOf]): a key
@@ -469,6 +578,62 @@ func (d *lineDecoder) headKeys() headKeys {
 		sidechain: key(headSidechain), replacesSpan: key(headReplacesSpan)}
 }
 
+// admits reports whether a gated frame read on records of types alone is read
+// where the pass stands: unless the last `type` read so far is a string
+// naming none of them. Before any type, or after one that is no string, the
+// frame is read, since the record's last type may still read it.
+func (d *lineDecoder) admits(types []string) bool {
+	if !d.typed {
+		return true
+	}
+	for _, t := range types {
+		if string(d.typeText) == t {
+			return true
+		}
+	}
+	return false
+}
+
+// passedOver is the key of a frame the record of head reads that the pass
+// passed over for the type the line wrote before it ([lineDecoder.admits]);
+// "" where none.
+func (d *lineDecoder) passedOver(head threadHead) string {
+	if d.missed&gateMessage != 0 && slices.Contains(messageTypes, head.Type) {
+		return "message"
+	}
+	return ""
+}
+
+// settle is f, the facts of a record of head, as its accessors read them: a
+// frame its type does not read emptied, so a record of another type holds
+// nothing of it; and of a message, the calls of the kind the record makes
+// alone, a user's results or an assistant's uses, in order.
+func settle(f *lineFacts, head threadHead) {
+	switch head.Type {
+	case recordUser:
+		f.message.content.calls = callsOf(f.message.content.calls, blockToolResult)
+	case recordAssistant:
+		f.message.content.calls = callsOf(f.message.content.calls, blockToolUse)
+	default:
+		f.message = messageFacts{}
+	}
+}
+
+// callsOf is the calls of calls of kind, in order, in calls' own array.
+func callsOf(calls []threadCall, kind string) []threadCall {
+	kept := calls[:0]
+	for _, c := range calls {
+		if c.Kind == kind {
+			kept = append(kept, c)
+		}
+	}
+	clear(calls[len(kept):])
+	if len(kept) == 0 {
+		return nil
+	}
+	return kept
+}
+
 // line reads one line, the scanner's whole text, into f and d: its value,
 // then the scanner's io.EOF or the fault that ends the text. It answers nil
 // where the text is one JSON value, else what the scanner answered, the
@@ -480,7 +645,7 @@ func (d *lineDecoder) line(scan *jsonscan.Scanner, f *lineFacts) error {
 	}
 	if k == jsonscan.ObjectStart {
 		d.object = true
-		err = d.record(scan, f)
+		err = d.members(scan, func(name []byte, k jsonscan.Kind) error { return d.member(scan, k, name, f) })
 	} else {
 		err = scan.Skip()
 	}
@@ -495,11 +660,11 @@ func (d *lineDecoder) line(scan *jsonscan.Scanner, f *lineFacts) error {
 	return err
 }
 
-// record reads the record's object, its opening brace read, into f and d,
-// member by member: a head key captured into d, a small value its accessors
-// decode captured into f, taskDelivery's presence, and every other member
-// passed over unheld.
-func (d *lineDecoder) record(scan *jsonscan.Scanner, f *lineFacts) error {
+// members reads the object whose opening brace the scanner stands at, member
+// by member, to its closing brace: each member's decoded name ([readName])
+// and its value's first token handed to each, which reads the value, the
+// name valid only until each reads anything more.
+func (d *lineDecoder) members(scan *jsonscan.Scanner, each func(name []byte, k jsonscan.Kind) error) error {
 	for {
 		k, err := scan.Next()
 		if err != nil || k == jsonscan.ObjectEnd {
@@ -509,37 +674,362 @@ func (d *lineDecoder) record(scan *jsonscan.Scanner, f *lineFacts) error {
 		if k, err = scan.Next(); err != nil {
 			return err
 		}
-		if err = d.member(scan, k, name, f); err != nil {
+		if err = each(name, k); err != nil {
 			return err
 		}
 	}
 }
 
 // member reads the record's member name, whose value's first token, k, the
-// scanner stands at.
+// scanner stands at: a head key captured into d, a small value its accessors
+// decode captured into f, taskDelivery's presence, a frame its type may read
+// ([lineDecoder.message]), and every other member passed over unheld.
 func (d *lineDecoder) member(scan *jsonscan.Scanner, k jsonscan.Kind, name []byte, f *lineFacts) error {
 	for i, key := range headNames {
 		if string(name) == key {
 			raw, kind, err := d.capture(scan, k, key)
 			d.head[i] = scannedKey{kind: kind, raw: append(d.head[i].raw[:0], raw...), kept: raw != nil}
+			if i == headType {
+				d.sawType(kind, raw)
+			}
 			return err
 		}
 	}
 	for _, kept := range recordRaws {
 		if string(name) == kept.name {
-			raw, _, err := d.capture(scan, k, kept.name)
-			var held json.RawMessage
-			if raw != nil {
-				held = append(held, raw...)
-			}
-			*kept.at(f) = held
+			raw, err := d.keep(scan, k, kept.name)
+			*kept.at(f) = raw
 			return err
 		}
 	}
-	if string(name) == "taskDelivery" {
+	switch string(name) {
+	case "taskDelivery":
 		f.taskDelivery = true
+	case "message":
+		f.message = messageFacts{}
+		if !d.admits(messageTypes) {
+			d.missed |= gateMessage
+			return scan.Skip()
+		}
+		d.missed &^= gateMessage
+		return d.message(scan, k, &f.message)
 	}
 	return scan.Skip()
+}
+
+// sawType reads the record's `type` just captured, of kind and raw as
+// written (nil where it ran past the bound), as the type the line has
+// written so far ([lineDecoder.admits]).
+func (d *lineDecoder) sawType(kind valueKind, raw []byte) {
+	d.typed, d.typeText = kind == '"', d.typeText[:0]
+	if d.typed && raw != nil {
+		// The raw is a whole string the scanner read, so unquoting it meets
+		// no error but a lone surrogate's or invalid UTF-8's, each written as
+		// U+FFFD, as the head's rule decodes it.
+		d.typeText, _ = jsontext.AppendUnquote(d.typeText, raw)
+	}
+}
+
+// message reads a user or assistant record's `message`, whose first token,
+// k, the scanner stands at, into m, as [messageOf] reads it: its kind; of an
+// object, its small values as written and its content
+// ([lineDecoder.content]), a content it lacks an error of the message's.
+func (d *lineDecoder) message(scan *jsonscan.Scanner, k jsonscan.Kind, m *messageFacts) error {
+	m.kind = scannedKind(k)
+	if k != jsonscan.ObjectStart {
+		return scan.Skip()
+	}
+	content := false
+	err := d.members(scan, func(name []byte, k jsonscan.Kind) error {
+		var err error
+		switch string(name) {
+		case "content":
+			content = true
+			return d.content(scan, k, m)
+		case "id":
+			m.id, err = d.keep(scan, k, "message.id")
+		case "model":
+			m.model, err = d.keep(scan, k, "message.model")
+		case "stop_reason":
+			m.stopReason, err = d.keep(scan, k, "message.stop_reason")
+		case "usage":
+			m.usage, err = d.keep(scan, k, "message.usage")
+		case "context_management":
+			m.contextManagement, err = d.keep(scan, k, "message.context_management")
+		default:
+			err = scan.Skip()
+		}
+		return err
+	})
+	if !content {
+		m.contentErr = errContentKind(0)
+	}
+	return err
+}
+
+// errContentKind is a message's content of kind, neither a string nor a list
+// ([messageContent]).
+func errContentKind(kind valueKind) error {
+	return fmt.Errorf("content is %s, neither a string nor a list", kind)
+}
+
+// content reads a message's `content`, whose first token, k, the scanner
+// stands at, into m, as [messageContent] reads it, whatever an earlier
+// `content` left: one string, streamed ([lineDecoder.contentText]); a list,
+// a block at a time ([lineDecoder.blocks]); anything else the message's
+// error.
+func (d *lineDecoder) content(scan *jsonscan.Scanner, k jsonscan.Kind, m *messageFacts) error {
+	m.content, m.contentErr = threadMessage{}, nil
+	switch k {
+	case jsonscan.String:
+		return d.contentText(scan, &m.content)
+	case jsonscan.ArrayStart:
+		return d.blocks(scan, m)
+	}
+	m.contentErr = errContentKind(scannedKind(k))
+	return scan.Skip()
+}
+
+// contentText reads a message's content that is one string, the scanner at
+// it, into c: its text streamed into the three automata its readers ask, a
+// piece at a time, until all three have decided, and the rest passed over.
+func (d *lineDecoder) contentText(scan *jsonscan.Scanner, c *threadMessage) error {
+	d.says, d.notice, d.handback = textSays{}, textNotice{}, textHandback{}
+	for !d.says.any || !d.notice.done || !d.handback.named {
+		n, err := scan.Read(d.text[:])
+		p := d.text[:n]
+		d.says.write(p)
+		d.notice.write(p)
+		d.handback.write(p)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+	}
+	d.notice.end()
+	*c = threadMessage{isText: true, saysAny: d.says.any, namesHandback: d.handback.named}
+	c.notification.agent, c.notification.leg, c.notification.ok = d.notice.notice()
+	return nil
+}
+
+// blocks reads a message's content that is a list, its opening bracket the
+// scanner's current token, into m, a block at a time: each decided by the one
+// rule of a block as it ends ([blockCallOf]), counted by its kind, a call
+// kept of either kind (the record's type, which keeps one, may come after
+// the message: [settle]), and whether its text says anything; the first
+// block the rule refuses the message's error, and every block after it
+// passed over, as [messageContent]'s walk stops there.
+func (d *lineDecoder) blocks(scan *jsonscan.Scanner, m *messageFacts) error {
+	c := &m.content
+	for {
+		k, err := scan.Next()
+		if err != nil || k == jsonscan.ArrayEnd {
+			return err
+		}
+		if m.contentErr != nil {
+			if err = scan.Skip(); err != nil {
+				return err
+			}
+			continue
+		}
+		var (
+			call    threadCall
+			refused error
+		)
+		if k == jsonscan.ObjectStart {
+			if err = d.readBlock(scan); err != nil {
+				return err
+			}
+			call, refused = blockCallOf('{', d.block.keys())
+		} else {
+			if err = scan.Skip(); err != nil {
+				return err
+			}
+			call, refused = blockCallOf(scannedKind(k), blockKeys{})
+		}
+		if refused != nil {
+			m.contentErr = fmt.Errorf("content block %d: %w", c.blocks.Len()+1, refused)
+			*c = threadMessage{}
+			continue
+		}
+		c.blocks.add(call.Kind)
+		if call.Kind == blockToolUse || call.Kind == blockToolResult {
+			c.calls = append(c.calls, call)
+		}
+		// A block the rule took is an object, so what its text said is its
+		// own.
+		if d.block.says.any {
+			c.saysAny = true
+			c.saysText = c.saysText || call.Kind == blockText
+		}
+	}
+}
+
+// readBlock reads a content block that is an object, its opening brace the
+// scanner's current token, into d.block: each key the rule of a block reads
+// held as written, its input's `to` ([lineDecoder.input]), its content's text
+// ([lineDecoder.resultContent]) and whether its text says anything
+// ([lineDecoder.blockText]), each key by its last occurrence. Nothing is
+// decided before the block ends: its type may be its last key.
+func (d *lineDecoder) readBlock(scan *jsonscan.Scanner) error {
+	b := &d.block
+	b.reset()
+	return d.members(scan, func(name []byte, k jsonscan.Kind) error {
+		switch string(name) {
+		case "type":
+			return d.hold(scan, k, "message.content.type", &b.typ)
+		case "id":
+			return d.hold(scan, k, "message.content.id", &b.id)
+		case "name":
+			return d.hold(scan, k, "message.content.name", &b.name)
+		case "tool_use_id":
+			return d.hold(scan, k, "message.content.tool_use_id", &b.toolUseID)
+		case "is_error":
+			return d.hold(scan, k, "message.content.is_error", &b.isError)
+		case "input":
+			return d.input(scan, k)
+		case "content":
+			return d.resultContent(scan, k)
+		case "text":
+			return d.blockText(scan, k)
+		}
+		return scan.Skip()
+	})
+}
+
+// input reads a block's `input`, whose first token, k, the scanner stands
+// at, as [sendTarget] reads it: its kind, and of an object its `to` as
+// written, every other key passed over.
+func (d *lineDecoder) input(scan *jsonscan.Scanner, k jsonscan.Kind) error {
+	b := &d.block
+	b.input, b.to = scannedKind(k), b.to[:0]
+	if k != jsonscan.ObjectStart {
+		return scan.Skip()
+	}
+	return d.members(scan, func(name []byte, k jsonscan.Kind) error {
+		if string(name) == "to" {
+			return d.hold(scan, k, "message.content.input.to", &b.to)
+		}
+		return scan.Skip()
+	})
+}
+
+// blockText reads a block's `text`, whose first token, k, the scanner stands
+// at: whether it is a string that says anything ([textSays]), streamed until
+// a character says it, the rest passed over.
+func (d *lineDecoder) blockText(scan *jsonscan.Scanner, k jsonscan.Kind) error {
+	b := &d.block
+	b.says = textSays{}
+	if k != jsonscan.String {
+		return scan.Skip()
+	}
+	for !b.says.any {
+		n, err := scan.Read(d.text[:])
+		b.says.write(d.text[:n])
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// resultContent reads a block's `content`, whose first token, k, the scanner
+// stands at, into the block's text as [resultText] reads it: one string,
+// streamed whole into its length and digests ([textResult]); a list whose
+// one element is an object whose `type` is the string "text" and whose
+// `text` is a string, that string streamed whole; no text for anything else,
+// a list of two or more elements, or one whose first is no object, among it,
+// and every element after the first passed over.
+func (d *lineDecoder) resultContent(scan *jsonscan.Scanner, k jsonscan.Kind) error {
+	b := &d.block
+	b.text = threadResultText{}
+	switch k {
+	case jsonscan.String:
+		if err := d.resultText(scan); err != nil {
+			return err
+		}
+		b.text = d.result.sum()
+		return nil
+	case jsonscan.ArrayStart:
+	default:
+		return scan.Skip()
+	}
+	for at := 0; ; at++ {
+		k, err := scan.Next()
+		if err != nil || k == jsonscan.ArrayEnd {
+			return err
+		}
+		if at > 0 || k != jsonscan.ObjectStart {
+			b.text = threadResultText{}
+			if err = scan.Skip(); err != nil {
+				return err
+			}
+			continue
+		}
+		text := valueKind(0)
+		b.resultType = b.resultType[:0]
+		err = d.members(scan, func(name []byte, k jsonscan.Kind) error {
+			switch string(name) {
+			case "type":
+				return d.hold(scan, k, "message.content.content.type", &b.resultType)
+			case "text":
+				text = scannedKind(k)
+				if k != jsonscan.String {
+					return scan.Skip()
+				}
+				return d.resultText(scan)
+			}
+			return scan.Skip()
+		})
+		if err != nil {
+			return err
+		}
+		if resultElementIsText('{', present(b.resultType), text) {
+			b.text = d.result.sum()
+		}
+	}
+}
+
+// resultText reads the string the scanner stands at whole into d.result,
+// whatever it read before.
+func (d *lineDecoder) resultText(scan *jsonscan.Scanner) error {
+	d.result.reset()
+	for {
+		n, err := scan.Read(d.text[:])
+		d.result.write(d.text[:n])
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
+// keep is the value the scanner stands at, of kind k, the value of key, as
+// written, in a copy of its own for the line's facts to hold: nil where it
+// runs past d's bound, which marks the line ([lineDecoder.capture]).
+func (d *lineDecoder) keep(scan *jsonscan.Scanner, k jsonscan.Kind, key string) (json.RawMessage, error) {
+	raw, _, err := d.capture(scan, k, key)
+	if raw == nil {
+		return nil, err
+	}
+	return append(json.RawMessage(nil), raw...), err
+}
+
+// hold is the value the scanner stands at, of kind k, the value of key, as
+// written, into *buf, a buffer the reader keeps, for the rule that decides
+// its object to read when the object ends: emptied where it runs past d's
+// bound, which marks the line ([lineDecoder.capture]).
+func (d *lineDecoder) hold(scan *jsonscan.Scanner, k jsonscan.Kind, key string, buf *[]byte) error {
+	raw, _, err := d.capture(scan, k, key)
+	*buf = append((*buf)[:0], raw...)
+	return err
 }
 
 // readName is the decoded text of the name the scanner stands at, in d's

@@ -308,6 +308,10 @@ type textResult struct {
 	kept [sandbox.MaxBridgeOutputBytes]byte
 }
 
+// reset makes r read a text from its start, its buffer kept: [textResult.sum]
+// reads only what of the buffer the text since wrote.
+func (r *textResult) reset() { r.n = 0 }
+
 // write reads the text's next piece.
 func (r *textResult) write(p []byte) {
 	if r.n < int64(len(r.kept)) {
