@@ -61,8 +61,8 @@ const READERS: { file: string; family: RegExp; why: string }[] = [
 const HOSTS: { file: string; names: string[]; why: string }[] = [
   {
     file: "routes/home/CodeWaiting.tsx",
-    names: ["ChangeStateTag"],
-    why: "Home's code card lists Gitlet's changes, each with its state as Gitlet draws it.",
+    names: ["ChangeRows"],
+    why: "Home's code card lists Gitlet's changes in Gitlet's change row, compact, its halves one peek order.",
   },
   {
     file: "routes/inbox/InboxPane.tsx",
@@ -72,17 +72,17 @@ const HOSTS: { file: string; names: string[]; why: string }[] = [
   {
     file: "routes/me/MyWork.tsx",
     names: ["ChangeList"],
-    why: "My work's Reviews mount Gitlet's Changes grid for the reviews and fixes a person owes.",
+    why: "My work's Reviews mount Gitlet's change rows for the reviews and fixes a person owes.",
   },
   {
     file: "routes/agents/seat/Code.tsx",
     names: ["ChangeList", "ReviewList"],
-    why: "A seat's Code section mounts Gitlet's Changes grid for the changes the seat opened.",
+    why: "A seat's Code section mounts Gitlet's change rows for the changes the seat opened.",
   },
   {
     file: "routes/worklet/WorkItem.tsx",
     names: ["ChangeList"],
-    why: "A task's Changes tab mounts Gitlet's Changes grid for the changes that carry it out.",
+    why: "A task's Changes tab mounts Gitlet's change rows for the changes that carry it out.",
   },
 ];
 
@@ -591,7 +591,11 @@ describe("it can tell", () => {
       "routes/settings/Foo.tsx:1 imports ChangeStateTag",
     ]);
     expect(markSites("routes/gitlet/Foo.tsx", tag, "tsx")).toEqual([]);
-    expect(markSites("routes/home/CodeWaiting.tsx", tag, "tsx")).toEqual([]);
+    const rows = 'import { ChangeRows } from "~/routes/gitlet/ChangeRow.tsx";';
+    expect(markSites("routes/home/CodeWaiting.tsx", rows, "tsx")).toEqual([]);
+    expect(markSites("routes/home/CodeWaiting.tsx", tag, "tsx")).toEqual([
+      "routes/home/CodeWaiting.tsx:1 imports ChangeStateTag",
+    ]);
     expect(
       markSites(
         "routes/settings/Foo.tsx",

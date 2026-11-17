@@ -12,8 +12,8 @@ import { eventually } from "~/test/settle.ts";
 import { DiffView, type DiffHunk } from "~/components/DiffView.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import type { CodeChangeSummary } from "~/protocol/index.ts";
-import { Changes, ChangesGrid } from "./Changes.tsx";
-import { ChangeRows } from "./ChangeRow.tsx";
+import { ChangeRows, ChangeStateTag } from "./ChangeRow.tsx";
+import { Changes } from "./Changes.tsx";
 import { BranchChip } from "./ui.tsx";
 import { ComparePage } from "./commit/ComparePage.tsx";
 import { RepositoryPage } from "./repo/RepositoryPage.tsx";
@@ -466,21 +466,20 @@ function summary(number: number, state: string): CodeChangeSummary {
 
 const NONE = "rgba(0, 0, 0, 0)";
 
-// A CHIP ON A SELECTED ROW DRAWS NO GROUND (`aria-current` on its overlay or on
-// the row), and a state pill paints the kit's fill. Mutation: drop either arm
-// of the selected-row rule, or the merged pill's rule, and this fails.
+// A CHIP ON A SELECTED ROW DRAWS NO GROUND (the list's peeked row, or a grid's
+// `aria-current` row), and a state pill paints the kit's fill. Mutation: drop either
+// selected-row rule, or the merged pill's rule, and this fails.
 test("a branch chip draws no ground on a selected row, and a state pill paints its fill", async () => {
-  location.hash = "#/gitlet/changes?peek=change:web!42";
+  location.hash = "#/gitlet?peek=change:web!42";
   mount(
-    <ChangesGrid
-      rows={[summary(42, "open"), summary(41, "merged")]}
-      onLoadMore={undefined}
-      loadedNote={undefined}
-    />,
+    <>
+      <ChangeRows rows={[summary(42, "open"), summary(41, "merged")]} label="Changes" />
+      <ChangeStateTag state="merged" />
+    </>,
   );
   const rowOf = (ref: string) =>
     eventually(() => {
-      const row = [...document.querySelectorAll<HTMLElement>('[role="row"]')].find((r) =>
+      const row = [...document.querySelectorAll<HTMLElement>(".code-list__row")].find((r) =>
         r.textContent?.includes(ref),
       );
       expect(row).toBeTruthy();
@@ -488,6 +487,7 @@ test("a branch chip draws no ground on a selected row, and a state pill paints i
     });
   const picked = await rowOf("web!42");
   const other = await rowOf("web!41");
+  expect(picked.hasAttribute("data-current")).toBe(true);
   const grounds = (row: HTMLElement) =>
     [...row.querySelectorAll(".code-branch-chip")].map((c) => getComputedStyle(c).backgroundColor);
   expect(grounds(picked)).toEqual([NONE, NONE]);
@@ -495,7 +495,7 @@ test("a branch chip draws no ground on a selected row, and a state pill paints i
   const probe = document.createElement("span");
   probe.style.background = "var(--color-change-merged-fill)";
   host!.append(probe);
-  const pill = other.querySelector<HTMLElement>('.code-state[data-state="merged"]')!;
+  const pill = document.querySelector<HTMLElement>('.code-state[data-state="merged"]')!;
   expect(getComputedStyle(pill).backgroundColor).toBe(getComputedStyle(probe).backgroundColor);
   expect(getComputedStyle(probe).backgroundColor).not.toBe(NONE);
   flushSync(() => root?.unmount());
@@ -520,25 +520,24 @@ test("a branch chip draws no ground on a selected row, and a state pill paints i
   expect(getComputedStyle(chip).backgroundColor).toBe(NONE);
 });
 
-// A STATE PILL'S WORD IS CENTRED ON ITS GLYPH, the phone's stacked grid too,
-// whose kit rule sets a pictured value's words on their baseline. Mutation:
-// drop the pill word's `align-self`, and at 390px the word rides 4px high.
+// A STATE PILL'S WORD IS CENTRED ON ITS GLYPH at either width, where the kit's
+// stacked grid sets a pictured value's words on their baseline. Mutation:
+// drop the pill word's `align-self`, and the word rides high.
 for (const width of [1440, 390]) {
   test(`a state pill's word is centred on its glyph, at ${width}px`, async () => {
     await page.viewport(width, 900);
-    const states = ["open", "draft", "merged", "closed"];
+    const states = ["open", "draft", "merged", "closed"] as const;
     mount(
-      <ChangesGrid
-        rows={states.map((s, i) => summary(i + 1, s))}
-        onLoadMore={undefined}
-        loadedNote={undefined}
-      />,
+      <span>
+        {states.map((s) => (
+          <ChangeStateTag key={s} state={s} />
+        ))}
+      </span>,
       width,
     );
     const pills = await eventually(() => {
       const found = [...document.querySelectorAll<HTMLElement>(".code-state")];
       expect(found).toHaveLength(states.length);
-      if (width === 390) expect(document.querySelector("[data-stacked]")).not.toBeNull();
       return found;
     });
     const middle = (el: Element) => {

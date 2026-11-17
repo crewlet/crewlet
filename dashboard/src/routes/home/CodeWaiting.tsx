@@ -7,8 +7,9 @@
  * `needs=review`, which names no reviewer and so asks the reader's own seat,
  * and `needs=person` — a change whose first unmet precondition waits on
  * persons alone (a person's approval, a blocker a person raised). Each row
- * opens its change in the peek; the card's link is Gitlet › Changes narrowed to
- * what waits on a person, where the rest are.
+ * is Gitlet's change row, compact, opening its change in the peek, and the card
+ * publishes one peek order across both halves; its link is Gitlet › Changes
+ * narrowed to what waits on a person, where the rest are.
  *
  * KEPT, NOT READ: a page of either listing is the rows the engine read, and
  * it drops some of them after (a change of a repository the reader may not
@@ -41,16 +42,17 @@
  * and the kit still decides what an empty half says.
  */
 
+import { useMemo } from "react";
 import { Card } from "@crewlethq/ui";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
-import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
+import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { GITLET, needsWords } from "~/lib/access.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useServicesAsk } from "~/lib/services.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { CodeChangeSummary } from "~/protocol/index.ts";
 import { CODE_LIST_POLL_MS } from "~/routes/gitlet/ChangeList.tsx";
-import { ChangeStateTag } from "~/routes/gitlet/ChangeRow.tsx";
+import { ChangeRows } from "~/routes/gitlet/ChangeRow.tsx";
 import { changeObject, changesHref } from "~/routes/gitlet/paths.ts";
 import { WidgetQuery } from "./board/kit.tsx";
 import "~/styles/gitlet.css";
@@ -73,16 +75,19 @@ export function CodeWaiting() {
   const locked = !viewer.loading && !viewer.gitlet;
   const mine = useCodeQuery(
     "code_changes",
-    { needs: "review", limit: HOME_CODE_ROWS },
+    { needs: "review", limit: HOME_CODE_ROWS, cards: true },
     { enabled: reads && seated, pollMs: CODE_LIST_POLL_MS, fill: HOME_CODE_ROWS },
   );
   const person = useCodeQuery(
     "code_changes",
-    { needs: "person", limit: HOME_CODE_ROWS },
+    { needs: "person", limit: HOME_CODE_ROWS, cards: true },
     { enabled: reads, pollMs: CODE_LIST_POLL_MS, fill: HOME_CODE_ROWS },
   );
-  const asked = (mine.data?.changes ?? []).slice(0, HOME_CODE_ROWS);
-  const waiting = (person.data?.changes ?? []).slice(0, HOME_CODE_ROWS);
+  const asked = useMemo(() => (mine.data?.changes ?? []).slice(0, HOME_CODE_ROWS), [mine.data]);
+  const waiting = useMemo(
+    () => (person.data?.changes ?? []).slice(0, HOME_CODE_ROWS),
+    [person.data],
+  );
   // WHETHER A HALF'S LISTING ENDED: the one answer that lets it say "none".
   // A half not asked (a reader bound to no seat) has nothing more to find.
   const mineEnded = !seated || (mine.data !== null && !mine.data.next);
@@ -91,6 +96,14 @@ export function CodeWaiting() {
   // reader bound to no seat keeps the first half's sentence about why it was
   // not asked, so for them the halves stay.
   const nothing = seated && asked.length === 0 && waiting.length === 0 && mineEnded && personEnded;
+  // ONE PEEK ORDER ACROSS THE CARD: the asked half, then the waiting half, each change once.
+  const order = useMemo(() => {
+    const seen = new Set<string>();
+    return [...asked, ...waiting]
+      .filter((c) => !seen.has(c.id) && Boolean(seen.add(c.id)))
+      .map((c) => changeObject(c.repo, c.number));
+  }, [asked, waiting]);
+  usePeekNeighbours(order);
   return (
     <Card padding="none" className="home-card">
       <Card.Header
@@ -129,6 +142,7 @@ export function CodeWaiting() {
                   gaps={[]}
                 >
                   <WaitingRows
+                    label="Asking your review"
                     rows={asked}
                     ended={mineEnded}
                     none="No change is asking your review."
@@ -151,6 +165,7 @@ export function CodeWaiting() {
                 gaps={[]}
               >
                 <WaitingRows
+                  label="Waiting on a person"
                   rows={waiting}
                   ended={personEnded}
                   none="No change waits on a person."
@@ -166,22 +181,23 @@ export function CodeWaiting() {
 }
 
 /**
- * A half's rows: each change's reference, title and what it waits on, opening
- * its peek — and, where the reading stopped at its bound before keeping any,
- * where the rest are rather than a "none" it cannot know (`ended` false).
+ * A half's rows, Gitlet's compact change rows; and, where the reading stopped
+ * at its bound before keeping any, where the rest are rather than a "none" it
+ * cannot know (`ended` false).
  */
 function WaitingRows({
+  label,
   rows,
   ended,
   none,
   rest,
 }: {
+  label: string;
   rows: CodeChangeSummary[];
   ended: boolean;
   none: string;
   rest: string;
 }) {
-  const { open } = usePeekControls();
   if (rows.length === 0) {
     return ended ? (
       <span className="t-caption">{none}</span>
@@ -194,25 +210,5 @@ function WaitingRows({
       </span>
     );
   }
-  return (
-    <ul className="code-person-band__list">
-      {rows.map((c) => (
-        <li key={c.id}>
-          <a
-            className="mono"
-            href={peekHref(changeObject(c.repo, c.number))}
-            onClick={(e) => {
-              if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-              e.preventDefault();
-              open(changeObject(c.repo, c.number));
-            }}
-          >
-            {c.ref}
-          </a>{" "}
-          {c.title} <ChangeStateTag state={c.state} />
-          {c.readiness && <span className="muted"> · {c.readiness.first}</span>}
-        </li>
-      ))}
-    </ul>
-  );
+  return <ChangeRows rows={rows} label={label} density="compact" neighbours={false} />;
 }

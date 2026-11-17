@@ -121,8 +121,8 @@ export const CHANGE_STATES = ["draft", "open", "closed", "merged"] as const;
  * What a listing of changes can ask its changes to be waiting on, in the
  * engine's order (`gitlet.Needs`): a review the asker owes, a fix their own
  * change owes, either of the two, or a PERSON — a change whose readiness's
- * first unmet precondition waits on persons alone, which the "Needs a person"
- * band lists. Each lists LIVE changes. HELD BOTH WAYS, in order, by
+ * first unmet precondition waits on persons alone, which Home's code card lists.
+ * Each lists LIVE changes. HELD BOTH WAYS, in order, by
  * `internal/gitlet.TestTheDashboardKnowsEveryNeedOfAListingOfChanges`.
  */
 export const CHANGE_NEEDS = ["review", "fix", "me", "person"] as const;

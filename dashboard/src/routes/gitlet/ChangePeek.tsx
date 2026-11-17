@@ -126,7 +126,7 @@ function ChangeReading({ change }: { change: CodeChangeDetail }) {
         )}
         <div>
           <strong>Authors</strong>
-          <ul className="code-person-band__list">
+          <ul className="code-change-authors">
             {change.authors.map((a) => (
               <li key={a.author}>
                 {seatBadge(a.author).name}{" "}

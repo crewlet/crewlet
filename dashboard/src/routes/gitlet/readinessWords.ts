@@ -7,7 +7,7 @@
  * "ada"`), branches as full refs, lowercase. Those are a model's words. The
  * readiness also carries each precondition's kind, where it stands and whom
  * it waits on, so every surface that draws a readiness for a person (the
- * merge panel, the peek, the "Needs a person" band, the listing's meter)
+ * merge panel, the peek, Waiting on you, the listing's meter)
  * words it here, once: parties by the name the dashboard shows for them, the
  * target by its branch name, one term for the count.
  */
