@@ -70,7 +70,8 @@ export function useCommitMarks(repo: string, pages: readonly (readonly string[])
         .then((page) => {
           if (abort.signal.aborted) return;
           asking.current.delete(key);
-          setHeld((h) => ({ ...h, [key]: page }));
+          // A FAILED RE-ASK keeps the marks already drawn; the next minute asks again.
+          setHeld((h) => ({ ...h, [key]: page.failed && h[key]?.marks ? h[key] : page }));
         });
     },
     [repo],
