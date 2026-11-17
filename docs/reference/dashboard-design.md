@@ -9399,14 +9399,22 @@ a reply box at the foot, however tall each grows as it is typed in
   `chatlet.DecisionWait`) and then at doubling intervals up to thirty seconds,
   until the answer is a decision: it landed, and the transcript brings it, or it
   was refused, and the row says why. It waits there while you look at another
-  room, and is there when you come back.
+  room, and is there when you come back. **Whom a message reached is a mark,
+  never a sentence** (the kit's `DeliveryReceipt`): under a person's message a
+  dashed circle while nobody it reached has answered, a check once somebody
+  has, with the count while others are still to answer, and the warning where
+  it named an agent and reached none. Hover, keyboard focus or a press opens
+  its tooltip with where it stands, who answered and when, who it still waits
+  on and when it was sent, and the whole sentence is its accessible name. The
+  composer's line draws whom a draft will reach as their faces, the same way.
 - **The panes** draw in the kit's side panel, so opening one moves focus to
   its heading, Escape inside closes it, and closing gives focus back to what
   opened it (to a menu's trigger, when a menu item opened it and is gone).
   **A thread** (`pane=thread:{room}:{root}`), opened beside the conversation
   or over it, is its root, the reply count, the
   replies as the room draws them, an agent writing a reply, the reply box
-  where the room takes one, who a reply reaches, and Follow. It is one level
+  where the room takes one, who a reply reaches (their faces, as the
+  composer's receipt draws them), and Follow. It is one level
   deep, so a reply offers no thread of its own, and it pages forwards from its
   root. Its read place moves to the newest reply on screen. **Details**
   (`pane=details:{room}:{tab}`) groups the room's facts in cards (its name,
