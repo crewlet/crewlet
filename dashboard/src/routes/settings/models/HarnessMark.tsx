@@ -3,9 +3,8 @@
  * entries table, the entry's header and the add review. Always beside the
  * harness's name, which carries the meaning; the mark is decoration.
  *
- * A built-in harness draws its vendor's mark from @crewlethq/icons. Codex, Muse Code and Kimi
- * Code draw the terminal glyph, as a custom harness does: OpenAI and Meta publish no mark for
- * them and require permission, and Kimi's logo terms allow only editorial, non-commercial use.
+ * A built-in harness draws its vendor's mark from @crewlethq/icons (Codex OpenAI's, Muse Code
+ * Meta's); a custom harness draws the terminal glyph.
  *
  * NAMED, the mark stands in for the harness's name: an entry's row line says the
  * model alone, so the mark carries the harness as its accessible name. Beside a
@@ -23,18 +22,21 @@ import { product } from "./words.ts";
 /** The kit mark each built-in harness draws; every other one is in `GLYPH_HARNESSES`. */
 export const HARNESS_MARKS: Readonly<Record<string, Vendor>> = {
   "claude-code": "claude",
+  codex: "openai",
   copilot: "copilot",
   "cursor-agent": "cursor",
   "gemini-cli": "gemini-cli",
   grok: "grok",
   hermes: "hermes",
+  "kimi-code": "kimi",
+  "muse-code": "meta",
   opencode: "opencode",
   pi: "pi",
   "qwen-code": "qwen",
 };
 
-/** The built-in harnesses whose owners publish no mark the product may use. */
-export const GLYPH_HARNESSES: readonly string[] = ["codex", "kimi-code", "muse-code"];
+/** The built-in harnesses whose owners publish no mark the product may use: none today. */
+export const GLYPH_HARNESSES: readonly string[] = [];
 
 /**
  * ONE SIZE WHEREVER A HARNESS IS NAMED: the harness cards, the table rows, the
