@@ -26,29 +26,23 @@ import (
 // from its memory rather than from its last record.
 //
 // A LIVE NODE WHOSE RECORD IS NOT COUNTED KEEPS ITS LAST WORD while its
-// presence stands at the epoch it said it under: a record not yet rewritten, or
-// one whose write failed and aged out while the node lives, is a node not
-// saying, never one whose runs stopped waiting, and read as the second the
-// alarm cleared on that pass and was raised again on the next. A node whose
-// presence is gone, or moved to a new epoch, says nothing it said before: its
-// seats move to holders that say their own, and a restarted node's memory of
-// its attempts went with its process. And a listing that fails is the last one
-// that answered, as the model alarms' is, so a blip neither clears the alarm
-// nor raises it again on the next tick.
+// presence stands at the epoch it said it under ([coord.LiveNodeStatusesKept],
+// the model and MCP alarms' rule too): a record not yet rewritten, or one whose
+// write failed and aged out while the node lives, is a node not saying, never
+// one whose runs stopped waiting, and read as the second the alarm cleared on
+// that pass and was raised again on the next. A node whose presence is gone, or
+// moved to a new epoch, says nothing it said before: its seats move to holders
+// that say their own, and a restarted node's memory of its attempts went with
+// its process. And a listing that fails is the last one that answered, as the
+// model alarms' is, so a blip neither clears the alarm nor raises it again on
+// the next tick.
 
-// blockedSaid is what [Engine.executorReading] last read of each live node: its
-// runs waiting for an operator, nil where it named none, under the presence
-// epoch it said them at.
+// blockedSaid is what [Engine.executorReading] last read of each live node's
+// status record, a live node whose record is not counted keeping the one it
+// last had.
 type blockedSaid struct {
-	mu    sync.Mutex
-	nodes map[string]blockedWord
-}
-
-// blockedWord is one live node's last word on its runs waiting for an
-// operator, and the presence epoch its record was written under.
-type blockedWord struct {
-	epoch   int64
-	blocked *coord.ResumesBlocked
+	mu      sync.Mutex
+	records map[string]coord.NodeStatusRecord
 }
 
 // executorReading fills the alarm reading's runs of seats whose finished job's
@@ -83,9 +77,9 @@ func (e *Engine) executorReading(ctx context.Context, now time.Time, out *statel
 
 // blockedByNode is each live node's word on the runs of its seats waiting for an
 // operator, by node id, off one listing of the presence leases and one of the
-// status records, joined by epoch ([coord.LiveNodeStatuses]): a live node whose
-// record is not counted keeps its last word at the same epoch, and the last
-// listings that answered stand for a pair that failed.
+// status records, joined by epoch ([coord.LiveNodeStatusesKept]): a live node
+// whose record is not counted keeps its last word at the same epoch, and the
+// last listings that answered stand for a pair that failed.
 func (e *Engine) blockedByNode(ctx context.Context) map[string]*coord.ResumesBlocked {
 	in := &e.blockedSaid
 	leases, records, err := e.statusListings(ctx)
@@ -96,24 +90,11 @@ func (e *Engine) blockedByNode(ctx context.Context) map[string]*coord.ResumesBlo
 			"detail", "the runs of seats waiting for an operator are judged on the status records "+
 				"this node last read")
 	} else {
-		counted := coord.LiveNodeStatuses(records, leases)
-		next := make(map[string]blockedWord, len(leases))
-		for _, lease := range leases {
-			node, ok := coord.NodeID(lease.Resource)
-			if !ok {
-				continue
-			}
-			if r, ok := counted[node]; ok {
-				next[node] = blockedWord{epoch: r.Epoch, blocked: r.ResumesBlocked}
-			} else if last, ok := in.nodes[node]; ok && last.epoch == lease.Epoch {
-				next[node] = last
-			}
-		}
-		in.nodes = next
+		in.records = coord.LiveNodeStatusesKept(records, leases, in.records)
 	}
-	out := make(map[string]*coord.ResumesBlocked, len(in.nodes)+1)
-	for node, word := range in.nodes {
-		out[node] = word.blocked
+	out := make(map[string]*coord.ResumesBlocked, len(in.records)+1)
+	for node, r := range in.records {
+		out[node] = r.ResumesBlocked
 	}
 	return out
 }

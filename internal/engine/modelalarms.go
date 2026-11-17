@@ -35,6 +35,13 @@ import (
 // be read is the last one that could, and the failure is logged. Only a node
 // that has never read the records judges nothing about models.
 //
+// AND A LIVE NODE WHOSE RECORD IS NOT COUNTED KEEPS ITS LAST RECORD while its
+// presence stands at the epoch it wrote it under ([coord.LiveNodeStatusesKept]),
+// as the runs waiting for an operator do ([Engine.executorReading]): a record
+// that aged out while its node lives is a node not saying, and read as one with
+// no rows, a sit-out or an outage only that node held cleared for one
+// evaluation and was raised again on the next.
+//
 // ONE LISTING OF THE RECORDS FEEDS THE MCP ALARMS TOO ([mcpConditions]), read
 // here once per evaluation, so a model's and a server's conditions are judged
 // on the same records of every node, and a blip carries both on the last good
@@ -44,7 +51,8 @@ import (
 // alarms judge.
 type entryInputs struct {
 	mu sync.Mutex
-	// statuses is every live node's status record, by node id.
+	// statuses is every live node's status record, by node id, a live node
+	// whose record is not counted keeping the one it last had.
 	statuses map[string]coord.NodeStatusRecord
 	// stored is when the secret store last wrote each secret, by name.
 	stored map[string]time.Time
@@ -63,13 +71,15 @@ func (e *Engine) entriesReading(ctx context.Context, now time.Time, out *statelo
 		return
 	}
 	in := &e.entryInputs
-	statuses, err := e.liveStatusRecords(ctx)
+	leases, records, err := e.statusListings(ctx)
 	in.mu.Lock()
+	var statuses map[string]coord.NodeStatusRecord
 	if err != nil {
 		log.WarnContext(ctx, "entry_alarms_status_unread", "error", err,
 			"detail", "the model and MCP alarms are judged on the last status records this node read")
 		statuses = in.statuses
 	} else {
+		statuses = coord.LiveNodeStatusesKept(records, leases, in.statuses)
 		in.statuses = statuses
 	}
 	in.mu.Unlock()

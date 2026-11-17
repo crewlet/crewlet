@@ -322,6 +322,40 @@ func LiveNodeStatuses(records []NodeStatusRecord, presence []Lease) map[string]N
 	return out
 }
 
+// LiveNodeStatusesKept is [LiveNodeStatuses] for a reader that judges the fleet
+// over and over, an alarm evaluation above all: last is what it counted on its
+// previous read, and a live node whose record is not counted now keeps the
+// record last holds for it while its presence stands at the epoch that record
+// was written under.
+//
+// A LIVE NODE WHOSE RECORD IS NOT COUNTED IS A NODE NOT SAYING, never one whose
+// rows went away: a record whose rewrites failed while the node lives ages out
+// of its bucket ([StatusFreshness]) before the presence lapses, and read as a
+// node holding nothing, a condition only that node held (a model's sit-out, a
+// server's outage, a run waiting for the operator) cleared for one evaluation
+// and was raised again on the next, with its lines and its wakes. A node whose
+// presence is gone, or was claimed again at a new epoch, keeps nothing: what it
+// held moves to holders that say their own, and a restarted node's memory went
+// with its process. A reader that decides once, rather than judging a standing
+// condition, reads [LiveNodeStatuses] itself.
+func LiveNodeStatusesKept(records []NodeStatusRecord, presence []Lease,
+	last map[string]NodeStatusRecord) map[string]NodeStatusRecord {
+	out := LiveNodeStatuses(records, presence)
+	for _, lease := range presence {
+		node, ok := NodeID(lease.Resource)
+		if !ok {
+			continue
+		}
+		if _, counted := out[node]; counted {
+			continue
+		}
+		if kept, ok := last[node]; ok && kept.Epoch == lease.Epoch {
+			out[node] = kept
+		}
+	}
+	return out
+}
+
 // ModelStatus is one configured model entry, as ONE node holds it when it
 // writes its status record.
 //
