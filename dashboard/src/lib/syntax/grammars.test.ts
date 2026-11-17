@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from "vitest";
 import { contractBreaks } from "~/test/syntax.ts";
-import { language, load, loaded, tokenize, type Lang } from "./index.ts";
+import { language, languageOfInfo, load, loaded, tokenize, type Lang } from "./index.ts";
 import type { Grammar } from "./types.ts";
 
 /** Each line's tokens as text, the state carried from line to line; each answer keeps the contract. */
@@ -65,6 +65,29 @@ describe("the registry", () => {
       [".gitignore", null],
     ];
     for (const [path, lang] of table) expect(language(path), path).toBe(lang);
+  });
+
+  // Mutation: reading the info string whole, or dropping the extension fallback, fails it.
+  test("a fence's language is its info string's first word: a name, an alias or an extension", () => {
+    const table: [string, Lang | null][] = [
+      ["sh", "shell"],
+      ["Bash", "shell"],
+      ["shell", "shell"],
+      ["go", "go"],
+      ["golang", "go"],
+      ["ts title", "ts"],
+      ["javascript", "ts"],
+      ["py", "python"],
+      ["yml", "yaml"],
+      ["Makefile", "makefile"],
+      ["dockerfile", "dockerfile"],
+      ["terraform", "hcl"],
+      ["console", null],
+      ["diff", null],
+      ["text", null],
+      ["", null],
+    ];
+    for (const [info, lang] of table) expect(languageOfInfo(info), info).toBe(lang);
   });
 
   // Mutation: a fresh promise per call fails it.

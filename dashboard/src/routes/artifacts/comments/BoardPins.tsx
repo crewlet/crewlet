@@ -11,7 +11,7 @@ import {
   type BoardFrame,
   type Box,
 } from "~/lib/artifacts/comments.ts";
-import { DraftPin, Outline, ThreadPin } from "./layer.tsx";
+import { DraftPin, Outline, ThreadPin, usePlacingCursor } from "./layer.tsx";
 import { useComments } from "./state.tsx";
 
 /** How much of the canvas around a pin Jump to brings into view, in canvas pixels. */
@@ -29,6 +29,7 @@ export function BoardPins({
   moved: Set<() => void>;
 }) {
   const c = useComments();
+  const cursor = usePlacingCursor(c?.placing ?? false);
   const [, redraw] = useReducer((n: number) => n + 1, 0);
   useEffect(() => {
     moved.add(redraw);
@@ -108,6 +109,7 @@ export function BoardPins({
       {c.placing && (
         <div
           className="artifact-comment-catch"
+          style={{ cursor }}
           aria-hidden="true"
           // THE CANVAS DOES NOT PAN OR SELECT under a press that places a
           // comment; its wheel still zooms.

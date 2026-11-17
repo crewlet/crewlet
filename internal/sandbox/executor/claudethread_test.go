@@ -493,14 +493,16 @@ func ctTypes(lines []threadLine) []string {
 // asked again, the reader answers it again. A subagent's metadata, one JSON
 // document with no break after it, is no line at all, only a torn piece: no
 // reader of a thread reads it through this one. Each line says the bytes it
-// takes, its break included, and hands what a reader of its bytes reads of
-// them, its break dropped ([threadBytes]).
+// takes, its break included, hands what a reader of its bytes reads of them,
+// its break dropped ([threadBytes]), and reads as the record's whole decode
+// ([decodeThreadLine]).
 //
 // Mutation: hand out the last piece with no break as a line, and the torn
 // record, the padding, a piece a carriage return ends and a subagent's
 // metadata each come back as a line, or a line that is no record, where the
-// member's end belongs; count a record's size without its break, or read its
-// byte facts with the break, and every line says so.
+// member's end belongs; count a record's size without its break, read its
+// byte facts with the break or without a carriage return before it, or decode
+// a line from bytes other than its record's, and every line says so.
 func TestAThreadIsReadAWholeLineAtATime(t *testing.T) {
 	t.Parallel()
 	brief := ctBrief(ctUUID(1))
@@ -528,16 +530,14 @@ func TestAThreadIsReadAWholeLineAtATime(t *testing.T) {
 			t.Errorf("%s: the lines read are of types %q, want %q", name, strings.Join(types, " "),
 				strings.Join(tc.types, " "))
 		}
+		// records is each whole record the member holds, its break dropped.
+		records := strings.Split(tc.text, "\n")
+		records = records[:len(records)-1]
 		for i, line := range got.lines {
-			if line.N != i+1 || bytes.HasSuffix(line.Raw, []byte("\n")) {
-				t.Errorf("%s: line %d is numbered %d and keeps its break %t", name, i+1, line.N,
-					bytes.HasSuffix(line.Raw, []byte("\n")))
+			if i >= len(records) {
+				break
 			}
-			if line.Size != len(line.Raw)+1 || line.Bytes != wholeLineBytes(line.Raw) {
-				t.Errorf("%s: line %d says it takes %d bytes, and hands byte facts of %d; want %d with its break, "+
-					"and the facts of its bytes but the break", name, i+1, line.Size, line.Bytes.Len(),
-					len(line.Raw)+1)
-			}
+			ctWholeRecord(t, name, i+1, line, records[i])
 		}
 		if !errors.Is(got.end, io.EOF) || got.torn != tc.torn || !errors.Is(got.again, io.EOF) {
 			t.Errorf("%s: the reading ended with %v, torn %t, and then %v; want io.EOF, torn %t, and io.EOF again",
@@ -545,8 +545,30 @@ func TestAThreadIsReadAWholeLineAtATime(t *testing.T) {
 		}
 	}
 	got := ctRead(ctEnqueue+"\r\n"+brief+"\n", threadPlainMax)
-	if len(got.lines) != 2 || string(got.lines[0].Raw) != ctEnqueue+"\r" || string(got.lines[1].Raw) != brief {
-		t.Errorf("a line's bytes are not the record's with its break dropped and its carriage return kept")
+	if len(got.lines) != 2 {
+		t.Fatalf("a member of two records reads as %d lines", len(got.lines))
+	}
+	ctWholeRecord(t, "a record ended by CRLF", 1, got.lines[0], ctEnqueue+"\r")
+	ctWholeRecord(t, "a record ended by a break alone", 2, got.lines[1], brief)
+}
+
+// ctWholeRecord fails t unless line is record, a whole record its break
+// dropped, read as line n of the member it was read from (name): numbered n,
+// taking its record's bytes and its break, handing its record's byte facts
+// and reading, every accessor, as the record's whole decode.
+func ctWholeRecord(t *testing.T, name string, n int, line threadLine, record string) {
+	t.Helper()
+	if line.N != n || line.Size != len(record)+1 || line.Bytes != wholeLineBytes([]byte(record)) {
+		t.Errorf("%s: line %d is numbered %d, says it takes %d bytes and hands byte facts of %d; want %d with "+
+			"its break, and the facts of its bytes but the break", name, n, line.N, line.Size, line.Bytes.Len(),
+			len(record)+1)
+	}
+	decoded, err := decodeThreadLine(n, []byte(record))
+	if err != nil {
+		t.Fatalf("%s: line %d, decoded whole, is no record: %v", name, n, err)
+	}
+	if got, want := ctAll(line), ctAll(decoded); got != want {
+		t.Errorf("%s: line %d reads as\n%s\nwant its record's whole decode\n%s", name, n, got, want)
 	}
 }
 
@@ -672,9 +694,10 @@ func TestAMembersReaderThatFailsEndsTheReadingWithItsError(t *testing.T) {
 }
 
 // ctTrace is what r hands out reading one member to its end with ctx, as
-// text: each line as Next hands it (its place and bytes, or, where it is no
-// record, its place, fault and size), then what ended the reading, what one
-// more Next answered, and whether the member ended torn.
+// text: each line as Next hands it (its place, its size, the bytes it holds
+// and its first ones, and everything its accessors read ([ctAll]), or, where
+// it is no record, its place, fault and size), then what ended the reading,
+// what one more Next answered, and whether the member ended torn.
 func ctTrace(ctx context.Context, r *threadReader) string {
 	var b strings.Builder
 	for {
@@ -682,7 +705,8 @@ func ctTrace(ctx context.Context, r *threadReader) string {
 		var broken *threadLineError
 		switch {
 		case err == nil:
-			fmt.Fprintf(&b, "line %d: %s\n", line.N, line.Raw)
+			fmt.Fprintf(&b, "line %d: %d bytes, %d of them its own, beginning %q\n%s", line.N, line.Size,
+				line.Bytes.Len(), line.Bytes.Head(), ctAll(line))
 		case errors.As(err, &broken):
 			fmt.Fprintf(&b, "line %d is no record: fault %q, size %d\n", broken.N, broken.Fault, broken.Size)
 		default:
@@ -4490,7 +4514,8 @@ func TestAReplysIterationsCostItsUsageAnEntryAtATime(t *testing.T) {
 	)
 	usage := func(l threadLine) func() { return func() { _, _, _ = l.Usage() } }
 	one := ctLine(t, head+"1"+tail)
-	long := ctLine(t, ctListRecord(t, head, "1", tail, listBytes))
+	longRecord := ctListRecord(t, head, "1", tail, listBytes)
+	long := ctLine(t, longRecord)
 	for name, l := range map[string]threadLine{"a list of one": one, "a long list": long} {
 		if u, ok, err := l.Usage(); !ok || err != nil || u.Input != 3 {
 			t.Fatalf("%s of entries no harness counts says its request took %+v (%t), %v; want its usage's own", name,
@@ -4501,11 +4526,11 @@ func TestAReplysIterationsCostItsUsageAnEntryAtATime(t *testing.T) {
 	manyObjects, manyBytes := allocationsOf(usage(long))
 	if manyObjects > fewObjects+listSlack {
 		t.Errorf("a usage listing %d bytes of iterations costs %d allocations, and one listing one entry %d",
-			len(long.Raw), manyObjects, fewObjects)
+			len(longRecord), manyObjects, fewObjects)
 	}
-	if manyBytes > fewBytes+listCopies*uint64(len(long.Raw)) {
+	if manyBytes > fewBytes+listCopies*uint64(len(longRecord)) {
 		t.Errorf("a usage listing %d bytes of iterations costs %d bytes, and one listing one entry %d: more than %d "+
-			"copies of the line", len(long.Raw), manyBytes, fewBytes, listCopies)
+			"copies of the line", len(longRecord), manyBytes, fewBytes, listCopies)
 	}
 }
 
@@ -4724,25 +4749,38 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 	// detector a pool also drops a quarter of what is put in it. A whole
 	// decode costs millions more.
 	const slack = 64
-	// A MESSAGE IS READ AS ITS LINE IS DECODED ([factsOf]): what it costs is
-	// its line's decode and then Message.
-	message := func(l threadLine) error {
-		decoded, err := decodeThreadLine(l.N, l.Raw)
+	// decoded is record, decoded whole as a thread's line ([decodeThreadLine]).
+	decoded := func(record []byte) threadLine {
+		l, err := decodeThreadLine(1, record)
 		if err != nil {
-			t.Fatalf("line %d, decoded again, is no record: %v", l.N, err)
+			t.Fatalf("a line of %d bytes, decoded whole, is no record: %v", len(record)+1, err)
 		}
-		_, err = decoded.Message()
-		return err
+		return l
 	}
-	cleared := func(l threadLine) error {
-		_, err := l.ToolResultsCleared()
-		return err
+	// A MESSAGE IS READ AS ITS LINE IS DECODED ([factsOf]): what it costs is
+	// its line's whole decode and then Message.
+	message := func(record []byte) func() error {
+		return func() error {
+			_, err := decoded(record).Message()
+			return err
+		}
+	}
+	// ToolResultsCleared reads the report its line's facts keep: what it
+	// costs is the read alone, of a line decoded before it is measured.
+	cleared := func(record []byte) func() error {
+		l := decoded(record)
+		return func() error {
+			_, err := l.ToolResultsCleared()
+			return err
+		}
 	}
 	user := `{"type":"user","message":{"role":"user","content":[`
 	reply := `{"type":"assistant","message":{"role":"assistant","content":[],"context_management":{"applied_edits":[`
 	for name, tc := range map[string]struct {
 		head, element, tail string
-		read                func(threadLine) error
+		// read is what is measured of a record: its read, from what is
+		// decoded of it before it is measured.
+		read func(record []byte) func() error
 		// copies is how many copies of the list its reader makes as it decodes
 		// the record around it, measured: Message the message's and its
 		// content's, and ToolResultsCleared its edits'. A list may cost
@@ -4755,13 +4793,13 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 		"a message's content of empty objects": {head: user, element: "{}", tail: `]}}`, read: message, copies: 2},
 		"a reply's applied edits of numbers":   {head: reply, element: "1", tail: `]}}}`, read: cleared, copies: 1},
 	} {
-		one := ctLine(t, tc.head+tc.element+tc.tail)
-		full := ctLine(t, ctListRecord(t, tc.head, tc.element, tc.tail, threadLineMax))
-		if len(full.Raw) != threadLineMax-1 || tc.read(one) == nil || tc.read(full) == nil {
-			t.Fatalf("%s: a line of %d bytes whose first block is none reads with no error", name, len(full.Raw)+1)
+		fullRecord := []byte(ctListRecord(t, tc.head, tc.element, tc.tail, threadLineMax))
+		one, full := tc.read([]byte(tc.head+tc.element+tc.tail)), tc.read(fullRecord)
+		if len(fullRecord) != threadLineMax-1 || one() == nil || full() == nil {
+			t.Fatalf("%s: a line of %d bytes whose first block is none reads with no error", name, len(fullRecord)+1)
 		}
-		fewObjects, fewBytes := allocationsOf(func() { _ = tc.read(one) })
-		manyObjects, manyBytes := allocationsOf(func() { _ = tc.read(full) })
+		fewObjects, fewBytes := allocationsOf(func() { _ = one() })
+		manyObjects, manyBytes := allocationsOf(func() { _ = full() })
 		if manyObjects > fewObjects+slack {
 			t.Errorf("%s: refused at its first block, a list at the line's bound costs %d allocations, and a list "+
 				"of one %d", name, manyObjects, fewObjects)
@@ -4811,17 +4849,13 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 		"blocks of a kind no reader names": {element: `{"type":"x"}`},
 		"the smallest results":             {element: `{"type":"tool_result","tool_use_id":"a"}`, own: 1, calls: true},
 	} {
-		line := ctLine(t, ctListRecord(t, user, tc.element, `]}}`, listBytes))
+		record := []byte(ctListRecord(t, user, tc.element, `]}}`, listBytes))
 		read := func() any {
-			decoded, err := decodeThreadLine(line.N, line.Raw)
-			if err != nil {
-				t.Fatalf("%s: the line, decoded again, is no record: %v", name, err)
-			}
-			m, _ := decoded.Message()
+			m, _ := decoded(record).Message()
 			return m
 		}
-		m, err := line.Message()
-		blocks, calls := uint64(strings.Count(string(line.Raw), tc.element)), uint64(0)
+		m, err := ctLine(t, string(record)).Message()
+		blocks, calls := uint64(strings.Count(string(record), tc.element)), uint64(0)
 		if tc.calls {
 			calls = blocks
 		}
@@ -4832,7 +4866,7 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 		fields := calls * (uint64(unsafe.Sizeof(threadCall{})) + tc.own)
 		if held, limit := heldBy(read), fields*5/4+heldSlack; held > limit {
 			t.Errorf("%s: a list of %d bytes read to its end holds %d bytes, more than its %d calls of %d blocks "+
-				"take: %d", name, len(line.Raw)+1, held, calls, blocks, limit)
+				"take: %d", name, len(record)+1, held, calls, blocks, limit)
 		}
 	}
 }
@@ -5200,7 +5234,7 @@ func TestALineThatHoldsNoFactsReadsAsARecordOfNoKeys(t *testing.T) {
 		`{"type":"system","subtype":"model_refusal_fallback"}`,
 	} {
 		want := ctLine(t, head)
-		got := threadLine{N: want.N, Raw: want.Raw, Head: want.Head}
+		got := threadLine{N: want.N, Head: want.Head}
 		if ctAll(got) != ctAll(want) {
 			t.Errorf("a line of no facts with the head of %s reads as\n%s\nwant\n%s", head, ctAll(got), ctAll(want))
 		}
@@ -5208,7 +5242,7 @@ func TestALineThatHoldsNoFactsReadsAsARecordOfNoKeys(t *testing.T) {
 	for _, kind := range recordKinds {
 		head := `{"type":"` + string(kind) + `"}`
 		want := ctLine(t, head)
-		got := threadLine{N: want.N, Raw: want.Raw, Head: want.Head}
+		got := threadLine{N: want.N, Head: want.Head}
 		if ctAll(got) != ctAll(want) {
 			t.Errorf("a line of no facts with the head of %s reads as\n%s\nwant\n%s", head, ctAll(got), ctAll(want))
 		}

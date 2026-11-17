@@ -155,7 +155,7 @@ describe("the star", () => {
       return disabled;
     };
     expect(more(["account"])).toBe(false);
-    expect(more(["settings", "models"])).toBe(true);
+    expect(more(["settings", "general"])).toBe(true);
   });
 
   // A SCREEN WHOSE OWN MENU CARRIES THE STAR (a knowledge page's More) gets

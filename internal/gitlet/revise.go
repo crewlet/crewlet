@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -162,11 +164,29 @@ type SkippedOwner struct {
 	Why    SkipReason `json:"why"`
 }
 
+// MatchedOwner is a path owner a revision's touched paths matched, and its globs that matched them
+// in the order its settings hold them; none where the revision touches all, every glob matching.
+type MatchedOwner struct {
+	Owner
+	// Paths is SENT BY THE HOME, at most MaxPathOwnerPaths; none from a home before [OwnedPathsVersion].
+	Paths []string `json:"paths,omitempty"`
+}
+
+// OwnerAsk is a reviewer a revise asks for the path owners resolving to it, and the globs of
+// theirs the revision touched: sorted, each once, cut at MaxPathOwnerPaths and MaxOwnedPathsBytes
+// as JSON, PathsOmitted how many more. STAMPED BY THE WRITER.
+type OwnerAsk struct {
+	Reviewer
+	Paths        []string `json:"paths,omitempty"`
+	PathsOmitted int      `json:"paths_omitted,omitempty"`
+}
+
 // Revise records one revision's facts on its change: what the revision's head
 // is against its target's tip, as the repository's home Gitlet node read them,
 // and the path owners whose globs its touched paths match.
 //
-// Every field is in the base format, as [OpRevise] is.
+// Every field is in the base format, as [OpRevise] is, but MeasuredAt and the globs of the matched
+// owners and the asks ([OwnedPathsVersion]).
 type Revise struct {
 	RepoID   string `json:"repo_id"`
 	ChangeID string `json:"change_id"`
@@ -212,13 +232,17 @@ type Revise struct {
 	// Node is the Gitlet node that recorded the facts: the repository's home as
 	// it took itself to be, which asked for them.
 	Node string `json:"node"`
+	// MeasuredAt is when the home read these facts, by its clock and to the microsecond: SENT BY THE
+	// HOME, zero from a home before [OwnedPathsVersion].
+	MeasuredAt time.Time `json:"measured_at,omitzero"`
 	// RequestedOwners is the path owners one of whose globs matched a touched
-	// path — every owner, where the revision touches all — as [MatchOwners]
-	// answers them, and OwnersDigest the digest of the owner rows they were
+	// path, every owner where the revision touches all, as [MatchOwners]
+	// answers them: each with its globs that matched, none where the revision
+	// touches all. OwnersDigest is the digest of the owner rows they were
 	// matched against ([OwnersDigest]), which the decide holds its own
 	// snapshot's to.
-	RequestedOwners []Owner `json:"requested_owners,omitempty"`
-	OwnersDigest    string  `json:"owners_digest"`
+	RequestedOwners []MatchedOwner `json:"requested_owners,omitempty"`
+	OwnersDigest    string         `json:"owners_digest"`
 	// HumanPaths is which of the human paths the change's target's merge gate
 	// names hold the revision to a person and which their unless waives, each
 	// by its place in the target's human paths ([HumanPathMatch]), as
@@ -231,10 +255,11 @@ type Revise struct {
 	HumanPathsDigest string         `json:"human_paths_digest"`
 
 	// Asked is the reviewers the record asks for the matched owners, each by
-	// the seat it resolved to and its kind; SkippedOwners the matched owners
-	// it asked no review of, and why. STAMPED BY THE WRITER from its snapshot
-	// and its chart; the home sends neither.
-	Asked         []Reviewer     `json:"asked,omitempty"`
+	// the seat it resolved to, its kind and the globs it is asked for;
+	// SkippedOwners the matched owners it asked no review of, and why.
+	// STAMPED BY THE WRITER from its snapshot and its chart; the home sends
+	// neither.
+	Asked         []OwnerAsk     `json:"asked,omitempty"`
 	SkippedOwners []SkippedOwner `json:"skipped_owners,omitempty"`
 	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
 	// WRITER from its snapshot and chart; an asker sends none. Its re_review
@@ -345,37 +370,41 @@ func OwnersDigest(owners []PathOwner) string {
 // MatchOwners is which of a repository's path owners a revision touching
 // touched owns — every owner one of whose globs matches a touched path, and
 // every owner where the revision touches all — in the order owners holds them
-// (the canonical one, [CanonicalPathOwners]), and the digest of owners
-// ([OwnersDigest]) a revise sends beside them. A glob gitref cannot read — which
-// no row holds, since every settings record is validated — owns nothing.
+// (the canonical one, [CanonicalPathOwners]), each with its globs that matched,
+// none where the revision touches all; and the digest of owners
+// ([OwnersDigest]) a revise sends beside them. A glob gitref cannot read, which
+// no row holds since every settings record is validated, owns nothing.
 //
 // ON THE HOME, NEVER IN A DECIDE: up to MaxPathOwners × MaxPathOwnerPaths globs
-// against MaxTouchedPaths paths, each owner's match ending at its first hit.
-func MatchOwners(owners []PathOwner, touched []string, touchesAll bool) ([]Owner, string) {
+// against MaxTouchedPaths paths, each glob's match ending at its first hit.
+func MatchOwners(owners []PathOwner, touched []string, touchesAll bool) ([]MatchedOwner, string) {
 	canonical := CanonicalPathOwners(owners)
-	var out []Owner
+	var out []MatchedOwner
 	for _, po := range canonical {
-		if touchesAll || ownsAny(po.Paths, touched) {
-			out = append(out, po.Owner)
+		if touchesAll {
+			out = append(out, MatchedOwner{Owner: po.Owner})
+			continue
+		}
+		if globs := matchingGlobs(po.Paths, touched); len(globs) > 0 {
+			out = append(out, MatchedOwner{Owner: po.Owner, Paths: globs})
 		}
 	}
 	return out, OwnersDigest(canonical)
 }
 
-// ownsAny reports whether one of globs matches one of paths.
-func ownsAny(globs, paths []string) bool {
+// matchingGlobs is the globs of globs one of paths matches, in globs' order.
+func matchingGlobs(globs, paths []string) []string {
+	var out []string
 	for _, spelled := range globs {
 		glob, err := gitref.ParsePathGlob(spelled)
 		if err != nil {
 			continue
 		}
-		for _, p := range paths {
-			if glob.Match(p) {
-				return true
-			}
+		if slices.ContainsFunc(paths, glob.Match) {
+			out = append(out, spelled)
 		}
 	}
-	return false
+	return out
 }
 
 // validFields holds a revise to [ConversationWrite.Validate]'s rules: a
@@ -387,8 +416,10 @@ func ownsAny(globs, paths []string) bool {
 // facts keep it to, beside no word that it touches all, of clean paths; its
 // classes naming its touched paths ([classesProblem]); the node a node id
 // config admits; the matched owners each a unit or a seat, sorted and once,
-// at most MaxPathOwners; a digest of SHA-256's width in lowercase hex; and no
-// field the writer stamps.
+// at most MaxPathOwners; each owner's globs, named where the facts were
+// measured and do not touch all and nowhere else, at most MaxPathOwnerPaths,
+// sorted and once; a measured instant after 1970; a digest of SHA-256's width
+// in lowercase hex; and no field the writer stamps.
 func (r *Revise) validFields() error {
 	if r.N < 1 {
 		return badField("revise.n", "%d; a change's revisions count from 1", r.N)
@@ -438,6 +469,7 @@ func (r *Revise) validFields() error {
 		return badField("revise.requested_owners", "%d owners, past the %d a repository names (MaxPathOwners)",
 			len(r.RequestedOwners), MaxPathOwners)
 	}
+	named := !r.MeasuredAt.IsZero() && !r.TouchesAll
 	for i, o := range r.RequestedOwners {
 		field := fmt.Sprintf("revise.requested_owners[%d]", i)
 		switch {
@@ -445,11 +477,18 @@ func (r *Revise) validFields() error {
 			return badField(field+".kind", "%q is not one of %s", o.Kind, words.Or(OwnerKinds()))
 		case strings.TrimSpace(o.Ref) == "":
 			return badField(field+".ref", "a path owner names a unit or a seat")
-		case i > 0 && compareOwners(r.RequestedOwners[i-1], o) >= 0:
+		case i > 0 && compareOwners(r.RequestedOwners[i-1].Owner, o.Owner) >= 0:
 			return badField(field, "%s %s is not after %s %s — matched owners are in the order the "+
 				"repository's settings hold them, each once", o.Kind, o.Ref, r.RequestedOwners[i-1].Kind,
 				r.RequestedOwners[i-1].Ref)
 		}
+		if err := matchedGlobsProblem(field+".paths", o, named, r.TouchesAll); err != nil {
+			return err
+		}
+	}
+	if !r.MeasuredAt.IsZero() && r.MeasuredAt.UnixMicro() <= 0 {
+		return badField("revise.measured_at", "%s: an instant before 1970 is no home's reading",
+			r.MeasuredAt.Format(time.RFC3339Nano))
 	}
 	if len(r.OwnersDigest) != sha256.Size*2 || strings.Trim(r.OwnersDigest, "0123456789abcdef") != "" {
 		return badField("revise.owners_digest", "%q is not a SHA-256 in lowercase hex", r.OwnersDigest)
@@ -465,6 +504,33 @@ func (r *Revise) validFields() error {
 			"chart, and the home sends none of them")
 	}
 	return stampedRouting("revise", r.Routing)
+}
+
+// matchedGlobsProblem refuses a matched owner's globs as a revise carries them at field: named
+// exactly where the facts name them (named), at most MaxPathOwnerPaths, each a path glob, sorted and once.
+func matchedGlobsProblem(field string, o MatchedOwner, named, touchesAll bool) error {
+	switch {
+	case named && len(o.Paths) == 0:
+		return badField(field, "the home names the globs of every owner it matched, and names none of %s %s",
+			o.Kind, o.Ref)
+	case !named && len(o.Paths) > 0 && touchesAll:
+		return badField(field, "a revision that touches all names no glob: it touches every glob of every owner")
+	case !named && len(o.Paths) > 0:
+		return badField(field, "facts naming globs name when they were measured (measured_at)")
+	case len(o.Paths) > MaxPathOwnerPaths:
+		return badField(field, "%d globs, past the %d a path owner names (MaxPathOwnerPaths)", len(o.Paths),
+			MaxPathOwnerPaths)
+	}
+	for k, glob := range o.Paths {
+		if _, err := gitref.ParsePathGlob(glob); err != nil {
+			return badField(fmt.Sprintf("%s[%d]", field, k), "%q is not a path glob: %v", glob, err)
+		}
+		if k > 0 && o.Paths[k-1] >= glob {
+			return badField(fmt.Sprintf("%s[%d]", field, k), "%q is not after %q: an owner's globs are in the "+
+				"order its settings hold them, each once", glob, o.Paths[k-1])
+		}
+	}
+	return nil
 }
 
 // touchedProblem refuses a revision's touched paths as a revise carries them:
@@ -501,10 +567,11 @@ func compareOwners(a, b Owner) int {
 }
 
 // stampedReviseBytes is what the writer may add to a revise's record beside
-// what the home sent, at its widest: an ask or a skip for every matched owner —
-// a skip naming the owner, the widest handle and the widest reason, which is
-// wider than an ask. Whom it asks to look again and the lead it falls back to
-// ride its routing alone, which [MaxRoutingBytes] bounds.
+// what the home sent, at its widest: an ask or a skip for every matched owner,
+// each at the wider of a skip naming the owner, the widest handle and the
+// widest reason, and an ask naming the widest handle and globs at their bound.
+// Whom it asks to look again and the lead it falls back to ride its routing
+// alone, which [MaxRoutingBytes] bounds.
 func stampedReviseBytes(r Revise) int {
 	const (
 		handle = iam.MaxLogin // a seat's handle is no longer than a login (iam.ValidSeatHandle)
@@ -514,14 +581,16 @@ func stampedReviseBytes(r Revise) int {
 	for _, why := range SkipReasons() {
 		widest = max(widest, len(why))
 	}
+	ask := len(`{"handle":"","kind":"","paths":,"paths_omitted":},`) + handle + len(PartyPerson) +
+		MaxOwnedPathsBytes + len(strconv.Itoa(MaxPathOwners*MaxPathOwnerPaths))
 	n := lists
 	for _, o := range r.RequestedOwners {
-		encoded, err := json.Marshal(SkippedOwner{Owner: o, Handle: strings.Repeat("h", handle),
+		encoded, err := json.Marshal(SkippedOwner{Owner: o.Owner, Handle: strings.Repeat("h", handle),
 			Why: SkipReason(strings.Repeat("w", widest))})
 		if err != nil {
 			continue
 		}
-		n += len(encoded) + 1
+		n += max(len(encoded)+1, ask)
 	}
 	return n
 }
@@ -615,24 +684,39 @@ func decideRevise(ctx context.Context, tx *sql.Tx, w ConversationWrite, roster R
 	if err != nil {
 		return conversationDecision{}, err
 	}
-	isOwner := make(map[Owner]bool, len(owners))
+	globsOf := make(map[Owner][]string, len(owners))
 	for _, po := range owners {
-		isOwner[po.Owner] = true
+		globsOf[po.Owner] = po.Paths
 	}
-	for _, o := range r.RequestedOwners {
-		if !isOwner[o] {
+	// EACH OWNER'S MATCHED GLOBS: those the home names, and every glob it holds where a home of
+	// this build measured facts touching all. An older home's name none, so its asks name none.
+	matched := make([][]string, len(r.RequestedOwners))
+	for i, o := range r.RequestedOwners {
+		owns, ok := globsOf[o.Owner]
+		if !ok {
 			return d.refuse(ConversationRefusalSuperseded, fmt.Sprintf("%s names no path owner %s %s, which "+
 				"the facts were matched to: the home matches the touched paths again", repo.Name, o.Kind, o.Ref))
 		}
+		for _, glob := range o.Paths {
+			if !slices.Contains(owns, glob) {
+				return d.refuse(ConversationRefusalSuperseded, fmt.Sprintf("%s's path owner %s %s owns no glob "+
+					"%q, which the facts were matched to: the home matches the touched paths again", repo.Name,
+					o.Kind, o.Ref, glob))
+			}
+		}
+		matched[i] = o.Paths
+		if r.TouchesAll && !r.MeasuredAt.IsZero() {
+			matched[i] = owns
+		}
 	}
-	j, err := judgeOwners(ctx, tx, r, roster, repo, row, !held)
+	j, err := judgeOwners(ctx, tx, r, matched, roster, repo, row, !held)
 	if err != nil {
 		return conversationDecision{}, err
 	}
 	r.Asked, r.SkippedOwners = j.asked, j.skipped
 	// WHOM THE FACTS CONCERN: the path owners they ask, the reviewers they
 	// ask to look again, and the lead a change nobody may review reaches.
-	d.concern = concerning{pathOwners: j.asked, reReview: j.reReview}
+	d.concern = concerning{pathOwners: asksReviewers(j.asked), reReview: j.reReview}
 	if j.fallback != nil {
 		d.concern.lead = *j.fallback
 	}
@@ -663,7 +747,7 @@ func decideRevise(ctx context.Context, tx *sql.Tx, w ConversationWrite, roster R
 // ownersJudged is what a revise's decide makes of the owners a revision's
 // facts matched, and of whom else its facts concern.
 type ownersJudged struct {
-	asked    []Reviewer
+	asked    []OwnerAsk
 	skipped  []SkippedOwner
 	reReview []Reviewer
 	fallback *Reviewer
@@ -682,14 +766,20 @@ type resolvedOwner struct {
 // rows tx holds and the chart roster — see this file's head. first is a
 // revision's first facts: only those wake reviewers to look again, and only
 // the change's first wake its lead where nobody who may review it is asked.
-func judgeOwners(ctx context.Context, tx *sql.Tx, r Revise, roster Roster, repo RepoRef, row changeRow,
-	first bool) (ownersJudged, error) {
+// matched is each requested owner's matched globs, in its order: an ask names
+// the union of those of every owner resolving to its seat ([askedGlobs]).
+func judgeOwners(ctx context.Context, tx *sql.Tx, r Revise, matched [][]string, roster Roster, repo RepoRef,
+	row changeRow, first bool) (ownersJudged, error) {
 
 	var j ownersJudged
 	resolved := make([]resolvedOwner, 0, len(r.RequestedOwners))
 	handles := []string{}
-	for _, o := range r.RequestedOwners {
-		ro := resolveOwner(o, roster, repo)
+	globs := map[string][]string{}
+	for i, o := range r.RequestedOwners {
+		ro := resolveOwner(o.Owner, roster, repo)
+		if ro.handle != "" && ro.why == "" {
+			globs[ro.handle] = append(globs[ro.handle], matched[i]...)
+		}
 		resolved = append(resolved, ro)
 		if ro.handle != "" {
 			handles = append(handles, ro.handle)
@@ -767,13 +857,16 @@ func judgeOwners(ctx context.Context, tx *sql.Tx, r Revise, roster Roster, repo 
 			case requested+len(j.asked) >= MaxReviewersPerChange:
 				why = SkipTooManyReviewers
 			default:
-				j.asked = append(j.asked, Reviewer{Handle: ro.handle, Kind: ro.kind})
+				j.asked = append(j.asked, OwnerAsk{Reviewer: Reviewer{Handle: ro.handle, Kind: ro.kind}})
 			}
 			judged[ro.handle] = why
 		}
 		if why != "" {
 			j.skipped = append(j.skipped, SkippedOwner{Owner: ro.owner, Handle: ro.handle, Why: why})
 		}
+	}
+	for i := range j.asked {
+		j.asked[i].Paths, j.asked[i].PathsOmitted = askedGlobs(globs[j.asked[i].Handle])
 	}
 	for _, rv := range again {
 		if authors[rv.Handle] != rv.Kind {
@@ -785,6 +878,40 @@ func judgeOwners(ctx context.Context, tx *sql.Tx, r Revise, roster Roster, repo 
 		j.fallback = &lead
 	}
 	return j, nil
+}
+
+// askedGlobs is the globs an ask names of globs: sorted, each once, at most MaxPathOwnerPaths and as
+// many as MaxOwnedPathsBytes holds as a JSON array, and how many more.
+func askedGlobs(globs []string) ([]string, int) {
+	sorted := slices.Compact(slices.Sorted(slices.Values(globs)))
+	weight, kept := len("[]"), 0
+	for kept < len(sorted) && kept < MaxPathOwnerPaths {
+		next := stringBytes(sorted[kept])
+		if kept > 0 {
+			next++
+		}
+		if weight+next > MaxOwnedPathsBytes {
+			break
+		}
+		weight += next
+		kept++
+	}
+	if kept == 0 {
+		return nil, len(sorted)
+	}
+	return sorted[:kept:kept], len(sorted) - kept
+}
+
+// asksReviewers is the reviewers asks ask.
+func asksReviewers(asks []OwnerAsk) []Reviewer {
+	if len(asks) == 0 {
+		return nil
+	}
+	out := make([]Reviewer, len(asks))
+	for i, a := range asks {
+		out[i] = a.Reviewer
+	}
+	return out
 }
 
 // resolveOwner is o as the chart resolves it: a unit's effective lead or the

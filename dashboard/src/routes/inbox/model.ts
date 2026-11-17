@@ -43,6 +43,8 @@ import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
 import { zone } from "~/lib/prefs.ts";
 import { companyZone } from "~/lib/companyDay.ts";
 import { plainText } from "~/lib/markdownText.ts";
+import type { ArtifactHeadline } from "~/lib/artifacts/heads.ts";
+import { isArtifactKind } from "~/lib/artifacts/words.ts";
 import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
 import { codeReasonPhrase, parseChangeRef, severityWord } from "~/lib/code.ts";
 import {
@@ -617,12 +619,15 @@ export function changeWords(notice: CodeInboxNotice): { text: string; excerpt?: 
  *  same as a heading ("Commented"), and the remark flattened to words, never read as markup. */
 export function artifactWords(notice: ArtifactInboxNotice): {
   did: string;
+  /** The deed before the artifact a row draws as a reference: "commented on". */
+  on: string;
   heading: string;
   excerpt?: string;
 } {
   const verb = artifactCommentVerb(notice.op);
   const words = {
     did: `${verb} on ${notice.title || "an artifact"}`,
+    on: `${verb} on`,
     heading: capital(verb),
   };
   const said = plainText(notice.excerpt ?? "");
@@ -1399,4 +1404,10 @@ export function followThrough(
   if (seat.paused) return { state: "held", reason: "paused" };
   if (seat.activity === "stopped") return { state: "held", reason: "stopped" };
   return { state: "waiting" };
+}
+
+/** The artifact a notice is about, as a reference draws it; undefined for a kind this build does not draw. */
+export function artifactHeadline(notice: ArtifactInboxNotice): ArtifactHeadline | undefined {
+  const kind = notice.artifact_kind ?? "";
+  return isArtifactKind(kind) ? { kind, title: notice.title || "an artifact" } : undefined;
 }

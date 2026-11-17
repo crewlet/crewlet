@@ -17,7 +17,6 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Announcer } from "@crewlethq/ui";
-import { onTheRight } from "~/test/codeScreens.tsx";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
@@ -595,12 +594,81 @@ function stubEngine(
               tips: (p.get("oids") ?? "").split(",").map((oid) => tipOf(oid, 0, 3)),
             },
           });
+        case "/query/code_tree_commits":
+          return json({
+            repo: "web",
+            kind: "tree_commits",
+            tree_commits: {
+              tree: OTHER,
+              entries:
+                p.get("path") === "src"
+                  ? [{ path: "src/app.go", commit: HEAD }]
+                  : [
+                      { path: "README.md", commit: HEAD },
+                      { path: "src", commit: OTHER },
+                    ],
+              commits: [
+                {
+                  oid: HEAD,
+                  author: "Ada",
+                  authored_at: "2026-10-22T10:00:00Z",
+                  committed_at: "2026-10-22T10:00:00Z",
+                  subject: "Start the storefront",
+                },
+                {
+                  oid: OTHER,
+                  author: "Grace",
+                  authored_at: "2026-10-21T10:00:00Z",
+                  committed_at: "2026-10-21T10:00:00Z",
+                  subject: "Older work",
+                },
+              ],
+              total: p.get("path") === "src" ? 1 : 2,
+            },
+          });
+        case "/query/code_find":
+          return json({
+            repo: "web",
+            kind: "find",
+            find: {
+              tree: OTHER,
+              matches: p.get("q") === "zzz" ? [] : FOUND,
+              total: p.get("q") === "zzz" ? 0 : 43,
+              files: 1204,
+            },
+          });
       }
       return json({}, 404);
     }),
   );
   return asked;
 }
+
+/** The engine, with `what` answered by `answer`; every request kept. */
+function stubAnswering(
+  what: string,
+  answer: (url: URL) => Response,
+  repo: Record<string, unknown> = detail(),
+) {
+  const asked = stubEngine(repo);
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname !== `/query/${what}`) return engine(input, init);
+      asked.push(url);
+      return answer(url);
+    }),
+  );
+  return asked;
+}
+
+/** What Go to file finds for any query but `zzz`: the best two of 43. */
+const FOUND = [
+  { path: "cmd/web/main.go", oid: OTHER, mode: "100644", spans: [[8, 12]] },
+  { path: "src/main_test.go", oid: OTHER, mode: "100644", spans: [[4, 8]] },
+];
 
 /** One write the page sent, as `POST /operator/act/{tool}` carried it. */
 interface Acted {
@@ -639,6 +707,14 @@ function mount(hash: string, repo = "web", viewer: unknown = ADMIN_VIEWER) {
 
 const reads = (asked: URL[], what: string) => asked.filter((u) => u.pathname === `/query/${what}`);
 
+/** The head row's subject link, once it says `subject`. */
+const headRow = (subject: string) =>
+  waitFor(() => {
+    const link = document.querySelector<HTMLAnchorElement>(".code-latest__subject");
+    expect(link?.textContent).toBe(subject);
+    return link!;
+  });
+
 // THE CODE TAB IS THE REPOSITORY'S LANDING, as a code host's is: the header
 // names the repository under its owner off the chart, with its description;
 // the root's files stand under the latest commit, read at the commit the root
@@ -651,21 +727,30 @@ test("the code tab is the root's files, its latest commit and its README, at one
   mount("#/gitlet/repos/web");
 
   expect(await screen.findByRole("heading", { name: "Hello storefront" })).toBeTruthy();
-  // THE FILE IS NAMED AS IT IS: never in the label register, whose capitals
-  // would print README.MD.
-  const name = screen.getByRole("heading", { name: "README.md" });
-  expect(name.closest(".t-label")).toBeNull();
+  // THE CARD IS NAMED BY THE FILE AS IT IS, its tab README the one chosen.
+  const card = screen.getByRole("region", { name: "README.md" });
+  expect(within(card).getByRole("tab", { name: "README" }).getAttribute("aria-selected")).toBe(
+    "true",
+  );
   expect(screen.getAllByText("Engineering").length).toBeGreaterThan(0);
   expect(screen.getByText("The storefront")).toBeTruthy();
   const readme = reads(asked, "code_blob").find((u) => u.searchParams.get("path") === "README.md");
   expect(readme?.searchParams.get("ref")).toBe(HEAD);
   expect(reads(asked, "code_repo")[0]?.searchParams.get("name")).toBe("web");
   // THE LATEST COMMIT, one commit of the root's history at the listed commit.
-  expect(await screen.findByRole("link", { name: "Start the storefront" })).toBeTruthy();
+  expect(await headRow("Start the storefront")).toBeTruthy();
   const latest = reads(asked, "code_log")[0];
   expect(latest?.searchParams.get("ref")).toBe(HEAD);
   expect(latest?.searchParams.get("limit")).toBe("1");
-  expect(screen.getByRole("table", { name: "Files" })).toBeTruthy();
+  expect(screen.getByRole("table", { name: "Files in main" })).toBeTruthy();
+  // EACH ENTRY'S LAST COMMIT AND THE HEAD ROW'S MARKS, at the same commit.
+  await waitFor(() => expect(reads(asked, "code_tree_commits")).toHaveLength(1));
+  expect(reads(asked, "code_tree_commits")[0]!.searchParams.get("ref")).toBe(HEAD);
+  await waitFor(() =>
+    expect(
+      reads(asked, "code_commit_marks").some((u) => u.searchParams.get("commits") === HEAD),
+    ).toBe(true),
+  );
 });
 
 // The About rail's sentence says its time in words; the latest commit's chip keeps the short form.
@@ -688,26 +773,185 @@ test("a directory is read at the address's revision and its entries open at it",
   const asked = stubEngine();
   mount("#/gitlet/repos/web?ref=feature&path=src");
 
-  const table = await screen.findByRole("table", { name: "Files" });
+  const table = await screen.findByRole("table", { name: "Files in src at feature" });
   const link = within(table).getByRole("link", { name: "app.go" });
   expect(link.getAttribute("href")).toBe("#/gitlet/repos/web?ref=feature&path=src%2Fapp.go");
   const read = reads(asked, "code_blob").find((u) => u.searchParams.get("path") === "src");
   expect(read?.searchParams.get("ref")).toBe("feature");
 });
 
-// A DIRECTORY IS A LIST LIKE EVERY OTHER: the data grid, its sizes on the
-// right edge, and its heads sorting the entries once the whole directory is
-// here. Mutation: draw the hand-built table again, or leave Size at the
-// start, and this fails.
-test("a directory's entries are drawn on the data grid, sortable once the whole directory is here", async () => {
+/** The rows of the files table, each as its cells' words. */
+const fileRows = (table: HTMLElement) =>
+  [...table.querySelectorAll("tbody tr")].map((tr) =>
+    [...tr.querySelectorAll("td")].map((td) => td.textContent),
+  );
+
+// EACH ENTRY NAMES ITS LAST COMMIT AND WHEN, directories first once the whole directory
+// is here, git's order while it is paged; the head cells are a screen reader's alone.
+// Mutation: sort a paged directory, or link an entry's subject to the branch, and this fails.
+test("a directory's entries carry their last commit and age, directories first once the directory is whole", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
   stubEngine();
   mount("#/gitlet/repos/web");
+  const table = await screen.findByRole("table", { name: "Files in main" });
+  await waitFor(() =>
+    expect(within(table).getAllByRole("link", { name: "Older work" })).toHaveLength(1),
+  );
+  expect(fileRows(table)).toEqual([
+    ["srcDirectory", "Older work", "7d ago"],
+    ["README.mdFile", "Start the storefront", "6d ago"],
+  ]);
+  expect(within(table).getByRole("link", { name: "Older work" }).getAttribute("href")).toBe(
+    `#/gitlet/repos/web/commits/${OTHER}`,
+  );
+  expect(within(table).getByRole("link", { name: "Older work" }).getAttribute("title")).toBe(
+    "Older work by Grace",
+  );
+  expect(
+    within(table)
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent),
+  ).toEqual(["Name", "Last commit", "Updated"]);
+  expect(table.querySelector("thead")!.classList.contains("sr-only")).toBe(true);
 
-  const table = await screen.findByRole("table", { name: "Files" });
-  expect(table.classList.contains("crewlet-data-grid")).toBe(true);
-  expect(onTheRight(table, "Size")).toBe(true);
-  const name = within(table).getByRole("columnheader", { name: /Name/ });
-  expect(within(name).getByRole("button")).toBeTruthy();
+  cleanup();
+  stubAnswering("code_tree", (url) =>
+    json(
+      byRef(url, {
+        kind: "tree",
+        next: "e:2",
+        tree: {
+          tree: OTHER,
+          entries: [
+            { mode: "100644", type: "blob", oid: OTHER, path: "README.md", size: 20 },
+            { mode: "040000", type: "tree", oid: OTHER, path: "src" },
+          ],
+          total: 3,
+        },
+      }),
+    ),
+  );
+  mount("#/gitlet/repos/web");
+  const paged = await screen.findByRole("table", { name: "Files in main" });
+  expect(fileRows(paged).map((r) => r[0])).toEqual(["README.mdFile", "srcDirectory"]);
+  expect(screen.getByText("2 of 3 entries loaded")).toBeTruthy();
+});
+
+// J AND K WALK A DIRECTORY'S ENTRIES, each focusing its name's link, and Enter elsewhere
+// opens the one the cursor is on. Mutation: drop useListKeys from Entries, and this fails.
+test("j and k walk a directory's entries and Enter opens one", async () => {
+  stubEngine();
+  mount("#/gitlet/repos/web");
+  const table = await screen.findByRole("table", { name: "Files in main" });
+  const src = await within(table).findByRole("link", { name: "src" });
+  const readme = within(table).getByRole("link", { name: "README.md" });
+  fireEvent.keyDown(window, { key: "j" });
+  expect(document.activeElement).toBe(src);
+  fireEvent.keyDown(window, { key: "j" });
+  expect(document.activeElement).toBe(readme);
+  fireEvent.keyDown(window, { key: "k" });
+  expect(document.activeElement).toBe(src);
+  fireEvent.keyDown(window, { key: "j" });
+  readme.blur();
+  fireEvent.keyDown(window, { key: "Enter" });
+  await waitFor(() => expect(location.hash).toBe("#/gitlet/repos/web?path=README.md"));
+});
+
+/** A tree-commits page naming `entries`, each commit a log row named by its subject. */
+function treeCommits(entries: Record<string, unknown>[], next?: string, extra = {}) {
+  return json({
+    repo: "web",
+    kind: "tree_commits",
+    ...(next ? { next } : {}),
+    tree_commits: {
+      tree: OTHER,
+      entries,
+      commits: entries
+        .filter((e) => e.commit)
+        .map((e) => ({
+          oid: e.commit,
+          author: "Ada",
+          authored_at: "2026-10-22T10:00:00Z",
+          committed_at: "2026-10-22T10:00:00Z",
+          subject: `Last of ${String(e.path)}`,
+        })),
+      total: 3,
+      ...extra,
+    },
+  });
+}
+
+// THE LAST COMMITS ARE READ PAGE BY PAGE until every loaded entry is answered, each page
+// asked with the one before's cursor. Mutation: stop after the first page, and this fails.
+test("an entry's last commit is read page by page until every loaded entry is answered", async () => {
+  const asked = stubAnswering("code_tree_commits", (url) =>
+    url.searchParams.get("cursor") === "e:1"
+      ? treeCommits([{ path: "src" }, { path: "README.md", out_of_time: true }], undefined, {
+          out_of_time: true,
+        })
+      : treeCommits([{ path: "LICENSE", commit: HEAD }], "e:1"),
+  );
+  const tree = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname !== "/query/code_tree") return tree(input, init);
+      return json(
+        byRef(url, {
+          kind: "tree",
+          tree: {
+            tree: OTHER,
+            entries: [
+              { mode: "100644", type: "blob", oid: OTHER, path: "LICENSE", size: 20 },
+              { mode: "100644", type: "blob", oid: OTHER, path: "README.md", size: 20 },
+              { mode: "040000", type: "tree", oid: OTHER, path: "src" },
+            ],
+            total: 3,
+          },
+        }),
+      );
+    }),
+  );
+  mount("#/gitlet/repos/web");
+  expect(await screen.findByText("Not found in one read's time")).toBeTruthy();
+  expect(screen.getByText("No file in it was ever committed")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Last of LICENSE" })).toBeTruthy();
+  const pages = reads(asked, "code_tree_commits");
+  expect(pages.map((u) => u.searchParams.get("cursor"))).toEqual([null, "e:1"]);
+  expect(screen.getByText("Not found in one read's time").getAttribute("title")).toBe(
+    "Finding its last commit ran past one read's time. Reload to look again.",
+  );
+});
+
+// A REFUSAL OR A FAILURE IS SAID ONCE UNDER THE ENTRIES, whose names still draw; a failed
+// page is asked again by Retry. Mutation: a line per row, or no Retry, and this fails.
+test("refused or failed last commits are said once under the entries, and a failed page is asked again by Retry", async () => {
+  stubAnswering("code_tree_commits", () =>
+    engineJson({ error: "unavailable", detail: "this node answers no last commits yet" }, 503),
+  );
+  mount("#/gitlet/repos/web");
+  const note = await screen.findByText(
+    "Each entry's last commit is unavailable: this node answers no last commits yet.",
+  );
+  expect(note.closest("[role=status]")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "README.md" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+
+  cleanup();
+  let fail = true;
+  const asked = stubAnswering("code_tree_commits", () =>
+    fail
+      ? engineJson({ error: "query_failed" }, 500)
+      : treeCommits([{ path: "src", commit: HEAD }]),
+  );
+  mount("#/gitlet/repos/web");
+  await screen.findByText("Each entry's last commit could not be read.", { exact: false });
+  fail = false;
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(await screen.findByRole("link", { name: "Last of src" })).toBeTruthy();
+  expect(reads(asked, "code_tree_commits")).toHaveLength(2);
 });
 
 // THE BRANCHES AND TAGS ARE READ ONCE FOR THE PAGE, never once a picker: a
@@ -1352,8 +1596,9 @@ test("each commit carries its check for the branch read", async () => {
   );
   fireEvent.click(await screen.findByRole("button", { name: "Load older commits" }));
   await rowOf("Older work");
-  await waitFor(() => expect(marks).toHaveLength(2));
-  expect(marks).toEqual([{ commits: HEAD }, { commits: OTHER }]);
+  // THE CHECKS TAB'S MARKER asks the default branch's head too, on every tab.
+  await waitFor(() => expect(marks).toHaveLength(3));
+  expect(marks).toEqual([{ commits: HEAD }, { commits: HEAD }, { commits: OTHER }]);
 
   cleanup();
   mount("#/gitlet/repos/web?tab=commits&ref=feature");
@@ -1598,9 +1843,10 @@ test("a refused marks read is said once, and the rows still draw", async () => {
   const failed = await screen.findByText(
     "Checks and the changes each commit landed with could not be read.",
   );
-  expect(marksAsked).toHaveLength(1);
+  // ONE ASK BY THE HISTORY, one by the Checks tab's marker; Retry is the history's.
+  expect(marksAsked).toHaveLength(2);
   fireEvent.click(within(failed).getByRole("button", { name: "Retry" }));
-  await waitFor(() => expect(marksAsked).toHaveLength(2));
+  await waitFor(() => expect(marksAsked).toHaveLength(3));
 });
 
 /** The engine answering each history page with `page(url)`, every ask kept. */
@@ -2127,7 +2373,10 @@ test("each branch's checks are its head's, for itself or for the default branch"
   expect(within(checks("bare")).getByText("No check ran")).toBeTruthy();
   expect(checks("bare").querySelector(".code-check-mark")).toBeNull();
   expect(within(checks("old")).getByText("Checks no longer kept")).toBeTruthy();
-  const marks = reads(asked, "code_commit_marks");
+  // The Checks tab's marker reads the head alone; the table asks once for every tip.
+  const marks = reads(asked, "code_commit_marks").filter(
+    (u) => u.searchParams.get("commits") !== HEAD,
+  );
   expect(marks).toHaveLength(1);
   expect(marks[0]!.searchParams.get("commits")).toBe([OTHER, HEAD, THIRD, old.oid].join(","));
 });
@@ -3013,4 +3262,496 @@ test("a line past 4,000 code units draws plain and the next line is still colour
   expect(textOf(2)!.querySelector(".code-syn-comment")!.textContent).toBe("still a note */");
   expect(painted(textOf(1)!)).toHaveLength(0);
   expect(textOf(1)!.textContent).toBe(long);
+});
+
+// A README'S FENCE IS COLOURED BY ITS INFO STRING, its bytes unchanged; an unknown or
+// absent one stays plain `md-code`. Mutation: drop the README's fence hook, and this fails.
+test("a README's fence is coloured by its info string", async () => {
+  const text = [
+    "# web",
+    "",
+    "```sh",
+    "make dev   # the server on :8080",
+    "```",
+    "",
+    "```go",
+    "package main",
+    "```",
+    "",
+    "```diff",
+    "-a",
+    "```",
+    "",
+    "```",
+    "plain words",
+    "```",
+    "",
+  ].join("\n");
+  stubEngine(detail(), [], { "README.md": { oid: OTHER, text } });
+  mount("#/gitlet/repos/web");
+  const readme = await screen.findByRole("region", { name: "README.md" });
+  await waitFor(() => expect(readme.querySelector(".code-syn-comment")).toBeTruthy());
+  const fences = [...readme.querySelectorAll<HTMLElement>("pre.md-code")];
+  expect(fences.map((f) => f.textContent)).toEqual([
+    "make dev   # the server on :8080",
+    "package main",
+    "-a",
+    "plain words",
+  ]);
+  expect(fences[0]!.querySelector(".code-syn-comment")!.textContent).toBe("# the server on :8080");
+  await waitFor(() =>
+    expect(fences[1]!.querySelector(".code-syn-keyword")?.textContent).toBe("package"),
+  );
+  expect(fences[2]!.querySelector("[class^='code-syn-']")).toBeNull();
+  expect(fences[3]!.querySelector("[class^='code-syn-']")).toBeNull();
+});
+
+// GO TO FILE ASKS ONCE TYPING RESTS, at the commit the listing resolved, and opens a file at
+// the address's revision. Mutation: ask per keystroke, or at the branch, and this fails.
+test("Go to file finds a file at the listing's commit and opens it at the address's revision", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const asked = stubEngine();
+  mount("#/gitlet/repos/web?ref=feature");
+  const field = await screen.findByRole("combobox", { name: "Go to file" });
+  await headRow("Start the storefront");
+  for (const typed of ["m", "ma", "mai", "main"])
+    fireEvent.change(field, { target: { value: typed } });
+  await act(async () => {
+    vi.advanceTimersByTime(200);
+    await afterMicrotasks();
+  });
+  const finds = reads(asked, "code_find");
+  expect(finds.map((u) => u.searchParams.get("q"))).toEqual(["main"]);
+  expect(finds[0]!.searchParams.get("ref")).toBe(HEAD);
+  expect(finds[0]!.searchParams.get("limit")).toBe("20");
+  const list = await screen.findByRole("listbox", { name: "Files" });
+  const rows = within(list).getAllByRole("option");
+  expect(rows.map((r) => r.textContent)).toEqual([
+    "cmd/web/main.go",
+    "src/main_test.go",
+    "The best 2 of 43 files: type more to narrow",
+  ]);
+  expect([...rows[0]!.querySelectorAll(".code-find__hit")].map((h) => h.textContent)).toEqual([
+    "main",
+  ]);
+  fireEvent.mouseDown(rows[0]!);
+  await waitFor(() =>
+    expect(location.hash).toBe("#/gitlet/repos/web?path=cmd%2Fweb%2Fmain.go&ref=feature"),
+  );
+});
+
+test("Go to file says when no path holds the query, and an engine's refusal in its own words", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  stubEngine();
+  mount("#/gitlet/repos/web");
+  const field = await screen.findByRole("combobox", { name: "Go to file" });
+  await headRow("Start the storefront");
+  fireEvent.change(field, { target: { value: "zzz" } });
+  await act(async () => {
+    vi.advanceTimersByTime(200);
+    await afterMicrotasks();
+  });
+  expect(await screen.findByText("No file's path holds “zzz”, among 1,204 files")).toBeTruthy();
+
+  cleanup();
+  stubAnswering("code_find", () =>
+    engineJson({ error: "unavailable", detail: "this node does not find files yet" }, 503),
+  );
+  mount("#/gitlet/repos/web");
+  const again = await screen.findByRole("combobox", { name: "Go to file" });
+  await headRow("Start the storefront");
+  fireEvent.change(again, { target: { value: "main" } });
+  await act(async () => {
+    vi.advanceTimersByTime(200);
+    await afterMicrotasks();
+  });
+  expect(
+    await screen.findByText("Finding a file is unavailable: this node does not find files yet"),
+  ).toBeTruthy();
+});
+
+// A QUERY PAST THE ENGINE'S 256 BYTES IS ASKED CUT at a code point, and its answer drawn.
+// Mutation: ask nothing past the bound, and the list says "Looking for" forever.
+test("Go to file asks a query past 256 bytes cut to them", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const asked = stubEngine();
+  mount("#/gitlet/repos/web");
+  const field = await screen.findByRole("combobox", { name: "Go to file" });
+  await headRow("Start the storefront");
+  fireEvent.change(field, { target: { value: "界".repeat(90) } });
+  await act(async () => {
+    vi.advanceTimersByTime(200);
+    await afterMicrotasks();
+  });
+  const list = await screen.findByRole("listbox", { name: "Files" });
+  expect(await within(list).findByText("cmd/web/")).toBeTruthy();
+  expect(reads(asked, "code_find").map((u) => u.searchParams.get("q"))).toEqual(["界".repeat(85)]);
+});
+
+// t IS GO TO FILE, never typed into the field it focuses; inside a field it is a letter, and g
+// then t is still Chatlet's. Mutation: bind t while typing, and this fails.
+test("t focuses Go to file; a t typed into a field stays a letter", async () => {
+  stubEngine();
+  mount("#/gitlet/repos/web");
+  const field = await screen.findByRole("combobox", { name: "Go to file" });
+  const t = new KeyboardEvent("keydown", { key: "t", bubbles: true, cancelable: true });
+  act(() => {
+    window.dispatchEvent(t);
+  });
+  expect(document.activeElement).toBe(field);
+  expect(t.defaultPrevented).toBe(true);
+  const typed = new KeyboardEvent("keydown", { key: "t", bubbles: true, cancelable: true });
+  act(() => {
+    field.dispatchEvent(typed);
+  });
+  expect(typed.defaultPrevented).toBe(false);
+});
+
+/** The engine with the head row's commit and its marks as a case draws them. */
+function stubHead(commit: Record<string, unknown>, marks: () => Response) {
+  const asked = stubAnswering("code_commit_marks", marks);
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname !== "/query/code_log") return engine(input, init);
+      asked.push(url);
+      return json(byRef(url, { kind: "log", log: { commits: [commit], scanned: 1 } }));
+    }),
+  );
+  return asked;
+}
+
+const MERGE = {
+  oid: HEAD,
+  parent_count: 2,
+  author: "cto",
+  committer: "Crewlet",
+  engine_committed: true,
+  authored_at: "2026-10-22T09:00:00Z",
+  committed_at: "2026-10-22T10:00:00Z",
+  subject: "Merge change web!41: cache the cart badge for 30s",
+};
+
+const PASSED_MAIN = {
+  target: "refs/heads/main",
+  state: "passed",
+  counts: { passed: 2 },
+  required: 2,
+  required_passed: 2,
+  last_ended: "2026-10-22T10:00:00Z",
+};
+
+// THE HEAD ROW IS GITLET'S WHERE GITLET WROTE THE MERGE, its check a glyph whose word a
+// screen reader says; refused marks leave the commit's own author and no check.
+// Mutation: decide Gitlet without the marks' landing, and this fails.
+test("the head row is Gitlet's where Gitlet wrote the merge, with its check", async () => {
+  stubHead(MERGE, () =>
+    json({
+      commit_marks: [
+        {
+          commit: HEAD,
+          checks: [PASSED_MAIN],
+          merged: [
+            {
+              repo: "web",
+              ref: "web!41",
+              title: "cache the cart badge",
+              state: "merged",
+              merge_oid: HEAD,
+              merged_by: "cto",
+              merged_via: "direct",
+            },
+          ],
+        },
+      ],
+      position: POSITION,
+      level: "session",
+    }),
+  );
+  mount("#/gitlet/repos/web");
+  await headRow(MERGE.subject);
+  await waitFor(() =>
+    expect(document.querySelector(".code-latest__author")?.textContent).toBe("Gitlet"),
+  );
+  expect(document.querySelector(".code-latest__who")!.getAttribute("title")).toBe(
+    "Gitlet wrote this merge commit when CTO merged web!41 through its gate",
+  );
+  const check = document.querySelector<HTMLElement>(".code-latest__check .code-check-mark")!;
+  expect(check.textContent).toBe("Passed");
+  expect(check.getAttribute("title")).toMatch(/^2 checks: 2 passed\. 2 of 2 required passed\./);
+  expect(document.querySelector(".code-latest__when")!.getAttribute("dateTime")).toBe(
+    MERGE.committed_at,
+  );
+
+  cleanup();
+  stubHead(MERGE, () => engineJson({ error: "unavailable", detail: "no marks here yet" }, 503));
+  mount("#/gitlet/repos/web");
+  await headRow(MERGE.subject);
+  await waitFor(() =>
+    expect(document.querySelector(".code-latest__author")?.textContent).toBe("CTO"),
+  );
+  expect(document.querySelector(".code-latest__check .code-check-mark")).toBeNull();
+});
+
+/** The root's listing naming the push that brought HEAD, long past the checks kept. */
+function pushedLongAgo() {
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname !== "/query/code_tree") return engine(input, init);
+      const answer = (await (await engine(input, init)).json()) as Record<string, unknown>;
+      return json({
+        ...answer,
+        pushed_by: {
+          [HEAD]: {
+            push_id: "p1",
+            position: POSITION,
+            at: "2026-10-22T10:00:00Z",
+            principal: { kind: "agent", seat: "cto" },
+            via: "git",
+          },
+        },
+      });
+    }),
+  );
+}
+
+// PAST THE CHECKS KEPT, THE HEAD ROW SAYS SO at the root, where the listing names the push
+// that brought the commit; refused marks leave the slot empty.
+// Mutation: draw nothing for an old commit, or drop LatestCheck's `failed`, and this fails.
+test("the head row says the checks are no longer kept past 30 days at the root", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-12-28T12:00:00Z"));
+  stubHead(MERGE, () => engineJson({ error: "unavailable", detail: "no marks here yet" }, 503));
+  pushedLongAgo();
+  mount("#/gitlet/repos/web");
+  // THE WRITER WAITS FOR THE MARKS on a merge, so its name says the marks have settled.
+  await waitFor(() => expect(document.querySelector(".code-latest__author")).toBeTruthy());
+  expect(document.querySelector(".code-latest__check")!.textContent).toBe("");
+
+  cleanup();
+  stubAnswering("code_commit_marks", () =>
+    json({ commit_marks: [{ commit: HEAD }], position: POSITION, level: "session" }),
+  );
+  pushedLongAgo();
+  mount("#/gitlet/repos/web");
+  const kept = await screen.findByText("Checks no longer kept");
+  expect(kept.closest(".code-latest__check")).toBeTruthy();
+  expect(kept.getAttribute("title")).toBe("Checks are kept 30 days.");
+});
+
+/** The engine with a root holding a README, a LICENSE, or both, each file's text its own. */
+function stubDocs(names: string[], acted: Acted[] = [], repo = detail({ managed_by: "tools" })) {
+  const files: Record<string, Coded> = {
+    "README.md": { oid: OTHER, text: "# Hello storefront\n" },
+    LICENSE: { oid: BIG_OID, text: "MIT License\n\nCopyright the storefront's authors\n" },
+  };
+  stubEngine(repo, acted, files);
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  const asked: URL[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      asked.push(url);
+      if (url.pathname !== "/query/code_tree") return engine(input, init);
+      return json(
+        byRef(url, {
+          kind: "tree",
+          tree: {
+            tree: OTHER,
+            entries: names.map((path) => ({
+              mode: "100644",
+              type: "blob",
+              oid: OTHER,
+              path,
+              size: 20,
+            })),
+            total: names.length,
+          },
+        }),
+      );
+    }),
+  );
+  return asked;
+}
+
+// THE README AND THE LICENSE ARE TABS OF ONE CARD, the choice the address's `doc=`, each read
+// at the listing's commit; one file is one tab, and neither is no card.
+// Mutation: read the LICENSE at the branch, or keep the choice out of the address, and this fails.
+test("README and LICENSE are tabs whose choice is the address", async () => {
+  const asked = stubDocs(["LICENSE", "README.md"]);
+  mount("#/gitlet/repos/web?doc=license");
+  const card = await screen.findByRole("region", { name: "LICENSE" });
+  expect(await within(card).findByText(/MIT License/)).toBeTruthy();
+  const read = reads(asked, "code_blob").find((u) => u.searchParams.get("path") === "LICENSE");
+  expect(read?.searchParams.get("ref")).toBe(HEAD);
+  fireEvent.click(within(card).getByRole("tab", { name: "README" }));
+  expect(await screen.findByRole("heading", { name: "Hello storefront" })).toBeTruthy();
+  expect(location.hash).toBe("#/gitlet/repos/web");
+
+  cleanup();
+  stubDocs(["README.md"]);
+  mount("#/gitlet/repos/web?doc=license");
+  const only = await screen.findByRole("region", { name: "README.md" });
+  expect(
+    within(only)
+      .getAllByRole("tab")
+      .map((t) => t.textContent),
+  ).toEqual(["README"]);
+
+  cleanup();
+  stubDocs(["go.mod"]);
+  mount("#/gitlet/repos/web");
+  await headRow("Start the storefront");
+  expect(screen.queryByRole("tablist", { name: "The repository's documents" })).toBeNull();
+});
+
+// THE README'S EDIT IS THE FILE'S EDIT: the editor on it at the branch read, held at a tag
+// with the reason. Mutation: open the editor at a tag, and this fails.
+test("the README's Edit opens the editor on it at the branch read, and is held at a tag with the reason", async () => {
+  const acted: Acted[] = [];
+  stubDocs(["README.md"], acted);
+  mount("#/gitlet/repos/web", "web", MAINTAINER);
+  const edit = await screen.findByRole("button", { name: "Edit README.md" });
+  await waitFor(() => expect(edit.getAttribute("title")).toBeNull());
+  fireEvent.click(edit);
+  const dialog = await screen.findByRole("dialog", { name: "Edit README.md" });
+  const text = (await within(dialog).findByLabelText("File contents")) as HTMLTextAreaElement;
+  expect(text.value).toBe("# Hello storefront\n");
+  fireEvent.change(text, { target: { value: "# Hello\n" } });
+  fireEvent.change(within(dialog).getByLabelText("Commit message"), {
+    target: { value: "Say hello" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Commit to main" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]!.args).toMatchObject({
+    branch: "main",
+    expected_head: HEAD,
+    files: [{ op: "put", path: "README.md", content: "# Hello\n" }],
+  });
+
+  cleanup();
+  stubDocs(["README.md"]);
+  mount("#/gitlet/repos/web?ref=refs%2Ftags%2Fv1", "web", MAINTAINER);
+  const held = await screen.findByRole("button", { name: "Edit README.md" });
+  await waitFor(() => expect(held.getAttribute("title")).toMatch(/Choose a branch/));
+});
+
+// THE HEADER NAMES THE REPOSITORY UNDER ITS OWNER'S PATH, each unit a link to it, with who
+// reads it and its push mirror; a seat's repository is under the seat, and a unit the chart
+// lacks is its key. Mutation: drop the owner's path, or the mirror's mark, and this fails.
+test("the header names the repository under its unit's path, with its visibility and its push mirror", async () => {
+  stubEngine(
+    detail({
+      remotes: {
+        mirror_to: { url: "https://example.com/acme/web.git", as: "sre", credential: "${TOKEN}" },
+      },
+    }),
+  );
+  mount("#/gitlet/repos/web");
+  const title = await screen.findByRole("heading", { name: "Engineering, web" });
+  expect(within(title).getByRole("link", { name: "Engineering" }).getAttribute("href")).toMatch(
+    /peek=unit%3Aengineering/,
+  );
+  const header = within(title.closest("header")!);
+  expect(header.getByText("Company").closest("[title]")?.getAttribute("title")).toBe(
+    "Every seat reads it; every person does.",
+  );
+  expect(header.getByText("Push mirror").closest("[title]")?.getAttribute("title")).toBe(
+    "Pushes its default branch and refs/tags/* to https://example.com/acme/web.git as sre.",
+  );
+  expect(document.body.textContent).not.toContain("${TOKEN}");
+
+  cleanup();
+  stubEngine(detail({ owner: { kind: "seat", ref: "cto" }, kind: "scratch", visibility: "unit" }));
+  mount("#/gitlet/repos/web");
+  const seat = await screen.findByRole("heading", { name: "CTO, web" });
+  expect(within(seat).getByRole("link", { name: "CTO" })).toBeTruthy();
+  const seatHeader = within(seat.closest("header")!);
+  expect(seatHeader.getByText("Unit")).toBeTruthy();
+  expect(seatHeader.queryByText("Push mirror")).toBeNull();
+
+  cleanup();
+  stubEngine(detail({ owner: { kind: "unit", ref: "gone" } }));
+  mount("#/gitlet/repos/web");
+  const lost = await screen.findByRole("heading", { name: "gone, web" });
+  expect(within(lost).queryByRole("link")).toBeNull();
+});
+
+// CHANGES COUNTS THE LIVE CHANGES, its own read; a refused count draws no figure and the page
+// stays whole. Mutation: read the count off the repository's row, and this fails.
+test("the Changes tab counts the live changes, and a refused count draws no count", async () => {
+  const counts = { live: 4, draft: 1, open: 3, closed: 0, merged: 1 };
+  const asked = stubAnswering("code_counts", () =>
+    json({ counts: { changes: counts }, position: POSITION, level: "session" }),
+  );
+  mount("#/gitlet/repos/web");
+  const tab = await screen.findByRole("tab", { name: /Changes/ });
+  await waitFor(() => expect(tab.textContent).toBe("Changes4"));
+  const read = reads(asked, "code_counts")[0]!;
+  expect([read.searchParams.get("repo"), read.searchParams.get("parts")]).toEqual([
+    "web",
+    "changes",
+  ]);
+
+  cleanup();
+  stubAnswering("code_counts", () =>
+    engineJson({ error: "unavailable", detail: "no counts" }, 503),
+  );
+  mount("#/gitlet/repos/web");
+  await headRow("Start the storefront");
+  expect(screen.getByRole("tab", { name: /Changes/ }).textContent).toBe("Changes");
+});
+
+// CHECKS IS MARKED BY THE DEFAULT BRANCH'S HEAD: a dot when it passed, a count when it failed,
+// nothing while it runs or when refused. Mutation: mark a running head, and this fails.
+test("the Checks tab is marked by the default branch's head: a dot when it passed, a count when it failed, nothing while it runs", async () => {
+  const marked = (rollup: Record<string, unknown>) => () =>
+    json({
+      commit_marks: [{ commit: HEAD, checks: [{ ...PASSED_MAIN, ...rollup }] }],
+      position: POSITION,
+      level: "session",
+    });
+  const checksTab = () => screen.getByRole("tab", { name: /Checks/ });
+  const asked = stubAnswering("code_commit_marks", marked({}));
+  mount("#/gitlet/repos/web?tab=pushes");
+  await waitFor(() => expect(checksTab().textContent).toBe("ChecksEvery check on main passed"));
+  expect(reads(asked, "code_commit_marks")[0]!.searchParams.get("commits")).toBe(HEAD);
+
+  cleanup();
+  stubAnswering(
+    "code_commit_marks",
+    marked({ state: "failing", counts: { failed: 1, errored: 1 }, required_passed: 0 }),
+  );
+  mount("#/gitlet/repos/web?tab=pushes");
+  await waitFor(() => expect(checksTab().textContent).toBe("Checks22 checks on main failed"));
+
+  cleanup();
+  stubAnswering("code_commit_marks", marked({ state: "running", counts: { running: 2 } }));
+  mount("#/gitlet/repos/web?tab=pushes");
+  await screen.findByRole("tab", { name: /Checks/ });
+  await afterMicrotasks();
+  expect(checksTab().textContent).toBe("Checks");
+
+  cleanup();
+  stubAnswering("code_commit_marks", () => engineJson({ error: "unavailable" }, 503));
+  mount("#/gitlet/repos/web?tab=pushes");
+  await afterMicrotasks();
+  expect(checksTab().textContent).toBe("Checks");
+});
+
+// THE BAR'S COUNTS LEAD TO THEIR LISTS: Branches to the branches, Tags to the tags' view.
+test("the root's bar counts the branches and tags, each a link to its list", async () => {
+  stubEngine();
+  mount("#/gitlet/repos/web");
+  const branches = await screen.findByRole("link", { name: "2 Branches" });
+  expect(branches.getAttribute("href")).toBe("#/gitlet/repos/web?tab=branches");
+  expect(screen.getByRole("link", { name: "1 Tag" }).getAttribute("href")).toBe(
+    "#/gitlet/repos/web?tab=branches&view=tags",
+  );
 });

@@ -64,10 +64,9 @@
 // take's context meter (measure.go) reads the main
 // thread through the layer too, in one walk of its whole lines
 // ([walkThread]): it decides what a continuation of the capture is told, by
-// what Claude Code counts the session at ([resumedReading]). Its one decode
-// outside the layer's options is the launch floor's figure, the last request's
-// input read off each whole line by the rule every capture's figure has been
-// read by ([contextReading]), so that figure does not move.
+// what Claude Code counts the session at ([resumedReading]), and reads the
+// launch floor's figure, the last request's input, off the last main-thread
+// reply's usage by the rule the count reads it by ([contextReading]).
 //
 // What Claude Code's resume hands its model of such a thread, which of its
 // records and in what order, is modelled once, by [threadChain]

@@ -1,7 +1,7 @@
 /**
  * One setting of the company document that is not a number, drawn and changed
  * where it is read: the engine's row for it (`queries.SettingRow`), its value
- * in force with the pencil that changes it, and where it comes from.
+ * in force, where it comes from, and its pencil and reset.
  *
  * The number's twin (`LimitSetting`), on the same editor (`SettingEditor`):
  * the field is the kind's (a line of text, a zone, a space key with its Off, a
@@ -49,7 +49,7 @@ export function TextSetting({
   words = settingWords,
   offWords = "Off",
   valueWords = "Another space",
-  helper,
+  hint,
   placeholder,
   choices,
   switchWords = { on: "On", off: "Off" },
@@ -69,8 +69,8 @@ export function TextSetting({
   offWords?: string;
   /** The choice beside Default and Off that takes a value of its own. */
   valueWords?: string;
-  /** The line under the field. */
-  helper: string;
+  /** A short line under the field, where the control alone does not say what the value does. */
+  hint?: string;
   /** What an empty text field shows. */
   placeholder?: string;
   /** Values a list offers to pick from, beside what is typed: the spaces there are. */
@@ -110,6 +110,8 @@ export function TextSetting({
         };
       }}
       edit={{
+        defaultState: { mode: "default" },
+        defaultWords,
         open: () => {
           const draft = openDraft(row);
           // A FIELD WITH NO CHOICE OF MODES opens on its text, empty for the
@@ -134,14 +136,15 @@ export function TextSetting({
             row.has_off && v === "" ? offWords : words(v),
           ),
         served: (target) => settingServed(row, target),
-        helper,
-        field: ({ id, state, set, error, busy }) => {
+        hint,
+        field: ({ id, describedBy, state, set, error, busy }) => {
           switch (row.kind) {
             case "zone":
               return (
                 <Select
                   id={id}
                   ariaLabel={label}
+                  aria-describedby={describedBy}
                   searchable
                   disabled={busy}
                   error={error}
@@ -244,6 +247,7 @@ export function TextSetting({
           return (
             <Input
               id={id}
+              aria-describedby={describedBy}
               value={state.mode === "value" ? String(state.value) : ""}
               autoFocus
               placeholder={placeholder ?? `Default: ${defaultWords}`}

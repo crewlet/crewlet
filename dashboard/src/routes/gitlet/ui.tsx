@@ -19,7 +19,7 @@
 import "~/styles/gitlet.css";
 
 import type { ComponentType, ReactNode } from "react";
-import { Button, Copyable, InlineCode, Popover, Spinner, Tag } from "@crewlethq/ui";
+import { Button, Copyable, InlineCode, Popover, Spinner, Tag, VisuallyHidden } from "@crewlethq/ui";
 import { ProductMark } from "@crewlethq/icons/product-mark";
 import {
   BookOpenGlyph,
@@ -171,6 +171,16 @@ export function entryKind(e: Pick<CodeTreeEntry, "mode">): string {
 /** The names a README goes by, the one a reader writes first first. */
 export const README_NAMES = ["readme.md", "readme.markdown", "readme", "readme.txt"];
 
+/** The names a licence goes by, in the order a root is searched for one. */
+export const LICENSE_NAMES = [
+  "license",
+  "license.md",
+  "license.txt",
+  "licence",
+  "licence.md",
+  "copying",
+];
+
 /** Prose a reader reads rather than runs: a README, a licence, a change log, a note. */
 const PROSE_FILE =
   /(^|\/)(readme|licen[cs]e|copying|changelog|notice|authors)(\.[^/]*)?$|\.(md|markdown|txt|rst|adoc)$/i;
@@ -295,16 +305,18 @@ const ROLLUP_LOOK: Readonly<
 
 /**
  * Where a commit's checks stand: a glyph and a word, toned by the rollup's state.
- * `of` adds the required count to a pass: "Passed 2 of 2".
+ * `of` adds the required count to a pass: "Passed 2 of 2"; `bare` draws the glyph alone.
  */
 export function CheckRollupMark({
   rollup,
   title,
   of = false,
+  bare = false,
 }: {
   rollup: CodeCheckRollup;
   title: string;
   of?: boolean;
+  bare?: boolean;
 }) {
   const look = ROLLUP_LOOK[rollup.state];
   const Glyph = look?.glyph;
@@ -315,10 +327,14 @@ export function CheckRollupMark({
   return (
     <span className="code-check-mark" data-tone={look?.tone ?? "neutral"} title={title}>
       {Glyph === "spinner" ? <Spinner size="sm" /> : Glyph && <Glyph size="sm" aria-hidden />}
-      <span className="code-check-mark__word">
-        {rollupWord(rollup)}
-        {count}
-      </span>
+      {bare ? (
+        <VisuallyHidden>{rollupWord(rollup)}</VisuallyHidden>
+      ) : (
+        <span className="code-check-mark__word">
+          {rollupWord(rollup)}
+          {count}
+        </span>
+      )}
     </span>
   );
 }

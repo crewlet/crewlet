@@ -13,7 +13,7 @@ import {
 } from "~/lib/artifacts/comments.ts";
 import type { ArtifactCommentAnchor } from "~/protocol/index.ts";
 import type { PageHost } from "../host.ts";
-import { DraftPin, Outline, Repositioned, ThreadPin } from "./layer.tsx";
+import { DraftPin, Outline, Repositioned, ThreadPin, usePlacingCursor } from "./layer.tsx";
 import { useComments } from "./state.tsx";
 
 /** The page's anchor a thread is pinned to on this page, or null. */
@@ -41,7 +41,8 @@ export function PagePins({ host, page }: { host: PageHost; page: string }) {
       : pins.length > 0 || draft
         ? "show"
         : "off";
-  useEffect(() => host.setCommentMode(mode), [host, mode]);
+  const cursor = usePlacingCursor(mode === "place");
+  useEffect(() => host.setCommentMode(mode, cursor), [host, mode, cursor]);
   useEffect(() => () => host.setCommentMode("off"), [host]);
 
   useEffect(() => {

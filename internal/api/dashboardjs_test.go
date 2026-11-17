@@ -1476,7 +1476,8 @@ const (
 	// The Settings polish, on kit 0.143.0: 420.2 KiB, the kit's shared chunk most of it: 421 KiB, 2.30 seconds.
 	// The clear controls, Doclet changes, Settings polish and notices train, on kit 0.144.0: 422.2 KiB: 423 KiB, 2.31 seconds.
 	// Gitlet's commits as a timeline on one list, on kit 0.144.0: 423.1 KiB: 424 KiB, 2.32 seconds.
-	initialBudget = 424 << 10
+	// Setting editors and SettingsTable on DataGrid's anatomy, on kit 0.150.0, whose one sheet adds their rules: 424.4 KiB: 425 KiB, 2.32 seconds.
+	initialBudget = 425 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2688,7 +2689,17 @@ const (
 	// (6,802,790 bytes), 10,478 over main: 6644 KiB.
 	// The model alias versions and harness marks train, on kit 0.147.0: 6662.4 KiB
 	// (6,822,314 bytes), 10,692 over main: 6663 KiB.
-	treeBudget = 5<<20 + 1543<<10
+	// Chat receipts as marks, records coloured by kind and the coding harness marks, on kit
+	// 0.149.0: 6651.8 KiB, about 18.7 KiB over main: 6652 KiB.
+	// Artifact links drawn as artifact references, Show latest and the comment pin, on kit 0.148.0:
+	// 6650.0 KiB (6,809,588 bytes), 17,276 over main: 6651 KiB.
+	// Setting editors and SettingsTable on DataGrid's anatomy, on kit 0.150.0: 6661.5 KiB (6,821,388 bytes),
+	// 29,076 over main, the kit's editors in the settings editors' chunk and kit 0.147.0 to 0.150.0: 6662 KiB.
+	// A Gitlet repository's home as a code host, on kit 0.147.0: 6676.2 KiB
+	// (6,836,450 bytes), 14,136 over main: 6677 KiB.
+	// The setting editors, artifact references, chat receipts and Gitlet repository home train,
+	// on kit 0.150.1: 6700.2 KiB (6,861,017 bytes), 38,703 over main: 6701 KiB.
+	treeBudget = 5<<20 + 1581<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

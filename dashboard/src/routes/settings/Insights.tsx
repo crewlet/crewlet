@@ -269,6 +269,7 @@ function Consent({
                   <CodeBlock
                     plain
                     selectable
+                    language="json"
                     label={`Sample record: ${c.title}`}
                     code={pretty(sampleRecord(answer, c))}
                   />
@@ -525,6 +526,7 @@ function RecordModal({
         <CodeBlock
           plain
           selectable
+          language="json"
           label={`The record for ${row.week}, exactly as it is sent`}
           code={pretty(row.record ?? {})}
         />

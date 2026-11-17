@@ -1141,10 +1141,10 @@ describe("the page header", () => {
   });
 
   // AN ADDRESS THAT NAMES NO SCREEN IS IN NO SECTION. Settings owns every
-  // address under it, so a mistyped one (or one that moved out, as General
-  // did) draws "Not found" beside a column, and a phone picker, marking none.
+  // address under it, so a mistyped one draws "Not found" beside a column,
+  // and a phone picker, marking none.
   test("a Settings address that names no screen marks no section", async () => {
-    location.hash = "#/settings/general";
+    location.hash = "#/settings/overview";
     const { store, socket } = answering({});
     mountShell(store, socket);
     await settle();
@@ -1801,7 +1801,7 @@ describe("the compact sidebar", () => {
     const win = await folded();
     try {
       expect(screen.getByRole("link", { name: /^Settings/ }).getAttribute("href")).toBe(
-        "#/settings/models",
+        "#/settings/general",
       );
       act(() => screen.getByRole("button", { name: /, your menu$/ }).click());
       act(() => screen.getByRole("menuitem", { name: /^Preferences/ }).click());

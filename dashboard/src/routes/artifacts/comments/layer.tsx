@@ -1,7 +1,13 @@
 /** What every pin layer draws: a thread's pin, the draft's pin and composer, a part's outline. */
 
-import { useLayoutEffect } from "react";
-import { CommentPin, LAYER_REPOSITION_EVENT, Popover, useLayerContainer } from "@crewlethq/ui";
+import { useLayoutEffect, useMemo } from "react";
+import {
+  CommentPin,
+  LAYER_REPOSITION_EVENT,
+  Popover,
+  commentPinCursorAt,
+  useLayerContainer,
+} from "@crewlethq/ui";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
 import type { Box } from "~/lib/artifacts/comments.ts";
 import type { ArtifactCommentThread } from "~/protocol/index.ts";
@@ -88,4 +94,9 @@ export function Repositioned({ stamp }: { stamp: string }) {
     container?.dispatchEvent(new CustomEvent(LAYER_REPOSITION_EVENT));
   }, [container, stamp]);
   return null;
+}
+
+/** The pointer while placing: the draft pin, in this frame's theme and brand. */
+export function usePlacingCursor(placing: boolean): string | undefined {
+  return useMemo(() => (placing ? commentPinCursorAt(document.body) : undefined), [placing]);
 }

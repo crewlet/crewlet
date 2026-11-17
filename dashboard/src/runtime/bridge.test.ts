@@ -8,6 +8,7 @@
 import { describe, expect, test } from "vitest";
 import {
   BRIDGE_MESSAGE,
+  COMMENT_CURSOR_MAX,
   BRIDGE_METHODS,
   COMMENT_LAYOUT_MAX_ANCHORS,
   capabilityOf,
@@ -234,6 +235,23 @@ describe("the comment layer", () => {
     expect(event({ capture: { id: 4, view: { x: 30, y: 1200 } } })).toMatchObject({
       capture: { id: 4, view: { x: 30, y: 1200 } },
     });
+  });
+
+  test("takes the cursor a mode is placed by, and drops one that is not a bounded string", () => {
+    const cursor = 'url("data:image/svg+xml,x") 3 21, crosshair';
+    expect(event({ mode: "place", cursor })).toEqual({
+      type: BRIDGE_MESSAGE.event,
+      topic: "comments",
+      mode: "place",
+      cursor,
+    });
+    for (const bad of [42, "", "x".repeat(COMMENT_CURSOR_MAX + 1)]) {
+      expect(event({ mode: "place", cursor: bad })).toEqual({
+        type: BRIDGE_MESSAGE.event,
+        topic: "comments",
+        mode: "place",
+      });
+    }
   });
 
   test("drops a request that is not exactly one", () => {

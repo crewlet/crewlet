@@ -2997,8 +2997,8 @@ type FindingRow struct {
 
 // ReviewerRow is one reviewer a change has asked (code_reviewers): a seat by
 // its handle or a person by the human seat they hold, why they were asked,
-// whether the ask stands, who asked with what note, and the record that last
-// moved it.
+// whether the ask stands, who asked with what note, the record that last
+// moved it, and the globs a path owner was asked for.
 type ReviewerRow struct {
 	Reviewer        string            `json:"reviewer"`
 	Kind            PartyKind         `json:"kind"`
@@ -3011,6 +3011,10 @@ type ReviewerRow struct {
 	// At is when the record at Position landed, read from one of its notices on the change;
 	// zero where none is kept (past the notices' horizon, or a record that told nobody).
 	At time.Time `json:"at,omitzero"`
+	// OwnedPaths is the globs a path owner's ask is for (OwnerAsk.Paths), OwnedPathsOmitted how many
+	// more; none on an ask by name or one recorded before [OwnedPathsVersion].
+	OwnedPaths        []string `json:"owned_paths,omitempty"`
+	OwnedPathsOmitted int      `json:"owned_paths_omitted,omitempty"`
 }
 
 // CommentRow is one comment on a change (code_comments): its thread — its own
@@ -3076,18 +3080,20 @@ type RevisionRow struct {
 // lands it. Two revisions whose rows name the same trees hold the same code
 // ([ChangeClassNoCodeChange]).
 type RevisionFactsRow struct {
-	TargetRef       string            `json:"target_ref"`
-	TargetOID       string            `json:"target_oid"`
-	TargetPosition  statelog.Position `json:"target_position"`
-	BaseOID         string            `json:"base_oid,omitempty"`
-	BaseTree        string            `json:"base_tree"`
-	HeadTree        string            `json:"head_tree"`
-	PatchID         string            `json:"patch_id,omitempty"`
-	PatchIDOmitted  bool              `json:"patch_id_omitted,omitempty"`
-	Touched         []string          `json:"touched"`
-	TouchesAll      bool              `json:"touches_all,omitempty"`
-	Classes         RevisionClasses   `json:"classes,omitzero"`
-	Node            string            `json:"node"`
+	TargetRef      string            `json:"target_ref"`
+	TargetOID      string            `json:"target_oid"`
+	TargetPosition statelog.Position `json:"target_position"`
+	BaseOID        string            `json:"base_oid,omitempty"`
+	BaseTree       string            `json:"base_tree"`
+	HeadTree       string            `json:"head_tree"`
+	PatchID        string            `json:"patch_id,omitempty"`
+	PatchIDOmitted bool              `json:"patch_id_omitted,omitempty"`
+	Touched        []string          `json:"touched"`
+	TouchesAll     bool              `json:"touches_all,omitempty"`
+	Classes        RevisionClasses   `json:"classes,omitzero"`
+	Node           string            `json:"node"`
+	// MeasuredAt is when its home read them, by its clock; zero for facts recorded before [OwnedPathsVersion].
+	MeasuredAt      time.Time         `json:"measured_at,omitzero"`
 	OwnersDigest    string            `json:"owners_digest"`
 	RequestedOwners []Owner           `json:"requested_owners,omitempty"`
 	SkippedOwners   []SkippedOwner    `json:"skipped_owners,omitempty"`

@@ -448,7 +448,9 @@ change](#recorded-on-the-change)), which its repository's home does for every
 live change ([The home's change work](#the-homes-change-work)), whether a
 push opened it ([A change a push opens](#a-change-a-push-opens)) or a tool
 did ([Opening, editing and closing a
-change](#opening-editing-and-closing-a-change)). It
+change](#opening-editing-and-closing-a-change)). The ask names the owner's
+globs that the revision touched ([Recorded on the
+change](#recorded-on-the-change)). It
 **grants nothing**. A seat named a path owner reads
 and pushes the repository by its [grant](#who-may-read-and-push) exactly as it
 did before — owning `deploy/**` lets no seat push there that could not, and a
@@ -1941,10 +1943,11 @@ answer that holds every record the code log had committed when it was asked.
 - **A listing's rows carry their cards where asked** (`cards=true`): each
   change's comments (comments alone, never its reviews), its reviews, how many
   reviewers' standing verdict asks for changes, up to eight reviewers' faces
-  (each reviewer's standing verdict and the revision it judged, and whether an
-  ask of them waits and why; asks for changes first, then waiting asks, then
-  approvals; a reviewer who has only commented draws none) with how many
-  more, where its head's checks stand for its target (each check's latest
+  (each reviewer's standing verdict and the revision it judged, whether an ask
+  of them waits and why, and, for a path owner's ask that waits, was answered
+  or ended, the globs it is for and how many more; asks for changes first,
+  then waiting asks, then approvals; a reviewer who has only commented draws
+  none) with how many more, where its head's checks stand for its target (each check's latest
   attempt, counted by state, the required ones passed of all required, and the
   failing ones named, required or not), and, for a live change its merge queue
   put out within the last day, why and when. A card is read only when asked,
@@ -2116,7 +2119,7 @@ behind their batches and contend with every push to the repository.
 | Table | A row for | What it holds |
 |---|---|---|
 | `code_conversations` | each change that has been discussed | Its counters — its comments, its reviews, its open findings, its standing blockers and how many reviewers' standing verdict asks for changes — what its comments, reviews and findings weigh, the version and position of its last record, and the version of what its [readiness](#merge-readiness) reads: one more for each ask for review, review, answer to findings, revision's facts and settling of its asks — and how many of its asks wait and how many its end left, which its [home](#the-homes-change-work) finds a change to settle by |
-| `code_reviewers` | each reviewer it has asked | A seat, or a person by the human seat they hold; why — asked by name, or as a [path owner](#recorded-on-the-change) a revision's facts asked — whether the ask waits (`requested`), was answered by the reviewer's review (`reviewed`), was ended by the change's close or merge (`ended`) or was withdrawn (`withdrawn`) — each kept, so the change says who was once asked — who asked, nobody for a path owner, and the note they asked with, at most 1 KiB |
+| `code_reviewers` | each reviewer it has asked | A seat, or a person by the human seat they hold; why — asked by name, or as a [path owner](#recorded-on-the-change) a revision's facts asked — whether the ask waits (`requested`), was answered by the reviewer's review (`reviewed`), was ended by the change's close or merge (`ended`) or was withdrawn (`withdrawn`) — each kept, so the change says who was once asked — who asked, nobody for a path owner, and the note they asked with, at most 1 KiB, or for a path owner the globs the ask is for, at most 32 and 1 KiB of them, with how many more |
 | `code_participants` | everybody who takes part in it | Each reviewer asked or reviewing and each author of a comment, by handle and kind, and a reviewer's **standing verdict**: the latest of their reviews that approves or asks for changes, and the revision it judged |
 | `code_comments` | each comment | Its thread, its parent or the finding it replies to, who said it — a seat, or a person with the credential they used — the line it points at, whether its thread is resolved and by whom, the turn that said it, and its body, at most 32 KiB |
 | `code_reviews` | each review | The revision it judged, who reviewed — a seat, or a person with the credential they used — its verdict, how many findings it raised, the turn and the model that reviewed, and its summary, at most 4 KiB |
@@ -2152,8 +2155,9 @@ changes](#reading-changes)).
   person and the credential they used — the line a thread's first comment
   points at, and whether its thread is resolved and by whom.
 - **Reviewers come by handle**, a withdrawn ask among them, 200 a page and
-  1 000 at most: who was asked, by whom, with what note, and whether the ask
-  stands. Each row says when the record that last moved it landed, read from
+  1 000 at most: who was asked, by whom, with what note, whether the ask
+  stands, and, for a path owner's ask, the globs it is for, with how many
+  more. Each row says when the record that last moved it landed, read from
   that record's notices on the change: known while one of them is kept (a
   person's inbox horizon, a seat's thirty days) and unknown after, which the
   page words "asked earlier". Two data nodes may answer differently close to
@@ -6616,7 +6620,7 @@ was past its bound.
 
 | Table | A row for | What it holds |
 |---|---|---|
-| `code_revision_facts` | each revision of a change its home read | The target branch, the tip read and the position of the record that moved the branch there; the base and the trees of the base and the head; the `patch_id` or that none was taken; the files touched or that it touches all, and their [classes](#change-classes); the Gitlet node that recorded them; and its path-owner match — the digest of the owners matched against, those matched and those asked no review of, with why |
+| `code_revision_facts` | each revision of a change its home read | The target branch, the tip read and the position of the record that moved the branch there; the base and the trees of the base and the head; the `patch_id` or that none was taken; the files touched or that it touches all, and their [classes](#change-classes); the Gitlet node that recorded them; and its path-owner match — the digest of the owners matched against, those matched, each with the first of its globs the revision touched and how many more, and those asked no review of, with why; and when its home read them |
 
 - **Facts are of the change's head revision against its target now.** A
   revise is decided only while they still are: facts of a revision a push has
@@ -6627,6 +6631,11 @@ was past its bound.
   recorded nowhere, for the home's next pass. Facts of a later tip of the
   same branch replace the row, and so do the facts of a retargeted change's
   new branch: one row a revision.
+- **The facts keep when they were read.** Each records the instant its home
+  read them, by the home's clock, to the microsecond (`measured_at`),
+  answered with the revision's facts: facts that replace them carry their
+  own, a write refused `superseded` leaves it, and facts a home of an earlier
+  build recorded carry none.
 - **A head its target holds has no facts.** Whatever moved the target there
   merged the change, so there is nothing of it left to measure or review; the
   home records the merge itself, and a revise naming its head as its own base
@@ -6635,8 +6644,17 @@ was past its bound.
   [path owner](#path-owners) one of whose globs matches a touched path — every
   owner, where the revision touches all — is asked to review the change: a
   unit of its effective lead, a seat of itself, the ask's reason `path_owner`
-  and naming no asker. The HOME matches the globs, up to 64 owners' 32 globs
-  each against up to 1 000 paths, which no decide pays on every round it may
+  and naming no asker. The home names each matched owner's globs that
+  matched, none where the revision touches all, every glob then matching, and
+  each ask names the globs it is for: every such glob of every owner resolving
+  to its seat, sorted, at most 32 and 1 KiB of them, with how many more, kept
+  on the reviewer's row in place of a note. The facts keep each owner's first
+  glob and how many more, which the merge gate's sentence names, and no
+  answer names which globs each owner matched: a revision's facts answer its
+  owners alone. An ask that later facts find held keeps its globs through
+  every state it moves to; asking the reviewer again by name makes the ask
+  the asker's and drops them. The HOME matches the globs, up to 64 owners' 32
+  globs each against up to 1 000 paths, which no decide pays on every round it may
   take, and sends the digest of the owners it matched against; the decide
   holds it to the digest its own snapshot's repository row carries, written
   beside the owners by every change of them, and facts matched against owners
@@ -6673,6 +6691,18 @@ A write of facts that is refused appends nothing: `superseded` is the home's
 alone, answered to no person and no seat, and a closed or merged change takes
 no facts (`change_closed`, `change_merged`). `crewlet.code.conversation.writes`
 counts them under `op` `revise`, beside the conversation's other writes.
+
+During a rolling upgrade a home of this build sends when it read the facts
+and the globs each owner matched, which a data node of an earlier build
+refuses unread, so the next one is asked: a home's facts wait while no data
+node of its build serves them, which only a roll that upgrades the homes
+before the data nodes meets. A data node of an earlier build holds back each
+revise that carries them, and every later record of its repository, until it
+is upgraded, and past the deferral grace takes its copy of the code log out
+of service ([Which records an upgrade holds
+back](../guides/replication.md#which-records-an-upgrade-holds-back)): a roll
+that upgrades every data node before any Gitlet node holds none back, and any
+other finishes inside the grace.
 
 ### Change classes
 
@@ -7078,7 +7108,9 @@ merged by somebody, and landed by its queue:
   repository's owners digest to another value than the match recorded —
   owners added or removed since — `owners_approval` is `computing` until the
   home matches the paths again, which the change is due at the home's next
-  pass.
+  pass. Its sentence names each touched owner with the first of its globs the
+  revision touched and how many more, which the facts keep beside the owner,
+  and at most eight owners.
 - **No human path's glob is matched in a judgment either.** A branch's human
   paths are every matching rule's — up to 64 rules of 32 each, and the
   checks' directory — and the home matches them against the touched paths
