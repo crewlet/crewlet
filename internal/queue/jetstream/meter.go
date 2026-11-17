@@ -125,8 +125,11 @@ func (m *LinkMeter) run() {
 	}
 }
 
-// close stops the meter's readings and waits for its reader to end. What it
-// answers from then on is what it read last, and the bytes read since.
+// close stops the meter's readings and waits for its reader to end. From then
+// on it answers [LinkMeter.Carried] with what it read last and the bytes read
+// since, and [LinkMeter.Moving] that the link is not moving: a closed meter
+// takes no readings, and a ring frozen while the link moved would otherwise
+// hold every wait that reads it to its cap.
 func (m *LinkMeter) close() {
 	if m == nil {
 		return
@@ -173,10 +176,16 @@ func (m *LinkMeter) Carried() (acked, read uint64) {
 // the meter's readings, the newest at most a [meterPeriod] old.
 //
 // A meter younger than d answers for the span it has read, and one that has
-// read no span at all — made a moment ago — answers that it is not moving.
+// read no span at all — made a moment ago — answers that it is not moving, as
+// does a closed one ([LinkMeter.close]).
 // A d past what the meter keeps ([objstore.Stall]) is answered over what it
 // keeps.
 func (m *LinkMeter) Moving(d time.Duration) bool {
+	select {
+	case <-m.done:
+		return false
+	default:
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return movingOver(m.inOrderLocked(), d, m.floor)

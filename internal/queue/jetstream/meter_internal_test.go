@@ -139,3 +139,29 @@ func TestALinksMovementIsJudgedOverTheSpanAskedAbout(t *testing.T) {
 		t.Fatal("a meter that has read the floor over all it has read reads still")
 	}
 }
+
+// A CLOSED METER SAYS ITS LINK IS NOT MOVING: it takes no readings once
+// closed, and its ring, frozen at the moment of its close, would otherwise say
+// a link that moved then moves for ever, and hold every wait that reads it to
+// its cap.
+//
+// Mutant: a closed meter answers from its frozen readings.
+func TestAClosedMeterSaysItsLinkIsNotMoving(t *testing.T) {
+	t.Parallel()
+	const floor = 1 << 20
+	f := newFedMeter(floor)
+	f.m.stop, f.m.done = make(chan struct{}), make(chan struct{})
+	// ITS READER, which ends at the meter's close.
+	go func() {
+		<-f.m.stop
+		close(f.m.done)
+	}()
+	f.feed(16, perPeriod(floor, 1), 0)
+	if !f.m.Moving(2 * time.Second) {
+		t.Fatal("a meter fed the floor says its link is not moving")
+	}
+	f.m.close()
+	if f.m.Moving(2 * time.Second) {
+		t.Error("a closed meter says its link is moving, from readings frozen at its close")
+	}
+}
