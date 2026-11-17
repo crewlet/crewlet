@@ -491,7 +491,6 @@ var allowed = []Entry{
 	{File: "internal/engine/gitlethost_test.go", Func: "TestTheCommitBusyAlarmFiresOnItsDataNode", ExemptWait: 4, ExemptElapsed: 1, Piece: 18},
 	{File: "internal/engine/gitlethost_test.go", Func: "TestTheCompactionBehindAlarmFiresOnItsNode", ExemptWait: 2, ExemptElapsed: 2, Piece: 18},
 	{File: "internal/engine/gitlethost_test.go", Func: "TestTheGitCachesMaintenanceAlarmFiresOnItsNode", ExemptWait: 1, ExemptElapsed: 1, Piece: 18},
-	{File: "internal/engine/gitlethostbuild_internal_test.go", Func: "TestGitletIsStoppedOnceWithinOneBudget", ElapsedBound: 2, Piece: 18},
 	{File: "internal/engine/healthtools_internal_test.go", Func: "TestAPageOfCodeStatusAsksAndWaitsForItsOwnGitletNodesAlone", ElapsedBound: 1, Piece: 18},
 	{File: "internal/engine/identityduties_test.go", Func: "TestEveryIdentityDutyIsALeaseClaimedSingleton", ExemptWait: 1, ExemptElapsed: 1, Piece: 17},
 	{File: "internal/engine/identitysingleflight_internal_test.go", Func: "TestACredentialNamedTwiceInOneCallResolvesOnce", ExemptWait: 1, Piece: 20},
