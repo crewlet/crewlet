@@ -936,7 +936,6 @@ var allowed = []Entry{
 	{File: "internal/objstore/s3obj/stall_test.go", Func: "pacedRelay", ExemptWait: 1, ExemptElapsed: 1, Piece: 9},
 	{File: "internal/objstore/s3obj/stall_test.go", Func: "slowBody.Read", ExemptWait: 1, Piece: 9},
 	{File: "internal/objstore/s3obj/stall_test.go", Func: "stoppingBucket.Do", ExemptWait: 2, ExemptElapsed: 2, Piece: 9},
-	{File: "internal/objstore/s3obj/unacked_test.go", Func: "TestTheSocketCountIsReadOnThisPlatform", ExemptWait: 1, ExemptElapsed: 1, Piece: 9},
 	{File: "internal/objstore/s3obj/unreachable_test.go", Func: "TestAnEndpointNoDialCanReachFailsAtOnce", ElapsedBound: 1, Piece: 9},
 	{File: "internal/objstore/store_test.go", Func: "TestABucketThatKeepsFailingAReadsOpenEndsItAtTheStall", ExemptWait: 1, Piece: 9},
 	{File: "internal/objstore/store_test.go", Func: "TestAReadIsBoundedByItsBudget", ElapsedBound: 2, Piece: 9},
