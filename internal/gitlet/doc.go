@@ -379,7 +379,9 @@
 // PatternAdditive requires: the state is derived and only rises, a claim
 // tie keeps the lower (StartedAt, Runner) and its box is set once, an
 // ending tie keeps a measurement over infrastructure's, the log follows
-// the ending kept, and a dispatch's rows keep the reading of the later tip.
+// the ending kept, and so do its test counts and its output's lines (version
+// 6, [CheckCountsVersion]), and a dispatch's rows keep the reading of the
+// later tip.
 // Its attempts' rows are kept [CheckHistory] — a dispatch's until the
 // repository's purge, one a head and a target — and every ending removes
 // its own repository's oldest past its broker instant, bounded by

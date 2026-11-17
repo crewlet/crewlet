@@ -95,11 +95,14 @@
 // is killed and the attempt FAILED `timed_out`: the timeout is the check's
 // own, so running past it is a measurement of the commit, never
 // infrastructure's. An exit is passed for 0 and failed for any other status,
-// with the last [gitlet.CheckTailBytes] of its output on a failure. A box that
-// could not be made is `errored box_failed`, a setup step that failed
-// `errored setup_failed` — both infrastructure's, which the home queues again
-// below gitlet.AutoRequeueAttempts. The box is closed on every path, under a
-// context its caller's cancellation does not reach.
+// with the last [gitlet.CheckTailBytes] of its output on a failure, and the
+// tests its JUnit report counted on either. A failed run's output lines are
+// counted in its box over the bytes its tail ends at, and an ending a data
+// node refused for those counts, which nothing ran, is sent again without them
+// ([Options.Unread]). A box that could not be made is `errored box_failed`, a
+// setup step that failed `errored setup_failed` — both infrastructure's, which
+// the home queues again below gitlet.AutoRequeueAttempts. The box is closed on
+// every path, under a context its caller's cancellation does not reach.
 //
 // A CHECK SPENDS NO TOKENS. No model runs in its box and nothing it does is
 // charged to any account: what it costs is its box's time, which its row
