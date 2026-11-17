@@ -68,13 +68,14 @@
 // where only they load it: a rule under .claude/rules/, which loads with the
 // first file its paths name, or a skill under .claude/skills/, which loads when
 // used. TestTheAlwaysLoadedInstructionsStayWithinTheirBudget holds CLAUDE.md to
-// its budget; TestEveryRuleLoadsOnlyWithTheFilesItNames refuses a rule with no
-// paths (it would load at launch, outside the budget) and a pattern that names
-// no file (its rule would never load), and requires each pattern's twin under
-// .claude/worktrees/*/, where Claude Code keeps the worktrees a session works
-// through; TestEverySkillSaysWhenToUseIt holds a skill's description to the
-// length Claude Code shows; and TestCLAUDEMDNamesEveryRuleAndSkill holds
-// CLAUDE.md's table of them to .claude/ both ways.
+// its budget; TestEveryRuleLoadsOnlyWithTheFilesItNames holds each rule to its
+// own, refuses a rule with no paths (it would load at launch, outside the
+// budget) and a pattern that names no file (its rule would never load), and
+// requires each pattern's twin under .claude/worktrees/*/, where Claude Code
+// keeps the worktrees a session works through; TestEverySkillSaysWhenToUseIt
+// holds a skill's description to the length Claude Code shows; and
+// TestCLAUDEMDNamesEveryRuleAndSkill holds CLAUDE.md's table of them to
+// .claude/ both ways.
 //
 // The package is test-only: this file is its documentation and the gates are
 // its tests.
