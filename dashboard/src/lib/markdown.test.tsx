@@ -1065,3 +1065,31 @@ describe("the inline hook", () => {
     expect(container.querySelector("pre code")?.textContent).toBe("make dashboard");
   });
 });
+
+describe("a fence hook", () => {
+  const source = "Run it:\n\n```sh\nmake dev\n```\n\n```diff\n-a\n+b\n```";
+
+  // Mutation: ignoring the hook, or treating its null as drawn, fails it.
+  it("draws a fenced block its way, and null leaves it to md-code", () => {
+    const fence: RenderOptions["fence"] = (text, lang, key) =>
+      lang === "sh" ? (
+        <figure key={key} className="drawn">
+          {text}
+        </figure>
+      ) : null;
+    const { container } = render(<div>{renderMarkdown(source, { fence })}</div>);
+    expect(container.querySelector("figure.drawn")?.textContent).toBe("make dev");
+    const plain = [...container.querySelectorAll("pre.md-code")];
+    expect(plain.map((p) => [p.getAttribute("data-lang"), p.textContent])).toEqual([
+      ["diff", "-a\n+b"],
+    ]);
+  });
+
+  it("changes nothing where no hook is given", () => {
+    const { container } = render(<div>{renderMarkdown(source)}</div>);
+    expect([...container.querySelectorAll("pre.md-code")].map((p) => p.outerHTML)).toEqual([
+      '<pre class="md-code" data-lang="sh"><code>make dev</code></pre>',
+      '<pre class="md-code" data-lang="diff"><code>-a\n+b</code></pre>',
+    ]);
+  });
+});

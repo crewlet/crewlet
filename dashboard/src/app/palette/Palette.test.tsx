@@ -1603,10 +1603,10 @@ describe("a screen found by what it holds", () => {
     expect(hits).toContain("Tasks");
   });
 
-  // SETTINGS OPENS ON MODELS FOR EVERY READER: each model's condition is
-  // every member's to read, so the landing is never a lock. Mutation: give
-  // the Models section a grant and a Worklet-only reader is sent elsewhere.
-  test("a reader holding only Worklet opens Settings on Models, unlocked", () => {
+  // SETTINGS OPENS ON GENERAL FOR EVERY READER: the company's clock is every
+  // member's to read, so the landing is never a lock. Mutation: give the
+  // General section a grant and a Worklet-only reader is sent elsewhere.
+  test("a reader holding only Worklet opens Settings on General, unlocked", () => {
     const to = vi.fn();
     const nav = { to } as unknown as Parameters<typeof destinationHits>[1];
     const runs = { tracker: true, knowledge: true, chat: true, code: true };
@@ -1622,7 +1622,7 @@ describe("a screen found by what it holds", () => {
     ).find((h) => h.id === "nav-settings")!;
     expect(settings.hint).not.toMatch(/needs/);
     settings.go();
-    expect(to).toHaveBeenCalledWith(["settings", "models"]);
+    expect(to).toHaveBeenCalledWith(["settings", "general"]);
     const admin = destinationHits(
       "settings",
       nav,
@@ -1634,7 +1634,7 @@ describe("a screen found by what it holds", () => {
       runs,
     ).find((h) => h.id === "nav-settings")!;
     admin.go();
-    expect(to).toHaveBeenLastCalledWith(["settings", "models"]);
+    expect(to).toHaveBeenLastCalledWith(["settings", "general"]);
   });
 
   // A WORKSPACE'S ENTRY IS OFFERED WHERE ITS ROW IS: My work's landing

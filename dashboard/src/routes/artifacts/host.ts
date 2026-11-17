@@ -135,6 +135,7 @@ export class PageHost {
   private readonly stopStore: () => void;
   private readonly send: (req: KeyedRequest) => Promise<KeyedAnswer>;
   private commentMode: CommentMode = "off";
+  private commentCursor: string | undefined;
   private layout: CommentLayout | null = null;
   private nextCapture = 1;
   private readonly captures = new Set<number>();
@@ -157,7 +158,7 @@ export class PageHost {
       connection: this.connection,
     });
     this.pushPresence();
-    if (this.commentMode !== "off") this.event({ topic: "comments", mode: this.commentMode });
+    if (this.commentMode !== "off") this.event({ topic: "comments", ...this.modeRequest() });
   }
 
   /** The frame is gone: nothing more is said to it, and nothing it said still stands. */
@@ -211,12 +212,19 @@ export class PageHost {
     return this.layout;
   }
 
-  /** The layer's mode: said to the page now and on its every hello. */
-  setCommentMode(mode: CommentMode): void {
-    if (mode === this.commentMode) return;
+  /** The layer's mode, and the cursor to place by: said to the page now and on its every hello. */
+  setCommentMode(mode: CommentMode, cursor?: string): void {
+    if (mode === this.commentMode && cursor === this.commentCursor) return;
     this.commentMode = mode;
+    this.commentCursor = cursor;
     if (mode === "off") this.forgetComments();
-    this.event({ topic: "comments", mode });
+    this.event({ topic: "comments", ...this.modeRequest() });
+  }
+
+  private modeRequest(): { mode: CommentMode; cursor?: string } {
+    return this.commentMode === "place" && this.commentCursor
+      ? { mode: this.commentMode, cursor: this.commentCursor }
+      : { mode: this.commentMode };
   }
 
   /** Asks the page to bring a part into view. */

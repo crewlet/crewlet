@@ -249,13 +249,15 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
   },
   "routes/gitlet/repo/BranchWrites.tsx": {
-    why: "Branches' New branch and a row's Delete (code_create_branch, code_delete_branch)",
+    why:
+      "Branches' New branch and a row's Delete (code_create_branch, code_delete_branch), " +
+      "held with the engine's sentence where its rules refuse a delete",
     suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
   },
   "routes/gitlet/repo/FileWrites.tsx": {
     why:
-      "a branch's files: Edit, New file, Delete file, and an empty repository's Add a " +
-      "file, each one code_commit_files",
+      "a branch's files: Edit, New file, Delete file, the README's Edit, and an empty " +
+      "repository's Add a file, each one code_commit_files",
     suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
   },
   "routes/gitlet/commit/CommitWrites.tsx": {

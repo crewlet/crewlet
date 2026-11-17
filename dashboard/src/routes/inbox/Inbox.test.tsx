@@ -1982,9 +1982,16 @@ describe("the pane", () => {
     await settle();
     const updates = within(screen.getByRole("region", { name: "Updates, 2" }));
     expect(updates.getAllByRole("listitem")).toHaveLength(2);
-    const row = updates.getByRole("button", { name: /commented on Q3 plan/ });
+    // jsdom's name computation drops the spaces between a reference's parts.
+    const row = updates.getByRole("button", { name: /commented on Doc:\s*Q3\s*plan/ });
     expect(row.textContent).toContain("Maya Ops");
-    expect(row.textContent).toContain("commented on Q3 plan");
+    // THE ARTIFACT IS DRAWN AS A TASK'S KEY IS: its kind's glyph before its title.
+    expect(row.textContent).toMatch(/commented on\s*Doc: Q3 plan/);
+    expect(row.querySelector(".crewlet-inline-ref .crewlet-inline-ref__mark svg")).not.toBeNull();
+    // The reading pane's byline links the artifact the same way.
+    const byline = screen.getAllByRole("link").find((a) => a.textContent === "Doc: Q3 plan")!;
+    expect(byline.getAttribute("href")).toBe("#/artifacts/art-1");
+    expect(byline.querySelector(".crewlet-inline-ref__mark svg")).not.toBeNull();
     expect(row.textContent).toContain("The Q3 numbers look off");
     expect(row.textContent).not.toContain("**");
     fireEvent.click(screen.getByRole("button", { name: "Mark as read" }));
@@ -2027,7 +2034,7 @@ describe("the pane", () => {
     });
     await settle();
     const pane = within(document.querySelector(".inbox-pane") as HTMLElement);
-    expect(byline()).toContain("Maya Ops on Q3 plan");
+    expect(byline()).toContain("Maya Ops on Doc: Q3 plan");
     expect(byline()).toContain("On your artifact");
     expect(pane.getByRole("heading", { name: "Commented" })).toBeTruthy();
     expect(pane.getByText("The Q3 numbers look off")).toBeTruthy();
@@ -3634,7 +3641,7 @@ test("on a company running neither Worklet nor Gitlet the comments on artifacts 
   expect(asked.some((a) => a.kind === "inbox")).toBe(true);
   await openUpdates();
   const updates = within(screen.getByRole("region", { name: "Updates, 1" }));
-  expect(updates.getByRole("button", { name: /commented on Q3 plan/ })).toBeTruthy();
+  expect(updates.getByRole("button", { name: /commented on Doc:\s*Q3\s*plan/ })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Mark all read" }));
   await settle();
   expect(posted).toEqual([

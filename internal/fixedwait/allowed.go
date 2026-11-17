@@ -942,7 +942,6 @@ var allowed = []Entry{
 	{File: "internal/objstore/store_test.go", Func: "TestAReadThatBeginsNothingIsEndedAtTheStall", PositiveDeadline: 1, ElapsedBound: 1, Piece: 9},
 	{File: "internal/objstore/store_test.go", Func: "TestAStalledReadIsEndedAndAClosedOneStops", ElapsedBound: 1, Piece: 9},
 	{File: "internal/objstore/store_test.go", Func: "watching.Get", PositiveDeadline: 1, Piece: 9},
-	{File: "internal/observe/custody_internal_test.go", Func: "TestAFullCustodyBufferDropsAndNeverBlocks", ElapsedBound: 1, Piece: 14},
 	{File: "internal/observe/custody_internal_test.go", Func: "waitFor", ExemptWait: 1, ElapsedBound: 1, Piece: 14},
 	{File: "internal/observe/executors_internal_test.go", Func: "TestTheReconcileRunsEveryIntervalUntilStopped", NegativeWindow: 1, ExemptWait: 1, ExemptElapsed: 1, Piece: 14},
 	{File: "internal/observe/executors_test.go", Func: "TestAReconcileLandsTheRecordAndAFailedReadLandsNothing", ElapsedBound: 2, Piece: 14},

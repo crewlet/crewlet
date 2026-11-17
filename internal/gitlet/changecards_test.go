@@ -3,6 +3,7 @@ package gitlet_test
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -49,6 +50,19 @@ func cardOf(t *testing.T, n *node, number int64) gitlet.ChangeCard {
 	}
 	t.Fatalf("web!%d is not listed", number)
 	return gitlet.ChangeCard{}
+}
+
+// faceOf is the face handle draws on the card of web's change number, failing t where it
+// draws none.
+func faceOf(t *testing.T, n *node, number int64, handle string) gitlet.ReviewerFace {
+	t.Helper()
+	for _, f := range cardOf(t, n, number).Reviewers {
+		if f.Handle == handle {
+			return f
+		}
+	}
+	t.Fatalf("web!%d's card draws no face of %s", number, handle)
+	return gitlet.ReviewerFace{}
 }
 
 // widerChart is the grant tests' chart and persons person-00 onward, as many as asked.
@@ -175,7 +189,7 @@ func TestACardCountsWhatItsConversationCounts(t *testing.T) {
 		{Handle: "person-00", Kind: gitlet.PartyPerson, Asked: true, Reason: gitlet.ReviewerAsked},
 		{Handle: "person-01", Kind: gitlet.PartyPerson, Verdict: gitlet.VerdictApprove, VerdictRevision: 1},
 	}
-	if !slices.Equal(card.Reviewers, want) || card.ReviewersOmitted != 0 {
+	if !reflect.DeepEqual(card.Reviewers, want) || card.ReviewersOmitted != 0 {
 		t.Errorf("web!1's faces are %+v and %d more, want %+v", card.Reviewers, card.ReviewersOmitted, want)
 	}
 	if untouched := cardOf(t, n, 2); untouched.Comments != 0 || untouched.Reviews != 0 ||
@@ -458,5 +472,79 @@ func TestAPageOfCardsIsCutByWhatItsCardsWeigh(t *testing.T) {
 		if !slices.Equal(refs, []string{"web!2", "web!1"}) {
 			t.Errorf("cards %t at %d bytes a page: listed %v, want web!2 then web!1", tc.cards, bare+1, refs)
 		}
+	}
+}
+
+// A CARD'S FACE NAMES THE GLOBS ITS OWNER WAS ASKED FOR: a path owner's waiting
+// ask draws an asked face with the globs; once its owner approves, the face
+// holds the verdict and keeps them; a reviewer asked by name, and a path owner
+// asked again by name, carry none.
+//
+// Mutation: read only waiting asks (the approving face loses its globs, red).
+func TestACardsFaceNamesTheGlobsItsOwnerWasAskedFor(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	owners := []gitlet.PathOwner{pathOwner(gitlet.OwnerUnit, "Platform", "docs/**", "upload/**")}
+	repo, change := ownedChange(t, n, "web", owners...)
+	w, _ := writerOn(t, n, n.pub)
+	converse(t, w, n.revising(repo, change, 1, oidOf("B"), mainRef, owners, "upload/retry.go", "docs/upload.md"))
+	globs := []string{"docs/**", "upload/**"}
+	if f := faceOf(t, n, 1, "plat-lead"); !f.Asked || f.Reason != gitlet.ReviewerPathOwner ||
+		!slices.Equal(f.OwnedPaths, globs) {
+		t.Fatalf("the path owner's waiting face is %+v, want asked as a path owner for %v", f, globs)
+	}
+	converse(t, w, reviewing(repo, change, platLead, 1, gitlet.VerdictApprove, nil))
+	if f := faceOf(t, n, 1, "plat-lead"); f.Asked || f.Verdict != gitlet.VerdictApprove ||
+		!slices.Equal(f.OwnedPaths, globs) {
+		t.Fatalf("the path owner's face after approving is %+v, want the approval, still for %v", f, globs)
+	}
+	converse(t, w, asking(repo, change, dev, "cto"))
+	if f := faceOf(t, n, 1, "cto"); !f.Asked || f.Reason != gitlet.ReviewerAsked || f.OwnedPaths != nil {
+		t.Fatalf("the face of a reviewer asked by name is %+v, want no globs", f)
+	}
+	converse(t, w, asking(repo, change, ada, "plat-lead"))
+	if f := faceOf(t, n, 1, "plat-lead"); !f.Asked || f.Reason != gitlet.ReviewerAsked || f.OwnedPaths != nil ||
+		f.OwnedPathsOmitted != 0 {
+		t.Fatalf("the path owner asked again by name draws %+v, want the asker's ask and no globs", f)
+	}
+}
+
+// AN ENDED PATH OWNER'S FACE KEEPS ITS GLOBS: a path owner who asked for
+// changes is asked again by the next revision's facts, and once the change
+// closes and its asks end, the face its verdict draws still names the globs.
+//
+// Mutation: read answered asks only, not ended ones (the face loses its globs, red).
+func TestAnEndedPathOwnersFaceKeepsItsGlobs(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	ctx := t.Context()
+	owners := []gitlet.PathOwner{pathOwner(gitlet.OwnerUnit, "Platform", "docs/**", "upload/**")}
+	repo, change := ownedChange(t, n, "web", owners...)
+	w, _ := writerOn(t, n, n.pub)
+	converse(t, w, n.revising(repo, change, 1, oidOf("B"), mainRef, owners, "upload/retry.go", "docs/upload.md"))
+	converse(t, w, reviewing(repo, change, platLead, 1, gitlet.VerdictRequestChanges, nil))
+	n.revise(repo, "B", "B2")
+	converse(t, w, n.revising(repo, change, 2, oidOf("B2"), mainRef, owners, "upload/retry.go"))
+	globs, _ := json.Marshal([]string{"docs/**", "upload/**"})
+	if got, ok := n.reviewer(change, "plat-lead"); !ok || got.state != string(gitlet.ReviewerRequested) ||
+		got.ownedPaths != string(globs) {
+		t.Fatalf("plat-lead after revision 2 is %+v (%v), want asked again, still for %s", got, ok, globs)
+	}
+
+	c, _ := committerOn(t, n, n.pub)
+	closed, err := c.ProposeChange(ctx, closing(repo, change, dev, n.change(change).version))
+	requireChanged(t, closed, err)
+	converse(t, w, settling(repo, change, gitlet.ReviewerEnded))
+	if got, _ := n.reviewer(change, "plat-lead"); got.state != string(gitlet.ReviewerEnded) {
+		t.Fatalf("plat-lead's ask on the closed change is %+v, want ended", got)
+	}
+	f := faceOf(t, n, 1, "plat-lead")
+	if f.Asked || f.Verdict != gitlet.VerdictRequestChanges || f.VerdictRevision != 1 {
+		t.Fatalf("plat-lead's face on the closed change is %+v, want revision 1's verdict, not asked", f)
+	}
+	if want := []string{"docs/**", "upload/**"}; !slices.Equal(f.OwnedPaths, want) {
+		t.Fatalf("plat-lead's ended face names %v, want %v", f.OwnedPaths, want)
 	}
 }

@@ -58,6 +58,37 @@ var gitQuestions = []struct {
 	}},
 }
 
+// A DIFF'S EVERY PATCH IS ASKED BY ITS PARAMETER: `patches=true` asks the diff's Patches; a value
+// that is no flag, or patches beside a file, is bad_params with nothing read by object id.
+//
+// Mutation: drop the patches parameter's read → the diff asks the stat, red.
+func TestADiffsPatchesAreAskedByTheirParameter(t *testing.T) {
+	t.Parallel()
+	stub := &stubCode{floor: wrote}
+	if _, err := askNative(t, queries.Sources{Code: stub}, "code_diff", map[string]any{"name": "web",
+		"base": whole, "head": other, "patches": "true"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.read) != 1 || !stub.read[0].Diff.Patches {
+		t.Fatalf("code_diff with patches read %+v, want one diff of every file's patch", stub.read)
+	}
+	for name, params := range map[string]map[string]any{
+		"patches that is no flag": {"patches": "yes"},
+		"patches beside a file":   {"patches": "true", "file": "go.mod"},
+	} {
+		all := map[string]any{"name": "web", "base": whole, "head": other}
+		for k, v := range params {
+			all[k] = v
+		}
+		stub := &stubCode{floor: wrote}
+		if _, err := askNative(t, queries.Sources{Code: stub}, "code_diff", all); !errors.Is(err,
+			queries.ErrBadParams) || len(stub.read) != 0 {
+			t.Errorf("%s: answered %v having read %d times by object id, want bad_params before it", name, err,
+				len(stub.read))
+		}
+	}
+}
+
 // stamping is a Gitlet node that stamps every answer whatever it was asked —
 // the copy's position, the push behind its rev, what its index covers — so a
 // case sees that a question never carries a stamp into an answer it calls

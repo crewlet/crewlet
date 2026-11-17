@@ -8802,6 +8802,9 @@ export interface CodeReviewerFace {
   /** An ask of them waits; `reason` is why: `requested` or `path_owner`. */
   asked?: boolean;
   reason?: string;
+  /** The globs their path owner's ask is for, where it waits, was answered or ended, and how many more. */
+  owned_paths?: string[];
+  owned_paths_omitted?: number;
 }
 
 /** Why and when a queue last put a live change out (`gitlet.CardEjection`). */
@@ -8905,6 +8908,8 @@ export interface CodeRevisionFacts {
   /** The revision's change classes, each a list of places in `touched`; absent where none is classed. */
   classes?: CodeRevisionClasses;
   node: string;
+  /** When its home read them, by its own clock, to the microsecond; absent on facts recorded before the engine kept it. */
+  measured_at?: string;
 }
 
 /**
@@ -8938,7 +8943,7 @@ export interface CodeReviewerRow {
   kind: CodePartyKind;
   /** `requested`, or `path_owner` for one a revision's path owners asked. */
   reason: string;
-  /** `requested` while the ask stands, `withdrawn` once taken back. */
+  /** `requested` while it waits, `reviewed` once their review answered it, `ended` with the change, `withdrawn` once taken back. */
   state: string;
   requested_by: string;
   requested_by_kind: CodePartyKind;
@@ -8946,6 +8951,9 @@ export interface CodeReviewerRow {
   position: LogPosition;
   /** When the record at `position` landed; absent past the notices' horizon or for a record that told nobody. */
   at?: string;
+  /** For a path owner's ask, the globs it is for, and how many more; absent on an ask by name. */
+  owned_paths?: string[];
+  owned_paths_omitted?: number;
 }
 
 /** A verdict a review gives (`gitlet.Verdicts`). */
@@ -9061,7 +9069,21 @@ export interface CodeDiffFile {
   new_oid?: string;
 }
 
-/** A page of a diff's files, or of one file's patch (`gitlet.DiffAnswer`). */
+/** One file's patch, or the part of it a page holds (`gitlet.FilePatch`). */
+export interface CodeFilePatch {
+  /** Its place among the diff's files, from 0, in the stat's order. */
+  file: number;
+  path: string;
+  path_b64?: string;
+  status: string;
+  patch: string;
+  /** The next page goes on with this file's patch. */
+  continues?: boolean;
+  /** The patch stops before a line longer than one answer holds; the rest is left out. */
+  rest_omitted?: boolean;
+}
+
+/** A page of a diff's files, of one file's patch, or of every file's patch (`gitlet.DiffAnswer`). */
 export interface CodeDiffAnswer {
   base: string;
   head: string;
@@ -9071,6 +9093,8 @@ export interface CodeDiffAnswer {
   deleted: number;
   /** One file's patch, as git writes it. */
   patch?: string;
+  /** A page of every file's patch, where `patches=true` asks; `files` is empty on it, and a diff of no file has none. */
+  patches?: CodeFilePatch[];
 }
 
 /**

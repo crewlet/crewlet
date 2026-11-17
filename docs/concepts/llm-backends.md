@@ -4105,7 +4105,7 @@ it runs on.
 | `device_code_patterns` | `{url, code, lifetime}`: regular expressions, each with a capture group, that read the address, the code and the code's lifetime in minutes out of what `device_login_args` prints, with colour stripped. `url` and `code` are required. |
 | `status_text_args` | The `status_args` command in words, for `crewlet llm status`, where `status_args` prints JSON for the engine to read. Absent, `crewlet llm status` shows what `status_args` prints. |
 | `status_fields` | `{method, account}`: where in the JSON `status_args` prints the sign-in method and the account are, each a list of paths of which the first holding a string wins. Absent, a status reads the exit code alone (0 signed in, 1 signed out). |
-| `model_aliases` | `{id, name, detail}`: model names the harness resolves itself (`opus`, `sonnet`, `haiku`), which no catalogue lists. |
+| `model_aliases` | `{id, name, detail, model, version}`: model names the harness resolves itself (`opus`, `sonnet`, `haiku`), which no catalogue lists. `model` and `version` are what the alias resolves to on the vendor's own service for the builds `written_for` names (`claude-opus-5-5`, `5.5`), set together or not at all; the version must be the model id's own. When the vendor ships a model an alias moves to, re-read `models_docs` and update both. |
 | `models_docs` | The vendor's own page of the models the harness takes; an `https` address. |
 | `marker_scope` | Where markers match: `answer-and-stderr` (default), `stderr`, or `events` (the class in the harness's own failure events, compared by equality; `jsonl` only, and stderr is not searched). |
 | `marker_events` | Under `marker_scope: events`, the event kinds (read through `event_type_path`) the harness reports a failure in. Refused beside any other scope. |
@@ -4257,7 +4257,10 @@ revision ([the route](../reference/api-endpoints.md#delete-configllm-providersid
 vendor offers from the public [models.dev](https://models.dev) catalogue, the
 harness's own aliases and the vendor's model page; nothing typed on the page is sent
 anywhere to list them, and any model name is still accepted as text. A node that
-cannot reach the catalogue offers the aliases, the page and free text.
+cannot reach the catalogue offers the aliases, the page and free text. An alias
+shows the version it resolves to today (Opus 5.5) where its harness profile
+records one and the model signs in to the vendor's own service; on a cloud
+account, a gateway or an unchanged sign-in it shows none.
 
 **The model alarms** (`llm_credential_expiring` at 30 days,
 `llm_credential_expires_soon` at 7, `llm_sign_in_refused`, `llm_limit`, and

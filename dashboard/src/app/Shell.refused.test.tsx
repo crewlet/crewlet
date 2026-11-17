@@ -228,9 +228,9 @@ test("a session holding no app finds Settings unlocked, and Spend open in it", a
   );
   expect(settings.getAttribute("title")).toBe("Settings");
   expect(settings.getAttribute("aria-current")).toBe("page");
-  // AND IT OPENS ON ITS LANDING, Models, which every member reads: each
-  // model's condition is what tells a member why a seat waits.
-  await waitFor(() => expect(settings.getAttribute("href")).toBe("#/settings/models"));
+  // AND IT OPENS ON ITS LANDING, General, which every member reads: the
+  // company's clock, every day and schedule is cut on.
+  await waitFor(() => expect(settings.getAttribute("href")).toBe("#/settings/general"));
   const column = await screen.findByRole("navigation", { name: "Settings sections" });
   const spend = within(column)
     .getAllByRole("link")

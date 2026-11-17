@@ -165,7 +165,7 @@ describe("file storage", () => {
       within(row)
         .getAllByRole("cell")
         .map((c) => c.textContent),
-    ).toEqual(["S3 bucket https://s3.example.com/files/acme/", "Node configuration file"]);
+    ).toEqual(["S3 bucket https://s3.example.com/files/acme/", "Node configuration file", ""]);
     const passes = screen.getByText("Collector passes").closest(".crewlet-card") as HTMLElement;
     expect(within(passes).getByText("Last run by", { exact: false })).toBeTruthy();
     expect(within(passes).getByRole("link", { name: "data-a" })).toBeTruthy();

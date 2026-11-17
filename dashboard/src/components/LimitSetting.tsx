@@ -1,25 +1,30 @@
 /**
  * One numeric setting of the company document, drawn and changed where it is
- * read: the engine's row for it (`queries.LimitRow`), its value in force with
- * the pencil that changes it, and where the value comes from.
+ * read: the engine's row for it (`queries.LimitRow`), its value in force,
+ * where the value comes from, and its pencil and reset.
  *
- * THE ONE EDITOR of such a value. Settings › Limits drew it first; a page
- * that shows another setting the engine answers as a row of the same shape
- * (the delegated-decision limits, a retention, an interval) draws this, so
- * every one is typed, held to its range, checked and saved the same way
- * (`lib/limits.ts`), by the one setting editor (`SettingEditor`).
+ * THE ONE EDITOR of such a value, by the one setting editor (`SettingEditor`):
+ * a number is stepped within its range (the kit's `NumberField`), a duration
+ * is an amount and a unit (`DurationField`), each with its default as a chip
+ * and common values beside it (`lib/limits.ts`).
  */
 
-import { Input } from "@crewlethq/ui";
+import { DurationField, NumberField, type DurationValue } from "@crewlethq/ui";
 import { SettingEditor } from "~/components/SettingEditor.tsx";
 import { fmtSetting, plural } from "~/lib/format.ts";
 import {
+  durationUnits,
+  limitBounds,
+  limitDraft,
+  limitHint,
   limitPlan,
+  limitPresets,
   limitRefusal,
   limitText,
-  limitTyping,
   limitUnchanged,
+  limitUnitWords,
   readLimit,
+  type LimitDraft,
   type LimitRow,
 } from "~/lib/limits.ts";
 
@@ -79,6 +84,7 @@ export function LimitSetting({
   off,
   zero,
   words,
+  unit,
 }: {
   cap: LimitRow;
   /** What the setting is called on its page; its key is drawn beside it. */
@@ -95,12 +101,22 @@ export function LimitSetting({
   zero?: string;
   /** A count in the page's own words, where a bare number says it badly: "12 characters". */
   words?: (amount: number) => string;
+  /** What the field's number counts, inside it, where the cap's unit does not say: "characters". */
+  unit?: string;
 }) {
   const amountWords = (row: LimitRow, amount: number, isOff: boolean): string =>
     words && !isOff ? words(amount) : limitAmountWords(row, amount, isOff, off);
   const defaultWords = amountWords(cap, cap.default, cap.default_off);
+  const bounds = limitBounds(cap);
+  const presets = limitPresets(cap);
+  // A SHARE IS TYPED AS A PERCENTAGE: its default and chips in percent too.
+  const shown = (n: number): number => (cap.unit === "fraction" ? Math.round(n * 10_000) / 100 : n);
+  const chipWords = (n: number): string =>
+    n === shown(cap.default)
+      ? defaultWords
+      : amountWords(cap, cap.unit === "fraction" ? n / 100 : n, false);
   return (
-    <SettingEditor<string, number | null>
+    <SettingEditor<LimitDraft, number | null>
       label={label}
       settingKey={cap.key}
       answer={cap}
@@ -115,41 +131,64 @@ export function LimitSetting({
         // where one of those already told this page that zero is off.
         const value = saved ? (saved.value ?? cap.default) : cap.value;
         const zeroIsOff = cap.off || cap.default_off || cap.range?.or_zero === true;
-        const shown: LimitRow = saved ? { ...cap, value, off: value === 0 && zeroIsOff } : cap;
+        const row: LimitRow = saved ? { ...cap, value, off: value === 0 && zeroIsOff } : cap;
         const source = words
-          ? shown.value === shown.default
+          ? row.value === row.default
             ? { changed: false, words: "Default" }
             : { changed: true, words: `Changed from ${defaultWords}` }
-          : limitSource(shown, off);
+          : limitSource(row, off);
         return {
-          value: amountWords(shown, shown.value, shown.off),
+          value: amountWords(row, row.value, row.off),
           source: source.words,
           changed: source.changed,
         };
       }}
       edit={{
-        open: () => (cap.value === cap.default ? "" : limitText(cap, cap.value)),
-        read: (text) => readLimit(cap, text, zero),
+        open: () => limitDraft(cap),
+        defaultState: limitDraft({ ...cap, value: cap.default }),
+        defaultWords,
+        read: (draft) => readLimit(cap, draft, zero),
         same: (value) => limitUnchanged(cap, value),
         sameWords: "This is the limit already.",
         unchangedWords: "Already the limit.",
         plan: (value) => limitPlan(cap, label, value, area),
         served: (value) => cap.value === (value ?? cap.default),
-        helper: `${limitTyping(cap)}${zero ? ` ${zero[0]!.toUpperCase()}${zero.slice(1)}.` : ""} Empty is the default, ${defaultWords}.`,
-        field: ({ id, state, set, error, busy }) => (
-          <Input
-            id={id}
-            value={state}
-            autoFocus
-            inputMode="decimal"
-            placeholder={`Default: ${defaultWords}`}
-            autoComplete="off"
-            spellCheck={false}
-            error={error}
-            disabled={busy}
-            onChange={(event) => set(event.target.value)}
-          />
-        ),
+        hint: limitHint(cap, zero, unit),
+        field: ({ id, describedBy, state, set, error, busy }) =>
+          typeof state === "string" ? (
+            <NumberField
+              id={id}
+              aria-describedby={describedBy}
+              focusOnMount
+              value={state}
+              onValueChange={set}
+              defaultValue={shown(cap.default)}
+              {...bounds}
+              unit={unit ?? limitUnitWords(cap)}
+              presets={presets.map((p) => ({
+                value: limitText(cap, p),
+                label: chipWords(shown(p)),
+              }))}
+              formatValue={chipWords}
+              error={error}
+              disabled={busy}
+            />
+          ) : (
+            <DurationField
+              id={id}
+              aria-describedby={describedBy}
+              focusOnMount
+              value={state}
+              onValueChange={(next: DurationValue) => set(next)}
+              defaultValue={cap.default}
+              {...bounds}
+              units={durationUnits(cap)}
+              presets={presets}
+              labels={{ defaultPreset: () => `Default (${defaultWords})` }}
+              error={error}
+              disabled={busy}
+            />
+          ),
       }}
     />
   );

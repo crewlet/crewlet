@@ -58,7 +58,8 @@ var suiteAt = time.Unix(1_700_000_000, 0).UTC()
 // production encoder, which stamps it at the field's version: each a seat's
 // write made for the person's seat founder — a routing's beside its agent
 // actor on a dequeue, a push entry's routing's on the change the push merges,
-// an enqueue's own, and a seat's push entry's own.
+// an enqueue's own, and a seat's push entry's own; or a revise on its change's
+// subject carrying one of gitlet.OwnedPathsVersion's fields alone.
 func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 	const repo = "0190f3c4-0000-7000-8000-00000000c0de"
 	founder := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}
@@ -71,6 +72,14 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 	entry := gitlet.PushEntry{PushID: "push-carrying", Principal: seat, Via: gitlet.ViaEngine, Node: "suite-node",
 		Commands:   []gitlet.Command{{Ref: mainRef, Old: oidOf("A"), New: oidOf("B"), Result: gitlet.ResultOK}},
 		ReceivedAt: suiteAt, Day: suiteAt.Format(time.DateOnly)}
+	const change = "0190f3c4-0000-7000-8000-0000000000c1"
+	revise := gitlet.Revise{RepoID: repo, ChangeID: change, N: 1, HeadOID: oidOf("B"), TargetRef: mainRef,
+		TargetOID: oidOf("A"), TargetPosition: statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 2},
+		BaseOID: oidOf("A"), BaseTree: oidOf("the tree of A"), HeadTree: oidOf("the tree of B"),
+		Touched: []string{"upload/retry.go"}, Node: "suite-node", OwnersDigest: gitlet.OwnersDigest(nil),
+		HumanPathsDigest: oidOf("human paths")}
+	platform := gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Platform"}
+	lead := gitlet.Reviewer{Handle: "plat-lead", Kind: gitlet.PartyAgent}
 	var (
 		op      gitlet.OpKind
 		payload any
@@ -91,8 +100,27 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 	case "PushEntry.WorkingFor":
 		entry.WorkingFor = founder
 		op, payload = gitlet.OpPush, gitlet.PushBatch{RepoID: repo, Pushes: []gitlet.PushEntry{entry}}
+	case "Revise.MeasuredAt":
+		revise.MeasuredAt = suiteAt
+		op, payload = gitlet.OpRevise, revise
+	case "MatchedOwner.Paths":
+		revise.RequestedOwners = []gitlet.MatchedOwner{{Owner: platform, Paths: []string{"upload/**"}}}
+		op, payload = gitlet.OpRevise, revise
+	case "OwnerAsk.Paths":
+		revise.Asked = []gitlet.OwnerAsk{{Reviewer: lead, Paths: []string{"upload/**"}}}
+		op, payload = gitlet.OpRevise, revise
+	case "OwnerAsk.PathsOmitted":
+		// A COUNT ALONE, without the globs every ask this build stamps names it beside: carrying exactly
+		// the one field, the record is stamped by its own path.
+		revise.Asked = []gitlet.OwnerAsk{{Reviewer: lead, PathsOmitted: 1}}
+		op, payload = gitlet.OpRevise, revise
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
+	}
+	// A revise is on its change's subject, scoped to the repository and the change, as the writer's is.
+	subject, scope := gitlet.RepoSubject(repo), gitlet.Scope{gitlet.RepoPath(repo)}
+	if op == gitlet.OpRevise {
+		subject, scope = gitlet.ChangeSubject(change), gitlet.Scope{gitlet.RepoPath(repo), gitlet.ChangePath(change)}
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -100,8 +128,8 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 	}
 	return gitlet.Encode(gitlet.MutationRecord{
 		RecordEnvelope: gitlet.RecordEnvelope{
-			OpID: "suite-carrying", Subject: gitlet.RepoSubject(repo), Op: op, CreatedAt: suiteAt,
-			Gen: 1, Writer: "suite-node", Scope: gitlet.Scope{gitlet.RepoPath(repo)},
+			OpID: "suite-carrying", Subject: subject, Op: op, CreatedAt: suiteAt,
+			Gen: 1, Writer: "suite-node", Scope: scope,
 		},
 		Mutation: body, Actor: "suite-node", ActorKind: gitlet.ActorSystem,
 	})

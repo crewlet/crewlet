@@ -68,16 +68,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  ArtifactKindGlyph,
-  Callout,
-  CodeBlock,
-  cx,
-  Disclosure,
-  EmptyValue,
-  Link,
-  Tag,
-} from "@crewlethq/ui";
+import { Callout, CodeBlock, cx, Disclosure, EmptyValue, Link, Tag } from "@crewlethq/ui";
 import {
   ChevronRightGlyph,
   ChevronDownGlyph,
@@ -126,7 +117,7 @@ import { href, useIsCurrent } from "~/app/router.tsx";
 import { pathOf } from "~/app/frame/objects.ts";
 import { PromptRecord } from "~/components/PromptDoc.tsx";
 import { WITHHELD_WHY, WITHHELD_WORDS } from "~/lib/access.ts";
-import { artifactPath } from "~/app/routes.ts";
+import { ArtifactLink, artifactHref } from "./ArtifactLink.tsx";
 import { writtenArtifact, type WrittenArtifact } from "~/lib/artifacts/transcript.ts";
 
 /**
@@ -240,7 +231,13 @@ function RunningRecords({ name, args }: { name: string; args: string }) {
       {args && (
         <>
           <div className="t-label">Arguments</div>
-          <CodeBlock plain selectable label={`${name} · arguments`} code={prettyArgs} />
+          <CodeBlock
+            plain
+            selectable
+            language="json"
+            label={`${name} · arguments`}
+            code={prettyArgs}
+          />
         </>
       )}
       <span className="t-caption">Still running: its result lands here when it returns.</span>
@@ -420,17 +417,21 @@ function RunHead({
  */
 function WrittenArtifactLink({ artifact }: { artifact: WrittenArtifact | null }) {
   if (!artifact) return null;
-  const named = artifact.title ? `“${artifact.title}”` : "the artifact";
   return (
-    <Link
-      className="tool-row-artifact"
-      variant="quiet"
-      size="caption"
-      href={href(artifactPath(artifact.id))}
-    >
-      {artifact.kind && <ArtifactKindGlyph kind={artifact.kind} size="xs" />}
-      {`Open ${named}, version ${artifact.version}`}
-    </Link>
+    <p className="tool-row-artifact">
+      <ArtifactLink
+        id={artifact.id}
+        known={
+          artifact.kind && artifact.title
+            ? { kind: artifact.kind, title: artifact.title }
+            : undefined
+        }
+        to={artifactHref(artifact.id)}
+        version={artifact.version}
+        words="the artifact"
+        quiet
+      />
+    </p>
   );
 }
 

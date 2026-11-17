@@ -6,6 +6,7 @@
 import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { SignInPolicyAnswer } from "~/contract/signin.ts";
+import { typeSetting } from "~/test/settingField.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
 import {
   engineAnswer,
@@ -90,8 +91,7 @@ async function change(name: RegExp, value: string) {
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name }));
   });
-  const field = screen.getByRole("textbox");
-  fireEvent.change(field, { target: { value } });
+  const field = await typeSetting(value);
   await act(async () => {
     fireEvent.submit(field.closest("form")!);
   });

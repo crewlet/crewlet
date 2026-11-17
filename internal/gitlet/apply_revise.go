@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -13,12 +14,13 @@ import (
 // applyRevise writes a revision's facts ([Revise]) — the row of its revision,
 // its trees, its classes and its home's matches among them, the facts of
 // another target it replaces where the change was retargeted, or of an
-// earlier tip or an earlier match — and asks each reviewer the record names
-// as a path owner's, a participant of the change, where the change holds no
-// ask of them: the decide asked only those whose ask it did not hold, and the
-// broker's arbitration on the change's subject applies the record against
-// the rows that decide read, so a conflict is a record the ledger would have
-// collapsed, met again, and a skip. The conversation's text_bytes moves by
+// earlier tip or an earlier match, and when its home measured them — and asks
+// each reviewer the record names as a path owner's, with the globs each ask is
+// for, a participant of the change, where the change holds no ask of them: the
+// decide asked only those whose ask it did not hold, and the broker's
+// arbitration on the change's subject applies the record against the rows that
+// decide read, so a conflict is a record the ledger would have collapsed, met
+// again, and a skip. The conversation's text_bytes moves by
 // what the facts' wide columns weigh, less what the row they replace weighed,
 // so a purge weighs the change's subject's wide rows by its one narrow row.
 //
@@ -42,7 +44,7 @@ func applyRevise(ctx context.Context, tx *sql.Tx, at applyContext, r Revise) (in
 	if _, err = tx.ExecContext(ctx, writeFactsSQL, r.ChangeID, r.N, r.TargetRef, r.TargetOID,
 		r.TargetPosition.Packed(), r.BaseOID, r.BaseTree, r.HeadTree, r.PatchID, r.PatchIDOmitted, len(r.Touched),
 		r.TouchesAll, r.Node, r.OwnersDigest, r.HumanPathsDigest, wide.bytes(), at.packed, wide.owners,
-		wide.skipped, wide.humanPaths, wide.classes, wide.touched); err != nil {
+		wide.skipped, wide.humanPaths, wide.classes, wide.touched, measuredMicros(r.MeasuredAt)); err != nil {
 		return 0, conversationCounts{}, fmt.Errorf("gitlet: write revision %d of %s's facts at %s: %w", r.N,
 			r.ChangeID, at.position, err)
 	}
@@ -57,18 +59,31 @@ func applyRevise(ctx context.Context, tx *sql.Tx, at applyContext, r Revise) (in
 				"writer stamps", at.position, rv.Handle, rv.Kind)
 		}
 	}
+	globs := make([]string, len(r.Asked))
+	for i, rv := range r.Asked {
+		if len(rv.Paths) == 0 {
+			continue
+		}
+		encoded, encodeErr := json.Marshal(rv.Paths)
+		if encodeErr != nil {
+			return 0, conversationCounts{}, fmt.Errorf("gitlet: encode the globs the facts at %s ask %s for: %w",
+				at.position, rv.Handle, encodeErr)
+		}
+		globs[i] = string(encoded)
+	}
 	// THE OWNERS ASKED AND THEIR PARTICIPANT ROWS, A COLLECTION EACH, as an
 	// ask for review writes its own.
-	if _, err = store.InsertRows(ctx, tx, at.maxVariables, askPathOwnersSQL, `(?, ?, ?, ?, ?, '', '', '', ?)`,
-		`ON CONFLICT (change_id, reviewer) DO NOTHING`, len(r.Asked), func(i int) []any {
+	if _, err = store.InsertRows(ctx, tx, at.maxVariables, askPathOwnersSQL,
+		`(?, ?, ?, ?, ?, '', '', '', ?, ?, ?)`, `ON CONFLICT (change_id, reviewer) DO NOTHING`, len(r.Asked),
+		func(i int) []any {
 			rv := r.Asked[i]
 			return []any{r.ChangeID, rv.Handle, string(rv.Kind), string(ReviewerPathOwner), string(ReviewerRequested),
-				at.packed}
+				at.packed, globs[i], rv.PathsOmitted}
 		}); err != nil {
 		return 0, conversationCounts{}, fmt.Errorf("gitlet: ask change %s's path owners at %s: %w", r.ChangeID,
 			at.position, err)
 	}
-	if err = addParticipants(ctx, tx, at, r.ChangeID, r.Asked); err != nil {
+	if err = addParticipants(ctx, tx, at, r.ChangeID, asksReviewers(r.Asked)); err != nil {
 		return 0, conversationCounts{}, err
 	}
 	rows += 2 * len(r.Asked)
@@ -92,8 +107,8 @@ func applyRevise(ctx context.Context, tx *sql.Tx, at applyContext, r Revise) (in
 
 // factsWide is a revision's facts' wide columns as a row keeps them: its
 // touched paths NUL-separated — no path of a tree holds a NUL — and its
-// matched and skipped owners, its human-path match and its classes as JSON,
-// each "" for none.
+// matched owners, each with its first glob ([TouchedOwner]), its skipped
+// owners, its human-path match and its classes as JSON, each "" for none.
 type factsWide struct {
 	touched, owners, skipped, humanPaths, classes string
 }
@@ -115,7 +130,7 @@ func factsColumns(r Revise) (factsWide, error) {
 		w.classes = string(encoded)
 	}
 	if len(r.RequestedOwners) > 0 {
-		encoded, err := json.Marshal(r.RequestedOwners)
+		encoded, err := json.Marshal(touchedOwners(r.RequestedOwners))
 		if err != nil {
 			return factsWide{}, err
 		}
@@ -138,6 +153,27 @@ func factsColumns(r Revise) (factsWide, error) {
 	return w, nil
 }
 
+// touchedOwners is what the facts keep of owners: each with its first glob and how many more, a fixed
+// rule with no bound, so two builds write one row from one record, and today's bytes where none is named.
+func touchedOwners(owners []MatchedOwner) []TouchedOwner {
+	out := make([]TouchedOwner, len(owners))
+	for i, o := range owners {
+		out[i].Owner = o.Owner
+		if len(o.Paths) > 0 {
+			out[i].FirstPath, out[i].MorePaths = o.Paths[0], len(o.Paths)-1
+		}
+	}
+	return out
+}
+
+// measuredMicros is a revise's measured instant as its row keeps it: 0 for none.
+func measuredMicros(at time.Time) int64 {
+	if at.IsZero() {
+		return 0
+	}
+	return store.EncodeTime(at)
+}
+
 // A revise's writes, every one with a WHERE registered in plan_test.go: the
 // facts by their key, replaced whole by a later record of the same revision —
 // another target's, or a later tip's — and a path owner's ask, which the
@@ -145,8 +181,9 @@ func factsColumns(r Revise) (factsWide, error) {
 const (
 	writeFactsSQL = `INSERT INTO code_revision_facts (change_id, n, target_ref, target_oid, target_position,
 			base_oid, base_tree, head_tree, patch_id, patch_id_omitted, touched_count, touches_all, node,
-			owners_digest, human_paths_digest, bytes, position, owners, skipped, human_paths, classes, touched)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			owners_digest, human_paths_digest, bytes, position, owners, skipped, human_paths, classes, touched,
+			measured_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (change_id, n) DO UPDATE SET target_ref = excluded.target_ref,
 			target_oid = excluded.target_oid, target_position = excluded.target_position,
 			base_oid = excluded.base_oid, base_tree = excluded.base_tree, head_tree = excluded.head_tree,
@@ -155,9 +192,9 @@ const (
 			owners_digest = excluded.owners_digest, human_paths_digest = excluded.human_paths_digest,
 			bytes = excluded.bytes, position = excluded.position, owners = excluded.owners,
 			skipped = excluded.skipped, human_paths = excluded.human_paths, classes = excluded.classes,
-			touched = excluded.touched`
+			touched = excluded.touched, measured_at = excluded.measured_at`
 	// askPathOwnersSQL is the path owners a revision's facts ask, a collection
 	// store.InsertRows writes, each where the change holds no ask of them.
 	askPathOwnersSQL = `INSERT INTO code_reviewers (change_id, reviewer, reviewer_kind, reason, state, requested_by,
-			requested_by_kind, note, position) VALUES `
+			requested_by_kind, note, position, owned_paths, owned_paths_omitted) VALUES `
 )
