@@ -37,7 +37,7 @@ type ChangeCard struct {
 }
 
 // ReviewerFace is one reviewer on a card: their standing verdict and the revision it
-// judged, and whether an ask of them waits, and why.
+// judged, whether an ask of them waits, and why, and the globs a path owner's ask of them is for.
 type ReviewerFace struct {
 	Handle string    `json:"handle"`
 	Kind   PartyKind `json:"kind"`
@@ -47,6 +47,10 @@ type ReviewerFace struct {
 	// Asked is set where an ask of them waits, and Reason only then.
 	Asked  bool           `json:"asked,omitempty"`
 	Reason ReviewerReason `json:"reason,omitempty"`
+	// OwnedPaths and OwnedPathsOmitted are their path owner's ask's globs where it waits, was
+	// answered by their review or ended with the change.
+	OwnedPaths        []string `json:"owned_paths,omitempty"`
+	OwnedPathsOmitted int      `json:"owned_paths_omitted,omitempty"`
 }
 
 // CardEjection is why and when a queue last put the change out, and the required
@@ -88,9 +92,11 @@ const (
 	cardVerdictsSQL = `SELECT p.change_id, p.handle, p.kind, p.verdict, p.verdict_revision FROM json_each(?) AS j
 		CROSS JOIN code_participants AS p INDEXED BY ` + participantsKey + `
 		WHERE p.change_id = CAST(j.value AS TEXT) AND p.verdict != ''`
-	cardAsksSQL = `SELECT r.change_id, r.reviewer, r.reviewer_kind, r.reason FROM json_each(?) AS j
+	cardAsksSQL = `SELECT r.change_id, r.reviewer, r.reviewer_kind, r.reason, r.state, r.owned_paths,
+			r.owned_paths_omitted FROM json_each(?) AS j
 		CROSS JOIN code_reviewers AS r INDEXED BY ` + reviewersKey + `
-		WHERE r.change_id = CAST(j.value AS TEXT) AND r.state = 'requested'`
+		WHERE r.change_id = CAST(j.value AS TEXT)
+			AND (r.state = 'requested' OR (r.owned_paths != '' AND r.state IN ('reviewed', 'ended')))`
 	cardEjectionsSQL = `SELECT q.change_id, q.state, q.end_reason, q.ended_at, q.ejected FROM json_each(?) AS j
 		CROSS JOIN code_queue AS q INDEXED BY ` + queueKey + `
 		WHERE q.repo_id = CAST(j.value ->> 0 AS TEXT) AND q.entry_id = (SELECT n.entry_id
@@ -170,7 +176,8 @@ func cardCountsIn(ctx context.Context, tx *sql.Tx, list string, cards map[string
 }
 
 // cardFacesIn sets each card's faces: its standing verdicts and waiting asks, one face a
-// reviewer, in [faceRank] order and cut at MaxCardReviewers.
+// reviewer, in [faceRank] order and cut at MaxCardReviewers; and on a face either made, the
+// globs of a path owner's ask of them that waits, was answered or ended.
 func cardFacesIn(ctx context.Context, tx *sql.Tx, list string, cards map[string]*ChangeCard) error {
 	faces := map[string]map[string]*ReviewerFace{}
 	face := func(change, handle string) *ReviewerFace {
@@ -207,12 +214,25 @@ func cardFacesIn(ctx context.Context, tx *sql.Tx, list string, cards map[string]
 		return fmt.Errorf("gitlet: read the asks of %d changes: %w", len(cards), err)
 	}
 	err = eachRow(rows, func(s scanner) (err error) {
-		var change, handle, kind, reason string
-		if err = s.Scan(&change, &handle, &kind, &reason); err != nil {
+		var change, handle, kind, reason, state, owned string
+		var omitted int
+		if err = s.Scan(&change, &handle, &kind, &reason, &state, &owned, &omitted); err != nil {
 			return err
 		}
-		f := face(change, handle)
-		f.Kind, f.Asked, f.Reason = PartyKind(kind), true, ReviewerReason(reason)
+		var f *ReviewerFace
+		if ReviewerState(state) == ReviewerRequested {
+			f = face(change, handle)
+			f.Kind, f.Asked, f.Reason = PartyKind(kind), true, ReviewerReason(reason)
+		} else if f = faces[change][handle]; f == nil {
+			// An answered or ended ask draws no face of its own: only one the verdicts made.
+			return nil
+		}
+		if owned != "" {
+			if err = json.Unmarshal([]byte(owned), &f.OwnedPaths); err != nil {
+				return fmt.Errorf("change %s's ask of %s: its globs: %w", change, handle, err)
+			}
+			f.OwnedPathsOmitted = omitted
+		}
 		return nil
 	})
 	if err != nil {

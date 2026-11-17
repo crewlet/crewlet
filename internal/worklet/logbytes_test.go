@@ -150,7 +150,7 @@ const (
 	codeChangeOpenBytes           = 3_160
 	codeChangeEditBytes           = 2_770
 	codeReviewersBytes            = 1_240
-	codeReviseBytes               = 1_420
+	codeReviseBytes               = 1_460
 	codeMergeabilityBytes         = 1_030
 	codeMergeabilityRecheckBytes  = 880
 	codeMergeabilityRefreshBytes  = 860
@@ -451,7 +451,7 @@ var codeLogNegligible = map[gitlet.OpKind]string{
 		"tools) — so it records none. That is the whole case for leaving it out, and what rides on " +
 		"it is not small: were each of its 3 000 turns a day to name one, at the most a hold record " +
 		"takes as the engine writes one (896 bytes, codeHoldRecordBytes), they would append 2.69 " +
-		"MB a day, 12 % of the day's least of 22.6 MB — a company whose seats work so reads it in " +
+		"MB a day, 12 % of the day's least of 22.7 MB — a company whose seats work so reads it in " +
 		"its code log's crewlet.statelog.log.bytes_per_day. The window is that long because " +
 		"gitlet.HoldRecordAfter is idle_days' floor, not the idle_days in force; pricing the rate " +
 		"needs a figure from a running company's tool calls, which nobody has, as codeLogManagers " +
@@ -936,7 +936,7 @@ var codeLogFields = map[gitlet.OpKind]struct {
 		payload: reflect.TypeFor[gitlet.Revise](),
 		carried: []string{"repo_id", "change_id", "n", "head_oid", "target_ref", "target_oid",
 			"target_position", "base_oid", "base_tree", "head_tree", "patch_id", "touched", "node",
-			"owners_digest", "human_paths_digest"},
+			"measured_at", "owners_digest", "human_paths_digest"},
 		absent: absent(
 			map[string]string{
 				"routing": "whom a revision's facts concern — the path owners they ask, the reviewers " +

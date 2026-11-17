@@ -10248,7 +10248,8 @@ the same vocabulary:
 
 `?cards=true` on `GET /gitlet/changes` answers each listed change's `card`:
 `comments`, `reviews` and `changes_requested`; `reviewers` (at most 8, each
-`handle`, `kind`, `verdict`, `verdict_revision`, `asked` and `reason`) and
+`handle`, `kind`, `verdict`, `verdict_revision`, `asked`, `reason`,
+`owned_paths` and `owned_paths_omitted`) and
 `reviewers_omitted`; `checks`, a check rollup of its head for its target
 (`state`, `counts`, `required`, `required_passed`, `last_ended`,
 `running_since`, `failing`, `failing_more`, `more`), absent where no attempt is
@@ -10257,6 +10258,16 @@ change's newest queue entry was put out in the last day. An older data node
 refuses `cards` and another answers; a card never reads as zeros where it was
 not answered. `cards=` other than `true` or `false` is `400 bad_params`, and
 `cards=true` on any other question is refused naming it.
+
+Each reviewer row of `?part=reviewers` carries `owned_paths` where a
+revision's facts asked the reviewer as a path owner: the globs of every owner
+resolving to them that the revision touched, sorted, at most 32 and 1 KiB of
+them, and `owned_paths_omitted`, how many more. An ask by name carries none,
+and asking a path owner again by name drops them. A card's face carries the
+same where that ask waits, was answered by their review or ended with the
+change. Each revision's `facts` carry `measured_at`, when its home read them
+by its own clock, to the microsecond. Facts and asks recorded before this
+build carry none of them, and neither does an older data node's answer.
 
 `?part=finding_paths` on `GET /gitlet/repos/{name}/changes/{n}` answers
 `finding_paths`: the change's findings counted by `path`, `state` and

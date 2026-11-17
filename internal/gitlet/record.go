@@ -69,7 +69,9 @@ import (
 //     enqueue was made for (concerns.go's head, "Whom the actor acted for") —
 //     and on an open, a reopen, a push's entry, a merge and an enqueue
 //     whatever they wake ([WorkingForVersion]).
-const RecordVersion = 2
+//   - 3: when a revision's facts were measured, and the globs each path owner
+//     they matched and each ask of one is for ([OwnedPathsVersion]).
+const RecordVersion = OwnedPathsVersion
 
 // WorkingForVersion is the version from which a record carries whom an
 // agent's write was made for — on a routing beside its actor, or beside none
@@ -81,6 +83,11 @@ const RecordVersion = 2
 // a_code_row_keeps_whom_an_agents_write_was_made_for). A record below it keeps
 // none, whatever it holds ([keptCarrier]).
 const WorkingForVersion = 2
+
+// OwnedPathsVersion is the version from which a revise carries when its home measured the facts
+// and the globs each matched path owner and each ask of one is for (code_revision_facts.measured_at,
+// code_reviewers.owned_paths); a record below it keeps neither.
+const OwnedPathsVersion = 3
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped
@@ -114,6 +121,10 @@ const GateRecordVersion = 1
 // The routing's row and the payload's own are on EVERY OP rather than the
 // ones that carry one today, because every payload's working_for means one
 // thing, and a later payload that carries it is stamped by its row too.
+//
+// WHEN FACTS WERE MEASURED AND WHAT GLOBS OWNERS ARE ASKED FOR are version 3, on a revise: the home's
+// measured_at and requested_owners.paths, and the writer's asked.paths and asked.paths_omitted, which
+// rides beside paths with a row of its own, a field's version being the field's.
 var versionedFields = statelog.RecordFields{
 	{Name: "ChangeRouting.WorkingFor", Since: WorkingForVersion,
 		Path: []string{"mutation", "routing", "working_for"}},
@@ -122,6 +133,14 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Mutation.WorkingFor", Since: WorkingForVersion, Path: []string{"mutation", "working_for"}},
 	{Name: "PushEntry.WorkingFor", Since: WorkingForVersion, Op: string(OpPush),
 		Path: []string{"mutation", "pushes", "working_for"}},
+	{Name: "Revise.MeasuredAt", Since: OwnedPathsVersion, Op: string(OpRevise),
+		Path: []string{"mutation", "measured_at"}},
+	{Name: "MatchedOwner.Paths", Since: OwnedPathsVersion, Op: string(OpRevise),
+		Path: []string{"mutation", "requested_owners", "paths"}},
+	{Name: "OwnerAsk.Paths", Since: OwnedPathsVersion, Op: string(OpRevise),
+		Path: []string{"mutation", "asked", "paths"}},
+	{Name: "OwnerAsk.PathsOmitted", Since: OwnedPathsVersion, Op: string(OpRevise),
+		Path: []string{"mutation", "asked", "paths_omitted"}},
 }
 
 // VersionedFields is the table, for the conformance suite.
