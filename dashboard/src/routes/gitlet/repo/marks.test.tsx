@@ -88,6 +88,40 @@ test("a running check is asked again and a settled one is not", async () => {
   expect(asked).toHaveLength(2);
 });
 
+// A FAILED RE-ASK KEEPS THE MARKS DRAWN, and the next minute asks again. Mutation: store the
+// failure over the page's marks.
+test("a failed re-ask keeps the marks already drawn", async () => {
+  vi.useFakeTimers();
+  let fail = false;
+  const asked = stubCodeEngine({
+    "/query/code_commit_marks": () =>
+      fail
+        ? engineJson({ error: "query_failed" }, 500)
+        : jsonAnswer({
+            commit_marks: [
+              { commit: A, checks: [{ target: "refs/heads/main", state: "running", counts: {} }] },
+            ],
+            position: CODE_POSITION,
+            level: "session",
+          }),
+  });
+  render(<Marks pages={[[A]]} />);
+  await afterMicrotasks();
+  expect(rows()).toEqual(["a running"]);
+  fail = true;
+  act(() => {
+    vi.advanceTimersByTime(MARKS_POLL_MS);
+  });
+  await afterMicrotasks();
+  expect(asked).toHaveLength(2);
+  expect(rows()).toEqual(["a running"]);
+  act(() => {
+    vi.advanceTimersByTime(MARKS_POLL_MS);
+  });
+  await afterMicrotasks();
+  expect(asked).toHaveLength(3);
+});
+
 // A REFUSAL IS ITS CODE AND THE ENGINE'S SENTENCE, once. Mutation: drop the sentence.
 test("a refused read is its code and the engine's sentence", async () => {
   stubCodeEngine({
