@@ -1148,8 +1148,14 @@ type FakeSession struct {
 	// Taking, where set, runs as a take reads the box — after the capture
 	// read the run's log to place the session, and before the archive is
 	// handed over — so a case can land a call between the two, as a call
-	// answered while its box is read does.
-	Taking func()
+	// answered while its box is read does, or spend the take's time, as a
+	// pack and a scrub at their bound do: it is handed the take's context.
+	Taking func(ctx context.Context)
+
+	// Keeping, where set, runs as the take's digest is recorded in the box
+	// ([TakenSession.Keep]), before it is, handed the digest's context, so a
+	// case can stand in for a box slow to answer the write.
+	Keeping func(ctx context.Context)
 
 	// kept counts the digests recorded.
 	kept atomic.Int32
@@ -1183,7 +1189,7 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 		return TakenSession{}, session.TakeErr
 	}
 	if session.Taking != nil {
-		session.Taking()
+		session.Taking(ctx)
 	}
 	var count func() *ResumedCount
 	if session.Count != nil {
@@ -1194,7 +1200,10 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 		Body:    io.NopCloser(bytes.NewReader(session.Body)),
 		Context: func() int64 { return session.ContextTokens },
 		Count:   count,
-		Keep: func(context.Context) error {
+		Keep: func(ctx context.Context) error {
+			if session.Keeping != nil {
+				session.Keeping(ctx)
+			}
 			if session.KeepErr != nil {
 				return session.KeepErr
 			}

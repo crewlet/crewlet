@@ -1954,13 +1954,20 @@ func (c *Coordinator) reserveRoom() time.Duration { return RowBudget(c.pending, 
 
 // takeRecordsRoom is the room a read leaves the records it makes after its
 // take, before its pause ([Coordinator.recordsBy]): a teardown's grace
-// ([discardGrace]) for those records and the digest a take leaves in the box,
-// and the crossing of each of the two changes of the run's row among them —
-// the stamp of what came of the take and how its job's harness ended — at this
-// node's connection to the store ([PendingStore.RowCrossing]): none in the
-// store's own process.
+// ([discardGrace]) for EACH of the two, the take's own (the stamp of what came
+// of it where it was refused, [Coordinator.settleContext], or the digest it
+// leaves in the box where it spooled, [stampContext]) and how its job's
+// harness ended ([Coordinator.markHarnessEnd]), and the crossing of each change
+// of the run's row among them at this node's connection to the store
+// ([PendingStore.RowCrossing]): none in the store's own process.
+//
+// A GRACE EACH, since each is given a grace of its own from where it is asked,
+// one after the other: one grace for the pair let a take at its bound whose own
+// record took its whole room leave how its job's harness ended a grace short of
+// its own, and none at all in the store's own process, where the room was that
+// grace alone, so the record was cut at recordsBy and said as unrecorded.
 func (c *Coordinator) takeRecordsRoom() time.Duration {
-	return discardGrace + 2*c.pending.RowCrossing()
+	return 2*discardGrace + 2*c.pending.RowCrossing()
 }
 
 // pauseRoom is the room a read leaves its box's pause, the pause's record on

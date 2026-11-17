@@ -616,24 +616,25 @@ func TestAWaitersWriteOfARunsRowIsGivenTheRowsCrossingPastItsTask(t *testing.T) 
 // bytes were still crossing (crewlet/crewlet#1151). So on a host whose store
 // takes a crossing, the take's context keeps the reservation one record's
 // reason and that crossing beside the pack's budget, and the read leaves the
-// take's two records and the pause's record a crossing each beside their
-// graces; and the asker, which cannot know the host's connection, waits the
-// slowest node's crossing for each change, coord.MaxValueCrossing. Here the
-// host's read is given exactly its share of that budget, and the room it then
-// keeps for each is held. Exact, in a bubble.
+// take's two records and the pause's record a grace and a crossing each; and
+// the asker, which cannot know the host's connection, waits the slowest node's
+// crossing for each change, coord.MaxValueCrossing, and the three graces.
+// Here the host's read is given exactly its share of that budget, and the room
+// it then keeps for each is held. Exact, in a bubble.
 //
 // Mutation: drop the crossing from the reservation's room, from the take's
-// records' room or from the pause's, or count fewer changes at the slowest
-// crossing in the asker's budget, and its check goes red.
+// records' room or from the pause's, give the take's two records one grace, or
+// count fewer changes at the slowest crossing in the asker's budget, and its
+// check goes red.
 func TestABoxReadGivesEachChangeOfTheRowItsHostMakesItsCrossing(t *testing.T) {
 	t.Parallel()
 	const crossing = 7 * time.Minute
 	run := PendingRun{TurnID: "t1"}
-	held := SessionTakeBudget + sessionRecordBudget + 2*discardGrace + 4*coord.MaxValueCrossing
+	held := SessionTakeBudget + sessionRecordBudget + 3*discardGrace + 4*coord.MaxValueCrossing
 	if got, want := BoxReadBudget(run, BoxReadCollect),
 		pollBound+time.Duration(float64(held)/BoxReadAnswerShare); got != want {
 		t.Errorf("a collection of a turn with no cap waits %v, want the poll's bound and, at the host's "+
-			"share, the take, its reservation's reason, two graces and four changes of the row at the "+
+			"share, the take, its reservation's reason, three graces and four changes of the row at the "+
 			"slowest node's crossing, %v", got, want)
 	}
 	inBubble(t, func(t *testing.T) {
@@ -662,7 +663,7 @@ func TestABoxReadGivesEachChangeOfTheRowItsHostMakesItsCrossing(t *testing.T) {
 		defer cancelTake()
 		deadline, _ = take.Deadline()
 		end, _ := short.Deadline()
-		if got, want := by.Sub(deadline), discardGrace+2*crossing; got != want {
+		if got, want := by.Sub(deadline), 2*discardGrace+2*crossing; got != want {
 			t.Errorf("a take's records are left %v after it, want a grace and a crossing for each of "+
 				"its two changes of the row, %v", got, want)
 		}

@@ -1620,8 +1620,9 @@ func TestACapturesRecordsStopAtTheReadsTime(t *testing.T) {
 			silent := &silentStamps{PendingStore: rig.coordinator.pending, only: CaptureBegun}
 			rig.coordinator.pending, rig.coordinator.recordBudget = silent, time.Minute
 			// A READ WITH A DEADLINE, whose take ends two seconds from now and
-			// whose by a pause's grace after that.
-			read, cancel := context.WithTimeout(t.Context(), 2*discardGrace+2*time.Second)
+			// whose by its records' two graces after that, a pause's grace
+			// before the read's own.
+			read, cancel := context.WithTimeout(t.Context(), 3*discardGrace+2*time.Second)
 			defer cancel()
 			began := time.Now()
 			spooled, _ := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,

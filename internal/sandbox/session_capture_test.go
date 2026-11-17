@@ -291,10 +291,11 @@ func (s *timedStamps) askedUnder(state CaptureState) []time.Time {
 
 // readUntil is a read of a box whose deadline leaves its take two seconds — its
 // own deadline, T — and, after that, the room the read keeps for the take's
-// outcome stamp, up to by, and for its box's pause ([Coordinator.takeContext]).
+// records, a grace for each of the two, up to by, and for its box's pause
+// ([Coordinator.takeContext]).
 func readUntil(t *testing.T) (read context.Context, by time.Time) {
 	t.Helper()
-	read, cancel := context.WithTimeout(t.Context(), 2*discardGrace+2*time.Second)
+	read, cancel := context.WithTimeout(t.Context(), 3*discardGrace+2*time.Second)
 	t.Cleanup(cancel)
 	deadline, _ := read.Deadline()
 	return read, deadline.Add(-discardGrace)
