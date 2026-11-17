@@ -771,6 +771,78 @@ func TestAResetReaderReadsAsAFreshOne(t *testing.T) {
 	}
 }
 
+// A HEAD IS REFUSED BY ITS KEYS' KINDS ALONE: each head key, of every kind a
+// JSON value is, refuses the head with the same error whether its reading
+// hands the rule the key's value or only its kind, as a reading that keeps a
+// value too long to keep still knows its kind, and both say what the line's
+// own decode says of the same key on a user record. A boolean's value is its
+// kind, so a head of kinds alone reads `isSidechain` and `replacesSpan` as the
+// whole one does.
+//
+// Mutation: hold a string key, `parentUuid` or a boolean key to its type by
+// its raw value, and a key of the wrong kind whose value was not kept reads
+// as absent, or one of the right kind as of none.
+func TestAHeadIsRefusedByItsKeysKindsAlone(t *testing.T) {
+	t.Parallel()
+	values := []string{`"x"`, `{"a":1}`, `[1]`, `true`, `false`, `null`, `1`}
+	for _, key := range []string{"type", "subtype", "agentId", "parentUuid", "isSidechain", "replacesSpan"} {
+		for _, value := range values {
+			// keys is the head of a user record with key's value raw, kept or
+			// its kind alone.
+			keys := func(kept bool) headKeys {
+				k := headKeys{typ: headKeyOf(json.RawMessage(`"user"`))}
+				v := headKeyOf(json.RawMessage(value))
+				if !kept {
+					v.raw = nil
+				}
+				switch key {
+				case "type":
+					k.typ = v
+				case "subtype":
+					k.subtype = v
+				case "agentId":
+					k.agentID = v
+				case "parentUuid":
+					k.parent = v
+				case "isSidechain":
+					k.sidechain = v
+				case "replacesSpan":
+					k.replacesSpan = v
+				}
+				return k
+			}
+			whole, wholeErr := headOf(keys(true))
+			kinds, kindsErr := headOf(keys(false))
+			line := `{"type":"user","` + key + `":` + value + `}`
+			if key == "type" {
+				line = `{"type":` + value + `}`
+			}
+			_, decodeErr := decodeThreadLine(1, []byte(line))
+			var refused *threadLineError
+			if errors.As(decodeErr, &refused) {
+				decodeErr = refused.Err
+			}
+			if fmt.Sprint(kindsErr) != fmt.Sprint(wholeErr) || fmt.Sprint(wholeErr) != fmt.Sprint(decodeErr) {
+				t.Errorf("%s of %s: its kind alone gives %v, its value %v, and the line's decode %v; want one "+
+					"error", key, value, kindsErr, wholeErr, decodeErr)
+				continue
+			}
+			if wholeErr == nil && (ctSidechain(kinds) != ctSidechain(whole) || kinds.ReplacesSpan != whole.ReplacesSpan) {
+				t.Errorf("%s of %s: its kind alone reads isSidechain %s and replacesSpan %t, its value %s and %t",
+					key, value, ctSidechain(kinds), kinds.ReplacesSpan, ctSidechain(whole), whole.ReplacesSpan)
+			}
+		}
+	}
+}
+
+// ctSidechain is h's `isSidechain` as text: "absent", "true" or "false".
+func ctSidechain(h threadHead) string {
+	if h.Sidechain == nil {
+		return "absent"
+	}
+	return fmt.Sprint(*h.Sidechain)
+}
+
 // EVERY WHOLE LINE IS DECODED INTO ITS HEAD BEFORE ANYTHING READS IT: a line
 // that is not one record (two values, one cut short, a value that is no
 // object) or one whose head key is of the wrong type (`type`, `subtype` and

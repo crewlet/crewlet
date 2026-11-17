@@ -611,6 +611,11 @@ type threadLine struct {
 // ANOTHER TYPE IS NO RECORD: a newer Claude Code that changes one fails toward
 // no reading, which every reader takes for "not confirmed", never for a fact.
 //
+// A KEY'S KIND ALONE DECIDES EVERY ERROR IT GIVES ([headKey]), never its raw
+// value: a reading that keeps a key's kind but not its value, one too long to
+// keep, still refuses the line's head exactly as a reading that kept it does.
+// A boolean's value is its kind too.
+//
 // `replacesSpan` IS HELD ON A USER RECORD ALONE, the one record the harness
 // reads it on and the one the restart rule reads it on ([threadRestarts.See]).
 // On any other record it says nothing to any reader, so whatever it holds
@@ -620,38 +625,80 @@ func headOf(k headKeys) (threadHead, error) {
 		h   threadHead
 		err error
 	)
-	if h.Type, err = wireString("type", k.typ); err != nil {
+	if h.Type, err = k.typ.text("type"); err != nil {
 		return threadHead{}, err
 	}
-	if h.Subtype, err = wireString("subtype", k.subtype); err != nil {
+	if h.Subtype, err = k.subtype.text("subtype"); err != nil {
 		return threadHead{}, err
 	}
-	if h.AgentID, err = wireString("agentId", k.agentID); err != nil {
+	if h.AgentID, err = k.agentID.text("agentId"); err != nil {
 		return threadHead{}, err
 	}
-	if k.parent != nil && !bytes.Equal(k.parent, jsonNull) && k.parent[0] != '"' {
-		return threadHead{}, fmt.Errorf("parentUuid is %s, neither null nor a string", wireKind(k.parent))
+	switch k.parent.kind {
+	case 0, '"':
+		h.Parent = k.parent.raw
+	case 'n':
+		h.Parent = jsonNull
+	default:
+		return threadHead{}, fmt.Errorf("parentUuid is %s, neither null nor a string", k.parent.kind)
 	}
-	h.Parent = k.parent
-	if k.sidechain != nil {
+	if k.sidechain.kind != 0 {
 		var side bool
-		if side, err = wireBool("isSidechain", k.sidechain); err != nil {
+		if side, err = k.sidechain.boolean("isSidechain"); err != nil {
 			return threadHead{}, err
 		}
 		h.Sidechain = &side
 	}
-	if k.replacesSpan != nil && h.Type == recordUser {
-		if h.ReplacesSpan, err = wireBool("replacesSpan", k.replacesSpan); err != nil {
+	if k.replacesSpan.kind != 0 && h.Type == recordUser {
+		if h.ReplacesSpan, err = k.replacesSpan.boolean("replacesSpan"); err != nil {
 			return threadHead{}, err
 		}
 	}
 	return h, nil
 }
 
-// headKeys is the head's keys as a line writes them ([headOf]): each raw, as
-// written, nil where absent.
+// headKeys is the head's keys as a line writes them ([headOf]).
 type headKeys struct {
-	typ, subtype, agentID, parent, sidechain, replacesSpan json.RawMessage
+	typ, subtype, agentID, parent, sidechain, replacesSpan headKey
+}
+
+// headKey is one key of a line's head as a reading of the line hands it to
+// [headOf]: kind, its value's kind, 0 where the key is absent; and raw, its
+// value as written, where the reading kept it, nil where it kept the kind
+// alone. The head's rule refuses a key by its kind, and reads its raw only
+// for the value it hands out, so a head built of a kind alone hands out no
+// value for that key: the reading that kept no value hands that head to no
+// reader.
+type headKey struct {
+	kind valueKind
+	raw  json.RawMessage
+}
+
+// headKeyOf is raw, a head key's value as written, nil where the key is
+// absent, as [headOf] reads it: its kind, and itself.
+func headKeyOf(raw json.RawMessage) headKey { return headKey{kind: kindOfValue(raw), raw: raw} }
+
+// text is k, a key named key, held to a string: "" where it is absent, and
+// where its value was not kept.
+func (k headKey) text(key string) (string, error) {
+	switch {
+	case k.kind == 0:
+		return "", nil
+	case k.kind != '"':
+		return "", fmt.Errorf("%s is %s, not a string", key, k.kind)
+	case k.raw == nil:
+		return "", nil
+	}
+	return wireRequiredString(key, k.raw)
+}
+
+// boolean is k, a key named key that is there, held to a boolean: its value
+// is its kind, 't' or 'f'.
+func (k headKey) boolean(key string) (bool, error) {
+	if k.kind != 't' && k.kind != 'f' {
+		return false, fmt.Errorf("%s is %s, not a boolean", key, k.kind)
+	}
+	return k.kind == 't', nil
 }
 
 // threadHead is what EVERY reader needs of a whole line, held to its type by

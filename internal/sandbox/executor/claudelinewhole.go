@@ -96,8 +96,9 @@ func decodeThreadLine(n int, raw []byte) (threadLine, error) {
 // head is the line's head, its keys held to their types by the head's rule
 // ([headOf]).
 func (w threadWire) head() (threadHead, error) {
-	return headOf(headKeys{typ: w.Type, subtype: w.Subtype, agentID: w.AgentID, parent: w.ParentUUID,
-		sidechain: w.IsSidechain, replacesSpan: w.ReplacesSpan})
+	return headOf(headKeys{typ: headKeyOf(w.Type), subtype: headKeyOf(w.Subtype), agentID: headKeyOf(w.AgentID),
+		parent: headKeyOf(w.ParentUUID), sidechain: headKeyOf(w.IsSidechain),
+		replacesSpan: headKeyOf(w.ReplacesSpan)})
 }
 
 // factsOf is what a line's accessors read of w, its whole decode, h its head
