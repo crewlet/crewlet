@@ -613,10 +613,11 @@ test("the code tab is the root's files, its latest commit and its README, at one
   mount("#/gitlet/repos/web");
 
   expect(await screen.findByRole("heading", { name: "Hello storefront" })).toBeTruthy();
-  // THE FILE IS NAMED AS IT IS: never in the label register, whose capitals
-  // would print README.MD.
-  const name = screen.getByRole("heading", { name: "README.md" });
-  expect(name.closest(".t-label")).toBeNull();
+  // THE CARD IS NAMED BY THE FILE AS IT IS, its tab README the one chosen.
+  const card = screen.getByRole("region", { name: "README.md" });
+  expect(within(card).getByRole("tab", { name: "README" }).getAttribute("aria-selected")).toBe(
+    "true",
+  );
   expect(screen.getAllByText("Engineering").length).toBeGreaterThan(0);
   expect(screen.getByText("The storefront")).toBeTruthy();
   const readme = reads(asked, "code_blob").find((u) => u.searchParams.get("path") === "README.md");
@@ -2957,4 +2958,102 @@ test("the head row says the checks are no longer kept past 30 days at the root",
   const kept = await screen.findByText("Checks no longer kept");
   expect(kept.closest(".code-latest__check")).toBeTruthy();
   expect(kept.getAttribute("title")).toBe("Checks are kept 30 days.");
+});
+
+/** The engine with a root holding a README, a LICENSE, or both, each file's text its own. */
+function stubDocs(names: string[], acted: Acted[] = [], repo = detail({ managed_by: "tools" })) {
+  const files: Record<string, Coded> = {
+    "README.md": { oid: OTHER, text: "# Hello storefront\n" },
+    LICENSE: { oid: BIG_OID, text: "MIT License\n\nCopyright the storefront's authors\n" },
+  };
+  stubEngine(repo, acted, files);
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  const asked: URL[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      asked.push(url);
+      if (url.pathname !== "/query/code_tree") return engine(input, init);
+      return json(
+        byRef(url, {
+          kind: "tree",
+          tree: {
+            tree: OTHER,
+            entries: names.map((path) => ({
+              mode: "100644",
+              type: "blob",
+              oid: OTHER,
+              path,
+              size: 20,
+            })),
+            total: names.length,
+          },
+        }),
+      );
+    }),
+  );
+  return asked;
+}
+
+// THE README AND THE LICENSE ARE TABS OF ONE CARD, the choice the address's `doc=`, each read
+// at the listing's commit; one file is one tab, and neither is no card.
+// Mutation: read the LICENSE at the branch, or keep the choice out of the address, and this fails.
+test("README and LICENSE are tabs whose choice is the address", async () => {
+  const asked = stubDocs(["LICENSE", "README.md"]);
+  mount("#/gitlet/repos/web?doc=license");
+  const card = await screen.findByRole("region", { name: "LICENSE" });
+  expect(await within(card).findByText(/MIT License/)).toBeTruthy();
+  const read = reads(asked, "code_blob").find((u) => u.searchParams.get("path") === "LICENSE");
+  expect(read?.searchParams.get("ref")).toBe(HEAD);
+  fireEvent.click(within(card).getByRole("tab", { name: "README" }));
+  expect(await screen.findByRole("heading", { name: "Hello storefront" })).toBeTruthy();
+  expect(location.hash).toBe("#/gitlet/repos/web");
+
+  cleanup();
+  stubDocs(["README.md"]);
+  mount("#/gitlet/repos/web?doc=license");
+  const only = await screen.findByRole("region", { name: "README.md" });
+  expect(
+    within(only)
+      .getAllByRole("tab")
+      .map((t) => t.textContent),
+  ).toEqual(["README"]);
+
+  cleanup();
+  stubDocs(["go.mod"]);
+  mount("#/gitlet/repos/web");
+  await headRow("Start the storefront");
+  expect(screen.queryByRole("tablist", { name: "The repository's documents" })).toBeNull();
+});
+
+// THE README'S EDIT IS THE FILE'S EDIT: the editor on it at the branch read, held at a tag
+// with the reason. Mutation: open the editor at a tag, and this fails.
+test("the README's Edit opens the editor on it at the branch read, and is held at a tag with the reason", async () => {
+  const acted: Acted[] = [];
+  stubDocs(["README.md"], acted);
+  mount("#/gitlet/repos/web", "web", MAINTAINER);
+  const edit = await screen.findByRole("button", { name: "Edit README.md" });
+  await waitFor(() => expect(edit.getAttribute("title")).toBeNull());
+  fireEvent.click(edit);
+  const dialog = await screen.findByRole("dialog", { name: "Edit README.md" });
+  const text = (await within(dialog).findByLabelText("File contents")) as HTMLTextAreaElement;
+  expect(text.value).toBe("# Hello storefront\n");
+  fireEvent.change(text, { target: { value: "# Hello\n" } });
+  fireEvent.change(within(dialog).getByLabelText("Commit message"), {
+    target: { value: "Say hello" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Commit to main" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]!.args).toMatchObject({
+    branch: "main",
+    expected_head: HEAD,
+    files: [{ op: "put", path: "README.md", content: "# Hello\n" }],
+  });
+
+  cleanup();
+  stubDocs(["README.md"]);
+  mount("#/gitlet/repos/web?ref=refs%2Ftags%2Fv1", "web", MAINTAINER);
+  const held = await screen.findByRole("button", { name: "Edit README.md" });
+  await waitFor(() => expect(held.getAttribute("title")).toMatch(/Choose a branch/));
 });

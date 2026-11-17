@@ -3,10 +3,10 @@
  * with the ones an address picks marked, and the blame of a file — drawn as a
  * code host draws them. A directory is one card: the latest commit that
  * touched it across its head, then its entries, each with the commit that last
- * changed it and when; at the root its README follows in a card of its own.
- * A file is one card: its name, its size and its lines across its head, with
- * the switch between its lines and its blame and what a reader does with it,
- * then its lines.
+ * changed it and when; at the root its README and LICENSE follow as tabs of
+ * one card under the files. A file is one card: its name, its size and its
+ * lines across its head, with the switch between its lines and its blame and
+ * what a reader does with it, then its lines.
  *
  * # The address is the place
  *
@@ -58,7 +58,7 @@
  * from line 1 (`routes/gitlet/syntax.tsx`); a larger one is drawn plain.
  */
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Button,
   ButtonLink,
@@ -69,11 +69,14 @@ import {
   SegmentedControl,
   Skeleton,
   Stack,
+  Tabs,
+  tabId,
 } from "@crewlethq/ui";
 import {
   BookOpenGlyph,
   BookmarkGlyph,
   FileCodeGlyph,
+  ScaleGlyph,
   GitBranchGlyph,
   LinkGlyph,
   RotateCcwClockGlyph,
@@ -120,6 +123,7 @@ import {
   CloneButton,
   Face,
   GITLET,
+  LICENSE_NAMES,
   README_NAMES,
   ShaChip,
   cloneURL,
@@ -132,6 +136,7 @@ import { useCommitMarks } from "./marks.ts";
 import { RefPicker, revisionWord, type Revisions } from "./refs.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import {
+  EditFileButton,
   FileWriteButtons,
   FirstFileButton,
   NewFileButton,
@@ -237,7 +242,12 @@ function RootListing({ repo, revisions, rev, path, onRev }: Place) {
       </Card>
       {/* THE README OF THE REVISION ON SCREEN, read at the commit the
           listing was: the two are one revision. */}
-      <Readme repo={repo} entries={paged.items} commit={commit} />
+      <RepoDocs
+        repo={repo}
+        entries={paged.items}
+        commit={commit}
+        target={targetOf(rev, first.data)}
+      />
     </Stack>
   );
 }
@@ -1406,57 +1416,73 @@ function Blame({
 }
 
 /**
- * The README at the root of the revision on screen, in a card of its own
- * under the files, as a code host draws it: the root's listing names it, and
- * its file is read at the commit that listing resolved, so the two are one
- * revision. Markdown is rendered by the dashboard's own renderer, which
- * builds every element itself, so text a pusher wrote cannot introduce one;
- * any other README is drawn as its text. A root with none says nothing: the
- * files above it are the answer.
+ * The README and LICENSE at the root, tabs of one card under the files
+ * (`doc=license`), read at the listing's commit, markdown by the dashboard's
+ * own renderer with its fences coloured. A root with neither draws nothing.
  */
-function Readme({
+function RepoDocs({
   repo,
   entries,
   commit,
+  target,
 }: {
   repo: CodeRepoDetail;
   /** What the root's listing holds, every page of it read so far. */
   entries: readonly PathPart[];
   /** The commit the listing resolved, whole. */
   commit: string;
+  target: CommitTarget;
 }) {
+  const [doc, setDoc] = useParam("doc", "", "filter");
+  const panelId = useId();
   const files = entries.filter((e): e is CodeTreeEntry => "mode" in e && e.type === "blob");
-  const entry = README_NAMES.map((name) =>
-    files.find((e) => baseName(e.path).toLowerCase() === name),
-  ).find(Boolean);
+  const firstOf = (names: readonly string[]) =>
+    names.map((name) => files.find((e) => baseName(e.path).toLowerCase() === name)).find(Boolean);
+  const docs = [
+    {
+      value: "readme",
+      label: "README",
+      icon: <BookOpenGlyph size="sm" />,
+      entry: firstOf(README_NAMES),
+    },
+    {
+      value: "license",
+      label: "LICENSE",
+      icon: <ScaleGlyph size="sm" />,
+      entry: firstOf(LICENSE_NAMES),
+    },
+  ].filter((d) => d.entry !== undefined);
+  const shown = docs.find((d) => d.value === (doc === "license" ? "license" : "readme")) ?? docs[0];
+  const entry = shown?.entry;
   const file = useCodeQuery(
     "code_blob",
     { name: repo.name, path: entry?.path ?? "", ...(commit ? { ref: commit } : {}) },
     { enabled: Boolean(entry) && commit !== "" },
   );
-  if (!entry) return null;
+  if (!shown || !entry) return null;
   const blob = file.data?.blob;
   return (
     <Card padding="none" className="code-readme" as="section" aria-label={baseName(entry.path)}>
-      <Card.Header
-        divided
-        icon={<BookOpenGlyph size="sm" />}
-        subtitle={<span className="mono">at {revisionWord(repo, commit)}</span>}
-        actions={
-          <ButtonLink
-            size="small"
-            variant="ghost"
-            href={repoHref(repo.name, { ref: commit, path: entry.path })}
-          >
-            Open the file
-          </ButtonLink>
-        }
+      <div className="code-docs__head">
+        <Tabs
+          variant="chip"
+          size="sm"
+          ariaLabel="The repository's documents"
+          value={shown.value}
+          onValueChange={(next) => setDoc(next === "license" ? "license" : "")}
+          panelId={panelId}
+          items={docs.map(({ value, label, icon }) => ({ value, label, icon }))}
+        />
+        <EditFileButton repo={repo} target={target} path={entry.path} file={blob} />
+      </div>
+      <div
+        className="code-docs__body"
+        role="tabpanel"
+        id={panelId}
+        aria-labelledby={tabId(panelId, shown.value)}
       >
-        <Card.Title as="h2">{baseName(entry.path)}</Card.Title>
-      </Card.Header>
-      <Card.Body padding="lg">
         {(file.loading && !blob) || commit === "" ? (
-          <Skeleton variant="text" rows={4} label="Loading the README" />
+          <Skeleton variant="text" rows={4} label={`Loading ${baseName(entry.path)}`} />
         ) : file.error ? (
           <QueryState
             error={file.error}
@@ -1476,7 +1502,7 @@ function Readme({
         {file.data?.next && (
           <Callout variant="neutral">It runs past one page: open it to read the rest.</Callout>
         )}
-      </Card.Body>
+      </div>
     </Card>
   );
 }

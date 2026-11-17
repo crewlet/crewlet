@@ -1373,9 +1373,27 @@
   white-space: pre;
 }
 
-/* THE README: a card under the files, its text at a reading measure. */
+/* THE README AND THE LICENSE: tabs across the card's head, Edit at its end, the text the card's width. */
+.code-docs__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  min-height: var(--size-row-md);
+  padding: var(--spacing-2) var(--row-inline);
+  border-block-end: 1px solid var(--color-border-default);
+}
+
+.code-docs__head > :first-child {
+  min-width: 0;
+}
+
+.code-docs__body {
+  padding: var(--spacing-5) var(--spacing-6);
+}
+
 .code-readme .prose {
-  max-width: var(--size-measure);
+  max-width: none;
 }
 
 .code-readme__text {

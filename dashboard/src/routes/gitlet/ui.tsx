@@ -171,6 +171,16 @@ export function entryKind(e: Pick<CodeTreeEntry, "mode">): string {
 /** The names a README goes by, the one a reader writes first first. */
 export const README_NAMES = ["readme.md", "readme.markdown", "readme", "readme.txt"];
 
+/** The names a licence goes by, in the order a root is searched for one. */
+export const LICENSE_NAMES = [
+  "license",
+  "license.md",
+  "license.txt",
+  "licence",
+  "licence.md",
+  "copying",
+];
+
 /** Prose a reader reads rather than runs: a README, a licence, a change log, a note. */
 const PROSE_FILE =
   /(^|\/)(readme|licen[cs]e|copying|changelog|notice|authors)(\.[^/]*)?$|\.(md|markdown|txt|rst|adoc)$/i;

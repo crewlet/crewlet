@@ -254,8 +254,8 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
   },
   "routes/gitlet/repo/FileWrites.tsx": {
     why:
-      "a branch's files: Edit, New file, Delete file, and an empty repository's Add a " +
-      "file, each one code_commit_files",
+      "a branch's files: Edit, New file, Delete file, the README's Edit, and an empty " +
+      "repository's Add a file, each one code_commit_files",
     suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
   },
   "routes/gitlet/commit/CommitWrites.tsx": {
