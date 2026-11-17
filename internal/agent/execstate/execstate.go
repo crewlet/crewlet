@@ -28,7 +28,10 @@
 // So it carries an explicit Version, and decoding an unknown one is a LOUD
 // REFUSAL that leaves the row untouched rather than a best-effort read: a
 // resumed turn acting on a half-understood state is worse than a run that
-// waits for a node which understands it.
+// waits for a node which understands it. [VersionOf] reads the version alone,
+// as [Decode] reads it first and with nothing else of the state built, for a
+// caller that asks only which build may read a row (internal/engine's resume
+// give-up, on every failure another node or build may get past).
 //
 // Evolution is additive WITHIN a version — new fields get defaults, nothing is
 // removed or repurposed — and a shape that cannot be read that way takes a new
