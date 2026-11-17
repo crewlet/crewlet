@@ -1733,6 +1733,8 @@ type ReadAnswer struct {
 	// none the repositories holding one in DueRepos.
 	Checks []CheckRow   `json:"checks,omitempty"`
 	Check  *CheckDetail `json:"check,omitempty"`
+	// StandingCounts is a standing listing's first page's attempts by state ([CheckQuery.Standing]).
+	StandingCounts *StandingCounts `json:"standing_counts,omitempty"`
 	// Runnable is a page of a `checks_queued` read: the attempts waiting for
 	// a runner, oldest queued first.
 	Runnable []RunnableCheck `json:"runnable,omitempty"`
@@ -2388,6 +2390,11 @@ type CheckRow struct {
 	Revision    int    `json:"revision,omitempty"`
 	CandidateID string `json:"candidate_id,omitempty"`
 	EntryID     string `json:"entry_id,omitempty"`
+	// Change, SourceRef and ChangeHead are the change the attempt judges, on a standing listing
+	// alone: the live change at a head's commit, or a candidate's entry's, at its enqueued head.
+	Change     *ChangeName `json:"change,omitempty"`
+	SourceRef  string      `json:"source_ref,omitempty"`
+	ChangeHead string      `json:"change_head,omitempty"`
 	// Base is what its diff is read against, and DefsOID the checks file its
 	// definition came from — the file of the branch it is checked for, its
 	// key's Target.
@@ -2518,6 +2525,10 @@ type CheckQuery struct {
 	// AN ESTATE REQUEST'S FIELD, as State is: the domain landed on main with
 	// it ([RecordVersion]).
 	Until time.Time `json:"until,omitzero"`
+	// Standing lists where each check stands, in its order ([StandingOrder]): each key's latest
+	// attempt of a live change's head, its newest queue entry or a branch's tip, running ones
+	// included; "" is the listing above. A request field, so an older build refuses it unread.
+	Standing StandingOrder `json:"standing,omitempty"`
 }
 
 // ChecksDueQuery is a `checks_due` read's question, REQUIRED as a

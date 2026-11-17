@@ -2936,8 +2936,9 @@ grant on the repository as every other read of it is:
   it: its head's, or a commit it names, checked for its own target, by name
   and attempt; one commit's, for every branch it was checked for; or — naming
   no repository — every repository's the reader may read whose attempts ended
-  since a moment, newest ended first. Each is a page of at most 200 attempts
-  (50 unless asked), resuming exactly where the page before ended;
+  since a moment, newest ended first; or, asked, where each check stands
+  ([Where a check stands](#where-a-check-stands)). Each is a page of at most
+  200 attempts (50 unless asked), resuming exactly where the page before ended;
 - **`check`**: one attempt whole, named by its commit, its target branch, its
   check and its number — its row, the definition it ran under, the last of
   its output, the failures its ending named and its kept log;
@@ -3021,6 +3022,34 @@ keeps no snapshot of it:
 - a person's reason for merging past the gate, where one did.
 
 A push's merge has no gate: who pushed it is the push's.
+
+### Where a check stands
+
+A `checks` read asked where each check stands (`standing`) lists each
+check's latest attempt for a branch, of a live subject: the head of an open
+or draft change, the newest queue entry of such a change, tested by the
+candidate the queue last tested it in, or a protected branch's tip. An
+attempt a later one reran, a head the change moved on from, a branch it no
+longer merges into, a tip the branch moved past and a bisection never stand.
+A head's attempt judges the live change at that head, whichever change's
+dispatch queued it.
+
+It lists in one of two orders: `recent`, what runs now and what waits first,
+then every ending newest first; or `failing`, the failures, the errors, what
+runs, what waits, the cancellations, the passes and the skips, each newest
+ended first. Running and queued attempts are listed beside the ended ones,
+across every repository too. A check's name narrows the listing, and so does
+a state, any of the seven, queued and running in the window too. A page is the attempts it read, so one may be
+short, or empty with a cursor, where the grant or a dead subject kept none.
+
+It reads one repository or every repository the reader may read, within a
+window that starts at a moment and ends now; an attempt not yet ended is in
+every window. Its first page counts the standing attempts by state, by a
+check's name where one narrows it and never by a state, each state counted
+among its newest 128 places and saying when it stopped there. Each row names
+the change it judges, that change's branch and the head it was checked at:
+the entry's head for a candidate, which was checked merged onto its branch.
+A data node of an older build refuses `standing`, and another answers.
 
 ### Check boxes
 

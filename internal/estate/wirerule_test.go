@@ -548,6 +548,31 @@ func TestAViewedMarkThisBuildDoesNotDeclareIsRefusedUnread(t *testing.T) {
 	}
 }
 
+// A CHECKS READ ASKING WHERE CHECKS STAND IS ASKED OF A BUILD THAT READS IT: a data node whose build
+// does not declare `standing` refuses the read by that key, its code half never asked, and the
+// walk asks the next, which serves it.
+// Mutation: send the order under another key and the first node runs the read, ending the walk there.
+func TestAChecksReadAskingWhereChecksStandIsAskedOfABuildThatReadsIt(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	nodes, _ := f.placement.Holders()
+	order := f.client.order(opCodeRead.spec, nodes)
+	older, newer := f.nodes[order[0]], f.nodes[order[1]]
+	older.set(func(n *fakeNode) { n.undeclared = []string{"args.checks.standing"} })
+	if _, err := f.client.Code().Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadChecks,
+		Asker:  gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "token:founder"},
+		Fresh:  statelog.Freshness{Level: statelog.ReadStale},
+		Checks: &gitlet.CheckQuery{Standing: gitlet.StandingFailing}}); err != nil {
+		t.Fatalf("a read asking where checks stand failed: %v, want the second node's answer", err)
+	}
+	if !older.askedFor("unread") || older.askedFor(opCodeRead.spec.name) {
+		t.Fatal("the node whose build does not declare standing ran the read rather than refuse it unread")
+	}
+	if !newer.askedFor(opCodeRead.spec.name) {
+		t.Fatal("the node whose build reads standing was never asked")
+	}
+}
+
 // A QUEUE READ ASKING FOR TRAINS IS ASKED OF A BUILD THAT READS IT: the node whose build does
 // not declare `trains` refuses the read unread, its code half never asked, and the walk asks the
 // next, which answers; a read not asking for them is served by the first node asked.

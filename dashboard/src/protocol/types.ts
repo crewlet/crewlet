@@ -9981,6 +9981,11 @@ export interface CodeCheckRow {
   revision?: number;
   candidate_id?: string;
   entry_id?: string;
+  /** The change the attempt judges, on a standing listing alone: absent elsewhere, on a tip's attempt, and from an older build. */
+  change?: CodeChangeName;
+  /** That change's branch, and the head it was checked at: a candidate's entry's, or a head's own commit. */
+  source_ref?: string;
+  change_head?: string;
   base?: string;
   defs_oid?: string;
   /** Whether the branch's protection requires it. */
@@ -10018,9 +10023,14 @@ export interface CodeCheckDetail extends CodeCheckRow {
   log?: { object: string; hash: string; size: number };
 }
 
-/** `code_checks`: a page of attempts of checks, newest ended first. */
+/** `code_checks`: a page of attempts of checks, newest ended first, or where each stands (`standing`). */
 export interface CodeChecksAnswer {
   checks?: CodeCheckRow[];
+  /** A standing listing's first page's attempts by state; a state in `at_least` counted to its bound (128). */
+  standing_counts?: {
+    counts: CodeCheckCounts;
+    at_least?: ((typeof CHECK_STATES)[number] | (string & {}))[];
+  };
   next?: string;
   position: LogPosition;
   level: ReadLevel;
