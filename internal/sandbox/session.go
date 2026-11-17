@@ -725,6 +725,18 @@ type SessionCapture struct {
 	// none this build reads.
 	ContextTokens int64 `json:"context_tokens,omitempty"`
 
+	// NextRequestTokens and NextRequestOlderTokens are the harness's own
+	// estimate of the session's next request at each of the two rates Claude
+	// Code counts text at ([NextRequest], [SessionCapture.NextRequest]), as the
+	// take read its archive's main thread whole ([TakenSession.Next]): what a
+	// launch that continues the session is held to with its brief, where its
+	// last request's input (ContextTokens) under-counts it. Zero where the take
+	// read none (a harness whose taker estimates none, a thread not read whole,
+	// a stamp settled off the executor log, which carries ContextTokens alone,
+	// a stamp an older build wrote), each read as ContextTokens.
+	NextRequestTokens      int64 `json:"next_request_tokens,omitempty"`
+	NextRequestOlderTokens int64 `json:"next_request_older_tokens,omitempty"`
+
 	// ResumedCount is what Claude Code counts the session at before its next
 	// request, as the take read its archive's main thread whole
 	// ([TakenSession.Count], resumed.go), with the least window the run that
@@ -881,6 +893,12 @@ func (c SessionCapture) Bounded() error {
 		}
 	}
 	return nil
+}
+
+// NextRequest is what c's stamp says the session's next request carries
+// ([SessionCapture.NextRequestTokens]).
+func (c SessionCapture) NextRequest() NextRequest {
+	return NextRequest{Tokens: c.NextRequestTokens, OlderTokens: c.NextRequestOlderTokens}
 }
 
 // RunStart is where the run that packed c's session began in it, as the stamp
@@ -1818,8 +1836,9 @@ func (c *Coordinator) besideAnother(ctx context.Context, run PendingRun, stamp S
 }
 
 // spooledWhole is what a take does once its session is spooled: the last
-// request's context read off the archive as it was spooled, for the floor of
-// the launch that continues it, and what Claude Code counts the archive at with
+// request's context and the harness's own estimate of the next request, read
+// off the archive as it was spooled, for the floor of the launch that
+// continues it, and what Claude Code counts the archive at with
 // window, the least window the run reported ([capturePoint.window]), for its
 // telling, both stamped with the capture's outcome, which is the stamp that
 // launch reads; and the kept archive's digest left in its box
@@ -1829,6 +1848,12 @@ func (c *Coordinator) spooledWhole(ctx context.Context, by time.Time, run Pendin
 
 	if taken.Context != nil {
 		spooled.stamp.ContextTokens = taken.Context()
+	}
+	// AND THE HARNESS'S OWN ESTIMATE OF ITS NEXT REQUEST, off the same read:
+	// what a launch that continues this capture is held to with its brief.
+	if taken.Next != nil {
+		next := taken.Next()
+		spooled.stamp.NextRequestTokens, spooled.stamp.NextRequestOlderTokens = next.Tokens, next.OlderTokens
 	}
 	// AND WHAT CLAUDE CODE COUNTS THE ARCHIVE AT, as the take read its main
 	// thread whole, beside the least window the run reported: what a launch

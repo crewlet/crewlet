@@ -577,7 +577,8 @@ func worstRow(t *testing.T) PendingRun {
 	capture := &SessionCapture{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64, Launch: uuid.NewString(),
 		State: CaptureUnresolved, Reason: markup(1 << 10), Through: new(math.MaxInt), Omitted: omitted,
 		BridgeSeq: math.MaxInt, BridgeOpen: make([]int, maxOpenPlaces), NoteCursor: math.MaxInt,
-		ContextTokens: math.MaxInt64, At: worstAt, Harness: plain(32), HarnessVersion: plain(64),
+		ContextTokens: math.MaxInt64, NextRequestTokens: math.MaxInt64, NextRequestOlderTokens: math.MaxInt64,
+		At: worstAt, Harness: plain(32), HarnessVersion: plain(64),
 		SessionID: plain(128), ArchiveFormat: 99, RunAfter: plain(MaxMessageIDBytes),
 		Object: plain(256), ObjectHash: plain(64), ObjectSize: math.MaxInt64, ContentKey: plain(256),
 		Home: markup(1024), Workspace: markup(1024), Final: true, Interrupted: true,
@@ -725,6 +726,9 @@ func worstRow(t *testing.T) PendingRun {
 		// most: the box's thread writes it, and nothing holds it to a uuid's
 		// shape.
 		ResumedCount: worstCount(), BasisRestart: new(markup(RestartIDMaxBytes)),
+		// AND WHAT THE HARNESS ESTIMATES ITS NEXT REQUEST AT, nineteen digits
+		// at each rate ([LaunchRecord.NextRequestTokens]).
+		NextRequestTokens: math.MaxInt64, NextRequestOlderTokens: math.MaxInt64,
 		Bridged: EngineSpend{Aux: AuxTokens{Input: math.MaxInt, Output: math.MaxInt, CacheRead: math.MaxInt,
 			CacheWrite: math.MaxInt}, Workers: math.MaxInt, WorkerInput: math.MaxInt, WorkerOutput: math.MaxInt},
 		Condensed: AuxTokens{Input: math.MaxInt, Output: math.MaxInt, CacheRead: math.MaxInt,

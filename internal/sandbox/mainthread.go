@@ -15,13 +15,14 @@ import (
 // harness counts there. So the read that collects a job reads the job's main
 // thread ONCE, on the box's host, before the take ([Coordinator.readMainThread]),
 // and every reading the collection asks of that thread shares the one read
-// ([MainThreadAsk]): what Claude Code counts the copy at ([ResumedCount]) now,
-// and whatever later reading of the thread joins it, never a second read of
-// the thread.
+// ([MainThreadAsk]): what Claude Code counts the copy at ([ResumedCount]) and
+// what it estimates the copy's next request at ([NextRequest]) now, and
+// whatever later reading of the thread joins them, never a second read of the
+// thread.
 //
 // ITS ANSWER IS WRITTEN WITH HOW THE HARNESS ENDED, after the take, in the
-// collection's one write of the job's end ([EndRead.Count]), never in a write of
-// its own. A stop's read and a loss's ask nothing: no relaunch carries their
+// collection's one write of the job's end ([EndRead.Count], [EndRead.Next]),
+// never in a write of its own. A stop's read and a loss's ask nothing: no relaunch carries their
 // round on in place. A job not over is not read: its harness may still write.
 
 // MainThreadReadWait bounds the read of a job's main thread at its collection
@@ -59,6 +60,9 @@ type MainThreadAsk struct {
 	// Count asks for [ResumedCount], what Claude Code counts the session at
 	// before its next request.
 	Count bool
+	// Next asks for [NextRequest], what Claude Code estimates the session's
+	// next request at.
+	Next bool
 }
 
 // MainThreadReading is what one read answered, a part per reading asked. The
@@ -67,16 +71,20 @@ type MainThreadReading struct {
 	// Count is the session's count where it was asked: a bound, or a mark
 	// saying why there is none. Nil where it was not asked.
 	Count *ResumedCount
+	// Next is the harness's own estimate of the session's next request where
+	// it was asked; zero where it was not, and where the read made none.
+	Next NextRequest
 }
 
 // readMainThread reads run's job's main thread in box through runner, once, for
-// every reading the collection asks of it: what Claude Code counts the copy at,
-// for a Claude Code job's collection ([BoxReadCollect]), whether or not its
-// harness ended its own run, since the count decides the copy's skill guard
-// too. Nothing where nothing is asked: a stop's read, a loss's, and another
-// harness's job. A job not over is [CountUnread] with no read
-// ([capturePoint.final]), and so is a runner that reads no thread. The count
-// carries the least window the run reported ([Result.ReportedWindow]).
+// every reading the collection asks of it: what Claude Code counts the copy at
+// and what it estimates its next request at, for a Claude Code job's
+// collection ([BoxReadCollect]), whether or not its harness ended its own run,
+// since the count decides the copy's skill guard too. Nothing where nothing is
+// asked: a stop's read, a loss's, and another harness's job. A job not over is
+// [CountUnread] with no read and no estimate ([capturePoint.final]), and so is
+// a runner that reads no thread. The count carries the least window the run
+// reported ([Result.ReportedWindow]).
 //
 // WITHIN [Coordinator.mainThreadWait], armed here, inside the read's context:
 // past it, the read ends where it is, and the count is [CountUnread]. Logged
@@ -87,7 +95,10 @@ func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sa
 	if !asksMainThread(run, read) {
 		return MainThreadReading{}
 	}
-	var count *ResumedCount
+	var (
+		count *ResumedCount
+		next  NextRequest
+	)
 	reader, reads := runner.(mainThreadReader)
 	switch {
 	case !at.final:
@@ -96,9 +107,10 @@ func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sa
 		count = &ResumedCount{Mark: CountUnread}
 	default:
 		readCtx, cancel := context.WithTimeout(ctx, c.mainThreadWait)
-		count = reader.ReadMainThread(readCtx, box, MainThreadAsk{Session: run.SessionRan(),
-			Release: result.HarnessVersion, Count: true}).Count
+		reading := reader.ReadMainThread(readCtx, box, MainThreadAsk{Session: run.SessionRan(),
+			Release: result.HarnessVersion, Count: true, Next: true})
 		cancel()
+		count, next = reading.Count, reading.Next
 		if count == nil {
 			count = &ResumedCount{Mark: CountUnread}
 		}
@@ -116,7 +128,7 @@ func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sa
 			"launch_id", run.LaunchID, "mark", string(count.Mark), "detail", why,
 			"outcome", "a relaunch that continues this copy in its box is told it as a cut-off one")
 	}
-	return MainThreadReading{Count: count}
+	return MainThreadReading{Count: count, Next: next}
 }
 
 // unboundedBecause is why a read of a job's main thread that answered mark holds

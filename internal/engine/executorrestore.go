@@ -134,7 +134,8 @@ func storedSession(row executorkeep.TurnRow) executordomain.Session {
 // chain — where the runner of a member that could take the launch restores it —
 // or why it continues none, which is logged, but for a conversation's first
 // turn, which had nothing to continue; and either way what the job before's
-// session's last request carried, which the in-place floor is made of.
+// session's last request carried and what its harness estimates its next one
+// at, which the in-place floor is made of.
 //
 // ANY MEMBER OF THE CHAIN, never one picked here: the launch picks its member
 // once, as it launches ([agentLauncher.member]), and a member's plan can be
@@ -186,14 +187,15 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 		// A TURN THAT HAS KEPT NOTHING, relaunched: the base its first launch
 		// froze, which its row still holds.
 		basis := baseBasis(*base, continued.Context)
-		basis.KeptTurn = continued.KeptTurn
+		basis.KeptTurn, basis.NextRequest = continued.KeptTurn, continued.NextRequest
 		return basis
 	}
 	if why != "" {
 		// THE SESSION THE TURN KEEPS, or else the base it froze, where the
 		// relaunch continues neither: a run that starts a session of its own
 		// beside it is told it may read it.
-		return runner.SessionBasis{Why: why, ContextTokens: continued.Context, KeptTurn: continued.KeptTurn}
+		return runner.SessionBasis{Why: why, ContextTokens: continued.Context,
+			NextRequest: continued.NextRequest, KeptTurn: continued.KeptTurn}
 	}
 	captured := continued.Capture
 	// ITS SAVE POINT, which every capture a relaunch continues states: one
@@ -210,7 +212,7 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 		Release: continued.Row.HarnessVersion,
 		Through: through, NoteCursor: captured.NoteCursor,
 		Interrupted: captured.Interrupted, Home: captured.Home, ContextTokens: continued.Context,
-		KeptTurn: continued.KeptTurn,
+		NextRequest: continued.NextRequest, KeptTurn: continued.KeptTurn,
 		// AND WHAT CLAUDE CODE COUNTS THE CAPTURE'S SESSION AT, as its take
 		// read its archive whole: what the kept path's first request is judged
 		// by.

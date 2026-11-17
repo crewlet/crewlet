@@ -87,6 +87,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AMeasureLandsWhereTheEndIsAlreadyRecorded", testAMeasureLandsWhereTheEndIsAlreadyRecorded},
 		{"AJobsCountIsItsOwnReadsAndNeverCarried", testAJobsCountIsItsOwnReadsAndNeverCarried},
 		{"ACountLandsWhereTheEndIsAlreadyRecorded", testACountLandsWhereTheEndIsAlreadyRecorded},
+		{"TheNextRequestIsNeverCarried", testTheNextRequestIsNeverCarried},
+		{"AHarnessEndWritesTheNextRequest", testAHarnessEndWritesTheNextRequest},
 		{"ALaunchRecordsWhatTheBriefItHandedLeftOut", testALaunchRecordsWhatTheBriefItHandedLeftOut},
 		{"TheTurnsLeadsAreKeptBesideItsRowAndOutliveEveryRelaunch", testTheTurnsLeadsAreKeptBesideItsRowAndOutliveEveryRelaunch},
 		{"AResumedTurnsCarryIsItsClaimsOwn", testAResumedTurnsCarryIsItsClaimsOwn},
@@ -774,6 +776,81 @@ func testACountLandsWhereTheEndIsAlreadyRecorded(t *testing.T, s sandbox.Pending
 	}
 	if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil || ok {
 		t.Errorf("the same read again = %v, %v, want nothing written", ok, err)
+	}
+}
+
+// THE NEXT REQUEST IS NEVER CARRIED. The read that collects a job records what
+// the harness estimates the next request of the copy its box holds at beside
+// how its harness ended: the read's wherever it made one, and the record's own
+// where a read made none, since the copy of a job that is over does not change.
+// Every write of the job's record after it keeps it, and the next launch's
+// record starts with none: an estimate is the read of this job's copy, never a
+// lineage's, since a job that made no request of its own may have grown the
+// copy it took up by its brief.
+//
+// Mutation: carry the estimate through the relaunch's reset, and this goes red.
+func testTheNextRequestIsNeverCarried(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-next-own"
+	launch := mustLaunched(t, s, run(turn))
+	claimed := mustClaim(t, s, turn)
+	estimate := sandbox.NextRequest{Tokens: 42_000, OlderTokens: 31_500}
+	mark := func(read sandbox.NextRequest) {
+		t.Helper()
+		if _, err := s.MarkHarnessEnd(t.Context(), turn, launch, sandbox.EndRead{End: sandbox.HarnessEndOwnRun,
+			Next: read}); err != nil {
+			t.Fatalf("MarkHarnessEnd: %v", err)
+		}
+	}
+	check := func(step string, want sandbox.NextRequest) {
+		t.Helper()
+		if got := mustGet(t, s, turn).Launch.NextRequest(); got != want {
+			t.Errorf("after %s the job's record holds the next request %+v, want %+v", step, got, want)
+		}
+	}
+	mark(estimate)
+	check("the read that collected the job", estimate)
+	mark(sandbox.NextRequest{})
+	check("a read that made none", estimate)
+	mustRelease(t, s, claimed)
+	check("the release of its claim", estimate)
+	if err := s.SetStatus(t.Context(), turn, sandbox.StatusRunning, sandbox.Fence{}); err != nil {
+		t.Fatal(err)
+	}
+	check("a status write", estimate)
+	park(t, s, turn)
+	check("a park", estimate)
+	mustBeginLaunch(t, s, run(turn))
+	check("the next launch's begin", sandbox.NextRequest{})
+}
+
+// A HARNESS END WRITES THE NEXT REQUEST. The read that collects a job records its
+// harness's end, its newest request's measure, its count and its estimate of the
+// next request in one write, which lands where any changes: a collection made
+// again, whose end the first read recorded already, brings an estimate the
+// first had none of, or another. The same read again changes nothing.
+//
+// Mutation: leave the estimate out of the write's test of a change, and this
+// goes red.
+func testAHarnessEndWritesTheNextRequest(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-next-after-end"
+	launch := mustLaunched(t, s, run(turn))
+	mustClaim(t, s, turn)
+	if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, sandbox.EndRead{End: sandbox.HarnessEndCutOff}); err != nil ||
+		!ok {
+		t.Fatalf("the first read's record = %v, %v", ok, err)
+	}
+	for _, estimate := range []sandbox.NextRequest{{Tokens: 42_000, OlderTokens: 31_500}, {Tokens: 43_000}} {
+		read := sandbox.EndRead{End: sandbox.HarnessEndCutOff, Next: estimate}
+		if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil || !ok {
+			t.Fatalf("a read bringing the estimate %+v beside the end recorded = %v, %v, want it written",
+				estimate, ok, err)
+		}
+		if got := mustGet(t, s, turn).Launch.NextRequest(); got != estimate {
+			t.Errorf("the job's record holds the next request %+v, want %+v", got, estimate)
+		}
+		if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil || ok {
+			t.Errorf("the same read again = %v, %v, want nothing written", ok, err)
+		}
 	}
 }
 

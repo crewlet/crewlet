@@ -78,7 +78,12 @@ import (
 // ([LaunchRecord.ResumedCount], resumed.go), as the same read found it in one
 // read of the job's main thread (mainthread.go), in the same write: never
 // carried, the read of this job's copy at its collection or nothing, so the
-// next launch's record starts with none.
+// next launch's record starts with none. And off that same read, the
+// harness's own estimate of the copy's NEXT request
+// ([LaunchRecord.NextRequestTokens]), which a relaunch continuing the copy in
+// place is held to with its brief: the newest request's input under-counts it
+// by that request's reply and everything after it, and over-counts it past a
+// compaction no request has followed. Never carried either.
 
 // HarnessEnd is how a job's harness ended, as the read that collected the job
 // found it ([LaunchRecord.HarnessEnd]).
@@ -144,6 +149,47 @@ func (p capturePoint) harnessEnd() HarnessEnd {
 type RequestMeasure struct {
 	Tokens int64
 	Own    bool
+}
+
+// NextRequest is the harness's own estimate of the NEXT request a session
+// sends, before a word of the brief that continues it: its last counted
+// reply's input, cache reads, cache writes and output, and what the harness
+// estimates every record after that reply at, restarted at a compaction from
+// what the compaction left (internal/sandbox/executor's nextReading). What a
+// launch that continues the session is held to with its brief
+// (internal/engine's continuedFloor), where the last request's input
+// ([RequestMeasure], [SessionCapture.ContextTokens]) under-counts it by the
+// reply's output and everything after it, and over-counts it past a
+// compaction no request has followed.
+//
+// AT BOTH RATES CLAUDE CODE COUNTS TEXT AT, since which model the next request
+// goes to is the launch's to pick: Tokens at three characters a token, the
+// rate of every current model, and OlderTokens at four, the rate of the
+// fourteen older models ([ClaudeTextRate]); OlderTokens 0 where the harness
+// counts one rate. Zero is no figure: a thread not read whole, a release whose
+// rules were not read, a compaction whose kept stretch could not be found,
+// each read by its reader as the last request's input.
+//
+// NEVER CARRIED along a session's lineage, as [ResumedCount] is not: a job
+// that made no request of its own may have grown its copy by its brief, so a
+// figure carried from its basis would under-state it. Never on the executor
+// log either: a stamp settled off the log carries the last request's input
+// alone.
+type NextRequest struct {
+	Tokens      int64
+	OlderTokens int64
+}
+
+// At is n at model's rate ([ClaudeTextRate]): OlderTokens for a model Claude
+// Code counts at four characters a token where n holds that figure, else
+// Tokens, which is the larger, so a model this build cannot place is held to
+// more and never less. Zero where n is no figure, a figure below zero among
+// it.
+func (n NextRequest) At(model string) int64 {
+	if n.OlderTokens > 0 && ClaudeTextRate(model) == claudeOlderTextRate {
+		return n.OlderTokens
+	}
+	return max(n.Tokens, 0)
 }
 
 // MeasureSource is where a job's record's measure of the session its box holds
@@ -241,6 +287,34 @@ type EndRead struct {
 	// its next request, as the read of the job's main thread found it
 	// ([Result.ResumedCount]); nil where the read asked none.
 	Count *ResumedCount
+	// Next is the harness's own estimate of the copy's next request, off the
+	// same read ([Result.NextRequest]); zero where the read made none.
+	Next NextRequest
+}
+
+// NextRequest is what l, a job's record, says the copy its box holds sends
+// next ([LaunchRecord.NextRequestTokens]).
+func (l LaunchRecord) NextRequest() NextRequest {
+	return NextRequest{Tokens: l.NextRequestTokens, OlderTokens: l.NextRequestOlderTokens}
+}
+
+// setNextRequest writes n onto l, both rates at once.
+func (l *LaunchRecord) setNextRequest(n NextRequest) {
+	l.NextRequestTokens, l.NextRequestOlderTokens = n.Tokens, n.OlderTokens
+}
+
+// nextRequested is the estimate l, a job's record, holds once a read of the
+// job found read: the read's where it made one, and l's own where it made none
+// (a read that asked nothing, a thread it could not read whole, a host of an
+// older build). The job's copy does not change once the job is over, and only
+// a read of a job that is over reads its thread, so an earlier read's figure
+// still describes the copy a later read could not: kept, a relaunch is held
+// to it rather than to the copy's newest input, which under-counts it.
+func (l LaunchRecord) nextRequested(read NextRequest) NextRequest {
+	if read.Tokens > 0 {
+		return read
+	}
+	return l.NextRequest()
 }
 
 // counted is the count l, a job's record, holds once a read of the job found
@@ -303,9 +377,10 @@ func (l LaunchRecord) measured(read RequestMeasure, launch string) *SessionMeasu
 }
 
 // markHarnessEnd records on run's job's record how its harness ended, what its
-// newest request carried and what Claude Code counts the copy at, as the read
-// that collects the job found them ([PendingStore.MarkHarnessEnd]), in ONE
-// WRITE: neither the measure nor the count adds a write of its own.
+// newest request carried, what Claude Code counts the copy at and what it
+// estimates its next request at, as the read that collects the job found them
+// ([PendingStore.MarkHarnessEnd]), in ONE WRITE: neither the measure, the
+// count nor the estimate adds a write of its own.
 //
 // UNDER A CONTEXT OF ITS OWN ([Coordinator.recordContext]), as the take's own
 // records are, within a teardown's grace and the time the run's row takes to

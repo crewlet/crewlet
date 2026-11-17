@@ -1052,6 +1052,13 @@ type ContinuedSession struct {
 	// continued; zero where no capture of the job measured any.
 	Context int64
 
+	// NextRequest is the harness's own estimate of that session's next
+	// request, as the same capture's take read it, kept or not
+	// ([SessionCapture.NextRequest]): what that launch is held to with its
+	// brief where it holds a figure, Context where it holds none. Set beside
+	// Context, whether or not the capture is continued.
+	NextRequest NextRequest
+
 	// KeptTurn is the turn whose kept session the relaunch's read found,
 	// continued or not: the turn's own where its run's record says a capture of
 	// it landed, once what was unsettled is settled — a live turn's row is
@@ -1093,7 +1100,8 @@ const relaunchCaptureWait = 15 * time.Second
 // as [BaseContinuityOf] decides of the turn's own row ([ContinuedSession.Base],
 // [Coordinator.continuedWithout]) — or why there is none, in words for the
 // log; and either way what that job's session's last request carried
-// ([ContinuedSession.Context]).
+// ([ContinuedSession.Context]) and what its harness estimates its next one at
+// ([ContinuedSession.NextRequest]).
 //
 // WHAT IS UNSETTLED IS SETTLED FIRST, within that same wait — see the file
 // comment: a capture whose taker is gone, from the turn's row on the log, as
@@ -1141,7 +1149,7 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 		return ContinuedSession{}, "the turn's run record was gone before the capture of the job " +
 			"the relaunch follows settled"
 	}
-	answer := ContinuedSession{Context: followedContext(run)}
+	answer := ContinuedSession{Context: followedContext(run), NextRequest: followedNextRequest(run)}
 	if err != nil {
 		// NO ANSWER IS NO KEPT CAPTURE: the row the wait could not read again
 		// may hold a capture since kept, or refused, and a relaunch never
@@ -1318,6 +1326,17 @@ func followedContext(run PendingRun) int64 {
 		return newest.ContextTokens
 	}
 	return 0
+}
+
+// followedNextRequest is the harness's own estimate of the next request of the
+// session of run's current job, as that job's newest capture's take read it,
+// kept or not ([followedContext]); zero where it left none, or none that
+// estimated one.
+func followedNextRequest(run PendingRun) NextRequest {
+	if newest := run.Capture; newest != nil && newest.LaunchSeq == run.LaunchSeq {
+		return newest.NextRequest()
+	}
+	return NextRequest{}
 }
 
 // unkeptWhy is why a capture is not the kept one, as its stamp says.

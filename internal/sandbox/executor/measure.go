@@ -20,8 +20,10 @@ import (
 //
 // A launch that continues a session sends the session's whole context again
 // before it reads a word of its brief, so its budget floor is that context and
-// the brief, never the static floor alone (internal/engine's launch floor). The
-// harness's own record of its last request is that context, cache included:
+// the brief, never the static floor alone (internal/engine's launch floor).
+// That context is the harness's own estimate of the next request where the
+// take read one (nextrequest.go); the harness's own record of its last
+// request, cache included, is the figure the floor reads where it read none:
 //
 //   - Claude Code's transcript keeps every assistant message with the usage
 //     of the request that produced it, so the last one on the main thread (a
@@ -42,10 +44,12 @@ import (
 // what it cannot read it says nothing about (zero), and it drains the rest.
 //
 // AND WHAT CLAUDE CODE COUNTS THE SESSION AT before its next request
-// ([sandbox.TakenSession.Count], resumed.go), off the same read: a Claude Code
-// archive's main thread is walked ONCE, through the line layer ([walkThread]),
-// by two readings, the floor's figure ([contextReading]) and the count
-// ([resumedReading]). So the meter DECIDES something now (whether a relaunch
+// ([sandbox.TakenSession.Count], resumed.go), and what it estimates that
+// request at ([sandbox.TakenSession.Next], nextrequest.go), off the same read:
+// a Claude Code archive's main thread is walked ONCE, through the line layer
+// ([walkThread]), by three readings, the last request's input
+// ([contextReading]), the count ([resumedReading]) and the estimate of the
+// next request ([nextReading]). So the meter DECIDES something now (whether a relaunch
 // that continues the capture is told it as a cut-off one), and reads its
 // archive's members by the layer's rules: a member named absolutely or with a
 // `..` element, or a main thread held twice, leaves the count unread, since the
@@ -85,12 +89,14 @@ import (
 // took 7.0 s, on two cores.
 
 // contextMeter reads an archive written to it and keeps the whole input of the
-// last request its transcript records and what Claude Code counts it at.
+// last request its transcript records, what Claude Code counts it at and what
+// it estimates its next request at.
 type contextMeter struct {
-	pw     *io.PipeWriter
-	done   chan struct{}
-	tokens int64
-	counts *sandbox.ResumedCount
+	pw       *io.PipeWriter
+	done     chan struct{}
+	tokens   int64
+	counts   *sandbox.ResumedCount
+	estimate sandbox.NextRequest
 }
 
 // newContextMeter starts a meter for an archive of layout holding session,
@@ -105,18 +111,19 @@ func newContextMeter(ctx context.Context, layout archiveLayout, session, release
 		var (
 			n     int64
 			count *sandbox.ResumedCount
+			next  sandbox.NextRequest
 			err   error
 		)
 		switch layout {
 		case archiveTar:
-			n, count, err = meterArchive(ctx, pr, session, release)
+			n, count, next, err = meterArchive(ctx, pr, session, release)
 		case archiveDocument:
 			n, err = lastExportInput(pr)
 		}
 		if err == nil {
 			m.tokens = n
 		}
-		m.counts = count
+		m.counts, m.estimate = count, next
 		// DRAINED WHATEVER IT FOUND, so the take that feeds it never waits on
 		// a meter that stopped reading; the pipe ends when the take finishes.
 		_, _ = io.Copy(io.Discard, pr)
@@ -147,26 +154,42 @@ func (m *contextMeter) count() *sandbox.ResumedCount {
 	return m.counts
 }
 
+// next is what the meter estimated the session's next request at, once the
+// archive has ended: zero for none, and for an archive of another harness's
+// layout.
+func (m *contextMeter) next() sandbox.NextRequest {
+	<-m.done
+	return m.estimate
+}
+
 // meterArchive is the input of the last request a Claude Code archive's main
-// thread of session records, zero where it records none, and what Claude Code
-// counts the session at, read off ONE walk of that thread ([walkThread]) by
-// both readings. The count is marked where the archive's members say so (the
-// file comment) and unread where the archive does not read to its end; err is
-// the archive's own, where its gzip or tar framing failed.
+// thread of session records, zero where it records none, what Claude Code
+// counts the session at, and what it estimates the next request at, read off
+// ONE walk of that thread ([walkThread]) by the three readings. The count is
+// marked where the archive's members say so (the file comment) and unread
+// where the archive does not read to its end, and the estimate is none where
+// the count is unread or of a release its rules were not read in; err is the
+// archive's own, where its gzip or tar framing failed.
+//
+// A SAVED COMPACTION LEAVES THE ESTIMATE STANDING: it marks the count, since
+// the harness may swap it in for the session, but what the harness swaps in is
+// smaller than the session it replaces, so the estimate of the session whole
+// is what the floor holds the launch to, the safe side.
 func meterArchive(ctx context.Context, r io.Reader, session, release string) (int64, *sandbox.ResumedCount,
-	error) {
+	sandbox.NextRequest, error) {
 
 	var (
 		callers countMarks
 		count   resumedReading
+		next    nextReading
 		figure  contextReading
 		walked  bool
 	)
 	if release == "" || !releaseAtLeast(release, claudeCountFloor) {
 		callers = callers.with(sandbox.CountRelease)
 	}
-	unread := func(err error) (int64, *sandbox.ResumedCount, error) {
-		return 0, count.count(callers.with(sandbox.CountUnread)), err
+	unread := func(err error) (int64, *sandbox.ResumedCount, sandbox.NextRequest, error) {
+		return 0, count.count(callers.with(sandbox.CountUnread)), sandbox.NextRequest{}, err
 	}
 	zr, err := gzip.NewReader(r)
 	if err != nil {
@@ -210,12 +233,16 @@ func meterArchive(ctx context.Context, r io.Reader, session, release string) (in
 			continue
 		}
 		walked = true
-		walkThread(ctx, tr, threadPlainMax, &figure, &count)
+		walkThread(ctx, tr, threadPlainMax, &figure, &count, &next)
 	}
 	if !walked {
 		callers = callers.with(sandbox.CountUnread)
 	}
-	return figure.context(), count.count(callers), nil
+	estimate := next.next()
+	if blind := countMarks(0).with(sandbox.CountUnread).with(sandbox.CountRelease); callers&blind != 0 {
+		estimate = sandbox.NextRequest{}
+	}
+	return figure.context(), count.count(callers), estimate, nil
 }
 
 // contextReading is the floor's figure as a reading of the walk

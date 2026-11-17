@@ -229,6 +229,90 @@ func onAnthropicAlone(window int) map[ClaudeRoute]int {
 var claudeModelDecorations = regexp.MustCompile(
 	`^(?:(?:[a-z]{2,6}\.)?anthropic\.)?(.+?)(?:[-@]\d{8})?(?:-v\d+(?::\d+)?)?$`)
 
+// The two rates Claude Code estimates text at, in UTF-16 characters a token
+// ([ClaudeTextRate]).
+const (
+	claudeTextRate      = 3
+	claudeOlderTextRate = 4
+)
+
+// claudeOlderTextModels is the fourteen canonical model ids Claude Code
+// estimates text for at four characters a token, every other model at three
+// (2.1.322's K$ @286842571 read by F_ @286842850; 2.1.310's eH and ry, the
+// same fourteen).
+var claudeOlderTextModels = []string{"claude-3-opus", "claude-3-sonnet", "claude-3-haiku", "claude-3-5-sonnet",
+	"claude-3-5-haiku", "claude-3-7-sonnet", "claude-opus-4-0", "claude-opus-4-1", "claude-opus-4-5",
+	"claude-opus-4-6", "claude-sonnet-4-0", "claude-sonnet-4-5", "claude-sonnet-4-6", "claude-haiku-4-5"}
+
+// claudeCanonicalModels is how Claude Code names a model id canonically before
+// it asks the rate of it (2.1.322's x$ @286839278, read by r_): lowercased, the
+// first of these whose pattern the id holds, in this order, so an id holding a
+// newer family's name is that family's whatever older name it also holds; an
+// id holding none keeps its own name, less a dated suffix, which names none of
+// the fourteen. A Bedrock region or vendor prefix, a dated or version suffix
+// and a `[1m]` opt-in each leave the family's name in the id.
+var claudeCanonicalModels = []struct {
+	pattern   *regexp.Regexp
+	canonical string
+}{
+	{regexp.MustCompile(`claude-fable-5-2`), "claude-fable-5-2"},
+	{regexp.MustCompile(`claude-fable-5-1`), "claude-fable-5-1"},
+	{regexp.MustCompile(`claude-fable-5`), "claude-fable-5"},
+	{regexp.MustCompile(`claude-mythos-5-2`), "claude-mythos-5-2"},
+	{regexp.MustCompile(`claude-mythos-5-1`), "claude-mythos-5-1"},
+	{regexp.MustCompile(`claude-mythos-5`), "claude-mythos-5"},
+	{regexp.MustCompile(`claude-opus-5-5`), "claude-opus-5-5"},
+	{regexp.MustCompile(`claude-opus-5`), "claude-opus-5"},
+	{regexp.MustCompile(`claude-opus-4-8`), "claude-opus-4-8"},
+	{regexp.MustCompile(`claude-opus-4-7`), "claude-opus-4-7"},
+	{regexp.MustCompile(`claude-opus-4-6`), "claude-opus-4-6"},
+	{regexp.MustCompile(`claude-opus-4-5`), "claude-opus-4-5"},
+	{regexp.MustCompile(`claude-opus-4-1`), "claude-opus-4-1"},
+	// `claude-opus-4` NOT FOLLOWED BY A SINGLE DIGIT'S PART: the harness's
+	// lookahead (?!-\d(?!\d)), which Go's regexp has no form of, spelled as
+	// what may follow instead: the end, a character that is no `-`, a `-`
+	// at the end or that no digit follows, or a `-` and two digits (a dated
+	// suffix).
+	{regexp.MustCompile(`claude-opus-4(?:$|[^-]|-$|-[^0-9]|-[0-9][0-9])`), "claude-opus-4-0"},
+	{regexp.MustCompile(`claude-sonnet-5-5`), "claude-sonnet-5-5"},
+	{regexp.MustCompile(`claude-sonnet-5`), "claude-sonnet-5"},
+	{regexp.MustCompile(`claude-sonnet-4-6`), "claude-sonnet-4-6"},
+	{regexp.MustCompile(`claude-sonnet-4-5`), "claude-sonnet-4-5"},
+	{regexp.MustCompile(`claude-sonnet-4(?:$|[^-]|-$|-[^0-9]|-[0-9][0-9])`), "claude-sonnet-4-0"},
+	{regexp.MustCompile(`claude-haiku-5-5`), "claude-haiku-5-5"},
+	{regexp.MustCompile(`claude-haiku-4-5`), "claude-haiku-4-5"},
+	{regexp.MustCompile(`claude-3-7-sonnet`), "claude-3-7-sonnet"},
+	{regexp.MustCompile(`claude-3-5-sonnet`), "claude-3-5-sonnet"},
+	{regexp.MustCompile(`claude-3-5-haiku`), "claude-3-5-haiku"},
+	{regexp.MustCompile(`claude-3-opus`), "claude-3-opus"},
+	{regexp.MustCompile(`claude-3-sonnet`), "claude-3-sonnet"},
+	{regexp.MustCompile(`claude-3-haiku`), "claude-3-haiku"},
+}
+
+// ClaudeTextRate is how many UTF-16 characters Claude Code estimates a token of
+// text at for model, as the model argument a launch hands it names it: four
+// for the fourteen older models it names ([claudeOlderTextModels]), matched
+// by the id it canonicalizes model to ([claudeCanonicalModels]), and three for
+// every other, the current models among them.
+//
+// THREE FOR AN ALIAS AND FOR NO MODEL, whatever model they name: an alias
+// (`sonnet`, `opus`, `default`) names a model only through the account's
+// settings and the member's platform, and the rate a reader takes is the
+// larger figure's, three ([NextRequest.At]), so a model this build cannot
+// place holds a launch to more and never less.
+func ClaudeTextRate(model string) int {
+	m := strings.ToLower(strings.TrimSpace(model))
+	for _, c := range claudeCanonicalModels {
+		if c.pattern.MatchString(m) {
+			if slices.Contains(claudeOlderTextModels, c.canonical) {
+				return claudeOlderTextRate
+			}
+			return claudeTextRate
+		}
+	}
+	return claudeTextRate
+}
+
 // ClaudeCodeWindow is the window a Claude Code run on model is pinned to: the
 // model's own, or [FallbackExecutorWindow] where this build does not know it,
 // with its least window on Anthropic's own API ([ClaudeCodeWindowOn]). An empty

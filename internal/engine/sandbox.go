@@ -1821,6 +1821,11 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal,
 		// in that box is held to it with its brief, beside the job's newest
 		// capture's measure ([runner.Resume.ContextTokens]).
 		ContextTokens: in.Run.Launch.Context.ContextTokens(),
+		// AND WHAT ITS HARNESS ESTIMATES THAT COPY'S NEXT REQUEST AT, off the
+		// same record, never carried along the copy's lineage: what that
+		// relaunch is held to in place of the measure where it holds a figure
+		// ([runner.Resume.NextRequest]).
+		NextRequest: in.Run.Launch.NextRequest(),
 		// AND WHAT CLAUDE CODE COUNTS THAT COPY AT, as the read that collected
 		// the job found it, and the restart the job's launch handed it, which
 		// the copy's own and a capture of the job are compared with: a

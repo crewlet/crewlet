@@ -398,6 +398,13 @@ type Resume struct {
 	// record holds none.
 	ContextTokens int64
 
+	// NextRequest is the harness's own estimate of the next request of that
+	// copy, as the read that collected the job found it
+	// (sandbox.LaunchRecord.NextRequest): what a relaunch that carries the
+	// round on in the job's box is held to with its brief where it holds a
+	// figure ([Continuation.NextRequest]). Zero where the record holds none.
+	NextRequest sandbox.NextRequest
+
 	// Count is what Claude Code counts the copy the box of the job State
 	// parked holds at before its next request, as the read that collected the
 	// job found it (sandbox.LaunchRecord.ResumedCount): what a relaunch that

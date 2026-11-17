@@ -268,6 +268,17 @@ type Continuation struct {
 	// holds the launch to the static floor with Brief beside it.
 	ContextTokens int64
 
+	// NextRequest is the harness's own estimate of that session's next
+	// request: the job's record's, which the read that collected the job made
+	// of the copy its box holds ([Resume.NextRequest]), where it holds a
+	// figure, else its newest capture's ([SessionBasis.NextRequest]). What the
+	// relaunch's floor is made of where it holds a figure, in place of
+	// ContextTokens, which under-counts it by the last request's reply and
+	// everything after it, and over-counts it past a compaction no request has
+	// followed; never the larger of the two, which would put that compacted
+	// figure back.
+	NextRequest sandbox.NextRequest
+
 	// BriefRead is how many calls the round's log had taken at the read
 	// every brief of the launch was built from ([Resume.BridgedRead]): the
 	// launch's opening of the job's log marks every call of the round the log
@@ -288,6 +299,18 @@ type Continuation struct {
 	// them ([Resume.Owed], [SessionBasis.Owed]): a session holds what its brief
 	// told, never what its budgets left out.
 	Told, Fresh sandbox.BriefTold
+}
+
+// inPlaceNextRequest is the estimate of the next request of the copy a job's
+// box holds that a relaunch continuing it in place is held to
+// ([Continuation.NextRequest]): record's, the read of the copy itself as its
+// job ended, where it holds a figure, and else captured's, the job's newest
+// capture's.
+func inPlaceNextRequest(record, captured sandbox.NextRequest) sandbox.NextRequest {
+	if record.Tokens > 0 {
+		return record
+	}
+	return captured
 }
 
 // SessionDecision is how a launch decided its run takes up a session, told
@@ -450,6 +473,14 @@ type SessionBasis struct {
 	// the job's own box beside what the job's record measured
 	// ([Continuation.ContextTokens]). Zero where no capture measured any.
 	ContextTokens int64
+
+	// NextRequest is the harness's own estimate of the next request of the
+	// same session, as the same capture's take read it, kept or not
+	// (sandbox.ContinuedSession.NextRequest): what that launch's floor is made
+	// of where it holds a figure, in place of ContextTokens, and in the job's
+	// own box where the job's record holds none ([Continuation.NextRequest]).
+	// Zero where no capture estimated one.
+	NextRequest sandbox.NextRequest
 
 	// Count is what Claude Code counts the kept capture's session at before
 	// its next request, as the take read its archive's main thread whole
@@ -1029,6 +1060,10 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			// collected its job found its newest request carried, the larger
 			// of the two: the floor of a launch that continues it in its box.
 			ContextTokens: max(basis.ContextTokens, r.cfg.Resume.ContextTokens),
+			// AND WHAT ITS HARNESS ESTIMATES ITS NEXT REQUEST AT, the job's
+			// record's off the copy itself where it holds one, else the
+			// newest capture's: the floor's figure where either holds one.
+			NextRequest: inPlaceNextRequest(r.cfg.Resume.NextRequest, basis.NextRequest),
 			// AND THE READ EVERY BRIEF ABOVE WAS BUILT FROM, so the job's
 			// opening marks late what the log took after it: the job before's
 			// calls that landed while this relaunch was readied, the call a

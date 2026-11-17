@@ -216,38 +216,70 @@ func (r *resumedReading) line(l threadLine) {
 	if cleared, err := l.ToolResultsCleared(); cleared || err != nil || l.Bytes.Has(markClearing) {
 		r.thread = r.thread.with(sandbox.CountCleared)
 	}
-	u, ok, err := l.Usage()
+	reply, err := countedReplyOf(l)
 	if err != nil {
 		r.thread = r.thread.with(sandbox.CountUsage)
 		r.after(charge, marks)
 		return
 	}
-	// ITS ID, which the harness takes off a record with no usage too; none for
-	// a reply the harness wrote itself.
-	id := u.ID
-	if u.Model == claudeSynthetic {
-		id = ""
-	}
-	if !ok && u.ID == "" {
+	if reply.unread {
 		r.thread = r.thread.with(sandbox.CountUsage)
 	}
-	if id == "" {
+	if reply.id == "" {
 		r.after(charge, marks)
 		return
 	}
-	if digest := sha256.Sum256([]byte(id)); digest != r.runID {
+	if digest := sha256.Sum256([]byte(reply.id)); digest != r.runID {
 		r.runID, r.run, r.runMarks = digest, 0, 0
 	} else {
 		r.run += charge
 		r.runMarks |= marks
 	}
-	if ok && u.Input+u.CacheWrite+u.CacheRead > 0 && !l.Bytes.Has(markUnmetered) {
-		r.tokens = u.Input + u.CacheWrite + u.CacheRead + u.Output
+	if reply.anchors {
+		r.tokens = reply.tokens
 		r.tail, r.tailMarks, r.compacted = r.run, r.runMarks, false
 		return
 	}
 	r.tail += charge
 	r.tailMarks |= marks
+}
+
+// countedReply is what the harness's walk back to its anchor reads of one
+// main-thread reply record ([countedReplyOf]), the ONE RULE both readings of
+// that walk take it by, the count ([resumedReading]) and the estimate of the
+// next request ([nextReading]), so the two never part on which reply anchors.
+type countedReply struct {
+	// id is its message's id, which the harness takes off a record with no
+	// usage too, and which a run of records of one reply shares; "" for none,
+	// and for a reply the harness wrote itself.
+	id string
+	// anchors is whether the reply is one the harness anchors its count on: a
+	// usage present whose input side is above zero, an id, and no
+	// provisional `isUnmetered` record; tokens is then its input, cache
+	// writes, cache reads and output.
+	anchors bool
+	tokens  int64
+	// unread is a reply that carries neither a usage nor an id, which the
+	// count reads as a usage it cannot read as the harness counts it.
+	unread bool
+}
+
+// countedReplyOf is what the walk reads of l, a main-thread reply record, by
+// the line layer's one rule for a reply's usage ([threadLine.Usage]); the
+// usage's error where it does not read.
+func countedReplyOf(l threadLine) (countedReply, error) {
+	u, ok, err := l.Usage()
+	if err != nil {
+		return countedReply{}, err
+	}
+	c := countedReply{id: u.ID, unread: !ok && u.ID == ""}
+	if u.Model == claudeSynthetic {
+		c.id = ""
+	}
+	if c.id != "" && ok && u.Input+u.CacheWrite+u.CacheRead > 0 && !l.Bytes.Has(markUnmetered) {
+		c.anchors, c.tokens = true, u.Input+u.CacheWrite+u.CacheRead+u.Output
+	}
+	return c, nil
 }
 
 // after charges a chained line that is no record of a counted reply's message

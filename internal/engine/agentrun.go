@@ -761,8 +761,14 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 		return stillShort(f)
 	}
 	var keptWhy, inPlaceWhy string
+	// THE MODEL THE NEXT REQUEST GOES TO, whose rate the harness's estimate of
+	// a continued session's next request is read at ([continuedContext]).
+	var model string
+	if member != nil {
+		model = member.ModelArgument()
+	}
 	if s := req.Session; s != nil {
-		kept := keptFloor(static, s)
+		kept := keptFloor(static, s, model)
 		keptWhy = carried(kept)
 		// THE BRIEFS TOLD BY A READING DROPPED ALONE where theirs is the floor
 		// that cannot be carried and the session's own briefs' can: the
@@ -776,7 +782,7 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 		if keptWhy != "" && s.Exact != nil {
 			without := *s
 			without.Exact = nil
-			told := keptFloor(static, &without)
+			told := keptFloor(static, &without, model)
 			if whyTold := carried(told); whyTold != "" {
 				keptWhy = whyTold
 			} else {
@@ -790,7 +796,8 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 		}
 	}
 	if c := req.Continue; c != nil && c.SessionID != "" && inBox {
-		inPlace := static.continuing(c.ContextTokens, harness.EstimateTokens(c.Brief))
+		inPlace := static.continuing(continuedContext(c.NextRequest, c.ContextTokens, model),
+			harness.EstimateTokens(c.Brief))
 		if inPlaceWhy = carried(inPlace); inPlaceWhy == "" {
 			floor = floor.atLeast(inPlace)
 		}
@@ -882,15 +889,16 @@ func (l *agentLauncher) refusedIn() []sandbox.BudgetWindow {
 // [runner.SessionContinuation.Exact], since which box the launch gets, and
 // which release that box's harness answers, are the launch's to learn), or the
 // session its conversation's last turn left, in its one; static where s names
-// neither.
-func keptFloor(static launchFloor, s *runner.SessionContinuation) launchFloor {
+// neither. The kept capture's context is its harness's estimate of its next
+// request at model's rate where the capture holds one ([continuedContext]).
+func keptFloor(static launchFloor, s *runner.SessionContinuation, model string) launchFloor {
 	switch {
 	case s.Basis.Continues():
 		brief := max(harness.EstimateTokens(s.Brief), harness.EstimateTokens(s.Replaced))
 		if x := s.Exact; x != nil {
 			brief = max(brief, harness.EstimateTokens(x.Brief), harness.EstimateTokens(x.Replaced))
 		}
-		return static.continuing(s.Basis.ContextTokens, brief)
+		return static.continuing(continuedContext(s.Basis.NextRequest, s.Basis.ContextTokens, model), brief)
 	case s.Basis.ContinuesBase():
 		// THE BASE'S OWN CONTEXT, never the job before's: that one sizes the
 		// in-place floor, and a base is continued only in a box of its own,
@@ -898,6 +906,24 @@ func keptFloor(static launchFloor, s *runner.SessionContinuation) launchFloor {
 		return static.continuing(s.Basis.Base.ContextTokens, harness.EstimateTokens(s.Replaced))
 	}
 	return static
+}
+
+// continuedContext is the context a continued session sends again before a
+// word of its brief, which its launch's floor is made of: next, its harness's
+// own estimate of its next request, at the rate of model, the model the
+// launch's member hands its harness ([sandbox.NextRequest.At]), where it holds
+// a figure; else last, its last request's input, which under-counts the next
+// request by that request's reply and everything after it, and is the figure
+// of every record that holds no estimate (an older build's, a capture settled
+// off the executor log, a thread not read whole, a session of a harness whose
+// reader estimates none). Never the larger of the two: past a compaction no
+// request has followed, the last request's input is the compacted-away
+// conversation's, and the estimate is the smaller and the right one.
+func continuedContext(next sandbox.NextRequest, last int64, model string) int64 {
+	if n := next.At(model); n > 0 {
+		return n
+	}
+	return last
 }
 
 // uncarried is why no launch on member can carry f, "" where one can: one

@@ -4729,6 +4729,21 @@ type LaunchRecord struct {
 	// land, each read as a copy that may compact.
 	ResumedCount *ResumedCount `json:"resumed_count,omitempty"`
 
+	// NextRequestTokens and NextRequestOlderTokens are the harness's own
+	// estimate of the next request of the copy the job's box holds, at each
+	// of the two rates Claude Code counts text at ([NextRequest],
+	// [LaunchRecord.NextRequest]), as the read that collected the job found it
+	// in the same read of the job's main thread as ResumedCount, written with
+	// HarnessEnd in that read's one write ([PendingStore.MarkHarnessEnd]):
+	// what a relaunch that continues the copy in the job's box is held to with
+	// its brief (internal/engine's continuedFloor), where the job's newest
+	// request's input (Context) under-counts it. NEVER CARRIED, as the count
+	// is not: the next launch's record starts with none. Zero where nothing
+	// estimated it (a job of another harness, a thread not read whole, one an
+	// older build collected, a write that did not land), each read as Context.
+	NextRequestTokens      int64 `json:"next_request_tokens,omitempty"`
+	NextRequestOlderTokens int64 `json:"next_request_older_tokens,omitempty"`
+
 	// BasisRestart is the newest place the session the launch handed its run
 	// restarts at ([ResumedCount.Restart]), as the launch knew it when it
 	// opened the job: of the copy the job before left in the box, that job's

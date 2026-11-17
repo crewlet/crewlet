@@ -14,11 +14,12 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// countingThread is a [FakeRunner.MainThread] that answers count and records
-// what it was asked, in order.
+// countingThread is a [FakeRunner.MainThread] that answers count and next and
+// records what it was asked, in order.
 type countingThread struct {
 	mu    sync.Mutex
 	count *ResumedCount
+	next  NextRequest
 	asked []MainThreadAsk
 }
 
@@ -27,10 +28,10 @@ func (c *countingThread) read(_ context.Context, _ Sandbox, ask MainThreadAsk) M
 	defer c.mu.Unlock()
 	c.asked = append(c.asked, ask)
 	if c.count == nil {
-		return MainThreadReading{}
+		return MainThreadReading{Next: c.next}
 	}
 	counted := *c.count
-	return MainThreadReading{Count: &counted}
+	return MainThreadReading{Count: &counted, Next: c.next}
 }
 
 func (c *countingThread) asks() []MainThreadAsk {
@@ -518,5 +519,88 @@ func TestACapturesCountIsHeldToWhatARowCarries(t *testing.T) {
 			t.Errorf("the take's count past its bound is stamped %+v, want the capture kept and its count unread",
 				run.Capture)
 		}
+	})
+}
+
+// THE NEXT REQUEST RIDES WHERE THE COUNT DOES. The read that collects a Claude
+// Code job asks its main thread for the harness's estimate of the copy's next
+// request beside the count, and writes it on the job's own record in the same
+// write, carries it back to the claim it collects for, which a relaunch carrying
+// the round on in the job's box reads; and the take's estimate of the archive
+// it keeps is stamped on the capture, which a relaunch continuing that capture
+// reads, beside the context its last request carried.
+//
+// Mutation: leave the estimate out of the record's write, out of the claim, or
+// off the capture's stamp, and a case goes red.
+func TestTheNextRequestRidesWhereTheCountDoes(t *testing.T) {
+	t.Parallel()
+	estimate := NextRequest{Tokens: 42_000, OlderTokens: 31_500}
+	t.Run("the job's record", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		thread := &countingThread{count: &ResumedCount{Tokens: 40_000, Restart: new("")}, next: estimate}
+		rig.runner.MainThread = thread.read
+		rig.launch("t1")
+		run := rig.get("t1")
+		rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1"})
+		if _, _, err := rig.coordinator.readBox(t.Context(), run, BoxReadCollect); err != nil {
+			t.Fatalf("readBox: %v", err)
+		}
+		if got := rig.get("t1").Launch.NextRequest(); got != estimate {
+			t.Errorf("the job's record holds the next request %+v, want %+v", got, estimate)
+		}
+		if asks := thread.asks(); len(asks) != 1 || !asks[0].Next || !asks[0].Count {
+			t.Errorf("the read asked the thread %+v, want once for the count and the next request", asks)
+		}
+	})
+	t.Run("the claim", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		rig.runner.MainThread = (&countingThread{count: &ResumedCount{Tokens: 40_000, Restart: new("")},
+			next: estimate}).read
+		rig.launch("t1")
+		rig.coordinator.countRun("swe", StatusRunning)
+		rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1"})
+		var (
+			mu      sync.Mutex
+			claimed []NextRequest
+		)
+		rig.resumer.failWith(errors.New("held for the case to read the claim"))
+		rig.resumer.during = func(_ context.Context, run PendingRun) {
+			mu.Lock()
+			defer mu.Unlock()
+			claimed = append(claimed, run.Launch.NextRequest())
+		}
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Logf("OnCompleted: %v", err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if len(claimed) != 1 || claimed[0] != estimate {
+			t.Errorf("the resume on the claim read the next requests %+v, want once %+v", claimed, estimate)
+		}
+	})
+	t.Run("the capture", func(t *testing.T) {
+		t.Parallel()
+		inBubble(t, func(t *testing.T) {
+			rig, _, _ := keepingRig(t)
+			rig.launchKept(t, "t1")
+			session := rig.runner.Session
+			session.ContextTokens, session.NextRequest = 30_000, estimate
+			rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+			if _, _, err := rig.coordinator.readBox(t.Context(), rig.get("t1"), BoxReadCollect); err != nil {
+				t.Fatalf("readBox: %v", err)
+			}
+			rig.awaitKeeps()
+			run := rig.get("t1")
+			if run.Capture == nil || run.Capture.NextRequest() != estimate || run.Capture.ContextTokens != 30_000 {
+				t.Fatalf("the capture is stamped %+v, want the next request %+v beside the context 30,000",
+					run.Capture, estimate)
+			}
+			if got := followedNextRequest(run); got != estimate {
+				t.Errorf("a relaunch following the job reads the next request %+v, want %+v", got, estimate)
+			}
+		})
 	})
 }

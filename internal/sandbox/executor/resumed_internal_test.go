@@ -539,7 +539,7 @@ func TestTheMetersFloorFigureIsWhatTheLayerReadsOfAReply(t *testing.T) {
 	t.Parallel()
 	meter := func(t *testing.T, body string) (int64, *sandbox.ResumedCount) {
 		t.Helper()
-		figure, count, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, body)), ctSession,
+		figure, count, _, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, body)), ctSession,
 			"2.1.310")
 		if err != nil {
 			t.Fatalf("meterArchive: %v", err)
@@ -619,7 +619,7 @@ func TestAPrecompactMemberMarksTheCapturesCount(t *testing.T) {
 	for _, name := range saved {
 		archive := cntArchive(t, cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1, 0, 0, 1)),
 			tarMember{h: tar.Header{Name: name, Mode: 0o600, Typeflag: tar.TypeReg}, body: "{}"})
-		_, count, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, "2.1.310")
+		_, count, _, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, "2.1.310")
 		if err != nil {
 			t.Fatalf("meterArchive: %v", err)
 		}
@@ -648,7 +648,7 @@ func TestAnArchiveTheLayerGivesNoReadingLeavesNoCount(t *testing.T) {
 	} {
 		archive := cntArchive(t, body, tarMember{h: tar.Header{Name: extra, Mode: 0o600, Typeflag: tar.TypeReg},
 			body: body})
-		_, count, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, "2.1.310")
+		_, count, _, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, "2.1.310")
 		if err != nil {
 			t.Fatalf("%s: meterArchive: %v", name, err)
 		}
@@ -670,7 +670,7 @@ func TestAWriterBelowTheCountFloorLeavesNoCount(t *testing.T) {
 	archive := cntArchive(t, cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1, 0, 0, 1),
 		cntBoundary("b1"), cntUser("b1", "u4", `"the summary"`), cntAnchor("u4", "u5", "m2", 1, 0, 0, 1)))
 	for _, release := range []string{"2.1.300", ""} {
-		_, count, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, release)
+		_, count, _, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, release)
 		if err != nil {
 			t.Fatalf("meterArchive: %v", err)
 		}
@@ -1038,7 +1038,7 @@ func TestACountMarkedForWhatItsBytesCannotBoundNamesItsRestart(t *testing.T) {
 		`"role":"assistant","context_management":{"applied_edits":[{"type":"clear_tool_uses_20250919",`+
 			`"cleared_tool_uses":3,"cleared_input_tokens":9000}]},`, 1)
 	saved, _ := claudePrecompact(ctSession)
-	_, precompacted, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, cntThread(restarted...),
+	_, precompacted, _, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, cntThread(restarted...),
 		tarMember{h: tar.Header{Name: saved[0], Mode: 0o600, Typeflag: tar.TypeReg}, body: "{}"})), ctSession,
 		"2.1.322")
 	if err != nil {
@@ -1097,7 +1097,7 @@ func TestAMarkedCaptureStillSaysWhetherAJobRestartedItsSession(t *testing.T) {
 	// collected what the read that collects a job counts its box's copy at.
 	captured := func(lines ...string) *sandbox.ResumedCount {
 		t.Helper()
-		_, count, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, cntThread(lines...))), ctSession,
+		_, count, _, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, cntThread(lines...))), ctSession,
 			"2.1.322")
 		if err != nil || count == nil || count.Mark != sandbox.CountMedia {
 			t.Fatalf("the capture counts %+v (%v), want the mark media", count, err)
@@ -1197,7 +1197,7 @@ func BenchmarkTheMeterAtItsBounds(b *testing.B) {
 	b.Logf("an archive of %d bytes, %d of plaintext", len(archive), len(body))
 	b.Run("meter", func(b *testing.B) {
 		for b.Loop() {
-			if _, count, err := meterArchive(b.Context(), bytes.NewReader(archive), ctSession,
+			if _, count, _, err := meterArchive(b.Context(), bytes.NewReader(archive), ctSession,
 				"2.1.322"); err != nil || count == nil {
 				b.Fatalf("meterArchive: %v", err)
 			}

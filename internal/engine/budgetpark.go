@@ -451,8 +451,8 @@ func starvedReason(r refusal, floor launchFloor) string {
 		floor.tokens())
 	switch {
 	case floor.context > 0:
-		need = fmt.Sprintf("the %d an executor launch that continues its session needs (its last "+
-			"request carried %d tokens and its brief about %d; turn_engine.executor_min_budget_tokens "+
+		need = fmt.Sprintf("the %d an executor launch that continues its session needs (its session "+
+			"sends %d tokens before its brief, which is about %d; turn_engine.executor_min_budget_tokens "+
 			"is %d)", floor.tokens(), floor.context, floor.brief, floor.static)
 	case floor.held():
 		need = fmt.Sprintf("the %d an executor launch needs (its brief about %d beside "+

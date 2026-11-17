@@ -756,6 +756,16 @@ type Result struct {
 	// a host of an older build, which reads as a copy that may compact.
 	ResumedCount *ResumedCount
 
+	// NextRequest is the harness's own estimate of the next request of the
+	// copy the job's box holds, as the read that collected this result found
+	// it in the same read of the job's main thread as ResumedCount: recorded
+	// on the job's record with HarnessEnd, in that read's one write
+	// ([LaunchRecord.NextRequestTokens]), and carried back for the claim it
+	// collects for. Set by the coordinator, never by a runner; zero where the
+	// read made none, and from a host of an older build, which leaves the
+	// record what it held.
+	NextRequest NextRequest
+
 	// Turns is how many model turns the run's harness says its own loop took —
 	// each one a provider call the engine neither made nor saw — and zero
 	// where the harness reported none. It is what the launch's own record counts

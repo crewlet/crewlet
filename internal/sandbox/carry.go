@@ -326,6 +326,13 @@ type TakenSession struct {
 	// taker that measures nothing.
 	Context func() int64
 
+	// Next is the harness's own estimate of the session's next request
+	// ([NextRequest]), off the same read of the archive's main thread as
+	// Count, once Body has been read to its end: zero where the thread was
+	// not read whole ([SessionCapture.NextRequestTokens]). Nil from a taker
+	// that estimates nothing, as one of another harness is.
+	Next func() NextRequest
+
 	// Count is what Claude Code counts the session at before its next
 	// request, as the archive's own main thread bounds it read whole
 	// ([ResumedCount]), once Body has been read to its end: a bound, or a mark

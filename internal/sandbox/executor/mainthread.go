@@ -16,8 +16,9 @@ import (
 // [Runner.ReadMainThread]). Each is ONE WALK of the thread's whole lines
 // through the line layer ([walkThread]), into which every reading the caller
 // asks is composed ([threadReading]): the count of what Claude Code counts the
-// session at ([resumedReading]), and at the take the floor's figure, the last
-// request's input ([contextReading]). A reading never reads the thread itself,
+// session at ([resumedReading]), its estimate of the session's next request
+// ([nextReading]), and at the take the last request's input
+// ([contextReading]). A reading never reads the thread itself,
 // so a thread is read once whatever readings ask of it, and a reading a later
 // change adds joins the same walk rather than read the thread again.
 //
@@ -28,13 +29,17 @@ import (
 // not read in is [sandbox.CountRelease]; a saved compaction under either name
 // Claude Code reads one by ([claudePrecompact]), found by a look at each name's
 // size and never a read of its body, is [sandbox.CountPrecompact]; and only
-// then is the thread opened, streamed (through envd on e2b) and walked.
+// then is the thread opened, streamed (through envd on e2b) and walked. A
+// count marked before the walk leaves the estimate of the next request none,
+// since the thread was not read: the floor then reads the copy's last
+// request's input, as it did before the estimate existed.
 
 // threadReading is one reader's account of a Claude Code thread, composed into
 // the ONE walk of its whole lines ([walkThread]): handed every whole line in
 // file order, each line the layer refuses, and then how the walk ended. A
 // reading never reads the thread itself, so a thread is read once whatever
-// readings ask of it: the count ([resumedReading]) and the meter's floor figure
+// readings ask of it: the count ([resumedReading]), the estimate of the next
+// request ([nextReading]) and the meter's last request's input
 // ([contextReading]) now, and any later reading of the thread when it joins.
 type threadReading interface {
 	// line is the thread's next whole line that is one record, the
@@ -115,10 +120,13 @@ var _ mainThreadHarness = ClaudeCode{}
 func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
-	if !ask.Count {
+	if !ask.Count && !ask.Next {
 		return sandbox.MainThreadReading{}
 	}
 	marked := func(mark sandbox.CountMark) sandbox.MainThreadReading {
+		if !ask.Count {
+			return sandbox.MainThreadReading{}
+		}
 		return sandbox.MainThreadReading{Count: &sandbox.ResumedCount{Mark: mark}}
 	}
 	thread, ok := claudeMainThread(ask.Session)
@@ -145,7 +153,17 @@ func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths
 		return marked(sandbox.CountUnread)
 	}
 	defer func() { _ = body.Close() }()
-	var count resumedReading
-	walkThread(ctx, body, threadPlainMax, &count)
-	return sandbox.MainThreadReading{Count: count.count(0)}
+	var (
+		count resumedReading
+		next  nextReading
+	)
+	walkThread(ctx, body, threadPlainMax, &count, &next)
+	var reading sandbox.MainThreadReading
+	if ask.Count {
+		reading.Count = count.count(0)
+	}
+	if ask.Next {
+		reading.Next = next.next()
+	}
+	return reading
 }

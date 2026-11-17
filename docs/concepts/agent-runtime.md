@@ -521,8 +521,8 @@ stateDiagram-v2
   relaunch that [continues the turn's
   session](code-sandbox.md#what-a-continued-launch-costs) the session's context
   with its brief where that is the larger, its reason then reading `… below
-  the 62000 an executor launch that continues its session needs (its last
-  request carried 60000 tokens and its brief about 2000;
+  the 62000 an executor launch that continues its session needs (its session
+  sends 60000 tokens before its brief, which is about 2000;
   turn_engine.executor_min_budget_tokens is 25000); resets …`.
 - **Released.** At the reset, or at once when a published company changes the
   ceilings of either scope or the company's clock (which moves every window's
