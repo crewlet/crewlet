@@ -8875,6 +8875,8 @@ export interface CodeChangeCard {
 export interface CodeChangesText {
   /** The answering node's index of changes' words was behind its rows: a match may be missing. */
   building?: boolean;
+  /** While the answering node's index is first built, newest first: changes opened at or before this instant may be missing. */
+  indexed_back_to?: string;
   /** More changes may hold the words than one search reads: the page is drawn from the newest. */
   truncated?: boolean;
 }

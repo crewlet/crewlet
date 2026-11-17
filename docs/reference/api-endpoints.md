@@ -10278,9 +10278,11 @@ change moved since the index last caught up, so pages are full; newest is the
 order the node's index took the changes in (newest opened where it keeps up,
 most recently moved among what its first build found). Every page it narrows
 carries `changes_text`, `{}` where the search was whole: `truncated`
-says more changes may hold the words than one search reads, and `building`
-that the node's index was behind its rows, so a change holding them may be
-missing, never that none does. A page without `changes_text` was answered by a
+says more changes may hold the words than one search reads; `indexed_back_to`,
+an instant, that the node's index is still being built and has reached back to
+the changes opened then, so one opened at or before it may be missing; and
+`building` that the node's index was behind its rows, so a change holding them
+may be missing. Neither says that none does. A page without `changes_text` was answered by a
 node that does not read `?text=`, and is the listing unnarrowed. Beside a
 reviewer, a need, a work item or a readiness bucket, that walk leads and the
 words are judged on each change it read. Across repositories a deleted

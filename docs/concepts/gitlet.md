@@ -2147,11 +2147,13 @@ words are judged on each change it reads, a page still being the rows it read.
 
 Every page a listing's words narrowed carries `changes_text`, empty where the
 search was whole: `truncated` says more changes may hold the words than one
-search reads (add a word, or name a repository, an owner or a state), and
-`building` that this node's index is behind the rows it holds, is being
-rebuilt, or is holding back behind a record this node keeps for a newer build,
-so a change holding the words may be missing. Never read `building` as "no
-change holds them". A page without `changes_text` was answered by a node that
+search reads (add a word, or name a repository, an owner or a state);
+`indexed_back_to` that this node's index is still being built and has reached
+back to the changes opened at that instant, so one opened at or before it may
+be missing; and `building` that this node's index is behind the rows it holds,
+is being rebuilt, or is holding back behind a record this node keeps for a
+newer build, so a change holding the words may be missing. Never read either
+as "no change holds them". A page without `changes_text` was answered by a node that
 does not read `text=`, and is the listing unnarrowed. Each data node builds its
 index from the rows it holds, after an upgrade and when it joins, and says
 `building` until its walk catches up. The index costs every data node about

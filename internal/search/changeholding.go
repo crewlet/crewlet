@@ -16,11 +16,14 @@ type ChangeQuery struct {
 	Limit                int      // the most ids answered
 }
 
-// ChangeHeld is the index's answer, read in one snapshot of this node's own file.
+// ChangeHeld is the index's answer, read in one snapshot of this node's own file. Its zero BackPos and
+// BackFloor are an index built whole.
 type ChangeHeld struct {
 	IDs        []string // newest first in the order the index took them in, at most Limit
 	Truncated  bool     // the read stopped at the scan of what it drove on, or more than Limit matched
-	Through    int64    // the packed position the walk has indexed every change through
+	Through    int64    // the forward walk's watermark: a change moved past BackPos and no further is indexed
+	BackPos    int64    // where the first build began: a change at or below it is indexed where its id is at or above BackFloor
+	BackFloor  string   // the least change id the first build has reached back to; "" once it reached the oldest
 	Seen       int64    // the code log's settled position in the newest estate snapshot an index write read
 	BuiltFrom  string   // the estate instance it was built from
 	Rebuilding bool     // a rebuild asked for or under way

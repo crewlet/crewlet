@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/search"
@@ -34,6 +35,9 @@ type ChangesText struct {
 	// Building: this node's index of changes' words is behind the rows the read holds, is being rebuilt,
 	// or was built from another copy, so a change holding the words may be missing.
 	Building bool `json:"building,omitempty"`
+	// IndexedBackTo: this node's first build of the index has reached back to the changes minted at this
+	// instant and is still indexing older ones, so one minted at or before it may be missing.
+	IndexedBackTo time.Time `json:"indexed_back_to,omitzero"`
 	// Truncated: a search reads the newest MaxChangeTextScan of the narrowest of its scope and words and
 	// judges the newest MaxChangeTextCandidates matches, and more may hold the words.
 	Truncated bool `json:"truncated,omitempty"`
@@ -152,7 +156,7 @@ func (r *Reader) changesByWords(ctx context.Context, tx *sql.Tx, q ReadQuery, ch
 	}
 	var trusted, judged []changeRow
 	for _, row := range kept {
-		if covered && candidates[row.id] && row.position <= through {
+		if covered && candidates[row.id] && heldAsItIs(held, row) {
 			trusted = append(trusted, row)
 		} else {
 			judged = append(judged, row)
@@ -179,7 +183,13 @@ func (r *Reader) changesByWords(ctx context.Context, tx *sql.Tx, q ReadQuery, ch
 			return err
 		}
 	}
-	out.ChangesText = &ChangesText{Building: !covered || overflow, Truncated: ours && held.Truncated}
+	// HOW FAR BACK: while the first build walks back, the instant its floor's id was minted.
+	backTo, dated := time.Time{}, true
+	if ours && held.BackFloor != "" {
+		backTo, dated = statelog.OpMintedAt(held.BackFloor)
+	}
+	out.ChangesText = &ChangesText{Building: !covered || overflow || !dated, IndexedBackTo: backTo,
+		Truncated: ours && held.Truncated}
 	pg := page{maxRows: limit, maxB: r.pageBytes}
 	for i, row := range listed {
 		s := repos[row.repoID].summary(row)
@@ -194,6 +204,16 @@ func (r *Reader) changesByWords(ctx context.Context, tx *sql.Tx, q ReadQuery, ch
 		}
 	}
 	return nil
+}
+
+// heldAsItIs reports a row one of the index's walks has reached at its position: at or below where
+// the first build began with an id it has reached back to, or past that and no further than the
+// watermark. Their zero, an index built whole, leaves the watermark alone.
+func heldAsItIs(held search.ChangeHeld, row changeRow) bool {
+	if row.position <= held.BackPos {
+		return held.BackFloor == "" || row.id >= held.BackFloor
+	}
+	return row.position <= held.Through
 }
 
 // scopedWords keeps the rows of q's scope, its asker's grant and its window, each with what its

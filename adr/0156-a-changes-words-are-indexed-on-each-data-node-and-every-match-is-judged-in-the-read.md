@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/search`
-- **Enforced-by:** `internal/gitlet.TestAListingNarrowedByWordsIsExactAsOfItsSnapshot`, `internal/gitlet.TestAWordsListingNeverAnswersAChangeItsAskerMayNotRead`, `internal/search.TestTheChangeIndexHoldsEveryChangesWords`, `internal/search.TestAChangeIndexNeverWalksPastARetainedRecord`, `internal/search.TestEveryChangeIndexWriteRecordsWhatItWasDecidedFrom`, `internal/search.TestEveryTermOfTheLargestChangeIsKept`, `internal/engine.TestAReplacedEstateRebuildsTheChangeIndex`
+- **Enforced-by:** `internal/gitlet.TestAListingNarrowedByWordsIsExactAsOfItsSnapshot`, `internal/gitlet.TestAWordsListingNeverAnswersAChangeItsAskerMayNotRead`, `internal/search.TestTheChangeIndexHoldsEveryChangesWords`, `internal/search.TestAChangeIndexNeverWalksPastARetainedRecord`, `internal/search.TestEveryChangeIndexWriteRecordsWhatItWasDecidedFrom`, `internal/search.TestEveryTermOfTheLargestChangeIsKept`, `internal/engine.TestAReplacedEstateRebuildsTheChangeIndex`, and for the amendment below `internal/gitlet.TestAWordsListingSaysHowFarBackItsIndexReaches`
 - **Measured:** the index takes about 2.0 KB a change of short text, 8.1 KB a change of 150 distinct words and 46 KB at a 32 KiB description, with its documents numbered a year in (`BenchmarkTheChangeIndexBuild`), so about 120 GB a year on every data node at 40 000 changes a day of the middle kind, where a term list kept beside each document took 13.3 KB a change and 195 GB a year; its first build walks 0.7 ms a change of short text and 17 ms at a 32 KiB description, and 5.8 ms a change of 150 distinct words, 110 of them rare, at 10 000 indexed and 12.3 ms at 30 000 (about 15.5 ms a change between the two), a cost that grows with the index, so a year of such changes takes at least two and a half days; a search at its scan bound reads in 7 ms on one word and 32 ms on eight words and three scopes (`BenchmarkAChangeSearchAtItsScanBound`); a page at its candidate bound reads in about 102 ms where the index is trusted and 121 ms where every match's description is read (`BenchmarkAWordsPageAtItsCandidateBound`); a push record moving 64 changes' heads applies in 43 to 48 ms with `code_changes_position_idx` against 43 to 51 ms without it (`BenchmarkApplyAPushRecord`'s `group+changes`).
 - **Cost-when-tried:** the chat index once remembered its readiness as a flag set the first time its walk caught up, and answered every later search as caught up through any backlog; and its walk once kept no record of the copy it was built from, so a replaced copy's documents stayed searchable (node 0057). Both are designed out here from the start.
 - **Tag-status:** unreleased
@@ -74,3 +74,16 @@ on the lane every domain waits behind, to agree on what any node rebuilds from r
 A relevance order, prefixes and phrases (a later decision, which would have to pay for the
 statistics above); a seat tool that takes words, which would narrow the candidates by its grant
 first; the words of a change's conversation, which are not indexed.
+
+## Amendment: a search says how far back a first build has reached
+
+A first build that walks the changes newest first leaves the oldest unreached
+for hours at a large company's scale, so the index answers, beside its
+watermark, where that build began (`BackPos`) and the least change id it has
+reached back to (`BackFloor`, empty once it reached the oldest). The read
+trusts a match only where a walk has reached its row: moved past where the
+build began and no further than the watermark, or at or below it with an id at
+or above the floor. Every page the index leads carries `indexed_back_to`, the
+instant that floor's id was minted at, while the build walks back; a change
+opened at or before it may be missing. It stands beside `building`, which keeps
+its meaning. Their zero is an index built whole.
