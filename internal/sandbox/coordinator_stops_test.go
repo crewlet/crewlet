@@ -371,6 +371,27 @@ var coordinatorEntries = map[string][]entryDrive{
 		name: "the busy half of it",
 		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.SeatHeldBySandbox("swe") },
 	}},
+	"ResumesBlocked": {
+		// IT ENDS NOTHING: it reads this node's memory of the runs whose
+		// last resume failed on a condition only an operator clears, asks
+		// the lease seam whether this node still holds each one's seat
+		// under the lease its attempt was taken with, and forgets, in that
+		// memory alone, one it no longer does. It asks the store nothing
+		// and writes nothing to it, so whatever becomes of the run is the
+		// next completion's or recovery's to say. Driven with the run
+		// remembered both ways, so the count and the letting go are each
+		// reached.
+		{
+			name:    "the alarm's reading of a run waiting for the operator, its seat held",
+			arrange: blockedUnder(rigLease),
+			call:    readsBlocked,
+		},
+		{
+			name:    "the alarm's reading of a run remembered under a lease this node no longer holds",
+			arrange: blockedUnder(Fence{Owner: "node-a:1", Epoch: rigLease.Epoch - 1}),
+			call:    readsBlocked,
+		},
+	},
 	"LaunchStopped": {{
 		// IT ENDS NOTHING: it hands the frame launching a run the stop
 		// decided on it — already ended by the stop's own ending — and
@@ -678,6 +699,29 @@ func judgedUnresumable(_ *testing.T, rig *coordRig) {
 	rig.coordinator.unresumable = func(context.Context, PendingRun) (*Unresumable, error) {
 		return &Unresumable{Reason: types.ExecutorFailureItemFinished, Detail: "the item was finished"}, nil
 	}
+}
+
+// blockedUnder is this node remembering that t1's last resume failed on a
+// condition only an operator clears, under fence, its hand-back landed: the
+// state [Coordinator.ResumesBlocked] reads. Written into the memory itself,
+// because what puts it there is a completion's resume failing, which is
+// OnCompleted's drive and not this one's.
+func blockedUnder(fence Fence) func(*testing.T, *coordRig) {
+	return func(_ *testing.T, rig *coordRig) {
+		rig.coordinator.mu.Lock()
+		defer rig.coordinator.mu.Unlock()
+		if rig.coordinator.blocked == nil {
+			rig.coordinator.blocked = map[string]blockedResume{}
+		}
+		rig.coordinator.blocked["t1"] = blockedResume{agent: "swe", kind: "disk_full", since: rig.now,
+			fence: fence, counted: true}
+	}
+}
+
+// readsBlocked is the reading the engine takes into the executor_resume_blocked
+// alarm on every evaluation.
+func readsBlocked(t *testing.T, rig *coordRig) {
+	t.Logf("ResumesBlocked: %+v", rig.coordinator.ResumesBlocked())
 }
 
 // recovers takes the seat under a fresh lease, as a node claiming it does.
