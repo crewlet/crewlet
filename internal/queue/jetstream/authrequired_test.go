@@ -199,7 +199,7 @@ func TestAnExternalServerThatAuthenticatesNobodyIsRefused(t *testing.T) {
 // dial, the literal IP's too, is handed less than its share.
 func TestOneAttemptAtAMemberTakesOneHandshakeBudgetHoweverManyAddressesItsNameHas(t *testing.T) {
 	t.Parallel()
-	opts, recorded, err := dialOptions(Config{})
+	opts, recorded, err := dialOptions(Config{}, nil)
 	if err != nil {
 		t.Fatalf("dialOptions: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestOneAttemptAtAMemberTakesOneHandshakeBudgetHoweverManyAddressesItsNameHa
 	t.Run("a name resolving to three silent addresses", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
-			d := newInfoDialer(recorded.budget)
+			d := newInfoDialer(recorded.budget, nil)
 			var looked, dials armedWaits
 			d.lookup = func(ctx context.Context, host string) ([]string, error) {
 				if !looked.note(ctx, host) {
@@ -270,7 +270,7 @@ func TestOneAttemptAtAMemberTakesOneHandshakeBudgetHoweverManyAddressesItsNameHa
 	t.Run("a literal IP", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
-			d := newInfoDialer(recorded.budget)
+			d := newInfoDialer(recorded.budget, nil)
 			d.lookup = func(context.Context, string) ([]string, error) {
 				return nil, errors.New("a literal IP was looked up")
 			}
@@ -302,7 +302,7 @@ func TestOneAttemptAtAMemberTakesOneHandshakeBudgetHoweverManyAddressesItsNameHa
 // a probability of one less 2⁻⁶³.
 func TestTheAddressesBehindOneNameAreDialledInRandomOrder(t *testing.T) {
 	t.Parallel()
-	d := newInfoDialer(externalHandshake)
+	d := newInfoDialer(externalHandshake, nil)
 	d.lookup = func(context.Context, string) ([]string, error) {
 		return []string{"192.0.2.1", "192.0.2.2"}, nil
 	}
@@ -348,7 +348,7 @@ func TestTheINFOJudgedIsTheOneOfTheServerTheClientIsOn(t *testing.T) {
 	// newest that has read nothing yet.
 	opened := func(t *testing.T) *infoDialer {
 		t.Helper()
-		d := newInfoDialer(externalHandshake)
+		d := newInfoDialer(externalHandshake, nil)
 		var servers []net.Conn
 		d.connect = func(context.Context, string, string) (net.Conn, error) {
 			client, server := net.Pipe()
@@ -423,7 +423,7 @@ func TestTheINFOJudgedIsTheOneOfTheServerTheClientIsOn(t *testing.T) {
 	t.Run("a live client on no server", func(t *testing.T) {
 		t.Parallel()
 		srv := externaltest.Start(t, queue.MaxPayloadBytes)
-		opts, recorded, err := dialOptions(Config{Token: externaltest.Token})
+		opts, recorded, err := dialOptions(Config{Token: externaltest.Token}, nil)
 		if err != nil {
 			t.Fatalf("dialOptions: %v", err)
 		}

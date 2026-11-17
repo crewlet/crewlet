@@ -447,13 +447,20 @@ func Open(ctx context.Context, cfg Config, opts ...queue.Option) (*Queue, error)
 func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns bool,
 	contract queue.Options,
 ) (*Queue, error) {
+	// AN EXTERNAL BROKER'S LINK IS METERED BY THE QUEUE, every connection
+	// it dials counting into one meter, which the queue stops with itself;
+	// a leaf's is its tunnel's, and a member crosses none ([LinkMeter]).
+	var dialled *LinkMeter
+	if embedded == nil {
+		dialled = newLinkMeter()
+	}
 	q := &Queue{
 		log:         logging.Get("queue.jetstream"),
 		cfg:         cfg,
 		contract:    contract,
 		embedded:    embedded,
 		ownsServer:  owns,
-		link:        linkOf(embedded),
+		link:        linkOf(embedded, dialled),
 		attachments: map[attachKey][]*attachment{},
 		holds:       map[attachKey]map[string]struct{}{},
 		streams:     map[string]struct{}{},
@@ -475,9 +482,10 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 	if embedded != nil {
 		q.nc, err = embedded.connect(own)
 	} else {
-		q.nc, err = dial(cfg, own)
+		q.nc, err = dial(cfg, own, dialled)
 	}
 	if err != nil {
+		dialled.close()
 		return nil, fmt.Errorf("connect nats: %w", err)
 	}
 	if q.js, err = cfg.API().Client(q.nc); err != nil {
@@ -518,8 +526,23 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 func (q *Queue) abandonOpen(err error) error {
 	err = q.lost.during(err)
 	q.nc.Close()
+	q.closeMeter()
 	return err
 }
+
+// closeMeter stops the meter of the link this queue dialled itself — an
+// external broker's — and leaves a leaf's, which is its tunnel's to stop.
+func (q *Queue) closeMeter() {
+	if q.embedded == nil {
+		q.link.meter.close()
+	}
+}
+
+// LinkMeter is what this queue's link to the fleet's broker carries each way,
+// read at the link's sockets ([LinkMeter]): a leaf's link through its tunnel,
+// and every connection this queue dials to an external broker. Nil on a
+// member, whose connection crosses no link.
+func (q *Queue) LinkMeter() *LinkMeter { return q.link.meter }
 
 // ensureStreams provisions the engine's own streams, under ONE ceiling for
 // the whole sequence.
@@ -1217,7 +1240,7 @@ func (q *Queue) dialSecond(at watched) (*nats.Conn, error) {
 		return nil, fmt.Errorf("jetstream: this queue has no embedded server " +
 			"and no URL, so a second connection cannot be opened")
 	}
-	return dial(q.cfg, at)
+	return dial(q.cfg, at, q.link.meter)
 }
 
 // Lost is closed once NATS has closed, FOR GOOD, this queue's own connection or
@@ -2059,6 +2082,7 @@ func (q *Queue) Stop(ctx context.Context) error {
 	if q.nc != nil {
 		q.nc.Close()
 	}
+	q.closeMeter()
 	q.shutdownServer()
 	return nil
 }

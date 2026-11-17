@@ -88,9 +88,9 @@ naming the variable. ci.yml's `git recipe (macOS)` job runs `make
 test-gitproc` — gitproc's own suite on the three pins — on macOS for every pull
 request, so the recipe's macOS branch is built where a Mac contributor builds
 it; on Linux `make test` runs the same packages. Its `harness capture (macOS)`
-job runs `make test-capture` there the same way: internal/flock's pin cases and
-the cases of a harness's output capture, which rest on darwin calls no Linux job
-makes.
+job runs `make test-capture` there the same way: internal/flock's pin cases,
+the cases of a harness's output capture and internal/sockcount's suite, which
+rest on darwin calls no Linux job makes.
 
 **What fetching Chromium takes** — `curl`, `unzip` and the same SHA-256 tool,
 `zip` for `make chromium-test` (the recipe's own suite, in `make check`), and on
