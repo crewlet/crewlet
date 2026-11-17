@@ -824,17 +824,25 @@ func TestAQueueIsPacedByHowItsOwnConnectionWasMade(t *testing.T) {
 	t.Parallel()
 	srv := externaltest.Start(t, queue.MaxPayloadBytes)
 	for _, c := range []struct {
-		name string
-		q    *Queue
-		want link
+		name    string
+		q       *Queue
+		want    link
+		metered bool // the connection's link carries its meter (a member's crosses none)
 	}{
-		{"a member's own client", openForTest(t, Config{}), link{}},
-		{"a leaf's client", openLeafForTest(t, Config{}), link{pace: objstore.MiBPace, leaf: true}},
+		{"a member's own client", openForTest(t, Config{}), link{}, false},
+		{"a leaf's client", openLeafForTest(t, Config{}), link{pace: objstore.MiBPace, leaf: true}, true},
 		{"a client of an external cluster", newQueueWith(t, Config{URL: srv.URL(),
-			Token: externaltest.Token}), link{pace: objstore.MiBPace}},
+			Token: externaltest.Token}), link{pace: objstore.MiBPace}, true},
 	} {
-		if c.q.link != c.want {
-			t.Errorf("%s crosses %+v, want %+v", c.name, c.q.link, c.want)
+		got := c.q.link
+		if metered := got.meter != nil; metered != c.metered {
+			t.Errorf("%s's link is metered %v, want %v", c.name, metered, c.metered)
+		}
+		// The meter is the connection's own, so the reading is compared
+		// without it.
+		got.meter = nil
+		if got != c.want {
+			t.Errorf("%s crosses %+v, want %+v", c.name, got, c.want)
 		}
 	}
 }
