@@ -482,18 +482,21 @@ the dependency surface before choosing a host for it:
   ([across a link, silence is the link's](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
   It windows its pulls to what the link carries in four seconds at the
   floor, as an upload is windowed to one 128 KiB message, so a request sent
-  behind either on the link — a lease renewal among them — is still answered
-  inside its five-second term at any rate the engine allows. Two things still
-  hold a request past its term
-  ([#1035](https://github.com/crewlet/crewlet/issues/1035)). Each direction
-  has a window of its own, so with an upload and a hydration both in flight a
-  request whose bytes wait behind the one and whose reply waits behind the
-  other can take 7.75 seconds at the floor beyond its own round trip. And
-  nothing windows a download, which holds four 128 KiB messages in hand,
-  fifteen seconds at the floor, nor an event delivered to one of the node's
-  seats, which crosses whole, so a request whose reply crosses behind them
-  waits for all of it; a hydration's next row waiting there is waited for
-  while the link moves, as above, but a lease renewal is not. Meanwhile the
+  behind either alone on the link — a lease renewal among them — is still
+  answered inside its five-second term at any rate the engine allows. Until
+  [#1035](https://github.com/crewlet/crewlet/issues/1035), more still holds
+  a request past its term. Each direction has a window of its own, so with
+  an upload and a hydration both in flight a request whose bytes wait behind
+  the one and whose reply waits behind the other can take 7.75 seconds at the
+  floor beyond its own round trip. Nothing windows the object store's other
+  reads toward the node — a download, which holds four 128 KiB messages in
+  hand, fifteen seconds at the floor, a listing's walk, or a read's check of
+  what the stream's leader holds, answered with a whole message — nor an
+  event delivered to one of the node's seats, which crosses whole, so a
+  request whose reply crosses behind them waits for all of it, as one sent
+  behind what the node sends whole does (next item). A hydration's next row
+  waiting there is waited for while the link moves, as above, but a lease
+  renewal is not. Meanwhile the
   node's placement pass waits for it (see
   [a seat's memory follows it](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
   A restart costs that

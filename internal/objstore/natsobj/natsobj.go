@@ -156,9 +156,7 @@
 // first in first out. Every one of them is held to its term
 // ([jsapi.RequestTerm]) and is unknown past it, so the window crosses the
 // floor within what that term leaves after the request's own round trip,
-// [jsapi.WindowCrossing]: four seconds, at every lease TTL, and inside every
-// heartbeat config allows (config.MinLeaseTTL's, five seconds), so a renewal
-// behind a full window still lands within its heartbeat too. Sized by the
+// [jsapi.WindowCrossing]: four seconds, at every lease TTL. Sized by the
 // node's lease heartbeat instead, as it was, the shipped lease's window of
 // four messages held such a request fifteen seconds at the floor, past its
 // term. AT LEAST ONE, because a put holds a message out to move at all; one
@@ -167,7 +165,7 @@
 // NOT SIZED BY A MEASURED RATE, which would recover a fast link's throughput:
 // a link that drops to the floor mid-transfer (a satellite's rain fade) then
 // holds a request behind a window sized for the faster rate, sixteen messages
-// a minute at the floor, past every term and every lease. The floor is a
+// a minute at the floor, past every term and the shipped lease. The floor is a
 // promise about the slowest link the engine allows, and the window keeps it
 // there. It is also what keeps a stall honest across the link: no message
 // waits behind more than the window, so at the floor every one's bytes have
@@ -180,13 +178,20 @@
 // longer round trip the share lost is larger, since a window of one moves
 // 128 KiB a round trip: 1.31 MB/s across 100 ms, where four moved 5.24. That
 // is the price, on a link that did not need the bound, of a connection whose
-// small requests are answered inside their term on one that does.
+// small requests are answered inside their term on one that does, and every
+// node across a link pays it: one without `data` through its leaf, and every
+// node on an external broker, data nodes included.
 //
 // The window is the puts' alone, for what crosses the link outbound. Until
 // crewlet/crewlet#1035 puts one window across the link, both directions and
-// the downloads inside it, a memory replay's pull window is another, for what
-// crosses inbound (internal/learning/memsync), and a download's hand
-// ([readAhead]) crosses inbound unwindowed.
+// the downloads and walks inside it, a memory replay's pull window is
+// another, for what crosses inbound (internal/learning/memsync), so a request
+// behind both waits past its term (jsapi's package doc); and this package's
+// own reads cross inbound unwindowed: a download's hand ([readAhead], four
+// whole messages), a walk's ([walkAhead], five hundred names' metadata or
+// messages' headers), and a read's question to the stream's leader of what
+// follows ([reading.caughtUp]), answered with a whole message. A request whose
+// reply crosses behind any of them waits for all of it.
 //
 // # What it costs, measured
 //
