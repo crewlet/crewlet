@@ -139,9 +139,9 @@ type sessionHolds struct {
 	// restartedInJob says the job's main thread restarted after its brief, or
 	// whether it did cannot be read (sandbox.RestartedSince): a resume hands
 	// its model nothing before the restart but what it left, so the session
-	// may lack the job's brief and the calls before it. A Claude Code
-	// session's alone, whose thread a count reads; false for another
-	// harness's, which no count describes.
+	// may lack the job's brief and the calls before it. A session of a
+	// harness this build judges alone ([firstRequest.judges]), whose count
+	// names its restarts; false for another harness's.
 	restartedInJob bool
 	// compacts says its harness may compact it before its first request
 	// ([firstRequest.compacts]).
@@ -149,10 +149,11 @@ type sessionHolds struct {
 	// restarted says the session's thread restarted somewhere, before its job
 	// or in it, or whether it did cannot be read ([restartedAnywhere]): what
 	// it holds from before its newest restart is that restart's summary, or
-	// nothing. A Claude Code session's alone, whose thread a count reads;
-	// false for another harness's, which no count describes yet. It decides
-	// only how the turn's closed rounds are told ([sessionHolds.closedSummarized]),
-	// never the round's own calls: a restart in an earlier job of the round
+	// nothing. A session of a harness this build judges alone
+	// ([firstRequest.judges]), whose count names its restarts; false for
+	// another harness's. It decides only how the turn's closed rounds are
+	// told ([sessionHolds.closedSummarized]), never the round's own calls: a
+	// restart in an earlier job of the round
 	// was followed by a telling of the round from its start, and one in a
 	// closed round is before every call of this one.
 	restarted bool
@@ -318,9 +319,9 @@ func (r *Runner) keptTellings(ctx context.Context, basis SessionBasis, round rou
 	branch string) keptTellings {
 
 	t := keptTellings{f: firstRequest{harness: basis.Harness, window: basis.Window, count: keptCount(basis, r.cfg.Resume)},
-		holds: sessionHolds{cutOff: basis.MayLackBrief(),
-			restartedInJob: basis.Harness == sandbox.ClaudeCodeHarness && keptRestarted(basis, r.cfg.Resume),
-			restarted:      basis.Harness == sandbox.ClaudeCodeHarness && restartedAnywhere(basis.Count)}}
+		holds: sessionHolds{cutOff: basis.MayLackBrief()}}
+	t.holds.restartedInJob = t.f.judges() && keptRestarted(basis, r.cfg.Resume)
+	t.holds.restarted = t.f.judges() && restartedAnywhere(basis.Count)
 	if !basis.Continues() {
 		return t
 	}
@@ -453,8 +454,8 @@ func (r *Runner) inPlaceTellings(ctx context.Context, carry carried, basis Sessi
 	t := inPlaceTellings{holds: sessionHolds{cutOff: r.copyMayLackBrief()}}
 	if r.cfg.Resume != nil {
 		t.f = firstRequest{harness: r.cfg.Resume.Run.Harness, window: basis.Window, count: r.cfg.Resume.Count}
-		t.holds.restartedInJob = t.f.harness == sandbox.ClaudeCodeHarness && inPlaceRestarted(r.cfg.Resume)
-		t.holds.restarted = t.f.harness == sandbox.ClaudeCodeHarness && restartedAnywhere(r.cfg.Resume.Count)
+		t.holds.restartedInJob = t.f.judges() && inPlaceRestarted(r.cfg.Resume)
+		t.holds.restarted = t.f.judges() && restartedAnywhere(r.cfg.Resume.Count)
 	}
 	build := func(holds sessionHolds) *inPlaceTelling {
 		after, omitted, told := r.inPlaceAfter(ctx, carry, round, current, history, surface, holds)

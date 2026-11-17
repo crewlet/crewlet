@@ -10,6 +10,10 @@ import (
 // compaction window the engine pins ([ClaudeCodeWindow]).
 const ClaudeCodeHarness = "claude-code"
 
+// OpenCodeHarness is the OpenCode runner's name, whose session's count the
+// collection reads off the export the job's script left ([ResumedCount]).
+const OpenCodeHarness = "opencode"
+
 // ExecutorWindow is the context window a Claude Code executor run is pinned to
 // (CLAUDE_CODE_AUTO_COMPACT_WINDOW), the window of the model the run works
 // under, and the least window the harness holds a run of that model to.

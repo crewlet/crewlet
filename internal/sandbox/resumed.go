@@ -21,6 +21,15 @@ import "slices"
 // continuation inside that band reached its model as a summary, and whatever
 // the engine counted as held could be gone from it.
 //
+// OpenCode counts a session by a rule of its own before every request (its last
+// counted reply's input, cache, output and reasoning, and an estimate of every
+// message after it, restarted at its newest completed compaction), which the
+// engine bounds the same way, off the session's export
+// (internal/sandbox/executor's openCodeCountReading), for the releases whose
+// rule was read and measured (its openCodeCountRead); its first request is
+// judged by a later change, and until then an OpenCode count is recorded and
+// read for the size of the session's next request alone ([NextRequest]).
+//
 // So the engine bounds that count FROM ABOVE, at both places a session's copy
 // is read whole: as a capture is taken, over the kept archive
 // ([SessionCapture.ResumedCount]), and as the read that collects a job reads the
@@ -53,7 +62,9 @@ const (
 	CountUnread CountMark = "unread"
 	// CountRelease is a thread written by a Claude Code release the count's
 	// rules were not read in: none named, or one below the count's floor
-	// (internal/sandbox/executor's claudeCountFloor, 2.1.310).
+	// (internal/sandbox/executor's claudeCountFloor, 2.1.310); or a session
+	// written by an OpenCode release outside the set whose rules were read and
+	// measured (internal/sandbox/executor's openCodeCountRead), or none named.
 	CountRelease CountMark = "release"
 	// CountPrecompact is a session holding a saved compaction Claude Code
 	// swaps in for a summary where its threshold fires
@@ -65,6 +76,10 @@ const (
 	// before the boundary in the file, off the chain the count reads, while
 	// the harness carries it into its next request.
 	CountCompacted CountMark = "compacted"
+	// CountUnanchored is an OpenCode session with no counted reply since its
+	// start or its newest completed compaction: OpenCode then estimates the
+	// system prompt, the tools and every message, which no export holds.
+	CountUnanchored CountMark = "unanchored"
 	// CountUsage is a reply since the last boundary whose usage does not read
 	// as Claude Code counts it, or one with no usage that names no message
 	// id.
@@ -74,17 +89,21 @@ const (
 	// and no line states.
 	CountCleared CountMark = "cleared"
 	// CountPDF is a PDF read after the counted reply, which Claude Code counts
-	// at 3,000 tokens a page, unbounded by its bytes.
+	// at 3,000 tokens a page, unbounded by its bytes; or a PDF file in an
+	// OpenCode session after its counted reply.
 	CountPDF CountMark = "pdf"
 	// CountMedia is an image or a document after the counted reply, which
-	// Claude Code counts at a flat 2,000 tokens, unbounded by its bytes.
+	// Claude Code counts at a flat 2,000 tokens, unbounded by its bytes; or any
+	// other file in an OpenCode session after its counted reply (a person's
+	// message's files, a tool's answer that is no text), whose estimate is not
+	// its bytes.
 	CountMedia CountMark = "media"
 )
 
 // CountMarks are the marks this build writes, IN PRECEDENCE ORDER: a count
 // that is marked keeps the first of them that applies, one word.
-var CountMarks = []CountMark{CountUnread, CountRelease, CountPrecompact, CountCompacted, CountUsage,
-	CountCleared, CountPDF, CountMedia}
+var CountMarks = []CountMark{CountUnread, CountRelease, CountPrecompact, CountCompacted, CountUnanchored,
+	CountUsage, CountCleared, CountPDF, CountMedia}
 
 // Valid reports whether this build knows m. A word it does not know, a later
 // build's, is still a mark: it reads as a session that may compact.
@@ -99,20 +118,50 @@ func (m CountMark) Valid() bool { return slices.Contains(CountMarks, m) }
 // of its widest count (TestTheWholeRowFitsItsBudget) is a bound.
 const maxCountMarkBytes = 32
 
-// RestartIDMaxBytes is the longest restart uuid a count names
-// ([ResumedCount.Restart]): a uuid's thirty-six, as every chained record
-// measured carries one. A newest restart whose uuid is longer, empty or absent,
-// or does not read, is no identity, and its count is [CountUnread].
+// RestartIDMaxBytes is the longest restart identity a count names
+// ([ResumedCount.Restart]): a uuid's thirty-six, as every chained record of a
+// Claude Code thread measured carries one, and an OpenCode message id's thirty
+// (`msg_` and twenty-six characters). A newest restart whose identity is
+// longer, empty or absent, or does not read, is no identity, and its count is
+// [CountUnread].
 const RestartIDMaxBytes = 36
+
+// MaxCountProviderBytes is the longest provider a count names beside it
+// ([SessionCapture.CountProvider], [LaunchRecord.CountProvider]): sixty-four
+// bytes, a provider id OpenCode reads from a configuration key (`anthropic`,
+// `openrouter`, a company's own name for a local server) with room to spare.
+const MaxCountProviderBytes = 64
+
+// ValidCountProvider reports whether p is a provider a record may carry beside
+// a count: none (""), or at most [MaxCountProviderBytes] bytes, each printable
+// ASCII but the five encoding/json escapes (`"`, `\`, `<`, `>` and `&`), so the
+// record writes it as itself and the row's model of its widest record
+// (TestTheWholeRowFitsItsBudget) is exact. A provider that is none of these is
+// none a reader of the session keeps: its count is [CountUnread].
+func ValidCountProvider(p string) bool {
+	if len(p) > MaxCountProviderBytes {
+		return false
+	}
+	for i := 0; i < len(p); i++ {
+		switch c := p[i]; {
+		case c < 0x20 || c > 0x7e, c == '"', c == '\\', c == '<', c == '>', c == '&':
+			return false
+		}
+	}
+	return true
+}
 
 // ResumedCount is at least what Claude Code counts a session it resumes at
 // before the brief and what the resume's own turn attaches (window.go's
 // compaction arithmetic), read whole off the session's own main thread
-// (internal/sandbox/executor's resumedReading), or why no such bound could be
-// read; the least context window the run that left the copy reported holding a
-// model to; and the newest place the thread restarts at. CLOSED: a later build
-// that knows more adds a key beside it on the record holding it (wirekeys.go's
-// other way), never a field to it, so it carries no Extra.
+// (internal/sandbox/executor's resumedReading), or what OpenCode counts a
+// session at before its next request, read whole off its export
+// (internal/sandbox/executor's openCodeCountReading), or why no such bound
+// could be read; the least context window the run that left the copy
+// reported holding a model to; and the newest place the thread restarts at.
+// CLOSED: a later build that knows more adds a key beside it on the record
+// holding it (wirekeys.go's other way), never a field to it, so it carries no
+// Extra.
 type ResumedCount struct {
 	// Tokens is the bound; 0 where Mark says there is none.
 	Tokens int64 `json:"tokens,omitempty"`
@@ -127,18 +176,21 @@ type ResumedCount struct {
 	// session its resume hands its model starts over (the line layer's restart
 	// rule: a compaction's boundary, a microcompaction's, a span replaced, a
 	// later root, a first chained record that roots nothing), "" where the
-	// thread restarts nowhere. A job whose newest restart differs from the one
-	// its launch's session held restarted after its brief
-	// ([LaunchRecord.BasisRestart]).
+	// thread restarts nowhere. Of an OpenCode session, the id of its newest
+	// compaction message, whatever its status (the transcript's own restart
+	// rule, internal/sandbox/executor's openCodeRestart), "" where it holds
+	// none. A job whose newest restart differs from the one its launch's
+	// session held restarted after its brief ([LaunchRecord.BasisRestart]).
 	//
 	// NIL ONLY WHERE THE THREAD WAS NOT READ WHOLE, OR NOT BY THE RULES OF ITS
 	// RELEASE ([ResumedCount.Restarted]): [CountUnread], a newest restart whose
 	// uuid does not read (no identity) among its causes; the box's read that
 	// found a saved compaction before it opened the thread ([CountPrecompact]
 	// there); and [CountRelease]. EVERY OTHER MARK LEAVES IT KNOWN: compacted,
-	// usage, cleared, pdf, media and a kept archive's precompact say what a
-	// whole thread's bytes cannot bound, never where it restarts, and the
-	// restart rule ran over every line of it, so its newest restart is exact.
+	// unanchored, usage, cleared, pdf, media and a kept archive's precompact
+	// say what a whole thread's bytes cannot bound, never where it restarts,
+	// and the restart rule ran over every line of it, so its newest restart is
+	// exact.
 	// A launch handed such a session records that restart as a known basis, so
 	// its job reads as restarted only for a restart of its own; read as no
 	// basis, any restart the thread already held would read as the job's
@@ -230,6 +282,24 @@ func (c *ResumedCount) bounded() *ResumedCount {
 		out.Tokens, out.Mark, out.Restart = 0, CountUnread, nil
 	}
 	return &out
+}
+
+// provided is c as a record carries it beside provider, the provider of the
+// reply it is anchored on ([ResumedCount.bounded]), and that provider: a
+// provider no record may carry ([ValidCountProvider]) is none, and the count
+// beside it [CountUnread], its identity with it, as a reader of the session
+// writes a count whose provider does not read; nil for no count, whatever
+// provider is.
+func (c *ResumedCount) provided(provider string) (*ResumedCount, string) {
+	if c == nil {
+		return nil, ""
+	}
+	out := c.bounded()
+	if !ValidCountProvider(provider) {
+		out.Tokens, out.Mark, out.Restart = 0, CountUnread, nil
+		return out, ""
+	}
+	return out, provider
 }
 
 // same reports whether c and o say the same of a session's count, a nil one

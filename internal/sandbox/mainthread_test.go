@@ -14,13 +14,14 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// countingThread is a [FakeRunner.MainThread] that answers count and next and
-// records what it was asked, in order.
+// countingThread is a [FakeRunner.MainThread] that answers count, its
+// provider and next, and records what it was asked, in order.
 type countingThread struct {
-	mu    sync.Mutex
-	count *ResumedCount
-	next  NextRequest
-	asked []MainThreadAsk
+	mu       sync.Mutex
+	count    *ResumedCount
+	provider string
+	next     NextRequest
+	asked    []MainThreadAsk
 }
 
 func (c *countingThread) read(_ context.Context, _ Sandbox, ask MainThreadAsk) MainThreadReading {
@@ -31,7 +32,7 @@ func (c *countingThread) read(_ context.Context, _ Sandbox, ask MainThreadAsk) M
 		return MainThreadReading{Next: c.next}
 	}
 	counted := *c.count
-	return MainThreadReading{Count: &counted, Next: c.next}
+	return MainThreadReading{Count: &counted, Provider: c.provider, Next: c.next}
 }
 
 func (c *countingThread) asks() []MainThreadAsk {
@@ -45,9 +46,8 @@ func (c *countingThread) asks() []MainThreadAsk {
 // record, with how its harness ended and in the same write, what Claude Code
 // counts the copy at, beside the least window the run reported: of a job whose
 // harness ended its own run and of one cut off alike, since the count decides
-// the copy's guard too. A stop's read and a loss's ask nothing, nor does an
-// OpenCode job's collection: no relaunch carries their round on in place, and
-// OpenCode's thread is not one Claude Code counts.
+// the copy's guard too. A stop's read and a loss's ask nothing: no relaunch
+// carries their round on in place.
 //
 // Mutation: leave the count out of the record's write (markHarnessEnd handed no
 // count), or ask the thread on every read, and a case goes red.
@@ -87,21 +87,48 @@ func TestACollectionRecordsTheCountOfTheCopyItsBoxHolds(t *testing.T) {
 			}
 		})
 	}
-	t.Run("an OpenCode job's collection", func(t *testing.T) {
-		t.Parallel()
-		rig := newCoordRig(t)
-		thread := &countingThread{count: bound}
+}
+
+// THE COLLECTION READS AN OPENCODE COPY ITS JOB ENDED ITSELF: the read that
+// collects an OpenCode job asks the export its script left as the job ended,
+// once, for the count, its provider and the estimate of the next request; and a
+// job whose harness did not end its own run (cut off, or one its script packed
+// nothing for) is unread with no read, since its script exports the session
+// after its harness stops and that export may lack what the copy holds. A
+// stop's read asks nothing.
+//
+// Mutation: read a cut-off OpenCode job, or ask nothing of an OpenCode
+// collection, and a case goes red.
+func TestTheCollectionReadsAnOpenCodeCopyItsJobEndedItself(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	run := rig.get("t1")
+	run.Harness = OpenCodeHarness
+	for name, tc := range map[string]struct {
+		read  BoxRead
+		at    capturePoint
+		asked int
+		want  *ResumedCount
+	}{
+		"its own run's collection": {read: BoxReadCollect, at: capturePoint{final: true}, asked: 1,
+			want: &ResumedCount{Tokens: 42_000, Restart: new("msg_c")}},
+		"a cut-off job's collection": {read: BoxReadCollect, at: capturePoint{final: true, cutOff: true},
+			want: &ResumedCount{Mark: CountUnread}},
+		"a stop's read": {read: BoxReadStop, at: capturePoint{final: true}},
+	} {
+		thread := &countingThread{count: &ResumedCount{Tokens: 42_000, Restart: new("msg_c")}, provider: "stub",
+			next: NextRequest{Tokens: 42_000}}
 		rig.runner.MainThread = thread.read
-		rig.launch("t1")
-		run := rig.get("t1")
-		run.Harness = "opencode"
-		got := rig.coordinator.readMainThread(t.Context(), run, nil, rig.runner, BoxReadCollect,
-			capturePoint{final: true}, Result{})
-		if got.Count != nil || len(thread.asks()) != 0 {
-			t.Errorf("an OpenCode job's collection counted %+v, asking %d times; want nothing asked",
-				got.Count, len(thread.asks()))
+		got := rig.coordinator.readMainThread(t.Context(), run, nil, rig.runner, tc.read, tc.at, Result{})
+		if !got.Count.same(tc.want) || len(thread.asks()) != tc.asked {
+			t.Errorf("%s: the read counted %+v asking %d times, want %+v asking %d", name, got.Count,
+				len(thread.asks()), tc.want, tc.asked)
 		}
-	})
+		if wantProvider := tc.asked == 1; (got.Provider == "stub") != wantProvider {
+			t.Errorf("%s: the read names the provider %q", name, got.Provider)
+		}
+	}
 }
 
 // A COUNT OF A JOB NOT OVER IS UNREAD: a job its box would not end may still write
@@ -218,33 +245,34 @@ func TestTheMainThreadIsReadBeforeTheTakeWithinItsWait(t *testing.T) {
 	})
 }
 
-// THE BOX READ'S BUDGET HOLDS THE MAIN THREAD'S READ: a Claude Code collection's
-// asker waits the read's wait more, at the host's share, whether or not its
-// turn has a cap, and an OpenCode collection, a stop's and a loss's wait as
-// they did. A Claude Code collection of a turn with a cap is the one read whose
-// host may make both the record that the cap ended a job it saw working and the
-// thread's read, so it is held with each. Every read is held against the same
-// read of a run that names no harness, which asks the thread nothing: a basis
-// that asked it would leave a Claude Code collection no more than it, and its
-// case goes red. The figures the docs state are held too: twenty seconds more
-// than another harness's collection, and in all the budget's own terms with the
-// read's wait among them, about 4,720 s for a turn with no cap and about
-// 5,994 s for one with a cap at today's bounds, composed rather than pinned
-// because one of their terms, the slowest node's crossing of a change of the
-// run's row (coord.MaxValueCrossing), is a figure of the store's.
+// THE BOX READ'S BUDGET HOLDS THE MAIN THREAD'S READ: a Claude Code or an
+// OpenCode collection's asker waits the read's wait more, at the host's share,
+// whether or not its turn has a cap, and a stop's and a loss's wait as they
+// did. A collection of a turn with a cap is the one read whose host may make
+// both the record that the cap ended a job it saw working and the thread's
+// read, so it is held with each. Every read is held against the same read of a
+// run that names no harness, which asks the thread nothing: a basis that asked
+// it would leave a collection no more than it, and its case goes red. The
+// figures the docs state are held too: twenty seconds more than a collection
+// that reads no thread, and in all the budget's own terms with the read's
+// wait among them, about 4,720 s for a turn with no cap and about 5,994 s for
+// one with a cap at today's bounds, composed rather than pinned because one of
+// their terms, the slowest node's crossing of a change of the run's row
+// (coord.MaxValueCrossing), is a figure of the store's.
 //
-// Mutation: add the wait to every read, or to none, or ask the thread for a
-// run that names no harness, and a case goes red; drop the wait, or the cap's
-// record, from a Claude Code collection of a capped turn alone, and its case
-// goes red; change the wait, and the twenty seconds go red; drop the cap's
-// record from every read, and the capped turn's figure goes red.
+// Mutation: add the wait to every read, or to none, or to a Claude Code
+// collection alone, or ask the thread for a run that names no harness, and a
+// case goes red; drop the wait, or the cap's record, from a collection of a
+// capped turn alone, and its case goes red; change the wait, and the twenty
+// seconds go red; drop the cap's record from every read, and the capped turn's
+// figure goes red.
 func TestTheBoxReadBudgetHoldsTheMainThreadRead(t *testing.T) {
 	t.Parallel()
 	share := time.Duration(float64(MainThreadReadWait) / BoxReadAnswerShare)
 	// ANY INSTANT: the budget reads only whether the turn has a cap, since the
 	// host decides on its own clock whether it has passed.
 	capAt := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
-	claude, open := PendingRun{Harness: ClaudeCodeHarness}, PendingRun{Harness: "opencode"}
+	claude, open := PendingRun{Harness: ClaudeCodeHarness}, PendingRun{Harness: OpenCodeHarness}
 	capped := PendingRun{Harness: ClaudeCodeHarness, Deadline: capAt}
 	for name, tc := range map[string]struct {
 		run  PendingRun
@@ -252,7 +280,8 @@ func TestTheBoxReadBudgetHoldsTheMainThreadRead(t *testing.T) {
 		more time.Duration
 	}{
 		"a Claude Code collection":                  {run: claude, read: BoxReadCollect, more: share},
-		"an OpenCode collection":                    {run: open, read: BoxReadCollect},
+		"an OpenCode collection":                    {run: open, read: BoxReadCollect, more: share},
+		"an OpenCode job's stop":                    {run: open, read: BoxReadStop},
 		"a Claude Code job's stop":                  {run: claude, read: BoxReadStop},
 		"a Claude Code job's loss":                  {run: claude, read: BoxReadLoss},
 		"a Claude Code collection of a capped turn": {run: capped, read: BoxReadCollect, more: share},
@@ -263,8 +292,11 @@ func TestTheBoxReadBudgetHoldsTheMainThreadRead(t *testing.T) {
 			t.Errorf("%s: the read's budget is %v, want %v", name, got, want)
 		}
 	}
-	if got := BoxReadBudget(claude, BoxReadCollect) - BoxReadBudget(open, BoxReadCollect); got != 20*time.Second {
-		t.Errorf("an uncapped Claude Code collection waits %v more than an OpenCode one, want 20s", got)
+	for _, run := range []PendingRun{claude, open} {
+		if got := BoxReadBudget(run, BoxReadCollect) - BoxReadBudget(PendingRun{}, BoxReadCollect); got != 20*time.Second {
+			t.Errorf("an uncapped %s collection waits %v more than one that reads no thread, want 20s",
+				run.Harness, got)
+		}
 	}
 	held := SessionTakeBudget + sessionRecordBudget + 3*discardGrace + boxReadChanges*coord.MaxValueCrossing +
 		MainThreadReadWait
@@ -348,9 +380,11 @@ func TestTheCaptureStampsItsCount(t *testing.T) {
 
 // AN OLDER BUILD'S WRITE CARRIES THE COUNT. A fleet mid-upgrade rewrites the job's
 // record and the capture's stamp on a build that does not know the field, and a
-// relaunch that reads them may run on this build: so the count and the restart
-// basis ride each record under their own keys, which a build that does not
-// declare them keeps verbatim and writes back.
+// relaunch that reads them may run on this build: so the count, the provider
+// beside it and the restart basis ride each record under their own keys, which
+// a build that does not declare them keeps verbatim and writes back. The
+// provider is a key of the record, never a field of the count, which is closed:
+// inside it, an older build that knows the count would drop it on every write.
 //
 // Mutation: leave a field off the wire, or drop the carried keys from the
 // encode, and a case goes red.
@@ -384,21 +418,21 @@ func TestAnOlderBuildsWriteCarriesTheCount(t *testing.T) {
 			t.Errorf("after the older build's write %s reads %+v, want %+v: %s", typ, got, read(raw), written)
 		}
 	}
-	carried(t, reflect.TypeFor[LaunchRecord](), []string{"resumed_count", "basis_restart"},
-		LaunchRecord{ResumedCount: count, BasisRestart: new("u-0")}, func(raw []byte) any {
+	carried(t, reflect.TypeFor[LaunchRecord](), []string{"resumed_count", "basis_restart", "count_provider"},
+		LaunchRecord{ResumedCount: count, BasisRestart: new("u-0"), CountProvider: "stub"}, func(raw []byte) any {
 			var back LaunchRecord
 			if err := json.Unmarshal(raw, &back); err != nil {
 				t.Fatal(err)
 			}
-			return []any{back.ResumedCount, back.BasisRestart}
+			return []any{back.ResumedCount, back.BasisRestart, back.CountProvider}
 		})
-	carried(t, reflect.TypeFor[SessionCapture](), []string{"resumed_count"},
-		SessionCapture{ResumedCount: count}, func(raw []byte) any {
+	carried(t, reflect.TypeFor[SessionCapture](), []string{"resumed_count", "count_provider"},
+		SessionCapture{ResumedCount: count, CountProvider: "stub"}, func(raw []byte) any {
 			var back SessionCapture
 			if err := json.Unmarshal(raw, &back); err != nil {
 				t.Fatal(err)
 			}
-			return back.ResumedCount
+			return []any{back.ResumedCount, back.CountProvider}
 		})
 }
 
@@ -603,4 +637,83 @@ func TestTheNextRequestRidesWhereTheCountDoes(t *testing.T) {
 			}
 		})
 	})
+}
+
+// THE PROVIDER RIDES BESIDE THE COUNT. The read that collects an OpenCode job
+// names the provider of the reply its count is anchored on, and the collection
+// writes it on the job's record beside the count, in the same write, carries it
+// back to the claim beside the count, and stamps the take's on the capture
+// beside its count; a provider no record may carry as itself is written as
+// none, its count unread with it; and a later read that brings no count leaves
+// both as they were, since the provider is the count's.
+//
+// Mutation: leave the provider out of the record's write, out of the claim or
+// off the stamp, keep one no record may carry, or write it where the read
+// brings no count, and a case goes red.
+func TestTheProviderRidesBesideTheCount(t *testing.T) {
+	t.Parallel()
+	count := &ResumedCount{Tokens: 40_000, Restart: new("msg_c")}
+	t.Run("the job's record and the claim", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		rig.runner.MainThread = (&countingThread{count: count, provider: "stub"}).read
+		rig.launch("t1")
+		rig.coordinator.countRun("swe", StatusRunning)
+		rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1"})
+		var (
+			mu      sync.Mutex
+			claimed []string
+		)
+		rig.resumer.failWith(errors.New("held for the case to read the claim"))
+		rig.resumer.during = func(_ context.Context, run PendingRun) {
+			mu.Lock()
+			defer mu.Unlock()
+			claimed = append(claimed, run.Launch.CountProvider)
+		}
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Logf("OnCompleted: %v", err)
+		}
+		if got := rig.get("t1").Launch.CountProvider; got != "stub" {
+			t.Errorf("the job's record names the provider %q, want stub", got)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if len(claimed) != 1 || claimed[0] != "stub" {
+			t.Errorf("the resume on the claim read the providers %q, want once stub", claimed)
+		}
+	})
+	t.Run("the record's own rule", func(t *testing.T) {
+		t.Parallel()
+		held := LaunchRecord{ResumedCount: count, CountProvider: "stub"}
+		if got, provider := held.counted(nil, ""); !got.same(count) || provider != "stub" {
+			t.Errorf("a read with no count leaves %+v and %q, want the record's own", got, provider)
+		}
+		got, provider := held.counted(count, `a"b`)
+		if provider != "" || got.Mark != CountUnread || got.Restart != nil {
+			t.Errorf("a provider no record may carry is written as %q beside %+v, want none beside an unread "+
+				"count", provider, got)
+		}
+	})
+	t.Run("the capture's stamp", func(t *testing.T) {
+		t.Parallel()
+		inBubble(t, func(t *testing.T) {
+			rig, _, _ := keepingRig(t)
+			rig.launchKept(t, "t1")
+			session := rig.runner.Session
+			session.Count, session.CountProvider = count, "stub"
+			rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+			if _, _, err := rig.coordinator.readBox(t.Context(), rig.get("t1"), BoxReadCollect); err != nil {
+				t.Fatalf("readBox: %v", err)
+			}
+			rig.awaitKeeps()
+			if run := rig.get("t1"); run.Capture == nil || run.Capture.CountProvider != "stub" {
+				t.Errorf("the capture is stamped %+v, want the provider stub", run.Capture)
+			}
+		})
+	})
+	if err := (SessionCapture{CountProvider: strings.Repeat("p", MaxCountProviderBytes+1)}).Bounded(); !errors.Is(
+		err, ErrCaptureUnbounded) {
+		t.Errorf("a stamp naming a provider past its bound is refused with %v, want %v", err, ErrCaptureUnbounded)
+	}
 }

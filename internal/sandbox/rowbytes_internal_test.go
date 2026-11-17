@@ -584,7 +584,7 @@ func worstRow(t *testing.T) PendingRun {
 		Home: markup(1024), Workspace: markup(1024), Final: true, Interrupted: true,
 		SeatBudget: math.MaxInt64, Minted: worstAt, Taker: plain(maxIncarnationBytes), TakerEpoch: math.MaxInt64,
 		StandbyTaker: plain(maxIncarnationBytes), StandbyTakerEpoch: math.MaxInt64, StandbyAt: worstAt,
-		ResumedCount: worstCount()}
+		ResumedCount: worstCount(), CountProvider: plain(MaxCountProviderBytes)}
 	for i := range capture.BridgeOpen {
 		capture.BridgeOpen[i] = math.MaxInt
 	}
@@ -726,6 +726,9 @@ func worstRow(t *testing.T) PendingRun {
 		// most: the box's thread writes it, and nothing holds it to a uuid's
 		// shape.
 		ResumedCount: worstCount(), BasisRestart: new(markup(RestartIDMaxBytes)),
+		// AND THE PROVIDER BESIDE IT at its bound, every byte one a record
+		// writes as itself ([ValidCountProvider]).
+		CountProvider: plain(MaxCountProviderBytes),
 		// AND WHAT THE HARNESS ESTIMATES ITS NEXT REQUEST AT, nineteen digits
 		// at each rate ([LaunchRecord.NextRequestTokens]).
 		NextRequestTokens: math.MaxInt64, NextRequestOlderTokens: math.MaxInt64,

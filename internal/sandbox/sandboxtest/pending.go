@@ -89,6 +89,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ACountLandsWhereTheEndIsAlreadyRecorded", testACountLandsWhereTheEndIsAlreadyRecorded},
 		{"TheNextRequestIsNeverCarried", testTheNextRequestIsNeverCarried},
 		{"AHarnessEndWritesTheNextRequest", testAHarnessEndWritesTheNextRequest},
+		{"AHarnessEndWritesTheCountsProvider", testAHarnessEndWritesTheCountsProvider},
 		{"ALaunchRecordsWhatTheBriefItHandedLeftOut", testALaunchRecordsWhatTheBriefItHandedLeftOut},
 		{"TheTurnsLeadsAreKeptBesideItsRowAndOutliveEveryRelaunch", testTheTurnsLeadsAreKeptBesideItsRowAndOutliveEveryRelaunch},
 		{"AResumedTurnsCarryIsItsClaimsOwn", testAResumedTurnsCarryIsItsClaimsOwn},
@@ -847,6 +848,33 @@ func testAHarnessEndWritesTheNextRequest(t *testing.T, s sandbox.PendingStore) {
 		}
 		if got := mustGet(t, s, turn).Launch.NextRequest(); got != estimate {
 			t.Errorf("the job's record holds the next request %+v, want %+v", got, estimate)
+		}
+		if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil || ok {
+			t.Errorf("the same read again = %v, %v, want nothing written", ok, err)
+		}
+	}
+}
+
+// A HARNESS END WRITES THE COUNT'S PROVIDER: a read that brings an OpenCode
+// count whose figure is already on the job's record, anchored on another
+// provider's reply, is a change to record beside the end, since a figure is the
+// report of the provider beside it; and the same read again writes nothing.
+//
+// Mutation: leave the provider out of the write's test of a change, and this
+// goes red.
+func testAHarnessEndWritesTheCountsProvider(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-provider-after-end"
+	launch := mustLaunched(t, s, run(turn))
+	mustClaim(t, s, turn)
+	count := &sandbox.ResumedCount{Tokens: 42_000, Restart: new("msg_c")}
+	for _, provider := range []string{"stub", "openrouter"} {
+		read := sandbox.EndRead{End: sandbox.HarnessEndOwnRun, Count: count, CountProvider: provider}
+		if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil || !ok {
+			t.Fatalf("a read bringing the provider %q beside the count recorded = %v, %v, want it written",
+				provider, ok, err)
+		}
+		if got := mustGet(t, s, turn).Launch.CountProvider; got != provider {
+			t.Errorf("the job's record names the provider %q, want %q", got, provider)
 		}
 		if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil || ok {
 			t.Errorf("the same read again = %v, %v, want nothing written", ok, err)

@@ -1149,6 +1149,10 @@ type FakeSession struct {
 	// ([TakenSession.Next]), zero for none.
 	NextRequest NextRequest
 
+	// CountProvider is the provider the take names beside its count
+	// ([TakenSession.CountProvider]), "" for none.
+	CountProvider string
+
 	// Taking, where set, runs as a take reads the box — after the capture
 	// read the run's log to place the session, and before the archive is
 	// handed over — so a case can land a call between the two, as a call
@@ -1214,6 +1218,9 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 		Context: func() int64 { return session.ContextTokens },
 		Next:    func() NextRequest { return session.NextRequest },
 		Count:   count,
+		CountProvider: func() string {
+			return session.CountProvider
+		},
 		Keep: func(ctx context.Context) error {
 			if session.Keeping != nil {
 				session.Keeping(ctx)

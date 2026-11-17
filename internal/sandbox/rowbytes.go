@@ -112,8 +112,8 @@ import (
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... measuredOtherFields     2,035,094
-//	to spare, measured .............. measuredSpare             560,814
+//	every other field, measured ..... measuredOtherFields     2,035,346
+//	to spare, measured .............. measuredSpare             560,562
 //
 // Every other field is the identity, status and time fields, the run its
 // turn's leads are kept for and how many leads that part has taken
@@ -134,14 +134,16 @@ import (
 // [MaxBridgeCalls] places each) and which of the turn's leads its brief told,
 // by their numbers in the run's leads part ([LaunchRecord.LeadMarks], at most
 // [MaxKeptLeads]), what the session its box holds carried at its newest
-// request the engine measured ([LaunchRecord.Context]), what Claude Code counts
-// that copy at and the restart its launch's session held
-// ([LaunchRecord.ResumedCount], [LaunchRecord.BasisRestart]) and what it
+// request the engine measured ([LaunchRecord.Context]), what its harness
+// counts that copy at and the restart its launch's session held
+// ([LaunchRecord.ResumedCount], [LaunchRecord.BasisRestart]), the provider an
+// OpenCode count is anchored on ([LaunchRecord.CountProvider]) and what it
 // estimates the copy's next request at ([LaunchRecord.NextRequestTokens]); the
 // owed end and the captures, each with the reads its session holds only as a
-// count ([SessionCapture.Omitted]), its count ([SessionCapture.ResumedCount])
-// and its estimate of the next request ([SessionCapture.NextRequestTokens]); and
-// what the job may do on Gitlet: the holds of
+// count ([SessionCapture.Omitted]), its count with its provider
+// ([SessionCapture.ResumedCount], [SessionCapture.CountProvider]) and its
+// estimate of the next request ([SessionCapture.NextRequestTokens]); and what
+// the job may do on Gitlet: the holds of
 // its turn ([MaxCodeHolds]), its repositories ([MaxRunRepos], each held to its
 // grammar, its cone and its change's title, [MaxChangeTitleBytes], among
 // them), its floors and whom its pushes and its change are made for
@@ -301,8 +303,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_035_094
-	measuredSpare       = 560_814
+	measuredOtherFields = 2_035_346
+	measuredSpare       = 560_562
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].

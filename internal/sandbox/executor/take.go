@@ -121,7 +121,7 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		_ = body.Close()
 	}
 	sum := &cksum{}
-	// WHAT THE SESSION'S LAST REQUEST CARRIED, and what Claude Code counts it
+	// WHAT THE SESSION'S LAST REQUEST CARRIED, and what its harness counts it
 	// at, read off the archive as it is kept (measure.go), beside the take and
 	// within its context, never holding it up.
 	meter := newContextMeter(ctx, carries.layout(), archive.SessionID, archive.Version)
@@ -159,7 +159,7 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		return keepDigest(ctx, box, paths, archive.SessionID, digest)
 	}
 	return sandbox.TakenSession{Archive: archive, Body: out, Keep: keep, Context: meter.context,
-		Count: meter.count, Next: meter.next}, nil
+		Count: meter.count, CountProvider: meter.countProvider, Next: meter.next}, nil
 }
 
 // keptRunStart is where an archive's run began in its session as the take

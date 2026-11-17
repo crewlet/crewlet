@@ -287,6 +287,10 @@ type EndRead struct {
 	// its next request, as the read of the job's main thread found it
 	// ([Result.ResumedCount]); nil where the read asked none.
 	Count *ResumedCount
+	// CountProvider is the provider of the reply an OpenCode Count is
+	// anchored on, off the same read ([Result.CountProvider]); "" for a Claude
+	// Code count and where no reply anchored one.
+	CountProvider string
 	// Next is the harness's own estimate of the copy's next request, off the
 	// same read ([Result.NextRequest]); zero where the read made none.
 	Next NextRequest
@@ -318,17 +322,22 @@ func (l LaunchRecord) nextRequested(read NextRequest) NextRequest {
 }
 
 // counted is the count l, a job's record, holds once a read of the job found
-// read: the read's wherever it made one, a mark among them, so a later read of
-// the job that could not bound the copy replaces an earlier bound, which tells
-// more and never less; and l's own where the read made none (a read that asked
-// nothing, or a host of an older build). Held to what a record carries
-// ([ResumedCount.bounded]): a mark past its bound, or a restart past a uuid's
-// whatever the mark, is [CountUnread].
-func (l LaunchRecord) counted(read *ResumedCount) *ResumedCount {
+// read, and the provider of the reply it is anchored on beside it
+// ([LaunchRecord.CountProvider]): the read's wherever it made one, a mark
+// among them, so a later read of the job that could not bound the copy
+// replaces an earlier bound, which tells more and never less; and l's own
+// where the read made none (a read that asked nothing, or a host of an older
+// build). The provider goes with the count, written and cleared together, so
+// no record names one count's provider beside another's figure. Held to what
+// a record carries ([ResumedCount.bounded]): a mark past its bound, or a
+// restart past a uuid's whatever the mark, is [CountUnread]; and so is a count
+// beside a provider no record may carry ([ValidCountProvider]), the provider
+// then none, as a reader of the session writes such a count.
+func (l LaunchRecord) counted(read *ResumedCount, provider string) (*ResumedCount, string) {
 	if read == nil {
-		return l.ResumedCount
+		return l.ResumedCount, l.CountProvider
 	}
-	return read.bounded()
+	return read.provided(provider)
 }
 
 // measured is the measure l, the record of job launch, holds once a read of the

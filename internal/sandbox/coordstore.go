@@ -2797,9 +2797,9 @@ func (s *CoordStore) MarkEndedAtDeadline(ctx context.Context, turnID, launch str
 // carried, as a read that collected the job found them. See the contract on
 // [PendingStore].
 //
-// A WRITE WHERE ANY CHANGES: an end already recorded beside a measure, a count
-// or an estimate of the next request the read brings is one to record, which a
-// test of the end alone would drop.
+// A WRITE WHERE ANY CHANGES: an end already recorded beside a measure, a count,
+// its provider or an estimate of the next request the read brings is one to
+// record, which a test of the end alone would drop.
 func (s *CoordStore) MarkHarnessEnd(ctx context.Context, turnID, launch string, read EndRead) (bool, error) {
 	if !read.End.Valid() {
 		return false, fmt.Errorf("sandbox: %q is no way a job's harness ends; it is one of %s",
@@ -2813,12 +2813,15 @@ func (s *CoordStore) MarkHarnessEnd(ctx context.Context, turnID, launch string, 
 			return false
 		}
 		next, measure := run.Launch.HarnessEnd.after(read.End), run.Launch.measured(read.Request, launch)
-		count, estimate := run.Launch.counted(read.Count), run.Launch.nextRequested(read.Next)
+		count, provider := run.Launch.counted(read.Count, read.CountProvider)
+		estimate := run.Launch.nextRequested(read.Next)
 		if next == run.Launch.HarnessEnd && measure.same(run.Launch.Context) &&
-			count.same(run.Launch.ResumedCount) && estimate == run.Launch.NextRequest() {
+			count.same(run.Launch.ResumedCount) && provider == run.Launch.CountProvider &&
+			estimate == run.Launch.NextRequest() {
 			return false
 		}
 		run.Launch.HarnessEnd, run.Launch.Context, run.Launch.ResumedCount = next, measure, count
+		run.Launch.CountProvider = provider
 		run.Launch.setNextRequest(estimate)
 		return true
 	})

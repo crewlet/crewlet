@@ -828,20 +828,20 @@ func TestAThreadWithNoChainedLineLeavesNoCount(t *testing.T) {
 	}
 }
 
-// ONLY CLAUDE CODE READS A MAIN THREAD: another harness's runner answers no
-// reading.
+// EACH RUNNER READS ITS OWN HARNESS'S SESSION: a Claude Code runner its main
+// thread, and an OpenCode runner the export its job's script left, never the
+// other's file, so a box holding a Claude Code thread and no export is no
+// count of an OpenCode session.
 //
-// Mutation: read every harness's thread, and this goes red.
-func TestOnlyClaudeCodeReadsAMainThread(t *testing.T) {
+// Mutation: read a Claude Code thread for an OpenCode runner, and this goes
+// red.
+func TestEachRunnerReadsItsOwnHarnesssSession(t *testing.T) {
 	t.Parallel()
 	box, _ := cntBox(cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 100, 0, 0, 50)), nil)
-	ask := sandbox.MainThreadAsk{Session: ctSession, Release: "2.1.322", Count: true}
-	if got := New(OpenCode{}).ReadMainThread(t.Context(), box, ask); got.Count != nil {
-		t.Errorf("an OpenCode runner counts %+v, want no reading", got.Count)
-	}
-	if got := New(ClaudeCode{}).ReadMainThread(t.Context(), box, ask); got.Count == nil {
-		t.Error("a Claude Code runner reads no count")
-	}
+	ask := sandbox.MainThreadAsk{Session: ctSession, Release: "2.3.0", Count: true}
+	wantMark(t, New(OpenCode{}).ReadMainThread(t.Context(), box, ask).Count, sandbox.CountUnread)
+	ask.Release = "2.1.322"
+	wantBound(t, New(ClaudeCode{}).ReadMainThread(t.Context(), box, ask).Count, 150)
 }
 
 // THE REPORTED WINDOW IS THE LEAST ITS RUN REPORTED, over every result line's

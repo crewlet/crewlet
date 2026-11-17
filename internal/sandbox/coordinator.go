@@ -1918,10 +1918,12 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 	// ([LaunchRecord.Context]), for the same resume: a round carried on in the
 	// job's box is held to that copy's measure.
 	run.Launch.Context = run.Launch.measured(result.LastRequest, run.LaunchID)
-	// AND WHAT CLAUDE CODE COUNTS ITS COPY AT, by the rule the record follows
+	// AND WHAT THE HARNESS COUNTS ITS COPY AT, with the provider of the reply
+	// an OpenCode count is anchored on, by the rule the record follows
 	// ([LaunchRecord.counted]), for the same resume: a round carried on in the
 	// job's box is told what that copy may have compacted away.
-	run.Launch.ResumedCount = run.Launch.counted(result.ResumedCount)
+	run.Launch.ResumedCount, run.Launch.CountProvider = run.Launch.counted(result.ResumedCount,
+		result.CountProvider)
 	// AND WHAT THE HARNESS ESTIMATES ITS COPY'S NEXT REQUEST AT, by the rule
 	// the record follows ([LaunchRecord.nextRequested]), for the same resume:
 	// a round carried on in the job's box is held to it with its brief.
@@ -2336,14 +2338,15 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	at.exhausted = ranOutOfContext(asCollected(run, result, ended))
 	at.refused = requestRefused(asCollected(run, result, ended))
 	// THE JOB'S MAIN THREAD, read once on the box's host before the take, by
-	// every reading the collection asks of it (mainthread.go): what Claude Code
-	// counts the session at before its next request, and what it estimates
-	// that request at, for a Claude Code job. Kept on the result, the count
-	// with the least window its run reported, and written with how the
-	// harness ended, after the take, in the one write that records the job's
-	// end.
+	// every reading the collection asks of it (mainthread.go): what the
+	// harness counts the session at before its next request, with the
+	// provider of the reply an OpenCode count is anchored on, and what it
+	// estimates that request at, for a Claude Code or an OpenCode job. Kept on
+	// the result, the count with the least window its run reported, and
+	// written with how the harness ended, after the take, in the one write
+	// that records the job's end.
 	reading := c.readMainThread(ctx, run, box, runner, read, at, result)
-	result.ResumedCount, result.NextRequest = reading.Count, reading.Next
+	result.ResumedCount, result.CountProvider, result.NextRequest = reading.Count, reading.Provider, reading.Next
 	spooled, kept := c.takeCapture(ctx, run, box, runner, at)
 	result.Kept = kept
 	c.keepLater(ctx, spooled)
@@ -2361,10 +2364,10 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	}
 	// AND WHAT THE COPY'S NEWEST REQUEST CARRIED, as the run's own account
 	// measured it, and what Claude Code counts the copy at, as the read of its
-	// main thread above found it, and what the harness estimates its next
-	// request at, off the same read, in the same write.
+	// main thread above found it with its provider, and what the harness
+	// estimates its next request at, off the same read, in the same write.
 	c.markHarnessEnd(ctx, run, EndRead{End: result.HarnessEnd, Request: result.LastRequest,
-		Count: result.ResumedCount, Next: result.NextRequest})
+		Count: result.ResumedCount, CountProvider: result.CountProvider, Next: result.NextRequest})
 	if err := box.Pause(ctx); err != nil {
 		log.WarnContext(ctx, "sandbox_pause_failed", "turn_id", run.TurnID, "error", err.Error())
 	} else if err := c.markBoxPaused(ctx, run); err != nil {
