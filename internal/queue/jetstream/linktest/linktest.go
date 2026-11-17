@@ -68,9 +68,21 @@
 // Those buffers are PINNED to [SocketBuffer], and [Link.Buffers] is what the
 // kernel granted: a sender's kernel counts a byte as delivered once the
 // relay's kernel has taken it, so a node's acknowledged bytes run ahead of
-// what the link has read by up to [Buffers.Receive], exactly that and no
-// more, and a blackholed account's run ahead of it by that and then stand
-// still, because a blackhole stops reading rather than read and hold.
+// what the link has read by at most [Buffers.Receive] — an upper bound the
+// window never reaches, since the buffer counts the kernel's overhead of
+// each segment as well as its bytes — and a blackholed account's run ahead
+// of it by that at most and then stand still, because a blackhole stops
+// reading rather than read and hold.
+//
+// A NODE'S ACKNOWLEDGED BYTES MOVE IN STEPS, NOT A CROSSING AT A TIME: the
+// relay's kernel reopens a window it has shut only once a good part of its
+// receive space is free again (Linux's receive-side silly window avoidance,
+// __tcp_select_window), so behind a link that reads slowly — a first-in,
+// first-out one at its inflight, a mended blackhole — what a node's socket
+// says it delivered stands still across many crossings and then jumps by
+// tens of kilobytes. A case bounds a node's acknowledged bytes by what the
+// link has read and the pinned buffer; it never expects them to advance
+// with each piece the link carries.
 package linktest
 
 import (
@@ -111,9 +123,12 @@ const readChunk = 64 << 10
 //
 // 64 KiB, THE SMALLEST THAT TAKES A WHOLE LOOPBACK SEGMENT: loopback's MTU of
 // 65,536 bytes makes a segment 65,483, and Linux grants twice what is asked
-// and advertises about half of what it grants, so a smaller ask would hold a
-// loopback sender to segments of less than one and slow every link the
-// package builds. It is no larger, because every byte of it is a byte a
+// and advertises only the part of the grant its accounting of each
+// segment's overhead leaves (since 6.6 the measured ratio of a segment's
+// payload to the memory it takes, about nine tenths on loopback), so an ask
+// of 32 KiB would advertise a window short of one segment, hold a loopback
+// sender to segments of less than one and slow every link the package
+// builds. It is no larger, because every byte of it is a byte a
 // sender's kernel counts as delivered that the relay never carried: a case
 // that reads a node's acknowledged bytes off its socket allows for it
 // whole.
@@ -166,11 +181,14 @@ type Buffers struct {
 // socket says it has delivered runs ahead of what the link has carried by up
 // to the relay's receive buffer. Left to the kernel that buffer starts at
 // 128 KiB on Linux and grows with the traffic to 6 MiB, and a case could not
-// say by how much; pinned, a case allows for [Buffers.Receive] exactly: a
-// node's acknowledged bytes are at most what the relay has read
+// say by how much; pinned, a case allows for [Buffers.Receive], which bounds
+// it: a node's acknowledged bytes are at most what the relay has read
 // ([Link.Count]) plus it. The send buffer bears where the relay writes to a
 // side that is slow to read it: what the relay has carried runs ahead of
-// what that side has read by up to [Buffers.Send].
+// what that side has read by up to [Buffers.Send] plus that side's own
+// receive buffer, which the relay does not pin — a node's or a broker's
+// socket autotunes it, to 6 MiB on Linux — so a case reads what a side has
+// taken at that side, never off what the relay carried.
 //
 // # The link is the only way
 //
@@ -192,8 +210,6 @@ type Buffers struct {
 // carries and every goroutine it runs.
 type Link struct {
 	ln net.Listener
-	// buffers is what the kernel granted the relay's sockets ([pin]).
-	buffers Buffers
 	// dial opens the relay's own connection to the broker for each one it
 	// carries.
 	dial func(context.Context) (net.Conn, error)
@@ -208,6 +224,10 @@ type Link struct {
 	mu    sync.Mutex
 	shut  bool
 	pairs map[*pair]struct{}
+	// buffers is the most the kernel granted any of the relay's sockets
+	// ([pin]): its listener's, and every one it has carried over once
+	// connected ([Link.Buffers]).
+	buffers Buffers
 	// target is the broker's address, empty until a case names it
 	// ([Link.To]).
 	target string
@@ -363,9 +383,14 @@ func sharedEachWay(rate int64) (toward, back carrier) {
 // waits behind every byte the other connections queued ahead of it.
 //
 // INFLIGHT IS A CONNECTION'S CONGESTION WINDOW. The relay reads a connection
-// only while it has fewer than inflight bytes queued in that direction, and
-// never more than that, so each flow keeps at most inflight bytes in the
-// bottleneck, as TCP's window does. Past that the sender's socket buffer
+// only while fewer than inflight of the bytes it has read of it in that
+// direction are still to be written to the far side — queued on the
+// bottleneck, crossed and not yet written, or held by a [Link.Blackhole] —
+// and never more than that, so each flow keeps at most inflight bytes
+// between its sender and its receiver, as TCP's window does, and what the
+// link has read of it runs ahead of what it carried ([Link.Count]) by at most
+// inflight, however slowly the far side reads or a [Link.Watch]er returns.
+// Past that the sender's socket buffer
 // fills and its writes block: a nats.go client then holds its connection's
 // lock in its write, and a broker's write stalls. A member's leaf writes keep
 // moving within its write deadline (10 s) only while inflight / rate stays
@@ -421,7 +446,8 @@ func open(t testing.TB, target string, toward, back carrier) *Link {
 		t.Fatalf("read the link's socket buffers: %v", err)
 	}
 	l := newLink(nil, toward, back)
-	l.ln, l.buffers, l.target, l.dial = ln, got, target, l.dialTarget
+	l.ln, l.target, l.dial = ln, target, l.dialTarget
+	l.buffers = got
 	l.start(t)
 	return l
 }
@@ -479,11 +505,24 @@ func (l *Link) start(t testing.TB) {
 // Addr is the host and port the node dials to cross the link.
 func (l *Link) Addr() string { return l.ln.Addr().String() }
 
-// Buffers is what the kernel granted each socket the relay carries over, for
-// [SocketBuffer] asked of each: what a case allows for where an assertion
-// rests on what a kernel holds that the relay has not read or the far side
-// has not taken ([Link]'s "Its sockets' buffers are pinned").
-func (l *Link) Buffers() Buffers { return l.buffers }
+// Buffers is the most the kernel granted any socket the relay has carried
+// over, each way, for [SocketBuffer] asked of each: what a case allows for
+// where an assertion rests on what a kernel holds that the relay has not
+// read or the far side has not taken ([Link]'s "Its sockets' buffers are
+// pinned").
+//
+// READ IT ONCE THE CONNECTION A CASE ASSERTS ABOUT IS CARRIED: Linux grants
+// on the ask, so every socket holds what the listener was granted from the
+// start, but darwin rounds each buffer of a socket up to a whole number of
+// its segments as the connection's handshake settles them (XNU's tcp_mss),
+// on the socket it accepted and the one it dialled and never on the
+// listener, so there a connection's sockets hold more than the listener was
+// granted, and the link reports it from when it carries them.
+func (l *Link) Buffers() Buffers {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buffers
+}
 
 // Count is what the link has done with the bytes of every connection that
 // binds account in way, those that have ended included: the empty name counts
@@ -564,10 +603,17 @@ func (l *Link) Unread(account string, way Way) (int, error) {
 // Watch calls f each time the link writes a piece of a connection's bytes to
 // the far side, from then until the case ends, with the count of its
 // account's connections in its way once it has: so a case reads what a node's
-// socket says at the moment the link has carried a known count, in the order
-// the link carried it. The direction it was carried in waits for f to
-// return, the other carries on; a shared link's pacer carries the next piece
-// meanwhile, and writes it once f returns.
+// socket says at the moment the link has carried a known count.
+//
+// F RUNS ON THE GOROUTINE THAT WROTE THE PIECE, one for each connection and
+// way, so it is called concurrently — both ways of one connection, and
+// different connections, at once — and must be safe for that; the pieces of
+// one connection in one way reach it in the order the link carried them,
+// and nothing orders the rest. That connection's way waits for f to return,
+// every other carries on; a shared link's pacer carries the next piece
+// meanwhile and the leg writes it once f returns, and a first-in, first-out
+// link reads no more of the connection than its inflight ahead of what f has
+// been handed ([SharedFIFO]).
 func (l *Link) Watch(f func(Crossing)) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -628,9 +674,12 @@ func (l *Link) Cut(account string) {
 // Blackhole stops reading what every connection that binds account sends,
 // either way, from now on and for every one that binds it later, until
 // [Link.Mend], without closing any of them: a path that drops every packet.
-// It returns once the link reads none of them any more, so [Link.Count]'s
-// Read stands still from then on, and what they had sent before is carried
-// as it would have been.
+// It returns once the link reads none of them any more, so what
+// [Link.Count] says it read of them stands still from then on, and what they
+// had sent before is carried as it would have been. A connection that binds
+// the account LATER — a leaf's redial — is stopped as it binds, and brings
+// into the count what the link read of it to learn its account (its INFO and
+// the CONNECT naming it), which the count then holds still too.
 //
 // IT STOPS READING, RATHER THAN READ AND HOLD, because a sender's kernel
 // counts what the relay's kernel takes as delivered: a link that read on
@@ -735,14 +784,17 @@ func (l *Link) accept(ctx context.Context) {
 }
 
 // track records p for the case's end to close, and refuses it once that end
-// has begun, so no connection outlives the link.
-func (l *Link) track(p *pair) bool {
+// has begun, so no connection outlives the link; and takes the buffers its
+// sockets hold into what the link reports, before a case can find it.
+func (l *Link) track(p *pair, held Buffers) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.shut {
 		return false
 	}
 	l.pairs[p] = struct{}{}
+	l.buffers.Receive = max(l.buffers.Receive, held.Receive)
+	l.buffers.Send = max(l.buffers.Send, held.Send)
 	return true
 }
 
@@ -772,6 +824,15 @@ func (l *Link) carry(ctx context.Context, in net.Conn) {
 		_ = in.Close()
 		return
 	}
+	// ONCE BOTH ARE CONNECTED, which is when darwin settles their buffers
+	// ([Link.Buffers]). A link that cannot say what its sockets hold
+	// carries nothing over them.
+	held, err := heldBy(in, out)
+	if err != nil {
+		_ = in.Close()
+		_ = out.Close()
+		return
+	}
 	p := newPair(in, out)
 	// EITHER SIDE ENDING ENDS THE OTHER: closing the pair fails the read or
 	// the write each of its goroutines is blocked in, and stops every wait
@@ -780,7 +841,7 @@ func (l *Link) carry(ctx context.Context, in net.Conn) {
 	toward := l.leg(p, ToBroker, in, out, l.toward)
 	toward.sniff = &sniffer{}
 	back := l.leg(p, ToNode, out, in, l.back)
-	if !l.track(p) {
+	if !l.track(p, held) {
 		p.close()
 		return
 	}
@@ -797,6 +858,29 @@ func (l *Link) carry(ctx context.Context, in net.Conn) {
 		})
 	}
 	wg.Wait()
+}
+
+// heldBy is the most the kernel holds any of conns' sockets' buffers to, each
+// way; a connection carried over no socket (a case's in-memory pipe) holds
+// none.
+func heldBy(conns ...net.Conn) (Buffers, error) {
+	var most Buffers
+	for _, c := range conns {
+		sc, ok := c.(syscall.Conn)
+		if !ok {
+			continue
+		}
+		raw, err := sc.SyscallConn()
+		if err != nil {
+			return Buffers{}, err
+		}
+		got, err := granted(raw)
+		if err != nil {
+			return Buffers{}, err
+		}
+		most.Receive, most.Send = max(most.Receive, got.Receive), max(most.Send, got.Send)
+	}
+	return most, nil
 }
 
 // pair is one connection the link carries: the node's, and the relay's own to
@@ -986,6 +1070,11 @@ func (l *Link) read(g *leg) {
 		}
 		buf := make([]byte, n)
 		k, err := g.src.Read(buf)
+		// COUNTED AGAINST ITS INFLIGHT AS IT IS READ, before a blackhole
+		// can park it, so a parked read is never outside the bound.
+		if g.flow != nil {
+			g.flow.took(k)
+		}
 		g.taken.Add(int64(k))
 		g.p.endRead()
 		if k > 0 {
@@ -1051,10 +1140,16 @@ func (g *leg) deliver(l *Link, stop <-chan struct{}) {
 	g.own.deliver(g.dst, g.how.rate, stop, hold, func(n int) { g.wrote(l, n) })
 }
 
-// wrote counts n bytes the leg has written to its destination, and hands the
-// crossing to whoever watches the link ([Link.Watch]), waiting for it.
+// wrote counts n bytes the leg has written to its destination, makes room
+// for as many more on a fifo pacer, and hands the crossing to whoever watches
+// the link ([Link.Watch]), waiting for it. Counted carried BEFORE the room is
+// made, so what the link has read never runs more than inflight ahead of
+// what it carried, not even between the two.
 func (g *leg) wrote(l *Link, n int) {
 	g.carried.Add(int64(n))
+	if g.flow != nil {
+		g.flow.release(n)
+	}
 	l.mu.Lock()
 	watch := l.watch
 	var c Crossing
@@ -1115,10 +1210,14 @@ type flow struct {
 	// pending is what a fair pacer has still to carry of the connection,
 	// in order.
 	pending []byte
-	// queued is how many of the connection's bytes a fifo pacer has still
-	// to carry.
+	// queued is how many of the bytes the link has read of the connection
+	// a fifo link has still to write to the far side: from the read that
+	// took them, a read a [Link.Blackhole] holds included, until the leg
+	// has written them, so what the link has read of the connection runs
+	// ahead of what it has carried by queued, and queued never passes
+	// inflight.
 	queued int
-	// freed is signalled whenever a fifo pacer has carried some of them.
+	// freed is signalled whenever a fifo link has written some of them.
 	freed chan struct{}
 	// out is what the pacer has carried, written to the destination by
 	// the leg's own goroutine.
@@ -1170,7 +1269,9 @@ func (f *flow) leave() {
 
 // room is how many bytes the connection's source may be read for now: as many
 // as a read takes on a fair pacer, and on a fifo pacer what its inflight has
-// left, waiting while that is none; false once stop is closed.
+// left, waiting while that is none; false once stop is closed. ONE READER A
+// FLOW, so what room grants is still free when the read it sizes returns:
+// only that reader adds to queued ([flow.took]).
 func (f *flow) room(stop <-chan struct{}) (int, bool) {
 	b := f.b
 	if !b.fifo {
@@ -1191,6 +1292,34 @@ func (f *flow) room(stop <-chan struct{}) (int, bool) {
 	}
 }
 
+// took counts n bytes the leg has just read of the connection against its
+// inflight, on a fifo pacer, until [flow.release] lets them go.
+func (f *flow) took(n int) {
+	b := f.b
+	if !b.fifo {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	f.queued += n
+}
+
+// release lets go of n of the connection's bytes the leg has written to the
+// far side, on a fifo pacer, making room for more of it.
+func (f *flow) release(n int) {
+	b := f.b
+	if !b.fifo {
+		return
+	}
+	b.mu.Lock()
+	f.queued -= n
+	b.mu.Unlock()
+	select {
+	case f.freed <- struct{}{}:
+	default:
+	}
+}
+
 // enqueue puts p on the pacer, behind what the connection queued before.
 func (f *flow) enqueue(p []byte) {
 	b := f.b
@@ -1203,7 +1332,6 @@ func (f *flow) enqueue(p []byte) {
 		for len(p) > 0 {
 			n := min(len(p), Quantum)
 			b.queue = append(b.queue, segment{f: f, bytes: p[:n:n]})
-			f.queued += n
 			p = p[n:]
 		}
 	} else {
@@ -1296,23 +1424,19 @@ func (b *bottleneck) run(done <-chan struct{}, hold func() time.Duration) {
 	}
 }
 
-// carried hands what crossed to its connection, and makes room for more of it
-// on a fifo pacer.
+// carried hands what crossed to its connection, for its leg to write to the
+// far side. It makes no room on a fifo pacer: the leg does, once it has
+// written the piece ([flow.release]), so a far side slow to read, or a
+// watcher slow to return, holds its connection's reads back as a receiver's
+// window holds a sender's.
 func (b *bottleneck) carried(f *flow, piece []byte) {
 	b.mu.Lock()
-	if f.left {
-		b.mu.Unlock()
+	left := f.left
+	b.mu.Unlock()
+	if left {
 		return
 	}
-	if b.fifo {
-		f.queued -= len(piece)
-	}
-	b.mu.Unlock()
 	f.out.push(chunk{bytes: piece})
-	select {
-	case f.freed <- struct{}{}:
-	default:
-	}
 }
 
 // backlog is what a side has sent and the link has not carried yet, in the

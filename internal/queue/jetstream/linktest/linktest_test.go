@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -68,8 +69,15 @@ func (p *pipes) dial(ctx context.Context) (net.Conn, error) {
 // broker's.
 func (p *pipes) connect(t *testing.T, l *Link) (node, broker net.Conn) {
 	t.Helper()
+	return p.connectThrough(t, l, func(c net.Conn) net.Conn { return c })
+}
+
+// connectThrough is [pipes.connect] whose link reads the node's end through
+// what wrap makes of it.
+func (p *pipes) connectThrough(t *testing.T, l *Link, wrap func(net.Conn) net.Conn) (node, broker net.Conn) {
+	t.Helper()
 	node, relay := net.Pipe()
-	l.wg.Go(func() { l.carry(t.Context(), relay) })
+	l.wg.Go(func() { l.carry(t.Context(), wrap(relay)) })
 	broker = <-p.dialled
 	t.Cleanup(func() {
 		_ = node.Close()
@@ -303,10 +311,17 @@ func TestAWatcherIsHandedEachPieceALinkCarriesAsItCarriesIt(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		toward, back := sharedFIFO(floorRate, inflight)
 		l, far := bubbleLink(t, toward, back)
-		var seen []Crossing
-		var at []time.Duration
+		var (
+			mu   sync.Mutex
+			seen []Crossing
+			at   []time.Duration
+		)
 		start := time.Now()
+		// LOCKED, as [Link.Watch] says a watcher must be: it is called
+		// from each connection's and way's own goroutine.
 		l.Watch(func(c Crossing) {
+			mu.Lock()
+			defer mu.Unlock()
 			seen = append(seen, c)
 			at = append(at, time.Since(start))
 		})
@@ -315,6 +330,8 @@ func TestAWatcherIsHandedEachPieceALinkCarriesAsItCarriesIt(t *testing.T) {
 		write(node, pieces*ethernetSegment)
 		<-done
 		synctest.Wait()
+		mu.Lock()
+		defer mu.Unlock()
 		if len(seen) != pieces {
 			t.Fatalf("the watcher was handed %d crossings, want %d: one a quantum", len(seen), pieces)
 		}
@@ -339,6 +356,151 @@ func TestAWatcherIsHandedEachPieceALinkCarriesAsItCarriesIt(t *testing.T) {
 			t.Errorf("the link counts %+v once the connection ended, want %+v: kept", got, want)
 		}
 	})
+}
+
+// A FIRST-IN, FIRST-OUT LINK READS NO MORE OF A CONNECTION THAN ITS INFLIGHT
+// AHEAD OF WHAT IT HAS CARRIED, however long what it carried takes to be
+// written: a watcher that holds every crossing for several quanta, as a case
+// holds one while it samples a node's socket, holds the connection's reads
+// back with it, and a read a blackhole held when it began counts against the
+// inflight while it is held and once it is mended. The bound a case reading a
+// node's acknowledged bytes rests on: at most what the link carried, the
+// inflight and the pinned receive buffer.
+//
+// Red first: the pacer made room as each piece crossed, before it was
+// written, so a held watcher let the link read on into a backlog of crossed
+// pieces, and a held read was outside the count, so a mended link read a
+// whole inflight on top of it. Mutants: room made as the pacer carries a
+// piece; a held read left out of the count.
+func TestAFIFOLinkReadsNoMoreThanItsInflightAheadOfWhatItCarried(t *testing.T) {
+	const (
+		account  = "BULK"
+		pieces   = 32
+		inflight = 8 * ethernetSegment
+	)
+	connect := []byte(`CONNECT {"remote_account":"` + account + `"}` + "\r\n")
+	// bounded watches l, and is the most it has seen read ahead of what was
+	// carried, and how many crossings it was handed, each holding for hold.
+	bounded := func(l *Link, hold time.Duration) func() (int64, int) {
+		var (
+			mu    sync.Mutex
+			ahead int64
+			n     int
+		)
+		l.Watch(func(c Crossing) {
+			mu.Lock()
+			ahead = max(ahead, c.Count.Read-c.Count.Carried)
+			n++
+			mu.Unlock()
+			time.Sleep(hold)
+		})
+		return func() (int64, int) {
+			mu.Lock()
+			defer mu.Unlock()
+			return ahead, n
+		}
+	}
+	t.Run("a watcher holds every crossing", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			toward, back := sharedFIFO(floorRate, inflight)
+			l, far := bubbleLink(t, toward, back)
+			seen := bounded(l, 4*quantum)
+			node, broker := far.connect(t, l)
+			done := whenRead(broker, pieces*ethernetSegment)
+			write(node, pieces*ethernetSegment)
+			<-done
+			synctest.Wait()
+			ahead, n := seen()
+			if n != pieces {
+				t.Fatalf("the watcher was handed %d crossings, want %d", n, pieces)
+			}
+			if ahead > inflight {
+				t.Errorf("the link read %d bytes ahead of what it carried while the watcher held each crossing, want at most its inflight of %d",
+					ahead, inflight)
+			}
+		})
+	})
+	t.Run("a read held by a blackhole, then mended", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			toward, back := sharedFIFO(floorRate, inflight)
+			l, far := bubbleLink(t, toward, back)
+			seen := bounded(l, 0)
+			src := &hushedMidRead{}
+			node, broker := far.connectThrough(t, l, func(c net.Conn) net.Conn {
+				src.Conn = c
+				return src
+			})
+			total := len(connect) + pieces*ethernetSegment
+			done := whenRead(broker, total)
+			go func() { _, _ = node.Write(connect) }()
+			synctest.Wait()
+			if got := l.Count(account, ToBroker).Read; got != int64(len(connect)) {
+				t.Fatalf("the link read %d bytes of the account before the bulk, want its CONNECT's %d", got, len(connect))
+			}
+			// BLACKHOLED WHILE THE BULK'S FIRST READ IS IN FLIGHT, as a
+			// Blackhole that lands as a read returns: the read is held.
+			src.arm(func() {
+				for _, p := range l.bound(account, func(a *accountState) { a.silent = true }) {
+					p.hush()
+				}
+			})
+			write(node, pieces*ethernetSegment)
+			time.Sleep(crossing(inflight))
+			synctest.Wait()
+			if held := len(l.heldOf(account)); held != 1 {
+				t.Fatalf("the blackhole holds %d reads, want the 1 it landed in", held)
+			}
+			l.Mend(account)
+			<-done
+			synctest.Wait()
+			ahead, _ := seen()
+			if ahead > inflight {
+				t.Errorf("the mended link read %d bytes ahead of what it carried, want at most its inflight of %d: the held read counted in it",
+					ahead, inflight)
+			}
+			if got, want := l.Count(account, ToBroker), (Count{Read: int64(total), Carried: int64(total)}); got != want {
+				t.Errorf("the mended link counts %+v, want %+v: every byte", got, want)
+			}
+		})
+	})
+}
+
+// hushedMidRead is a node's end of a connection whose next read that returns
+// bytes, once armed, runs a function before it returns: a blackhole landing
+// while the link is in the read.
+type hushedMidRead struct {
+	net.Conn
+	then atomic.Pointer[func()]
+}
+
+func (h *hushedMidRead) arm(f func()) { h.then.Store(&f) }
+
+func (h *hushedMidRead) Read(b []byte) (int, error) {
+	n, err := h.Conn.Read(b)
+	if n > 0 {
+		if f := h.then.Swap(nil); f != nil {
+			(*f)()
+		}
+	}
+	return n, err
+}
+
+// heldOf is every read the link holds of account's connections.
+func (l *Link) heldOf(account string) []chunk {
+	var held []chunk
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for p := range l.pairs {
+		if p.account != account {
+			continue
+		}
+		p.mu.Lock()
+		for _, g := range p.legs {
+			held = append(held, g.parked...)
+		}
+		p.mu.Unlock()
+	}
+	return held
 }
 
 // fastRate is the rate a case carries a real leaf's links at, where what it

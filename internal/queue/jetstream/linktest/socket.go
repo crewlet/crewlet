@@ -28,7 +28,12 @@ func pin(_, _ string, c syscall.RawConn) error {
 
 // granted is the receive and send buffers the kernel holds the socket c is
 // the descriptor of to: Linux doubles what was asked, for its own bookkeeping
-// of each buffer's bytes, and darwin grants what was asked.
+// of each buffer's bytes, and holds the socket to that from then on; darwin
+// grants what was asked and then, on a connected socket, rounds each buffer
+// up to a whole number of the connection's segments as its handshake settles
+// them (XNU's tcp_mss: 65,536 asked becomes about 81.7 kB on loopback, whose
+// MTU is 16,384), on the socket accepted and the one dialled alike, never on
+// a listener ([Link.Buffers]).
 func granted(c syscall.RawConn) (Buffers, error) {
 	var (
 		got Buffers

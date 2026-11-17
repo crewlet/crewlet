@@ -12,15 +12,16 @@ import (
 // other size is red.
 const askedBuffer = 64 << 10
 
-// target is a broker stand-in on a loopback port: it takes one connection at
-// a time and reads everything sent on it, counting.
+// target is a broker stand-in on a loopback port: it reads everything sent
+// on each connection it takes, counting, and sends reply bytes back on each.
 type target struct {
 	ln       net.Listener
 	received atomic.Int64
 }
 
-// newTarget listens until the case ends.
-func newTarget(t *testing.T) *target {
+// newTarget listens until the case ends, sending reply bytes back on every
+// connection it takes.
+func newTarget(t *testing.T, reply int) *target {
 	t.Helper()
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -34,6 +35,9 @@ func newTarget(t *testing.T) *target {
 			c, err := ln.Accept()
 			if err != nil {
 				return
+			}
+			if reply > 0 {
+				go func() { _, _ = c.Write(make([]byte, reply)) }()
 			}
 			go func() {
 				defer func() { _ = c.Close() }()
@@ -113,20 +117,42 @@ func (l *Link) onlyPair(t *testing.T) *pair {
 }
 
 // EVERY SOCKET A LINK CARRIES OVER HOLDS THE BUFFERS IT REPORTS, the one it
-// accepted from the node and the one it dialled to the broker, each way: what
-// the kernel granted for the size the relay asks, which a case allows for
-// whole wherever an assertion rests on what a kernel holds that the relay has
-// not read. Granted is at least what was asked and at most twice it (Linux
-// doubles it for its own bookkeeping, darwin grants it as asked).
+// accepted from the node and the one it dialled to the broker, each way, once
+// a bulk has crossed each way — what an unpinned buffer grows with: what the
+// kernel granted for the size the relay asks, which a case allows for whole
+// wherever an assertion rests on what a kernel holds that the relay has not
+// read. Granted is at least what was asked and at most twice it (Linux
+// doubles it for its own bookkeeping, darwin rounds it up to whole segments,
+// [Link.Buffers]).
 //
 // Red first: a relay that pinned nothing reported Linux's unpinned send
-// buffer of 16 KiB, a quarter of what it asks. Mutant: the dialled socket
-// left unpinned, and its buffers are not the ones the link reports.
+// buffer of 16 KiB, a quarter of what it asks. Mutants: the dialled socket
+// left unpinned, and its buffers are not the ones the link reports; the
+// receive buffer left unpinned, and the bulk grows it past what was granted
+// (on every link that reads as fast as bytes come; a first-in, first-out
+// link reads too slowly for it to grow).
 func TestEverySocketALinkCarriesOverHoldsTheBuffersItReports(t *testing.T) {
+	// bulk is what crosses each way before the sockets are read: enough for
+	// an unpinned receive buffer to grow, as Linux's grows with the traffic
+	// its reader keeps up with.
+	const bulk = 4 << 20
 	for _, kind := range kinds {
 		t.Run(kind.name, func(t *testing.T) {
-			tg := newTarget(t)
+			tg := newTarget(t, bulk)
 			l := kind.open(t, tg.ln.Addr().String())
+			node, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", l.Addr())
+			if err != nil {
+				t.Fatalf("dial the link: %v", err)
+			}
+			t.Cleanup(func() { _ = node.Close() })
+			back := tally(node)
+			if _, err := node.Write(make([]byte, bulk)); err != nil {
+				t.Fatalf("send the bulk across the link: %v", err)
+			}
+			eventually(t, "the bulk crossed each way", func() bool {
+				return tg.received.Load() == bulk && back.Load() == bulk
+			})
+			p := l.onlyPair(t)
 			got := l.Buffers()
 			for way, n := range map[string]int{"receive": got.Receive, "send": got.Send} {
 				if n < askedBuffer || n > 2*askedBuffer {
@@ -134,12 +160,6 @@ func TestEverySocketALinkCarriesOverHoldsTheBuffersItReports(t *testing.T) {
 						way, n, askedBuffer, 2*askedBuffer, askedBuffer)
 				}
 			}
-			node, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", l.Addr())
-			if err != nil {
-				t.Fatalf("dial the link: %v", err)
-			}
-			t.Cleanup(func() { _ = node.Close() })
-			p := l.onlyPair(t)
 			for side, c := range map[string]net.Conn{"accepted from the node": p.in, "dialled to the broker": p.out} {
 				if held := buffersOf(t, c); held != got {
 					t.Errorf("the socket %s holds buffers of %+v, want the %+v the link reports", side, held, got)
@@ -185,7 +205,7 @@ func TestABlackholedSenderHasNoMoreAcknowledgedThanTheLinkReadAndItsBuffer(t *te
 	connect := []byte(`CONNECT {"remote_account":"` + account + `"}` + "\r\n")
 	for _, kind := range kinds {
 		t.Run(kind.name, func(t *testing.T) {
-			tg := newTarget(t)
+			tg := newTarget(t, 0)
 			l := kind.open(t, tg.ln.Addr().String())
 			// THE SENDER'S OWN BUFFERS ARE PINNED TOO, so its socket fills
 			// at a size it states rather than one it grows to.
@@ -252,20 +272,28 @@ func TestABlackholedSenderHasNoMoreAcknowledgedThanTheLinkReadAndItsBuffer(t *te
 				t.Fatalf("%d bytes wait unread in the link's socket once its window shut, want some and at most its pinned receive buffer's %d",
 					unread, most)
 			}
+			// WRITTEN FIRST here too: the writer may still be filling its
+			// own send buffer, and a piece it finishes between the two
+			// readings must not count as delivered.
+			w := written.Load()
 			unacked, _ := queued(t, node)
-			if delivered := before + written.Load() - int64(unacked); delivered > read+int64(unread) {
+			if delivered := before + w - int64(unacked); delivered > read+int64(unread) {
 				t.Fatalf("the sender's socket says it delivered %d bytes, want at most the %d the link read and the %d waiting unread",
 					delivered, read, unread)
 			}
 
 			l.Mend(account)
+			total := before + bulk
+			// ON THE LINK'S COUNT AS WELL AS THE TARGET'S: the relay counts
+			// a piece carried once its write returns, which may be after
+			// the target has read it. And before the writer's own end,
+			// which a mend that never read again would leave waiting.
+			eventually(t, "every byte carried on once mended", func() bool {
+				return tg.received.Load() == total && l.Count(account, ToBroker).Carried == total
+			})
 			if err := <-wrote; err != nil {
 				t.Fatalf("send into the mended link: %v", err)
 			}
-			total := before + bulk
-			eventually(t, "every byte carried on once mended", func() bool {
-				return tg.received.Load() == total
-			})
 			if got := l.Count(account, ToBroker); got.Read != total || got.Carried != total {
 				t.Fatalf("the mended link read and carried %+v, want %d of each: every byte", got, total)
 			}
