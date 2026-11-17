@@ -414,7 +414,10 @@ type PushRow struct {
 	PackBytes       int64         `json:"pack_bytes,omitempty"`
 	Introduced      []string      `json:"introduced,omitempty"`
 	IntroducedCount int           `json:"introduced_count,omitempty"`
-	ReceivedAt      time.Time     `json:"received_at"`
+	// Offered is an attempt's commits offered ([PushEntry.Offered]); absent on every other row, on an
+	// attempt that offered none or was not counted, and on rows recorded before [OfferedVersion].
+	Offered    int       `json:"offered,omitempty"`
+	ReceivedAt time.Time `json:"received_at"`
 }
 
 // CommandCounts is commands of a push counted by what became of each, in the

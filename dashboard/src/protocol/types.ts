@@ -8638,6 +8638,8 @@ export interface CodePushRow {
    */
   introduced?: string[];
   introduced_count?: number;
+  /** An attempt's commits offered: absent on every other row, and where none was counted. */
+  offered?: number;
   received_at: string;
 }
 

@@ -1013,6 +1013,16 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	if got := d.last(); !reflect.DeepEqual(got, proposal) {
 		t.Errorf("the committer was proposed %+v, want %+v", got, proposal)
 	}
+	// AN ATTEMPT'S, its one command refused by a protection, carrying the commits it offered.
+	tried := proposalTo(ref.ID, "019a0c2e-0000-7000-8000-00000000a11e")
+	tried.Commands[0].Result, tried.Commands[0].Reason = gitlet.ResultNG, gitlet.RefusalProtectedDirect
+	tried.Commands[0].Detail, tried.Offered = "takes no direct push", 2
+	if _, err = seam.Propose(ctx, tried); err != nil {
+		t.Fatalf("propose an attempt: %v", err)
+	}
+	if got := d.last(); !reflect.DeepEqual(got, tried) {
+		t.Errorf("the committer was proposed %+v, want the attempt %+v", got, tried)
+	}
 
 	// A COMPACTION'S PROPOSAL, every field of it and of its answer — a
 	// publication's, so its layer crosses too.
