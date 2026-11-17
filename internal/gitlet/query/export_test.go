@@ -101,3 +101,6 @@ func WindowStarts(names []string, size int) []int {
 	}
 	return out
 }
+
+// MaxPatchesRunPages is how many pages past the asked one a patches run cuts.
+const MaxPatchesRunPages = maxPatchesRunPages

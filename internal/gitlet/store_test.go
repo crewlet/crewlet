@@ -602,6 +602,7 @@ func (n *node) seedRows(repoID string, pushes, refs, packs int) {
 	}); err != nil {
 		n.t.Fatalf("seed %s's rows: %v", repoID, err)
 	}
+	gitlet.RecountChanges(n.t, n.db)
 }
 
 // A PURGE IS BOUNDED BY WHAT ITS PUSHES WEIGH: a repository with few push
@@ -626,6 +627,7 @@ func TestAPurgeIsBoundedByWhatItsPushesWeigh(t *testing.T) {
 			received_at, row_bytes)
 		SELECT printf('wide-%02d', i), ?, i + 1, 0, 'seed', 'operator', 'git', '[]', 0, ? FROM k`,
 		rows, id, width)
+	gitlet.RecountChanges(t, n.db)
 	late, err := gitlet.NewStore(gitlet.StoreOptions{
 		Publisher: n.pub, DB: n.db.Reader(), NodeID: n.id,
 		Now: func() time.Time { return harnessAt.Add(time.Hour + retention) },

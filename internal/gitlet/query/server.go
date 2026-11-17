@@ -946,6 +946,8 @@ func (r *read) answer(ctx context.Context, objs found, at cursor) (gitlet.GitAns
 		return r.checksFileRead(ctx, objs)
 	case gitlet.GitCodeFiles:
 		return r.codeFilesRead(ctx, objs)
+	case gitlet.GitExcerpts:
+		return r.excerptsRead(ctx, objs, at, m)
 	}
 	return r.compareRead(ctx, objs, m)
 }
@@ -1046,11 +1048,17 @@ func cursorOf(q gitlet.GitQuery) (cursor, error) {
 		// an entry's.
 		return parseCursor(q.Cursor, q.Kind, map[byte]int{'l': 1, 'b': 2, 'e': 1})
 	case gitlet.GitDiff:
+		if q.Diff.Patches {
+			return parseCursor(q.Cursor, q.Kind, map[byte]int{'w': 2})
+		}
 		if q.Diff.File != "" || q.Diff.FileB64 != "" {
 			return parseCursor(q.Cursor, q.Kind, map[byte]int{'p': 1})
 		}
 		return parseCursor(q.Cursor, q.Kind, map[byte]int{'f': 1})
 	case gitlet.GitInterdiff:
+		if q.Interdiff.Patches {
+			return parseCursor(q.Cursor, q.Kind, map[byte]int{'w': 2})
+		}
 		if q.Interdiff.File != "" || q.Interdiff.FileB64 != "" {
 			return parseCursor(q.Cursor, q.Kind, map[byte]int{'p': 1})
 		}
@@ -1071,6 +1079,13 @@ func cursorOf(q gitlet.GitQuery) (cursor, error) {
 	case gitlet.GitTreeCommits:
 		// A directory's last commits begin at its listing's n-th entry.
 		return parseCursor(q.Cursor, q.Kind, map[byte]int{'e': 1})
+	case gitlet.GitExcerpts:
+		// A page of excerpts begins at the n-th anchor, one the query names.
+		c, err := parseCursor(q.Cursor, q.Kind, map[byte]int{'x': 1})
+		if err == nil && c.a >= len(q.Excerpts.Anchors) {
+			return cursor{}, errBadCursor(q.Cursor, q.Kind, "an anchor of the read")
+		}
+		return c, err
 	}
 	// A comparison answers its first page of files and no more — a diff of
 	// its merge base and head reads the rest — a landed-in read one answer

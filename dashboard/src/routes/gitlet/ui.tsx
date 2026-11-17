@@ -1,7 +1,7 @@
 /**
  * The marks every Gitlet screen draws the same way: a commit's id, a branch,
  * who did something and when, what a directory entry is, and how a repository
- * is cloned.
+ * is cloned; a check's verdict, a tag.
  *
  * # Why they are one module
  *
@@ -18,10 +18,15 @@
 
 import "~/styles/gitlet.css";
 
-import type { ReactNode } from "react";
-import { Button, Copyable, InlineCode, Popover } from "@crewlethq/ui";
+import type { ComponentType, ReactNode } from "react";
+import { Button, Copyable, InlineCode, Popover, Spinner, Tag } from "@crewlethq/ui";
+import { ProductMark } from "@crewlethq/icons/product-mark";
 import {
   BookOpenGlyph,
+  CircleCheckGlyph,
+  CircleDashedGlyph,
+  CircleStopGlyph,
+  CircleXGlyph,
   FileCodeGlyph,
   FileTextGlyph,
   FolderGlyph,
@@ -29,13 +34,17 @@ import {
   LinkGlyph,
   PackageGlyph,
   SquareTerminalGlyph,
+  TagGlyph,
+  type GlyphProps,
 } from "@crewlethq/icons/glyphs";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { refName, shortOID } from "~/lib/code.ts";
 import { ago } from "~/lib/ago.ts";
+import { rollupWord } from "~/lib/checks.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
-import type { CodeTreeEntry } from "~/protocol/index.ts";
+import type { CodeCheckRollup, CodeTreeEntry } from "~/protocol/index.ts";
+import { repoHref } from "./paths.ts";
 
 /**
  * A commit's id: its first characters, and a press that copies the whole of
@@ -55,37 +64,58 @@ export function ShaChip({ oid }: { oid: string }) {
   );
 }
 
+/** Gitlet itself as a writer: a merge commit it built, a branch it moved. */
+export const GITLET = Object.freeze({ product: "gitlet" as const });
+
+/** Who did something: a seat's handle, a name, or Gitlet itself. */
+export type Who = string | typeof GITLET;
+
+/** The product mark's size at each face's: the kit avatar's 20, 26 and 32 px, or the words'. */
+const MARK_SIZE = { xs: 20, sm: 26, md: 32, text: "1.15em" } as const;
+
 /**
  * Who someone is, as a face: a seat by its handle or its name, off the chart —
  * an agent as its own character, a person as initials on the neutral badge —
  * or, for a name the chart does not hold (a git author line written by
- * somebody's own git), that name's initials. Decorative: the name is always
- * printed beside it.
+ * somebody's own git), that name's initials; Gitlet, its product mark.
+ * Decorative: the name is always printed beside it.
  */
 export function Face({
   who,
   size = "xs",
 }: {
-  who: string;
+  who: Who;
   /** A step, or `text`: a face inside a line of code or prose, sized by the words around it. */
   size?: "xs" | "sm" | "md" | "text";
 }) {
-  const badge = useSeatBadgeOf()(who);
+  const badge = useSeatBadgeOf();
+  if (typeof who !== "string") {
+    return (
+      <span className="code-face" aria-hidden="true">
+        <ProductMark
+          product={who.product}
+          size={MARK_SIZE[size]}
+          drawing={size === "text" ? "small" : "auto"}
+        />
+      </span>
+    );
+  }
+  const seat = badge(who);
   return (
     <SeatAvatar
-      name={badge.name || who}
+      name={seat.name || who}
       size={size}
-      kind={badge.kind === "human" ? "human" : "agent"}
-      avatar={badge.avatar}
+      kind={seat.kind === "human" ? "human" : "agent"}
+      avatar={seat.avatar}
       decorative
     />
   );
 }
 
-/** A seat's name off the chart, or the words it was given where the chart has none. */
-export function useWhoName(): (who: string) => string {
+/** A seat's name off the chart, the words it was given where the chart has none, or "Gitlet". */
+export function useWhoName(): (who: Who) => string {
   const badge = useSeatBadgeOf();
-  return (who) => badge(who).name || who;
+  return (who) => (typeof who === "string" ? badge(who).name || who : "Gitlet");
 }
 
 /**
@@ -100,7 +130,7 @@ export function Byline({
   now,
   children,
 }: {
-  who: string;
+  who: Who;
   verb?: ReactNode;
   at?: string | undefined;
   now: number;
@@ -249,5 +279,65 @@ export function RefName({ gitRef }: { gitRef: string }) {
     <BranchChip name={ref.name} />
   ) : (
     <span className="mono">{ref.name}</span>
+  );
+}
+
+/** Each rollup state's glyph and ink: a cross only for a failure, never for an absence. */
+const ROLLUP_LOOK: Readonly<
+  Record<string, { glyph: ComponentType<GlyphProps> | "spinner"; tone: string }>
+> = {
+  passed: { glyph: CircleCheckGlyph, tone: "success" },
+  failing: { glyph: CircleXGlyph, tone: "danger" },
+  running: { glyph: "spinner", tone: "info" },
+  pending: { glyph: CircleDashedGlyph, tone: "neutral" },
+  cancelled: { glyph: CircleStopGlyph, tone: "neutral" },
+};
+
+/**
+ * Where a commit's checks stand: a glyph and a word, toned by the rollup's state.
+ * `of` adds the required count to a pass: "Passed 2 of 2".
+ */
+export function CheckRollupMark({
+  rollup,
+  title,
+  of = false,
+}: {
+  rollup: CodeCheckRollup;
+  title: string;
+  of?: boolean;
+}) {
+  const look = ROLLUP_LOOK[rollup.state];
+  const Glyph = look?.glyph;
+  const count =
+    of && rollup.state === "passed" && rollup.required > 0
+      ? ` ${rollup.required_passed} of ${rollup.required}`
+      : "";
+  return (
+    <span className="code-check-mark" data-tone={look?.tone ?? "neutral"} title={title}>
+      {Glyph === "spinner" ? <Spinner size="sm" /> : Glyph && <Glyph size="sm" aria-hidden />}
+      <span className="code-check-mark__word">
+        {rollupWord(rollup)}
+        {count}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * A tag naming a commit: its glyph and name on the neutral outline, opening the
+ * repository's files at its whole ref, which no branch of the same name can shadow.
+ */
+export function TagChip({ repo, gitRef }: { repo: string; gitRef: string }) {
+  const name = refName(gitRef).name;
+  return (
+    <a
+      className="code-tag-chip"
+      href={repoHref(repo, { ref: gitRef })}
+      title={`Browse the files at ${name}`}
+    >
+      <Tag appearance="outline" size="xs" leadingIcon={<TagGlyph size="xs" />}>
+        {name}
+      </Tag>
+    </a>
   );
 }

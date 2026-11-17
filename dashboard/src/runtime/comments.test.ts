@@ -110,6 +110,16 @@ describe("the layout", () => {
       h: 40,
     });
   });
+  test("moves when an element inside the page scrolls, not only the page", async () => {
+    comments.receive({ mode: "show" });
+    document.querySelector("section")!.dispatchEvent(new Event("scroll"));
+    await frame();
+    expect(layouts()).toHaveLength(2);
+    comments.receive({ mode: "off" });
+    document.querySelector("section")!.dispatchEvent(new Event("scroll"));
+    await frame();
+    expect(layouts()).toHaveLength(2);
+  });
 });
 
 describe("placing", () => {
@@ -180,6 +190,24 @@ describe("the host's requests", () => {
     comments.receive({ reveal: { point: { x: 0.5, y: 0.5 } } });
     expect(scrollTo).toHaveBeenCalled();
     scrollTo.mockRestore();
+  });
+
+  test("a picture of a point of the viewport is the window around it at the page's scroll", () => {
+    const spies = [
+      vi.spyOn(window, "scrollY", "get").mockReturnValue(1500),
+      vi.spyOn(document.documentElement, "scrollHeight", "get").mockReturnValue(5000),
+      vi.spyOn(document.documentElement, "scrollWidth", "get").mockReturnValue(1000),
+    ];
+    try {
+      expect(comments.regionOf({ view: { x: 500, y: 300 } })).toEqual({
+        x: 500 - 240,
+        y: 1800 - 150,
+        w: 480,
+        h: 300,
+      });
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
   });
 
   test("a picture of a part is its box with a margin; one the page cannot draw is answered as none", async () => {

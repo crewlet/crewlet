@@ -73,6 +73,15 @@ func TestASignInOrLimitFieldTheEngineCannotUseIsRefused(t *testing.T) {
 			overrides: map[string]any{"models_docs": "http://example.com/models"},
 			want:      "models_docs",
 		},
+		"an alias version with no model": {
+			overrides: map[string]any{"model_aliases": []any{map[string]any{"id": "opus", "version": "5.5"}}},
+			want:      "model_aliases[0] (opus) sets one of model and version",
+		},
+		"an alias version its model does not name": {
+			overrides: map[string]any{"model_aliases": []any{map[string]any{"id": "opus",
+				"model": "claude-opus-5-5", "version": "6"}}},
+			want: "which its id does not name",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

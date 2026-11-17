@@ -192,9 +192,11 @@ func TestTheTombstoneSweepStaysInsideTheRecordsRowBudget(t *testing.T) {
 	for i := range MaxCommandsPerPush {
 		cmds = append(cmds, move(fmt.Sprintf("refs/heads/new-%04d", i), ZeroOID, oid(fmt.Sprint(i))))
 	}
-	if written := e.applyCounting(pushOf(t, "repo-a", pushEntry("big", cmds...))); written != MaxRecordRows {
-		t.Fatalf("the record wrote and removed %d rows, want exactly its budget of %d — "+
-			"the sweep takes what the push left", written, MaxRecordRows)
+	// Its day and pusher rows come on top of the budget, as an older build's sweep takes the same rows.
+	const activity = pushDayRows + pusherDayRows
+	if written := e.applyCounting(pushOf(t, "repo-a", pushEntry("big", cmds...))); written != MaxRecordRows+activity {
+		t.Fatalf("the record wrote and removed %d rows, want exactly its budget of %d and its %d activity rows: "+
+			"the sweep takes what the push left", written, MaxRecordRows, activity)
 	}
 	// The push wrote its refs, its pack, its push row and the counters; the
 	// sweep's mark is one more row.
