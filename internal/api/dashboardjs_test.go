@@ -2681,7 +2681,8 @@ const (
 	// 3,670 over main: 6619 KiB.
 	// Gitlet's commits with their checks, landing change and tags, filtered by seat and time:
 	// 6631.3 KiB (6,790,461 bytes), 12,721 over main: 6632 KiB.
-	treeBudget = 5<<20 + 1512<<10
+	// A Gitlet repository's home as a code host: 6645.2 KiB (6,804,636 bytes), 14,175 over main: 6646 KiB.
+	treeBudget = 5<<20 + 1526<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
