@@ -54,7 +54,10 @@ import (
 // ([Coordinator.keepRefused]), which is kept for its condition's signal
 // besides; and an answer that settled nothing, a claim another attempt holds or
 // a resume the run's row holds for the seat's budget ([HeldError]), whose
-// host's waiter would announce the job once that hold lifts. This node's memory
+// host's waiter would announce the job once that hold lifts; and a claim the
+// seat's recovery gate refused while a recovery pass of the seat ran here
+// ([ErrSeatRecovering], recoverygate.go), which the broker brings back past
+// the pass. This node's memory
 // of the job, a completion it keeps for a condition included, outlives neither
 // its restart nor its letting go of the seat, so while the clock runs the
 // delivery is the one copy of the completion that does. KEYED ON THE CLOCK,
@@ -200,7 +203,9 @@ import (
 // ([refirePublish]), past the seat's release and a lease it lost, and its own
 // line says so, never that a delivery was handed back to make the renewal
 // again: WHAT A REFUSED RENEWAL LEAVES IS ITS CALLER'S TO SAY
-// ([Coordinator.renewing], [Coordinator.refire]).
+// ([Coordinator.renewing], [Coordinator.refire]). A re-fire the seat's
+// recovery gate refused is renewed by nothing and kept for no backstop: the
+// pass that refused it re-fires it when it is done ([Coordinator.carryPastRecovery]).
 //
 // NOTHING IS RENEWED WHILE NEITHER THE CLOCK NOR THE ROW SAYS SO: a step this
 // node's own store did not answer is NAK'd and nothing more, since the waiter

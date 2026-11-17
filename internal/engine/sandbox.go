@@ -4108,19 +4108,28 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 	if control == "" {
 		return nil
 	}
-	// The subscription is attached BEFORE recovery, so a completion
-	// published in the window between the two is held rather than dropped.
-	// A detached run outlives its node, so that window is not hypothetical.
-	if err := e.backends.Queue.Subscribe(ctx, control, group,
-		func(ctx context.Context, ev *events.Event) queue.Result {
-			return controlOutcome(ctx, rt.coordinator.OnEvent(ctx, ev))
-		}); err != nil {
-		return fmt.Errorf("attaching the sandbox control topic: %w", err)
+	// The subscription is attached BEFORE the recovery reads the seat's
+	// runs, so a completion published in the window between the two is held
+	// rather than dropped. A detached run outlives its node, so that window
+	// is not hypothetical. And INSIDE the recovery's gate, which the pass
+	// closes before it attaches: a delivery from here is refused its claim,
+	// and handed back, until the pass is done, so none is claimed and
+	// resumed while the pass reads the runs, which on a seat already held
+	// (an apply bringing the runtime up) this node's admission alone did not
+	// keep from happening (internal/sandbox's recoverygate.go).
+	attach := func(ctx context.Context) error {
+		if err := e.backends.Queue.Subscribe(ctx, control, group,
+			func(ctx context.Context, ev *events.Event) queue.Result {
+				return controlOutcome(ctx, rt.coordinator.OnEvent(ctx, ev))
+			}); err != nil {
+			return fmt.Errorf("attaching the sandbox control topic: %w", err)
+		}
+		// ATTACHED FROM HERE, whatever recovery says: a release has to
+		// detach what this call attached, and a refused seat is released.
+		e.markSandboxSeat(handle, true)
+		return nil
 	}
-	// ATTACHED FROM HERE, whatever recovery says: a release has to detach
-	// what this call attached, and a refused seat is released.
-	e.markSandboxSeat(handle, true)
-	if err := rt.coordinator.RecoverSeat(ctx, handle, owner, epoch, e.inboxOf(seat.ID)); err != nil {
+	if err := rt.coordinator.RecoverSeat(ctx, handle, owner, epoch, e.inboxOf(seat.ID), attach); err != nil {
 		return err
 	}
 	// A SEAT TAKEN WHILE A PERSON'S STOP IS ON IT ends the runs its last
@@ -4273,7 +4282,12 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 // does not read, a reply kind it does not know, a seat or a company that is
 // not this node's): the completion waits for a node that can resume it, which
 // says nothing of the message, and NAK'd as the message's, a roll that kept an
-// older node holding the seat sent it to the poison. A refusal that names
+// older node holding the seat sent it to the poison. AND SO IS A CLAIM THE
+// SEAT'S RECOVERY GATE REFUSED ([sandbox.ErrSeatRecovering]): a recovery pass of
+// the seat is under way on this node, which claims none of its runs until the
+// pass is done, a second or so, so the delivery comes back past it on the
+// broker's backoff; it says nothing of the message, and acknowledged, the
+// completion would wait for the waiter's next announcement. A refusal that names
 // nothing to wait on is not one: it stays the message's (below). A DRAIN'S
 // CUT IS NOT ONE: it ends only the turn's admission context (internal/node's
 // cut), never the delivery's, so a hand-back it interrupted reads as no
@@ -4329,7 +4343,7 @@ func controlOutcome(ctx context.Context, err error) queue.Result {
 	case waits && !storeUnheard(err):
 		return queue.Ack()
 	case nodesFailure(ctx, err), errors.Is(err, sandbox.ErrResumeElsewhere),
-		errors.Is(err, sandbox.ErrSeatNotHeld):
+		errors.Is(err, sandbox.ErrSeatNotHeld), errors.Is(err, sandbox.ErrSeatRecovering):
 		return queue.NakNode(err)
 	}
 	return queue.Nak(err)

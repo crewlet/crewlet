@@ -630,7 +630,7 @@ func TestASeatThatMovesWhileItsExecutorLaunchesIsHandedOn(t *testing.T) {
 					}
 				}
 				if tc.recover {
-					if err := successor.RecoverSeat(ctx, seat.Handle(), "node-b:1", 7, noSeatInbox); err != nil {
+					if err := successor.RecoverSeat(ctx, seat.Handle(), "node-b:1", 7, noSeatInbox, nil); err != nil {
 						t.Errorf("the next holder's recovery: %v", err)
 					}
 				}

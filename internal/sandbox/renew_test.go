@@ -177,10 +177,11 @@ func newRenewRig(t *testing.T) *renewRig {
 // controlResult is what the engine's control handler leaves a delivery with,
 // for what these cases meet (internal/engine's controlOutcome): nil is
 // acknowledged; a refusal the handler hands on, a drain's and a seat let go
-// of's ([Draining], [SeatLost]), is deferred; a store's silence and every
-// delivery the coordinator marks as one no waiter announces again
-// ([ErrStoreSilent], [ErrUnannounced]) are NAK'd as the node's own, a refusal
-// so marked included; any other refusal on a condition that clears by waiting
+// of's ([Draining], [SeatLost]), is deferred; a store's silence, every
+// delivery the coordinator marks as one no waiter announces again and a claim
+// the seat's recovery gate refused ([ErrStoreSilent], [ErrUnannounced],
+// [ErrSeatRecovering]) are NAK'd as the node's own, a refusal so marked
+// included; any other refusal on a condition that clears by waiting
 // is acknowledged; every other error is NAK'd.
 func controlResult(err error) queue.Result {
 	if err == nil {
@@ -193,7 +194,7 @@ func controlResult(err error) queue.Result {
 		return queue.Defer(queue.DeferDraining, err.Error())
 	case waits && refused.Condition == SeatLost:
 		return queue.Defer(queue.DeferSeatMoved, err.Error())
-	case errors.Is(err, ErrStoreSilent), errors.Is(err, ErrUnannounced):
+	case errors.Is(err, ErrStoreSilent), errors.Is(err, ErrUnannounced), errors.Is(err, ErrSeatRecovering):
 		return queue.NakNode(err)
 	case waits:
 		return queue.Ack()

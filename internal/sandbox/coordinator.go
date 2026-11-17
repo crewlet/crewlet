@@ -1246,6 +1246,15 @@ type Coordinator struct {
 	finishing map[string]bool
 	frames    map[string]int
 
+	// recovering are the seats a recovery pass is under way for on this
+	// node, by handle, with the claims of their runs the pass carries once it
+	// is done; and live the claims of runs this node's attempts hold, by turn
+	// id, each counted from the gate that let it through until its attempt
+	// returns. Between them a seat's recovery pass and the claims of its runs
+	// on this node exclude each other (recoverygate.go). Under mu.
+	recovering map[string]*seatRecovery
+	live       map[string]*liveAttempt
+
 	hold  SeatHold
 	admit Admission
 	// gate is [CoordinatorOptions.Gate]; see [Coordinator.admitTurn].
@@ -1412,6 +1421,8 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		launchStops:  map[string]launchStop{},
 		finishing:    map[string]bool{},
 		frames:       map[string]int{},
+		recovering:   map[string]*seatRecovery{},
+		live:         map[string]*liveAttempt{},
 		hold:         opts.Hold,
 		admit:        opts.Admit,
 		gate:         opts.Gate,
@@ -1993,8 +2004,14 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 	// RELEASE OF ITS LAST CLAIM ([Coordinator.claimCompletion]): that release,
 	// made again, would give back a claim taken now while its collection is
 	// still working. The completion comes back on the queue's backoff, as one
-	// whose claim the store does not take does.
-	run, won, err := c.claimCompletion(ctx, ev, fence)
+	// whose claim the store does not take does. NOR WHILE THE SEAT'S RECOVERY
+	// PASS RUNS HERE: the claim's gate refuses it, and the caller's road
+	// carries it past the pass (recoverygate.go). Let through, the claim is
+	// this node's live attempt until this frame returns.
+	run, won, done, err := c.claimCompletion(ctx, ev, fence)
+	if done != nil {
+		defer done()
+	}
 	if err != nil {
 		return fmt.Errorf("sandbox: claiming %s: %w", ev.TurnID, err)
 	}
@@ -6464,6 +6481,24 @@ func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) e
 // held the seat before and asked after that holding's release is refused by
 // the queue rather than carried onto this one (seathold.go).
 //
+// attach, where not nil, attaches the seat's control topic: called once the
+// seat's recovery gate is closed and before the seat's runs are read, so a
+// completion published while nothing consumed the topic is held by the
+// subscription rather than dropped, and delivered into a gate that refuses its
+// claim until the pass is done (recoverygate.go). An attach that fails fails
+// the recovery.
+//
+// # The pass is exclusive with every claim of the seat's runs here
+//
+// The pass reads a claim it finds as one whose node stopped, and reaps it or
+// revives its answer, which is right only while no attempt of this node's own
+// holds it. So from the moment the pass begins until it is done, every claim
+// of the seat's runs on this node is refused ([ErrSeatRecovering]) and
+// carried past it, and a claim this node's attempt took before the pass began
+// is left to that attempt ([Coordinator.reapTail]): see recoverygate.go for
+// why the node's admission alone did not keep them apart, and who carries
+// what the gate refuses.
+//
 // PER-SEAT, and inside the acquire hook, because a fleet-wide boot scan is
 // wrong twice over: every node would re-mark and reap runs belonging to seats
 // its peers own, and a node that claims a seat LATER — a takeover, not a boot
@@ -6498,8 +6533,9 @@ func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) e
 //
 // # Each run it takes over is counted once
 //
-// The seat's control topic is attached before the recovery runs, so a recount
-// off it can land before the recovery or between a run's fence and its count.
+// The seat's control topic is attached before the recovery reads the seat's
+// runs, so a recount off it can land before the recovery's count or between a
+// run's fence and its count.
 // So the recovery COUNTS THROUGH THE ONE MECHANISM every write that moves a
 // run's count takes (countwrite.go): before any fence it records the takeover
 // of every run its listing found, and starts the seat's counts afresh from
@@ -6514,31 +6550,54 @@ func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) e
 // to an answer match with nothing more to answer, and a tail a recount had
 // counted kept the seat held after its reap.
 func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epoch int64,
-	inbox queue.Attachment) error {
+	inbox queue.Attachment, attach func(context.Context) error) error {
+	// THE SEAT'S RECOVERY GATE CLOSED FIRST, before anything can deliver to
+	// the seat: no claim of its runs on this node from here until the pass is
+	// done, and every claim this node's attempts already hold is left to them
+	// (recoverygate.go).
+	c.beginRecovery(handle)
+	var (
+		takeovers []*countWrite
+		tally     recovery
+		seen      map[signal]uint64
+	)
+	// EVERY TAKEOVER IS SETTLED ON EVERY WAY OUT, a panic included: one left
+	// out holds every later move on its run (countwrite.go). THEN THE GATE
+	// OPENS, and what it refused meanwhile is carried: each completion
+	// re-fired, each answer's next attempt armed ([Coordinator.endRecovery]).
+	// AND ONLY THEN ARE THE REFUSALS THE SEAT OWES RE-ARMED, so a re-fire's
+	// claim moves a run the pass is done with ([Coordinator.rearmOwed]), and
+	// the resumes its rows hold kept ([Coordinator.keepHeldRows]), neither
+	// starting a second re-fire of a job the gate's carry re-fired
+	// ([Coordinator.carriedLocked]).
+	defer func() {
+		for _, w := range takeovers {
+			c.settleWrite(w)
+		}
+		c.endRecovery(ctx, handle)
+		c.rearmOwed(ctx, tally.owed)
+		c.keepHeldRows(ctx, tally.held, seen)
+	}()
+	// THE CONTROL TOPIC INSIDE THE GATE: a completion published while the
+	// seat was not consumed here is held by the subscription and delivered
+	// from here on, and refused by the gate until the pass is done, so none
+	// is claimed while it runs.
+	if attach != nil {
+		if err := attach(ctx); err != nil {
+			return fmt.Errorf("sandbox: recovering %s: %w", handle, err)
+		}
+	}
 	// THE ATTACHMENT FIRST, before anything this recovery counts can ask
 	// for the seat's hold: every hold from here is taken for it.
 	c.attachInbox(handle, inbox)
 	// WHAT WAS SIGNALLED BEFORE THE SEAT'S RUNS ARE READ, for the keep of
 	// each resume a row holds ([Coordinator.keepHeldRows]).
-	seen := c.signalsSeen()
+	seen = c.signalsSeen()
 	active, err := c.pending.ListActiveForSeat(ctx, handle)
 	if err != nil {
 		return fmt.Errorf("sandbox: recovering %s: %w", handle, err)
 	}
-	takeovers := c.takingOver(ctx, handle, active)
-	var tally recovery
-	// EVERY TAKEOVER IS SETTLED ON EVERY WAY OUT, a panic included: one left
-	// out holds every later move on its run (countwrite.go). AND ONLY THEN
-	// ARE THE REFUSALS THE SEAT OWES RE-ARMED, so a re-fire's claim moves a
-	// run the pass is done with ([Coordinator.rearmOwed]), and the resumes
-	// its rows hold kept ([Coordinator.keepHeldRows]).
-	defer func() {
-		for _, w := range takeovers {
-			c.settleWrite(w)
-		}
-		c.rearmOwed(ctx, tally.owed)
-		c.keepHeldRows(ctx, tally.held, seen)
-	}()
+	takeovers = c.takingOver(ctx, handle, active)
 	if len(active) == 0 {
 		return nil
 	}
@@ -6701,7 +6760,19 @@ const (
 	// reapOwed: a revival that did not land, kept for this node's retry with
 	// the seat's mail held behind it ([Coordinator.oweRevival]).
 	reapOwed
+	// reapLive: refused, the claim being this node's own live attempt's
+	// ([errReapLive]): left to that attempt, which drives it, and counted
+	// where it is, a claim holding the seat.
+	reapLive
 )
+
+// errReapLive is the invariant a reap refuses on: a claim this node's own live
+// attempt holds is never a tail its node abandoned. The recovery gate keeps the
+// two apart (recoverygate.go), so meeting one says the gate let a claim through
+// that it should not have; the reap refuses it all the same, since reaping it
+// ended a turn under the review still running it.
+var errReapLive = errors.New("sandbox: invariant broken: a reap reached a claim this node's own " +
+	"live attempt holds, which the seat's recovery gate keeps from every pass")
 
 // recoverRun takes over one run of a seat this node has just acquired, and
 // reports the status the seat counts it in from here
@@ -6755,6 +6826,10 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 		case reapLeft, reapOwed:
 			// Another lease's to reap, gone, or a revival this node
 			// retries with the seat's mail held behind it.
+		case reapLive:
+			// THIS NODE'S OWN LIVE CLAIM, left to the attempt that holds
+			// it, and counted as the claim holding the seat it is.
+			return run.Status
 		}
 		return ""
 	}
@@ -7046,6 +7121,16 @@ func (c *Coordinator) fenceRun(ctx context.Context, run PendingRun, owner string
 func (c *Coordinator) reapTail(ctx context.Context, run PendingRun, owner string, epoch int64,
 ) (*PendingRun, reaped) {
 	fence := Fence{Owner: owner, Epoch: epoch}
+	if run.Status == StatusResumed && c.liveHere(run.TurnID) {
+		// NOT A TAIL ANYBODY ABANDONED: this node's own attempt holds the
+		// claim, and is collecting or resuming it now ([errReapLive]).
+		log.ErrorContext(ctx, "sandbox_reap_refused_live_claim",
+			"turn_id", run.TurnID, "agent", run.AgentHandle, "launch_id", run.LaunchID,
+			"error", errReapLive.Error(),
+			"detail", "the claim is left to this node's attempt that holds it; the seat's recovery gate "+
+				"should have kept the pass and the claim apart, and did not")
+		return nil, reapLive
+	}
 	if run.Status == StatusResumed {
 		fenced, still, decided := c.fenceClaim(ctx, run, owner, epoch)
 		if !decided {

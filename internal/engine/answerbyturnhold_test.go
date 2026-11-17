@@ -88,7 +88,7 @@ func newBusySeat(t *testing.T, resume func(*busySeat) sandbox.Resumer) *busySeat
 	}
 	// THE SEAT TAKEN, as a node's acquisition takes it: recovered for the
 	// attachment of its inbox before the attach, which every hold names.
-	if err := coordinator.RecoverSeat(ctx, "swe", "node-a", 1, fixtureAttachment(t, q, "swe")); err != nil {
+	if err := coordinator.RecoverSeat(ctx, "swe", "node-a", 1, fixtureAttachment(t, q, "swe"), nil); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	s.mail = watchAcks(q, s.inbox(), s.control())

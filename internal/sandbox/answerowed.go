@@ -1236,6 +1236,25 @@ func (c *Coordinator) resumeOwedAdmitted(adm admitted, run PendingRun, answer *R
 	words AnswerWords, fence Fence, seen map[signal]uint64,
 ) (kept bool) {
 	ctx := adm.ctx
+	// THROUGH THE SEAT'S RECOVERY GATE FIRST ([Coordinator.claimGateLocked]):
+	// while a recovery pass of the seat runs on this node no claim of its runs
+	// is taken, and the answer, still recorded on its run and owed here, is
+	// handed to the pass, which arms its series at once when it is done. Taken
+	// meanwhile, the pass found its own node's live claim resumed and revived
+	// or reaped it under the turn this attempt was resuming. Let through, the
+	// claim is this node's live attempt until this frame returns.
+	c.mu.Lock()
+	done, gated := c.claimGateLocked(run.AgentHandle, run.TurnID)
+	c.mu.Unlock()
+	if gated != nil {
+		log.InfoContext(ctx, "sandbox_answer_recovery_refused",
+			"turn_id", run.TurnID, "agent", run.AgentHandle, "launch_id", run.LaunchID,
+			"detail", "the seat's recovery pass is under way on this node, which claims none of its runs "+
+				"until the pass is done; the answer stays owed, and its next attempt is armed when the pass ends")
+		c.carryPastRecovery(ctx, run.AgentHandle, passCarry{answer: &run})
+		return false
+	}
+	defer done()
 	// INTO THE HOLDING SET, once, as the claim's answer is taken; recorded
 	// before the write, so a recount meanwhile counts the run as the answer it
 	// is still counted as (countwrite.go).
@@ -1855,7 +1874,7 @@ func (c *Coordinator) retryRevival(ctx context.Context, run PendingRun, launch s
 			return PendingRun{}, false
 		case reapRevived, reapMoved:
 			run = *moved
-		case reapLeft, reapEnded:
+		case reapLeft, reapEnded, reapLive:
 			c.settleOwed(ctx, handle, run.TurnID)
 			return PendingRun{}, false
 		}

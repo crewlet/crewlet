@@ -382,6 +382,14 @@ func (c *Coordinator) claimDoneLocked(turnID string) {
 // the release of the job's last claim: refused then, with [errReleaseOwed],
 // and the completion comes back for its retry. See the top of this file.
 //
+// THROUGH THE RECOVERY GATE FIRST ([Coordinator.claimGateLocked]), in the same
+// step: refused with [ErrSeatRecovering] while a recovery pass of the seat runs
+// on this node, which the caller's road carries past the pass
+// (recoverygate.go); and otherwise counted as this node's live attempt on the
+// run until the caller calls done, which it does once its attempt has
+// returned, whatever the claim answered. done is nil only beside an error the
+// gate or the release refusal returned.
+//
 // EITHER FAILURE IS THE STORE'S SILENCE ([ErrStoreSilent]), as every step a
 // collection cannot go on without is: a claim the store did not answer, and a
 // claim refused while the store has yet to take the release of the last one,
@@ -394,30 +402,42 @@ func (c *Coordinator) claimDoneLocked(turnID string) {
 // still recorded is proof the release landed: the release is settled, never
 // made again, and the seat's mail it held is let go.
 func (c *Coordinator) claimCompletion(ctx context.Context, ev types.ExecutorFinished, fence Fence,
-) (PendingRun, bool, error) {
+) (run PendingRun, won bool, done func(), err error) {
 	turnID, launch := ev.TurnID, ev.LaunchID
 	c.mu.Lock()
+	done, err = c.claimGateLocked(ev.AgentHandle, turnID)
+	if err != nil {
+		c.mu.Unlock()
+		log.InfoContext(ctx, "sandbox_completion_recovery_refused",
+			"turn_id", turnID, "agent", ev.AgentHandle, "launch_id", launch,
+			"detail", "the seat's recovery pass is under way on this node, which claims none of its runs "+
+				"until the pass is done; the completion is carried past it")
+		return PendingRun{}, false, nil, err
+	}
 	if c.releasingLocked(turnID, launch) {
 		c.mu.Unlock()
+		done()
 		log.InfoContext(ctx, "sandbox_completion_release_owed",
 			"turn_id", turnID, "agent", ev.AgentHandle, "launch_id", launch,
 			"detail", "this node is still giving back the job's last claim, or owes its release, which the "+
 				"coordination store did not answer; the job is claimed again once that release lands")
-		return PendingRun{}, false, storeSilent(ctx, errReleaseOwed)
+		return PendingRun{}, false, nil, storeSilent(ctx, errReleaseOwed)
 	}
 	c.claiming[turnID]++
 	c.mu.Unlock()
 	// AND UNCOUNTED ON EVERY WAY OUT, a panic in the claim included: a count
-	// left up held an owed release of the job back for good.
+	// left up held an owed release of the job back for good, and a live
+	// attempt left counted kept every later recovery of the seat off the run.
 	answered := false
 	defer func() {
 		if !answered {
 			c.mu.Lock()
 			c.claimDoneLocked(turnID)
 			c.mu.Unlock()
+			done()
 		}
 	}()
-	run, won, err := c.pending.ClaimForResume(ctx, turnID, CompletionTail(launch), fence)
+	run, won, err = c.pending.ClaimForResume(ctx, turnID, CompletionTail(launch), fence)
 	answered = true
 	c.mu.Lock()
 	c.claimDoneLocked(turnID)
@@ -447,5 +467,5 @@ func (c *Coordinator) claimCompletion(ctx context.Context, ev types.ExecutorFini
 	if owed {
 		c.settleOwed(ctx, ev.AgentHandle, turnID)
 	}
-	return run, won, storeSilent(ctx, err)
+	return run, won, done, storeSilent(ctx, err)
 }

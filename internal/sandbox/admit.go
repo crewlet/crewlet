@@ -321,7 +321,18 @@ func (c *Coordinator) recheckHeld(kept refusedCompletion, armed *keptRefire) {
 			c.forgetRefused(ev.TurnID)
 			return
 		}
-		if err := c.completeAtDeadline(ctx, ev, fence, refusal.Reason); err != nil {
+		err := c.completeAtDeadline(ctx, ev, fence, refusal.Reason)
+		switch {
+		case errors.Is(err, ErrSeatRecovering):
+			// THE SEAT'S RECOVERY PASS RUNS HERE, and its gate refused the
+			// claim: handed to the pass, which re-fires the completion when it
+			// is done, and that re-fire, still held here and past the
+			// deadline, ends the run (recoverygate.go). Left to the next
+			// backstop, the run waited five minutes past its deadline for a
+			// pass of a second or so.
+			unsettled = true
+			c.carryPastRecovery(ctx, ev.AgentHandle, passCarry{refire: &kept})
+		case err != nil:
 			unsettled = true
 			log.InfoContext(ctx, "sandbox_completion_held_unsettled",
 				"turn_id", ev.TurnID, "agent", ev.AgentHandle, "condition", string(kept.cond),
@@ -1179,6 +1190,13 @@ func (c *Coordinator) refire(kept refusedCompletion) {
 	case !before && started.Load() && c.hostClocked(kept.ev.TurnID, kept.ev.LaunchID):
 		// RENEWED BELOW: nothing else carries it.
 	case err == nil:
+		return
+	case errors.Is(err, ErrSeatRecovering):
+		// REFUSED BY THE SEAT'S RECOVERY GATE, whose pass runs here: handed
+		// to the pass, which re-fires it when it is done (recoverygate.go).
+		// Kept for the backstop instead, the job waited five minutes for a
+		// pass of a second or so.
+		c.carryPastRecovery(ctx, kept.ev.AgentHandle, passCarry{refire: &kept})
 		return
 	case before, c.hostClocked(kept.ev.TurnID, kept.ev.LaunchID):
 		log.InfoContext(ctx, "sandbox_completion_refire_unsettled",

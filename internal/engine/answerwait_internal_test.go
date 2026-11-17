@@ -306,7 +306,7 @@ func recoverHeld(t *testing.T, e *Engine, coordinator *sandbox.Coordinator, hand
 		t.Fatalf("the premise: this node holds %s", handle)
 	}
 	if err := coordinator.RecoverSeat(t.Context(), handle, fence.Owner, fence.Epoch,
-		e.inboxOf(seatIn(t, e, handle))); err != nil {
+		e.inboxOf(seatIn(t, e, handle)), nil); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 }

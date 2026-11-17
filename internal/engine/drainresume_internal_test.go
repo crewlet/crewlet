@@ -448,8 +448,10 @@ func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 // still reads held (sandbox.ErrSeatNotHeld that the coordinator did not name
 // sandbox.SeatLost, the refusal's record among them): where the run goes is
 // what failed, which the heartbeat settles within a beat, and nothing of the
-// message. A failure of the completion itself stays the message's, a resume
-// that ran past its deadline among them.
+// message. AND SO IS A CLAIM THE SEAT'S RECOVERY GATE REFUSED
+// (sandbox.ErrSeatRecovering): the seat's recovery pass runs on this node, and
+// the delivery comes back past it. A failure of the completion itself stays the
+// message's, a resume that ran past its deadline among them.
 //
 // Mutation: hand a store's silence, a broker's refusal or a cancelled handler
 // back with queue.Nak, and a delivery spent during an outage or a stop is kept
@@ -457,7 +459,8 @@ func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 // resume the coordination store failed is counted against the message; read
 // every condition as the node's, and the deadline's row is not; drop
 // sandbox.ErrSeatNotHeld from controlOutcome, and the newer lease's row counts
-// against the message.
+// against the message; drop sandbox.ErrSeatRecovering, and a delivery the
+// recovery gate refused counts against the message.
 func TestAStoreSilenceIsNeverTheMessagesFailure(t *testing.T) {
 	t.Parallel()
 	live := t.Context()
@@ -501,6 +504,8 @@ func TestAStoreSilenceIsNeverTheMessagesFailure(t *testing.T) {
 			sandbox.Because(sandbox.WhyProviderRefused, errors.New("e2b: 401"))), nodes: true},
 		"a refusal's record a newer lease's row refused": {err: fmt.Errorf("sandbox: the refusal of t1's "+
 			"completion (refused) is not recorded: %w", sandbox.ErrSeatNotHeld), nodes: true},
+		"a claim the seat's recovery gate refused": {err: fmt.Errorf("sandbox: claiming t1: "+
+			"sandbox: claiming run t1 of seat \"swe\": %w", sandbox.ErrSeatRecovering), nodes: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

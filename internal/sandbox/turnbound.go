@@ -139,13 +139,24 @@ func (c *Coordinator) pastDeadline(ctx context.Context, ev types.ExecutorFinishe
 // announces the job still ends the run within the backstop.
 //
 // No turn starts here, which is why no admission is asked: the claim, the
-// collection and the ending are the run's, and none of them is a turn.
+// collection and the ending are the run's, and none of them is a turn. But the
+// claim is a claim like any other, and meets the seat's recovery gate: a pass
+// of the seat under way on this node refuses it, and its road carries it past
+// the pass (recoverygate.go). Asking no admission, it was the one claim the
+// acquisition's own refusal of a seat still establishing never kept out of
+// that seat's recovery.
 func (c *Coordinator) completeAtDeadline(ctx context.Context, ev types.ExecutorFinished, fence Fence,
 	why string,
 ) error {
 	// A CLAIM OF THE JOB LIKE ANY OTHER, held to what this node still owes
-	// the job's last claim ([Coordinator.claimCompletion]).
-	run, won, err := c.claimCompletion(ctx, ev, fence)
+	// the job's last claim and to the seat's recovery gate
+	// ([Coordinator.claimCompletion]): asking no admission is not asking no
+	// gate, and a pass of the seat under way here refuses it, its caller's
+	// road carrying it past the pass (recoverygate.go).
+	run, won, done, err := c.claimCompletion(ctx, ev, fence)
+	if done != nil {
+		defer done()
+	}
 	if err != nil {
 		return fmt.Errorf("sandbox: claiming %s to end it at its deadline: %w", ev.TurnID, err)
 	}

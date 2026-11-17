@@ -736,7 +736,11 @@ func TestAClaimThatProvesABlockedHandBackLandedCountsItsRun(t *testing.T) {
 			t.Errorf("the premise: the hand-back landed = %v, %v", landed, landErr)
 		}
 	}
-	if _, onItsWay, claimErr := rig.coordinator.claimCompletion(live, payload, rigLease); claimErr != nil || !onItsWay {
+	_, onItsWay, done, claimErr := rig.coordinator.claimCompletion(live, payload, rigLease)
+	if done != nil {
+		done()
+	}
+	if claimErr != nil || !onItsWay {
 		t.Fatalf("the claim on its way = %v, %v; want it won on the run the hand-back put back",
 			onItsWay, claimErr)
 	}

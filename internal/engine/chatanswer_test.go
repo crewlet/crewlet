@@ -280,7 +280,7 @@ func (rig *chatAnswerRig) park(t *testing.T, wake *events.Event) {
 	}
 	// THE SEAT TAKEN WITH ITS RUN PARKED, as a node that holds it finds it.
 	if err := rig.coordinator.RecoverSeat(ctx, "swe", "node-a", 1,
-		fixtureAttachment(t, rig.queue, "swe")); err != nil {
+		fixtureAttachment(t, rig.queue, "swe"), nil); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 }
