@@ -490,7 +490,8 @@ tells the seats and people it concerns.
 
 **Find what waits on you.** **Gitlet › Changes** lists the open changes, and
 **Waiting on** narrows them to the ones waiting on you, on a review, on a fix
-or on a person. A record that concerns you leaves a notice in your
+or on a person. **Waiting on you**, above the list, names each change that waits on
+your review or your fix and why, with **Review** opening its files. A record that concerns you leaves a notice in your
 **Inbox** — the change, why you hear of it ("asked for your review", "asked
 to look again") and where its merge stands — whose **Open the diff** opens the
 change's page on its files. A seat is woken instead, told the change, why it
@@ -1083,7 +1084,10 @@ send.
 Report `running` when the run starts, then how it ended — `passed`,
 `failed`, `errored` or `cancelled` — with its `summary`, `tail` and
 `failures` (each a `path`, `line`, `test_id` and `message`, at the bounds an
-engine check keeps) and the run's `url`. Name the commit by `sha` and the
+engine check keeps), your JUnit report's `tests` (`total`, `failed`,
+`skipped`), and `log_lines`, how many lines the run's whole output has, with
+`tail_cut` where the `tail` you send begins inside a line, so a read of the
+check numbers the tail's lines, and the run's `url`. Name the commit by `sha` and the
 branch it is checked for by `checked_for` (the repository's default branch
 when left out), or by `change`, which reports for the change's head and
 target. An ending sent again is answered from the row, so a CI that retries a
@@ -1093,7 +1097,9 @@ a name the engine has queued at that commit for that branch is refused
 `native_check`, so the engine's result is never overwritten, and a name your
 CI reported first is left to it — the engine's dispatch queues nothing of a
 name the commit already holds an attempt of. So name your CI's checks apart
-from the ones `.crewlet/checks.yaml` defines.
+from the ones `.crewlet/checks.yaml` defines. During a rolling upgrade a data
+node of an earlier build refuses `tests`, `log_lines` and `tail_cut`; send the
+report again without them.
 
 ## Finding code
 

@@ -2715,7 +2715,9 @@ const (
 	// (6,917,984 bytes), 22,182 over main: 6756 KiB.
 	// The Gitlet repository rows and file beside its tree train, on kit 0.151.0: 6762.4 KiB
 	// (6,924,733 bytes), 28,931 over main: 6763 KiB.
-	treeBudget = 5<<20 + 1643<<10
+	// Gitlet's changes as code-host rows wherever they are listed, with their cards, state totals
+	// and sort: 6780.7 KiB (6,943,394 bytes), 18,661 over main: 6781 KiB.
+	treeBudget = 5<<20 + 1661<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

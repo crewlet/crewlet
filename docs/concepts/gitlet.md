@@ -2671,7 +2671,7 @@ one head share theirs: the same commit, judged by the same file.
 |---|---|
 | `check_queued` | An attempt is queued on a commit: what it is for (a change's head, a merge queue's candidate, a protected branch's tip, a bisection), the branch it is checked for, the checks file it was read from and its definition whole — so it runs under the definition it was queued with, whatever the file says by the time a box starts — whether that branch requires it, and why it was queued: dispatched, run again by a seat or a person, or queued again after its runner was lost — a person's own CI queues nothing, its report being the claim and the ending below. Or the attempt is recorded `skipped`: its change touched none of its `paths` |
 | `check_started` | A runner claims the attempt — and, once it has made one, names its box — or a person's CI reports its run started, placed `external` |
-| `check_finished` | The attempt ended: its state and why, its exit status, how long it ran, its summary (at most 4 KiB), the last 16 KiB of its output, the failures its reports named (at most 200, weighing at most 64 KiB, the rest counted), the link a person's CI reported, and the log a failed run kept |
+| `check_finished` | The attempt ended: its state and why, its exit status, how long it ran, its summary (at most 4 KiB), the last 16 KiB of its output, how many tests its JUnit report says ran, failed and were skipped, how many lines its whole output has and whether that last 16 KiB begins inside one, the failures its reports named (at most 200, weighing at most 64 KiB, the rest counted), the link a person's CI reported, and the log a failed run kept |
 | `checks_sweep` | The rows that ended before an instant are removed — the `code-retention` duty's, for a repository whose checks stopped ending, swept back to the 30 days once a row of it outlived them by a day ([How long a check is kept](#how-long-a-check-is-kept)) |
 | `check_dispatched` | The home read a target's checks file at its tip — or found none there — and **dispatched** the heads it names under it: the checks it queues at them for that target ride the record — each queued, skipped or errored as a `check_queued` record would set it — so a head's checks and its dispatch land together; with no heads, a moved target's reading refreshed ([How a head's checks are dispatched](#how-a-heads-checks-are-dispatched)) |
 
@@ -2702,6 +2702,15 @@ it in, and every record's apply is a **join**:
 A failed run's **log** is one object in the [object store](object-store.md),
 named by a `code_check_logs` row: a live reference, audited and carried by
 every backup, since nothing builds it again.
+
+**An ending's counts.** A run's tests are its JUnit report's, on a run that
+passed or failed. A failed run's output lines are counted in its box, over the
+bytes its tail ends at, so the tail is numbered: its first line is that count
+less the tail's own lines, plus one, and the ending says whether that first
+line began before the 16 KiB. A person's CI reports its own. The counts are
+kept only by data nodes of this build: one of an earlier build holds back each
+ending that carries them, and every later record of its repository's checks,
+until it is upgraded ([Which records an upgrade holds back](../guides/replication.md#which-records-an-upgrade-holds-back)).
 
 ### Who records a check
 
@@ -3223,9 +3232,9 @@ box's lifetime, and reads the attempt's row:
 
 | What happens | How the attempt ends |
 |---|---|
-| The command exits 0 | `passed`, its summary alone |
-| The command exits non-zero | `failed`, with the failures its reports name, the last 16 KiB of its output and its kept log |
-| The command runs past its timeout — the file's `timeout_seconds`, held to `code.checks.max_timeout_seconds`, from the command's start | `failed` `timed_out`, with its tail and its log, its box closed: the timeout is the check's own, so running past it measured the commit |
+| The command exits 0 | `passed`, its summary and its report's test counts |
+| The command exits non-zero | `failed`, with the failures its reports name, the last 16 KiB of its output, how many lines that output has, its kept log and its report's test counts |
+| The command runs past its timeout — the file's `timeout_seconds`, held to `code.checks.max_timeout_seconds`, from the command's start | `failed` `timed_out`, with its tail, how many lines its output had then, and its log, its box closed: the timeout is the check's own, so running past it measured the commit |
 | The box could not be made, or stopped answering for four polls in a row | `errored` `box_failed` |
 | A setup step failed — the git floor, the checkout — or a named secret resolved to nothing | `errored` `setup_failed` |
 | The file names a cell the company does not allow, or a secret it does not declare | `errored` `defs_invalid`, with no box |

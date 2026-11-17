@@ -970,8 +970,9 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Check: &gitlet.CheckDetail{CheckRow: gitlet.CheckRow{CheckKey: gitlet.CheckKey{RepoID: ref.ID,
 				OID: "6666666666666666666666666666666666666666", Target: "refs/heads/main", Name: "lint", Attempt: 1},
 				State: gitlet.CheckStatePassed}, Def: &gitlet.CheckDef{Name: "lint", Run: "make lint",
-				TimeoutSeconds: 60}, Tail: "ok", Failures: []gitlet.CheckFailure{{Path: "a.go", Line: 3,
-				TestID: "lint/a", Message: "unused"}},
+				TimeoutSeconds: 60}, Tail: "ok", Tests: &gitlet.CheckTests{Total: 9, Failed: 1, Skipped: 2},
+				LogLines: 40, TailFirstLine: 40, TailCut: true, Failures: []gitlet.CheckFailure{{Path: "a.go",
+					Line: 3, TestID: "lint/a", Message: "unused"}},
 				Log: &gitlet.CheckLog{Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte("l")), Size: 9}},
 			// A MERGE QUEUE'S ENTRIES, ITS TRAINS, A TARGET'S LANDINGS AND ITS
 			// GREEN ROW, every field of each.
@@ -1316,6 +1317,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Reason: gitlet.CheckReasonExit, ExitCode: &exit, DurationMs: 61_000, Summary: "2 of 40 failed",
 			Tail: "--- FAIL: TestRetry", Failures: []gitlet.CheckFailure{{Path: "upload/retry_test.go", Line: 12,
 				TestID: "TestRetry", Message: "want 2, got 3"}}, FailuresOmitted: 4,
+			Tests: &gitlet.CheckTests{Total: 40, Failed: 2, Skipped: 1}, LogLines: 1201, TailCut: true,
 			Log: &gitlet.CheckLog{Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte("log")), Size: 900},
 			URL: "https://ci.example.com/run/1", FinishedAt: created}},
 	} {

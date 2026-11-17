@@ -90,7 +90,7 @@ import { menuHold, type WriteAccess } from "~/lib/useWriteAccess.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { CodeChangeDetail, CodeRevisionRow, CodeVerdict } from "~/protocol/index.ts";
-import { ChangeStateTag, ReadinessMeter } from "../Changes.tsx";
+import { ChangeStateTag, ReadinessMeter } from "../ChangeRow.tsx";
 import { CodeNotFound } from "../NotFound.tsx";
 import { ReviewerPicker } from "../ReviewerPicker.tsx";
 import { CHANGE_TABS, changesHref, repoHref, type ChangeTab } from "../paths.ts";

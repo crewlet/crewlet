@@ -14,7 +14,8 @@ import { SessionReading } from "~/lib/frameSession.ts";
 import { DiffView, type DiffHunk } from "~/components/DiffView.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import type { CodeChangeSummary } from "~/protocol/index.ts";
-import { ChangesGrid } from "./Changes.tsx";
+import { ChangeRows, ChangeStateTag } from "./ChangeRow.tsx";
+import { Changes } from "./Changes.tsx";
 import { BranchChip } from "./ui.tsx";
 import { ComparePage } from "./commit/ComparePage.tsx";
 import { RepositoryPage } from "./repo/RepositoryPage.tsx";
@@ -63,9 +64,23 @@ const MOVED = [
     : {}),
 }));
 
+/** The changes Gitlet › Changes lists and the repositories its pickers offer, where a case sets them. */
+let listed: CodeChangeSummary[] | null = null;
+let repos: string[] | null = null;
+
 /** The engine, for one repository's comparison of feature into main, and one file. */
 function answer(url: URL): Response {
   switch (url.pathname) {
+    case "/query/code_changes":
+      if (!listed) break;
+      return json({
+        changes: url.searchParams.has("limit") ? [] : listed,
+        position: POSITION,
+        level: "session",
+      });
+    case "/query/code_repos":
+      if (!repos) break;
+      return json({ repos: repos.map((name) => ({ name })), position: POSITION, level: "session" });
     case "/query/code_blob":
       if (url.searchParams.get("path") !== "cmd/main.go") break;
       return json({
@@ -195,6 +210,8 @@ afterEach(() => {
   host?.remove();
   root = null;
   host = null;
+  listed = null;
+  repos = null;
   forgetTrees();
   forgetTreeChoice();
   vi.unstubAllGlobals();
@@ -460,21 +477,20 @@ function summary(number: number, state: string): CodeChangeSummary {
 
 const NONE = "rgba(0, 0, 0, 0)";
 
-// A CHIP ON A SELECTED ROW DRAWS NO GROUND (`aria-current` on its overlay or on
-// the row), and a state pill paints the kit's fill. Mutation: drop either arm
-// of the selected-row rule, or the merged pill's rule, and this fails.
+// A CHIP ON A SELECTED ROW DRAWS NO GROUND (the list's peeked row, or a grid's
+// `aria-current` row), and a state pill paints the kit's fill. Mutation: drop either
+// selected-row rule, or the merged pill's rule, and this fails.
 test("a branch chip draws no ground on a selected row, and a state pill paints its fill", async () => {
-  location.hash = "#/gitlet/changes?peek=change:web!42";
+  location.hash = "#/gitlet?peek=change:web!42";
   mount(
-    <ChangesGrid
-      rows={[summary(42, "open"), summary(41, "merged")]}
-      onLoadMore={undefined}
-      loadedNote={undefined}
-    />,
+    <>
+      <ChangeRows rows={[summary(42, "open"), summary(41, "merged")]} label="Changes" />
+      <ChangeStateTag state="merged" />
+    </>,
   );
   const rowOf = (ref: string) =>
     eventually(() => {
-      const row = [...document.querySelectorAll<HTMLElement>('[role="row"]')].find((r) =>
+      const row = [...document.querySelectorAll<HTMLElement>(".code-list__row")].find((r) =>
         r.textContent?.includes(ref),
       );
       expect(row).toBeTruthy();
@@ -482,6 +498,7 @@ test("a branch chip draws no ground on a selected row, and a state pill paints i
     });
   const picked = await rowOf("web!42");
   const other = await rowOf("web!41");
+  expect(picked.hasAttribute("data-current")).toBe(true);
   const grounds = (row: HTMLElement) =>
     [...row.querySelectorAll(".code-branch-chip")].map((c) => getComputedStyle(c).backgroundColor);
   expect(grounds(picked)).toEqual([NONE, NONE]);
@@ -489,7 +506,7 @@ test("a branch chip draws no ground on a selected row, and a state pill paints i
   const probe = document.createElement("span");
   probe.style.background = "var(--color-change-merged-fill)";
   host!.append(probe);
-  const pill = other.querySelector<HTMLElement>('.code-state[data-state="merged"]')!;
+  const pill = document.querySelector<HTMLElement>('.code-state[data-state="merged"]')!;
   expect(getComputedStyle(pill).backgroundColor).toBe(getComputedStyle(probe).backgroundColor);
   expect(getComputedStyle(probe).backgroundColor).not.toBe(NONE);
   flushSync(() => root?.unmount());
@@ -514,25 +531,24 @@ test("a branch chip draws no ground on a selected row, and a state pill paints i
   expect(getComputedStyle(chip).backgroundColor).toBe(NONE);
 });
 
-// A STATE PILL'S WORD IS CENTRED ON ITS GLYPH, the phone's stacked grid too,
-// whose kit rule sets a pictured value's words on their baseline. Mutation:
-// drop the pill word's `align-self`, and at 390px the word rides 4px high.
+// A STATE PILL'S WORD IS CENTRED ON ITS GLYPH at either width, where the kit's
+// stacked grid sets a pictured value's words on their baseline. Mutation:
+// drop the pill word's `align-self`, and the word rides high.
 for (const width of [1440, 390]) {
   test(`a state pill's word is centred on its glyph, at ${width}px`, async () => {
     await page.viewport(width, 900);
-    const states = ["open", "draft", "merged", "closed"];
+    const states = ["open", "draft", "merged", "closed"] as const;
     mount(
-      <ChangesGrid
-        rows={states.map((s, i) => summary(i + 1, s))}
-        onLoadMore={undefined}
-        loadedNote={undefined}
-      />,
+      <span>
+        {states.map((s) => (
+          <ChangeStateTag key={s} state={s} />
+        ))}
+      </span>,
       width,
     );
     const pills = await eventually(() => {
       const found = [...document.querySelectorAll<HTMLElement>(".code-state")];
       expect(found).toHaveLength(states.length);
-      if (width === 390) expect(document.querySelector("[data-stacked]")).not.toBeNull();
       return found;
     });
     const middle = (el: Element) => {
@@ -1156,6 +1172,190 @@ for (const [viewport, column] of [
     expect(box.right).toBeLessThanOrEqual(window.innerWidth);
   });
 }
+
+/** A change with its card, its title as long as `title` says. */
+function carded(number: number, title = `Change ${number}`): CodeChangeSummary {
+  return {
+    ...summary(number, "open"),
+    title,
+    source_ref: `refs/heads/feature/${"stream-".repeat(number % 3)}shell`,
+    revision: 3,
+    open_findings: number % 2,
+    work_item: { backend: "worklet", id: `t-${number}`, key: `ENG-${number}` },
+    readiness: {
+      met: 2,
+      total: 3,
+      first: "",
+      preconditions: [
+        { kind: "facts", state: "met", detail: "" },
+        {
+          kind: "approval",
+          state: "unmet",
+          detail: "",
+          waits_on: [{ handle: "jane", kind: "person" }],
+        },
+        { kind: "mergeable", state: "met", detail: "" },
+      ],
+    },
+    card: {
+      comments: number * 7,
+      reviews: 1,
+      changes_requested: 0,
+      reviewers: [{ handle: "jane", kind: "person", verdict: "approve", verdict_revision: 1 }],
+      checks: { state: "passed", counts: { passed: 2 }, required: 2, required_passed: 2 },
+    },
+  } as CodeChangeSummary;
+}
+
+/** A change whose branch is long enough that its meta wraps on a wide screen. */
+const WRAPPED = {
+  ...carded(105),
+  source_ref: `refs/heads/feature/${"stream-the-product-page-".repeat(6)}shell`,
+} as CodeChangeSummary;
+
+const ROWS = [
+  carded(42, "render: stream the product page's shell before its data"),
+  carded(7),
+  WRAPPED,
+];
+
+/** Each row's body and facts boxes, once the list has drawn. */
+const rowBoxes = () =>
+  eventually(() => {
+    const rows = [...document.querySelectorAll<HTMLElement>(".code-list__row")];
+    expect(rows).toHaveLength(ROWS.length);
+    return rows.map((row) => ({
+      row,
+      body: row.querySelector(".code-list__body")!.getBoundingClientRect(),
+      facts: row.querySelector(".code-list__facts")!.getBoundingClientRect(),
+      slots: [...row.querySelectorAll(".code-change-fact")].map(
+        (s) => s.getBoundingClientRect().left,
+      ),
+    }));
+  });
+
+// A CHANGE ROW'S FACTS LINE UP DOWN THE LIST, on the title's line however the meta wraps.
+// Mutation: size the slots by their content, or centre the facts on the row.
+test("a change row keeps its facts on its title's line at 1440 px, in columns down the card", async () => {
+  await page.viewport(1440, 900);
+  mount(<ChangeRows rows={ROWS} label="Changes" />, 1200);
+  const boxes = await rowBoxes();
+  for (const { row } of boxes) {
+    const title = row.querySelector(".code-list__title")!.getBoundingClientRect();
+    const facts = row.querySelector(".code-change-facts")!.getBoundingClientRect();
+    expect(Math.abs(facts.top - title.top)).toBeLessThanOrEqual(2);
+  }
+  const wrapped = boxes.at(-1)!.row.querySelector(".code-list__meta")!.getBoundingClientRect();
+  expect(wrapped.height).toBeGreaterThan(40);
+  const [first, ...rest] = boxes;
+  for (const other of rest) expect(other.slots).toEqual(first!.slots);
+});
+
+// A CHANGE ROW FOLDS WHERE ITS FACTS WOULD CRUSH ITS WORDS, a list under 820 px of its own.
+// Mutation: fold change rows at the phone's width alone, and a 720 px list keeps them beside.
+test("a change row stacks its facts under its words in a 720 px list", async () => {
+  await page.viewport(1440, 900);
+  mount(<ChangeRows rows={ROWS} label="Changes" />, 720);
+  const boxes = await rowBoxes();
+  for (const { row, body, facts } of boxes) {
+    expect(facts.top).toBeGreaterThanOrEqual(body.bottom - 1);
+    expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth);
+  }
+});
+
+// ON A PHONE THE FACTS GO UNDER THE WORDS, and nothing is wider than the column.
+// Mutation: drop the fold's facts rules, and the slots' fixed widths overflow the row.
+test("a change row stacks its facts under its words at 390 px, and nothing overflows", async () => {
+  await page.viewport(390, 900);
+  const long = carded(9, `render: ${"stream the product page's shell before its data ".repeat(4)}`);
+  mount(<ChangeRows rows={[...ROWS.slice(0, 2), long]} label="Changes" />, 358);
+  const boxes = await rowBoxes();
+  for (const { row, body, facts } of boxes) {
+    expect(facts.top).toBeGreaterThanOrEqual(body.bottom - 1);
+    expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth);
+  }
+  const list = document.querySelector<HTMLElement>(".code-list__rows")!;
+  expect(list.scrollWidth).toBeLessThanOrEqual(list.clientWidth);
+  // A MIDDLE DOT ENDS THE LINE ITS PART ENDS, never a line of its own.
+  const dots = [...document.querySelectorAll<HTMLElement>(".code-change-meta__dot")];
+  expect(dots.length).toBeGreaterThan(0);
+  for (const dot of dots) {
+    const range = document.createRange();
+    range.selectNodeContents(dot.parentElement!);
+    range.setEndBefore(dot);
+    const before = [...range.getClientRects()].filter((r) => r.width > 0).at(-1)!;
+    const at = dot.getBoundingClientRect();
+    expect(Math.abs(before.top + before.height / 2 - (at.top + at.height / 2))).toBeLessThan(
+      at.height / 2,
+    );
+  }
+});
+
+// THE ROW FOLDS BY ITS OWN LIST'S WIDTH, so Home's narrow card stacks it on a wide screen.
+// Mutation: fold on the page's container, and a 370 px card at 1440 keeps its facts beside.
+test("a change row folds by its own width in a 370 px card at 1440 px", async () => {
+  await page.viewport(1440, 900);
+  mount(<ChangeRows rows={ROWS} label="Changes" density="compact" />, 370);
+  const boxes = await rowBoxes();
+  for (const { row, body, facts } of boxes) {
+    expect(facts.top).toBeGreaterThanOrEqual(body.bottom - 1);
+    expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth);
+  }
+});
+
+/** Every option of the open list, once it holds `count`. */
+const optionsOf = (count: number) =>
+  eventually(() => {
+    const found = [...document.querySelectorAll<HTMLElement>('[role="option"]')];
+    expect(found).toHaveLength(count);
+    return found;
+  });
+
+/** Whether a point on the element's middle lands on it, nothing clipping or covering it. */
+function reachable(el: HTMLElement): boolean {
+  const box = el.getBoundingClientRect();
+  return el.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+}
+
+const FIVE = ["api", "docs", "infra", "mobile", "web"];
+
+// THE HEAD'S PICKER HANGS ITS LIST PAST A SHORT CARD: only the rows clip.
+// Mutation: clip the card that holds the head, and the list is cut off under one row.
+test("the Repository picker's list hangs whole past a card of one row", async () => {
+  await page.viewport(1440, 900);
+  listed = [carded(42)];
+  // FOUR AND EVERY REPOSITORY, as many rows as the bounded list shows without scrolling.
+  repos = FIVE.slice(0, 4);
+  location.hash = "#/gitlet";
+  mount(<Changes />, 1200);
+  await eventually(() => expect(document.querySelectorAll(".code-list__row")).toHaveLength(1));
+  const field = document.querySelector<HTMLInputElement>(
+    '.code-list__head input[aria-label="Repository"]',
+  )!;
+  field.click();
+  const options = await optionsOf(5);
+  for (const option of options) expect(reachable(option), option.textContent ?? "").toBe(true);
+});
+
+// NEW CHANGE'S REPOSITORIES STAND IN ITS POPOVER, in the flow, never under its scroll box.
+// Mutation: draw the picker's popup list inside the popover, and its rows are past its bottom.
+test("New change's repository list stands inside its popover", async () => {
+  await page.viewport(1440, 900);
+  listed = [carded(42)];
+  repos = FIVE;
+  location.hash = "#/gitlet";
+  mount(<Changes />, 1200);
+  const button = await eventually(() => {
+    const found = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === "New change",
+    );
+    expect(found).toBeTruthy();
+    return found!;
+  });
+  button.click();
+  const options = await optionsOf(FIVE.length);
+  for (const option of options) expect(reachable(option), option.textContent ?? "").toBe(true);
+});
 
 /** The shell's scroller at `height` holding the content column, so `100cqb` and the sticky pane resolve. */
 function mountScrolled(node: React.ReactNode, width: number, height: number) {

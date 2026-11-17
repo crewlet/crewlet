@@ -8732,7 +8732,17 @@ export interface CodePrecondition {
   waits_on?: CodeParty[];
   blockers?: CodeBlocker[];
   blockers_omitted?: number;
+  /** A queue precondition's live entry and its place; absent on every other kind. */
+  queue?: CodeQueuedFacts;
   detail: string;
+}
+
+/** A change's live entry in its target's merge queue, and its place (`gitlet.QueuedFacts`). */
+export interface CodeQueuedFacts {
+  entry_id: string;
+  target_ref: string;
+  state: (typeof QUEUE_STATES)[number] | (string & {});
+  place: number;
 }
 
 /**
@@ -10038,6 +10048,12 @@ export interface CodeCheckFailure {
 export interface CodeCheckDetail extends CodeCheckRow {
   def?: { name: string; run: string; timeout_seconds: number; paths?: string[]; run_in?: string };
   tail?: string;
+  /** Its JUnit report's counts; absent where none was read or from an older build. */
+  tests?: { total: number; failed?: number; skipped?: number };
+  /** Lines of the whole output, the tail's first line's number in it, and whether the tail begins inside that line; absent where uncounted. */
+  log_lines?: number;
+  tail_first_line?: number;
+  tail_cut?: boolean;
   failures?: CodeCheckFailure[];
   log?: { object: string; hash: string; size: number };
 }

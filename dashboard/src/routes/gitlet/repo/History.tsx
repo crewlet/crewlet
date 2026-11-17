@@ -55,7 +55,7 @@ import type {
 } from "~/protocol/index.ts";
 import { CodeList, useDayGroups, type ListDay } from "../CodeList.tsx";
 import { commitHref, repoHref } from "../paths.ts";
-import { ChangeRefPill } from "../Changes.tsx";
+import { ChangeRefPill } from "../ChangeRow.tsx";
 import { CheckRollupMark, Face, GITLET, ShaChip, TagChip, useWhoName, type Who } from "../ui.tsx";
 import { REFUSED_CODES, useCommitMarks, type MarksFailure } from "./marks.ts";
 import { RefPicker, revisionWord } from "./refs.tsx";
