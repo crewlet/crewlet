@@ -475,12 +475,16 @@ test-gitproc: git ## build the pinned gits and run gitproc's own suite on them (
 # (one of which punches what was read past the bound and reserves the room
 # ahead through those very calls), one run whose record passes the bound and is
 # given back as it is read, and one call through a harness whose group outlives
-# it, all under -race. On Linux `make test` runs them with the rest, so `check`
-# does not depend on it.
+# it, all under -race. Beside them it runs internal/sockcount's whole suite:
+# what a socket's kernel has done with its bytes, which darwin answers from
+# SO_NWRITE and the bytes written where Linux reads its own count, and which
+# the S3 backend's stall watch and a node's data-link meter both read. On
+# Linux `make test` runs them with the rest, so `check` does not depend on it.
 CAPTURE_CASES := ^(TestAPinIsHeldWhileAChildHoldsItsDescription|TestAProbeLeavesNoLockBehind|TestAPinRefusedByAnotherDescriptionIsAnError|TestNothingWrittenAfterTheEndIsRead|TestAPinLastsWhileAnyHolderHoldsTheDescription|TestAFileThatShrankUnderTheReaderIsRefused|TestACaptureOnAFilesystemWithoutPerDescriptionLocksIsRefused|TestAHeldCaptureIsEmptiedAtTheEnd|TestAnEscapedWriterCannotGrowItsCaptureAfterTheEnd|TestACapturePathReplacedBeforeItsReopenIsNamedAsSuch|TestACredentialCaptureIsInMemory|TestWhatWasReadPastTheBoundIsGivenBackAndRoomKeptAhead|TestARecordPastTheBoundIsReadWholeAndGivenBack|TestTheEndWaitsForTheHarnesssGroup)$$
 
-test-capture: ## run flock's pin cases and the harness capture's cases (ci: harness capture (macOS))
+test-capture: ## run flock's pin cases, the harness capture's cases and the socket counts' (ci: harness capture (macOS))
 	$(REQUIRED) $(SKIPGATE) -- $(GOTEST) -json -run '$(CAPTURE_CASES)' ./internal/flock/ ./internal/providers/llm/harness/
+	$(REQUIRED) $(SKIPGATE) -- $(GOTEST) -json ./internal/sockcount/
 
 ##@ The pinned Chromiums
 
