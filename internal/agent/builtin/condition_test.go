@@ -294,26 +294,18 @@ func TestEverySandboxClassIsACondition(t *testing.T) {
 	}
 }
 
-// EVERY CONDITION KIND IS THE NODE'S OR THE WORK'S, AND NEVER BOTH. A seat's
-// mail that failed on a condition of the infrastructure is handed back as the
-// failing node's own, and one that failed on anything else as the mail's, by
-// [builtin.InfrastructureKind] over the kind its record carries; so the side
-// of every kind is decided once, here. The work's side is exactly the kinds
-// worksKinds names, each one a piece of work can cause (a write the state log
-// refused for what it is, a deadline, an abandoned wait), and any coding
-// sandbox class sandboxClassSides leaves with the work, which today is none.
-// Every other condition, and every other kind the package declares, is the
-// node's. A state log's refusal of
-// the write itself and its every other refusal are two kinds, one a side
-// each, held for every reason the log names; and every class the sandbox
-// names has a side decided here, so a class added there fails until one is.
+// EVERY CONDITION KIND IS THE NODE'S OR THE WORK'S, AND NEVER BOTH, decided
+// once ([builtin.InfrastructureKind]): the work's side is exactly worksKinds
+// (a write the state log refused for what it is, a deadline, an abandoned
+// wait) and any sandbox class sandboxClassSides leaves with the work, today
+// none; every other declared kind and condition is the node's. The state log's
+// two kinds hold for every reason it names, and a sandbox class added there
+// fails until it has a side here (builtin's "Whose failure a condition is").
 //
-// Mutation: take a declared kind off InfrastructureKind's list and its rows go
-// red; put a kind of the work's on it and theirs do; read every state-log
-// write refusal under one kind and the write rows of the work's reasons do;
-// move a sandbox class to the work's side, or read every class as the work's,
-// and its rows do; declare a kind no condition is recorded under and the
-// declaration's row does.
+// Mutation: take a declared kind off InfrastructureKind's list, put a work's
+// kind on it, read every state-log refusal under one kind, move a sandbox
+// class to the work's side or read every class as the work's, or declare a
+// kind no condition is recorded under, and its rows go red.
 func TestEveryConditionKindIsTheNodesOrTheWorks(t *testing.T) {
 	t.Parallel()
 	works := func(kind string) bool {
