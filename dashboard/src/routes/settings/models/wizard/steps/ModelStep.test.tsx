@@ -16,9 +16,22 @@ import type { ModelsAnswer } from "~/protocol/models.ts";
 import { emptyDraft, type Draft } from "../draft.ts";
 import { ModelStep } from "./ModelStep.tsx";
 
+// Haiku carries no version: an alias the engine cannot resolve.
 const ALIASES = [
-  { id: "opus", name: "Opus", detail: "The harness's latest Opus" },
-  { id: "sonnet", name: "Sonnet", detail: "The harness's latest Sonnet" },
+  {
+    id: "opus",
+    name: "Opus",
+    detail: "The harness's latest Opus",
+    model: "claude-opus-5-5",
+    version: "5.5",
+  },
+  {
+    id: "sonnet",
+    name: "Sonnet",
+    detail: "The harness's latest Sonnet",
+    model: "claude-sonnet-5-5",
+    version: "5.5",
+  },
   { id: "haiku", name: "Haiku", detail: "The harness's latest Haiku" },
 ];
 
@@ -43,8 +56,8 @@ const answered: ModelsAnswer = {
 } as unknown as ModelsAnswer;
 
 let latest: Draft;
-function Step({ model }: { model: string }) {
-  const [draft, setDraft] = useState<Draft>({ ...emptyDraft(), key: "fast", model });
+function Step({ model, method = "api-key" }: { model: string; method?: Draft["method"] }) {
+  const [draft, setDraft] = useState<Draft>({ ...emptyDraft(), key: "fast", model, method });
   latest = draft;
   return (
     <ModelStep
@@ -58,11 +71,11 @@ function Step({ model }: { model: string }) {
 }
 
 /** Opens the step as an edit does: the aliases answer only after the first render. */
-function openEdit(model: string) {
+function openEdit(model: string, method?: Draft["method"]) {
   listing.answer = null;
-  const view = render(<Step model={model} />);
+  const view = render(<Step model={model} method={method} />);
   listing.answer = answered;
-  view.rerender(<Step model={model} />);
+  view.rerender(<Step model={model} method={method} />);
 }
 
 const checked = (name: string | RegExp) =>
@@ -81,6 +94,30 @@ test.each(ALIASES)(
     expect(checked(/^Another model/)).toBe(false);
     expect(screen.queryByRole("combobox", { name: /Model id/ })).toBeNull();
     expect(latest.model).toBe(id);
+  },
+);
+
+test("an alias names the version it resolves to beside its name, in the kit's secondary caption", () => {
+  openEdit("opus");
+  expect(screen.getByRole("radio", { name: /^Opus 5\.5The/ })).toBeTruthy();
+  expect(screen.getByRole("radio", { name: /^Sonnet 5\.5The/ })).toBeTruthy();
+  for (const label of screen.getAllByText("5.5")) {
+    expect(label.className).toContain("crewlet-text--caption");
+    expect(label.className).toContain("crewlet-text--tone-secondary");
+  }
+});
+
+test("an alias whose version the engine does not know shows no label", () => {
+  openEdit("opus");
+  expect(screen.getByRole("radio", { name: /^HaikuThe/ })).toBeTruthy();
+});
+
+test.each(["cloud", "unchanged"] as const)(
+  "a %s sign-in, which may resolve an alias elsewhere, shows no version",
+  (method) => {
+    openEdit("opus", method);
+    expect(screen.getByRole("radio", { name: /^OpusThe/ })).toBeTruthy();
+    expect(screen.queryByText("5.5")).toBeNull();
   },
 );
 

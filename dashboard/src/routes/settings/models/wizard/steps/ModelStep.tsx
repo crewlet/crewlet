@@ -14,6 +14,10 @@
  * names it as the catalogue does and says it is a fixed version, rather than
  * under the alias it resembles, which would move the model on its next save.
  *
+ * AN ALIAS NAMES THE VERSION IT FOLLOWS TODAY beside its name, as the engine's
+ * harness profile records it for the vendor's own service; a cloud or unchanged
+ * sign-in may route it elsewhere, and an unknown version shows nothing.
+ *
  * WHERE THE SUGGESTIONS COME FROM (N6): `llm_models`, the models.dev
  * catalogue for the harness's provider, read by the engine with no credential
  * (D1). Whether a plan reaches a model is the test call's question. With no
@@ -31,6 +35,7 @@ import {
   type ComboboxOption,
 } from "@crewlethq/ui";
 import { useQuery } from "~/lib/useQuery.ts";
+import type { ModelAlias } from "~/protocol/models.ts";
 import { product } from "../../words.ts";
 import { effortLevels, factsOf, modelId, namesProvider, type Draft } from "../draft.ts";
 
@@ -41,6 +46,20 @@ const MODEL_PLACEHOLDER: Readonly<Record<string, string>> = {
   opencode: "claude-sonnet-5-5",
   pi: "claude-sonnet-5-5",
 };
+
+/** An alias's name, with the version it resolves to when the sign-in reaches the vendor's own service. */
+function aliasLabel(alias: ModelAlias, draft: Draft) {
+  const known = alias.version && draft.method !== "cloud" && draft.method !== "unchanged";
+  if (!known) return alias.name;
+  return (
+    <>
+      {alias.name}{" "}
+      <Text as="span" variant="caption" tone="secondary">
+        {alias.version}
+      </Text>
+    </>
+  );
+}
 
 /** The value the effort control holds for the harness's default, which writes no `effort`. */
 const DEFAULT_EFFORT = "";
@@ -212,7 +231,7 @@ export function ModelStep({
           onChange(v);
         }}
         options={[
-          ...aliases.map((a) => ({ value: a.id, label: a.name, detail: a.detail })),
+          ...aliases.map((a) => ({ value: a.id, label: aliasLabel(a, draft), detail: a.detail })),
           {
             value: ANOTHER,
             label: "Another model",
