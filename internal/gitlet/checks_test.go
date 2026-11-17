@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -401,6 +402,8 @@ func TestTheLargestCheckRecordsFitARecord(t *testing.T) {
 	finished := gitlet.CheckFinished{CheckKey: key, State: gitlet.CheckStateFailed, Reason: gitlet.CheckReasonReported,
 		ExitCode: &exit, DurationMs: 1 << 40, Summary: wide(gitlet.CheckSummaryBytes),
 		Tail: wide(gitlet.CheckTailBytes), Failures: failures, FailuresOmitted: 1 << 30,
+		Tests:    &gitlet.CheckTests{Total: math.MaxInt, Failed: 1 << 30, Skipped: 1 << 30},
+		LogLines: math.MaxInt, TailCut: true,
 		Log:      &gitlet.CheckLog{Object: keyOf("log"), Hash: objstore.HashOf([]byte("log")), Size: gitlet.MaxCheckLogBytes},
 		Reporter: person, URL: "https://ci.example.com/" + wide(gitlet.MaxCheckURLBytes-len("https://ci.example.com/")),
 		FinishedAt: harnessAt}
@@ -498,5 +501,140 @@ func TestTheDefaultCheckTimeoutFitsTheShortestRemoteSession(t *testing.T) {
 	if got := config.CodeDefaultCheckMaxTimeout + gitlet.CheckBoxGrace; got != shortestSession {
 		t.Errorf("a check at the default timeout holds its box %s with its setup, want %s: the hour a box "+
 			"on E2B's smallest plan lives", got, shortestSession)
+	}
+}
+
+// AN ENDING'S COUNTS ARE HELD TO ITS TAIL: CheckFinished.Validate refuses, naming the field, tests
+// on a run that measured nothing, failed and skipped past the tests that ran, a negative line
+// count, lines with no tail or fewer than the tail's own, and a cut with no tail; and it accepts a
+// report of no tests on a passed run, lines equal to the tail's, and a cut without lines.
+//
+// Mutation: drop any one of the rules (its case validates, red).
+func TestAnEndingsCountsAreHeldToItsTail(t *testing.T) {
+	t.Parallel()
+	key := gitlet.CheckKey{RepoID: "0190f3c4-0000-7000-8000-0000000000c1", OID: oidOf("head"), Target: mainRef,
+		Name: "unit", Attempt: 1}
+	zero, one := 0, 1
+	failed := func(edit func(*gitlet.CheckFinished)) gitlet.CheckFinished {
+		f := gitlet.CheckFinished{CheckKey: key, State: gitlet.CheckStateFailed, Reason: gitlet.CheckReasonExit,
+			ExitCode: &one, Tail: "a\nb\nc\n", FinishedAt: harnessAt}
+		edit(&f)
+		return f
+	}
+	for name, tc := range map[string]struct {
+		f     gitlet.CheckFinished
+		field string
+	}{
+		"tests on an errored run": {gitlet.CheckFinished{CheckKey: key, State: gitlet.CheckStateErrored,
+			Reason: gitlet.CheckReasonBoxFailed, Tests: &gitlet.CheckTests{Total: 1}, FinishedAt: harnessAt}, "tests"},
+		"failed and skipped past the total": {failed(func(f *gitlet.CheckFinished) {
+			f.Tests = &gitlet.CheckTests{Total: 3, Failed: 2, Skipped: 2}
+		}), "tests"},
+		"a negative total": {failed(func(f *gitlet.CheckFinished) {
+			f.Tests = &gitlet.CheckTests{Total: -1}
+		}), "tests"},
+		"a negative line count": {failed(func(f *gitlet.CheckFinished) { f.LogLines = -1 }), "log_lines"},
+		"lines with no tail": {failed(func(f *gitlet.CheckFinished) { f.Tail, f.LogLines = "", 3 }),
+			"log_lines"},
+		"fewer lines than the tail's": {failed(func(f *gitlet.CheckFinished) { f.LogLines = 2 }), "log_lines"},
+		"a cut with no tail":          {failed(func(f *gitlet.CheckFinished) { f.Tail, f.TailCut = "", true }), "tail_cut"},
+	} {
+		err := tc.f.Validate()
+		if !errors.Is(err, gitlet.ErrInvalid) || !strings.Contains(err.Error(), ": "+tc.field+": ") {
+			t.Errorf("%s: Validate = %v, want ErrInvalid naming %s", name, err, tc.field)
+		}
+	}
+	for name, f := range map[string]gitlet.CheckFinished{
+		"a report of no tests on a passed run": {CheckKey: key, State: gitlet.CheckStatePassed,
+			Reason: gitlet.CheckReasonExit, ExitCode: &zero, Tests: &gitlet.CheckTests{}, FinishedAt: harnessAt},
+		"lines equal to the tail's": failed(func(f *gitlet.CheckFinished) {
+			f.Tests, f.LogLines = &gitlet.CheckTests{Total: 3, Failed: 1, Skipped: 2}, 3
+		}),
+		"a cut without lines": failed(func(f *gitlet.CheckFinished) { f.TailCut = true }),
+	} {
+		if err := f.Validate(); err != nil {
+			t.Errorf("%s: Validate = %v, want it valid", name, err)
+		}
+	}
+}
+
+// A TAIL IS NUMBERED FROM ITS OUTPUT'S LINES: its first line is the output's lines less the tail's
+// own, plus one, whether or not the two end in a newline.
+//
+// Mutation: number it the output's lines less the tail's newlines (the first case reads 0, red).
+func TestATailIsNumberedFromItsOutputsLines(t *testing.T) {
+	t.Parallel()
+	failing18 := strings.Repeat("--- FAIL: TestRetry\n", 18) // a failing run's last 18 lines
+	for _, tc := range []struct {
+		tail        string
+		lines, want int
+	}{
+		{"a\nb\nc\n", 3, 1}, {"a\nb", 2, 1}, {failing18, 1201, 1184}, {"a", 1, 1}, {"a\n", 0, 0}, {"", 4, 0},
+	} {
+		if got := gitlet.TailFirstLine(tc.lines, tc.tail); got != tc.want {
+			t.Errorf("TailFirstLine(%d, %q) = %d, want %d", tc.lines, tc.tail, got, tc.want)
+		}
+	}
+	for tail, want := range map[string]int{"": 0, "a": 1, "a\n": 1, "a\nb": 2, "\n\n": 2} {
+		if got := gitlet.TailLines(tail); got != want {
+			t.Errorf("TailLines(%q) = %d, want %d", tail, got, want)
+		}
+	}
+}
+
+// A CHECK READ ANSWERS ITS COUNTS AND NUMBERS ITS TAIL: the `check` read of an attempt whose
+// ending counted answers its tests, its lines, its cut and its tail's first line; an attempt
+// whose ending counted nothing answers none of them; and the `checks` listing answers none.
+//
+// Mutation: add the columns to checkColumns and the listing's rows (the listing carries
+// log_lines, red); drop the derivation (tail_first_line 0, red).
+func TestACheckReadAnswersItsCountsAndNumbersItsTail(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.ensure("web", described("web"), t1)
+	repo := n.mustID("web")
+	w, _, _, _ := checksWriterOn(t, n)
+	ctx := t.Context()
+	counted := gitlet.CheckKey{RepoID: repo, OID: oidOf("B"), Target: mainRef, Name: "unit", Attempt: 1}
+	plain := gitlet.CheckKey{RepoID: repo, OID: oidOf("B"), Target: mainRef, Name: "lint", Attempt: 1}
+	for _, key := range []gitlet.CheckKey{counted, plain} {
+		for _, r := range []gitlet.ChecksRequest{queueing(key, gitlet.QueueDispatch), claiming(key, "git-a", "")} {
+			res, err := w.Publish(ctx, r)
+			requireChecked(t, "queue and claim "+key.Name, res, err)
+		}
+		end := ending(key, gitlet.CheckStateFailed, gitlet.CheckReasonExit)
+		end.Finished.Tail = strings.Repeat("--- FAIL: TestRetry\n", 18)
+		if key == counted {
+			end.Finished.Tests = &gitlet.CheckTests{Total: 214, Failed: 1}
+			end.Finished.LogLines, end.Finished.TailCut = 1201, true
+		}
+		res, err := w.Publish(ctx, end)
+		requireChecked(t, "end "+key.Name, res, err)
+	}
+	stale := statelog.Freshness{Level: statelog.ReadStale}
+	read := func(key gitlet.CheckKey) gitlet.CheckDetail {
+		one, err := n.reader.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadCheck, Asker: ada, Repo: "web", Fresh: stale,
+			Checks: &gitlet.CheckQuery{OID: key.OID, Target: key.Target, Name: key.Name, Attempt: key.Attempt}})
+		if err != nil || one.Check == nil {
+			t.Fatalf("read %s: (%+v, %v)", key.Name, one.Check, err)
+		}
+		return *one.Check
+	}
+	got := read(counted)
+	if got.Tests == nil || *got.Tests != (gitlet.CheckTests{Total: 214, Failed: 1}) || got.LogLines != 1201 ||
+		!got.TailCut || got.TailFirstLine != 1184 {
+		t.Errorf("the counted attempt reads tests %+v, lines %d, cut %v, first line %d; want 214 and 1 failed, "+
+			"1201, cut, 1184", got.Tests, got.LogLines, got.TailCut, got.TailFirstLine)
+	}
+	if got := read(plain); got.Tests != nil || got.LogLines != 0 || got.TailCut || got.TailFirstLine != 0 {
+		t.Errorf("an attempt that counted nothing reads tests %+v, lines %d, cut %v, first line %d; want none",
+			got.Tests, got.LogLines, got.TailCut, got.TailFirstLine)
+	}
+	listed, err := n.reader.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadChecks, Asker: ada, Repo: "web", Fresh: stale})
+	if err != nil || len(listed.Checks) != 2 {
+		t.Fatalf("the listing read (%+v, %v), want both attempts", listed.Checks, err)
+	}
+	if encoded, err := json.Marshal(listed); err != nil || strings.Contains(string(encoded), "log_lines") {
+		t.Errorf("the listing answers an ending's counts (%v): %s", err, encoded)
 	}
 }

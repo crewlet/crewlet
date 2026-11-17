@@ -1082,9 +1082,16 @@ test("a branch table stacks at the phone's width, and at no other", () => {
   ]);
 });
 
-/** What is wrong with where a sheet folds Gitlet's code list: at the phone's width, and at no other. */
+/** The one wider fold: a change row's, whose facts would leave its words under about 400 px. */
+const CHANGE_ROW_FOLD = 820;
+
+/**
+ * What is wrong with where a sheet folds Gitlet's code list: at the phone's width of its own,
+ * and at CHANGE_ROW_FOLD for the rows holding a change's facts alone.
+ */
 function codeListFolds(css: string): string[] {
-  const phone = `@container page (width < ${PHONE_BREAKPOINT}px)`;
+  const phone = `@container code-list (width < ${PHONE_BREAKPOINT}px)`;
+  const changes = `@container code-list (width < ${CHANGE_ROW_FOLD}px)`;
   const out: string[] = [];
   let folds = false;
   for (const m of css.matchAll(/@(?:container|media)[^{]*/g)) {
@@ -1092,24 +1099,46 @@ function codeListFolds(css: string): string[] {
     const body = atRuleBody(css.slice(m.index), prelude);
     if (prelude === phone) {
       if (/\.code-list__row\s*\{[^}]*grid-template-areas:/.test(body)) folds = true;
+    } else if (prelude === changes) {
+      for (const rule of body.matchAll(/([^{}]+)\{/g)) {
+        for (const selector of rule[1]!.split(",").map((x) => x.trim())) {
+          if (/\.code-list/.test(selector) && !/:has\([^)]*\.code-change-facts/.test(selector)) {
+            out.push(`${prelude} names ${selector}, which holds no change's facts`);
+          }
+        }
+      }
     } else if (/\.code-list(?![\w-])|\.code-list[_-]/.test(body)) {
       out.push(`${prelude} names the code list`);
     }
   }
   if (!folds) out.push(`no ${phone} block folds .code-list__row's areas`);
+  if (!/\.code-list\s*\{[^}]*container:\s*code-list\s*\/\s*inline-size/.test(css)) {
+    out.push(".code-list is not the code-list inline-size container");
+  }
   return out;
 }
 
-// GITLET'S CODE LIST FOLDS WITH THE PHONE, by the page's own container, so a
-// list narrowed by a peek folds too; one second width would be a second phone.
-test("a code list folds at the phone's width, and at no other", () => {
+// GITLET'S CODE LIST FOLDS WITH THE PHONE BY ITS OWN WIDTH, so a list in a narrow card
+// (Home's code card) or beside a peek folds too; only a change row folds wider.
+test("a code list folds at the phone's width of its own, and a change row at its own", () => {
   expect(codeListFolds(sheet("gitlet.css"))).toEqual([]);
-  // IT CAN TELL: a fold at another width is reported, and so is a missing one.
-  const at720 =
-    "@container page (width < 720px) { .code-list__row { grid-template-areas: 'body'; } }";
+  // IT CAN TELL: the change rows' width folding any other row is reported.
+  const wide = `.code-list { container: code-list / inline-size; } @container code-list (width < ${PHONE_BREAKPOINT}px) { .code-list__row { grid-template-areas: 'body'; } } @container code-list (width < ${CHANGE_ROW_FOLD}px) { .code-list__row:has(.code-change-facts), .code-list__row { grid-template-areas: 'body'; } }`;
+  expect(codeListFolds(wide)).toEqual([
+    `@container code-list (width < ${CHANGE_ROW_FOLD}px) names .code-list__row, which holds no change's facts`,
+  ]);
+  // IT CAN TELL: a fold at another width, or on the page's container, is reported.
+  const own = ".code-list { container: code-list / inline-size; }";
+  const at720 = `${own} @container code-list (width < 720px) { .code-list__row { grid-template-areas: 'body'; } }`;
   expect(codeListFolds(at720)).toEqual([
-    "@container page (width < 720px) names the code list",
-    `no @container page (width < ${PHONE_BREAKPOINT}px) block folds .code-list__row's areas`,
+    "@container code-list (width < 720px) names the code list",
+    `no @container code-list (width < ${PHONE_BREAKPOINT}px) block folds .code-list__row's areas`,
+  ]);
+  const page = `@container page (width < ${PHONE_BREAKPOINT}px) { .code-list__row { grid-template-areas: 'body'; } }`;
+  expect(codeListFolds(page)).toEqual([
+    `@container page (width < ${PHONE_BREAKPOINT}px) names the code list`,
+    `no @container code-list (width < ${PHONE_BREAKPOINT}px) block folds .code-list__row's areas`,
+    ".code-list is not the code-list inline-size container",
   ]);
 });
 

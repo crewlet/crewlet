@@ -2,7 +2,10 @@ package checkrun_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -72,19 +75,47 @@ func (tokens) Mint(k gitlet.CheckKey, repo string, timeout time.Duration) (strin
 }
 
 // cell is one fake backend of the catalogue whose boxes run a check's command
-// until a case ends it: every spec it was asked for, and each box's job.
+// until a case ends it: every spec it was asked for, each box's job and the
+// output it ended with, which a line count in the box is run over.
 type cell struct {
 	*sandbox.FakeProvider
-	mu    sync.Mutex
-	specs []sandbox.Spec
-	boxes []*sandbox.FakeSandbox
-	ended map[string]bool
-	made  chan *sandbox.FakeSandbox
+	mu      sync.Mutex
+	specs   []sandbox.Spec
+	boxes   []*sandbox.FakeSandbox
+	ended   map[string]bool
+	outputs map[string]string
+	made    chan *sandbox.FakeSandbox
+	// count answers a box's line count in place of the shell, where a case sets it.
+	countLines func(cmd string) (sandbox.ExecResult, error)
 }
 
 func newCell() *cell {
-	return &cell{FakeProvider: sandbox.NewFakeProvider(), ended: map[string]bool{},
+	return &cell{FakeProvider: sandbox.NewFakeProvider(), ended: map[string]bool{}, outputs: map[string]string{},
 		made: make(chan *sandbox.FakeSandbox, 64)}
+}
+
+// counting answers the line count cmd over output as a box's shell does: run by /bin/sh over a
+// file holding output in place of the box's.
+func counting(cmd, output string) (sandbox.ExecResult, error) {
+	file, err := os.CreateTemp("", "check-output-")
+	if err != nil {
+		return sandbox.ExecResult{}, err
+	}
+	defer func() { _ = os.Remove(file.Name()) }()
+	_, err = file.WriteString(output)
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return sandbox.ExecResult{}, err
+	}
+	cmd = strings.Replace(cmd, sandbox.ShellQuote(checkrun.OutputFile), sandbox.ShellQuote(file.Name()), 1)
+	out, err := exec.Command("/bin/sh", "-c", cmd).Output()
+	var exited *exec.ExitError
+	if errors.As(err, &exited) {
+		return sandbox.ExecResult{ExitCode: exited.ExitCode(), Stdout: string(out)}, nil
+	}
+	return sandbox.ExecResult{Stdout: string(out)}, err
 }
 
 func (c *cell) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Sandbox, error) {
@@ -95,6 +126,15 @@ func (c *cell) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Sandbox, 
 	box := made.(*sandbox.FakeSandbox)
 	id := box.ID()
 	box.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
+		if strings.HasPrefix(cmd, "head -c ") {
+			c.mu.Lock()
+			output, counter := c.outputs[id], c.countLines
+			c.mu.Unlock()
+			if counter != nil {
+				return counter(cmd)
+			}
+			return counting(cmd, output)
+		}
 		if strings.HasPrefix(cmd, "kill -0 ") {
 			c.mu.Lock()
 			defer c.mu.Unlock()
@@ -119,6 +159,7 @@ func (c *cell) end(box *sandbox.FakeSandbox, status int, output string) {
 	box.Put(dir+"/exit", strconv.Itoa(status)+"\n")
 	c.mu.Lock()
 	c.ended[box.ID()] = true
+	c.outputs[box.ID()] = output
 	c.mu.Unlock()
 }
 

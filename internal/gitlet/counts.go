@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/words"
@@ -11,7 +12,8 @@ import (
 
 // A SCOPE'S COUNTS, the `counts` read: the parts it asks of one repository or
 // of every one in use the asker reads, each read from counters the applies keep
-// (apply_counts.go) in one snapshot, never by walking the changes.
+// (apply_counts.go) in one snapshot, never by walking the changes; the queue part
+// read at read time, within MaxQueueCounted.
 
 // CountPart names a part of a counts read at its surface; on the wire each is a key of
 // [CountsQuery] and of [Counts] by the same JSON name.
@@ -22,10 +24,12 @@ const (
 	CountChanges CountPart = "changes"
 	// CountRepos is the repositories by kind and status ([RepoKindCounts]), the company's alone.
 	CountRepos CountPart = "repos"
+	// CountQueue is the live entries, waiting or testing, of the scope's queues ([QueueCounts]).
+	CountQueue CountPart = "queue"
 )
 
 // CountParts is the closed set, in the order the parts were added.
-func CountParts() []CountPart { return []CountPart{CountChanges, CountRepos} }
+func CountParts() []CountPart { return []CountPart{CountChanges, CountRepos, CountQueue} }
 
 // Valid reports a part this build counts.
 func (p CountPart) Valid() bool { return slices.Contains(CountParts(), p) }
@@ -35,6 +39,7 @@ func (p CountPart) Valid() bool { return slices.Contains(CountParts(), p) }
 type CountsQuery struct {
 	Changes bool `json:"changes,omitempty"`
 	Repos   bool `json:"repos,omitempty"`
+	Queue   bool `json:"queue,omitempty"`
 }
 
 // Ask sets p's key and reports whether this build counts p.
@@ -44,6 +49,8 @@ func (q *CountsQuery) Ask(p CountPart) bool {
 		q.Changes = true
 	case CountRepos:
 		q.Repos = true
+	case CountQueue:
+		q.Queue = true
 	default:
 		return false
 	}
@@ -51,12 +58,13 @@ func (q *CountsQuery) Ask(p CountPart) bool {
 }
 
 // asks reports a query asking at least one part.
-func (q CountsQuery) asks() bool { return q.Changes || q.Repos }
+func (q CountsQuery) asks() bool { return q.Changes || q.Repos || q.Queue }
 
 // Counts is a counts read's answer: a part each it asked, absent where not asked.
 type Counts struct {
 	Changes *ChangeCounts   `json:"changes,omitempty"`
 	Repos   *RepoKindCounts `json:"repos,omitempty"`
+	Queue   *QueueCounts    `json:"queue,omitempty"`
 }
 
 // ChangeCounts is changes by state; Live is those in a live state ([ChangeState.Live]).
@@ -227,6 +235,13 @@ func statusCounts(importing, active, archived, deleted, purging int64) RepoCount
 	return c
 }
 
+// QueueCounts is the live entries of a scope's queues, counted at read time; More where
+// the walk stopped at MaxQueueCounted, so Live is a floor.
+type QueueCounts struct {
+	Live int64 `json:"live"`
+	More bool  `json:"more,omitempty"`
+}
+
 // validateCounts is [ReadQuery.validate] for a `counts` read: at least one part,
 // and one answer, never paged.
 func (q ReadQuery) validateCounts() error {
@@ -284,8 +299,44 @@ func (r *Reader) counts(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		}
 		counts.Repos = &c
 	}
+	if q.Counts.Queue {
+		c, err := r.liveQueued(ctx, tx, repoID, q.Asker, q.CeilingSeat, chart)
+		if err != nil {
+			return err
+		}
+		counts.Queue = &c
+	}
 	out.Counts = &counts
 	return nil
+}
+
+// liveQueued counts the live entries of repoID's queues, already judged, or with none, of
+// every repository in use asker and its ceiling read: a covering walk of code_queue_live_idx
+// within the reader's bound, each repository judged once.
+func (r *Reader) liveQueued(ctx context.Context, tx *sql.Tx, repoID string, asker Principal, ceilingSeat string,
+	chart Roster) (QueueCounts, error) {
+
+	if repoID != "" {
+		var n int64
+		if err := tx.QueryRowContext(ctx, queueCountOfRepoSQL, repoID, r.queueCounted).Scan(&n); err != nil {
+			return QueueCounts{}, fmt.Errorf("gitlet: count a repository's queued entries: %w", err)
+		}
+		return QueueCounts{Live: n, More: n == int64(r.queueCounted)}, nil
+	}
+	counted, read, err := countedByRepo(ctx, tx, queueCountsSQL, r.queueCounted)
+	if err != nil {
+		return QueueCounts{}, fmt.Errorf("gitlet: count the queued entries: %w", err)
+	}
+	listed, err := listedReposAmong(ctx, tx, slices.Collect(maps.Keys(counted)), asker, ceilingSeat, chart,
+		"the queues counted")
+	if err != nil {
+		return QueueCounts{}, err
+	}
+	c := QueueCounts{More: read == int64(r.queueCounted)}
+	for id := range listed {
+		c.Live += counted[id]
+	}
+	return c, nil
 }
 
 // talliedChanges sums the tally rows asker and its ceiling read. Who reads a repository is

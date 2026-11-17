@@ -546,3 +546,78 @@ func TestEveryOrderOfACheckRecordsJoinsToOne(t *testing.T) {
 		t.Fatalf("joined %d orders, want every one of 8!", orders)
 	}
 }
+
+// countedRec is a failed exit of key at the instant at carrying tests, lines and cut beside the
+// two-line tail "ok\nFAIL\n".
+func countedRec(t testing.TB, key CheckKey, at time.Time, tests *CheckTests, lines int, cut bool) built {
+	code := 1
+	return checkRec(t, OpCheckFinished, CheckFinished{CheckKey: key, State: CheckStateFailed,
+		Reason: CheckReasonExit, ExitCode: &code, Summary: "1 of 214 tests failed", FinishedAt: at,
+		Tail: "ok\nFAIL\n", Tests: tests, LogLines: lines, TailCut: cut})
+}
+
+// AN ENDING'S COUNTS MOVE WITH THE ENDING THE JOIN KEEPS: an errored runner_lost ending without
+// counts and a failed exit ending with them, applied in both orders, leave the failed ending's
+// counts; a second failed ending with an earlier instant and counts of its own replaces them.
+//
+// Mutation: write the counts outside checkEnding (the backward order keeps the runner_lost
+// ending's NULL, red).
+func TestAnEndingsCountsMoveWithTheEndingTheJoinKeeps(t *testing.T) {
+	t.Parallel()
+	key := checkKeyOf("unit", 1)
+	records := map[uint64]built{
+		10: queuedRec(t, key, applyClock),
+		11: endedRec(t, key, CheckStateErrored, CheckReasonRunnerLost, applyClock.Add(time.Minute), nil),
+		12: countedRec(t, key, applyClock.Add(time.Hour), &CheckTests{Total: 214, Failed: 1}, 1201, true),
+		13: countedRec(t, key, applyClock.Add(30*time.Minute), &CheckTests{Total: 9, Failed: 2, Skipped: 3}, 40,
+			false),
+	}
+	forward, backward := openChecksEstate(t), openChecksEstate(t)
+	forward.applyAt(records, 10, 11, 12)
+	backward.applyAt(records, 12, 11, 10)
+	if got, want := backward.checksDump(), forward.checksDump(); got != want {
+		t.Fatalf("two orders of one attempt's endings left two rows:\n%s\nand\n%s", want, got)
+	}
+	counts := func(e *estate) string {
+		return strings.Join([]string{e.checkColumn(key, "tests_total"), e.checkColumn(key, "tests_failed"),
+			e.checkColumn(key, "tests_skipped"), e.checkColumn(key, "log_lines"), e.checkColumn(key, "tail_cut")}, " ")
+	}
+	if got, want := counts(backward), "214 1 0 1201 1"; got != want {
+		t.Fatalf("the failed ending's row counts %q, want %q", got, want)
+	}
+	forward.applyAt(records, 13)
+	if got, want := counts(forward), "9 2 3 40 0"; got != want {
+		t.Fatalf("the earlier failed ending's row counts %q, want its own %q", got, want)
+	}
+}
+
+// ONLY AN ENDING THAT COUNTS STAMPS ITS RECORD at CheckCountsVersion, through the production
+// encoder: an ending carrying tests, lines or a cut alone is stamped it, and a passed ending
+// carrying none, and the home's runner_lost ending, are stamped the base.
+//
+// Mutations: drop a versionedFields row (that case stamped the base, red); tag Total omitempty and
+// Tests a value (every ending stamped CheckCountsVersion, red).
+func TestOnlyAnEndingThatCountsStampsItsRecord(t *testing.T) {
+	t.Parallel()
+	key := checkKeyOf("unit", 1)
+	zero := 0
+	passed := CheckFinished{CheckKey: key, State: CheckStatePassed, Reason: CheckReasonExit, ExitCode: &zero,
+		FinishedAt: applyClock}
+	withTests := passed
+	withTests.Tests = &CheckTests{}
+	for name, tc := range map[string]struct {
+		record built
+		want   int
+	}{
+		"an ending with tests alone":     {checkRec(t, OpCheckFinished, withTests), CheckCountsVersion},
+		"an ending with log_lines alone": {countedRec(t, key, applyClock, nil, 2, false), CheckCountsVersion},
+		"an ending with tail_cut alone":  {countedRec(t, key, applyClock, nil, 0, true), CheckCountsVersion},
+		"a passed ending with none":      {checkRec(t, OpCheckFinished, passed), baseRecordVersion},
+		"the home's runner_lost ending": {endedRec(t, key, CheckStateErrored, CheckReasonRunnerLost, applyClock,
+			nil), baseRecordVersion},
+	} {
+		if got := stampOf(t, tc.record.payload); got != tc.want {
+			t.Errorf("%s: stamped %d, want %d", name, got, tc.want)
+		}
+	}
+}

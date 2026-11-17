@@ -888,6 +888,8 @@ var codeLogFields = map[gitlet.OpKind]struct {
 				"seat's direct push — each its command's place and whether it lands green; the measured " +
 				"push, a coding box's moving its branch on, moves none. The queue's history it makes is " +
 				"swept with an idle repository's queue (codeLogNegligible)",
+			"pushes.offered": "an attempt's count of the commits it offered (gitlet.PushEntry.Offered), " +
+				"and the measured push lands",
 		},
 	},
 	gitlet.OpCompact: {
@@ -1174,8 +1176,12 @@ var codeLogFields = map[gitlet.OpKind]struct {
 				"tail":             "the end of a failing check's output, and the reference checks pass",
 				"failures":         "the failures a failing check's report names, likewise",
 				"failures_omitted": "likewise",
-				"log":              "the object a runner stored a check's whole log in, where it stored one: a key and a hash",
-				"url":              "a link to a check's run outside the engine, where its reporter gave one",
+				"tests": "the counts of a check's JUnit report, three integers, and the reference checks " +
+					"name no report",
+				"log_lines": "a failing check's output lines beside its tail, and the reference checks pass",
+				"tail_cut":  "likewise",
+				"log":       "the object a runner stored a check's whole log in, where it stored one: a key and a hash",
+				"url":       "a link to a check's run outside the engine, where its reporter gave one",
 				"routing": "whom an ending that fails a change's head concerns (gitlet.CheckFinished.Routing): " +
 					"the change's routing, its authors, the head's pusher and whom the head was pushed for — " +
 					"some hundreds of bytes, as a merge's routing is — and the reference checks pass, which " +

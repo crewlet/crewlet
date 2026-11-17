@@ -393,7 +393,6 @@ func TestAProtectedRefMovesOnlyByAGatedRecord(t *testing.T) {
 	repo, change := mergeRepo(t, n, c, "web", gitlet.DirectNone, mergeGate())
 	converse(t, w, n.revising(repo, change, 1, oidOf("B"), mainRef, nil))
 
-	before := n.end()
 	byPerson := proposal(repo, update(mainRef, oidOf("A"), oidOf("X")))
 	bySeat := proposal(repo, update(mainRef, oidOf("A"), oidOf("X")))
 	bySeat.Principal = gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev",
@@ -405,6 +404,7 @@ func TestAProtectedRefMovesOnlyByAGatedRecord(t *testing.T) {
 			t.Fatalf("%s to main answered %+v (%v), want refused protected_direct", name, got.Answer, err)
 		}
 	}
+	before := n.end()
 	res, err := c.ProposeMerge(t.Context(), merging(repo, change, dev, gitlet.MergeMethodFastForward, oidOf("A"),
 		oidOf("B"), oidOf("B")))
 	requireMergeRefused(t, n, before, res, err, gitlet.MergeRefusalGateUnmet, "does not meet")

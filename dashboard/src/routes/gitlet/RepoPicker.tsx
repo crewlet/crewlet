@@ -21,8 +21,10 @@
  * repository while the screen reads another. The chosen name stays a row of
  * its own where the pages loaded do not hold it, so an address naming any
  * repository reads as itself.
+ *
+ * INLINE, the list stands in the flow under the field, for a picker inside a popover's scroll box.
  */
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, type FocusEvent } from "react";
 import { Combobox, type ComboboxOption } from "@crewlethq/ui";
 import { ChevronDownGlyph } from "@crewlethq/icons/glyphs";
 import { isRepoPrefix } from "~/lib/code.ts";
@@ -43,6 +45,7 @@ export function RepoPicker({
   every,
   placeholder = "Choose a repository",
   size = "md",
+  inline,
 }: {
   /** The chosen repository's name, or "" for none. */
   repo: string;
@@ -56,6 +59,8 @@ export function RepoPicker({
   placeholder?: string;
   /** The control step: small in a toolbar row, the default in a form. */
   size?: "sm" | "md";
+  /** The list always shown under the field, this many rows tall, rather than a popup. */
+  inline?: number;
 }) {
   // NULL UNTIL SOMEBODY TYPES, and again once they leave the field: the field
   // shows the chosen name, and the list is the listing from its first name.
@@ -112,20 +117,39 @@ export function RepoPicker({
           ? "No repository you may read"
           : `No repository you may read begins with “${term}”`;
 
+  const commit = (option: ComboboxOption) => {
+    if (option.value === MORE) {
+      // A POPUP closes on any row taken; the close that follows Load more is kept from it.
+      paging.current = inline === undefined;
+      paged.next();
+      return;
+    }
+    setTyped(null);
+    onChoose(option.value);
+  };
+  const field = {
+    label: "Repositories",
+    "aria-label": "Repository",
+    placeholder: every ?? placeholder,
+    inputSize: size,
+    width: "sm",
+    value: typed ?? repo,
+    onFocus: (event: FocusEvent<HTMLInputElement>) => event.currentTarget.select(),
+    options,
+    emptyMessage: empty,
+    onCommit: commit,
+  } as const;
+  if (inline !== undefined) {
+    return <Combobox {...field} inline rows={inline} chosen={repo} onValueChange={setTyped} />;
+  }
   return (
     <Combobox
-      label="Repositories"
-      aria-label="Repository"
-      placeholder={every ?? placeholder}
-      inputSize={size}
-      width="sm"
+      {...field}
       trailing={<ChevronDownGlyph size="sm" />}
-      value={typed ?? repo}
       onValueChange={(next) => {
         setTyped(next);
         setOpen(true);
       }}
-      onFocus={(event) => event.currentTarget.select()}
       onClick={() => setOpen(true)}
       open={open}
       onOpenChange={(next) => {
@@ -135,17 +159,6 @@ export function RepoPicker({
         }
         setOpen(next);
         if (!next) setTyped(null);
-      }}
-      options={options}
-      emptyMessage={empty}
-      onCommit={(option) => {
-        if (option.value === MORE) {
-          paging.current = true;
-          paged.next();
-          return;
-        }
-        setTyped(null);
-        onChoose(option.value);
       }}
     />
   );

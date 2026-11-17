@@ -278,11 +278,11 @@ func (q ReadQuery) halfOfMe() (ReadQuery, bool) {
 
 // readByID is one page of a walk of changes by their ids, newest first — the
 // changes whose ask of the walk's reviewer stands, or whose stored readiness
-// waits on a person: at most limit ids by first, or by after past a cursor —
-// each binding the walk's keys, the cursor's id and the limit — and the row
-// of each change they name. EVERY ONE: a change's asks and its mergeability go
-// before its row in a purge, and with it in the final one. what names the walk
-// in a failure's sentence.
+// waits on a person or is ready: at most limit ids by first, or by after past
+// a cursor (each binding the walk's keys, the cursor's id and the limit), and
+// the row of each change they name. EVERY ONE: a change's asks and its
+// mergeability go before its row in a purge, and with it in the final one.
+// what names the walk in a failure's sentence.
 func (w changeWalk) readByID(ctx context.Context, tx *sql.Tx, first, after, cursor string, limit int,
 	what string) ([]changeRow, error) {
 

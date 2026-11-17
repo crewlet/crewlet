@@ -1,6 +1,6 @@
 /**
  * Whom a person's message reached, and who answered and when: what a receipt
- * under a message, the composer's draft receipt and a thread's reply receipt
+ * ending a message, the composer's draft receipt and a thread's reply receipt
  * hand uilet's `DeliveryReceipt`, which draws them as a mark and a tooltip.
  *
  * THE ENGINE DECIDES, THIS FILE WORDS. Whom a message reached is the post's

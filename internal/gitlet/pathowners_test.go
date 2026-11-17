@@ -401,9 +401,9 @@ func TestOnlyAReadThatAsksIsAnsweredThePathOwners(t *testing.T) {
 // included: a read of each kind this build reads, as everyReadAsked asks it,
 // that also names a commit, an inbox, an inbox page's cards, a history
 // page's commits, the narrowing to protected repositories, a counts read's
-// parts, a repository's facts or a listing's sort (fields only a `commit`, an
-// `inbox`, a `notice_cards`, a `commit_marks`, a `repos`, a `counts`, a
-// `repos` or `repo` and a `changes` read read) is refused naming the field, never
+// parts, a repository's facts, a listing's sort or a queue's trains (fields
+// only a `commit`, an `inbox`, a `notice_cards`, a `commit_marks`, a `repos`,
+// a `counts`, a `repos` or `repo`, a `changes` and a `queue` read read) is refused naming the field, never
 // answered with it ignored. The engine's own reads validate
 // against lists of their own, and a field added after a list was written
 // passed it unseen.
@@ -447,7 +447,13 @@ func TestAFieldOneKindReadsIsRefusedOnEveryOther(t *testing.T) {
 		{"change_sort", []gitlet.ReadKind{gitlet.ReadChanges}, func(q *gitlet.ReadQuery) {
 			q.ChangeSort = gitlet.ChangeSortUpdated
 		}},
+		{"readiness", []gitlet.ReadKind{gitlet.ReadChanges}, func(q *gitlet.ReadQuery) {
+			q.Readiness = gitlet.BucketReady
+		}},
 		{"cards", []gitlet.ReadKind{gitlet.ReadChanges}, func(q *gitlet.ReadQuery) { q.Cards = true }},
+		{"push_filter", []gitlet.ReadKind{gitlet.ReadPushes}, func(q *gitlet.ReadQuery) {
+			q.PushFilter = &gitlet.PushFilter{Since: harnessAt}
+		}},
 		{"day_bounds", []gitlet.ReadKind{gitlet.ReadRepos, gitlet.ReadRepo, gitlet.ReadPushes},
 			func(q *gitlet.ReadQuery) {
 				day := harnessAt.Truncate(gitlet.PushSlot)
@@ -455,6 +461,7 @@ func TestAFieldOneKindReadsIsRefusedOnEveryOther(t *testing.T) {
 			}},
 		{"finding_paths", []gitlet.ReadKind{gitlet.ReadChange}, func(q *gitlet.ReadQuery) { q.FindingPaths = true }},
 		{"viewed", []gitlet.ReadKind{gitlet.ReadChange}, func(q *gitlet.ReadQuery) { q.Viewed = true }},
+		{"trains", []gitlet.ReadKind{gitlet.ReadQueue}, func(q *gitlet.ReadQuery) { q.Trains = true }},
 	} {
 		for _, kind := range gitlet.ReadKinds() {
 			q, named := asks[kind]

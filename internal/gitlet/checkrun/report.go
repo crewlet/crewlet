@@ -24,13 +24,23 @@ type failures struct {
 	kept    []gitlet.CheckFailure
 	bytes   int
 	omitted int
-	// tests and failed are the JUnit report's counts, and results how many
-	// SARIF results were failures — each -1 where no report of its kind was
-	// read.
-	tests, failed, results int
+	// tests and failed are the JUnit report's counts, and skipped its skipped
+	// tests, and results how many SARIF results were failures — each -1 where
+	// no report of its kind was read.
+	tests, failed, skipped, results int
 }
 
-func newFailures() *failures { return &failures{tests: -1, failed: -1, results: -1} }
+func newFailures() *failures { return &failures{tests: -1, failed: -1, skipped: -1, results: -1} }
+
+// counts is the JUnit report's tests as an ending carries them: nil where no report was read, or
+// where its suites' counts do not add up, which the ending's own Validate would refuse.
+func (fs *failures) counts() *gitlet.CheckTests {
+	if fs == nil || fs.tests < 0 || fs.failed < 0 || fs.skipped < 0 || fs.failed > fs.tests ||
+		fs.skipped > fs.tests-fs.failed {
+		return nil
+	}
+	return &gitlet.CheckTests{Total: fs.tests, Failed: fs.failed, Skipped: fs.skipped}
+}
 
 // failureOverhead is what one failure's encoding adds to its fields' bytes
 // beyond them — its keys, quotes, braces and the comma between two — so the

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"reflect"
 	"regexp"
 	"regexp/syntax"
 	"slices"
@@ -593,5 +594,32 @@ func BenchmarkALineAtTheWorkBound(b *testing.B) {
 			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(plan.insts)/float64(n),
 				"ns/inst-byte")
 		})
+	}
+}
+
+// A LINE'S MATCHES ARE EVERY NON-EMPTY ONE THAT STARTS BEFORE within, in
+// order: what a search highlights of a line it answers, up to the line's cut.
+//
+// Mutation: keep a match starting at within, or stop at the first match
+// (Confirm's FindIndex), red.
+func TestALinesMatchesStopAtWithin(t *testing.T) {
+	t.Parallel()
+	plan, err := NewPlan(regexp.MustCompile("abc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := []byte("abc xx abc yy abc")
+	for _, tc := range []struct {
+		within int
+		want   [][2]int
+	}{
+		{len(line), [][2]int{{0, 3}, {7, 10}, {14, 17}}},
+		{14, [][2]int{{0, 3}, {7, 10}}},
+		{8, [][2]int{{0, 3}, {7, 10}}},
+		{0, nil},
+	} {
+		if got := plan.Matches(line, tc.within); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("Matches within %d = %v, want %v", tc.within, got, tc.want)
+		}
 	}
 }

@@ -110,7 +110,7 @@ var pointNames = map[string]gitletfault.Point{
 	"ImportAfterPropose": gitletfault.ImportAfterPropose, "MirrorAfterBuild": gitletfault.MirrorAfterBuild,
 	"MirrorAfterUpload": gitletfault.MirrorAfterUpload, "MirrorAfterPropose": gitletfault.MirrorAfterPropose,
 	"CommitterBeforeAdmit": gitletfault.CommitterBeforeAdmit, "MaintainBeforeStep": gitletfault.MaintainBeforeStep,
-	"WriteJoined": gitletfault.WriteJoined,
+	"WriteJoined": gitletfault.WriteJoined, "HostBeforeOffered": gitletfault.HostBeforeOffered,
 }
 
 // byPoint is counts keyed by identifier, read as points.

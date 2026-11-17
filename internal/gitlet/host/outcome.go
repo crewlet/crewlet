@@ -153,8 +153,9 @@ func (s *Server) decided(ctx context.Context, l *landing, proposed []gitlet.Comm
 
 // settled is the verdict of a push whose commands are final — row reports that
 // its push row exists: applied with the row's position when any command moved
-// a ref or the answer collapsed onto an earlier row; applied with no position
-// when every command was a noop; refused under the first code otherwise.
+// a ref or the answer collapsed onto an earlier row that is no attempt's;
+// applied with no position when every command was a noop; refused under the
+// first code otherwise.
 func settled(cmds []gitlet.Command, at statelog.Position, row, collapsed bool) verdict {
 	v := verdict{commands: cmds, applied: row}
 	moved, noop := false, true
@@ -171,7 +172,7 @@ func settled(cmds []gitlet.Command, at statelog.Position, row, collapsed bool) v
 		}
 	}
 	switch {
-	case moved || collapsed:
+	case moved || collapsed && first == "":
 		v.outcome, v.position = types.AuditApplied, at
 	case noop:
 		v.outcome = types.AuditApplied

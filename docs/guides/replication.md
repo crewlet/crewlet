@@ -794,6 +794,13 @@ node holds none back, and any other roll, a fleet whose nodes hold the data
 themselves among them, finishes inside the deferral grace, past which each
 older data node takes its copy of the code log out of service until it is
 upgraded ([What a rolling upgrade blocks](#what-a-rolling-upgrade-blocks)).
+Its version 5, how many commits a push a rule refused offered, rides only such
+a push that offered commits, so an older data node holds back those records
+and every later record of their repository until it is upgraded.
+Its version 6, a check's test counts and its output's lines, rides most check
+endings, so an older data node holds back those endings and every later record
+of their repository's checks until it is upgraded; a roll that upgrades the
+data nodes first holds back none.
 A release that adds a field to a record gives it the next
 version of its domain's table, and from then on an older node holds back the
 records carrying it and every later record whose scope meets one — except a

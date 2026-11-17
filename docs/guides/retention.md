@@ -283,8 +283,13 @@ Two policies decide which copies count:
   copy left the host, so a person says so:
 
   ```
-  crewlet retention ack -stream CREWLET_TRACKER_LOG -position 918100000
+  crewlet retention ack -stream CREWLET_TRACKER_LOG -position 918100000 \
+    -taken-at 2026-11-17T03:00:00Z
   ```
+
+  `-taken-at` is when the copy was taken, by the node's clock: the backup's
+  age is measured from it, so an acknowledgement given hours after the copy
+  left still ages the copy, not the acknowledgement.
 
   An acknowledgement names ONE stream and is kept per stream: acknowledging
   the next log leaves the last one's acknowledgement standing. Under this

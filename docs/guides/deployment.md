@@ -917,9 +917,10 @@ domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
 `CREWLET_ARTIFACT_DATA_LOG`, `CREWLET_ASSISTANT_LOG`, `CREWLET_CHAT_LOG`,
 `CREWLET_EXECUTOR_LOG`, `CREWLET_ACCESS_LOG`, `CREWLET_ATLAS_LOG`), a stream per extra subject namespace a company
 publishes under, two durable consumers per seat mailbox (the inbox and its
-priority lane, each an ordinary API call, measured at 1.7 ms), the twenty-two `crewlet_*` KV buckets:
+priority lane, each an ordinary API call, measured at 1.7 ms), the twenty-seven `crewlet_*` KV buckets
+([listed with what each holds](../concepts/architecture.md#5-where-state-lives)):
 three in the lease store, holding the seat and presence leases, the duty
-leases and the fencing epochs, and nineteen in the fleet store holding the
+leases and the fencing epochs, and twenty-four in the fleet store holding the
 shared records — the object store's backend record and its collector's report
 among them — and, on the default `nats` object store, the `crewlet_files`
 object store bucket (its stream is `OBJ_crewlet_files`). A credential

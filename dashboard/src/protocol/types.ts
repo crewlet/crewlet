@@ -63,6 +63,7 @@ import type {
   FINDING_SEVERITIES,
   PRECONDITION_KINDS,
   PRECONDITION_STATES,
+  PUSHER_KINDS,
   REPO_STATUSES,
 } from "../contract/code.ts";
 import type { LimitsAnswer } from "../contract/limits.ts";
@@ -8624,6 +8625,13 @@ export interface CodePushRow {
    */
   commands: CodePushCommand[] | null;
   /**
+   * The change its own record merged on a branch it set (`gitlet.PushRow.Change`): a merge's or a merge queue's
+   * landing's, else the lowest-numbered a push merged; absent where it merged none, or an older engine answered.
+   */
+  change?: CodeChangeName;
+  /** How many more changes its record merged beside `change`; absent at none. */
+  changes_more?: number;
+  /**
    * The ref updates a row read in brief leaves out of `commands`, counted by
    * what became of each; absent where nothing is left out, so `commands` and
    * this are every update the push asked for.
@@ -8637,6 +8645,8 @@ export interface CodePushRow {
    */
   introduced?: string[];
   introduced_count?: number;
+  /** An attempt's commits offered: absent on every other row, and where none was counted. */
+  offered?: number;
   received_at: string;
 }
 
@@ -8660,8 +8670,18 @@ export interface CodeReposAnswer extends CodePage {
 export interface CodePushesAnswer extends CodePage {
   /** Absent on a page that holds none. */
   pushes?: CodePushRow[];
+  /**
+   * On every page of a history narrowed by `pusher_kind`, `pusher`, `since` or `until` (`gitlet.PushScan`); absent
+   * on an unnarrowed page, and where an engine that predates the narrowing answered, which then narrowed nothing.
+   */
+  push_scan?: CodePushScan;
   /** The repository's pushes on each of the asker's days, oldest first, zeros included, where `day_bounds` asks (`gitlet.ReadAnswer.PushDays`); absent where not answered, as an older node answers. */
   push_days?: number[];
+}
+
+/** How far a narrowed page read: `to`, on a page with a `next`, the instant of the push it ended at. */
+export interface CodePushScan {
+  to?: string;
 }
 
 /**
@@ -8712,7 +8732,17 @@ export interface CodePrecondition {
   waits_on?: CodeParty[];
   blockers?: CodeBlocker[];
   blockers_omitted?: number;
+  /** A queue precondition's live entry and its place; absent on every other kind. */
+  queue?: CodeQueuedFacts;
   detail: string;
+}
+
+/** A change's live entry in its target's merge queue, and its place (`gitlet.QueuedFacts`). */
+export interface CodeQueuedFacts {
+  entry_id: string;
+  target_ref: string;
+  state: (typeof QUEUE_STATES)[number] | (string & {});
+  place: number;
 }
 
 /**
@@ -8838,6 +8868,8 @@ export interface CodeChangeCard {
 export interface CodeChangesAnswer extends CodePage {
   /** Absent on a page that holds none. */
   changes?: CodeChangeSummary[];
+  /** The bucket a `readiness=` page was narrowed to, on every such page; absent where it was not narrowed, as an older node answers. */
+  narrowed_to?: string;
 }
 
 /** One author of a change (`gitlet.ChangeAuthor`), from the revision they first wrote. */
@@ -9299,7 +9331,7 @@ export interface CodePushers {
 
 /** One pusher (`gitlet.PusherPushes`): a seat by its handle, a person by the human seat they hold, or Gitlet. */
 export interface CodePusher {
-  kind: "agent" | "person" | "gitlet" | (string & {});
+  kind: (typeof PUSHER_KINDS)[number] | (string & {});
   handle?: string;
   pushes: number;
 }
@@ -9838,6 +9870,8 @@ export interface CodeCommitMarksAnswer {
 export interface CodeCounts {
   changes?: CodeChangeCounts;
   repos?: CodeRepoKindCounts;
+  /** The live entries of the scope's merge queues, counted when read; `more` where the count stopped at its bound. */
+  queue?: { live: number; more?: boolean };
 }
 
 /** `code_counts`: a scope's counts, the parts it was asked. */
@@ -9876,6 +9910,9 @@ export interface CodeQueueRow {
   change_id: string;
   /** Its change's number on its repository: `web!42`'s 42. */
   number: number;
+  /** Its change's title and source branch: absent from an older build's answer. */
+  title?: string;
+  source_ref?: string;
   /** Its place in its branch's queue, from 1. */
   place: number;
   seq: LogPosition;
@@ -9920,8 +9957,15 @@ export interface CodeEjectedRow {
   target_ref: string;
   change_id: string;
   number: number;
+  /** Its change's title and source branch: absent from an older build's answer. */
+  title?: string;
+  source_ref?: string;
   head_oid: string;
   enqueued_by: CodeParty;
+  /** How it was to land, what a re-queue sends; absent from an older build's answer, which answers neither flag. */
+  method?: string;
+  delete_source?: boolean;
+  close_task?: boolean;
   reason: string;
   checks?: string[];
   paths?: string[];
@@ -9932,12 +9976,15 @@ export interface CodeEjectedRow {
 /**
  * `code_queue`: a page of the live entries of merge queues, in queue order,
  * beside a named repository's trains and — on its first page — what its
- * queues put out in the last day.
+ * queues put out in the last day, and every repository's trains and
+ * ejections where `trains=true` asks.
  */
 export interface CodeQueueAnswer {
   queue?: CodeQueueRow[];
   trains?: CodeCandidateRow[];
   ejected?: CodeEjectedRow[];
+  /** How many entries the queues the caller reads put out in the last day, where `trains=true` asked. */
+  ejected_total?: { total: number; more?: boolean };
   next?: string;
   position: LogPosition;
   level: ReadLevel;
@@ -9963,6 +10010,11 @@ export interface CodeCheckRow {
   revision?: number;
   candidate_id?: string;
   entry_id?: string;
+  /** The change the attempt judges, on a standing listing alone: absent elsewhere, on a tip's attempt, and from an older build. */
+  change?: CodeChangeName;
+  /** That change's branch, and the head it was checked at: a candidate's entry's, or a head's own commit. */
+  source_ref?: string;
+  change_head?: string;
   base?: string;
   defs_oid?: string;
   /** Whether the branch's protection requires it. */
@@ -9996,13 +10048,24 @@ export interface CodeCheckFailure {
 export interface CodeCheckDetail extends CodeCheckRow {
   def?: { name: string; run: string; timeout_seconds: number; paths?: string[]; run_in?: string };
   tail?: string;
+  /** Its JUnit report's counts; absent where none was read or from an older build. */
+  tests?: { total: number; failed?: number; skipped?: number };
+  /** Lines of the whole output, the tail's first line's number in it, and whether the tail begins inside that line; absent where uncounted. */
+  log_lines?: number;
+  tail_first_line?: number;
+  tail_cut?: boolean;
   failures?: CodeCheckFailure[];
   log?: { object: string; hash: string; size: number };
 }
 
-/** `code_checks`: a page of attempts of checks, newest ended first. */
+/** `code_checks`: a page of attempts of checks, newest ended first, or where each stands (`standing`). */
 export interface CodeChecksAnswer {
   checks?: CodeCheckRow[];
+  /** A standing listing's first page's attempts by state; a state in `at_least` counted to its bound (128). */
+  standing_counts?: {
+    counts: CodeCheckCounts;
+    at_least?: ((typeof CHECK_STATES)[number] | (string & {}))[];
+  };
   next?: string;
   position: LogPosition;
   level: ReadLevel;

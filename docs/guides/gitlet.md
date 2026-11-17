@@ -125,6 +125,10 @@ could, so owning `deploy/**` lets no seat push there that could not before
 
 ### Or make one in the dashboard
 
+**Gitlet › Repositories** lists the most recently pushed first, with each
+repository's open changes, its default branch's checks and two weeks of
+pushes; Projects and Scratch narrow it.
+
 A project the document does not declare is made in the dashboard too: **New
 repository** on **Gitlet › Repositories** (`code_create_repo`) takes its name,
 the unit that owns it and, where you say them, a description, a default
@@ -133,13 +137,20 @@ the page lands, adds its first file with **Add a file**, the root commit that
 makes its default branch, so it needs no clone to start; beside it, the
 address to clone it from and the two commands that push a repository you
 already have into it. Its **Code** tab lists each entry with the commit that
-last changed it; press `t`, or **Go to file**, to find a file by name. Its
-README and its LICENSE are tabs under the files. From then on the
-repository's page writes it from the browser, each write one commit or one
+last changed it; press `t`, or **Go to file**, to find a file by name. Pick a
+branch or a tag from the button before the files; **Find a branch** matches
+any part of a name. Its README and its LICENSE are tabs under the files. A file
+opens beside the repository's tree. Press a line's number to pick it, Shift to
+pick a run, and **…** to copy the lines or a link to them.
+Beside the files, the repository's rail says who owns it and how it is read,
+lists its open changes, who pushed to it over the last 30 days and how many
+pushes landed each day, where it is mirrored and its newest tag. From then on
+the repository's page writes it from the browser, each write one commit or one
 ref moved, as you:
 
-- **Code**, on a branch: **Edit** a text file of up to 256 KiB (the README's
-  pencil too), **Delete file**, or **New file** in a directory
+- **Code**, on a branch: **Edit** a text file of up to 256 KiB (its pencil, the
+  README's too), **Delete file** (under a file's **More**), or **New file** in a
+  directory (or the plus at the head of a file's tree)
   (`code_commit_files`), each at the
   commit the page read, so a push made since is refused rather than written
   over;
@@ -238,7 +249,8 @@ and a service account is created with it (`crewlet iam create -kind machine
 ## Clone, fetch and push
 
 The address is the API's own, on `api.port` — never the public listener —
-and a repository's page offers it under **Clone**, at the end of the bar above its files:
+and a repository's page offers it under **Code**, at the end of the bar above
+its files, with a button that copies the whole `git clone` command:
 
 ```sh
 git clone https://crewlet.example.com/git/web.git
@@ -247,6 +259,7 @@ git clone https://crewlet.example.com/git/web.git
 The engine answers that address as the repository's `clone_url`
 (`GET /gitlet/repos/{name}`), built from `api.external_url`, so a dashboard
 reached through another address still shows the one git must use.
+A deployment that sets no `api.external_url` shows no address there.
 
 git asks for a user name and a password: the password is the token, and the
 user name is ignored. So that git never asks, give it a credential helper.
@@ -367,9 +380,13 @@ it means](../concepts/gitlet.md#what-git-prints-and-what-it-means).
 
 ## Download a file or a commit
 
+**Code** › **Download ZIP** downloads every file of the commit on show, as
+`/git/{name}/-/archive.zip` serves it.
+
 Anybody who may fetch a repository may download one file of a commit, or the
-whole commit as a ZIP, without git: from the dashboard, signed in, once its
-code screens offer the buttons, or from a script with a token. Name the commit
+whole commit as a ZIP, without git: from the dashboard, signed in, from a
+file's **Raw** and **Download** or **Code** › **Download ZIP**, or from a
+script with a token. Name the commit
 by its whole id:
 
 ```sh
@@ -473,7 +490,8 @@ tells the seats and people it concerns.
 
 **Find what waits on you.** **Gitlet › Changes** lists the open changes, and
 **Waiting on** narrows them to the ones waiting on you, on a review, on a fix
-or on a person. A record that concerns you leaves a notice in your
+or on a person. **Waiting on you**, above the list, names each change that waits on
+your review or your fix and why, with **Review** opening its files. A record that concerns you leaves a notice in your
 **Inbox** — the change, why you hear of it ("asked for your review", "asked
 to look again") and where its merge stands — whose **Open the diff** opens the
 change's page on its files. A seat is woken instead, told the change, why it
@@ -1060,7 +1078,10 @@ send.
 Report `running` when the run starts, then how it ended — `passed`,
 `failed`, `errored` or `cancelled` — with its `summary`, `tail` and
 `failures` (each a `path`, `line`, `test_id` and `message`, at the bounds an
-engine check keeps) and the run's `url`. Name the commit by `sha` and the
+engine check keeps), your JUnit report's `tests` (`total`, `failed`,
+`skipped`), and `log_lines`, how many lines the run's whole output has, with
+`tail_cut` where the `tail` you send begins inside a line, so a read of the
+check numbers the tail's lines, and the run's `url`. Name the commit by `sha` and the
 branch it is checked for by `checked_for` (the repository's default branch
 when left out), or by `change`, which reports for the change's head and
 target. An ending sent again is answered from the row, so a CI that retries a
@@ -1070,7 +1091,9 @@ a name the engine has queued at that commit for that branch is refused
 `native_check`, so the engine's result is never overwritten, and a name your
 CI reported first is left to it — the engine's dispatch queues nothing of a
 name the commit already holds an attempt of. So name your CI's checks apart
-from the ones `.crewlet/checks.yaml` defines.
+from the ones `.crewlet/checks.yaml` defines. During a rolling upgrade a data
+node of an earlier build refuses `tests`, `log_lines` and `tail_cut`; send the
+report again without them.
 
 ## Finding code
 
@@ -1264,8 +1287,9 @@ push](../concepts/gitlet.md#a-seats-push)):
 - **A seat outside the owning unit fills at most half** of the repository's
   refs and half its bytes, so the owners always keep room to push
   (`repo_refs`, `repo_size`).
-- **A seat lands at most `code.limits.pushes_per_seat_day` pushes a day**
-  ([The daily quota](#the-daily-quota), `push_quota`).
+- **A seat makes at most `code.limits.pushes_per_seat_day` pushes a day**,
+  a push a rule refused whole among them ([The daily quota](#the-daily-quota),
+  `push_quota`).
 - **A data node behind the company's configuration decides no seat's push**:
   the revision it failed to apply may be the one that took the seat's grant
   away, so the repository's next committer decides it.
@@ -1347,10 +1371,11 @@ repositories](#declare-repositories)).
 
 ### The daily quota
 
-A seat lands at most `code.limits.pushes_per_seat_day` pushes a day on the
+A seat makes at most `code.limits.pushes_per_seat_day` pushes a day on the
 company's [calendar](../getting-started/configuration.md#the-companys-clock),
-every repository together and every push it lands — built by its tools or sent
-from its coding box: 1 000 unless set, about thirty-three times the thirty
+every repository together and every push it lands, built by its tools or sent
+from its coding box, as well as every push a rule refused whole, which is
+recorded as an attempt: 1 000 unless set, about thirty-three times the thirty
 pushes a seat of the reference company makes a day. It is a bound on a seat
 pushing in a loop, not a budget, and your pushes are never counted:
 
@@ -1363,7 +1388,9 @@ code:
 Past it, a push is refused whole as `push_quota`, its sentence naming when the
 count starts again — the company's next midnight — and **nothing records it**:
 a record of every refusal of a runaway seat would cost the code log what the
-quota exists to bound, so a refused push is not in the push history. A seat
+quota exists to bound, so a refused push is not in the push history. An
+attempt past the day is told its own rule, not `push_quota`, and is not
+recorded either. A seat
 that meets it is pushing in a loop: read what its turns are doing before you
 raise the bound. Its git work is already done by then — the pack it built is
 stored, named by nothing, and deleted by the object collector a day later.

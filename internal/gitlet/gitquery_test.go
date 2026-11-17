@@ -474,3 +474,43 @@ func TestAPathThatIsNoUTF8IsCarriedAsItsBytes(t *testing.T) {
 		}
 	}
 }
+
+// A SEARCH'S BOUNDS ARE REFUSED BY FIELD before anything is read: a context
+// past gitlet.MaxSearchContext or below none, a per-file bound past
+// gitlet.MaxSearchHits or below none, and a limit past
+// gitlet.MaxSearchContextHits beside context, which a limit alone may pass.
+//
+// Mutation: drop the context bound (ValidateBounds), red.
+func TestASearchsBoundsAreRefused(t *testing.T) {
+	t.Parallel()
+	asker := gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "token:ci"}
+	search := func(s gitlet.SearchQuery) gitlet.GitQuery {
+		s.Text, s.Mode = "needle", "literal"
+		return gitlet.GitQuery{Kind: gitlet.GitSearch, RepoID: "01920000-0000-7000-8000-000000000001",
+			Asker: asker, Search: &s}
+	}
+	for _, tc := range []struct {
+		q     gitlet.SearchQuery
+		field string // "" is a valid search
+	}{
+		{gitlet.SearchQuery{Context: -1}, "search.context"},
+		{gitlet.SearchQuery{Context: gitlet.MaxSearchContext + 1}, "search.context"},
+		{gitlet.SearchQuery{PerFile: -1}, "search.per_file"},
+		{gitlet.SearchQuery{PerFile: gitlet.MaxSearchHits + 1}, "search.per_file"},
+		{gitlet.SearchQuery{Limit: gitlet.MaxSearchContextHits + 1, Context: 1}, "search.limit"},
+		{gitlet.SearchQuery{Limit: gitlet.MaxSearchContextHits + 1}, ""},
+		{gitlet.SearchQuery{Limit: gitlet.MaxSearchContextHits, Context: gitlet.MaxSearchContext,
+			PerFile: gitlet.MaxSearchHits}, ""},
+	} {
+		err := search(tc.q).Validate()
+		switch {
+		case tc.field == "" && err != nil:
+			t.Errorf("%+v refused: %v", tc.q, err)
+		case tc.field != "" && (!errors.Is(err, gitlet.ErrInvalid) || !strings.Contains(fmt.Sprint(err), tc.field+":")):
+			t.Errorf("%+v answered %v, want invalid naming %s", tc.q, err, tc.field)
+		}
+	}
+	if got := (gitlet.SearchQuery{Context: 1}).Hits(); got != gitlet.MaxSearchContextHits {
+		t.Errorf("a search asking context with no limit answers %d hits, want %d", got, gitlet.MaxSearchContextHits)
+	}
+}

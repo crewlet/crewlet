@@ -658,8 +658,8 @@ func TestAPurgePartTakesTheActivityLeftOnceItsPushesAreGone(t *testing.T) {
 	}
 }
 
-// THE PUSH ACTIVITY IS THE PUSH ROWS: random records leave both tables what the oracle counts after
-// each one, through a clock that jumps past the history and steps back, a re-derivation midway, a replay
+// THE PUSH ACTIVITY IS THE PUSH ROWS: random records, attempts among them, leave both tables what the
+// oracle counts after each one, through a clock that jumps past the history and steps back, a re-derivation midway, a replay
 // from zero, a re-derivation of the end, an older build's final purge and seeded drift.
 // Mutation: drop a horizon's or a part's move, count an expiry or a merger, floor by the hour, skip the
 // prune, count a redelivery, walk only code_repos in the re-derivation, or re-derive only the days
@@ -798,6 +798,17 @@ func activityOps() []activityOp {
 				entries = append(entries, e)
 			}
 			return []built{pushOf(w.t, r[0], entries...)}
+		}},
+		activityOp{"an attempt", func(w *activityWorld) []built {
+			r := w.pick(ccInUse)
+			if r == nil {
+				return nil
+			}
+			who := activityPushers[w.rng.IntN(len(activityPushers))]
+			e := pushedAs(w.id(), who, "refs/heads/locked-"+w.id())
+			e.Commands[0].Result, e.Commands[0].Reason = ResultNG, RefusalProtectedDirect
+			e.Pack, e.Offered = nil, w.rng.IntN(3)
+			return []built{pushOf(w.t, r[0], e)}
 		}},
 		activityOp{"an expiry", func(w *activityWorld) []built {
 			b := w.pick(`SELECT f.repo_id, f.ref, f.target FROM code_refs f JOIN code_repos r ON r.id = f.repo_id

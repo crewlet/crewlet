@@ -36,21 +36,22 @@ import {
   Callout,
   FormField,
   Input,
+  Menu,
   Skeleton,
   Stack,
   Textarea,
   VisuallyHidden,
 } from "@crewlethq/ui";
-import { PencilGlyph } from "@crewlethq/icons/glyphs";
+import { EllipsisGlyph, PencilGlyph, PlusGlyph, TrashGlyph } from "@crewlethq/icons/glyphs";
 import { Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { baseName, isWholeOID, refName, shortOID } from "~/lib/code.ts";
 import { fmtBytes } from "~/lib/format.ts";
 import { branchWriteHeld, commitFormHeld } from "~/lib/repoWrites.ts";
 import { useAct } from "~/lib/useAct.ts";
-import { codeRest } from "~/lib/useCodeQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { CodeBlobAnswer, CodeGitAnswer, CodeRepoDetail } from "~/protocol/index.ts";
+import { readWhole } from "./blobs.ts";
 
 /**
  * The largest file the browser's editor opens, in bytes: 256 KiB, a handful
@@ -93,16 +94,19 @@ export function targetHeld(target: CommitTarget): string | undefined {
   return undefined;
 }
 
-/** "New file", in a directory's bar: a file added under it. */
+/** "New file", in a directory's bar, or a plus at a file's tree: a file added under it. */
 export function NewFileButton({
   repo,
   target,
   dir,
+  compact = false,
 }: {
   repo: CodeRepoDetail;
   target: CommitTarget;
   /** The directory on screen, "" for the root. */
   dir: string;
+  /** A plus with no words, at the head of a file's tree. */
+  compact?: boolean;
 }) {
   const write = useAct("code_commit_files");
   const viewer = useViewer();
@@ -112,11 +116,17 @@ export function NewFileButton({
       <WriteButton
         write={write}
         size="small"
-        variant="secondary"
+        variant={compact ? "ghost" : "secondary"}
         blocked={branchWriteHeld(repo, viewer) ?? targetHeld(target)}
         onPress={() => setOpen(true)}
+        {...(compact
+          ? {
+              "aria-label": `Add a file to ${dir || repo.name}`,
+              leadingIcon: <PlusGlyph size="sm" />,
+            }
+          : {})}
       >
-        New file
+        {compact ? <VisuallyHidden>New file</VisuallyHidden> : "New file"}
       </WriteButton>
       {open && target.branch && (
         <CommitDialog
@@ -219,55 +229,44 @@ export function EditFileButton({
   );
 }
 
-/** "Edit" and "Delete file", in a file's bar. */
-export function FileWriteButtons({
+/** Held with its reason: a menu entry is drawn for every reader, never removed. */
+const held = (reason: string | undefined) =>
+  reason ? { disabled: true, description: reason } : {};
+
+/** "More file actions" in a file's head: Delete file, held as a branch's write is. */
+export function FileMoreMenu({
   repo,
   target,
   path,
-  file,
 }: {
   repo: CodeRepoDetail;
   target: CommitTarget;
   path: string;
-  /** The file as its first page answered it: its size and whether git calls it binary. */
-  file: CodeBlobAnswer;
 }) {
   const write = useAct("code_commit_files");
   const viewer = useViewer();
-  const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const held = branchWriteHeld(repo, viewer) ?? targetHeld(target);
-  const editHeld = held ?? fileEditHeld(file);
+  const reason = write.access.can
+    ? (branchWriteHeld(repo, viewer) ?? targetHeld(target))
+    : write.access.reason;
   return (
     <>
-      <WriteButton
-        write={write}
-        size="small"
-        variant="secondary"
-        blocked={editHeld}
-        onPress={() => setEditing(true)}
-      >
-        Edit
-      </WriteButton>
-      <WriteButton
-        write={write}
-        size="small"
-        variant="ghost"
-        blocked={held}
-        onPress={() => setDeleting(true)}
-      >
-        Delete file
-      </WriteButton>
-      {editing && target.branch && (
-        <CommitDialog
-          repo={repo}
-          branch={target.branch}
-          head={target.head}
-          path={path}
-          existing
-          onClose={() => setEditing(false)}
-        />
-      )}
+      <Menu
+        label="More file actions"
+        icon={<EllipsisGlyph />}
+        triggerVariant="ghost"
+        align="end"
+        items={[
+          {
+            key: "delete",
+            label: "Delete file",
+            icon: <TrashGlyph size="sm" />,
+            danger: true,
+            onSelect: () => setDeleting(true),
+            ...held(reason),
+          },
+        ]}
+      />
       {deleting && target.branch && (
         <DeleteFileDialog
           repo={repo}
@@ -279,22 +278,6 @@ export function FileWriteButtons({
       )}
     </>
   );
-}
-
-/** A file's whole text at a commit: every page of it, joined. */
-async function readWhole(repo: string, path: string, commit: string, signal: AbortSignal) {
-  let text = "";
-  let cursor = "";
-  for (;;) {
-    const answer = await codeRest.query(
-      "code_blob",
-      { name: repo, path, ref: commit, ...(cursor ? { cursor } : {}) },
-      signal,
-    );
-    text += answer.blob?.text ?? "";
-    cursor = answer.next ?? "";
-    if (!cursor) return text;
-  }
 }
 
 /** The editor: a file's path, its text and the commit's message. */
@@ -324,7 +307,7 @@ function CommitDialog({
   useEffect(() => {
     if (!existing) return;
     const abort = new AbortController();
-    readWhole(repo.name, path, head, abort.signal).then(
+    readWhole(repo.name, path, head, abort.signal, EDIT_MAX_BYTES).then(
       (text) => {
         setOriginal(text);
         setContent(text);
