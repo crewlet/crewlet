@@ -1977,6 +1977,9 @@ func (q ReadQuery) kindOwnedField() error {
 	case q.ChangeSort != "" && q.Kind != ReadChanges:
 		return fmt.Errorf("%w: change_sort: only a listing of changes is ordered by when its changes were "+
 			"opened or last moved", ErrInvalid)
+	case q.Readiness != "" && q.Kind != ReadChanges:
+		return fmt.Errorf("%w: readiness: only a listing of changes is narrowed to where their merge stands",
+			ErrInvalid)
 	case q.RefListing != nil && q.Kind != ReadRefs:
 		return fmt.Errorf("%w: ref_listing: only a refs listing is ordered, narrowed or read in detail",
 			ErrInvalid)

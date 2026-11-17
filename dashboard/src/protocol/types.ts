@@ -8838,6 +8838,8 @@ export interface CodeChangeCard {
 export interface CodeChangesAnswer extends CodePage {
   /** Absent on a page that holds none. */
   changes?: CodeChangeSummary[];
+  /** The bucket a `readiness=` page was narrowed to, on every such page; absent where it was not narrowed, as an older node answers. */
+  narrowed_to?: string;
 }
 
 /** One author of a change (`gitlet.ChangeAuthor`), from the revision they first wrote. */
