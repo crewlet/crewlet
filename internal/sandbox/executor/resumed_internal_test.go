@@ -507,11 +507,16 @@ func cntArchive(t *testing.T, body string, members ...tarMember) []byte {
 // standing: its counts' keys in another case, a usage written twice whose last
 // names no input, a null count, a negative one, iterations Claude Code counts in
 // the usage's place with other counts, a record that does not say it is a
-// sidechain and one that names an agent; and a sidechain's reply, as ever.
+// sidechain and one that names an agent; and a sidechain's reply, as ever. And a
+// reply whose line encoding/json refused whole for a key of another kind that
+// the layer reads by its last value, or not at all, gives its figure: a `Type`
+// that is no string, an earlier `isSidechain` that is no boolean, an earlier
+// `message` that is no object.
 //
 // Mutation: read the figure by encoding/json where the layer reads none, the
 // whole rule or its case-folding or its merge alone, or take a reply for the main
-// thread's by its `isSidechain` alone, and a case goes red.
+// thread's by its `isSidechain` alone, and a case goes red; read it by
+// encoding/json alone, and a line it refused gives no figure.
 func TestTheMetersFloorFigureIsWhatTheLayerReadsOfAReply(t *testing.T) {
 	t.Parallel()
 	meter := func(t *testing.T, body string) (int64, *sandbox.ResumedCount) {
@@ -559,6 +564,10 @@ func TestTheMetersFloorFigureIsWhatTheLayerReadsOfAReply(t *testing.T) {
 		{"a sidechain's reply", as(`"isSidechain":false`, `"isSidechain":true`), 1120},
 		{"a record that does not say it is a sidechain", as(`"isSidechain":false,`, ``), 1120},
 		{"a record that names an agent", as(`"isSidechain":false,`, `"isSidechain":false,"agentId":"a1",`), 1120},
+		{"a Type that is no string", as(`"type":"assistant"`, `"Type":0,"type":"assistant"`), 4300},
+		{"an earlier isSidechain that is no boolean", as(`"isSidechain":false`, `"isSidechain":20,"isSidechain":false`),
+			4300},
+		{"an earlier message that is no object", as(`"message":{`, `"message":0,"message":{`), 4300},
 	} {
 		if got, _ := meter(t, cntThread(brief, anchor, tc.reply)); got != tc.want {
 			t.Errorf("%s: the floor's figure is %d, want %d", tc.name, got, tc.want)

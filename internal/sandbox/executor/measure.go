@@ -57,7 +57,7 @@ import (
 // THE FLOOR'S FIGURE IS WHAT THE LAYER READS OF A REPLY ([contextReading]):
 // the input side of the last reply of the main thread's own
 // ([threadHead.Main]) whose usage the layer reads ([threadLine.Usage]), by
-// the one rule a reply's usage is read by wherever the engine reads one
+// the one rule a reply's usage is read by in a thread and in a run's stream
 // ([readUsage]), the count's included. So the two readings of one walk never
 // part on which record is a main-thread reply or on what its usage says: each
 // key exactly as written, each count a whole number in digits alone, and the
@@ -66,10 +66,14 @@ import (
 // the whole line, a rule of its own that matched a key in any case, merged a
 // key written twice, read a null or a negative count as 0, and took a record
 // that does not say it is a sidechain, or that names an agent, for the main
-// thread's: every reply measured carries a usage the layer reads
-// ([threadLine.Usage] has the measure). A last piece with no break is no line
-// (the box cuts it away before a resume), and a line the layer refuses counts
-// nothing.
+// thread's; and that refused the whole line for any key it read, in any case,
+// holding a value of another kind, where the layer reads each key it reads by
+// its last value as written, so a reply that one refused for a `Type` of
+// another kind, an earlier `isSidechain` that is no boolean or an earlier
+// `message` that is no object now gives its figure. Every reply measured
+// carries a usage the layer reads ([threadLine.Usage] has the measure). A
+// last piece with no break is no line (the box cuts it away before a resume),
+// and a line the layer refuses counts nothing.
 //
 // ITS PACE: the walk is fed by the pipe the take writes into, so a meter slower
 // than the scrub would hold the take up inside its wait. The walk is one JSON
