@@ -2709,7 +2709,9 @@ const (
 	// 0.150.1: 6728.1 KiB (6,889,605 bytes), 17,006 over the picker's: 6729 KiB.
 	// The quiet configuration warnings, inline delivery receipt, Code menu and repository rail
 	// train, on kit 0.151.0: 6734.2 KiB (6,895,802 bytes), 34,785 over main: 6735 KiB.
-	treeBudget = 5<<20 + 1615<<10
+	// Gitlet's changes as code-host rows wherever they are listed, with their cards, state totals
+	// and sort: 6751.1 KiB (6,913,142 bytes), 17,340 over main: 6752 KiB.
+	treeBudget = 5<<20 + 1632<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
