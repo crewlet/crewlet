@@ -87,19 +87,12 @@ func (e *Engine) retiredState(ctx context.Context, decoded error) (*sandbox.Unre
 // state ([Engine.fleetReadsParkedState]), so a resume this node cannot make
 // for want of the build that wrote the state ([sandbox.ErrResumeElsewhere]) is
 // not counted toward the resume give-up while one can, and is once none can.
-// A run whose parked state names no version (none parked, or bytes that are no
-// state) is read by no node.
-//
-// A REPLY KIND THIS BUILD DOES NOT READ ([resumeReply]) IS BOUNDED BY THE LIVE
-// NODES' BUILDS instead ([Engine.anotherBuildLive]): the kind is a plain value
-// on the run's row, no part of the parked state's version, so a build that
-// adds one writes states every node of the fleet reads at that version. Read
-// by the version, a rollback that left two nodes of this build held the seat
-// for as long as both lived, each reading the other as able to resume the run
-// and neither able to. While another build is live (the one that wrote the
-// kind, mid-roll), the run waits for it; once every live node runs this build,
-// none reads the kind, and the failure counts. A fleet left on two builds for
-// good is the operator's, raised as fleet_builds_differ.
+// A run whose parked state names no version is read by no node. A REPLY KIND
+// THIS BUILD DOES NOT READ ([resumeReply]) is bounded by the live nodes' builds
+// instead ([Engine.anotherBuildLive]): the kind is no part of the state's
+// version, and read by it, two nodes of this build after a rollback held the
+// seat for as long as both lived. The package doc's "A resume another node or
+// build can make" says why.
 func (e *Engine) resumableElsewhere(ctx context.Context, run sandbox.PendingRun) (bool, error) {
 	if _, err := resumeReply(run); errors.Is(err, sandbox.ErrResumeElsewhere) {
 		return e.anotherBuildLive(ctx)

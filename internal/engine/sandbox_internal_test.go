@@ -1129,17 +1129,12 @@ func TestTheEnginesCoordinatorRaisesAResumeOnlyAnOperatorClears(t *testing.T) {
 }
 
 // THE ENGINE'S COORDINATOR BOUNDS A RESUME ANOTHER BUILD CAN MAKE BY THE LIVE
-// NODES' BUILDS: a parked state a newer build wrote is resumable elsewhere
-// while a node that reads its version is live, so the give-up counts nothing,
-// and not once none is, so it counts; a state of this build's version is
-// resumable elsewhere only where another node reads it, and a run with no
-// parked state, or bytes that are no state, nowhere. ONLY THE VERSION IS READ
-// (execstate.VersionOf), never the whole state, which a failure that counts
-// nothing reads again on every attempt: a state of this build's version whose
-// body this build refuses still names the version another node reads, and
-// its body's own failure is met, and counted, where a node decodes it. The
-// resumer answers the newer state with sandbox.ErrResumeElsewhere, which the
-// bound reads.
+// NODES' BUILDS: a parked state a newer build wrote is resumable elsewhere while
+// a node that reads its version is live, and not once none is; a state of this
+// build's version only where another node reads it; a run with no parked state,
+// or bytes that are no state, nowhere. ONLY THE VERSION IS READ
+// (execstate.VersionOf), never the whole state (the package doc's "A resume
+// another node or build can make").
 //
 // Mutation: leave ResumableElsewhere off the coordinator's options, read a
 // state this build does not decode as this build's version, decode the whole
@@ -1200,16 +1195,11 @@ func TestTheEnginesCoordinatorCountsAResumeAnotherBuildCanMakeOnlyOnceNoneIsLive
 }
 
 // THE ENGINE'S COORDINATOR BOUNDS A RESUME A REPLY KIND KEEPS FROM THIS BUILD
-// BY THE LIVE NODES' BUILDS, never by the parked state's version, which a reply
-// kind is no part of: a run whose reply this build does not read is resumable
-// elsewhere while a live node runs another build (the newer one that wrote the
-// kind, or one that does not say which it runs, its heartbeat naming no build
-// or carrying no status at all), so the give-up counts nothing, and not once
-// every live node runs this build, which reads it nowhere, so it counts. Read
-// by the version, a rollback that left two nodes of this build held the seat
-// for as long as both lived, each reading the other as able to resume it. A
-// fleet that cannot be read is an error, which the coordinator counts as
-// nothing and warns of (internal/sandbox's runsOwnFailure).
+// BY THE LIVE NODES' BUILDS, never by the parked state's version: resumable
+// elsewhere while a live node runs another build (or does not say which, its
+// heartbeat naming no build or carrying no status), not once every live node
+// runs this build. A fleet that cannot be read is an error (the package doc's
+// "A resume another node or build can make").
 //
 // Mutation: bound the reply's failure by the parked state's version again, or
 // read a node that does not say its build, or says nothing at all, as this
@@ -1372,17 +1362,12 @@ func TestTheEnginesCoordinatorHoldsThisProcesssTakerLease(t *testing.T) {
 }
 
 // A DELIVERY MADE AS A SEAT'S CONTROL TOPIC IS ATTACHED WAITS FOR THE SEAT'S
-// RECOVERY. A seat's recovery pass reads a claim it finds as one whose node
-// stopped, so none of the seat's runs is claimed on this node while the pass
-// runs (internal/sandbox's recoverygate.go). The broker holds what was
-// published to the seat's control topic while nothing here consumed it and
-// delivers it the moment the topic is attached, which on a seat already held,
-// prepared by the apply that brings the runtime up, the node's admission does
-// not refuse. So the preparation hands the subscription to the pass, which
-// makes it once the seat's recovery gate is closed
-// ([sandbox.Coordinator.RecoverSeat]'s attach): the delivery is refused its
-// claim (sandbox.ErrSeatRecovering) and handed back as this node's failure,
-// and the pass takes the run over as its last holder left it.
+// RECOVERY. The broker delivers what it held the moment the topic is attached,
+// which on a seat already held the admission does not refuse, so the
+// preparation hands the subscription to the recovery pass, which attaches it
+// once the seat's recovery gate is closed: the delivery is refused its claim
+// (sandbox.ErrSeatRecovering) and handed back as this node's, and the pass takes
+// the run over (the package doc's "Everything else on the control topic NAKs").
 //
 // Mutation: attach the control topic before the pass and hand the pass no
 // attach, as the preparation did, and the delivery claims the run ahead of it.

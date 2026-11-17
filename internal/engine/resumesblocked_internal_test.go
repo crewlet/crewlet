@@ -20,14 +20,12 @@ import (
 )
 
 // A RUN WAITING FOR AN OPERATOR IS RAISED FROM THE STATUS RECORD OF THE NODE
-// HOLDING ITS SEAT, by every data node, whichever node holds it: a satellite
-// evaluates no alarm table of its own, and read from each node's own memory
-// alone, the alarm was never raised for a seat a satellite held. The reading sums
-// the fleet's runs and names the one waiting longest, by its seat, the node
-// holding it, its condition and how long. A live node whose record is not counted
-// keeps its last word while its presence stands at the same epoch, a listing that
-// fails stands on the last that answered, and a node whose presence is gone, or
-// was claimed again at a new epoch, says nothing it said before.
+// HOLDING ITS SEAT, by every data node, whichever node holds it (the package
+// doc's "The runs waiting for an operator"). The reading sums the fleet's runs
+// and names the one waiting longest, by its seat, its holder, its condition
+// and how long. A live node whose record is not counted keeps its last word at
+// the same epoch, a failed listing stands on the last that answered, and a node
+// gone or claimed again at a new epoch says nothing it said before.
 //
 // Mutation: read this node's own memory alone, read a node whose record is not
 // counted as holding no such run, clear the reading on a failed listing, or keep

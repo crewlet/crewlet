@@ -909,26 +909,17 @@ func TestAReviewsTakeWhoseAnswerWasLostHandsItsNotesOver(t *testing.T) {
 }
 
 // A RELAUNCH'S BRIEF TELLS A NOTE A HOOK'S SERVE PLACED AT THAT PLACE. A note
-// whose first serve to a job's hook fixed its place among the turn's reads
-// (sandbox.RunNote.Place), and which nothing has read since, its hook's answer
-// lost with no cancel heard, waits while a person's later note, correcting it,
-// is served and read at a later place. A relaunch's brief peeks it, and the
-// launch's write reads it at its own place, ahead of the correction: so the
-// brief hands that place beside the places of the reads it carries
-// (steer.Briefing.Orders), and its runner tells the note ahead of the
-// correction, as every later brief does from the record. A note no hook was
-// served takes the write's own place, after every read, and the brief places
-// none.
-//
-// EVERY PEEKED NOTE A SERVE PLACED, AT ITS PLACE AND NOT AT ITS NUMBER: the
-// hook's lost answer handed two notes, which share the one place its write
-// took while their numbers among the turn's notes (sandbox.RunNote.Seq)
-// differ, and the brief places each at the place the launch's write reads it
-// at.
+// whose first serve to a hook fixed its place (sandbox.RunNote.Place), its
+// hook's answer lost, waits while a later correction is read at a later place;
+// the relaunch's brief peeks it, the launch's write reads it at its own place,
+// and the brief hands that place (steer.Briefing.Orders) so the runner tells
+// it ahead of the correction. Every peeked note a serve placed, at its place
+// and not at its number (sandbox.RunNote.Seq); a note no hook was served is
+// placed nowhere (the package doc's "Every read is on the record, so the
+// record is the carry").
 //
 // Mutation: hand the brief without a peeked note's place, place one at its
-// number among the turn's notes, place only the first of them, or place a note
-// no hook was served, and the case goes red.
+// number, place only the first, or place an unserved note, and it goes red.
 func TestARelaunchsBriefTellsANoteAHooksServePlacedAtThatPlace(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -1610,18 +1601,14 @@ func TestAConfirmationWhoseAnswerWasLostReportsItsNoteOnce(t *testing.T) {
 }
 
 // A CONFIRMATION AN INBOX SERVING NO JOB CANNOT TAKE SAYS SO, AND RECORDS
-// NOTHING. The run's opening on the bridge can end as its notes route records a
-// confirmation (the run ended, the seat left the node, or a recovery opened the
-// job again with an inbox of its own), and its end closes the inbox the route
-// found serving. That inbox serves no job, and a read of it took nothing and
-// answered done: the bridge said 204, the plugin never confirmed the note
-// again, and the record kept it served and unread, so the run's ending reported
-// unconfirmed a note OpenCode had delivered, and a later launch told it again
-// as one the session may already show. So such an inbox answers
-// mcpbridge.ErrNoteUntaken, which the bridge turns away to ask again, and
-// the confirmation made again is recorded by the inbox that serves the job. An
-// inbox not yet bound serves no job either, and says so too, though no opening
-// serves one (TestAnOpeningIsFiledOnlyOnceItsInboxIsBound).
+// NOTHING. The run's opening on the bridge can end as its notes route records
+// a confirmation (the run ended, the seat left, or a recovery opened the job
+// with an inbox of its own), closing the inbox the route found serving. Such an
+// inbox answers mcpbridge.ErrNoteUntaken, which the bridge turns away to ask
+// again, and the confirmation made again is recorded by the inbox that serves
+// the job; an inbox not yet bound says so too
+// (TestAnOpeningIsFiledOnlyOnceItsInboxIsBound). The package doc's "An OpenCode
+// confirmation is recorded once, and reported" says why.
 //
 // Mutation: answer a read of an inbox that serves no job done (nil), and both
 // of its reads go red.
@@ -1670,23 +1657,17 @@ func TestAConfirmationAnInboxServingNoJobCannotTakeSaysSo(t *testing.T) {
 }
 
 // A CONFIRMATION ITS JOB'S RECORD NO LONGER TAKES SAYS SO, AND RECORDS NOTHING.
-// A job's completion claims its run, which moves the record out of the
-// statuses its harness takes notes in, while the job's session on the bridge
-// still serves, until the reclaim closes it. A read reaching the inbox then
-// found it serving, took nothing, since the record took no read of the job,
-// and answered done: the bridge said 204, the plugin never confirmed the note
-// again, and the record kept it served and unread. So the inbox answers
-// mcpbridge.ErrNoteUntaken for a note its take left waiting, which the
-// bridge turns away to ask again; and once the claim is handed back, the
-// collection not finished, and the run goes on in its box, the confirmation
-// made again is recorded. A note named that no longer waits is no such note:
-// the same confirmation made once more, through an inbox whose view still
-// shows the note waiting though its job read it, is answered done.
+// A job's completion claims its run, moving the record out of the statuses its
+// harness takes notes in while its session still serves: the inbox answers
+// mcpbridge.ErrNoteUntaken for a note its take left waiting, and once the claim
+// is handed back and the run goes on in its box, the confirmation made again
+// is recorded. A note named that no longer waits, though the inbox's view still
+// shows it, is answered done (the package doc's "An OpenCode confirmation is
+// recorded once, and reported").
 //
 // Mutation: answer a confirmation whose take left a note waiting done, and the
 // read after the claim goes red; turn away every confirmation that took fewer
-// notes than it named, or one that left a note whatever became of it, and the
-// one made once more goes red.
+// notes than it named, or any that left a note, and the last one goes red.
 func TestAConfirmationItsJobsRecordNoLongerTakesSaysSo(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -1788,15 +1769,12 @@ func TestAConfirmationIsJudgedByTheRecordReadAfterItsTake(t *testing.T) {
 }
 
 // A CONFIRMATION TURNED AWAY STILL REPORTS WHAT ITS JOB READ BEFORE. The
-// confirmation the plugin makes again after an answer it lost names a note an
-// earlier confirmation of its job read beside one it owes now, and reports
-// that earlier read, under the same id and at the same instant, whatever
-// became of the earlier report (runInbox.confirmedBefore). Where its job's
-// record takes no read any more, its completion having claimed the run, the
-// confirmation is turned away for the note still waiting; and where the claim
-// goes on to end the run, every try after it is refused. Turned away before it
-// reported the earlier read, it would leave that read reported by nobody: the
-// run's ending reports nothing of a note a step read.
+// confirmation made again after a lost answer names a note an earlier
+// confirmation of its job read beside one it owes now, and reports that earlier
+// read under the same id and instant (runInbox.confirmedBefore), even where it
+// is turned away for the note still waiting (the completion claimed the run) or
+// refused (the claim ended it): the run's ending reports nothing of a note a
+// step read, so turned away first, that read would be reported by nobody.
 //
 // Mutation: turn the confirmation away before it reports what its job read
 // before, and that report is never made.
@@ -1876,16 +1854,13 @@ func (s frozenWatch) WatchNotes(ctx context.Context, turnID string) (<-chan sand
 }
 
 // AN OPENING IS FILED ONLY ONCE ITS INBOX IS BOUND. A box reaches its job's
-// opening the moment the bridge files it: a recovery's at once, with the token
-// it already holds. And the bridge files the opening before it ends the job's
-// opening this node held until then, an end that waits for that opening's
-// answers still on their way, for up to five seconds. The inbox was bound only
-// once the bridge's Open had returned, so all that while the opening served an
-// inbox that served no job: a poll of it spun, its wait handing back a channel
-// that is always closed, and a confirmation was turned away as one no inbox
-// took. So the launch and the recovery bind the inbox before the bridge files
-// the opening (Engine.openBridge), and a confirmation reaching the opening as
-// the job's earlier one ends is recorded.
+// opening the moment the bridge files it, a recovery's at once, and the bridge
+// files it before ending the job's earlier opening, which waits up to five
+// seconds for its answers. So the launch and the recovery bind the inbox before
+// the bridge files the opening (Engine.openBridge), and a confirmation reaching
+// the opening as the earlier one ends is recorded; bound after Open returned,
+// the inbox served no job all that while (the package doc's "An OpenCode
+// confirmation is recorded once, and reported").
 //
 // Mutation: bind the inbox once the bridge's Open has returned, and the
 // confirmation is turned away.

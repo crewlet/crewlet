@@ -13,18 +13,12 @@ import (
 // takes on the inbox names: the sandbox coordinator's, a person's pause, a
 // park, the no-model pause.
 //
-// RECORDED AS THE SEAT IS TAKEN ([Engine.prepareSeat], handed it by the node
-// before the attach) AND DROPPED AS IT IS RELEASED ([Engine.releaseSeat], after
-// the node's detach ended it), so a hold decided while this node held the seat
-// and asked after the detach names the attachment that ended, which the queue
-// refuses, never the one this node makes if it takes the seat back: keyed by
-// the subscription alone, such a hold was carried onto that attachment, and a
-// seat retaken with nothing to hold it for attached held with nothing left to
-// lift it. A hold of a seat this node does not hold names the zero attachment,
-// which every hold refuses.
-//
-// WHO HAS TO AGREE ON IT: this node alone, as the holds it names are this
-// process's queue client's.
+// RECORDED AS THE SEAT IS TAKEN ([Engine.prepareSeat], before the attach) AND
+// DROPPED AS IT IS RELEASED ([Engine.releaseSeat], after the detach), so a hold
+// asked after the detach names the ended attachment, which the queue refuses,
+// never the one a retaken seat attaches; a seat this node does not hold names
+// the zero attachment. WHO HAS TO AGREE ON IT: this node alone. The package
+// doc's "Every hold is taken for one attachment of the inbox" says why.
 type seatInboxes struct {
 	mu    sync.Mutex
 	seats map[uuid.UUID]queue.Attachment

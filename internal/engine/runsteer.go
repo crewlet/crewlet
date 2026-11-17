@@ -30,137 +30,16 @@ import (
 )
 
 // A person's note to a turn whose executor is out: it waits sealed on the
-// run's record (ADR-0067).
-//
-// # Where a turn's notes wait, and who has to agree on them
-//
-// Before a turn launches its executor, its notes wait in the box its first
-// segment holds, on the node running it (steer.go). From the run's launch to
-// the turn's end they wait on the RUN'S RECORD in the coordination store
-// ([sandbox.RunSteer]) — the whole company, now: the node a person's request
-// reaches, the node serving the run's tool bridge, the node that resumes the
-// turn and the node that finishes the run's ending can be four processes
-// across a restart and a seat moving, and each already reads the record. So
-// any node files a note there with one compare-and-swap, and nothing that
-// holds a note lives in one node's memory alone: what a node keeps — a bridge
-// session's view of the record, a held poll — is derived and rebuilt from it.
-//
-// # Sealed, because a note is an instruction
-//
-// The coordination store decides between writers by compare-and-set and
-// authenticates none of them (ADR-0031), and a note on a record is still a
-// person's words a model will read as theirs. So every note is SEALED under the
-// fleet keyring by the node that files it, in a key domain of its own
-// ([SteerNoteDomain]), over the note bound to its turn and its id; and the
-// record carries a sealed ANCHOR naming the seat the run serves
-// ([SteerSeatDomain]), written by the launch, on which a person's authority to
-// steer the turn is decided. Every reader opens before use: a note whose seal
-// does not open is never delivered, carried or attributed (logged at ERROR as
-// steer_note_unverified), and one sealed under a key this node does not hold
-// waits, with a WARN naming the keys it holds — the precedent is a person's
-// answer to a parked run (internal/sandbox, answerseal.go). The run's harness
-// confirming such a note here is turned away to ask again, for a node that
-// holds the key to record, and that is said once too, at WARN
-// (steer_read_key_unknown, [runSteers.waitsForItsKey]). An anchor this node
-// cannot open decides nothing, and one sealed under a key it does not hold is a
-// WARN naming the keys it holds (steer_seat_key_unknown), and steer_turn says
-// only who fixes it, as a condition of the fleet ([runSteers.openSeat]).
-// What is NOT sealed is the `read` marker, which only the store's own
-// compare-and-set guards: a party on the broker could re-deliver a genuine
-// note to its own turn, or hide one from in-run delivery, and the note still
-// reaches the reviewer or expires — the residual ADR-0067 states.
-//
-// # Every read is on the record, so the record is the carry
-//
-// A note is handed to a model only by a write that records it: the launch's
-// own for a brief ([sandbox.PendingStore.BeginLaunch]), a take for the
-// reviewer ([sandbox.PendingStore.TakeNotes]), and a SERVE for a Claude Code
-// hook ([sandbox.PendingStore.ServeHook]), whose note is recorded read only
-// once the job's own session shows the hook handed it over, by the read that
-// collects the job ([runSteers.confirmed]): a hook's answer can be lost, or
-// given up by its harness, after its write lands. So the record's read notes
-// are exactly the notes the turn has read, and a segment that resumes the
-// turn starts from them ([runSteers.carried]) — whichever node it is on.
-//
-// # A take whose answer was lost is settled, never left saying it was read
-//
-// A write can land and its answer not: a hook's take is held to five seconds
-// (internal/api/mcpbridge's steerTakeBudget), and a compare-and-swap the store
-// answers after them, or one whose answer a broken connection lost, may still
-// have landed. So every take names itself ([sandbox.NoteRead.Take],
-// [sandbox.HookServed.Take]), and one whose call answered an error is SETTLED
-// by that name, which also leaves its write, if it is still in flight, unable
-// to land after. A hook's serve answered nothing is kept unanswered by its
-// inbox ([hookMemory]), removed by the job's next serve in its own write, and
-// settled OFF THE HOOK'S PATH ([runSteers.settleHook]): the note waits again,
-// for the job's next boundary or the review. A
-// review's take settles ON ITS OWN PATH, in answer mode, and hands over what its
-// write recorded, its round still waiting on it; where the store answers that
-// settle no more than the take, the take is kept and settled again by the
-// segment's next round or brief, standing meanwhile for a note waiting, and is
-// marked only when the segment ends, in its path before the run's ending can
-// read the record, and off it where the store answers that no more
-// ([rowSource.Close]). An
-// OpenCode confirmation's take settles on its own path too, in answer mode,
-// never marking: its read is true, the harness having confirmed delivering the
-// note, and only its report rode on the answer, so what it recorded is
-// reported there; and a confirmation made again that finds a note read at its
-// job's step reports it under the same record ([runInbox.Read]). A settle off
-// the path asks until its store answers, or until the node stops
-// ([runSteers.settleRun]).
-//
-// # A note a harness may have delivered is never one the record says nothing of
-//
-// OpenCode's plugin is handed its notes by a poll and confirms each once
-// OpenCode delivered it, and only the confirmation records the note read: a
-// harness cut off between the two — or whose confirmation the store never took —
-// leaves a session that may hold a note the record says waits, which the next
-// launch's brief would tell it as one it had not read. So a poll answers a note
-// only once the record says it was SERVED to the job
-// ([sandbox.PendingStore.ServeNotes]), in a write before its answer, and a
-// launch that continues the job's session tells a served note as one it may
-// already show ([servedNotes], internal/agent/runner).
-//
-// # Who records what became of a note
-//
-// The node whose step read it: the runner for a round of the engine's loop or a
-// launch's brief, the run inbox of the node serving the run's bridge for a read
-// inside the run ([runInbox]), and a read of the job's box for a hook's serve
-// its session showed taken ([runSteers.confirmed]), under ids derived from the
-// turn and the note. And the node that finishes the run's ending, for every
-// note no step reported reading when the turn is over, as the run's record
-// knows it ([runSteers.ended]): one still waiting, or read first by the brief
-// of a job that never started, expired; one served to a harness that never
-// confirmed it, unconfirmed; one a take marked unanswered recorded, missed,
-// where no later launch whose job started told it again; and one a later
-// launch's brief told again, its job started, delivered there. Under ids
-// derived from the ending, so a repeat of either is the same record. Never at a
-// park: a question can wait days, and the turn that resumes reads what waited.
-//
-// # A note a take never handed over is told again by every later launch
-//
-// A read marked unanswered is told again by the brief of every launch after
-// it, whatever session the launch continues: the runner names each such note
-// in its request ([runner.AgentRunRequest.Retold]), and the launch's write
-// records it read by the job it opens, told again, at the marked take's own
-// place among the reads, keeping the take's read beside the telling
-// ([retoldNotes], [sandbox.NoteRead.Retold]). Where that job started, the
-// ending reports the note delivered at its brief; where no later launch whose
-// job started told it, missed at the take.
-//
-// # An item for one job is that job's alone
-//
-// A record can hold an item for one job beside a person's notes
-// ([sandbox.RunNote.For]), which only the store's own writes file (a filing
-// of a person's note that names a job is refused, [sandbox.ErrNoteKind]) and
-// the next launch removes. So every reader of the record's
-// waiting notes names the job it reads inside ([runSteers.waiting]): the run
-// inbox the job it serves, and the review and a relaunch's brief none, which
-// hands them no item. And every step that reads a person's notes passes an
-// item over, whatever its read: the carry ([runSteers.carried]), the notes a
-// continued session may already show ([servedNotes]), the marks a brief tells
-// again ([unansweredNotes]), the record of a note delivered
-// ([runSteers.delivered]) and the ending ([sandbox.PendingRun.EndedNotes]).
+// run's record (ADR-0067), the whole company's, which any node files on with
+// one compare-and-swap and every reader opens before use. Every read is on the
+// record, in the order it numbers them, so the record is the carry; a hook's
+// serve is read only once its job's session shows it; a take whose answer was
+// lost is settled by its name; a poll answers a note only once the record says
+// it was served; a confirmation the inbox cannot take is turned away to ask
+// again; the run's ending reports what no step did; and an item for one job is
+// that job's alone. The package doc's sections from "A note to a turn whose
+// executor is out" to "An item for one job is that job's alone" hold the
+// decisions and why.
 
 // SteerNoteDomain is the key domain a note on a run's record is sealed in: its
 // own, so no frame of another channel or a state log opens as a note, and no
@@ -993,28 +872,16 @@ func (s *runSteers) waitSettles() {
 	s.settles.Wait()
 }
 
-// carried is every note run's record holds read, opened, in the order read —
+// carried is every note run's record holds read, opened, in the order read:
 // what a segment resuming the turn carries ([runner.Resume.Steered]). A note
-// that does not open is not carried: nobody can say it is a person's.
+// that does not open is not carried: nobody can say it is a person's, and an
+// item for one job is never carried, read or not ([sandbox.RunNote.For]).
 //
-// THE ORDER READ IS THE RECORD'S OWN: the place of the write that recorded each
-// read ([sandbox.NoteRead.Order]), and among the reads one write recorded, the
-// order the notes were filed in — never a read's time. The writes that record
-// reads are made by whichever nodes launch the run, serve its bridge and resume
-// the turn, each stamping its own clock, and a note is the later word: two
-// clocks a second apart would otherwise hand the reviewer and every later brief
-// a correction ahead of the note it corrects.
-//
-// THE WAITING NOTES GO BEFORE THE SORT, never into it: a comparison that
-// answered "equal" for any pair with a waiting note in it would not be an
-// order at all — a waiting note between two read ones would tie with both
-// while they did not tie with each other — and the sort could leave the read
-// notes out of the order they were read in. A record holds such a note
-// whenever one waits while a later one is read: a seal this node cannot open
-// yet, or a later note a harness took first.
-//
-// AN ITEM FOR ONE JOB IS NEVER CARRIED, read or not ([sandbox.RunNote.For]): it
-// was that job's alone, and what resumes the turn is not inside it.
+// THE ORDER READ IS THE RECORD'S OWN ([sandbox.NoteRead.Order], then the order
+// filed), never a read's time, which each node stamps from its own clock. THE
+// WAITING NOTES GO BEFORE THE SORT, never into it: a comparison answering
+// "equal" for any pair with a waiting note is no order. The package doc's
+// "Every read is on the record, so the record is the carry" says why.
 func (s *runSteers) carried(run sandbox.PendingRun) []steer.Read {
 	if s == nil {
 		return nil
@@ -1498,25 +1365,15 @@ func notesTaken(candidates []openedNote, taken []sandbox.RunNote) []steer.Note {
 
 // Brief is what a relaunch's brief takes of the turn's notes
 // ([steer.Briefing]): the notes the segment's lost takes recorded, where their
-// settle answers now ([rowSource.settleLost]) — which the launch's write records
-// read by its job in their take's place, at that take's own place among the
-// reads ([rowSource.lostTakes]) — then the waiting notes that open — a peek,
-// which the launch's own write records read — and every note the record marks
-// unanswered, by id, read off the same record; and the place among the
-// record's reads of every note this segment's takes handed over, those the
-// brief carries among them ([rowSource.orders]), and of every note it peeks
-// that a hook's serve placed ([sandbox.RunNote.Place]), so the brief tells the
-// turn's notes in the order the record numbers them.
-//
-// A PEEKED NOTE A HOOK'S SERVE PLACED is read by the launch's write at that
-// place, ahead of a correction a person filed after it and the job's session
-// confirmed: handed with no place, it was told after every read, the
-// correction first.
-//
-// THE MARKS AS THE RECORD HOLDS THEM NOW, never only as the segment's claim
-// read them: a take's settle is made off the path that took, and can mark a
-// read after this segment resumed from the record — so the relaunch's briefs,
-// built from the reads the turn carries, count the mark as the record does.
+// settle answers now ([rowSource.settleLost]), which the launch's write records
+// read in their take's place ([rowSource.lostTakes]); then the waiting notes
+// that open, a peek the launch's write records read; and every note the record
+// marks unanswered, as the record holds the marks now. With them goes the
+// place among the record's reads of every note the segment's takes handed over
+// ([rowSource.orders]) and of every peeked note a hook's serve placed
+// ([sandbox.RunNote.Place]), so the brief tells the notes in the record's
+// order. The package doc's "Every read is on the record, so the record is the
+// carry" says why.
 func (r *rowSource) Brief(ctx context.Context) steer.Briefing {
 	if r == nil {
 		return steer.Briefing{}
@@ -2116,64 +1973,17 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 }
 
 // Read records the notes named read at the run's next step, and publishes them
-// delivered there — see [mcpbridge.SteerInbox].
+// delivered there; see [mcpbridge.SteerInbox].
 //
-// A CONFIRMATION'S READ IS TRUE WHETHER OR NOT ITS ANSWER ARRIVES — OpenCode
-// delivered the note — but its REPORT rides on that answer: a take whose write
-// landed and whose answer was lost published nothing, the plugin's confirmation
-// made again found the note no longer waiting and skipped it, and the run's
-// ending, a step having read the note, reported nothing either. So no node
-// said what became of it. Two things close that:
-//
-//   - THE TAKE NAMES ITSELF, and one that answered an error is SETTLED ON THIS
-//     PATH ([runInbox.confirm]): what its write recorded is published
-//     delivered, and the confirmation answered done, whether or not the
-//     plugin would ever confirm again; and
-//   - A NOTE NAMED THAT THE RECORD HOLDS READ AT A STEP OF THIS JOB — an
-//     earlier confirmation's, whose answer never reached the plugin — is
-//     published delivered all the same ([runInbox.confirmedBefore]), under the
-//     id that confirmation's report took and at its read's instant, so a note
-//     both reported is one record.
-//
-// AN INBOX THAT SERVES NO JOB TAKES NO READ, AND SAYS SO
-// ([mcpbridge.ErrNoteUntaken]): one closed, its opening's end having taken
-// it after the notes route found it serving, or one not yet bound, which no
-// opening serves, its bind coming before the bridge files the opening
-// ([Engine.openBridge]), and which says so too. Answered done, the plugin
-// never confirmed the note again, and the record kept it served and unread, for
-// the run's ending to report unconfirmed and a later launch to tell again as
-// one the session may already show. Turned away, the confirmation made again
-// reaches the inbox that serves the job now. DECIDED UNDER THE INBOX'S OWN
-// LOCK, which its Close takes ([runInbox.bound]): a read that found the inbox
-// serving records through the store, a write a later Close does not touch.
-//
-// NOR DOES AN INBOX WHOSE JOB ITS RECORD TAKES NO READ OF ANY MORE, and it says
-// so the same way: a note named that still waits on the record once the take
-// left it ([waitsUntaken]). The job's completion claimed the run, moving its
-// record out of [steerTakeStatuses] while its session still serves, until the
-// reclaim closes it; or the run's ending is decided; or a later job carries it
-// on. Answered done, that read too was recorded nowhere, the note kept served
-// and unread. Turned away, the confirmation made again is recorded where the
-// claim is handed back and the run goes on in its box, and refused once the
-// run is over. A note named that no longer waits is no such note, whoever
-// read it: answered done, reported where this job's earlier read holds it.
-//
-// NOR DOES A NOTE THIS NODE CANNOT OPEN FOR WANT OF ITS KEY, and the read says
-// so the same way: a note named that still waits on the record for the job,
-// sealed under a key this node does not hold, in a fleet whose nodes hold
-// different keys ([runSteers.waitsForItsKey]). A take hands over only a note
-// it opened, so this node's took no read of it, and the note waits for a node
-// that holds its key, as it does for every reader ([runSteers.open]).
-// Answered done, the plugin never confirmed it again and the read was
-// recorded nowhere. Turned away, the plugin confirms it again on its own
-// backoff, and the confirmation is recorded once it reaches a node that holds
-// the key, the run's seat having moved or its session opened again there; a
-// run that ends first leaves the note served and unread on its record, which
-// its ending reports unconfirmed where the node ending the run holds the key;
-// a node that does not records nothing of it (steer_note_end_unrecorded,
-// [runSteers.ended]). Every other note the read names is taken and reported
-// before it is turned away, as ever. A note this node cannot open that waits
-// no more, or waits for another job, is no such note.
+// A CONFIRMATION'S READ IS TRUE WHETHER OR NOT ITS ANSWER ARRIVES, but its
+// report rides on that answer, so a take that answered an error is settled on
+// this path ([runInbox.confirm]), and a note named that the record holds read
+// at a step of this job is published delivered all the same, as one record
+// ([runInbox.confirmedBefore]). A note the inbox cannot take (it serves no job,
+// [runInbox.bound]; its record takes no read of the job, [waitsUntaken]; it
+// waits for a key this node lacks, [runSteers.waitsForItsKey]) is turned away
+// to ask again, never answered done. The package doc's "An OpenCode
+// confirmation is recorded once, and reported" says why.
 func (i *runInbox) Read(ctx context.Context, ids []string) error {
 	launch, watch := i.bound()
 	switch {

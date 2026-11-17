@@ -355,32 +355,18 @@ func TestADrainingNodeLeavesACompletionForTheSeatsNextHolder(t *testing.T) {
 	})
 }
 
-// A REFUSED COMPLETION IS HANDED BACK BY THE CONDITION ITS REFUSAL NAMES.
+// A REFUSED COMPLETION IS HANDED BACK BY THE CONDITION ITS REFUSAL NAMES (the
+// package doc's "A refused completion is handed back by the condition it
+// names"): a draining node defers; a condition that clears by waiting, a
+// provider's limit here that this build names nowhere, is acked, and the
+// waiter announces the run again (TestAnUnclaimedCompletionIsAnnouncedAgain);
+// a failure the refusal does not explain is a Nak. A completion marked
+// sandbox.ErrUnannounced, or whose refusal record the store did not take
+// (sandbox.ErrStoreSilent), is never acknowledged: a Nak, or deferred where a
+// drain or a seat let go of hands it on.
 //
-// A node that is leaving defers: the attachment is quiesced for the rest of the
-// drain and the completion waits at the head for the seat's next holder. A
-// condition that clears by waiting is acked, which spends none of the broker's
-// deliveries and quiesces nothing: the run is left unclaimed and the waiter
-// announces it again on its schedule (TestAnUnclaimedCompletionIsAnnouncedAgain).
-// A condition this build names nowhere yet, a provider's limit here, takes the
-// waiting rule with no change to the hand-back, which is the point of keying it
-// on the condition. Only a failure the refusal does not explain is a Nak. And a
-// completion the coordinator marks as no waiter's to announce again
-// (sandbox.ErrUnannounced: the clock on its box's host runs, and that host's
-// waiter reads the run through a store that does not answer it) is never
-// acknowledged, whatever its refusal waits on: it is a Nak, but where a drain or
-// a seat let go of hands it on, which still defers it. So is a refusal whose
-// record the store did not take (sandbox.ErrStoreSilent alone): the
-// coordinator acknowledges no refusal it has not written on the job's record
-// as owed, and writes none for a drain's, which is handed on.
-//
-// Mutation: key the hand-back on node.ErrDraining again and the provider limit
-// is a Nak, walking a healthy completion to the dead-letter boundary one
-// delivery at a time; defer every refusal and a seat whose ownership merely
-// blipped quiesces its control topic for as long as this node holds it;
-// acknowledge a refusal no waiter announces again, and nothing does;
-// acknowledge a refusal whose record the store did not take, and nothing owes
-// it.
+// Mutation: key on node.ErrDraining and the limit is a Nak; defer every refusal
+// and a blipped seat quiesces its topic; acknowledge either unowed refusal.
 func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 	t.Parallel()
 	refusal := func(cond sandbox.Condition, cause error) error {
@@ -428,39 +414,18 @@ func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 	}
 }
 
-// A STORE'S SILENCE IS THIS NODE'S FAILURE, NEVER THE MESSAGE'S. A completion
-// handed back because the coordination store did not answer a step
-// (sandbox.ErrStoreSilent: a collection's step, the claim, a claim refused while
-// its last release is owed, the record of a park's question), or handed back
-// while no waiter can announce the job (sandbox.ErrUnannounced, a renewal's NAK
-// and a refusal's among them), is returned on the same backoff as any failure
-// and spends the same budget, so the spacing the dead-letter inequality holds
-// is the same; but it is the node's (queue.NakNode), so a delivery whose budget
-// it spends is kept with the group's unhandled deliveries, never with its
-// poison. SO IS ONE THE QUEUE TELLS AS ITS NODE'S (queue.NodeFault, the test
-// internal/notify's wakes ask too): an announcement of the job's question the
-// broker did not take, and a handler this node's stop, drain or seat move
-// cancelled. AND SO IS A CONDITION OF THE INFRASTRUCTURE, by the one answer
-// the seat's mailbox NAKs by too (nodesFailure): a resumed turn that could not
-// read where its writes are minted from a coordination store that did not
-// answer, and a relaunch whose sandbox provider did not answer or refused the
-// company's key. AND SO IS A ROW A NEWER LEASE OWNS while this node's own lease
-// still reads held (sandbox.ErrSeatNotHeld that the coordinator did not name
-// sandbox.SeatLost, the refusal's record among them): where the run goes is
-// what failed, which the heartbeat settles within a beat, and nothing of the
-// message. AND SO IS A CLAIM THE SEAT'S RECOVERY GATE REFUSED
-// (sandbox.ErrSeatRecovering): the seat's recovery pass runs on this node, and
-// the delivery comes back past it. A failure of the completion itself stays the
-// message's, a resume that ran past its deadline among them.
+// A STORE'S SILENCE IS THIS NODE'S FAILURE, NEVER THE MESSAGE'S, and so is
+// every failure controlOutcome hands back as the node's (queue.NakNode): the
+// store's silence or no waiter to announce the job (sandbox.ErrStoreSilent,
+// sandbox.ErrUnannounced), what the queue tells as its node's (queue.NodeFault),
+// a condition of the infrastructure (nodesFailure), a row a newer lease owns
+// (sandbox.ErrSeatNotHeld not named SeatLost) and a claim the recovery gate
+// refused (sandbox.ErrSeatRecovering). A failure of the completion itself, past
+// its deadline among them, stays the message's. The package doc's "Everything
+// else on the control topic NAKs" says why.
 //
-// Mutation: hand a store's silence, a broker's refusal or a cancelled handler
-// back with queue.Nak, and a delivery spent during an outage or a stop is kept
-// as poison; ask queue.NodeFault alone after a refusal that waits, and the
-// resume the coordination store failed is counted against the message; read
-// every condition as the node's, and the deadline's row is not; drop
-// sandbox.ErrSeatNotHeld from controlOutcome, and the newer lease's row counts
-// against the message; drop sandbox.ErrSeatRecovering, and a delivery the
-// recovery gate refused counts against the message.
+// Mutation: hand any of these back with queue.Nak, ask queue.NodeFault alone
+// after a refusal that waits, or read every condition as the node's: red.
 func TestAStoreSilenceIsNeverTheMessagesFailure(t *testing.T) {
 	t.Parallel()
 	live := t.Context()
@@ -526,24 +491,17 @@ func TestAStoreSilenceIsNeverTheMessagesFailure(t *testing.T) {
 }
 
 // A RESUME ANOTHER NODE OR BUILD CAN MAKE IS THIS NODE'S FAILURE ON THE CONTROL
-// TOPIC, CAUSE BY CAUSE, and one no node gets past stays the message's. Each
-// failure is the one the engine's own resumer answers: a parked state a newer
-// build wrote, a retired one an older node still live reads, a reply kind this
-// build does not know, a node with no applied company and a seat not in this
-// node's company are each the node's (queue.NakNode), so a delivery a roll
-// spends while the completion waits for a node that can resume it is kept with
-// the unhandled deliveries; a refusal that names nothing to wait on, a parked
-// state that is no state, a run with no reply kind and one with no parked state
-// at all are the message's (queue.Nak), as controlOutcome's doc keeps them. (A
-// seat this node does not hold reaches the control topic deferred as one let go
-// of, sandbox.SeatLost, which TestARefusedCompletionIsHandedBackByItsCondition
-// holds.)
+// TOPIC, CAUSE BY CAUSE, and one no node gets past stays the message's: a
+// parked state a newer build wrote, a retired one an older live node reads, a
+// reply kind this build does not know, no applied company and a seat not in
+// this node's company are each queue.NakNode; a refusal naming nothing to wait
+// on, a parked state that is no state, a run with no reply kind and one with no
+// parked state are queue.Nak. A seat not held here is deferred as SeatLost
+// (TestARefusedCompletionIsHandedBackByItsCondition).
 //
-// Mutation: drop sandbox.ErrResumeElsewhere from controlOutcome and the
-// node's rows count against the message; hand every sandbox.ErrResumeUnavailable
-// back as the node's and the message's rows do not; mark any one cause's
-// failure as the plain sandbox.ErrResumeUnavailable, or the plain ones as
-// sandbox.ErrResumeElsewhere, and its row goes red.
+// Mutation: drop sandbox.ErrResumeElsewhere from controlOutcome, hand every
+// ErrResumeUnavailable back as the node's, or mark any cause with the other
+// error, and its row goes red.
 func TestAResumeAnotherNodeCanMakeIsTheNodesOnTheControlTopic(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -606,24 +564,17 @@ func replyErr(run sandbox.PendingRun) error {
 }
 
 // A COMPLETION REFUSED ON A CONDITION THAT CLEARS BY WAITING RESUMES ONCE IT
-// CLEARS, AND ONCE ONLY, WITHOUT ANY DELIVERY BEING HANDED BACK.
-//
-// The condition is a provider's limit, which no code here names yet: the
-// hand-back keys on the condition's kind, so it needs none. While it holds,
-// every completion the waiter fires is refused and acked, so the control
-// attachment is never quiesced and the run stays unclaimed. Then it clears,
-// and the run is collected once, by whichever comes first:
-//
-//   - the signal (readmitResumes, the hook whatever ends a condition calls),
-//     with both waiters stopped so nothing else could have brought it back;
-//   - the waiter's next announcement alone, with no signal, which its schedule
-//     makes at most twenty poll intervals after its last, a second at this
-//     rig's cadence;
-//   - both at once, racing, which the at-most-once claim settles.
+// CLEARS, AND ONCE ONLY, WITHOUT ANY DELIVERY BEING HANDED BACK. The condition
+// is a provider's limit, which no code here names (the hand-back keys on its
+// kind): every completion the waiter fires meanwhile is refused and acked, so
+// the control attachment is never quiesced. Once it clears, the run is
+// collected once, by the signal (readmitResumes, both waiters stopped), by the
+// waiter's next announcement alone (at most twenty poll intervals after its
+// last, a second at this rig's cadence), or by both racing, which the
+// at-most-once claim settles.
 //
 // Mutation: drop the kept completion from the coordinator's Readmit and the
-// signalled case never collects; defer or Nak the refusal and the attachment is
-// quiesced, or the completion's deliveries are spent, while it waits.
+// signalled case never collects; defer or Nak the refusal and it is spent.
 func TestACompletionRefusedOnAWaitResumesOnceItClears(t *testing.T) {
 	t.Parallel()
 	const waitLimit sandbox.Condition = "provider_limit"

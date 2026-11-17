@@ -536,17 +536,12 @@ roles:
 // A RESUME THAT LANDS AS A PAUSED SEAT IS ACQUIRED LEAVES ITS INBOX UNHELD.
 //
 // The node that acquires a paused seat attaches its inbox already held, and the
-// resume that lifts the hold has to find it. So the hold is taken and recorded
-// as one step, under the lock every pause and resume is folded under: a resume
-// lands wholly before it (nothing paused, nothing held) or wholly after it (a
-// record, which it lifts). Recorded under that lock and taken after it, by the
-// node, a resume landing between the two lifted a hold that was not there yet,
-// and the hold the node took next was recorded nowhere: the seat attached held,
-// with nothing left to lift it until it moved or was paused and resumed again.
-//
-// The resume is staged at the queue's take of the hold, through the node's own
-// acquisition: it runs at once when nothing holds the pause lock, and otherwise
-// as soon as whatever holds it lets go, as a real one would.
+// hold is taken and recorded as one step under the pauses' lock, so a resume
+// lands wholly before or wholly after it (the package doc's "A person's pause,
+// carried out by whichever node holds the seat"). The resume is staged at the
+// queue's take of the hold, through the node's own acquisition: it runs at
+// once when nothing holds the pause lock, and otherwise as soon as whatever
+// holds it lets go, as a real one would.
 //
 // Mutation: take the hold outside the pause lock, and the seat attaches held.
 func TestAResumeAsAPausedSeatIsAcquiredLeavesItsInboxUnheld(t *testing.T) {
@@ -641,15 +636,11 @@ func (s *resumeAtHold) PauseTopic(ctx context.Context, topic, group string, at q
 // A PAUSE FOLDED WHILE A RESUME'S LIFT IS IN FLIGHT KEEPS THE SEAT HELD.
 //
 // The lift drops its record under the pause lock and makes its queue call
-// outside it, because the in-memory twin's resume drains into handlers that
-// read the pause copy. A pause folded in between holds the same attachment
-// again, which changes nothing on the queue, and records it, and the late
-// resume then lifts that pause's hold: the seat was paused and recorded held
-// with its inbox not held. So the lift reads the pause again once its call has
-// returned, and takes back the hold of one in force.
-//
-// The pause is staged at the queue's resume of the pause hold, before the
-// resume reaches the queue: inside the window, with the lock free.
+// outside it; a pause folded in between re-holds the attachment and records
+// it, and the late resume would lift its hold. So the lift reads the pause
+// again once its call has returned (the package doc's "A lift takes back a hold
+// taken in its window"). The pause is staged at the queue's resume of the pause
+// hold, before the resume reaches the queue: inside the window, the lock free.
 //
 // Mutation: drop the read after the resume, and the seat is left paused with
 // its inbox unheld.
@@ -772,15 +763,12 @@ func saysHeldAgain(t *testing.T, lines func(string) []map[string]any, msg, key, 
 
 // A LIFT WHOSE SEAT WAS LET GO IN ITS WINDOW SAYS NOTHING HOLDS IT.
 //
-// A lift takes back the hold of a pause or park recorded while its queue call
-// was in flight, for the attachment the seat holds, and says whether it did
-// (held_again). A seat let go meanwhile has ended that attachment, or this
-// node records none for it: the queue refuses the hold, or none is asked for,
-// and nothing holds the inbox here. So the lift's line says its hold is
-// lifted, never that the inbox stays held for a seat this node no longer
-// serves.
-//
-// NOT PARALLEL: it reads the process's log, which [logging.Configure] owns.
+// A lift says whether it took back the hold of a pause or park recorded in its
+// window (held_again). A seat let go meanwhile has ended its attachment, or
+// this node records none: the queue refuses the hold, or none is asked for, so
+// the line says the hold is lifted (the package doc's "A lift takes back a hold
+// taken in its window"). NOT PARALLEL: it reads the process's log, which
+// [logging.Configure] owns.
 //
 // Mutation: report a hold the queue refused, or one no attachment was asked
 // for, as taken back, in any of the three lifts, and its subtest fails.

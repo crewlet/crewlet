@@ -17,39 +17,15 @@ import (
 )
 
 // THE MODEL ALARMS' INPUTS (M15 of the Models design): each entry's condition
-// across the fleet, which the alarm table judges at the owner's fixed
-// thresholds ([statelog.KindLLMCredentialExpiring] and the four beside it).
-//
-// MOSTLY FLEET-WIDE: the live nodes' status records' model rows (a limit met on one node, a
-// refusal on another) and the secret store's write instants are the fleet's,
-// as `backup_age` reads the fleet's one backup register, so a refusal, a limit,
-// a wait and a stored credential's age read the same whichever node a person
-// asks. Two inputs are this node's own reading, and say so: whether anything
-// signs an entry in here, and its harness's token lifetime.
-//
-// A READ THAT FAILS CARRIES THE LAST GOOD ONE. The status records and the secret
-// store are read on every evaluation, and a blip in either must not read as
-// "no model sits out" or "no token expires": that cleared every standing model
-// alarm on the blip and raised each again on the next tick, two log lines per
-// entry per blip, and a health count that flickered. So each input that cannot
-// be read is the last one that could, and the failure is logged. Only a node
-// that has never read the records judges nothing about models.
-//
-// AND A LIVE NODE WHOSE RECORD IS NOT COUNTED KEEPS ITS LAST RECORD while its
-// presence stands at the epoch it wrote it under ([coord.LiveNodeStatusesKept]),
-// as the runs waiting for an operator do ([Engine.executorReading]): a record
-// that aged out while its node lives is a node not saying, and read as one with
-// no rows, a sit-out or an outage only that node held cleared for one
-// evaluation and was raised again on the next. ALL BUT THIS NODE, whose own
-// rows are its memory wherever no record of its own counts: it holds what that
-// record is written from, and its last record kept in their place stood raised
-// on a sit-out or an outage its memory no longer held, for as long as its
-// writes failed.
-//
-// ONE LISTING OF THE RECORDS FEEDS THE MCP ALARMS TOO ([mcpConditions]), read
-// here once per evaluation, so a model's and a server's conditions are judged
-// on the same records of every node, and a blip carries both on the last good
-// listing.
+// across the fleet, judged at the owner's fixed thresholds
+// ([statelog.KindLLMCredentialExpiring] and the four beside it), read off the
+// live nodes' status records and the secret store, save whether anything signs
+// an entry here and its harness's token lifetime, which are this node's own. A
+// read that fails carries the last good one, so a blip neither clears nor
+// raises an alarm; a live node whose record is not counted keeps its last one
+// at the same epoch, all but this node, whose rows are its memory; and one
+// listing feeds the MCP alarms too ([mcpConditions]). The package doc's "The
+// model alarms' inputs" holds the why of each.
 
 // entryInputs is the last good read of each fleet-wide input the per-entry
 // alarms judge.

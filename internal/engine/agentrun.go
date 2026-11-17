@@ -1040,32 +1040,16 @@ func (l *agentLauncher) continuesInItsBox(ctx context.Context, pending sandbox.P
 
 // openBridge opens a job's bridge session under the job's own name, with its
 // ledger and its note inbox bound to the same job, and answers what the box is
-// given for it — its server entry, and where its harness asks for its turn's notes:
-// [sandbox.LaunchRequest.Opened], for the launch, and the same opening for a
-// run taken over while it works ([Engine.reopenAgentRun]), whose box already
-// holds the endpoint and is never handed the one minted here.
-//
-// THE SESSION NUMBERS ITS CALLS AFTER THE ONES THE LOG HOLDS
-// ([sandbox.OpenedJob.LastSeq]): a recovery's after its own job's, and a job
-// continuing one that asked a person after the asking job's, so the round's
-// calls keep the one order its collection reads them in.
-//
-// AND READS EACH CALL'S ID UNDER THE KEY THE JOB NAMES
-// ([sandbox.OpenedJob.CallIDMeta]): the one the runner starting the job's box
-// declares its harness sends it under, for the launch, and this node's runner
-// of the job's harness, for a run taken over while it works — each set here,
-// on the session the bridge opens, never on the launch's own literal.
-//
-// THE INBOX IS BOUND BEFORE THE BRIDGE FILES THE SESSION'S OPENING, never
-// after. A request reaches the opening the moment the bridge files it: a
-// recovery's box at once, with the token it already holds. And the bridge files
-// it before it ends the job's opening this node held until then, an end that
-// waits up to its bound for that opening's answers still on their way
-// ([mcpbridge.Bridge.Open]). Bound only once Open had returned, the inbox was
-// served unbound all that while: a poll of it spun, its wait handing back a
-// channel that is always closed, and a read was turned away as one no inbox
-// took. A session that does not open serves no notes, and the caller closes the
-// inbox, which stops the view its bind started.
+// given for it: its server entry, and where its harness asks for its turn's
+// notes ([sandbox.LaunchRequest.Opened]), for the launch and for a run taken
+// over while it works ([Engine.reopenAgentRun]), whose box already holds the
+// endpoint. The session numbers its calls after the ones the log holds
+// ([sandbox.OpenedJob.LastSeq]) and reads each call's id under the key the job
+// names ([sandbox.OpenedJob.CallIDMeta]), set here. THE INBOX IS BOUND BEFORE
+// THE BRIDGE FILES THE OPENING, which a recovery's box reaches at once: bound
+// after Open, it was served unbound until then. The caller closes the inbox of
+// a session that does not open. The package doc's "An OpenCode confirmation is
+// recorded once, and reported" says why.
 func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *bridgeLedger,
 	inbox *runInbox, job sandbox.OpenedJob,
 ) (_ sandbox.Opening, err error) {

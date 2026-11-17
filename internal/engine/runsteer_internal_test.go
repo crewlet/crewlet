@@ -315,28 +315,16 @@ func TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys(t *testing.T) {
 }
 
 // A CONFIRMATION OF A NOTE UNDER A KEY THIS NODE DOES NOT HOLD WAITS FOR A NODE
-// THAT HOLDS IT. In a fleet whose nodes hold different keys, the node serving a
-// run's session can lack the key a note is sealed under while the node that
-// served the note to the job's harness held it: the run's seat moved, or a
-// recovery opened its session on another node. This node's take hands over
-// only a note it opened, so a confirmation naming that note took no read of
-// it, and answered done, the plugin never confirmed it again: the read was
-// recorded nowhere. So the confirmation is turned away
-// (mcpbridge.ErrNoteUntaken), the note still waiting and served to the
-// job, and said once, at WARN with the keys this node holds, however often the
-// plugin asks again. A note beside it that this node opens is recorded and
-// reported all the same, and reported again through the job's earlier read
-// when the plugin asks again. The confirmation made again where the key is
-// held is recorded there. A note this node cannot open that waits no more, or
-// that waits for another job, is no such note: answered done.
+// THAT HOLDS IT (the package doc's "An OpenCode confirmation is recorded once,
+// and reported"): it is turned away (mcpbridge.ErrNoteUntaken), said once at
+// WARN with the keys held however often the plugin asks, while a note beside it
+// this node opens is recorded and reported, and reported again through the
+// job's earlier read. A note this node cannot open that waits no more, or waits
+// for another job, is answered done. Not parallel: it installs the log sink.
 //
-// Mutation: answer the note this node cannot open done, and the first
-// confirmation goes red; say it at every confirmation, and its line is
-// counted twice; turn it away before the take, or before the job's earlier
-// read is reported, and the note beside it goes unrecorded or unreported
-// again; turn a note this node cannot open away whether or not it waits, or
-// whatever job it is for, and the last two confirmations go red. Not
-// parallel: it installs the process's log sink.
+// Mutation: answer the unopened note done, say it at every confirmation, turn
+// it away before the take or before the earlier read is reported, or turn away
+// an unopened note that waits no more or for another job, and a step goes red.
 func TestAConfirmationOfANoteUnderAnUnheldKeyWaitsForANodeThatHoldsIt(t *testing.T) {
 	logs := captureSteerLogs(t)
 	ctx := t.Context()
@@ -506,20 +494,17 @@ func TestAConfirmationIsTurnedAwayOnlyForANoteItNamesThatWaitsForItsKey(t *testi
 }
 
 // EVERY NOTE THAT WAITS FOR ITS KEY IS SAID ONCE, WHEREVER ITS CONFIRMATION IS
-// TURNED AWAY. A confirmation naming two notes this node cannot open says each
-// of them, at WARN, the first time it is turned away for them, and never
-// again however often the plugin makes it again: once a note, as the open of
-// one is said, so a second note is not hidden behind the first. And the first
-// time is the first turn-away, whatever else turns it away: a confirmation
-// reaching the inbox once the job's completion claimed the run, so that its
-// take left the note this node opens waiting too, says the notes waiting for
-// their key as well, and the confirmation made again once the claim is handed
-// back, which records the note this node opens, says nothing more.
+// TURNED AWAY: each of two notes this node cannot open is said at WARN the
+// first time a confirmation is turned away for it, and never again, so a
+// second note is not hidden behind the first. The first time is the first
+// turn-away whatever else turns it away: under a completion's claim, whose
+// take left the note this node opens waiting too, both notes waiting for their
+// key are said, and the confirmation made again once the claim is handed back
+// says nothing more. Not parallel: it installs the process's log sink.
 //
 // Mutation: say the turn-away once a turn, and the second note goes unsaid;
 // ask whether the take left a note before asking for a note waiting for its
-// key, and the confirmation turned away under the claim says neither. Not
-// parallel: it installs the process's log sink.
+// key, and the confirmation turned away under the claim says neither.
 func TestEveryNoteThatWaitsForItsKeyIsSaidOnceWhereverItsConfirmationIsTurnedAway(t *testing.T) {
 	logs := captureSteerLogs(t)
 	ctx := t.Context()

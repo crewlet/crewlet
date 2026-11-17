@@ -14,28 +14,15 @@ import (
 // THE RUNS WAITING FOR AN OPERATOR, ACROSS THE FLEET: what the
 // executor_resume_blocked alarm reads ([statelog.KindExecutorResumeBlocked]).
 //
-// A finished job whose resume fails on a condition only an operator clears is
-// counted by the executor coordinator of the node holding its seat, from that
-// node's own memory of its attempts ([sandbox.Coordinator.ResumesBlocked]). That
-// node may evaluate no alarm table at all: a satellite (`roles: [seats]`) runs
-// no state log, and read from each node's own memory alone, the alarm was never
-// raised for a seat a satellite held, the one topology where nobody reads the
-// node's log by default. So the node says it in its status record
-// ([coord.NodeStatusRecord.ResumesBlocked]) and every data node raises it from
-// the live records, as the model alarms are raised, this node's own runs read
-// from its memory rather than from its last record.
-//
-// A LIVE NODE WHOSE RECORD IS NOT COUNTED KEEPS ITS LAST WORD while its
-// presence stands at the epoch it said it under ([coord.LiveNodeStatusesKept],
-// the model and MCP alarms' rule too): a record not yet rewritten, or one whose
-// write failed and aged out while the node lives, is a node not saying, never
-// one whose runs stopped waiting, and read as the second the alarm cleared on
-// that pass and was raised again on the next. A node whose presence is gone, or
-// moved to a new epoch, says nothing it said before: its seats move to holders
-// that say their own, and a restarted node's memory of its attempts went with
-// its process. And a listing that fails is the last one that answered, as the
-// model alarms' is, so a blip neither clears the alarm nor raises it again on
-// the next tick.
+// Each node says its own in its status record
+// ([coord.NodeStatusRecord.ResumesBlocked], from
+// [sandbox.Coordinator.ResumesBlocked]) and every data node raises it from the
+// live records, this node's own runs read from its memory: a satellite runs no
+// state log, and read from each node's memory alone the alarm is never raised
+// for a seat it held. A live node whose record is not counted keeps its last
+// word at the same epoch ([coord.LiveNodeStatusesKept]), and a failed listing
+// stands on the last that answered. The package doc's "The runs waiting for an
+// operator" says why.
 
 // blockedSaid is what [Engine.executorReading] last read of each live node's
 // status record, a live node whose record is not counted keeping the one it

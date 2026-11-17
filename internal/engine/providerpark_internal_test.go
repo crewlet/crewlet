@@ -967,14 +967,12 @@ func TestAProbeRefusedWithANextTryAlreadyPastWaitsBeforeItAsksAgain(t *testing.T
 
 // A PARK TAKEN WHILE A RELEASE OF THE SEAT IS LIFTING KEEPS THE SEAT HELD.
 //
-// A release drops its record under the parks' lock and resumes outside it. A
-// park taken in between (a delivery on another partition that met the
-// condition) holds the same attachment again, which changes nothing on the
-// queue, and records itself, and the late resume then lifted that park's hold:
-// the seat was recorded parked with its inbox not held. So the release reads
-// the record again once its resume has returned, and takes back the hold of a
-// park recorded meanwhile. Shared by both kinds of park (seatpark.go); the
-// provider's is the one taken with no alarm, so nothing but the case moves it.
+// A release drops its record under the parks' lock and resumes outside it; a
+// park taken in between re-holds the same attachment and records itself, and
+// the late resume would lift its hold, leaving the seat recorded parked with
+// its inbox not held. So the release reads the record again after its resume
+// (the package doc's "A lift takes back a hold taken in its window"). Shared by
+// both kinds of park; the provider's is the one taken with no alarm.
 //
 // Mutation: drop the read after the resume, and the seat is left recorded
 // parked with its inbox unheld.
@@ -1021,17 +1019,13 @@ func TestAParkTakenAsItsSeatsReleaseLiftsKeepsTheSeatHeld(t *testing.T) {
 
 // A PARK TAKEN IN A RELEASE'S WINDOW KEEPS ITS WAIT.
 //
-// A seat's wait record is what a later park carries its start from
-// ([limitProbes.waits]). A release marks it released, or, for a probe's answer,
-// ends it, once its resume has returned, and a turn that meets the limit again
-// in between parks the seat on the record first: the release's late mark or
-// end then landed on the wait that park stands on. Ended, the park's own
-// release later found no record to mark: the seat dropped out of the waits the
-// heartbeat reports until its re-park within [parkCarryWindow] of that
-// release, which began a new wait; marked, the standing seat's re-park
-// on another chain more than [parkCarryWindow] after the release began a new
-// wait. Either way a seat that had waited throughout read as newly waiting, and
-// `llm_limit_waiting`, judged at fifteen minutes, went out.
+// A release marks the seat's wait released, or a probe's answer ends it, once
+// its resume has returned, and a turn that meets the limit again in between
+// parks the seat on that record first. Landed on the standing park's record,
+// the late end or mark made a later re-park begin a new wait, so a seat that
+// had waited throughout read as newly waiting and `llm_limit_waiting`, judged
+// at fifteen minutes, went out (the package doc's "A provider park's release
+// and its wait").
 //
 // Mutation: let either the release's mark or the probe's end land on the
 // record of a park that stands, and its subtest fails.
@@ -1256,19 +1250,15 @@ func TestAReleaseThatTookAParksHoldBackSaysTheInboxStaysHeld(t *testing.T) {
 // A PARK ON ITS CHAIN TAKEN AS THE PROBE'S RELEASE LIFTS IS LEFT WHOLE: HELD,
 // PROBED AND ANNOUNCED.
 //
-// The probe's answer releases the seat's park, and a turn that meets the limit
-// again parks the seat on the same chain in the release's window: before its
-// resume reaches the queue (a turn on another partition), or once it has (the
-// resumed mail, which the in-memory twin hands over inside the resume). The
-// release then took the seat off the probe the new park had just joined, and
-// announced the seat released after the new park had announced it parked:
-// held, with nothing left to release it, and drawn released on every screen.
-// So the release's own effects on the seat are decided with its record's drop,
-// before any park after it can be taken.
+// The park is taken in the release's window, before its resume reaches the
+// queue (a turn on another partition) or once it has (the resumed mail, which
+// the in-memory twin hands over inside the resume). So the release's own
+// effects on the seat are decided with its record's drop, before any later
+// park can be taken (the package doc's "A provider park's release and its
+// wait").
 //
-// Mutation: take the seat off its probe after the resume rather than with the
-// drop, and the park taken in the window is left on no probe; announce the
-// release after the resume, and the seat is drawn released.
+// Mutation: take the seat off its probe after the resume, and the park is left
+// on no probe; announce the release after it, and the seat is drawn released.
 func TestAParkOnItsChainTakenAsItsProbesReleaseLiftsIsLeftWhole(t *testing.T) {
 	t.Parallel()
 	for _, late := range []bool{false, true} {
