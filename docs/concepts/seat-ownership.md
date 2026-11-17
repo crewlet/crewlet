@@ -856,10 +856,11 @@ the fleet's nodes holding different keys or running different builds) is the
 node's too, so the give-up never ends a run held by one: the run and its seat
 wait for the operator, and a turn with a wall-clock cap still ends at it. What
 the operator sees is the [`executor_resume_blocked`](../reference/alarms.md)
-alarm while such a run waits, raised by every data node from the heartbeat of
-the node holding the seat, so a seat a satellite holds is raised too, naming
-the seat waiting longest, the node holding it, the condition and for how long,
-and cleared once a resume gets past it; each attempt's `sandbox_resume_failed`
+alarm while such a run waits, raised by every data node from the status record
+of the node holding the seat, so a seat a satellite holds is raised too (a live
+node whose record is not counted keeping its last word), naming the seat
+waiting longest, the node holding it, the condition and for how long, and
+cleared once a resume gets past it; each attempt's `sandbox_resume_failed`
 line, at error, on the node holding the seat, its `error` naming the condition;
 and for a full volume holding the node's databases the
 [`volume_low`](../reference/alarms.md) alarm besides.
