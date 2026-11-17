@@ -18,13 +18,29 @@ span reads the meter first. Where the link did not carry seven tenths of the
 floor over that span, in either direction, the wait ends as it did. Where it
 did, the wait is held: the reply may be among what the link carries.
 
-**And every hold is capped by one message at the transport's bound.** No
-reply waits behind more than the node's own windowed bulk and one other
-message, so a wait held past its span is held by at most what one message at
-the transport's ceiling takes to cross at the floor (`Timing.Following`'s
-beyond, memsync's `quietCap`), and a replay that has watched that much cross
-with nothing for it is placed again (memsync's `quietBytes`). A member crosses
-no link, has no meter, and waits on time alone.
+**And every hold is capped, by choice, at one message at the transport's
+bound.** A wait held past its span is held by at most what one message at the
+transport's ceiling takes to cross at the floor (`Timing.Following`'s beyond,
+memsync's `quietCap`), and a replay that has watched one such message and one
+of its own pulls cross with nothing for it is placed again (memsync's
+`quietBytes`). That is not a bound on what may be ahead of a reply: any number
+of messages may be (below), and until the node's own bulk is windowed its
+transfers may be too. A reply behind more than the cap allows is cut at the
+cap, where it was cut at its span before, and a replay behind more is placed
+again needlessly. A held wait is judged again as the meter reads (a request's
+every quarter second, a replay's every second, over the span before each
+judgment), so a link that falls still ends it within its span and a judgment
+of its last byte. A member crosses no link, has no meter, and waits on time
+alone.
+
+**Only where nothing on the path terminates TCP.** The meter reads the node's
+own socket, so it sees what the next hop took: a proxy that terminates TCP in
+front of the far end (a service mesh's sidecar, a load balancer that buffers)
+acknowledges what it buffered, and a far end that stopped reading looks, for as
+long as that buffer takes to fill, like one that reads. The guides require the
+link's port to be left out of mesh capture and kept clear of such proxies
+(`docs/guides/satellite-nodes.md`, `docs/guides/deployment.md`); NAT, a
+firewall and a VPN that forwards packets do not terminate TCP.
 
 The first readers are a seat's hydration and the ceilings of its hedged
 requests. A wait that has no meter to read keeps its time bound; making every

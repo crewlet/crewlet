@@ -45,6 +45,13 @@ import (
 // caller whose own deadline is longer gains nothing past the ceiling, for the
 // same reason; one whose deadline is shorter keeps it.
 //
+// ACROSS A LINK ITS TIMING FOLLOWS ([Timing.Following]) the ceiling runs only
+// while the link is still: a read whose reply may be among what a moving link
+// carries is held past it by the timing's Beyond at most, asking nothing more
+// past it and waiting for the requests already out ([Timing.Ceiling]). So
+// "never past t.Lookup" holds for a timing that follows no link, and "never
+// past t.Lookup and its Beyond" for one that does.
+//
 // The ceiling ending is SILENCE, never the caller's ending: [Unanswered] on
 // the caller's own context reads it as a read nobody answered.
 //

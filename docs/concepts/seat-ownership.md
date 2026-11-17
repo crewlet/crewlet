@@ -341,12 +341,13 @@ the end), and a delivery the link lost. A placement that delivered nothing is
 followed by the next a second after it, so a broker that refuses every pull is
 asked for a consumer once a second, not as fast as it answers. Each placement
 after a table's first logs `memory_replay_placed_again`, with the reason
-(`behind`, `gone`, `unpulled` or `gap`) and what the broker or the link said
-(`detail`: a refusal's status line, a lost delivery's counts). A replay that
-nothing has been delivered to for a minute, across every placement and
-whatever each ended with, refuses the seat, until the next sweep, rather than
-admitting it without its newest memory, and names what ended its last
-placement. A pull asks no more messages than the consumer it was given takes:
+(`behind`, `gone`, `unpulled`, `gap`, or `quiet` across a link, below) and what
+the broker or the link said (`detail`: a refusal's status line, a lost
+delivery's counts, what the link carried). A replay that nothing has been
+delivered to for a minute, across every placement and whatever each ended
+with but `quiet`, which neither starts nor reads that minute (below), refuses
+the seat, until the next sweep, rather than admitting it without its newest
+memory, and names what ended its last placement. A pull asks no more messages than the consumer it was given takes:
 a server whose JetStream limits set `max_request_batch` gives every consumer
 that limit, and refuses a pull asking more.
 
@@ -430,12 +431,18 @@ hold the wait:
 
 - **Placed again past one message and a window.** Once the link has read one
   message at the broker's limit and one of the replay's pulls since the replay
-  last heard anything (8.9 MB at the shipped lease), every word its copy owes
-  it has crossed or was never sent, and the replay is placed again on a copy
-  the broker chooses afresh (`memory_replay_placed_again`, `why=quiet`): on a
-  link of 100 Mbit/s, under a second's worth. Such a placement starts no
-  minute of the replay being behind (above), since the link it waits on
-  carries other traffic, which may hold its words longer than a minute.
+  last heard anything (8.9 MB at the shipped lease), the replay is placed
+  again on a copy the broker chooses afresh (`memory_replay_placed_again`,
+  `why=quiet`): on a link of 100 Mbit/s, under a second's worth. The figure is
+  a choice, not a bound on what the link may carry ahead of a word: the
+  replay's own bytes ahead of it are one pull's, since it keeps one pull out
+  at a time, and the cap allows one other message at the broker's limit; any
+  number of other messages may be ahead, and the object store's transfers
+  ride the same connection. Behind more, the replay is placed again
+  needlessly, which costs the seat a consumer, and at worst is refused at the
+  cap below. Such a placement starts no minute of the replay being behind
+  (above), since the link it waits on carries other traffic, which may hold
+  its words longer than a minute.
 - **Refused at one pull at the broker's limit.** A replay that hears nothing
   for the stall of one pull at the broker's limit since its last word, across
   every placement (about 253 seconds at the floor), while its link moves too

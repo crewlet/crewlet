@@ -459,16 +459,19 @@ func (s *Syncer) pullBound() int {
 // the transport's bound ([Syncer.pullBytes]) and one of the replay's own
 // pulls ([Syncer.pullBound]).
 //
-// THE MOST A WORD WAITS BEHIND on the link, but for other single messages: a
-// replay keeps one pull out at a time ([tableReplay.pull]), so its own bytes
-// ahead of a word are one pull's at most, and the node's other bulk — the
-// object store's transfers — is windowed and not ahead of it on its own
-// connection. So once the link has read that much since the replay last
-// heard anything, the word its copy owes it crossed or was never sent, and a
-// copy afresh is cheaper than waiting: 8.9 MB at the shipped lease, under a
-// second at 100 Mbit/s. A word queued behind two messages at the transport's
-// bound is placed again needlessly, and the placement, which the behind clock
-// does not read ([tableReplay.again]), costs the seat nothing but a consumer.
+// A CHOICE, NOT A BOUND on what the link may carry ahead of a word: a replay
+// keeps one pull out at a time ([tableReplay.pull]), so its own bytes ahead
+// of a word are one pull's at most, and the figure allows one other message
+// at the transport's bound beside them. Nothing bounds the rest — any number
+// of events and records may be ahead of a word, and the object store's
+// transfers ride the same connection, unwindowed — so once the link has read
+// that much since the replay last heard anything, a copy afresh is judged
+// cheaper than waiting on: 8.9 MB at the shipped lease, under a second at
+// 100 Mbit/s. A word queued behind more is placed again needlessly, and the
+// placement, which the behind clock does not read ([tableReplay.again]),
+// costs the seat a consumer; at worst the replay is refused at its time cap
+// ([Syncer.quietCap]), where it was refused at its stall before the link was
+// read at all.
 func (s *Syncer) quietBytes() int {
 	return s.pullBytes() + s.pullBound()
 }
