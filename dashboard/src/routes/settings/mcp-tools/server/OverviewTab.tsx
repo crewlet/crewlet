@@ -153,9 +153,8 @@ function unanswered(detail: ServerDetail): string {
 
 /**
  * The calls this server's tools hold for a person's answer. AN ANSWERED CALL
- * STAYS, for its row to say what was answered, until the page is drawn
- * afresh: the engine drops a call from the answer once its run carries on,
- * which would take the line away mid-read.
+ * STAYS until the page is drawn afresh: the engine drops it once its run
+ * carries on, which would take the row away mid-read.
  */
 export function useKeptCalls(server: McpMemberServerStatus, data: McpData): McpApproval[] {
   const all =

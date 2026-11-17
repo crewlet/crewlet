@@ -82,11 +82,9 @@ test("a change that claims less risk is shown first, flagged, with what moved", 
   ).toBeDefined();
 });
 
-// THE REVIEW SAYS EACH THING ONCE: one sentence under the heading, which does
-// not count the changes again; the chosen tool is named by the rail alone, not
-// again over its diff; and a part is named by its label alone, not by a line
-// over the list repeating the labels. Mutation: put back the count, the name
-// over the diff or the rail's description, and this is red.
+// THE REVIEW SAYS EACH THING ONCE: no count under the heading, the tool named
+// by the rail alone and each part by its label alone. Mutation: put back the
+// count, the name over the diff or the rail's description, and this is red.
 test("the review says each thing once", () => {
   const [moved] = LINEAR_CHANGES;
   detail = {
