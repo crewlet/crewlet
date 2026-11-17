@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -597,42 +598,52 @@ func TestTheMaxTransfersDescriptionIsThePoolsDefault(t *testing.T) {
 // is asked for twice, the way the teardown and the shutdown ask: it runs once,
 // and the two together take one budget.
 //
+// The case runs in a synctest bubble, because its claims are about the bound's
+// clock: the bound's timer fires at exactly its budget on the bubble's clock,
+// and nothing else moves that clock, so the pair takes EXACTLY one budget when
+// the stop runs once and exactly two when it runs twice. On the wall clock the
+// first stop rightly waits its whole budget, and a loaded runner under -race
+// spends the margin beside it on scheduling alone (#1225).
+//
 // Mutation: drop the once, and the second call runs the stop again and the
-// pair takes two budgets.
+// pair takes two budgets. Bound the stop by the caller's context rather than
+// detaching it, and the ended caller's stop waits no time at all.
 func TestGitletIsStoppedOnceWithinOneBudget(t *testing.T) {
 	t.Parallel()
-	const budget = 200 * time.Millisecond
-	var runs atomic.Int32
-	held := func(ctx context.Context) {
-		runs.Add(1)
-		<-ctx.Done() // git work that outlives the bound
-	}
-	stop := boundedStop{budget: budget}
-	start := time.Now()
-	stop.stop(t.Context(), held) // the teardown's
-	stop.stop(t.Context(), held) // the shutdown's
-	took := time.Since(start)
-	if runs.Load() != 1 {
-		t.Fatalf("the stop ran %d times, want once", runs.Load())
-	}
-	if took >= 2*budget {
-		t.Fatalf("two stops took %v, two budgets of %v", took, budget)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		const budget = 200 * time.Millisecond
+		var runs atomic.Int32
+		held := func(ctx context.Context) {
+			runs.Add(1)
+			<-ctx.Done() // git work that outlives the bound
+		}
+		stop := boundedStop{budget: budget}
+		start := time.Now()
+		stop.stop(t.Context(), held) // the teardown's
+		stop.stop(t.Context(), held) // the shutdown's
+		took := time.Since(start)
+		if runs.Load() != 1 {
+			t.Fatalf("the stop ran %d times, want once", runs.Load())
+		}
+		if took != budget {
+			t.Fatalf("two stops took %v, want one budget of %v", took, budget)
+		}
 
-	// A CALLER WHOSE CONTEXT HAS ENDED STILL GETS THE WHOLE BOUND: the stop
-	// is often asked for because it ended.
-	ended, cancel := context.WithCancel(t.Context())
-	cancel()
-	var waited time.Duration
-	fresh := boundedStop{budget: budget}
-	fresh.stop(ended, func(ctx context.Context) {
-		begun := time.Now()
-		<-ctx.Done()
-		waited = time.Since(begun)
+		// A CALLER WHOSE CONTEXT HAS ENDED STILL GETS THE WHOLE BOUND: the stop
+		// is often asked for because it ended.
+		ended, cancel := context.WithCancel(t.Context())
+		cancel()
+		var waited time.Duration
+		fresh := boundedStop{budget: budget}
+		fresh.stop(ended, func(ctx context.Context) {
+			begun := time.Now()
+			<-ctx.Done()
+			waited = time.Since(begun)
+		})
+		if waited != budget {
+			t.Fatalf("a stop asked for on an ended context waited %v, want its whole %v bound", waited, budget)
+		}
 	})
-	if waited < budget/2 {
-		t.Fatalf("a stop asked for on an ended context waited %v of its %v bound", waited, budget)
-	}
 }
 
 // EVERY FACTS READ OF A HOME HAS A SPOOL. A node's facts reads are its own
