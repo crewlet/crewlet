@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/gitlet"
@@ -141,19 +140,12 @@ func checksListing(p Params) (*gitlet.CheckQuery, error) {
 				words.Or(gitlet.CheckStates()))
 		}
 	}
-	if since := strings.TrimSpace(p.String("since")); since != "" {
-		at, err := time.Parse(time.RFC3339Nano, since)
-		if err != nil {
-			return nil, fmt.Errorf("%w: since %q is not an RFC 3339 instant", ErrBadParams, since)
-		}
-		c.Since = at.UTC()
+	var err error
+	if c.Since, err = instantParam(p, "since"); err != nil {
+		return nil, err
 	}
-	if until := strings.TrimSpace(p.String("until")); until != "" {
-		at, err := time.Parse(time.RFC3339Nano, until)
-		if err != nil {
-			return nil, fmt.Errorf("%w: until %q is not an RFC 3339 instant", ErrBadParams, until)
-		}
-		c.Until = at.UTC()
+	if c.Until, err = instantParam(p, "until"); err != nil {
+		return nil, err
 	}
 	if c == (gitlet.CheckQuery{}) {
 		return nil, nil

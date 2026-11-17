@@ -1393,6 +1393,18 @@ func (n CommandCounts) encodedBytes() int {
 	return size
 }
 
+// changeBytes is what the row's change and its count add to its encoding: none where it names no change.
+func (row PushRow) changeBytes() int {
+	n := 0
+	if row.Change != nil {
+		n += field("change", row.Change.encodedBytes(), false)
+	}
+	if row.ChangesMore != 0 {
+		n += field("changes_more", intBytes(int64(row.ChangesMore)), false)
+	}
+	return n
+}
+
 // encodedBytes is the length of the push row's JSON encoding, given the
 // length of its commands' encoding — which a row read from the store has
 // already, as the column it was decoded from: the stored commands ARE
@@ -1419,6 +1431,7 @@ func (row PushRow) encodedBytes(commands int) int {
 		n += field("atomic", trueBytes, false)
 	}
 	n += field("commands", commands, false)
+	n += row.changeBytes()
 	if row.Omitted != (CommandCounts{}) {
 		n += field("omitted", row.Omitted.encodedBytes(), false)
 	}

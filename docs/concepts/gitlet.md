@@ -3453,6 +3453,55 @@ repositories or one repository's detail, or on a push history
 (`GET /gitlet/repos/{name}/pushes`); see [the code
 reads](../reference/api-endpoints.md#the-code-reads).
 
+### Narrowing a push history
+
+A repository's push history can be narrowed to one pusher, to a window of
+time, or to both:
+
+- a pusher is named as its pushes are counted ([Counting
+  pushes](#counting-pushes)): a seat by its handle, a person by the human seat
+  they hold whichever credential they pushed with, or Gitlet, whose pushes are
+  merges, merge queue landings, imports and pull mirror syncs. A seat's merges
+  are Gitlet's, and the ref lifecycle's expiries are nobody's;
+- a window runs from `since` (inclusive) to `until` (exclusive), judged on each
+  push's own instant;
+- the narrowed history stays in the order its pushes landed.
+
+No index of who pushed is kept. One would cost every push about a hundred
+bytes on every data node for its 181 days (some 4.5 GB at 250 000 pushes a
+day), and one of people's pushes alone as much for each of theirs. So a
+narrowed read scans the history newest first, at most 5 000 pushes and
+4 MiB of their rows a page, and answers the pushes it keeps up to its limit.
+A page can hold fewer, or none, beside a cursor, and `push_scan` says how far
+back it has looked.
+
+Narrowed to a pusher, the read takes the repository's counts of who pushed on
+each UTC day: it skips the days the pusher did not push on, leaves a day once
+it has met that day's pushes, and ends once it has met them all. Narrowed to a
+window, it skips what was pushed after the window and stops past its start.
+
+Skipping and stopping rest on the clocks. A record's instant can stand before
+the instant of a record that landed earlier, when the stream's leader changes;
+the engine assumes it stands at most two hours before, two broker members each
+assumed within an hour of the fleet's clock (the `clock_skew` alarm watches
+only the member leading the position register, and an external NATS cluster's
+servers are the operator's to keep, see [Deployment § Every machine's
+clock](../guides/deployment.md#every-machines-clock)). So a narrowed read reads
+two hours past each end of a day or window it skips to or stops at, and a push
+stamped further out of order can be left out of a narrowed page, while the
+unnarrowed history lists it.
+
+`day_bounds` beside a pusher is refused, since the days count every pusher's
+pushes; beside a window, every bound lies inside it.
+
+Each push also names the change its own record merged on a branch it set
+("Gitlet merged web!41 into main"): a merge's, a merge queue landing's, or one
+a push merged by setting the change's target to its head, with how many more
+it merged. A change the repository's home Gitlet node found merged after a
+push moved its target past the change's head is named on no push, since no row
+keeps which push did it. See [the code
+reads](../reference/api-endpoints.md#the-code-reads).
+
 ### Deletion and purge
 
 A repository removed from `code.repos` is **deleted**, softly: its rows and
