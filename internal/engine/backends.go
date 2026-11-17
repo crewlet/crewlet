@@ -1086,9 +1086,8 @@ func acrossLink(b *config.Bootstrap) bool { return b.BrokerKind() != placement.B
 // over backends' coordination connection (memsync.Config): across a link or
 // not ([acrossLink]), on the stream's topology ([clusteredStream]), and
 // reading the meter of its link where it crosses one (Backends.link) — what
-// each of a hydration's requests is given, whether its pulls are windowed so
-// a request sent behind one on the link is still answered inside its term,
-// and what tells a hydration held behind the link's other traffic from one
+// each of a hydration's requests is given, whether its pulls are windowed
+// (memsync's package doc, "A window across a link"), and what tells a hydration held behind the link's other traffic from one
 // whose copy stopped answering.
 func memoryConfig(b *config.Bootstrap, backends *Backends) memsync.Config {
 	return memsync.Config{

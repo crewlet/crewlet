@@ -135,11 +135,16 @@ logs survive, on the same members:
   is held to a five-second term, so the window is **one 128 KiB message**,
   which crosses the floor of thirty seconds a mebibyte in 3.75 seconds: a
   request sent behind a full window still has the second its own round trip
-  needs, at every lease TTL. The window does not follow the lease: sized by
-  the lease's heartbeat, as it once was, the default 45-second lease's window
-  of four messages held such a request fifteen seconds at the floor. A window
-  of one costs throughput on a fast link: through a leaf on loopback it
-  carried a lone 16 MiB upload at 47–83 MB/s and eight at once at 56–78
+  needs, at every lease TTL, unless its answer also crosses back behind a
+  memory replay's window, which windows the other direction: then it waits
+  behind both, 7.75 seconds at the floor beyond its own round trip, past its
+  term, until [#1035](https://github.com/crewlet/crewlet/issues/1035) puts
+  one window across the link
+  ([Seat Ownership](seat-ownership.md#a-seats-memory-follows-it)). The
+  window does not follow the lease: sized by the lease's heartbeat, as it
+  once was, the default 45-second lease's window of four messages held such
+  a request fifteen seconds at the floor. A window of one costs throughput
+  on a fast link: through a leaf on loopback it carried a lone 16 MiB upload at 47–83 MB/s and eight at once at 56–78
   together, against 120–139 and 130–135 with four — about half — and across
   a longer round trip the share lost is larger, since it moves 128 KiB a
   round trip (1.31 MB/s across 100 ms). On a data node's own client, where

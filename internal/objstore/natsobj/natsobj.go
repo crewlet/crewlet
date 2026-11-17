@@ -73,8 +73,9 @@
 // reader answers io.EOF itself — never at a body cut short — with no publish
 // retry and its messages out held to a WINDOW the connection's puts share
 // ([window]: [linkWindow] across a leaf's link or to an external cluster,
-// sized so a request queued behind it at the floor is still answered inside
-// its term; [memberWindow] on a member's own client); it is ended only when
+// sized so a request queued behind it alone at the floor is still answered
+// inside its term, and what else it waits behind is "The window across a
+// link" below; [memberWindow] on a member's own client); it is ended only when
 // the broker has acknowledged nothing for [objstore.Stall] while messages are
 // out ([objstore.ErrStalled]); and a put that fails, the caller giving up among
 // the ways, drains what is out and purges what it stored under a context that

@@ -423,7 +423,7 @@ var rowInventory = map[string]int{
 	"objstore/collect":                       5781,
 	"objstore/memobj, objstore/objstoretest": 1187,
 	"objstore/migrate":                       1174,
-	"objstore/natsobj":                       9523,
+	"objstore/natsobj":                       9521,
 	"objstore/references":                    2363,
 	"objstore/s3obj":                         13290,
 	"observe":                                2095,

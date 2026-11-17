@@ -28,10 +28,11 @@ const messageCrossing = objstore.MiBPace * MessageBytes / objstore.MiB
 // the floor every leg is promised ([objstore.MiBPace]) carries within
 // [jsapi.WindowCrossing], at least one — ONE message, 128 KiB, crossing the
 // floor in 3.75 seconds, whatever lease the node holds — so a request sent
-// behind a full window is still answered inside its term. Neither a lease's
-// heartbeat nor a measured rate sizes it, and one message costs a fast link
-// half its throughput: the package doc's "The window across a link" says why.
-// A test holds the arithmetic against the terms' own constants.
+// behind a full window of puts alone is still answered inside its term. Neither
+// a lease's heartbeat nor a measured rate sizes it, and one message costs a
+// fast link half its throughput: the package doc's "The window across a link"
+// says why, and what a request also behind the inbound traffic waits. A test
+// holds the arithmetic against the terms' own constants.
 const linkWindow = max(int(jsapi.WindowCrossing/messageCrossing), 1)
 
 // memberWindow is the window on a MEMBER's own client — a data node, whose
