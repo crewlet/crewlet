@@ -142,26 +142,13 @@ func (q *Queue) nakSpacing(n uint64) time.Duration {
 }
 
 // LeastTimeToDeadLetter is the least time this backend carries a failing
-// message, at its defaults, from its first delivery to its dead letter: its
-// budget's deliveries ([maxDeliver]), every one but the last returned as a
-// failure to one attachment, each return spaced by [Queue.nakBackoff] at the
-// floor of its jitter. The spacings are 1, 2, 4, 8 and 16 s, then nineteen at
-// the 30 s ceiling, 601 s in all; at four fifths of each, about 481 s.
-//
-// FOR A LAYER ABOVE THAT LEANS ON A FAILING MESSAGE OUTLIVING A WAIT OF ITS
-// OWN, and holds the two apart in a test rather than in prose. internal/sandbox
-// is one: its waiter announces a finished job again on a schedule whose longest
-// gap is twenty poll intervals, while each announcement a node's own silent
-// store cannot claim is returned as a failure, so a fresh announcement has to
-// be out before the last one is dead-lettered.
-//
-// THE LEAST ON THE FAILURE PATH, NOT ON EVERY PATH. A hand-back returns at
-// once ([attachment.handBack]), and a failure to an attachment the message had
-// not failed on yet, another node's or this node's own after a re-attach, is
-// spaced from the first return again ([attachment.failures]), so a message
-// handed from node to node, or met by a re-attach, is dead-lettered sooner; and
-// a handler's own time adds to it. [Config.MaxDeliver], NakDelay and
-// NakCeiling, which only tests set, change it too.
+// message, at its defaults, from its first delivery to its dead letter, every
+// return but the last spaced by [Queue.nakBackoff] at the floor of its jitter:
+// about 481 s. For a layer above that holds a wait of its own under it, in a
+// test (internal/sandbox's re-announcement). The least on the failure path
+// alone: a hand-back returns at once, and each attachment spaces its own
+// failures from the first (the package doc's "The least time a failing message
+// is carried").
 func LeastTimeToDeadLetter() time.Duration {
 	// THE DEFAULTS: a queue configured with nothing, whose spacing reads
 	// nothing else ([Queue.nakSpacing]). The floor is what [backoff.Jitter]
@@ -543,26 +530,11 @@ func (a *attachment) wait(d time.Duration) {
 // --- pause holds ----------------------------------------------------------
 //
 // Holds live on the QUEUE, keyed by the (topic, group) pair, not on an
-// attachment's consumer, and each is TAKEN FOR ONE ATTACHMENT of the pair.
-// Three reasons, all learned the hard way.
-//
-// Keyed by the PAIR rather than by topic alone, because a topic-keyed hold
-// also gated every other group on a shared subject, and because a second
-// subsystem gating one inbox must not release the first one's hold.
-//
-// Owned by the QUEUE rather than by a consumer, because a hold is routinely
-// taken BEFORE anything attaches: an engine that knows a seat is busy pauses
-// first and attaches after. A hold stored on the consumer would simply be
-// dropped in that window, and the seat would take exactly the work it was
-// told not to.
-//
-// Taken FOR AN ATTACHMENT ([queue.Attachment]), because owned by the pair
-// alone a hold could not tell the attach it was taken before from the one a
-// release had just ended: a hold decided while a seat was held here and
-// asked after its release's Detach was carried onto the next attachment of
-// that inbox, which then fetched nothing, with nothing left that knew of the
-// hold to lift it. The pair's current attachment is minted on its first read
-// and ended by its Detach, and a hold asked for any other is refused.
+// attachment's consumer, and each is TAKEN FOR ONE ATTACHMENT of the pair:
+// the pair's current attachment, minted on its first read and ended by its
+// Detach, and a hold asked for any other is refused. Why each of the three is
+// so is the package doc's "A pause hold lives on the queue, for one
+// attachment".
 
 // Attachment answers the pair's current attachment, minting it on the first
 // read since the pair's last Detach.
