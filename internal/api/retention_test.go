@@ -731,6 +731,8 @@ func TestAnAcknowledgementRecordsWhenItsCopyWasTaken(t *testing.T) {
 		{"no instant", "", httpjson.CodeTakenAtRequired},
 		{"an instant that is no RFC 3339", "&taken_at=yesterday", httpjson.CodeTakenAtRequired},
 		{"a date with no time", "&taken_at=2026-11-14", httpjson.CodeTakenAtRequired},
+		{"the zero instant", "&taken_at=0001-01-01T00:00:00Z", httpjson.CodeTakenAtRequired},
+		{"an offset's + sent unescaped", "&taken_at=2026-11-14T11:00:00+02:00", httpjson.CodeTakenAtRequired},
 		{"an instant a second past the node's clock", "&taken_at=2026-11-17T09:00:01Z",
 			httpjson.CodeTakenAtInFuture},
 	} {

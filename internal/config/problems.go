@@ -1089,7 +1089,7 @@ func (b *Bootstrap) Warnings() []Warning {
 		out = append(out, advisory(field("stream.tracker_retention.backup_floor"),
 			"`operator` means every state log is trimmed only as far as a "+
 				"backup of that log has been acknowledged, once per log "+
-				"(`crewlet retention ack -stream <log> -position <n> -taken-at <when>`; "+
+				"(`crewlet retention ack -stream <log> -position <n> -taken-at <t>`; "+
 				"`crewlet retention status` names every one). Until its own "+
 				"acknowledgement a log is never trimmed. The ordered logs grow "+
 				"until their own ceiling starts refusing writes: "+

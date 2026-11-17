@@ -107,7 +107,14 @@ type NodeGate interface {
 // for a clock that runs ahead: an instant past now is a copy younger than any
 // could be, which overstates the one thing the field exists to state, and an
 // operator whose own clock leads can give the instant by this node's, which
-// the refusal reads out.
+// the refusal reads out. The zero instant is refused with a missing one: it
+// says nothing about any copy, and the register would refuse it anyway.
+//
+// AN OLDER COPY MAY REPLACE A NEWER ONE. The point under this log is the
+// operator's newest ASSERTION, and an operator who finds the newer copy bad
+// has to be able to fall back to an older one. Either way the record states
+// the copy the operator vouches for, and moving it back is the conservative
+// direction: the trim deletes less, and the backup's age reads older.
 func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 	stream := r.URL.Query().Get("stream")
 	position, err := strconv.ParseUint(r.URL.Query().Get("position"), 10, 64)
@@ -119,12 +126,16 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	takenAt, err := time.Parse(time.RFC3339Nano, r.URL.Query().Get("taken_at"))
-	if err != nil {
+	raw := r.URL.Query().Get("taken_at")
+	takenAt, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil || takenAt.IsZero() {
+		// THE VALUE AS RECEIVED, because the commonest way to send a valid
+		// instant and have it refused is an offset's '+' left unescaped in
+		// the query, which arrives as a space.
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeTakenAtRequired, map[string]string{
-			"detail": "name when your copy was taken in taken_at, as an RFC 3339 " +
-				"instant such as 2026-11-17T03:00:00Z. The backup's age is measured " +
-				"from it, so there's no value to guess",
+			"detail": fmt.Sprintf("name when your copy was taken in taken_at, as an RFC 3339 "+
+				"instant such as 2026-11-17T03:00:00Z (received %q; an offset's + is sent as %%2B). "+
+				"The backup's age is measured from it, so there's no value to guess", raw),
 		})
 		return
 	}
@@ -133,7 +144,7 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeTakenAtInFuture, map[string]string{
 			"detail": fmt.Sprintf("taken_at %s is later than this node's clock, which reads %s. "+
 				"Give when the copy was taken, by this node's clock",
-				takenAt.Format(time.RFC3339), now.Format(time.RFC3339)),
+				takenAt.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)),
 		})
 		return
 	}
