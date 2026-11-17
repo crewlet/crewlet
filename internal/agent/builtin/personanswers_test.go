@@ -152,6 +152,15 @@ func everyLandedAnswer(t *testing.T) map[string]tools.Result {
 		t.Fatalf("%s: %v", builtin.CodeMarkInboxTool, err)
 	}
 	out[builtin.CodeMarkInboxTool] = marked
+	// AND THE PERSON'S OWN VIEWED MARK, which only the operator catalogue serves.
+	viewing := codeDeps(newChangeHost(siteChange()))
+	viewing.Writer = &codeWrites{}
+	viewed, err := readersCatalogueOver(viewing, nil)[builtin.CodeMarkViewedTool].Call(asBoundPerson(),
+		map[string]any{"repo": "site", "change": "7", "viewed": []any{map[string]any{"path": "a.txt"}}})
+	if err != nil {
+		t.Fatalf("%s: %v", builtin.CodeMarkViewedTool, err)
+	}
+	out[builtin.CodeMarkViewedTool] = viewed
 	// AND THE PERSON'S OWN COMMENT MARK, served beside the artifacts tools.
 	f := newFakeArtifacts()
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{

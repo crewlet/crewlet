@@ -249,6 +249,17 @@ func asSeat(handle string) context.Context {
 	})
 }
 
+// heldBackend is a coordination store whose clock stands still at the instant
+// it was made, so a presence lease [node] takes there stays live however late
+// a case's parallel subtests run. On the wall clock, a one-minute lease taken
+// before its subtests lapsed while they waited for a slot on a loaded race
+// shard, and fleet_health then answered no live node: the case's claim is who
+// may read the fleet, never how long a presence lasts.
+func heldBackend() *coordmem.Backend {
+	at := time.Now()
+	return &coordmem.Backend{Clock: func() time.Time { return at }}
+}
+
 // node claims node's presence in backend, its heartbeat carrying status where
 // it is not nil and nothing where it is.
 func node(t *testing.T, backend *coordmem.Backend, id string, meta map[string]any,
@@ -367,7 +378,7 @@ func keysOf(t *testing.T, v any) []string {
 // over-budget flag to a node's cache, and code_status does.
 func TestTheHealthToolsReportOnlyTheTablesVerdicts(t *testing.T) {
 	t.Parallel()
-	backend := coordmem.New()
+	backend := heldBackend()
 	since := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 	node(t, backend, "node-a", map[string]any{"roles": []string{"data", "gitlet"}}, &coord.NodeStatus{
 		InFlight: 3, AlarmsEvaluated: true, Alarms: []coord.AlarmMark{
@@ -508,7 +519,7 @@ func TestTheHealthToolsReportOnlyTheTablesVerdicts(t *testing.T) {
 func TestASeatGrantAdmitsOnlyItsGrantedSeats(t *testing.T) {
 	t.Parallel()
 	_, chart := healthChart(t)
-	backend := coordmem.New()
+	backend := heldBackend()
 	node(t, backend, "node-a", nil, &coord.NodeStatus{AlarmsEvaluated: true})
 	deps := fullDeps(t)
 	deps.Authorize = builtin.Decide(chart)
@@ -1125,7 +1136,7 @@ func (l *countingLeases) ListLive(ctx context.Context, class coord.Class) ([]coo
 func TestAFleetHealthInATurnSomebodyWokeIsReadOnlyForTheCompany(t *testing.T) {
 	t.Parallel()
 	o, chart := healthChart(t)
-	backend := coordmem.New()
+	backend := heldBackend()
 	node(t, backend, "node-a", nil, &coord.NodeStatus{AlarmsEvaluated: true})
 	unknown := []types.CanonicalIdentity{{ExternalID: "U-out", Platform: "slack"}}
 	speaker := func(handle string) []types.CanonicalIdentity {
@@ -1207,7 +1218,7 @@ func TestAFleetHealthInATurnSomebodyWokeIsReadOnlyForTheCompany(t *testing.T) {
 func TestAFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
 	t.Parallel()
 	const nodes = 300
-	backend := coordmem.New()
+	backend := heldBackend()
 	since := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 	wide := map[string]any{} // labels long enough that a hundred rows outgrow one answer
 	for i := range 20 {

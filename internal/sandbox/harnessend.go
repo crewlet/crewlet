@@ -313,9 +313,11 @@ func (l LaunchRecord) measured(read RequestMeasure, launch string) *SessionMeasu
 // later, on another node — a person's answer — whatever becomes of this read's
 // context. AND IN THE ROOM THE READ LEAVES THOSE RECORDS
 // ([Coordinator.recordsBy], [Coordinator.takeRecordsRoom]), after the take,
-// which counts this write's crossing as the read's budget does
-// ([BoxReadBudget]): made before the take, a store slow to answer it cut the
-// take's time, and made past that room, the box's pause and the read's answer.
+// which counts this write's grace and its crossing beside the take's own
+// record's, as the read's budget does ([BoxReadBudget]), so a take's own record
+// at its grace leaves this one its whole grace: made before the take, a store
+// slow to answer it cut the take's time, and made past that room, the box's
+// pause and the read's answer.
 // A record that does not land is said, and the job then reads as one whose
 // harness may have been cut off: a relaunch
 // that reads the record later carries its round on in its box telling the

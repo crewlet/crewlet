@@ -518,6 +518,11 @@ var codeLogNegligible = map[gitlet.OpKind]string{
 		"an Inbox button or an assistant's call, persons only: a person marking their day's " +
 		"notices one at a time writes tens of them, each a gesture and the positions of the " +
 		"notices it names, a few hundred bytes for the one or two a press names",
+	gitlet.OpViewed: "a person's viewed marks on a change's files: one record a press of a file's Viewed " +
+		"toggle or an assistant's call, persons only; a reviewer marking a change's files one at a time " +
+		"writes one a file, each two digests and the ended changes it forgets, a few hundred bytes",
+	gitlet.OpViewedKey: "a repository's viewed key: one record a repository ever, before the first mark of " +
+		"any of its files, about two hundred bytes",
 	// A GESTURE ON A CHANGE beside its open, its reviews and its merge: the
 	// reference company's changes are opened ready, on the target they merge
 	// into, and merged, so its day makes none of them. Each is one record
