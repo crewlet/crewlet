@@ -332,7 +332,10 @@ func rcChainEnding(ctx context.Context, t *testing.T, agent string, lines ...str
 	got := rcRead{c: newThreadChain(agent), handles: map[int]chainHandle{}}
 	r := newThreadReader(strings.NewReader(text), threadPlainMax)
 	for {
-		line, err := r.Next()
+		// READ UNDER THE TEST'S OWN CONTEXT, never ctx, which is End's alone:
+		// a reading that looked at it would spend the looks a case counts for
+		// End's walk (rcCancelledAfter).
+		line, err := r.Next(t.Context()) //nolint:contextcheck // ctx is End's alone; see the paragraph above
 		var broken *threadLineError
 		switch {
 		case err == nil:
@@ -1537,7 +1540,9 @@ func rcBytesAt(t *testing.T, line string, within bool) string {
 // reading it as part of the reply above that result; and one holding a line
 // the layer refuses that yields the load nothing and that no reader takes for
 // a slot by its bytes: one value that is no object, a line a later write tore
-// into, an object of no kind the load reads. Every other thread past the bound
+// into, an object of no kind the load reads; and one holding a line whose name
+// a decode reads as `parentUuid` and no reader's bytes read as that key, the
+// name escaped or a space before its colon. Every other thread past the bound
 // is whyLargeFile, and under it answers as its small path does with AnySize
 // false: one whose reply of an id hangs off another branch, whose abandoned
 // prompt hangs off a result off the walk, whose result is written before the
@@ -1551,7 +1556,13 @@ func rcBytesAt(t *testing.T, line string, within bool) string {
 // past a string holding a brace and an escaped quote; a record whose line does
 // not begin `{"parentUuid":`, its keys in another order, or another key's
 // value where the parent's would be; a last record holding a sidechain's bytes
-// in its first 256 bytes, or past them, where the prune alone reads them; a
+// in its first 256 bytes, or past them, where the prune alone reads them, or in
+// a call's input under a key whose name ends in them through an escaped quote,
+// which no decode reads as the mark; a record keyed by the uuid after such a
+// key ending in `uuid`'s bytes, before a time, its own uuid before none; a
+// refused line of one list whose object carries `"parentUuid":`, or whose
+// value, a string, spells the key, each at its depth one to a reader of bytes
+// and, to a decode, no key of the head a record's own object holds; a
 // parent written with an escape, or written twice, null first; a uuid the
 // readers key otherwise than the decode; a branch only the walk from the
 // checkpoint reaches, which the prune never makes; a parent naming no record
@@ -1611,7 +1622,12 @@ func rcBytesAt(t *testing.T, line string, within bool) string {
 // line, and the torn line marked after another key reads; take a head's
 // parent of any 36 bytes, and the torn line under an uppercase uuid reads;
 // or hold a line of no record to the key alone in a subagent's thread, and
-// the one headed as a sidechain's costs its thread the bound.
+// the one headed as a sidechain's costs its thread the bound; or read these
+// facts off a decode's names rather than the line's bytes (a key read as the
+// name it decodes to, an escaped quote passed over), and the threads holding a
+// key that ends in a mark's bytes, a uuid's key, or a refused line that spells
+// parentUuid read as path-free, and those whose name only a decode reads as
+// parentUuid cost the bound.
 func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testing.T) {
 	t.Parallel()
 	past := claudeResumeLargeFile + 1
@@ -1670,6 +1686,10 @@ func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testin
 			`{"type":"queue-operation","operation":"enq`+ctDequeue)),
 		"a refused line of no kind the load reads": shaped(append(slices.Clone(t4),
 			`{"type":"queue-operation","agentId":5}`)),
+		"a line whose name a decode reads as parentUuid, written with an escape": shaped(append(slices.Clone(t4),
+			`{"parent\u0055uid":null}`)),
+		"a line whose name a decode reads as parentUuid, a space before its colon": shaped(append(slices.Clone(t4),
+			`{"parentUuid" :null}`)),
 	} {
 		for _, size := range []int{0, past} {
 			lines := tc.lines
@@ -1734,6 +1754,20 @@ func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testin
 				`"content":"a prompt"},`, `"content":"a prompt`+strings.Repeat("x", 256)+
 					`"},"toolUseResult":{"isSidechain":true},`), false)}, 3, `"content":"a prompt`,
 			rcHanding(whyChain, []int{1, 2, 3}), []int{1, 2, 3}, 3},
+		"a sidechain's bytes ending a key's name in the last record's call": {[]string{rcPrompt(0, 1, 0),
+			ctReplace(t, rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), `"input":{}`,
+				`"input":{"x\"isSidechain":true}`)}, 1, `"content":"a prompt`, plain, []int{1, 2}, 2},
+		"a uuid the readers key by after a key ending in its key's bytes": {[]string{rcPrompt(0, 1, 0),
+			ctReplace(t, ctReplace(t, rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), `"input":{}`,
+				`"input":{"x\"uuid":"`+rcUUID(77)+`","timestamp":"`+rcAt(999)+`"}`),
+				`"uuid":"`+rcUUID(2)+`","timestamp":"`, `"uuid":"`+rcUUID(2)+`","entrypoint":"cli","timestamp":"`),
+			rcResults(2, 3, 1100, "x1"), rcReply(3, 4, "msg_b", 1200, rcSaid("done"))}, 1, `"content":"a prompt`,
+			rcHanding(whyChain, []int{1, 2, 3, 4}), []int{1, 2, 3, 4}, 4},
+		"a refused line of one list whose object carries parentUuid": {append(slices.Clone(turns),
+			`[{"parentUuid":null,"uuid":"`+rcUUID(9)+`"}]`), 1, `"content":"a prompt`, turnsAnswers,
+			[]int{1, 2, 3, 4}, 4},
+		"a refused line whose value spells parentUuid's key": {append(slices.Clone(turns),
+			`{"a":"parentUuid":1}`), 1, `"content":"a prompt`, turnsAnswers, []int{1, 2, 3, 4}, 4},
 		"a parent written with an escape": {[]string{rcPrompt(0, 1, 0), ctReplace(t, rcReply(1, 2, "msg_a",
 			1000, rcSaid("done")), `"parentUuid":"0`, `"parentUuid":"\u0030`)}, 1, `"content":"a prompt`, plain,
 			[]int{1, 2}, 2},
@@ -1854,8 +1888,9 @@ func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testin
 	prompt, reply := ctLine(t, rcPlain[0]), ctLine(t, rcPlain[1])
 	reply.N = 3
 	for name, fault := range map[string]*threadLineError{
-		"no bytes":                {N: 2, Fault: faultNotObject, Size: len("[1,2]") + 1},
-		"bytes short of its Size": {N: 2, Fault: faultNotObject, Size: len("[1,2]") + 2, Raw: []byte("[1,2]")},
+		"no bytes": {N: 2, Fault: faultNotObject, Size: len("[1,2]") + 1},
+		"bytes short of its Size": {N: 2, Fault: faultNotObject, Size: len("[1,2]") + 2,
+			Bytes: wholeLineBytes([]byte("[1,2]"))},
 	} {
 		bare := newThreadChain("")
 		bare.See(prompt)
@@ -1930,8 +1965,13 @@ func TestALineThatIsNoRecordIsSkippedOnlyWhereTheLoadSkipsIt(t *testing.T) {
 // the one before it, never beside it, and the boundary itself with it, so a
 // boundary at the bound in place of a longer list is read, and one past it
 // with no list to replace, whether it names what it kept or not, is whyBound;
-// and past the bound See still decodes and hands back each user and assistant
-// message, with pastChainBound, which answers whyBound.
+// and past the bound See still hands back each user and assistant message,
+// with pastChainBound, which answers whyBound. THE ROOM COMES BEFORE
+// THE SHAPE, as the lists are read in order: a list whose prefixes, or whose
+// entries, pass the bound before an entry in no shape is whyBound, and one in
+// no shape within it is whyRetractionShape or whyPreservedShape; a retraction's
+// entries that name no prefix take no room; and a list of no anchor is in no
+// shape however many entries it holds, its anchor read before them.
 //
 // Mutation: take a bound's own count for past it, and the thread at it is
 // cannot tell; count no prefixes, no listed uuids or no calls, or no record
@@ -1941,8 +1981,13 @@ func TestALineThatIsNoRecordIsSkippedOnlyWhereTheLoadSkipsIt(t *testing.T) {
 // later one's, and the two lists of half the bound pass it; hold a boundary's
 // own room before the list it replaces is released, and the boundary at the
 // bound passes it; let a boundary pass the bound, and the boundary past it
-// reads; or hand back no message past the bound, and the reader that counts
-// what lies past it counts nothing.
+// reads; hand back no message past the bound, and the reader that counts
+// what lies past it counts nothing; judge a list's shape before its room, and
+// each list in no shape past the bound is whyRetractionShape or
+// whyPreservedShape; count a retraction's every entry against the room, and
+// the list whose entries naming nothing pass it is cannot tell; or count a
+// list's entries before its anchor is read, and the list of no anchor past
+// the bound is whyBound.
 func TestAThreadPastTheChainsBoundIsCannotTell(t *testing.T) {
 	t.Parallel()
 	prompt := rcPlain[0]
@@ -1985,6 +2030,33 @@ func TestAThreadPastTheChainsBoundIsCannotTell(t *testing.T) {
 			t, "a boundary "+name+" past the bound", whyBound)
 	}
 
+	// then is a list's record with entries after its last.
+	retractingThen := func(entries int, then string) string {
+		return ctReplace(t, retracting(entries), `-"],`, `-"`+then+`],`)
+	}
+	listingThen := func(entries int, then string) string {
+		return ctReplace(t, listing(2, absent, entries), `]}}`, then+`]}}`)
+	}
+	rcChain(t, "", prompt, retractingThen(threadChainMaxRecords-2, `,"x"`+strings.Repeat(`,"x"`, 1<<10))).expect(t,
+		"records and prefixes at the bound beside entries naming none", map[int]rcAnswer{1: yes(whyChain),
+			2: yes(whyChain)}, rcOrder{[]int{1, 2}, allVariants})
+	for name, tc := range map[string]struct {
+		line string
+		why  chainWhy
+	}{
+		"a retraction in no shape within the bound": {retractingThen(threadChainMaxRecords-2, `,7`),
+			whyRetractionShape},
+		"a retraction's prefixes past the bound, then an entry in no shape": {
+			retractingThen(threadChainMaxRecords-1, `,7`), whyBound},
+		"a list in no shape within the bound": {listingThen(threadChainMaxRecords-2, `,7`), whyPreservedShape},
+		"a list's entries past the bound, then an entry in no shape": {listingThen(threadChainMaxRecords-1, `,7`),
+			whyBound},
+		"a list of no anchor past the bound": {ctReplace(t, listing(2, absent, threadChainMaxRecords),
+			`"anchorUuid":"`+rcUUID(1)+`",`, ""), whyPreservedShape},
+	} {
+		rcChain(t, "", prompt, tc.line).expectCannotTell(t, name, tc.why)
+	}
+
 	calling := func(calls int) string {
 		return rcReply(1, 2, "msg_a", 1000, `[{"type":"tool_use","id":"c","name":"B"}`+
 			strings.Repeat(`,{"type":"tool_use","id":"c","name":"B"}`, calls-1)+`]`)
@@ -1998,7 +2070,7 @@ func TestAThreadPastTheChainsBoundIsCannotTell(t *testing.T) {
 	r := newThreadReader(strings.NewReader(ctThread(prompt, retracting(threadChainMaxRecords-2),
 		rcReply(2, 3, "msg_b", 2000, rcCalls("x1")), rcReply(3, 4, "msg_c", 3000, rcCalls("x2")))), threadPlainMax)
 	for {
-		line, err := r.Next()
+		line, err := r.Next(t.Context())
 		if err != nil {
 			break
 		}
@@ -3063,7 +3135,7 @@ func TestAnEndItsCallerAbandonedLeavesNoModel(t *testing.T) {
 		r := newThreadReader(strings.NewReader(ctThread(tc.lines...)), threadPlainMax)
 		h := noChainRecord
 		for {
-			line, err := r.Next()
+			line, err := r.Next(t.Context())
 			if err != nil {
 				break
 			}

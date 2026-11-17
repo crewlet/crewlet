@@ -315,6 +315,24 @@ func TestAMediaMarkNeedsABlocksType(t *testing.T) {
 	wantBound(t, got, 1050+cntCharge(call))
 }
 
+// A MEDIA MARK IS READ OFF A LINE'S BYTES: a call's input holding a key whose
+// name ends, through an escaped quote, in a block's type and whose value is
+// image, `"x\"type":"image"` as JSON.stringify writes it, holds the mark's
+// bytes exactly, and marks the count as an image does. The mark errs that way
+// by design: a line's bytes are what the count reads, and a name a decode
+// reads otherwise is no reason to read less of them.
+//
+// Mutation: read the mark off a decode's names and values rather than the
+// line's bytes (a mark's bytes after a backslash passed over), and the count
+// reads as a bound.
+func TestAMediaMarkIsReadOffALinesBytes(t *testing.T) {
+	t.Parallel()
+	call := cntReply("u2", "u3", "m2", "claude-sonnet-4-5", "",
+		`[{"type":"tool_use","id":"toolu_1","name":"run","input":{"x\"type":"image"}}]`)
+	wantMark(t, cntCount(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50), call),
+		sandbox.CountMedia)
+}
+
 // A PDF READ AFTER THE ANCHOR MARKS THE COUNT: the harness counts one at 3,000
 // tokens a page, which no line's bytes bound.
 //
@@ -722,8 +740,8 @@ func (c cancelling) end(bool, error)          {}
 // two lines its body handed at once ends there, and the thread is not read whole,
 // so its count names no restart, not even the one its first line is.
 //
-// Mutation: leave the context unchecked between lines, or name the restart read
-// before the cut, and this goes red.
+// Mutation: leave the context unchecked between lines (the line reader's Next
+// asking none), or name the restart read before the cut, and this goes red.
 func TestAReadCutShortBetweenLinesLeavesNoCount(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())

@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -224,10 +223,10 @@ import (
 //     ANSWERS NO LEG, the call's own or a notification, nor does any answer
 //     of a leg one of whose answers carries one: under a handback the
 //     subagent's report never reaches the main thread's model through it
-//     ([carriesHandback], [handbackNotice]).
+//     ([carriesHandback], [textHandback]).
 //     A NOTIFICATION IS AN ANSWER: a continuation hands its model the
 //     notification's record verbatim (probe T, T10, on 2.1.310 and 2.1.322),
-//     and its lines name the subagent and the leg ([taskNotification]). An
+//     and its lines name the subagent and the leg ([textNotice]). An
 //     answer is read off a record of that one result alone, since a record's
 //     own toolUseResult is that record's, never one call's of several.
 //  4. NO UNSEEN LEG: its file starts no more legs (a user record of its own
@@ -321,10 +320,10 @@ import (
 // subagents at [holdingsMaxAgents], legs at [holdingsMaxLegs], and every
 // chained record's writer, and the session's, at its floor. At its worst a
 // reading holds the line reader's buffer; one line and the slice that gathered
-// it; the line's raw keys and its message's decode,
-// each at most a line; what the message's calls keep (a line of the smallest
-// results keeps about three times the line); one result's text; a metadata; the
-// model of one thread, at most [threadChainMaxRecords] records and
+// it; the line's raw keys and its message's decode, each at most a line; what
+// the message's calls keep (a line of the smallest results keeps about three
+// and a half times the line); one result's text; a metadata; the model of one
+// thread, at most [threadChainMaxRecords] records and
 // [threadChainMaxCalls] call ids, past either of which it files nothing more
 // ([threadChain], THE BOUNDS), and the pairing rule's mark of each of its
 // records, two bytes a record ([holdingsPairing]), one thread's at a time; and
@@ -438,7 +437,7 @@ const (
 // What the records rule 2 reads say, as Claude Code writes it.
 const (
 	// claudeTaskNotification is the origin kind of the main thread's record of
-	// a subagent's end ([taskNotification]).
+	// a subagent's end ([textNotice]).
 	claudeTaskNotification = "task-notification"
 	// claudeAgentCompleted is the status of an Agent or Task call's answer
 	// whose subagent finished, and [claudeNotificationCompleted] a task
@@ -474,7 +473,7 @@ const (
 	claudeRefused = "refusal"
 	// claudeToolHandback is the tool through which a subagent under a handback
 	// contract delivers its report, which every answer of a leg that carries
-	// a handback names ([handbackNotice]).
+	// a handback names ([textHandback]).
 	claudeToolHandback = "SubagentHandback"
 )
 
@@ -596,6 +595,23 @@ type holdingsWalk struct {
 	notices map[legNotice]noticeFact
 	unnamed map[string]bool
 	kept    int
+	// lines is the one line reader every thread member the walk reads is
+	// read through ([holdingsWalk.reader]).
+	lines *threadReader
+}
+
+// reader is the walk's one line reader, made to read member within what the
+// members read so far left of the reading's budget ([threadPlainMax]): one
+// reader for every member, so a session of many subagents costs the walk one
+// reader's buffers ([threadReader.Reset]), never one a member.
+func (w *holdingsWalk) reader(member io.Reader) *threadReader {
+	handed := &handedReader{r: member, handed: &w.handed}
+	if w.lines == nil {
+		w.lines = newThreadReader(handed, w.bounds.plain-w.handed)
+	} else {
+		w.lines.Reset(handed, w.bounds.plain-w.handed)
+	}
+	return w.lines
 }
 
 // callFacts is what the counted records of the threads read say of one asked
@@ -695,7 +711,7 @@ type legFact struct {
 	refused    bool
 	// handback is whether a record of a result of it, or a task notification
 	// of it, carries a handback: no answer of the leg is then its subagent's
-	// report ([carriesHandback], [handbackNotice]).
+	// report ([carriesHandback], [textHandback]).
 	handback bool
 	// answered is whether the request a resumed session sends pairs the
 	// first call with the first result, by the pairing rule
@@ -816,15 +832,12 @@ func outsideArchive(name string) bool {
 // cannot place the thread ([threadChain.Unknown]): read on, the reading
 // would vouch for a thread no model says the resume hands its model.
 func (w *holdingsWalk) mainThread(ctx context.Context, member io.Reader) error {
-	lines := newThreadReader(&handedReader{r: member, handed: &w.handed}, w.bounds.plain-w.handed)
+	lines := w.reader(member)
 	chain, pairing := newThreadChain(""), &holdingsPairing{}
 	for {
-		// BETWEEN LINES, since a line's read takes no context: a reading
-		// overruns its caller's wait by one line's read and decode at most.
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		line, err := lines.Next()
+		// ctx is asked before each line ([threadReader.Next]), and an error
+		// of its is the walk's to answer ([holdingsWalk.failed]).
+		line, err := lines.Next(ctx)
 		switch {
 		case errors.Is(err, io.EOF):
 			return w.mainEnd(ctx, chain, pairing)
@@ -1084,14 +1097,19 @@ func (w *holdingsWalk) mainRecord(line threadLine, message threadMessage, record
 		}
 		return nil
 	}
-	// THE RECORD'S OWN toolUseResult IS ONE CALL'S ONLY ON A RECORD OF THAT
-	// ONE RESULT ALONE: on a record of two it is the record's, and says
-	// nothing of either call.
-	alone := len(message.Kinds()) == 1 && len(calls) == 1
+	alone := resultAlone(message)
 	for _, call := range calls {
 		w.legResult(line, call, alone, record)
 	}
 	return w.notification(line, message, record)
+}
+
+// resultAlone reports whether message, a user record's, is one result alone:
+// THE RECORD'S OWN toolUseResult IS ONE CALL'S ONLY ON A RECORD OF THAT ONE
+// RESULT ALONE, its one block. On a record of two blocks, two results or a
+// result beside a text, it is the record's, and says nothing of either.
+func resultAlone(message threadMessage) bool {
+	return message.Blocks().Len() == 1 && len(message.Calls()) == 1
 }
 
 // count files call, a block of line n of thread ("" the main thread, else a
@@ -1125,16 +1143,8 @@ func (w *holdingsWalk) count(thread string, call threadCall, n int, record int32
 			return
 		}
 		facts.resultThread, facts.line, facts.resultRec = thread, n, record
-		facts.failed, facts.textBytes = call.IsError != nil && *call.IsError, -1
-		if text, ok := resultText(call.Content); ok {
-			facts.textBytes = len(text)
-			facts.opening = sha256.Sum256([]byte(text[:min(sandbox.HoldingsOpeningBytes, len(text))]))
-			// WHOLE ONLY WHERE A LOG COULD HAVE KEPT IT WHOLE: a longer text
-			// is compared by its opening alone, so its whole is never hashed.
-			if len(text) <= sandbox.MaxBridgeOutputBytes {
-				facts.whole = sha256.Sum256([]byte(text))
-			}
-		}
+		facts.failed = call.Failed
+		facts.textBytes, facts.opening, facts.whole = int(call.Text.Bytes()), call.Text.Opening, call.Text.Whole
 	}
 }
 
@@ -1161,7 +1171,7 @@ func (w *holdingsWalk) leg(call threadCall, record int32) error {
 		if call.Name != claudeToolSendMessage {
 			return nil
 		}
-		return w.sentUnnamed(sendTarget(call.Input))
+		return w.sentUnnamed(call.To)
 	}
 	leg := w.legs[call.ID]
 	if leg == nil {
@@ -1177,7 +1187,7 @@ func (w *holdingsWalk) leg(call threadCall, record int32) error {
 	}
 	leg.sends++
 	if leg.sends == 1 {
-		leg.to = sendTarget(call.Input)
+		leg.to = call.To
 	}
 	return nil
 }
@@ -1219,39 +1229,34 @@ func (w *holdingsWalk) legResult(line threadLine, call threadCall, alone bool, r
 	if leg == nil {
 		return
 	}
-	leg.handback = leg.handback || carriesHandback(line.ToolUseResult())
+	leg.handback = leg.handback || line.HandsBack()
 	leg.results++
 	if leg.results > 1 {
 		return
 	}
-	leg.resultRec, leg.resultLine, leg.failed = record, line.N, call.IsError != nil && *call.IsError
+	leg.resultRec, leg.resultLine, leg.failed = record, line.N, call.Failed
 	if alone {
-		leg.completed, leg.agent, leg.refused = agentAnswer(line.ToolUseResult())
+		leg.completed, leg.agent, leg.refused = line.AgentAnswer()
 	}
 }
 
 // notification files line, a user record of the main thread whose
 // message is message, record in its chain, as a task notification of a
-// subagent's leg where it is one: a text whose origin says so, its lines
-// naming the subagent and a leg whose call was read ([taskNotification]).
+// subagent's leg where it is one: a text whose origin says so, naming the
+// subagent and a leg whose call was read ([threadMessage.Notification]), and
+// whether it carries a handback ([threadMessage.NamesHandback]).
 func (w *holdingsWalk) notification(line threadLine, message threadMessage, record int32) error {
-	text, ok := message.Text()
-	if !ok {
+	if !message.IsText() || originOf(line) != claudeTaskNotification {
 		return nil
 	}
-	if originOf(line) != claudeTaskNotification {
-		return nil
-	}
-	agent, leg, ok := taskNotification(text)
+	agent, leg, ok := message.Notification()
 	if !ok || w.legs[leg] == nil {
 		return nil
 	}
-	if handbackNotice(text) {
+	if message.NamesHandback() {
 		w.legs[leg].handback = true
 	}
-	// CLONED, since each is a piece of a text up to a line long, which a kept
-	// substring would hold until the walk ends.
-	key := legNotice{agent: strings.Clone(agent), leg: strings.Clone(leg)}
+	key := legNotice{agent: agent, leg: leg}
 	if _, filed := w.notices[key]; !filed {
 		if err := w.keep(); err != nil {
 			return err
@@ -1290,13 +1295,10 @@ func originOf(line threadLine) string {
 func (w *holdingsWalk) subagentThread(ctx context.Context, agent string, a *subagentFacts,
 	member io.Reader) error {
 
-	lines := newThreadReader(&handedReader{r: member, handed: &w.handed}, w.bounds.plain-w.handed)
+	lines := w.reader(member)
 	chain, pairing := newThreadChain(agent), &holdingsPairing{}
 	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		line, err := lines.Next()
+		line, err := lines.Next(ctx)
 		var broken *threadLineError
 		switch {
 		case errors.Is(err, io.EOF):
@@ -1322,10 +1324,6 @@ func (w *holdingsWalk) subagentThread(ctx context.Context, agent string, a *suba
 		w.subagentLine(agent, a, chain, pairing, line)
 	}
 }
-
-// errTakenBack is a subagent's record naming records taken back out of its
-// conversation ([holdingsWalk.subagentLine]).
-var errTakenBack = errors.New("it names records taken back")
 
 // subagentLine reads line, one of subagent agent's thread, into a, chain and
 // pairing.
@@ -1357,8 +1355,12 @@ func (w *holdingsWalk) subagentLine(agent string, a *subagentFacts, chain *threa
 		a.notWhole(fmt.Sprintf("line %d of its thread replaces results in no shape Claude Code writes", line.N),
 			err)
 	}
-	switch err := line.Retracted(func(string) error { return errTakenBack }); {
-	case errors.Is(err, errTakenBack):
+	// AN ENTRY BEFORE ANY FAULT TAKES RECORDS BACK: the list is read in order,
+	// so one that names an entry before an entry in no shape takes back, and
+	// only one whose first entry is in no shape, or which is none, is in no
+	// shape.
+	switch retracted, err := line.Retracted(); {
+	case retracted.Entries > 0:
 		a.notWhole(fmt.Sprintf("line %d of its thread takes records back out of its conversation, which no load "+
 			"of a subagent's thread filters", line.N), nil)
 	case err != nil:
@@ -1414,7 +1416,7 @@ func (w *holdingsWalk) subagentLine(agent string, a *subagentFacts, chain *threa
 		pairing.flag(record, pairLegStart)
 	}
 	if text, _ := message.Says(); head.Type == recordAssistant && text && stopErr == nil && apiErr == nil &&
-		modelErr == nil && finishedReply(message.Kinds(), stop, model, apiError) {
+		modelErr == nil && finishedReply(message.Blocks(), stop, model, apiError) {
 		pairing.flag(record, pairFinished)
 	}
 }
@@ -1549,14 +1551,14 @@ func (a *subagentFacts) notWhole(why string, cause error) {
 // alone, so a text, a list of no blocks, or a block of another kind, the
 // subagent's prompt and every message sent to it among them.
 func legStart(message threadMessage) bool {
-	if _, text := message.Text(); text {
+	if message.IsText() {
 		return true
 	}
-	kinds := message.Kinds()
-	return len(kinds) == 0 || slices.ContainsFunc(kinds, func(kind string) bool { return kind != blockToolResult })
+	blocks := message.Blocks()
+	return blocks.Len() == 0 || !blocks.All(blockToolResult)
 }
 
-// finishedReply reports whether an assistant record whose blocks are kinds,
+// finishedReply reports whether an assistant record of blocks,
 // whose reply stopped for stop and names model as the model that wrote it,
 // and which its harness wrote in place of a failed request's reply where
 // apiError, ends a leg: a reply with which its model ended its turn, as
@@ -1578,13 +1580,11 @@ func legStart(message threadMessage) bool {
 // 2.1.322 builds says "end_turn", so the stop alone already leaves each one's
 // leg unfinished; the test is still the harness's whole one, so a release
 // that builds one saying so finishes no leg no model ended.
-func finishedReply(kinds []string, stop, model string, apiError bool) bool {
-	if len(kinds) == 0 || apiError || stop != claudeEndedTurn || model == claudeSyntheticModel {
+func finishedReply(blocks threadBlocks, stop, model string, apiError bool) bool {
+	if blocks.Len() == 0 || apiError || stop != claudeEndedTurn || model == claudeSyntheticModel {
 		return false
 	}
-	return !slices.ContainsFunc(kinds, func(kind string) bool {
-		return kind != blockText && kind != blockThinking && kind != blockRedactedThinking
-	})
+	return blocks.All(blockText, blockThinking, blockRedactedThinking)
 }
 
 // readSubagentMeta reads a subagent's metadata, whose bytes member hands out,
@@ -1670,146 +1670,6 @@ func cutDescription(description string) string {
 		cut--
 	}
 	return strings.Clone(description[:cut])
-}
-
-// sendTarget is the subagent a SendMessage call's input, raw, sends to: its
-// `to`, matched exactly and a key written twice by its last value, where it
-// is a string naming an agent ([validClaudeAgent]); "" else, a send to no
-// subagent a reading reads.
-func sendTarget(input json.RawMessage) string {
-	if !wireObject(input) {
-		return ""
-	}
-	var wire struct {
-		To json.RawMessage `json:"to"`
-	}
-	if wireDecode(input, &wire) != nil {
-		return ""
-	}
-	to, err := wireRequiredString("to", wire.To)
-	if err != nil || !validClaudeAgent(to) {
-		return ""
-	}
-	return to
-}
-
-// agentAnswer is what a leg's result record's own toolUseResult, raw, says,
-// read by its exact keys and a key written twice by its last value: whether
-// an Agent or Task call's subagent completed (`status` "completed"), the
-// subagent it names (`agentId`, "" where it names none a reading reads), and
-// whether a SendMessage was refused (`success`, the literal false). A result
-// of another shape says none of them: no answer, and no refusal.
-func agentAnswer(raw json.RawMessage) (completed bool, agent string, refused bool) {
-	if !wireObject(raw) {
-		return false, "", false
-	}
-	var wire struct {
-		Status  json.RawMessage `json:"status"`
-		AgentID json.RawMessage `json:"agentId"`
-		Success json.RawMessage `json:"success"`
-	}
-	if wireDecode(raw, &wire) != nil {
-		return false, "", false
-	}
-	status, err := wireRequiredString("status", wire.Status)
-	completed = err == nil && status == claudeAgentCompleted
-	if agent, err = wireRequiredString("agentId", wire.AgentID); err != nil || !validClaudeAgent(agent) {
-		agent = ""
-	}
-	return completed, agent, string(wire.Success) == "false"
-}
-
-// carriesHandback reports whether a leg's result record's own toolUseResult,
-// raw, carries a handback: a `handback` or a `handbackReport` key, any value,
-// read by its exact key.
-//
-// A HANDBACK ANSWERS NO LEG. Under a handback contract, which both releases
-// arm on a run of a subagent behind a flag on by default (2.1.322's BFt
-// @288117159, 2.1.310's p_t @245867640, armed @302126445), the subagent
-// delivers its report through a call of its own ([claudeToolHandback]), and
-// its completion drops the text of its last reply and answers its caller
-// with words of the harness's own in its place: that the report was delivered
-// as a message, that it has not reported yet, or that none was delivered
-// (2.1.322's pkn @302170267, `if(r!==void 0){Z=[];...}`, 2.1.310's Owr
-// @255311767). A call's own answer then carries the `handback` key beside
-// that text (`...ee!==void 0&&{handback:ee}`, spread into its result at
-// @302347284), so no answer of the leg is the subagent's report.
-func carriesHandback(raw json.RawMessage) bool {
-	if !wireObject(raw) {
-		return false
-	}
-	var wire struct {
-		Handback       json.RawMessage `json:"handback"`
-		HandbackReport json.RawMessage `json:"handbackReport"`
-	}
-	// ONE THAT DOES NOT DECODE IS READ AS CARRYING ONE, the safe direction.
-	if wireDecode(raw, &wire) != nil {
-		return true
-	}
-	return wire.Handback != nil || wire.HandbackReport != nil
-}
-
-// handbackNotice reports whether a task notification's text, whose leading
-// lines name a subagent's leg ([taskNotification]), carries a handback
-// ([carriesHandback]): where it names [claudeToolHandback] anywhere.
-//
-// THE NOTIFICATION MARKS A HANDBACK BY ITS WORDS ALONE. Both releases build a
-// completion's notification (2.1.322's MXt @298314707 through Pi @292640802,
-// 2.1.310's W0t @251577375 through Di) with the subagent's answer, joined, as
-// its `<result>`, and no tag of a handback's own: so under a handback its
-// result is the harness's words in the report's place, and each of their
-// three forms names the tool (2.1.322's H3i, tOr and iOr @288119298 and
-// @287819913, 2.1.310's Eqs, kqs and jQn @245869660 and @242470305, the tool
-// SubagentHandback in each). A report of the subagent's own that names it
-// costs only its leg, the safe direction.
-func handbackNotice(text string) bool { return strings.Contains(text, claudeToolHandback) }
-
-// taskNotification is the subagent and the leg a task notification's text
-// names: its lines, in order, `<task-notification>`, `<task-id>A</task-id>`,
-// `<tool-use-id>L</tool-use-id>`, any number of
-// `<output-file>…</output-file>`, and `<status>completed</status>`, nothing
-// after the status read. False for any other text, an agent outside
-// [validClaudeAgent]'s rule, or a leg outside the call-id rule
-// ([sandbox.ValidCallID]).
-func taskNotification(text string) (agent, leg string, ok bool) {
-	line, rest := nextLine(text)
-	if line != "<task-notification>" {
-		return "", "", false
-	}
-	line, rest = nextLine(rest)
-	if agent, ok = enclosed(line, "<task-id>", "</task-id>"); !ok || !validClaudeAgent(agent) {
-		return "", "", false
-	}
-	line, rest = nextLine(rest)
-	if leg, ok = enclosed(line, "<tool-use-id>", "</tool-use-id>"); !ok || !sandbox.ValidCallID(leg) {
-		return "", "", false
-	}
-	for {
-		line, rest = nextLine(rest)
-		if _, file := enclosed(line, "<output-file>", "</output-file>"); !file {
-			break
-		}
-	}
-	if line != claudeNotificationCompleted {
-		return "", "", false
-	}
-	return agent, leg, true
-}
-
-// nextLine is text's first line, its break dropped, and what follows it.
-func nextLine(text string) (line, rest string) {
-	line, rest, _ = strings.Cut(text, "\n")
-	return line, rest
-}
-
-// enclosed is what line holds between opening and closing, where line is
-// exactly that.
-func enclosed(line, opening, closing string) (string, bool) {
-	inner, ok := strings.CutPrefix(line, opening)
-	if !ok {
-		return "", false
-	}
-	return strings.CutSuffix(inner, closing)
 }
 
 // failed is err, which ended the reading, as the reading answers it: its
@@ -1965,47 +1825,4 @@ func (h *handedReader) Read(p []byte) (int, error) {
 	n, err := h.r.Read(p)
 	*h.handed += int64(n)
 	return n, err
-}
-
-// errNotOneText is a result's content that is neither a string nor one text
-// block ([resultText]).
-var errNotOneText = errors.New("not one text block")
-
-// resultText is the text a tool_result's content, raw, holds: a JSON string, or
-// a list of exactly one element, an object whose `type` is "text" and whose
-// `text` is a string, other keys passed over, each key matched exactly and a
-// key written twice read by its last value ([wireDecode]); false for every
-// other content, absent and null among it.
-//
-// THE LIST IS READ NO FURTHER THAN ITS SECOND ELEMENT ([eachElement]), so a
-// list a line long costs what its first two elements do.
-func resultText(content json.RawMessage) (string, bool) {
-	if len(content) > 0 && content[0] == '"' {
-		var text string
-		if err := wireDecode(content, &text); err != nil {
-			return "", false
-		}
-		return text, true
-	}
-	text, blocks := "", 0
-	err := eachElement(content, func(raw json.RawMessage, _ int) error {
-		blocks++
-		if blocks > 1 || !wireObject(raw) {
-			return errNotOneText
-		}
-		var block struct {
-			Type json.RawMessage `json:"type"`
-			Text json.RawMessage `json:"text"`
-		}
-		if err := wireDecode(raw, &block); err != nil {
-			return err
-		}
-		kind, err := wireRequiredString("type", block.Type)
-		if err != nil || kind != blockText {
-			return errNotOneText
-		}
-		text, err = wireRequiredString("text", block.Text)
-		return err
-	})
-	return text, err == nil && blocks == 1
 }
