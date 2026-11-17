@@ -16,8 +16,8 @@ import (
 // four methods of [coord.Backend], named by the consumer as this package uses
 // them. Three-valued by construction, as every answer of the store is: a lease
 // held, none held, and an error that says nothing is known — which a fence
-// reads as no lease and a settle as no answer, each the direction that keeps
-// a capture from being refused under a taker still keeping it.
+// reads as no lease and a settle as no taker gone, each the direction that
+// keeps a capture from being refused under a taker still keeping it.
 type TakerLeases interface {
 	TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error)
 	Renew(ctx context.Context, resource, owner string, epoch int64, ttl time.Duration) (bool, error)

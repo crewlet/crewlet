@@ -1307,13 +1307,14 @@ const relaunchCaptureWait = 15 * time.Second
 // comment: a capture whose taker is gone, from the turn's row on the log, as
 // every wait for a capture settles it ([Coordinator.awaitCapture]); once the
 // wait has run out, in one read of its own held to as long again, the
-// followed job's capture still begun under a taker whose lease holds, however
-// long ago it began ([followedBegunUnderTaker]), landed where the turn's row
-// names its place ([Coordinator.settleGone]'s readHeld); and the followed
-// job's capture whose record was never answered, asked again under its own
-// operation ([Coordinator.settleUnresolved]) — asked by the turn's end alone,
-// it left a relaunch reading a record the log had taken as one never
-// answered, and starting a session of its own beside it. The asks come first, whatever else
+// followed job's capture still begun under a taker whose lease holds, or that
+// the store cannot say of, however long ago it began
+// ([followedBegunUnderTaker]), landed where the turn's row names its place
+// ([Coordinator.settleGone]'s readHeld); and the followed job's capture whose
+// record was never answered, asked again under its own operation
+// ([Coordinator.settleUnresolved]) — asked by the turn's end alone, it left a
+// relaunch reading a record the log had taken as one never answered, and
+// starting a session of its own beside it. The asks come first, whatever else
 // is in flight, and again for what the wait leaves unanswered where it ends
 // early, so one that lands is continued in place of the older capture its job
 // kept even beside a newer keep still under way. A SAVE UNDER WAY of
@@ -1357,12 +1358,13 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 	if found && err == nil && followedBegunUnderTaker(run) {
 		// THE ONE READ PAST THE WAIT, where a capture of the job the
 		// relaunch follows is still begun under a taker it names, in flight
-		// or past a capture's budget: one whose taker's lease holds may be
-		// the log's although no stamp of it reached the row, as where that
-		// taker's host is the one the job was lost with, its store answering
-		// its leases and not its runs. Settled landed where the turn's row
-		// names its place ([Coordinator.settleGone]), it is the capture the
-		// relaunch continues; where the row does not, a live taker's is left
+		// or past a capture's budget: one whose taker's lease holds, or that
+		// the store cannot say of, may be the log's although no stamp of it
+		// reached the row, as where that taker's host is the one the job was
+		// lost with, its store answering its leases and not its runs.
+		// Settled landed where the turn's row names its place
+		// ([Coordinator.settleGone]), it is the capture the relaunch
+		// continues; where the row does not, a taker not read gone is left
 		// as it was.
 		//
 		// HELD TO A WAIT OF ITS OWN, as long as the relaunch's
@@ -1372,7 +1374,7 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 		// a slot of the node's admission.
 		held, cancel := context.WithTimeout(ctx, c.relaunchWait)
 		heldBy, _ := held.Deadline()
-		run, found = c.settleGone(held, heldBy, run, true)
+		run, found, _ = c.settleGone(held, heldBy, run, true)
 		cancel()
 	}
 	if !found {

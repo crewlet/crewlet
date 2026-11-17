@@ -3739,41 +3739,47 @@ stamp of its own reaches the run's row, so a wait that settled by the lease
 alone held the turn's end for the capture's whole budget beside a record the
 log had taken, and a relaunch that followed a job lost with that host
 (`launch_node_store_silent`) started without that capture. So a wait reads the
-turn's row for a begun stamp naming a taker whose lease holds as well, and
-settles it landed where the row names its place: the turn's end at most once
-every record's budget, thirty seconds on its wait's own clock, never at its
-two-second tick (`heldRowPace`, `beganUnderTaker`), about a hundred and sixty
-linearizable reads at the end's bound; a relaunch once, after its wait has run
-out, for a stamp of the job it follows however long ago it began
-(`ContinuedCapture`, `followedBegunUnderTaker`), since such a host holds its
-lease for as long as its silence lasts and its job is found lost only once
-that silence has lasted the box's timeout, which can put a keep under way
-when it began past a capture's budget; and that read is held to a wait of its
-own as long as the relaunch's, its settle's stamp never past it, since the
-frame still holds the seat and a slot of the node's admission; and a read
-standing by for such a capture once, when the capture has stood begun past
-its budget and before it takes the place after it (`awaitStood`), keeping
-nothing where the row names it, since by the age alone it took the place,
-uploaded the session a second time beside the record the log took, and both
-records landed. The standby's read is held to its own wait, so it never moves
-the takeover past that wait's end, and its room is not counted in
+turn's row for a begun stamp naming a taker whose lease holds, or that the
+store cannot say of, as well, and settles it landed where the row names its
+place: the turn's end at most once every record's budget, thirty seconds on
+its wait's own clock, never at its two-second tick (`heldRowPace`,
+`beganUnderTaker`), about a hundred and sixty linearizable reads at the end's
+bound; a relaunch once, after its wait has run out, for a stamp of the job it
+follows however long ago it began (`ContinuedCapture`,
+`followedBegunUnderTaker`), since such a host holds its lease for as long as
+its silence lasts and its job is found lost only once that silence has lasted
+the box's timeout, which can put a keep under way when it began past a
+capture's budget; and that read is held to a wait of its own as long as the
+relaunch's, its settle's stamp never past it, since the frame still holds the
+seat and a slot of the node's admission; and a read standing by for such a
+capture once, when the capture has stood begun past its budget and before it
+takes the place after it (`awaitStood`), keeping nothing and withdrawing where
+the row names it, on the row's word alone (`settleGone`'s named stamps),
+whether or not the run's record takes the landed settle, since by the age
+alone it took the place, uploaded the session a second time beside the record
+the log took, and both records landed, and decided on the row as the store
+took the settle, a settle the store did not take read the capture back begun
+and did the same. The standby's read is held to its own wait, so it never
+moves the takeover past that wait's end, and its room is not counted in
 `standbyBudget`, which counts one read of the run's row between the capture's
 budget and the takeover's stamp: a slow read can bring the takeover past
-`standbyBudget` from the standby's instant, where a wait reading the
-standby's age has read it gone. The landed arm
-needs no fence: the row names the place only once the log has taken the
-record, and nothing takes a record back. The refused arm stays a gone
-taker's, since a taker that holds its lease may still send its record, and a
-stamp that names no taker is read by its age alone, as before. This amends the
-taker amendment's rule that a wait settles a begun capture only where its taker
-is gone; a capture the log has not taken, still begun under a live lease when
-the relaunch's wait runs out, is still being kept, as that amendment says. And
-it amends the standby amendment's rule that a standby takes the place after a
-capture begun past what a capture can take: it does so only where that one
-read does not settle the capture landed. A log that does not answer, a lease
-the store cannot say of, a stamp that names no taker and a settle the store
-does not take leave the takeover to the capture's age, as before, so there
-the session can still be uploaded twice.
+`standbyBudget` from the standby's instant, where a wait reading the standby's
+age has read it gone. The landed arm needs no fence: the row names the place
+only once the log has taken the record, and nothing takes a record back; so a
+lease the store cannot say of is admitted to it as a lease that holds is, for
+the end's, the relaunch's and the standby's reads alike, since a store that
+cannot answer is never a taker gone and never a reason to leave a capture the
+log took begun. The refused arm stays a gone taker's, since a taker not read
+gone may still send its record, and a stamp that names no taker is read by its
+age alone, as before. This amends the taker amendment's rule that a wait
+settles a begun capture only where its taker is gone; a capture the log has
+not taken, still begun under a live lease when the relaunch's wait runs out,
+is still being kept, as that amendment says. And it amends the standby
+amendment's rule that a standby takes the place after a capture begun past
+what a capture can take: it does so only where that one read does not find the
+row naming the capture. A log that does not answer and a stamp that names no
+taker leave the takeover to the capture's age, as before, so there the session
+can still be uploaded twice.
 
 A relaunch in its job's own box continues the copy that went on past a kept
 capture (`copyWentPast`). A capture taken while its job still worked is a point

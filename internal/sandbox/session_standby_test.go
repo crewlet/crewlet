@@ -133,22 +133,31 @@ func standingBy(t *testing.T, rig *coordRig, run PendingRun, body io.Reader) *sp
 }
 
 // keptByTheStandby holds rig's row, its uploads and its log to the session the
-// read standing by took, kept in the place after the one it stood by for, and
-// nothing else: one upload, one record, and no capture left in flight.
+// read standing by took, kept in the place after the one it stood by for, the
+// second, and nothing else: one upload, one record, and no capture left in
+// flight.
 func keptByTheStandby(t *testing.T, rig *coordRig, writes *sessionWrites, keep *sessionKeep) {
+	t.Helper()
+	keptByTheStandbyAt(t, rig, writes, keep, 2)
+}
+
+// keptByTheStandbyAt is [keptByTheStandby] for a standby that keeps its own
+// session in place, the place after the one it stood by for.
+func keptByTheStandbyAt(t *testing.T, rig *coordRig, writes *sessionWrites, keep *sessionKeep, place int64) {
 	t.Helper()
 	row := rig.get("t1")
 	switch {
-	case row.Capture == nil || row.Capture.State != CaptureLanded || row.Capture.CaptureSeq != 2:
-		t.Errorf("the row's newest capture is %+v, want the standby's own landed in the next place", row.Capture)
-	case row.Kept == nil || row.Kept.CaptureSeq != 2:
-		t.Errorf("the row keeps %+v, want the standby's capture", row.Kept)
+	case row.Capture == nil || row.Capture.State != CaptureLanded || row.Capture.CaptureSeq != place:
+		t.Errorf("the row's newest capture is %+v, want the standby's own landed in the next place, %d",
+			row.Capture, place)
+	case row.Kept == nil || row.Kept.CaptureSeq != place:
+		t.Errorf("the row keeps %+v, want the standby's capture, in place %d", row.Kept, place)
 	}
 	if uploads := keep.uploads(); len(uploads) != 1 || !bytes.Equal(uploads[0], standbyArchive) {
 		t.Errorf("uploaded %q, want the standby's session once", uploads)
 	}
-	if captured := writes.captured(); len(captured) != 1 || captured[0].Stamp.CaptureSeq != 2 {
-		t.Errorf("recorded %d captures, want the standby's alone", len(captured))
+	if captured := writes.captured(); len(captured) != 1 || captured[0].Stamp.CaptureSeq != place {
+		t.Errorf("recorded %d captures, want the standby's alone, in place %d", len(captured), place)
 	}
 	if captureInFlight(row, rig.now) {
 		t.Errorf("a capture is still in flight once the standby's landed: %+v", row.Capture)
@@ -1097,10 +1106,21 @@ func TestAReadStandingByTakesOverACaptureBegunPastItsBudget(t *testing.T) {
 // takes the place after it: where the row names that capture, it is settled
 // landed from the row and the standby keeps nothing, the session uploaded
 // once; where the log holds no record of it, the standby takes the place after
-// it and keeps its own; and where the log does not answer, the standby keeps
-// its own all the same, a session that may be kept twice rather than one
-// nobody keeps. Every way the log is read at that last decision alone, never
-// while the capture is still within its budget.
+// it and keeps its own; where the row names the save the capture overtook,
+// the log took that save's record and not the capture's, and the standby
+// keeps its own in the place after the capture all the same; and where the
+// log does not answer, the standby keeps its own all the same, a session that
+// may be kept twice rather than one nobody keeps. Every way the log is read at
+// that last decision alone, never while the capture is still within its
+// budget.
+//
+// ON THE LOG'S WORD ALONE: where the row names the capture and the run's
+// record does not take the landed settle, the standby keeps nothing all the
+// same and withdraws, the capture left begun on the record for a later wait to
+// settle, where it once read the capture back begun and took the place after
+// it by its age, a second upload beside the record the log holds. And whatever
+// the store answers of node-a's lease: where it cannot say, the row is read
+// as for a lease that holds, and the capture the log took is settled landed.
 //
 // IN A SYNCTEST BUBBLE, so the standby's wait ticks on the bubble's clock; the
 // coordinator's own clock moves past the capture's budget only once the wait
@@ -1114,9 +1134,14 @@ func TestAReadStandingByTakesOverACaptureBegunPastItsBudget(t *testing.T) {
 // not answer, and it keeps nothing where nobody may have kept the session;
 // read the log for a held taker at every pass of the wait, or once at the
 // standby's first pass whatever the capture's age, and it is read while the
-// capture is still within its budget. (A takeover asked after the settle
-// whatever it found is refused by the store, which takes over no capture that
-// landed: [PendingStore.TakeOver].)
+// capture is still within its budget; decide on the row as the store took the
+// settle rather than on the log's answer, and the standby uploads a second
+// time where the store did not take it; read the log only for a lease that
+// answers held, and it uploads a second time where the store cannot say of
+// node-a's lease; stand down where the row names any stamp the read settled,
+// the save beside the capture included, and the final session is kept by
+// nobody. (A takeover asked after the settle whatever it found is refused by
+// the store, which takes over no capture that landed: [PendingStore.TakeOver].)
 func TestAReadStandingByKeepsNothingWhereTheLogTookTheCaptureItStoodByFor(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -1126,10 +1151,28 @@ func TestAReadStandingByKeepsNothingWhereTheLogTookTheCaptureItStoodByFor(t *tes
 		// unread is every read's answer from the log: a log that does not
 		// answer.
 		unread error
+		// unsettled makes the run's store take no settle of a begun stamp
+		// ([PendingStore.SettleBegun]) at the standby's last decision: its
+		// node's runs stream lost for the settle's whole room.
+		unsettled bool
+		// leaseUnread makes every read of a taker lease fail while this
+		// process's own renewals land: a store that cannot say of node-a's
+		// lease.
+		leaseUnread bool
+		// saveTook makes node-a's capture a job's final take that overtook a
+		// save of the job still under way beside it ([overtakenSave]), and
+		// puts the SAVE's record on the turn's row on the log: the log took
+		// the save and not the final take the standby stands by for.
+		saveTook bool
 	}{
 		{name: "the log took the capture's record, its stamp never on the run's row", took: true},
 		{name: "the log holds no record of the capture"},
 		{name: "the log does not answer", unread: errors.New("the executor log did not answer")},
+		{name: "the log took the capture's record, and the run's record does not take its settle", took: true,
+			unsettled: true},
+		{name: "the log took the capture's record, and the store cannot say of its taker's lease", took: true,
+			leaseUnread: true},
+		{name: "the log took the record of the save the capture overtook", saveTook: true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -1138,14 +1181,26 @@ func TestAReadStandingByKeepsNothingWhereTheLogTookTheCaptureItStoodByFor(t *tes
 				rig, writes, keep := keepingRigWith(t, taking(thisProcess, store))
 				run := rig.launchKept(t, "t1")
 				lease := claimTaker(t, store, takingProcess)
-				begun := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
-					State: CaptureBegun, Final: true, At: rig.coordinator.now(), Taker: takingProcess,
-					TakerEpoch: lease.Epoch, Harness: "claude-code", SessionID: "s-1"}
-				if took, err := rig.pending.StampCapture(t.Context(), "t1", begun); err != nil || !took {
-					t.Fatalf("stamping node-a's begun capture = %v, %v", took, err)
-				}
 				restore := &keptRestore{rows: map[string]executorkeep.TurnRow{}, noRowFound: true,
 					unreadRows: c.unread}
+				var begun SessionCapture
+				if c.saveTook {
+					var save SessionCapture
+					save, begun = overtakenSave(t, rig, "t1", takingProcess, lease.Epoch, CaptureBegun)
+					onTheLog(restore, landedRow(t, save))
+					// ONE SECOND MORE: overtakenSave stamps the final take a
+					// second past the clock and standingBy moves the clock a
+					// second on, so without it the standby's stamp would be
+					// the final take's own instant rather than another take's.
+					rig.now = rig.now.Add(time.Second)
+				} else {
+					begun = SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
+						State: CaptureBegun, Final: true, At: rig.coordinator.now(), Taker: takingProcess,
+						TakerEpoch: lease.Epoch, Harness: "claude-code", SessionID: "s-1"}
+					if took, err := rig.pending.StampCapture(t.Context(), "t1", begun); err != nil || !took {
+						t.Fatalf("stamping node-a's begun capture = %v, %v", took, err)
+					}
+				}
 				row := landedRow(t, begun)
 				if c.took {
 					onTheLog(restore, row)
@@ -1154,6 +1209,16 @@ func TestAReadStandingByKeepsNothingWhereTheLogTookTheCaptureItStoodByFor(t *tes
 				standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
 				if standby == nil || !standby.standby {
 					t.Fatalf("this node's read beside node-a's capture spooled %+v, want it standing by", standby)
+				}
+				if standby.stamp.CaptureSeq != begun.CaptureSeq {
+					t.Fatalf("the premise: the standby stands by at %d, want node-a's capture's place %d",
+						standby.stamp.CaptureSeq, begun.CaptureSeq)
+				}
+				if c.unsettled {
+					rig.coordinator.pending = stallingSettles{PendingStore: rig.coordinator.pending}
+				}
+				if c.leaseUnread {
+					store.failReads(errors.New("coord: the lease store could not say"))
 				}
 				clock := &stepClock{at: rig.now}
 				rig.coordinator.now = clock.now
@@ -1178,7 +1243,7 @@ func TestAReadStandingByKeepsNothingWhereTheLogTookTheCaptureItStoodByFor(t *tes
 					if got == nil || got.NotKept != "" {
 						t.Fatalf("the standby's keep came to %+v, want its own session kept in the next place", got)
 					}
-					keptByTheStandby(t, rig, writes, keep)
+					keptByTheStandbyAt(t, rig, writes, keep, begun.CaptureSeq+1)
 					return
 				}
 				if got != nil {
@@ -1191,8 +1256,15 @@ func TestAReadStandingByKeepsNothingWhereTheLogTookTheCaptureItStoodByFor(t *tes
 					t.Errorf("recorded %d captures, want none beside the record the log took", len(captured))
 				}
 				now := rig.get("t1")
-				if now.Kept == nil || !now.Kept.samePlace(begun) || now.Kept.State != CaptureLanded ||
-					now.Kept.Object != row.Object.Key.String() || now.Kept.Taker != takingProcess {
+				switch {
+				case c.unsettled:
+					if now.Capture == nil || !now.Capture.sameTake(begun) || now.Capture.State != CaptureBegun ||
+						!now.Capture.StandbyAt.IsZero() {
+						t.Errorf("the row holds %+v, want node-a's capture left begun, its settle not taken, "+
+							"and the standby withdrawn", now.Capture)
+					}
+				case now.Kept == nil || !now.Kept.samePlace(begun) || now.Kept.State != CaptureLanded ||
+					now.Kept.Object != row.Object.Key.String() || now.Kept.Taker != takingProcess:
 					t.Errorf("the row keeps %+v, want node-a's capture settled landed as the log's row names it",
 						now.Kept)
 				}
