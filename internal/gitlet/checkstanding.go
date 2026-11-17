@@ -45,9 +45,9 @@ type StandingCounts struct {
 }
 
 // MaxStandingCounted is the most places of one state a standing count reads; past it the count is a
-// floor. Every state at it, a first page reads about 3,600 places and their facts: about 200 ms on
-// the pinned driver (BenchmarkTheStandingCountsAtTheirBound).
-const MaxStandingCounted = 512
+// floor. Every state at it, a first page reads about 900 places and their facts: about 60 ms on the
+// pinned driver (BenchmarkTheStandingCountsAtTheirBound), near the 50 ms line a first page keeps.
+const MaxStandingCounted = 128
 
 // validateStanding is [ReadQuery.validateChecks] for a listing asked where each check stands:
 // of a repository or of every repository, within a window that ends now, never one change's or

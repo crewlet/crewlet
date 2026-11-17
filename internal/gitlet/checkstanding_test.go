@@ -585,3 +585,13 @@ func BenchmarkTheStandingCountsAtTheirBound(b *testing.B) {
 		})
 	}
 }
+
+// TestTheStandingCountBoundKeepsTheFirstPageQuick pins MaxStandingCounted at the bound that keeps a
+// first page near the 50 ms line (BenchmarkTheStandingCountsAtTheirBound); a raise re-measures that.
+func TestTheStandingCountBoundKeepsTheFirstPageQuick(t *testing.T) {
+	t.Parallel()
+	if gitlet.MaxStandingCounted > 128 {
+		t.Fatalf("MaxStandingCounted is %d: past 128 places a state a first page leaves the 50 ms line; "+
+			"re-measure BenchmarkTheStandingCountsAtTheirBound before raising it", gitlet.MaxStandingCounted)
+	}
+}

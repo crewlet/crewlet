@@ -10010,8 +10010,11 @@ export interface CodeCheckDetail extends CodeCheckRow {
 /** `code_checks`: a page of attempts of checks, newest ended first, or where each stands (`standing`). */
 export interface CodeChecksAnswer {
   checks?: CodeCheckRow[];
-  /** A standing listing's first page's attempts by state; a state in `at_least` counted to its bound (512). */
-  standing_counts?: { counts: CodeCheckCounts; at_least?: ((typeof CHECK_STATES)[number] | (string & {}))[] };
+  /** A standing listing's first page's attempts by state; a state in `at_least` counted to its bound (128). */
+  standing_counts?: {
+    counts: CodeCheckCounts;
+    at_least?: ((typeof CHECK_STATES)[number] | (string & {}))[];
+  };
   next?: string;
   position: LogPosition;
   level: ReadLevel;

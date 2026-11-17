@@ -3042,7 +3042,7 @@ It reads one repository or every repository the reader may read, within a
 window that starts at a moment and ends now; an attempt not yet ended is in
 every window. Its first page counts the standing attempts by state, by a
 check's name where one narrows it and never by a state, each state counted
-among its newest 512 places and saying when it stopped there. Each row names
+among its newest 128 places and saying when it stopped there. Each row names
 the change it judges, that change's branch and the head it was checked at:
 the entry's head for a candidate, which was checked merged onto its branch.
 A data node of an older build refuses `standing`, and another answers.
