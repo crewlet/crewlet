@@ -34,11 +34,10 @@ import (
 // meter and in the read that collects a job, [resumedReading]) reads a Claude
 // Code thread through this one layer, so the rules it is read by are held
 // once, each in one walk of a thread's whole lines that every reading of it
-// shares ([walkThread]). The walk's one decode outside this layer's options is
-// the launch floor's figure at the meter ([contextReading]), the last
-// request's input read off each whole line by the rule every capture's figure
-// has been read by, which decides nothing of what the session recorded and so
-// does not move with the layer. The rules:
+// shares ([walkThread]). The launch floor's figure at the meter
+// ([contextReading]), which decides nothing of what the session recorded,
+// reads a thread's replies through this layer too, so every reading of a
+// thread reads a reply's usage by one rule ([threadLine.Usage]). The rules:
 //
 //   - A MEMBER IS NAMED EXACTLY ([claudeMainThread], [claudeSubagentThread],
 //     [claudeSubagentMeta], [claudePrecompact], and [claudeMemberOf] the other
@@ -3028,14 +3027,17 @@ type threadUsage struct {
 // harness compacts at its first request would read as one that holds its
 // history.
 //
-// ITS READER is the resumed count, which reads it on every main-thread reply,
-// to bound what a continued session's harness counts before its first
+// ITS READERS are the resumed count, which reads it on every main-thread
+// reply, to bound what a continued session's harness counts before its first
 // request, as Claude Code counts it to judge whether to compact there: from
 // the newest reply whose usage counts, its four counts' sum, OUTPUT among
 // them, placed at the first record of that reply's ID, which Claude Code
 // takes off a record that carries no usage too, so ID and Model come with
-// every reply, usage or not. Which reply counts, and what "<synthetic>" or an
-// empty ID means, are its reader's to judge, never this accessor's.
+// every reply, usage or not; and the launch floor's figure at the take's
+// meter ([contextReading]), the input side of the last main-thread reply
+// whose usage it reads with no error. Which reply counts, and what
+// "<synthetic>" or an empty ID means, are each reader's to judge, never this
+// accessor's.
 //
 // Read off the line's one decode, its raw `message`, never a second read of
 // the line.
@@ -3083,20 +3085,18 @@ func (l threadLine) Usage() (threadUsage, bool, error) {
 // is an error, null among it, and u's counts are then not to be read.
 //
 // ONE RULE FOR A REPLY'S USAGE, IN A THREAD AND IN A RUN'S STREAM: a thread's
-// reply ([threadLine.Usage]), and a run's event stream, whose assistant lines
-// carry the same message the thread records ([claudeEvents.measure]), so the
-// figure a collection reads off the stream for the copy its box holds is read
-// by the rule the thread's reader reads it by, never by a rule of its own.
+// reply ([threadLine.Usage]), which the resumed count and the launch floor's
+// figure ([contextReading]) read alike, and a run's event stream, whose
+// assistant lines carry the same message the thread records
+// ([claudeEvents.measure]), so the figure a collection reads off the stream
+// for the copy its box holds is read by the rule the thread's readers read it
+// by, never by a rule of its own.
 //
-// TWO OTHER READERS OF A USAGE KEEP THEIR OWN READING, each for what its figure
-// is. The run's spend ([looseUsage]) reads a count of another kind as none and
-// the rest as written: it is what the run is charged, the share of the seat's
+// ONE OTHER READER OF A USAGE KEEPS ITS OWN READING, for what its figure is.
+// The run's spend ([looseUsage]) reads a count of another kind as none and the
+// rest as written: it is what the run is charged, the share of the seat's
 // windows its requests took, and a count it cannot read costs the charge that
-// count, never the line's whole spend. A capture's measure of its archive
-// ([assistantInput]) reads with encoding/json, keys in any case and a null
-// count as 0: it is the figure every capture's stamp has carried, which every
-// reader of a stamp reads ([sandbox.SessionCapture.ContextTokens]) and a kept
-// capture's floor is made of, read alike whichever build took the capture.
+// count, never the line's whole spend.
 func readUsage(usage json.RawMessage, u *threadUsage) error {
 	if !wireObject(usage) {
 		return fmt.Errorf("usage is %s, not an object", wireKind(usage))
