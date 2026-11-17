@@ -10,13 +10,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/codeindex"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/cache"
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 	"github.com/crewlet/crewlet/internal/gitref"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // A SEARCH ([gitlet.GitSearch], M6-D12, M6-D13) reads a commit two ways, and
@@ -55,6 +55,12 @@ import (
 // long search answers the lines past it alone; the index path asks cat-file
 // for no file whose path sorts before the place's, and git grep, which reads
 // the commit whole, has those files' lines dropped as they stream.
+//
+// A FILE'S HITS ARE EMITTED AT ITS END (flush), with their matches, their
+// file's total where per_file asks it, and the lines around them where
+// context asks them: from the blob in hand through the index, and from one
+// cat-file after git grep ends (withHeldContext), since git grep's own context
+// lines cannot be told from its matches.
 
 // searchTipKey and searchRefKey are a search's places in the map a memo key
 // reads whole ids from (read.memoKey): the commit searched and the whole ref
@@ -123,7 +129,8 @@ func (r *read) searchRead(ctx context.Context) (gitlet.GitAnswer, error) {
 	// answer, Truncated; what ends ctx is the asker's.
 	sctx, cancel := context.WithTimeout(ctx, r.s.searchBudget)
 	defer cancel()
-	s := &searching{r: r, plan: plan, filter: filter, after: after, limit: sq.Hits(),
+	s := &searching{r: r, plan: plan, filter: filter, after: after, limit: sq.Hits(), context: sq.Context,
+		perFile: sq.PerFile, readCtx: ctx,
 		room: r.s.pageBytes - r.stampCost() - jsonLen(gitlet.GitAnswer{Kind: gitlet.GitSearch,
 			Search: &gitlet.SearchAnswer{Tip: tip, Ref: ref, Via: gitlet.SearchViaGrep, SkippedFiles: 1 << 30,
 				Truncated: true}}),
@@ -240,7 +247,9 @@ func (r *read) searchTip(ctx context.Context) (ref, tip string, absent bool, err
 }
 
 // searching is one search's run: what it confirms with, and what it has
-// found.
+// found. A file's hits are collected while its lines are confirmed and
+// emitted into the answer at the file's end (flush), once its total and,
+// where asked, the lines around them are known.
 type searching struct {
 	r      *read
 	plan   *codeindex.Plan
@@ -249,6 +258,11 @@ type searching struct {
 	// nil from the start.
 	after *searchPlace
 	limit int
+	// context and perFile are the query's (gitlet.SearchQuery.Context, PerFile).
+	context, perFile int
+	// readCtx is the read's own context: the grep path's context pass runs
+	// under it, so a search its own budget ended still answers its hits whole.
+	readCtx context.Context
 	// room is what the hits may encode to: the answer's bound less its
 	// envelope's stamps and its own fields at their widest.
 	room   int
@@ -257,6 +271,29 @@ type searching struct {
 	// run the expression on: git grep answers a file's lines one at a time,
 	// and a file is counted once however many of its lines are.
 	longIn string
+	// file is the file being confirmed; held, the grep path's files whose
+	// hits wait for their context (withHeldContext).
+	file pendingFile
+	held []pendingFile
+	// collected is the hits kept so far, against limit. full is that the
+	// search has all it answers (its limit, or its room, roomOut); stopped,
+	// that it ended a git run itself for that (errSearchFull).
+	collected              int
+	full, roomOut, stopped bool
+}
+
+// pendingFile is one file's hits as a search collects them.
+type pendingFile struct {
+	path, blob string
+	// matched is how many of the file's lines matched so far, those at or
+	// before the search's place included.
+	matched int
+	kept    []gitlet.SearchHit
+	// next is the line of the file's first hit past the search's limit, which
+	// the last kept hit's After stops before; 0 for none.
+	next int
+	// cut is that the search stopped confirming the file part way.
+	cut bool
 }
 
 // searchPlace is a [gitlet.SearchAfter] as a search compares by it: the path's
@@ -276,43 +313,99 @@ func (p *searchPlace) answered(path string, line int) bool {
 	return p != nil && (path < p.path || path == p.path && line <= p.line)
 }
 
-// add confirms one file's lines — a whole blob, or (grep) one line of it
-// numbered line — and keeps every hit past the place the search continues
-// from, answering errSearchFull once the search has all it answers.
-func (s *searching) add(ctx context.Context, path, blob string, text []byte, line int) error {
+// add confirms lines of the open file (s.file) — a whole blob, or (grep) one
+// line of it numbered line — and keeps every hit past the place the search
+// continues from, within its limit and the query's per-file bound. Once the
+// limit is reached it marks the search full and stops confirming the file,
+// unless per_file asks for its total and the file holds kept hits.
+func (s *searching) add(ctx context.Context, text []byte, line int) error {
+	f := &s.file
 	long, err := s.plan.Confirm(ctx, text, func(h codeindex.Hit) bool {
 		n := h.Line
 		if line > 0 {
 			n = line
 		}
-		if s.after.answered(path, n) {
-			// AN EARLIER PAGE'S LINE, left out before it is counted: the
-			// limit is of the lines past the place alone.
+		f.matched++
+		switch {
+		case s.after.answered(f.path, n):
+			// AN EARLIER PAGE'S LINE, left out before the limit counts it:
+			// counted in its file's total alone.
 			return true
-		}
-		p, b64 := gitlet.WirePath(path)
-		hit := gitlet.SearchHit{Path: p, PathB64: b64, Line: n, Blob: blob,
-			Text: textcut.Within(strings.ToValidUTF8(string(h.Text), "�"), gitlet.MaxSearchLineBytes)}
-		cost := jsonLen(hit) + 1
-		if len(s.answer.Hits) == s.limit || cost > s.room {
-			s.answer.Truncated = true
+		case s.perFile > 0 && f.matched > s.perFile:
+			return true
+		case s.collected == s.limit:
+			s.answer.Truncated, s.full = true, true
+			if f.next == 0 {
+				f.next = n
+			}
+			if s.perFile > 0 && len(f.kept) > 0 {
+				return true
+			}
+			f.cut = true
 			return false
 		}
-		s.room -= cost
-		s.answer.Hits = append(s.answer.Hits, hit)
+		p, b64 := gitlet.WirePath(f.path)
+		hit := gitlet.SearchHit{Path: p, PathB64: b64, Line: n, Blob: f.blob}
+		hit.Text, hit.Matches = hitText(h.Text, func(within int) [][2]int { return s.plan.Matches(h.Text, within) })
+		f.kept = append(f.kept, hit)
+		s.collected++
 		return true
 	})
-	if long > 0 && path != s.longIn {
-		s.longIn = path
+	if long > 0 && f.path != s.longIn {
+		s.longIn = f.path
 		s.answer.SkippedFiles++
 	}
-	switch {
-	case err != nil:
-		return err
-	case s.answer.Truncated:
-		return errSearchFull
+	if err != nil {
+		f.cut = true
 	}
-	return nil
+	return err
+}
+
+// open starts the file the next lines confirmed are of.
+func (s *searching) open(path, blob string) { s.file = pendingFile{path: path, blob: blob} }
+
+// flush ends the open file: its hits name its total where per_file asked it
+// and every line was confirmed, then go into the answer, with the lines
+// around them where context was asked and body, the file's bytes, is in
+// hand; the grep path, which has none, holds them for withHeldContext.
+func (s *searching) flush(body []byte) {
+	f := s.file
+	s.file = pendingFile{}
+	if len(f.kept) == 0 {
+		return
+	}
+	if s.perFile > 0 && !f.cut {
+		for i := range f.kept {
+			f.kept[i].FileMatches = f.matched
+		}
+	}
+	switch {
+	case s.context == 0:
+	case body == nil:
+		s.held = append(s.held, f)
+		return
+	default:
+		withContext(body, f.kept, f.next, s.context)
+	}
+	s.emit(f.kept)
+}
+
+// emit appends hits to the answer, in order, while they fit its room: the
+// first that does not ends the answer, Truncated, and every hit after it is
+// dropped.
+func (s *searching) emit(hits []gitlet.SearchHit) {
+	for _, h := range hits {
+		if s.roomOut {
+			return
+		}
+		cost := jsonLen(h) + 1
+		if cost > s.room {
+			s.roomOut, s.full, s.answer.Truncated = true, true, true
+			return
+		}
+		s.room -= cost
+		s.answer.Hits = append(s.answer.Hits, h)
+	}
 }
 
 // indexedFile is a candidate the index path reads.
@@ -354,24 +447,44 @@ func (s *searching) viaIndex(ctx context.Context, view *cache.CodeIndexView) err
 		return nil
 	}
 	slices.SortFunc(files, func(a, b indexedFile) int { return cmp.Compare(a.path, b.path) })
-	var in strings.Builder
-	for _, f := range files {
-		in.WriteString(f.blob.String())
-		in.WriteByte('\n')
+	ids := make([]string, len(files))
+	for i, f := range files {
+		ids[i] = f.blob.String()
 	}
 	// One answer a line asked, in the order asked: a blob two paths hold is
 	// asked, read and confirmed once for each, as git grep reads it.
+	return s.catBlobs(ctx, "cat-file of the search's candidates", ids, func(i int, body []byte) error {
+		s.open(files[i].path, ids[i])
+		err := s.add(ctx, body, 0)
+		s.flush(body)
+		if err == nil && s.full {
+			s.stopped = true
+			return errSearchFull
+		}
+		return err
+	})
+}
+
+// catBlobs reads the blobs ids name through one cat-file, in the order asked,
+// calling each with every one's place in ids and its bytes, whole.
+func (s *searching) catBlobs(ctx context.Context, what string, ids []string,
+	each func(i int, body []byte) error) error {
+
+	var in strings.Builder
+	for _, id := range ids {
+		in.WriteString(id)
+		in.WriteByte('\n')
+	}
 	next := 0
 	out := &catStream{each: func(oid string, body []byte) error {
-		if next == len(files) || files[next].blob.String() != oid {
+		if next == len(ids) || ids[next] != oid {
 			return fmt.Errorf("%w: cat-file answered %s out of the order asked", errUnparsed, oid)
 		}
-		f := files[next]
 		next++
-		return s.add(ctx, f.path, oid, body, 0)
+		return each(next-1, body)
 	}}
 	r := s.r
-	return s.run(ctx, "cat-file of the search's candidates", func(deadline time.Duration) (gitproc.Result, error) {
+	return s.run(ctx, what, func(deadline time.Duration) (gitproc.Result, error) {
 		return r.s.o.Git.Run(ctx, gitproc.Cmd{Dir: r.synced.Dir, Dropping: r.synced.Dropping,
 			Config: r.s.o.Cache.ServeConfig(), Args: []string{"cat-file", "--batch"},
 			Stdin: strings.NewReader(in.String()), Stdout: out, Class: gitproc.ClassRead, Deadline: deadline})
@@ -420,11 +533,31 @@ func (s *searching) viaGrep(ctx context.Context, tip string) error {
 	tail = append(tail, "--end-of-options", tip)
 	out := &grepStream{prefix: tip + ":", each: func(path string, line int, text []byte) error {
 		// git grep reads the commit whole; a line before the place is
-		// dropped here, before it is confirmed or counted.
-		if large[path] || s.after.answered(path, line) || !s.filter.Match(path) {
+		// dropped here, before it is confirmed or counted, but for one of
+		// the place's own file, which counts in its total where per_file
+		// asks it.
+		if large[path] || s.after.before(path) || s.perFile == 0 && s.after.answered(path, line) ||
+			!s.filter.Match(path) {
 			return nil
 		}
-		return s.add(ctx, path, blobs[path], text, line)
+		if path != s.file.path {
+			// git grep answers a file's lines together: one of another path
+			// ends the file before it, read whole.
+			s.flush(nil)
+			if s.full {
+				s.stopped = true
+				return errSearchFull
+			}
+			s.open(path, blobs[path])
+		}
+		if err := s.add(ctx, text, line); err != nil {
+			return err
+		}
+		if s.file.cut {
+			s.stopped = true
+			return errSearchFull
+		}
+		return nil
 	}}
 	err := s.run(ctx, "git grep over the search's commit", func(deadline time.Duration) (gitproc.Result, error) {
 		return r.s.o.Git.Run(ctx, gitproc.Cmd{Dir: r.synced.Dir, Dropping: r.synced.Dropping,
@@ -434,17 +567,187 @@ func (s *searching) viaGrep(ctx context.Context, tip string) error {
 	}, out.close)
 	var exit *gitproc.ExitError
 	if errors.As(err, &exit) && exit.Result.Exit == 1 {
-		return nil // git grep's "no line matched"
+		err = nil // git grep's "no line matched"
+	}
+	if err != nil || ctx.Err() != nil {
+		// A stream git or the budget ended part way: its last file was
+		// not read whole.
+		s.file.cut = true
+	}
+	s.flush(nil)
+	// The held files' context is read where git grep answered or the
+	// search's budget ended it, never past a failure of the read's.
+	if len(s.held) > 0 && (err == nil || ctx.Err() != nil) {
+		if held := s.withHeldContext(); err == nil {
+			err = held
+		}
 	}
 	return err
+}
+
+// withHeldContext reads the grep path's held files (flush) through one
+// cat-file, attaching to each file's hits the lines around them and emitting
+// them in order. It runs under the read's own context, not the search's
+// budget, so a search its budget ended still answers its hits whole; a pass
+// that ends part way emits no file past the first whose bytes did not arrive.
+func (s *searching) withHeldContext() error {
+	held := s.held
+	s.held = nil
+	ids := make([]string, len(held))
+	for i, f := range held {
+		ids[i] = f.blob
+	}
+	// run reads this pass's own stop, not the grep run's.
+	stopped := s.stopped
+	s.stopped = false
+	done := 0
+	err := s.catBlobs(s.readCtx, "cat-file of the search's hits' files", ids, func(i int, body []byte) error {
+		withContext(body, held[i].kept, held[i].next, s.context)
+		s.emit(held[i].kept)
+		done = i + 1
+		if s.roomOut {
+			s.stopped = true
+			return errSearchFull
+		}
+		return nil
+	})
+	s.stopped = s.stopped || stopped
+	if done < len(held) {
+		s.answer.Truncated = true
+	}
+	return err
+}
+
+// hitText is a line as a hit answers it, valid UTF-8 cut within
+// gitlet.MaxSearchLineBytes (strings.ToValidUTF8's and textcut.Within's
+// rules), and matches, asked of the line up to the cut, mapped into it:
+// clipped at the cut, never empty or overlapping, at most
+// gitlet.MaxSearchHitMatches. A nil matches answers the text alone.
+func hitText(raw []byte, matches func(within int) [][2]int) (string, [][2]int) {
+	const most, marker = gitlet.MaxSearchLineBytes, "…"
+	// units are where each rune, or each run of invalid bytes, starts in raw
+	// and in the text, up to the cut; the last is the end of what is kept.
+	type unit struct{ raw, at int }
+	units := make([]unit, 0, min(len(raw), most)+1)
+	var b strings.Builder
+	keep, cutRaw := -1, len(raw)
+	for i := 0; i < len(raw); {
+		if b.Len() <= most-len(marker) {
+			keep = len(units)
+		}
+		units = append(units, unit{raw: i, at: b.Len()})
+		r, w := utf8.DecodeRune(raw[i:])
+		if r == utf8.RuneError && w == 1 {
+			for w = 1; i+w < len(raw); w++ {
+				if c, n := utf8.DecodeRune(raw[i+w:]); c != utf8.RuneError || n != 1 {
+					break
+				}
+			}
+			b.WriteString("\uFFFD")
+		} else {
+			b.Write(raw[i : i+w])
+		}
+		i += w
+		if b.Len() > most {
+			cutRaw = units[keep].raw
+			break
+		}
+	}
+	text, end := b.String(), b.Len()
+	if cutRaw < len(raw) {
+		end = units[keep].at
+		text = text[:end] + marker
+		units = units[:keep]
+	}
+	units = append(units, unit{raw: cutRaw, at: end})
+	if matches == nil {
+		return text, nil
+	}
+	// at maps a raw offset to the text's: the start of the unit it falls in,
+	// or with up, the end of it where it falls inside one.
+	at := func(off int, up bool) int {
+		k, exact := slices.BinarySearchFunc(units, off, func(u unit, off int) int { return cmp.Compare(u.raw, off) })
+		switch {
+		case exact:
+			return units[k].at
+		case k == len(units):
+			return end
+		case up:
+			return units[k].at
+		}
+		return units[k-1].at
+	}
+	var out [][2]int
+	for _, m := range matches(cutRaw) {
+		if len(out) == gitlet.MaxSearchHitMatches {
+			break
+		}
+		from, to := at(min(m[0], cutRaw), false), at(min(m[1], cutRaw), true)
+		switch n := len(out); {
+		case to <= from:
+		case n > 0 && from < out[n-1][1]:
+			out[n-1][1] = max(out[n-1][1], to)
+		default:
+			out = append(out, [2]int{from, to})
+		}
+	}
+	return text, out
+}
+
+// withContext attaches to a file's kept hits, in line order, the lines of
+// body around each, context of each side, a line carried once
+// (gitlet.SearchHit.Before); next is the line of the file's next hit the
+// search would answer, 0 for none. Lines are split as Confirm numbers them.
+func withContext(body []byte, hits []gitlet.SearchHit, next, context int) {
+	if len(hits) == 0 || context <= 0 {
+		return
+	}
+	// starts are where the file's lines begin, as far as the last one a hit
+	// may carry.
+	need := hits[len(hits)-1].Line + context
+	var starts []int
+	for at := 0; at < len(body) && len(starts) < need; {
+		starts = append(starts, at)
+		nl := bytes.IndexByte(body[at:], '\n')
+		if nl < 0 {
+			break
+		}
+		at += nl + 1
+	}
+	line := func(n int) string {
+		start, end := starts[n-1], len(body)
+		if nl := bytes.IndexByte(body[start:], '\n'); nl >= 0 {
+			end = start + nl
+		}
+		text, _ := hitText(body[start:end], nil)
+		return text
+	}
+	carried := 0
+	for i := range hits {
+		h := &hits[i]
+		for n := max(h.Line-context, carried+1, 1); n < h.Line && n <= len(starts); n++ {
+			h.Before = append(h.Before, line(n))
+		}
+		stop := h.Line + context
+		switch {
+		case i+1 < len(hits):
+			stop = min(stop, hits[i+1].Line-1)
+		case next > 0:
+			stop = min(stop, next-1)
+		}
+		for n := h.Line + 1; n <= min(stop, len(starts)); n++ {
+			h.After = append(h.After, line(n))
+		}
+		carried = h.Line + len(h.After)
+	}
 }
 
 // run runs one git of the search over the copy — git, which spells its own
 // Cmd where it meets the pool, so the writers gate reads every argument
 // list a search hands git — its deadline what is left of the read's budget
 // of git; done, where set, is what its stdout's reader says of the end of
-// the stream. A run the search stopped itself (errSearchFull) answered all
-// it needs.
+// the stream. A run the search stopped itself (errSearchFull, stopped)
+// answered all it needs.
 func (s *searching) run(ctx context.Context, what string, git func(deadline time.Duration) (gitproc.Result, error),
 	done func() error) error {
 
@@ -457,7 +760,7 @@ func (s *searching) run(ctx context.Context, what string, git func(deadline time
 		deadline = min(deadline, time.Until(d))
 	}
 	res, err := git(deadline)
-	if s.answer.Truncated && res.Damage == nil {
+	if s.stopped && res.Damage == nil {
 		r.charge(res)
 		return nil
 	}

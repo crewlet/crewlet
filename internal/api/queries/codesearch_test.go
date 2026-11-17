@@ -104,7 +104,8 @@ func TestTheDashboardReadsWhatACodeSearchAnswers(t *testing.T) {
 	s := &stubCode{search: func(codesearch.Query) (codesearch.Answer, error) {
 		return codesearch.Answer{
 			Hits: []codesearch.Hit{{Repo: "web", SearchHit: gitlet.SearchHit{Path: "go.mod", PathB64: "Z28ubW9k",
-				Line: 1, Text: "module web", Blob: stubOID}}},
+				Line: 1, Text: "module web", Blob: stubOID, Matches: [][2]int{{0, 6}}, Before: []string{"// go.mod"},
+				After: []string{"", "go 1.27"}, FileMatches: 1}}},
 			Tips: map[string]string{"web": stubOID},
 			Coverage: codesearch.Coverage{Searched: 1, NotIndexed: set, Building: set,
 				NotAnswering: []codesearch.NodeGap{{Node: "git-b", Why: "silent", Repos: set}},
@@ -248,5 +249,50 @@ func TestCodeSearchReadsOneGrammar(t *testing.T) {
 	if !errors.As(err, &missing) || missing.Reason != queries.ReasonNotDeclared ||
 		missing.Detail != queries.RepoNotDeclared("nope") {
 		t.Errorf("a search naming an undeclared repository answered %v, want not_declared naming nope", err)
+	}
+}
+
+// A CODE SEARCH ASKS FOR CONTEXT AND A PER-FILE BOUND as it is asked:
+// `context` and `per_file` reach the search, neither asks the zeros, and a
+// value past its bound, not a whole number, or a limit past
+// gitlet.MaxSearchContextHits beside context is bad_params naming its field,
+// before anything is searched.
+//
+// Mutation: read `per_file` into Context, red.
+func TestACodeSearchAsksForContextAndPerFile(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		params           map[string]any
+		context, perFile int
+	}{
+		{map[string]any{"q": "needle", "context": "2", "per_file": "3"}, 2, 3},
+		{map[string]any{"q": "needle"}, 0, 0},
+	} {
+		s := &stubCode{}
+		if _, err := askNative(t, queries.Sources{Code: s}, "code_search", tc.params); err != nil {
+			t.Fatal(err)
+		}
+		if len(s.searched) != 1 || s.searched[0].Context != tc.context || s.searched[0].PerFile != tc.perFile {
+			t.Errorf("code_search %v searched %+v, want context %d and per_file %d", tc.params, s.searched,
+				tc.context, tc.perFile)
+		}
+	}
+	for _, tc := range []struct {
+		params map[string]any
+		field  string
+	}{
+		{map[string]any{"q": "needle", "context": "4"}, "context"},
+		{map[string]any{"q": "needle", "per_file": "-1"}, "per_file"},
+		{map[string]any{"q": "needle", "context": "x"}, "context"},
+		{map[string]any{"q": "needle", "context": "1", "limit": "200"}, "limit"},
+	} {
+		s := &stubCode{}
+		_, err := askNative(t, queries.Sources{Code: s}, "code_search", tc.params)
+		if !errors.Is(err, queries.ErrBadParams) || !strings.Contains(err.Error(), tc.field) {
+			t.Errorf("code_search %v answered %v, want bad_params naming %s", tc.params, err, tc.field)
+		}
+		if len(s.searched) != 0 {
+			t.Errorf("code_search %v searched, want refused before", tc.params)
+		}
 	}
 }

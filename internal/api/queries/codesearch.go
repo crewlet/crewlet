@@ -65,7 +65,9 @@ const codeSearchFloorless = "code_search takes no floor: it answers at the tip o
 // REQUIRED; `mode` (literal, regex or word; literal unset), `ignore_case`
 // (true or false), and one `repo`, `path` and `ref` beside its filters;
 // `limit`, the most lines answered (1 to gitlet.MaxSearchHits, unset or 0 the
-// most); and the level the caller's repositories are listed at.
+// most); `context`, the lines around each answered (0 to
+// gitlet.MaxSearchContext); `per_file`, the most lines of one file, each then
+// naming its file's total; and the level the caller's repositories are listed at.
 //
 // THE SOURCE FIRST, so a node that does not serve Gitlet says why whatever the
 // request named; then the request, refused [ErrBadParams] naming what the
@@ -142,13 +144,22 @@ func codeSearchQuery(p Params) (codesearch.Query, error) {
 		return codesearch.Query{}, fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
 	q := codesearch.Query{Search: search, Rows: rows}
-	if p.Has("limit") {
-		n, whole := p.WholeInt("limit")
-		if !whole || n < 0 || n > gitlet.MaxSearchHits {
-			return codesearch.Query{}, fmt.Errorf("%w: the limit %q is not a whole number from 0 to %d "+
-				"(0 is the most)", ErrBadParams, p.String("limit"), gitlet.MaxSearchHits)
+	for _, n := range []struct {
+		name string
+		into *int
+	}{{"limit", &q.Limit}, {"context", &q.Context}, {"per_file", &q.PerFile}} {
+		if !p.Has(n.name) {
+			continue
 		}
-		q.Limit = int(n)
+		v, whole := p.WholeInt(n.name)
+		if !whole || v < 0 || v > gitlet.MaxSearchHits {
+			return codesearch.Query{}, fmt.Errorf("%w: %s: %q is not a whole number from 0 to %d", ErrBadParams,
+				n.name, p.String(n.name), gitlet.MaxSearchHits)
+		}
+		*n.into = int(v)
+	}
+	if err := (gitlet.SearchQuery{Limit: q.Limit, Context: q.Context, PerFile: q.PerFile}).ValidateBounds(); err != nil {
+		return codesearch.Query{}, fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
 	return q, nil
 }

@@ -85,6 +85,7 @@ import (
 // where `truncated` with no `next` is a search that stopped before its first
 // line somewhere — narrow it. A cursor names the search it was cut from, so
 // one handed to another search is refused rather than read as a place in it.
+// With `context`, each line around a hit is fenced as its text is.
 
 // CodeSearchTool is the code search's name: its authority row's action.
 const CodeSearchTool = string(authz.ActionCodeSearch)
@@ -108,7 +109,8 @@ func (t *codeSearch) Description() string {
 		"trees. Each hit is a repository, a path, a line and the file's blob id, read at the commit " +
 		"`tips` names; its text arrives fenced as content nobody vouches for. `coverage` names what " +
 		"was not searched, and `truncated` with no `next` means lines went unread: narrow it with repo: or " +
-		"path:. A page at a time — pass `next` back as `cursor` with the same search."
+		"path:. A page at a time — pass `next` back as `cursor` with the same search. `matches` are byte " +
+		"offsets into a hit's text; `context` lines are fenced as it is."
 }
 
 func (t *codeSearch) Parameters() map[string]any {
@@ -132,7 +134,11 @@ func (t *codeSearch) Parameters() map[string]any {
 			"repo":        map[string]any{"type": "string", "description": "One more repo: filter."},
 			"path":        map[string]any{"type": "string", "description": "One more path: filter."},
 			"ref":         map[string]any{"type": "string", "description": "The ref: filter."},
-			"cursor":      codeCursorArg(),
+			"context": map[string]any{"type": "integer", "minimum": 0, "maximum": gitlet.MaxSearchContext,
+				"description": "Lines around each hit; near hits share them."},
+			"per_file": map[string]any{"type": "integer", "minimum": 0, "maximum": gitlet.MaxSearchHits,
+				"description": "Most hits of one file, each naming its file's total (file_matches); 0 is all."},
+			"cursor": codeCursorArg(),
 		},
 		"required": []string{"query"},
 	}
@@ -163,15 +169,22 @@ func (t *codeSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	after, refusal := searchCursorArg(t.Name(), search, strings.TrimSpace(argString(args, "cursor")))
+	lines, perFile, refusal := searchBounds(t.Name(), args)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	after, refusal := searchCursorArg(t.Name(), search, perFile, strings.TrimSpace(argString(args, "cursor")))
 	if refusal != nil {
 		return *refusal, nil
 	}
 	// ONE PAGE'S LINES, AFTER THE LAST ONE SENT: the search itself starts
 	// at the cursor's key and stops at what a page holds, so a page costs
 	// the Gitlet nodes the lines it answers, never the whole search again.
-	q := codesearch.Query{Search: search, Limit: searchPageHits, After: after, Asker: c.asker,
-		CeilingSeat: c.ceiling, Rows: seatRead}
+	q := codesearch.Query{Search: search, Limit: searchPageHits, Context: lines, PerFile: perFile, After: after,
+		Asker: c.asker, CeilingSeat: c.ceiling, Rows: seatRead}
+	if lines > 0 {
+		q.Limit = searchContextPageHits
+	}
 	if turn != nil && c.asker.Kind == gitlet.PrincipalAgent {
 		// A SEAT'S SEARCH NAMES ITS TURN, whose bucket on each answering
 		// Gitlet node pays the search's second look at the log's head, as a
@@ -185,7 +198,7 @@ func (t *codeSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return searchFailure(ctx, t.Name(), err), nil
 	}
-	k, rendered, err := fitLabelled(len(answer.Hits), searchPage(turn, c.asker.Seat, search, answer))
+	k, rendered, err := fitLabelled(len(answer.Hits), searchPage(turn, c.asker.Seat, search, perFile, answer))
 	switch {
 	case err != nil:
 		return labelFault(ctx, t.Name(), err), nil
@@ -204,7 +217,8 @@ func (t *codeSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // searchPageHits is the most lines a page of code_search asks the search for
 // (codesearch.Query.Limit): what one tool answer holds of the SMALLEST lines
 // a search answers that carry text — a one-byte repository, path and line,
-// fenced — measured as sent by TestCodeSearchAsksForWhatOnePageHolds. Asked
+// fenced, and its one match — measured as sent by
+// TestCodeSearchAsksForWhatOnePageHolds. Asked
 // for more, a page would have the Gitlet nodes find, confirm and send lines no
 // page of them can carry, which the next page reads again; asked for fewer, a
 // page of short lines would be shorter than one answer holds, and the search
@@ -212,13 +226,42 @@ func (t *codeSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // sooner, and the lines past the page's last are the next page's to read
 // again — less than one page's worth at most. Under gitlet.MaxSearchHits (500),
 // which a page of the shortest lines could not carry.
-const searchPageHits = 315
+const searchPageHits = 290
+
+// searchContextPageHits is searchPageHits for a page asking `context`: what
+// one tool answer holds of the smallest lines carrying text and three one-byte
+// lines on each side, each fenced, measured as TestCodeSearchAsksForWhatOnePageHolds
+// measures searchPageHits.
+const searchContextPageHits = 70
+
+// searchBounds is a call's `context` and `per_file`, 0 where unset, or the
+// refusal of one that is not a whole number in its range, before anything
+// is read.
+func searchBounds(tool string, args map[string]any) (lines, perFile int, refusal *tools.Result) {
+	for _, b := range []struct {
+		name string
+		most int
+		into *int
+	}{{"context", gitlet.MaxSearchContext, &lines}, {"per_file", gitlet.MaxSearchHits, &perFile}} {
+		raw, given := args[b.name]
+		if !given || raw == nil {
+			continue
+		}
+		n, whole := argIntValue(raw)
+		if !whole || n < 0 || n > b.most {
+			r := failed(fmt.Sprintf("%s: `%s` is a whole number from 0 to %d.", tool, b.name, b.most))
+			return 0, 0, &r
+		}
+		*b.into = n
+	}
+	return lines, perFile, nil
+}
 
 // searchPage is the fitLabelled builder of the page of answer's first k hits:
 // each hit's text fenced, the commit each repository with a hit on the page
 // was searched at, the coverage, and — where lines may follow the page's
 // last — the cursor of the page after it.
-func searchPage(turn *turnctx.Turn, seat string, search codeindex.Query,
+func searchPage(turn *turnctx.Turn, seat string, search codeindex.Query, perFile int,
 	answer codesearch.Answer) func(k int) (*foreignRead, any) {
 
 	return func(k int) (*foreignRead, any) {
@@ -227,8 +270,16 @@ func searchPage(turn *turnctx.Turn, seat string, search codeindex.Query,
 		for i, hit := range page.Hits {
 			// A LINE IS A FILE'S TEXT, which nobody this read can name
 			// vouches for: fenced, at the least trust.
-			read.fenceRepository(fieldPath{}.key("hits").index(i).key("text"), provenance.SourceRepoFile,
-				hit.Text)
+			at := fieldPath{}.key("hits").index(i)
+			read.fenceRepository(at.key("text"), provenance.SourceRepoFile, hit.Text)
+			for _, side := range []struct {
+				key   string
+				lines []string
+			}{{"before", hit.Before}, {"after", hit.After}} {
+				for j, line := range side.lines {
+					read.fenceRepository(at.key(side.key).index(j), provenance.SourceRepoFile, line)
+				}
+			}
 			if tip, ok := answer.Tips[hit.Repo]; ok {
 				if page.Tips == nil {
 					page.Tips = map[string]string{}
@@ -244,7 +295,7 @@ func searchPage(turn *turnctx.Turn, seat string, search codeindex.Query,
 		// fitLabelled measures first, never a page sent.
 		if k > 0 && (k < len(answer.Hits) || answer.Coverage.Truncated) {
 			last := answer.Hits[k-1]
-			page.Next = searchCursorOf(search, codesearch.KeyOf(last, answer.Tips[last.Repo]))
+			page.Next = searchCursorOf(search, perFile, codesearch.KeyOf(last, answer.Tips[last.Repo]))
 		}
 		return read, page
 	}
@@ -410,18 +461,23 @@ type searchCursor struct {
 
 // searchFingerprint names one search by its parts — its repo: and path:
 // filters as the sets they are, sorted, since either order searches alike —
-// so a cursor cut from it is told from one cut from any other: sixteen hex
-// digits of its SHA-256, a name and not a secret.
-func searchFingerprint(q codeindex.Query) string {
+// and its per_file bound, which changes the lines a page answers, so a cursor
+// cut from it is told from one cut from any other: sixteen hex digits of its
+// SHA-256, a name and not a secret. `context` changes no line answered.
+func searchFingerprint(q codeindex.Query, perFile int) string {
 	repos, paths := slices.Sorted(slices.Values(q.Repos)), slices.Sorted(slices.Values(q.Paths))
-	data, _ := json.Marshal([]any{q.Text, q.Mode, q.IgnoreCase, repos, paths, q.Ref})
+	fields := []any{q.Text, q.Mode, q.IgnoreCase, repos, paths, q.Ref}
+	if perFile > 0 {
+		fields = append(fields, perFile)
+	}
+	data, _ := json.Marshal(fields)
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:8])
 }
 
 // searchCursorOf is the cursor of the page after key, in search.
-func searchCursorOf(search codeindex.Query, key codesearch.Key) string {
-	data, _ := json.Marshal(searchCursor{Search: searchFingerprint(search), Repo: key.Repo, Tip: key.Tip,
+func searchCursorOf(search codeindex.Query, perFile int, key codesearch.Key) string {
+	data, _ := json.Marshal(searchCursor{Search: searchFingerprint(search, perFile), Repo: key.Repo, Tip: key.Tip,
 		Path: key.Path, PathB64: key.PathB64, Line: key.Line})
 	return base64.RawURLEncoding.EncodeToString(data)
 }
@@ -429,7 +485,8 @@ func searchCursorOf(search codeindex.Query, key codesearch.Key) string {
 // searchCursorArg is the key a call's cursor names in search — the last hit
 // a page sent, which the search continues after — nil for the first page, or
 // the refusal of a cursor that is not one of search's.
-func searchCursorArg(tool string, search codeindex.Query, cursor string) (*codesearch.Key, *tools.Result) {
+func searchCursorArg(tool string, search codeindex.Query, perFile int, cursor string) (*codesearch.Key,
+	*tools.Result) {
 	if cursor == "" {
 		return nil, nil
 	}
@@ -448,9 +505,9 @@ func searchCursorArg(tool string, search codeindex.Query, cursor string) (*codes
 			"page answered, unchanged.", tool))
 		return nil, &r
 	}
-	if c.Search != searchFingerprint(search) {
+	if c.Search != searchFingerprint(search, perFile) {
 		r := failed(fmt.Sprintf("%s: `cursor` is a page of another search — hand it back with the same "+
-			"`query`, `mode`, `ignore_case`, `repo`, `path` and `ref` it was answered for.", tool))
+			"`query`, `mode`, `ignore_case`, `repo`, `path`, `ref` and `per_file` it was answered for.", tool))
 		return nil, &r
 	}
 	return &key, nil

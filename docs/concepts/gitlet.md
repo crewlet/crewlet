@@ -6078,6 +6078,15 @@ the files' paths and then of their lines: at most 500 of them, each line cut
 to its first 256 bytes, with the file's path, the line's number and the id of
 the file's object.
 
+Each line also names where the expression matched in the text answered, at
+most 32 matches. Asked, a search answers up to three lines of the file on
+each side of each line, a line two near lines share answered once; a search
+asking them answers at most 100 lines. Asked to answer at most so many lines
+of one file, it answers how many lines of each file matched. Through git grep
+the lines around are read from the file once git grep is done, under the
+read's own time rather than the search's five seconds, so a search those
+seconds cut still answers its lines with the lines around them.
+
 - **Through the index**, where the node keeps the repository's code index
   (`codeindex`, [The cache on a Gitlet node](#the-cache-on-a-gitlet-node)) and it
   answers for the commit searched: the files of the commit the index's
@@ -6215,7 +6224,9 @@ sequenceDiagram
 - **Exact.** Each node keeps the first lines of its repositories by
   repository name, path and line, at most the search's limit, and the asker
   keeps the first of all of them, so the answer is the same whichever node
-  answers first, and a limit cuts the first lines of the whole search. A
+  answers first, and a limit cuts the first lines of the whole search. Each
+  line keeps the matches, the lines around it and the file's total its node
+  answered. A
   repository whose search stopped early — its answer full, or its five
   seconds spent — answered its first lines up to its last, so the asker keeps
   no line of any repository past that last: every line of the search before
@@ -6236,6 +6247,11 @@ sequenceDiagram
   repositories named before the next one, that one cannot reach the answer
   and is not read — a search for a common word reads the repositories that
   fill its limit rather than every repository in the company.
+- **A newer protocol only where it is needed.** A search asking context lines
+  or a per-file bound is asked at a newer protocol of the request, which a
+  Gitlet node of an earlier build does not answer, so its repositories are
+  asked of the next node of their order and, if none answers, named under
+  `not_answering`; any other search is answered by every build.
 
 Every answer carries its **coverage**, so a search that could not reach part
 of the company never reads as one that found nothing there. Each repository

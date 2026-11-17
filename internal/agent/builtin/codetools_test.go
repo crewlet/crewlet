@@ -2116,8 +2116,11 @@ const codeReadsCatalogueBudget = 22_100
 // above the thirteen reads' 16 954 as the session serves them now — so ~6%
 // headroom, the rule [codeCatalogueBudget] states. And code_log took `until`
 // and `pushed_by` within it, deliberately, with their measured cost: 21 375 →
-// 21 764 (~5 441 tokens), 389 bytes (~97 tokens), ~3% headroom left.
-const codeReviewCatalogueBudget = 22_500
+// 21 764 (~5 441 tokens), 389 bytes (~97 tokens), ~3% headroom left. And
+// code_search took `context` and `per_file` and named its `matches`,
+// deliberately, with their measured cost: 22 096 → 22 443 (~5 611 tokens),
+// 347 bytes (~87 tokens); raised to ~6% headroom again.
+const codeReviewCatalogueBudget = 23_800
 
 // THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET. A seat of a company hosting
 // code is offered the thirteen reads on every run of every turn, a review seat
