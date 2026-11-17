@@ -18,7 +18,7 @@
  * page loaded, so a reply on a later page joins its root.
  */
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { AsideLayout, Button, Stack, Tag, Textarea, useSendOnEnter } from "@crewlethq/ui";
 import {
   CheckGlyph,
@@ -47,6 +47,7 @@ import type {
   CodeReviewerRow,
   CodeRevisionRow,
 } from "~/protocol/index.ts";
+import { ownedPathList } from "../owners.ts";
 import { changeHref } from "../paths.ts";
 import { Byline, Face, ShaChip, useWhoName } from "../ui.tsx";
 import { Description } from "./Description.tsx";
@@ -229,27 +230,27 @@ function Earlier() {
   );
 }
 
-/** A path owner's globs in words: `a`, `a and b`, `a, b and c`, `a, b, c and 2 more`. */
-export function pathsWords(paths: readonly string[], omitted = 0): ReactNode {
-  const named = paths.map((p) => (
-    <span key={p} className="code-tl-path mono">
-      {p}
-    </span>
-  ));
-  const parts: ReactNode[] = omitted > 0 ? [...named, `${omitted} more`] : named;
-  return parts.map((part, i) => (
-    <span key={i}>
-      {i === 0 ? "" : i === parts.length - 1 ? " and " : ", "}
-      {part}
-    </span>
-  ));
-}
-
-/** Why a path owner was asked: which paths it owns, or that its facts predate them. */
+/** Why a path owner was asked: its paths, each as code, or that its facts predate them. */
 function ownerWords(ask: CodeReviewerRow): ReactNode {
-  const paths = ask.owned_paths ?? [];
-  if (paths.length === 0) return <>as an owner of paths it touches</>;
-  return <>as the owner of {pathsWords(paths, ask.owned_paths_omitted)}</>;
+  const { paths, more } = ownedPathList(ask);
+  if (paths.length === 0) return "as an owner of paths it touches";
+  const said: ReactNode[] = paths.map((path) => (
+    <code key={path} className="code-tl-path">
+      {path}
+    </code>
+  ));
+  if (more > 0) said.push(`${more} more`);
+  return (
+    <>
+      as the owner of{" "}
+      {said.map((part, i) => (
+        <Fragment key={i}>
+          {i === 0 ? "" : i === said.length - 1 ? " and " : ", "}
+          {part}
+        </Fragment>
+      ))}
+    </>
+  );
 }
 
 /** What a review did, in words: the verdict is never told by the disc's tone alone. */

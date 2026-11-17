@@ -612,12 +612,14 @@
   gap: var(--spacing-1);
 }
 
+/* A PATH AN OWNER'S ASK IS FOR, as code in the sentence. */
 .code-tl-path {
   padding: 0 var(--spacing-1);
   border-radius: var(--radius-sm);
   background: var(--color-surface-subtle);
   color: var(--color-text-primary);
   font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
 }
 
 .code-tl-note {

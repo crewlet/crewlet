@@ -1281,6 +1281,11 @@ test("an ask that stands is drawn where it was made, with when, and a path owner
     "SR sre was asked to review, as the owner of a/**, b/**, c/** and 2 more 24 minutes ago",
     "QA qa was asked to review, as an owner of paths it touches 24 minutes ago",
   ]);
+  // EACH GLOB IS CODE in the sentence; "2 more" is words.
+  const rows = document.querySelectorAll<HTMLElement>(".code-tl-event__said");
+  const globs = (row: HTMLElement) => [...row.querySelectorAll("code")].map((c) => c.textContent);
+  expect(globs(rows[1]!)).toEqual(["internal/server"]);
+  expect(globs(rows[2]!)).toEqual(["a/**", "b/**", "c/**"]);
 });
 
 // PAST THE NOTICES' HORIZON an ask's time is said as earlier, never guessed.
