@@ -525,7 +525,8 @@ func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
 // socket has at most four queries in flight (stream.MaxInFlightQueries), but
 // a node serves every tab open on it, and REST bounds none. One slot would
 // queue every reader behind the longest archive; two let a second reader
-// through while one is read.
+// through while one is read. A collection's pass takes neither: its pool is
+// its own ([CollectionLargeReadsAtOnce]), so no transcript read spends its wait.
 //
 // A SEAT'S READ FOR WORDS holds one more text at its worst: the whole
 // redaction of an entry whose words could hold every term, which is at most a
@@ -554,13 +555,15 @@ var transcriptReads = make(chan struct{}, TranscriptReadsAtOnce)
 // one of these, and then one of the process's.
 //
 // ONE, INSIDE THE PROCESS'S TWO, never a pool beside them: a pool of its own
-// would double what reads can hold at their worst, about 100 MiB each. A node
+// would double what reads can hold at their worst, about 100 MiB each (a
+// collection's pool is apart, [CollectionLargeReadsAtOnce]: it decides a turn
+// within a wait, where a seat's read decides how fast a page comes). A node
 // runs every role in one process by default, so without it a node's seats
 // paging transcripts could fill both slots and queue a person's read behind
 // every one of them; with it, one slot is always a person's to take while a
 // seat reads. A node that runs seats alone serves no person a transcript, and
-// its seats' reads take turns in one slot: each is bounded, and a seat's page
-// is a fraction of a person's.
+// its seats' reads take turns in one slot: each bounded, a seat's page a
+// fraction of a person's.
 //
 // A RELAUNCH'S READING TAKES IT TOO ([Runner.ReadHoldings]): which of its
 // round's calls the cut-off session it continues holds, read off the kept

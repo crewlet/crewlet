@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -184,11 +185,32 @@ type scrubBounds struct {
 	plain int64
 	// piece is the most it holds whole.
 	piece int
+	// large is what the scrub waits on before it holds a piece past
+	// [collectionBaseLineBytes] ([scrubBounds.gatedBy]); nil where no slot
+	// gates the scrub's pieces.
+	large func() error
 }
 
 // boundsFor is the scrub of an archive of at most archiveMax bytes.
 func boundsFor(archiveMax int64) scrubBounds {
 	return scrubBounds{plain: scrubExpansion * archiveMax, piece: scrubPieceMaxBytes}
+}
+
+// gatedBy is b with every piece past the base held under large's one slot,
+// waited for within ctx: a take's scrub, one pass with its meter (the package
+// doc's "A collection's read of a thread").
+func (b scrubBounds) gatedBy(ctx context.Context, large *passBudget) scrubBounds {
+	b.large = func() error { return large.escalate(ctx) }
+	return b
+}
+
+// pieceSource is src beneath a scrub's line reader: past the base, a line
+// waits for b's slot before its bytes are handed on ([lineRun]).
+func (b scrubBounds) pieceSource(src io.Reader) io.Reader {
+	if b.large == nil {
+		return src
+	}
+	return &lineRun{r: src, escalate: b.large}
 }
 
 // scrubber takes the engine's own values out of text.
@@ -696,7 +718,7 @@ func readLine(r *bufio.Reader, bound int) ([]byte, error) {
 
 // rewriteLines rewrites a file of one JSON value a line ([rewriteLine]).
 func rewriteLines(dst io.Writer, src io.Reader, s scrubber, b scrubBounds) error {
-	r := bufio.NewReaderSize(src, 64<<10)
+	r := bufio.NewReaderSize(b.pieceSource(src), 64<<10)
 	w := bufio.NewWriter(dst)
 	for {
 		line, err := readLine(r, b.piece)
@@ -940,7 +962,7 @@ func brokenDefinition(definition []byte) bool {
 // a value nested past [scrubDepthMax], before the decoder holds either
 // ([tokenBound]).
 func rewriteDocument(dst io.Writer, src io.Reader, s scrubber, b scrubBounds) error {
-	dec := json.NewDecoder(&tokenBound{r: src, bound: b.piece})
+	dec := json.NewDecoder(&tokenBound{r: src, bound: b.piece, large: b.large})
 	dec.UseNumber()
 	j := &jsonRewrite{out: bufio.NewWriter(dst), scrub: s}
 	for {
@@ -978,6 +1000,9 @@ type tokenBound struct {
 	run int
 	// depth is how many containers are open.
 	depth int
+	// large is waited on before a run past [collectionBaseLineBytes] is
+	// handed on ([scrubBounds.large]); nil once taken, or where none gates.
+	large func() error
 }
 
 func (t *tokenBound) Read(p []byte) (int, error) {
@@ -1012,6 +1037,12 @@ func (t *tokenBound) Read(p []byte) (int, error) {
 		}
 		if t.run > t.bound {
 			return 0, fmt.Errorf("%w: a JSON value of the session runs past %d bytes", errScrubBound, t.bound)
+		}
+		if t.run > collectionBaseLineBytes && t.large != nil {
+			if largeErr := t.large(); largeErr != nil {
+				return 0, largeErr
+			}
+			t.large = nil
 		}
 	}
 	return n, err
@@ -1185,13 +1216,22 @@ func (j *jsonRewrite) writeString(s string) error {
 // it is held until they come, and the rest once the text ends. Held, never
 // past the scrub's piece: a stretch still unsettled past it is refused.
 func rewriteText(dst io.Writer, src io.Reader, s scrubber, b scrubBounds) error {
-	r := bufio.NewReaderSize(src, 64<<10)
+	r := bufio.NewReaderSize(b.pieceSource(src), 64<<10)
 	w := bufio.NewWriter(dst)
 	var held []byte
 	// asked is how long the stretch was when the redaction was last asked.
 	asked := 0
+	gated := b.large == nil
 	for {
 		line, err := readLine(r, b.piece)
+		// A STRETCH OF SHORT LINES is a piece too: past the base, it waits for
+		// the slot before it holds more.
+		if !gated && len(held)+len(line) > collectionBaseLineBytes {
+			if largeErr := b.large(); largeErr != nil {
+				return largeErr
+			}
+			gated = true
+		}
 		if len(line) > 0 {
 			held = append(held, s.apply(string(line))...)
 		}

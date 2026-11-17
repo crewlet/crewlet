@@ -931,17 +931,14 @@ const chainPrefixBytes = 10
 //     for the reading's.
 //
 // THE COLLECTION'S PASS: a node's collection reads its job's main thread
-// once, in one walk of its whole lines ([walkThread]), for every reading it
-// asks of it, the resumed count ([resumedReading]) now, and the chain is
-// charged to that walk, a reading beside the count, never a read of its own.
-// That read takes none of the process's transcript slots
-// ([TranscriptReadsAtOnce]): a collection reads its own job's thread, within
-// the one wait its readings share (internal/sandbox's MainThreadReadWait), so
-// the slot it reads in is its own, held to what one transcript slot's read
-// holds at its worst, the about 133 MiB above. MEASURED as above, the chain
-// first and the count after it on each line, the order that holds the
-// message See hands back while the count decodes the same line, the times at
-// the default GOGC:
+// once, in one walk ([walkThread]) for every reading it asks, the resumed
+// count ([resumedReading]) now, the chain a reading beside it, never a read
+// of its own. Within its base it holds no token, past it the one slot of a
+// pool of its own ([CollectionLargeReadsAtOnce]), never a transcript slot:
+// the package doc's "A collection's read of a thread" derives both from
+// these figures. MEASURED as above, the chain first and the count after it
+// on each line (the message See hands back held while the count decodes the
+// same line), the times at the default GOGC:
 //
 //   - a thread at the plaintext's bound, the chain beside the count: 2.78 to
 //     2.85 s, against the chain's own 2.05 to 2.11 s in the same runs, End's
@@ -963,9 +960,9 @@ const chainPrefixBytes = 10
 //     them, 24 MiB each, past the slot; 101 to 102 MiB once it keeps no more
 //     of them than a uuid's bytes and a digest ([resumedReading]).
 //
-// So the pass holds 109 MiB at its worst, within the slot, and both bounds
-// stay at 2^17. Its peak at the default GOGC is 176 to 191 MiB, at that
-// reply's id.
+// So the pass holds 109 MiB at its worst, in its one large slot, and both
+// bounds stay at 2^17. Its peak at the default GOGC is 176 to 191 MiB, at
+// that reply's id.
 //
 // MISUSE IS ANSWERED, NEVER A PANIC, where a node's collection could reach
 // it: a line handed out of turn is whyLineGap; a question asked before End, or

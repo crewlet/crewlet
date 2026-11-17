@@ -96,12 +96,17 @@ type contextMeter struct {
 // newContextMeter starts a meter for an archive of layout holding session,
 // written by release (the box's word on its harness's release,
 // [sandbox.SessionArchive.Version]), read within ctx, the take's own: a take
-// cut short ends the walk, whose count is then unread.
-func newContextMeter(ctx context.Context, layout archiveLayout, session, release string) *contextMeter {
+// cut short ends the walk, whose count is then unread. Its walk is under the
+// take's large, which it gives back as it ends: it drains the take's last
+// byte, so it is the take's last reader.
+func newContextMeter(ctx context.Context, layout archiveLayout, session, release string,
+	large *passBudget) *contextMeter {
+
 	pr, pw := io.Pipe()
 	m := &contextMeter{pw: pw, done: make(chan struct{})}
 	go func() {
 		defer close(m.done)
+		defer large.release()
 		var (
 			n     int64
 			count *sandbox.ResumedCount
@@ -109,7 +114,7 @@ func newContextMeter(ctx context.Context, layout archiveLayout, session, release
 		)
 		switch layout {
 		case archiveTar:
-			n, count, err = meterArchive(ctx, pr, session, release)
+			n, count, err = meterArchive(ctx, pr, session, release, large)
 		case archiveDocument:
 			n, err = lastExportInput(pr)
 		}
@@ -150,11 +155,11 @@ func (m *contextMeter) count() *sandbox.ResumedCount {
 // meterArchive is the input of the last request a Claude Code archive's main
 // thread of session records, zero where it records none, and what Claude Code
 // counts the session at, read off ONE walk of that thread ([walkThread]) by
-// both readings. The count is marked where the archive's members say so (the
-// file comment) and unread where the archive does not read to its end; err is
-// the archive's own, where its gzip or tar framing failed.
-func meterArchive(ctx context.Context, r io.Reader, session, release string) (int64, *sandbox.ResumedCount,
-	error) {
+// both readings, under large. The count is marked where the archive's members
+// say so (the file comment) and unread where the archive does not read to its
+// end; err is the archive's own, where its gzip or tar framing failed.
+func meterArchive(ctx context.Context, r io.Reader, session, release string,
+	large *passBudget) (int64, *sandbox.ResumedCount, error) {
 
 	var (
 		callers countMarks
@@ -206,11 +211,11 @@ func meterArchive(ctx context.Context, r io.Reader, session, release string) (in
 			// figure reads the later as it always has.
 			callers = callers.with(sandbox.CountUnread)
 			figure = contextReading{}
-			walkThread(ctx, tr, threadPlainMax, &figure)
+			walkThread(ctx, tr, threadPlainMax, large, &figure)
 			continue
 		}
 		walked = true
-		walkThread(ctx, tr, threadPlainMax, &figure, &count)
+		walkThread(ctx, tr, threadPlainMax, large, &figure, &count)
 	}
 	if !walked {
 		callers = callers.with(sandbox.CountUnread)
