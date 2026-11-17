@@ -392,7 +392,9 @@
   display: inline;
 }
 
-.chat-body.has-after > :nth-last-child(3) {
+/* Four classes: the kit's reset of a message's block margins has three, and
+   its sheet lands after this one. */
+.prose.chat-body.has-after > :nth-last-child(3) {
   margin-bottom: var(--crewlet-chat-block-gap);
 }
 
