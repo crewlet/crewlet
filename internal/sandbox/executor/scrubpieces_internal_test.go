@@ -95,13 +95,10 @@ func cuttings(r *rand.Rand, n int) [][]int {
 	return ways
 }
 
-// A VALUE STREAM WRITES WHAT THE REPLACER DOES, HOWEVER THE TEXT IS CUT: what a
-// [valueStream] writes, put together, is [scrubber.apply] of the whole text
-// (today's strings.Replacer), whether the text arrives whole, a byte at a time
-// or cut at random, empty pieces among them. Over values that begin inside one
-// another, one another's starts, a value written across lines and its JSON
-// string's form, and texts holding them, their starts and the bytes between.
-// And it holds fewer bytes than its longest value from one piece to the next.
+// A VALUE STREAM WRITES WHAT THE REPLACER DOES, HOWEVER THE TEXT IS CUT, whole,
+// a byte at a time or at random, empty pieces among them: [scrubber.apply] of
+// the whole text, over values that begin inside one another, a value across
+// lines and its JSON string's form; holding fewer bytes than its longest value.
 //
 // Mutation: decide a place before the longest value's length of text from it
 // is read ([valueStream.step]), and a value cut across two pieces is kept;
@@ -253,13 +250,10 @@ func readKey(key string, at []int) bool {
 }
 
 // A KEY READ IN PIECES IS READ AS THE SAME KEY WHOLE: a [keyReading] handed a
-// key in pieces, whole, a byte at a time or cut at random (a rune's bytes
-// cut apart among them), names a credential exactly where the whole key's
-// reading does ([wholeKeyCredential]); and [credentialKey], a reading handed
-// the whole key, does too. Over keys of every word a credential's key is read
-// by, in more than one case, cut short and joined every way, runes that
-// lower to a letter of one, and bytes that begin no rune; each key short, or
-// long enough to pass every window the reading keeps.
+// key whole, a byte at a time or cut at random, names a credential exactly
+// where the whole key's reading does ([wholeKeyCredential]), as does
+// [credentialKey], over every word a credential's key is read by, cut and
+// joined every way, short keys and ones past every window.
 //
 // Mutation: keep none of a window when it fills, and a password's key or a
 // name across the cut is missed; read a piece's last bytes as runes before

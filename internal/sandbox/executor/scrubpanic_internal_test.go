@@ -14,14 +14,12 @@ import (
 )
 
 // A PANIC WHILE A `.json` FILE IS READ IS THE TAKE'S, AND LEAVES NOTHING OF THE
-// SCRUB RUNNING: the first reading reads a `.json` file both ways at once, as
-// a document and as text, and both readings run on the scrub's own goroutine,
-// the one the take contains a panic on (scrubContained), the document's
-// rewrite handing every byte it reads to the text's scrub. So a panic met
-// halfway through such a file, here the box's archive failing under the
-// rewrite's read, is the take's refusal, and no rewrite or redaction of the
-// file is left behind it. Read off every goroutine's stack once the take has
-// answered. Not in parallel: another case's scrub would be read as this one's.
+// SCRUB RUNNING: both of the first reading's ways through a `.json` file run on
+// the scrub's own goroutine, where the take contains a panic (scrubContained),
+// so a panic halfway through one (the box's archive failing under the
+// rewrite's read) is the take's refusal, with no rewrite or redaction of the
+// file left behind. Read off every goroutine's stack once the take has
+// answered; not in parallel, since another case's scrub would be read as this.
 //
 // Mutation: read the file's two readings on goroutines of their own, fed
 // through pipes, and the panic leaves both blocked on their pipes for good,

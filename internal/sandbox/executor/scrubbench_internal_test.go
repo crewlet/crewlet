@@ -18,40 +18,15 @@ import (
 )
 
 // BenchmarkTheScrubAtThePlaintextBound scrubs a session at the plaintext one
-// reading of an archive at its bound reads (scrubExpansion times
-// executorkeep.SessionMaxBytes, 256 MiB), both readings of the tar, from a file
-// on disk, as the take does once the box has handed the archive over:
-//
-//   - one string: a transcript of one line holding one string to the bound, a
-//     whole PDF's base64 as Claude Code writes it, past every bound the scrub
-//     once held a value to;
-//   - a million short lines: a transcript of a million records of about 160
-//     bytes each, a string and a key or two apiece, 160 MiB of them: a line a
-//     record, each read both ways in the first reading;
-//   - tiny definitions: one loaded-tools record whose list is `1` to the
-//     bound, each element a definition the line loses since the line holds a
-//     marker: the plan's bits at their most, a bit for every two bytes.
-//
-// Each reports the time a scrub takes (s/scrub), the plaintext and the archive
-// in MiB, and what it held at most (held-MiB): the heap in use after a
-// collection at every sixty-fourth read of its archive, less the heap before
-// it, read on one more scrub after the timed ones ([heapSampler]).
-//
-// Recorded on two efficiency cores of a laptop shared with other work,
-// 2026-11-15:
-//
-//	one string:              40.6 s a scrub, held 18.6 MiB (256 MiB from 28 MiB)
-//	a million short lines:   19.9 s a scrub, held 1.6 MiB (160 MiB from 19 MiB)
-//	tiny definitions:        21.7 s a scrub, held 25.5 MiB (256 MiB from 0.5 MiB)
-//
-// AGAINST internal/sandbox's SessionScrubWait, two minutes, which bounds the
-// whole take's scrub, the archive's two readings out of a box at its floor
-// pace of a mebibyte a second among it: 64 s for an archive at its 32 MiB
-// bound read twice, so 56 s are left for the scrub's own work where the two do
-// not overlap. Each arm fits, the string the closest, since its first reading
-// redacts it twice (as JSON and as text, side by side) and its second once.
-// Held, each is well within scrubHeldBytes's figure at the bound (about 103
-// MiB), which counts the stages of both redactions at their worst.
+// reading of an archive at its bound reads (256 MiB), both readings of the
+// tar, from a file on disk, as the take does: one string to the bound (a whole
+// PDF's base64), a million short lines of about 160 bytes, and one
+// loaded-tools record whose list of tiny definitions all lose their line (the
+// plan's bits at their most). Each reports s/scrub, the plaintext and archive
+// in MiB, and held-MiB, the heap in use after a collection at every
+// sixty-fourth read less the heap before ([heapSampler]). The figures, against
+// SessionScrubWait and scrubHeldBytes, are in the package doc's "The scrub's
+// bounds, and what it holds".
 //
 //	go test -run '^$' -bench '^BenchmarkTheScrubAtThePlaintextBound$' -benchtime 1x -timeout 30m
 func BenchmarkTheScrubAtThePlaintextBound(b *testing.B) {

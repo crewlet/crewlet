@@ -196,19 +196,16 @@ func (o *rewriteOut) look(p []byte) {
 	o.tail = append(o.tail[:0], joined[max(0, len(joined)-keep):]...)
 }
 
-// jsonStringWriter writes a text that arrives in pieces as one JSON string, escaped
-// as plainjson escapes: what it writes for a text cut anywhere is
+// jsonStringWriter writes a text that arrives in pieces as one JSON string,
+// escaped as plainjson escapes: what it writes for a text cut anywhere is
 // plainjson.Marshal of the whole text, which a test holds it to.
 //
-// A PIECE MAY END INSIDE A RUNE (redact.Stream cuts its writes anywhere), so
-// the bytes of a rune a piece ended inside wait for the next piece: escaped
-// alone, a rune's first bytes would read as bytes that begin none, each
-// written as U+FFFD. At the text's end ([jsonStringWriter.end]) what waits is the
-// text's last bytes, read as the whole text's encoding reads them.
-//
-// AND IT KEEPS THE TEXT'S FIRST capMax BYTES as written to it, unescaped, for
-// a reader that judges a short text by what it says ([definitionsReading]):
-// over says the text ran past them.
+// A PIECE MAY END INSIDE A RUNE (redact.Stream cuts its writes anywhere), so a
+// rune's cut bytes wait for the next piece rather than each being written as
+// U+FFFD; at the text's end ([jsonStringWriter.end]) they are read as the
+// whole text's encoding reads them. It keeps the text's first capMax bytes as
+// written, for a reader that judges a short text by what it says
+// ([definitionsReading]); over says the text ran past them.
 type jsonStringWriter struct {
 	out   *rewriteOut
 	held  [utf8.UTFMax - 1]byte
@@ -791,17 +788,14 @@ func (j *jsonRewrite) text(key *keyReading, capMax int) error {
 // definitionsReading is the first reading's half of the cut of a transcript
 // line's loaded tool definitions ([loadedToolsRecord] says which and why): it
 // reads, as the line is rewritten, whether the rewritten line holds
-// [redact.Marker], which of its loaded-tools attachments JSON.parse reads (the
-// last `attachment` of the line's object, and of it the last `type` and the
-// last `entries`), and, of each list it reads, which definitions are broken
-// (no object, or named outside what [providerToolName] takes) and how many
-// bytes the rewrite wrote of them. Once the line is read whole,
-// [definitionsReading.decide] says whether it loses definitions and which.
+// [redact.Marker], which loaded-tools attachment JSON.parse reads (the last
+// `attachment`, and of it the last `type` and `entries`), and of each list
+// which definitions are broken and how many bytes the rewrite wrote of them.
+// Once the line is read whole, [definitionsReading.decide] says whether it
+// loses definitions and which.
 //
-// ITS STATE IS A BIT FOR EACH ELEMENT of the lists it reads, of the list being
-// read and of the last one read before it, which a later `entries` or
-// `attachment` replaces: so at most a bit for each two bytes of the line, an
-// element and its comma.
+// ITS STATE IS A BIT FOR EACH ELEMENT of the list being read and of the last
+// one read before it, so at most a bit for each two bytes of the line.
 type definitionsReading struct {
 	// chosen is what the line's last attachment read holds, the one
 	// JSON.parse reads; none where the last was no object.

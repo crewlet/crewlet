@@ -93,31 +93,14 @@ import (
 // threadLineMax is the longest line the thread layer reads, its break
 // included: 8 MiB.
 //
-// PAST IT, A READING FAILS CLOSED. [threadReader.Next] answers
-// errThreadBound, and every reader on the layer turns that into no reading
-// or cannot tell. A longer line costs its thread a reading, never a false
-// hold.
-//
-// IT BOUNDS THE READER'S MEMORY, NOT WHAT A SESSION HOLDS, and it is the
-// layer's own, never the take's scrub's: the scrub's bounds are what a kept
-// session is refused past, and Claude Code itself keeps no line bound, a
-// whole-PDF Read writing 55,924,056 bytes on one line at its 20 MiB file
-// limit.
-//
-// 8 MiB keeps one line's decode within the slot a reading takes. Measured
-// with BenchmarkAThreadChainAtItsBounds, arm the_reading_line_beside_it: a
-// line at this bound of the smallest results a message holds, decoded by
-// See beside a chain at both of its bounds, held 101 MiB at most (the
-// largest live heap, the collector at GOGC=10). A relaunch's reading of the
-// same line after the same thread held 102 MiB (BenchmarkAReadingAtItsBounds),
-// and a node's collection 109 MiB at its worst line, a reply's id at this
-// bound of bytes no UTF-8 holds, which the count and the chain each decode
-// (arm the_counts_id_line_beside_it). Each is within the about 133 MiB a
-// seat's read for words holds at its worst in one transcript slot
-// ([SeatTranscriptReadsAtOnce]), what a reading in that slot and a node's
-// collection are both held to. [threadChain]'s and [Runner.ReadHoldings]'s
-// bounds are stated at these figures, so another value runs those benchmarks
-// again.
+// PAST IT, A READING FAILS CLOSED: [threadReader.Next] answers errThreadBound,
+// which every reader turns into no reading or cannot tell, never a false hold.
+// It bounds the reader's memory, not what a session holds, and is the layer's
+// own, never the scrub's, which keeps a line of any length. 8 MiB keeps one
+// line's decode within the slot a reading takes, measured by
+// BenchmarkAThreadChainAtItsBounds and BenchmarkAReadingAtItsBounds, so
+// another value runs those again (the package doc's "A Claude Code thread is
+// read a whole line at a time").
 const threadLineMax = 8 << 20
 
 // threadPlainMax is the most of one member a reader reads: the plaintext one

@@ -19,110 +19,15 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// THE SCRUB A KEPT SESSION LEAVES ITS BOX THROUGH.
-//
-// A session is a harness's whole transcript — every file it read, every
-// command's output — and what leaves a box passes the engine's secret
-// redaction, as every other text read out of one does (code-sandbox.md). Two
-// passes, in this order:
-//
-//  1. BY VALUE: every secret the engine itself put in the box — its login,
-//     its environment's credentials — is taken out wherever it appears, in its
-//     raw form and in the form a JSON string holds it in, whatever its shape.
-//     A value redact's rules would never recognise (an operator's opaque
-//     token) is gone all the same. First, so the second pass sees the marker
-//     where the value was rather than a half it could not place.
-//  2. BY SHAPE: redact.Secrets, the one denylist every surface uses, which
-//     catches what the engine did not put there — a key the run printed.
-//
-// EACH FILE AS WHAT IT IS, so what is kept is still what its harness restores:
-//
-//   - A TRANSCRIPT, one JSON value a line (`.jsonl`): each value rewritten
-//     string by string — every string scrubbed and redacted as the text it
-//     decodes to, which is where a key's lines are lines again; every key of
-//     every object scrubbed and redacted the same way, so a secret a tool's
-//     structured result names a member by goes too; and a string or a number
-//     under a credential's own key taken out whole. A line that is not one
-//     JSON value (the last one of a job packed while it wrote, or a line of
-//     blanks) is scrubbed and redacted as text, the values in the forms a
-//     JSON string escapes them in among those it takes out. A RECORD KEEPS
-//     ITS LINE AND ITS KEYS: the transcript keeps every line, and each record
-//     every key in the order written, so Claude Code, which reads a session
-//     file past 5 MiB by where each line's keys sit, still finds every record
-//     where it did; what a record can lose is a loaded tool definition named
-//     outside what the provider takes, cut out of its line as written
-//     ([loadedToolsRecord]). Every key and string is written again
-//     ([jsonStringWriter]) as the text it decodes to, changed only where it held a
-//     secret: so an escape can come out spelled otherwise than its harness
-//     wrote it, and a lone surrogate's escape or a byte that is no UTF-8, each
-//     of which decodes to U+FFFD, comes out as U+FFFD.
-//   - A DOCUMENT (`.json`, and OpenCode's whole export): rewritten string by
-//     string as it streams, the same way, a token at a time, and one of
-//     blanks alone written as nothing ([rewriteDocument]). A `.json` file
-//     the rewrite cannot read as one JSON value — a task file its harness was
-//     killed while it wrote, which the run's own end packs as it finds it
-//     (a pack beside a harness still working refuses one it sees written,
-//     claudeHeldTar) — is redacted as text, as a transcript's torn line is,
-//     rather than costing the session.
-//   - ANYTHING ELSE, as text, scrubbed and redacted as it streams, so a rule
-//     that reads across lines sees them all.
-//
-// AND THE TAR'S OWN WORDS: a member's name is scrubbed by value and by shape
-// as the transcript's paths to it are ([memberName]), its header carries
-// nothing but its kind, name, mode, size and time — no owner, link target or
-// extended record of the box's — and a member that is neither a file nor a
-// directory (a link the box's own code made) is left out, since no harness
-// keeps its session in one.
-//
-// # No value held whole, and never more than the archive's bound
-//
-// A harness keeps no bound on one value: Claude Code writes a whole PDF it
-// read on one line of its transcript, its base64 twice, 55,924,056 bytes at
-// its 20 MiB file limit, and OpenCode keeps a message part of 27 MiB. So the
-// scrub holds NO LINE, STRING OR STRETCH OF TEXT WHOLE, and refuses none for
-// its length: JSON is read on internal/jsonscan, which hands a name's or a
-// string's decoded text over a piece at a time ([jsonRewrite]); every text is
-// taken out by value through a [valueStream], which holds fewer bytes than the
-// longest value, and redacted through redact.Stream, which writes exactly
-// redact.Secrets of the whole text within its stages' windows ([textScrub]);
-// and a transcript's line is never held to learn what it is ([measureLines]).
-//
-// What a line, or a `.json` file, is, JSON or text, is known only at its end,
-// and what a transcript's line loses of its loaded tool definitions only once
-// its last key is read; and a tar names each file's size before its bytes. So
-// a tar is read TWICE: the first reading reads each line and each `.json` file
-// both ways at once, counting what each would write, and keeps a PLAN of a
-// bit a line for which it is and of a bit a definition for which is cut
-// ([tarPlan]); the second writes what the first counted. An export is read
-// twice as well, the first reading dry, so a reading that refuses writes
-// nothing ([scrubDocument]). Every rewrite here is a pure function of what it
-// reads, so the second reading writes what the first counted.
-//
-// The archive is the box's own: its code can write a gzip that expands a
-// thousandfold, a value nested a million deep, or a session of nothing but
-// text the redaction has to read. So the scrub reads at most [scrubExpansion]
-// times the archive's bound of plaintext in one reading and rewrites no value
-// nested deeper than jsonscan.MaxDepth as JSON (a transcript's line or a
-// `.json` file so nested is text, and an export is refused); a session past
-// the first, or one the redaction refuses ([errRedaction]: its stream decided
-// a window before what it read there was known, redact.ErrDecidedEarly, at a
-// write or at its close), is refused, stamped with why, rather than costing
-// the engine host its memory; and the
-// whole scrub is held to the take's time (internal/sandbox's
-// SessionScrubWait).
-//
-// # What it holds
-//
-// AT MOST [scrubHeldBytes] of the plaintext bound, derived there from the
-// code's own figures: two text scrubs at once (a line's or a `.json` file's
-// two readings side by side, each redacting one text), each its redaction's
-// stages (redact.Stream's own figure) beside a [valueStream] and a string's
-// encoder; two JSON rewrites, each its scanner, its read buffer and a frame a
-// container open; the readers and writers of the archive's gzip and tar; and
-// the plan, at most a sixteenth of the plaintext ([tarPlan]). About 103 MiB at
-// the archive's bound, 16 MiB of it the plan, which a real session leaves
-// nearly empty; a test holds the figure at a smaller bound, and
-// BenchmarkTheScrubAtThePlaintextBound measures it at the real one.
+// THE SCRUB A KEPT SESSION LEAVES ITS BOX THROUGH: every secret the engine put
+// in the box taken out by value, then redact.Secrets by shape, each file
+// rewritten as what it is (a transcript line by line, a document a token at a
+// time, anything else as text) so its harness still restores it, and the tar's
+// own words scrubbed too. No line, string or stretch of text is held whole or
+// refused for its length; a tar and an export are each read twice, from a plan
+// of bits; and the scrub is held to its bounds and to [scrubHeldBytes]. The
+// argument is the package doc's: "A kept session leaves its box scrubbed",
+// "The scrub holds no value whole" and "The scrub's bounds, and what it holds".
 
 // archiveLayout is how a harness's archive is laid out.
 type archiveLayout int
@@ -285,20 +190,10 @@ func (s scrubber) apply(text string) string {
 // valueStream is the by-value pass over a text that arrives in pieces, cut
 // anywhere: what it writes to w, put together, is [scrubber.apply] of the
 // whole text, however the text was cut, once Close has written the last of it.
-//
-// AS THE REPLACER DECIDES, A PLACE AT A TIME: from the text's start, the
-// longest value that begins at a place is taken out and the reading goes on
-// after it, and where none begins the place's byte is kept and the reading
-// goes on at the next; so a value is taken out leftmost, and longest where
-// values begin at the same place, as strings.Replacer takes the first of its
-// pairs, which [newScrubber] orders longest first.
-//
-// IT HOLDS FEWER BYTES THAN THE LONGEST VALUE from one piece to the next, and
-// reads a piece where it lies: a place is decided once the longest value's
-// length of text from it is read, or the text has ended, so only a place
-// nearer a piece's end than that waits for the next piece. A value taken out
-// lies whole within the bytes its place is decided on, so the stream carries
-// nothing else from piece to piece.
+// It decides a place at a time as the replacer does, a value taken out
+// leftmost and longest first, and holds fewer bytes than the longest value
+// from one piece to the next. The package doc's "The scrub holds no value
+// whole" says why.
 type valueStream struct {
 	w      io.Writer
 	values *valueTable
@@ -453,38 +348,13 @@ func jsonEscaped(s string) string {
 }
 
 // credentialKey reports whether a JSON object's key names a credential, whose
-// string value is taken out whole however it is shaped: a login's tokens, a
-// tool call's password or API key, a cloud session's token. Read on the key's
-// own words, lowercase: a password's, as redact names them
-// (redact.NamesPassword), `token`, `key` and `auth` exactly, or one of the
-// names a credential carries — an API key and an API token, the access token a
-// login holds and the token that refreshes it, a cloud session's token, which
-// AWS names a session token and a security token both, an auth token and a
-// bearer token, a private key and a private token (GitLab's header), the
-// authorization a request carries, a secret, a credential itself, an OpenID
-// Connect ID token ([keyReading.idToken]), and the identity token and registry token
-// a Docker config holds beside a registry's `auth`, which is its user and
-// password encoded.
-//
-// THE NAMES ARE READ WITH THE KEY'S SEPARATORS DROPPED, since each format joins
-// a name's words its own way: a session's token is `aws_session_token` in AWS's
-// credentials file, `SessionToken` in what STS answers and `sessionToken` in
-// what Roles Anywhere does, one name once the separators are gone; and a
-// request's header joins its words with hyphens, so AWS's
-// `X-Amz-Security-Token` is read by its security token, and an API key's
-// `x-api-key` and GitLab's `PRIVATE-TOKEN` by theirs. Spelled out per
-// separator, the names missed every header's.
-//
-// NOT `token`, `key` OR `auth` AT LARGE, which only the whole key is read as:
-// a transcript counts its tokens and names its sessions in keys of its own
-// (`input_tokens`, `sessionId`), an access key's id is no secret
-// (`AccessKeyId`), a commit's author and a server's OAuth settings are no
-// credential (`author`, `oauth_provider`), and a value under one is none.
-//
-// ONE READING, IN PIECES OR WHOLE: credentialKey is a [keyReading] handed the
-// whole key at once, and a reader that has a key's decoded text a piece at a
-// time hands one each piece, so a key cut anywhere is read as the same key
-// whole and the rule has one implementation.
+// string or number value is taken out whole however it is shaped: read on the
+// key's own words, lowercase, with its separators dropped, `token`, `key` and
+// `auth` only as the whole key, and an OpenID Connect ID token's `id` only as a
+// word of its own ([keyReading.idToken]). It is a [keyReading] handed the whole
+// key, so a key read in pieces and one read whole share one rule. The names,
+// and why neither the separators nor the short words are read at large, are in
+// the package doc's "A kept session leaves its box scrubbed".
 func credentialKey(key string) bool {
 	var k keyReading
 	k.WriteString(key)
@@ -522,18 +392,10 @@ var keyReadingReach = func() (r struct{ whole, name, password int }) {
 // credential, [credentialKey]'s reading of the whole key.
 //
 // ITS STATE DOES NOT GROW WITH THE KEY, since a box's code can write a key a
-// gibibyte long. It holds the bytes of a rune a piece ended inside (three at
-// most); the key lowered for as long as it is no longer than the longest whole
-// key; the key's last runes, as written, in a window twice the most a
-// password's key spans, asked of [redact.NamesPassword] each time it fills and
-// cut back to one rune fewer than that span, so a key the window has not yet
-// seen whole is still in it; the lowered key's last letters and digits, in a
-// window twice the longest name, read for every name and cut back the same
-// way; and how far an ID token has read ([keyReading.idToken]), a few words.
-//
-// EVERY RUNE AS THE WHOLE KEY'S READING DECODES IT: a byte that begins no rune
-// is U+FFFD wherever the key is cut, since a piece's last bytes wait for the
-// next piece until they are a whole rune or none ([utf8.FullRune]).
+// gibibyte long: a rune's cut bytes, the key lowered while it is short, and two
+// windows over its last runes, each cut back to one fewer than its span when it
+// fills (the package doc's "A kept session leaves its box scrubbed"). A byte
+// that begins no rune is U+FFFD wherever the key is cut ([utf8.FullRune]).
 type keyReading struct {
 	// cut is the bytes of a rune the last piece ended inside.
 	cut  [utf8.UTFMax - 1]byte
@@ -781,18 +643,13 @@ func scrubArchive(layout archiveLayout, first io.Reader, reopen func() (io.ReadC
 // scrubDocument streams a gzipped JSON document, rewritten string by string,
 // read TWICE: once dry, writing nothing, and again to write it.
 //
-// DRY FIRST, because a reading refuses a document only once it has read it: a
-// document that is no one JSON value, one past the plaintext a reading reads,
-// or text the redaction could not redact. Read once, the bytes rewritten
-// before the refusal would reach the take's pipe, its uploader, its checksum
-// and its context meter before the pipe ended in the error, a published key
-// among them where the redaction is what refused. So no byte of a reading that
-// refuses reaches any of them. The second reading writes what the first read,
-// and one that comes out another length, or that the scanner refuses where
-// the first read one value whole, is an export that changed between the two,
-// which fails as a tar's member that changed does; a second reading refused
-// for another reason (past the plaintext's bound, or by the redaction) says
-// that reason, as a first reading's refusal does.
+// DRY FIRST, because a reading refuses a document only once it has read it,
+// and read once, the bytes rewritten before a refusal would reach the take's
+// pipe, its uploader, its checksum and its meter, a published key among them
+// where the redaction refused. A second reading that comes out another length,
+// or that the scanner refuses, is an export that changed between the two; one
+// refused for another reason says that reason. The package doc's "The scrub
+// holds no value whole" has the whole argument.
 func scrubDocument(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writer, s scrubber,
 	b scrubBounds) error {
 
@@ -1007,18 +864,12 @@ func (c *counted) Write(p []byte) (int, error) {
 // whether it is kept as text because it is not JSON; a transcript's lines are
 // planned on plan ([measureLines]).
 //
-// A `.json` FILE IS READ BOTH WAYS AT ONCE, its bytes handed to a rewrite as a
-// document and to one as text: which it takes is known only once it has been
-// read through, and a tar member is read once in each reading.
-//
-// ON ONE GOROUTINE, THE SCRUB'S OWN: the document's rewrite reads the file
-// through a reader that hands every byte it reads to the text's scrub as well
-// ([teeRead]), as a transcript's line is read ([lineReader]), so every byte of
-// the file is rewritten and redacted where the take's containment of a panic
-// sees it (scrubContained). A goroutine for each reading, fed through pipes,
-// as the two were read until then, put the rewrite and the redaction of every
-// `.json` file a box wrote outside it, and a panic there ended the engine; and
-// a panic in the copy beside them left both blocked on their pipes for good.
+// A `.json` FILE IS READ BOTH WAYS AT ONCE, as a document and as text, ON ONE
+// GOROUTINE, THE SCRUB'S OWN: the rewrite hands every byte it reads to the
+// text's scrub ([teeRead]), so every byte is read where the take contains a
+// panic (scrubContained). Goroutines fed through pipes would put the file's
+// rewrite and redaction outside that containment (the package doc's "The scrub
+// holds no value whole").
 func measureFile(name string, body io.Reader, s scrubber, plan *tarPlan) (size int64, text bool, err error) {
 	switch path.Ext(name) {
 	case ".jsonl":
@@ -1112,35 +963,15 @@ func rewriteFile(name string, plan *tarPlan, end int, dst io.Writer, src io.Read
 // tarPlan is how the first reading of a tar decided to write it, which the
 // second reads back as it writes: three streams of bits ([planBits]), each
 // written by the first reading in the order it decides them and read by the
-// second in that same order, and nothing else, whatever the tar holds.
+// second in that same order, and nothing else, whatever the tar holds:
+// members (each one's kind, and a file's size as rewritten, whether it is kept
+// as text and how many line bits it took), lines (for each of two bytes or
+// more, whether it is kept as text) and cuts (for each line that loses a loaded
+// tool definition, where it lies, which list and which elements).
 //
-//   - members: for each member, its kind as the archive gave it, which the
-//     second reading must find again, and for a regular file its size as
-//     rewritten, whether it is kept as text (a `.json` file that is no JSON),
-//     and how many of lines' bits its transcript's lines took.
-//   - lines: for each line of two bytes or more before its break, of every
-//     transcript in turn, whether it is kept as text, since it is no JSON
-//     value ([measureLines]).
-//   - cuts: for each line that loses a loaded tool definition
-//     ([definitionsReading]), how many of lines' bits lie between it and the
-//     line of the cut before it, the list it loses them from as its line's
-//     containers count it, how many elements that list holds, and a bit for
-//     each, set for one cut.
-//
-// A LINE SHORTER THAN TWO BYTES HAS NO BIT: it is one byte or none, which no
-// pass by value or by shape changes, so it is the same whether it is read as
-// JSON (a digit) or as text, and both readings write it as text.
-//
-// SO THE PLAN IS AT MOST A SIXTEENTH OF THE PLAINTEXT, a bit for every two of
-// its bytes, beside a block of each stream's being filled: a member's header
-// is 512 bytes and its record a few dozen bits; a line with a bit is two bytes
-// or more; a list's element, a byte and its comma, takes one bit, and its cut
-// a few dozen bits more, which the loaded-tools record it is cut out of, some
-// seventy bytes, pays for. Nothing is kept for a member, a line or a cut but
-// its bits: a list or a record of its own for each, as the plan was first
-// written, cost a block or some dozen bytes a line, and let a box's archive of
-// a mebibyte, a transcript of short lines each losing a definition, hold the
-// engine host to gibibytes between the two readings.
+// SO IT IS AT MOST A SIXTEENTH OF THE PLAINTEXT, where a record for each
+// member, line or cut would let a box's small archive hold the host to
+// gibibytes (the package doc's "The scrub holds no value whole").
 type tarPlan struct {
 	members, lines, cuts planBits
 	// planned is the line after the last one the first reading cut, as
@@ -1458,53 +1289,17 @@ func writeLines(dst io.Writer, src io.Reader, s scrubber, plan *tarPlan, end int
 }
 
 // loadedToolsRecord is the `type` of the attachment Claude Code keeps in its
-// transcript for the tool definitions a session loaded through tool search.
-// A session resumed from the transcript sends each one again as a tool of
-// every request it makes (measured on 2.1.322).
+// transcript for the tool definitions a session loaded through tool search,
+// each sent again as a tool of every request a resumed session makes.
 //
 // A DEFINITION THE SCRUB RENAMED IS CUT OUT OF ITS LINE ([definitionsReading],
-// [definitionCut]): every loaded tool definition whose name the rewrite left
-// outside what [providerToolName] takes, where a marker stands where part of
-// the name was, and resent under that name the definition has every request of
-// the restored session refused. Left out, the session loads the tool again by
-// search when it needs it. A line that holds no marker loses nothing, since
-// the rewrite renamed nothing in it, a definition its writer named outside the
-// pattern included; one that holds a marker loses every definition named
-// outside the pattern, whoever named it so. A line that is not one JSON object
-// loses nothing either. The record is read as Claude Code's JSON.parse reads
-// it, its attachment, the attachment's type and its list each the last value
-// written under its key, each key by its name exactly; and a definition is
-// judged by the name Claude Code sends it under, its `name` exactly and the
-// last written, a value that is no string naming nothing, so a definition that
-// is no object, or names nothing, is cut where its line holds a marker.
-//
-// CUT OUT OF THE LINE AS THE REWRITE WROTE IT, each definition with the comma
-// that joined it to its list, every other byte of the line left where it was:
-// never the record decoded and written again, which wrote its keys sorted, the
-// attachment (a subagent's agentId before it) first and its list inside it.
-// Claude Code reads a session file past 5 MiB by the bytes of its lines, and
-// finds a record by where its keys sit, in two readings (read in 2.1.310 and
-// 2.1.322):
-//
-//   - 2.1.310, reading such a file as it does by default, takes a record for
-//     a subagent's only where `"isSidechain":true` sits in its line's first
-//     256 bytes, and walks the thread back from the last record it takes for
-//     the main thread's. A subagent's record written sorted, its list before
-//     that key, was that record: the walk began there, and records the
-//     subagent wrote after it were left out of the thread a relaunch resumed.
-//     2.1.322 looks for the key past those bytes as well.
-//   - Under CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP (a switch a managed settings
-//     file can set whatever a launch unsets), both prune such a file, taking a
-//     line for a record only where it begins `{"parentUuid":` and walking the
-//     main thread back from its last record through such lines alone. A
-//     record's line that begins otherwise ends that walk, and where the
-//     records the walk reached held half the file or less, every record above
-//     that line was pruned from the session a relaunch resumed.
-//
-// DECIDED IN THE FIRST READING, APPLIED IN THE SECOND: whether a line loses a
-// definition is known only at its end (the attachment's last `type`, its last
-// `entries`, a marker anywhere), and the second reading writes the list before
-// it reads that end.
+// [definitionCut]): one named outside what [providerToolName] takes, in a
+// line that holds a marker, would have every request of the restored session
+// refused. It is cut from the line as the rewrite wrote it, every other byte
+// where it was, never the record written again from a map, whose sorted keys
+// Claude Code misreads past 5 MiB; decided in the first reading, applied in
+// the second. The package doc's "A definition the scrub renamed is cut out of
+// its line" has the reading of both releases.
 const loadedToolsRecord = "deferred_tools_record"
 
 // providerToolNameMax is the longest name the provider takes for a tool.
@@ -1533,13 +1328,10 @@ func providerToolName(name string) bool {
 // value ends it on the scanner's *jsonscan.Error: more than one value, one
 // cut short, or one nested past jsonscan.MaxDepth.
 //
-// BUT A DOCUMENT OF BLANKS ALONE, or of nothing, holds no value, and is
-// written as nothing, as the scrub wrote one when it read documents on
-// encoding/json, whose decoder answers such a text with its end: blanks hold
-// nothing a harness reads, so a `.json` file of them is kept empty and an
-// export of them kept, empty, rather than refused as no JSON. A transcript's
-// line of blanks is read on its own and kept as its blanks, as every line
-// that is no JSON value is kept as its text ([measureLines]).
+// BUT A DOCUMENT OF BLANKS ALONE, or of nothing, holds no value a harness
+// reads, and is written as nothing rather than refused as no JSON, as
+// encoding/json's decoder answers such a text with its end. A transcript's
+// line of blanks is kept as its blanks ([measureLines]).
 func rewriteDocument(dst io.Writer, src io.Reader, s scrubber) error {
 	w := bufio.NewWriterSize(dst, 64<<10)
 	var out rewriteOut

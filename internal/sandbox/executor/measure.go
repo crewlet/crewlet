@@ -418,20 +418,11 @@ func skipNext(sc *jsonscan.Scanner) error {
 // one by [measuredPrompt]'s rule.
 //
 // THE MESSAGE IS THE ONE EVERY READER OF AN EXPORT TAKES ([openCodeMessage]),
-// so this and a session's transcript never disagree about what a message is,
-// its kind or its failure. A KEY AT A TIME, the export streamed: each of the
-// small values the measure reads, its type, its time, its tokens and its error,
-// is taken raw by its exact name and decoded on its own, by its keys exactly as
-// written ([openCodeMeasuredWire]), and every other field is passed over, so a
-// message's content is never held at all. Decoded by encoding/json into the
-// message's fields, the tokens were read with a key that differs from one they
-// declare only in case taken for that one, the last of the two written
-// winning.
-//
-// HELD TO [exportValueMaxBytes]: an error past it is one (it is no null), and
-// a type, a time or tokens past it is no message OpenCode writes, which the
-// meter reads as an export it cannot read and so measures nothing of, rather
-// than hold whatever a box wrote there.
+// read A KEY AT A TIME: its type, time, tokens and error each taken raw by its
+// exact name and decoded alone ([openCodeMeasuredWire]), the rest passed over
+// unheld; encoding/json would take the tokens under a key differing in case.
+// HELD TO [exportValueMaxBytes]: an error past it is still one (no null), and a
+// type, time or tokens past it no message OpenCode writes, measuring nothing.
 func exportMessageInput(sc *jsonscan.Scanner, first jsonscan.Kind) (int64, bool, error) {
 	if first != jsonscan.ObjectStart {
 		return 0, false, fmt.Errorf("%w: it holds %s where a message belongs", errNotExport, first)

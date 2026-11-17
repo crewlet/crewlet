@@ -584,18 +584,13 @@ type refusingWriter struct{ err error }
 func (f refusingWriter) Write([]byte) (int, error) { return 0, f.err }
 
 // THE SCRUB HOLDS NO MORE THAN THE FIGURE ITS DOC STATES, AND NOTHING THAT
-// GROWS WITH A STRING: a session of one string near a reading's plaintext
-// bound (a test's bound of 32 MiB, scrubHeldBytes's figure at it), scrubbed
-// both readings, holds at most that figure between two reads of its archive,
-// and a session of a string four times as long holds no more than a little
-// over what the shorter one held. Read off the heap in use after a collection
-// at every sixty-fourth read, against the heap in use before the scrub began,
-// the archive already in it: what the scrub carries from one read to the next,
-// which is what it holds, while what it allocates and lets go of within a read
-// is not. Not in parallel: another case's heap would be read as the scrub's.
-//
-// The figure itself is measured at the real bound, 256 MiB, by
-// BenchmarkTheScrubAtThePlaintextBound.
+// GROWS WITH A STRING: a session of one string near a test's plaintext bound
+// of 32 MiB, scrubbed both readings, holds at most scrubHeldBytes's figure
+// between two reads of its archive, and one four times as long no more than a
+// little over that. Read off the heap in use after a collection at every
+// sixty-fourth read against the heap before the scrub; not in parallel, since
+// another case's heap would be read as the scrub's. The real bound is
+// BenchmarkTheScrubAtThePlaintextBound's.
 //
 // Mutation: read a long string whole rather than through the streams, or hold
 // a transcript's line to learn what it is, and the longer string holds it.
@@ -701,16 +696,12 @@ func TestAKeptLineIsJSONWhereItWasAndItsTextWhereItWasNot(t *testing.T) {
 }
 
 // THE PLAN HOLDS AT MOST A SIXTEENTH OF THE PLAINTEXT, HOWEVER THE BOX SHAPES
-// ITS SESSION: between the tar's two readings the scrub holds its plan and
-// nothing else of the archive, and the plan is a bit for every two bytes of
-// plaintext at most, beside the blocks its streams are filling
-// ([planBlockBytes]); never a block, or a record, for each line it cuts or
-// each transcript it reads. Two shapes a box's code can write at will: a
-// transcript of short lines, each a loaded-tools record that loses its one
-// definition (the line holds a marker), and a tar of many small transcripts.
-// Read off the heap in use after a collection at the moment the second
-// reading opens the archive, against the heap in use before the scrub began.
-// Not in parallel: another case's heap would be read as the scrub's.
+// ITS SESSION: a bit for every two bytes beside the blocks its streams are
+// filling ([planBlockBytes]), never a block or a record for each cut line or
+// transcript, over a transcript of short lines each losing its one definition
+// and a tar of many small transcripts. Read off the heap after a collection
+// as the second reading opens the archive; not in parallel, since another
+// case's heap would be read as the scrub's.
 //
 // Mutation: keep a block of bits for each cut line, or a plan of its own for
 // each transcript, and the plan holds kibibytes a line or a member, far past
