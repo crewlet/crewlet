@@ -374,6 +374,16 @@ interface CodeSearchHit {
   text: string;
   /** The file's object id, whole. */
   blob: string;
+  /** Where `text` matched: byte offsets [start, end) into its UTF-8, at most 32. */
+  matches?: [number, number][];
+  /**
+   * The file's lines just before and after, where `context` was asked; a
+   * line another hit carries is not repeated.
+   */
+  before?: string[];
+  after?: string[];
+  /** How many lines of the file matched, where `per_file` was asked and the whole file read. */
+  file_matches?: number;
 }
 
 /**

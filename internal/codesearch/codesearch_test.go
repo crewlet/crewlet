@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/recordseal"
+	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -181,9 +182,14 @@ type fleet struct {
 	servers map[string]*codesearch.Server
 	silent  map[string]bool
 	order   func(replies [][]byte) [][]byte
+	// versions is the protocol of every request asked, in order.
+	versions []int
 }
 
 func (f *fleet) ask(ctx context.Context, request []byte, each func([]byte) bool) error {
+	if w, err := codesearch.NewWire(fleetRing); err == nil {
+		f.versions = append(f.versions, w.Admit(request, signedask.NewGuard(), time.Now()).Request.Version)
+	}
 	var replies [][]byte
 	for id, s := range f.servers {
 		reply, err := s.Answer(ctx, request)
@@ -280,6 +286,9 @@ func TestASilentNodeIsNamedInTheCoverage(t *testing.T) {
 // order, and a limit cuts exactly the first lines of the whole search — what
 // every repository's lines sorted together and cut would be.
 //
+// A search asking context and a per-file bound merges the same way, every hit
+// keeping the matches, lines around it and file total its node answered.
+//
 // Mutations: keep the replies' order instead of sorting, red; cut each node's
 // lines before the merge at a limit below the search's, red.
 func TestTheMergeIsExactWhateverAnswersFirst(t *testing.T) {
@@ -290,6 +299,7 @@ func TestTheMergeIsExactWhateverAnswersFirst(t *testing.T) {
 		r := indexed(name, []string{"git-a", "git-b", "git-c"}[i%3])
 		for j := range 4 {
 			h := line(fmt.Sprintf("p%d.go", (j*7+i)%5), j+1)
+			h.Matches, h.Before, h.After, h.FileMatches = [][2]int{{0, 6}}, []string{"before"}, []string{"after"}, j+1
 			r.lines = append(r.lines, h)
 		}
 		slices.SortFunc(r.lines, func(x, y gitlet.SearchHit) int {
@@ -311,7 +321,12 @@ func TestTheMergeIsExactWhateverAnswersFirst(t *testing.T) {
 	// 3 is under what amber's node holds of amber alone, so a node that cut
 	// its lines below the search's limit would lose the first lines of the
 	// whole search; 7 takes them from two nodes.
-	for _, limit := range []int{0, 3, 7} {
+	for _, limit := range []int{0, 3, 7, -2} {
+		around, perFile := 0, 0
+		if limit < 0 {
+			// The same cut once more, asked with context and a per-file bound.
+			limit, around, perFile = 7, 2, 1
+		}
 		want := all
 		if limit > 0 {
 			want = all[:limit]
@@ -328,8 +343,8 @@ func TestTheMergeIsExactWhateverAnswersFirst(t *testing.T) {
 				return out
 			}
 			q := query("needle")
-			q.Limit = limit
-			got, err := s.Search(context.Background(), q)
+			q.Limit, q.Context, q.PerFile = limit, around, perFile
+			got, err := s.Search(t.Context(), q)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -350,10 +365,11 @@ func TestTheMergeIsExactWhateverAnswersFirst(t *testing.T) {
 
 // A CODE QUERY IS BOUNDED AS KNOWLEDGE IS: a search's text past knowledge
 // search's bound is refused before anything is listed or asked, and one at it
-// is searched.
+// is searched. So are its context and per-file bounds, in the git read's own
+// sentence (gitlet.SearchQuery.ValidateBounds).
 //
 // Mutation: drop the grammar's check from validate, and the long query is
-// searched, red.
+// searched, red; drop the bounds' check, and a context of 4 is searched, red.
 func TestACodeQueryIsBoundedAsKnowledge(t *testing.T) {
 	t.Parallel()
 	r := indexed("alpha", "git-a")
@@ -368,6 +384,103 @@ func TestACodeQueryIsBoundedAsKnowledge(t *testing.T) {
 	}
 	if _, err := s.Search(context.Background(), query(strings.Repeat("q", knowledge.MaxQueryBytes))); err != nil {
 		t.Fatalf("a %d-byte search = %v, want it searched", knowledge.MaxQueryBytes, err)
+	}
+	reads := e.reads
+	for _, bound := range []struct {
+		field                   string
+		limit, context, perFile int
+	}{
+		{"search.context", 0, gitlet.MaxSearchContext + 1, 0},
+		{"search.context", 0, -1, 0},
+		{"search.per_file", 0, 0, gitlet.MaxSearchHits + 1},
+		{"search.limit", gitlet.MaxSearchContextHits + 1, 1, 0},
+		{"search.limit", gitlet.MaxSearchHits + 1, 0, 0},
+	} {
+		q := query("needle")
+		q.Limit, q.Context, q.PerFile = bound.limit, bound.context, bound.perFile
+		if _, err := s.Search(t.Context(), q); !errors.Is(err, gitlet.ErrInvalid) ||
+			!strings.Contains(err.Error(), bound.field+":") {
+			t.Errorf("a search of %+v = %v, want invalid naming %s", bound, err, bound.field)
+		}
+	}
+	if e.reads != reads {
+		t.Errorf("a search past its bounds read the estate %d times", e.reads-reads)
+	}
+}
+
+// A REQUEST IS STAMPED WITH THE PROTOCOL IT NEEDS: a plain search is asked at
+// the first protocol, which every build answers, and one asking context or a
+// per-file bound at codesearch.ContextProtocol, which an older build refuses
+// rather than answer short. An answerer refuses a request at a protocol past
+// its own, and one at the first that carries context, and replies at its
+// request's protocol, which its asker reads.
+//
+// Mutation: stamp every request codesearch.Protocol, red on the plain search;
+// stamp every one the first, red on the context search; reply at Protocol
+// whatever the request's, red.
+func TestARequestIsStampedWithTheProtocolItNeeds(t *testing.T) {
+	t.Parallel()
+	var repos []repo
+	for i, name := range []string{"alpha", "beta"} {
+		r := indexed(name, []string{"git-a", "git-b"}[i])
+		r.lines = []gitlet.SearchHit{line("a.go", 1)}
+		repos = append(repos, r)
+	}
+	e := &estate{repos: repos}
+	n := &node{}
+	f := newFleet(t, e, map[string]*node{"git-a": n, "git-b": {}})
+	s := searcher(t, e, f)
+	for _, tc := range []struct {
+		context, perFile, want int
+	}{{0, 0, 1}, {1, 0, codesearch.ContextProtocol}, {0, 1, codesearch.ContextProtocol}} {
+		f.versions = nil
+		q := query("needle")
+		q.Context, q.PerFile = tc.context, tc.perFile
+		got, err := s.Search(t.Context(), q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(f.versions, []int{tc.want}) || len(got.Hits) != 2 {
+			t.Errorf("context %d, per_file %d: asked at %v and answered %d hits, want protocol %d and both lines",
+				tc.context, tc.perFile, f.versions, len(got.Hits), tc.want)
+		}
+	}
+
+	srv, err := codesearch.NewServer(wire(t, fleetRing), "git-a", n, shareUnits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assign := map[string][]codesearch.Assigned{"git-a": {{RepoID: repos[0].ref.ID, Name: "alpha", Home: true}}}
+	for i, tc := range []struct {
+		version int
+		search  gitlet.SearchQuery
+		refused bool
+	}{
+		{1, gitlet.SearchQuery{Text: "needle", Mode: codeindex.ModeLiteral}, false},
+		{1, gitlet.SearchQuery{Text: "needle", Mode: codeindex.ModeLiteral, Context: 1}, true},
+		{1, gitlet.SearchQuery{Text: "needle", Mode: codeindex.ModeLiteral, PerFile: 1}, true},
+		{codesearch.ContextProtocol, gitlet.SearchQuery{Text: "needle", Mode: codeindex.ModeLiteral, Context: 1},
+			false},
+		{codesearch.Protocol + 1, gitlet.SearchQuery{Text: "needle", Mode: codeindex.ModeLiteral}, true},
+	} {
+		id := fmt.Sprintf("req-%d", i)
+		sealed, err := wire(t, fleetRing).SealRequest(codesearch.Request{Version: tc.version, ID: id,
+			Deadline: time.Now().Add(time.Minute), Asker: person, Search: tc.search, Assign: assign})
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := srv.Answer(t.Context(), sealed)
+		if tc.refused {
+			if err == nil || raw != nil {
+				t.Errorf("a request at protocol %d of %+v was answered", tc.version, tc.search)
+			}
+			continue
+		}
+		rep, why, err := wire(t, fleetRing).OpenReply(raw, id)
+		if err != nil || why != "" || rep.Version != tc.version || len(rep.Hits) != 1 {
+			t.Errorf("a request at protocol %d answered %+v (%q, %v), want its line at its protocol", tc.version,
+				rep, why, err)
+		}
 	}
 }
 
@@ -404,10 +517,12 @@ func TestARepositoryNamedTwiceIsSearchedOnce(t *testing.T) {
 // AN UNSIGNED SEARCH IS REFUSED: a request sealed under a key that is not the
 // fleet's, and the same request replayed, run nothing and answer nothing; a
 // request signed under a key the node does not hold runs nothing and answers
-// that it could not verify it; and the fleet's own request is answered.
+// that it could not verify it, at the request's own protocol; and the fleet's
+// own request is answered.
 //
 // Mutation: answer a request whatever Admit concluded, and the forged one
-// reads alpha as the person it names, red.
+// reads alpha as the person it names; answer Unverified at Protocol whatever
+// the request's: red.
 func TestAnUnsignedSearchIsRefused(t *testing.T) {
 	t.Parallel()
 	r := indexed("alpha", "git-a")
@@ -429,7 +544,9 @@ func TestAnUnsignedSearchIsRefused(t *testing.T) {
 		t.Errorf("a request the fleet did not sign answered %q, %v", reply, err)
 	}
 	other := recordseal.OneKey("k2", "a key this node does not hold")
-	unknown, err := wire(t, other).SealRequest(codesearch.Request{Version: req.Version, ID: "req-2",
+	// A plain search at the older protocol, whose asker drops a reply of another version.
+	plain := codesearch.ContextProtocol - 1
+	unknown, err := wire(t, other).SealRequest(codesearch.Request{Version: plain, ID: "req-2",
 		Deadline: req.Deadline, Asker: person, Search: req.Search, Assign: req.Assign})
 	if err != nil {
 		t.Fatal(err)
@@ -439,9 +556,9 @@ func TestAnUnsignedSearchIsRefused(t *testing.T) {
 		t.Fatalf("a request under a key this node does not hold = %v, want an answer that says so", err)
 	}
 	rep, why, err := wire(t, fleetRing).OpenReply(raw, "req-2")
-	if err != nil || why != "" || rep.Unverified == "" || len(rep.Repos) != 0 {
-		t.Errorf("the answer to a request under an unknown key = %+v (%q, %v), want Unverified and nothing read",
-			rep, why, err)
+	if err != nil || why != "" || rep.Unverified == "" || len(rep.Repos) != 0 || rep.Version != plain {
+		t.Errorf("the answer to a request under an unknown key = %+v (%q, %v), want Unverified at protocol %d "+
+			"and nothing read", rep, why, err, plain)
 	}
 	if len(n.asked) != 0 {
 		t.Fatalf("an unverified request read %v", n.asked)

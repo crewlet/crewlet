@@ -6159,7 +6159,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `code_check_log` | `{name, oid, check, attempt, target, object, offset, limit, read_level, …}` | `GET /gitlet/repos/{name}/checks/{oid}/{check}/{attempt}/log`. A page of the log a failed run kept |
 | `code_commit_marks` | `{name, commits, read_level, …}` | `GET /gitlet/repos/{name}/commit-marks`. What a history page draws beside up to 100 commits: where each one's checks stand, and the changes it merged and heads, with how each landed |
 | `code_counts` | `{repo, parts, read_level, …}` | `GET /gitlet/counts`. A scope's changes counted by state, the company's or one repository's, the company's repositories by kind and status, and the live entries of merge queues: see [Counting changes](../concepts/gitlet.md#counting-changes) |
-| `code_search` | `{q, mode, ignore_case, repo, path, ref, limit, read_level}` | [`GET /gitlet/search`](#get-gitletsearch). The lines that match a search across the repositories the caller may read, the commit each repository was searched at, and what was not searched. Read at no `session` floor: it answers at the tip it names |
+| `code_search` | `{q, mode, ignore_case, repo, path, ref, limit, context, per_file, read_level}` | [`GET /gitlet/search`](#get-gitletsearch). The lines that match a search across the repositories the caller may read, the commit each repository was searched at, and what was not searched. Read at no `session` floor: it answers at the tip it names |
 | `chat_channels` | `{include_archived, unread, limit, with, read_level, …}` | `GET /chatlet/channels`. `{channels, read_state, read, default_private, truncated, unreadable}` plus the read's `read_level`, `complete` and `position`. Each room carries the reader's own summary (the room, its revision, the last message, its participants), with `unread` counted above the caller's cursor over the room's posts (a reply in a thread is read there and does not count) and stopped at 100 (`unread_capped` says it stopped), `mentions` (how many of those name the caller or the whole room with `@channel`; room events, the caller's own messages and tombstones are never counted), and `muted`. `with` (a seat's handle) keeps only the caller's rooms that seat is also in, which is how a profile lists the rooms two people share. `read` is the caller's WHOLE read state, named by their seat and carrying its `revision`, the order a screen keeps it against the `chat_cursor_moved` pushes by; `read_state: false` says the coordination record could not be read, and then every badge is zero, every mute absent and `read` absent with them: an unknown cursor is never a cursor at zero, which would badge every room with its whole history. `default_private` is what a room created without a stated visibility will be (`chat.chatlet.default_channel_private`), so the create form opens on the company's own default. An archived room is left out unless `include_archived=true`. `limit` (1 to 256, every room by default) answers the most recently active that many, cut from the one list sorted by activity and never paged; `unread=true` keeps only the rooms with something unread, and is refused `503 unavailable` while the read state cannot be read, since zeroed counts would say nothing is unread. `truncated` says rooms were left out: the caller is in more than 256, or more matched than `limit`. See [Chatlet](#chatlet) |
 | `chat_channel` | `{channel_id, read_level, …}` | `GET /chatlet/channels/{channel_id}`. The room, its revision, its message count, its members and whether the caller is one. Here and in `chat_messages` and `chat_thread`, `channel_id` is the room's id or its name, with or without the `#` people write before it, so a room the caller is not in is reached by the name everybody calls it |
 | `chat_messages` | `{channel_id, cursor, limit, read_level, …}` | `GET /chatlet/channels/{channel_id}/messages`. `{channel_id, messages, next_cursor, unreadable}` plus the read's level and position. The page holds the room's own posts and room events, never a reply: a reply is read in its thread (`chat_thread`). The cursor is the room's own message number, sent back as it was answered, so it steps over the replies between two posts; a cursor the room refuses is `400 bad_params` in the domain's own words. A room post somebody replied to carries `thread`: `replies` (a tombstone included), `last_reply_at`, `last_reply_position`, `repliers` (the first three, in the order they first replied) and `replier_count`. A row with `event` is a room event, the room's own change rather than anything said (see [Chatlet](../concepts/chatlet.md#a-room-says-what-changed-in-it)). A person's message carries `message.reach` (`recipients`, each `{handle, reason}`, empty when it reached no agent), `answered` (each `{handle, message_id, at}`: the seat spoke in its thread, or anywhere after it in a direct conversation) and `delivery` (`no_agent`, `waiting`, `partly_answered` or `answered`, and `unknown` for a person's message stored before messages recorded their reach, which is not `no_agent`; absent on an agent's message and a room event) |
@@ -10510,11 +10510,17 @@ unfiltered search, and a `repo:` naming one is `403 not_permitted`.
 | `ignore_case` | `true` folds case; `false`, unset, does not |
 | `repo`, `path`, `ref` | One more filter each, beside those `q` writes: a repository or a path widens the search, and a `ref` beside a different `ref:` is refused, as two `ref:` filters are |
 | `limit` | The most lines answered, 1–500; unset or `0` is 500 |
+| `context` | The lines of the file answered on each side of each line, 0 to 3; unset or `0` is none. With it, `limit` is at most 100, and unset is 100 |
+| `per_file` | The most lines answered of one file, 1 to 500; unset or `0` is every line. With it, each line names `file_matches`, how many lines of its file matched |
 | `read_level` | The level the caller's repositories are listed at: `stale` (unset), `linearizable` or `consistent_prefix`, with `max_lag_seconds` and `max_lag_seq` beside `stale` |
 
 The answer is `hits` — each line's `repo`, `path` (`path_b64` beside it for
-bytes that are not UTF-8), `line`, `text` (at most 256 bytes of it) and `blob`,
-the file's object id — in the order of repository, path and line; `tips`, the
+bytes that are not UTF-8), `line`, `text` (at most 256 bytes of it), `blob`,
+the file's object id, and `matches`, where the search matched in `text` as
+byte offsets `[start, end)`, at most 32; with `context`, `before` and `after`,
+the file's lines around it, a line another answered line carries not
+repeated; and with `per_file`, `file_matches` — in the order of repository,
+path and line; `tips`, the
 commit each repository with a hit was searched at, by its name; and
 `coverage`, what the search did and did not reach: `searched`, `building`,
 `stale`, `not_answering`, `not_permitted`, `no_ref`, `past_limit`,
@@ -10536,7 +10542,9 @@ ago is listed for an unfiltered search at `read_level=linearizable`.
 Its refusals are the code reads' ([above](#the-code-reads)), and beside them
 `400 bad_params` for a `q` that is missing, past 400 bytes, holds no run of
 three characters to look up, or whose expression does not compile; a `mode`
-that is none of the three; a `limit` past 500; and a search naming more than
+that is none of the three; a `limit` past 500; a `context` past 3, a
+`per_file` past 500, and a `limit` past 100 beside `context`; and a search
+naming more than
 eight `search: grep` repositories. A repository a `repo:` names that nobody
 declared is `404 not_found` with `"reason": "not_declared"`, naming it.
 
