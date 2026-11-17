@@ -1032,3 +1032,62 @@ test("a pairing the engine refuses is said in place and never asked", async () =
   await settled(() => asked.length);
   expect(listings(asked)).toHaveLength(0);
 });
+
+// AN OWNER'S ASK NAMES THE PATHS THE READER OWNS, and facts older than them say less, never a guess.
+// Mutation: drop the paths, count the omitted ones wrong, or guess paths where none are named.
+test("an owner's ask names the paths the reader owns, and says less where its facts predate them", async () => {
+  const asked = (n: number, owned_paths?: string[], owned_paths_omitted?: number) =>
+    change("web", n, {
+      card: {
+        comments: 0,
+        reviews: 0,
+        changes_requested: 0,
+        reviewers: [
+          {
+            handle: "jane",
+            kind: "person",
+            asked: true,
+            reason: "path_owner",
+            owned_paths,
+            owned_paths_omitted,
+          },
+        ],
+      },
+    });
+  stubFetch(
+    engine(
+      [asked(80, ["internal/server"])],
+      [
+        asked(80, ["internal/server"]),
+        asked(81, ["internal/server", "internal/render"]),
+        asked(82, ["internal/server", "internal/render"], 2),
+        asked(83),
+      ],
+    ),
+  );
+  mount(<Changes />);
+  const box = await screen.findByRole("region", { name: "Waiting on you" });
+  expect(
+    within(box).getByText(
+      "Engineer's change touches internal/server, which you own: your review is asked",
+    ),
+  ).toBeTruthy();
+  expect(
+    within(box).getByText(
+      "Engineer's change touches internal/server and internal/render, which you own: your review is asked",
+    ),
+  ).toBeTruthy();
+  expect(
+    within(box).getByText(
+      "Engineer's change touches internal/server, internal/render and 2 more, which you own: your review is asked",
+    ),
+  ).toBeTruthy();
+  expect(
+    within(box).getByText("Engineer's change touches paths you own: your review is asked"),
+  ).toBeTruthy();
+  const list = await theList();
+  const faces = rowOf(list, "Change 80 of web").querySelector(".code-change-faces")!;
+  expect(faces.getAttribute("aria-label")).toBe(
+    "Reviewers: You were asked to review: it waits on you, as the owner of internal/server",
+  );
+});

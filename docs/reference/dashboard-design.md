@@ -8710,8 +8710,9 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   its walk can order by it (Newest where an owner or a work item narrows), held and said
   elsewhere, and the address keeps the reader's density. A pairing the engine refuses (a need
   beside an ended state, Waiting on me beside an owner or a reviewer) is said, never sent.
-  **Waiting on you** lists the engine's `needs=me` with why each waits; a reader bound to no
-  seat sees what waits on a person.
+  **Waiting on you** lists the engine's `needs=me` with why each waits (an owner's ask names
+  the paths the reader owns, where the facts name them); a reader bound to no seat sees what
+  waits on a person.
   A row opens the
   change in the peek (`peek=change:web!42`), which reads the change itself
   (`code_change`): its branches, owner, revisions and work item (the owner's

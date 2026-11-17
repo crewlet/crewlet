@@ -196,6 +196,14 @@ function namesSaid(names: readonly string[], more = 0): string {
   return `${all.slice(0, -1).join(", ")} and ${all[all.length - 1]}`;
 }
 
+/** The paths an owner's ask is for, in a sentence; empty where the facts name none. */
+function ownedPaths(face: CodeReviewerFace): string {
+  return namesSaid(
+    face.owned_paths ?? [],
+    face.owned_paths?.length ? (face.owned_paths_omitted ?? 0) : 0,
+  );
+}
+
 /** What one reviewer's face says: their verdict on a revision, or the ask that waits. */
 export function faceSentence(face: CodeReviewerFace, name: string, you: boolean): string {
   const who = you ? "You" : name;
@@ -217,6 +225,8 @@ export function faceSentence(face: CodeReviewerFace, name: string, you: boolean)
       else said = `${who} was asked to review`;
   }
   if (face.verdict && face.asked) said += `, and ${you ? "you are" : "is"} asked to review again`;
+  const paths = face.reason === "path_owner" ? ownedPaths(face) : "";
+  if (paths !== "") said += `, as the owner of ${paths}`;
   return said;
 }
 
@@ -299,7 +309,11 @@ export function waitingReason(
   const owner = nameOf(change.owner);
   const face = ownFace(change, me);
   if (face?.asked && face.reason === "path_owner") {
-    return `${owner}'s change touches paths you own: your review is asked`;
+    // FACTS OLDER THAN THE OWNED PATHS name none, and say so without a guess.
+    const paths = ownedPaths(face);
+    return paths === ""
+      ? `${owner}'s change touches paths you own: your review is asked`
+      : `${owner}'s change touches ${paths}, which you own: your review is asked`;
   }
   if (face?.asked) return `${owner} asks your review`;
   if (me !== "" && change.owner === me) {
