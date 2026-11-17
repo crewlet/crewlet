@@ -345,10 +345,14 @@ func (r CheckRow) encodedBytes() int {
 		key, value string
 	}{
 		{"candidate_id", r.CandidateID}, {"entry_id", r.EntryID}, {"base", r.Base}, {"defs_oid", r.DefsOID},
+		{"source_ref", r.SourceRef}, {"change_head", r.ChangeHead},
 	} {
 		if s.value != "" {
 			n += field(s.key, stringBytes(s.value), false)
 		}
+	}
+	if r.Change != nil {
+		n += field("change", r.Change.encodedBytes(), false)
 	}
 	if r.Required {
 		n += field("required", trueBytes, false)
@@ -1322,6 +1326,12 @@ func (p FindingPathRow) encodedBytes() int {
 		field("state", stringBytes(string(p.State)), false) +
 		field("revision", intBytes(p.Revision), false) +
 		field("findings", intBytes(p.Findings), false)
+}
+
+// encodedBytes is the length of the mark's JSON encoding.
+func (r ViewedRow) encodedBytes() int {
+	return 2 + field("path_digest", stringBytes(r.PathDigest), true) +
+		field("file_digest", stringBytes(r.FileDigest), false) + field("at", timeBytes(r.At), false)
 }
 
 // encodedBytes is the length of the anchor's JSON encoding.

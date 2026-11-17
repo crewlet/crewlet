@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -22,11 +23,13 @@ import (
 //
 //   - `queue` ([ReadQueue]) lists the LIVE entries of every queue — of one
 //     repository, of one of its targets, or of every repository the asker
-//     reads — in queue order, each with its place, beside the trains testing a
-//     named repository's (code_queue_live_idx, code_candidates_train_idx) and
-//     the entries its queues put out in the last [QueueEjectionsShown]
-//     (code_queue_ended_idx), held to the asker's grant as a listing of
-//     changes is.
+//     reads — in queue order, each with its place and its change's number,
+//     title and source branch, beside the trains testing a named repository's
+//     (code_queue_live_idx, code_candidates_train_idx) and the entries its
+//     queues put out in the last [QueueEjectionsShown] (code_queue_ejected_idx),
+//     held to the asker's grant as a listing of changes is. Every
+//     repository's trains and ejections are answered where [ReadQuery.Trains]
+//     asks (code_queue_ejected_recent_idx).
 //   - `landings` ([ReadLandings]) is one target's landings ABOVE ITS GREEN, in
 //     the order they landed, beside the green itself: what its tip checks have
 //     not yet judged.
@@ -58,6 +61,9 @@ type QueueRow struct {
 	ChangeID  string `json:"change_id"`
 	// Number is its change's number on its repository (web!42's 42).
 	Number int64 `json:"number"`
+	// Title and SourceRef are its change's title and source branch, read with its number.
+	Title     string `json:"title,omitempty" untrusted:"name"`
+	SourceRef string `json:"source_ref,omitempty"`
 	// Place is its place in its target's queue, from 1; Seq the position of
 	// the record that enqueued it.
 	Place        int               `json:"place"`
@@ -105,8 +111,9 @@ type CandidateRow struct {
 }
 
 // EjectedRow is one entry a queue put out, as a `queue` read of its
-// repository answers it beside the live ones: the change it was and the head
-// it was enqueued at, who enqueued it, why the queue put it out
+// repository answers it beside the live ones: the change it was, its title and
+// source branch, the head it was enqueued at, who enqueued it, how it was to
+// land, why the queue put it out
 // ([QueueEndReason]: check_failed, conflict, gate_unmet, head_moved,
 // not_fast_forward) and what of it a person reads first — the required checks
 // that failed on what it was tested in, or the paths its merge conflicted on —
@@ -122,14 +129,22 @@ type EjectedRow struct {
 	TargetRef string `json:"target_ref"`
 	ChangeID  string `json:"change_id"`
 	// Number is its change's number on its repository (web!42's 42).
-	Number     int64          `json:"number"`
-	HeadOID    string         `json:"head_oid"`
-	EnqueuedBy Party          `json:"enqueued_by"`
-	Reason     QueueEndReason `json:"reason"`
-	Checks     []string       `json:"checks,omitempty"`
-	Paths      []string       `json:"paths,omitempty"`
-	EnqueuedAt time.Time      `json:"enqueued_at"`
-	EjectedAt  time.Time      `json:"ejected_at"`
+	Number int64 `json:"number"`
+	// Title and SourceRef are its change's title and source branch, read with its number.
+	Title      string `json:"title,omitempty" untrusted:"name"`
+	SourceRef  string `json:"source_ref,omitempty"`
+	HeadOID    string `json:"head_oid"`
+	EnqueuedBy Party  `json:"enqueued_by"`
+	// Method, DeleteSource and CloseTask are how the entry was to land, what a re-queue
+	// sends again; a row with no Method is an older build's, which answers none of the three.
+	Method       MergeMethod    `json:"method,omitempty"`
+	DeleteSource bool           `json:"delete_source,omitempty"`
+	CloseTask    bool           `json:"close_task,omitempty"`
+	Reason       QueueEndReason `json:"reason"`
+	Checks       []string       `json:"checks,omitempty"`
+	Paths        []string       `json:"paths,omitempty"`
+	EnqueuedAt   time.Time      `json:"enqueued_at"`
+	EjectedAt    time.Time      `json:"ejected_at"`
 }
 
 // QueueEjectionsShown is how far back a `queue` read of a repository answers
@@ -148,6 +163,19 @@ const QueueEjectionsShown = 24 * time.Hour
 // them.
 const MaxEjectionsShown = defaultQueueLimit
 
+// EjectedTotal is how many entries the asker's queues put out in the last
+// [QueueEjectionsShown]; More where the count stopped at [MaxQueueCounted], so Total is a floor
+// and a read of every repository answers rows of the counted ejections alone.
+type EjectedTotal struct {
+	Total int64 `json:"total"`
+	More  bool  `json:"more,omitempty"`
+}
+
+// MaxQueueCounted is the most index entries one count of a queue read or a counts read's
+// queue part walks: MaxSnapshotItems, met only by a fleet in trouble. A queue page stays
+// under MaxPageBytes: 200 rows, 200 targets' trains of MaxQueueDepth and 50 ejections, about 2.6 MiB.
+const MaxQueueCounted = MaxSnapshotItems
+
 // ejections files into out what repository repo's queues put out in the last
 // [QueueEjectionsShown] — its target's alone, where target names one — newest
 // first, at most [MaxEjectionsShown]: one seek of an index partial on the
@@ -155,20 +183,134 @@ const MaxEjectionsShown = defaultQueueLimit
 // the newest down to the horizon, so the read touches the rows it answers and
 // never the entries the queue LANDED meanwhile — which a healthy queue ends
 // thousands of a day, and an index of every ended entry walked to find a
-// handful of ejections on every poll of the Queue section.
-func (r *Reader) ejections(ctx context.Context, tx *sql.Tx, repo RepoRef, target string, out *ReadAnswer) error {
+// handful of ejections on every poll of the Queue section. Where total asks,
+// it also counts them, within [MaxQueueCounted] ([ReadAnswer.EjectedTotal]).
+func (r *Reader) ejections(ctx context.Context, tx *sql.Tx, repo RepoRef, target string, total bool,
+	out *ReadAnswer) error {
+
 	since := store.EncodeTime(r.now().Add(-QueueEjectionsShown))
-	var (
-		rows *sql.Rows
-		err  error
-	)
-	if target == "" {
-		rows, err = tx.QueryContext(ctx, ejectedOfRepoSQL, repo.ID, since, MaxEjectionsShown)
-	} else {
-		rows, err = tx.QueryContext(ctx, ejectedOfTargetSQL, repo.ID, target, since, MaxEjectionsShown)
+	stmt, args := ejectedOfRepoSQL, []any{repo.ID, since, MaxEjectionsShown}
+	if target != "" {
+		stmt, args = ejectedOfTargetSQL, []any{repo.ID, target, since, MaxEjectionsShown}
 	}
-	if err != nil {
+	if err := ejectedRows(ctx, tx, map[string]string{repo.ID: repo.Name}, stmt, args, out); err != nil {
 		return fmt.Errorf("gitlet: read what %s's queues put out: %w", repo.Name, err)
+	}
+	if !total {
+		return nil
+	}
+	stmt, args = ejectedCountOfRepoSQL, []any{repo.ID, since, r.queueCounted}
+	if target != "" {
+		stmt, args = ejectedCountOfTargetSQL, []any{repo.ID, target, since, r.queueCounted}
+	}
+	var n int64
+	if err := tx.QueryRowContext(ctx, stmt, args...).Scan(&n); err != nil {
+		return fmt.Errorf("gitlet: count what %s's queues put out: %w", repo.Name, err)
+	}
+	out.EjectedTotal = &EjectedTotal{Total: n, More: n == int64(r.queueCounted)}
+	return nil
+}
+
+// ejectionsEverywhere files into out what the queues of every repository the asker reads put
+// out in the last [QueueEjectionsShown], newest first, at most [MaxEjectionsShown], and their
+// total: the newest [MaxQueueCounted] ejections counted by repository, the repositories judged
+// once, then the newest rows of those the asker reads. Past the bound the rows keep to the
+// counted window, so they and the total cover the same ejections.
+func (r *Reader) ejectionsEverywhere(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster,
+	out *ReadAnswer) error {
+
+	since := store.EncodeTime(r.now().Add(-QueueEjectionsShown))
+	counted, read, oldest, err := ejectedByRepo(ctx, tx, since, r.queueCounted)
+	if err != nil {
+		return fmt.Errorf("gitlet: count what every queue put out: %w", err)
+	}
+	listed, err := listedReposAmong(ctx, tx, slices.Collect(maps.Keys(counted)), q.Asker, q.CeilingSeat, chart,
+		"a page of ejections")
+	if err != nil {
+		return err
+	}
+	total := &EjectedTotal{More: read == int64(r.queueCounted)}
+	if total.More {
+		since = max(since, oldest)
+	}
+	names := make(map[string]string, len(listed))
+	for id, repo := range listed {
+		total.Total += counted[id]
+		names[id] = repo.ref.Name
+	}
+	out.EjectedTotal = total
+	if len(names) == 0 {
+		return nil
+	}
+	list, err := jsonList(slices.Sorted(maps.Keys(names)))
+	if err != nil {
+		return err
+	}
+	if err = ejectedRows(ctx, tx, names, ejectedEverywhereSQL, []any{since, list, MaxEjectionsShown},
+		out); err != nil {
+		return fmt.Errorf("gitlet: read what every queue put out: %w", err)
+	}
+	return nil
+}
+
+// countedByRepo is what stmt, bound to args, counts by repository, and how many index
+// entries it read.
+func countedByRepo(ctx context.Context, tx *sql.Tx, stmt string, args ...any) (map[string]int64, int64, error) {
+	rows, err := tx.QueryContext(ctx, stmt, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	counted := map[string]int64{}
+	var read int64
+	for rows.Next() {
+		var (
+			id string
+			n  int64
+		)
+		if err = rows.Scan(&id, &n); err != nil {
+			return nil, 0, err
+		}
+		counted[id], read = n, read+n
+	}
+	return counted, read, rows.Err()
+}
+
+// ejectedByRepo is the newest ejections ending at or after since, at most bound of them,
+// counted by repository, how many it read, and when the oldest of them ended.
+func ejectedByRepo(ctx context.Context, tx *sql.Tx, since int64, bound int) (counted map[string]int64,
+	read, oldest int64, err error) {
+
+	rows, err := tx.QueryContext(ctx, ejectedReposSQL, since, bound)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	counted = map[string]int64{}
+	for rows.Next() {
+		var (
+			id     string
+			n, end int64
+		)
+		if err = rows.Scan(&id, &n, &end); err != nil {
+			return nil, 0, 0, err
+		}
+		counted[id], read = n, read+n
+		if oldest == 0 || end < oldest {
+			oldest = end
+		}
+	}
+	return counted, read, oldest, rows.Err()
+}
+
+// ejectedRows files into out the ejections stmt reads for args, each of a repository names
+// holds by id, with its change's label.
+func ejectedRows(ctx context.Context, tx *sql.Tx, names map[string]string, stmt string, args []any,
+	out *ReadAnswer) error {
+
+	rows, err := tx.QueryContext(ctx, stmt, args...)
+	if err != nil {
+		return err
 	}
 	defer func() { _ = rows.Close() }()
 	var (
@@ -180,34 +322,47 @@ func (r *Reader) ejections(ctx context.Context, tx *sql.Tx, repo RepoRef, target
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		e, err := scanEntry(func(dest ...any) error { return rows.Scan(append(dest, &detail)...) })
 		if err != nil {
-			return fmt.Errorf("gitlet: read what %s's queues put out: %w", repo.Name, err)
+			return err
 		}
 		entries, details = append(entries, e), append(details, detail)
 	}
 	if err = rows.Err(); err != nil {
-		return fmt.Errorf("gitlet: read what %s's queues put out: %w", repo.Name, err)
+		return err
 	}
-	numbers, err := numbersOf(ctx, tx, entries)
+	labels, err := labelsOf(ctx, tx, entries)
 	if err != nil {
 		return err
 	}
 	for i, e := range entries {
-		row := EjectedRow{RepoID: e.RepoID, Repo: repo.Name, EntryID: e.EntryID, TargetRef: e.TargetRef,
-			ChangeID: e.ChangeID, Number: numbers[e.ChangeID], HeadOID: e.HeadOID, EnqueuedBy: e.EnqueuedBy,
-			Reason: e.EndReason, EnqueuedAt: store.DecodeTime(e.EnqueuedAt), EjectedAt: store.DecodeTime(e.EndedAt)}
-		if details[i] != "" {
-			var x struct {
-				Checks []string `json:"checks"`
-				Paths  []string `json:"paths"`
-			}
-			if err := json.Unmarshal([]byte(details[i]), &x); err != nil {
-				return fmt.Errorf("gitlet: read entry %s's ejection: %w", e.EntryID, err)
-			}
-			row.Checks, row.Paths = x.Checks, x.Paths
+		row, rowErr := ejectedRow(e, names[e.RepoID], labels[e.ChangeID], details[i])
+		if rowErr != nil {
+			return rowErr
 		}
 		out.Ejected = append(out.Ejected, row)
 	}
 	return nil
+}
+
+// ejectedRow is e as a queue read answers it: of repository repo, its change's label, and
+// the ejection's detail as the `ejected` column keeps it.
+func ejectedRow(e queueEntry, repo string, label changeLabel, detail string) (EjectedRow, error) {
+	row := EjectedRow{RepoID: e.RepoID, Repo: repo, EntryID: e.EntryID, TargetRef: e.TargetRef,
+		ChangeID: e.ChangeID, Number: label.number, Title: label.title, SourceRef: label.sourceRef,
+		HeadOID: e.HeadOID, EnqueuedBy: e.EnqueuedBy, Method: e.Method, DeleteSource: e.DeleteSource,
+		CloseTask: e.CloseTask, Reason: e.EndReason, EnqueuedAt: store.DecodeTime(e.EnqueuedAt),
+		EjectedAt: store.DecodeTime(e.EndedAt)}
+	if detail == "" {
+		return row, nil
+	}
+	var x struct {
+		Checks []string `json:"checks"`
+		Paths  []string `json:"paths"`
+	}
+	if err := json.Unmarshal([]byte(detail), &x); err != nil {
+		return EjectedRow{}, fmt.Errorf("gitlet: read entry %s's ejection: %w", e.EntryID, err)
+	}
+	row.Checks, row.Paths = x.Checks, x.Paths
+	return row, nil
 }
 
 // LandingRow is one landing on a protected target: the record that landed it
@@ -385,12 +540,14 @@ func cutQueueCursor(s string) (repoID, target string, seq int64, ok bool) {
 	return parts[0], parts[1], seq, err == nil && seq > 0 && parts[0] != "" && parts[1] != ""
 }
 
-// queue serves one page of a `queue` read: the live entries of the repository
+// queueListing serves one page of a `queue` read: the live entries of the repository
 // q names — of its target, where it names one — or, naming none, of every
 // repository the asker reads, in queue order; each with its place and its
-// change's number; and, for a named repository, the candidates of every train
-// of the targets the page reaches and, on its first page, what its queues —
-// its target's, where it names one — put out lately ([Reader.ejections]).
+// change's number, title and source branch; and, for a named repository or
+// where q asks for [ReadQuery.Trains], the candidates of every train of the
+// targets the page reaches and, on its first page, what its queues — its
+// target's, where it names one — put out lately ([Reader.ejections],
+// [Reader.ejectionsEverywhere]).
 func (r *Reader) queueListing(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
 	limit := min(limitOr(q.Limit, defaultQueueLimit), r.pageRows)
 	repos := map[string]listedRepo{}
@@ -446,7 +603,15 @@ func (r *Reader) queueListing(ctx context.Context, tx *sql.Tx, q ReadQuery, char
 			return err
 		}
 	}
-	numbers, err := numbersOf(ctx, tx, scanned)
+	// THE CHANGES OF THE LISTED REPOSITORIES ALONE are read, so no title of
+	// one the asker may not read is ever fetched.
+	var listed []queueEntry
+	for _, e := range scanned {
+		if _, ok := repos[e.RepoID]; ok {
+			listed = append(listed, e)
+		}
+	}
+	labels, err := labelsOf(ctx, tx, listed)
 	if err != nil {
 		return err
 	}
@@ -454,11 +619,7 @@ func (r *Reader) queueListing(ctx context.Context, tx *sql.Tx, q ReadQuery, char
 		group [2]string
 		place int
 	)
-	for _, e := range scanned {
-		repo, listed := repos[e.RepoID]
-		if !listed {
-			continue
-		}
+	for _, e := range listed {
 		if key := [2]string{e.RepoID, e.TargetRef}; key != group {
 			group = key
 			if place, err = placeIn(ctx, tx, e); err != nil {
@@ -467,30 +628,33 @@ func (r *Reader) queueListing(ctx context.Context, tx *sql.Tx, q ReadQuery, char
 		} else {
 			place++
 		}
-		out.Queue = append(out.Queue, e.row(repo.ref.Name, numbers[e.ChangeID], place))
+		out.Queue = append(out.Queue, e.row(repos[e.RepoID].ref.Name, labels[e.ChangeID], place))
 	}
 	if len(scanned) == limit {
 		out.Next = queueCursor(scanned[len(scanned)-1])
 	}
-	if q.Repo == "" {
+	switch {
+	case q.Repo == "" && !q.Trains:
 		return nil
-	}
-	if !resumed {
+	case q.Repo == "" && !resumed:
+		if err = r.ejectionsEverywhere(ctx, tx, q, chart, out); err != nil {
+			return err
+		}
+	case !resumed:
 		for _, named := range repos {
-			if err := r.ejections(ctx, tx, named.ref, q.Target, out); err != nil {
+			if err = r.ejections(ctx, tx, named.ref, q.Target, q.Trains, out); err != nil {
 				return err
 			}
 		}
 	}
-	// THE TRAINS OF THE TARGETS THE PAGE REACHED, a named repository's: a
-	// target's candidates are its live trains' alone, since a train that ends
-	// removes them.
-	var targets []string
+	// THE TRAINS OF THE TARGETS THE PAGE REACHED: a target's candidates are
+	// its live trains' alone, since a train that ends removes them.
+	var targets [][2]string
 	for _, row := range out.Queue {
-		targets = appendOnce(targets, row.TargetRef)
+		targets = appendOnce(targets, [2]string{row.RepoID, row.TargetRef})
 	}
 	for _, target := range targets {
-		trains, err := trainsOf(ctx, tx, out.Queue[0].RepoID, target)
+		trains, err := trainsOf(ctx, tx, target[0], target[1])
 		if err != nil {
 			return err
 		}
@@ -766,6 +930,56 @@ func numbersOf(ctx context.Context, tx *sql.Tx, entries []queueEntry) (map[strin
 	return out, nil
 }
 
+// changeLabel is what a queue row names of its change.
+type changeLabel struct {
+	number           int64
+	title, sourceRef string
+}
+
+// labelsOf is the label of each change entries name, by id: one statement for each
+// repository the entries reach, over the list of its changes' ids.
+func labelsOf(ctx context.Context, tx *sql.Tx, entries []queueEntry) (map[string]changeLabel, error) {
+	var repos []string
+	byRepo := map[string][]string{}
+	for _, e := range entries {
+		if _, seen := byRepo[e.RepoID]; !seen {
+			repos = append(repos, e.RepoID)
+		}
+		byRepo[e.RepoID] = appendOnce(byRepo[e.RepoID], e.ChangeID)
+	}
+	out := map[string]changeLabel{}
+	for _, repo := range repos {
+		if err := labelsIn(ctx, tx, repo, byRepo[repo], out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// labelsIn files into out the label of each change ids names that is a change of repoID.
+func labelsIn(ctx context.Context, tx *sql.Tx, repoID string, ids []string, out map[string]changeLabel) error {
+	list, err := jsonList(ids)
+	if err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, changeLabelsSQL, repoID, list)
+	if err != nil {
+		return fmt.Errorf("gitlet: read the titles of repository %s's changes: %w", repoID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			id string
+			l  changeLabel
+		)
+		if err = rows.Scan(&id, &l.number, &l.title, &l.sourceRef); err != nil {
+			return fmt.Errorf("gitlet: read the titles of repository %s's changes: %w", repoID, err)
+		}
+		out[id] = l
+	}
+	return rows.Err()
+}
+
 // trainsOf is every candidate of target's live trains on repoID, in train and
 // ordinal order — one seek of code_candidates_train_idx.
 func trainsOf(ctx context.Context, tx *sql.Tx, repoID, target string) ([]CandidateRow, error) {
@@ -795,10 +1009,10 @@ func trainsOf(ctx context.Context, tx *sql.Tx, repoID, target string) ([]Candida
 }
 
 // row is e as a queue read answers it, of repository repo, its change's
-// number and its place.
-func (e queueEntry) row(repo string, number int64, place int) QueueRow {
+// label and its place.
+func (e queueEntry) row(repo string, label changeLabel, place int) QueueRow {
 	return QueueRow{RepoID: e.RepoID, Repo: repo, EntryID: e.EntryID, TargetRef: e.TargetRef, ChangeID: e.ChangeID,
-		Number: number, Place: place, Seq: unpacked(e.Seq), HeadOID: e.HeadOID, Method: e.Method,
+		Number: label.number, Title: label.title, SourceRef: label.sourceRef, Place: place, Seq: unpacked(e.Seq), HeadOID: e.HeadOID, Method: e.Method,
 		DeleteSource: e.DeleteSource, CloseTask: e.CloseTask, EnqueuedBy: e.EnqueuedBy,
 		EnqueuedOperator: e.EnqueuedOperator, State: e.State, Train: e.Train, CandidateID: e.CandidateID,
 		CommitOID: e.CommitOID, EnqueuedAt: store.DecodeTime(e.EnqueuedAt)}
@@ -813,10 +1027,11 @@ func (e queueEntry) row(repo string, number int64, place int) QueueRow {
 // trains by code_candidates_train_idx; its landings above a place by their
 // key; its green row, and a repository's, by theirs; and a repository's
 // ejections, or one target's, newest first by the index partial on them
-// (replicated 0132). Every read of code_queue by a partial index repeats its
-// predicate verbatim.
-// The numbers of a page's changes are [changeNumbersIn]'s, registered as the
-// committer's.
+// (replicated 0132), and counted by the same indexes; every repository's
+// ejections, counted by repository and read newest first, by the index partial
+// on them that leads with the ending; the live entries counted, a repository's
+// and every repository's; and the labels of a page's changes by the changes'
+// key. Every read of code_queue by a partial index repeats its predicate verbatim.
 const (
 	queueOfTargetSQL = `SELECT ` + entryColumns + ` FROM code_queue INDEXED BY code_queue_live_idx
 		WHERE repo_id = ? AND target_ref = ? AND state IN ('waiting', 'testing') AND seq > ?
@@ -844,6 +1059,25 @@ const (
 			INDEXED BY code_queue_target_ejected_idx
 		WHERE repo_id = ? AND target_ref = ? AND state = 'ejected' AND ended_at >= ?
 		ORDER BY ended_at DESC LIMIT ?`
+	ejectedCountOfRepoSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_queue INDEXED BY code_queue_ejected_idx
+		WHERE repo_id = ? AND state = 'ejected' AND ended_at >= ? LIMIT ?)`
+	ejectedCountOfTargetSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_queue INDEXED BY code_queue_target_ejected_idx
+		WHERE repo_id = ? AND target_ref = ? AND state = 'ejected' AND ended_at >= ? LIMIT ?)`
+	ejectedReposSQL = `SELECT repo_id, COUNT(*), MIN(ended_at) FROM (SELECT repo_id, ended_at FROM code_queue
+			INDEXED BY code_queue_ejected_recent_idx WHERE state = 'ejected' AND ended_at >= ?1
+			ORDER BY ended_at DESC LIMIT ?2)
+		GROUP BY repo_id`
+	ejectedEverywhereSQL = `SELECT ` + entryColumns + `, ejected FROM code_queue
+			INDEXED BY code_queue_ejected_recent_idx
+		WHERE state = 'ejected' AND ended_at >= ?1 AND repo_id IN (SELECT CAST(value AS TEXT) FROM json_each(?2))
+		ORDER BY ended_at DESC, repo_id DESC LIMIT ?3`
+	queueCountOfRepoSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_queue INDEXED BY code_queue_live_idx
+		WHERE repo_id = ? AND state IN ('waiting', 'testing') LIMIT ?)`
+	queueCountsSQL = `SELECT repo_id, COUNT(*) FROM (SELECT repo_id FROM code_queue INDEXED BY code_queue_live_idx
+			WHERE state IN ('waiting', 'testing') AND repo_id >= '' LIMIT ?1)
+		GROUP BY repo_id`
+	changeLabelsSQL = `SELECT c.id, c.number, c.title, c.source_ref FROM json_each(?2) AS j
+		CROSS JOIN code_changes AS c WHERE c.id = CAST(j.value AS TEXT) AND c.repo_id = ?1`
 	trainsSQL = `SELECT candidate_id, train, ordinal, base_oid, tip_oid, pack_id, state, position, entries
 		FROM code_candidates INDEXED BY code_candidates_train_idx WHERE repo_id = ? AND target_ref = ?
 		ORDER BY train, ordinal`

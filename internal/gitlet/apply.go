@@ -197,6 +197,9 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 	case KindChecks:
 		return a.applyChecks(ctx, tx, at)
 	case KindPerson:
+		if record.Op == OpViewed {
+			return a.applyViewed(ctx, tx, at)
+		}
 		return a.applyMarks(ctx, tx, at)
 	}
 	// A KIND THIS BUILD DOES NOT KNOW REACHES HERE ONLY BY WAY OF A RECORD AT
@@ -763,6 +766,8 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		payloadRepo = p.RepoID
 	case QueueSweep:
 		payloadRepo = p.RepoID
+	case ViewedKeyRecord:
+		payloadRepo = p.RepoID
 	default:
 		return 0, fmt.Errorf("gitlet: %s is not an op this build applies to a repository "+
 			"(the record at %s)", at.record.Op, at.position)
@@ -847,6 +852,8 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		return a.noticed(ctx, tx, at, id, payload, n, err)
 	case QueueSweep:
 		return a.applyQueueSweep(ctx, tx, at, p)
+	case ViewedKeyRecord:
+		return a.applyViewedKey(ctx, tx, at, p)
 	}
 	return 0, fmt.Errorf("gitlet: the record at %s carries a %T", at.position, payload)
 }

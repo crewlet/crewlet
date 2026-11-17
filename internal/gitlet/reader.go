@@ -69,6 +69,10 @@ type Reader struct {
 	refsScanned, activeCounted int
 	// spokenScanned bounds a live state's conversation side: MaxSpokenScanned, or a test's.
 	spokenScanned int
+	// standingCounted bounds a standing count's places a state: MaxStandingCounted, or a test's.
+	standingCounted int
+	// queueCounted bounds a queue read's and a counts read's walks: MaxQueueCounted, or a test's.
+	queueCounted int
 }
 
 // ReaderOptions configure a reader.
@@ -110,10 +114,12 @@ func NewReader(o ReaderOptions) (*Reader, error) {
 	if r.limits == nil {
 		r.limits = DefaultLimits
 	}
+	r.standingCounted = MaxStandingCounted
 	if r.now == nil {
 		r.now = time.Now
 	}
 	r.reposSized, r.lastPushWalk = MaxReposSized, MaxLastPushWalk
+	r.queueCounted = MaxQueueCounted
 	return r, nil
 }
 
@@ -1850,6 +1856,9 @@ func (q ReadQuery) validate() error {
 	case q.FindingPaths && (q.Part != "" || q.DetailOnly || q.Brief || len(q.FindingIDs) > 0):
 		return fmt.Errorf("%w: finding_paths: a change's findings by path are a page of their own, "+
 			"named by no part, detail_only, brief or finding_ids", ErrInvalid)
+	case q.Viewed && (q.Part != "" || q.DetailOnly || q.Brief || len(q.FindingIDs) > 0 || q.FindingPaths):
+		return fmt.Errorf("%w: viewed: a change's viewed files are a page of their own, named by no part, "+
+			"detail_only, brief, finding_ids or finding_paths", ErrInvalid)
 	}
 	switch {
 	case q.Kind == ReadInbox && q.Repo != "":
@@ -1953,11 +1962,11 @@ func (q ReadQuery) validate() error {
 }
 
 // kindOwnedField refuses a field that one kind a principal reads alone reads
-// (a commit, an inbox, an inbox page's cards, a history page's commits, the
+// (a commit, a queue read's trains, an inbox, an inbox page's cards, a history page's commits, the
 // narrowing of a listing of repositories to the ones a rule protects, the
 // parts a counts read names, a repository's facts, a listing of changes'
-// order, a change's findings by path) on a read of any other
-// kind, the engine's own reads included ([ReadQuery.validate]).
+// order, a change's findings by path, a change's viewed files) on a read of
+// any other kind, the engine's own reads included ([ReadQuery.validate]).
 func (q ReadQuery) kindOwnedField() error {
 	switch {
 	case q.Protected && q.Kind != ReadRepos:
@@ -1969,6 +1978,8 @@ func (q ReadQuery) kindOwnedField() error {
 		return fmt.Errorf("%w: cards: only a listing of changes carries each change's card", ErrInvalid)
 	case q.FindingPaths && q.Kind != ReadChange:
 		return fmt.Errorf("%w: finding_paths: only a change read counts its findings by path", ErrInvalid)
+	case q.Viewed && q.Kind != ReadChange:
+		return fmt.Errorf("%w: viewed: only a change read answers the files its asker marked viewed", ErrInvalid)
 	case q.Inbox != nil && q.Kind != ReadInbox:
 		return fmt.Errorf("%w: inbox: only an inbox read names whose inbox it reads", ErrInvalid)
 	case len(q.NoticeCards) > 0 && q.Kind != ReadNoticeCards:
@@ -1977,6 +1988,9 @@ func (q ReadQuery) kindOwnedField() error {
 	case q.ChangeSort != "" && q.Kind != ReadChanges:
 		return fmt.Errorf("%w: change_sort: only a listing of changes is ordered by when its changes were "+
 			"opened or last moved", ErrInvalid)
+	case q.Readiness != "" && q.Kind != ReadChanges:
+		return fmt.Errorf("%w: readiness: only a listing of changes is narrowed to where their merge stands",
+			ErrInvalid)
 	case q.RefListing != nil && q.Kind != ReadRefs:
 		return fmt.Errorf("%w: ref_listing: only a refs listing is ordered, narrowed or read in detail",
 			ErrInvalid)
@@ -1996,6 +2010,8 @@ func (q ReadQuery) kindOwnedField() error {
 	case q.RepoSort != "" && q.Kind != ReadRepos:
 		return fmt.Errorf("%w: repo_sort: only a listing of repositories is ordered by name or last push",
 			ErrInvalid)
+	case q.Trains && q.Kind != ReadQueue:
+		return fmt.Errorf("%w: trains: only a queue read answers its trains and ejections", ErrInvalid)
 	}
 	return nil
 }

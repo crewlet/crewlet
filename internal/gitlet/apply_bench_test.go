@@ -1818,3 +1818,62 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 // five percent of one), and under a hundredth no figure these rows forecast
 // moves past its rounding.
 const inPlaceShare = 100
+
+// BenchmarkApplyAViewedMark prices a viewed record's apply on the shared write lane, in three arms:
+// one file marked by a person holding 100 marks; MaxViewedPerMark files marked by one at the cap, so
+// as many of their oldest go; and a record forgetting a review of MaxViewedFiles files whose change
+// ended.
+func BenchmarkApplyAViewedMark(b *testing.B) {
+	quiet(b)
+	key := ViewedKey(strings.Repeat("ab", ViewedKeyBytes))
+	marks := func(prefix string, n int) []ViewedMark {
+		out := make([]ViewedMark, n)
+		for i := range out {
+			path := fmt.Sprintf("%s/%04d.go", prefix, i)
+			out[i] = ViewedMark{PathDigest: key.PathDigest(path), FileDigest: key.FileDigest(path, oid(path), "100644")}
+		}
+		return out
+	}
+	const ended, live = "0192f6c1-0000-7000-8000-000000000001", "0192f6c1-0000-7000-8000-000000000002"
+	for _, arm := range []struct {
+		name   string
+		held   int
+		record ViewedMarks
+		// rows is what the apply writes at least: the marks, and the rows it drops or forgets.
+		rows int
+	}{
+		{"one of 100", 100, ViewedMarks{ChangeID: live, Viewed: marks("new", 1)}, 1},
+		{"32 at the cap", MaxViewedFiles, ViewedMarks{ChangeID: live, Viewed: marks("new", MaxViewedPerMark)},
+			2 * MaxViewedPerMark},
+		{"forgetting 2000", MaxViewedFiles, ViewedMarks{ChangeID: live, Viewed: marks("new", 1),
+			Forget: []string{ended}}, MaxViewedFiles + 1},
+	} {
+		b.Run(arm.name, func(b *testing.B) {
+			e := openApplyEstate(b)
+			a := NewApplier(nil)
+			held := marks("old", arm.held)
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.StopTimer()
+			for i := range b.N {
+				handle := fmt.Sprintf("p%06d", i)
+				ctx := context.Background()
+				if err := e.db.Tx(ctx, func(tx *sql.Tx) error {
+					_, err := store.InsertRows(ctx, tx, e.db.Caps().MaxVariables,
+						`INSERT INTO code_viewed_files (handle, change_id, path_digest, file_digest, at, position) VALUES `,
+						`(?, ?, ?, ?, 0, ?)`, ``, len(held), func(j int) []any {
+							return []any{handle, ended, held[j].PathDigest, held[j].FileDigest, j + 1}
+						})
+					return err
+				}); err != nil {
+					b.Fatalf("seed %s's marks: %v", handle, err)
+				}
+				e.applyTimed(b, a, viewedOn(b, handle, arm.record), arm.rows)
+				if n := e.num(`SELECT COUNT(*) FROM code_viewed_files WHERE handle = ?`, handle); n > MaxViewedFiles {
+					b.Fatalf("%s holds %d marks after the record, past the cap", handle, n)
+				}
+			}
+			b.ReportMetric(float64(b.Elapsed().Microseconds())/1000/float64(b.N), "ms/record")
+		})
+	}
+}

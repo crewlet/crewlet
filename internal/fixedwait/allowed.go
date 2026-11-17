@@ -866,7 +866,6 @@ var allowed = []Entry{
 	{File: "internal/objstore/collect/collect_test.go", Func: "TestACollectionDeletesAtMostItsBoundAtOnce", NegativeWindow: 1, Piece: 9},
 	{File: "internal/objstore/collect/collect_test.go", Func: "TestAFailedAuditKeepsTheLastFindings", ExemptElapsed: 1, Piece: 9},
 	{File: "internal/objstore/collect/collect_test.go", Func: "TestAFailedDeletionStopsTheCollection", NegativeWindow: 1, Piece: 9},
-	{File: "internal/objstore/collect/collect_test.go", Func: "TestAStoreThatFailsQuestionAfterQuestionStopsTheAudit", NegativeWindow: 1, ExemptWait: 1, Piece: 9},
 	{File: "internal/objstore/collect/collect_test.go", Func: "TestTheAuditAsksAtMostItsBoundAtOnce", NegativeWindow: 1, Piece: 9},
 	{File: "internal/objstore/collect/collect_test.go", Func: "TestTheAuditTakesItsSecondLookBeforeItsWalkEndsOnceItHoldsItsBound", ExemptWait: 1, Piece: 9},
 	{File: "internal/objstore/collect/collect_test.go", Func: "gate.waitHeld", ExemptWait: 1, ExemptElapsed: 1, Piece: 9},

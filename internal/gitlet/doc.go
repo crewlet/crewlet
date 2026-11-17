@@ -177,7 +177,8 @@
 // leaves out the changes of every repository either may not, and of a
 // deleted one. Both carry each live change's readiness, judged in the read's
 // own transaction (readiness.go); and what waits on a person ([NeedPerson])
-// walks the changes whose stored readiness does, keeping those the read
+// walks the changes whose stored readiness does, as the ready bucket
+// ([ReadinessBucket]) walks the ones stored ready, keeping those the read
 // judges still do. What a surface reads of a change's CODE — a revision's
 // files from the base its facts record, what changed between two revisions,
 // where each finding is in the revision asked about, and the floor those
@@ -187,6 +188,7 @@
 // ITS COUNTS (apply_counts.go, counts.go): code_repos counts each repository's changes by
 // state and code_change_tallies those in use by owner and visibility, kept by every apply and
 // re-derived when their rules change; a counts read sums the tallies the asker's grant reads.
+// The queue part counts the live entries at read time, within MaxQueueCounted.
 //
 // # A change's conversation is rows on its own subject
 //
@@ -271,7 +273,8 @@
 // [NeedPerson] seeks — a home refreshing it, merging nothing, once a review,
 // an ask, an answer to findings, facts or the change's own row moves them
 // ([Mergeability.Refresh]). It reads the change's own review objects, never a
-// decision of the tracker's.
+// decision of the tracker's. A listing narrowed to [BucketReady] seeks the
+// stored answer too, as [NeedPerson] does.
 //
 // AND IT IS JUDGED UNDER ITS TARGET'S MERGE GATE (gatejudge.go): every reader
 // and every decide of a merge asks ONE pure [JudgeGate] over the facts one
@@ -323,6 +326,11 @@
 // A CHANGE'S PAGE (changepage.go): its detail names its participants, a reviewer row when the
 // record behind it landed (one notice of that record, none past the notices' horizon), a finding
 // when its review landed, and [ReadQuery.FindingPaths] counts its findings by path.
+//
+// A PERSON'S VIEWED FILES (viewed.go): kept on their own subject by HMAC-SHA256 digests under a key
+// their repository records before its first mark ([OpViewedKey]) and its purge deletes; the decide,
+// probing the change's repository, carries the ended changes for the apply to forget, the apply drops
+// the oldest past [MaxViewedFiles], and [ReadQuery.Viewed] reads the asker's own with the key.
 //
 // # A change wakes the seats its records concern
 //

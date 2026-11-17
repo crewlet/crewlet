@@ -511,6 +511,114 @@ func TestACountsPartThisBuildDoesNotDeclareIsRefusedUnread(t *testing.T) {
 	}
 }
 
+// A VIEWED MARK THIS BUILD DOES NOT DECLARE IS REFUSED UNREAD: a code.mark whose files gesture
+// carries a member this build does not know is refused naming it, the code half never asked, so the
+// walk asks another; the gesture whole is asked once.
+// Mutation: decode the arguments without RejectUnknownMembers, and the code half is asked, red.
+func TestAViewedMarkThisBuildDoesNotDeclareIsRefusedUnread(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a")
+	node := f.nodes["data-a"]
+	start := f.start(t)
+	ask := func(extra string) reply {
+		return askSigned(t, start, "data-a", request{Op: opCodeMark.spec.name, Args: json.RawMessage(
+			`{"op_id":"op-viewed","asker":{"kind":"operator","operator_id":"pat:ada","seat":"founder"},` +
+				`"handle":"founder","seen":{"stream":"` + codeStream + `","generation":1,"seq":3},` +
+				`"files":{"repo_id":"` + repoID(1) + `","change_id":"` + repoID(2) + `",` +
+				`"viewed":[{"path":"a.go","blob_oid":"` + strings.Repeat("a", 40) + `","mode":"100644"}]` + extra +
+				`}}`)})
+	}
+	rep := ask(`,"later":true`)
+	var refused *ErrUnknownKeys
+	if err := decodeError(rep.Err); rep.Unserved != "" || rep.Result != nil || !errors.As(err, &refused) ||
+		refused.Op != opCodeMark.spec.name || !slices.Equal(refused.Keys, []string{"args.files.later"}) {
+		t.Fatalf("a viewed mark naming a member this build does not declare was answered %+v, want it refused "+
+			"naming args.files.later", rep)
+	}
+	if node.askedFor(opCodeMark.spec.name) {
+		t.Fatal("the code half was asked a viewed mark this build does not declare")
+	}
+	if rep = ask(""); rep.Err != nil {
+		t.Fatalf("a viewed mark this build declares was refused: %v", decodeError(rep.Err))
+	}
+	node.mu.Lock()
+	defer node.mu.Unlock()
+	if len(node.marks) != 1 || node.marks[0].Files == nil || len(node.marks[0].Files.Viewed) != 1 {
+		t.Fatalf("the code half was asked %+v, want the one gesture whole", node.marks)
+	}
+}
+
+// A CHECKS READ ASKING WHERE CHECKS STAND IS ASKED OF A BUILD THAT READS IT: a data node whose build
+// does not declare `standing` refuses the read by that key, its code half never asked, and the
+// walk asks the next, which serves it.
+// Mutation: send the order under another key and the first node runs the read, ending the walk there.
+func TestAChecksReadAskingWhereChecksStandIsAskedOfABuildThatReadsIt(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	nodes, _ := f.placement.Holders()
+	order := f.client.order(opCodeRead.spec, nodes)
+	older, newer := f.nodes[order[0]], f.nodes[order[1]]
+	older.set(func(n *fakeNode) { n.undeclared = []string{"args.checks.standing"} })
+	if _, err := f.client.Code().Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadChecks,
+		Asker:  gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "token:founder"},
+		Fresh:  statelog.Freshness{Level: statelog.ReadStale},
+		Checks: &gitlet.CheckQuery{Standing: gitlet.StandingFailing}}); err != nil {
+		t.Fatalf("a read asking where checks stand failed: %v, want the second node's answer", err)
+	}
+	if !older.askedFor("unread") || older.askedFor(opCodeRead.spec.name) {
+		t.Fatal("the node whose build does not declare standing ran the read rather than refuse it unread")
+	}
+	if !newer.askedFor(opCodeRead.spec.name) {
+		t.Fatal("the node whose build reads standing was never asked")
+	}
+}
+
+// A QUEUE READ ASKING FOR TRAINS IS ASKED OF A BUILD THAT READS IT: the node whose build does
+// not declare `trains` refuses the read unread, its code half never asked, and the walk asks the
+// next, which answers; a read not asking for them is served by the first node asked.
+// Mutation: carry trains under a key every build declares, and the older node serves both reads.
+func TestAQueueReadAskingForTrainsIsAskedOfABuildThatReadsIt(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	nodes, _ := f.placement.Holders()
+	order := f.client.order(opCodeRead.spec, nodes)
+	older, newer := f.nodes[order[0]], f.nodes[order[1]]
+	older.set(func(n *fakeNode) { n.undeclared = []string{"args.trains"} })
+	read := func(trains bool) error {
+		_, err := f.client.Code().Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadQueue,
+			Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "token:founder"}, Trains: trains,
+			Fresh: statelog.Freshness{Level: statelog.ReadStale}})
+		return err
+	}
+	if err := read(false); err != nil {
+		t.Fatalf("a queue read asking for no trains: %v", err)
+	}
+	if !older.askedFor(opCodeRead.spec.name) || newer.askedFor(opCodeRead.spec.name) {
+		t.Fatalf("a queue read asking for no trains was not served by %s, the first node asked", older.name)
+	}
+	if err := read(true); err != nil {
+		t.Fatalf("a queue read asking for trains: %v, want the newer build's answer", err)
+	}
+	if !newer.askedFor(opCodeRead.spec.name) {
+		t.Fatalf("%s, whose build reads trains, was never asked the read", newer.name)
+	}
+	older.mu.Lock()
+	served, unread := 0, 0
+	for _, op := range older.asked {
+		switch op {
+		case opCodeRead.spec.name:
+			served++
+		case "unread":
+			unread++
+		}
+	}
+	older.mu.Unlock()
+	if served != 1 || unread != 1 {
+		t.Errorf("%s served %d reads and refused %d unread, want the one asking for no trains served "+
+			"and the one asking for them refused", older.name, served, unread)
+	}
+}
+
 // A REQUEST NO BUILD COULD READ WHOLE CROSSES AS ITSELF, AND AS AN ESTATE NOBODY
 // SERVED: a node that answers on another's behalf — a Gitlet node proposing a
 // push its data nodes refused — hands its asker the refusal with every field,
@@ -1065,5 +1173,64 @@ func TestEveryAnswerReadWholeIsOneACallerCarriesIntoAnotherRequest(t *testing.T)
 		if _, ok := registry[into]; !ok {
 			t.Errorf("answeredWholeBy says %s's answer is carried into %q, which is no operation", name, into)
 		}
+	}
+}
+
+// A CHANGES LISTING NARROWED BY READINESS IS ASKED OF A BUILD THAT READS IT: a data node whose build
+// declares no readiness refuses the member unread and the walk asks the next; unnarrowed, it serves.
+// Mutation: keep the bucket off the wire (json:"-") and the older node answers the narrowed read.
+func TestAChangesListingNarrowedByReadinessIsAskedOfABuildThatReadsIt(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	nodes, _ := f.placement.Holders()
+	order := f.client.order(opCodeRead.spec, nodes)
+	older, newer := f.nodes[order[0]], f.nodes[order[1]]
+	older.set(func(n *fakeNode) {
+		// AN OLDER BUILD: the member reaches it under a name its build does not declare.
+		n.olderBuild = func(req request) request {
+			var args map[string]json.RawMessage
+			if err := json.Unmarshal(req.Args, &args); err != nil {
+				panic(fmt.Sprintf("the arguments of %s do not decode: %v", req.Op, err))
+			}
+			if bucket, held := args["readiness"]; held {
+				delete(args, "readiness")
+				args["readiness_of_a_later_build"] = bucket
+				raw, err := json.Marshal(args)
+				if err != nil {
+					panic(err)
+				}
+				req.Args = raw
+			}
+			return req
+		}
+	})
+	reads := func(n *fakeNode) int {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		read := 0
+		for _, op := range n.asked {
+			if op == "code.read" {
+				read++
+			}
+		}
+		return read
+	}
+	asker := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"}
+	q := gitlet.ReadQuery{Asker: asker, Kind: gitlet.ReadChanges, State: gitlet.ChangeStateOpen,
+		Fresh: statelog.Freshness{Level: statelog.ReadStale}}
+	if _, err := f.client.Code().Read(t.Context(), q); err != nil {
+		t.Fatalf("the unnarrowed listing: %v", err)
+	}
+	if reads(older) != 1 || reads(newer) != 0 {
+		t.Fatalf("the unnarrowed listing was read %d times by %s and %d by %s, want once by the first",
+			reads(older), older.name, reads(newer), newer.name)
+	}
+	q.Readiness = gitlet.BucketChecks
+	if _, err := f.client.Code().Read(t.Context(), q); err != nil {
+		t.Fatalf("the listing narrowed to checks: %v", err)
+	}
+	if reads(older) != 1 || reads(newer) != 1 {
+		t.Errorf("the narrowed listing was read by %s %d more times and by %s %d, want by %s alone",
+			older.name, reads(older)-1, newer.name, reads(newer), newer.name)
 	}
 }

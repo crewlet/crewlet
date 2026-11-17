@@ -42,13 +42,15 @@ const (
 	pathChange     = "c"
 	pathChecks     = "k"
 	pathPerson     = "p"
+	pathViewed     = "v"
 )
 
 // NamePath is a repository name's claim.
 func NamePath(token string) string { return pathDomain + "/" + pathName + "/" + token }
 
-// RepoPath is one repository: its row, its refs, its packs, its pushes and its
-// protection rules — everything a record on its subject may write.
+// RepoPath is one repository: its row, its refs, its packs, its pushes, its
+// protection rules and its viewed key, everything a record on its subject may
+// write.
 func RepoPath(id string) string { return pathDomain + "/" + pathRepo + "/" + id }
 
 // ChangePath is one change's conversation: who is asked to review it, its
@@ -92,6 +94,10 @@ func ChecksPath(repoID string) string { return pathDomain + "/" + pathChecks + "
 // none of them stale, and the inbox reads the domain's path, which covers
 // both.
 func PersonPath(handle string) string { return pathDomain + "/" + pathPerson + "/" + handle }
+
+// ViewedPath is one person's viewed marks: the rows a viewed record writes. BESIDE their inbox's
+// path, so a build that retains a viewed record holds none of their inbox marks back.
+func ViewedPath(handle string) string { return pathDomain + "/" + pathViewed + "/" + handle }
 
 // ActivationPath is the activation fence's row.
 func ActivationPath() string { return pathDomain + "/" + pathActivation }

@@ -33,7 +33,8 @@ import (
 // landing that ended it is a record on the REPOSITORY'S, which that
 // arbitration does not order it against — so the two can land either way
 // round, and a stored answer of an ended change would sit in
-// code_mergeability_waits_idx, which needs=person walks, until its
+// code_mergeability_ready_idx or code_mergeability_waits_idx, which
+// readiness=ready and needs=person walk, until its
 // repository's purge. The record that ends a change clears what it stored
 // before ([clearReadiness]); this is the same rule for the record that lands
 // after it.
@@ -144,8 +145,9 @@ func applyMergeabilityKept(ctx context.Context, tx *sql.Tx, at applyContext, k M
 // for each whose row held an answer, ready or waiting on a person, and none
 // for the rest, which the statement does not write. An ended change merges
 // nothing, so it is ready for nobody and waits on nobody; and a row left
-// waiting would stay in code_mergeability_waits_idx, which needs=person walks
-// and whose partial predicate keeps it to the changes in front of the
+// ready or waiting would stay in code_mergeability_ready_idx or
+// code_mergeability_waits_idx, which readiness=ready and needs=person walk
+// and whose partial predicates keep them to the changes ready or in front of the
 // company's persons, until its repository's purge — since no record of its
 // home's refreshes an ended change. A reopen moves the change's version, so
 // its home's next pass judges it again (changesdue.go's refresh term).
@@ -175,7 +177,8 @@ func clearReadiness(ctx context.Context, tx store.Execer, ids []string) (int, er
 // than they do; and the
 // readiness of a list of ended changes cleared, each by its key, only where
 // the row holds an answer — a write naming waits_person rewrites the row's
-// entry in code_mergeability_waits_idx whatever the value, so a row with
+// entry in code_mergeability_waits_idx, as one naming ready does in
+// code_mergeability_ready_idx, whatever the value, so a row with
 // nothing to clear is not written.
 const (
 	writeMergeabilitySQL = `INSERT INTO code_mergeability (change_id, revision, target_ref, target_oid,
