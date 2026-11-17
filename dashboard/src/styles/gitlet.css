@@ -1783,6 +1783,10 @@
   margin: 0;
 }
 
+.code-spark--compact {
+  gap: 0;
+}
+
 .code-spark__ends {
   display: flex;
   justify-content: space-between;
@@ -2217,6 +2221,13 @@
   z-index: 1;
 }
 
+.code-list__summary {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
 .code-list__meta {
   display: flex;
   flex-wrap: wrap;
@@ -2436,34 +2447,114 @@
 
 /* ---- The workspace's listings ---------------------------------------------- */
 
-/* A REPOSITORY AS A ROW NAMES IT: its glyph, its name and its marks, then
-   its description. */
-.code-repo-cell {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
-  padding-block: var(--spacing-1);
+/* GITLET › REPOSITORIES: a row's name at the title step, its description on one line. */
+.code-repo-row__name {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
 }
 
-.code-repo-cell__head {
-  display: flex;
+.code-repo-row__description {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-repo-row__description[data-none] {
+  color: var(--color-text-tertiary);
+}
+
+/* A META ITEM wraps between its parts, never inside a phrase. */
+.code-repo-meta {
+  display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--spacing-1) var(--spacing-2);
+  gap: var(--spacing-1);
+  min-width: 0;
 }
 
-.code-repo-cell__name {
-  font-family: var(--font-family-mono);
-  font-weight: var(--font-weight-semibold);
+.code-repo-meta > span:not(.code-repo-meta__who, .code-repo-meta__by) {
+  white-space: nowrap;
+}
+
+/* WHO, a face kept beside its name. */
+.code-repo-meta__by {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.code-repo-meta > svg {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+
+.code-repo-meta__who {
   color: var(--color-text-primary);
-  overflow-wrap: anywhere;
+  font-weight: var(--font-weight-medium);
 }
 
-.code-repo-cell__description {
-  font-size: var(--font-size-xs);
+.code-repos .code-list__facts {
+  align-self: start;
+}
+
+/* Three fixed tracks, so the facts line up down the card. */
+.code-repo-facts {
+  display: grid;
+  grid-template-columns:
+    calc(2 * var(--size-control-sm)) calc(4 * var(--size-control-sm))
+    calc(3 * var(--size-control-sm));
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+.code-repo-facts > * {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.code-repo-facts__changes {
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.code-repo-facts__count {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
   color: var(--color-text-secondary);
-  overflow-wrap: anywhere;
+}
+
+.code-repo-facts__count > svg {
+  color: var(--color-text-tertiary);
+}
+
+.code-repo-facts__checks .code-check-mark {
+  min-width: 0;
+  font-size: var(--font-size-sm);
+}
+
+.code-repo-facts__checks .code-check-mark__word {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.code-repo-facts__spark .code-spark {
+  inline-size: 100%;
+}
+
+/* NO PUSH IN 14 DAYS: a quiet baseline where the bars would stand. */
+.code-repo-facts__quiet {
+  inline-size: 100%;
+  border-block-end: 1px dashed var(--color-border-default);
+}
+
+/* THE SORT at the toolbar's end. */
+.code-repos__sort {
+  margin-inline-start: auto;
 }
 
 /* A PUSH'S REFS: a ref a line — its glyph, its name, what became of it and
