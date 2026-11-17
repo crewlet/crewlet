@@ -540,10 +540,6 @@ var readOutsideTheDashboard = map[string]string{
 	// prints.
 	"work_inbox": "a script: GET /worklet/inbox, as docs/reference/api-endpoints.md prints it, and Worklet's " +
 		"own tool work_inbox",
-	// A HISTORY PAGE'S MARKS, answered ahead of the rooms that draw them: until
-	// the first reads it, a script reads the reference's path.
-	"code_commit_marks": "a script: GET /gitlet/repos/{name}/commit-marks, as docs/reference/api-endpoints.md " +
-		"prints it",
 	// GITLET'S SECTION COUNTS, answered ahead of the tabs that draw them: until the first reads it, a script
 	// reads the reference's path.
 	"code_counts": "a script: GET /gitlet/counts, as docs/reference/api-endpoints.md prints it",

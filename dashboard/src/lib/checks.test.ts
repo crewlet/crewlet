@@ -17,6 +17,7 @@ import { expect, test } from "vitest";
 import type {
   CodeCandidateRow,
   CodeCheckRow,
+  CodeTargetChecks,
   CodeQueueRow,
   CodeReadiness,
 } from "~/protocol/index.ts";
@@ -32,6 +33,9 @@ import {
   measuredChecks,
   queueBands,
   requiredMeter,
+  rollupFor,
+  rollupTitle,
+  rollupWord,
 } from "./checks.ts";
 
 const A = "a".repeat(40);
@@ -262,4 +266,83 @@ test("states and reasons are the engine's words, and an unknown one is drawn as 
   expect(ejectReasonWord("check_failed")).toBe("a required check failed");
   expect(ejectReasonWord("repo_mirrored")).toBe("the repository became a pull mirror");
   expect(ejectReasonWord("tide_turned")).toBe("tide_turned");
+});
+
+/** A rollup for `target`, passed unless a case says otherwise. */
+const rollup = (target: string, extra: Partial<CodeTargetChecks> = {}): CodeTargetChecks => ({
+  target,
+  state: "passed",
+  counts: { passed: 2 },
+  required: 2,
+  required_passed: 2,
+  ...extra,
+});
+
+// A ROW'S CHECK IS THE BRANCH READ'S, else the default branch's, else the first; none for
+// a commit with none. Mutation: always take the first.
+test("a commit's rollup is the branch read's, then the default's, then the first", () => {
+  const main = rollup("refs/heads/main");
+  const feature = rollup("refs/heads/feature", { state: "running" });
+  const other = rollup("refs/heads/other");
+  const mark = { commit: A, checks: [other, main, feature] };
+  expect(rollupFor(mark, "refs/heads/feature", "refs/heads/main")).toBe(feature);
+  expect(rollupFor(mark, "refs/heads/gone", "refs/heads/main")).toBe(main);
+  expect(rollupFor({ commit: A, checks: [other] }, "refs/heads/x", "refs/heads/main")).toBe(other);
+  expect(rollupFor({ commit: A }, "refs/heads/main", "refs/heads/main")).toBeUndefined();
+  expect(rollupFor(null, "refs/heads/main", "refs/heads/main")).toBeUndefined();
+});
+
+// A ROLLUP'S WORD: a failure names its first failing check and how many more; a state this
+// build does not know is the engine's word. Mutation: word a failure "Passed".
+test("a rollup is one word, a failure naming what failed", () => {
+  const main = "refs/heads/main";
+  expect(rollupWord(rollup(main))).toBe("Passed");
+  expect(rollupWord(rollup(main, { state: "running" }))).toBe("Running");
+  expect(rollupWord(rollup(main, { state: "pending" }))).toBe("Pending");
+  expect(rollupWord(rollup(main, { state: "cancelled" }))).toBe("Cancelled");
+  expect(rollupWord(rollup(main, { state: "deferred" }))).toBe("deferred");
+  const failed = (failing: CodeTargetChecks["failing"], more?: number) =>
+    rollupWord(
+      rollup(main, { state: "failing", failing, ...(more ? { failing_more: more } : {}) }),
+    );
+  expect(failed([{ name: "e2e", state: "failed", required: true }])).toBe("e2e failed");
+  expect(failed([{ name: "unit", state: "errored" }])).toBe("unit errored");
+  expect(failed([{ name: "e2e", state: "failed" }], 1)).toBe("e2e and 1 more failed");
+  expect(
+    failed([
+      { name: "e2e", state: "failed" },
+      { name: "lint", state: "errored" },
+    ]),
+  ).toBe("e2e and 1 more failed");
+  expect(failed([])).toBe("Failed");
+});
+
+// A ROLLUP'S TITLE counts in words, names the target only where it is not the branch read,
+// and says its times in words at the one clock's now. Mutation: name the target always.
+test("a rollup's title counts its checks and says when they ran", () => {
+  const now = Date.parse("2026-11-15T12:00:00Z");
+  const r = rollup("refs/heads/main", {
+    state: "failing",
+    counts: { passed: 2, failed: 1 },
+    required: 2,
+    required_passed: 1,
+    last_ended: "2026-11-15T07:00:00Z",
+  });
+  expect(rollupTitle(r, "refs/heads/main", now)).toBe(
+    "3 checks: 2 passed, 1 failed. 1 of 2 required passed. Last ended 5 hours ago.",
+  );
+  expect(rollupTitle(r, "refs/heads/feature", now)).toBe(
+    "3 checks for main: 2 passed, 1 failed. 1 of 2 required passed. Last ended 5 hours ago.",
+  );
+  const running = rollup("refs/heads/main", {
+    state: "running",
+    counts: { running: 1 },
+    required: 0,
+    required_passed: 0,
+    running_since: "2026-11-15T11:58:00Z",
+    more: true,
+  });
+  expect(rollupTitle(running, "refs/heads/main", now)).toBe(
+    "1 check: 1 running. Running since 2 minutes ago. Counted over the checks one read holds.",
+  );
 });

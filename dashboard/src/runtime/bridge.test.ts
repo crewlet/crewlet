@@ -230,6 +230,10 @@ describe("the comment layer", () => {
     expect(event({ capture: { id: 3, name: "plans.annual" } })).toMatchObject({
       capture: { id: 3, name: "plans.annual" },
     });
+    // A POINT OF THE VIEWPORT is in pixels, never held to a fraction.
+    expect(event({ capture: { id: 4, view: { x: 30, y: 1200 } } })).toMatchObject({
+      capture: { id: 4, view: { x: 30, y: 1200 } },
+    });
   });
 
   test("drops a request that is not exactly one", () => {
@@ -241,6 +245,8 @@ describe("the comment layer", () => {
       { capture: { id: 0, name: "pricing" } },
       { capture: { id: 1.5, point: { x: 0, y: 0 } } },
       { capture: { id: 2 } },
+      { capture: { id: 5, view: { x: 1, y: Number.POSITIVE_INFINITY } } },
+      { capture: { id: 6, view: "30,40" } },
       {},
     ]) {
       expect(event(fields)).toBeNull();

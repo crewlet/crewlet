@@ -108,6 +108,44 @@
   align-self: center;
 }
 
+/* GITLET'S FACE: its product mark in the box a seat's avatar takes. */
+.code-face {
+  display: inline-flex;
+  flex: none;
+  line-height: 0;
+  vertical-align: middle;
+}
+
+/* A CHECK'S VERDICT: a glyph and a word in the state's ink; the word carries it. */
+.code-check-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.code-check-mark[data-tone="success"] {
+  color: var(--color-feedback-success-ink);
+}
+.code-check-mark[data-tone="danger"] {
+  color: var(--color-feedback-danger-ink);
+}
+.code-check-mark[data-tone="info"] {
+  color: var(--color-feedback-info-ink);
+}
+.code-check-mark__word {
+  font-weight: var(--font-weight-medium);
+}
+
+/* A TAG NAMING A COMMIT, and a change's pill as a link: no underline, the focus ring kept. */
+.code-tag-chip,
+.code-change-ref {
+  display: inline-flex;
+  border-radius: var(--radius-pill);
+  text-decoration: none;
+}
+
 /* THE DESCRIPTION: a card its owner opened, the first thing on the page. */
 .code-description {
   border: 1px solid var(--color-border-default);
@@ -1535,6 +1573,38 @@
 
 .code-commit-prov__key {
   color: var(--color-text-primary);
+}
+
+/* A ROW'S CHECK keeps its width while the marks are read, so the id never moves under the pointer. */
+.code-commit-check {
+  display: inline-flex;
+  min-inline-size: calc(4 * var(--size-control-sm));
+}
+
+.code-commit-landed {
+  color: var(--color-text-secondary);
+}
+
+/* THE HISTORY'S SEARCH at the toolbar's end; a phone gives it a line of its own. */
+.code-commits-search {
+  flex: 0 1 calc(12 * var(--size-control-sm));
+  margin-inline-start: auto;
+}
+@container page (width < 640px) {
+  .code-commits-search {
+    flex: 1 1 100%;
+  }
+}
+
+/* WHY A HISTORY'S MARKS ARE MISSING, said once above its rows. */
+.code-commit-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0 0 var(--spacing-3);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }
 
 /* ---- A commit's page (`routes/gitlet/commit/`) --------------------------- */

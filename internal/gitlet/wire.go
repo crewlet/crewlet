@@ -1561,6 +1561,10 @@ type ReadQuery struct {
 	// ids, once each, required for that kind and refused on every other. A request
 	// field, no record's, so no versionedFields row: an older build refuses the kind.
 	CommitMarks []string `json:"commit_marks,omitempty"`
+	// DayBounds is the asker's day boundaries, a day between each two: on a push history, and with
+	// RepoFacts on a listing of repositories or a read of one ([ReadQuery.validateDayBounds]); refused
+	// on every other kind. A request field, no record's: an older build refuses it unread.
+	DayBounds []time.Time `json:"day_bounds,omitempty"`
 	// Counts is a `counts` read's parts, each a key of its own so an older build refuses one
 	// it lacks unread; required there and refused on every other kind. A request field, no record's.
 	Counts *CountsQuery `json:"counts,omitempty"`
@@ -1615,7 +1619,10 @@ type ReadAnswer struct {
 	// executor's pushes, oldest first — each repository the run was given
 	// in its query's order, and each one's pushes in log order.
 	Pushes []PushRow `json:"pushes,omitempty"`
-	Refs   []RefRow  `json:"refs,omitempty"`
+	// PushDays is the repository's pushes on each of the asker's days, oldest first, zeros included:
+	// answered on a push history asked with [ReadQuery.DayBounds], whatever the page holds.
+	PushDays []int64  `json:"push_days,omitempty"`
+	Refs     []RefRow `json:"refs,omitempty"`
 	// RefsDetail is a refs page read in detail, in place of Refs, and
 	// ActiveBranches a first page's count of the branches moved since
 	// [RefListingQuery.ActiveSince].
@@ -2554,6 +2561,9 @@ type RepoSummary struct {
 	// Pushes is pushes EVER.
 	Pushes     int64     `json:"pushes"`
 	LastPushAt time.Time `json:"last_push_at,omitzero"`
+	// Spark is its pushes on each of the asker's days, oldest first, zeros included: Spark[i] those
+	// landed from DayBounds[i] up to DayBounds[i+1]. Answered only where RepoFacts asks with DayBounds.
+	Spark []int64 `json:"spark,omitempty"`
 	// ChangeCounts is its changes by state, answered only where [ReadQuery.RepoFacts] asks.
 	ChangeCounts *ChangeCounts `json:"change_counts,omitempty"`
 	// Card is what a listing's row draws of it, where [ReadQuery.RepoFacts] asks: absent from a
@@ -2598,6 +2608,9 @@ type RepoDetail struct {
 	// row never carries, read in the same transaction as the rules it does,
 	// so every source names a rule of the row.
 	RuleSources []RuleSource `json:"rule_sources,omitempty"`
+	// Pushers is who pushed to it on the UTC days that begin within the asker's day bounds, most
+	// first: answered only where RepoFacts asks with DayBounds ([Pushers]).
+	Pushers *Pushers `json:"pushers,omitempty"`
 	// Expunge is where the repository's expunges stand ([ExpungeState]):
 	// the one open, the purge a person asked for and not yet served, and the
 	// last one committed — the repository's own row, read with the rest of
