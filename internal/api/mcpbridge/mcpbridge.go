@@ -90,13 +90,172 @@
 // budget's per-request refusal. A detached run's loop is its harness's own, the
 // engine's phase is suspended while it runs, and those are settled when the run
 // is collected and its turn resumes. A person's notes to the turn it serves
-// from the run's note inbox, at the harness's own boundaries — see steer.go, "A
-// NOTE INBOX" — and decides nothing about them. A load of one of the run's own
+// from the run's note inbox, at the harness's own boundaries — see "A note
+// inbox" below — and decides nothing about them. A load of one of the run's own
 // skills, which its harness reports, it records as the run's own load of the
-// Tool Skill it stands for — see skills.go. And which session the job's box
+// Tool Skill it stands for — see "A run's own skills, and what loading one
+// unlocks" below. And which session the job's box
 // started — the one its launch continued, or one of its own in that one's place
 // — it reads off the token the box dials, one of the job's two, and has the
 // run's skill guard held to it before the run's first call — see started.go.
+//
+// # A note inbox
+//
+// A person's notes to the run's turn, at the run's own steps.
+// An executor is its harness's own loop, so the engine has no round of it to open
+// with a note. What the harness has is boundaries of its own — Claude Code's hooks
+// after a batch of tool calls and as it is about to finish, OpenCode's next
+// step — and a way to ask for something there. So a run's session carries the
+// run's note INBOX ([Session.Steer]), and the bridge serves it two ways, both
+// behind the run's own token and nothing else:
+//
+//   - THE steer_take TOOL ([SteerTool]) on the run's existing MCP server, which
+//     a hook calls. It is NEVER LISTED, so no harness offers it to its model, and
+//     it is answered by the server's own receiving middleware, so the call never
+//     reaches the run's surface and is never recorded on its ledger: it is the
+//     harness asking, not the model. Its answer is ALWAYS text — empty for nothing
+//     — never an error: measured on Claude Code 2.1.263 and 2.1.310, a hook's
+//     call answered with an error made the harness drop and re-initialise the
+//     whole bridge, telling the model its tools were still connecting; one the
+//     bridge turns away with a 503 is a hook error the run goes on past, the
+//     bridge kept (2.1.310 and 2.1.322, [Bridge.serveMCP]). And the opening's
+//     end waits for that answer before it closes the box's sessions, for as
+//     long as the box waits for it ([binding.holdHook]): an answer the close
+//     refused would fail the call all the same, at a cost no probe has
+//     measured, and a take's notes would be recorded handed over to a step
+//     that never had them.
+//   - THE NOTES ROUTE ([SteerPattern]) a plugin inside the harness polls: GET
+//     `notes?after=<seq>` holds for a note for up to [steerHold] and answers the
+//     ones waiting past the cursor, rendered, each recorded served to the run's
+//     job before it is answered (the inbox's [SteerInbox.Wait]); POST `read`
+//     records the notes the harness reported putting in front of its model.
+//
+// THE BRIDGE DECIDES NOTHING ABOUT NOTES. What waits, what fits, what is read
+// and what is recorded is the inbox's (internal/engine, runsteer.go); the
+// bridge routes a call to the session that holds the inbox — relayed to the
+// seat's holder like every bridged call ([Bridge.Join]) — keeps a hook's call to
+// the boundaries the main agent's loop makes, and bounds how long either is
+// held.
+//
+// [ErrNoteUntaken] is what a [SteerInbox] answers a [SteerInbox.Read] with
+// where it left a note the read names untaken that the read made again can
+// have taken. An inbox that serves no job that takes notes recorded nothing:
+// closed, the opening that served it having ended; not yet bound to its job,
+// which no opening serves (the engine binds a run's inbox before the bridge
+// files the opening that serves it, so a box that reaches the opening the
+// moment it is filed finds the inbox serving); or bound to a job the run's
+// record takes no read of any more, a note the read names still waiting
+// there: the job's completion claimed the run while its opening still serves,
+// the run's ending is decided, or a later job carries it on. And one whose
+// node does not hold the key a note the read names is sealed under, that note
+// still waiting for the job, recorded every other note named, as ever, and
+// not that one, which no read of that node's can take. Declared here, by the
+// consumer, which tells it from a write that could not be confirmed: the read
+// is turned away to ask again, as one reaching its opening as it ends is
+// ([Bridge.serveSteer]), and its next try reaches the inbox that serves the
+// job now, the run that goes on once a claim is handed back, or a node that
+// holds the key.
+//
+// A NOTES CALL THAT REACHES ITS OPENING AS IT ENDS IS TURNED AWAY TO ASK AGAIN
+// ([Bridge.serveSteer]), as a poll the opening can no longer hold is
+// ([Bridge.pollNotes]): a 503 with a Retry-After. The routing found the opening before its end took it out of
+// the bridge's table, and the end took its inbox before the call was served:
+// the run ended, the seat left this node, or a recovery opened the job again.
+// The call's next try is routed afresh, to the opening that serves the box
+// now, here or on the seat's next holder, or refused where the run is over.
+// NEVER THE 404 of a session that never had an inbox, which says the run has
+// no notes route at all: the OpenCode plugin reads that as it reads a refused
+// token, and stops asking for the rest of its run, so a box that goes on
+// would never be handed a note between its steps again. And the same holds
+// for a read whose opening the end overtakes after the route's check, on its
+// way to the inbox ([readNotes]).
+//
+// A READ ([readNotes]) IS RECORDED OR TURNED AWAY TO ASK AGAIN, NEVER ANSWERED
+// DONE WITH NOTHING RECORDED: the plugin would never confirm its notes again, and the
+// record would keep each served and unread, for the run's ending to report
+// unconfirmed though OpenCode delivered it, and a later launch to tell again
+// as one the session may already show. It is turned away as a read that
+// reached the opening after its end took the inbox is ([Bridge.serveSteer]),
+// at either of its last two steps:
+//
+//   - A RUN WHOSE TOOLS ARE CLOSED takes nothing more from its notes (see
+//     [Bridge.pollNotes]), and records no read either, whether or not its
+//     opening has ended yet. A seat leaving this node leaves its grants,
+//     which closes the fence, before its release ends the opening, and its
+//     box goes on with the seat's next holder, which the read's next try
+//     reaches and which records it. A person's stop closes the fence too, and
+//     the run's end then refuses the read's next try. Answered done, the read
+//     was recorded nowhere, and the seat's next holder was never asked.
+//   - AN INBOX THAT SERVES NO JOB says it took the read nowhere
+//     ([ErrNoteUntaken]): the end closed it after the route found it
+//     serving. The inbox decides that under its own lock, which its close
+//     takes, so a read either found it serving and is recorded through the
+//     store, which a later close does not touch, or did not and is not
+//     recorded at all. And so does an inbox whose job the run's record takes
+//     no read of any more, though it still serves: the job's completion
+//     claimed the run before the reclaim closes its session, so the read
+//     made again is recorded where the claim is handed back and the run goes
+//     on in its box, and refused once the run is over. And so does an inbox
+//     whose node does not hold the key a note the read names is sealed
+//     under, once it has taken the rest: the read made again is recorded
+//     where it reaches a node that holds the key.
+//
+// # A run's own skills, and what loading one unlocks
+//
+// A seat's executor can be handed the company's tool skills as its harness's
+// OWN (internal/sandbox, RunRequest.Skills): listed to its model, and loaded
+// with the harness's own skill tool, which tells nobody. So a hook of the
+// harness's (Claude Code) or a plugin of its own (OpenCode) reports each load
+// here, by the name the skill is listed under, and the bridge records it as
+// THE RUN'S OWN LOAD of the Tool Skill that name stands for ([Session.Skills]):
+// a call of load_tool_skill with the skill's key, made on the opening as a
+// call of the run's is ([binding.Call]). One kind of load, then, however it was
+// made: the required-skill guard unlocks what the skill covers by its own
+// reading of the call, the skill's page records the read, the run's record
+// lists the load, and every rebuild of the run's surface replays it from that
+// record, as it replays a load the run made over the bridge.
+//
+// load_tool_skill IS NEVER LISTED to a harness that loads its skills itself:
+// its own tool is the loader its model knows, and a second beside it would
+// put the same text in front of the model a second way. It stays on the run's
+// surface — a reported load is a call of it.
+//
+// TWO WAYS IN, each behind the run's own token and nothing else, as a
+// person's notes are ("A note inbox" above):
+//
+//   - THE skill_loaded TOOL ([SkillTool]) on the engine's own server, which
+//     a hook calls. NEVER LISTED, so no model is offered it, and no model
+//     can unlock a skill it never read; answered by the server's receiving
+//     middleware, so the hook's call never reaches the run's surface itself;
+//     and its answer is ALWAYS empty text, never an error: a hook's call
+//     answered with an error makes Claude Code drop and re-initialise the
+//     whole bridge (measured, see "A note inbox"). The opening's end waits for
+//     that answer before it closes the box's sessions, for as long as the
+//     box waits for it, as for a take's ([binding.holdHook]), since an
+//     answer the close refused fails the call all the same, at a cost no
+//     probe has measured.
+//   - THE SKILL ROUTE ([SkillPattern], [Bridge.serveSkill]), which a plugin
+//     posts each load to: POST `{"skill": "<name>"}`, answered 204 — and 404
+//     for a session handed no skills, which has no skill route at all.
+//
+// A NAME THE RUN WAS NOT HANDED — a skill of the checkout's, or of the
+// image's — is no Tool Skill of the run's, and is answered as quietly and
+// recorded nowhere.
+//
+// A REPORT THE OPENING CANNOT COUNT IS ANSWERED 204 ALL THE SAME, NEVER TURNED
+// AWAY: one reaching the opening as it ends, whose load the end refuses and
+// records nowhere, and one behind a fence that has closed (the seat moved, or
+// a person stopped it), whose load is recorded refused ([binding.Call]).
+// Neither unlocks anything. A notes read in the same place is turned away to
+// ask again ([readNotes]), because its plugin confirms again. The skills
+// plugin never posts a load again, whatever it is answered, and ends its
+// reports for the rest of the run on a 401 or a 404 (internal/sandbox/executor,
+// opencode_skills.js): a 503 would buy nothing, and a refusal would end the
+// reports of a run that goes on with the seat's next holder. What makes good a
+// load that did not count is the required-skill guard: the run's next call to
+// a tool the skill covers is refused, naming the skill to load, and the load
+// its model makes then is reported afresh, to the opening that serves the run
+// by then.
 //
 // # A call is on its run's record before it runs
 //
@@ -245,9 +404,12 @@
 // still running and must not be made again. NOT A FAILURE, as the tool loop's
 // own "still running" is not (internal/agent/toolloop): a harness hands its
 // model a failed result as a call that failed, and a model makes a failed call
-// again, where this one is running and its effect is still to come. The call's
-// handler stops its beat and waits for it, as before any answer, so no progress
-// follows. The ending waits for each answer it gave to be out
+// again, where this one is running and its effect is still to come. A call
+// whose entry is still being written ahead of it, or that waits for its
+// admission ([binding.writeAhead]), is answered as not run, failed, as a call
+// reaching the opening after its end is ([ending.notRun]), and never runs. The
+// call's handler stops its beat and waits for it, as before any answer, so no
+// progress follows. The ending waits for each answer it gave to be out
 // ([toolsession.Call.Over]); for the answer of a call whose tool returned just
 // before it, which its own result answers, once its record is made; and for
 // every answer the opening gave without running a call, the refusal of one that
@@ -286,11 +448,15 @@
 // PAST THAT BOUND THE ENDING DOES NOT WAIT: an answer still on its way is one a
 // box is not reading, and a box that does not read must not hold an ending. It
 // ends the opening's ledger and returns, and the bridge closes the sessions
-// behind it once those answers are out: once the box reads them, or its
+// behind it ([bridgedCalls]) once those answers are out: once the box reads them, or its
 // connection ends — at the latest when its box is reclaimed, or this node's
 // listener closes its connections as the node stops. An answer whose write
 // fails is one its box never reads: its harness sees the call's request fail,
 // and the call is recorded as nobody waited for it, as below.
+//
+// NOTHING IS OWED THE RUN'S LOG AS THE OPENING ENDS: every call it ran has its
+// identity there from before it ran ([Ledger.Begin]), and a call still running
+// makes its one update itself as its tool returns.
 //
 // THE CALL'S TOOL RUNS ON TO ITS OWN END, and the call's one update is made
 // once it returns ([binding.conclude]) — after the opening ended — as one
@@ -319,6 +485,146 @@
 // point, so every continuation of its round built after it landed is told its
 // result from the run's log (ADR-0073), while the session that made it holds
 // the ending's answer, never the call's output.
+//
+// # The end's bound
+//
+// An opening's end waits for its answers for at most [endAnswerWait], FIVE
+// SECONDS. The end's own answers to the calls it holds are written at once:
+// the call's beat is stopped and the SDK writes the answer as any, and a
+// relayed one lands in the relay's buffer, which never blocks below its bound
+// (internal/httprelay). What the bound is sized for is a call whose tool
+// returned just before the end, whose own answer follows its record: the
+// update of its entry on the run's log and its retries (internal/engine's
+// appendRetryWaits, 1.75 seconds of waits between four attempts) and, after an
+// activation, the hold for the box's re-list (internal/toolsession's
+// relistWait, two seconds) — under four seconds on a coordination store that
+// answers. FIVE, as the write ahead of a call is given (internal/engine's
+// beginBudget, five alone because a harness's own minute bounds that write,
+// crewlet/crewlet#1150) and the record of a job's session start is for its
+// reason, beside its row's crossing (sessionStartRecordBudget): a store that
+// has not answered in five is in an outage this wait would not see the end
+// of. Past it the end waits no longer: an answer still on its way is one a box
+// is not reading, and the box's sessions are closed behind the end once it is
+// out. NOTHING HOLDS THE SUM TO THE BOUND: both waits live in other packages,
+// one of them the engine's, which this one cannot import, so moving either is
+// reading this again.
+//
+// A HOOK'S TAKE OF THE RUN'S NOTES, under way as the end comes, is waited for
+// within it too ([binding.holdHook]): a take is bounded by [steerTakeBudget],
+// the same five seconds, started as the take starts, so the answer of a take
+// begun before the end is due within this wait wherever the store answers. A
+// take whose store stalls past its budget is waited for behind the end, as any
+// answer past this bound is, and is never refused while its box still waits
+// for it. A box that gave the call up, or whose connection failed, waits for
+// no answer, and its request's end lets the hold go before any write. Nothing
+// holds the two to each other either: a take's budget raised past this wait
+// would leave more ends returning with their close behind them, never an
+// answer its box waits for refused.
+//
+// # A hook's answer, held for the end
+//
+// A HOOK'S CALL NEVER REACHES [binding.Call], which holds every answer it
+// gives: the opening's own server answers it in a middleware of its own,
+// steer_take's ([binding.steerMiddleware]) and skill_loaded's
+// ([binding.skillMiddleware]). Unheld, a hook's answer that came after the
+// end began to close the box's sessions was refused by the SDK, which writes
+// no answer on a session whose close has begun. A take whose write had landed
+// on the run's record answered into that close: the record held its notes
+// handed to a step that never had them, and nothing said otherwise, since a
+// box sends no cancel for an answer it never got. And the hook's call failed,
+// its request ended with no answer, which no probe has measured a harness's
+// handling of: what was measured is a hook's call answered with an error,
+// which Claude Code answers by dropping and re-initialising the whole bridge
+// (see "A note inbox"). So [binding.holdHook] holds the answer as a
+// refused call's is held, and reads the opening's note inbox under the same
+// lock, the hold first: an end either came before, and the hook takes nothing
+// from the inbox, or it finds the hold, and waits for the hook's answer
+// ([binding.answersOut]) before it closes the box's sessions. Held past the
+// end too, as the refusal of a call after it is: the empty answer of a hook
+// that reaches the opening while its end waits reaches the box, rather than
+// the close's failure.
+//
+// THE HOLD ENDS WITH THE REQUEST, as a call's [toolsession.Call.Over] does:
+// once the answer's write has returned, or BEFORE ANY WRITE where the box gave
+// the call up or its connection failed. The SDK cancels the request's context
+// on the box's `notifications/cancelled` while the answer is still to come,
+// and on the connection's failure (its reader's exit, a broken writer, go-sdk
+// v1.8.0). The hold then lets go with the answer unwritten, and an end may
+// close the box's sessions under it, which loses nothing the hold could keep:
+// a box that gave the call up discards a late answer (measured on Claude Code,
+// [steerTakeBudget]), and a failed connection carries none.
+//
+// # A session opened as its opening ends
+//
+// THE SDK OPENS THE SESSION AS IT SERVES THE REQUEST, and the end closes the
+// sessions the opening's servers hold as it finds them once the answers it
+// waits for are out ([binding.closeSessions]). So the end waits for a request
+// that opens a session ([binding.holdSessionOpen]): its session is then one of
+// those it closes, and the request's answer, an initialize's, reaches the box
+// before the close, which writes none. A session opened after the close began
+// would be one nothing ever closed. And a close that came before the SDK had
+// opened it missed it altogether, and left it live on an opening that refuses
+// every call made on it, where a box told to make a call again makes it on
+// that same session.
+//
+// THE HANDLER'S RETURN, NEVER THE REQUEST'S CONTEXT. The context ends before
+// it where the box gave the request up, its connection failed, or the node
+// that relayed it closed it, and the handler goes on: still opening the
+// session, which it would then file after the end's close had looked, or
+// still answering on it, whose close waits for that answer, as the SDK's close
+// of a session waits for every request in flight on it, and so held the end
+// past its bound. By the handler's return the session is filed among the
+// server's, or closed.
+//
+// UNDER ONE LOCK WITH THE END, which marks the opening ended under it before
+// it waits for anything ([binding.endKeeping]): a request either came first,
+// and the end waits for it, or finds the opening ended, and is never served.
+//
+// A REQUEST THAT OPENS A SESSION ONCE ITS OPENING HAS ENDED is TURNED AWAY TO
+// ASK AGAIN ([Bridge.serveMCP]), a 503 with a Retry-After, as a call to the
+// notes route is ([Bridge.serveSteer]): its opening ended after the routing
+// found it (the run ended, the seat left this node, or a recovery opened the
+// job again), and the request's next try is routed afresh, to the opening
+// that serves the box now, here or on the seat's next holder, or refused where
+// the run is over. NEVER SERVED THERE: a session opened on an ended opening is
+// one its end never closes, which answers every call made on it as one not
+// run, a box told to call again calling on it again. And never the SDK's 400
+// "no server available", which Claude Code never makes again at a box's
+// startup. A server the opening does not serve keeps that 400: that request
+// is malformed, and asking again would not mend it.
+//
+// THE MCP HANDLER IS HANDED THE OPENING THE ROUTING FOUND ([servedOpening]),
+// and never reads the token again: the routing reads it once, as the request
+// arrives, and that is the request's credential to its end, so a token that
+// expires while its request waits is still the one it was admitted under.
+// Read again, it named no opening where the opening ended between the routing
+// and the handler, or named the opening a recovery put in its place, which no
+// step had held to the session the box started ([Bridge.serveBegun]).
+//
+// WHAT A BOX DOES WITH THE 503, measured on Claude Code 2.1.310 and 2.1.322,
+// which behave alike and read no Retry-After. A request opening a session at
+// the box's startup is made again three times, about 0.5, 2 and 6 seconds
+// after the first, and the server is given up for the run where all three
+// meet a 503 too; one opening a session again after the box's session was
+// lost mid-run is made five times within about 15 seconds, at once and then
+// 1, 2, 4 and 8 seconds apart, then up to eight more times in the background
+// over the minutes that follow while the answer stays a 503. A call that meets
+// a 503 ([Bridge.forward], [Bridge.heldOnly]) is not made again: the model's
+// call fails, a hook's call is a hook error the run goes on past, and the CLI
+// keeps the server and its session. The 400 this 503 replaced was never made
+// again at a box's startup, which left the box without its tools for the run.
+// OpenCode's own MCP client was not measured; its notes plugin, the notes
+// route's one client, asks again on its own backoff and reads no Retry-After
+// either.
+//
+// THE BRIDGE DOES NOT ROUTE THE REQUEST AGAIN ITSELF: the 503 fires only where
+// the opening ended in the instant between the routing that found it and the
+// session's hold, in which [Bridge.serveBegun] runs nothing but
+// [binding.begin], and the box's own next try is routed afresh.
+//
+// A request on a session it names needs neither: that session is closed by the
+// opening's end, and the SDK answers a request on a closed one with the 404
+// that has a client open a new session, through the routing.
 //
 // # A run outlives the process that opened its session
 //
@@ -363,6 +669,47 @@
 // alone ([FromLoopback]), beside its probes. The route is the same handler
 // there, so a call for a seat the node has since handed on is relayed to the
 // seat's holder exactly as a call that landed on an ingress node is.
+//
+// # The session is the seat holder's, and only the token is the fleet's
+//
+// A session holds a live [tools.Surface]: the seat's MCP children, its skill
+// guard, its per-turn recording. Those are objects in the process that holds
+// the seat, so ONLY THE NODE HOLDING THE RUN'S SEAT CAN SERVE ITS SESSION —
+// the node that launched it, or the one that took the run over and opened its
+// job's session again ([Bridge.Open]). Signing shares authentication across a
+// fleet; it does not and could not share the surface. So a call is answered
+// by the holder wherever it lands ([Bridge.Join]), and the holder's answer
+// starts from what it can do for the call's job ([Bridge.verdict]).
+//
+// "OVER" ONLY ONCE THIS NODE HAS FINISHED TAKING THE SEAT ([Bridge.SeatReady]):
+// a node that has just taken a seat opens its running jobs' sessions again as
+// it recovers the seat, and until it has, a missing opening says nothing about
+// the run.
+//
+// A PINNED SESSION IS ITS OPENER'S FOR LIFE ([route]), and the relay has
+// already held a call to the incarnation its token names, so an opening that
+// is not here is a run that is over.
+//
+// ONE MOMENT FOR THE OPENING AND THE SEAT'S READINESS, read under one lock
+// ([Bridge.verdict]), as the relay's admission reads them: a seat leaving this node takes its readiness and its
+// openings in one step ([Bridge.ReleaseSeat]), and read apart, the readiness
+// from before that step and the opening from after it said that a run whose
+// box goes on with the seat's next holder is over, which the box's harness
+// takes for good.
+//
+// A RELAYED CALL WHOSE OPENING LEFT AFTER ITS ADMISSION is answered as this
+// node can answer it now ([Bridge.heldOnly]), since the relay admits a call
+// and starts its handler after: refused where the run is over, closed or
+// replaced by a relaunch's job, as one reaching this node's own route is; and
+// where the seat left this node, turned away to ask again, a 503 with a
+// Retry-After, as one that found no holder in time is ([Bridge.forward]), its
+// next try relayed to the seat's next holder; and where a recovery opened the
+// job again, served by the opening that serves the box now. Never told that a
+// run going on with the seat's next holder is over: a refusal says the run is
+// over, which OpenCode's plugins read as the end of the run's notes and of its
+// skill reports for the rest of the run, and a box's MCP client as a refused
+// credential. Every route the relay serves takes that one step: the notes
+// route, the skill route and the MCP endpoint alike.
 //
 // # The Host a call may name
 //
@@ -966,32 +1313,17 @@ func New(opts Options) (*Bridge, error) {
 		hold:     steerHold,
 		calls:    newBridgedCalls(),
 	}
-	// NO IDLE TIMEOUT, deliberately. A session's lifetime is its RUN's —
-	// [Bridge.Close] ends every MCP session the moment the run ends — and
-	// a harness legitimately goes quiet for as long as a build or a
-	// test suite takes, so an idle clock here would cut a live run off from
-	// its tools mid-job for no reason the run could see.
-	//
-	// NO HOST CHECK, the SDK's included: the token in the path is the
-	// route's credential, and the one session whose call's Host is judged
-	// — one held to this host's loopback — is judged in the routing in
-	// front of this handler ([loopbackRefusal]). See the package doc.
-	//
-	// A REQUEST'S BODY IS HELD TO WHAT THE RELAY CARRIES ([httprelay.MaxBody]):
-	// a call that lands on a node other than its seat's holder is relayed
-	// there whole, and one past that is refused before it is sent, so a
-	// larger body would be a call served on one node and refused on another.
-	// Stated here rather than left to the SDK's own default, which happens
-	// to be the same figure today and answers to nothing of the engine's.
-	//
-	// THE OPENING IS THE ONE THE REQUEST'S ROUTING FOUND, handed to the
-	// handler on the request ([Bridge.serveMCP]), and the token is never read
-	// again: read again, it named no opening where the opening ended between
-	// the routing and the handler, or named the opening a recovery put in its
-	// place, which no step had held to the session the box started
-	// ([Bridge.serveBegun]); and a nil server here is the SDK's 400 "no server
-	// available", which Claude Code never makes again at a box's startup
-	// ([Bridge.serveMCP]).
+	// NO IDLE TIMEOUT: a session lives as long as its run ([Bridge.Close] ends
+	// it), and a harness goes quiet as long as a build takes, so an idle clock
+	// would cut a live run off from its tools mid-job. NO HOST CHECK, the SDK's
+	// included (package doc, "The Host a call may name"). A BODY IS HELD TO
+	// WHAT THE RELAY CARRIES ([httprelay.MaxBody]): a call relayed whole to its
+	// seat's holder is never served on one node and refused on another, and the
+	// SDK's default, the same figure today, answers to nothing of the engine's.
+	// THE OPENING IS THE ONE THE REQUEST'S ROUTING FOUND, handed on the request
+	// ([Bridge.serveMCP]), and the token is never read again: the package doc's
+	// "A session opened as its opening ends" has why; a nil server here is the
+	// SDK's 400 "no server available".
 	b.streamable = mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		opened, _ := r.Context().Value(servedOpening{}).(*binding)
 		if opened == nil {
@@ -1480,33 +1812,12 @@ func (b *Bridge) heldLocked(sub subject) *binding {
 // verdict is what THIS NODE can do for a token's job: serve its opening, say
 // that the run is over, or say it does not hold the run's seat — not yet, or no
 // longer. And the job's live opening here, nil where it holds none
-// ([Bridge.held]), read in the same moment as the verdict.
-//
-// # The session is the seat holder's, and only the token is the fleet's
-//
-// A session holds a live [tools.Surface]: the seat's MCP children, its skill
-// guard, its per-turn recording. Those are objects in the process that holds
-// the seat, so ONLY THE NODE HOLDING THE RUN'S SEAT CAN SERVE ITS SESSION —
-// the node that launched it, or the one that took the run over and opened its
-// job's session again ([Bridge.Open]). Signing shares authentication across a
-// fleet; it does not and could not share the surface. So a call is answered
-// by the holder wherever it lands ([Bridge.Join]), and the holder answers it
-// from here.
-//
-// "OVER" ONLY ONCE THIS NODE HAS FINISHED TAKING THE SEAT ([Bridge.SeatReady]):
-// a node that has just taken a seat opens its running jobs' sessions again as
-// it recovers the seat, and until it has, a missing opening says nothing about
-// the run.
-//
-// A PINNED SESSION IS ITS OPENER'S FOR LIFE ([route]), and the relay has
-// already held a call to the incarnation its token names, so an opening that
-// is not here is a run that is over.
-//
-// ONE MOMENT FOR THE OPENING AND THE SEAT'S READINESS, read under one lock: a
-// seat leaving this node takes its readiness and its openings in one step
-// ([Bridge.ReleaseSeat]), and read apart, the readiness from before that step
-// and the opening from after it said that a run whose box goes on with the
-// seat's next holder is over, which the box's harness takes for good.
+// ([Bridge.held]), read with the seat's readiness under one lock, since a seat
+// leaving this node takes both in one step ([Bridge.ReleaseSeat]). "OVER" ONLY
+// ONCE THIS NODE HAS FINISHED TAKING THE SEAT ([Bridge.SeatReady]), or for a
+// pinned session, which is its opener's for life ([route]). The package doc's
+// "The session is the seat holder's, and only the token is the fleet's" has
+// why.
 func (b *Bridge) verdict(sub subject) (*binding, httprelay.Verdict) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -1714,51 +2025,15 @@ func opensSession(r *http.Request) bool {
 // serveMCP serves a request of the job's endpoint, or of one of the seat's MCP
 // servers beneath it ([ServerPattern]), on the opening its routing found
 // ([Bridge.routed], or [Bridge.heldOnly] for a relayed call) and held to the
-// session the job's box started ([Bridge.serveBegun]).
-//
-// ON THAT OPENING AND NO OTHER: the MCP handler is handed it on the request
-// ([servedOpening]), and never reads the token again. The routing reads it once,
-// as the request arrives, and that is the request's credential to its end.
-//
-// A REQUEST THAT OPENS A SESSION ([opensSession]) IS SERVED ONLY BY AN OPENING
-// THAT HAS NOT ENDED, and that opening's end waits for the MCP handler to
-// return it before it closes the box's sessions ([binding.holdSessionOpen]), so
-// the session the SDK opens as it serves the request is among those the end
-// closes. One whose opening ended after its routing found it is TURNED AWAY TO
-// ASK AGAIN, a 503 with a Retry-After, as a call to the notes route is
-// ([Bridge.serveSteer]): the run ended, the seat left this node, or a recovery
-// opened the job again, and the request's next try is routed afresh, to the
-// opening that serves the box now, here or on the seat's next holder, or
-// refused where the run is over. NEVER SERVED THERE: a session opened on an
-// ended opening is one its end never closes, which answers every call made on
-// it as one not run, a box told to call again calling on it again. And never
-// the SDK's 400 "no server available", which Claude Code never makes again at
-// a box's startup (below).
-//
-// WHAT A BOX DOES WITH THE 503, measured on Claude Code 2.1.310 and 2.1.322,
-// which behave alike and read no Retry-After. A request opening a session at
-// the box's startup is made again three times, about 0.5, 2 and 6 seconds
-// after the first, and the server is given up for the run where all three
-// meet a 503 too; one opening a session again after the box's session was
-// lost mid-run is made five times within about 15 seconds, at once and then
-// 1, 2, 4 and 8 seconds apart, then up to eight more times in the background
-// over the minutes that follow while the answer stays a 503. A call that meets
-// a 503 ([Bridge.forward], [Bridge.heldOnly]) is not made again: the model's
-// call fails, a hook's call is a hook error the run goes on past, and the CLI
-// keeps the server and its session. The 400 this 503 replaced was never made
-// again at a box's startup, which left the box without its tools for the run.
-// OpenCode's own MCP client was not measured; its notes plugin, the notes
-// route's one client, asks again on its own backoff and reads no Retry-After
-// either.
-//
-// THE BRIDGE DOES NOT ROUTE THE REQUEST AGAIN ITSELF: the 503 fires only where
-// the opening ended in the instant between the routing that found it and the
-// session's hold, in which [Bridge.serveBegun] runs nothing but
-// [binding.begin], and the box's own next try is routed afresh.
-//
-// A request on a session it names needs neither: that session is closed by the
-// opening's end, and the SDK answers a request on a closed one with the 404
-// that has a client open a new session, through the routing.
+// session the job's box started ([Bridge.serveBegun]), handed to the MCP
+// handler on the request ([servedOpening]): the token is never read again.
+// A REQUEST THAT OPENS A SESSION ([opensSession]) is served only by an opening
+// that has not ended, whose end waits for the handler to return it
+// ([binding.holdSessionOpen]); one whose opening ended after its routing found
+// it is TURNED AWAY TO ASK AGAIN, a 503 with a Retry-After, never served there
+// and never the SDK's 400. A request on a session it names needs neither. The
+// package doc's "A session opened as its opening ends" has why, and what a box
+// does with the 503 (measured).
 func (b *Bridge) serveMCP(w http.ResponseWriter, r *http.Request, opened *binding) {
 	if opensSession(r) {
 		// HELD UNTIL THE HANDLER HAS RETURNED THE REQUEST, never only until
@@ -1833,16 +2108,13 @@ func (b *Bridge) routed(serve func(http.ResponseWriter, *http.Request, *binding)
 // ([Bridge.admitRelayed]).
 //
 // AN OPENING GONE SINCE IS ANSWERED AS THIS NODE CAN ANSWER IT NOW
-// ([Bridge.verdict]): the relay admits a call and starts its handler after, and
-// the opening can leave in between. Where the run is over, closed or replaced
-// by a relaunch's job, the call is refused, as one reaching this node's own
-// route is. Where the seat left this node ([Bridge.ReleaseSeat]), the run goes
-// on with the seat's next holder: the call is turned away to ask again, a 503
-// with a Retry-After, as one that found no holder in time is
-// ([Bridge.forward]), and its next try is relayed to that holder. NEVER
-// REFUSED THERE: a refusal says the run is over, which OpenCode's plugins read
-// as the end of the run's notes and of its skill reports, and a box's MCP
-// client as a refused credential, for a run that goes on.
+// ([Bridge.verdict]), since the opening can leave between the relay's
+// admission and the handler: refused where the run is over (closed, or
+// replaced by a relaunch's job), and turned away to ask again, a 503 with a
+// Retry-After, where the seat left this node ([Bridge.ReleaseSeat]), so its
+// next try reaches the seat's next holder. NEVER REFUSED THERE: OpenCode's
+// plugins read a refusal as the end of the run's notes and skill reports, and
+// a box's MCP client as a refused credential, for a run that goes on.
 func (b *Bridge) heldOnly(serve func(http.ResponseWriter, *http.Request, *binding)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sub, ok := b.parse(r.PathValue("token"))

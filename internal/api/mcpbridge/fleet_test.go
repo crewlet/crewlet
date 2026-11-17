@@ -360,19 +360,12 @@ func TestACallNoHolderAnswersIsUnavailable(t *testing.T) {
 }
 
 // A RELAYED CALL WHOSE OPENING LEFT AFTER ITS ADMISSION IS ANSWERED AS THE NODE
-// CAN ANSWER IT NOW. The relay asks this node whether it serves a call's job,
-// and starts the call's handler after: the opening can leave in between. Where
-// the run is over, closed or replaced by a relaunch's job, the call is
-// refused, as one reaching this node's own route is. Where the seat left this
-// node, the run goes on with the seat's next holder, so the call is turned
-// away to ask again, a 503 with a Retry-After, as a call that found no holder
-// in time is: its next try is relayed to that holder. Refused there, a live run
-// read as over: OpenCode's plugins stop asking for the run's notes and stop
-// reporting its skill loads for the rest of the run, and a box's MCP client
-// reads a refused credential. And where a recovery opened the job again, the
-// call is served by the opening that serves the box now. On the notes route,
-// the skill route and the MCP endpoint alike, since every route the relay
-// serves takes that one step.
+// CAN ANSWER IT NOW (package doc, "The session is the seat holder's, and only
+// the token is the fleet's"), on the notes route, the skill route and the MCP
+// endpoint alike: refused where the run is over, closed or replaced by a
+// relaunch's job; turned away to ask again, a 503 with a Retry-After, where
+// the seat left this node; and served by the opening that serves the box now
+// where a recovery opened the job again.
 //
 // Mutation: refuse every relayed call whose opening is gone (the 401 whatever
 // the node can do now), and the seat's leaving goes red; turn every one away
