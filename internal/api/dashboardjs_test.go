@@ -2713,7 +2713,9 @@ const (
 	// (6,902,550 bytes), 6,748 over the train's: 6741 KiB.
 	// A file beside its repository's tree, with raw, download, copy and line actions: 6755.8 KiB
 	// (6,917,984 bytes), 22,182 over main: 6756 KiB.
-	treeBudget = 5<<20 + 1621<<10
+	// The Gitlet repository rows and file beside its tree train, on kit 0.151.0: 6762.4 KiB
+	// (6,924,733 bytes), 28,931 over main: 6763 KiB.
+	treeBudget = 5<<20 + 1643<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
