@@ -3,8 +3,13 @@
  * reader's access and authorship leave them, and the one dialog each opens.
  */
 import { useState, type ReactNode } from "react";
-import { Button, Stack, Textarea, type MenuItem } from "@crewlethq/ui";
-import { CheckGlyph, FileDiffGlyph, MessageSquareGlyph } from "@crewlethq/icons/glyphs";
+import { Button, Count, Menu, Stack, Textarea, type MenuItem } from "@crewlethq/ui";
+import {
+  CheckGlyph,
+  ChevronDownGlyph,
+  FileDiffGlyph,
+  MessageSquareGlyph,
+} from "@crewlethq/icons/glyphs";
 import { Modal } from "~/components/Modal.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { WriteButton } from "~/components/WriteButton.tsx";
@@ -198,5 +203,32 @@ export function ReviewDialog({
         </fieldset>
       )}
     </Modal>
+  );
+}
+
+/** Files changed's one primary: the head's drafts counted, each verdict opening the review dialog. */
+export function FinishReview({ change, drafts }: { change: CodeChangeDetail; drafts: number }) {
+  const [verdict, setVerdict] = useState<CodeVerdict | null>(null);
+  const review = useAct("code_review_change");
+  const viewer = useViewer();
+  return (
+    <>
+      <Menu
+        label={`Finish your review of ${change.ref}`}
+        trigger={
+          <span className="code-finish">
+            Finish review
+            {drafts > 0 && <Count value={drafts} label={`${drafts} drafted`} />}
+          </span>
+        }
+        trailingIcon={<ChevronDownGlyph size="sm" />}
+        triggerVariant="primary"
+        align="end"
+        items={verdictItems(change, review.access, viewer, setVerdict)}
+      />
+      {verdict && (
+        <ReviewDialog change={change} verdict={verdict} onClose={() => setVerdict(null)} />
+      )}
+    </>
   );
 }

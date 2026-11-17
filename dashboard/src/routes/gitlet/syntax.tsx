@@ -5,6 +5,7 @@
 import {
   Fragment,
   memo,
+  useCallback,
   useDeferredValue,
   useEffect,
   useMemo,
@@ -468,9 +469,13 @@ export function useExpandLines(
   held: readonly string[] | null,
 ): ExpandLines {
   const kept = useRef(new Map<string, { lines: Map<number, string>; total: number | null }>());
-  const [, readNew] = useState(0);
+  const [version, readNew] = useState(0);
   const at = oid ? kept.current.get(oid) : undefined;
-  const line = (n: number) => (held ? held[n - 1] : at?.lines.get(n));
+  // ONE FUNCTION UNTIL A READ LANDS, so a host's memo over it holds.
+  const line = useCallback(
+    (n: number) => (held ? held[n - 1] : oid ? kept.current.get(oid)?.lines.get(n) : undefined),
+    [held, oid, version],
+  );
   const total = held ? held.length : (at?.total ?? null);
   const read = async (from: number, to: number): Promise<string | null> => {
     if (held || !oid) return held ? null : "";

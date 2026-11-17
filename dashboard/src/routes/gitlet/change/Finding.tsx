@@ -86,7 +86,7 @@ function linesWord(f: Pick<CodeFindingRow, "line_start" | "line_end">): string {
 }
 
 /** Whether a line is one of the finding's own, on the side it is about. */
-function ownLine(f: CodeFindingRow, line: DiffLine): boolean {
+export function ownLine(f: CodeFindingRow, line: DiffLine): boolean {
   const n = f.side === "old" ? line.before : line.after;
   if (f.side === "old" && line.kind === "add") return false;
   if (f.side !== "old" && line.kind === "remove") return false;
@@ -204,6 +204,7 @@ export function FindingCard({
   applicable,
   place,
   excerpt,
+  own: ownGiven,
   where,
 }: {
   change: CodeChangeDetail;
@@ -215,6 +216,8 @@ export function FindingCard({
   place?: CodeFindingPlace | undefined;
   /** Under its review: its excerpt as read; none on a line, whose lines are above it. */
   excerpt?: ExcerptRead | undefined;
+  /** On a line: its own lines as the patch on screen draws them, for its suggestion. */
+  own?: readonly DiffLine[] | undefined;
   /** Under its review (its row says who and when), or on a line. */
   where: "review" | "line";
 }) {
@@ -233,8 +236,9 @@ export function FindingCard({
       ? "It is answered this way already."
       : undefined;
   const own = useMemo(
-    () => (read ? excerptHunks(read)[0]!.lines.filter((l) => ownLine(finding, l)) : []),
-    [read, finding],
+    () =>
+      read ? excerptHunks(read)[0]!.lines.filter((l) => ownLine(finding, l)) : (ownGiven ?? []),
+    [read, finding, ownGiven],
   );
   const range = `${finding.line_start}${finding.line_end !== finding.line_start ? `-${finding.line_end}` : ""}`;
   const placeWord = place?.gone

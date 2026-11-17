@@ -934,9 +934,21 @@
   align-items: start;
 }
 
+.code-files[data-tree="hidden"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 @container page (width < 720px) {
   .code-files {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .code-files__pane {
+    position: static;
+  }
+
+  .code-files__pane .code-tree__scroll {
+    max-block-size: calc(100cqb / 2);
   }
 }
 
@@ -3548,4 +3560,154 @@
 
 .code-repo-title__link:hover {
   color: var(--color-text-primary);
+}
+
+/* THE FILES' TOOLBAR: the tree's toggle, what is compared, Go to file, then
+   the layout and Finish review at its end; it wraps by groups. */
+.code-files-bar {
+  flex-wrap: wrap;
+}
+
+.code-files-bar__words {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.code-files-bar__find {
+  inline-size: min(16rem, 100%);
+}
+
+.code-files-bar__end {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-inline-start: auto;
+}
+
+@container page (width < 640px) {
+  .code-files-bar__layout {
+    display: none;
+  }
+
+  .code-files-bar__find {
+    flex-basis: 100%;
+    inline-size: 100%;
+  }
+}
+
+/* THE PANE'S FOOT: what the files are compared with, and what lies on them. */
+.code-tree__foot {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-block-start: 1px solid var(--color-border-default);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.code-tree__said {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* THE STACK: every file a card, its head stuck under the toolbar as its body scrolls by. */
+.code-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+.code-stack > .code-file {
+  gap: 0;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
+  overflow: clip;
+  scroll-margin-top: var(--sticky-top);
+}
+
+.code-file__head {
+  position: sticky;
+  top: var(--sticky-top);
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  padding: var(--spacing-1) var(--spacing-2);
+  border-block-end: 1px solid var(--color-border-default);
+  background: var(--color-surface-subtle);
+}
+
+.code-file__path {
+  min-width: 0;
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.code-file__dir {
+  color: var(--color-text-secondary);
+  font-weight: var(--font-weight-regular);
+}
+
+.code-file__fold[aria-expanded="false"] svg {
+  rotate: -90deg;
+}
+
+.code-file__end {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-inline-start: auto;
+}
+
+.code-file__binary {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.code-file__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+  padding: var(--spacing-2);
+}
+
+.code-file__note {
+  margin: 0;
+  padding: var(--spacing-1) var(--spacing-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.code-file__pending {
+  padding: var(--spacing-2);
+}
+
+.code-file__pager {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--spacing-2);
+}
+
+.code-gap__failed {
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+/* FINISH REVIEW's words and the count of the head's drafts. */
+.code-finish {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
 }

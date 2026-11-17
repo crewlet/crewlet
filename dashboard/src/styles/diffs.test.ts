@@ -710,7 +710,7 @@ describe("in the tree", () => {
 /** Every Gitlet module drawing a DiffView, each with `hue="code"` and `tokens`: two-sided. */
 const CODE_DIFFS: { file: string; why: string }[] = [
   {
-    file: "routes/gitlet/change/Files.tsx",
+    file: "routes/gitlet/change/FileStack.tsx",
     why: "A change's files, each read in its revision's diff, with its findings.",
   },
   {

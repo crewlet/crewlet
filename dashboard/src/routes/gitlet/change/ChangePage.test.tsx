@@ -31,6 +31,7 @@ import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { ChangePage } from "./ChangePage.tsx";
 import { EDIT_MOVED } from "./Description.tsx";
+import { FOLD_FROM_LINES } from "./FileStack.tsx";
 import { NOT_AUTHOR_RESOLVE } from "./Finding.tsx";
 import { CHANGE_POLL_MS } from "./reads.ts";
 
@@ -241,6 +242,14 @@ function stubEngine(
             },
           });
         case "diff":
+          // THE WALK OF EVERY FILE'S PATCH ends at once here: each file is read alone.
+          if (url.searchParams.get("patches") === "true") {
+            return json({
+              ...page,
+              revision: 2,
+              diff: { base: HEAD, head: HEAD, files: [], total: 1, added: 1, deleted: 1 },
+            });
+          }
           return json({
             ...page,
             ...(pageAt + 1 < patch.length ? { next: `p:${pageAt + 1}` } : {}),
@@ -491,7 +500,8 @@ test("the Files tab asks for a diff again only when the change moves", async () 
   const askedFor = (part: string) =>
     changeAsked.filter((u) => u.searchParams.get("part") === part).length;
   const details = () => changeAsked.filter((u) => !u.searchParams.get("part")).length;
-  await waitFor(() => expect(askedFor("diff")).toBe(1));
+  // THE WALK OF EVERY PATCH, and the file it ended without read alone.
+  await waitFor(() => expect(askedFor("diff")).toBe(2));
   // THE TAB ROW'S COUNTS ask the head's files beside the tab's own read, on its key.
   expect(askedFor("files")).toBe(2);
 
@@ -501,19 +511,19 @@ test("the Files tab asks for a diff again only when the change moves", async () 
   }
   await waitFor(() => expect(details()).toBeGreaterThanOrEqual(before + 3));
   expect(askedFor("files")).toBe(2);
-  expect(askedFor("diff")).toBe(1);
+  expect(askedFor("diff")).toBe(2);
 
   version = 6;
   await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
   await waitFor(() => expect(askedFor("files")).toBe(4));
-  await waitFor(() => expect(askedFor("diff")).toBe(2));
+  await waitFor(() => expect(askedFor("diff")).toBe(4));
 
   // A RETARGET'S NEW FACTS land in a record of the home's own, after the one
   // that moved the version: the base they record moves the diff too.
   base = "fedcba9876543210fedcba9876543210fedcba98";
   await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
   await waitFor(() => expect(askedFor("files")).toBe(6));
-  await waitFor(() => expect(askedFor("diff")).toBe(3));
+  await waitFor(() => expect(askedFor("diff")).toBe(6));
 });
 
 // FINDINGS AND COMMENTS PAST ONE PAGE ARE LOADED on the Files tab as the
@@ -1855,7 +1865,9 @@ test("a change's files past one page are listed when the reader asks", async () 
   const list = await screen.findByRole("tree", { name: "Files changed" });
   expect(await within(list).findByRole("treeitem", { name: /app\.go/ })).toBeTruthy();
   expect(within(list).queryByRole("treeitem", { name: /z\.go/ })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Load more files" }));
+  // ONE PRESS AT THE TREE'S FOOT AND ONE AT THE STACK'S.
+  expect(screen.getAllByRole("button", { name: "Load more files" })).toHaveLength(2);
+  fireEvent.click(screen.getAllByRole("button", { name: "Load more files" })[0]!);
 
   expect(await within(list).findByRole("treeitem", { name: /z\.go/ })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Load more files" })).toBeNull();
@@ -2330,10 +2342,10 @@ test("a change's diff colours each side from its blob, a hunk inside a comment a
   expect(asked.map((u) => u.searchParams.get("ref")).sort()).toEqual([OLD, NEW]);
 });
 
-// A FILE PAST THE LISTING'S FIRST PAGE, named by the address, is coloured from
-// the oids its patch's answer carries.
-// Mutation: drop the fallback to the patch's file.
-test("a file the listing has not reached is coloured from its patch's own entry", async () => {
+// A FILE PAST THE LISTING'S FIRST PAGE, named by the address, is listed by the
+// pages after it and coloured from the oids its entry carries.
+// Mutation: drop the arrival's paging, and app.go is never drawn.
+test("a file the listing has not reached is listed for the address and coloured", async () => {
   const OLD = "1".repeat(40);
   const NEW = "2".repeat(40);
   const go = (edit: string) => ["package app", "", "func A() {", edit, "}"].join("\n") + "\n";
@@ -2351,12 +2363,21 @@ test("a file the listing has not reached is coloured from its patch's own entry"
     detail(),
     () => json({ outcome: "applied" }),
     {
-      diff: () =>
+      diff: (url) =>
         json({
           position: POSITION,
           level: "session",
           revision: 2,
-          diff: { base: HEAD, head: HEAD, files: [app], total: 2, added: 1, deleted: 1, patch },
+          diff: {
+            base: HEAD,
+            head: HEAD,
+            files: [app],
+            total: 2,
+            added: 1,
+            deleted: 1,
+            // OTHER.GO'S PATCH IS ITS OWN, so the line found is app.go's.
+            patch: url.searchParams.get("file") === "app.go" ? patch : "",
+          },
         }),
     },
     [patch],
@@ -2378,4 +2399,640 @@ test("a file the listing has not reached is coloured from its patch's own entry"
 
   await waitFor(() => expect(inkedLine("same", "func A() {")).toContain("code-syn-keyword:func"));
   expect(inkedLine("add", "\treturn 2")).toContain("code-syn-keyword:return");
+});
+
+// ---- Files changed: every file on one page --------------------------------- //
+
+/** Revision 2's five files, in the listing's (git's) order. */
+const STACK_FILES = [
+  {
+    path: "internal/render/page.go",
+    status: "M",
+    added: 2,
+    deleted: 1,
+    old_oid: "o1",
+    new_oid: "n1",
+  },
+  { path: "internal/render/stream.go", status: "A", added: 3, deleted: 0, new_oid: "n2" },
+  {
+    path: "internal/server/routes.go",
+    status: "M",
+    added: 1,
+    deleted: 1,
+    old_oid: "o3",
+    new_oid: "n3",
+  },
+  {
+    path: "web/src/product/Page.tsx",
+    status: "M",
+    added: 1,
+    deleted: 1,
+    old_oid: "o4",
+    new_oid: "n4",
+  },
+  { path: "web/src/product/Shell.tsx", status: "A", added: 2, deleted: 0, new_oid: "n5" },
+];
+
+/** Each file's whole patch, as a read of it alone answers. */
+const STACK_PATCHES: Record<string, string> = {
+  "internal/render/page.go": "@@ -1,2 +1,3 @@\n keep\n-old\n+new\n+more\n",
+  "internal/render/stream.go": "@@ -0,0 +1,3 @@\n+a\n+b\n+c\n",
+  "internal/server/routes.go": "@@ -14,2 +14,2 @@ func New()\n keep14\n-old15\n+new15\n",
+  "web/src/product/Page.tsx": "@@ -1,1 +1,1 @@\n-before\n+after\n",
+  "web/src/product/Shell.tsx": "@@ -0,0 +1,2 @@\n+shell one\n+shell two\n",
+};
+
+/** The walk: page one ends inside stream.go, page two holds the rest. */
+const WALK = [
+  [
+    {
+      file: 0,
+      path: STACK_FILES[0]!.path,
+      status: "M",
+      patch: STACK_PATCHES["internal/render/page.go"],
+    },
+    {
+      file: 1,
+      path: STACK_FILES[1]!.path,
+      status: "A",
+      patch: "@@ -0,0 +1,3 @@\n+a\n+b\n",
+      continues: true,
+    },
+  ],
+  [
+    { file: 1, path: STACK_FILES[1]!.path, status: "A", patch: "+c\n" },
+    ...STACK_FILES.slice(2).map((f, i) => ({
+      file: i + 2,
+      path: f.path,
+      status: f.status,
+      patch: STACK_PATCHES[f.path],
+    })),
+  ],
+];
+
+/** Every `code_blob` question asked, newest last. */
+const blobsAsked: URL[] = [];
+/** Blobs past the syntax bound, so expanding them reads a range. */
+const BIG_BLOBS = new Set<string>();
+/** Blobs whose ranges the engine refuses. */
+const REFUSE_RANGES = new Set<string>();
+
+/**
+ * The engine for the stack: the listing `files`, the walk `walk` (cursor `w:<n>`)
+ * or `walkRefused`, each file alone from STACK_PATCHES, and blobs by id.
+ */
+function stubStack({
+  files = STACK_FILES,
+  walk = WALK,
+  walkRefused = false,
+  parts = {},
+  change = detail(),
+}: {
+  files?: readonly Record<string, unknown>[];
+  walk?: readonly (readonly Record<string, unknown>[])[];
+  walkRefused?: boolean;
+  parts?: Readonly<Record<string, (url: URL) => Promise<Response> | Response>>;
+  change?: Record<string, unknown>;
+} = {}) {
+  blobsAsked.length = 0;
+  const acted = stubEngine(
+    change,
+    () => json({ outcome: "applied" }),
+    {
+      findings: page({ revision: 2, findings: [] }),
+      diff: (url) => {
+        const at = { position: POSITION, level: "session", revision: 2 };
+        const diff = { base: HEAD, head: HEAD, total: files.length, added: 9, deleted: 3 };
+        if (url.searchParams.get("patches") === "true") {
+          if (walkRefused) return json({ error: "bad_params", detail: "unknown key patches" }, 400);
+          const n = Number((url.searchParams.get("cursor") ?? "w:0").slice(2));
+          return json({
+            ...at,
+            ...(n + 1 < walk.length ? { next: `w:${n + 1}` } : {}),
+            diff: { ...diff, files: [], patches: walk[n] },
+          });
+        }
+        const path = url.searchParams.get("file") ?? "";
+        return json({
+          ...at,
+          diff: {
+            ...diff,
+            files: files.filter((f) => f.path === path),
+            patch: STACK_PATCHES[path] ?? "",
+          },
+        });
+      },
+      ...parts,
+    },
+    [PATCH],
+    [files],
+  );
+  const fetched = globalThis.fetch as ReturnType<typeof vi.fn>;
+  const engine = fetched.getMockImplementation()! as (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  fetched.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.pathname !== "/query/code_blob") return engine(input, init);
+    blobsAsked.push(url);
+    const ref = url.searchParams.get("ref") ?? "";
+    if (REFUSE_RANGES.has(ref) && url.searchParams.has("end_line")) {
+      return json({ error: "not_found", detail: "no such blob" }, 404);
+    }
+    const from = Number(url.searchParams.get("start_line") || 1);
+    const to = Number(url.searchParams.get("end_line") || 30);
+    const text = Array.from({ length: to - from + 1 }, (_, i) => `line ${from + i}`).join("\n");
+    return json({
+      position: POSITION,
+      level: "session",
+      blob: {
+        oid: ref,
+        size: BIG_BLOBS.has(ref) ? 300_000 : 900,
+        lines: 30,
+        start_line: from,
+        end_line: to,
+        text: `${text}\n`,
+      },
+    });
+  });
+  return acted;
+}
+
+/** The `diff` questions asked: the walk's by cursor ("" first), each file alone by path. */
+function diffAsked() {
+  const diffs = changeAsked.filter((u) => u.searchParams.get("part") === "diff");
+  return {
+    walk: diffs
+      .filter((u) => u.searchParams.get("patches") === "true")
+      .map((u) => u.searchParams.get("cursor") ?? ""),
+    alone: diffs.filter((u) => u.searchParams.has("file")).map((u) => u.searchParams.get("file")),
+  };
+}
+
+/** A stand-in IntersectionObserver whose sections come near only when a case says so. */
+class NearBy {
+  static made: NearBy[] = [];
+  targets: Element[] = [];
+  constructor(private readonly said: IntersectionObserverCallback) {
+    NearBy.made.push(this);
+  }
+  observe(el: Element) {
+    this.targets.push(el);
+  }
+  unobserve() {}
+  disconnect() {
+    this.targets = [];
+  }
+  takeRecords() {
+    return [];
+  }
+  /** Say the sections of `paths` came within one view. */
+  static near(...paths: string[]) {
+    for (const o of NearBy.made) {
+      const entries = o.targets
+        .filter((t) => paths.includes((t as HTMLElement).dataset.path ?? ""))
+        .map(
+          (target) => ({ target, isIntersecting: true }) as unknown as IntersectionObserverEntry,
+        );
+      if (entries.length > 0) act(() => o.said(entries, o as unknown as IntersectionObserver));
+    }
+  }
+}
+
+/** Sections come near only when a case says so. */
+function holdSectionsFar() {
+  NearBy.made = [];
+  vi.stubGlobal("IntersectionObserver", NearBy);
+}
+
+const section = (path: string) => screen.findByRole("region", { name: `Changes to ${path}` });
+
+// EVERY LISTED FILE IS A SECTION, in git's order, under its head. Mutation:
+// sort the sections by path, and Page.tsx comes before Shell.tsx still but
+// routes.go no longer follows stream.go... the order list fails.
+test("every listed file is a section of the stack, in the listing's order, each under its head", async () => {
+  stubStack();
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  await section("web/src/product/Shell.tsx");
+  const regions = screen
+    .getAllByRole("region")
+    .filter((r) => r.classList.contains("code-file"))
+    .map((r) => r.getAttribute("data-path"));
+  expect(regions).toEqual(STACK_FILES.map((f) => f.path));
+  const routes = await section("internal/server/routes.go");
+  expect(within(routes).getByRole("heading", { level: 3 }).textContent).toBe(
+    "internal/server/routes.go",
+  );
+  expect(within(routes).getByText("Modified")).toBeTruthy();
+  expect(
+    within(routes).getByRole("img", {
+      name: "1 line added and 1 removed in internal/server/routes.go",
+    }),
+  ).toBeTruthy();
+});
+
+// THE WALK SERVES THE STACK, never every file read alone. Mutation: read every
+// section alone, and five file= questions are asked.
+test("the walk's first page draws the files it holds and no file is read alone", async () => {
+  holdSectionsFar();
+  stubStack();
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  const page1 = await section("internal/render/page.go");
+  await within(page1).findByText("more");
+  await settled();
+  expect(diffAsked()).toEqual({ walk: [""], alone: [] });
+  const shell = await section("web/src/product/Shell.tsx");
+  expect(shell.querySelector("[aria-busy]")).not.toBeNull();
+});
+
+// THE NEXT PAGE WHEN ITS FILE COMES NEAR, not before. Mutation: ask every page
+// on mount, and the walk's cursor is asked before the section is near.
+test("the walk's next page is asked when the first file it has not finished comes near", async () => {
+  holdSectionsFar();
+  stubStack();
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  await within(await section("internal/render/page.go")).findByText("more");
+  await settled();
+  expect(diffAsked().walk).toEqual([""]);
+  NearBy.near("internal/render/stream.go");
+  await within(await section("internal/server/routes.go")).findByText("new15");
+  expect(diffAsked()).toEqual({ walk: ["", "w:1"], alone: [] });
+});
+
+// A FILE GOING ON PAST THE PAGE SAYS HOW MANY OF ITS CHANGED LINES ARE LEFT.
+// Mutation: count every line rather than the changed ones, and it says 1 too few or many.
+test("a file going on past the walk's page says how many lines are left and loads them", async () => {
+  holdSectionsFar();
+  stubStack();
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  const stream = await section("internal/render/stream.go");
+  fireEvent.click(await within(stream).findByRole("button", { name: "Load 1 more line" }));
+  await within(stream).findByText("c");
+  expect(diffAsked().walk).toEqual(["", "w:1"]);
+  expect(within(stream).queryByRole("button", { name: /Load .*more line/ })).toBeNull();
+});
+
+// A JUMP PAST THE WALK READS THE FILE ALONE, and the walk never redraws it.
+// Mutation: let the walk's text replace the read alone, and its rows are drawn twice.
+test("a jump past the walk reads that file alone and the walk's later page does not redraw it", async () => {
+  holdSectionsFar();
+  stubStack();
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  const tree = await screen.findByRole("tree", { name: "Files changed" });
+  fireEvent.click(await within(tree).findByRole("treeitem", { name: /Shell\.tsx/ }));
+  const shell = await section("web/src/product/Shell.tsx");
+  await within(shell).findByText("shell one");
+  expect(diffAsked().alone).toEqual(["web/src/product/Shell.tsx"]);
+  expect(document.activeElement).toBe(within(shell).getByRole("heading", { level: 3 }));
+  expect(new URLSearchParams(location.hash.split("?")[1]).get("file")).toBe(
+    "web/src/product/Shell.tsx",
+  );
+  NearBy.near("internal/render/stream.go");
+  await within(await section("internal/server/routes.go")).findByText("new15");
+  expect(within(shell).getAllByText("shell one")).toHaveLength(1);
+});
+
+// THE ADDRESS'S FILE OPENS THE STACK THERE. Mutation: drop the arrival jump, and nothing is read alone.
+test("file= on arrival opens the stack at that file, read alone", async () => {
+  holdSectionsFar();
+  stubStack();
+  mount("#/gitlet/repos/web/changes/42?tab=files&file=web/src/product/Page.tsx");
+  const tsx = await section("web/src/product/Page.tsx");
+  await within(tsx).findByText("after");
+  expect(diffAsked().alone).toEqual(["web/src/product/Page.tsx"]);
+  expect(document.activeElement).toBe(within(tsx).getByRole("heading", { level: 3 }));
+});
+
+// A LARGE FILE STARTS FOLDED. Mutation: drop FOLD_FROM_LINES, and it is drawn at once.
+test("a file past the fold starts folded and is read only when asked", async () => {
+  const big = {
+    path: "web/src/generated/schema.ts",
+    status: "M",
+    added: 900,
+    deleted: 300,
+    new_oid: "n9",
+  };
+  STACK_PATCHES[big.path] = "@@ -1,1 +1,1 @@\n-x\n+generated\n";
+  stubStack({ files: [big], walk: [[]] });
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  const schema = await section(big.path);
+  expect(await within(schema).findByText(/This file changes 1,200 lines\./)).toBeTruthy();
+  await settled();
+  expect(diffAsked().alone).toEqual([]);
+  fireEvent.click(within(schema).getByRole("button", { name: "Show its changes" }));
+  await within(schema).findByText("generated");
+  expect(diffAsked().alone).toEqual([big.path]);
+  expect(FOLD_FROM_LINES).toBe(400);
+});
+
+// EACH STATE WITHOUT LINES SAYS WHAT BECAME OF ITS FILE. Mutation: draw a
+// deleted file's View the file, and the deleted section has a link.
+test("a file with no lines to draw says what became of it", async () => {
+  const files = [
+    { path: "web/public/hero.png", status: "M", added: 0, deleted: 0, binary: true },
+    {
+      path: "internal/render/shell.go",
+      old_path: "internal/render/old.go",
+      status: "R",
+      added: 0,
+      deleted: 0,
+    },
+    {
+      path: "scripts/deploy.sh",
+      status: "M",
+      added: 0,
+      deleted: 0,
+      old_mode: "100644",
+      new_mode: "100755",
+    },
+    {
+      path: "vendor/lib",
+      status: "M",
+      added: 1,
+      deleted: 1,
+      old_mode: "160000",
+      new_mode: "160000",
+      old_oid: "1a2b3c4d5e",
+      new_oid: "5d6e7f8a9b",
+    },
+    { path: "web/src/legacy.ts", status: "D", added: 0, deleted: 1, old_oid: "o7" },
+  ];
+  STACK_PATCHES["web/src/legacy.ts"] = "@@ -1,1 +0,0 @@\n-gone\n";
+  stubStack({
+    files,
+    walk: [
+      [{ file: 4, path: "web/src/legacy.ts", status: "D", patch: "@@ -1,1 +0,0 @@\n-gone\n" }],
+    ],
+  });
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  expect(
+    await within(await section("web/public/hero.png")).findByText(/A binary file/),
+  ).toBeTruthy();
+  expect(
+    within(await section("internal/render/shell.go")).getByText(
+      "Renamed from internal/render/old.go, its lines unchanged.",
+    ),
+  ).toBeTruthy();
+  expect(
+    within(await section("scripts/deploy.sh")).getByText("It became executable."),
+  ).toBeTruthy();
+  expect(
+    within(await section("vendor/lib")).getByText(/A submodule moved from 1a2b3c4 to 5d6e7f8/),
+  ).toBeTruthy();
+  const legacy = await section("web/src/legacy.ts");
+  await within(legacy).findByText("gone");
+  expect(within(legacy).queryByRole("link", { name: "View the file" })).toBeNull();
+  expect(legacy.querySelector("[data-gap]")).toBeNull();
+});
+
+// A REFUSED WALK IS SAID ONCE, and no section reads itself without a press.
+// Mutation: read sections alone on the refusal, and file= questions arrive unasked.
+test("a refused walk says so once, and each file is read when its reader asks", async () => {
+  stubStack({ walkRefused: true });
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  expect(
+    await screen.findByText(/Every file's patch on one page is unavailable on this fleet yet/),
+  ).toBeTruthy();
+  await settled();
+  expect(diffAsked().alone).toEqual([]);
+  const routes = await section("internal/server/routes.go");
+  fireEvent.click(within(routes).getByRole("button", { name: "Show its changes" }));
+  await within(routes).findByText("new15");
+  expect(diffAsked().alone).toEqual(["internal/server/routes.go"]);
+});
+
+// A HUNK OPENS WITH GIT'S HEADER, and Expand reads the hidden lines of the
+// newer blob by its id, one range, numbered on both sides. Mutation: number the
+// revealed lines on the newer side only, and the older number is missing.
+test("a hunk opens with git's header and Expand reveals hidden lines from the newer blob by id", async () => {
+  BIG_BLOBS.add("n3");
+  stubStack();
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  const routes = await section("internal/server/routes.go");
+  await within(routes).findByText("@@ -14,2 +14,2 @@ func New()");
+  fireEvent.click(
+    await within(routes).findByRole("button", { name: "Expand 13 hidden lines above line 14" }),
+  );
+  await waitFor(() => expect(routes.textContent).toContain("line 13"));
+  const ranged = blobsAsked.filter((u) => u.searchParams.has("end_line"));
+  expect(ranged).toHaveLength(1);
+  expect(Object.fromEntries(ranged[0]!.searchParams)).toMatchObject({
+    ref: "n3",
+    start_line: "1",
+    end_line: "13",
+  });
+  expect(ranged[0]!.searchParams.has("path")).toBe(false);
+  const first = [...routes.querySelectorAll(".diff-view__line")][0]!;
+  expect([...first.querySelectorAll(".diff-view__number")].map((n) => n.textContent)).toEqual([
+    "1",
+    "1",
+  ]);
+  BIG_BLOBS.delete("n3");
+});
+
+// A COLOURED FILE'S BLOB IS HELD ALREADY, so expanding it asks nothing more,
+// and the lines after its last hunk expand once its length is known.
+// Mutation: always read a range, and a ranged blob question is asked.
+test("a coloured file expands from the blob its colouring holds, the lines after its last hunk too", async () => {
+  stubStack();
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  const pageGo = await section("internal/render/page.go");
+  fireEvent.click(
+    await within(pageGo).findByRole("button", { name: "Expand all 27 hidden lines below line 3" }),
+  );
+  await waitFor(() => expect(pageGo.textContent).toContain("line 30"));
+  expect(blobsAsked.filter((u) => u.searchParams.has("end_line"))).toEqual([]);
+});
+
+// A GAP'S LINES REFUSED SAY SO IN ITS PLACE, and nothing else changes.
+test("a gap whose lines are refused says so in its place", async () => {
+  BIG_BLOBS.add("n3");
+  REFUSE_RANGES.add("n3");
+  stubStack();
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  const routes = await section("internal/server/routes.go");
+  fireEvent.click(
+    await within(routes).findByRole("button", { name: "Expand 13 hidden lines above line 14" }),
+  );
+  expect(
+    await within(routes).findByText(/These lines are unavailable: no such blob\./),
+  ).toBeTruthy();
+  BIG_BLOBS.delete("n3");
+  REFUSE_RANGES.delete("n3");
+});
+
+// THE TOOLBAR'S SPLIT SETS EVERY FILE; A FILE'S MENU SETS IT ALONE, held for
+// the visit. Mutation: write the file's choice to the address, and layout= moves.
+test("a file's menu draws that file alone split, and its head says so", async () => {
+  stubStack();
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  const tsx = await section("web/src/product/Page.tsx");
+  await within(tsx).findByText("after");
+  fireEvent.click(
+    within(tsx).getByRole("button", { name: "More actions on web/src/product/Page.tsx" }),
+  );
+  fireEvent.click(await screen.findByRole("menuitem", { name: "View this file split" }));
+  expect(within(tsx).getByText("Split")).toBeTruthy();
+  expect(new URLSearchParams(location.hash.split("?")[1]).has("layout")).toBe(false);
+  const routes = await section("internal/server/routes.go");
+  expect(within(routes).queryByText("Split")).toBeNull();
+});
+
+// T IS GO TO FILE, over the diff's own files. Mutation: bind a keymap row of
+// its own, and the keymap's one bare t is no longer code.find alone.
+test("t focuses Go to file, and choosing a file brings its head to the top", async () => {
+  holdSectionsFar();
+  stubStack();
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  const field = await screen.findByRole("combobox", { name: "Go to file" });
+  fireEvent.keyDown(document.body, { key: "t" });
+  expect(document.activeElement).toBe(field);
+  fireEvent.change(field, { target: { value: "shell" } });
+  const options = await screen.findAllByRole("option");
+  expect(options[0]!.textContent).toBe("web/src/product/Shell.tsx");
+  fireEvent.keyDown(field, { key: "Enter" });
+  const shell = await section("web/src/product/Shell.tsx");
+  await waitFor(() =>
+    expect(document.activeElement).toBe(within(shell).getByRole("heading", { level: 3 })),
+  );
+  expect(new URLSearchParams(location.hash.split("?")[1]).get("file")).toBe(
+    "web/src/product/Shell.tsx",
+  );
+});
+
+// A FILE'S STATUS IS ITS INK'S HOOK AND ITS WORD. Mutation: drop the word from
+// the row's name, and the name check fails.
+test("the tree draws each file's status in its ink's hook and in words, with its counts", async () => {
+  stubStack();
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  const tree = await screen.findByRole("tree", { name: "Files changed" });
+  const routes = await within(tree).findByRole("treeitem", {
+    name: "internal/server/routes.go, modified, 1 line added and 1 removed",
+  });
+  expect(routes.querySelector(".code-ftree__status")!.getAttribute("data-status")).toBe("M");
+  const stream = within(tree).getByRole("treeitem", { name: /stream\.go, added/ });
+  expect(stream.querySelector(".code-ftree__status")!.getAttribute("data-status")).toBe("A");
+  expect(stream.querySelector(".code-ftree__counts")!.textContent).toBe("+3");
+});
+
+// THE TREE MARKS THE FILE WHOSE HEAD IS STUCK as the stack scrolls. Mutation:
+// mark the file the address names, and the current row never moves.
+test("the tree marks the file whose head is stuck at the top as the stack scrolls", async () => {
+  stubStack();
+  const shell = document.body.appendChild(document.createElement("div"));
+  shell.id = "screen-scroll";
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  await section("internal/server/routes.go");
+  const tops: Record<string, number> = {
+    "internal/render/page.go": -900,
+    "internal/render/stream.go": -500,
+    "internal/server/routes.go": -10,
+    "web/src/product/Page.tsx": 300,
+    "web/src/product/Shell.tsx": 700,
+  };
+  for (const r of document.querySelectorAll<HTMLElement>("section[data-path]")) {
+    r.getBoundingClientRect = () => ({ top: tops[r.dataset.path!] ?? 0 }) as DOMRect;
+  }
+  vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
+    run(0);
+    return 1;
+  });
+  fireEvent.scroll(shell);
+  const tree = screen.getByRole("tree", { name: "Files changed" });
+  await waitFor(() =>
+    expect(
+      within(tree).getByRole("treeitem", { current: true }).getAttribute("aria-label"),
+    ).toMatch(/^internal\/server\/routes\.go/),
+  );
+  shell.remove();
+});
+
+// FINISH REVIEW IS THE TAB'S ONE PRIMARY, counting the head's drafts; its
+// verdicts are held for an author. Mutation: make the page bar's Review primary too.
+test("Finish review is the tab's one primary, counts the drafts, and opens the review", async () => {
+  stubStack();
+  sessionStorage.setItem(
+    draftsKey("change-1", 2),
+    JSON.stringify([
+      {
+        id: "d1",
+        path: "app.go",
+        side: "new",
+        line_start: 2,
+        line_end: 2,
+        severity: "minor",
+        category: "style",
+        title: "Name it",
+        body: "",
+      },
+      {
+        id: "d2",
+        path: "app.go",
+        side: "new",
+        line_start: 3,
+        line_end: 3,
+        severity: "minor",
+        category: "style",
+        title: "Again",
+        body: "",
+      },
+    ]),
+  );
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  const finish = await screen.findByRole("button", { name: "Finish your review of web!42" });
+  expect(finish.textContent).toContain("2");
+  const primaries = [...document.querySelectorAll("button")].filter((b) =>
+    b.className.includes("primary"),
+  );
+  expect(primaries).toEqual([finish]);
+  fireEvent.click(finish);
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Approve" }));
+  expect(await screen.findByRole("dialog", { name: /Approve web!42/ })).toBeTruthy();
+  cleanup();
+  stubStack({
+    change: detail({
+      owner: "jane",
+      authors: [{ author: "jane", kind: "person", first_revision: 1, position: POSITION }],
+    }),
+  });
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  fireEvent.click(await screen.findByRole("button", { name: "Finish your review of web!42" }));
+  const approve = await screen.findByRole("menuitem", { name: /Approve/ });
+  expect(approve.getAttribute("aria-disabled")).toBe("true");
+});
+
+// A FINDING ON A LINE SUGGESTS ITS CHANGE AS A SMALL DIFF of its own lines,
+// and its line wears the picked mark. Mutation: hand the card no own lines,
+// and the suggestion's removed row goes.
+test("a finding on a line suggests its change as a diff of its own lines, and its line is marked", async () => {
+  const onRoutes = { ...F1, revision: 2, line_start: 15, line_end: 15, suggestion: "fixed15\n" };
+  stubStack({
+    parts: {
+      findings: page({
+        revision: 2,
+        findings: [onRoutes],
+        placed: { "f-1": { start: 15, end: 15 } },
+      }),
+    },
+  });
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  const routes = await section("internal/server/routes.go");
+  const card = await within(routes).findByRole("article", { name: `Finding: ${F1.title}` });
+  const diff = within(card).getByRole("group", {
+    name: "The lines suggested in place of line 15 of internal/server/routes.go",
+  });
+  expect(
+    [...diff.querySelectorAll("[data-kind]")].map((r) => [
+      r.getAttribute("data-kind"),
+      r.querySelector(".diff-view__text")?.textContent,
+    ]),
+  ).toEqual([
+    ["remove", "new15"],
+    ["add", "fixed15"],
+  ]);
+  const marked = [...routes.querySelectorAll(":scope .diff-view__line[data-picked]")].filter(
+    (l) => !card.contains(l),
+  );
+  expect(marked.map((l) => l.querySelector(".diff-view__text")?.textContent)).toEqual(["new15"]);
 });

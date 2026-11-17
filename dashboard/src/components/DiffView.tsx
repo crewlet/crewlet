@@ -313,7 +313,7 @@ export const WINDOW_BLOCK_ROWS = 100;
  * hidden panel, and there it keeps the empty boxes the height of real rows
  * rather than none, which would bring every block within the window at once.
  */
-const ROW_ESTIMATE_PX = 21;
+export const ROW_ESTIMATE_PX = 21;
 
 /** One row of the diff, as it is drawn: what is underlined in it is its lines' [Pair]s'. */
 type Row =
