@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/checkrun"
 	gitlethome "github.com/crewlet/crewlet/internal/gitlet/home"
@@ -66,6 +67,7 @@ func (e *Engine) buildChecks(nodeID string, boot *config.Bootstrap, home *gitlet
 		// leased for each remote box, its minutes on the fleet's counter.
 		Leases: e.backends.Coord, Minutes: e.backends.Fleet,
 		Nudges: checkNudges{nudges: codeNudges{log: codeLog.log, runner: codeLog.runner}}, Metrics: e.metrics,
+		Unread: unreadAnywhere,
 	}
 	// A FAILED RUN'S LOG goes to the fleet's object store, which
 	// Gitlet's own build has already required (store.objects): one object a
@@ -93,6 +95,14 @@ func checkCodeBase(gitBase string) string {
 		return ""
 	}
 	return listener + strings.TrimSuffix(auth.BoxGitletPrefix, "/")
+}
+
+// unreadAnywhere reports a request nothing ran: a walk in which a data node refused a key it
+// carries, no node served it and none went silent (a silent node may have run it). The others
+// may only have been out of service, so the counts are given up rather than the ending.
+func unreadAnywhere(err error) bool {
+	var refused *estate.ErrUnknownKeys
+	return errors.As(err, &refused) && refused.Unserved != nil && !refused.Unserved.Silent()
 }
 
 // checkBoxes is this node's CURRENT sandbox catalogue, read at every walk and

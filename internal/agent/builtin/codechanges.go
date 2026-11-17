@@ -782,8 +782,11 @@ func (g *changeRead) head(ctx context.Context, after statelog.Position) (*gitlet
 // and its number asks, which an executor's launch on a change is
 // ([CodeDeps.runChange]). Its detail would read its description, authors,
 // conversation and mergeability and judge its readiness, all of it dropped.
-func (g *changeRead) row(ctx context.Context) (*gitlet.ChangeSummary, statelog.Position, *tools.Result) {
-	answer, refusal := g.read(ctx, gitlet.ReadQuery{Brief: true, DetailOnly: true}, statelog.Position{})
+// Read at session floored at after, as [changeRead.head] is.
+func (g *changeRead) row(ctx context.Context, after statelog.Position) (*gitlet.ChangeSummary, statelog.Position,
+	*tools.Result) {
+
+	answer, refusal := g.read(ctx, gitlet.ReadQuery{Brief: true, DetailOnly: true}, after)
 	if refusal != nil {
 		return nil, statelog.Position{}, refusal
 	}

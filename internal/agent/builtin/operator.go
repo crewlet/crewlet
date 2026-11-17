@@ -256,6 +256,8 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// codemarks.go. Beside the code writes, on their terms: a surface
 		// that changes none of the company's code marks none of it either.
 		{&codeMarkInbox{deps: deps.Code}, deps.Code.serves() && deps.Code.Writer != nil},
+		// Nor a person's viewed files of a change: a seat reviews a change whole and keeps none.
+		{&codeMarkViewed{deps: deps.Code}, deps.Code.serves() && deps.Code.Writer != nil},
 		// EVERY CHAT GESTURE A PERSON MAKES, because the dashboard makes
 		// them through this catalogue (ADR-0024): read the rooms, find
 		// what was said, say something, react, move one's own membership

@@ -90,8 +90,9 @@ func (t *Translator) Source() changefeed.Source {
 // trimmed record — is machinery or bookkeeping, and so is every record of a
 // repository's checks but an attempt's ending: its queue, its start, a
 // dispatch and a sweep carry no routing, and are acknowledged off the
-// envelope, never decoded ([wakesAnybody]). A record about a repository or a
-// change that carries no routing is one that concerns nobody: every record
+// envelope, never decoded ([wakesAnybody]), as is a repository's viewed key,
+// which routes nobody. A record about a repository or a change that carries
+// no routing is one that concerns nobody: every record
 // from before changes existed, a push that moves no change, a compaction. And
 // a record whose routing tells only its own actor, or only persons, has no
 // seat to wake.
@@ -152,7 +153,8 @@ func (t *Translator) Translate(_ context.Context, rec changefeed.Record) (change
 // attempt's ending alone (a failed check of a change's head:
 // CheckFinished.Routing). Every other kind, and every other op of the checks,
 // is named by its absence, because a new one routes nobody until its records
-// carry a routing and this names it.
+// carry a routing and this names it. A repository's viewed key routes nobody
+// either, so the record that carries a key is acknowledged undecoded.
 //
 // BY THE OP TOO for the checks, the one kind most of whose records route
 // nobody: every attempt is queued, and every one a runner takes is started,
@@ -162,7 +164,9 @@ func (t *Translator) Translate(_ context.Context, rec changefeed.Record) (change
 // in its payload.
 func wakesAnybody(kind ObjectKind, op OpKind) bool {
 	switch kind {
-	case KindRepo, KindChange:
+	case KindRepo:
+		return op != OpViewedKey
+	case KindChange:
 		return true
 	case KindChecks:
 		return op == OpCheckFinished

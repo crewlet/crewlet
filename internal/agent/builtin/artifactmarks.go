@@ -111,7 +111,8 @@ func (t *artifactMarkInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if bad != "" {
 		return failed(bad), nil
 	}
-	seen, bad := markFloor(args, topics.ArtifactsLogStream, "artifacts log", "comment")
+	seen, bad := markFloor(args, topics.ArtifactsLogStream, "artifacts log",
+		"pass the `position` of a comment notice")
 	if bad != "" {
 		return failed(bad), nil
 	}

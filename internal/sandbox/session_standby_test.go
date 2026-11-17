@@ -530,7 +530,7 @@ func TestAReadStandingByWhoseTakerIsGoneIsWithdrawnNotWaitedFor(t *testing.T) {
 }
 
 // A TURN'S END WAITS FOR A STANDBY'S TAKEOVER AND ITS KEEP. The read holding the
-// place keeps for as long as a capture can take and is refused at the end of
+// place keeps for as long as a capture can live and is refused at the end of
 // it; only then does the read standing by for it take the place after it, and
 // its keep of its own session there takes as long as a keep can. The turn's
 // end, a loss's whose box is gone, waits for all of it: once the standby's
@@ -540,9 +540,9 @@ func TestAReadStandingByWhoseTakerIsGoneIsWithdrawnNotWaitedFor(t *testing.T) {
 // IN A SYNCTEST BUBBLE, so the end's wait and the two keeps run on the bubble's
 // clock, which only their own waits advance.
 //
-// Mutation: hold the end's wait to a capture's own budget, as it was, and it
-// gives up on the standby's keep and records the end ahead of it, naming the
-// standby's capture begun and never finished.
+// Mutation: hold the end's wait to one capture's life from its own start, and
+// it gives up on the standby's keep and records the end ahead of it, naming
+// the standby's capture begun and never finished.
 func TestATurnsEndWaitsForAStandbysTakeoverAndKeep(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -562,8 +562,8 @@ func TestATurnsEndWaitsForAStandbysTakeoverAndKeep(t *testing.T) {
 		go func() {
 			defer close(kept)
 			// THE READ HOLDING THE PLACE, refused at the end of a capture's
-			// budget; the standby's takeover, and its keep at a keep's.
-			time.Sleep(SessionCaptureBudget - time.Minute)
+			// life; the standby's takeover, and its keep at a keep's.
+			time.Sleep(captureLife - time.Minute)
 			refused := begun
 			refused.State, refused.Reason = CaptureRefused, "the session could not be uploaded"
 			if took, err := rig.pending.StampCapture(context.WithoutCancel(t.Context()), "t1", refused); err != nil ||
@@ -968,6 +968,139 @@ func TestATakeoverTheStoreNeverAnsweredIsKeptUnderWhereItWasMade(t *testing.T) {
 	})
 }
 
+// unansweredReadBack is a run store whose connection takes crossing to carry a
+// run's row at its bound, which makes every takeover it is asked for and
+// answers none, as [lostTakeOver] does, and which from that ask on never
+// answers a read of the row, as a store whose row is still crossing a slow link
+// does not: the read waits until its context ends, and the store notes when the
+// first such read began and when the last was let go. reading is closed once
+// the first has begun.
+type unansweredReadBack struct {
+	PendingStore
+	crossing time.Duration
+	reading  chan struct{}
+
+	mu        sync.Mutex
+	takenOver bool
+	began     time.Time
+	cut       time.Time
+}
+
+func (s *unansweredReadBack) RowCrossing() time.Duration { return s.crossing }
+
+func (s *unansweredReadBack) TakeOver(ctx context.Context, turnID string, standby,
+	capture SessionCapture) (bool, error) {
+
+	if _, err := s.PendingStore.TakeOver(ctx, turnID, standby, capture); err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	s.takenOver = true
+	s.mu.Unlock()
+	return false, errors.New("the store's answer never reached its asker")
+}
+
+func (s *unansweredReadBack) Get(ctx context.Context, turnID string) (PendingRun, bool, error) {
+	s.mu.Lock()
+	takenOver := s.takenOver
+	s.mu.Unlock()
+	if !takenOver {
+		return s.PendingStore.Get(ctx, turnID)
+	}
+	s.mu.Lock()
+	if s.began.IsZero() {
+		s.began = time.Now()
+		close(s.reading)
+	}
+	s.mu.Unlock()
+	<-ctx.Done()
+	s.mu.Lock()
+	s.cut = time.Now()
+	s.mu.Unlock()
+	return PendingRun{}, false, ctx.Err()
+}
+
+// readBack is when the store's first unanswered read of the row began and when
+// its last was let go, both zero where none was made.
+func (s *unansweredReadBack) readBack() (began, cut time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.began, s.cut
+}
+
+// A TAKEOVER LEFT UNANSWERED READS ITS ROW WITHIN A CHANGE OF IT: a record's
+// budget and this node's crossing of the row at its bound
+// ([Coordinator.rowContext]). The store made the standby's takeover and never
+// said so, then told it its standby was no longer there to withdraw, and never
+// answered the read of the row that would say whether the place is its own.
+// That read is a step of the takeover's life, which every reader of a begun
+// capture holds to a bound, and the keep's context has no deadline before its
+// budget starts, after it: held to that context alone, it waited for as long
+// as the store did not answer, the place begun and the keep behind it held
+// with it. Here the read is cut exactly that room after it began, and the keep
+// ends keeping nothing, as where the row could not be read. Exact, in a
+// bubble.
+//
+// Mutation: read the row under the keep's context alone, and the keep is still
+// waiting a minute past the read's room; give the read more room than one
+// change of the row, and it is cut late.
+func TestATakeoverLeftUnansweredReadsItsRowWithinAChangeOfIt(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		const crossing = 7 * time.Minute
+		rig, _, keep := keepingRig(t)
+		rig.coordinator.recordBudget = sessionRecordBudget
+		run := rig.launchKept(t, "t1")
+		held := newHeldArchive(placeHolderArchive)
+		placed := holdingPlace(t, rig, run, held)
+		standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
+		if standby == nil || !standby.standby {
+			t.Fatalf("the collection's read beside the stop's spooled %+v, want it standing by", standby)
+		}
+		held.end <- errScrubRefused
+		if spooled := <-placed; spooled != nil {
+			t.Fatalf("a take whose scrub refused its archive spooled %+v", spooled)
+		}
+		store := &unansweredReadBack{PendingStore: rig.coordinator.pending, crossing: crossing,
+			reading: make(chan struct{})}
+		rig.coordinator.pending = store
+		room := sessionRecordBudget + crossing
+		keeping, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		kept := make(chan *SessionKept, 1)
+		go func() { kept <- rig.coordinator.keepCapture(keeping, standby) }()
+		select {
+		case <-store.reading:
+		case got := <-kept:
+			t.Fatalf("the premise: the standby's keep came to %+v without reading the row back after its "+
+				"takeover went unanswered", got)
+		}
+		select {
+		case got := <-kept:
+			if got != nil {
+				t.Errorf("the standby's keep came to %+v with the row unread, want it keeping nothing", got)
+			}
+			if began, cut := store.readBack(); cut.Sub(began) != room {
+				t.Errorf("the read of the row was let go %v after it began, want it cut at one change of the "+
+					"row, a record's budget and the row's crossing, %v", cut.Sub(began), room)
+			}
+		case <-time.After(room + time.Minute):
+			t.Errorf("the standby's keep is still waiting %v after its read of the row began, on a read the "+
+				"store never answers, past one change of the row, %v", room+time.Minute, room)
+			cancel()
+			<-kept
+		}
+		if row := rig.get("t1"); row.Capture == nil || row.Capture.CaptureSeq != 2 ||
+			row.Capture.State != CaptureBegun {
+			t.Errorf("the row's newest capture is %+v, want the premise: the standby's takeover made, begun",
+				row.Capture)
+		}
+		if uploads := keep.uploads(); len(uploads) != 0 {
+			t.Errorf("uploaded %d sessions with the row unread, want none", len(uploads))
+		}
+	})
+}
+
 // refusedTake is a runner whose every take of a box's session is refused with
 // err, as a box whose session cannot be read refuses it.
 type refusedTake struct {
@@ -1059,10 +1192,11 @@ func TestAWaitLeavesAReadStandingByWhoseTakerHolds(t *testing.T) {
 	})
 }
 
-// A READ STANDING BY TAKES OVER A CAPTURE BEGUN PAST WHAT A CAPTURE CAN TAKE. The
-// read holding the place is node-a's, whose taker lease still holds, and its
-// capture has stood begun longer than a capture can take: it will come to
-// nothing a standby could wait for. The standby takes the place after it and
+// A READ STANDING BY TAKES OVER A CAPTURE BEGUN PAST WHAT ANY NODE'S CLOCK READS
+// A CAPTURE AS ABLE TO TAKE. The read holding the place is node-a's, whose
+// taker lease still holds, and its capture has stood begun longer than any
+// node's clock reads a capture as able to take ([SessionCaptureBudget]): it
+// will come to nothing a standby could wait for. The standby takes the place after it and
 // keeps its own session there, rather than wait out its own time and keep
 // nothing.
 //
@@ -1112,9 +1246,10 @@ func TestAReadStandingByTakesOverACaptureBegunPastItsBudget(t *testing.T) {
 // log does not answer, the standby keeps its own all the same, a session that
 // may be kept twice rather than one nobody keeps. Every way the log is read at
 // that last decision alone, never while the capture is still within its
-// budget. Where node-a's stamp names no taker, one an older build wrote, the
-// capture is decided by its age alone: the log is not read, even holding its
-// record, and the standby takes the place after it and keeps its own.
+// budget. Where node-a's stamp names no taker, which only a coordinator with
+// no taker lease writes, the capture is decided by its age alone: the log is
+// not read, even holding its record, and the standby takes the place after it
+// and keeps its own.
 //
 // ON THE LOG'S WORD ALONE: where the row names the capture and the run's
 // record does not take the landed settle, the standby keeps nothing all the
@@ -1167,8 +1302,8 @@ func TestAReadStandingByKeepsNothingWhereTheLogTookTheCaptureItStoodByFor(t *tes
 		// puts the SAVE's record on the turn's row on the log: the log took
 		// the save and not the final take the standby stands by for.
 		saveTook bool
-		// noTaker stamps node-a's capture with no taker, as an older build
-		// wrote it, its record on the log all the same.
+		// noTaker stamps node-a's capture with no taker, as a coordinator
+		// with no taker lease writes it, its record on the log all the same.
 		noTaker bool
 	}{
 		{name: "the log took the capture's record, its stamp never on the run's row", took: true},

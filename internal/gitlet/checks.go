@@ -82,6 +82,8 @@ import (
 // Every op, kind and field here is in the base format ([RecordVersion]): the
 // domain landed on main with them, so every build that meets a record on a
 // checks subject reads it. None is a gate.
+// An ending's test counts and its output's lines are version 6
+// ([CheckCountsVersion]); an ending that carries neither is base format.
 
 // CheckHistory is how long a check's rows are kept once it has ended: thirty
 // days. Past it a check is one nobody reads — a change merged weeks ago, a tip
@@ -745,10 +747,20 @@ func (l CheckLog) Content() objstore.Object {
 	return objstore.Object{Key: l.Object, Hash: l.Hash, Size: l.Size}
 }
 
+// CheckTests is what a run's JUnit report says of its tests: Total ran, Failed of them failed or
+// errored, Skipped were skipped. Version 6 ([CheckCountsVersion]).
+type CheckTests struct {
+	// Total has no omitempty: a report of no tests still says one was read.
+	Total   int `json:"total"`
+	Failed  int `json:"failed,omitempty"`
+	Skipped int `json:"skipped,omitempty"`
+}
+
 // CheckFinished ends an attempt, on the repository's checks subject
 // ([OpCheckFinished]): what it measured — or why it measured nothing — what
 // it said, and its log where a failed run kept one. Every field is in the
-// base format, as this file's head says.
+// base format but Tests, LogLines and TailCut ([CheckCountsVersion]), as this
+// file's head says.
 type CheckFinished struct {
 	CheckKey
 	State  CheckState  `json:"state"`
@@ -767,6 +779,12 @@ type CheckFinished struct {
 	// more there were; a passed run carries none.
 	Failures        []CheckFailure `json:"failures,omitempty"`
 	FailuresOmitted int            `json:"failures_omitted,omitempty"`
+	// Tests are its JUnit report's counts, nil where none was read. LogLines is how many lines its
+	// whole output has (its newlines, and one for an unterminated last line), 0 where none were
+	// counted; TailCut reports a Tail whose first line began before it. Version 6.
+	Tests    *CheckTests `json:"tests,omitempty"`
+	LogLines int         `json:"log_lines,omitempty"`
+	TailCut  bool        `json:"tail_cut,omitempty"`
 	// Log is the failed run's kept log; a passed run keeps none.
 	Log *CheckLog `json:"log,omitempty"`
 	// Reporter is the person whose CI reported the ending; nil for a runner
@@ -806,6 +824,25 @@ func failsAHead(state CheckState, reason CheckReason, attempt int) bool {
 	return false
 }
 
+// TailLines is how many lines tail holds: its newlines, and one more where it does not end in one.
+func TailLines(tail string) int {
+	n := strings.Count(tail, "\n")
+	if tail != "" && !strings.HasSuffix(tail, "\n") {
+		n++
+	}
+	return n
+}
+
+// TailFirstLine is the number, from 1, of tail's first line in an output of lines lines that ends
+// where tail ends; 0 where lines or tail is empty.
+func TailFirstLine(lines int, tail string) int {
+	if lines <= 0 || tail == "" {
+		return 0
+	}
+	// Both counts end at the same byte, so an unterminated last line is in each and cancels.
+	return lines - TailLines(tail) + 1
+}
+
 // Validate refuses an ending no writer forms.
 func (f CheckFinished) Validate() error {
 	if err := f.CheckKey.Validate(); err != nil {
@@ -838,6 +875,21 @@ func (f CheckFinished) Validate() error {
 			"count the rest in failures_omitted", len(f.Failures), MaxCheckFailures)
 	case f.FailuresOmitted < 0:
 		return checkField("failures_omitted", "%d is no count", f.FailuresOmitted)
+	case f.Tests != nil && !f.State.Measured():
+		return checkField("tests", "only a run that measured the commit, passed or failed, counts its tests")
+	case f.Tests != nil && (f.Tests.Total < 0 || f.Tests.Failed < 0 || f.Tests.Skipped < 0 ||
+		f.Tests.Failed > f.Tests.Total || f.Tests.Skipped > f.Tests.Total-f.Tests.Failed):
+		return checkField("tests", "%d failed and %d skipped of %d: no count is negative and none is past "+
+			"the tests that ran", f.Tests.Failed, f.Tests.Skipped, f.Tests.Total)
+	case f.LogLines < 0:
+		return checkField("log_lines", "%d is no count of lines", f.LogLines)
+	case f.LogLines > 0 && f.Tail == "":
+		return checkField("log_lines", "an output's lines are counted beside its tail")
+	case f.LogLines > 0 && f.LogLines < TailLines(f.Tail):
+		return checkField("log_lines", "%d lines, fewer than the %d its own tail holds", f.LogLines,
+			TailLines(f.Tail))
+	case f.TailCut && f.Tail == "":
+		return checkField("tail_cut", "only a tail begins inside a line")
 	case len(f.URL) > MaxCheckURLBytes || !utf8.ValidString(f.URL):
 		return checkField("url", "%d bytes: at most %d of valid UTF-8 (gitlet.MaxCheckURLBytes)", len(f.URL),
 			MaxCheckURLBytes)

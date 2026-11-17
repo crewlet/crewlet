@@ -208,7 +208,7 @@ func testASaveReservesItsPlaceOnlyWhileItsJobRunsUndecided(t *testing.T, s sandb
 			{"the newest capture's record past the window any record names it in", true,
 				func(t *testing.T, turnID string) sandbox.SessionCapture {
 					r := runningRow(t, s, turnID)
-					old := saveAt(r, 1, now.Add(-objstore.RecordWithin-time.Minute))
+					old := saveAt(r, 1, now.Add(-objstore.RecordWithin-2*objstore.AssumedClockSkew-time.Minute))
 					old.Final, old.Interrupted = false, false
 					mustStamp(t, s, turnID, old)
 					mustStamp(t, s, turnID, stampedAs(old, sandbox.CaptureUnresolved))

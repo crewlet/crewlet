@@ -37,9 +37,12 @@ import (
 //     newest ended first (code_checks_recent_idx, sought from the end down),
 //     each kept only where its repository is one the asker reads, so a page
 //     is the rows it READ and may be short, as a listing of changes across
-//     repositories is. Every shape takes a check's name and a state as
-//     NARROWINGS, each the STATEMENT'S, never a filter of what a page read
-//     ([CheckQuery.State]): a repository's and the window's seek an index
+//     repositories is; or, asked where each check STANDS
+//     ([CheckQuery.Standing], checkstanding.go), each key's latest attempt of
+//     a live subject, running ones included, in a recent or a failing-first
+//     order, with the change it judges. Every shape takes a check's name
+//     and a state as NARROWINGS, each the STATEMENT'S, never a filter of what
+//     a page read ([CheckQuery.State]): a repository's and the window's seek an index
 //     that leads with the narrowing (narrowedPlaces), and a change's and a
 //     commit's test it inside their walk of one commit's attempts. The
 //     dashboard's Checks section's facets.
@@ -218,6 +221,9 @@ func (q ReadQuery) validateChecks() error {
 		case c.Latest:
 			return refused("checks.latest", "a check read names its attempt; a listing of a change's or a "+
 				"commit's checks answers each one's latest")
+		case c.Standing != "":
+			return refused("checks.standing", "a check read names one attempt; a listing of checks says where "+
+				"each stands")
 		case q.Cursor != "" || q.Limit != 0:
 			return refused("limit", "one attempt is read whole, never paged")
 		case !gitref.ValidOID(c.OID) || c.OID == ZeroOID:
@@ -235,6 +241,9 @@ func (q ReadQuery) validateChecks() error {
 	}
 	if c == nil {
 		return nil
+	}
+	if c.Standing != "" {
+		return q.validateStanding()
 	}
 	switch {
 	case c.Target != "" && (c.OID == "" || c.Change != 0):
@@ -627,6 +636,9 @@ func (r *Reader) checks(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		fallback = latestCheckLimit
 	}
 	limit := min(limitOr(q.Limit, fallback), r.pageRows)
+	if c.Standing != "" {
+		return r.standingChecks(ctx, tx, q, c, chart, cp, limit, out)
+	}
 	if q.Repo == "" {
 		return r.checksWindow(ctx, tx, q, c, chart, limit, out)
 	}
@@ -1042,11 +1054,13 @@ func (r *Reader) check(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 	key := CheckKey{RepoID: repo.ref.ID, OID: q.Checks.OID, Target: q.Checks.Target, Name: q.Checks.Name,
 		Attempt: q.Checks.Attempt}
 	var (
-		d                   CheckDetail
-		def, failures, tail string
+		d                                   CheckDetail
+		def, failures, tail                 string
+		testsTotal                          sql.NullInt64
+		testsFailed, testsSkipped, logLines int
 	)
 	d.CheckRow, err = scanCheck(tx.QueryRowContext(ctx, checkWholeSQL, key.RepoID, key.OID, key.Target, key.Name,
-		key.Attempt).Scan, &def, &failures, &tail)
+		key.Attempt).Scan, &def, &failures, &tail, &testsTotal, &testsFailed, &testsSkipped, &logLines, &d.TailCut)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return fmt.Errorf("%w: %s holds no attempt %d of check %s of %s for %s", ErrCheckNotFound,
@@ -1056,6 +1070,10 @@ func (r *Reader) check(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 	}
 	d.Repo = repo.ref.Name
 	d.Tail = tail
+	if testsTotal.Valid {
+		d.Tests = &CheckTests{Total: int(testsTotal.Int64), Failed: testsFailed, Skipped: testsSkipped}
+	}
+	d.LogLines, d.TailFirstLine = logLines, TailFirstLine(logLines, tail)
 	if def != "" {
 		d.Def = &CheckDef{}
 		if err := json.Unmarshal([]byte(def), d.Def); err != nil {
@@ -1385,7 +1403,8 @@ var cursorTarget = base64.RawURLEncoding
 // names no repository ([windowCursor]); one commit's attempts for one target
 // — a change's at its head, or a commit's beside the branch it names — by
 // name and attempt ([nameAttemptCursor]); one commit's for every target
-// ([targetCursor]); and a repository's, newest ended first ([endedCursor]).
+// ([targetCursor]); a repository's, newest ended first ([endedCursor]); and a
+// standing listing's, by its phase ([standingCursorOf]).
 // A latest listing ([CheckQuery.Latest]) walks the same key and resumes
 // alike: after a check's latest attempt, its next check.
 // THE ONE CHOICE: the reader pages by it and [ReadQuery.ChecksCursor] answers
@@ -1397,6 +1416,8 @@ func checksWalk(q ReadQuery) func(CheckRow) string {
 		c = *q.Checks
 	}
 	switch {
+	case c.Standing != "":
+		return standingCursorOf(c)
 	case q.Repo == "":
 		return windowCursor
 	case c.Change != 0 || c.Target != "":
@@ -1529,7 +1550,8 @@ func cutWindowCursor(s string) (int64, string, string, string, string, int, bool
 const (
 	checkRowSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY ` + checksKey + `
 		WHERE repo_id = ? AND commit_oid = ? AND target_ref = ? AND name = ? AND attempt = ?`
-	checkWholeSQL = `SELECT ` + checkColumns + `, def, failures, tail FROM code_checks INDEXED BY ` + checksKey + `
+	checkWholeSQL = `SELECT ` + checkColumns + `, def, failures, tail, tests_total, tests_failed, tests_skipped,
+		log_lines, tail_cut FROM code_checks INDEXED BY ` + checksKey + `
 		WHERE repo_id = ? AND commit_oid = ? AND target_ref = ? AND name = ? AND attempt = ?`
 	checkLogSQL = `SELECT object, hash, size FROM code_check_logs
 		WHERE repo_id = ? AND commit_oid = ? AND target_ref = ? AND name = ? AND attempt = ?`

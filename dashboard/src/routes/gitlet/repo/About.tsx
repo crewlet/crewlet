@@ -1,27 +1,38 @@
 /**
- * What a repository is, beside its code: the rail every code host draws
- * there. The counts a reader places it by — each a link to the tab that lists
- * them — and its properties: who owns it, which seats read it, what decides
- * its settings, how code search reads it and where it stands with other
- * hosts. Its description is the header's, which every tab draws, and its
- * branches and tags are counted in the bar beside the revision picker.
- *
- * EVERY VALUE IS THE ROW'S (`code_repo`), read by the page every minute: the
- * rail asks nothing of its own. What it held on the old Overview tab — a fact
- * sheet a reader had to pass before reaching a file — is here, read across a
- * gap from the code it describes.
+ * What a repository is, beside its code: its facts as sentences, each led by its glyph. Every value
+ * is the page's row but the default branch's protection; the rail's other sections read their own.
  */
 
-import { EmptyValue } from "@crewlethq/ui";
-import { ClockGlyph, HardDriveGlyph, ShieldGlyph, UploadGlyph } from "@crewlethq/icons/glyphs";
-import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
+import { createContext, useContext, useEffect, type MouseEvent, type ReactNode } from "react";
+import { IconButtonLink, Skeleton } from "@crewlethq/ui";
+import {
+  ActivityGlyph,
+  BookOpenGlyph,
+  ClockGlyph,
+  FileTextGlyph,
+  HardDriveGlyph,
+  KeyGlyph,
+  LockGlyph,
+  NetworkGlyph,
+  ScaleGlyph,
+  SearchGlyph,
+  SettingsGlyph,
+  ShieldCheckGlyph,
+  ShieldGlyph,
+  UploadGlyph,
+  UsersGlyph,
+} from "@crewlethq/icons/glyphs";
+import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { ago } from "~/lib/ago.ts";
 import { fmtBytes, fmtDateTime, plural } from "~/lib/format.ts";
-import { importStanding, pullMirrorStanding, pushMirrorStanding } from "~/lib/repoWrites.ts";
-import type { CodeOwner, CodeRepoDetail } from "~/protocol/index.ts";
+import { importStanding } from "~/lib/repoWrites.ts";
+import { indexOrg, seatPath, unitByKey, unitPlace, useSeatBadgeOf } from "~/lib/seats.ts";
+import { useOrg } from "~/lib/store-hooks.ts";
+import type { CodeRepoDetail } from "~/protocol/index.ts";
 import { repoHref } from "../paths.ts";
 import { Face } from "../ui.tsx";
+import { protectionWords, useDefaultBranch } from "./Branches.tsx";
 import "~/styles/gitlet.css";
 
 /** Which seats read a repository, in words. Every person reads every repository (ADR-0088). */
@@ -51,108 +62,205 @@ export function managedWord(managedBy: string): string {
   return managedBy;
 }
 
-/** The rail's counts: each a glyph, a number and what it counts, linking to the tab that lists them. */
-function Stats({ repo }: { repo: CodeRepoDetail }) {
-  const now = useNow();
-  const rules = repo.protections?.length ?? 0;
-  return (
-    <ul className="code-about__stats" aria-label="The repository in numbers">
-      <li>
-        <UploadGlyph size="sm" className="code-about__glyph" />
-        <a className="t-link" href={repoHref(repo.name, { tab: "pushes" })}>
-          {plural(repo.pushes, "push", "pushes")}
-        </a>
-      </li>
-      <li>
-        <ShieldGlyph size="sm" className="code-about__glyph" />
-        <a className="t-link" href={repoHref(repo.name, { tab: "settings" })}>
-          {rules === 0 ? "No protection rule" : plural(rules, "protection rule")}
-        </a>
-      </li>
-      <li>
-        <HardDriveGlyph size="sm" className="code-about__glyph" />
-        <span title={`${plural(repo.live_packs, "pack")}, ${plural(repo.live_objects, "object")}`}>
-          {fmtBytes(repo.live_bytes)}
-        </span>
-      </li>
-      <li>
-        <ClockGlyph size="sm" className="code-about__glyph" />
-        {repo.last_push_at ? (
-          <time dateTime={repo.last_push_at} title={fmtDateTime(repo.last_push_at)}>
-            Pushed {ago(repo.last_push_at, now)}
-          </time>
-        ) : (
-          <span>Never pushed</span>
-        )}
-      </li>
-    </ul>
-  );
+/** The root's documents the README card holds (`readme`, `license`), reported up to About. */
+export const RootDocs = createContext<(docs: string) => void>(() => {});
+
+/** Reports the documents a root holds, comma-separated, to the rail beside it. */
+export function useReportDocs(docs: string): void {
+  const report = useContext(RootDocs);
+  useEffect(() => report(docs), [report, docs]);
 }
 
-/** Who owns a repository: a seat by its face and name, a unit by its name. */
-function Owner({ owner, name }: { owner: CodeOwner; name: string }) {
-  if (owner.kind !== "seat") return <span>{name}</span>;
-  return (
-    <span className="code-about__owner">
-      <Face who={owner.ref} />
-      <span>{name}</span>
-    </span>
-  );
-}
-
-export function About({
-  repo,
-  ownerName,
+/** One fact: its glyph, then its sentence. */
+function Fact({
+  glyph,
+  title,
+  children,
 }: {
-  repo: CodeRepoDetail;
-  ownerName: (owner: CodeOwner) => string;
+  glyph: ReactNode;
+  title?: string;
+  children: ReactNode;
 }) {
   return (
-    <section className="code-about" aria-labelledby="code-about-title">
-      <h2 id="code-about-title" className="code-about__title">
-        About
-      </h2>
-      <Stats repo={repo} />
-      <PropertiesRail
-        headings="sentence"
-        groups={[
-          {
-            name: "Repository",
-            properties: [
-              { label: "Owner", value: <Owner owner={repo.owner} name={ownerName(repo.owner)} /> },
-              {
-                label: "Read by",
-                value: readByWord(repo.visibility),
-                title: "Which seats read it. Every person reads every repository.",
-              },
-              {
-                label: "Kind",
-                value: repo.kind === "scratch" ? "A seat's scratch repository" : "Project",
-              },
-              { label: "Managed by", value: managedWord(repo.managed_by) },
-              { label: "Declared", value: fmtDateTime(repo.created_at) },
-              ...(repo.access ? [{ label: "Your access", value: repo.access }] : []),
-              {
-                label: "Last activity",
-                value: repo.last_activity_at ? (
-                  fmtDateTime(repo.last_activity_at)
-                ) : (
-                  <EmptyValue label="None" />
-                ),
-              },
-            ],
-          },
-          {
-            name: "Search and other hosts",
-            properties: [
-              { label: "Search", value: searchWord(repo.search) },
-              { label: "Import", value: importStanding(repo) ?? undefined },
-              { label: "Pull mirror", value: pullMirrorStanding(repo) ?? undefined },
-              { label: "Push mirror", value: pushMirrorStanding(repo) ?? undefined },
-            ],
-          },
-        ]}
-      />
+    <li className="code-repo-rail__fact" title={title}>
+      <span className="code-repo-rail__glyph">{glyph}</span>
+      <span className="code-repo-rail__words">{children}</span>
+    </li>
+  );
+}
+
+/** A document's link: its tab of the README card chosen and focused, else the address. */
+function DocLink({ repo, doc, label }: { repo: string; doc: "readme" | "license"; label: string }) {
+  const open = (e: MouseEvent) => {
+    const tab = [...document.querySelectorAll<HTMLElement>('.code-readme [role="tab"]')].find(
+      (t) => t.textContent === (doc === "license" ? "LICENSE" : "README"),
+    );
+    if (!tab) return;
+    e.preventDefault();
+    tab.click();
+    tab.focus();
+  };
+  return (
+    <a
+      className="t-link"
+      href={repoHref(repo, doc === "license" ? { doc: "license" } : {})}
+      onClick={open}
+    >
+      {label}
+    </a>
+  );
+}
+
+/** The default branch's protection in its rules' words, else how many rules the repository holds. */
+function Protection({ repo }: { repo: CodeRepoDetail }) {
+  const found = useDefaultBranch(repo);
+  const branch = <strong>{repo.default_branch}</strong>;
+  const settings = repoHref(repo.name, { tab: "settings" });
+  if (found.loading) {
+    return (
+      <li className="code-repo-rail__fact">
+        <Skeleton variant="text" rows={1} label="Reading the default branch's rules" />
+      </li>
+    );
+  }
+  if (found.row?.protection) {
+    return (
+      <Fact glyph={<ShieldCheckGlyph size="sm" />}>
+        {branch} is protected: {protectionWords(found.row.protection)}
+      </Fact>
+    );
+  }
+  if (found.row) {
+    return (
+      <Fact glyph={<ShieldGlyph size="sm" />}>
+        <a className="t-link" href={settings}>
+          {branch} has no protection rule
+        </a>
+      </Fact>
+    );
+  }
+  const rules = repo.protections?.length ?? 0;
+  return (
+    <Fact glyph={<ShieldGlyph size="sm" />}>
+      <a className="t-link" href={settings}>
+        {rules === 0 ? "No protection rule" : plural(rules, "protection rule")}
+      </a>
+    </Fact>
+  );
+}
+
+/** Who owns it: a unit by its name off the chart (its key where the chart has none), or a seat. */
+function Owner({ repo }: { repo: CodeRepoDetail }) {
+  const org = useOrg();
+  const seatBadge = useSeatBadgeOf();
+  const { owner } = repo;
+  if (owner.kind === "seat") {
+    return (
+      <Fact glyph={<Face who={owner.ref} />}>
+        Owned by{" "}
+        <a className="prose-link" href={href(seatPath({ handle: owner.ref, name: owner.ref }))}>
+          <strong>{seatBadge(owner.ref).name || owner.ref}</strong>
+        </a>
+      </Fact>
+    );
+  }
+  const unit = unitByKey(indexOrg(org), owner.ref);
+  return (
+    <Fact glyph={<NetworkGlyph size="sm" />}>
+      Owned by{" "}
+      {unit ? (
+        <a className="prose-link" href={href(unitPlace(unit).path, unitPlace(unit).query)}>
+          <strong>{unit.name}</strong>
+        </a>
+      ) : (
+        <strong>{owner.ref}</strong>
+      )}
+    </Fact>
+  );
+}
+
+/** About: its documents, its protection, who owns and reads it, its search, size and times. */
+export function About({ repo, docs }: { repo: CodeRepoDetail; docs: string }) {
+  const now = useNow();
+  const has = docs.split(",");
+  const standing = importStanding(repo);
+  return (
+    <section className="code-repo-rail__sec" aria-labelledby="code-about-title">
+      <div className="code-repo-rail__head">
+        <h2 id="code-about-title" className="code-repo-rail__about">
+          About
+        </h2>
+        <span className="code-repo-rail__end">
+          <IconButtonLink
+            href={repoHref(repo.name, { tab: "settings" })}
+            icon={<SettingsGlyph />}
+            label="Open the repository's settings"
+            size="sm"
+            variant="ghost"
+          />
+        </span>
+      </div>
+      <ul className="code-repo-rail__facts">
+        {has.includes("readme") && (
+          <Fact glyph={<BookOpenGlyph size="sm" />}>
+            <DocLink repo={repo.name} doc="readme" label="Readme" />
+          </Fact>
+        )}
+        {has.includes("license") && (
+          <Fact glyph={<ScaleGlyph size="sm" />}>
+            <DocLink repo={repo.name} doc="license" label="LICENSE" />
+          </Fact>
+        )}
+        <Protection repo={repo} />
+        <Owner repo={repo} />
+        <Fact
+          glyph={repo.visibility === "unit" ? <LockGlyph size="sm" /> : <UsersGlyph size="sm" />}
+          title="Every person reads every repository."
+        >
+          {readByWord(repo.visibility)} {repo.visibility === "unit" ? "read" : "reads"} it
+        </Fact>
+        <Fact glyph={<SearchGlyph size="sm" />}>
+          {repo.search === "indexed" ? "Indexed for code search" : searchWord(repo.search)}
+        </Fact>
+        <Fact glyph={<HardDriveGlyph size="sm" />} title={plural(repo.live_objects, "object")}>
+          <strong>{fmtBytes(repo.live_bytes)}</strong> in {plural(repo.live_packs, "pack")}
+        </Fact>
+        <Fact glyph={<ClockGlyph size="sm" />}>
+          Created{" "}
+          <time dateTime={repo.created_at} title={fmtDateTime(repo.created_at)}>
+            {ago(repo.created_at, now)}
+          </time>
+        </Fact>
+        <Fact glyph={<UploadGlyph size="sm" />}>
+          {repo.last_push_at ? (
+            <>
+              Last pushed{" "}
+              <time dateTime={repo.last_push_at} title={fmtDateTime(repo.last_push_at)}>
+                {ago(repo.last_push_at, now)}
+              </time>
+            </>
+          ) : (
+            "Never pushed"
+          )}
+        </Fact>
+        {repo.kind === "scratch" && repo.last_activity_at && (
+          <Fact glyph={<ActivityGlyph size="sm" />}>
+            Last active{" "}
+            <time dateTime={repo.last_activity_at} title={fmtDateTime(repo.last_activity_at)}>
+              {ago(repo.last_activity_at, now)}
+            </time>
+          </Fact>
+        )}
+        {repo.managed_by === "config" && (
+          <Fact glyph={<FileTextGlyph size="sm" />}>Declared in the company document</Fact>
+        )}
+        {repo.access && (
+          <Fact glyph={<KeyGlyph size="sm" />}>
+            Your access: <strong>{repo.access}</strong>
+          </Fact>
+        )}
+        {standing && <Fact glyph={<UploadGlyph size="sm" />}>{standing}</Fact>}
+      </ul>
     </section>
   );
 }

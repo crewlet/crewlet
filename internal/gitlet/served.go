@@ -38,10 +38,11 @@ type Served struct {
 	ChecksWriter *ChecksWriter
 	Reader       *Reader
 	Store        *Store
-	// Marks is the writer of persons' code inbox marks, beside the
-	// committer on every node that publishes, and nil where the committer
-	// is: a mark is then refused [ErrNotServing], as a proposal is, and the
-	// router asks the next data node.
+	// Marks is the writer of persons' own marks on the code log, their
+	// inbox's and the files they viewed, beside the committer on every node
+	// that publishes, and nil where the committer is: a mark is then refused
+	// [ErrNotServing], as a proposal is, and the router asks the next data
+	// node.
 	Marks *Marks
 }
 

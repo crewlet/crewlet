@@ -945,9 +945,8 @@ func TestARelaunchContinuesOnlyTheSessionOfTheJobItFollows(t *testing.T) {
 // waits is continued — but only for as long as an ordinary keep takes: one
 // still begun after that is a slow store or a stopped node's, which the frame
 // holding the seat and a slot of the node's admission does not wait out for
-// the capture's own budget of half an hour and more. Past the wait it
-// continues the capture its job kept before, as it would beside one never
-// kept.
+// the capture's own life of an hour and more. Past the wait it continues the
+// capture its job kept before, as it would beside one never kept.
 //
 // Mutation: wait out the capture's own budget on the relaunch, or stop waiting
 // at once, or refuse the kept capture beside the one still being kept, and a
@@ -1435,8 +1434,9 @@ func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 // only while the turn has kept none, whose landing would end the session its
 // first launch was handed as the one a relaunch continues (beside a capture
 // the turn kept, its landing changes nothing a relaunch decides, and the row
-// is decided); one whose object is past the window a record may name it in,
-// which the ask refuses unasked, and in a company that keeps no session,
+// is decided); one whose object is past the window a record may name it in and
+// twice the skew, past which the log refuses it on any clock the engine holds,
+// and in a company that keeps no session,
 // whose relaunch asks nothing — a target that cannot be said, a round lost a
 // second time, and a collected job's
 // resume, which carries its round on in its box only where its sign-in was
@@ -1613,7 +1613,9 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 			}},
 		"a capture whose record went unanswered past the window a record may name it in": {target: target,
 			decided: true, in: ContinuesInAnyBox,
-			run: func(r *PendingRun) { r.Capture = unanswered(now.Add(-objstore.RecordWithin - time.Minute)) }},
+			run: func(r *PendingRun) {
+				r.Capture = unanswered(now.Add(-objstore.RecordWithin - 2*objstore.AssumedClockSkew - time.Minute))
+			}},
 		"a newer capture of the job refused, beside the one it kept": {target: target, decided: true,
 			in: ContinuesInAnyBox, run: func(r *PendingRun) {
 				refused := kept
@@ -1754,8 +1756,9 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 // read would, nor where the job still works, its capture, or a save of it
 // under way beside a refused final take, is still being kept or awaits its
 // record's answer, or its turn has ended, which decide without the row's
-// capture. A capture unanswered past the window a record may name it
-// in awaits nothing, and its row is read again; so does an earlier job's
+// capture. A capture unanswered past the window a record may name it in and
+// twice the skew, past which the log refuses it on any clock the engine
+// holds, awaits nothing, and its row is read again; so does an earlier job's
 // capture still being kept beside the capture the turn kept, which no
 // relaunch waits for; and so does a row naming the kept capture where the
 // record holds a newer capture of the job it did not keep, which the log may
@@ -1830,7 +1833,7 @@ func TestARowIsReadAgainOnlyWhereThatCanChangeItsAnswer(t *testing.T) {
 		"a row whose newest capture awaits its record's answer": {row: naming(3),
 			run: unanswered(now.Add(-time.Minute))},
 		"a row whose newest capture went unanswered past its window": {row: naming(3),
-			run: unanswered(now.Add(-objstore.RecordWithin - time.Minute)), again: true},
+			run: unanswered(now.Add(-objstore.RecordWithin - 2*objstore.AssumedClockSkew - time.Minute)), again: true},
 		"a row naming the kept capture beside a newer one of its job refused": {row: naming(2),
 			run: refusedNewer, again: true},
 	} {
@@ -2007,8 +2010,9 @@ func TestACapturesRecordsStopAtTheReadsTime(t *testing.T) {
 			silent := &silentStamps{PendingStore: rig.coordinator.pending, only: CaptureBegun}
 			rig.coordinator.pending, rig.coordinator.recordBudget = silent, time.Minute
 			// A READ WITH A DEADLINE, whose take ends two seconds from now and
-			// whose by a pause's grace after that.
-			read, cancel := context.WithTimeout(t.Context(), 2*discardGrace+2*time.Second)
+			// whose by its records' two graces after that, a pause's grace
+			// before the read's own.
+			read, cancel := context.WithTimeout(t.Context(), 3*discardGrace+2*time.Second)
 			defer cancel()
 			began := time.Now()
 			spooled, _ := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,

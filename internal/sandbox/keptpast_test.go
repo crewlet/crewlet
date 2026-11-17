@@ -68,7 +68,8 @@ func launchAfter(t *testing.T, rig *coordRig, want SessionCapture, reused bool,
 
 // A RELAUNCH CONTINUES THE NEWEST KEPT CAPTURE OF ITS JOB PAST ONE NOT KEPT. A
 // job whose newest capture was refused, begun and never finished, or sent and
-// never answered past the window a record may name it in kept an older one,
+// never answered past the window a record may name it in, which the log
+// refuses once it is asked again, kept an older one,
 // which holds everything up to its own save point: the relaunch continues
 // that one, told every call after it, rather than start a session of its own
 // and lose all of it. It says, in the line that names what it continued, which
@@ -120,12 +121,19 @@ func TestARelaunchContinuesTheNewestKeptCaptureOfItsJobPastOneNotKept(t *testing
 				return begun
 			}},
 		{name: "unanswered past the window a record may name it in",
-			line: "(launch 1, capture 2) was not kept: refused: its record was never answered within",
+			line: "(launch 1, capture 2) was not kept: refused: " + staleUpload,
 			newer: func(t *testing.T, rig *coordRig, _ *keptRestore, _ *takerStore, kept SessionCapture) SessionCapture {
+				// THE LOG DECIDES THE WINDOW, on its own clock: the relaunch asks
+				// the record again whatever its key's age, and the log refuses it.
+				if writes, ok := rig.coordinator.sessions.(*sessionWrites); ok {
+					rig.coordinator.sessions = windowedLog{sessionWrites: writes,
+						now: func() time.Time { return rig.now }}
+				}
 				begun := takenBy(t, rig, kept, "", 0)
 				unanswered := begun
 				unanswered.State = CaptureUnresolved
-				unanswered.Object = objstore.KeyAt(rig.now.Add(-objstore.RecordWithin - time.Minute)).String()
+				unanswered.Object = objstore.KeyAt(rig.now.Add(-objstore.RecordWithin - 2*objstore.AssumedClockSkew -
+					time.Minute)).String()
 				if took, err := rig.pending.StampCapture(t.Context(), "t1", unanswered); err != nil || !took {
 					t.Fatalf("stamping the unanswered capture = %v, %v", took, err)
 				}

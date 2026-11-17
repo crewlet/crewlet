@@ -117,7 +117,7 @@ func TestAnEndWaitsForASaveAFinalTakeOvertook(t *testing.T) {
 			_, _ = rig.pending.StampCapture(context.Background(), "t1", comeOut(save, CaptureLanded))
 		}()
 		started := time.Now()
-		waited, found, err := rig.coordinator.awaitCapture(t.Context(), owing, endCaptureWait, captureInFlight)
+		waited, found, err := rig.coordinator.awaitEndCaptures(t.Context(), owing)
 		elapsed := time.Since(started)
 		<-landing
 		if err != nil || !found {
@@ -183,7 +183,7 @@ func TestAnEndDoesNotWaitForASaveAKeptCaptureSuperseded(t *testing.T) {
 				"save the older build carried", owing.Kept, owing.Saving)
 		}
 		started := time.Now()
-		waited, found, err := rig.coordinator.awaitCapture(t.Context(), owing, endCaptureWait, captureInFlight)
+		waited, found, err := rig.coordinator.awaitEndCaptures(t.Context(), owing)
 		if elapsed := time.Since(started); err != nil || !found || elapsed > 0 {
 			t.Fatalf("the end's wait = found %v, %v after %s; want it over at once", found, err, elapsed)
 		}
@@ -236,8 +236,7 @@ func TestASaveWhoseTakersLeaseLapsedIsSettledFromTheTurnsRow(t *testing.T) {
 				lapse(store)
 				leaseReads := store.readsOf(takingProcess)
 				started := time.Now()
-				_, found, err := rig.coordinator.awaitCapture(t.Context(), rig.get("t1"), endCaptureWait,
-					captureInFlight)
+				_, found, err := rig.coordinator.awaitEndCaptures(t.Context(), rig.get("t1"))
 				if elapsed := time.Since(started); err != nil || !found || elapsed > 0 {
 					t.Fatalf("the end's wait = found %v, %v after %s; want it over at its first pass", found, err,
 						elapsed)
@@ -310,8 +309,7 @@ func TestAnUnresolvedSaveIsAskedAgainBeforeARelaunchOrAnEndDecides(t *testing.T)
 				asked := len(writes.captured())
 				if c.end {
 					started := time.Now()
-					waited, found, err := rig.coordinator.awaitCapture(t.Context(), owingEnd(t, rig, "t1"),
-						endCaptureWait, captureInFlight)
+					waited, found, err := rig.coordinator.awaitEndCaptures(t.Context(), owingEnd(t, rig, "t1"))
 					if elapsed := time.Since(started); err != nil || !found || elapsed > 0 {
 						t.Fatalf("the end's wait = found %v, %v after %s; want it over at once beside a save "+
 							"whose record awaits its answer", found, err, elapsed)

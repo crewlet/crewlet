@@ -633,3 +633,53 @@ func TestACheckPageStaysOnTheAttemptItBegan(t *testing.T) {
 		t.Errorf("a cursor of attempt 1 sent with attempt 2 answered %q, want it refused", got.Output)
 	}
 }
+
+// A REPORTED CHECK CARRIES ITS OWN COUNTS: a person's failed report with its JUnit counts, its
+// output's lines and its tail's cut sends an ending carrying each; a running report with lines,
+// and one whose lines are fewer than its tail's, are refused naming what is wrong, writing nothing.
+//
+// Mutation: drop the arguments' reading (the ending carries no counts, red).
+func TestAReportedCheckCarriesItsOwnCounts(t *testing.T) {
+	t.Parallel()
+	host, writer := newGitletHost(), &codeWrites{}
+	deps := writeDeps(host, writer)
+	deps.Actor = builtin.PrincipalActor
+	report := operatorToolOver(t, builtin.OperatorDeps{Code: deps, Authorize: builtin.Decide(chartLeads)},
+		builtin.CodeReportCheckTool)
+	call := func(args map[string]any) (bool, string) {
+		args["repo"], args["sha"], args["name"] = "site", mainOID, "lint"
+		got, err := report.CallForTurn(asBoundPerson(), nil, args)
+		if err != nil {
+			t.Fatalf("the report answered %v", err)
+		}
+		return got.Failed, got.Output
+	}
+	if failed, out := call(map[string]any{"status": "failed", "tail": "ok\nFAIL\n", "log_lines": 1201,
+		"tail_cut": true, "tests": map[string]any{"total": 214, "failed": 1}}); failed {
+		t.Fatalf("a failed report with its counts answered %q", out)
+	}
+	sent := writer.checksAsked()
+	if len(sent) != 1 || sent[0].Report == nil {
+		t.Fatalf("the report sent %+v, want one report", sent)
+	}
+	if r := sent[0].Report; r.Tests == nil || *r.Tests != (gitlet.CheckTests{Total: 214, Failed: 1}) ||
+		r.LogLines != 1201 || !r.TailCut {
+		t.Errorf("the report carries tests %+v, lines %d, cut %v; want 214 and 1 failed, 1201, cut", r.Tests,
+			r.LogLines, r.TailCut)
+	}
+	for name, tc := range map[string]struct {
+		args map[string]any
+		says string
+	}{
+		"a running check with lines": {map[string]any{"status": "running", "log_lines": 3}, "running check"},
+		"fewer lines than its tail's": {map[string]any{"status": "failed", "tail": "a\nb\nc\n", "log_lines": 2},
+			"log_lines"},
+	} {
+		if failed, out := call(tc.args); !failed || !strings.Contains(out, tc.says) {
+			t.Errorf("%s answered %v %q, want refused saying %q", name, failed, out, tc.says)
+		}
+	}
+	if got := len(writer.checksAsked()); got != 1 {
+		t.Errorf("the refused reports sent %d writes, want none", got-1)
+	}
+}

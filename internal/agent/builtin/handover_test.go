@@ -429,7 +429,9 @@ func newSweepRig(t *testing.T) *sweepRig {
 	host := sweepGitletHost(t, words)
 	codeWire := writeDeps(host, sweepCodeWrites(words))
 	codeWire.Searcher = &codeSearches{answer: func(int, codesearch.Query) (codesearch.Answer, error) {
-		return codesearch.Answer{Hits: []codesearch.Hit{searchHit(host.detail.Name, "a.txt", 1, words)}}, nil
+		hit := searchHit(host.detail.Name, "a.txt", 2, words)
+		hit.Before, hit.After = []string{words}, []string{words}
+		return codesearch.Answer{Hits: []codesearch.Hit{hit}}, nil
 	}}
 	codeWire.Logs = &checkLogs{text: words}
 	codeWire.Placement = purgePlacement{}
@@ -645,6 +647,8 @@ func codeSweepArgs() map[string]map[string]any {
 		"name": "lint", "status": "failed", "summary": "2 lint errors", "url": "https://ci.example.com/runs/1"}
 	out[builtin.CodePurgeUnreachableTool] = map[string]any{"repo": repo}
 	out[builtin.CodeMarkInboxTool] = map[string]any{"read": []any{"r-1"}}
+	out[builtin.CodeMarkViewedTool] = map[string]any{"repo": repo, "change": "7",
+		"viewed": []any{map[string]any{"path": "a.txt", "blob_oid": mainOID, "mode": "100644"}}}
 	out[builtin.CodeRepoReadersTool] = map[string]any{"repo": repo}
 	out[builtin.FleetHealthTool] = map[string]any{}
 	out[builtin.CodeStatusTool] = map[string]any{}

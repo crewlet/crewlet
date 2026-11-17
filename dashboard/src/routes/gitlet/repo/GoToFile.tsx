@@ -25,7 +25,7 @@ const FIND_MAX_BYTES = 256;
 const utf8 = new TextEncoder();
 
 /** The text cut to the engine's bound at a code point: the field's length counts code units. */
-function withinBound(text: string): string {
+export function withinBound(text: string): string {
   if (utf8.encode(text).length <= FIND_MAX_BYTES) return text;
   let bytes = 0;
   let cut = "";
@@ -69,7 +69,18 @@ function Matched({ path, spans }: { path: string; spans: readonly [number, numbe
   return <span className="code-find__path">{parts}</span>;
 }
 
-export function GoToFile({ repo, rev, commit }: { repo: string; rev: string; commit: string }) {
+export function GoToFile({
+  repo,
+  rev,
+  commit,
+  keyed = true,
+}: {
+  repo: string;
+  rev: string;
+  commit: string;
+  /** `t` focuses it; off where the page binds `t` itself (a file's view, whose pane may be hidden). */
+  keyed?: boolean;
+}) {
   const nav = useNavigator();
   const field = useRef<HTMLInputElement>(null);
   const [typed, setTyped] = useState("");
@@ -86,7 +97,7 @@ export function GoToFile({ repo, rev, commit }: { repo: string; rev: string; com
     { name: repo, ref: commit, q, limit: FIND_LIMIT },
     { enabled: commit !== "" && q.trim() !== "" },
   );
-  useKeymap({ "code.find": () => field.current?.focus() });
+  useKeymap({ "code.find": { run: () => field.current?.focus(), when: keyed } });
   const answer = find.data?.find;
   const current = q === withinBound(typed) && !find.loading && commit !== "";
   const matches: readonly CodeFindMatch[] = current ? (answer?.matches ?? []) : [];
