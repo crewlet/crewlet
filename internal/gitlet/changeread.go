@@ -87,10 +87,6 @@ import (
 // change's judged readiness stands in ([ReadQuery.Readiness]) is tested on each
 // row the same way, once the page's readiness is judged.
 //
-// A listing narrowed by its words that no reviewer, need, work item or readiness bucket leads is led
-// by this node's index of them instead, every match judged in the read and kept in the order above
-// (changetext.go).
-//
 // # Held to the grant
 //
 // A listing that NAMES its repository is that repository's: judged once,

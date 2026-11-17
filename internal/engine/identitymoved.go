@@ -97,13 +97,12 @@ func (s *stateLog) estateReplaced() {
 }
 
 // estateReplaced is what this node does once its replicated estate was replaced
-// under it: the chat index and the index of changes' words, whose walks only
-// move forward over their rows' own positions, drop what they hold and walk the
-// rows they now have ([search.ChatIndexer.RequestRebuild],
-// [search.ChangeIndexer.RequestRebuild]): a document indexed from the copy the
-// adoption replaced would otherwise answer searches for as long as the
-// deployment lived. The knowledge base's lexical index needs nothing: its walk
-// laps by id and repairs a drifted row where it finds one.
+// under it: the chat index and the index of changes' words, both walking only
+// forward, drop what they hold and walk the rows they now have
+// ([search.ChatIndexer.RequestRebuild], [search.ChangeIndexer.RequestRebuild]):
+// a document indexed from the copy the adoption replaced would otherwise answer
+// searches for as long as the deployment lived. The knowledge base's lexical
+// index laps by id and repairs drift itself.
 //
 // THE NUDGE, NOT THE GUARANTEE: the request lives in this process, and the
 // adopter has already named the file it installed a new copy of the estate

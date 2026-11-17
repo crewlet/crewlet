@@ -63,6 +63,21 @@
 // keyword index of their own here ([ChangeIndexer], ADR-0156), unranked, since a listing
 // of changes keeps its order.
 //
+// # The index of changes' words
+//
+// [ChangeIndexer] indexes Gitlet changes' titles and descriptions
+// (ADR-0156). It walks forward over code_changes.position no further than
+// the code log's applied prefix, so a record this node retains is never
+// passed. Each document is numbered by this node and keeps its repository,
+// owner, state and a hash that keeps a head move from rewriting its
+// postings; its postings are one range of the postings key (the number
+// shifted 16 bits), so an edit or a purge removes them with no term list
+// kept. A purged repository is dropped by a rotation, and a replaced estate
+// is rebuilt as chat's is. [ChangeIndexer.Holding] reads the narrowest of a
+// search's scope and words first and answers the newest changes holding
+// every word, with how far the walk reached and the code log's position its
+// writes were decided from, which the reader compares with its own snapshot.
+//
 // # A read of another domain's table is a named, exported statement
 //
 // This package reads tables it does not own (the tracker's tasks and
