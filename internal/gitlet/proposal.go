@@ -119,9 +119,10 @@ type Proposal struct {
 
 // ProposeResult is what became of one proposal.
 type ProposeResult struct {
-	// Outcome is applied, pending or unknown for a push in a record, and
-	// empty for one answered with no record of its own: every command noop
-	// or ng, or a refusal of the whole push. A push answered from the row an
+	// Outcome is applied, pending or unknown for a push in a record, an
+	// attempt's among them ([Attempted]), and empty for one answered with no
+	// record of its own: every command noop or ng and no attempt, or a
+	// refusal of the whole push. A push answered from the row an
 	// earlier record applied it as is applied, and its Answer says
 	// Collapsed.
 	Outcome statelog.Outcome `json:"outcome,omitempty"`

@@ -3429,7 +3429,8 @@ a repository's recent activity and who pushes to it without walking its push
 history:
 
 - every push row is counted on its UTC day, by the quarter-hour its record
-  landed in, the ref lifecycle's expiries too, as the push history lists them;
+  landed in, the ref lifecycle's expiries too, and a push a rule refused whole
+  (an attempt), as the push history lists them;
 - who pushed is counted per UTC day: a seat by its handle, a person by the
   human seat they hold whichever credential they pushed with, and Gitlet for a
   merge, a merge queue's landing, an import and a pull mirror's sync, never the
@@ -5140,7 +5141,8 @@ token is the guard's `401`, as any credential it does not know is.
 **What is recorded.** A box's push is no `operator_acted` event — no person
 acted — and its push row is its record: the seat as an agent, the run that
 made it (its turn, its launch, its work item, its model and its harness),
-received over git. A refused one is its `code_box_refused` or `code_push` line.
+received over git. A refused one is its `code_box_refused` or `code_push` line,
+and one a rule refused whole is an attempt on the push history too.
 Those rows are also how the seat learns what its run delivered here: when the
 run is collected, the engine reads the pushes made under its launch to the
 repositories it was given — one linearizable read a run, its later pages at
@@ -5408,7 +5410,9 @@ every such push to, whichever way it came.
   **unrecorded**: nothing of it is decided and no record carries it, because a
   refusal recorded for every push of a runaway seat would cost the log the
   record a push the quota exists to bound. Its sentence names the instant the
-  count starts again, the company's next midnight. A person's pushes are never
+  count starts again, the company's next midnight. A push a rule refused whole
+  ([an attempt](#a-push-end-to-end)) counts too, and one past the bound is
+  told its rule and not recorded. A person's pushes are never
   counted. A push the quota refuses has already stored its pack; nothing names
   it, and the [object collector](object-store.md#collection-and-audit) deletes
   it a day later — the quota bounds what a seat costs the log, not its git
@@ -8118,9 +8122,10 @@ options together to 1 MiB before receive-pack reads either, and refuses a
 push past it — far past the 33 KiB a change's options take at their longest.
 
 **Checked before it is stored.** A push naming more than 1 000 refs, a credential
-bound to no seat, an archived or deleted repository, a deletion or a direct
-push a protection refuses — each is refused before receive-pack runs, and
-nothing is stored. A forced update of a ref a protection keeps from forcing,
+bound to no seat, an archived or deleted repository — each is refused before
+receive-pack runs, and nothing is stored. A deletion or a direct push a
+protection refuses is refused too, and nothing of it is stored, but it is
+received in its scratch so it can be recorded (below). A forced update of a ref a protection keeps from forcing,
 and a blob larger than `code.limits.max_blob_bytes`, are known only once the
 objects are, so the hook checks them — and refuses the push before uploading
 anything. A ref keeps the first refusal it meets: a force-push of a protected
@@ -8148,6 +8153,16 @@ engine, which the repository does not already hold, is refused
 pack are read before its upload begins, never beside it.
 Only a push that passes every check is uploaded, as **one** object: its pack
 with the indexes the receiving git wrote.
+
+**A push a rule refuses is recorded.** A push git received every ref of which
+is refused, one at least by a protection, the grant, the default branch, a
+moved tag or a reserved ref, is an *attempt*: it is recorded moving nothing,
+with no pack and no commit introduced, so the push history says who tried
+what. A stale push, one too large, and one the repository's state or the fleet
+refuses are not recorded, and neither is a write the engine refuses, which its
+tool call answers. A seat's attempt counts against its day's pushes, and a seat
+past its day is told the rule and nothing is recorded. Its pusher is told the
+rule whatever becomes of the record: one no data node takes is a logged line.
 
 **A clock that is behind.** git walks a repository's commits newest first by
 date wherever it has no generation number to stop on, so a commit dated before

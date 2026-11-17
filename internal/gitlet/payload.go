@@ -939,7 +939,9 @@ type PushBatch struct {
 	Pushes []PushEntry `json:"pushes"`
 }
 
-// PushEntry is one push: in a record iff at least one of its commands is ok.
+// PushEntry is one push: in a record iff at least one of its commands is ok, or it is an ATTEMPT
+// ([Attempted]): a push git received every command of which is refused, one by a rule, recorded moving
+// nothing, with no pack, no commit introduced, no change and no routing.
 type PushEntry struct {
 	// PushID is minted by the receiving node and stable across a failover,
 	// which is what collapses a push decided twice.

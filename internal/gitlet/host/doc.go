@@ -28,7 +28,8 @@
 // rules and the protections of what Forced changes; the blob scan over the
 // push's own pack, while any command is left to decide, refusing only those,
 // so a refusal that came first is the one the pusher reads; --atomic; nothing
-// left to land; the stored size against gitlet.MaxPackBytes; the repository's
+// left to land, but an attempt's proposal with nothing stored
+// (gitlet.Attempted); the stored size against gitlet.MaxPackBytes; the repository's
 // pack bound (gitlet.MaxPacksPerRepo), a push carrying a pack refused
 // compaction_behind only once the repository's row, read again, still holds
 // the bound, so that a retry whose own sync finds the bound uploads nothing

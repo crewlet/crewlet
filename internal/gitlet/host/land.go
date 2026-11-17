@@ -210,6 +210,10 @@ func unchecked(err error) error {
 //     pass spools the pack's commits for step 8 (packCommits).
 //  4. ATOMIC: a push refused in part is refused whole.
 //  5. NOTHING LEFT: every command refused, so nothing is stored.
+//     5b. AN ATTEMPT (gitlet.Attempted, a push git received): its pack dropped
+//     and the push proposed with nothing stored, so its record says who
+//     tried; its pusher is told the refusals step 5 formed, whatever the
+//     proposal comes to.
 //  6. THE SIZE: a bundle past gitlet.MaxPackBytes is refused before its upload.
 //  7. THE PACK BOUND: a push carrying a pack into a repository at
 //     gitlet.MaxPacksPerRepo live packs is refused compaction_behind before its
@@ -349,11 +353,17 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	}
 
 	// 5 NOTHING LEFT: every command refused, so nothing is uploaded and
-	// nothing proposed.
+	// nothing proposed but an attempt (5b), with no pack: steps 6 to 9 pass
+	// it by on ref.
+	attempt := false
 	if !undecided(cmds) {
 		v := settled(cmds, statelog.Position{}, false, false)
 		result.outcome, result.refusal = v.outcome, v.refusal
-		return done(landed{Commands: cmds, Result: result}), nil
+		if !l.attempt(cmds) {
+			return done(landed{Commands: cmds, Result: result}), nil
+		}
+		l.Progress("recording the refused push")
+		attempt, ref = true, nil
 	}
 
 	// 6 THE SIZE, before a byte is uploaded.
@@ -419,7 +429,10 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	// out, where it has no source by now or no room in the push's record —
 	// its title, where the options named none, filled in beside the upload
 	// (titleChange).
-	change := s.readyChange(&l, &ask, cmds, proposed)
+	var change *gitlet.ChangeOption
+	if !attempt {
+		change = s.readyChange(&l, &ask, cmds, proposed)
+	}
 	var title func(context.Context)
 	if change != nil {
 		title = s.titleChange(&l, change, cmds[ask.source])
@@ -458,6 +471,11 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		full    *objstore.Full
 	)
 	switch {
+	case errors.As(err, &invalid) && attempt:
+		// The receiver's own bug never turns a refusal into a failure.
+		s.log.Error("code_push_attempt_invalid", "repo", l.Synced.Repo.Name, "push_id", l.PushID,
+			"error", invalid.err)
+		return done(landed{Commands: cmds, Result: result}), nil
 	case errors.As(err, &invalid):
 		// THE RECEIVER'S OWN BUG, found before its committer was asked and
 		// before its bundle was stored: answered as the committer answers
@@ -516,6 +534,15 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	if err := s.fault(ctx, gitletfault.HostAfterPropose, 0); err != nil {
 		return landed{}, unchecked(err)
 	}
+	// AN ATTEMPT IS ANSWERED ITS REFUSALS, never waiting on its row: a lost
+	// record is a logged line.
+	if attempt {
+		if perr != nil || res.Answer.Refused != "" {
+			s.log.Warn("code_push_attempt_unrecorded", "repo", l.Synced.Repo.Name, "push_id", l.PushID,
+				"refusal", string(res.Answer.Refused), "error", perr)
+		}
+		return done(landed{Commands: cmds, Result: result}), nil
+	}
 
 	// 11 THE OUTCOME, from the push's own row — a merge's from its change's,
 	// as its committer answered it.
@@ -553,6 +580,12 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		}
 	}
 	return out, nil
+}
+
+// attempt reports a push of the landing's that is recorded though every
+// command is refused (gitlet.Attempted): one git received, never a merge.
+func (l *landing) attempt(cmds []gitlet.Command) bool {
+	return l.Merge == nil && l.Via == gitlet.ViaGit && gitlet.Attempted(cmds)
 }
 
 // forceAndStale is land's step 2 for a push: one merge-base a branch update,

@@ -212,10 +212,12 @@ func TestEveryPushIsAuditedAsItsPerson(t *testing.T) {
 	if len(audited) != 2 {
 		t.Fatalf("two pushes were recorded as %d: %+v", len(audited), audited)
 	}
+	// The refused force-push is an attempt, recorded after the applied push.
 	rows := pushRows(t, c)
-	if len(rows) != 1 {
-		t.Fatalf("one applied push left %d rows", len(rows))
+	if len(rows) != 2 || rows[0].PackID != "" || rows[0].Commands[0].Reason != gitlet.RefusalProtectedForce {
+		t.Fatalf("an applied push and an attempt left %d rows: %+v", len(rows), rows)
 	}
+	rows = rows[1:]
 	// AND ITS ROW AS THE SAME PERSON'S, received by git: the credential the
 	// actor, the seat beside it, and no run — a person's push names none.
 	if r := rows[0]; r.Via != gitlet.ViaGit || r.Actor != iam.TokenLogin("ceo") ||
@@ -910,6 +912,7 @@ func TestAHandBuiltPushIsJudgedAsReceivePackReadsIt(t *testing.T) {
 		outcome types.AuditOutcome
 		refusal host.AuditRefusal
 		lands   string // the ref the push lands, after receive-pack has run
+		attempt bool   // refused by a rule, so received and recorded moving nothing
 	}{
 		{name: "ids in capitals, too wide for the record", body: wide.String() + "0000" + pack,
 			status: http.StatusOK, answer: "0000 this push's ref updates take up to ", outcome: types.AuditRefused,
@@ -919,15 +922,15 @@ func TestAHandBuiltPushIsJudgedAsReceivePackReadsIt(t *testing.T) {
 			answer: `"refs/heads/twice" is named twice`, outcome: types.AuditRefused, refusal: host.RefusalCommands},
 		{name: "ids in capitals, protected", body: pkt(create(upper, "refs/heads/frozen")+"\x00report-status\n") +
 			"0000" + pack, status: http.StatusOK, answer: "ng refs/heads/frozen protected_direct",
-			outcome: types.AuditRefused, refusal: host.AuditRefusal(gitlet.RefusalProtectedDirect)},
+			outcome: types.AuditRefused, refusal: host.AuditRefusal(gitlet.RefusalProtectedDirect), attempt: true},
 		{name: "the capabilities on a later line", body: pkt(create(head, "refs/notes/a")+"\n") +
 			pkt(create(head, "refs/notes/b")+"\x00report-status side-band-64k\n") + "0000" + pack,
 			status: http.StatusOK, banded: true, answer: "ng refs/notes/b reserved_ref",
-			outcome: types.AuditRefused, refusal: host.AuditRefusal(gitlet.RefusalReservedRef)},
+			outcome: types.AuditRefused, refusal: host.AuditRefusal(gitlet.RefusalReservedRef), attempt: true},
 		// A CLIENT THAT ASKS FOR NO REPORT GETS NONE, as from receive-pack.
 		{name: "a refusal to a client that asked for no report", body: pkt(create(head, "refs/notes/c")+
 			"\x00side-band-64k\n") + "0000" + pack, status: http.StatusOK, banded: true, absent: "unpack",
-			outcome: types.AuditRefused, refusal: host.AuditRefusal(gitlet.RefusalReservedRef)},
+			outcome: types.AuditRefused, refusal: host.AuditRefusal(gitlet.RefusalReservedRef), attempt: true},
 		{name: "a push certificate", body: certificate + pack, status: http.StatusBadRequest,
 			answer: "this push carries a push certificate (a signed push)", outcome: types.AuditRefused,
 			refusal: host.RefusalCommands},
@@ -962,7 +965,7 @@ func TestAHandBuiltPushIsJudgedAsReceivePackReadsIt(t *testing.T) {
 			if tc.absent != "" && strings.Contains(answer, tc.absent) {
 				t.Errorf("answered %.300q, which says %q", answer, tc.absent)
 			}
-			if runs := pushReceives(calls) - ran; runs != 0 && tc.lands == "" {
+			if runs := pushReceives(calls) - ran; runs != 0 && tc.lands == "" && !tc.attempt {
 				t.Errorf("ran receive-pack %d times for a push refused before it", runs)
 			}
 			if got := len(objects(t, c)); got != stored {
@@ -1176,7 +1179,8 @@ func TestAKeepaliveFlowsWhileAPushWaits(t *testing.T) {
 }
 
 // An atomic push is never answered in part: a ref the receiver refuses
-// refuses every other, nothing is uploaded and nothing proposed.
+// refuses every other and nothing is uploaded; refused by a rule, it is
+// proposed once, as an attempt that stores nothing.
 func TestAnAtomicPushIsNeverAnsweredMixed(t *testing.T) {
 	settings := gitlettest.Settings()
 	settings.Protections = append(settings.Protections,
@@ -1198,8 +1202,8 @@ func TestAnAtomicPushIsNeverAnsweredMixed(t *testing.T) {
 	if got := len(objects(t, c)); got != stored {
 		t.Errorf("a refused atomic push stored %d objects", got-stored)
 	}
-	if got := len(e.seen("propose")); got != proposed {
-		t.Errorf("a refused atomic push was proposed")
+	if got := len(e.seen("propose")); got != proposed+1 {
+		t.Errorf("a refused atomic push was proposed %d times, want once, as an attempt", got-proposed)
 	}
 
 	// AND ONE THE SESSION REFUSES IN PART: a forced update of protected main
@@ -1216,8 +1220,9 @@ func TestAnAtomicPushIsNeverAnsweredMixed(t *testing.T) {
 	if got := len(objects(t, c)); got != stored {
 		t.Errorf("an atomic push the session refused in part stored %d objects", got-stored)
 	}
-	if got := len(e.seen("propose")); got != proposed {
-		t.Errorf("an atomic push the session refused in part was proposed")
+	if got := len(e.seen("propose")); got != proposed+2 {
+		t.Errorf("an atomic push the session refused in part was proposed %d times, want once, as an attempt",
+			got-proposed-1)
 	}
 }
 
