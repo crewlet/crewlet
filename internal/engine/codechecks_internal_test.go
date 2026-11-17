@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -8,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/gitlet/host"
 )
 
@@ -68,6 +71,38 @@ func TestACheckBoxReadsItsCommitWhereTheAPIServesIt(t *testing.T) {
 		gitRoute} {
 		if base := checkCodeBase(gitBase); base != "" {
 			t.Errorf("checkCodeBase(%q) = %q, want none: it names no listener's box git route", gitBase, base)
+		}
+	}
+}
+
+// AN ENDING IS SENT AGAIN WITHOUT ITS COUNTS ONLY WHERE NO DATA NODE RAN IT: unreadAnywhere is true
+// for the unknown keys refused over a whole walk, wrapped, and false for a walk in which a node went
+// silent (which may have run it), an answer this build could not read (whose request ran), an
+// outcome unknown, and a walk no node served for another reason.
+//
+// Mutations: drop the walk's test (the answer's refusal reads as one, red); drop the silent test
+// (the silent walk reads as unread, red).
+func TestAnEndingIsSentAgainWithoutItsCountsOnlyWhereNoDataNodeRanIt(t *testing.T) {
+	t.Parallel()
+	walk := &estate.ErrUnserved{Detail: "data-a: its build does not declare args.Finished.log_lines"}
+	silent := &estate.ErrUnserved{Detail: "data-a: its build does not declare args.Finished.log_lines; data-b: silent",
+		NodeSilent: true}
+	for name, tc := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"unknown keys over a walk": {fmt.Errorf("record the ending: %w", &estate.ErrUnknownKeys{Op: "code.checks",
+			Keys: []string{"args.Finished.log_lines"}, Nodes: []string{"data-a"}, Unserved: walk}), true},
+		"unknown keys over a walk a node went silent in": {&estate.ErrUnknownKeys{Op: "code.checks",
+			Keys: []string{"args.Finished.log_lines"}, Nodes: []string{"data-a"}, Unserved: silent}, false},
+		"unknown keys in an answer": {&estate.ErrUnknownKeys{Op: "code.checks", Keys: []string{"result.novel"},
+			Nodes: []string{"data-a"}, Answer: true}, false},
+		"an outcome unknown": {estate.ErrOutcomeUnknown, false},
+		"a walk unserved":    {walk, false},
+		"another error":      {errors.New("busy"), false},
+	} {
+		if got := unreadAnywhere(tc.err); got != tc.want {
+			t.Errorf("%s: unreadAnywhere = %v, want %v", name, got, tc.want)
 		}
 	}
 }
