@@ -642,8 +642,8 @@ func (s Sources) codeTreeCommits(ctx context.Context, p Params) (any, error) {
 // codeDiff answers `code_diff`: what changed from `base` to `head` — the
 // per-file stat, narrowed to `paths` (a file, or a directory it is under; at
 // most gitlet.MaxDiffPaths), or one `file`'s patch (`file_b64` for a path's
-// exact bytes) — with renames detected unless `renames` is false, a page at a
-// time.
+// exact bytes), or with `patches` every file's patch — with renames detected
+// unless `renames` is false, a page at a time.
 func (s Sources) codeDiff(ctx context.Context, p Params) (any, error) {
 	g, err := s.gitAskOf(ctx, p, "code_diff")
 	if err != nil {
@@ -663,6 +663,9 @@ func (s Sources) codeDiff(ctx context.Context, p Params) (any, error) {
 			len(d.Paths), gitlet.MaxDiffPaths)
 	}
 	if d.Renames, err = boolParam(p, "renames", true); err != nil {
+		return nil, err
+	}
+	if d.Patches, err = boolParam(p, "patches", false); err != nil {
 		return nil, err
 	}
 	repo, err := g.resolve(ctx, base, head)

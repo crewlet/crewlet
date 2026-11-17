@@ -275,10 +275,10 @@ func spell(ty reflect.Type) string {
 }
 
 // memoShapes is the shape of the answers each memoFormat this build reads was
-// written over: a format names one shape, for ever. page/8 adds findings'
-// excerpts to page/6's answers.
+// written over: a format names one shape, for ever. page/9 adds a diff's
+// every file's patch to page/8's answers.
 var memoShapes = map[string]string{
-	"page/8": "3624eff04a742745",
+	"page/9": "bbc0015057f6907a",
 }
 
 // AN ANSWER'S SHAPE IS ITS MEMO FORMAT. An entry a node keeps outlives the
