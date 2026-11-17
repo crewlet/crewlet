@@ -548,6 +548,52 @@ func TestAViewedMarkThisBuildDoesNotDeclareIsRefusedUnread(t *testing.T) {
 	}
 }
 
+// A QUEUE READ ASKING FOR TRAINS IS ASKED OF A BUILD THAT READS IT: the node whose build does
+// not declare `trains` refuses the read unread, its code half never asked, and the walk asks the
+// next, which answers; a read not asking for them is served by the first node asked.
+// Mutation: carry trains under a key every build declares, and the older node serves both reads.
+func TestAQueueReadAskingForTrainsIsAskedOfABuildThatReadsIt(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	nodes, _ := f.placement.Holders()
+	order := f.client.order(opCodeRead.spec, nodes)
+	older, newer := f.nodes[order[0]], f.nodes[order[1]]
+	older.set(func(n *fakeNode) { n.undeclared = []string{"args.trains"} })
+	read := func(trains bool) error {
+		_, err := f.client.Code().Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadQueue,
+			Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "token:founder"}, Trains: trains,
+			Fresh: statelog.Freshness{Level: statelog.ReadStale}})
+		return err
+	}
+	if err := read(false); err != nil {
+		t.Fatalf("a queue read asking for no trains: %v", err)
+	}
+	if !older.askedFor(opCodeRead.spec.name) || newer.askedFor(opCodeRead.spec.name) {
+		t.Fatalf("a queue read asking for no trains was not served by %s, the first node asked", older.name)
+	}
+	if err := read(true); err != nil {
+		t.Fatalf("a queue read asking for trains: %v, want the newer build's answer", err)
+	}
+	if !newer.askedFor(opCodeRead.spec.name) {
+		t.Fatalf("%s, whose build reads trains, was never asked the read", newer.name)
+	}
+	older.mu.Lock()
+	served, unread := 0, 0
+	for _, op := range older.asked {
+		switch op {
+		case opCodeRead.spec.name:
+			served++
+		case "unread":
+			unread++
+		}
+	}
+	older.mu.Unlock()
+	if served != 1 || unread != 1 {
+		t.Errorf("%s served %d reads and refused %d unread, want the one asking for no trains served "+
+			"and the one asking for them refused", older.name, served, unread)
+	}
+}
+
 // A REQUEST NO BUILD COULD READ WHOLE CROSSES AS ITSELF, AND AS AN ESTATE NOBODY
 // SERVED: a node that answers on another's behalf — a Gitlet node proposing a
 // push its data nodes refused — hands its asker the refusal with every field,
