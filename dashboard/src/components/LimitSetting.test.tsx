@@ -187,10 +187,9 @@ test("a duration is an amount and a unit, and a common duration fills both", asy
   });
 });
 
-// THE RESET STANDS AT THE ROW'S END while the value differs from its default,
-// asks inline, and saves the default by removing the key, on the same checked
-// path every save takes. Mutation: reset without asking, or write the default's
-// number, and this fails.
+// THE RESET STANDS AT THE ROW'S END while the value differs from its default, asks
+// inline, and saves the default by removing the key. Mutation: reset without asking,
+// or write the default's number, and this fails.
 test("a changed value is reset to its default after an inline question, by removing its key", async () => {
   const calls = engine({
     name: "Acme",

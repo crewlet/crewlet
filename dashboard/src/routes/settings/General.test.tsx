@@ -43,10 +43,9 @@ async function show(viewer?: Record<string, unknown>) {
   await act(afterMicrotasks);
 }
 
-// THE CLOCK KEEPS ITS KEY AND ITS SOURCE where it moved: the row is the
-// engine's, a changed zone is marked, and its pencil and reset stand at the
-// row's end. Mutation: draw the zone off the org projection for an admin, or
-// drop the reset, and this fails.
+// THE CLOCK KEEPS ITS KEY AND ITS SOURCE where it moved, with its pencil and reset at
+// the row's end. Mutation: draw the zone off the org projection for an admin, or drop
+// the reset, and this fails.
 test("the company clock is the engine's row, with its key, source and controls", async () => {
   await show();
   const clock = screen.getByRole("table", { name: "Company clock" });

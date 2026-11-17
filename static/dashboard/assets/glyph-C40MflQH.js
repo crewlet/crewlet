@@ -1,0 +1,1 @@
+import{Zn as e}from"./index-sTT64eCj.js";import{o as t}from"./words-D-cp87ue.js";import{t as n}from"./react-C1iE8mnY.js";var r=n();function i({kind:n,size:i=`sm`}){return(0,r.jsx)(e,{name:t[n].glyph,size:i})}export{i as t};

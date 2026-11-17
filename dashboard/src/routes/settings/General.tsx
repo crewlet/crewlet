@@ -1,13 +1,6 @@
 /**
- * Settings › General: the company-wide basics every team and seat runs on,
- * today the company's clock.
- *
- * THE CLOCK IS THE ENGINE'S ROW of `timezone` (`settings`, an administrator's
- * read), beside its default and changed in place. A move shifts every budget
- * window and every schedule without a zone of its own, which the engine's
- * check says before the save asks to go ahead. A reader who may not read the
- * document sees the zone the org projection carries, with the pencil held and
- * its reason.
+ * Settings › General: the company's clock, the engine's `timezone` row changed in place.
+ * A reader who may not read the document sees the org projection's zone, its pencil held.
  */
 
 import { Card, PageNote, SettingsTable } from "@crewlethq/ui";

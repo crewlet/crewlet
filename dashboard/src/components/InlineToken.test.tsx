@@ -726,12 +726,9 @@ describe("links in a chat message", () => {
   });
 });
 
-// AN ARTIFACT IS NAMED AS A TASK'S KEY IS: its kind's glyph and its title,
-// whichever way it was written (a labelled link, the whole address Copy link
-// writes), read once per artifact, and words where the reader may not see it.
-//
-// Mutation: drop the `artifactAddress` branch in `AddressLink` and the whole
-// address is a globe and a host again.
+// AN ARTIFACT IS NAMED AS A TASK'S KEY IS: its kind's glyph and its title, however it
+// was written. Mutation: drop the `artifactAddress` branch in `AddressLink` and the
+// whole address is a globe and a host again.
 describe("an artifact named in prose", () => {
   const PLAN = "0a1b2c3d-0000-4000-8000-000000000001";
   const DECK = "0a1b2c3d-0000-4000-8000-000000000002";

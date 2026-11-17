@@ -881,10 +881,9 @@ function withHome() {
   );
 }
 
-// A REPOSITORY'S HOME HOLDS ITS WIDTH: each entry's subject and the head row's give way, an
-// entry's age stays one line, and on a phone each row stacks its subject under its name and
-// age and the head row its id, time and History under its subject.
-// Mutation: drop the subject's `overflow: hidden`, the phone rule or the colgroup: this fails.
+// A REPOSITORY'S HOME HOLDS ITS WIDTH: subjects give way, an entry's age stays one line, and on
+// a phone each row stacks. Mutation: drop the subject's `overflow: hidden`, the phone rule or
+// the colgroup: this fails.
 for (const [viewport, column] of [
   [1024, 740],
   [640, 608],

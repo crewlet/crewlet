@@ -2697,7 +2697,9 @@ const (
 	// 29,076 over main, the kit's editors in the settings editors' chunk and kit 0.147.0 to 0.150.0: 6662 KiB.
 	// A Gitlet repository's home as a code host, on kit 0.147.0: 6676.2 KiB
 	// (6,836,450 bytes), 14,136 over main: 6677 KiB.
-	treeBudget = 5<<20 + 1543<<10
+	// The setting editors, artifact references, chat receipts and Gitlet repository home train,
+	// on kit 0.150.1: 6700.2 KiB (6,861,017 bytes), 38,703 over main: 6701 KiB.
+	treeBudget = 5<<20 + 1581<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
