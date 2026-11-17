@@ -88,6 +88,19 @@ func Read[T any](ctx context.Context, one func(context.Context) (T, error), agai
 // The bound ending is SILENCE, as the ceiling's is ([Unanswered]). A bound of
 // zero or less is refused by name, as a [Timing] field left unset is: it is a
 // deadline already past, which no caller chose.
+//
+// # Across a link its caller meters, both run only while the link is still
+//
+// A timing that follows a link ([Timing.Following]) holds the bound and the
+// ceiling past their spans while the link moves, by its Beyond at most
+// ([Timing.Ceiling]): a reply queued behind a message of megabytes on the link
+// is the broker having answered, and the link carrying bytes is the one sign
+// of it before the reply's last byte is in. NOTHING MORE IS ASKED past the
+// span, only waited for: past the ceiling a group in any state answers a read
+// ([LookupBudget]), so every request sent inside it is answered or was
+// dropped by a member past recovering, and one more request would only queue
+// another reply behind the bytes the first is waiting on. A timing that
+// follows no link is held to both on time alone, as every read was.
 func ReadBoundedWith[T any](ctx context.Context, t Timing, bound time.Duration,
 	one func(context.Context) (T, error), again func(asks int)) (T, error) {
 
@@ -100,14 +113,16 @@ func ReadBoundedWith[T any](ctx context.Context, t Timing, bound time.Duration,
 		return zero, fmt.Errorf("jsprovision: a read's bound is %v — it is its client's "+
 			"DefaultTimeout, which every JetStream client holds", bound)
 	}
+	asking := t.Lookup
 	if _, set := ctx.Deadline(); !set {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, bound)
+		ctx, cancel = t.Ceiling(ctx, bound)
 		defer cancel()
+		asking = min(asking, bound)
 	}
-	ctx, cancel := context.WithTimeout(ctx, t.Lookup)
+	ctx, cancel := t.Ceiling(ctx, t.Lookup)
 	defer cancel()
-	return hedge(ctx, t, one, again)
+	return hedge(ctx, t, asking, one, again)
 }
 
 // ReadBounded is [ReadBoundedWith] at the production cadences, which no
@@ -175,6 +190,11 @@ func ReadBounded[T any](ctx context.Context, bound time.Duration, one func(conte
 // taken first was a request past its caller's bound — one more on the queue
 // above, whose answer nobody would hear.
 //
+// AND NOTHING PAST asking, the span it is asked for, where that is above
+// zero: past it the requests already out are waited for under ctx and no
+// re-ask is sent — the span a moving link holds a read open beyond
+// ([ReadBoundedWith]). Zero asks for as long as ctx allows.
+//
 // Every request runs on one context, derived from ctx and cancelled as hedge
 // returns, which waits for each request to end and hears every reply: no
 // request outlives the call. one may therefore be running more than once at a
@@ -186,15 +206,16 @@ func ReadBounded[T any](ctx context.Context, bound time.Duration, one func(conte
 // the deadline: a caller whose context was already over is still told what
 // the one request it made was answered, as it was when a request ran on the
 // caller's own goroutine.
-func hedge[T any](ctx context.Context, t Timing, one func(context.Context) (T, error),
-	again func(asks int)) (T, error) {
+func hedge[T any](ctx context.Context, t Timing, asking time.Duration,
+	one func(context.Context) (T, error), again func(asks int)) (T, error) {
 
 	type reply struct {
 		ask int
 		v   T
 		err error
 	}
-	asking, stop := context.WithCancel(ctx)
+	askedUntil := time.Now().Add(asking)
+	requests, stop := context.WithCancel(ctx)
 	defer stop()
 	var running sync.WaitGroup
 	// UNBUFFERED, and every request's reply is received — by the loop, or
@@ -206,7 +227,7 @@ func hedge[T any](ctx context.Context, t Timing, one func(context.Context) (T, e
 		asks++
 		ask := asks
 		running.Go(func() {
-			v, err := one(asking)
+			v, err := one(requests)
 			replies <- reply{ask: ask, v: v, err: err}
 		})
 	}
@@ -282,6 +303,12 @@ func hedge[T any](ctx context.Context, t Timing, one func(context.Context) (T, e
 				// more is asked, and ctx's ending, which is due,
 				// ends the read below — or an answer to a request
 				// already out comes first, and is taken.
+				continue
+			}
+			if asking > 0 && !time.Now().Before(askedUntil) {
+				// PAST THE SPAN IT IS ASKED FOR, while a moving link
+				// holds ctx open ([ReadBoundedWith]): the requests
+				// already out are waited for, and none is added.
 				continue
 			}
 			send()
