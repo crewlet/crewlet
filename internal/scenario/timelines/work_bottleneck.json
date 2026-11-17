@@ -7,7 +7,7 @@
       "kind": "person"
     },
     {
-      "handle": "dev",
+      "handle": "backend",
       "kind": "agent"
     },
     {
@@ -21,10 +21,10 @@
       "actor": "owner",
       "verb": "file",
       "item": "W-1",
-      "assignee": "dev",
+      "assignee": "backend",
       "expect": {
         "woken": [
-          "dev"
+          "backend"
         ]
       }
     },
@@ -96,7 +96,7 @@
       "on": "W-1",
       "expect": {
         "woken": [
-          "dev"
+          "backend"
         ]
       }
     },
@@ -108,7 +108,7 @@
       "on": "W-1",
       "expect": {
         "woken": [
-          "dev"
+          "backend"
         ]
       }
     },
