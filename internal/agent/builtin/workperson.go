@@ -478,7 +478,7 @@ func (d WorkDeps) writeInbox(ctx context.Context, actor Actor, writer PersonWrit
 	if bad != "" {
 		return failed(bad)
 	}
-	seen, bad := markFloor(args, topics.TrackerLogStream, "tracker's log", "work")
+	seen, bad := markFloor(args, topics.TrackerLogStream, "tracker's log", "pass the `position` of a work notice")
 	if bad != "" {
 		return failed(bad)
 	}

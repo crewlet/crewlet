@@ -138,7 +138,7 @@ a person writes **as the seat they hold** — every person holds one — and so
 does a token the identity directory binds to a seat, with kind `human`, while a
 credential nobody is bound through writes under its own login (`token:<id>`),
 with kind `operator` — the credential
-itself is recorded beside either as the write's `operator_id`. Nine more are a
+itself is recorded beside either as the write's `operator_id`. Ten more are a
 person's decisions about the company rather than its work, and are served only
 there too: `pause_seat` and `resume_seat`; `run_schedule`, which runs one
 schedule now, off its cron, decided on every seat it wakes
@@ -155,7 +155,9 @@ holder and the board only for a `worklet` holder) **and** a credential bound
 to a seat; and, where the company hosts its code, `code_repo_readers`, who
 read a `visibility: unit` repository, an administrator's audit, and
 `code_mark_inbox`, a person's marks over their own code notices, served beside
-the code writes (a seat is woken, never shown an inbox); and `atlas_refresh`,
+the code writes (a seat is woken, never shown an inbox), and `code_mark_viewed`,
+a person's marks over the files of a change they review, beside it (a seat
+reviews a change whole and keeps none); and `atlas_refresh`,
 any Atlas holder's ask that one integration be read for the atlas now rather
 than on its next scheduled read, which the engine honours within a minute and
 refuses for a source read less than five minutes ago
@@ -745,6 +747,13 @@ notices on its own log, so each has its tool. It writes the caller's own record
 and nobody else's, and takes `gitlet` as `mark_inbox` takes `worklet`: a person
 without it is listed no code notice to mark. A seat is never offered it: a seat
 is woken, never shown an inbox ([How a person learns they have work](../concepts/humans-in-the-org.md#how-a-person-learns-they-have-work)).
+
+**Nor is `code_mark_viewed`**, which the operator catalogue serves beside the
+code writes: a person's own marks over the files of a change they review, each
+at the object id and mode they read, kept while the change is a draft or open,
+which the change's Files tab reads back. It writes the caller's own record
+alone and takes `gitlet`. A seat is never offered it: a seat reviews a change
+whole and keeps no viewed files ([Viewed files](../concepts/gitlet.md#viewed-files)).
 
 **Nor is `artifact_mark_inbox`**, which the operator catalogue serves beside the
 artifacts tools: a person's own marks over their comment notices, the ones the

@@ -206,7 +206,7 @@ var belowWriteNeeds = map[string]gitlet.Access{
 // committer, its conversation of the change writer beside it — and a person's
 // marks over their own code notices, asked of any data node — and a write of
 // a repository's checks, a rerun or a report, asked of its checks writer
-// beside the committer.
+// beside the committer. Mark carries a person's viewed files of a change too.
 type CodeWriter interface {
 	GitWrite(ctx context.Context, w gitlet.EngineWrite) (gitlet.EngineWriteResult, error)
 	Lifecycle(ctx context.Context, r gitlet.LifecycleRequest) (gitlet.LifecycleResult, error)

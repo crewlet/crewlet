@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -14,13 +16,16 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/caveat/caveattest"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/inbox"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -65,8 +70,12 @@ func refusingSurface(t *testing.T, err error) http.Handler {
 
 // machineFields are the keys of an act answer a client reads as values, never
 // as a sentence: codes, names, keys and the facts a screen branches on.
+//
+// `refusal` is Gitlet's own word for why a write wrote nothing, beside the
+// class, which a screen branches on; `repo` and `change` are the code domain's
+// objects a failure names (builtin.ObjectArgs), as `item` is the tracker's.
 var machineFields = []string{"error", "tool", "item", "page", "project", "handle",
-	"op_id", "field", "fields", "action", "outcome", "reason", "window"}
+	"op_id", "field", "fields", "action", "outcome", "reason", "window", "refusal", "repo", "change"}
 
 // wordedForAPerson fails t for every sentence in an act answer that is not
 // worded for a person: every string the answer carries that is not one of
@@ -176,6 +185,77 @@ func TestEveryRefusalTheActRouteAnswersIsWordedForAPerson(t *testing.T) {
 			}
 			wordedForAPerson(t, tc.name, answer)
 		})
+	}
+
+	// A PERSON'S VIEWED FILES, through code_mark_viewed: each refusal Gitlet's writer answers, each
+	// error before an answer, and the tool's own refusals before any write. Each writer case reaches the
+	// writer and answers its own status and word, so an internal fault cannot pass as a refusal.
+	//
+	// Mutation: answer the change row without its repository's resolution, red.
+	viewed := `{"args":{"repo":"web","change":"42","viewed":[{"path":"a.go","blob_oid":"` +
+		strings.Repeat("a", 40) + `","mode":"100644"}]}}`
+	marks := map[string]struct {
+		mark    func() (gitlet.MarkResult, error)
+		status  int
+		refusal gitlet.MarkRefusal
+	}{
+		"not_permitted": {refusedMark(gitlet.MarkNotPermitted, "jane-founder's viewed files are marked only by "+
+			"the person who holds that seat, as themselves"), http.StatusForbidden, gitlet.MarkNotPermitted},
+		"ended": {refusedMark(gitlet.MarkEnded, "web!42 is closed, and a change keeps viewed files only while "+
+			"it is a draft or open"), http.StatusConflict, gitlet.MarkEnded},
+		"invalid": {refusedMark(gitlet.MarkInvalid, "repository web holds no change "+
+			"0190f3c4-0000-7000-8000-0000000000c1"), http.StatusUnprocessableEntity, gitlet.MarkInvalid},
+		"busy": {refusedMark(gitlet.MarkBusy, "jane-founder's viewed files kept changing for every round the "+
+			"mark may take; the same mark again is the same write"), http.StatusServiceUnavailable,
+			gitlet.MarkBusy},
+		"busy on the repository": {refusedMark(gitlet.MarkBusy, "repository web kept changing for every round "+
+			"its first viewed mark may take; the same mark again is the same write"),
+			http.StatusServiceUnavailable, gitlet.MarkBusy},
+		"unavailable": {refusedMark(gitlet.MarkUnavailable, "Gitlet could not record the mark just now, and "+
+			"nothing was written"), http.StatusServiceUnavailable, gitlet.MarkUnavailable},
+		"an unknown outcome": {func() (gitlet.MarkResult, error) {
+			return gitlet.MarkResult{}, fmt.Errorf("%w (asked of 10.0.0.7)", estate.ErrOutcomeUnknown)
+		}, 0, ""},
+		"a fleet that serves none": {func() (gitlet.MarkResult, error) {
+			return gitlet.MarkResult{}, &estate.ErrUnserved{Detail: "data-a: no code half"}
+		}, http.StatusServiceUnavailable, ""},
+	}
+	for name, tc := range marks {
+		host := &viewedHost{mark: tc.mark}
+		status, answer := act(t, viewedSurface(t, host), "founder",
+			builtin.CodeMarkViewedTool, "application/json", viewed, newKey())
+		unknown := answer["outcome"] == string(statelog.OutcomeUnknown)
+		switch {
+		case host.marked.Load() != 1:
+			t.Errorf("code_mark_viewed: %s reached the writer %d times, want once", name, host.marked.Load())
+		case tc.status == 0 && !unknown:
+			t.Errorf("code_mark_viewed: %s answered %d %v, want an unknown outcome", name, status, answer)
+		case tc.status != 0 && (status != tc.status || answer["refusal"] != string(tc.refusal) && tc.refusal != ""):
+			t.Errorf("code_mark_viewed: %s answered %d %v, want %d with refusal %q", name, status, answer,
+				tc.status, tc.refusal)
+		case answer["error"] == string(httpjson.CodeInternalError):
+			t.Errorf("code_mark_viewed: %s answered an internal fault %v", name, answer)
+		}
+		wordedForAPerson(t, "code_mark_viewed: "+name, answer)
+	}
+	for name, tc := range map[string]struct {
+		body   string
+		closed bool
+		status int
+	}{
+		"no file": {`{"args":{"repo":"web","change":"42"}}`, false, http.StatusUnprocessableEntity},
+		"33 files": {`{"args":{"repo":"web","change":"42","unviewed":[` + manyPaths(33) + `]}}`, false,
+			http.StatusUnprocessableEntity},
+		"a closed change": {viewed, true, http.StatusConflict},
+	} {
+		host := &viewedHost{closed: tc.closed, mark: refusedMark(gitlet.MarkInvalid, "unreached")}
+		status, answer := act(t, viewedSurface(t, host), "founder", builtin.CodeMarkViewedTool,
+			"application/json", tc.body, newKey())
+		if status != tc.status || host.marked.Load() != 0 || tc.closed && answer["refusal"] != string(gitlet.MarkEnded) {
+			t.Errorf("code_mark_viewed: %s answered %d %v having marked %d times, want %d before any write",
+				name, status, answer, host.marked.Load(), tc.status)
+		}
+		wordedForAPerson(t, "code_mark_viewed: "+name, answer)
 	}
 
 	// THE TOOL'S OWN REFUSALS, before any write: a title it needs, and an
@@ -395,3 +475,56 @@ func (parkedRun) Deliver(context.Context, types.ExecutorAnswerGiven) (uuid.UUID,
 // Answerer names nobody: t1 is still waiting, so it holds no answer whose seal
 // could name who gave it.
 func (parkedRun) Answerer(sandbox.PendingRun) string { return "" }
+
+// viewedHost is Gitlet holding web!42, open unless closed, whose marks writer answers mark.
+type viewedHost struct {
+	writingHost
+	closed bool
+	mark   func() (gitlet.MarkResult, error)
+	marked atomic.Int32
+}
+
+func (h *viewedHost) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
+	state := gitlet.ChangeStateOpen
+	if h.closed {
+		state = gitlet.ChangeStateClosed
+	}
+	return gitlet.ReadAnswer{Level: q.Fresh.Level, Position: statelog.Position{Stream: topics.CodeLogStream,
+		Generation: 1, Seq: 9}, ChangeBrief: &gitlet.ChangeSummary{ChangeRow: gitlet.ChangeRow{
+		ID: "0190f3c4-0000-7000-8000-0000000000c1", RepoID: "0190f3c4-0000-7000-8000-00000000c0de", Number: 42,
+		State: state}, Repo: "web", Ref: "web!42"}, Resolved: &gitlet.RepoRef{
+		ID: "0190f3c4-0000-7000-8000-00000000c0de", Name: "web", Status: gitlet.RepoStatusActive}}, nil
+}
+
+func (h *viewedHost) Mark(context.Context, gitlet.MarkWrite) (gitlet.MarkResult, error) {
+	h.marked.Add(1)
+	return h.mark()
+}
+
+// refusedMark is a marks writer refusing every mark under refusal, saying detail.
+func refusedMark(refusal gitlet.MarkRefusal, detail string) func() (gitlet.MarkResult, error) {
+	return func() (gitlet.MarkResult, error) { return gitlet.MarkResult{Refusal: refusal, Detail: detail}, nil }
+}
+
+// manyPaths is n distinct paths as a JSON list's members.
+func manyPaths(n int) string {
+	paths := make([]string, n)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("%q", fmt.Sprintf("f%d.go", i))
+	}
+	return strings.Join(paths, ",")
+}
+
+// viewedSurface is the act route over a code half holding host's change and writes.
+func viewedSurface(t *testing.T, host *viewedHost) http.Handler {
+	t.Helper()
+	return guarded(newSurface(t, operator.Options{
+		Halves: fixed(operator.Halves{
+			Work: builtin.WorkDeps{Reader: stubWorkReader{}, Writer: stubWorkWriter},
+			Code: builtin.CodeDeps{Code: host, Requesters: noRequesters{}, Chart: authz.NoChart{}, Writer: host,
+				Holder: host},
+		}),
+		Org:       company,
+		Authorize: builtin.Decide(leadsNobody{}),
+	}))
+}

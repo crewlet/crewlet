@@ -698,6 +698,9 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	if q.FindingPaths {
 		return r.changeFindingPaths(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)
 	}
+	if q.Viewed {
+		return r.changeViewed(ctx, tx, q, repo.ref.ID, ChangeRef(repo.ref.Name, row.number), row, out)
+	}
 	switch q.Part {
 	case PartReviewers:
 		return r.changeReviewers(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)

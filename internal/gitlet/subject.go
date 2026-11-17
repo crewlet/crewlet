@@ -36,7 +36,9 @@ const (
 	// SUBJECT A REPOSITORY rather than one a ref, because every write on a
 	// repository updates the repository row too, so a per-ref subject would
 	// never narrow a write's contention; and two pushes to one repository
-	// meet at the broker, where exactly one record lands per round.
+	// meet at the broker, where exactly one record lands per round. It also
+	// carries the key its persons' viewed marks are digested under
+	// ([OpViewedKey]).
 	KindRepo ObjectKind = "repo"
 
 	// KindEviction is a node's eviction from THIS log, or its readmission:
@@ -101,7 +103,8 @@ const (
 	// (person.<handle>): the subject the marks they lay over their code
 	// notices are written on ([OpMarks], marks.go) — how far they have read
 	// on this log, what they marked out of order, what they put off and
-	// which reasons are theirs to act on. ITS OWN SUBJECT, NEVER A
+	// which reasons are theirs to act on; and the files of a change they
+	// marked viewed ([OpViewed], viewed.go). ITS OWN SUBJECT, NEVER A
 	// CHANGE'S OR A REPOSITORY'S: a mark is about the person's own
 	// bookkeeping across every change that reached them, and decided on a
 	// change's subject it would contend with that change's conversation
@@ -112,9 +115,11 @@ const (
 	// person's, kept beside the notices they mark on THIS log, because a
 	// position is a coordinate on one stream and a person's tracker marks
 	// count in another (internal/inbox's package doc). A table is written
-	// by the records of ONE subject: code_person_marks by this one's.
+	// by the records of ONE subject: code_person_marks and
+	// code_viewed_files by this one's.
 	//
-	// BASE FORMAT, as [KindChange] is. It is no gate.
+	// BASE FORMAT, as [KindChange] is: the kind is, and its viewed op is
+	// versioned ([ViewedVersion]). It is no gate.
 	KindPerson ObjectKind = "person"
 )
 
