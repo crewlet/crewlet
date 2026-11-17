@@ -131,7 +131,11 @@ const (
 // direct socket's would give is spread over two more sockets' buffers, which
 // the kernel autotunes. Nothing the engine bounds counts those buffers: a
 // window ends at a stream's acknowledgement or a piece's arrival, both past
-// them.
+// them. Its upstream socket keeps no TCP keepalive, as nats-server's own
+// dial of a leaf link keeps none (v2.15.2, util.go natsDialTimeout, which
+// leaves liveness to the protocol's pings, for links that pay per packet):
+// the leaf's pings find a member that vanished, as they do without the
+// tunnel.
 //
 // WHAT IT CANNOT CARRY: a link that upgrades to TLS. nats-server closes a
 // proxied remote whose member requires TLS (v2.15.2, leafnode.go), so a
@@ -179,7 +183,11 @@ func startTunnel(ctx context.Context, death *Death) (*tunnel, error) {
 			"a leaf needs a loopback interface it may bind a free port on — check the host's or "+
 			"the pod's lo is up and the process is not out of file descriptors", err)
 	}
-	t := newTunnel(context.WithoutCancel(ctx), ln, newMemberDialer(tunnelDial), newLinkMeter(), death)
+	dialer := newMemberDialer(tunnelDial)
+	// NO KEEPALIVE, as nats-server dials a leaf link: see [tunnel]'s "What
+	// it changes on the path".
+	dialer.connect = (&net.Dialer{KeepAlive: -1}).DialContext
+	t := newTunnel(context.WithoutCancel(ctx), ln, dialer, newLinkMeter(), death)
 	t.start()
 	return t, nil
 }
