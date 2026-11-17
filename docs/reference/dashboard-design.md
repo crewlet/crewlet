@@ -11653,7 +11653,12 @@ its new one added, all in the one `DiffView`
 ([A diff carries no hue outside Gitlet](#a-diff-carries-no-hue-outside-gitlet));
 **Accept change**,
 **Accept the new tool** or **Accept that it went**, and **Keep blocked**, each
-sent by the digest of the definition shown. On the Tools tab a changed tool is
+sent by the digest of the definition shown. It says each thing once: its one
+subtitle is how many tools ask for approval until decided, a rail row is the
+tool's name alone (the dialog is wide enough for the rail, which folds into
+its picker only on a narrow window), the chosen tool is not named again over
+its diff, and a part is named by its label alone, one it cannot show saying
+"This part changed" under it. On the Tools tab a changed tool is
 marked *Changed*, *New* or *Removed*, the changes are counted with **Review**,
 **Changed** filters them, a held tool's *Always allow* says it applies once
 its change is reviewed, and the tab is marked while any wait.

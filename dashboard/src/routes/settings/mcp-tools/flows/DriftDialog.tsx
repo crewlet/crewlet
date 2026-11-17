@@ -128,25 +128,17 @@ function schemaText(def: McpChangeView["before"] | McpChangeView["after"]): stri
   return JSON.stringify({ input: def.input_schema, output: def.output_schema }, null, 2);
 }
 
-/** The words a part is named by in a sentence. */
-const PART_WORD: Readonly<Record<string, string>> = {
-  title: "title",
-  description: "description",
-  schema: "arguments",
-  annotations: "hints",
-};
-
 /**
  * A part that moved and cannot be drawn: said to have changed, never shown as
- * unchanged. `kept` is false where the engine keeps no whole copy of it.
+ * unchanged. It stands under the part's label, so it does not name the part
+ * again. `kept` is false where the engine keeps no whole copy of it.
  */
-function NotShown({ kind, kept }: { kind: string; kept: boolean }) {
-  const word = PART_WORD[kind] ?? kind;
+function NotShown({ kept }: { kept: boolean }) {
   return (
     <Text as="p" variant="body" tone="secondary">
       {kept
-        ? `The ${word} changed, but this review cannot show how.`
-        : `The ${word} changed, but the engine keeps no whole copy of it, so this review cannot show how.`}{" "}
+        ? "This part changed, but the review cannot show how."
+        : "This part changed, but the engine keeps no whole copy of it, so the review cannot show how."}{" "}
       Ask the server's vendor what changed before you accept it.
     </Text>
   );
@@ -179,11 +171,11 @@ function PartChange({
   if (change.unshown.includes(kind)) {
     return (
       <Part label={label}>
-        <NotShown kind={kind} kept={false} />
+        <NotShown kept={false} />
       </Part>
     );
   }
-  const guard = <NotShown kind={kind} kept />;
+  const guard = <NotShown kept />;
   switch (kind) {
     case "title":
       return (
@@ -267,7 +259,7 @@ function ChangeBody({ change }: { change: McpChangeView }) {
   }
   if (kinds.includes("added") && after) {
     return (
-      <div className="mcp-stack">
+      <Part label={CHANGE_KIND.added ?? "added"}>
         <Text as="p" variant="body">
           {after.description ||
             after.title ||
@@ -289,7 +281,7 @@ function ChangeBody({ change }: { change: McpChangeView }) {
             .join(", ") || "none"}
           .{change.held ? " It asks first until you accept it." : ""}
         </Text>
-      </div>
+      </Part>
     );
   }
   return (
@@ -393,6 +385,21 @@ function partialWords(p: McpChangesPartial): string {
     .join(" ");
 }
 
+/**
+ * The review's one subtitle: what waits on it, the tools held at Needs
+ * approval. The heading already says there are changes and the rail lists them.
+ */
+function heldWords(changes: readonly McpChangeView[]): string | undefined {
+  const tools = new Set(changes.map((c) => c.tool)).size;
+  const held = new Set(changes.filter((c) => c.held).map((c) => c.tool)).size;
+  if (held === 0) return undefined;
+  const ask = held === 1 ? "asks" : "ask";
+  if (held === tools) {
+    return `${held === 1 ? "The tool" : `The ${held} tools`} ${ask} for approval until you decide.`;
+  }
+  return `${held} of the ${tools} tools ${ask} for approval until you decide.`;
+}
+
 export function DriftDialog({
   server,
   onClose,
@@ -416,7 +423,6 @@ export function DriftDialog({
   // is listed nor what is sent; the engine refuses whatever moved since.
   const [confirming, setConfirming] = useState<readonly Reworded[] | null>(null);
   const current = ordered.find((c) => c.tool === chosen) ?? ordered[0] ?? null;
-  const held = changes.filter((c) => c.held).length;
 
   // ONE TOOL A DECISION: a tool listed under two new definitions at once is
   // decided on its own, by the definition the person reads.
@@ -497,7 +503,7 @@ export function DriftDialog({
 
   if (detail.data === null) {
     return (
-      <Modal open onClose={onClose} title={`Review ${server.title}'s tool changes`} size="lg">
+      <Modal open onClose={onClose} title={`Review ${server.title}'s tool changes`} size="xl">
         <Skeleton variant="text" rows={6} label="Reading the changes" />
       </Modal>
     );
@@ -554,12 +560,10 @@ export function DriftDialog({
       open
       onClose={onClose}
       title={`Review ${server.title}'s tool changes`}
-      subtitle={`${plural(changes.length, "change")} to review.${
-        held > 0
-          ? ` Until you do, ${held === 1 ? "the tool it holds asks" : `the ${held} tools they hold ask`} for approval.`
-          : ""
-      }`}
-      size="lg"
+      subtitle={heldWords(changes)}
+      // WIDE ENOUGH FOR THE RAIL: the kit folds it into a picker under 44rem
+      // of its own width, which a large dialog's body never reaches.
+      size="xl"
       footerStart={
         wording.length >= 2 ? (
           <Button
@@ -602,18 +606,12 @@ export function DriftDialog({
     >
       <RailList
         label="Changed tools"
-        items={ordered.map((c) => ({
-          key: c.tool,
-          label: c.tool,
-          description: c.kinds.map((k) => CHANGE_KIND[k] ?? k).join(", "),
-        }))}
+        // A ROW IS THE TOOL ALONE: what moved is the parts' labels beside it.
+        items={ordered.map((c) => ({ key: c.tool, label: c.tool }))}
         value={current.tool}
         onChange={setChosen}
       >
         <div className="mcp-stack mcp-drift">
-          <Text as="p" variant="cell" mono>
-            {current.tool}
-          </Text>
           {current.loosened ? (
             <Callout variant="warning" title="It now claims to be less risky">
               Its hints moved towards less risk. A server should rarely do that; accept only if the
