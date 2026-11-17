@@ -1282,7 +1282,7 @@ func (c *Coordinator) resumeOwedAdmitted(adm admitted, run PendingRun, answer *R
 		CacheWriteTokens: claimed.ParkedCacheWriteTokens,
 		Engine:           parkedEngineSpend(claimed),
 		Asked:            c.askedWith(claimed, words),
-	})
+	}, seen)
 	if disposition == AnswerDeferred {
 		// The claim went back: the run is [StatusAnswered] again with
 		// the same answer on it, owed the same resume.

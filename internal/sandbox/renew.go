@@ -151,7 +151,8 @@ import (
 // seat's budget, whose delivery the hold spends where no clock runs: kept
 // unheld, re-fired at the hold's instant and never sooner, since no claim wins
 // before it, and on its condition's signal once its own lift of the hold has
-// landed ([Coordinator.keepHeldOnRow]), every lift of a hold the signal makes
+// landed, a signal during the resume the budget held included
+// ([Coordinator.keepHeldOnRow]), every lift of a hold the signal makes
 // re-firing the job besides unless this node carries it already, kept or a
 // re-fire of it on its way ([Coordinator.refireLifted],
 // [Coordinator.carriedLocked]), kept through a delivery of it or a re-fire

@@ -563,8 +563,9 @@ func (c *Coordinator) keepRefused(ev types.ExecutorFinished, trigger *events.Eve
 // ([Coordinator.keptRefireIn]), and for hold's condition's signal, which lifts
 // the row's hold and then re-fires it ([Coordinator.liftAndRefire]). trigger is
 // the completion's event, or nil for one rebuilt from the row
-// ([announcementOf]); seen is what was signalled before the hold was written,
-// or before a claim the hold refused was asked ([Coordinator.keepHeldClaim]),
+// ([announcementOf]); seen is what was signalled before the resume that met
+// the hold was admitted ([Coordinator.resumeAndSettle]), or before a claim the
+// hold refused was admitted ([Coordinator.keepHeldClaim]),
 // or before a recovery read the held row ([Coordinator.keepHeldRows]); and
 // recovered is whether the caller is that recovery, which keeps nothing and
 // re-fires nothing for a job this node already carries
@@ -601,7 +602,11 @@ func (c *Coordinator) keepRefused(ev types.ExecutorFinished, trigger *events.Eve
 // ([Coordinator.keepRefused]): one whose listing of the runs ran before the
 // hold was written, or was not answered, lifted nothing, so a condition or a
 // person's stop signalled for the seat since seen lifts the hold here and
-// re-fires at once.
+// re-fires at once. Seen is read before the resume's admission, never once
+// the resume has returned: a signal during the resume, after its budget
+// refused it, found the row the claim with no hold to lift, and read after it
+// the job waited for the hold's instant, until the budget's window turned.
+// The cost is one review re-run at once for a signal the budget still refuses.
 func (c *Coordinator) keepHeldOnRow(run PendingRun, trigger *events.Event, hold Refusal,
 	seen map[signal]uint64, recovered bool,
 ) bool {
@@ -831,7 +836,7 @@ func (c *Coordinator) forgetAdmitted(ev types.ExecutorFinished) {
 // the job running, under no newer lease: for the hold on the row where it holds
 // the job's resume ([PendingRun.Held]), as the resume that wrote the hold keeps
 // it ([Coordinator.keepHeldOnRow]), against seen, what was signalled before the
-// claim was asked; and for the backstop where it no longer does
+// delivery's admission was asked; and for the backstop where it no longer does
 // ([Coordinator.keepAgain]). trigger is the completion's event.
 //
 // # Why a refused claim reads the row

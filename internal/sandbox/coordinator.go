@@ -1891,7 +1891,9 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.ExecutorFinished
 	// box's host running), when the delivery is handed back whatever the
 	// condition (renew.go); and one the caller acknowledges is written on the
 	// job's record first, as owed ([Coordinator.oweRefused]). What was
-	// signalled is read first, for the reason [Coordinator.keepRefused] gives.
+	// signalled is read first, for the reason [Coordinator.keepRefused] gives,
+	// and handed to the resume, whose seat's budget may hold it
+	// ([Coordinator.resumeAndSettle]).
 	seen := c.signalsSeen()
 	// HELD BY THIS NODE, before its gate is asked: the job's last resume here
 	// met a refusal after its claim that lifts at an instant, which the gate
@@ -1927,7 +1929,7 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.ExecutorFinished
 	}
 	defer adm.release()
 	c.forgetAdmitted(ev)
-	err = c.completeAdmitted(adm, ev, trigger, fence)
+	err = c.completeAdmitted(adm, ev, trigger, fence, seen)
 	if errors.Is(err, errRunMovedOn) {
 		// THE RUN MOVED ON BEFORE THIS ATTEMPT COULD END IT, and this
 		// delivery is SETTLED: the seat's next holder fenced the claim, and
@@ -1973,14 +1975,14 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.ExecutorFinished
 //
 // IT TAKES THE ADMISSION, NOT A CONTEXT, for the reason
 // [Coordinator.resumeOwedAdmitted] gives: everything from the claim on belongs
-// to the admitted turn and runs under the admission's own context.
+// to the admitted turn and runs under the admission's own context. seen is
+// what was signalled before the admission was asked, for a claim the hold on
+// the run's row refuses ([Coordinator.keepHeldClaim]) and a resume its seat's
+// budget holds ([Coordinator.resumeAndSettle]).
 func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
-	trigger *events.Event, fence Fence,
+	trigger *events.Event, fence Fence, seen map[signal]uint64,
 ) error {
 	ctx := adm.ctx
-	// WHAT WAS SIGNALLED BEFORE THE CLAIM IS ASKED, for a claim the hold on
-	// the run's row refuses ([Coordinator.keepHeldClaim]).
-	seen := c.signalsSeen()
 	// NOTHING OF THE JOB IS CLAIMED WHILE THIS NODE GIVES BACK, OR OWES, THE
 	// RELEASE OF ITS LAST CLAIM ([Coordinator.claimCompletion]): that release,
 	// made again, would give back a claim taken now while its collection is
@@ -2040,7 +2042,7 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 		if err != nil || carry == nil {
 			return err
 		}
-		_, err = c.resumeAndSettle(adm, carry.run, carry.report, false, trigger, carry.outcome)
+		_, err = c.resumeAndSettle(adm, carry.run, carry.report, false, trigger, carry.outcome, seen)
 		return err
 	}
 
@@ -2070,7 +2072,7 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 		Engine: run.Launch.Bridged.Plus(EngineSpend{Aux: result.Condensed}),
 		Ended: RunEnding{Text: result.Text, Error: result.Error, Event: result.Event,
 			Success: result.Success, At: run.Launch.CollectedAt, Refused: requestRefused(run, result)},
-	})
+	}, seen)
 	return err
 }
 
@@ -4145,7 +4147,9 @@ func (c *Coordinator) announceAnsweredAs(ctx context.Context, run PendingRun,
 	}
 }
 
-// resumeAndSettle re-enters the parked turn, then settles the box.
+// resumeAndSettle re-enters the parked turn, then settles the box. seen is what
+// was signalled before the turn's admission was asked ([Coordinator.signalsSeen]),
+// which a resume its seat's budget held is kept against ([Coordinator.keepHeldOnRow]).
 //
 // After the resumed turn returns: if it relaunched its executor the row is
 // back in running and a new job owns the paused box, so it is left for the
@@ -4192,7 +4196,7 @@ func (c *Coordinator) announceAnsweredAs(ctx context.Context, run PendingRun,
 // between the two is drawn by the turn's own start ([ResumeRequest.Begin]) —
 // which is where its delivery is recorded as worked, too.
 func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
-	answer string, success bool, trigger *events.Event, outcome runOutcome,
+	answer string, success bool, trigger *events.Event, outcome runOutcome, seen map[signal]uint64,
 ) (AnswerDisposition, error) {
 	// UNDER THE ADMISSION, which is the only way here: the turn this
 	// re-enters is one the node admitted ([admitted]).
@@ -4451,9 +4455,15 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			// turn, and the release that lands moves the count to the set it
 			// returns the run to, once ([Coordinator.unclaimOwing]), never
 			// before it, since one the store does not answer keeps the claim.
-			// WHAT WAS SIGNALLED BEFORE THE HOLD IS WRITTEN, for the keep
-			// below ([Coordinator.keepHeldOnRow]).
-			seen := c.signalsSeen()
+			// WHAT WAS SIGNALLED BEFORE THE TURN WAS ADMITTED, for the keep
+			// below ([Coordinator.keepHeldOnRow]), never what was by the time
+			// the resume returned: the budget refused the resume inside it,
+			// and a signal that landed after that, while the row was still
+			// the claim, found no hold to lift, so read here it was counted
+			// as seen and the job waited for the hold's instant, until the
+			// budget's window turned. Read before the gate, it re-fires the
+			// job at once, at the cost of one review re-run for a signal the
+			// budget still refuses.
 			hold, unclaimErr := c.unclaimHeld(ctx, run, held.Refusal)
 			if unclaimErr != nil {
 				//nolint:nilerr // The run was ended in its place, as on
