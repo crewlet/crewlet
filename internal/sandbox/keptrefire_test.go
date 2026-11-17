@@ -672,13 +672,14 @@ func budgetHeldOnRow(t *testing.T, rig *coordRig, until time.Time) {
 // out of a recovery, and nothing is kept; read what was signalled only once the
 // recovery has listed the seat's runs, and a signal during it whose listing of
 // the holds the store does not answer leaves the job kept for the hold's
-// instant; keep a held resume against what was signalled once it returned, and
-// a signal that landed during it, the row still the claim, is counted as seen
-// and lifts nothing; write the hold without owing the completion on the job's
-// record, and a restart after a lift of the hold leaves the job owed nothing;
-// re-fire the job on a signal's lift while this node keeps it or a re-fire of
-// it is on its way, or keep it from the row in a recovery while that lift's
-// re-fire is, and it is re-fired twice at once.
+// instant; keep a held resume against what was signalled once it returned, or
+// once its gate admitted it, and a signal that landed during it, or while the
+// gate was asked, the row still unheld, is counted as seen and lifts nothing;
+// write the hold without owing the completion on the job's record, and a
+// restart after a lift of the hold leaves the job owed nothing; re-fire the
+// job on a signal's lift while this node keeps it or a re-fire of it is on its
+// way, or keep it from the row in a recovery while that lift's re-fire is, and
+// it is re-fired twice at once.
 func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 	t.Parallel()
 
@@ -1025,6 +1026,38 @@ func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 		if resumed := rig.resumer.calls(); len(resumed) != 1 || !resumed[0].Success {
 			t.Fatalf("the turn resumed %d times (%+v) on a signal that landed during the resume its budget "+
 				"held; want it carried once, not kept for the hold's instant", len(resumed), resumed)
+		}
+	})
+
+	t.Run("re-fired on a signal that lands while its gate is asked", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		rig.launch("t1")
+		rig.coordinator.countRun("swe", StatusRunning)
+		rig.resumer.failWith(budgetHeld(rig.now.Add(24 * time.Hour)))
+		// THE CONDITION IS SIGNALLED WHILE THE NODE'S GATE IS ASKED to admit
+		// the resume, before its claim, and the signal's listing of the holds
+		// is not answered: only what was read before the gate was asked tells
+		// the keep the resume makes that the signal landed.
+		rig.coordinator.pending = unlistedRuns{rig.coordinator.pending}
+		var signalled sync.Once
+		rig.coordinator.gate = func(ctx context.Context, _ string, _ ResumeRoute) (context.Context, func(), error) {
+			signalled.Do(func() { rig.coordinator.Readmit("budget", "swe") })
+			return ctx, func() {}, nil
+		}
+		var admitted sync.Once
+		rig.resumer.during = func(context.Context, PendingRun) {
+			admitted.Do(func() { rig.resumer.failWith(nil) })
+		}
+		rig.runner.Finish(Result{Success: true, Text: "first pass"})
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Fatalf("the premise: the held resume = %v; want its completion spent", err)
+		}
+		rig.coordinator.inflight.Wait()
+		if resumed := rig.resumer.calls(); len(resumed) != 1 || !resumed[0].Success {
+			t.Fatalf("the turn resumed %d times (%+v) on a signal that landed while its gate was asked; want "+
+				"it carried once, not kept for the hold's instant", len(resumed), resumed)
 		}
 	})
 
