@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/advisor/analyst"
 	"github.com/crewlet/crewlet/internal/api/assistantapi"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -65,6 +66,11 @@ type App struct {
 	// ends its run.
 	insights     *insights.Sharer
 	stopInsights func()
+
+	// analyst is the advisor's analyst (ADR-0156), nil where the fleet keeps
+	// no record of it; stopAnalyst ends its cadence and waits for a run.
+	analyst     *analyst.Service
+	stopAnalyst func()
 
 	// chatLive is the process's chat hub, which the socket carries chat
 	// through. The App's to mount and never to start or stop.
@@ -986,6 +992,7 @@ func New(opts Options) (*App, error) {
 		}
 		a.insights = sources.InsightSharer(origin, send)
 	}
+	a.analyst = sources.AnalystService()
 	// And each server's OAuth grant, which every node reads from the
 	// coordination store, with the addresses a vendor is given.
 	sources.MCPGrants = opts.Runtime.MCPGrants()
@@ -1092,6 +1099,10 @@ func New(opts Options) (*App, error) {
 	// failing the boot where a policy is missing.
 	if err := a.mountDeployment(mux); err != nil {
 		return nil, fmt.Errorf("api: mount the deployment's controls: %w", err)
+	}
+	// The advisor's analyst: a run now and an answer to a finding (ADR-0156).
+	if err := a.mountAnalysis(mux); err != nil {
+		return nil, err
 	}
 	// Gitlet and its reads: git on a node with the gitlet
 	// role — a person's routes each on the verb it is decided by, failing
@@ -1740,6 +1751,7 @@ func (a *App) Start(ctx context.Context) {
 	a.stream.StartHealthTicks(ctx)
 	a.listens.Join(ctx)
 	a.startInsights(ctx)
+	a.startAnalyst(ctx)
 }
 
 // Stop ends the tick, disconnects every client and leaves the fleet's
@@ -1749,6 +1761,9 @@ func (a *App) Start(ctx context.Context) {
 func (a *App) Stop(ctx context.Context) {
 	if a.stopInsights != nil {
 		a.stopInsights()
+	}
+	if a.stopAnalyst != nil {
+		a.stopAnalyst()
 	}
 	for _, stop := range a.stopRooms {
 		stop()

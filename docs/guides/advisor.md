@@ -112,6 +112,38 @@ Six more are read from the week's records, each the owner's (`costs`), each with
 
 If a server cannot read the week's budget refusals or its merge decisions, the answer's `unread` names `budget_stops` or `merges`, and their findings are left out.
 
+## Found by the analyst
+
+The rules above name what somebody already wrote a rule for. The **analyst** reads the same week of records on the company's own models and lists problems no rule names, under the rule-based list, in a section of its own. It is off until you name a model for it ([ADR-0156](../../adr/0156-the-advisors-analyst-lists-only-what-the-engines-records-show.md)):
+
+```yaml
+advisor:
+  analyst:
+    llm: [assistant]        # providers.llm keys; absent is off
+    cadence: daily          # daily (the default), weekly (on Mondays) or off
+    hour: 6                 # the company-clock hour a scheduled run starts at
+    max_tokens: 200000      # one run's token ceiling, at least 20000
+```
+
+**What it reads.** Only the engine's own records, through read tools served to the run: the company document's shape (each seat's model entries, round cap, budgets and schedules, and the delegation rules), the agents' turns by what woke them and what they did, the runs that ended on their round cap or for memory, the turns a budget refused, where open work sits and what waits on what, decisions and merges, schedule fires, what the rules above already list, and how people answered earlier findings. Every answer is numbers, closed words, times, handles and record ids. No comment, message, item title or transcript is read, so words somebody wrote cannot steer what you are told, and the document it reads is the redacted one.
+
+**How it runs.** Daily at 06:00 on the company clock by default, or weekly, and whenever an administrator presses **Run now**; one run at a time across the fleet. Each model entry is held to Ask Crewlet's rules for a member (the harness's local and web tools denied). Its rounds are charged to the company's budget windows and never a seat's, under the run's own `max_tokens`, and recorded as background spend with the purpose `advisor_analysis`. The section shows the last run's time, model entry and tokens. A run reads about ten tool answers of a few thousand tokens each beside its prompt, so the default ceiling leaves room to read twice.
+
+**What reaches the list.** The run submits findings; the engine lists one only when:
+
+- it cites at least one record (an item, a turn or a change) and one number, and every record and number is one this run's own tools answered, the number at the very place it names;
+- it is not a rule finding said again: one about the same subject citing only a rule finding's records, or offering a change a rule finding offers, is left out;
+- its fix is one the engine builds itself and checks against the company's rules: a seat's round cap, token budget or learning model, or opening an item it cites or an agent's page. The engine never applies one: it is previewed and applied as every fix here is;
+- its words are plain, at most 120 characters for the title and 600 for the why.
+
+What was left out is counted by why under the list, so a short list never hides a run that found more than it could prove.
+
+**Your answers.** Each finding takes **Useful**, **Wrong** or **Already known**. A wrong one is never listed again and the next run is told; an already-known one stays off the list for 30 days. Answers are kept by what the finding is about (its subject, records and kind of fix), not its words. Analyst findings never reach the Inbox, Home or the go-live check.
+
+**When it cannot say.** A model that declines, or does not submit findings the engine can read, is said as such; a run that reaches its ceiling says so; a model or a company budget that is not available fails the run in those words; a source a run could not read is named; a last run older than two of its periods is marked out of date. **Nothing found** is said only for a fresh run that read everything and found nothing the rules do not list.
+
+`GET /advisor/analysis` answers the same for a script, and `POST /advisor/analysis` runs it now ([API reference](../reference/api-endpoints.md)).
+
 ## What the atlas shows
 
 The advisor also lists what your company's [atlas](atlas.md) shows needs a person. Each is read from the atlas when the list is read and stored nowhere, so it leaves the list once it is fixed. None blocks the company.
