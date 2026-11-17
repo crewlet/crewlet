@@ -379,7 +379,9 @@ func TestAResumeAnotherBuildCanMakeIsCountedOnlyOnceNoLiveNodeCan(t *testing.T) 
 // resume whose turn relaunched before it failed is out, its hand-back finding
 // the turn's next job on the row. A hand-back the store answers late counts the
 // run once it lands, and an ending
-// that lands beside it, before its answer is taken, leaves it uncounted. AND
+// that lands beside it, before its answer is taken, leaves it uncounted; a run
+// an earlier attempt counted stays counted, from its first failure's instant,
+// while a later attempt's hand-back is owed. AND
 // ONLY WHILE THIS NODE HOLDS THE SEAT UNDER THE LEASE THE ATTEMPT'S CLAIM WAS
 // TAKEN WITH: nothing cuts a resume's frame short at the seat's release, and
 // one that meets its failure after it, its hand-back landing before a newer
@@ -393,8 +395,10 @@ func TestAResumeAnotherBuildCanMakeIsCountedOnlyOnceNoLiveNodeCan(t *testing.T) 
 // or as the attempt returns rather than once its hand-back lands, count it in
 // the step that takes the landing's answer whatever settled before it, keep it
 // where the hand-back did not land, count it under a lease this node no longer
-// holds the seat by, keep it in memory once that lease is gone, or carry an
-// earlier holding's instant into a later one, and a row goes red.
+// holds the seat by, keep it in memory once that lease is gone, carry an
+// earlier holding's instant into a later one, or stop counting a run an
+// earlier attempt counted while the next attempt's hand-back is out, and a row
+// goes red.
 func TestAResumeOnlyAnOperatorClearsIsRaisedWhileTheRunWaits(t *testing.T) {
 	t.Parallel()
 	full := errors.New("write: no space left on device")
@@ -547,6 +551,27 @@ func TestAResumeOnlyAnOperatorClearsIsRaisedWhileTheRunWaits(t *testing.T) {
 			t.Fatalf("the premise: the owed hand-back landed, but the run is %s", got.Status)
 		}
 		blockedFor(t, rig, ResumesBlocked{Runs: 1, Seat: "swe", Kind: "disk_full", Since: met})
+	})
+	t.Run("a later attempt's hand-back the store answers late", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		first := rig.now
+		waiting(t, rig)
+		store := &unansweredRelease{silentStore: &silentStore{PendingStore: rig.coordinator.pending,
+			silent: []string{"ReleaseClaim"}}}
+		rig.coordinator.pending = store
+		rig.now = rig.now.Add(20 * time.Minute)
+		if err := attempt(t, rig); err == nil {
+			t.Fatal("the premise: the attempt on a full disk is not settled")
+		}
+		// STILL WAITING, as it was before this attempt: the run an earlier
+		// attempt counted is counted while this one's hand-back is owed.
+		blockedFor(t, rig, ResumesBlocked{Runs: 1, Seat: "swe", Kind: "disk_full", Since: first})
+		store.answer()
+		if fired := rig.fireRetries(); fired == 0 {
+			t.Fatal("the premise: the release the store did not answer is owed and made again")
+		}
+		blockedFor(t, rig, ResumesBlocked{Runs: 1, Seat: "swe", Kind: "disk_full", Since: first})
 	})
 	t.Run("an ending that lands beside the hand-back", func(t *testing.T) {
 		t.Parallel()
