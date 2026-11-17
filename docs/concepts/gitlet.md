@@ -5591,6 +5591,14 @@ line; a line of a patch longer than a page is refused, naming the file's lines
 to read instead. A binary file is answered by its size, as git calls one
 binary: a NUL in its first 8 000 bytes.
 
+**Every file's patch, page by page.** A diff's or an interdiff's `patches` are
+each file's patch in the stat's order, whole lines a page: a file's patch may
+begin on one page and go on on the next, and every page carries the stat's
+totals. A page starts at any file without diffing the files before it, and a
+read cuts the page it was asked for and up to sixteen after it, which the node
+keeps. A file's patch holding a line longer than one answer stops before that
+line, marked `rest_omitted`, and the pages go on at the next file.
+
 **Who may read** is judged by the Gitlet node that answers, from its own chart,
 by the rules of [Who may read and push](#who-may-read-and-push): a person
 holding the Gitlet permission reads every repository — one without it is
@@ -7597,9 +7605,10 @@ The **interdiff** of two revisions is the diff of their heads kept to the
 files either revision's change touches, as their facts list them: a rebase
 between the two brought in what the target changed meanwhile, and the files
 neither revision touches differ between the heads without being anything the
-change did. It is read as a diff is — its stat a page at a time, or one file's
-patch — and a file is kept by its whole name, so the touched path `a*` keeps
-the file `a*` and never `ab`. The paths are never handed to git as a pathspec
+change did. It is read as a diff is (its stat a page at a time, one file's
+patch, or every file's patch page by page), and a file is kept by its whole
+name, so the touched path `a*` keeps the file `a*` and never `ab`. The
+paths are never handed to git as a pathspec
 ([A path is data](#server-side-reads)): each touched path is looked up at both
 heads, one lookup on git's standard input for them all, and only the files
 whose two entries differ are diffed — so an interdiff costs git two lookups a

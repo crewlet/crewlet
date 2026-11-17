@@ -9057,7 +9057,21 @@ export interface CodeDiffFile {
   new_oid?: string;
 }
 
-/** A page of a diff's files, or of one file's patch (`gitlet.DiffAnswer`). */
+/** One file's patch, or the part of it a page holds (`gitlet.FilePatch`). */
+export interface CodeFilePatch {
+  /** Its place among the diff's files, from 0, in the stat's order. */
+  file: number;
+  path: string;
+  path_b64?: string;
+  status: string;
+  patch: string;
+  /** The next page goes on with this file's patch. */
+  continues?: boolean;
+  /** The patch stops before a line longer than one answer holds; the rest is left out. */
+  rest_omitted?: boolean;
+}
+
+/** A page of a diff's files, of one file's patch, or of every file's patch (`gitlet.DiffAnswer`). */
 export interface CodeDiffAnswer {
   base: string;
   head: string;
@@ -9067,6 +9081,8 @@ export interface CodeDiffAnswer {
   deleted: number;
   /** One file's patch, as git writes it. */
   patch?: string;
+  /** A page of every file's patch, where `patches=true` asks; `files` is empty on it, and a diff of no file has none. */
+  patches?: CodeFilePatch[];
 }
 
 /**

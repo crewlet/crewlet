@@ -94,38 +94,41 @@ func textCost(b []byte) int {
 // of a patch fences one text, whose fence the room a page leaves beside a
 // tool's envelope holds; a log's page fences every commit's subject and a
 // blame's every line and every commit's subject — a hundred, five hundred —
-// so each such field is costed here as internal/agent/builtin's code tools
-// send it: inside the fence they put a repository's text in, naming no writer
-// at trust external (provenance.Repository), its text NEUTRALISED there as every
-// other string of a code tool's answer is (provenance.Neutralise: every
+// and a diff's patches every patch, so each such field is costed here as
+// internal/agent/builtin's code tools send it: inside the fence they put a
+// repository's text in, naming no writer at trust external
+// (provenance.Repository), its text NEUTRALISED there as every other string
+// of a code tool's answer is (provenance.Neutralise: every
 // marker-shaped `[` lengthened into `[escaped `). The fence's label and closer
 // are read off provenance itself at init, so a fence grown longer is costed
 // longer; only the turn's own boundary, which no Gitlet node knows, is not —
 // text spelling it is a turn's own echo, and a page it lengthens past one
 // answer is refused by the tool naming a narrower read, never cut.
 
-// fenceCost is what the fence of each source a log or a blame fences adds to
-// a text once encoded: its opening line, the line feed before its closer and
-// the closer.
+// fenceCost is what the fence of each source a log, a blame or a diff's
+// patches fence adds to a text once encoded: its opening line, the line feed
+// before its closer and the closer.
 var fenceCost = map[provenance.Source]int{}
 
-// costModel is what a log's and a blame's pages were measured with — what each
-// fence adds, and what neutralising one marker does — in every key the memo
-// keeps such a page under: a build whose fence or escape is longer cuts its
-// pages anew rather than serve one measured short of it.
+// costModel is what a log's, a blame's and a diff's patches' pages were
+// measured with — what each fence adds, and what neutralising one marker does
+// — in every key the memo keeps such a page under: a build whose fence or
+// escape is longer cuts its pages anew rather than serve one measured short of
+// it.
 var costModel string
 
 // init measures both after the table above, which the measuring reads: an
 // init runs after every package variable is set, and in the order this file
 // declares it.
 func init() {
-	for _, src := range []provenance.Source{provenance.SourceRepoFile, provenance.SourceRepoCommit} {
+	for _, src := range []provenance.Source{provenance.SourceRepoFile, provenance.SourceRepoCommit,
+		provenance.SourceRepoPatch} {
 		const text = "x"
 		fenced := provenance.Repository(src).Fence(provenance.NewBoundary(), text)
 		fenceCost[src] = encodedLen(fenced) - encodedLen(text)
 	}
-	costModel = fmt.Sprintf("fence/%d/%d/%d", fenceCost[provenance.SourceRepoFile],
-		fenceCost[provenance.SourceRepoCommit], neutralGrowth("[untrusted"))
+	costModel = fmt.Sprintf("fence/%d/%d/%d/%d", fenceCost[provenance.SourceRepoFile],
+		fenceCost[provenance.SourceRepoCommit], fenceCost[provenance.SourceRepoPatch], neutralGrowth("[untrusted"))
 }
 
 // neutralCost is s's bytes inside a JSON string once a code tool's answer has
@@ -200,7 +203,8 @@ func widestCursor(letter byte, numbers int) string {
 // n-th file of a diff's stat, "l:<n>" line n of a file — or of a blame's range
 // — "b:<n>:<o>" byte o of line n, "p:<o>" byte o of a patch, "s:<n>" the n-th
 // commit of a history's walk (counted from 0, the commits git skips first),
-// "x:<n>" the n-th anchor of an excerpts read, and "d:<seconds>:<name>" a tags
+// "x:<n>" the n-th anchor of an excerpts read, "w:<n>:<o>" byte o of the n-th
+// file's patch of a diff's patches (both from 1), and "d:<seconds>:<name>" a tags
 // page's last tag (tags.go), a KEY of the listing rather than a position: a
 // listing at another position resumes past the same tag. Each other is a
 // position in an answer that is a function of object ids alone — the same
@@ -265,8 +269,8 @@ func formatCursor(c cursor) string {
 	switch c.letter {
 	case 0:
 		return ""
-	case 'b':
-		return fmt.Sprintf("b:%d:%d", c.a, c.b)
+	case 'b', 'w':
+		return fmt.Sprintf("%c:%d:%d", c.letter, c.a, c.b)
 	}
 	return fmt.Sprintf("%c:%d", c.letter, c.a)
 }

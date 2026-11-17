@@ -3614,6 +3614,9 @@ type DiffQuery struct {
 	// Renames detects a file moved between Base and Head as one renamed
 	// file rather than one deleted and one added.
 	Renames bool `json:"renames,omitempty"`
+	// Patches asks for every file's patch instead of the stat, a page at a time in the stat's
+	// order ([DiffAnswer.Patches]); refused beside File, kept to Paths where named.
+	Patches bool `json:"patches,omitempty"`
 }
 
 // CompareQuery is how two commits relate.
@@ -3739,6 +3742,8 @@ type InterdiffQuery struct {
 	// bytes), as [DiffQuery.File] is.
 	File    string `json:"file,omitempty"`
 	FileB64 string `json:"file_b64,omitempty"`
+	// Patches asks for every file's patch of the interdiff, as [DiffQuery.Patches] does.
+	Patches bool `json:"patches,omitempty"`
 }
 
 // LogQuery is the history of a path from a commit, or of every path.
@@ -4153,6 +4158,10 @@ func (q DiffQuery) validate() error {
 			return fmt.Errorf("%w: diff.paths[%d]: %s", ErrInvalid, i, why)
 		}
 	}
+	if q.Patches && (q.File != "" || q.FileB64 != "") {
+		return fmt.Errorf("%w: diff.patches: every file's patch names no one file: give file or patches",
+			ErrInvalid)
+	}
 	if q.File == "" && q.FileB64 == "" {
 		return nil
 	}
@@ -4255,6 +4264,10 @@ func (q InterdiffQuery) validate() error {
 		if err := validTouched(side.field, side.touched, side.all); err != nil {
 			return err
 		}
+	}
+	if q.Patches && (q.File != "" || q.FileB64 != "") {
+		return fmt.Errorf("%w: interdiff.patches: every file's patch names no one file: give file or patches",
+			ErrInvalid)
 	}
 	if q.File == "" && q.FileB64 == "" {
 		return nil
@@ -4858,7 +4871,7 @@ type DiffFile struct {
 	NewOID string `json:"new_oid,omitempty"`
 }
 
-// DiffAnswer is one page of a diff's stat, or of one file's patch.
+// DiffAnswer is one page of a diff's stat, of one file's patch, or of every file's patch.
 type DiffAnswer struct {
 	// Base and Head are the commits (or trees) compared, as whole ids.
 	Base string `json:"base"`
@@ -4874,6 +4887,25 @@ type DiffAnswer struct {
 	// Patch is a page of one file's patch (DiffQuery.File), cut at line
 	// boundaries; its header lines name the paths, as git's own do.
 	Patch string `json:"patch,omitempty"`
+	// Patches is a page of every file's patch (DiffQuery.Patches), cut at line boundaries;
+	// Files is empty on such a page, and the totals are the stat's. A diff of no file
+	// answers one page with no patches member.
+	Patches []FilePatch `json:"patches,omitempty"`
+}
+
+// FilePatch is one file's patch, or the part of it a page holds: File its place among the
+// files the diff admits, from 0 in the stat's order, its path and status as the stat names
+// them, and Continues where the next page goes on with it.
+type FilePatch struct {
+	File      int    `json:"file"`
+	Path      string `json:"path"`
+	PathB64   string `json:"path_b64,omitempty"`
+	Status    string `json:"status"`
+	Patch     string `json:"patch"`
+	Continues bool   `json:"continues,omitempty"`
+	// RestOmitted is a patch that stops before a line longer than one answer holds: the
+	// rest of the file's patch is left out, and the pages go on at the next file.
+	RestOmitted bool `json:"rest_omitted,omitempty"`
 }
 
 // CompareAnswer is how two commits relate.
