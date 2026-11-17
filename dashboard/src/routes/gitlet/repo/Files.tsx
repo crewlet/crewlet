@@ -128,6 +128,7 @@ import {
 } from "../ui.tsx";
 import { Painted, paintFence, tokensOf, useGrammar, useLineStates } from "../syntax.tsx";
 import { gitletWrote, mergeTitle, subjectOf } from "./History.tsx";
+import { useReportDocs } from "./About.tsx";
 import { Entries } from "./Entries.tsx";
 import { useCommitMarks } from "./marks.ts";
 import { RefPicker, revisionWord } from "./refs.tsx";
@@ -1483,6 +1484,7 @@ function RepoDocs({
       entry: firstOf(LICENSE_NAMES),
     },
   ].filter((d) => d.entry !== undefined);
+  useReportDocs(docs.map((d) => d.value).join(","));
   const shown = docs.find((d) => d.value === (doc === "license" ? "license" : "readme")) ?? docs[0];
   const entry = shown?.entry;
   const file = useCodeQuery(

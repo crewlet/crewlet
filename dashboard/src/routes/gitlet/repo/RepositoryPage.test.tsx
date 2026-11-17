@@ -765,7 +765,7 @@ test("the About rail says when the repository was pushed in words, the latest co
   vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
   stubEngine();
   mount("#/gitlet/repos/web");
-  expect(await screen.findByText("Pushed yesterday")).toBeTruthy();
+  expect((await screen.findByText(/^Last pushed/)).textContent).toBe("Last pushed yesterday");
   await waitFor(() =>
     expect(document.querySelector(".code-latest__when")?.textContent).toBe("6d ago"),
   );
@@ -967,6 +967,11 @@ test("the revision picker reads nothing until it opens, and then one page of the
   const asked = stubEngine();
   mount("#/gitlet/repos/web");
 
+  // THE RAIL'S OWN READS at the root, the default branch's find and the newest tag, are not the picker's.
+  const picker = (query: "code_refs" | "code_tags") =>
+    reads(asked, query).filter(
+      (u) => !u.searchParams.has("contains") && u.searchParams.get("limit") !== "1",
+    );
   await screen.findByRole("link", { name: "src" });
   act(() => {
     location.hash = "#/gitlet/repos/web?path=src";
@@ -976,13 +981,13 @@ test("the revision picker reads nothing until it opens, and then one page of the
     location.hash = "#/gitlet/repos/web?tab=commits";
   });
   expect(await screen.findByRole("group", { name: "History of main" })).toBeTruthy();
-  expect(reads(asked, "code_refs")).toHaveLength(0);
-  expect(reads(asked, "code_tags")).toHaveLength(0);
+  expect(picker("code_refs")).toHaveLength(0);
+  expect(picker("code_tags")).toHaveLength(0);
 
   fireEvent.click(screen.getByRole("button", { name: "Branch or tag: main" }));
   const panel = await screen.findByRole("dialog", { name: "Switch branches or tags" });
   await within(panel).findByRole("option", { name: /^feature/ });
-  const moved = reads(asked, "code_refs");
+  const moved = picker("code_refs");
   expect(moved).toHaveLength(1);
   expect(Object.fromEntries(moved[0]!.searchParams)).toMatchObject({
     order: "moved",
@@ -991,13 +996,13 @@ test("the revision picker reads nothing until it opens, and then one page of the
   });
   fireEvent.click(within(panel).getByRole("tab", { name: /Tags/ }));
   await within(panel).findByRole("option", { name: /^v3/ });
-  expect(reads(asked, "code_tags").map((u) => u.searchParams.get("limit"))).toEqual(["10"]);
+  expect(picker("code_tags").map((u) => u.searchParams.get("limit"))).toEqual(["10"]);
 
   fireEvent.click(within(panel).getByRole("button", { name: "Close" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   fireEvent.click(screen.getByRole("button", { name: "Branch or tag: main" }));
   await screen.findByRole("option", { name: /^feature/ });
-  expect(reads(asked, "code_refs")).toHaveLength(2);
+  expect(picker("code_refs")).toHaveLength(2);
 });
 
 /** Six branches by when each moved, main on the page's second row. */
@@ -2598,7 +2603,7 @@ test.each([
 // AN IMPORTING REPOSITORY SAYS HOW FAR ITS IMPORT WENT, and where its mirrors
 // stand, on the About rail beside its code. Mutation: drop the import's
 // progress or the pull mirror's line from the rail, and this fails.
-test("the About rail says how far an import went and where the mirrors stand", async () => {
+test("the About rail says how far an import went, and its Mirror where the mirror stands", async () => {
   const source = { url: "https://forge.example.com/acme/web.git" };
   stubEngine(
     detail({
@@ -2614,9 +2619,10 @@ test("the About rail says how far an import went and where the mirrors stand", a
       "Importing from https://forge.example.com/acme/web.git: 3 chunks landed so far.",
     ),
   ).toBeTruthy();
-  expect(
-    screen.getByText("Follows https://forge.example.com/acme/web.git; not synced yet."),
-  ).toBeTruthy();
+  // THE PULL MIRROR IS THE RAIL'S MIRROR: its address, then what it does.
+  const mirror = screen.getByRole("region", { name: "Mirror" });
+  expect(within(mirror).getByRole("link", { name: "forge.example.com/acme/web" })).toBeTruthy();
+  expect(within(mirror).getByText(/^Follows it;/).textContent).toBe("Follows it; not synced yet.");
 });
 
 /** A person the engine serves every repository and branch write for. */
