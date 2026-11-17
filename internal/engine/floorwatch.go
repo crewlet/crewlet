@@ -7,37 +7,16 @@ import (
 )
 
 // HOW LONG THIS NODE HAS BEEN UNABLE TO READ THE TRIM FLOOR, for
-// `floor_unknown`.
+// `floor_unknown`, which fires on an age. A health read has no memory and fails
+// whole on an unreadable floor, so the age is this node's own observation on
+// the alarm heartbeat (first failing beat to latest), in memory because it is a
+// fact about this node alone.
 //
-// # Why it is observed rather than read off a health
-//
-// A health read has no memory: it reads the published floor there and then,
-// and a floor that cannot be read makes the whole read fail — so the alarm's
-// input could only ever say "unknown now", never "unknown for four
-// heartbeats", which is what the rule fires on. The report used to stand the
-// threshold itself in for the age on the one branch that could see an unknown
-// floor, and that branch was unreachable besides: a health read that failed on
-// its floor was skipped before the branch was reached. The alarm could not
-// fire.
-//
-// So the age is this node's own observation, taken on the alarm heartbeat:
-// first failing beat to latest, never a persistence nobody saw, and in memory
-// because "can this node read the floor" is a fact about this node alone.
-//
-// # What a read is
-//
-// THE READ PATH'S OWN TWO STEPS — each domain's published floor read by its
-// own key ([readFloorsOf]), then [floorFor] at the generation its applier is
-// on — which is what the write fence, the readiness gate and every read's
-// health take. A floor this node cannot use is therefore one of two things,
-// and the alarm names which: that domain's key could not be read, or the fleet
-// published at a generation this node has not reached. EACH DOMAIN BY ITS KEY,
-// never a listing of the register, for the read path's reason: a listing is a
-// consumer created and deleted through the metadata group on a clustered
-// broker, and on a loaded fleet that create ran past the client's API timeout
-// with every key perfectly readable — a watch that listed would age an outage
-// no read was having. The keys are read at once, so a beat costs one round
-// trip however many logs the node runs.
+// A read is the read path's own two steps: each domain's floor by its own key
+// ([readFloorsOf]), then [floorFor] at its applier's generation, as the write
+// fence and the readiness gate read it, so the alarm names which failed. Never a listing of the register: that creates a consumer
+// through a clustered broker's metadata group, which times out under load with
+// every key readable. The keys are read at once: one round trip per beat.
 
 // floorSubject is one domain the watch asks about, at the generation its
 // applier is on.
@@ -69,11 +48,9 @@ func newFloorWatch(floors func(ctx context.Context, domains []string) publishedF
 		cause: map[string]string{}}
 }
 
-// observe takes one look at every domain's floor at now.
-//
-// A STOP THIS PROCESS ASKED FOR IS NOT AN UNREADABLE FLOOR: a read that failed
-// because the beat's own context ended starts no clock and clears none, since
-// it says nothing about coordination.
+// observe takes one look at every domain's floor at now. A read that failed
+// because the beat's own ctx ended starts no clock and clears none: it says
+// nothing about coordination.
 func (w *floorWatch) observe(ctx context.Context, now time.Time, subjects []floorSubject) {
 	if w == nil || w.floors == nil {
 		return
@@ -91,11 +68,8 @@ func (w *floorWatch) observe(ctx context.Context, now time.Time, subjects []floo
 	seen := make(map[string]bool, len(subjects))
 	for _, s := range subjects {
 		seen[s.domain] = true
-		// IN THE READ PATH'S OWN WORDS ([publishedFloors.floor]), so the
-		// cause names what could not be read — the domain's key, or a floor
-		// published at a generation this node has not reached — rather than
-		// a transport's error alone, a timeout or a closed connection with
-		// nothing in it saying it was a floor that was asked for.
+		// The read path's own error ([publishedFloors.floor]), so the cause
+		// names the key or the generation rather than a bare transport error.
 		_, err := read.floor(s.domain, s.generation)
 		if err == nil {
 			delete(w.first, s.domain)
@@ -120,21 +94,14 @@ func (w *floorWatch) observe(ctx context.Context, now time.Time, subjects []floo
 // of is the latest observation of one domain's floor: how long it has been
 // unreadable and what its latest read said, both zero while it is readable.
 //
-// PER DOMAIN, because the refusal is: a read of one log refuses on that log's
-// floor, and a floor published ahead of this node is one log's re-anchor. The
-// form this replaced reduced the watch to the domain unreadable longest, so a
-// node two logs behind a re-anchor named one of them — and an operator who
-// repaired it met the second only after the fix, under an alarm that had never
-// cleared. The report evaluates each domain's answer on its own and lists every
-// unreadable log, with its own cause, under the one `floor_unknown` alarm
-// ([statelog.Alarm.Domains]); a coordination outage that fails every domain at
-// once is that one alarm naming every log, and the [statelog.Tracker] writes a
-// raise and a clear line for each.
+// Per domain, because a read refuses on its own log's floor: the report lists
+// every unreadable log with its own cause under the one `floor_unknown` alarm
+// ([statelog.Alarm.Domains]), so an operator who repairs one is not met by a
+// second under an alarm that never cleared; the [statelog.Tracker] raises and
+// clears each.
 //
-// FIRST SIGHTING TO LATEST OBSERVATION, never to now: a report assembled
-// between two beats knows only what the last one found, and measuring to now
-// would fire on a screen an alarm the gauge beside it, set at the beat, does
-// not.
+// Measured to the latest observation, never to now: a report between beats
+// would otherwise show an alarm the gauge set at the beat does not.
 func (w *floorWatch) of(domain string) (time.Duration, string) {
 	if w == nil {
 		return 0, ""

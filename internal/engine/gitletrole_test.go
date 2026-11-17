@@ -13,11 +13,10 @@ import (
 // THE NODE'S UNMANNED-ROLE CHECK ASKS THE CURRENT COMPANY WHETHER IT NEEDS THE GITLET ROLE.
 // The engine hands the seat host its answer through the node
 // (seat.Config.RoleNeeded, by way of node.Config): a fleet whose nodes declare
-// their roles without gitlet is missing nothing while its company hosts no code,
-// and is missing gitlet from the activation that turns code on. Each link of that
-// chain is a field a constructor copies, and one left out made the seat host
-// need every role — fleet_role_unmanned for gitlet on every such fleet — while the
-// check's own tests, which build a host by hand, still passed.
+// no gitlet misses nothing until the activation that turns code on, then
+// misses gitlet. Each link is a field a constructor copies, and one left out
+// makes the host need every role (fleet_role_unmanned for gitlet) while the
+// check's own hand-built tests still pass.
 //
 // Mutation: drop RoleNeeded from the engine's node.Config, or from the node's
 // seat.Config, and the first assertion goes red.

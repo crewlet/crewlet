@@ -11,61 +11,44 @@ import (
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
-// ConfigWriter removes a block from the company document.
-//
-// The consumer's own interface, as wide as a disconnect and the passes need.
-// The implementation is the same config surface every other write goes
-// through (one validation, one compare-and-set) rather than a second path
-// onto the document.
+// ConfigWriter removes a block from the company document: the consumer's own
+// interface, implemented by the config surface every other write goes through
+// (one validation, one compare-and-set), never a second path onto the document.
 type ConfigWriter interface {
-	// Disconnect removes kind's block from the active revision and turns
-	// off every seat that was on through the connection it held, as one
-	// revision recorded as by's, and answers the seats it turned off. The
-	// block alone is not a disconnect: the document refuses an agent
+	// Disconnect removes kind's block and turns off every seat on through it,
+	// as one revision recorded as by's, and answers the seats it turned off.
+	// The block alone is not a disconnect: the document refuses an agent
 	// turned on at an integration the company has not connected.
 	Disconnect(ctx context.Context, kind integration.Kind, summary string,
 		by iam.Actor) (seatsOff []string, err error)
 
-	// Apply merges patch into the active revision and activates the
-	// result, recording by as its author: a field a pass discovered and
-	// records on the company's own block.
+	// Apply merges patch into the active revision and activates it as by's:
+	// a field a pass discovered, recorded on the company's own block.
 	Apply(ctx context.Context, patch []byte, summary string, by iam.Actor) error
 
 	// Seat reads one seat's whole entity as JSON, and SetSeat writes it
-	// back under the same handle.
-	//
-	// A SEPARATE PATH FROM Apply, and it has to be: a merge patch replaces
-	// an array wholesale, so patching `roles` to change one seat would
-	// delete every other one. The entity route addresses a seat by its
-	// handle, which is its identity rather than its position.
-	//
-	// The GitHub pass writes here: an operator installs an agent's app in
-	// a browser, which tells the engine nothing, so the loop discovers the
-	// installation and records it against that one seat.
+	// back under the same handle. Separate from Apply because a merge patch
+	// replaces an array wholesale: patching `roles` would delete every other
+	// seat, while the entity route addresses a seat by its handle. The GitHub
+	// pass records an installation it discovered here.
 	Seat(ctx context.Context, handle string) ([]byte, error)
 	SetSeat(ctx context.Context, handle string, body []byte, summary string,
 		by iam.Actor) error
 
-	// Reload re-activates the CURRENT document unchanged, which advances the
-	// epoch and makes every node apply again.
-	//
-	// The control plane's documented credential-rotation gesture, and the
-	// reason its activation pointer is append-only rather than keyed on a
-	// revision id: a pointer that deduplicated would rebuild nothing on
-	// precisely this operation. See [Engine.rebuildForSealedSecrets] for why
-	// a provisioning pass needs it.
+	// Reload re-activates the CURRENT document unchanged, advancing the epoch
+	// so every node applies again: the credential-rotation gesture, and why
+	// the activation pointer is append-only rather than keyed on a revision
+	// id. See [Engine.rebuildForSealedSecrets] for why a pass needs it.
 	Reload(ctx context.Context, summary string, by iam.Actor) error
 }
 
 // UseConfigWriter installs the surface a disconnect removes a block through.
 //
-// Installed rather than constructed here because the config surface is built
-// where the API is, and the reconcile loop is armed when the engine itself is
-// CONSTRUCTED, several hundred milliseconds earlier, measured. A disconnect
-// ticking in that window reports [integration.ErrDisconnectUnavailable] and
-// the loop leaves the row untouched, rather than running the third-party app teardown
-// and finding it cannot remove the block: that would leave an integration
-// configured, live, and stripped of everything that made it work.
+// Installed rather than constructed here: the config surface is built where
+// the API is, after the reconcile loop is armed. A disconnect ticking in that
+// window reports [integration.ErrDisconnectUnavailable] and leaves the row
+// untouched, rather than tearing down at the vendor and then failing to drop
+// the block, which would leave an integration configured, live and stripped.
 func (e *Engine) UseConfigWriter(w ConfigWriter) { e.configWriter.Store(&w) }
 
 // configWriterOrNil reads what was installed.
@@ -78,11 +61,9 @@ func (e *Engine) configWriterOrNil() ConfigWriter {
 
 // vendorDisconnect removes one surface: what it holds, and then its block.
 //
-// THE ORDER IS THE WHOLE POINT and is why [integration.Disconnector] is one
-// call rather than two. The block carries the credential the third-party app teardown
-// authenticates with, so removing it first strands every webhook and account
-// the integration still has, with nothing left to authenticate a second
-// attempt.
+// THE ORDER is why [integration.Disconnector] is one call: the block carries
+// the credential the vendor teardown authenticates with, so removing it first
+// strands every webhook and account with nothing to authenticate a retry.
 type vendorDisconnect struct {
 	engine *Engine
 	kind   integration.Kind
@@ -92,12 +73,9 @@ type vendorDisconnect struct {
 
 // teardown is the one method a disconnect calls, declared where it is called.
 //
-// NARROWER THAN [setup.Teardowner], which is a [setup.Pass] as well — a
-// reconcile, and the transient credential that reconcile needs. A disconnect
-// asks for neither, and requiring them meant the only step that removes
-// something WITHOUT a vendor to reconcile against, Slack's, could not be
-// expressed here at all: it would have had to carry a Run and a Needs that
-// nothing would ever call. Every real pass still satisfies this.
+// Narrower than [setup.Teardowner], which is a [setup.Pass] too, so that
+// Slack's step, which has no vendor to reconcile against, needs no Run or
+// Needs that nothing would call. Every real pass still satisfies this.
 type teardown interface {
 	Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error)
 }
@@ -105,35 +83,24 @@ type teardown interface {
 func (d vendorDisconnect) Disconnect(
 	ctx context.Context, req integration.TeardownRequest,
 ) (provision.Removed, error) {
-	// WHOEVER ASKED, which every write below is recorded under: the loop
-	// only carries the disconnect out. Always somebody — the one writer of
-	// the intent records who asked beside it ([integration.AskTeardown]) —
-	// so there is no name of the loop's own to fall back to.
+	// WHOEVER ASKED records every write below; the loop only carries it out.
+	// Always somebody ([integration.AskTeardown] records who asked beside
+	// the intent), so the loop has no name of its own to fall back to.
 	by := req.By
 	var removed provision.Removed
 	err := d.engine.dropBlock(ctx, d.kind, by, func(ctx context.Context) error {
-		// THE SEATS FIRST, while the block still holds the credentials
-		// their vendor authenticates with: every agent's account turned off
-		// and its credential revoked, and removed where the person asked,
-		// from the ledger rather than the document, so an account whose seat
-		// left the document is reached too. A no-op for a surface with no
-		// per-seat access.
+		// THE SEATS FIRST, while the block still holds the credentials their
+		// vendor authenticates with: turned off, revoked, and removed where
+		// asked, read from the ledger rather than the document so an account
+		// whose seat left the document is reached too.
 		if err := d.engine.tearDownSeatAccess(ctx, d.kind, by, req.RemoveSeats); err != nil {
 			return err
 		}
 		if d.pass == nil {
-			// NOTHING TO REMOVE ANYWHERE, which no surface in this
-			// build is: every kind has a step, seven at a vendor and
-			// Slack's on the company document itself. It is kept
-			// because a kind added with a read-only pass would reach
-			// it, and a surface with no teardown must still HAVE a
-			// disconnector or the intent sits on the row for ever.
-			//
-			// IT USED TO BE SLACK'S WHOLE DISCONNECT, on the reading
-			// that a surface with no vendor pass has nothing to tear
-			// down. What it had was every seat's sealed app
-			// credentials, and leaving them drew the card as paused
-			// for ever. See [slackTeardown].
+			// No kind in this build reaches this (Slack's step is
+			// [slackTeardown]); kept so a kind added with a read-only pass
+			// still HAS a disconnector, or its intent sits on the row for
+			// ever.
 			return nil
 		}
 		var err error
@@ -143,8 +110,7 @@ func (d vendorDisconnect) Disconnect(
 		if err != nil {
 			return err
 		}
-		// THE CREDENTIALS THOSE ACCOUNTS HELD, deleted here and in no
-		// vendor package. See [Engine.forgetRemoved].
+		// Deleted here and in no vendor package: [Engine.forgetRemoved].
 		return d.engine.forgetRemoved(ctx, d.kind, removed, by)
 	})
 	return removed, err
@@ -152,34 +118,15 @@ func (d vendorDisconnect) Disconnect(
 
 // forgetRemoved deletes the sealed values whose accounts a teardown removed.
 //
-// # One writer, and it is this one
+// The one writer of that deletion ([provision.TokenSink.Forget]), never a
+// vendor package: a credential left sealed keeps the tracker's identity
+// cache, keyed on the CREDENTIAL, on an account that is gone.
 //
-// A vendor package's only sanctioned write seam is [provision.TokenSink],
-// which deliberately has no "delete an arbitrary name" verb until now — so no
-// teardown or decommission path anywhere ever deleted a secret, and a
-// disconnect that removed every agent's service account left every agent's
-// credential sealed and resolving.
-//
-// Measured: disconnecting Atlassian with "remove accounts" deleted the service
-// accounts and left SRE_ATLASSIAN_TOKEN and SRE_ATLASSIAN_EMAIL behind. On
-// reconnect the tracker mapped the seat to the account that no longer existed
-// — its identity cache is keyed on the CREDENTIAL, and the credential had not
-// changed — and reported a 401 as the operator's problem, at a third-party
-// app, for about thirty-five seconds.
-//
-// # Inside the vendor step, before the block is dropped
-//
-// [Engine.dropBlock] runs this closure and only then removes the block, which
-// is the order this needs: every name here was derived from a `${VAR}` that is
-// still in the company document. It also means a failure holds the surface in
-// PhaseDisconnecting and the next tick tries again, which is why it returns an
-// error rather than logging one — a swallowed failure drops the block with the
-// credentials still sealed, and the retry that would have caught it never runs.
-//
-// A SINK THAT CANNOT BE BUILT FAILS THE TEARDOWN like any other failure here:
-// every node holds the keyring the rows were sealed under, so it is an engine
-// wired without its secret store, and dropping the block over it would leave
-// the dead values sealed with nothing left to retry.
+// Run before [Engine.dropBlock] drops the block, whose `${VAR}`s every name
+// came from. A failure, an unbuildable sink included (an engine without its
+// secret store), is returned rather than logged, holding the surface in
+// PhaseDisconnecting for the next tick instead of dropping the block over
+// credentials still sealed.
 func (e *Engine) forgetRemoved(
 	ctx context.Context, kind integration.Kind, removed provision.Removed,
 	by iam.Actor,
@@ -206,70 +153,49 @@ func (e *Engine) dropBlock(
 	ctx context.Context, kind integration.Kind, by iam.Actor,
 	vendor func(context.Context) error,
 ) error {
-	// BOTH PRECONDITIONS BEFORE THE VENDOR IS TOUCHED. Each is a thing
-	// THIS NODE lacks rather than anything wrong with the surface, so each
-	// is reported as "not yet": the row is left alone, no attempt is
-	// counted, and a node that has what is missing finishes the disconnect.
-	// A teardown that ran and then could not remove the block would leave
-	// an integration configured, live, and stripped of everything that
-	// made it work.
+	// BOTH PRECONDITIONS BEFORE THE VENDOR IS TOUCHED. Each is something
+	// THIS NODE lacks, so each answers "not yet": the row is left alone, no
+	// attempt is counted, and a node that has it finishes the disconnect. A
+	// teardown that ran and then could not drop the block would leave an
+	// integration configured, live and stripped of what made it work.
 	if e.Company() == nil {
-		// NO ACTIVE REVISION. Every pass reads the credential it
-		// authenticates with off `Company().Config`, so without one
-		// there is nothing to authenticate as and no block to drop.
-		//
-		// GUARDED HERE rather than in each of the seven Teardown methods
-		// for the reason [passConverger.Run] is guarded at its own
-		// boundary: this is the loop's OTHER way into a pass, and the
-		// two have to answer a company-less node the same way. Left to
-		// the passes it was seven chances to forget, and the loop reads
-		// its rows off the COORDINATION store — so a disconnect asked
-		// for on a node that holds the document is found by one that
-		// does not, and an unguarded read there is not an error the loop
-		// records but a nil dereference in its detached goroutine,
-		// taking down a process whose seats were running perfectly.
+		// NO ACTIVE REVISION: every pass reads its credential off
+		// `Company().Config`. Guarded here, the loop's other way into a
+		// pass, as [passConverger.Run] is at its own boundary, rather than
+		// in each Teardown: the loop reads its rows off the COORDINATION
+		// store, so a company-less node finds them, and an unguarded read
+		// is a nil dereference in the loop's detached goroutine that takes
+		// the whole process down.
 		return fmt.Errorf("%w: this node has no active company revision",
 			integration.ErrDisconnectUnavailable)
 	}
 	writer := e.configWriterOrNil()
 	if writer == nil {
-		// NO CONFIG SURFACE YET, which is now genuinely only the
-		// construction window: the loop is armed when the engine is
-		// constructed and the writer is installed a few hundred
-		// milliseconds later, measured, so a tick landing in between
-		// leaves the row alone and the next one finishes.
-		//
-		// It was not only that. The writer was installed inside the
-		// function that serves HTTP, after its early return for
-		// `api.port: 0` — so a worker-only node never got one and this
-		// branch was permanent there rather than momentary, on a loop
-		// that is a fleet singleton and lands on such a node as readily
-		// as on any other.
+		// NO CONFIG SURFACE YET: only the window between the loop being
+		// armed at construction and the writer being installed, so the
+		// next tick finishes. The writer must be installed on every node,
+		// a worker-only one (`api.port: 0`) included, or this is permanent
+		// there on a fleet-singleton loop.
 		return fmt.Errorf("%w: no config surface is wired on this node",
 			integration.ErrDisconnectUnavailable)
 	}
-	// NO GUARD IS TAKEN HERE. The loop's worker holds it around the whole
-	// teardown — this call and the status write that records how far it got —
-	// through the Guard wired in `startIntegrations`, so ctx is already the
-	// guard's and is bounded by [setup.PassDeadline].
-	//
-	// Taking it again would deadlock rather than double-lock: [setup.Runner]'s
-	// in-process claim is not reentrant, so this node would answer
-	// ErrDisconnectUnavailable on every tick and the disconnect would never
-	// finish. See the same note in `passConverger.Reconcile`.
+	// NO GUARD IS TAKEN HERE: the loop's worker holds it around the whole
+	// teardown and its status write (the Guard wired in `startIntegrations`),
+	// so ctx is the guard's, bounded by [setup.PassDeadline]. [setup.Runner]'s
+	// in-process claim is not reentrant, so taking it again would answer
+	// ErrDisconnectUnavailable on every tick for ever. As in
+	// `passConverger.Reconcile`.
 	if err := vendor(ctx); err != nil {
 		return fmt.Errorf("engine: %s teardown: %w", kind, err)
 	}
-	// THE BLOCK AND THE AGENTS ON THROUGH IT, in one revision. The vendor
-	// step above turned every agent off at the vendor; the document has to
-	// say the same, or it holds agents turned on at an integration the
-	// company no longer has, which its own rules refuse, and the disconnect
-	// could never finish while one agent was on.
+	// THE BLOCK AND THE AGENTS ON THROUGH IT, in one revision: the document
+	// refuses agents turned on at an integration the company no longer has,
+	// so dropping the block alone could never finish while one was on.
 	seatsOff, err := writer.Disconnect(ctx, kind, "disconnect "+string(kind), by)
 	if err != nil {
-		// The third-party app work IS done and is durable, so a retry re-runs a
-		// teardown with nothing left to remove and then tries the block
-		// again. That is why every teardown is safe to repeat.
+		// The vendor work is durable, so a retry re-runs a teardown with
+		// nothing left to remove and tries the block again: every teardown
+		// is safe to repeat.
 		return fmt.Errorf("%w: remove the %s block: %w", integration.ErrBlockNotRemoved, kind, err)
 	}
 	if len(seatsOff) > 0 {
@@ -283,18 +209,8 @@ func (e *Engine) dropBlock(
 // disconnectors pairs every surface with the seam the loop removes it
 // through, and with the step that removes what it holds.
 //
-// EVERY SURFACE, not only the ones with a vendor pass. A surface with no
-// teardown still has a BLOCK, and a disconnect for it that no node could
-// complete would leave the intent on the fleet row for ever with the screen
-// reporting Disconnecting and nothing moving.
-//
-// SLACK IS NOT THAT CASE, though it was written as the only one. It is the
-// single kind with no pass — its apps are created from the command line, and
-// only a person can delete one — which was read as "nothing this engine put
-// anywhere". What it put is a sealed bot token and signing secret on every
-// seat, in the company's own document, which is exactly where a disconnect
-// can reach. Its step is [slackTeardown] and it joins the same seam as the
-// other seven.
+// EVERY SURFACE: one with no teardown still has a BLOCK, and a disconnect no
+// node could complete would sit on the fleet row for ever, Disconnecting.
 func (e *Engine) disconnectors() map[integration.Kind]integration.Disconnector {
 	tearers := map[integration.Kind]teardown{}
 	for _, pass := range e.setupPasses() {
@@ -302,12 +218,11 @@ func (e *Engine) disconnectors() map[integration.Kind]integration.Disconnector {
 			tearers[pass.Kind()] = tearer
 		}
 	}
-	// THE ONE STEP THAT IS NOT A PASS'S. Slack's pass converges only its
-	// agents' apps and removes nothing at Slack (an app is deleted by a
-	// person), so it is no Teardowner; what a disconnect removes is the
-	// seats' sealed app credentials on the company document. Registered by
-	// name for that reason, and it is the only such entry: an assertion
-	// that finds nothing is how the defect it fixes went unnoticed.
+	// THE ONE STEP THAT IS NOT A PASS'S. Slack's pass removes nothing at
+	// Slack (a person deletes an app), so it is no Teardowner, yet every
+	// seat holds a sealed bot token and signing secret on the company
+	// document for a disconnect to remove. Registered by name, the only
+	// such entry.
 	tearers[integration.KindSlack] = slackTeardown{engine: e}
 	out := map[integration.Kind]integration.Disconnector{}
 	for _, kind := range integration.Kinds {
@@ -319,17 +234,12 @@ func (e *Engine) disconnectors() map[integration.Kind]integration.Disconnector {
 // RecordGitHubInstallation writes an installation the loop discovered onto
 // one seat, or clears one it found gone.
 //
-// THROUGH THE ENTITY ROUTE, for the reason [ConfigWriter] gives: a merge
-// patch on `roles` would replace the whole list. Refused rather than skipped
-// when no writer is installed, because a pass that silently failed to record
-// an adoption would rediscover the same installation on every tick and never
-// say why the seat stays unready.
+// Written through [Engine.editGitHubSeat].
 func (e *Engine) RecordGitHubInstallation(ctx context.Context, handle string, id int64) error {
 	summary := "record " + handle + "'s GitHub installation"
 	if id == 0 {
-		// A CLEARED ID IS AN UNINSTALL SOMEBODY PERFORMED AT GITHUB, and
-		// the summary says so: an operator reading the revision list
-		// should not have to work out why the engine removed something.
+		// A cleared id is an uninstall somebody performed at GitHub, and the
+		// revision's summary says so for whoever reads the list.
 		summary = "clear " + handle + "'s GitHub installation, which is gone at GitHub"
 	}
 	return e.editGitHubSeat(ctx, handle, summary, func(block map[string]any) {
@@ -340,16 +250,12 @@ func (e *Engine) RecordGitHubInstallation(ctx context.Context, handle string, id
 // ForgetGitHubApp clears the app a seat names, because GitHub no longer has
 // it.
 //
-// AN APP IS DELETED BY A PERSON AT GITHUB, and GitHub tells the engine
-// nothing. What is left behind is a record naming an app id that answers 404
-// to every call: the seat mints no token, the install link is one GitHub
-// itself 404s, and every surface reports a step nobody can take. Clearing it
-// puts the seat back to the one act that is available, which is creating
-// another app.
+// A person deletes an app at GitHub, which tells the engine nothing, leaving
+// an app id that 404s on every call and a step nobody can take; clearing it
+// puts the seat back to the one available act, creating another app.
 //
-// THE SEALED KEY IS LEFT WHERE IT IS. It is named per seat, so the next app's
-// conversion overwrites it, and deleting a credential on the strength of one
-// remote 404 is a destructive answer to a question only GitHub can settle.
+// THE SEALED KEY IS LEFT: it is named per seat, so the next app overwrites
+// it, and deleting a credential on one remote 404 is too destructive.
 func (e *Engine) ForgetGitHubApp(ctx context.Context, handle string) error {
 	return e.editGitHubSeat(ctx, handle,
 		"clear "+handle+"'s GitHub App, which no longer exists at GitHub",
@@ -365,24 +271,18 @@ func (e *Engine) ForgetGitHubApp(ctx context.Context, handle string) error {
 // editGitHubSeat reads one seat's GitHub block, applies an edit and writes it
 // back through the entity route.
 //
-// THROUGH THE ENTITY ROUTE, for the reason [ConfigWriter] gives: a merge
-// patch on `roles` would replace the whole list. Refused rather than skipped
-// when no writer is installed, because a pass that silently failed to record
-// what it found would rediscover the same thing on every tick and never say
-// why the seat stays unready.
+// Through the entity route, for the reason [ConfigWriter.Seat] gives. Refused
+// rather than skipped when no writer is installed: a pass that silently failed
+// to record what it found would rediscover it every tick and never say why the
+// seat stays unready.
 func (e *Engine) editGitHubSeat(
 	ctx context.Context, handle, summary string, edit func(block map[string]any),
 ) error {
 	writer := e.configWriter.Load()
 	if writer == nil {
-		// THE SENTINEL, WRAPPED WITH WHAT IT IS ACTUALLY REFUSING. Bare, it
-		// reads "this node cannot complete a disconnect yet" — which is the
-		// sentence its doc scopes it to and is not what happened: this is a
-		// pass recording an app it just discovered, and no disconnect is in
-		// flight. It stays comparable because the loop's own
-		// [integration.Worker.tearDown] arm keys on errors.Is, and it is
-		// the right sentinel: the cause is identical, the config surface
-		// this node has not wired yet.
+		// The same cause as a disconnect's, so the same sentinel, which
+		// [integration.Worker.tearDown] keys on with errors.Is; wrapped to
+		// say what it refuses, since no disconnect is in flight.
 		return fmt.Errorf(
 			"%w: no config surface is wired on this node, so %s's GitHub app "+
 				"cannot be recorded yet", integration.ErrDisconnectUnavailable, handle)

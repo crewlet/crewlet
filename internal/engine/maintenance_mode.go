@@ -16,69 +16,24 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// WHAT A MAINTENANCE-MODE NODE DOES, AND WHAT IT REFUSES TO DO.
-//
-// A stream's byte ceiling cannot be changed safely while anything publishes,
-// and what retires a request the broker has already queued is the broker
-// PROCESS restarting rather than a client closing. So a capacity change is a
-// fleet-wide restart into a mode that starts every broker and no publisher.
-//
-// The exclusion is therefore STRUCTURAL rather than observed: on the default
-// topology the embedded broker binds no socket, so nothing outside these
-// processes can reach it at all, and these processes start nothing that
-// writes. There is no check to pass — there is nobody who could publish.
-//
-// # The two halves this file owns
-//
-// A node in NORMAL mode must not start publishing into a fleet whose capacity
-// operation is unresolved, and it establishes that with a HANDSHAKE rather
-// than an absence check: it writes its own admission, re-reads the operation,
-// and withdraws and refuses if one is there. Either order is then safe — a
-// node that slipped between a coordinator's check and its own start has left a
-// durable record that blocks the coordinator, where a silence would have let
-// the coordinator proceed.
-//
-// A node in a MAINTENANCE mode acknowledges instead: it publishes its own
-// incarnation against the operation's current attempt, which is what the seal
-// is established from. An acknowledgement from seal mode is EVIDENCE — that
-// mode cannot write configuration, so the process making the claim cannot be
-// the one holding the request it is retiring.
-//
-// And EVERY BOOT INTO A MAINTENANCE MODE, before it acknowledges, retires the
-// admission a previous process of this node left, once the fleet's presence
-// shows that process is not running ([Engine.supersede]). A process that
-// crashed never withdrew its own, and a claim about a process that no longer
-// exists would otherwise stand in every window's way for good.
-//
-// # What a maintenance-mode node keeps, and what it withholds
-//
-// It keeps its PRESENCE LEASE. Presence is membership, not work: it says the
-// process is running, and three things read it during a window — the capacity
-// operation's participant set (a broker member that holds no data is found
-// nowhere else), the estate's routing of a stateless node's reads to a data
-// node that still serves them, and the fleet views an operator reads to see who
-// is up and whom the broker still counts. So the seat host runs in every mode,
-// renewing it.
-//
-// It withholds the two things that write the company's records: SEATS, which
-// the seat host never claims here ([Engine.seatsAdmitted]), and WRITERS — this
-// node's own, and the router's to a data node on a node that holds no data —
-// which no surface is handed ([Engine.writers]). And everything that
-// would append to a log on its own: the duties and schedulers the constructor's
-// gate never starts, the object store's collector, which pins the estate
-// with a barrier ([Engine.startNativeCollector]), and every barrier a read
-// would append ([statelog.RefuseMaintenance]).
+// A maintenance-mode node starts every broker and no publisher, so a stream's
+// byte ceiling can change with nothing publishing: the exclusion is structural,
+// not observed (package doc, "Maintenance mode"). This file owns the two boot
+// halves: a normal-mode node admits itself, then re-reads the operation and
+// refuses if one is open ([Engine.admit]); a maintenance-mode node retires its
+// previous process's stale admission ([Engine.supersede]) and acknowledges
+// ([Engine.acknowledge]). It keeps its presence lease, and withholds seats
+// ([Engine.seatsAdmitted]), writers ([Engine.writers]), the object collector
+// ([Engine.startNativeCollector]) and every appending read
+// ([statelog.RefuseMaintenance]).
 
 // ErrNotPublishing is an operator gesture that appends a record to a state log
-// — an eviction, a readmission, a reanchor — asked of a node in a mode that
+// (an eviction, a readmission, a reanchor) asked of a node in a mode that
 // publishes nothing. It wraps a sentence naming the mode and the gesture.
 //
-// REFUSED RATHER THAN CARRIED OUT, for the reason a linearizable read is
-// ([statelog.RefuseMaintenance]): each is a record on a log, and the mode
-// exists so the fleet's logs hold still while a capacity window measures them.
-// A gate record is no smaller a publish than a seat's write because an
-// operator asked for it. None of the three is what a window needs, either: a
-// participant that will not acknowledge is excluded from the operation
+// Refused for a linearizable read's reason ([statelog.RefuseMaintenance]): the
+// mode holds the logs still while a capacity window measures them, whoever
+// asks. A participant that will not acknowledge is excluded from the operation
 // (`crewlet retention maintenance exclude`), not evicted from the logs.
 var ErrNotPublishing = errors.New("engine: this node publishes nothing in its mode")
 
@@ -101,14 +56,11 @@ func NotPublishing(gesture string, mode statelog.MaintenanceMode) error {
 		"run` without -mode)", gesture, mode), Err: ErrNotPublishing}
 }
 
-// handshake is a boot's half of the capacity window, run BEFORE any publisher
+// handshake is a boot's half of the capacity window, run before any publisher
 // starts: in normal mode this process admits itself ([Engine.admit]); in a
-// maintenance mode the admission this node's previous process left is retired
-// ([Engine.supersede]) and this process acknowledges ([Engine.acknowledge]).
-//
-// ONE CALL, and the boot makes no other, so the steps of each mode are stated
-// once: a maintenance boot that skipped the retirement is how a crashed
-// process's admission outlived every restart into maintenance.
+// maintenance mode it retires its previous process's admission
+// ([Engine.supersede]) and acknowledges ([Engine.acknowledge]). The boot's one
+// call, so no maintenance boot can skip the retirement.
 func (e *Engine) handshake(ctx context.Context, streams []string) error {
 	e.supersede(ctx)
 	if err := e.admit(ctx, streams); err != nil {
@@ -118,70 +70,18 @@ func (e *Engine) handshake(ctx context.Context, streams []string) error {
 	return nil
 }
 
-// supersede withdraws the admission this node's id holds under ANOTHER
-// incarnation: the one a previous process of this node wrote and never gave
-// back, once the fleet's presence shows that process is not running.
-//
-// # What an admission is evidence of, and what refutes it
-//
-// That ONE PROCESS, the incarnation it names, may be publishing. An
-// incarnation is minted per process, so the process booting now is one the
-// admission does not name. That alone is not proof the one it names is gone:
-// a second process started under a live node's id (a misconfigured duplicate,
-// or a host brought up into maintenance mode before the old process stopped)
-// boots exactly like this, and withdrawing on its word baselined a window past
-// a publisher that was still running. So the withdrawal takes a second fact
-// the fleet keeps rather than the booting process's inference: the process
-// the admission names holds no PRESENCE LEASE for its node ([Engine.presenceHolders]),
-// because its lease lapsed or another process of the node holds it. A running
-// process renews its presence for as long as it runs, in every mode, so a
-// presence held by the incarnation the admission names is that process alive,
-// and its admission is left exactly where it is.
-//
-// Nothing else retires such a claim. An admission has no age, and the orderly
-// stop that withdraws one ([Engine.withdraw]) is exactly what a crash never
-// ran.
-//
-// # A process that crashed a moment ago
-//
-// Its presence lease runs out its TTL first, so a restart inside that TTL
-// finds the dead process still present and leaves the claim. A window retires
-// it on the same evidence once this process holds the node's presence in its
-// place ([Engine.judgeAdmissions]); until then it stands in the window's way
-// by name, as any admission does.
-//
-// # Why in the modes that enter a window, and only there
-//
-// A node restarted into a maintenance mode admits nothing, so it never touched
-// the key and the crashed process's admission outlived it. The coordinator
-// then refused the window naming a node already in maintenance mode, told the
-// operator to restart it into maintenance mode, and the restart changed
-// nothing. That boot is the one a window needs the claim gone by: the
-// procedure restarts every node into maintenance mode before anything else,
-// and a node that never comes back is excluded instead, which withdraws its
-// admission too ([Engine.ExcludeParticipant]).
-//
-// A boot in service needs no retirement of its own. A data node's admission
-// replaces the stale one under the same key ([Engine.admit]), and a node
-// without `data` admits nothing and publishes nothing, so a claim its earlier
-// process left (it held data then) stands in no one's way until a window, and
-// that window's first restart retires it. Asked on every boot in service, it
-// would be a coordination read on every node's start for a key that is almost
-// never there.
-//
-// # Why a live process's admission is not weakened
-//
-// The withdrawal is CONDITIONAL on the incarnation read here, so it removes
-// that one claim and never a newer process's, it never touches another node's
-// key, and it never touches a claim whose process the fleet still sees
-// running.
-//
-// A FAILURE IS LOGGED AND THE BOOT GOES ON, and so is a presence this boot
-// cannot read, which leaves the claim: nobody can say its process is gone. A
-// node in a maintenance mode publishes nothing, so refusing its boot over a
-// key it could not clear would cost the window the one participant it needs
-// to hear from, and the stale admission then does what it always did: it
-// stands in the window's way, and the refusal names the node.
+// supersede withdraws the admission this node's id holds under another
+// incarnation once that process holds no presence lease ([Engine.presenceHolders]):
+// a crash never ran [Engine.withdraw], and an admission has no age. A new
+// incarnation alone is no proof, since a duplicate process under a live node's
+// id boots the same way; one that crashed within its lease TTL is left for the
+// window to retire ([Engine.judgeAdmissions]). Maintenance modes only, the
+// boot a window needs it gone by: in service a data node's admission replaces
+// the key ([Engine.admit]), and a node without data blocks nobody until then.
+// The withdrawal is conditional on the incarnation read, never a newer claim.
+// A failure, or an unreadable presence, is logged and the boot goes on: the
+// claim stands in the window's way by name, and refusing would cost the window
+// a participant.
 func (e *Engine) supersede(ctx context.Context) {
 	if e.backends == nil || e.backends.Fleet == nil || e.Mode().Publishes() {
 		return
@@ -224,17 +124,12 @@ func (e *Engine) supersede(ctx context.Context) {
 			"window's way")
 }
 
-// presenceHolders is which process holds each node's presence lease, as the fleet
-// reads it now: the node's id to the incarnation that owns the lease (the seat
-// host takes it under [Engine.incarnation]). A node absent from the answer
-// holds none: its last process's lease lapsed, or no process of it has taken
-// one yet. It is the evidence an admission is judged by, because a running
-// process renews its presence in every mode for as long as it runs.
-//
-// UNREADABLE IS AN ERROR, never an empty fleet, because an empty answer reads
-// as every admission's process being gone. A node with no lease store (a test
-// that builds the engine around a fleet register alone) holds nobody's
-// presence.
+// presenceHolders maps each node's id to the incarnation holding its presence
+// lease now (the seat host takes it under [Engine.incarnation]); an absent node
+// holds none. It is the evidence an admission is judged by, since a running
+// process renews its presence in every mode. Unreadable is an error, never an
+// empty fleet, which would read as every admission's process gone. With no
+// lease store (a test engine with a fleet register alone) nobody is present.
 func (e *Engine) presenceHolders(ctx context.Context) (map[string]string, error) {
 	owners := map[string]string{}
 	if e.backends.Coord == nil {
@@ -271,10 +166,8 @@ func heldAdmission(ctx context.Context, fleet coord.MaintenanceRegister, node st
 }
 
 // ErrExcluded is a boot refused because a capacity operation is unresolved.
-//
-// A SENTINEL, because the caller's answer is specific and is not a retry: the
-// fleet is mid-window, and this node joins it when the window closes or when
-// an operator restarts it into the mode its window's phase is in.
+// Its own type because the answer is not a retry: the node joins when the
+// window closes, or when restarted into the mode its window's phase is in.
 type ErrExcluded struct {
 	Stream      string
 	OperationID string
@@ -282,14 +175,11 @@ type ErrExcluded struct {
 	By          string
 }
 
-// Mode is the mode a node joins this window in: maintenance mode while it is
-// at `opened`, where nothing has been sent and the next step is a request only
-// that mode sends, and seal mode from `baselined` on, where a request may be
-// outstanding and every next step is the seal restart's.
-//
-// THE PHASE DECIDES, never a fixed mode: told maintenance mode at every phase,
-// a node restarted that way during the seal wrote an acknowledgement the seal
-// refuses, and cost the fleet one more restart of it.
+// Mode is the mode a node joins this window in, decided by the phase:
+// maintenance at `opened`, where the next step is a request only that mode
+// sends, and seal from `baselined` on, where a request may be outstanding. A
+// node restarted into maintenance mode during the seal writes an
+// acknowledgement the seal refuses, costing one more restart.
 func (e *ErrExcluded) Mode() statelog.MaintenanceMode {
 	if e.Phase == coord.PhaseOpened {
 		return statelog.ModeMaintenance
@@ -307,42 +197,29 @@ func (e *ErrExcluded) Error() string {
 		e.Stream, e.OperationID, e.Phase, e.By, e.Mode(), e.Phase, e.Stream)
 }
 
-// admit is the normal-mode handshake, run BEFORE any publisher starts.
-//
-// # Why the write comes first
-//
-// A node that read the operation absent and THEN started publishing has a gap
-// between the two instants in which a coordinator can establish exclusion —
-// the same check-then-act shape this estate has removed four times elsewhere.
-// Writing first inverts it: whichever of the two writes lands first wins, and
-// the loser can see that it did.
-//
-// # And why this is at boot rather than on the heartbeat
-//
-// The population the operation has to exclude is exactly the nodes that were
-// NOT running when it was written. A node that reads it on a heartbeat never
-// reads it at all, because it was down when the key appeared.
+// admit is the normal-mode handshake, run before any publisher starts. It
+// writes the admission first and then reads the operation, so whichever of
+// this and a coordinator's write lands first wins and the loser sees it;
+// reading first leaves a check-then-act gap. At boot, not on a heartbeat,
+// because the nodes an operation must exclude are those that were down when
+// it was written.
 func (e *Engine) admit(ctx context.Context, streams []string) error {
 	if e.backends == nil || e.backends.Fleet == nil || e.mode != statelog.ModeNormal {
 		return nil
 	}
 	if !e.profile.HoldsData() {
-		// NO STATE-LOG PUBLISHER TO ADMIT: this node's seats write through
-		// a data node, which is admitted in its own right. An admission
-		// here would be a publisher a capacity operation waited on for
-		// ever — and that holds for a node whose broker is a member too,
-		// since what its broker queues is retired by the restart it
-		// ACKNOWLEDGES, not by anything an admission says.
+		// No state-log publisher to admit: its seats write through a data
+		// node admitted in its own right, and an admission here would be
+		// waited on for ever. A broker member too: what its broker queues
+		// is retired by the restart it acknowledges.
 		return nil
 	}
 	admission := coord.Admission{
 		NodeID: e.id, Incarnation: e.incarnation, At: time.Now().UTC(),
 	}
 	if err := e.backends.Fleet.PutAdmission(ctx, admission); err != nil {
-		// REFUSED RATHER THAN CARRIED ON WITHOUT. An admission that
-		// could not be written is a publisher a coordinator cannot see,
-		// which is the one thing the handshake exists to make
-		// impossible.
+		// Refused: an unwritten admission is a publisher no coordinator
+		// can see.
 		return fmt.Errorf("engine: record this node's admission before starting "+
 			"publishers: without it a capacity operation could take the "+
 			"exclusion while this node is publishing: %w", err)
@@ -350,9 +227,8 @@ func (e *Engine) admit(ctx context.Context, streams []string) error {
 	for _, stream := range streams {
 		op, found, err := e.backends.Fleet.Maintenance(ctx, stream)
 		if err != nil {
-			// UNREADABLE IS NOT ABSENT. Reading a coordination failure
-			// as "no maintenance" is the admission event the whole
-			// design removes.
+			// Unreadable is not absent: a coordination failure read as
+			// "no maintenance" would admit a publisher mid-window.
 			_ = e.withdraw(ctx)
 			return fmt.Errorf("engine: read the capacity operation on %s before "+
 				"starting publishers: %w", stream, err)
@@ -368,24 +244,15 @@ func (e *Engine) admit(ctx context.Context, streams []string) error {
 	return nil
 }
 
-// withdraw removes this node's admission.
+// withdraw removes this node's admission, conditional on this incarnation so a
+// late call never removes a replacement's. On an orderly stop it runs after
+// publishers drain, never before: the key says this process may be publishing.
 //
-// ON AN ORDERLY SHUTDOWN, AFTER PUBLISHERS DRAIN AND NEVER BEFORE: the key
-// says "this process may be publishing", and withdrawing it while a seat is
-// still finishing a turn would tell a coordinator the opposite of the truth.
-//
-// It is conditional on this incarnation, so a late withdrawal cannot remove a
-// replacement process's admission.
-//
-// ON A SHARE OF ITS OWN ([Engine.admissionShare]) and never a step of the
-// stop's allowance ([seat.StopBudget]). Every step on the allowance falls back
-// to a lease lapsing on its TTL, and an admission has no TTL — it lives in a
-// register with no age, because an expiring admission hides a publisher — so
-// one this misses stays until the node restarts under the same id or an
-// operator excludes it, which is what `admission_not_withdrawn` tells them. On
-// the allowance, a store that had stopped answering for the give-backs before
-// it, and was answering again by now, left the one round trip with nothing to
-// fall back on no time at all.
+// It has a share of its own ([Engine.admissionShare]), not a step of the
+// stop's allowance ([seat.StopBudget]): every step there falls back to a lease
+// lapsing, and an admission has no TTL (an expiring one would hide a
+// publisher), so a missed one stays until a restart under the same id or an
+// exclusion, which `admission_not_withdrawn` tells the operator.
 func (e *Engine) withdraw(ctx context.Context) error {
 	if e.backends == nil || e.backends.Fleet == nil || e.mode != statelog.ModeNormal {
 		return nil
@@ -396,67 +263,28 @@ func (e *Engine) withdraw(ctx context.Context) error {
 }
 
 // admissionShare is the part of a stop's coordination time reserved for
-// withdrawing this node's admission ([Engine.withdraw]): a third of the stop's
-// allowance ([seat.StopAllowance]) of this node's lease TTL — five seconds at
-// the shipped 45 s — and the steps on the allowance get the other two thirds
-// ([Engine.stopping]).
-//
-// CARVED OUT OF THE ALLOWANCE RATHER THAN ADDED BESIDE IT, so a stop against a
-// store that answers nothing still spends one allowance in total, which is
-// the reason there is one: the give-backs fail inside their two thirds and the
-// withdrawal inside its third, where a bound of its own beside the allowance
-// would make that stop one share longer.
-//
-// A THIRD because the withdrawal is two round trips — a read from the
-// register's leader and a conditional purge — and at the shipped TTL a third
-// is the five seconds the JetStream client gives one request with no deadline
-// of its own, which a store answering at all answers in milliseconds. The two
-// thirds left are ten seconds there for the presence, the seats and the
-// duties, each also milliseconds of work on a store that answers.
+// [Engine.withdraw]: a third of the stop's allowance ([seat.StopAllowance]) of
+// this node's lease TTL, five seconds at the shipped 45 s; the steps on the
+// allowance get the other two thirds ([Engine.stopping]). Carved out of the
+// allowance, not added beside it, so a stop against a silent store still
+// spends one allowance in total. A third because the withdrawal is two round
+// trips (a leader read and a conditional purge), and five seconds is what the
+// JetStream client gives a request with no deadline of its own.
 func (e *Engine) admissionShare() time.Duration {
 	return seat.StopAllowance(e.stopTTL()) / 3
 }
 
-// acknowledge is the maintenance-mode half: this node's evidence that its
-// process restarted, for each log's window.
-//
-// # Why every mode but normal writes one
-//
-// The seal is established only from SEAL mode, because that is the mode that
-// cannot write configuration. But a coordinator in maintenance mode needs to
-// know who is participating before it can baseline, and an acknowledgement
-// carrying its own mode is what lets one record answer both questions: the
-// barrier filters on the mode, and the participant set is read from the same
-// place.
-//
-// # And every node whose restart is evidence
-//
-// A DATA NODE, whose process publishes records, AND A BROKER MEMBER, whose
-// broker holds requests queued against the log whatever this node's roles —
-// the two the participant set counts ([Engine.capacityParticipants]). A member
-// that holds no data and did not acknowledge would be named a participant the
-// seal waits on for ever, since nothing else it could write says it restarted.
-//
-// # One per log
-//
-// A window is per log, and a fleet resizing two logs restarts once for both,
-// so the boot acknowledges each log's window under that log's own key
-// ([coord.MaintenanceAckKey]). Kept one per node, the acknowledgement of the
-// second window replaced the first's, and the first window read "acknowledged
-// another operation" from every node for as long as both were open.
-//
-// # And a log with no window open still says it restarted
-//
-// A fleet restarted into maintenance mode before the verb ran is the ordinary
-// first step of the procedure, so this boot finds no window, and it used to
-// write nothing. The baseline then found no record for any node but the
-// coordinator, refused every other one as never having restarted into a
-// maintenance mode, and sent the operator to restart a fleet that just had:
-// a fourth fleet-wide restart the procedure does not have. So a log the boot
-// read with no window open gets a WINDOWLESS acknowledgement
-// ([coord.MaintenanceAck.Windowless]): the process and its mode, bound to
-// nothing. A baseline reads which process a node is from it, and no seal takes
-// it, so the evidence the seal stands on is exactly what it was. A log the boot
+// acknowledge is the maintenance-mode half: this node's evidence, for each
+// log's window, that its process restarted. It carries its mode: the seal reads
+// only seal mode's (that mode cannot write configuration), and a baseline reads
+// the participant set from the same records. Data nodes and broker members
+// acknowledge ([acknowledges]), the two the participant set counts
+// ([Engine.capacityParticipants]); a member that did not would be waited on
+// for ever. One per log ([coord.MaintenanceAckKey]): one restart serves every
+// open window, and a per-node key let one window's replace another's. A log
+// with no window open gets a windowless one
+// ([coord.MaintenanceAck.Windowless]), so a fleet restarted before the verb ran
+// is found restarted by the baseline, and no seal takes it. A log the boot
 // could not read gets none, since a window may be open there.
 func (e *Engine) acknowledge(ctx context.Context, streams []string) {
 	if e.backends == nil || e.backends.Fleet == nil || e.mode == statelog.ModeNormal ||
@@ -482,10 +310,6 @@ func (e *Engine) acknowledge(ctx context.Context, streams []string) {
 			ack.OperationID, ack.Attempt = op.OperationID, op.Attempt
 		}
 		if err := e.backends.Fleet.PutMaintenanceAck(ctx, ack); err != nil {
-			// WHAT THE MISSING RECORD COSTS DEPENDS ON WHETHER A WINDOW IS
-			// OPEN: an open one's baseline and seal see no restart from this
-			// process, and with none open it is the next window's baseline
-			// that finds nothing for this node until it restarts again.
 			detail := "the window's baseline and its seal are established from " +
 				"these, so the window will find no restart recorded for this " +
 				"process"
@@ -514,38 +338,25 @@ func (e *Engine) acknowledge(ctx context.Context, streams []string) {
 
 // acknowledges reports whether a node's restart into a maintenance mode is
 // evidence a capacity seal needs: it holds data, or its broker is a member.
-// This node's own kind is always known — it is derived from its stream block —
-// so there is no unknown to resolve here.
+// This node's own kind, derived from its stream block, is never unknown.
 func acknowledges(p placement.NodeProfile) bool {
 	return p.HoldsData() || p.Broker == placement.BrokerMember
 }
 
 // seatsAdmitted is the seat host's claim gate: whether this node may take on a
-// NEW seat now.
-//
-// NEVER IN A MODE THAT DOES NOT PUBLISH. A seat is the first publisher there
-// is — its mailbox attaches, its turns run and its tools write the company's
-// records — and the host that claims seats is started in every mode, because it
-// is also what renews this node's presence. So the claim half is where the mode
-// is enforced: a maintenance-mode node boots holding nothing, and a gate that
-// never opens keeps it that way, while the presence the same host renews goes
-// on saying the process is running.
-//
-// Otherwise it is hydration ([Engine.StateLogHydrated]), the one admission
-// gate: a node whose copy of the company's records is behind claims nothing
-// new until it has caught up.
+// new seat now. Never in a mode that does not publish: a seat is the first
+// publisher there is, and the host runs in every mode to renew presence, so
+// the claim gate is where the mode is enforced. Otherwise it is hydration
+// ([Engine.StateLogHydrated]): a node whose copy is behind claims nothing new.
 func (e *Engine) seatsAdmitted(ctx context.Context) bool {
 	return e.mode.Publishes() && e.StateLogHydrated(ctx)
 }
 
 // writeSides are this node's own write authorities over the estate, one per
-// domain a surface writes: Worklet's writer, Doclet's store and Chatlet's
-// store, and Gitlet's — the committer deciding the pushes this node is
-// asked to commit, changes the writes of changes' conversations it is asked
-// beside them, checks the writes of repositories' checks, marks a person's
-// code notices' marks, and code the lifecycle store the repositories'
-// reconcile and retention write through. A nil one is a domain this node does
-// not write.
+// domain a surface writes: Worklet's writer, Doclet's and Chatlet's stores,
+// and Gitlet's committer (pushes), change writer (changes' conversations),
+// checks writer, marks (a person's code notices) and store (the repositories'
+// reconcile and retention). A nil one is a domain this node does not write.
 type writeSides struct {
 	tracker   *worklet.Writer
 	pages     *doclet.Store
@@ -558,22 +369,15 @@ type writeSides struct {
 }
 
 // writeSide is this node's own write authorities, each nil where the runtime
-// does not run that domain natively, and all of them nil in a mode that does
-// not publish.
+// does not run that domain natively, and all nil in a mode that does not
+// publish.
 //
-// ONE GATE FOR EVERY WRITE THIS NODE'S OWN COPY MAKES — a seat's tools, the
-// operator's MCP, the purge route, the chart's, the containers' and the unit
-// rooms' applies, the chat prune, Gitlet's committer deciding a push
-// for whichever node received it, and the estate server writing for a peer —
-// and, through [Engine.writers], for whether a seat's tools, the operator's
-// MCP and the write routes are handed the router's writer at all. Each is
-// handed its writer from here, so a maintenance-mode node hands out none — for
-// [New]'s reason for gating its publishers in one place: a check per surface
-// is a list somebody maintains, and the surface it forgets is a publish during
-// the window the mode exists to rule out, into a log whose usage a resize is
-// being decided against. A committer handed to the estate server here and not
-// there would be exactly that surface: a peer's push decided and appended on a
-// node whose operator restarted it to append nothing.
+// The one gate for every write this node's copy makes (a seat's tools, the
+// operator's MCP, the purge route, the applies, the chat prune, Gitlet's
+// committer deciding a peer's push, the estate server writing for a peer) and,
+// through [Engine.writers], for the router's writer: for [New]'s reason, a
+// check per surface is a list, and the surface it forgets publishes during the
+// window.
 func (e *Engine) writeSide() writeSides {
 	n := e.native.Load()
 	if n == nil || !e.mode.Publishes() {
@@ -592,12 +396,10 @@ func (e *Engine) Mode() statelog.MaintenanceMode {
 	return e.mode
 }
 
-// maintenanceStreams is every stream a capacity operation could be open on.
-//
-// EVERY REGISTERED DOMAIN'S, because an operation on any one of them excludes
-// this node from publishing at all: the appliers write into one estate and a
-// seat's tools reach every domain through it, so a node that started because
-// only the vector log was clear would be publishing into the tracker's.
+// maintenanceStreams is every stream a capacity operation could be open on:
+// every registered domain's, because an operation on any one excludes this
+// node from publishing at all, since a seat's tools reach every domain through
+// the one estate.
 func maintenanceStreams() []string {
 	domains := registeredDomains()
 	out := make([]string, 0, len(domains))

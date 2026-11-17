@@ -12,17 +12,14 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE ATLAS'S CODE SCAN, wired: the worker of a Gitlet node's home loop that
-// reads a repository's deploy and dependency files when its default branch
-// moves, and records what they declare on the atlas log (ADR-0133,
-// internal/atlas/codescan).
+// The atlas's code scan, wired: a Gitlet home loop worker recording what a
+// repository's deploy and dependency files declare when its default branch
+// moves (ADR-0133, internal/atlas/codescan).
 
 // buildAtlasCodeScan builds the scan and registers it with this node's home
-// loop: Gitlet's rows over the router's code seam, its git reads through the
-// loop's own bound (so they wait with the home's, never ahead of the seats),
-// each repository's standing in the fleet's coordination store, and the atlas
-// log as this node holds it. A node with no coordination store has nowhere to record a
-// standing and registers nothing.
+// loop, its git reads under the loop's own bound so they never run ahead of
+// the seats. Each repository's standing lives in the coordination store, so a
+// node without one registers nothing.
 func (e *Engine) buildAtlasCodeScan(home *gitlethome.Loop) error {
 	if e.backends == nil || e.backends.Fleet == nil {
 		return nil
@@ -33,9 +30,9 @@ func (e *Engine) buildAtlasCodeScan(home *gitlethome.Loop) error {
 	}
 	scanner, err := codescan.New(codescan.Options{
 		Code: atlasCodeReads{rows: e.router.Code(), git: home}, Log: atlasCodeLog{engine: e}, Store: store,
-		// A GITLET NODE HOLDS THE ESTATE, but it records on the atlas log only
-		// where it publishes: read per pass, since the core runtime is built
-		// beside Gitlet and a node restarted to write nothing must not.
+		// Records only where this node publishes, read per pass: the core
+		// runtime is built beside Gitlet, and a node restarted to write
+		// nothing must not.
 		Admits: func() bool {
 			_, _, ok := e.atlasLogSides()
 			return ok
@@ -75,8 +72,8 @@ func (e *Engine) atlasLogSides() (*atlasdomain.Reader, *atlasdomain.Writer, bool
 	return c.atlasReader, c.atlasWriter, true
 }
 
-// errNoAtlasLog is a write asked of a node that holds no atlas log it
-// publishes to, which the scan's own gate rules out before it reads.
+// errNoAtlasLog is a call on a node holding no atlas log it publishes to,
+// which the scan's Admits gate rules out first.
 var errNoAtlasLog = errors.New("engine: this node holds no atlas log it publishes to")
 
 // atlasCodeLog is the atlas log as the scan takes it, resolved at each call:

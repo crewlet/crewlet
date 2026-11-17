@@ -179,11 +179,10 @@ func appEngine(t *testing.T, c *Company) *Engine {
 
 // A SEAT'S APP TOKEN IS ANSWERED BY ITS OWN RESOLUTION AND NO OTHER.
 //
-// An app is one agent's identity. The token is laid in front of the
-// company's sources for that seat's reads alone: the document cannot name
-// another seat's variable in a seat (config refuses it), and were one asked
-// for anyway, nothing in this seat's resolution answers it. The company's
-// chain, which every shared server and every other seat reads, never holds it.
+// An app is one agent's identity: its token is laid in front of the company's
+// sources for that seat's reads alone. Another seat's variable (which config
+// refuses anyway) resolves to nothing here, and the company's chain, read by
+// every shared server and seat, never holds it.
 func TestASeatsAppTokenIsAnsweredOnlyByItsOwnResolution(t *testing.T) {
 	t.Parallel()
 	gh := newAppGitHub(t)
@@ -215,9 +214,8 @@ func TestASeatsAppTokenIsAnsweredOnlyByItsOwnResolution(t *testing.T) {
 	}
 }
 
-// NOTHING IS ISSUED WHILE GITHUB IS SWITCHED OFF. Switching the block off is
-// the gesture an operator makes after a leak, and it has to stop every token
-// the engine hands out, at the next read.
+// NOTHING IS ISSUED WHILE GITHUB IS SWITCHED OFF: the gesture after a leak
+// stops every token the engine hands out, at the next read.
 func TestADisabledGitHubIssuesNoToken(t *testing.T) {
 	t.Parallel()
 	gh := newAppGitHub(t)
@@ -256,12 +254,9 @@ func TestEveryAgentSeatsTokenIsDeclaredAsGitHubs(t *testing.T) {
 	}
 }
 
-// A SEAT WHOSE APP IS NOT INSTALLED YET WAITS FOR IT, and says what for.
-//
-// The variable is the GitHub integration's to issue, so the server naming it
-// is held back as waiting, not reported as a secret the operator forgot, and
-// the sentence names the app's installation rather than a seal that will
-// never come.
+// A SEAT WHOSE APP IS NOT INSTALLED YET WAITS FOR IT, and says what for: the
+// server naming the token is held back as waiting (not a forgotten secret),
+// and the sentence names the install, not a seal that will never come.
 func TestAServerNamingAnUninstalledAppsTokenWaitsForTheInstall(t *testing.T) {
 	t.Parallel()
 	gh := newAppGitHub(t)
@@ -336,13 +331,9 @@ func TestATokenGitHubRefusesIsAFailureWithItsReason(t *testing.T) {
 // A REFUSAL IS ASKED OF GITHUB ONCE A WAIT, HOWEVER OFTEN A RUNNING BOX IS
 // POLLED.
 //
-// Every agent turn is an executor run in a box, and both of a node's waiters
-// and every nudge after a submit run the refresh, so a refusal that lasts
-// until a person acts at GitHub asked GitHub again every fifteen seconds per
-// running box, and five times within seven seconds of each submit, for the
-// life of the run. The node's issuer holds GitHub's answer for the wait the
-// seat's tool servers retry that refusal on, and every poll inside it meets
-// the held answer.
+// Both waiters and every post-submit nudge run the refresh, so without a held
+// answer a lasting refusal is re-asked every poll of every box. The node's
+// issuer holds GitHub's answer for the seat's tool-server retry wait.
 //
 // Mutation: drop the issuer's held-refusal return, or the RetryWait New
 // sets, and every poll asks GitHub.
@@ -427,11 +418,10 @@ func TestARunEnvironmentCarriesTheSeatsAppToken(t *testing.T) {
 }
 
 // AN AGENT ON AT GITHUB GETS ITS APP TOKEN IN ITS BOX WITH NO LINE IN THE
-// DOCUMENT: as GITHUB_TOKEN, good for the launch, and in the token file the
-// poll rewrites, which a launch longer than the variable's 50 minutes reads.
-// A line of the seat's own under either is ignored for the integration's, and
-// an agent off at GitHub is given neither. Mutation: drop GitHub's box
-// defaults, or let the seat's line win, and this goes red.
+// DOCUMENT: as GITHUB_TOKEN for the launch, and in the token file the poll
+// rewrites for a launch past the variable's 50 minutes. The seat's own line
+// under either is ignored, and an agent off at GitHub gets neither. Mutation:
+// drop GitHub's box defaults, or let the seat's line win, and this goes red.
 func TestAGitHubAgentsBoxHoldsItsAppTokenAndItsFileWithNoLine(t *testing.T) {
 	t.Parallel()
 	gh := newAppGitHub(t)
@@ -486,14 +476,11 @@ func TestAGitHubAgentsBoxHoldsItsAppTokenAndItsFileWithNoLine(t *testing.T) {
 
 // A SHADOWED NAME IN A GITHUB-APP SEAT'S BOX IS WARNED ONCE, NOT EVERY TURN.
 //
-// Every agent turn is an executor launch, and a seat with a GitHub App reads
-// its box's values through a resolution of its own, the seat's issued token
-// laid in front of the company's chain. Each such resolution started its own
-// record of the shadow warnings it had logged, so a provider-wide setup value
-// the secret store and the environment disagree on was warned again on every
-// launch, at every seat. It is told once for the company's chain, however
-// many launches read it. Not parallel: it adds a destination to the
-// process-wide logger and sets a variable of the process's environment.
+// Each launch of a GitHub-App seat reads its box through a resolution of its
+// own over the company's chain; a value the secret store and the environment
+// disagree on is still told once for that chain, however many launches read
+// it. Not parallel: it adds a destination to the process-wide logger and
+// sets a variable of the process's environment.
 func TestAShadowedBoxValueIsWarnedOnceAcrossLaunches(t *testing.T) {
 	logs := captureEngineLogs(t)
 	t.Setenv("NPM_TOKEN", "npm_exported_stale")
@@ -583,11 +570,10 @@ roles:
 
 // A LONG RUN'S TOKEN FILE IS KEPT CURRENT, AND A QUIET POLL WRITES NOTHING.
 //
-// An executor is never stopped on a clock, so the token it launched with
-// expires under it. The poll rewrites the file a credential helper reads when
-// the token behind it is renewed, and leaves it alone otherwise, asking the
-// box rather than remembering, so the fleet waiter's duty can move between
-// nodes, and a node can restart, with nothing to carry over.
+// An executor is never stopped on a clock, so its launch token expires under
+// it. The poll rewrites the helper's file when the token is renewed and leaves
+// it alone otherwise, asking the box rather than remembering, so the fleet
+// waiter's duty can move nodes, or a node restart, with nothing to carry over.
 func TestALongRunsTokenFileIsKeptCurrent(t *testing.T) {
 	t.Parallel()
 	gh := newAppGitHub(t)
@@ -624,23 +610,14 @@ func TestALongRunsTokenFileIsKeptCurrent(t *testing.T) {
 	}
 }
 
-// BOTH OF A NODE'S WAITERS KEEP A LONG RUN'S TOKEN FILE CURRENT.
-//
-// Each box is polled by one waiter alone: a `direct` or `container` box by its
-// launching node's own, and an `e2b` box by the fleet's (ADR-0065). The
-// refresh rides the poll, so a waiter built without it leaves every box of
-// its kind holding the token it launched with, which GitHub refuses within
-// the hour, halfway through a long run's work.
-//
-// THROUGH THE NODE'S OWN WIRING, [Engine.startSandboxWaiter], and the waiters
-// it publishes, each ticked alone: a waiter built there without the refresh —
-// from options of its own rather than the shared constructor — goes red here,
-// and so does one that refreshed the other waiter's box.
-//
-// AND EACH RECORDS THE TOKEN BEFORE IT WRITES IT, in the sealed set beside the
-// job's row that every capture of the job's session is scrubbed by, through
-// the coordinator the node runs ([sandbox.Coordinator.RecordHanded]): a token
-// in the box its set does not hold is a live secret no capture is scrubbed of.
+// BOTH OF A NODE'S WAITERS KEEP A LONG RUN'S TOKEN FILE CURRENT: the node's
+// own polls `direct` and `container` boxes, the fleet's `e2b` ones (ADR-0065),
+// and the refresh rides the poll: a waiter without it leaves its boxes on a
+// launch token GitHub refuses within the hour. Driven through
+// [Engine.startSandboxWaiter], each waiter ticked alone. Each RECORDS THE
+// TOKEN BEFORE IT WRITES IT in the job's sealed set
+// ([sandbox.Coordinator.RecordHanded]), or the token is a live secret no
+// capture is scrubbed of.
 //
 // Mutation: build a waiter without the refresh, have one refresh the other's
 // box, or hand the refresh a recorder that records nothing, and a check below
@@ -656,8 +633,7 @@ func TestBothWaitersKeepARunsTokenFileCurrent(t *testing.T) {
 	// THE KEYRING THE JOBS' SETS ARE SEALED UNDER, as a node's is.
 	e.cipher = valueRing(t, "k1")
 	keep := executorKeep{engine: e}
-	// AN HOUR TO EACH LOOP'S FIRST PASS, so the loops the waiters start
-	// never poll beside the passes this case runs itself.
+	// AN HOUR TO EACH LOOP'S FIRST PASS, so only this case's passes poll.
 	e.sandboxPollInterval = time.Hour
 	const path = ".config/crewlet/github-token"
 	providers := map[sandbox.Placement]*sandbox.FakeProvider{
@@ -684,9 +660,8 @@ func TestBothWaitersKeepARunsTokenFileCurrent(t *testing.T) {
 	e.useSandbox(rt.pending, rt.coordinator)
 	t.Cleanup(e.stopSandbox)
 
-	// ONE RUNNING JOB IN EACH KIND OF CELL, each box holding the token its
-	// launch was handed, since expired, and the job's set of what its launch
-	// handed the box beside its row; the direct one launched here.
+	// ONE RUNNING JOB IN EACH KIND OF CELL, each box holding its launch's
+	// since-expired token, and its handed set beside its row.
 	ctx := t.Context()
 	boxes := map[sandbox.Placement]*sandbox.FakeSandbox{}
 	for _, cell := range []sandbox.Placement{sandbox.Direct, sandbox.E2B} {
@@ -786,15 +761,11 @@ func TestBothWaitersKeepARunsTokenFileCurrent(t *testing.T) {
 
 // A JOB CARRIED ON IN ITS KEPT BOX STARTS ON A CURRENT TOKEN FILE.
 //
-// A box is paused while its job waits on a person's answer, for up to half an
-// hour, and no poll reaches a paused box: its token file holds what the last
-// poll wrote, which can expire meanwhile. The job carried on in it runs no
-// setup, and acts on the answer at once — "push it" — while the helper reads
-// the file ahead of $GITHUB_TOKEN. So the engine's coordinator hands the kept
-// box to the same refresh the waiters poll with, before the job starts.
-//
-// Through the engine's own coordinator ([Engine.sandboxRuntimeOn]), so a
-// runtime built without the refresh goes red here.
+// No poll reaches a box paused on a person's answer (up to half an hour), so
+// its token file can expire; the carried-on job runs no setup and may push at
+// once, the helper reading the file ahead of $GITHUB_TOKEN. So the coordinator
+// refreshes the kept box before the job starts. Through
+// [Engine.sandboxRuntimeOn], so a runtime built without the refresh goes red.
 func TestAJobCarriedOnInItsKeptBoxStartsOnACurrentTokenFile(t *testing.T) {
 	t.Parallel()
 	gh := newAppGitHub(t)
@@ -823,9 +794,8 @@ func TestAJobCarriedOnInItsKeptBoxStartsOnACurrentTokenFile(t *testing.T) {
 	}
 	t.Cleanup(rt.coordinator.Stop)
 
-	// THE ASKING JOB, parked on its question in its box, whose token file
-	// holds what the last poll wrote before the pause, since expired; its
-	// turn has taken the answer and is carrying the run on.
+	// THE ASKING JOB, parked in its box with an expired token file; its turn
+	// has taken the answer and is carrying the run on.
 	ctx := t.Context()
 	created, err := provider.Create(ctx, sandbox.Spec{})
 	if err != nil {
@@ -907,14 +877,11 @@ func (r *startReader) reads() []string {
 // A RUN LAUNCHED WITHOUT ITS TOKEN IS HANDED THE FILE ONCE THE APP ISSUES ONE,
 // AND THE WAIT BEFORE THAT IS TOLD AS ONE, NOT AS A FAILURE ON EVERY POLL.
 //
-// Every agent turn is an executor run, which starts without a value its seat
-// cannot resolve yet rather than being refused for it, so a running box can
-// name a token file its launch could not write. A file that is missing reads
-// back as nothing, which the issued token differs from, so the first poll
-// after the app can issue one writes it. Until then the seat's app is a
-// person's step away: a job that never held a token is waiting on it, one
-// whose file holds a token the app no longer renews has lost it, and the two
-// are different stories, each told once for the job rather than once a poll.
+// An executor starts without a value its seat cannot resolve yet, so a box
+// can name a file its launch never wrote; a missing file reads as nothing, so
+// the first poll after the app issues writes it. A job that never held a
+// token is waiting; one holding a token the app no longer renews has lost it.
+// Each story is told once per job, not once a poll.
 func TestARunLaunchedWithoutItsTokenGetsTheFileOnceTheAppIssuesOne(t *testing.T) {
 	t.Parallel()
 	gh := newAppGitHub(t)
@@ -966,11 +933,9 @@ func TestARunLaunchedWithoutItsTokenGetsTheFileOnceTheAppIssuesOne(t *testing.T)
 		t.Errorf("%d mints, want the installed app's one", gh.minted())
 	}
 
-	// REFUSED BY GITHUB, for a job that holds nothing: it was launched
-	// without the token, and saying it "keeps the token it holds" would send
-	// a reader looking for a token the box never had. A job that holds one
-	// does keep it, until it expires. A node of its own, whose issuer holds
-	// no token for the app yet, so the refresh asks GitHub.
+	// REFUSED BY GITHUB: only a job holding a token "keeps the token it
+	// holds"; one launched without must not say so. A fresh node, whose
+	// issuer holds no token yet, so the refresh asks GitHub.
 	gh.mu.Lock()
 	gh.status = http.StatusForbidden
 	gh.mu.Unlock()
@@ -1052,14 +1017,11 @@ func TestATokenWaitIsToldOncePerJob(t *testing.T) {
 
 // A TOKEN FILE THE POLL CANNOT WRITE IS TOLD ONCE FOR THE FILE, NOT EVERY POLL.
 //
-// Every agent turn is a run whose box the refresh visits, and a job can make
-// its token file one no write reaches: a link or a directory in its place, a
-// directory around it made read-only, a box out of disk. Each fails the same
-// way on every poll and every nudge, and the line said so on each, for the
-// life of the job, while the token the file holds went on expiring. It is
-// told once for the file, saying that token is no longer renewed; a write
-// that succeeds settles it, so a file that fails again later is told again.
-// Not parallel: it adds a destination to the process-wide logger.
+// A job can make its token file unwritable (a link or directory in its place,
+// a read-only parent, a full disk), failing every poll alike. It is told once,
+// saying the token is no longer renewed; a successful write settles it, so a
+// later failure is told again. Not parallel: it adds a destination to the
+// process-wide logger.
 func TestATokenFileThePollCannotWriteIsToldOnce(t *testing.T) {
 	logs := captureEngineLogs(t)
 	gh := newAppGitHub(t)
@@ -1105,9 +1067,8 @@ func TestATokenFileThePollCannotWriteIsToldOnce(t *testing.T) {
 	}
 }
 
-// unwritableBox is a box whose writes fail with refuse while it is set, as a
-// file whose directory the job made read-only fails every write the engine
-// makes.
+// unwritableBox is a box whose writes fail with refuse while it is set, as
+// under a directory the job made read-only.
 type unwritableBox struct {
 	*sandbox.FakeSandbox
 	refuse error
@@ -1176,11 +1137,9 @@ func TestARenewalIsArmedOnlyForAnIssuedToken(t *testing.T) {
 	}
 }
 
-// A SEAT'S WORKFLOWS PERMISSION REACHES THE MINT, and its absence does too.
-// The document is the one place it is written, and a token is the one place
-// GitHub reads it: a seat holding it and minted without it has every push
-// touching `.github/workflows` refused, and one that does not hold it must
-// never be handed it.
+// A SEAT'S WORKFLOWS PERMISSION REACHES THE MINT, and its absence does too:
+// minted without it, every push touching `.github/workflows` is refused, and
+// a seat not holding it must never be handed it.
 func TestASeatsWorkflowsPermissionIsWhatItsTokenAsksFor(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {

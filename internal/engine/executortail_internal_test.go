@@ -23,15 +23,11 @@ func (f failingRuns) Get(context.Context, string) (sandbox.PendingRun, bool, err
 	return sandbox.PendingRun{}, false, f.err
 }
 
-// THE ENGINE'S TAIL ANSWERER CLASSES A FAILURE OF ITS OWN BY THE ENGINE'S RULE.
-//
-// A node that owns a run answers a peer's tail request, and a failure it meets
-// there is classed by the rule the engine hands it ([tailCondition], the one
-// builtin.Condition reads). A coordination blip on the owner is a wait, which
-// the asker answers 503 with a hint, and a fault of the owner's own is a 500.
-// The sandbox package's own tests stand a rule of their own in for the
-// engine's, so nothing held the wiring: a rule answering false would tell every
-// blip on a peer-owned run as a fault, with nothing failing.
+// THE ENGINE'S TAIL ANSWERER CLASSES A FAILURE OF ITS OWN BY THE ENGINE'S RULE
+// ([tailCondition]): a coordination blip on a run's owner is a wait, which the
+// asker answers 503 with a hint, and the owner's own fault a 500. The sandbox
+// package's tests stand in a rule of their own, so only this test holds the
+// wiring.
 //
 // Mutation: make tailCondition answer false, or wire ServeTail with a rule of
 // its own in [serveExecutorTails], and the blip is answered as a fault.

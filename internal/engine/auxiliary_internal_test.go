@@ -23,15 +23,9 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 )
 
-// THE AUXILIARY SEAM, held to both of its jobs.
-//
-// `token_budget` used to be charged in exactly two places — the turn loop and
-// the coding sandbox — while every auxiliary completion resolved a model and
-// called it directly, so that spend reached no counter; and once it did, it
-// still reached no EVENT, so every figure built from events understated the
-// counters by exactly it. The cases below are about the seam: a caller that
-// resolves its model the ordinary way is charged AND recorded without knowing
-// either is happening, which is what makes a caller added later do both.
+// THE AUXILIARY SEAM, held to both of its jobs: a caller that resolves its
+// model the ordinary way is charged against `token_budget` AND recorded as an
+// event without knowing either is happening, so a caller added later does both.
 
 // countingMeter records what it was asked to record, and when.
 type countingMeter struct {
@@ -158,12 +152,11 @@ func (r *seamRig) flushed(t *testing.T) []types.AuxiliarySpend {
 	return r.pub.records(t)
 }
 
-// AN AUXILIARY COMPLETION IS CHARGED AND RECORDED. The whole finding, in one
-// case: the counter hears the tokens, and the spend history holds one record
-// of the call under exactly the attribution its caller stated — the seat by its
-// derived id, the stage, the purpose, the run and its unit of work, the model
-// the reply named and the entry that served it, on the company day it was
-// charged in.
+// AN AUXILIARY COMPLETION IS CHARGED AND RECORDED: the counter hears the
+// tokens, and the spend history holds one record under exactly the attribution
+// its caller stated — the seat by derived id, stage, purpose, run, unit of
+// work, the model the reply named, the entry that served it, and the company
+// day it was charged in.
 func TestAnAuxiliaryCompletionIsChargedAndRecorded(t *testing.T) {
 	t.Parallel()
 	meter := &countingMeter{}
@@ -231,10 +224,10 @@ func TestWithNoCounterAnAuxiliaryCallIsStillRecorded(t *testing.T) {
 	}
 }
 
-// A FAILED CHARGE DOES NOT FAIL THE COMPLETION, AND DOES NOT LOSE THE RECORD.
-// The call already succeeded at the vendor and the caller's work is valid;
-// turning a coordination blip into a reflection outage would be the wrong
-// trade, and the history still says what was spent.
+// A FAILED CHARGE DOES NOT FAIL THE COMPLETION, AND DOES NOT LOSE THE RECORD:
+// the vendor already answered and the caller's work is valid, so a coordination
+// blip must not become a reflection outage, and the history still says what
+// was spent.
 func TestAnUncountedSpendStillReturnsTheCompletionAndIsRecorded(t *testing.T) {
 	t.Parallel()
 	meter := &countingMeter{err: errors.New("counter unreachable")}
@@ -251,10 +244,9 @@ func TestAnUncountedSpendStillReturnsTheCompletionAndIsRecorded(t *testing.T) {
 	}
 }
 
-// A FAILED CALL IS A CALL. One that returned nothing charges nothing — there
-// are no tokens to bill — and is recorded as a failed call, so a model that
-// times out is visible; one that failed AFTER reporting usage is charged what
-// it reported, since a provider bills what it computed.
+// A FAILED CALL IS A CALL: one that returned nothing charges nothing but is
+// recorded as failed, so a model that times out is visible; one that failed
+// AFTER reporting usage is charged it, since a provider bills what it computed.
 func TestAFailedCallIsRecordedAndChargedWhatItReported(t *testing.T) {
 	t.Parallel()
 	meter := &countingMeter{}
@@ -318,14 +310,11 @@ func (b *turnBudget) Held(context.Context) error {
 	return b.held
 }
 
-// A TURN'S CALL IS CHARGED THROUGH THE TURN'S OWN METER, never beside it.
-//
-// The counters are the seat's and the company's either way; what differs is
-// which frame hears their answer. Charged through the seat's bare recorder, a
-// window the call filled was one the turn's meter never learned of, so the
-// turn's next round was sent, billed and refused. A call that carries no meter
-// — a turn-stage call made between two segments, a reflection — is charged as
-// it always was.
+// A TURN'S CALL IS CHARGED THROUGH THE TURN'S OWN METER, never beside it: the
+// counters are the same either way, but only through the meter does the turn
+// learn of a window the call filled, so its next round is refused before it is
+// sent and billed. A call carrying no meter (between two segments, a
+// reflection) is charged on the seat's recorder.
 func TestATurnsCallIsChargedThroughItsOwnMeter(t *testing.T) {
 	t.Parallel()
 	seat := &countingMeter{}
@@ -356,12 +345,9 @@ func TestATurnsCallIsChargedThroughItsOwnMeter(t *testing.T) {
 	}
 }
 
-// A CALL THE TURN'S METER ALREADY REFUSES IS NOT MADE.
-//
-// The turn has seen a window full, so its next round is refused before it is
-// sent; a rewrite made now would feed a prompt nobody sends. Nothing was
-// spent, so nothing is charged, recorded or tallied — and the caller is told
-// the budget refused it, which it takes as it takes any rewrite it cannot have.
+// A CALL THE TURN'S METER ALREADY REFUSES IS NOT MADE: the turn's next round
+// will be refused, so a rewrite now would feed a prompt nobody sends. Nothing
+// is charged, recorded or tallied, and the caller gets the budget's refusal.
 func TestACallTheTurnsMeterRefusesIsNotMade(t *testing.T) {
 	t.Parallel()
 	provider := &answeringProvider{in: 700, out: 300}
@@ -391,10 +377,10 @@ func TestACallTheTurnsMeterRefusesIsNotMade(t *testing.T) {
 	}
 }
 
-// THE DAY IS THE CHARGE'S. The instant a call returned is read once, and both
-// the counter's windows and the record's company day are cut from it — so a
-// call that returned a moment before midnight on the company's clock is on that
-// day in both, never charged to one day and recorded on the next.
+// THE DAY IS THE CHARGE'S: the instant a call returned is read once, and both
+// the counter's windows and the record's company day are cut from it, so a call
+// just before the company's midnight is never charged to one day and recorded
+// on the next.
 func TestTheRecordsDayIsTheDayTheCounterWasCharged(t *testing.T) {
 	t.Parallel()
 	santiago, err := time.LoadLocation("America/Santiago")
@@ -428,14 +414,11 @@ func TestTheRecordsDayIsTheDayTheCounterWasCharged(t *testing.T) {
 }
 
 // AN AGENT SEAT'S SPEND IS THE SEAT'S AND THE COMPANY'S; EVERYTHING ELSE IS THE
-// COMPANY'S ALONE.
-//
-// A person's question (the operator stage) is the company's even when the seat
-// the credential names runs as an agent, because a person has no seat budget;
-// and a background pass resolved on a HUMAN seat's chain — a unit a person
-// leads — is the company's too, where it used to reach no counter at all. Both
-// are recorded for the person, never as a seat the live view would key a state
-// on.
+// COMPANY'S ALONE. A person's question (the operator stage) is the company's
+// even when the credential's seat runs as an agent, since a person has no seat
+// budget, and so is a background pass on a HUMAN seat's chain. Both are
+// recorded for the person (actor_seat), never as a seat the live view would
+// key a state on.
 func TestWhoseCounterAnAuxiliaryCallIsChargedTo(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -504,9 +487,9 @@ func TestWhoseCounterAnAuxiliaryCallIsChargedTo(t *testing.T) {
 	}
 }
 
-// AN UNCAPPED SEAT'S AUXILIARY SPEND IS COUNTED TOO. The counters are what a
-// ceiling set later judges, so spend that reached none of them would be a
-// window handed back its whole allowance the moment somebody capped it.
+// AN UNCAPPED SEAT'S AUXILIARY SPEND IS COUNTED TOO: a ceiling set later
+// judges these counters, so uncounted spend would hand the window back its
+// whole allowance the moment somebody capped it.
 func TestAnUncappedSeatsAuxiliarySpendIsCounted(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -554,14 +537,11 @@ func (p *queryingProvider) Complete(context.Context, llm.Request) (*llm.Completi
 		InputTokens: p.in, OutputTokens: p.out}, nil
 }
 
-// THE TURN-START PREFETCH'S AUXILIARY CALLS ARE CHARGED, RECORDED AND TALLIED.
-//
-// The memory filter, the knowledge query and the episode summary each send a
-// full prompt on EVERY turn, and the prefetch resolved them off the bare
-// registry — so that spend reached no counter and no record, a seat at its
-// ceiling went on paying for its turn-start context, and every figure an
-// operator reads understated it. This drives a real Fetch through the engine's
-// own sources and reads the counters, the record and the turn's tally back.
+// THE TURN-START PREFETCH'S AUXILIARY CALLS ARE CHARGED, RECORDED AND TALLIED:
+// the memory filter, knowledge query and episode summary each send a full
+// prompt on EVERY turn, so they resolve through the seam, never the bare
+// registry. This drives a real Fetch through the engine's own sources and
+// reads the counters, the record and the turn's tally back.
 func TestThePrefetchsAuxiliaryCompletionsAreChargedAndRecorded(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

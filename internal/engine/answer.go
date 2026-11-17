@@ -21,16 +21,10 @@ import (
 // internal/agent/builtin/answerknowledge.go for the tool.
 
 // AnswerModels resolves a person's answer model off the CURRENT epoch, per
-// call, because a config apply replaces the registry and the operator surface
-// outlives it: a node builds that surface again only when what it serves
-// changes, never for a new registry.
-//
-// THROUGH THE AUXILIARY SEAM like every other auxiliary call, which on the
-// operator stage the tool states charges the COMPANY's windows alone — a
-// person has no seat budget — and records the spend for the person. It used
-// to resolve off the bare registry and leave the charge to the tool, which
-// made the answer the one auxiliary call outside the seam, charged by a copy
-// of its rule and recorded nowhere.
+// call: a config apply replaces the registry, and the operator surface
+// outlives it. It goes through the auxiliary seam like every other auxiliary
+// call, which on the operator stage charges the COMPANY's windows alone (a
+// person has no seat budget) and records the spend for the person.
 func AnswerModels(e *Engine) builtin.AnswerModels { return answerModels{engine: e} }
 
 type answerModels struct{ engine *Engine }
@@ -43,13 +37,10 @@ func (m answerModels) Auxiliary(role *org.Role, use auxspend.Use) (chain.Member,
 	return seam.Auxiliary(role, use)
 }
 
-// AnswerBudget is the company's windows, as a person's answer is gated against
-// them — or nil where there is no fleet to count on, which omits the tool
-// rather than serving answers no counter hears about. The CHARGE is the seam's
-// ([AnswerModels]).
-//
-// THE COMPANY'S ALONE: a person has no seat budget, so the gate reads the
-// org's counter.
+// AnswerBudget is the company's windows a person's answer is gated against
+// (a person has no seat budget), or nil where there is no fleet to count on,
+// which omits the tool rather than serving answers no counter hears about.
+// The charge is the seam's ([AnswerModels]).
 func AnswerBudget(e *Engine) builtin.AnswerBudget {
 	if e == nil || e.backends == nil || e.backends.Fleet == nil {
 		return nil
@@ -70,17 +61,12 @@ type answerBudget struct {
 // basis is the company's ceilings and clock off the current epoch.
 func (b answerBudget) basis() budgetBasis { return basisOf(b.engine.Company(), nil) }
 
-// Refusing reports the company window that turns an answer away, by the same
-// rule the budget park and the live meter use ([windowRefuses]): a window with
-// no room for a single token, which every window the gate refused a round in
-// has, since the refused round is counted.
-//
-// AND RECORDS THE REFUSAL ([meter.turnAway]): the tool asks this immediately
-// before an answer's first call and refuses the question on yes, so a yes is
-// the gate turning that call away, and the company's window says so in its
-// `refused_at`. A company whose day a person's answers, an executor launch or a
-// background pass had filled used to refuse every question asked of it while
-// every screen said it had refused nothing.
+// Refusing reports the company window that turns an answer away (one with no
+// room for a single token, as a window that refused a round is, since the
+// refused round is counted), by the budget park's and the live meter's rule
+// ([windowRefuses]), and records the refusal in the window's `refused_at`
+// ([meter.turnAway]): the tool asks this immediately before an answer's first
+// call and refuses on yes, so a yes is the gate turning that call away.
 func (b answerBudget) Refusing(ctx context.Context) (builtin.BudgetRefusal, bool, error) {
 	m := &meter{budgets: b.budgets, basis: b.basis(), now: b.engine.now}
 	r, found, err := m.refusing(ctx)
@@ -98,31 +84,13 @@ func (b answerBudget) Refusing(ctx context.Context) (builtin.BudgetRefusal, bool
 // tracker's, the pages' and the vectors' rows, joined — and false where there
 // is no such place to name.
 //
-// WHERE THE ROWS LAST CHANGED ([statelog.Runner.Changed]), never how far a log
-// has been applied: a barrier changes no row, and every linearizable read in
-// the fleet appends one — the answer's own reads of its sources among them —
-// so a key that moved with the reached position, or the committed checkpoint,
-// was retired by the reads that filled it, and a repeated question on an idle
-// node paid the answering model again.
-//
-// THREE LOGS, because an answer is written from all three: a page's body, a
-// work item's description, and the vectors that ranked them by meaning. A
-// write to any of them can change what an answer would say, and moves the
-// position, which is what retires every answer cached at the old one.
-//
-// AND NOT CHAT'S, deliberately: a conversation is outside the knowledge corpus
-// (ADR-0071) — an answer is drawn from the knowledge seam, which searches no
-// room — so a message changes nothing an answer would say. Keyed on chat's log
-// as well, every cached answer would be retired each time anybody spoke, which
-// on a busy company is every answer, all the time.
-//
-// FALSE FOR A COMPANY WHOSE KNOWLEDGE BASE IS NOT DOCLET: an external wiki
-// changes without this node hearing, so a position that covered only the
-// tracker would keep serving an answer whose pages had moved.
-//
-// THE CORE'S LOGS, which every data node runs whatever its company keeps: the
-// native half holds only the searcher over them. A node without `data` runs
-// no log to read a position off, so it answers false and caches nothing.
+// Where the rows last changed ([statelog.Runner.Changed]), never the applied
+// position: every linearizable read appends a barrier that changes no row, so
+// a key on the position is retired by the answer's own reads. Those three logs
+// because an answer is written from all three; not chat's, which is outside
+// the corpus (ADR-0071) and would retire every answer whenever anybody spoke.
+// False when the knowledge base is not Doclet (an external wiki changes
+// unheard) and on a node without `data`, which runs no log to read.
 func (e *Engine) KnowledgeCorpus() (string, bool) {
 	c := e.core.Load()
 	if e.DocletSearcher() == nil || c == nil || c.log == nil {

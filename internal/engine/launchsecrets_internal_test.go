@@ -13,19 +13,17 @@ import (
 )
 
 // A LAUNCH'S SECRETS ARE ITS CREDENTIAL POSITIONS, AND ONLY THOSE: what each
-// reference in the run's environment resolved to — the whole value's, or a
-// part's inside a setting, whatever its variable is named — a variable whose
-// name says it carries a credential, written in the document as much as
-// referenced, the entry's sign-in beneath the seat's, and a setup file that was
-// one reference whole. Not the seat's handle or email, a setting written in the
-// document, or a setup step's own script: none is a secret, and each, scrubbed
-// by value, was lost from every kept transcript that named it — the seat's own
-// name read as a redacted secret in every commit it made.
+// reference in the run's environment resolved to (whole, or a part inside a
+// setting, whatever the variable is named), a variable whose name says it
+// holds a credential even when written literally, the entry's sign-in beneath
+// the seat's, and a setup file that was one whole reference. Not the seat's
+// handle or email, a literal setting or a setup step's own script: none is a
+// secret, and scrubbing one by value loses it from every kept transcript (the
+// seat's own name redacted in every commit it makes).
 //
-// Mutation: hand the sandbox the whole environment again, drop a reference's
-// value, stop reading a credential's name, take every setup file whatever its
-// body, or count the engine's identity facts among the references, and a check
-// below goes red.
+// Mutation: hand the sandbox the whole environment, drop a reference's value,
+// stop reading a credential's name, take every setup file whatever its body,
+// or count the engine's identity facts among the references → a check is red.
 func TestALaunchsSecretsAreItsCredentialPositionsAndOnlyThose(t *testing.T) {
 	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	t.Setenv("ENTRY_KEY", "sk-ant-company-entry-key")
@@ -88,22 +86,16 @@ roles:
 	}
 }
 
-// AN MCP SERVER'S URL HOLDS WHAT ITS REFERENCES RESOLVED TO, AND THE BOX'S SCRUB
-// IS TOLD SO: a secret an operator keeps in a URL's path rather than a header is
-// in the box's MCP configuration as surely as a header is, and with none of
-// redact's shapes it survived every capture. Both servers let every tool run
-// unasked, which is what a box is handed a server under (a box reaches a server
-// whole), so both reach the box and the check of each reads what it was handed.
+// AN MCP SERVER'S URL HOLDS WHAT ITS REFERENCES RESOLVED TO, AND THE BOX'S
+// SCRUB IS TOLD SO: a secret kept in a URL's path rather than a header is in
+// the box's MCP configuration all the same, and matching none of redact's
+// shapes, survived every capture unscrubbed. Both servers allow every tool,
+// so both reach the box (one holding a tool at Needs approval is reached over
+// the bridge instead, [sandboxMCP]); the case asserts both are in it first,
+// or the stdio check passes on nothing.
 //
 // Mutation: leave the url's references off the server the box is handed, or
-// render a server's url secret into a stdio server's fields, and a check below
-// goes red.
-//
-// BOTH SERVERS ALLOW EVERY TOOL, so both reach the box: a server holding a tool
-// back at Needs approval is kept out of it and reached over the bridge instead
-// ([sandboxMCP]), and a case whose servers were kept out read an empty
-// configuration — the stdio check below passing only because its server was not
-// there to read. So the case first asserts both are in the box.
+// render a server's url secret into a stdio server's fields → a check is red.
 func TestAnMCPServersURLSecretIsHandedToTheScrub(t *testing.T) {
 	t.Parallel()
 	company := specCompany(t, `

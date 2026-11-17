@@ -105,7 +105,7 @@ var excessInventory = map[string]int{
 	"internal/doclet":                               710,
 	"internal/docslinks":                            30,
 	"internal/e2e":                                  900,
-	"internal/engine":                               13626,
+	"internal/engine":                               8273,
 	"internal/envfile":                              15,
 	"internal/envref":                               14,
 	"internal/estate":                               1472,

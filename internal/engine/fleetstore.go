@@ -22,11 +22,9 @@ var ErrNoFleetStoreHere = errors.New("engine: the fleet's store cannot be reache
 // FleetStore is the fleet's coordination store, reached by a process that is
 // not this node's engine — a `crewlet` command, while the engine is stopped.
 type FleetStore struct {
-	// Fleet is the store. Its buckets are the engine's own, opened with the
-	// configuration the engine's boot opens them with ([coordinationStoresOf],
-	// through kv.OpenFleet), so a bucket this creates on a node that has never
-	// booted is the one the engine's first boot would have created, and
-	// adopts.
+	// Fleet is the store, its buckets opened through the engine's own boot
+	// configuration ([coordinationStoresOf], kv.OpenFleet), so a bucket this
+	// creates on a node that never booted is the one the engine adopts.
 	Fleet coord.Fleet
 	// Where names the broker it was reached through, for the reader of a
 	// command's output: "this node's broker on <stream.store_dir>", or
@@ -46,40 +44,17 @@ func (s *FleetStore) Close() {
 }
 
 // OpenFleetStore reaches the fleet's coordination store the way a node
-// configured as b does, for a process that is not its engine.
-//
-// # Which nodes can, alone
-//
-// A SOLO MEMBER starts its own broker on its own store directory — the store
-// is in there, and with the engine stopped nothing else is running it. The
-// directory's lock ([jetstream.StoreDirLock]) refuses this while the engine
-// holds it, and refuses the engine while this does. It opens no leaf listener
-// even where the node has one: the fleet's leaves would rejoin a broker that
-// is about to go away, and nothing a leaf asks of it is this process's to
-// answer.
-//
-// A NODE ON AN EXTERNAL BROKER dials it: the store lives there whether or not
-// any engine runs.
-//
-// A MEMBER OF A CLUSTER cannot: started alone it never reaches the quorum
-// every read and write of a replicated bucket needs, and started beside
-// running peers it would rejoin the cluster as this node — catching up every
-// replicated group, for a command that wanted one value — and leave it again
-// moments later. Its peers run the store, so it is reached through one of them.
-//
-// A NODE THAT HOLDS NO DATA has no store to start: it is a leaf of the
-// members', which run it.
-//
-// Both of those are [ErrNoFleetStoreHere], naming what to do instead.
-//
-// # Only the fleet store
-//
-// Not the queue, which would provision the engine's streams on a store whose
-// engine may never have booted; not the lease bucket, whose expiry is the
-// lease TTL the engine decides; not the object store, whose reservation is
-// sized against the broker and agreed fleet-wide. The fleet store's buckets
-// are the one thing here two processes would otherwise each decide, so they
-// come from the one constructor the engine boots with.
+// configured as b does, for a process that is not its engine. A solo member
+// starts a broker on its own store directory, whose lock
+// ([jetstream.StoreDirLock]) keeps this and the engine apart, with no leaf
+// listener: leaves would rejoin a broker about to go. A node on an external
+// broker dials it. A cluster member (alone it never reaches quorum; beside its
+// peers it would rejoin and catch up every group for one value) and a node
+// holding no data (its store is the members') get [ErrNoFleetStoreHere].
+// Only the fleet store, whose buckets two processes would otherwise each
+// decide: never the queue (it would provision streams on a store no engine
+// booted), the lease bucket (its TTL is the engine's) or the object store (its
+// reservation is agreed fleet-wide).
 func OpenFleetStore(ctx context.Context, b *config.Bootstrap) (*FleetStore, error) {
 	switch {
 	case b.BrokerKind() == placement.BrokerLeaf:

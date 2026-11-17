@@ -17,31 +17,25 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE ATLAS-COLLECT DUTY, wired: the fleet singleton that reads each connected
-// integration's vendor whole for the atlas and records what changed on the
-// atlas log (ADR-0129, internal/atlas/collect).
+// The atlas-collect duty, wired: the fleet singleton that reads each connected
+// integration's vendor whole and records what changed on the atlas log
+// (ADR-0129, internal/atlas/collect).
 
 // atlasCollectDutyName is the fleet singleton the duty claims.
 const atlasCollectDutyName = collect.DutyName
 
-// atlasCollectDutyTTL is how long the duty survives without a re-claim.
-//
-// DERIVED FROM THE LONGEST VISIT IT ADMITS, plus two ticks to renew in, for
-// the integration duty's reason: the worker re-claims before every source it
-// visits, so the lease only ever has to cover ONE visit, and a visit is bounded
-// by [collect.VisitDeadline]. A TTL of three ticks would lapse under the first
-// read of a large account, and a peer would read the same vendor beside it.
+// atlasCollectDutyTTL is how long the duty survives without a re-claim: the
+// longest visit plus two ticks to renew in. The worker re-claims before every
+// source, so the lease covers one visit, bounded by [collect.VisitDeadline];
+// a TTL of a few ticks would lapse under a large account's read and let a
+// peer read the same vendor beside it.
 const atlasCollectDutyTTL = collect.VisitDeadline + 2*collect.Tick
 
-// startAtlasCollect arms the duty on a data node that publishes, which is
-// the node that holds the atlas log's writer. A node without one, or without
-// a coordination store to record a source's standing in, runs no loop and
-// says so once.
-//
-// Registration is static and the document is read per tick, for the reconcile
-// loop's reason: which integrations are connected moves under a running loop,
-// and each source answers [integration.ErrNotConfigured] for a block that is
-// gone.
+// startAtlasCollect arms the duty on a data node that publishes, the holder
+// of the atlas log's writer; a node without one, or without a coordination
+// store, runs no loop and says so once. Registration is static and the
+// document read per tick: connected integrations move under a running loop,
+// and a source whose block is gone answers [integration.ErrNotConfigured].
 func (e *Engine) startAtlasCollect(ctx context.Context) {
 	if e.backends == nil || e.backends.Fleet == nil {
 		log.InfoContext(ctx, "atlas_collect_idle",
@@ -69,12 +63,11 @@ func (e *Engine) startAtlasCollect(ctx context.Context) {
 		Sources: e.atlasSources(),
 		Store:   store,
 		Log:     duty,
-		// AND EACH FORGE'S REPOSITORIES' FILES, where Gitlet mirrors none
-		// of them (ADR-0136): a visit of the same duty, after the forge's.
+		// Each forge's repositories Gitlet does not mirror (ADR-0136),
+		// visited after the forge.
 		Code: forges,
-		// THE LIVE DOCUMENT AND THIS NODE'S RESOLVER, read on every tick:
-		// a source resolves its own credential from them, and an apply can
-		// change both.
+		// Read every tick: a source resolves its credential from them, and
+		// an apply can change both.
 		Input: func(context.Context) (collect.Input, bool) {
 			company := e.Company()
 			if company == nil || company.Config == nil {
@@ -82,8 +75,7 @@ func (e *Engine) startAtlasCollect(ctx context.Context) {
 			}
 			return collect.Input{Config: company.Config, Env: e.resolver()}, true
 		},
-		// AND HOW OFTEN EACH SOURCE IS READ, the company's own field, read
-		// fresh so a shortened interval applies at once.
+		// Read fresh, so a shortened interval applies at once.
 		Interval: func() time.Duration {
 			company := e.Company()
 			if company == nil || company.Config == nil {
@@ -92,34 +84,31 @@ func (e *Engine) startAtlasCollect(ctx context.Context) {
 			return company.Config.Atlas.RefreshInterval()
 		},
 		ClaimDuty: e.workerDuty(atlasCollectDutyName, atlasCollectDutyTTL),
-		// THE POSTURE GATE, before the claim: a node the fleet has moved past
-		// would read a vendor under a credential the current document may no
-		// longer name.
+		// Before the claim: a node the fleet has moved past would read a
+		// vendor under a credential the current document may no longer name.
 		Admits: e.admits,
 	})
 	if err != nil {
-		// NOT FATAL, for the reconcile loop's reason: a company whose atlas
-		// is not refreshed from its vendors still runs every seat.
+		// Not fatal: a company whose atlas is not refreshed still runs
+		// every seat.
 		log.ErrorContext(ctx, "atlas_collect_unavailable", "error", err,
 			"detail", "the atlas is not read from the company's vendors on this node")
 		return
 	}
 	e.atlasCollect = worker
-	// Detached, for the reason the reconcile loop is.
+	// Detached, as the reconcile loop is.
 	worker.Start(context.WithoutCancel(ctx))
 }
 
-// atlasSources is what the duty reads: every registered vendor, and the
-// company's servers. The SSH source is built here rather than registered,
-// because each command it runs is recorded through this node's runner, on the
-// access log.
+// atlasSources is every registered vendor and the company's servers. The SSH
+// source is built here, not registered, so each command it runs goes through
+// this node's runner onto the access log.
 func (e *Engine) atlasSources() []collect.Source {
 	return append(collect.Registered(), sshint.NewAtlasSource(e.sshRun()))
 }
 
-// atlasForges is the reader of the files of the repositories a forge hosts
-// and Gitlet does not mirror: its standings beside the scan's own in the
-// fleet's coordination store, and the atlas log as the duty holds it.
+// atlasForges reads the files of the repositories a forge hosts and Gitlet
+// does not mirror, its standings in the coordination store beside the scan's.
 func (e *Engine) atlasForges(duty collect.Log) (*codescan.Forges, error) {
 	store, err := codescan.NewForgeStore(e.backends.Fleet)
 	if err != nil {
@@ -129,10 +118,8 @@ func (e *Engine) atlasForges(duty collect.Log) (*codescan.Forges, error) {
 }
 
 // atlasMirrored is the atlas key of every repository a Gitlet repository
-// pulls from, read from Gitlet's own listing of its mirrors: the engine's
-// read, which no principal makes. A company that keeps no code in Gitlet
-// mirrors nothing. Only the address is read; the credential beside it is a
-// reference, and is not.
+// pulls from: the engine's own read of Gitlet's mirrors, which no principal
+// makes. Only the address is read, never the credential reference beside it.
 func (e *Engine) atlasMirrored(ctx context.Context) (map[string]bool, error) {
 	out := map[string]bool{}
 	company := e.Company()
@@ -152,7 +139,7 @@ func (e *Engine) atlasMirrored(ctx context.Context) (map[string]bool, error) {
 			if m.From == nil {
 				continue
 			}
-			// AN ADDRESS THAT IS NO FORGE'S KEY mirrors nothing a forge lists.
+			// An address that is no forge's key mirrors nothing a forge lists.
 			if key, err := atlas.RepositoryKeyOf(m.From.URL); err == nil {
 				out[key] = true
 			}
@@ -164,10 +151,9 @@ func (e *Engine) atlasMirrored(ctx context.Context) (map[string]bool, error) {
 }
 
 // AtlasSourceReport is every source this build reads that the running
-// company connects, as a reader is shown it at now: its standing and the ask
-// waiting on it, both off the coordination store, since the node answering
-// is rarely the node holding the duty. False where this node runs no company
-// or has no coordination store to read.
+// company connects, with its standing and pending ask at now, read off the
+// coordination store since the node answering is rarely the duty's holder.
+// False where this node runs no company or has no coordination store.
 func (e *Engine) AtlasSourceReport(ctx context.Context, now time.Time) (collect.Report, bool, error) {
 	company := e.Company()
 	if company == nil || company.Config == nil || e.backends == nil || e.backends.Fleet == nil {
@@ -215,8 +201,8 @@ type atlasCollectLog struct {
 func (e *Engine) AtlasCollect() *collect.Worker { return e.atlasCollect }
 
 // AtlasSourceStore is the fleet row every source's standing is recorded in,
-// for the API: read from coordination rather than the worker's memory, since
-// the node answering is usually not the node holding the duty.
+// for the API: coordination, not the worker's memory, since the node
+// answering is usually not the duty's holder.
 func (e *Engine) AtlasSourceStore() (*collect.CoordStore, error) {
 	if e.backends == nil {
 		return nil, errors.New("engine: this node has no coordination store to read a source's standing from")
@@ -224,9 +210,9 @@ func (e *Engine) AtlasSourceStore() (*collect.CoordStore, error) {
 	return collect.NewCoordStore(e.backends.Fleet)
 }
 
-// stopAtlasCollect ends the loop, waiting for a visit in flight. Before the
-// duties are released and before the native half comes down, as every loop
-// that publishes is.
+// stopAtlasCollect ends the loop, waiting for a visit in flight; called
+// before the duties are released and the native half comes down, as every
+// publishing loop is.
 func (e *Engine) stopAtlasCollect() {
 	if e.atlasCollect != nil {
 		e.atlasCollect.Stop()

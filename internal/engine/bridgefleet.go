@@ -7,41 +7,27 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
-// The executor's tool bridge, served to the whole fleet (internal/api/mcpbridge).
+// The executor's tool bridge (internal/api/mcpbridge) is served fleet-wide.
+// EVERY NODE WITH A BRIDGE JOINS ITS RELAY: a box dials any node serving the
+// bridge's route (a direct box, its launcher's loopback), while a run's session
+// lives on whichever node holds the seat now, which may serve no API; so the
+// node a call lands on reads the seat's lease and relays the call over the
+// broker to the holder. A node with no broker is the fleet by itself.
 //
-// # Every node joins, in every role
-//
-// A box dials a node that serves the bridge's route — the fleet's one address,
-// any node that serves the API, or for a direct box its launching node's own
-// listener on loopback, which a node without the ingress role serves its own
-// host alone — and a run's session lives on the node holding the run's seat,
-// which may serve no API at all, and may have handed the seat on since the box
-// was launched. So every node with a bridge joins the fleet's relay: the node
-// a call lands on reads the seat's lease and relays the call to the holder
-// over the broker, and the holder answers it from its own session. A node that
-// has no broker is the fleet, and answers from its own sessions alone.
-//
-// # Not an ingress node that serves no HTTP
-//
-// A node WITHOUT the ingress role joins whatever its own api.port: its remote
-// boxes reach it through the nodes with the role, and a satellite started with
-// `-api-port 0` serves nothing and still runs agent seats. A node WITH the
-// role is one of the nodes a box dials, and api.port 0 — the hard off switch
-// for every listener — leaves it serving nothing; in a fleet of one it is the
-// whole fleet, and a box would reach nothing at all. So such a node joins
-// nothing, its bridge is unreachable, and an executor launch is refused naming
+// EXCEPT AN INGRESS NODE WITH api.port 0: it is one of the nodes boxes dial and
+// serves nothing, so it joins nothing and an executor launch is refused naming
 // the setting ([mcpbridge.Bridge.Reachable]) rather than started into calls
-// that all fail.
+// that all fail. A non-ingress node joins whatever its port, since its boxes
+// reach it through the ingress nodes: a `-api-port 0` satellite runs seats.
 
 // bridgeHolderWaitLeases is how many seat-lease lifetimes a box's call waits
-// for a node that can answer it: one for a dead holder's lease to run out, and
-// one for a peer to claim the seat and open its running jobs' sessions again
-// as it recovers it — after which nothing more is coming, and the call is
-// answered that the bridge is unavailable.
+// for a node that can answer it: one for a dead holder's lease to run out, one
+// for a peer to claim the seat and reopen its running jobs' sessions; after
+// that the call is answered that the bridge is unavailable.
 const bridgeHolderWaitLeases = 2
 
-// joinBridgeFleet joins this node's bridge to its fleet. After the node, whose
-// incarnation a seat's lease names.
+// joinBridgeFleet joins this node's bridge to its fleet; it runs after the
+// node starts, whose incarnation a seat's lease names.
 func (e *Engine) joinBridgeFleet(ctx context.Context, boot *config.Bootstrap) error {
 	if e.bridge == nil || e.node == nil || e.backends == nil || e.backends.Queue == nil ||
 		e.backends.Coord == nil || boot == nil {
@@ -63,14 +49,12 @@ func (e *Engine) joinBridgeFleet(ctx context.Context, boot *config.Bootstrap) er
 	return nil
 }
 
-// stopBridgeFleet withdraws this node from the bridge's relay, before its seats
-// are released and the broker closes, so a call arriving during the teardown is
-// found another holder rather than answered from a session that is closing.
-//
-// AND RELEASES EVERY POLL FOR A RUN'S NOTES THIS NODE HOLDS FIRST
-// ([mcpbridge.Bridge.Shutdown]): a poll relayed here from another node is held
-// by no listener of this one, so nothing else lets it go before its hold runs
-// out — and the relay waits on it.
+// stopBridgeFleet withdraws this node from the bridge's relay before its seats
+// are released and the broker closes, so a call arriving mid-teardown finds
+// another holder rather than a closing session. It first releases every notes
+// poll this node holds ([mcpbridge.Bridge.Shutdown]): one relayed from another
+// node has no listener here to free it before its hold runs out, and the relay
+// waits on it.
 func (e *Engine) stopBridgeFleet(ctx context.Context) {
 	e.bridge.Shutdown()
 	if e.leaveBridgeFleet == nil {

@@ -32,16 +32,15 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// AN EXECUTOR GIVEN REPOSITORIES ON GITLET (ADR-0093),
-// as the engine resolves each checkout ([Engine.resolveRunRepos]): what
-// each repository resolves to, what the seat may be given and the steps its
-// box is given them by — over a stand-in for Gitlet that answers as the estate's
-// router does, judging every read by the seat's grant from the epoch's chart.
+// AN EXECUTOR GIVEN REPOSITORIES ON GITLET (ADR-0093), as
+// [Engine.resolveRunRepos] resolves each checkout, over a stand-in for Gitlet
+// that judges every read by the seat's grant from the epoch's chart, as the
+// estate's router does.
 
-// launchReposDoc is a company hosting code whose seats run code in a fake
-// remote cell: an engineering unit owning the repositories — its lead, a
-// full_access engineer with an email, and a read_only one — and a design unit
-// whose full_access seat sits outside it.
+// launchReposDoc is a company hosting code, its seats' boxes in a fake remote
+// cell: Engineering owns the repositories (its lead, a full_access engineer
+// with an email, a read_only reader), and Design's full_access seat sits
+// outside it.
 const launchReposDoc = `
 name: Acme
 providers:
@@ -98,11 +97,10 @@ var (
 	abbrevOID = "abc1234" + strings.Repeat("5", 33)
 )
 
-// launchHost is Gitlet as the launcher's resolution reads it through
-// the estate's router: repositories by every name that names one, their refs,
-// the commits a read by object id finds, every read judged by the asker's
-// grant from the epoch's chart (gitlet.JudgeRead, as the serving node judges
-// it), and every lifecycle request — a hold record — applied.
+// launchHost is Gitlet as the launcher reads it through the estate's router:
+// repositories by every name, their refs, the commits a read by object id
+// finds, every read judged by the asker's grant (gitlet.JudgeRead, as the
+// serving node judges it), and every lifecycle request (a hold record) applied.
 type launchHost struct {
 	mu     sync.Mutex
 	roster func() gitlet.Roster
@@ -110,8 +108,8 @@ type launchHost struct {
 	refs   map[string]map[string]string // repo id → whole ref → oid
 	// commits are the ids a read by object id expands an abbreviation to.
 	commits []string
-	// read, resolved and git are where each kind of read answers, and
-	// floor this node's own writes to every repository.
+	// read, resolved and git are where each kind of read answers; floor is
+	// this node's own writes to every repository.
 	read, resolved, git, floor statelog.Position
 	lifecycles                 []gitlet.LifecycleRequest
 }
@@ -232,8 +230,8 @@ func newReposRig(t *testing.T, doc, base string) *reposRig {
 	return newReposRigIn(t, doc, base, sandbox.E2B)
 }
 
-// newReposRigIn is newReposRig with its catalogue's one cell, where every
-// seat's box runs, at placement.
+// newReposRigIn is newReposRig with every seat's box in its one cell, at
+// placement.
 func newReposRigIn(t *testing.T, doc, base string, placement sandbox.Placement) *reposRig {
 	t.Helper()
 	c := specCompany(t, doc)
@@ -269,9 +267,9 @@ func newReposRigIn(t *testing.T, doc, base string, placement sandbox.Placement) 
 		pending: pending, placement: placement}
 }
 
-// deps are the rig's code tools' seams over its fake of Gitlet, as the epoch's
-// equip hands them, composing whoever woke a turn by the rig's requesters
-// (nobody, unless a case says).
+// deps are the rig's code tools' seams over its fake Gitlet, as the epoch's
+// equip hands them, composing whoever woke a turn by r.requesters (nobody by
+// default).
 func (r *reposRig) deps() builtin.CodeDeps {
 	requesters := r.requesters
 	if requesters == nil {
@@ -298,25 +296,24 @@ func (r *reposRig) launch(t *testing.T, turn *turnctx.Turn, repos ...builtin.Rep
 	return r.e.resolveRunRepos(t.Context(), r.deps(), turn, repos, r.placement)
 }
 
-// project is a repository of a unit, visibility company unless said, its
-// default branch main.
+// project is an active repository of unit at visibility, its default branch
+// main.
 func project(name, unit string, visibility gitlet.Visibility) gitlet.RepoRef {
 	return gitlet.RepoRef{ID: uuid.NewString(), Name: name, Status: gitlet.RepoStatusActive,
 		ManagedBy: gitlet.ManagedConfig, Kind: gitlet.RepoProject, Owner: gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: unit},
 		Visibility: visibility, DefaultBranch: "main", Position: codeLogAt(5)}
 }
 
-// A LAUNCH RESOLVES EACH REPOSITORY into the run's grant on its row: the
-// branch is the seat's own for the turn's work item — seats/<handle>/<key>,
-// never the turn's dedupe key — or for the run where the turn is on none, the
-// same branch for a second call of the turn; its base is that branch's head
-// where it exists (a second run on one item continues the first's work), else
-// the default branch's, none for an empty repository, a tag as resolved, and
-// an abbreviated id expanded by a read by object id; a renamed repository's
-// run names its current name; and the run's floor is the furthest position
-// any read answered at and this node's own writes.
+// A LAUNCH RESOLVES EACH REPOSITORY into the run's grant: the branch is the
+// seat's own for the turn's work item (seats/<handle>/<key>, never the turn's
+// dedupe key), or for the run when there is none, the same on the turn's second
+// call; its base is that branch's head where it exists (a second run on one
+// item continues the first's work), else the default branch's, none for an
+// empty repository, a tag as resolved, an abbreviated id expanded by a read by
+// object id; a renamed repository is named by its current name; and the run's
+// floor is the furthest any read answered at and this node's own writes.
 //
-// Mutations: the base from the default branch always → the existing-branch
+// Mutations: the base always from the default branch → the existing-branch
 // row, red; the branch from turnctx.Turn.WorkKey → the ENG-42 row's branch is
 // a digest, red.
 func TestALaunchResolvesEachRepository(t *testing.T) {
@@ -388,11 +385,11 @@ func TestALaunchResolvesEachRepository(t *testing.T) {
 }
 
 // A CHECKOUT IS HELD TO THE SEAT'S GRANT (ADR-0093): a read_only seat asking
-// to write is refused with its grant's sentence and given `read` where it asks
+// to write is refused with its grant's sentence, and given `read` asking
 // nothing; a full_access seat outside the owning unit writes its own namespace
-// and is refused writing main; a `visibility: unit` repository outside the
-// seat's unit is refused with the grant's read refusal; an archived repository
-// is given to read and refused to write. Nothing refused leaves a row.
+// but not main; a `visibility: unit` repository outside the seat's unit is
+// refused reading; an archived one is given to read and refused to write.
+// Nothing refused leaves a row.
 //
 // Mutation: skip the access precheck → the read_only seat is given write, red.
 func TestACheckoutIsHeldToTheSeatsGrant(t *testing.T) {
@@ -465,16 +462,15 @@ func (colleagues) Credential(context.Context, string) (iam.Principal, bool, erro
 	return iam.Principal{}, false, nil
 }
 
-// A RUN CHECKS OUT FOR WHOEVER WOKE ITS TURN (M3-decisions U40 (a), the write
-// half for an executor): a checkout in a turn a colleague seat woke names that seat
-// on the run's row, which Gitlet's box admission reads back
-// (boxRuns.Run) to hold the box to the colleague's grant beside the seat's;
-// `access: write` on a branch the colleague could not push is refused at
-// launch, leaving no row, while the seat's own branch is written; a turn a
-// person woke names nobody, and pushes what the seat may.
+// A RUN CHECKS OUT FOR WHOEVER WOKE ITS TURN (M3-decisions U40 (a)): a turn a
+// colleague seat woke names that seat on the run's row, which Gitlet's box
+// admission reads back (boxRuns.Run) to hold the box to the colleague's grant
+// beside the seat's; `access: write` on a branch the colleague could not push
+// is refused at launch, leaving no row, while the seat's own branch is
+// written; a turn a person woke names nobody, and pushes what the seat may.
 //
-// Mutations: the launch request's ceiling dropped — the row names nobody, red;
-// boxRuns.Run not copying the row's ceiling — the admission reads none, red.
+// Mutations: the launch request's ceiling dropped → the row names nobody, red;
+// boxRuns.Run not copying the row's ceiling → the admission reads none, red.
 func TestARunChecksOutForWhoeverWokeItsTurn(t *testing.T) {
 	t.Parallel()
 	rig := newReposRig(t, launchReposDoc, "https://git.example.com/box/git")
@@ -515,17 +511,14 @@ func TestARunChecksOutForWhoeverWokeItsTurn(t *testing.T) {
 }
 
 // A RUN'S ROW CARRIES WHOM ITS TURN WORKS FOR TO ITS BOX AND ITS NEXT ROUND
-// (ADR-0109): a checkout writes on the job's row whom the turn works for, as
-// the turn's own code tools compose it (sandbox.PendingRun.CodeWorkingFor);
-// Gitlet's box admission reads it back with the run (boxRuns.Run), and every
-// push the box makes carries it; a round carried on is launched with it beside
-// the grants it keeps, and a fresh launch with none. A colleague's ask makes it
-// the colleague's seat, a person's the seat they hold.
+// (ADR-0109): a checkout writes it on the job's row as the turn's code tools
+// compose it (sandbox.PendingRun.CodeWorkingFor); Gitlet's box admission reads
+// it back (boxRuns.Run) and every push the box makes carries it; a round
+// carried on keeps it, a fresh launch has none. A colleague's ask makes it the
+// colleague's seat, a person's the seat they hold.
 //
-// Mutations: the checkout's grant leaving it off — the row works for nobody,
-// red; boxRuns.Run not copying it — the box's run works for nobody, red;
-// carriedGrants leaving it behind — the round carried on works for nobody,
-// red.
+// Mutations: the checkout's grant leaving it off, boxRuns.Run not copying it,
+// or carriedGrants leaving it behind → that reader works for nobody, red.
 func TestARunsRowCarriesWhomItsTurnWorksForToItsBoxAndItsNextRound(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -594,14 +587,13 @@ func (w withoutGitlet) Requester(ctx context.Context, handle string) (iam.Princi
 		Stage: iam.StageActive, Grants: others}, nil
 }
 
-// A RUN A PERSON WITHOUT GITLET WOKE IS GIVEN NO REPOSITORY (ADR-0110): a
-// run's repositories are resolved through the code read for whoever its turn
-// works for, and a person not given Gitlet reaches no repository, so the
-// launch is refused for them — forbidden, naming Gitlet — before anything is
-// read, and the box is given nothing to clone. The CONTROL is the founder,
-// who holds Gitlet: the same request is resolved.
+// A RUN A PERSON WITHOUT GITLET WOKE IS GIVEN NO REPOSITORY (ADR-0110): its
+// repositories resolve through the code read for whoever the turn works for,
+// so the launch is refused forbidden, naming Gitlet, before anything is read,
+// and the box is given nothing to clone. CONTROL: the founder, holding Gitlet,
+// is resolved.
 //
-// Mutation: put code.read back on ClassEverybody, and the contractor's run is
+// Mutation: put code.read back on ClassEverybody → the contractor's run is
 // given web.
 func TestARunAPersonWithoutGitletWokeIsGivenNoRepository(t *testing.T) {
 	t.Parallel()
@@ -627,10 +619,9 @@ func TestARunAPersonWithoutGitletWokeIsGivenNoRepository(t *testing.T) {
 	}
 }
 
-// A CHECKOUT NEEDS THE BOX URL: a node with no CREWLET_BOX_GIT_URL refuses a
-// checkout, naming the variable, before anything
-// is read or written — a box would be given a repository and no address to
-// clone it from — and launches one naming none.
+// A CHECKOUT NEEDS THE BOX URL: a node without CREWLET_BOX_GIT_URL refuses a
+// checkout, naming the variable, before anything is read or written (the box
+// would have no address to clone from), and launches one naming none.
 func TestACheckoutNeedsTheBoxURL(t *testing.T) {
 	t.Parallel()
 	rig := newReposRig(t, launchReposDoc, "")
@@ -645,9 +636,9 @@ func TestACheckoutNeedsTheBoxURL(t *testing.T) {
 	}
 }
 
-// A CHECKOUT NEEDS CODE.NATIVE: a company that hosts no code is told so and
-// pointed at the other host's credentials; one that does, on a node whose runtime does not
-// serve it yet, is told why — a restart owed — rather than that it hosts none.
+// A CHECKOUT NEEDS GITLET: a company hosting no code is told so; one that
+// does, on a node whose runtime does not serve it yet, is told a restart is
+// owed rather than that it hosts none.
 func TestACheckoutNeedsGitlet(t *testing.T) {
 	t.Parallel()
 	const base = "https://git.example.com/box/git"
@@ -669,14 +660,12 @@ func TestACheckoutNeedsGitlet(t *testing.T) {
 }
 
 // THE CELL DECIDES GIT'S MONITOR: a launch given two repositories runs, after
-// their clones, the step that turns git's file-system monitor on across both
-// (sandbox.MonitorStep) in a remote box, which owns its kernel's per-user
-// inotify budget — and never in a direct or container box on the engine
-// host, whose every box spends the engine user's, beside the other seats'
-// harnesses.
+// their clones, sandbox.MonitorStep across both in a remote box, which owns
+// its kernel's per-user inotify budget, and never in a direct or container
+// box, which spends the engine user's beside the other seats' harnesses.
 //
 // Mutation: CodingSteps appending the step in every cell → the direct and
-// container rows, red; appending it in none → the remote row, red.
+// container rows, red; in none → the remote row, red.
 func TestOnlyABoxWithAKernelOfItsOwnIsGivenGitsMonitor(t *testing.T) {
 	t.Parallel()
 	const base = "https://git.example.com/box/git"
@@ -727,13 +716,12 @@ func TestOnlyABoxWithAKernelOfItsOwnIsGivenGitsMonitor(t *testing.T) {
 }
 
 // A BOX REACHES ONLY WHAT ITS RUN CHECKED OUT (ADR-0093): a job opens with no
-// grant, so Gitlet's box admission, which reads the row on every
-// request (boxRuns.Run), lets its box reach nothing; each code_checkout adds
-// exactly the repository it named, with its access and its ask to open a
-// change at the collection, and raises the floor; the same checkout again is
-// the grant the row holds, cloned again, while another branch of it is
-// refused; a round carried on keeps the job's checkouts and a fresh launch
-// keeps none; and a job that is over is given nothing.
+// grant, so Gitlet's box admission (boxRuns.Run, read on every request) lets
+// its box reach nothing; each code_checkout adds exactly the repository it
+// named, with its access and its ask to open a change at the collection, and
+// raises the floor; the same checkout again is the held grant, cloned again,
+// another branch of it a conflict; a round carried on keeps the job's
+// checkouts, a fresh launch none; and a job that is over is given nothing.
 //
 // Mutations: GrantRepo appending without the launch check → the ended job's
 // checkout is granted, red; carriedGrants answering the row's grants to every
@@ -824,20 +812,17 @@ func TestABoxReachesOnlyWhatItCheckedOut(t *testing.T) {
 	}
 }
 
-// A BOX THAT LOST ITS CLONE CONTINUES ITS BRANCH WHERE IT STANDS. The same
-// checkout again — from a fresh box a round carried on was launched in — is
-// answered the row's grant cloned from the head the run's branch has now,
-// with whatever its job pushed there, and the row's floor raised to the read
-// that found that head, so the node serving the box's fetch holds it. While
-// nothing was pushed and the branch does not exist, the clone starts from the
-// base the first checkout resolved, however far the default branch has moved
-// since.
+// A BOX THAT LOST ITS CLONE CONTINUES ITS BRANCH WHERE IT STANDS: the same
+// checkout again (from a fresh box of a round carried on) is answered the
+// row's grant cloned from the run's branch's current head, and the row's floor
+// raised to the read that found it, so the node serving the box's fetch holds
+// it. While nothing was pushed, the clone starts from the first checkout's
+// base, however far the default branch has moved since.
 //
-// Mutations: the held grant cloned from its first base whatever was pushed
-// → the pushed branch's clone, red; its base taken from the resolution's own
-// rather than the branch's head → the moved default branch's clone, red; the
-// floor left where it was → the floor, red; the resolution reporting no head
-// → the pushed branch's clone, red.
+// Mutations: the held grant cloned from its first base whatever was pushed, or
+// the resolution reporting no head → the pushed branch's clone, red; its base
+// taken from the resolution's own rather than the branch's head → the moved
+// default branch's clone, red; the floor left where it was → the floor, red.
 func TestABoxThatLostItsCloneContinuesItsBranchWhereItStands(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -903,19 +888,16 @@ func TestABoxThatLostItsCloneContinuesItsBranchWhereItStands(t *testing.T) {
 }
 
 // A CHECKOUT HOLDS WHAT IT RESOLVES ON ITS JOB'S ROW (M3-decisions M3-O61,
-// M3-O64): an executor on ENG-42 checks out a scratch repository of its seat
-// it never wrote, and web, whose seats/swe/ENG-42 an earlier turn pushed. The
-// row the launch attached the turn's holds to holds the scratch repository
-// and web's branch, and neither a project repository nor a default branch,
-// which no seat's branch is: Gitlet's expiry and its branch sweep read
-// both held for as long as the row lives, with no turn running. A checkout of
-// a scratch repository the seat may not read is refused with the grant's
-// sentence and holds nothing of it.
+// M3-O64): an executor on ENG-42 checks out its seat's never-written scratch
+// repository and web, whose seats/swe/ENG-42 an earlier turn pushed. The row
+// holds the scratch repository and web's branch, and neither a project
+// repository nor a default branch, so Gitlet's expiry and branch sweep read
+// both held while the row lives, with no turn running. A scratch repository the
+// seat may not read is refused with the grant's sentence and holds nothing.
 //
-// Mutations: resolve without HoldRepo → the scratch repository is absent from
-// the row, red; resolveRunRepos skipping HoldRef → web's branch key absent,
-// red; the hold taken before the grant → the refused repository on the row,
-// red.
+// Mutations: resolve without HoldRepo → the scratch repository absent, red;
+// resolveRunRepos skipping HoldRef → web's branch key absent, red; the hold
+// taken before the grant → the refused repository on the row, red.
 func TestACheckoutHoldsWhatItResolvesOnItsJobsRow(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -974,17 +956,15 @@ func TestACheckoutHoldsWhatItResolvesOnItsJobsRow(t *testing.T) {
 }
 
 // A LAUNCH IS GIVEN ITS BOX'S GIT EXACTLY WHERE A CHECKOUT CAN GRANT IT A
-// REPOSITORY (ADR-0093): on a node that serves Gitlet and has
-// a box base, every launch of an executor gets its run's git environment —
-// its credential, the base its clones dial and git's configuration — and on a
-// node not serving Gitlet, or one with no base, none, since nothing there
-// could check a repository out to it. Asked of booted nodes, because "serves"
-// is the running runtime's answer ([OperatorCode]) and no field a rig sets.
+// REPOSITORY (ADR-0093): on a node serving Gitlet with a box base, every
+// executor launch gets its run's git environment (credential, the base its
+// clones dial, git's configuration); elsewhere none, since nothing there could
+// check a repository out to it. Asked of booted nodes, because "serves" is the
+// running runtime's answer ([OperatorCode]), not a field a rig sets.
 //
 // Mutations: gate the launch on Engine.CodeUnserved() == nil, which answers
-// no node that serves code → "serving code" given no git, red (what left the
-// executor of internal/e2e's A1 case cloning from an empty base); drop the
-// served check → "hosting none" given git, red.
+// no node that serves code → "serving code" given no git, red; drop the served
+// check → "hosting none" given git, red.
 func TestALaunchIsGivenGitWhereGitletIsServed(t *testing.T) {
 	t.Parallel()
 	const base = "https://git.example.com/box/git"
@@ -1030,16 +1010,15 @@ func TestALaunchIsGivenGitWhereGitletIsServed(t *testing.T) {
 	}
 }
 
-// A BOX IS CONFIGURED BY ENVIRONMENT (ADR-0093), the one every executor launch
-// on a node serving Gitlet is given ([Engine.boxGitEnv], its
-// [sandbox.LaunchRequest.RunEnv]): its run's credential — a token Gitlet
-// verifies for exactly this launch — Gitlet's base, and git's
-// configuration through the environment: exactly the engine's seven entries,
-// in order, the helper reset first, the seat's identity as an engine-built
-// commit names it (a role with no email on the identity domain), protocol v2,
-// and the index settings a wide checkout's status was measured faster with. A
-// second launch carries its own token. The variables beyond git's own are exactly the ones config
-// reserves, but the check's own, which only a check's box is told.
+// A BOX IS CONFIGURED BY ENVIRONMENT (ADR-0093), the one [Engine.boxGitEnv]
+// gives every executor launch on a node serving Gitlet (its
+// [sandbox.LaunchRequest.RunEnv]): a token Gitlet verifies for exactly this
+// launch, Gitlet's base, and git's configuration as exactly the engine's seven
+// entries in order — the helper reset first, the seat's identity as an
+// engine-built commit names it (a role with no email on the identity domain),
+// protocol v2, and the index settings measured to speed a wide checkout's
+// status. A second launch carries its own token. The variables beyond git's
+// own are exactly those config reserves, but the check's own.
 //
 // Mutations: drop entry 1 (the helper reset) → the exact-entries assertion,
 // red; mint the token for the turn's first launch → the second launch, red.
@@ -1091,9 +1070,8 @@ func TestABoxIsConfiguredByEnvironment(t *testing.T) {
 	}
 
 	// ONE LIST: what the engine sets beyond git's own variables is exactly
-	// what configuration reserves — but the check's own, which a check's box
-	// is told and an executor's is not — so no operator's value can stand
-	// beside it, and configuration reserves no name nothing sets.
+	// what configuration reserves for an executor (all but the check's own),
+	// so no operator value stands beside it and nothing reserved goes unset.
 	rig := newReposRig(t, launchReposDoc, base)
 	env, err := rig.e.boxGitEnv(rig.c.Org.AgentSeatByHandle("swe"), base,
 		host.BoxRunRef{TurnID: statelog.NewOpID(time.Now(), ""), LaunchID: uuid.NewString()}, nil)
@@ -1116,11 +1094,10 @@ func TestABoxIsConfiguredByEnvironment(t *testing.T) {
 	}
 }
 
-// THE OPERATOR'S GIT CONFIGURATION IS KEPT: a run environment handing git a
-// proxy through GIT_CONFIG_COUNT keeps it at entry 0, the engine's seven
-// appended after it and the count eight; a count naming an entry the env does
-// not set is refused, naming it, since git refuses a configuration with a hole
-// in it and every clone would fail.
+// THE OPERATOR'S GIT CONFIGURATION IS KEPT: a run environment's proxy at
+// GIT_CONFIG entry 0 stays there, the engine's seven appended and the count
+// eight; a count naming an entry the env does not set is refused, naming it,
+// since git refuses a configuration with a hole and every clone would fail.
 //
 // Mutation: overwrite the operator's entries rather than append → the proxy
 // gone, red.
@@ -1135,9 +1112,8 @@ func TestTheOperatorsGitConfigIsKept(t *testing.T) {
 	if err != nil {
 		t.Fatalf("boxGitEnv: %v", err)
 	}
-	// THE ENGINE'S ENTRIES ARE ADDED OVER THE RUN ENVIRONMENT, which keeps the
-	// operator's: the additions name no entry 0, so the proxy stays at 0 and
-	// the count covers it.
+	// The additions over the run environment name no entry 0, so the
+	// operator's proxy stays there and the count covers it.
 	_, overwrote := env["GIT_CONFIG_KEY_0"]
 	_, overwroteValue := env["GIT_CONFIG_VALUE_0"]
 	if env["GIT_CONFIG_COUNT"] != "8" || overwrote || overwroteValue ||

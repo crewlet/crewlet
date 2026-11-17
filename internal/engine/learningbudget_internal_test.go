@@ -17,17 +17,12 @@ import (
 )
 
 // The reflection pass's PRE-FLIGHT gate, and the record that closes it. The
-// seam's own cases — what is charged where, and what is recorded — are in
-// auxiliary_internal_test.go.
+// seam's own cases are in auxiliary_internal_test.go.
 
-// SPEND PAST THE CEILING IS RECORDED, AND IT IS WHAT CLOSES THE GATE.
-//
-// The record used to go through the gate's own Charge, which, when a refused
-// charge counted nothing, REFUSED a completion that did not fit and so
-// recorded nothing: the counter stayed under the ceiling, the pre-flight gate
-// still read room, and every later reflection pass ran and went uncounted in
-// its turn. The spend has happened at the vendor, so it is recorded whole —
-// and the gate then reads no room.
+// SPEND PAST THE CEILING IS RECORDED, AND IT IS WHAT CLOSES THE GATE. The
+// spend has happened at the vendor, so it is recorded whole rather than refused
+// for not fitting; otherwise the counter stays under the ceiling and the gate
+// keeps reading room for passes that go uncounted.
 func TestAnAuxiliaryCompletionPastTheCeilingIsRecordedAndClosesTheGate(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -35,9 +30,8 @@ func TestAnAuxiliaryCompletionPastTheCeilingIsRecordedAndClosesTheGate(t *testin
 	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
 	c := meteredCompany(config.TokenBudget{}, lead)
 	// ONE INSTANT for the 90 spent before, both gates and the completion's
-	// record: four clock reads, and a midnight between any two of them on
-	// the wall clock either put the record in a fresh day or opened the
-	// last gate onto one.
+	// record: a wall-clock midnight between any two would move the record or
+	// the last gate into a fresh day.
 	e := &Engine{backends: &Backends{Fleet: fleet}, clock: fixedClock(budgetNow)}
 	windows := coord.WindowsAt(budgetNow, time.UTC)
 	if _, err := fleet.PostCharge(ctx, scopeOf(t, c, lead), 90, windows); err != nil {
@@ -71,21 +65,15 @@ func TestAnAuxiliaryCompletionPastTheCeilingIsRecordedAndClosesTheGate(t *testin
 }
 
 // THE PRE-FLIGHT GATE DECLINES A SEAT WITH NO ROOM LEFT, AND ASKS WITHOUT
-// SPENDING.
-//
-// It used to ask with a charge of zero tokens, which the counter answers OK
-// without looking — a phase whose provider reported no usage still ran — so
-// the gate had never declined anything: a company at its ceiling kept starting
-// reflection passes and paying for their auxiliary calls until each one's
-// first charge was refused mid-pass.
+// SPENDING: a zero-token charge would be answered OK without looking
+// ([Engine.learningBudget]), so the gate must read the windows instead.
 func TestTheLearningGateDeclinesASeatWithNoRoomLeft(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	fleet := coordmem.NewFleet()
 	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
 	c := meteredCompany(config.TokenBudget{}, lead)
-	// The gate reads its windows at the engine's instant, and the day it is
-	// asked about is filled at the same one.
+	// The gate reads its windows at the instant the day is filled at.
 	e := &Engine{backends: &Backends{Fleet: fleet}, clock: fixedClock(budgetNow)}
 	gate := e.learningBudget(c)
 
@@ -112,16 +100,11 @@ func TestTheLearningGateDeclinesASeatWithNoRoomLeft(t *testing.T) {
 }
 
 // A DECLINED REFLECTION IS THE GATE'S REFUSAL, AND THE COUNTER RECORDS IT.
-//
-// The seat's day was filled by a post-charge — its executor's launch collected,
-// or its turn's auxiliary calls — which refuses nothing and stamps nothing.
-// The gate then turns away the reflection stage's calls before any is made:
-// unrecorded, a seat declining every pass read, on every screen and in
-// `crewlet budgets show`,
-// as one that had refused nothing. The seat is stamped, not the company,
-// which caps nothing; nothing is counted; a gate with room records nothing;
-// and a counter that cannot be read is not a refusal, so it records nothing
-// either.
+// The seat's day is filled by a post-charge, which stamps nothing, so without
+// the gate's record a seat declining every pass reads as having refused
+// nothing (on every screen and in `crewlet budgets show`). The seat is stamped,
+// not the company, which caps nothing; nothing is counted; a gate with room,
+// or an unreadable counter, records nothing.
 //
 // Mutation: drop the gate's record, and the seat's day carries no stamp.
 func TestADeclinedReflectionIsRecordedAsTheGatesRefusal(t *testing.T) {
@@ -131,9 +114,8 @@ func TestADeclinedReflectionIsRecordedAsTheGatesRefusal(t *testing.T) {
 	fleet, refusals := counted(base, nil)
 	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
 	c := meteredCompany(config.TokenBudget{}, lead)
-	// The gate reads its windows at the engine's instant, and the day it
-	// declines in is filled at the same one. The refusal's own stamp is the
-	// counter's clock, which is the wall's.
+	// The gate reads its windows at the instant the day is filled at; the
+	// refusal's stamp is the counter's clock, the wall's.
 	e := &Engine{backends: &Backends{Fleet: fleet}, clock: fixedClock(budgetNow)}
 	e.epoch.current.Store(c)
 	scope, windows := scopeOf(t, c, lead), coord.WindowsAt(budgetNow, time.UTC)

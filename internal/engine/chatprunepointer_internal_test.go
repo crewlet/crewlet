@@ -16,19 +16,13 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
-// The chat prune's horizon, as the fleet's revision states it.
-//
-// WHAT THEY PROTECT: that a prune, which deletes on every data node and has no
-// undo, is published only by the horizon of the revision the fleet's
-// activation pointer names, and only by a node that runs that very
-// activation; that a node which cannot say it does neither publishes nor
-// claims the duty, so the lease lapses to a peer that can; and that it says
-// why, naming what it serves and the fleet's epoch.
-//
-// Every case drives [chatPrune.tick] with the ENGINE's own policy source
-// ([Engine.chatRetentionPolicy]) over a fleet store whose pointer the case
-// moves, and the rooms and the publisher stubbed as the duty's other cases
-// stub them.
+// The chat prune's horizon, as the fleet's revision states it. These cases
+// protect that a prune, deleting on every data node with no undo, is published
+// only by the horizon of the revision the fleet's pointer names and only on a
+// node running that activation; that a node which cannot say so neither
+// publishes nor claims, so the lease lapses to a peer; and that it says why.
+// Each drives [chatPrune.tick] with [Engine.chatRetentionPolicy] over a fleet
+// store the case moves.
 
 // pruneCompanyDoc is a company on Chatlet with a thirty-day horizon, the
 // shortest `chat.chatlet.message_retention_days` takes, so the node's own
@@ -75,19 +69,13 @@ func newPointedPrune(fleet *rosterFleet, company *Company, rooms ...chatRoom) *p
 }
 
 // A PRUNE IS DECIDED ONLY ON A NODE SERVING THE FLEET'S ACTIVATION, AND NOWHERE
-// ELSE IS THE DUTY EVEN CLAIMED.
-//
-// The horizon is the revision the fleet's pointer names, read on a node whose
-// company was applied from that very activation ([Engine.fleetCompany]). A
-// duty holder that refused the fleet's revision serves the activation before
-// it, a node booted on an offline offer serves one no activation named, and a
-// pointer that cannot be read or names nothing says nothing either: each
-// publishes no record and makes no claim, so a lease it held lapses to a peer
-// that runs the fleet's revision rather than standing behind a holder that
-// prunes nothing. The node serving the fleet's activation prunes at exactly
-// its document's thirty days. Mutation: read the horizon off [Engine.Company]
-// again and every stale case prunes; ask for it after the claim and every
-// stale case renews the duty.
+// ELSE IS THE DUTY EVEN CLAIMED ([Engine.fleetCompany]). A holder serving a
+// replaced activation, a node booted on an offline offer, an unreadable
+// pointer and an empty one each publish nothing and claim nothing, so the
+// lease lapses to a peer running the fleet's revision. The node serving it
+// prunes at exactly its document's thirty days. Mutation: read the horizon off
+// [Engine.Company] and every stale case prunes; ask for it after the claim and
+// every stale case renews the duty.
 func TestTheChatPruneDecidesOnlyOnANodeServingTheFleetsRevision(t *testing.T) {
 	t.Parallel()
 	horizon := anchor.Add(-config.MinMessageRetentionDays * 24 * time.Hour)
@@ -159,14 +147,13 @@ func TestTheChatPruneDecidesOnlyOnANodeServingTheFleetsRevision(t *testing.T) {
 
 // A NODE THAT DECLINES SAYS WHAT IT SERVES AND WHAT THE FLEET IS ON.
 //
-// A horizon nobody enforces is otherwise invisible: the messages simply stay.
-// So every tick that declines logs `chat_prune_declined` at warn, its reason
-// naming the activation this node serves and the fleet's epoch, while a fleet
-// that has activated nothing, an unconfigured deployment rather than a fault,
-// is not warned about at all.
+// An unenforced horizon is otherwise invisible, so each declining tick warns
+// `chat_prune_declined`, naming this node's activation and the fleet's epoch,
+// while a fleet that has activated nothing (unconfigured, not a fault) is not
+// warned about.
 //
-// NOT PARALLEL: it swaps the process-wide logger, which this package otherwise
-// leaves at its boot default, and a parallel case's lines would be counted.
+// NOT PARALLEL: it swaps the process-wide logger, and a parallel case's lines
+// would be counted.
 func TestADeclinedPruneNamesWhatThisNodeServesAndTheFleetsEpoch(t *testing.T) {
 	logs := &stopLineBuffer{}
 	logging.Configure(slog.LevelInfo, logging.FormatJSON, logs)
@@ -216,16 +203,11 @@ func TestADeclinedPruneNamesWhatThisNodeServesAndTheFleetsEpoch(t *testing.T) {
 
 // A POINTER THAT MOVES MID-LAP ENDS THE LAP WHERE IT GOT TO.
 //
-// A lap drains a backlog a page at a time for up to its whole interval, and
-// the company may replace its horizon inside one: raise it, or set it to keep
-// everything because somebody asked for a conversation to be held. Each page
-// after the first is taken only while the fleet's revision still states the
-// horizon the lap began with, so a move ends the lap after the page in hand,
-// and the next tick continues it from there under the horizon it reads then.
-// A revision this node has applied that states the same horizon deletes
-// nothing the lap would not, so the lap goes on. Mutation: ask for the horizon
-// only once a tick and the two cases that end the lap prune the second page by
-// the horizon the fleet has replaced.
+// Each page after the first is taken only while the fleet's revision states
+// the horizon the lap began with, so a move ends the lap after the page in
+// hand and the next tick resumes from there; a revision stating the same
+// horizon lets the lap go on. Mutation: ask for the horizon once a tick and
+// the two ending cases prune the second page by the replaced horizon.
 func TestAPointerThatMovesMidLapEndsTheLap(t *testing.T) {
 	t.Parallel()
 	floor := anchor.Add(-2 * 365 * 24 * time.Hour)

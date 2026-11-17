@@ -26,12 +26,9 @@ tracker:
 `
 
 // WHICH CHOICES WAIT FOR A RESTART: a half moving to or from the engine's own
-// — Worklet, Doclet, Chatlet or Gitlet — and nothing else.
-//
-// The runtime is built around whether each half is the engine's own, so that
-// is the one change it cannot take live. Moving between two vendors is not one
-// — a vendor's parser is rebuilt by its own reconciler at the apply — and a
-// line for it would tell an operator to restart a fleet for nothing.
+// (Worklet, Doclet, Chatlet or Gitlet) and nothing else. A move between two
+// vendors is rebuilt by its own reconciler at the apply, and a line for it
+// would tell an operator to restart a fleet for nothing.
 func TestABackendSwitchSaysItWaitsForARestart(t *testing.T) {
 	t.Parallel()
 	native := builtWith{tracker: config.TrackerWorklet, knowledge: config.KnowledgeDoclet,
@@ -164,20 +161,13 @@ func TestTheRestartLineSaysWhatTheNodeServesMeanwhile(t *testing.T) {
 	}
 }
 
-// A REVISION THAT MOVES A NATIVE BACKEND SAYS IT WAITS FOR A RESTART, once per
-// activation, on the node it does not take effect on.
+// A REVISION THAT MOVES A NATIVE BACKEND SAYS IT WAITS FOR A RESTART, at EVERY
+// activation that still asks for it (a re-activation is the operator asking
+// again), and at none once a revision agrees with the runtime.
 //
-// The runtime is built once per process, so such a revision activated cleanly,
-// reported ok on every node, and changed nothing: a node went on serving
-// Worklet's tools after a revision turned it off, with nothing anywhere
-// saying why. Said at EVERY activation that still asks for the switch — a
-// re-activation of the same document is the operator asking again, and it is
-// still not served — and at none once a revision agrees with the runtime.
-//
-// AND ON A NODE WITH NO INBOUND EDGE: the line is about the runtime, never
-// about the edge, and a maintenance-mode node starts none — so the line is
-// said ahead of the parsers' swap, whose return on a missing edge would
-// otherwise swallow it.
+// AND ON A NODE WITH NO INBOUND EDGE: the line is about the runtime, not the
+// edge, and a maintenance-mode node starts none, so the line must be said
+// ahead of the parsers' swap, whose return on a missing edge would swallow it.
 //
 // NOT PARALLEL: it swaps the process-wide logger, which this package otherwise
 // leaves at its boot default.
@@ -247,11 +237,9 @@ func TestTheRestartLineIsSaidAtAnActivation(t *testing.T) {
 			"want still 2", got)
 	}
 
-	// A NODE WITH NO INBOUND EDGE, which a maintenance-mode node is: its
-	// constructor returns before the edge is started, and an apply starts
-	// none there ([Engine.startInbound]). Through APPLY, the way a node meets
-	// a revision, so a stage order that skipped the line on such a node is
-	// caught here too.
+	// A NODE WITH NO INBOUND EDGE, which a maintenance-mode node is
+	// ([Engine.startInbound]), met through APPLY so a stage order that skipped
+	// the line on such a node is caught too.
 	quiet, _ := aNodeInMode(t, statelog.ModeMaintenance)
 	if quiet.inboundStarted() {
 		t.Fatal("the premise: a maintenance-mode node started its inbound edge")
@@ -280,16 +268,13 @@ const restartLineTrackerOnly = nativeCleanupCompany + `knowledge:
 // A NODE WITH NO RUNTIME SAYS NOTHING, and the apply that gives it one says
 // nothing either.
 //
-// A data node runs a native runtime for EVERY company it holds, whatever
-// backends that company names: the object collector runs on it, since a
-// company on Jira and Confluence still holds the rows that name its files'
-// objects ([Engine.startNativeCollector]). So the only node with no runtime is
-// one that has no company yet, and the runtime its first apply meets is the
-// one its own `native` stage just started, from the revision being applied
-// ([Engine.startNativeFor]): the two agree by construction, whichever halves
-// that revision keeps, and a line there would tell an operator to restart a
-// node for a revision it is already serving. Once the runtime exists the line
-// is live: a later revision moving the tracker is said.
+// A data node runs a native runtime for every company it holds, whatever its
+// backends, since its rows still name objects the collector keeps
+// ([Engine.startNativeCollector]); so the only node with no runtime has no
+// company yet, and its first apply's `native` stage builds one from the
+// revision being applied ([Engine.startNativeFor]). The two agree by
+// construction, so a line there would ask for a needless restart. Once the
+// runtime exists the line is live: a later revision moving the tracker is said.
 //
 // NOT PARALLEL, for [TestTheRestartLineIsSaidAtAnActivation]'s reason.
 func TestTheApplyThatStartsTheRuntimeSaysNothing(t *testing.T) {
@@ -340,14 +325,12 @@ func TestTheApplyThatStartsTheRuntimeSaysNothing(t *testing.T) {
 }
 
 // WHICH SERVICES A READER IS REFUSED UNTIL A RESTART: the ones a revision
-// turned ON over a runtime built without them, by the names the org
-// projection's `services` uses, and never one it turned off, which the node
-// goes on serving.
+// turned ON over a runtime built without them, as the org projection's
+// `services` names them, never one it turned off, which the node still serves.
 //
-// Mutation: report every switch whatever its direction, and the Worklet a
-// revision moved to Jira is named as waiting, so the dashboard hides a tracker
-// the node still serves; name them by half ("Chatlet"), and the dashboard,
-// which reads `chat`, matches none.
+// Mutation: report every direction and a Worklet moved to Jira is named as
+// waiting, so the dashboard hides a tracker the node still serves; name them
+// by half ("Chatlet") and the dashboard, which reads `chat`, matches none.
 func TestOnlyAServiceTurnedOnAwaitsARestart(t *testing.T) {
 	t.Parallel()
 	vendors := builtWith{tracker: config.TrackerJira, knowledge: config.KnowledgeConfluence,

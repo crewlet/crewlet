@@ -16,16 +16,14 @@ import (
 // this engine's estate router, object store, chart and recorder, told every
 // artifacts movement this node's applier commits.
 //
-// EVERY INGRESS NODE THAT SETS THE LISTENER SERVES IT, and every ingress node
-// holds the estate (ingress requires `data`), so each hears every movement from
-// its own applier and nothing is forwarded between nodes; a node whose copy is
-// out of service or lagging decides through a data node whose copy answers,
-// which is the router's own order.
+// EVERY INGRESS NODE THAT SETS THE LISTENER SERVES IT, and ingress requires
+// `data`, so each hears every movement from its own applier and nothing is
+// forwarded; a node whose copy is out of service or lagging decides through a
+// data node whose copy answers, the router's own order.
 
-// ArtifactServing is the ticket codec and the origin a node's Tier A gives:
-// what the API mints a viewer's frame through, and what the origin serves it
-// under. ONE CONSTRUCTION for both halves, so a frame and the document it
-// loads are built from one reading of the keyring and of the external URL.
+// ArtifactServing is the ticket codec the API mints a viewer's frame through
+// and the origin it is served under, from a node's Tier A. ONE CONSTRUCTION for
+// both, so a frame and its document read the keyring and external URL once.
 func ArtifactServing(boot *config.Bootstrap) (*ticket.Codec, artifactserve.Origins, error) {
 	if boot == nil {
 		return nil, artifactserve.Origins{}, errors.New("engine: the artifact origin needs Tier A")
@@ -79,8 +77,8 @@ func ArtifactOrigin(e *Engine, boot *config.Bootstrap, creds artifactserve.Crede
 		Embedded:    tree,
 		Objectives:  e.objectives,
 	}
-	// A NIL RECORDER RECORDS NOTHING, and is handed on as no recorder at all:
-	// a nil pointer inside the interface would be a recorder that panics.
+	// A NIL RECORDER IS HANDED ON AS NONE: a nil pointer inside the interface
+	// would be a recorder that panics.
 	if rec := e.Recorder(); rec != nil {
 		deps.Metrics = rec
 	}
@@ -92,17 +90,15 @@ func ArtifactOrigin(e *Engine, boot *config.Bootstrap, creds artifactserve.Crede
 }
 
 // ArtifactsCopyServes reports whether this node answers artifacts reads from
-// its own copy right now, as far as it can tell WITHOUT WAITING: it holds the
-// estate, the last verdict read of its artifacts copy found it sound, and that
-// copy answers rather than lags its log — the artifacts domain's own verdict
-// (ADR-0079), since a wrong copy of another domain is no reason to send an
-// artifacts read away. False is a decision the estate router
-// takes through another data node.
+// its own copy right now, WITHOUT WAITING: it holds the estate, and the last
+// verdict found the artifacts copy sound and not lagging, by the artifacts
+// domain's own verdict (ADR-0079), since another domain's wrong copy is no
+// reason to send an artifacts read away. False means the router decides
+// through another data node.
 //
-// FROM THE VERDICT THE ROUTER ITSELF ANSWERS BY, never a second judgement and
-// never a broker round trip: a request on the artifact origin asks it before
-// every authorization, and a copy nobody has judged yet is not one it may
-// claim.
+// FROM THE ROUTER'S OWN VERDICT, never a second judgement or a broker round
+// trip, since the origin asks before every authorization; a copy nobody has
+// judged yet does not serve.
 func (e *Engine) ArtifactsCopyServes(ctx context.Context) bool {
 	if e.local == nil {
 		return false

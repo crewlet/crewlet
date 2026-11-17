@@ -40,17 +40,12 @@ func (h *heardMoves) take() []iamdomain.Moved {
 }
 
 // WHOSE CREDENTIALS AN IDENTITY BATCH MOVED REACHES THE LISTENER, THROUGH THE
-// REGISTER, and a batch that moved none does not.
-//
-// The listener is what ends or decides an open dashboard socket — a handshake
-// decision alone leaves a revoked session's tab receiving the company's state
-// for as long as it stays open — and nothing would notice a register that
-// built the identity applier with no hook: every case in internal/iamdomain
-// hands its own. So the applier here is the one a running node builds, and the
-// listener the one the API registers. A sign-in is the control: it is the bulk
-// of this log's traffic, moves nobody's credential, and must reach the
-// listener not at all, or every sign-in in the company reaches open sockets it
-// did not touch.
+// REGISTER, and a batch that moved none does not. The listener decides open
+// dashboard sockets, and every internal/iamdomain case hands its own hook, so
+// nothing else would notice a register that built the applier with none: the
+// applier here is the one a running node builds. A sign-in is the control: it
+// moves nobody's credential and must not reach the listener, or every sign-in
+// reaches open sockets it did not touch.
 func TestAnIdentityBatchReachesTheCredentialListener(t *testing.T) {
 	t.Parallel()
 	rig := newDirectoryRig(t)
@@ -91,15 +86,11 @@ func TestAnIdentityBatchReachesTheCredentialListener(t *testing.T) {
 }
 
 // A RECORD THE IDENTITY RUNNER RETAINS NAMES EVERYONE TO THE LISTENER, through
-// the applier the register builds.
-//
-// The framework finds an applier's retention hook by a type assertion on what
-// the register handed it, so a register that wrapped the identity applier — or
-// built one that dropped the hook — would compile, pass every iamdomain case,
-// and leave a retained revocation reaching no open socket on this node. So the
-// applier here is the register's own, and the listener the one the API
-// registers. It moves no seat: the contact routing is rebuilt from rows, and a
-// retained record wrote none.
+// the applier the register builds: the framework finds the retention hook by a
+// type assertion, so a register that wrapped the applier or dropped the hook
+// would compile, pass every iamdomain case, and leave a retained revocation
+// reaching no open socket. It moves no seat: contact routing is rebuilt from
+// rows, and a retained record wrote none.
 func TestARetainedIdentityRecordReachesTheCredentialListener(t *testing.T) {
 	t.Parallel()
 	e := &Engine{directoryNudge: make(chan struct{}, 1)}
@@ -134,13 +125,10 @@ func TestARetainedIdentityRecordReachesTheCredentialListener(t *testing.T) {
 	}
 }
 
-// AN ESTATE REPLACED WITH NO BATCH TO SAY SO NAMES EVERYONE TO THE LISTENER.
-//
-// An adoption puts a donor's rows in place and a reopened estate may be the
-// one a failed join installed: every revocation the donor applied while this
-// node was too far behind to follow arrives without an apply, so no committed
-// batch will ever name it. Told nothing, a socket opened on a session one of
-// those records ended goes on serving it until it closes on its own.
+// AN ESTATE REPLACED WITH NO BATCH TO SAY SO NAMES EVERYONE TO THE LISTENER:
+// after an adoption, or a reopen on a failed join's file, every revocation the
+// donor applied arrived without an apply, so no committed batch names it, and a
+// socket on a session one of them ended would serve on until it closed.
 func TestAReplacedEstateNamesEveryone(t *testing.T) {
 	t.Parallel()
 	e := &Engine{directoryNudge: make(chan struct{}, 1)}
@@ -162,17 +150,12 @@ func TestAReplacedEstateNamesEveryone(t *testing.T) {
 	}
 }
 
-// AN ESTATE REPLACED UNDER THE CHAT INDEX IS INDEXED AGAIN FROM ITS START.
-//
-// The chat index walks FORWARD over the transcript's own versions, so a row an
-// adoption replaced at a version the walk has already passed is never read
-// again: what this node indexed from the copy the adoption replaced — a copy
-// adopted over BECAUSE it was wrong, among other reasons — would answer
-// searches for as long as the deployment lived, and a search would say it
-// was answered over a caught-up index. The state log's own signal is the one
-// both an adoption and a reopen on a failed join's file raise, so it is the
-// one asked here, with an index that has caught up first: one that had not
-// would read as not ready whatever the signal did.
+// AN ESTATE REPLACED UNDER THE CHAT INDEX IS INDEXED AGAIN FROM ITS START: the
+// index walks FORWARD over the transcript's versions, so a row replaced behind
+// the walk is never reread, and what it indexed from the replaced copy would
+// answer searches as from a caught-up index. The state log's own signal (raised
+// by both an adoption and a reopen on a failed join's file) is asked, over an
+// index caught up first: one that was not would read as not ready anyway.
 func TestAReplacedEstateRebuildsTheChatIndex(t *testing.T) {
 	t.Parallel()
 	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"),
@@ -204,9 +187,9 @@ func TestAReplacedEstateRebuildsTheChatIndex(t *testing.T) {
 	}
 }
 
-// A REPLACED ESTATE REBUILDS THE INDEX OF CHANGES' WORDS, as it rebuilds the chat index: a document
-// indexed from the copy an adoption replaced would answer a listing narrowed by words for as long as the
-// deployment lived.
+// A REPLACED ESTATE REBUILDS THE INDEX OF CHANGES' WORDS, as it rebuilds the
+// chat index, or a document indexed from the replaced copy answers a listing
+// narrowed by words indefinitely.
 // Mutation: drop the change index's call from estateReplaced.
 func TestAReplacedEstateRebuildsTheChangeIndex(t *testing.T) {
 	t.Parallel()
@@ -238,13 +221,10 @@ func TestAReplacedEstateRebuildsTheChangeIndex(t *testing.T) {
 	}
 }
 
-// AN ADOPTION NAMES EVERYONE TO THE LISTENER, once the donor's rows are in
-// place and the appliers are running over them.
-//
-// The node was below the floor: every revocation a peer applied in that time
-// arrives inside the donor's file and through no apply of this node's, so
-// nothing else would ever say which open socket's credential one of them
-// ended.
+// AN ADOPTION NAMES EVERYONE TO THE LISTENER once the donor's rows are in place
+// and the appliers run over them: every revocation a peer applied while this
+// node was below the floor arrives inside the donor's file through no apply, so
+// nothing else would say which open socket's credential one of them ended.
 func TestAnAdoptionNamesEveryone(t *testing.T) {
 	t.Parallel()
 	e, back, q := bootRejoinNode(t)

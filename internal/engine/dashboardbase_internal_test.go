@@ -65,12 +65,12 @@ func TestNoDashboardBaseComposesNoLink(t *testing.T) {
 // baseEngine is an engine with no company over b, its store and stream in the
 // case's own directory.
 //
-// A NODE THAT SERVES NO API — a data, seats and workers node — because that is
-// where a public listener stands alone: on an ingress node it needs `api.port`
-// beside it, and a served API requires `api.external_url`, so the two
-// addresses could not be told apart there with one of them unset. The links
-// composed here are a worker's and a seat's as much as the API's: a skill is
-// rendered into a seat's prompt and a page change's link into its wake.
+// A NODE THAT SERVES NO API (data, seats, workers), the one place a public
+// listener stands alone: an ingress node needs `api.port` beside it and a
+// served API `api.external_url`, so the two addresses could not be told apart
+// with one unset. The links are a worker's
+// and a seat's as much as the API's: a skill renders into a seat's prompt and
+// a page change's link into its wake.
 func baseEngine(t *testing.T, b config.Bootstrap) *Engine {
 	t.Helper()
 	b.Node.Roles = []string{"data", "seats", "workers"}

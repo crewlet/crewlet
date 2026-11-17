@@ -10,13 +10,11 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
-// A TURN WOKEN IN A CHATLET THREAD IS HANDED THAT THREAD.
-//
-// [engine.Engine.ChatThreads] is what the turn-start prefetch reads a chat
-// thread through, one reader per surface, matched on the trigger's own
-// `transport`. It held the vendor surfaces' readers alone, so every Chatlet
-// thread reply rendered the "could not be read from this node" hint and sent
-// the seat to read its thread with its tools. This reads a real thread back
+// A TURN WOKEN IN A CHATLET THREAD IS HANDED THAT THREAD:
+// [engine.Engine.ChatThreads], which the turn-start prefetch reads a thread
+// through (one reader per surface, matched on the trigger's `transport`), holds
+// Chatlet's reader beside the vendors', or every Chatlet thread reply renders
+// the "could not be read from this node" hint. This reads a real thread back
 // through the engine's own set, as the seat it woke.
 func TestATurnWokenInAChatletThreadIsHandedTheThread(t *testing.T) {
 	t.Parallel()

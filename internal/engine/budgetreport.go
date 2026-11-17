@@ -16,65 +16,42 @@ import (
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
-// The LIVE TOKEN METERS, pushed rather than polled.
+// The LIVE TOKEN METERS, pushed rather than polled: the dashboard's header
+// draws the company's token headroom from a websocket push, so an open screen
+// moves as the company spends rather than a poll interval behind it.
 //
-// # Why this exists at all
+// A TICK rather than a publish per charge: a charge happens on every LLM round
+// of every seat, and the frame is a SNAPSHOT, so a consumer that missed ten of
+// them is one frame out of date, not behind.
 //
-// The dashboard's header renders the company's token headroom, and it renders
-// it from a websocket push — a screen that is open while a company works has
-// to move as the company spends, and a thirty-second poll behind it would
-// report the ceiling being hit half a minute after every seat had already
-// stopped. That push has been wired the whole time: the live projection folds a
-// report into its meter, the stream service broadcasts the result the moment a
-// report moves it, and the dashboard has a hook for it. Nothing published the
-// report, so every one of those carried zeroes.
-//
-// # Why a tick rather than a charge hook
-//
-// A charge happens on every LLM round of every seat. A publish per charge
-// would put an event on the fleet's stream per round for a screen nobody may
-// have open, and the frame is a SNAPSHOT — a consumer that missed ten of them
-// is not behind, it is one frame out of date.
-//
-// # And the one charge that does publish
-//
-// The FIRST REFUSAL IN A WINDOW is not one more reading of a meter that moves
-// over minutes: it is the moment the company — or a seat — stops working, and
-// every open header still says it is fine. Carried on the next tick it showed
-// up to fifteen seconds after every seat it stopped had stopped (the e2e
-// capture saw the refusal at 1.7 s and the frame that carried it at 15.6 s).
-// So the gate tells the reporter ([refusalLatch]) and the reporter publishes
-// at once; every refusal after it in the same window rides the tick, since it
-// changes nothing a header draws. It happens once per window per scope, so it
-// costs nothing the tick's own rationale was protecting.
+// Except a window's FIRST REFUSAL, the moment the company or a seat stops
+// working: the gate tells the reporter ([refusalLatch]) and it publishes at
+// once. Later refusals in the same window ride the tick, since they change
+// nothing a header draws.
 
 // BudgetReportInterval is how often a node publishes its snapshot.
 //
-// FIFTEEN SECONDS, from what the screen needs rather than what the counter
-// can bear. The question a header answers, "is the company about to run out",
-// changes over minutes, while each report costs a listing of the counter plus
-// one read per scope it holds, and is fanned out to every open dashboard on
-// every node the moment it lands, EVERY node publishing its own. A window's
-// first refusal does not wait for it ([refusalLatch]).
+// FIFTEEN SECONDS, from what the screen needs: "is the company about to run
+// out" changes over minutes, while EVERY node publishes its own report, each
+// costing a counter listing plus one read per scope and fanned out to every
+// open dashboard. A window's first refusal does not wait for it ([refusalLatch]).
 const BudgetReportInterval = 15 * time.Second
 
 // refusalLatch is how the gate tells the live meters a window has started
 // turning work away: the first refusal in each window wakes the reporter, and
 // the ones after it do not.
 //
-// FIRST AS THE COUNTER COUNTS IT. A window's refusal stamp is cleared by the
-// scope's next admitted charge ([coord.Budgets.Charge]), after which the next
-// refusal is a first again — a ceiling raised and then reached — so an
-// admitted charge forgets the scopes it charged, as the counter does. Per
-// NODE: a peer's refusal reaches this node's header on the peer's own frame,
-// which it publishes at once.
+// FIRST AS THE COUNTER COUNTS IT: a scope's next admitted charge clears its
+// refusal stamp ([coord.Budgets.Charge]), making the next refusal a first
+// again, so [refusalLatch.admitted] forgets those scopes too. Per NODE: a
+// peer's refusal reaches this node's header on the frame the peer publishes.
 //
 // Nil-safe throughout, for an engine built without one.
 type refusalLatch struct {
 	mu   sync.Mutex
 	seen map[refusedWindow]bool
-	// wake is the reporter's nudge. Buffered by one: a refusal that finds
-	// one pending adds nothing to it.
+	// wake is the reporter's nudge, buffered by one: a refusal that finds one
+	// pending adds nothing to it.
 	wake chan struct{}
 }
 
@@ -154,31 +131,27 @@ func (l *refusalLatch) woken() <-chan struct{} {
 type budgetReporter struct {
 	engine *Engine
 
-	// seq is monotonic within this process, and it is the reorder guard
-	// the payload's own doc asks for: broker ordering holds within one
-	// topic and a broadcast subscription reads across all of them, so an
-	// older report can arrive after a newer one and walk a meter backwards.
+	// seq is monotonic within this process, the reorder guard the payload's
+	// doc asks for: a broadcast subscription reads across topics, so an older
+	// report can arrive after a newer one and walk a meter backwards.
 	seq atomic.Int64
 
 	stop context.CancelFunc
 	done chan struct{}
 }
 
-// startBudgetReports arms the loop, or says why it did not.
+// startBudgetReports arms the loop where the engine has a fleet and a queue.
 //
-// EVERY NODE PUBLISHES, deliberately — this is not a fleet duty. The counters
-// are shared, so two nodes report the same numbers and a consumer keyed on
-// [types.BudgetMeters.MeterID] simply holds whichever arrived last; making
-// it a singleton would mean the meters stop the moment one node's lease flaps,
-// for a frame that costs one coordination read.
+// EVERY NODE PUBLISHES, deliberately: the counters are shared, so a consumer
+// keyed on [types.BudgetMeters.MeterID] holds whichever frame arrived last,
+// and a singleton's meters would stop whenever its lease flapped.
 func (e *Engine) startBudgetReports(ctx context.Context) {
 	if e.backends == nil || e.backends.Fleet == nil || e.backends.Queue == nil {
 		return
 	}
 	r := &budgetReporter{engine: e, done: make(chan struct{})}
-	// DETACHED from the caller's context, for the reason every other
-	// long-running loop here is: a loop bound to a signal context stops at
-	// SIGTERM, before the drain that is still spending tokens has run.
+	// DETACHED from ctx: a loop bound to a signal context stops at SIGTERM,
+	// before the drain that is still spending tokens has run.
 	loop, stop := context.WithCancel(context.WithoutCancel(ctx))
 	r.stop = stop
 	e.budgetReports = r
@@ -200,17 +173,15 @@ func (r *budgetReporter) run(ctx context.Context) {
 	r.loop(ctx, BudgetReportInterval, r.publish)
 }
 
-// loop publishes at once, then on every tick of every and on every wake of the
-// engine's refusal latch, until ctx ends. The publish is a parameter so the
-// schedule is exercised without a broker or a node behind it.
+// loop publishes at once, then on every tick of every and every wake of the
+// engine's refusal latch, until ctx ends. publish is a parameter so the
+// schedule is testable without a broker or a node.
 func (r *budgetReporter) loop(ctx context.Context, every time.Duration,
 	publish func(context.Context)) {
 	tick := time.NewTicker(every)
 	defer tick.Stop()
-	// ONE FRAME AT ONCE, then one per tick. A ticker's first fire is an
-	// interval away, and until a frame lands every open dashboard holds no
-	// reading of the budget at all — which it says, rather than guessing,
-	// but for fifteen seconds after every engine start.
+	// ONE FRAME AT ONCE: a ticker's first fire is an interval away, and until
+	// a frame lands every open dashboard has no budget reading at all.
 	publish(ctx)
 	for {
 		select {
@@ -246,28 +217,17 @@ func (r *budgetReporter) publish(ctx context.Context) {
 }
 
 // frame is the snapshot this node would publish now, and false for every
-// reason it publishes nothing.
+// reason it publishes nothing: the whole decision, split from
+// [budgetReporter.publish] (which stamps the incarnation, sequence and
+// envelope) so it is testable without a broker or a node.
 //
-// CUT AT THE ENGINE'S INSTANT ([Engine.now]), the one its gate charges a round
-// at, so the window a screen draws is the window the gate is counting in.
+// CUT AT [Engine.now], the instant the gate charges a round at, so the window
+// a screen draws is the window the gate counts in.
 //
-// THE WHOLE DECISION, split from the publish so it is testable without a
-// broker or a node: whether anything is capped, and whether the counters
-// could be read. Everything [budgetReporter.publish] adds — the incarnation,
-// the sequence, the envelope — is stamped on a frame this already decided to
-// send.
-//
-// A FAILED READ PUBLISHES NOTHING, rather than a frame of zeroes: the
-// consumer REPLACES what it holds on every report, so a zeroed one would
-// render a company that is spending as a company that has spent nothing —
-// which is the one reading an operator acts on by doing nothing.
-//
-// A COMPANY THAT CAPS NOTHING IS A FRAME, and one that needs no read: its
-// windows are empty whatever the counter holds, so the counter has nothing to
-// say about it. It used to publish nothing, which left a consumer unable to
-// tell "no ceiling" from "no report yet" — and the dashboard, holding an empty
-// meter for both, told an operator whose company WAS capped that it was not
-// for the first interval after every start.
+// A FAILED READ PUBLISHES NOTHING rather than zeroes: the consumer REPLACES
+// what it holds on every report, and zeroes would show a spending company as
+// having spent nothing. A COMPANY THAT CAPS NOTHING IS A FRAME, needing no
+// read, so a consumer can tell "no ceiling" from "no report yet".
 func (r *budgetReporter) frame(ctx context.Context) (types.BudgetMeters, bool) {
 	e := r.engine
 	company := e.Company()
@@ -293,35 +253,27 @@ func (r *budgetReporter) frame(ctx context.Context) (types.BudgetMeters, bool) {
 
 // BudgetNearFraction is the share of a window's ceiling at which the engine
 // calls it `near` ([types.BudgetNear]), and the ONE such threshold: every
-// answer that carries a state serves it beside the state, so a surface that
-// draws a threshold mark draws this one rather than a number of its own.
+// answer that carries a state serves it beside the state, so a surface draws
+// this mark rather than one of its own.
 //
-// NINE TENTHS, from what a steadily spending company looks like. Under a flat
-// rate a window's spend tracks the share of the window that has elapsed, so a
-// lower mark — the dashboard's 75%, which was one of the three this replaced —
-// fires in the last week of every healthy month and on every healthy evening,
-// and a mark that is always on is one nobody reads. At nine tenths a window is
-// ahead of its pace or at its last tenth either way, which is when raising a
-// ceiling is a decision somebody still has time to make.
+// NINE TENTHS: under a flat rate a window's spend tracks its elapsed share, so
+// a lower mark fires in the last week of every healthy month and on every
+// healthy evening, and is never read. At nine tenths a window is ahead of its
+// pace or in its last tenth, when raising a ceiling is still a decision.
 const BudgetNearFraction = 0.9
 
 // windowRefuses reports whether a capped window turns the next charge away:
-// it has no room left for a single token, which the gate refuses on the next
-// charge whatever its size.
+// it has no room left for a single token.
 //
 // THE SPEND DECIDES, NEVER THE REFUSAL STAMP. A refused round is counted
-// (coord.Budgets.Charge), so every window the gate has refused reads past its
-// ceiling by the round that crossed it, and this already holds for it. Where
-// the two part, the stamp is the stale one: a ceiling raised since leaves the
-// stamp on a window that has room again — only an admitted charge or the
-// window turning over clears it — and reading the stamp as "refusing" held the
-// seat in the budget park on the stamp alone, so no charge could ever be
-// admitted to clear it, and the room the raise made waited for the window to
-// turn over. The stamp is still reported as when the gate last said no.
+// ([coord.Budgets.Charge]), so a refused window already reads past its
+// ceiling. A raised ceiling leaves the stamp stale (only an admitted charge or
+// the window turning over clears it), and reading it would hold the seat in
+// the budget park with no charge ever admitted to clear it. The stamp is still
+// reported, as when the gate last said no.
 //
-// ONE PREDICATE for the budget park ([meter.refusing]) and the state every
-// meter reports ([budgetState]), so a seat is never parked under a meter that
-// reads as merely near.
+// ONE PREDICATE for the budget park ([meter.refusing]) and every meter's state
+// ([budgetState]), so a seat is never parked under a meter that reads as near.
 func windowRefuses(slot coord.WindowUsage, ceiling int) bool {
 	return slot.Used >= ceiling
 }
@@ -347,11 +299,10 @@ func budgetState(slot coord.WindowUsage, ceiling int, capped bool) types.BudgetS
 // [period.Periods] order, with its span, its spend, its ceiling where caps sets
 // one, its refusal and its [types.BudgetState].
 //
-// Every window rather than the capped ones, because a reader asking what a
-// scope has spent this week is owed the week whether or not a ceiling is
-// written for it; the live frame, which draws bars, keeps the capped ones
-// ([cappedWindows]). The one implementation both the frame and the `budgets`
-// answer are built from, so the two can never state one counter differently.
+// Every window, not only the capped ones: a reader asking a scope's spend this
+// week is owed it with or without a ceiling (the live frame keeps the capped
+// ones, [cappedWindows]). The frame and the `budgets` answer are both built
+// from it, so the two never state one counter differently.
 func BudgetWindows(caps coord.Caps, u coord.Usage) []types.BudgetWindow {
 	out := make([]types.BudgetWindow, 0, len(period.Periods))
 	for i, p := range period.Periods {
@@ -388,17 +339,12 @@ func cappedWindows(caps coord.Caps, u coord.Usage) []types.BudgetWindow {
 
 // budgetSnapshot is the frame one read of the shared counters makes. A company
 // that caps nothing frames the org as `[]` and lists no seat, which
-// [types.BudgetMeters.Metered] reports — a reading in its own right, "there is
-// no ceiling", never the absence of one.
-//
-// Split from the publish so what a frame SAYS is testable without a broker, a
-// node and a fleet: the reading of the counter is the whole of what can be
-// wrong with it, and it was the half nothing exercised.
+// [types.BudgetMeters.Metered] reports: "there is no ceiling", a reading in
+// its own right.
 //
 // EVERY CAPPED WINDOW OF EVERY SCOPE, each with its own ceiling, refusal and
-// state, so a seat capped by the day and by the month shows two bars rather
-// than one that jumps between them. A scope nothing has charged reads
-// [coord.Unspent].
+// state, so a seat capped by the day and the month shows two bars rather than
+// one jumping between them. A scope nothing has charged reads [coord.Unspent].
 func budgetSnapshot(company *Company, windows coord.Windows, usage []coord.Usage) types.BudgetMeters {
 	byScope := make(map[string]coord.Usage, len(usage))
 	for _, row := range usage {
@@ -417,9 +363,8 @@ func budgetSnapshot(company *Company, windows coord.Windows, usage []coord.Usage
 		Org:      types.BudgetScopeMeter{Windows: cappedWindows(orgCaps, read(coord.OrgScope))},
 	}
 
-	// ONLY METERED SEATS, which is what the payload promises: absence
-	// means "no cap and no meter", and a seat listed with no windows
-	// would be drawn as an empty bar rather than as no bar at all.
+	// ONLY METERED SEATS, as the payload promises: absence means "no cap and
+	// no meter", and a seat listed with no windows would draw an empty bar.
 	type seatMeter struct {
 		scope string
 		meter types.BudgetSeatMeter
@@ -453,11 +398,9 @@ func budgetSnapshot(company *Company, windows coord.Windows, usage []coord.Usage
 }
 
 // refusedAt renders a window's refusal stamp the way the payload carries it:
-// RFC 3339 in UTC, and empty for a window that is not refusing.
-//
-// EMPTY, never the zero instant spelled out. The dashboard tests the field for
-// presence, so "0001-01-01T00:00:00Z" would put every capped seat in its
-// attention queue as refusing charges since the first century.
+// RFC 3339 in UTC, and empty for a window that is not refusing. Never the zero
+// instant spelled out: the dashboard tests the field for presence, and would
+// queue every capped seat as refusing since the first century.
 func refusedAt(slot coord.WindowUsage) string {
 	if slot.RefusedAt.IsZero() {
 		return ""

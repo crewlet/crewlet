@@ -13,32 +13,27 @@ import (
 )
 
 // THE MCP ALARMS' INPUTS (M11): each configured server's condition joined
-// across every live node's status record row for it, which the alarm table judges
-// at the thresholds the restart schedule and the provisioning pass already keep
+// across every live node's status record rows for it, judged at the thresholds
+// the restart schedule and the provisioning pass keep
 // ([statelog.KindMCPServerFailing] and the three beside it).
 //
-// FLEET-WIDE AND NOTHING ELSE: an instance is down on the node running it and a
-// wait is held on the node holding its seat, and every node writes its servers
-// on its status record within a renew period of a change, so one listing of the
-// records, joined to the presence leases, is every server's condition, and
-// every data node judges the same one. Read off the same listing as the model
-// alarms ([Engine.entriesReading]), which carries the last good one across a
-// blip of either.
-//
-// THE SUMS ARE THE ANSWER'S: `mcp_servers_status` decides a server's state from
-// the same three counts over the same rows, so the alarm and the page cannot
-// call one server two things.
+// FLEET-WIDE: an instance is down on its own node and a wait held on its
+// seat's, and every node writes its servers on its status record within a
+// renew period, so one listing of the records, joined to the presence leases,
+// is every server's condition, the same on every data node.
+// It is the model alarms' listing ([Engine.entriesReading]), which carries the
+// last good one across a blip. `mcp_servers_status` sums the same three counts
+// over the same rows, so the alarm and the page cannot disagree.
 
 // mcpConditions joins every node's MCP rows into one condition per server the
-// active configuration runs, in name order. A server turned off raises nothing,
-// so it has no condition; one only a node on another revision reports is that
-// node's apply, which the control plane names, and has none either.
+// active configuration runs, in name order; one only a node on another
+// revision reports is that node's apply, which the control plane names, and
+// gets none.
 //
-// grants are the servers' OAuth grants by server ([Engine.grantsReading]): a
-// server signed in to by a person's grant gets its sign-in's condition from its
-// own, or none held. A service identity's server has none: nobody signs in to
-// it, and a credential its vendor refuses fails its instances, which the
-// failing and partial kinds read.
+// grants are the OAuth grants by server ([Engine.grantsReading]). Only a server
+// a person signs in to gets a sign-in condition: nobody signs in to a service
+// identity's, and a credential its vendor refuses fails its instances, which
+// the failing and partial kinds read.
 func mcpConditions(c *Company, statuses map[string]coord.NodeStatusRecord,
 	grants map[string]coord.MCPGrant) []statelog.MCPServerCondition {
 
@@ -47,8 +42,6 @@ func mcpConditions(c *Company, statuses map[string]coord.NodeStatusRecord,
 	for i := range c.Config.MCPServers {
 		if c.Config.MCPServers[i].IsEnabled() {
 			servers = append(servers, c.Config.MCPServers[i].Name)
-			// A PERSON'S SIGN-IN ALONE has a condition: a service identity
-			// is signed in by nobody, and its failures are its instances'.
 			signedIn[c.Config.MCPServers[i].Name] = c.Config.MCPServers[i].PersonSignIn()
 		}
 	}

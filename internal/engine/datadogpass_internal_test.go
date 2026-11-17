@@ -9,19 +9,15 @@ import (
 )
 
 // AN ENABLED DATADOG BLOCK WITH NO PROVISIONING IS REPORTED AS THE MISSING KEYS
-// IT IS, and never as connected.
-//
-// Config refuses that block, because the provisioning keys are what register
-// the webhook alerts arrive by: without them the integration serves a route,
-// reports itself connected and receives nothing. The pass returned nothing for
-// it — ready — on the reading that the company "asked for no identities". No
-// validated document carries such a block, so it is built here by hand.
+// IT IS, never as connected: those keys register the webhook alerts arrive by,
+// so without them the integration serves a route and receives nothing. Config
+// refuses such a block, so it is built here by hand.
 func TestADatadogBlockWithNoProvisioningIsReportedAsItsMissingKeys(t *testing.T) {
 	t.Parallel()
 	company := specCompany(t, provisioningDoc(true))
 	company.Config.Integrations.Datadog.Provisioning = nil
-	// A FLEET STORE, which every engine [New] builds has: the pass's access
-	// sync reads the seat access ledger kept there.
+	// A fleet store, as every engine [New] builds has: the pass's access sync
+	// reads the seat access ledger there.
 	e := &Engine{backends: &Backends{Fleet: memory.NewFleet()}}
 	e.epoch.current.Store(company)
 

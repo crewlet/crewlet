@@ -56,18 +56,15 @@ func (m *steppingMeter) Total() runner.Bridged {
 }
 
 // A SESSION'S CALLS ARE FILED UNDER THE JOB IT WAS BOUND TO, AND CARRY ITS
-// METER.
+// METER. Every append, the first included, names the job the launch bound the
+// session to before its box existed, so a call outliving its job never lands on
+// the next job's record as that job's (the store lists it late in its own round,
+// or drops it once a new round started). Every append carries the meter's
+// running total, every figure (cache shares, workers) included, for the
+// resuming segment to pay.
 //
-// Every append — the first included — names the job the launch bound the
-// session to before its box existed, so a call that outlives its job never lands
-// on the next job's record as that job's: the store lists it, marked late, in the
-// round it was made in, or drops it once a new round has started. And every append
-// carries the meter's running total as the row stores it — every figure, the
-// cache shares and the workers included — for the segment that resumes from
-// the run to pay.
-//
-// Mutations: leave the first append unnamed (the ledger that learned its job
-// from the row), or send an empty total, and this goes red.
+// Mutations: leave the first append unnamed (a ledger learning its job from
+// the row), or send an empty total, and this goes red.
 func TestABridgeSessionsCallsAreFiledUnderItsBoundJobAndCarryItsSpend(t *testing.T) {
 	t.Parallel()
 	store := &appendingStore{}
@@ -97,12 +94,11 @@ func TestABridgeSessionsCallsAreFiledUnderItsBoundJobAndCarryItsSpend(t *testing
 	}
 }
 
-// A SESSION NO JOB WAS BOUND TO FILES NOTHING, AND RUNS NOTHING. Through the
-// launch that cannot happen — the job is named before the box that makes calls
-// exists — so a call arriving on an unbound session is a wiring mistake, and the
-// one thing it must not do is reach the store naming no job, which a store that
-// read an empty name as "whichever job the row holds" filed on the next job's
-// record. Its entry is refused, so the call is not run off the record.
+// A SESSION NO JOB WAS BOUND TO FILES NOTHING, AND RUNS NOTHING. The launch
+// names the job before the box exists, so a call on an unbound session is a
+// wiring mistake, and it must not reach the store naming no job, which a store
+// reading an empty name as "whichever job the row holds" files on the next
+// job's record. Its entry is refused, so the call does not run off the record.
 //
 // Mutation: send the writes whatever the ledger's binding, and this goes red.
 func TestAnUnboundBridgeSessionFilesNothing(t *testing.T) {
@@ -121,12 +117,11 @@ func TestAnUnboundBridgeSessionFilesNothing(t *testing.T) {
 }
 
 // A BRIDGED CALL'S ROW SAYS WHEN IT RAN, FOR HOW LONG, IN WHAT ORDER, WHO
-// ANSWERED AND WHAT IT WAS — everything the bridge measured, in the log's own
-// shape, so a resumed executor's record can place its calls on a timeline, in
-// the order the run made them, and name the server each came from — read off
-// the log, which is the only place a collection, often another process, can
-// read them; and the identity the bridge admitted it under, which a later
-// segment's call log counts it by whatever the log keeps of its arguments.
+// ANSWERED AND WHAT IT WAS, in the log's own shape: the log is the only place
+// a collection, often another process, can read them, so a resumed executor's
+// record places its calls on a timeline in the run's order and names each
+// one's server. And the identity the bridge admitted it under, by which a later
+// segment's call log counts it whatever the log keeps of its arguments.
 //
 // Mutation: drop any of the six from the append, and this goes red.
 func TestABridgedCallsRowCarriesItsTimingAndWhoAnswered(t *testing.T) {
@@ -165,18 +160,16 @@ func TestABridgedCallsRowCarriesItsTimingAndWhoAnswered(t *testing.T) {
 
 // A CALL WHOSE RECORDED ARGUMENTS DO NOT READ BACK IS MARKED SO, as is one
 // whose arguments did not parse, and one the log recorded with no arguments is
-// not. The log spells a call made with none as no text at all, and so a call
-// the bridge refused unrun because what the model wrote did not parse, marked
-// unparsed; text that does not read back (cut, spliced, or not an argument
-// document) is a record something damaged, of a call made with some: all
-// decode to no arguments, and only the marks tell them apart, so the call
-// made with none is drawn as the tool called with none and the others say
-// their arguments could not be read, never as a call made with none.
+// not. All three decode to no arguments: the log spells a call made with none
+// as no text, a call the bridge refused unrun because its arguments did not
+// parse is marked unparsed, and text that does not read back (cut, spliced, not
+// an argument document) is a damaged record of a call made with some. Only the
+// marks tell them apart, so only the call made with none draws as the tool
+// called with none.
 //
 // Mutation: mark no call, and the damaged records draw `jira_create()`; mark
-// every call whose arguments decode to none, and the call made with none says
-// its arguments could not be read; ignore the unparsed mark, and the refused
-// call draws `jira_create()`.
+// every call decoding to none, and the call made with none reads as unreadable;
+// ignore the unparsed mark, and the refused call draws `jira_create()`.
 func TestACallWhoseRecordedArgumentsDoNotReadBackIsMarkedSo(t *testing.T) {
 	t.Parallel()
 	got := bridgedCalls([]sandbox.BridgeCall{
@@ -207,17 +200,15 @@ func TestACallWhoseRecordedArgumentsDoNotReadBackIsMarkedSo(t *testing.T) {
 	}
 }
 
-// WHAT THE LOG KEPT OF A CALL IS WHAT THE RESUMED TURN READS: its identity on
-// the turn's record of the call, and the size of the whole arguments and output
-// where the log kept less, which the collection's replay decides by — and the
-// calls the log dropped, by identity, in the turn's own shape. And of the call
-// a person approved, the held call it was made for, which tells the one a
-// relaunch's lead tells from one an earlier answer approved.
+// WHAT THE LOG KEPT OF A CALL IS WHAT THE RESUMED TURN READS: its identity, the
+// sizes of its whole arguments and output where the log kept less (the
+// collection's replay decides by them), the calls the log dropped as a tally by
+// identity, and of an approved call the held call it was made for, which tells
+// the one a relaunch's lead tells from one an earlier answer approved.
 //
-// Mutation: drop the digest or either size on the way to the runner, or the
-// tally, and a resumed segment seeds a cut call as another and replays a cut
-// submission as the run's; drop the held call's id, and a later attempt at an
-// answer lists the call its lead tells among the round's calls again.
+// Mutation: drop the digest, either size or the tally, and a resumed segment
+// seeds a cut call as another and replays a cut submission as the run's; drop
+// the held call's id, and a later answer lists its lead's call again.
 func TestWhatTheLogKeptOfACallIsWhatTheResumedTurnReads(t *testing.T) {
 	t.Parallel()
 	got := bridgedCalls([]sandbox.BridgeCall{{Name: "code_commit_files",
@@ -232,10 +223,10 @@ func TestWhatTheLogKeptOfACallIsWhatTheResumedTurnReads(t *testing.T) {
 		tally[0].Failed != 1 {
 		t.Errorf("the dropped calls read %+v", tally)
 	}
-	// A CALL WHOSE ARGUMENTS ARE WITHHELD reads as one, so a resumed segment
-	// counts it as a call of its tool whose arguments are not known, never as
-	// the tool called with none — and as WHICH of the two it is, which the
-	// execute phase's record says in place of its arguments.
+	// A CALL WHOSE ARGUMENTS ARE WITHHELD reads as one, and as held or
+	// approved (the execute phase's record says which in place of its
+	// arguments), so a resumed segment counts it as a call with unknown
+	// arguments, never as the tool called with none.
 	withheld := bridgedCalls([]sandbox.BridgeCall{{Name: "close_issue", Held: true, Failed: true},
 		{Name: "close_issue", Approved: true, HeldID: "held-1"}})
 	for _, call := range withheld {
@@ -254,17 +245,15 @@ func TestWhatTheLogKeptOfACallIsWhatTheResumedTurnReads(t *testing.T) {
 }
 
 // A RESUME HANDS THE RUNNER THE ROUND'S CALLS AS ITS LOG NUMBERED THEM. A
-// relaunch that continues a kept session is told the calls its run made after
-// the save by the order the round's log took them in (runner.BridgedCall's
-// Appended past runner.SessionBasis' Through), and counts the ones the log
-// dropped from its middle after it off the round's appends — the calls the
-// resume lists and the ones it hands over as a tally (runner.Resume's Elided).
-// So a resume read off a real log carries each call the number the log's own
-// append gave it, never its place among the calls the run made, and hands over
-// every append the log counts, listed or tallied.
+// relaunch continuing a kept session is told the calls made after the save by
+// the log's order (runner.BridgedCall's Appended past runner.SessionBasis'
+// Through) and counts the dropped ones off the round's appends (runner.Resume's
+// Elided). So each call carries the number the log's append gave it, never its
+// place among the run's calls, and every append the log counts is handed over,
+// listed or tallied.
 //
-// Mutation: drop the number from the conversion, or hand the runner the log's
-// dropped calls short of what it counts, and this goes red.
+// Mutation: drop the number from the conversion, or hand the runner fewer
+// dropped calls than the log counts, and this goes red.
 func TestAResumeHandsTheRunnerTheRoundsCallsAsItsLogNumberedThem(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -327,12 +316,11 @@ func TestABridgeSessionWithNoMeterSendsNoSpend(t *testing.T) {
 }
 
 // A RUN'S SUBMISSION, ONCE IN ITS LOG, TELLS THE WAITER THAT DRIVES IT TO LOOK
-// NOW: its harness is about to exit, and its completion is found within seconds of
-// that rather than up to a poll interval later. Only the submission, only one
-// the gate let through, and only one the log recorded — a refused submission
-// is no end, and one the log did not take, its round over, names a job that is
-// over. (A late one of the round, which the log records, names its own job,
-// which the row has moved on from and no waiter polls for it.)
+// NOW: its harness is about to exit, so its completion is found within seconds
+// rather than a poll interval later. Only a submission the gate let through and
+// the log took: a refused one is no end, and one the log did not take names a
+// job that is over. (A late one the log records names its own job, which no
+// waiter polls for.)
 //
 // Mutation: nudge on every recorded call, on a refused submission or ask, or
 // on one the log did not take, and this goes red.
@@ -348,9 +336,8 @@ func TestARecordedSubmissionTellsTheRunsWaiterToLookNow(t *testing.T) {
 		{"a submission the gate refused", "launch-1", tools.Call{Name: runner.SubmitWorkTool, Failed: true}, false},
 		{"any other call", "launch-1", tools.Call{Name: "read_page"}, false},
 		{"a submission its job no longer takes", "launch-0", tools.Call{Name: runner.SubmitWorkTool}, false},
-		// AN ASK ENDS THE RUN AS A SUBMISSION DOES (ADR-0068), and one the
-		// tool refused (malformed, its store unreachable, or its job moved
-		// on) ends nothing: the run was told so and goes on.
+		// AN ASK ENDS THE RUN AS A SUBMISSION DOES (ADR-0068); one the tool
+		// refused (malformed, store unreachable, job moved on) ends nothing.
 		{"a recorded ask", "launch-1", tools.Call{Name: builtin.AskAndWaitTool}, true},
 		{"an ask the tool refused", "launch-1", tools.Call{Name: builtin.AskAndWaitTool, Failed: true}, false},
 	} {
@@ -380,11 +367,10 @@ func TestARecordedSubmissionTellsTheRunsWaiterToLookNow(t *testing.T) {
 var errSpendRefused = errors.New("the record took the call's log but not its spend")
 
 // spendlessStore is a pending store whose log takes the first attempt of the
-// first record asked of it and whose record refuses the spend beside it — the
-// call is in the log, and the write of what it cost failed after it — and
-// which answers every attempt after that one as then does: the spend refused
-// again, the store out of reach, or the job replaced — by a new round, or by a
-// later job of its own round, which lists the call there.
+// first record while its record refuses the spend beside it, and which answers
+// every later attempt as then does: the spend refused again, the store out of
+// reach, or the job replaced (by a new round, or a later job of its own round
+// that lists the call).
 type spendlessStore struct {
 	sandbox.PendingStore
 	then  func() (bool, error)
@@ -403,27 +389,17 @@ func (s *spendlessStore) AppendBridgeCall(_ context.Context, _ string, a sandbox
 }
 
 // A CALL THE LOG TOOK IS NEVER ANSWERED AS AN UPDATE STILL OWED, WHATEVER
-// BECAME OF ITS SPEND. A call's update is one write of the run's log and then, where it
-// moved the job's spend, one of its record; a store that took the first and
-// refused the second answers the call recorded beside the error. The call is in
-// the log, and nothing an attempt after that one answers takes it out: the
-// attempts after it are for the spend alone, whether they meet the spend
-// refused again, the store out of reach, or the job replaced — by a new round,
-// or by a later job of its own round, whose log lists the call. So the call is
-// never answered as an update its bridge should ask for again
-// ([mcpbridge.ErrUnrecorded]), and the run's waiter is still nudged for a
-// submission that landed; the spend is cumulative, so the next record that
-// lands carries it. And the error answered is the spend's, the one
-// write that failed, WHICHEVER RELAUNCH REPLACED THE JOB: never the store's
-// word that its job was replaced, which no write failed over. On a bubble's
-// clock, so the retries cost the suite nothing.
+// BECAME OF ITS SPEND. An update writes the run's log, then the job's spend on
+// its record; a store taking the first and refusing the second answers the
+// call recorded beside the error, and later attempts are for the spend alone,
+// so whatever they meet the call is never [mcpbridge.ErrUnrecorded] and a
+// landed submission's waiter is still nudged. The cumulative spend rides the
+// next record that lands. The error answered is the spend's, whichever
+// relaunch replaced the job, never the store's word that it was replaced.
 //
-// Mutation: answer a record as its last attempt alone, and a call the first
-// attempt put in the log is answered as still owed where the store was then
-// out of reach, its submission's waiter never told; nudge only on a record
-// that answered no error, and the waiter is not told the run's work is in;
-// take the store's word that the job was replaced in its round for another
-// write's failure, and the spend's own error is lost.
+// Mutation: answer a record as its last attempt alone (the call is owed, its
+// waiter never told); nudge only on no error; or take the store's word that the
+// job was replaced for another write's failure (the spend's error is lost).
 func TestACallTheLogTookIsNeverSaidToHaveLostItsOutcomeWhateverBecameOfItsSpend(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -500,21 +476,17 @@ func ledgerOn(t *testing.T, store sandbox.PendingStore) (*bridgeLedger, *bytes.B
 }
 
 // AN UPDATE THE STORE REFUSES LEAVES THE CALL'S IDENTITY ON RECORD, AND IS
-// ANSWERED AS ONE STILL OWED. A call's entry is written before it runs, so a
-// store that then refuses every attempt at its update holds back what the call
-// answered, cost and committed, and nothing else: the entry stands in the run's
-// log, the call's identity on the record for every later segment's call log —
-// handed to the runner as a call whose outcome is unknown — and the ledger
-// answers [mcpbridge.ErrUnrecorded], which its bridge asks for again once the
-// call's answer is out. A blip the retries outlast loses nothing: the update
-// lands on a later attempt and takes the entry out. Nothing is carried by a
-// later call: the next call's update carries only itself.
+// ANSWERED AS ONE STILL OWED. The entry is written before the call runs, so a
+// store refusing every attempt at the update loses only its outcome: the entry
+// stays in the log, handed to every later segment's runner as a call whose
+// outcome is unknown, and the ledger answers [mcpbridge.ErrUnrecorded], which
+// its bridge asks for again once the call's answer is out. A blip the retries
+// outlast loses nothing, and the next call's update carries only itself.
 //
-// Mutation: make one attempt at an update, and a blip loses the call's
-// outcome; take the entry out of the log where the update did not land, and
-// the call is off the record; answer a refused update without
-// [mcpbridge.ErrUnrecorded] (refused-update-not-owed), and its bridge never asks
-// for it again.
+// Mutation: make one attempt at an update (a blip loses the outcome); take the
+// entry out where the update did not land (the call is off the record); or
+// answer a refused update without [mcpbridge.ErrUnrecorded]
+// (refused-update-not-owed), and its bridge never asks for it again.
 func TestAnUpdateTheStoreRefusesLeavesTheCallsIdentityOnRecord(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -596,16 +568,15 @@ func (s *electingStore) AppendBridgeCall(context.Context, string, sandbox.Bridge
 	return true, nil
 }
 
-// A BRIDGED CALL'S WRITES OUTLAST A LEADER'S RE-ELECTION. A call made as the
-// coordination store's stream leader steps down meets a store that refuses
-// every write until a successor is elected, about a second later. The retries
-// are there to outlast exactly that, so the call's entry lands within its
-// budget and the call runs, rather than being refused as one that could not be
-// recorded — and its update lands before its answer goes back to the box. On a
-// bubble's clock, so the second is exact and costs the suite nothing.
+// A BRIDGED CALL'S WRITES OUTLAST A LEADER'S RE-ELECTION. The store refuses
+// every write for about a second while the coordination store's stream leader
+// steps down and a successor is elected; the retries exist to outlast exactly
+// that, so the entry lands and the call runs rather than being refused as
+// unrecordable, and its update lands before its answer returns to the box. On
+// a bubble's clock, so the second is exact.
 //
-// Mutation: space the attempts 250 ms and then 500 ms, as they were, and the
-// last one comes before the successor is elected: the call is refused.
+// Mutation: space the attempts 250 ms then 500 ms, and the last comes before
+// the successor is elected: the call is refused.
 func TestABridgedCallsWritesOutlastALeadersReElection(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -642,13 +613,12 @@ func (s *fullStore) AppendBridgeCall(context.Context, string, sandbox.BridgeAppe
 	return false, sandbox.ErrCallsInFlight
 }
 
-// A CALL WHOSE ENTRY THE LOG DOES NOT TAKE IS NAMED, AND REFUSED. The call is not
-// run, so the ledger says so, at warning, naming it — its tool, its place and
-// the opening of its digest — and answers the bridge why: a store that refused
-// every attempt within the entry's budget, an error; a log that takes no more
-// calls of the job, [mcpbridge.ErrNotTaken], which the box is told as its run's
-// end; and a log holding as many calls in flight as it keeps, asked once — room
-// is made by calls finishing, not by asking again.
+// A CALL WHOSE ENTRY THE LOG DOES NOT TAKE IS NAMED, AND REFUSED. It does not
+// run, so the ledger names it at warning (tool, place, digest opening) and
+// answers the bridge why: the store's error after every attempt within the
+// entry's budget; [mcpbridge.ErrNotTaken], told to the box as its run's end,
+// where the log takes no more of the job's calls; and a full log of calls in
+// flight, asked once, since only finishing calls make room.
 //
 // Mutation: try a begin again past a log's bound, and a full log is asked as
 // often as an outage is.
@@ -688,9 +658,8 @@ func TestACallWhoseEntryTheLogDoesNotTakeIsNamedAndRefused(t *testing.T) {
 }
 
 // movingStore is a pending store whose bridged appends fail while it is down,
-// and which answers an append for a job its log no longer takes once the log
-// has moved on — a relaunch started a new round, or the run ended — as the store
-// does: taken, and landed nowhere.
+// and which, once its log has moved on (a relaunch's new round, or the run's
+// end), answers an append as the store does: no error, landed nowhere.
 type movingStore struct {
 	sandbox.PendingStore
 	down, moved atomic.Bool
@@ -742,14 +711,11 @@ func logLine(t *testing.T, logs *bytes.Buffer, msg string) map[string]any {
 }
 
 // A CALL NOBODY WAITED FOR THAT LANDS ON NO RECORD IS NAMED AT WARNING. An
-// opening's end answers a call still running that it is still running and
-// waits for none, and an ending that does not wait for it goes on to delete the
-// run's record: a call whose update finds the record gone ran, and its effect
-// happened, while neither the session that made it (which holds the end's
-// answer) nor any record of the run holds what it did. So the ledger names it,
-// at warning, by its tool, its place among the job's calls and the opening of
-// its identity, where a call its harness was handed whose round is over stays
-// the ordinary end of a round, said at debug.
+// opening's end waits for no running call, and an ending that does not wait
+// deletes the run's record: a call whose update then finds no record had its
+// effect while nothing holds what it did. So the ledger names it at warning
+// (tool, place, identity opening), while a handed call whose round is over
+// stays the ordinary end of a round, at debug.
 //
 // Mutation: say every call the log no longer takes at debug (`false &&` before
 // the test of its mark), and the call nobody waited for is named only at debug.

@@ -22,30 +22,18 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// THE EXECUTOR'S SESSIONS, KEPT, AND EVERY TURN'S END RECORDED (ADR-0073), as
-// the engine wires them into the sandbox runtime (internal/sandbox's
-// session.go has the mechanism).
+// THE EXECUTOR'S SESSIONS, KEPT, AND EVERY TURN'S END RECORDED (ADR-0073): the
+// engine's wiring of internal/sandbox's session.go.
 //
-// # Through the router, wherever the seat runs
+// THROUGH THE ROUTER, WHEREVER THE SEAT RUNS: a box runs wherever its seat is
+// held, a seats-only node included, and only a data node publishes, so every
+// capture and end goes through the estate router's writes ([Engine.executorLog]),
+// which no package serving a person or a model reaches (internal/estate's gate).
 //
-// A seat's box is wherever its seat is held, a seats-only node included, and
-// only a data node publishes. So the coordinator records every capture and every
-// end through the ESTATE ROUTER's writes ([Engine.executorLog]) — never a
-// data node's own writer, which a seats-only node does not have — and they are
-// the engine's alone: no package serving a person or a model reaches them
-// (internal/estate's gate).
-//
-// # What the engine adds
-//
-// The company's word on keeping sessions, off the revision the FLEET runs
-// ([executorKeep.Policy]); the keyring the secrets a launch handed its box are
-// sealed under on its run's row, for its capture's scrub
-// ([executorKeep.SealHanded]); the instant a turn's operations are minted at,
-// the rule every operation id of a turn follows ([executorKeep.MintedAt]); the
-// sealed spool and upload ([executorKeep.Seal], [executorKeep.Upload]); and, at
-// every way a turn ends, the account of how it ended ([Engine.oweExecutorEnd])
-// — the turn's decision, whether its reply reached the party waiting, who
-// stopped it, what lost it.
+// The engine adds the fleet revision's keep policy ([executorKeep.Policy]), the
+// seal of the secrets a launch handed its box, for its capture's scrub
+// ([executorKeep.SealHanded]), the turn's mint instant ([executorKeep.MintedAt]),
+// the sealed spool and upload, and how each turn ended ([Engine.oweExecutorEnd]).
 
 // executorLogWrites is the executor log's writes the engine records a run's
 // captures and its turn's end through: the estate router's
@@ -119,10 +107,9 @@ func (r executorRecords) Capture(ctx context.Context, c sandbox.CaptureRecord) (
 // Begin records a turn's first read of its conversation under the one
 // operation the turn derives ([executordomain.BeginOpID]), and answers whether
 // the turn's row, read back, holds the base the read froze
-// ([executordomain.BeginResult]). APPLIED is LANDED whether this attempt wrote
-// it or an earlier one, or a capture that landed first, recorded the turn's
-// first read: either way the row read back says what it holds. The log's
-// definite refusals are a capture's ([refusedCapture]).
+// ([executordomain.BeginResult]). APPLIED is LANDED whoever recorded the first
+// read (this attempt, an earlier one, or a capture): the row read back says
+// what it holds. Definite refusals are a capture's ([refusedCapture]).
 func (r executorRecords) Begin(ctx context.Context, b sandbox.BeginRecord) (sandbox.BeginAnswer, error) {
 	call := executordomain.Call{By: sandboxAuthor, OpID: executordomain.BeginOpID(b.Minted, b.Handle, b.Turn)}
 	res, err := r.log.Begin(ctx, call, executordomain.NewBegin{Handle: b.Handle, Turn: b.Turn,
@@ -199,11 +186,10 @@ func (k executorKeep) Policy(ctx context.Context) (sandbox.SessionPolicy, error)
 	return k.engine.executorPolicy(ctx)
 }
 
-// Keeps is whether the revision this node runs keeps sessions, read off the
-// company it holds with no round trip ([sandbox.SessionKeep.Keeps]): the hint
-// that spares a launch its sealing, and a loss its read of another host's box,
-// where nothing would be kept. A node with no object store keeps nothing, as
-// [executorKeep.Policy] says; the take itself asks Policy, the fleet's word.
+// Keeps is whether the revision this node runs keeps sessions, read with no
+// round trip ([sandbox.SessionKeep.Keeps]): a hint that spares a launch its
+// sealing, and a loss its read of another host's box, where nothing would be
+// kept. The take itself asks [executorKeep.Policy], the fleet's word.
 func (k executorKeep) Keeps() bool {
 	if k.engine.Objects() == nil {
 		return false
@@ -221,8 +207,7 @@ func (k executorKeep) Keeps() bool {
 //
 // THE FLEET'S REVISION, NEVER THIS NODE'S OWN, for [Engine.executorRetention]'s
 // reason: the budget a capture carries decides which ended sessions every node
-// releases, so a node serving a revision the fleet did not take must not decide
-// it. A capture that cannot read it is refused, and its stamp says why.
+// releases. A capture that cannot read it is refused, and its stamp says why.
 func (e *Engine) executorPolicy(ctx context.Context) (sandbox.SessionPolicy, error) {
 	company, err := e.servedFleetRevision(ctx)
 	if err != nil {
@@ -310,12 +295,9 @@ func (e *Engine) executorSessionStore() (*executordomain.SessionStore, error) {
 // oweExecutorEnd records how a turn that launched an executor ended: OWED on
 // the turn's run row ([sandbox.Coordinator.OweEnd]), which the run's ending
 // records on the executor log once every capture of the turn has settled and
-// before it deletes the row — so the seat's mail waits on it, and the turn's
-// row on the log holds it beside the session it kept. Owed under a context of
-// the coordinator's own, so a frame a drain is cancelling still owes it. A turn
-// whose row is gone has nothing to owe it on, and its end is recorded now
-// ([sandbox.Coordinator.EndTurn]) — owed after all where the row turns out to
-// be there — best effort and said where the log does not take it.
+// before it deletes the row, so the seat's mail waits on it. Owed under the
+// coordinator's own context, so a frame a drain is cancelling still owes it. A
+// turn whose row is gone has its end recorded now ([Engine.endTurnNow]).
 //
 // DECIDED ONCE: a turn whose row owes an end already keeps that one.
 func (e *Engine) oweExecutorEnd(ctx context.Context, run sandbox.PendingRun, ending executorkeep.Ending) {
@@ -383,13 +365,12 @@ func telTurnEnd(tel turnTelemetry, ending executorkeep.Ending) sandbox.TurnEnd {
 		WorkKey: tel.workKey, WorkSince: tel.workSince, Ask: tel.title, Ending: ending}
 }
 
-// endingOf is how a turn whose loop returned res ended, as its end records it:
-// FAILED where a guard ended it or its decision was a failure, COMPLETED
-// otherwise — and the turn's own decision and breach, never the reviewer's last
-// word, which still reads `done` after the loop overrode it; whether its reply
-// reached the party waiting, and on what; what the reviewer said landed; what
-// stopped a blocked round. answered is the engine's own answer to a colleague's
-// ask, where the turn owed one.
+// endingOf is how a turn whose loop returned res ended: FAILED where a guard
+// ended it or its decision was a failure, COMPLETED otherwise. It records the
+// turn's own decision and breach, never the reviewer's last word (which still
+// reads `done` after the loop overrode it), whether and where its reply was
+// delivered, what the reviewer said landed and what blocked a round. answered
+// is the engine's own answer to a colleague's ask, where the turn owed one.
 func endingOf(res turn.Result, reply turn.Reply, answered colleagueAnswer) executorkeep.Ending {
 	ending := executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted, Decision: string(res.Decision),
 		Delivered: res.Delivered, DeliveredTo: replySurface(reply)}
@@ -475,25 +456,17 @@ func stoppedEnding(res turn.Result, reply turn.Reply, stop error, answered colle
 	return ending
 }
 
-// runDelivered is whether the party waiting on run's turn has its answer, as
-// the run's own log of the turn's bridged calls says, read by the run's ending
-// ([sandbox.RunCalls]) — [turn.Answered], the rule a turn's loop answers it
-// by, over every round's calls: the earlier rounds' ([sandbox.BridgeLog.PriorCalls])
-// and the current one's, the calls its log kept and the identities of the ones
-// it does not list ([sandbox.BridgeLog.Unlisted]) — for an ending no frame of
-// the turn reaches: a loss, a stop. KNOWN is false where the log could not be
-// read, or is incomplete — calls not accounted for by name, on a log a build
-// without identities elided or past what its tally of identities holds
-// ([sandbox.BridgeLog.ElisionKnown]), or a call whose outcome is unknown, its
-// entry still in flight as the ending read the log ([sandbox.BridgeLog.InFlight])
-// — and what it kept shows no delivery: a definite "did not reply" read off no
-// log, or half of one, is the false account the end exists to prevent.
-//
-// A WORK PICKUP'S TURN IS HELD TO ITS ITEM, as its loop holds it: delivered
-// only where the seat's rows since the turn's first launch typed an answer on
-// the item or the item left the seat ([Engine.pickupAnswerFor], ADR-0122), and
-// unknown where that read fails, so a run lost after a comment alone is never
-// recorded as having answered.
+// runDelivered is whether the party waiting on run's turn has its answer, for
+// an ending no frame of the turn reaches (a loss, a stop): [turn.Answered], the
+// loop's rule, over every round's calls in the run's bridge log
+// ([sandbox.RunCalls]), the earlier rounds' ([sandbox.BridgeLog.PriorCalls])
+// and the unlisted ones' identities ([sandbox.BridgeLog.Unlisted]) included.
+// KNOWN is false where the log is unread or incomplete (calls elided unnamed,
+// [sandbox.BridgeLog.ElisionKnown]; an entry [sandbox.BridgeLog.InFlight]) and
+// shows no delivery: "did not reply" read off half a log is the false account
+// the end exists to prevent. A WORK PICKUP'S TURN IS HELD TO ITS ITEM, as its
+// loop holds it ([heldToItem], [Engine.pickupAnswerFor], ADR-0122), so a run
+// lost after a comment alone is never recorded as having answered.
 func (e *Engine) runDelivered(ctx context.Context, c *Company, run sandbox.PendingRun,
 	bridged sandbox.RunCalls) (reply turn.Reply, delivered, known bool) {
 

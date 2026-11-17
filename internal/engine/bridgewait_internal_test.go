@@ -29,12 +29,10 @@ func (w waitedTool) Call(context.Context, map[string]any) (tools.Result, error) 
 }
 
 // EVERY SERVER A BOX IS HANDED WAITS FOR A CALL AS LONG AS ITS BRIDGE CAN TAKE
-// TO ANSWER ONE. The bridge keeps a running call's answer going, which answers
-// every silence check a harness keeps on a call, so the harness's own tool
-// timeout is all that bounds its wait, and the launch hands it the bridge's
-// bound: on the engine's own server, and on each of the seat's MCP servers the
-// box reaches through the bridge, whose calls the same bridge keeps going and
-// answers.
+// TO ANSWER ONE. The bridge keeps a running call's answer going, answering the
+// harness's silence checks, so its own tool timeout is all that bounds its
+// wait: the launch hands it the bridge's bound, on the engine's own server and
+// on each of the seat's MCP servers the box reaches through the bridge.
 //
 // Mutation: hand the box no wait, or hand it to the engine's own server alone,
 // and an entry here waits on its harness's own default.
@@ -47,9 +45,8 @@ func TestEveryServerABoxIsHandedWaitsAsLongAsItsBridgeCanTakeToAnswer(t *testing
 	}))
 	l := launcherOn(e, c, seat, "t1")
 	req := launchRequest(l, nil)
-	// A SURFACE WITH A TOOL BOUND PAST THE ENGINE'S ONE-CALL CEILING, and one
-	// of the seat's MCP servers' tools on it, so the box is handed that
-	// server too.
+	// A SURFACE WITH A TOOL BOUND PAST THE ENGINE'S ONE-CALL CEILING, and one of
+	// the seat's MCP servers' tools, so the box is handed that server too.
 	reg := tools.NewRegistry()
 	if err := reg.Register(waitedTool{name: "long_report", bound: 3 * time.Hour}, tools.OriginBuiltin); err != nil {
 		t.Fatalf("Register(long_report): %v", err)
@@ -82,12 +79,10 @@ func TestEveryServerABoxIsHandedWaitsAsLongAsItsBridgeCanTakeToAnswer(t *testing
 }
 
 // A RELAUNCH'S BOX WAITS AS LONG AS ITS BRIDGE CAN TAKE TO ANSWER A CALL,
-// WHICHEVER SESSION IT STARTS. A relaunch that continues the turn's kept
-// session wires its box twice: under the token of the session it continues,
-// and under the job's other token for a session the box starts of its own
-// where it cannot restore that one. Which of the two its harness is handed is
-// the box's to find out as it starts, so the servers of both wait for a call
-// as long as the bridge can take to answer one.
+// WHICHEVER SESSION IT STARTS. A relaunch continuing the kept session wires its
+// box twice: for that session, and for one the box starts itself where it
+// cannot restore it. Only the box learns which as it starts, so both wirings
+// carry the bridge's bound.
 //
 // Mutation: hand the wiring for a session of the box's own no wait, and a box
 // that starts one waits on its harness's own default.

@@ -65,12 +65,11 @@ integrations:
 	}
 }
 
-// THE CAP ANSWERS BEFORE THE EPOCH EXISTS. A node's first company starts the
-// inbound edge before the epoch that carries it is published, and a delivery
-// that reaches the edge in between still asks for the per-seat cap. Read off
-// the epoch alone, that question dereferenced a company that did not exist
-// yet; once the epoch is current it is the one that answers, so an apply that
-// moves the cap moves it on the next notification.
+// THE CAP ANSWERS BEFORE THE EPOCH EXISTS: a node's first company starts the
+// inbound edge before its epoch is published, and a delivery in between still
+// asks for the per-seat cap, which a read off the epoch alone dereferenced as a
+// company not there yet. Once the epoch is current it answers, so an apply
+// that moves the cap moves it on the next notification.
 func TestTheNotificationCapAnswersBeforeTheFirstEpoch(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}

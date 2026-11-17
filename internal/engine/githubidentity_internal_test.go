@@ -39,14 +39,9 @@ roles:
     llm: primary
 `
 
-// AN AGENT'S OWN APP IS ITS IDENTITY, AND IT COSTS NO REQUEST.
-//
-// The old shape learned a seat's account by spending a `GET /user` per
-// credential, because a personal access token says nothing about whose it is.
-// An app's account is its slug, which the engine wrote down when it created
-// the app, so a seat that acts as its own app was registrable all along and
-// registered as nothing: a live company had an app created, installed, its
-// deliveries verified and stored, and not one of them reaching a seat.
+// AN AGENT'S OWN APP IS ITS IDENTITY, AND IT COSTS NO REQUEST: its account
+// is the slug the engine recorded, so a seat acting as its app is registered
+// without a `GET /user`, or its deliveries reach no seat.
 func TestASeatsOwnAppIsRegisteredUnderBothItsNames(t *testing.T) {
 	t.Parallel()
 	c := companyWith(t, appSeatsDoc)
@@ -57,9 +52,8 @@ func TestASeatsOwnAppIsRegisteredUnderBothItsNames(t *testing.T) {
 		t.Fatalf("registered %d seats, want the one with an app", got)
 	}
 
-	// THE MENTION, which is what a person types and what wakes the agent.
-	// FOLDED: the slug is written as `Acme-SRE-Lead` and a mention arrives
-	// from [github.Mentions] already lowercased.
+	// THE MENTION, what a person types. FOLDED: the slug is `Acme-SRE-Lead`
+	// and [github.Mentions] lowercases a mention.
 	party, ok := reg.ByExternalID(github.Backend, "acme-sre-lead")
 	if !ok || party.Handle != "sre-lead" {
 		t.Fatalf("a mention of the app resolved to %v (found=%v)", party.Handle, ok)
@@ -70,9 +64,8 @@ func TestASeatsOwnAppIsRegisteredUnderBothItsNames(t *testing.T) {
 		t.Fatalf("the app's own account resolved to %v (found=%v)", party.Handle, ok)
 	}
 
-	// A SEAT WHOSE APP DOES NOT EXIST YET IS NOT REGISTERED. It has a click
-	// outstanding and acts as nobody until somebody makes it one; a bare
-	// "[bot]" would map it and every seat like it onto one id.
+	// A SEAT WHOSE APP DOES NOT EXIST YET IS NOT REGISTERED: a bare "[bot]"
+	// would map it and every seat like it onto one id.
 	if _, ok := reg.ByExternalID(github.Backend, "[bot]"); ok {
 		t.Error("a seat with no app was registered under a bare bot suffix")
 	}
@@ -81,12 +74,9 @@ func TestASeatsOwnAppIsRegisteredUnderBothItsNames(t *testing.T) {
 	}
 }
 
-// A TOKEN THIS ENGINE RESOLVED IS FOLDED TOO.
-//
-// `GET /user` answers with the account's canonical casing, and a mention
-// carries what a person typed. Registered unfolded, a seat whose account is
-// `SreLead` was woken when a payload named it as an author and never when
-// somebody wrote `@srelead`, which is the spelling most people type.
+// A TOKEN THIS ENGINE RESOLVED IS FOLDED TOO: `GET /user` answers in the
+// account's canonical casing (`SreLead`), and unfolded, a mention typed
+// `@srelead` would never wake the seat.
 func TestATokenResolvedAccountIsRegisteredFolded(t *testing.T) {
 	t.Parallel()
 	const doc = `
@@ -116,9 +106,8 @@ roles:
 }
 
 // AN APP OUTRANKS A LEFTOVER TOKEN, because the app is what the agent acts
-// as. Registered the other way round, a credential nobody had cleaned out of
-// mcp_env would overwrite the mapping with whatever account it authenticates
-// as, and the app's own deliveries would reach a stranger.
+// as: otherwise a stale credential in mcp_env overwrites the mapping and the
+// app's own deliveries reach a stranger.
 func TestAnAppOutranksALeftoverToken(t *testing.T) {
 	t.Parallel()
 	const doc = `
@@ -155,9 +144,8 @@ roles:
 	}
 }
 
-// SEATS WITHOUT AN APP STILL USE THEIR TOKEN, because a company mid-migration
-// runs both shapes at once and dropping the token path would unroute every
-// seat that has not been given an app yet.
+// SEATS WITHOUT AN APP STILL USE THEIR TOKEN: a company mid-migration runs
+// both shapes, and dropping the token path unroutes every seat without one.
 func TestASeatWithNoAppKeepsItsToken(t *testing.T) {
 	t.Parallel()
 	const doc = `
@@ -197,15 +185,10 @@ roles:
 }
 
 // A SEAT WHOSE GITHUB CREDENTIAL IS ITS OWN APP'S TOKEN IS NEVER LOOKED UP.
-//
-// The documented tool credential of a seat with its own app is
-// `Bearer ${GITHUB_APP_TOKEN_<HANDLE>}`. Read as a personal credential, the
-// wiring spent a GET /user on it: before the app existed the variable was
-// unissued and the request carried the bare scheme (401 Bad credentials, on
-// every wiring), and once it existed GitHub refuses GET /user for every
-// installation token. The identity is the app's slug, so no request is made,
-// the seat with an app is registered under it, and the seat without one is
-// named as waiting for it.
+// `Bearer ${GITHUB_APP_TOKEN_<HANDLE>}` is unissued before the app exists
+// (401 on every wiring) and refused GET /user after. The identity is the
+// app's slug: the seat with an app is registered under it, and the seat
+// without one is named as waiting for it.
 func TestASeatActingAsItsOwnAppIsNeverLookedUpWithGetUser(t *testing.T) {
 	t.Parallel()
 	const doc = `
