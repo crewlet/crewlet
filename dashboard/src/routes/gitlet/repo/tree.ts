@@ -260,7 +260,7 @@ export interface Forest {
 
 // A NODE'S ID is its path; a state's row and a path git cannot spell take "//", which no path holds.
 const markId = (dir: string, mark: string) => `${dir}//${mark}`;
-const entryId = (e: CodeTreeEntry) => (e.path_b64 ? `//b64/${e.path_b64}` : e.path);
+const entryId = (e: CodeTreeEntry) => (e.path_b64 ? `b64//${e.path_b64}` : e.path);
 
 /** A directory's name as its rows name it: the repository's root is "the root". */
 export const dirWord = (dir: string) => (dir ? baseName(dir) : "the root");

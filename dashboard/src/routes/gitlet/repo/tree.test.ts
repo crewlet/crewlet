@@ -84,7 +84,7 @@ test("a submodule and a path git cannot spell are listed as inert", () => {
     ]),
   );
   expect([...forest.nodes.values()].map((n) => n.kind)).toEqual(["inert", "inert"]);
-  expect(forest.nodes.has("//b64/YmFk")).toBe(true);
+  expect(forest.nodes.has("b64//YmFk")).toBe(true);
 });
 
 test("a path's ancestors are its directories from the root", () => {
