@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/jsonscan"
 )
@@ -79,20 +80,33 @@ import (
 // the pass captures that passes its bound fails the line closed, never read
 // as a guess.
 //
-// A RECORD'S TYPE GATES ITS FRAMES. A frame whose accessors answer on records
-// of some types alone (a message, on a user's or an assistant's) is passed
-// over unread where the `type` the line wrote before it is a string naming
-// none of them ([lineDecoder.admits]): an api-request-blob writes its type
-// first, and then a message that repeats a whole request, its media among
-// it. A record's type is known only at its end, though (an assistant record
-// writes its message before its type), so a frame met before any type, or
-// after one that is no string, is read; a line whose last type reads a frame
-// the pass passed over for an earlier one fails closed, never read as a
-// record that holds no such frame; and a frame the last type does not read
-// is dropped at the commit ([settle]). Which kind of call a
-// message's blocks make turns on the type too (a user's results, an
-// assistant's uses), so the pass keeps both kinds and the commit keeps the
-// type's.
+// A LIST ITS READERS WALK is read an element at a time, each element by the
+// layer's one rule of it as it ends (a replacement's [replacedID], a batch
+// entry's [batchEntryID], a withheld memory's [withheldKept]), in order, up to
+// the first the rule refuses, which is the list's error, every element after
+// it passed over (still counted where its reader counts every element, as a
+// replacement record's is): what a walk of the list hands its reader
+// ([eachElement]). An entry a reader reads by its first characters alone (a
+// retraction's, a kept record's uuid) is read no further than one byte past
+// them ([lineDecoder.opening]), and a skill's name streams into its length in
+// UTF-16 code units and whether its bytes as written were UTF-8
+// ([jsonscan.Scanner.InvalidUTF8]), so no entry is held whole.
+//
+// A RECORD'S TYPE GATES ITS FRAMES ([gates]). A frame whose accessors answer
+// on records of some types alone (a message, on a user's or an assistant's;
+// an attachment, on an attachment record's; a compaction's metadata, on a
+// system record's) is passed over unread where the `type` the line wrote
+// before it is a string naming none of them ([lineDecoder.admits]): an
+// api-request-blob writes its type first, and then a message that repeats a
+// whole request, its media among it. A record's type is known only at its
+// end, though (an assistant record writes its message before its type), so a
+// frame met before any type, or after one that is no string, is read; a line
+// whose last type reads a frame the pass passed over for an earlier one fails
+// closed, never read as a record that holds no such frame; and a frame the
+// last type, or its subtype, does not read is dropped at the commit
+// ([settle]). Which kind of call a message's blocks make turns on the type
+// too (a user's results, an assistant's uses), so the pass keeps both kinds
+// and the commit keeps the type's.
 
 // threadValueMax is the most of one value the layer reads whole: a raw value
 // it keeps for an accessor to decode (a uuid, a timestamp, a reply's usage,
@@ -493,20 +507,105 @@ type lineDecoder struct {
 	// tool_result's content being read.
 	block  blockScan
 	result textResult
+	// held is the small values of the payload object being read that the
+	// rule deciding it reads once it ends, as written, empty where it lacks
+	// them: a toolUseResult's `status`, `agentId` and `success`
+	// ([answerOf]); a replacement's `kind` and `toolUseId` ([replacedID]); a
+	// batch entry's `id` ([batchEntryID]); a withheld memory entry's `why`
+	// ([withheldKept]); a kept list's `anchorUuid`. Objects of no two of
+	// them are open at once.
+	held [3][]byte
+	// open is a list entry's opening ([lineDecoder.opening]): the most of an
+	// entry any reader reads, a uuid's 36 bytes, one more, and room for one
+	// character more, which a read never splits.
+	open [uuidTextBytes + 1 + utf8.UTFMax]byte
 }
 
-// The frames a record's type gates ([lineDecoder.admits]), each a member of a
+// uuidTextBytes is a canonical uuid's length as written ([uuidBytes]), and
+// retractionPrefixBytes the characters of a retraction's entry the chain
+// reads ([chainPrefix]).
+const (
+	uuidTextBytes         = 36
+	retractionPrefixBytes = 24
+)
+
+// The frames a record's type gates ([gates]), each a member of a
 // gatedFrames.
 type gatedFrames uint8
 
 const (
-	// gateMessage is a user's or an assistant's `message` ([messageTypes]).
 	gateMessage gatedFrames = 1 << iota
+	gateToolUseResult
+	gateAttachment
+	gateCompacted
+	gateRetracted
+	gateReplacements
+	gateBatch
 )
 
-// messageTypes is the types of record whose accessors read a message
-// ([threadLine.Message]).
-var messageTypes = []string{recordUser, recordAssistant}
+// gates is each frame a record's type gates ([lineDecoder.admits]): its key,
+// the types of record whose accessors read it, and on a system record the
+// one subtype they read it on, "" where they read it on every subtype; and
+// how the pass reads it into a line's facts. In this order the commit names
+// the first a line's type reads that the pass passed over
+// ([lineDecoder.passedOver]).
+var gates = [...]struct {
+	frame   gatedFrames
+	key     string
+	types   []string
+	subtype string
+	read    func(d *lineDecoder, scan *jsonscan.Scanner, k jsonscan.Kind, f *lineFacts) error
+}{
+	{gateMessage, "message", []string{recordUser, recordAssistant}, "",
+		func(d *lineDecoder, scan *jsonscan.Scanner, k jsonscan.Kind, f *lineFacts) error {
+			return d.message(scan, k, &f.message)
+		}},
+	{gateToolUseResult, "toolUseResult", []string{recordUser}, "",
+		func(d *lineDecoder, scan *jsonscan.Scanner, k jsonscan.Kind, f *lineFacts) error {
+			return d.toolResult(scan, k, &f.result)
+		}},
+	{gateAttachment, "attachment", []string{recordAttachment}, "",
+		func(d *lineDecoder, scan *jsonscan.Scanner, k jsonscan.Kind, f *lineFacts) error {
+			return d.attachment(scan, k, &f.attachment)
+		}},
+	{gateCompacted, "compactMetadata", []string{recordSystem}, subtypeCompactBoundary,
+		func(d *lineDecoder, scan *jsonscan.Scanner, k jsonscan.Kind, f *lineFacts) error {
+			return d.compacted(scan, k, &f.compacted)
+		}},
+	{gateRetracted, "retractedMessageUuids", []string{recordUser, recordAssistant, recordSystem},
+		subtypeRefusalFallback, func(d *lineDecoder, scan *jsonscan.Scanner, k jsonscan.Kind, f *lineFacts) error {
+			return d.retracted(scan, k, f)
+		}},
+	{gateReplacements, "replacements", []string{recordContentReplacement}, "",
+		func(d *lineDecoder, scan *jsonscan.Scanner, k jsonscan.Kind, f *lineFacts) error {
+			return d.replacements(scan, k, &f.replacements)
+		}},
+	{gateBatch, "batchToolUses", []string{recordAssistant}, "",
+		func(d *lineDecoder, scan *jsonscan.Scanner, k jsonscan.Kind, f *lineFacts) error {
+			return d.batch(scan, k, &f.batch)
+		}},
+}
+
+// drop empties f's facts of frame, as a line that never wrote its key holds
+// them.
+func (f *lineFacts) drop(frame gatedFrames) {
+	switch frame {
+	case gateMessage:
+		f.message = messageFacts{}
+	case gateToolUseResult:
+		f.result = toolResultFacts{}
+	case gateAttachment:
+		f.attachment = attachmentFacts{}
+	case gateCompacted:
+		f.compacted = compactFacts{}
+	case gateRetracted:
+		f.retracted, f.retractedErr = threadRetracted{}, nil
+	case gateReplacements:
+		f.replacements = replacementFacts{}
+	case gateBatch:
+		f.batch = batchFacts{}
+	}
+}
 
 // blockScan is the content block being read, until it ends, where the one
 // rule of a block decides it from what it holds ([blockCallOf]): each key the
@@ -594,28 +693,38 @@ func (d *lineDecoder) admits(types []string) bool {
 	return false
 }
 
-// passedOver is the key of a frame the record of head reads that the pass
-// passed over for the type the line wrote before it ([lineDecoder.admits]);
-// "" where none.
+// passedOver is the key of the first frame ([gates]) a record of head's type
+// reads that the pass passed over for the type the line wrote before it
+// ([lineDecoder.admits]); "" where none. Judged by the type alone, as the
+// pass judged it: a frame a system record reads on one subtype is missed on
+// a system record of any.
 func (d *lineDecoder) passedOver(head threadHead) string {
-	if d.missed&gateMessage != 0 && slices.Contains(messageTypes, head.Type) {
-		return "message"
+	for _, g := range gates {
+		if d.missed&g.frame != 0 && slices.Contains(g.types, head.Type) {
+			return g.key
+		}
 	}
 	return ""
 }
 
 // settle is f, the facts of a record of head, as its accessors read them: a
-// frame its type does not read emptied, so a record of another type holds
-// nothing of it; and of a message, the calls of the kind the record makes
-// alone, a user's results or an assistant's uses, in order.
+// frame its type, or on a system record its subtype, does not read emptied
+// ([gates]), so a record of another type holds nothing of it, as the whole
+// decode reads none ([factsOf]); and of a message, the calls of the kind the
+// record makes alone, a user's results or an assistant's uses, in order.
 func settle(f *lineFacts, head threadHead) {
+	for _, g := range gates {
+		reads := slices.Contains(g.types, head.Type) &&
+			(head.Type != recordSystem || g.subtype == "" || head.Subtype == g.subtype)
+		if !reads {
+			f.drop(g.frame)
+		}
+	}
 	switch head.Type {
 	case recordUser:
 		f.message.content.calls = callsOf(f.message.content.calls, blockToolResult)
 	case recordAssistant:
 		f.message.content.calls = callsOf(f.message.content.calls, blockToolUse)
-	default:
-		f.message = messageFacts{}
 	}
 }
 
@@ -683,7 +792,7 @@ func (d *lineDecoder) members(scan *jsonscan.Scanner, each func(name []byte, k j
 // member reads the record's member name, whose value's first token, k, the
 // scanner stands at: a head key captured into d, a small value its accessors
 // decode captured into f, taskDelivery's presence, a frame its type may read
-// ([lineDecoder.message]), and every other member passed over unheld.
+// ([gates]), and every other member passed over unheld.
 func (d *lineDecoder) member(scan *jsonscan.Scanner, k jsonscan.Kind, name []byte, f *lineFacts) error {
 	for i, key := range headNames {
 		if string(name) == key {
@@ -702,17 +811,22 @@ func (d *lineDecoder) member(scan *jsonscan.Scanner, k jsonscan.Kind, name []byt
 			return err
 		}
 	}
-	switch string(name) {
-	case "taskDelivery":
+	if string(name) == "taskDelivery" {
 		f.taskDelivery = true
-	case "message":
-		f.message = messageFacts{}
-		if !d.admits(messageTypes) {
-			d.missed |= gateMessage
+		return scan.Skip()
+	}
+	for _, g := range gates {
+		if string(name) != g.key {
+			continue
+		}
+		// WHATEVER AN EARLIER OCCURRENCE LEFT GOES, read or passed over.
+		f.drop(g.frame)
+		if !d.admits(g.types) {
+			d.missed |= g.frame
 			return scan.Skip()
 		}
-		d.missed &^= gateMessage
-		return d.message(scan, k, &f.message)
+		d.missed &^= g.frame
+		return g.read(d, scan, k, f)
 	}
 	return scan.Skip()
 }
@@ -1009,6 +1123,425 @@ func (d *lineDecoder) resultText(scan *jsonscan.Scanner) error {
 			return err
 		}
 	}
+}
+
+// toolResult reads a user record's own `toolUseResult`, whose first token,
+// k, the scanner stands at, into r, as [toolResultOf] reads it: of an object,
+// whether it carries a `handback` or a `handbackReport`, any value, and what
+// its `status`, `agentId` and `success`, held as written until it ends, say
+// of a subagent's leg ([answerOf]); every other key (a file's base64, a
+// command's output, a patch) passed over, and every other kind nothing.
+func (d *lineDecoder) toolResult(scan *jsonscan.Scanner, k jsonscan.Kind, r *toolResultFacts) error {
+	if k != jsonscan.ObjectStart {
+		return scan.Skip()
+	}
+	status, agent, success := d.clearHeld()
+	err := d.members(scan, func(name []byte, k jsonscan.Kind) error {
+		switch string(name) {
+		case "handback", "handbackReport":
+			r.handsBack = true
+		case "status":
+			return d.hold(scan, k, "toolUseResult.status", status)
+		case "agentId":
+			return d.hold(scan, k, "toolUseResult.agentId", agent)
+		case "success":
+			return d.hold(scan, k, "toolUseResult.success", success)
+		}
+		return scan.Skip()
+	})
+	if err != nil {
+		return err
+	}
+	r.completed, r.agent, r.refused = answerOf(present(*status), present(*agent), present(*success))
+	return nil
+}
+
+// clearHeld empties d's held values ([lineDecoder.held]) for the object about
+// to be read, and hands their buffers, kept.
+func (d *lineDecoder) clearHeld() (*[]byte, *[]byte, *[]byte) {
+	for i := range d.held {
+		d.held[i] = d.held[i][:0]
+	}
+	return &d.held[0], &d.held[1], &d.held[2]
+}
+
+// attachment reads an attachment record's `attachment`, whose first token,
+// k, the scanner stands at, into a, as [attachmentOf] reads it: its kind; of
+// an object, its `type`, `toolUseID` and `by` kept as written, and what every
+// attachment's shape rule asks of its lists, every rule's at once, since its
+// type may be its last key ([threadLine.AttachmentWellFormed]): `content`'s
+// kind and whether it is a list of strings alone or of objects alone,
+// `skills` whether it is a list of objects and lists, `names` the skill
+// listing's answer ([lineDecoder.skillNames]), and `entries` whether every
+// entry is one a withheld memory keeps ([lineDecoder.withheldEntry]). No
+// element of a list is held: a file's content, its whole body, is passed
+// over.
+func (d *lineDecoder) attachment(scan *jsonscan.Scanner, k jsonscan.Kind, a *attachmentFacts) error {
+	a.kind = scannedKind(k)
+	if k != jsonscan.ObjectStart {
+		return scan.Skip()
+	}
+	// A listing that lacks its names is kept ([skillNamesKept]).
+	a.namesKept = true
+	return d.members(scan, func(name []byte, k jsonscan.Kind) error {
+		var err error
+		switch string(name) {
+		case "type":
+			a.typ, err = d.keep(scan, k, "attachment.type")
+		case "toolUseID":
+			a.toolUseID, err = d.keep(scan, k, "attachment.toolUseID")
+		case "by":
+			a.by, err = d.keep(scan, k, "attachment.by")
+		case "content":
+			strs, objs := true, true
+			var list bool
+			list, err = d.elements(scan, k, func(k jsonscan.Kind) error {
+				strs, objs = strs && k == jsonscan.String, objs && k == jsonscan.ObjectStart
+				return scan.Skip()
+			})
+			a.content, a.contentStrings, a.contentObjects = scannedKind(k), list && strs, list && objs
+		case "skills":
+			shaped := true
+			var list bool
+			list, err = d.elements(scan, k, func(k jsonscan.Kind) error {
+				shaped = shaped && (k == jsonscan.ObjectStart || k == jsonscan.ArrayStart)
+				return scan.Skip()
+			})
+			a.skillsShaped = list && shaped
+		case "names":
+			var unmeasured bool
+			a.namesKept, unmeasured, err = d.skillNames(scan, k)
+			a.namesErr = nil
+			if unmeasured {
+				a.namesErr = errSkillNameUnmeasured
+			}
+		case "entries":
+			kept := true
+			var list bool
+			list, err = d.elements(scan, k, func(k jsonscan.Kind) error {
+				if !kept {
+					return scan.Skip()
+				}
+				var entryErr error
+				kept, entryErr = d.withheldEntry(scan, k)
+				return entryErr
+			})
+			a.entriesKept = list && kept
+		default:
+			err = scan.Skip()
+		}
+		return err
+	})
+}
+
+// skillNames reads a skill listing's `names`, whose first token, k, the
+// scanner stands at, as [skillNamesKept] reads it: kept where it is a list of
+// at most [skillListingMaxNames] strings, each kept by the rule of a name
+// ([skillNameKept]), read in order and the first that is not deciding it; and
+// unmeasured instead where every name is kept but one past
+// [skillListingMaxNameUnits] held a byte that is no UTF-8, which the layer
+// cannot measure ([errSkillNameUnmeasured]). Each name streams into its
+// length in UTF-16 code units ([textUnits]) and whether its bytes as written
+// were UTF-8 ([jsonscan.Scanner.InvalidUTF8]), which its decoded text cannot
+// say.
+func (d *lineDecoder) skillNames(scan *jsonscan.Scanner, k jsonscan.Kind) (kept, unmeasured bool, err error) {
+	count, unreadable := 0, false
+	kept = true
+	list, walked := d.elements(scan, k, func(k jsonscan.Kind) error {
+		if !kept {
+			return scan.Skip()
+		}
+		if count++; count > skillListingMaxNames || k != jsonscan.String {
+			kept = false
+			return scan.Skip()
+		}
+		var units textUnits
+		for {
+			n, err := scan.Read(d.text[:])
+			units.write(d.text[:n])
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return err
+			}
+		}
+		name, unknown := skillNameKept(units.units(), !scan.InvalidUTF8())
+		kept, unreadable = name, unreadable || unknown
+		return nil
+	})
+	switch {
+	case walked != nil:
+		return false, false, walked
+	case !list || !kept:
+		return false, false, nil
+	case unreadable:
+		return false, true, nil
+	}
+	return true, false, nil
+}
+
+// withheldEntry reads one entry of a withheld memory's `entries`, whose first
+// token, k, the scanner stands at, as [withheldEntryKept] reads it: of an
+// object, its `path`'s and `displayPath`'s kinds and its `why` held as
+// written, each by its last occurrence, decided by the rule of such an entry
+// ([withheldKept]) once it ends; anything else no entry the rule keeps.
+func (d *lineDecoder) withheldEntry(scan *jsonscan.Scanner, k jsonscan.Kind) (bool, error) {
+	if k != jsonscan.ObjectStart {
+		return withheldKept(scannedKind(k), 0, nil, 0), scan.Skip()
+	}
+	why, _, _ := d.clearHeld()
+	var path, displayPath valueKind
+	err := d.members(scan, func(name []byte, k jsonscan.Kind) error {
+		switch string(name) {
+		case "path":
+			path = scannedKind(k)
+		case "displayPath":
+			displayPath = scannedKind(k)
+		case "why":
+			return d.hold(scan, k, "attachment.entries.why", why)
+		}
+		return scan.Skip()
+	})
+	return withheldKept('{', path, present(*why), displayPath), err
+}
+
+// compacted reads a compaction's boundary's `compactMetadata`, whose first
+// token, k, the scanner stands at, into c, as [compactOf] reads it: its kind;
+// of an object, its `preservedMessages` ([lineDecoder.preservedMessages]) and
+// its `preservedSegment` kept as written.
+func (d *lineDecoder) compacted(scan *jsonscan.Scanner, k jsonscan.Kind, c *compactFacts) error {
+	c.kind = scannedKind(k)
+	if k != jsonscan.ObjectStart {
+		return scan.Skip()
+	}
+	return d.members(scan, func(name []byte, k jsonscan.Kind) error {
+		var err error
+		switch string(name) {
+		case "preservedMessages":
+			err = d.preservedMessages(scan, k, c)
+		case "preservedSegment":
+			c.segment, err = d.keep(scan, k, "compactMetadata.preservedSegment")
+		default:
+			err = scan.Skip()
+		}
+		return err
+	})
+}
+
+// preservedMessages reads a compaction's `preservedMessages`, whose first
+// token, k, the scanner stands at, into c, as [preservedList] reads it, its
+// shapes checked in its order though its keys come in any: the list's kind,
+// none where it is null; an object's `anchorUuid`, held as written until it
+// ends; then its `uuids`, each entry read by its opening into a canonical
+// uuid or none ([threadPreserved.list]), in order, up to the first that is no
+// string. Where the anchor is no string the list holds no entry, as the
+// list's walk never began.
+func (d *lineDecoder) preservedMessages(scan *jsonscan.Scanner, k jsonscan.Kind, c *compactFacts) error {
+	c.messages, c.list, c.listErr = scannedKind(k), threadPreserved{}, nil
+	switch k {
+	case jsonscan.Null:
+		return scan.Skip()
+	case jsonscan.ObjectStart:
+	default:
+		c.listErr = fmt.Errorf("compactMetadata.preservedMessages is %s, not an object", c.messages)
+		return scan.Skip()
+	}
+	anchor, _, _ := d.clearHeld()
+	// A list that lacks its uuids is one whose walk refuses them.
+	uuids := fmt.Errorf("is %s, not a list", valueKind(0))
+	err := d.members(scan, func(name []byte, k jsonscan.Kind) error {
+		switch string(name) {
+		case "anchorUuid":
+			return d.hold(scan, k, "compactMetadata.preservedMessages.anchorUuid", anchor)
+		case "uuids":
+			c.list, uuids = threadPreserved{}, nil
+			list, err := d.elements(scan, k, func(k jsonscan.Kind) error {
+				if uuids != nil {
+					return scan.Skip()
+				}
+				if k != jsonscan.String {
+					uuids = fmt.Errorf("an entry is %s, not a string", scannedKind(k))
+					return scan.Skip()
+				}
+				opening, err := d.opening(scan, uuidTextBytes)
+				if err != nil {
+					return err
+				}
+				c.list.list(uuidBytes(opening))
+				return nil
+			})
+			if !list {
+				uuids = fmt.Errorf("is %s, not a list", scannedKind(k))
+			}
+			return err
+		}
+		return scan.Skip()
+	})
+	if err != nil {
+		return err
+	}
+	switch named, err := wireRequiredString("preservedMessages.anchorUuid", present(*anchor)); {
+	case err != nil:
+		c.list, c.listErr = threadPreserved{}, err
+	case uuids != nil:
+		c.listErr = fmt.Errorf("compactMetadata.preservedMessages.uuids: %w", uuids)
+	default:
+		c.list.Named, c.list.Kept, c.list.Anchor = true, c.list.Listed > 0, named
+	}
+	return nil
+}
+
+// retracted reads a record's `retractedMessageUuids`, whose first token, k,
+// the scanner stands at, into f, as [retractedOf] reads it: of a list, each
+// entry read by its opening into a canonical prefix or none
+// ([threadRetracted.entry]), in order, up to the first that is no string,
+// that entry's error; anything else the list's own.
+func (d *lineDecoder) retracted(scan *jsonscan.Scanner, k jsonscan.Kind, f *lineFacts) error {
+	list, err := d.elements(scan, k, func(k jsonscan.Kind) error {
+		if f.retractedErr != nil {
+			return scan.Skip()
+		}
+		if k != jsonscan.String {
+			f.retractedErr = fmt.Errorf("retractedMessageUuids: an entry is %s, not a string", scannedKind(k))
+			return scan.Skip()
+		}
+		opening, err := d.opening(scan, retractionPrefixBytes)
+		if err != nil {
+			return err
+		}
+		f.retracted.entry(chainPrefix(opening))
+		return nil
+	})
+	if !list {
+		f.retractedErr = fmt.Errorf("retractedMessageUuids: is %s, not a list", scannedKind(k))
+	}
+	return err
+}
+
+// replacements reads a content-replacement record's `replacements`, whose
+// first token, k, the scanner stands at, into r, as [replacementsOf] reads
+// it: its kind; of a list, EVERY element counted, and each read by the rule
+// of an entry ([replacedID]) until one fails it, its `kind` and `toolUseId`
+// held as written until it ends, the id of each that replaces a tool's
+// result kept, in order.
+func (d *lineDecoder) replacements(scan *jsonscan.Scanner, k jsonscan.Kind, r *replacementFacts) error {
+	r.kind = scannedKind(k)
+	_, err := d.elements(scan, k, func(k jsonscan.Kind) error {
+		r.count++
+		if r.err != nil {
+			return scan.Skip()
+		}
+		kind, toolUseID, _ := d.clearHeld()
+		var err error
+		if k == jsonscan.ObjectStart {
+			err = d.members(scan, func(name []byte, k jsonscan.Kind) error {
+				switch string(name) {
+				case "kind":
+					return d.hold(scan, k, "replacements.kind", kind)
+				case "toolUseId":
+					return d.hold(scan, k, "replacements.toolUseId", toolUseID)
+				}
+				return scan.Skip()
+			})
+		} else {
+			err = scan.Skip()
+		}
+		if err != nil {
+			return err
+		}
+		id, replaced, refused := replacedID(scannedKind(k), present(*kind), present(*toolUseID))
+		switch {
+		case refused != nil:
+			r.err = refused
+		case replaced:
+			r.ids = append(r.ids, id)
+		}
+		return nil
+	})
+	return err
+}
+
+// batch reads an assistant record's `batchToolUses`, whose first token, k,
+// the scanner stands at, into b, as [batchOf] reads it: that it is there; of
+// a list, each entry's `id`, held as written until the entry ends, read by
+// the rule of an entry ([batchEntryID]), in order, up to the first it
+// refuses, that entry's error; anything else the list's own.
+func (d *lineDecoder) batch(scan *jsonscan.Scanner, k jsonscan.Kind, b *batchFacts) error {
+	b.present = true
+	list, err := d.elements(scan, k, func(k jsonscan.Kind) error {
+		if b.err != nil {
+			return scan.Skip()
+		}
+		id, _, _ := d.clearHeld()
+		var err error
+		if k == jsonscan.ObjectStart {
+			err = d.members(scan, func(name []byte, k jsonscan.Kind) error {
+				if string(name) == "id" {
+					return d.hold(scan, k, "batchToolUses.id", id)
+				}
+				return scan.Skip()
+			})
+		} else {
+			err = scan.Skip()
+		}
+		if err != nil {
+			return err
+		}
+		switch kept, refused := batchEntryID(scannedKind(k), present(*id)); {
+		case refused != nil:
+			b.err = refused
+		default:
+			b.ids = append(b.ids, kept)
+		}
+		return nil
+	})
+	if !list {
+		b.err = fmt.Errorf("is %s, not a list", scannedKind(k))
+	}
+	return err
+}
+
+// elements reads the value whose first token, k, the scanner stands at, as a
+// list: each element's first token handed to each, which reads the element
+// whole, in order, to the list's end. list false, and the value passed over,
+// where it is no list.
+func (d *lineDecoder) elements(scan *jsonscan.Scanner, k jsonscan.Kind,
+	each func(k jsonscan.Kind) error) (bool, error) {
+	if k != jsonscan.ArrayStart {
+		return false, scan.Skip()
+	}
+	for {
+		k, err := scan.Next()
+		if err != nil || k == jsonscan.ArrayEnd {
+			return true, err
+		}
+		if err = each(k); err != nil {
+			return true, err
+		}
+	}
+}
+
+// opening is the decoded text of the string the scanner stands at as far as
+// a reader of its first n characters reads it: all of it where it is at most
+// n bytes long, else its first n bytes and at least one more, so a reader
+// tells an entry of exactly n bytes from a longer one. The rest is left to
+// the scanner's next call, which passes it over. In d's buffer, valid until
+// the next opening; n is at most [uuidTextBytes], so the buffer always has
+// room for the character after it.
+func (d *lineDecoder) opening(scan *jsonscan.Scanner, n int) ([]byte, error) {
+	got := 0
+	for got <= n {
+		m, err := scan.Read(d.open[got:])
+		got += m
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return d.open[:got], nil
 }
 
 // keep is the value the scanner stands at, of kind k, the value of key, as

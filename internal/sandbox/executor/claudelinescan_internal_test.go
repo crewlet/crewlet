@@ -21,8 +21,9 @@ import (
 // what the whole decode answers of it ([decodeThreadLine]): record or refused,
 // the fault, the kind of record a refused head names, the size, whether the
 // error is errNotOneRecord (a refused head's in its own words), the byte facts,
-// and for a record its head and every answer its accessors give of what the
-// pass reads. A value is read at any length here: the bound a value is kept
+// and for a record its head, every fact the line's accessors read and every
+// answer each accessor gives, an error by its text and a list by what it
+// replays. A value is read at any length here: the bound a value is kept
 // within is raised ([scanReader.valueMax]), since the whole decode has none,
 // and the bound's own claims are [TestALateFaultBeatsWhatTheLineSaidBeforeIt]'s.
 // Where the pass passes a frame over for the type a line wrote before it and
@@ -32,8 +33,10 @@ import (
 
 // scanAnswer is what a reading answered of one line, line and err, as text:
 // for a record, its place, its size, its head, every small value the pass
-// keeps as written and whether it carries taskDelivery, its byte facts, and
-// every answer of its message's accessors ([scanMessage]);
+// keeps as written and whether it carries taskDelivery, its byte facts, every
+// answer of the accessors of its head and of its small values
+// ([scanRecord]), of its message ([scanMessage]) and of its payloads and
+// lists ([scanPayloads]);
 // for a line that is no record, its place, its fault, the kind of record its
 // head names, its size, whether its error is errNotOneRecord (a refused
 // head's in its words), and its byte facts; else what ended the reading.
@@ -70,8 +73,92 @@ func scanAnswer(line threadLine, err error) string {
 		fmt.Fprintf(&b, "%s: %q\n", kept.name, ctRaw(kept.raw))
 	}
 	fmt.Fprintf(&b, "taskDelivery: %t\nbytes: %s\n", f.taskDelivery, scanBytes(line.Bytes))
+	b.WriteString(scanRecord(line))
 	b.WriteString(scanMessage(line))
+	b.WriteString(scanPayloads(line))
 	return b.String()
+}
+
+// scanRecord is every answer the accessors of line's head and of its small
+// values give, as text, each with its error.
+func scanRecord(line threadLine) string {
+	var b strings.Builder
+	h := line.Head
+	fmt.Fprintf(&b, "chained %t, parentless %t, main %t\n", h.Chained(), h.Parentless(), h.Main())
+	uuid, uuidErr := line.UUID()
+	version, versionErr := line.Version()
+	origin, originErr := line.OriginKind()
+	apiError, apiErr := line.APIError()
+	leaf, marked, leafErr := line.Checkpoint()
+	keyed, keyedErr := line.LeafKeyed()
+	fmt.Fprintf(&b, "uuid %q, %v; version %q, %v; origin %q, %v; api error %t, %v; checkpoint %q %t, %v; "+
+		"leaf keyed %t, %v\n", uuid, uuidErr, version, versionErr, origin, originErr, apiError, apiErr, leaf, marked,
+		leafErr, keyed, keyedErr)
+	virtual, virtualErr := line.IsVirtual()
+	shutdown, shutdownErr := line.InterruptedByShutdown()
+	summary, summaryErr := line.IsCompactSummary()
+	meta, metaErr := line.IsMeta()
+	ms, stamped, stampErr := line.Timestamp()
+	source, sourced := line.SourceToolAssistantUUID()
+	fmt.Fprintf(&b, "virtual %t, %v; interrupted by shutdown %t, %v; compact summary %t, %v; meta %t, %v; "+
+		"timestamp %d %t, %v; source %x %t; task delivery %t\n", virtual, virtualErr, shutdown, shutdownErr, summary,
+		summaryErr, meta, metaErr, ms, stamped, stampErr, source, sourced, line.TaskDelivery())
+	return b.String()
+}
+
+// scanPayloads is every fact a line keeps of its toolUseResult, attachment,
+// compactMetadata, retractedMessageUuids, replacements and batchToolUses,
+// each field by its own name, and every answer their accessors give, as
+// text: an error by its text and a list by the sequence it replays, then its
+// error.
+func scanPayloads(line threadLine) string {
+	var b strings.Builder
+	f := line.facts()
+	r := f.result
+	fmt.Fprintf(&b, "toolUseResult facts: hands back %t, completed %t, agent %q, refused %t\n", r.handsBack,
+		r.completed, r.agent, r.refused)
+	a := f.attachment
+	fmt.Fprintf(&b, "attachment facts: %v, %v; type %q, toolUseID %q, by %q; content %v, strings %t, objects %t; "+
+		"skills %t; names %t, %v; entries %t\n", a.kind, a.err, ctRaw(a.typ), ctRaw(a.toolUseID), ctRaw(a.by),
+		a.content, a.contentStrings, a.contentObjects, a.skillsShaped, a.namesKept, a.namesErr, a.entriesKept)
+	c := f.compacted
+	fmt.Fprintf(&b, "compactMetadata facts: %v, %v; preservedMessages %v, %s, %v; preservedSegment %q\n", c.kind,
+		c.err, c.messages, scanPreserved(c.list), c.listErr, ctRaw(c.segment))
+	fmt.Fprintf(&b, "retractedMessageUuids facts: %s, %v\n", scanRetracted(f.retracted), f.retractedErr)
+	rs := f.replacements
+	fmt.Fprintf(&b, "replacements facts: %v, %d, %q, %v\n", rs.kind, rs.count, rs.ids, rs.err)
+	fmt.Fprintf(&b, "batchToolUses facts: %t, %q, %v\n", f.batch.present, f.batch.ids, f.batch.err)
+
+	completed, agent, refused := line.AgentAnswer()
+	typ, typErr := line.AttachmentType()
+	key, isString := line.AttachmentToolUseID()
+	kept, keptErr := line.AttachmentWellFormed()
+	fmt.Fprintf(&b, "hands back %t; answer %t %q %t; attachment type %q, %v; tool use key %x %t; well formed %t, %v\n",
+		line.HandsBack(), completed, agent, refused, typ, typErr, key, isString, kept, keptErr)
+	preserved, preservedErr := line.Preserved()
+	retracted, retractedErr := line.Retracted()
+	fmt.Fprintf(&b, "preserved %s, %v; retracted %s, %v\n", scanPreserved(preserved), preservedErr,
+		scanRetracted(retracted), retractedErr)
+	var replaced, batched []string
+	replacedErr := line.ReplacedResults(func(id string) { replaced = append(replaced, id) })
+	count, countErr := line.ReplacementCount()
+	batch, batchErr := line.BatchToolUses(func(id string) { batched = append(batched, id) })
+	fmt.Fprintf(&b, "replaced %q, %v; %d replacements, %v; batch %q %t, %v\n", replaced, replacedErr, count, countErr,
+		batched, batch, batchErr)
+	return b.String()
+}
+
+// scanPreserved is p, every field, as text.
+func scanPreserved(p threadPreserved) string {
+	return fmt.Sprintf("{named %t, kept %t, anchor %q, segment %t, head %q, tail %q, listed %d, uuids %x, more %t, "+
+		"nowhere %t}", p.Named, p.Kept, p.Anchor, p.Segment, p.Head, p.Tail, p.Listed, p.UUIDs, p.More, p.Nowhere)
+}
+
+// scanRetracted is r, every field and what Prefixes answers, as text.
+func scanRetracted(r threadRetracted) string {
+	held, all := r.Prefixes()
+	return fmt.Sprintf("{entries %d, prefixes %x, more %t; prefixes %x, all %t}", r.Entries, r.prefixes, r.more, held,
+		all)
 }
 
 // scanMessage is every answer the accessors of line's message give, as text,
@@ -198,17 +285,39 @@ func checkScanReadsAsDecode(t testing.TB, text []byte, chunk int) {
 
 // scanWant is what a reading in one pass answers of raw, line n of its
 // member, as the whole decode reads it ([scanAnswer]); or, where the line's
-// last type reads its message and the pass passed that message over for the
-// type the line wrote before it ([scanPassedOver]), the error that ends the
-// reading there.
+// last type reads a frame and the pass passed that frame over for the type
+// the line wrote before it ([scanPassedOver]), the error that ends the
+// reading there, naming the first such frame of [scanGates].
 func scanWant(n int, raw []byte) (string, error) {
 	line, err := decodeThreadLine(n, raw)
-	if err == nil && slices.Contains([]string{recordUser, recordAssistant}, line.Head.Type) &&
-		scanPassedOver(raw, "message", recordUser, recordAssistant) {
-		return "", fmt.Errorf("%w: line %d's message came before a later type made it a record that reads it",
-			errThreadBound, n)
+	if err != nil {
+		return scanAnswer(line, err), nil
 	}
-	return scanAnswer(line, err), nil
+	for _, g := range scanGates {
+		if slices.Contains(g.types, line.Head.Type) && scanPassedOver(raw, g.frame, g.types...) {
+			return "", fmt.Errorf("%w: line %d's %s came before a later type made it a record that reads it",
+				errThreadBound, n, g.frame)
+		}
+	}
+	return scanAnswer(line, nil), nil
+}
+
+// scanGates is each frame of a record a reading in one pass reads only on
+// records of some types, and those types: those of the records each frame's
+// accessors answer on, by type alone (a compaction's metadata is read on a
+// system record of any subtype until the record ends), in the order a
+// reading names the first it passed over.
+var scanGates = []struct {
+	frame string
+	types []string
+}{
+	{"message", []string{recordUser, recordAssistant}},
+	{"toolUseResult", []string{recordUser}},
+	{"attachment", []string{recordAttachment}},
+	{"compactMetadata", []string{recordSystem}},
+	{"retractedMessageUuids", []string{recordUser, recordAssistant, recordSystem}},
+	{"replacements", []string{recordContentReplacement}},
+	{"batchToolUses", []string{recordAssistant}},
 }
 
 // scanPassedOver reports whether raw, one record, writes its last key named
@@ -235,10 +344,10 @@ func scanPassedOver(raw []byte, frame string, types ...string) bool {
 // line of the corpus ([scanCorpus]) answers, read in one pass, what the whole
 // decode answers ([scanAnswer]): record or refused, the fault, the kind of
 // record a refused head names, the size, whether the error is
-// errNotOneRecord, the byte facts, the head, every small value the pass
-// keeps as written, and every answer of the message's accessors; and a line
-// whose type reads a message the pass passed over for the type before it
-// ends the reading there. The corpus is read as one member to each line that
+// errNotOneRecord, the byte facts, the head, every fact the line keeps and
+// every answer of every accessor, errors by their text and lists by what they
+// replay; and a line whose type reads a frame the pass passed over for the
+// type before it ends the reading there. The corpus is read as one member to each line that
 // ends a reading, so nothing of a line reaches the next, each line's answer
 // printed only once every line of its member is read; whole and in pieces of
 // 17 bytes, so every token of a short line meets a piece's edge somewhere.
@@ -257,7 +366,17 @@ func scanPassedOver(raw []byte, frame string, types ...string) bool {
 // no further than its first piece, or a result's list past its first
 // element; leave a notification's last line unread; pass no message over
 // for the type before it, or read a line whose type reads one passed over
-// as a record.
+// as a record; keep what a payload's earlier occurrence read, or what the
+// object before it held for its rule; read a skill's name as UTF-8 whatever
+// its bytes, or no further than its first piece, or count no names past the
+// listing's bound; read a listing that lacks its names as one not kept, or
+// a content that is no list as a list of strings; check a kept list's
+// entries before its anchor, or keep a first `uuids` past a second; read an
+// entry's opening to its last byte that matters and none past it; read a
+// retraction's entries past one that is no string, or count a replacement
+// only until one fails its rule; read a null batch as none; gate only a
+// message by the type before it, or end only on a passed-over message; keep
+// a system record's frame its subtype does not read.
 func TestTheScanReadsEveryLineAsTheDecodeReadsIt(t *testing.T) {
 	t.Parallel()
 	lines := scanCorpus(t)
@@ -282,7 +401,7 @@ func FuzzTheScanReadsEveryLineAsTheDecodeReadsIt(f *testing.F) {
 		ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn), ctLastPrompt, ctMeta,
 		`{"type":"user","type":7}`, `{"type":7,"type":"user"}`, `{"\u0074ype":"user","Type":7}`,
 		`{"parentUuid":"x","parentUuid":null,"isSidechain":"no","isSidechain":true}`)
-	for _, line := range scanMessageLines() {
+	for _, line := range append(scanMessageLines(), scanPayloadLines()...) {
 		seeds = append(seeds, string(line))
 	}
 	for i, seed := range seeds {
@@ -300,8 +419,10 @@ func FuzzTheScanReadsEveryLineAsTheDecodeReadsIt(f *testing.F) {
 // at their breaks; every line the layer's tests read as no record
 // ([ctBrokenLines], [ctRefusedLines]) and a record nested as deep as a line
 // is read; records whose messages hold what the message's readers read at
-// its edges ([scanMessageLines]); each kind of record and each frame below
-// it mutated at every key the pass reads ([scanMutations]); and lines whose
+// its edges ([scanMessageLines]), and whose payloads and lists hold what
+// theirs read at theirs ([scanPayloadLines]); each kind of record and each
+// frame below it mutated at every key the pass reads ([scanMutations]); and
+// lines whose
 // keys, a key written twice or a fault fall across the edge of what the
 // member hands at once ([scanAcrossAFill]).
 func scanCorpus(t *testing.T) [][]byte {
@@ -317,6 +438,7 @@ func scanCorpus(t *testing.T) [][]byte {
 	}
 	lines = append(lines, []byte(ctDeep(10000)))
 	lines = append(lines, scanMessageLines()...)
+	lines = append(lines, scanPayloadLines()...)
 	lines = append(lines, scanMutations(lines)...)
 	return append(lines, scanAcrossAFill()...)
 }
@@ -375,6 +497,13 @@ var scanFrames = []struct{ path, keys []string }{
 		[]string{"type", "id", "name", "input", "tool_use_id", "is_error", "content", "text"}},
 	{[]string{"message", "content", "*", "input"}, []string{"to"}},
 	{[]string{"message", "content", "*", "content", "0"}, []string{"type", "text"}},
+	{[]string{"toolUseResult"}, []string{"handback", "handbackReport", "status", "agentId", "success"}},
+	{[]string{"attachment"}, []string{"type", "toolUseID", "by", "content", "skills", "names", "entries"}},
+	{[]string{"attachment", "entries", "*"}, []string{"path", "displayPath", "why"}},
+	{[]string{"compactMetadata"}, []string{"preservedMessages", "preservedSegment"}},
+	{[]string{"compactMetadata", "preservedMessages"}, []string{"anchorUuid", "uuids"}},
+	{[]string{"replacements", "*"}, []string{"kind", "toolUseId"}},
+	{[]string{"batchToolUses", "*"}, []string{"id"}},
 }
 
 // scanMutations is a record of each kind among lines (one a type and
@@ -595,6 +724,187 @@ func scanMessageLines() [][]byte {
 		`{"type":"x","message":{"content":"hi"},"type":"user"}`,
 		`{"type":"user","message":{"content":"a"},"type":"x","message":{"content":"b"},"type":"assistant"}`,
 		`{"type":"` + strings.Repeat("u", 100) + `","message":{"content":"hi"},"type":"user"}`,
+	}
+	out := make([][]byte, len(lines))
+	for i, line := range lines {
+		out[i] = []byte(line)
+	}
+	return out
+}
+
+// scanPayloadLines is records whose payloads and lists hold what their
+// readers read at its edges: a leg's result's answer and its handback in
+// every shape, beside a file's base64 longer than a piece; an attachment of
+// every type its shape rule reads, each rule met and missed, skill listings
+// at the count's and the name's bound in UTF-16 code units, a long name whose
+// bytes are no UTF-8 where it ends, where it begins and beside a name the
+// rule refuses after it, and a name of U+FFFD written as bytes and as an
+// escape; withheld memories of every entry the rule refuses, a key of an
+// entry written twice; a compaction's kept list refused at an entry after
+// those before it, at its anchor whatever comes first, and of entries one
+// byte either side of a uuid, an escaped one, one past ASCII and one longer
+// than a piece; retractions of the same entries about a uuid's first 24
+// characters, on every record that reads them and one that does not;
+// replacements and a batch's entries refused after one that was read,
+// written twice, and of every kind; and each frame on a record of a type
+// that does not read it, and after a type that does not read it on a record
+// whose last type does.
+func scanPayloadLines() [][]byte {
+	u := ctUUID
+	quote := func(s string) string {
+		b, _ := jsontext.AppendQuote(nil, s)
+		return string(b)
+	}
+	result := func(own string) string {
+		return `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_r",` +
+			`"content":"done"}]},"toolUseResult":` + own + `}`
+	}
+	attached := func(payload string) string { return ctAttachment(u(1), u(2), payload, "") }
+	names := func(names ...string) string {
+		return attached(`{"type":"skill_listing","names":[` + strings.Join(names, ",") + `]}`)
+	}
+	boundary := func(meta string) string {
+		return `{"type":"system","subtype":"compact_boundary","uuid":"` + u(10) + `","compactMetadata":` + meta + `}`
+	}
+	kept := func(uuids ...string) string {
+		return boundary(`{"preservedMessages":{"anchorUuid":"` + u(11) + `","uuids":[` + strings.Join(uuids, ",") +
+			`]}}`)
+	}
+	reply := func(batch string) string {
+		return `{"type":"assistant","message":{"role":"assistant","content":[]},"batchToolUses":` + batch + `}`
+	}
+	many := func(name string, n int) string {
+		return strings.TrimSuffix(strings.Repeat(name+",", n), ",")
+	}
+	long := strings.Repeat("n", 2*textPieceBytes)
+	// Entries about the edges of what a reader reads of one: a uuid, one byte
+	// short of it and one past it, its first 24 characters alone and one
+	// short of them, one in capitals, one with a letter escaped, one past
+	// ASCII inside its first 24 bytes, one of no UTF-8 there, the empty one
+	// and one longer than a piece.
+	entries := []string{quote(u(1)), quote(u(2)[:35]), quote(u(3) + "x"), quote(u(4)[:24]), quote(u(5)[:23]),
+		quote(strings.ToUpper("abcdef00-0000-4000-8000-000000000006")), `"\u0030` + u(7)[1:] + `"`,
+		quote("0000000\u00e9" + u(8)[8:]), "\"0000\xff" + u(9)[5:] + `"`, `""`, quote(u(12) + long)}
+	lines := []string{
+		result(`{"status":"completed","agentId":"a1b2c3","totalTokens":3}`),
+		result(`{"status":"completed","agentId":"a/b"}`),
+		result(`{"status":"failed","agentId":"a1b2c3","status":"completed"}`),
+		result(`{"status":"completed","status":7}`),
+		result(`{"success":false}`), result(`{"success":"false"}`), result(`{"success":false,"success":true}`),
+		result(`{"handback":null}`), result(`{"stdout":"` + long + `","handbackReport":{"x":1}}`),
+		result(`{"Handback":1}`),
+		result(`"text"`), result(`[{"handback":1}]`), result(`null`), result(`{}`),
+		result(`{"file":{"base64":"` + strings.Repeat("A", 3*textPieceBytes) +
+			`"},"status":"completed","agentId":"a1b2c3"}`),
+		`{"toolUseResult":{"status":"completed","agentId":"a1b2c3"},"type":"user"}`,
+		`{"toolUseResult":{"handback":1},"type":"assistant"}`,
+		`{"type":"user","toolUseResult":{"handback":1},"toolUseResult":{}}`,
+		`{"type":"assistant","toolUseResult":{"handback":1},"type":"user"}`,
+
+		attached(`{"type":"invoked_skills","skills":[{"name":"a"},["b"]]}`),
+		attached(`{"type":"invoked_skills","skills":[{},1]}`),
+		attached(`{"type":"invoked_skills"}`), attached(`{"type":"invoked_skills","skills":{}}`),
+		attached(`{"type":"invoked_skills","skills":[1],"skills":[]}`),
+		attached(`{"type":"hook_success","content":"ok","toolUseID":"toolu_h"}`),
+		attached(`{"type":"hook_success","content":["ok"]}`),
+		attached(`{"type":"hook_success","content":"x","content":7}`),
+		attached(`{"content":"x","type":"hook_success"}`),
+		attached(`{"type":"hook_additional_context","content":["a","b"]}`),
+		attached(`{"type":"hook_additional_context","content":["a",1]}`),
+		attached(`{"type":"hook_additional_context","content":[]}`),
+		attached(`{"type":"hook_additional_context","content":"a"}`),
+		attached(`{"type":"task_reminder","content":[{}]}`), attached(`{"type":"task_reminder","content":[{},[]]}`),
+		attached(`{"type":"todo_reminder","content":[{"a":1}]}`), attached(`{"type":"todo_reminder","content":"x"}`),
+		attached(`{"type":"file","content":{"text":"` + long + `"}}`), attached(`{"type":"file","content":[]}`),
+		attached(`{"type":"already_read_file","content":{}}`),
+		attached(`{"type":"skill_listing"}`), attached(`{"type":"skill_listing","names":null}`),
+		attached(`{"type":"skill_listing","names":[]}`), attached(`{"type":"skill_listing","names":["a"],"names":[1]}`),
+		names(`"a"`, `"b"`), names(`"a"`, `1`), names(many(`"a"`, skillListingMaxNames)),
+		names(many(`"a"`, skillListingMaxNames+1)),
+		names(quote(strings.Repeat("n", skillListingMaxNameUnits))),
+		names(quote(strings.Repeat("n", skillListingMaxNameUnits+1))),
+		names(quote(strings.Repeat("\U0001F600", skillListingMaxNameUnits/2))),
+		names(quote(strings.Repeat("\U0001F600", skillListingMaxNameUnits/2+1))),
+		names("\"" + strings.Repeat("n", skillListingMaxNameUnits) + "\xff\""),
+		names("\"\xff" + strings.Repeat("n", skillListingMaxNameUnits) + `"`),
+		names("\"" + long + "\xff\""), names("\"\xff\""),
+		names("\""+strings.Repeat("n", skillListingMaxNameUnits)+"\xff\"", quote(strings.Repeat("n", 600))),
+		names("\"" + strings.Repeat("n", skillListingMaxNameUnits) + "\xef\xbf\xbd\""),
+		names(`"` + strings.Repeat("n", skillListingMaxNameUnits) + `\ufffd"`),
+		attached(ctWithheld(`{"path":"a","displayPath":"a","why":"denied"}`,
+			`{"path":"b","displayPath":"b","why":"outside"}`)),
+		attached(ctWithheld(`{"path":"a","displayPath":"a","why":"other"}`)),
+		attached(ctWithheld(`{"path":"a","displayPath":"a","why":7}`)),
+		attached(ctWithheld(`{"path":7,"displayPath":"a","why":"denied"}`)),
+		attached(ctWithheld(`{"path":"a","why":"denied"}`)),
+		attached(ctWithheld(`1`, `{"path":"a","displayPath":"a","why":"denied"}`)),
+		attached(ctWithheld(`{"path":"a","displayPath":"a","why":"x","why":"unjudged"}`)),
+		attached(ctWithheld(`{"path":"a","displayPath":"a","why":"unsettled","why":"x"}`)),
+		attached(ctWithheld(`{"why":"denied","displayPath":"a","path":"a"}`, `{"path":"a","displayPath":"a"}`)),
+		attached(`{"type":"withheld_memory","by":"","entries":[]}`),
+		attached(`{"type":"withheld_memory","entries":[]}`),
+		attached(`{"type":"withheld_memory","by":"x","entries":{}}`),
+		attached(`"x"`), attached(`null`), attached(`[]`), attached(`{"type":7}`), attached(`{}`),
+		attached(`{"toolUseID":7,"type":"hook_success","content":"x"}`),
+		attached(`{"type":"a","by":"b","toolUseID":"c"}`),
+		`{"attachment":{"type":"hook_success","content":"x"},"type":"attachment"}`,
+		`{"type":"attachment","attachment":{"type":"hook_success","content":"x"},"attachment":"x"}`,
+		`{"attachment":{"type":"hook_success","content":"x"},"type":"user"}`,
+		`{"type":"user","attachment":{"type":"hook_success","content":"x"},"type":"attachment"}`,
+
+		ctBoundary(u(10), u(11), u(1), u(2)), kept(entries...), kept(entries[0], `7`, entries[0]),
+		kept(), kept(`null`), kept(entries[0], `{}`),
+		boundary(`{"preservedMessages":{"uuids":["` + u(1) + `",7]}}`),
+		boundary(`{"preservedMessages":{"uuids":["` + u(1) + `"],"anchorUuid":7}}`),
+		boundary(`{"preservedMessages":{"uuids":[7],"anchorUuid":"` + u(11) + `"}}`),
+		boundary(`{"preservedMessages":{"anchorUuid":"` + u(11) + `"}}`),
+		boundary(`{"preservedMessages":{"anchorUuid":"` + u(11) + `","uuids":null}}`),
+		boundary(`{"preservedMessages":{"anchorUuid":"` + u(11) + `","uuids":"x"}}`),
+		boundary(`{"preservedMessages":{"anchorUuid":"` + u(11) + `","uuids":["` + u(1) + `"],"uuids":["` + u(2) +
+			`",1]}}`),
+		boundary(`{"preservedMessages":{"anchorUuid":"` + u(11) + `","uuids":[1],"uuids":["` + u(2) + `"]}}`),
+		boundary(`{"preservedMessages":{"anchorUuid":"a","anchorUuid":"` + u(11) + `","uuids":[]}}`),
+		boundary(`{"preservedMessages":null,"preservedSegment":{"headUuid":"a","anchorUuid":"b","tailUuid":"c"}}`),
+		boundary(`{"preservedMessages":{"anchorUuid":"a","uuids":[]},"preservedMessages":null}`),
+		boundary(`{"preservedMessages":"x"}`), boundary(`{"preservedMessages":[]}`), boundary(`{"preservedSegment":7}`),
+		boundary(`{"preservedSegment":{"headUuid":"a","anchorUuid":"b","tailUuid":"c"},"preservedSegment":null}`),
+		boundary(`null`), boundary(`7`), boundary(`{}`), boundary(`[]`),
+		`{"type":"system","subtype":"informational","compactMetadata":{"preservedMessages":{"anchorUuid":"a",` +
+			`"uuids":[]}}}`,
+		`{"compactMetadata":{"preservedSegment":7},"type":"system","subtype":"compact_boundary"}`,
+		`{"type":"user","compactMetadata":{},"type":"system","subtype":"compact_boundary"}`,
+
+		ctRetry(u(5), u(6), u(1), u(2)), ctFallback(u(5), u(6), u(1), u(2)),
+		`{"type":"user","retractedMessageUuids":[` + strings.Join(entries, ",") + `]}`,
+		`{"type":"assistant","retractedMessageUuids":["` + u(1) + `",7,"` + u(2) + `"]}`,
+		`{"type":"assistant","retractedMessageUuids":null}`, `{"type":"user","retractedMessageUuids":"x"}`,
+		`{"type":"user","retractedMessageUuids":{}}`, `{"type":"user","retractedMessageUuids":[]}`,
+		`{"type":"system","subtype":"informational","retractedMessageUuids":["` + u(1) + `"]}`,
+		`{"type":"system","subtype":"model_refusal_fallback","retractedMessageUuids":[7]}`,
+		`{"retractedMessageUuids":["` + u(1) + `"],"type":"assistant","retractedMessageUuids":[]}`,
+		`{"type":"user","retractedMessageUuids":[1],"retractedMessageUuids":["` + u(1) + `"]}`,
+		`{"retractedMessageUuids":["` + u(1) + `"],"type":"attachment"}`,
+		`{"type":"x","retractedMessageUuids":["` + u(1) + `"],"type":"user"}`,
+
+		ctReplacement("", ctReplaced("toolu_A"), `{"kind":"other"}`, ctReplaced("toolu_B")),
+		ctReplacement("a1b2c3", ctReplaced("toolu_A"), `7`, ctReplaced("toolu_B"), `"x"`),
+		ctReplacement("", `{"kind":7}`, ctReplaced("toolu_A")), ctReplacement("", `{"kind":"tool-result"}`),
+		ctReplacement("", `{"kind":"tool-result","toolUseId":7}`),
+		ctReplacement("", `{"toolUseId":"toolu_A","kind":"tool-result","kind":"other"}`),
+		ctReplacement("", `{"kind":"other","kind":"tool-result","toolUseId":"toolu_A"}`),
+		ctReplacement("", `{"kind":"tool-result","toolUseId":7,"toolUseId":"toolu_A"}`), ctReplacement(""),
+		`{"type":"content-replacement","replacements":null}`, `{"type":"content-replacement","replacements":"x"}`,
+		`{"type":"content-replacement","replacements":{}}`, `{"type":"content-replacement"}`,
+		`{"type":"content-replacement","replacements":[` + ctReplaced("toolu_A") + `],"replacements":[]}`,
+		`{"replacements":[` + ctReplaced("toolu_A") + `],"type":"content-replacement"}`,
+		`{"type":"user","replacements":[` + ctReplaced("toolu_A") + `]}`,
+		`{"type":"x","replacements":[1],"type":"content-replacement"}`,
+
+		reply(`[{"id":"toolu_A"},{"id":"toolu_B","name":"x"}]`), reply(`[{"id":"toolu_A"},7,{"id":"toolu_B"}]`),
+		reply(`[{"id":7}]`), reply(`[{}]`), reply(`[{"id":"a","id":"b"}]`), reply(`[{"id":7,"id":"b"}]`),
+		reply(`null`), reply(`"x"`), reply(`{}`), reply(`[]`), reply(`[{"id":"a"}],"batchToolUses":[1]`),
+		`{"batchToolUses":[{"id":"a"}],"type":"assistant"}`, `{"type":"user","batchToolUses":[{"id":"a"}]}`,
+		`{"type":"user","batchToolUses":[{"id":"a"}],"type":"assistant"}`,
 	}
 	out := make([][]byte, len(lines))
 	for i, line := range lines {

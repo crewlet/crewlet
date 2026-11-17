@@ -1699,8 +1699,9 @@ func (c *threadChain) keptOf(line threadLine) (k chainKept, named, fits bool) {
 // 8, 4, 4 and 4 lowercase hex digits, each run followed by a hyphen. An entry
 // that begins otherwise retracts nothing, since every record the chain models
 // carries a lowercase canonical uuid, and the filter compares their first 24
-// characters as strings.
-func chainPrefix(entry string) ([chainPrefixBytes]byte, bool) {
+// characters as strings. Entry is a string or its bytes, for [uuidBytes]'s
+// reason.
+func chainPrefix[T ~string | ~[]byte](entry T) ([chainPrefixBytes]byte, bool) {
 	var p [chainPrefixBytes]byte
 	if len(entry) < 24 {
 		return p, false

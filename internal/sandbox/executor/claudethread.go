@@ -1989,7 +1989,11 @@ func (l threadLine) SourceToolAssistantUUID() ([16]byte, bool) {
 // urn:uuid: prefix, each a string Claude Code's load holds apart from the
 // lowercase one, so a type whose parse its readers would reach for would
 // merge records the load keeps apart.
-func uuidBytes(s string) ([16]byte, bool) {
+//
+// A STRING OR ITS BYTES: a reader that reads an entry as it streams holds its
+// first bytes in a buffer of its own, and a string made of them would cost it
+// an allocation an entry.
+func uuidBytes[T ~string | ~[]byte](s T) ([16]byte, bool) {
 	var u [16]byte
 	if len(s) != 36 {
 		return [16]byte{}, false
@@ -2528,12 +2532,13 @@ func (r threadRetracted) Prefixes() (held [][chainPrefixBytes]byte, all bool) {
 	return r.prefixes, !r.more
 }
 
-// entry reads the list's next entry, a string: counted, and its canonical
-// prefix held where it begins with one, while fewer than
-// [threadChainMaxRecords] are held ([threadLine.Retracted]).
-func (r *threadRetracted) entry(s string) {
+// entry reads the list's next entry, a string, by what [chainPrefix] reads of
+// it, prefix and canonical: counted, and its prefix held where it is
+// canonical, while fewer than [threadChainMaxRecords] are held
+// ([threadLine.Retracted]).
+func (r *threadRetracted) entry(p [chainPrefixBytes]byte, canonical bool) {
 	r.Entries++
-	if p, ok := chainPrefix(s); ok {
+	if canonical {
 		if len(r.prefixes) == threadChainMaxRecords {
 			r.more = true
 		} else {
@@ -2697,6 +2702,13 @@ func skillNameKept(units int, valid bool) (kept, unreadable bool) {
 	return false, false
 }
 
+// errSkillNameUnmeasured is a skill listing whose names are kept but for one
+// past [skillListingMaxNameUnits] that holds a byte that is no UTF-8
+// ([skillNameKept]): an answer the layer cannot give
+// ([threadLine.AttachmentWellFormed]).
+var errSkillNameUnmeasured = errors.New("a skill's name holds a byte that is no UTF-8, so its length in UTF-16 " +
+	"code units is not one the layer can count as Claude Code does")
+
 // threadPreserved is what a compaction's boundary says it kept of the thread
 // before it ([threadLine.Preserved]).
 type threadPreserved struct {
@@ -2729,14 +2741,14 @@ type threadPreserved struct {
 	Nowhere bool
 }
 
-// list reads the list's next entry, a string: counted; held where it is a
-// canonical uuid ([uuidBytes]), while fewer than [threadChainMaxRecords] are
-// held, and More set where one is past them; Nowhere set where it is none
-// ([threadLine.Preserved]).
-func (p *threadPreserved) list(entry string) {
+// list reads the list's next entry, a string, by what [uuidBytes] reads of
+// it, u and canonical: counted; held where it is a canonical uuid, while
+// fewer than [threadChainMaxRecords] are held, and More set where one is past
+// them; Nowhere set where it is none ([threadLine.Preserved]).
+func (p *threadPreserved) list(u [16]byte, canonical bool) {
 	p.Listed++
-	switch u, ok := uuidBytes(entry); {
-	case !ok:
+	switch {
+	case !canonical:
 		p.Nowhere = true
 	case len(p.UUIDs) == threadChainMaxRecords:
 		p.More = true

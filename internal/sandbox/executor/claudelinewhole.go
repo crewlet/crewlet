@@ -242,7 +242,7 @@ func retractedOf(raw json.RawMessage) (threadRetracted, error) {
 		if err != nil {
 			return err
 		}
-		r.entry(entry)
+		r.entry(chainPrefix(entry))
 		return nil
 	})
 	if err != nil {
@@ -696,8 +696,7 @@ func skillNamesKept(names json.RawMessage) (bool, error) {
 		return false, nil
 	}
 	if unreadable {
-		return false, errors.New("a skill's name holds a byte that is no UTF-8, so its length in UTF-16 code units " +
-			"is not one the layer can count as Claude Code does")
+		return false, errSkillNameUnmeasured
 	}
 	return true, nil
 }
@@ -727,7 +726,7 @@ func preservedList(raw json.RawMessage) (threadPreserved, error) {
 		if entryErr != nil {
 			return entryErr
 		}
-		p.list(entry)
+		p.list(uuidBytes(entry))
 		return nil
 	})
 	if err != nil {
