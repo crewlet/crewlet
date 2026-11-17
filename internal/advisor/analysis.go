@@ -58,7 +58,7 @@ type Analysis struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 	// Findings are the grounded ones, Dropped how many were not and why.
-	Findings []Finding    `json:"findings"`
+	Findings []Finding    `json:"findings,omitempty"`
 	Dropped  map[Drop]int `json:"dropped"`
 	Unread   []string     `json:"unread"`
 	Reason   string       `json:"reason,omitempty"`
