@@ -11,10 +11,9 @@
  * its character and colour), which is drawn in place of the initials where the
  * chart holds one. A person is always drawn as themself.
  *
- * ONE RULE FOR EVERY SURFACE: an agent the chart holds is its character
- * wherever it is drawn, alone or beside its name; a person, and a key the chart
- * does not hold, are initials. `avatar` is a required input so no caller can
- * leave an agent's character behind by omission.
+ * ONE RULE FOR EVERY SURFACE: an agent the chart holds is its character; a
+ * person, and a key the chart does not hold, are initials. `avatar` is required
+ * so no caller drops an agent's character by omission.
  *
  * `status` is the engine's own word (`lib/seats.ts`' `statusOf`), drawn as the
  * kit's corner badge, never a ring round the plate.

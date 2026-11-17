@@ -18,10 +18,9 @@ import (
 // runnable ones (see [Company.validateAvatars]) and is never carried onto
 // [org.Role].
 //
-// CHOSEN, OR PICKED FROM THE HANDLE. A part left out is picked from the
-// seat's handle ([DefaultAvatar]), which is minted once and never changes
-// (ADR-0013): a rename keeps the face, and agents that chose nothing are
-// still told apart rather than all drawn as one look.
+// CHOSEN, OR PICKED FROM THE HANDLE ([DefaultAvatar]). The handle never
+// changes (ADR-0013), so a rename keeps the face, and agents that chose
+// nothing are still told apart.
 type RoleAvatar struct {
 	// Character is which Crewlet the seat is drawn as.
 	Character AvatarCharacter `yaml:"character,omitempty" json:"character,omitempty" js:"enum=crewlet|hexlet|peaklet|prismlet|towerlet|bricklet|gemlet|coglet|pluslet|shieldlet|stacklet|sparklet|cloudlet|foxlet|rocketlet|crownlet|cactlet|wisplet|heartlet|flasklet|chiplet|duolet|chatlet|pagelet|archlet|dashlet|octlet|conelet|hivelet|folderlet" desc:"The Crewlet character this agent seat is drawn as. Absent = one picked from the seat's handle."`
@@ -72,10 +71,9 @@ func (c AvatarCharacter) Valid() bool { return slices.Contains(AvatarCharacters,
 // Valid reports whether the colour is one of the six.
 func (c AvatarColor) Valid() bool { return slices.Contains(AvatarColors, c) }
 
-// DefaultAvatar is the look an agent seat that chose none is drawn with: a
-// character and a colour picked from an FNV-1a hash of its handle, mixed by
-// murmur3's finalizer so handles a letter apart land far apart. The one
-// implementation: every read that serves a seat serves it resolved.
+// DefaultAvatar is the look an agent seat that chose none is drawn with, picked
+// from an FNV-1a hash of its handle mixed by murmur3's finalizer, so handles a
+// letter apart land far apart. Every read that serves a seat serves it resolved.
 func DefaultAvatar(handle string) RoleAvatar {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(handle))

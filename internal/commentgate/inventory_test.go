@@ -92,7 +92,7 @@ var excessInventory = map[string]int{
 	"internal/codeindex":                            273,
 	"internal/codesearch":                           35,
 	"internal/compact":                              3,
-	"internal/config":                               3437,
+	"internal/config":                               3432,
 	"internal/configplane":                          63,
 	"internal/confluence":                           262,
 	"internal/coord":                                2080,

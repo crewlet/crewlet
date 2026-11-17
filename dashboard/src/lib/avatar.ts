@@ -3,10 +3,9 @@
  * six seat colours, as the engine serves it on every seat it publishes: each
  * part as the seat's author chose it, or picked from the seat's handle.
  *
- * ONE IMPLEMENTATION, THE ENGINE'S. Nothing here picks a look: a screen draws
- * the look it is served, and a part this build's kit cannot draw (a character
- * a newer engine admitted) is no look, drawn as the seat's initials. The org
- * builder lays a seat's AUTHORED parts over the look the running chart serves.
+ * ONE IMPLEMENTATION, THE ENGINE'S: a screen draws the look it is served, and
+ * a part this kit cannot draw is no look (initials). The org builder lays a
+ * seat's AUTHORED parts over the look the running chart serves.
  *
  * The lists themselves are the contract's (`contract/avatar.ts`), which the
  * engine and this build's design system are both held to.
