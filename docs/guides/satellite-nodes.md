@@ -520,7 +520,11 @@ the dependency surface before choosing a host for it:
   which needs nothing from you: its port serves the node's own leaf alone,
   refuses every other caller on the host, and closes a connection that
   sends it nothing, so nothing on the host that holds connections open to
-  it can keep the leaf from linking.
+  it can keep the leaf from linking. A leaf whose link dropped links again
+  behind a queue on the link of up to two seconds round trip: past that,
+  nats-server's own fixed two-second wait for a member's answer to the
+  leaf's handshake ends every attempt, and the leaf links once the queue has
+  drained.
 - **The harness of every model its seats name, installed and signed in
   on that host.** Each [`providers.llm` entry](../concepts/llm-backends.md)
   is a harness the node runs, and it calls its own vendor over outbound HTTPS. A

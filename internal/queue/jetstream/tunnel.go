@@ -23,24 +23,25 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
+// tunnelDial bounds the tunnel's own dial to a member, its lookup included
+// ([memberDialer]): a request's term ([jsapi.RequestTerm]), because the dial
+// crosses the link, whose bottleneck every request across it is sized to
+// wait behind — up to four seconds of its rate across its two directions
+// together, and a round trip (crewlet/crewlet#1035) — and a connection's SYN
+// and SYN-ACK queue there like any other packet. The handshake behind it is
+// given a term too ([leafHandshakeTerm]).
+const tunnelDial = jsapi.RequestTerm
+
 // tunnelConnectTerm bounds a leaf's whole CONNECT exchange with its tunnel —
 // the dial to it, the request, and the tunnel's answer, its own dial to the
-// member inside it (nats-server's Proxy.Timeout): a request's term
-// ([jsapi.RequestTerm]), because the tunnel's dial crosses the link, whose
-// bottleneck every request across it is sized to wait behind — up to four
-// seconds of its rate across its two directions together, and a round trip
-// (crewlet/crewlet#1035). Left to nats-server it is the leaf's dial timeout,
-// one second, and a leaf whose link dropped could not dial again while other
-// flows kept that queue deep.
-const tunnelConnectTerm = jsapi.RequestTerm
-
-// tunnelDial bounds the tunnel's own dial to a member, its lookup included
-// ([memberDialer]): the term less a read's ([jsprovision.ReadTerm]), the same
-// split of the term a request across a link makes between the queue ahead of
-// it and its answer's crossing, so the tunnel answers a dial that failed — a
-// 502 naming why — inside the leaf's term, where a dial given the whole term
-// would be cut by the leaf first and leave it only a timeout to log.
-const tunnelDial = tunnelConnectTerm - jsprovision.ReadTerm
+// member inside it (nats-server's Proxy.Timeout): the tunnel's dial
+// ([tunnelDial]) and a read's term ([jsprovision.ReadTerm]) beside it, so a
+// dial that failed reaches the leaf as the tunnel's 502 naming why, inside
+// the leaf's term, where a term no longer than the dial would cut the leaf
+// first and leave it only a timeout to log. Left to nats-server it is the
+// leaf's dial timeout, one second, and a leaf whose link dropped could not
+// dial again while other flows kept the link's queue deep.
+const tunnelConnectTerm = tunnelDial + jsprovision.ReadTerm
 
 // tunnelCredentialTerm bounds how long the tunnel waits for a connection's
 // CONNECT, up to its credential: a read's term ([jsprovision.ReadTerm]). The

@@ -755,6 +755,9 @@ func embeddedOptions(cfg Config, auth *brokerAuth) (*server.Options, string, err
 		opts.LeafNode.Host = cfg.LeafHost
 		opts.LeafNode.Port = cfg.LeafPort
 		opts.LeafNode.Advertise = cfg.LeafAdvertise
+		// A LEAF'S CONNECT CROSSES ITS LINK behind the member's INFO: see
+		// [leafHandshakeTerm].
+		opts.LeafNode.AuthTimeout = leafHandshakeTerm.Seconds()
 	}
 	var scratch string
 	if opts.StoreDir == "" {
@@ -1675,6 +1678,8 @@ func (e *embeddedServer) presentedKey() string {
 // CONNECT signs the member's nonce with the seed (server/leafnode.go, v2.15.1),
 // so what crosses the network is a public key and a signature. A userinfo would
 // be sent beside it, in clear.
+//
+// AND THE MEMBER'S FIRST WORDS WAITED FOR A REQUEST'S TERM ([leafHandshakeTerm]).
 func leafRemotes(urls []string, seed string) ([]*server.RemoteLeafOpts, error) {
 	parsed := make([]*url.URL, 0, len(urls))
 	for i, raw := range urls {
@@ -1686,8 +1691,37 @@ func leafRemotes(urls []string, seed string) ([]*server.RemoteLeafOpts, error) {
 		u.User = nil
 		parsed = append(parsed, u)
 	}
-	return []*server.RemoteLeafOpts{{URLs: parsed, Nkey: seed}}, nil
+	return []*server.RemoteLeafOpts{{URLs: parsed, Nkey: seed, FirstInfoTimeout: leafHandshakeTerm}}, nil
 }
+
+// leafHandshakeTerm bounds a leaf link's handshake, at both ends: how long a
+// leaf waits for the member's first words once its dial has connected
+// (nats-server's remote FirstInfoTimeout), and how long a member waits for a
+// leaf's CONNECT once it has taken the connection (its leaf listener's
+// AuthTimeout).
+//
+// A REQUEST'S TERM ([jsapi.RequestTerm]), each wait spanning the link's
+// crossings. The handshake is two round trips: the member's INFO and the
+// leaf's answering INFO, which settle the link's compression, then the
+// member's INFO again and the leaf's CONNECT. nats-server times the leaf's
+// wait over the first three of those crossings — it clears the deadline only
+// at the second INFO — and the member's over all four (measured at v2.15.2
+// behind a link lagging 1.5 s each way: the leaf's CONNECT left at 4.5 s and
+// arrived at 6). And once it has sent CONNECT the leaf gives the member's
+// answer a FIXED two seconds (leafnode.go's connectProcessTimeout, which no
+// option sets), so no leaf links across a round trip longer than that,
+// whatever these waits are: two such round trips are four seconds, inside a
+// term, and a term is the most either wait can use.
+//
+// LEFT TO nats-server, the leaf waits one second over three crossings and the
+// member two over four, so a leaf whose link dropped while other flows kept
+// its queue more than about a second deep, round trip, could not link again
+// for as long as they did. Behind a queue past nats-server's two seconds it
+// still cannot, and waits for the queue to drain (crewlet/crewlet#1035). What
+// the longer waits cost is a member that holds a connection that never says
+// CONNECT for five seconds rather than two, and a leaf that waits five on a
+// member that accepts and never says INFO, before its next attempt.
+const leafHandshakeTerm = jsapi.RequestTerm
 
 // dial opens a NATS connection to an external server with this package's own
 // reconnect policy, held to the transport's contract. The caller owns the
@@ -1757,15 +1791,23 @@ func dial(cfg Config, at watched, meter *LinkMeter) (*nats.Conn, error) {
 // they did.
 //
 // WHAT IT COSTS: it is also how long the reconnect loop waits on each member
-// of the pool, which it tries in turn, and a member that silently drops
-// packets — a partition, a host that went away without closing anything —
-// holds every attempt at it for exactly this long before the next member is
-// asked, however many addresses its name resolves to (a name naming every
-// pod of the cluster shares the budget among them rather than taking it once
-// for each). The coordination store rides this connection, and an outage past
-// the lease TTL (45 s by default, 15 s at its floor) hands this node's seats
-// to a peer; a pool of three members with two silent ones reaches the third
-// within ten seconds, inside either.
+// of the pool, which it tries in turn. A member that silently drops packets —
+// a partition, a host that went away without closing anything — holds every
+// attempt at it for the dial's term before the next member is asked, however
+// many addresses its name resolves to (a name naming every pod of the cluster
+// shares the budget among them rather than taking it once for each); one that
+// takes the connection and never answers — a wedged process whose kernel
+// still completes the handshake — holds it for the handshake's term instead,
+// and one slow at both for both. So a pool of three with two such members
+// ahead of the live one reaches it ten seconds after a drop, and up to twenty
+// where both hang after accepting, where the two-second terms took four and
+// eight. The coordination store rides this connection, and an outage past the
+// lease TTL hands this node's seats to a peer: at the default 45 s that is far
+// off, but at the floor, 15 s renewed every 5 s, a drop just before a renewal
+// leaves 10 s, which two dead members ahead of the live one use up. A shorter
+// term would cut every attempt behind a deep queue instead, the link's
+// ordinary state at the floor, for a pool listing dead members; the deployment
+// guide says to list live ones at the floor lease.
 const externalHandshake = jsapi.RequestTerm
 
 // externalWriteDeadline is how long one socket Write of an external dial's

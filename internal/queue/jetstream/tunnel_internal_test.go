@@ -20,6 +20,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 )
 
 // dialRecord is what a case's tunnel dialled: each address it connected to,
@@ -598,15 +599,21 @@ func until(t *testing.T, what string, cond func() bool) {
 
 // A LINK'S HANDSHAKE IS GIVEN A REQUEST'S TERM, on a leaf and on an external
 // dial alike: its packets queue at the link's bottleneck like any request's,
-// which the engine sizes every request across a link to wait behind, so a
-// leaf's CONNECT through its tunnel and an external dial's connect and
-// handshake each get [jsapi.RequestTerm] — where nats-server's leaf default
-// is its one-second dial and the external dial had two seconds, and a node
-// whose link dropped behind a deep queue could never dial again. The tunnel
-// carries the leaf's data link, in the global account, and no other remote.
+// which the engine sizes every request across a link to wait behind. So the
+// tunnel's dial of a member gets [jsapi.RequestTerm], and the leaf's CONNECT
+// to its tunnel a read's term more, so the tunnel's 502 reaches it; the leaf
+// waits a term for the member's INFO, and the member a term for the leaf's
+// CONNECT ([leafHandshakeTerm]); and an external dial's connect and
+// handshake get the term too — where nats-server's leaf default is its
+// one-second dial, its one-second wait for INFO and its two-second wait for
+// CONNECT, and the external dial had two seconds, and a node whose link
+// dropped behind a deep queue could never dial again. The tunnel carries the
+// leaf's data link, in the global account, and no other remote.
 //
 // Mutant: the tunnel's connect term at nats-server's one second. Mutant: the
-// external handshake at two seconds. Mutant: every remote proxied.
+// tunnel's connect term no longer than its dial. Mutant: the external
+// handshake at two seconds. Mutant: every remote proxied. Mutant: the leaf's
+// wait for INFO unset. Mutant: the member's wait for CONNECT unset.
 func TestALinksHandshakeIsGivenARequestsTerm(t *testing.T) {
 	t.Parallel()
 	var rec dialRecord
@@ -615,16 +622,44 @@ func TestALinksHandshakeIsGivenARequestsTerm(t *testing.T) {
 	global := &server.RemoteLeafOpts{LocalAccount: server.DEFAULT_GLOBAL_ACCOUNT}
 	other := &server.RemoteLeafOpts{LocalAccount: "leases"}
 	tun.proxy([]*server.RemoteLeafOpts{data, global, other})
+	want := jsapi.RequestTerm + jsprovision.ReadTerm
 	for name, r := range map[string]*server.RemoteLeafOpts{"the default account's": data,
 		"the global account's": global} {
-		if r.Proxy.Timeout != jsapi.RequestTerm || r.Proxy.URL != "http://"+tun.ln.Addr().String() ||
+		if r.Proxy.Timeout != want || r.Proxy.URL != "http://"+tun.ln.Addr().String() ||
 			r.Proxy.Username != tun.user || r.Proxy.Password != tun.pass {
 			t.Errorf("%s remote dials through %q as %q within %v, want the tunnel with its credential "+
-				"within %v", name, r.Proxy.URL, r.Proxy.Username, r.Proxy.Timeout, jsapi.RequestTerm)
+				"within %v", name, r.Proxy.URL, r.Proxy.Username, r.Proxy.Timeout, want)
 		}
 	}
 	if other.Proxy.URL != "" {
 		t.Errorf("a remote in another account dials through %q, want directly", other.Proxy.URL)
+	}
+	if tun.dialer.budget != jsapi.RequestTerm || tun.connectTerm <= tun.dialer.budget {
+		t.Errorf("the tunnel dials a member within %v and answers within %v, want the request term "+
+			"%v, answered inside the leaf's term", tun.dialer.budget, tun.connectTerm, jsapi.RequestTerm)
+	}
+
+	leafCfg := Config{ServerName: "leaf", LeafURLs: []string{"nats-leaf://127.0.0.1:7422"},
+		FleetAuth: testFleetAuth()}
+	leaf, _, err := embeddedOptions(leafCfg, authFor(t, leafCfg))
+	if err != nil {
+		t.Fatalf("a leaf's options: %v", err)
+	}
+	for i, r := range leaf.LeafNode.Remotes {
+		if r.FirstInfoTimeout != jsapi.RequestTerm {
+			t.Errorf("the leaf's remote %d waits %v for a member's INFO, want the request term %v",
+				i, r.FirstInfoTimeout, jsapi.RequestTerm)
+		}
+	}
+	memberCfg := Config{ServerName: "a", LeafPort: 7422, StoreDir: t.TempDir(), FleetAuth: testFleetAuth()}
+	member, scratch, err := embeddedOptions(memberCfg, authFor(t, memberCfg))
+	if err != nil {
+		t.Fatalf("a member's options: %v", err)
+	}
+	removeScratch(scratch)
+	if got := member.LeafNode.AuthTimeout; got != jsapi.RequestTerm.Seconds() {
+		t.Errorf("a member waits %vs for a leaf's CONNECT, want the request term %v", got,
+			jsapi.RequestTerm)
 	}
 
 	opts, _, err := dialOptions(Config{}, nil)

@@ -396,6 +396,51 @@ func TestALeafsDataLinkCrossesItsTunnel(t *testing.T) {
 	})
 }
 
+// relinkLag is how late the relink case's link delivers every chunk, each
+// way, once it has linked: 700 ms, so a leaf's handshake meets a round trip of
+// 1.4 s — the member's INFO, the leaf's INFO and the member's again 2.1 s
+// after the dial, past nats-server's one-second wait for them, and the leaf's
+// CONNECT 2.8 s after the member took the connection, past its two-second
+// wait — and stays under the fixed two seconds nats-server gives the
+// member's answer to CONNECT, which no option moves ([leafHandshakeTerm]).
+const relinkLag = 700 * time.Millisecond
+
+// A LEAF LINKS AGAIN ACROSS A LINK WHOSE QUEUE IS DEEP: once its link drops
+// while every byte either way crosses 700 ms late, as behind a bottleneck
+// that other flows keep that deep, the leaf dials again through
+// its tunnel, the handshake completes, and a request crosses the new link —
+// decided by the request's answer, never by a clock. Left at nats-server's
+// waits, every attempt timed out at the member's INFO or the leaf's CONNECT,
+// and the leaf never linked again while the queue stayed deep.
+//
+// Mutant: the leaf's wait for the member's INFO left at its one second.
+// Mutant: the member's wait for the leaf's CONNECT left at its two seconds.
+func TestALeafLinksAgainAcrossALinkWhoseQueueIsDeep(t *testing.T) {
+	t.Parallel()
+	f := newMeterFleet(t, linktest.Lagging)
+	opened := f.meter.openedSockets()
+	f.link.Lag(relinkLag)
+	f.link.Drop(server.DEFAULT_GLOBAL_ACCOUNT)
+
+	bound := time.NewTimer(90 * time.Second) //fixedwait:liveness
+	defer bound.Stop()
+	for {
+		// A REQUEST'S WAIT HOLDS ITS ROUND TRIP AND ONE MORE, so an answer
+		// that crosses is never lost to it.
+		_, err := f.up.Request("meter.member.echo", []byte("again"), 4*relinkLag)
+		if err == nil && f.meter.openedSockets() > opened {
+			return
+		}
+		select {
+		case <-bound.C:
+			t.Fatalf("the leaf never linked again across a link lagging %v each way: the last "+
+				"request said %v, and the tunnel opened %d sockets to the members (%d before the drop)",
+				relinkLag, err, f.meter.openedSockets(), opened)
+		default:
+		}
+	}
+}
+
 // A LEAF WHOSE TUNNEL STOPS ACCEPTING IS A DEAD BROKER: the tunnel declares
 // the death the broker's own, which the engine ends the node on
 // ([Server.Death]), rather than leave a leaf that can never link again.
