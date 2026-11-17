@@ -88,11 +88,12 @@ func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
 		n.acked = map[string]string{
 			"stream":   r.URL.Query().Get("stream"),
 			"position": r.URL.Query().Get("position"),
+			"taken_at": r.URL.Query().Get("taken_at"),
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"stream": r.URL.Query().Get("stream"), "position": 918100000,
-			"generation": 2,
+			"generation": 2, "taken_at": r.URL.Query().Get("taken_at"),
 		})
 	})
 	for _, verb := range []string{"evict", "readmit"} {
@@ -838,29 +839,49 @@ func TestRetentionSnapshotsNamesWhyANodeHoldsNone(t *testing.T) {
 	}
 }
 
-// TestAnAcknowledgementNamesBothTheLogAndTheSequence: an acknowledgement moves
-// the floor the trim deletes against, so there is no value to guess.
-func TestAnAcknowledgementNamesBothTheLogAndTheSequence(t *testing.T) {
+// TestAnAcknowledgementNamesTheLogTheSequenceAndWhenTheCopyWasTaken: an
+// acknowledgement moves the floor the trim deletes against, and the backup's
+// age is measured from when its copy was taken, so none of the three is a
+// value to guess, and the instant reaches the node as the copy's, in UTC.
+func TestAnAcknowledgementNamesTheLogTheSequenceAndWhenTheCopyWasTaken(t *testing.T) {
 	t.Parallel()
 	node := newFakeRetentionNode(t)
-	if _, _, err := cli(t, "retention", "ack",
-		bootstrapForURL(t, node.server.URL), "-position", "918100000"); err == nil {
-		t.Error("an acknowledgement with no stream was accepted")
-	}
-	if _, _, err := cli(t, "retention", "ack",
-		bootstrapForURL(t, node.server.URL), "-stream", "S"); err == nil {
-		t.Error("an acknowledgement with no position was accepted")
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"no stream", []string{"-position", "918100000", "-taken-at", "2026-11-14T03:00:00Z"}},
+		{"no position", []string{"-stream", "S", "-taken-at", "2026-11-14T03:00:00Z"}},
+		{"no instant", []string{"-stream", "S", "-position", "918100000"}},
+		{"an instant that is no RFC 3339", []string{"-stream", "S", "-position", "918100000",
+			"-taken-at", "yesterday"}},
+		{"a date with no time", []string{"-stream", "S", "-position", "918100000",
+			"-taken-at", "2026-11-14"}},
+	} {
+		args := append([]string{"retention", "ack", bootstrapForURL(t, node.server.URL)}, tc.args...)
+		if _, _, err := cli(t, args...); err == nil {
+			t.Errorf("an acknowledgement with %s was accepted", tc.name)
+		}
 	}
 	if node.acked != nil {
 		t.Fatalf("the node was contacted anyway: %v", node.acked)
 	}
 
-	if _, _, err := cli(t, "retention", "ack", bootstrapForURL(t, node.server.URL),
-		"-stream", "CREWLET_TRACKER_LOG", "-position", "918100000"); err != nil {
+	stdout, _, err := cli(t, "retention", "ack", bootstrapForURL(t, node.server.URL),
+		"-stream", "CREWLET_TRACKER_LOG", "-position", "918100000",
+		"-taken-at", "2026-11-14T05:30:00+02:00")
+	if err != nil {
 		t.Fatalf("ack: %v", err)
 	}
 	if node.acked["stream"] != "CREWLET_TRACKER_LOG" || node.acked["position"] != "918100000" {
 		t.Fatalf("the node was asked for %v", node.acked)
+	}
+	if node.acked["taken_at"] != "2026-11-14T03:30:00Z" {
+		t.Errorf("the node was told the copy was taken at %q, want the instant given, in UTC",
+			node.acked["taken_at"])
+	}
+	if !strings.Contains(stdout, "a copy taken 2026-11-14T03:30:00Z") {
+		t.Errorf("the answer does not say which copy was acknowledged:\n%s", stdout)
 	}
 }
 
