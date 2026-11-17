@@ -76,6 +76,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ARoundCountsItsLostJobsAcrossTheRelaunchesThatCarryItOn", testARoundCountsItsLostJobsAcrossTheRelaunchesThatCarryItOn},
 		{"AHeldReleaseHoldsTheResumeUntilItsConditionLifts", testAHeldReleaseHoldsTheResumeUntilItsConditionLifts},
 		{"AHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts", testAHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts},
+		{"AHeldReleaseOwesItsCompletionOnTheJobsRecord", testAHeldReleaseOwesItsCompletionOnTheJobsRecord},
 		{"ASecondLaunchDropsTheFirstSuspension", testASecondLaunchDropsTheFirstSuspension},
 		{"ASecondLaunchDropsTheFirstRunsBridgedCalls", testASecondLaunchDropsTheFirstRunsBridgedCalls},
 		{"ALaunchNeedsATurnID", testALaunchNeedsATurnID},
@@ -2661,6 +2662,70 @@ func testAHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts(t *testing.T, s sand
 		t.Fatalf("held release: released=%v err=%v", released, err)
 	}
 	mustClaim(t, s, "t1")
+}
+
+// A HELD RELEASE OWES ITS COMPLETION ON THE JOB'S RECORD. The hold spends the
+// completion's delivery, and a lift clears the hold, so the release that writes
+// it records the completion as owed in the same write: the hold's condition and
+// the store's instant, which a lift of the hold leaves, so a restart after the
+// lift still finds the job owed. Only where the record owes none yet, so an
+// earlier refusal's condition and instant stand; and a hold whose condition is
+// past what an owed refusal records is refused, the claim left as it was.
+func testAHeldReleaseOwesItsCompletionOnTheJobsRecord(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	until := time.Now().UTC().Add(time.Hour)
+	mustLaunched(t, s, run("t1"))
+	held := releaseOf(mustClaim(t, s, "t1"))
+	held.Hold = &sandbox.Refusal{Condition: "budget", Until: until}
+	if released, err := s.ReleaseClaim(ctx, "t1", held); err != nil || !released {
+		t.Fatalf("held release: released=%v err=%v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Launch.RefusalOwed != "budget" || got.Launch.RefusalOwedSince.IsZero() {
+		t.Fatalf("the held job's record owes %q since %v; want the hold's condition owed, since the release",
+			got.Launch.RefusalOwed, got.Launch.RefusalOwedSince)
+	}
+	if lifted, err := s.LiftHold(ctx, "t1", "budget"); err != nil || !lifted {
+		t.Fatalf("a lift of the hold: lifted=%v err=%v", lifted, err)
+	}
+	if lifted := mustGet(t, s, "t1"); lifted.HeldFor != "" || lifted.Launch.RefusalOwed != "budget" {
+		t.Fatalf("the lifted row is held for %q and owes %q; want the hold gone and the completion still owed",
+			lifted.HeldFor, lifted.Launch.RefusalOwed)
+	}
+
+	// AN EARLIER REFUSAL STANDS.
+	first := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	launch := mustLaunched(t, s, run("t2"))
+	row := mustGet(t, s, "t2")
+	if wrote, err := s.OweRefusal(ctx, "t2", launch, sandbox.OwedRefusal{Condition: "provider", Since: first},
+		sandbox.Fence{Owner: row.Owner, Epoch: row.OwnerEpoch}); err != nil || !wrote {
+		t.Fatalf("an owed refusal on a running job = %v, %v; want it written", wrote, err)
+	}
+	again := releaseOf(mustClaim(t, s, "t2"))
+	again.Hold = &sandbox.Refusal{Condition: "budget", Until: until}
+	if released, err := s.ReleaseClaim(ctx, "t2", again); err != nil || !released {
+		t.Fatalf("held release: released=%v err=%v", released, err)
+	}
+	if got := mustGet(t, s, "t2"); got.HeldFor != "budget" || got.Launch.RefusalOwed != "provider" ||
+		!got.Launch.RefusalOwedSince.Equal(first) {
+		t.Fatalf("the held job's record, owing provider since %v before its hold, is held for %q and owes %q "+
+			"since %v; want it held and the first refusal standing", first, got.HeldFor,
+			got.Launch.RefusalOwed, got.Launch.RefusalOwedSince)
+	}
+
+	// PAST THE BOUND, refused, the claim standing.
+	mustLaunched(t, s, run("t3"))
+	long := releaseOf(mustClaim(t, s, "t3"))
+	long.Hold = &sandbox.Refusal{Condition: sandbox.Condition(strings.Repeat("c", sandbox.MaxOwedConditionBytes+1)),
+		Until: until}
+	if released, err := s.ReleaseClaim(ctx, "t3", long); err == nil || released {
+		t.Fatalf("a release holding the run for a condition past the bound = %v, %v; want it refused",
+			released, err)
+	}
+	if got := mustGet(t, s, "t3"); got.Status != sandbox.StatusResumed || got.HeldFor != "" ||
+		got.Launch.RefusalOwed != "" {
+		t.Fatalf("the refused release left the run %s, held for %q, owing %q; want the claim as it was",
+			got.Status, got.HeldFor, got.Launch.RefusalOwed)
+	}
 }
 
 func testAReleaseHandsTheClaimBackWhereItFoundIt(t *testing.T, s sandbox.PendingStore) {
