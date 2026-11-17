@@ -74,12 +74,12 @@ import {
 } from "@crewlethq/ui";
 import {
   BookOpenGlyph,
-  BookmarkGlyph,
   FileCodeGlyph,
   ScaleGlyph,
   GitBranchGlyph,
   LinkGlyph,
   RotateCcwClockGlyph,
+  TagGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useParam } from "~/app/router.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
@@ -100,7 +100,7 @@ import {
   shortOID,
   type LineRun,
 } from "~/lib/code.ts";
-import { fmtBytes, fmtDateTime, plural, relTime } from "~/lib/format.ts";
+import { fmtBytes, fmtCount, fmtDateTime, plural, relTime } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { codeRest, useCodeQuery, type CodeParams } from "~/lib/useCodeQuery.ts";
 import type { Grammar, State } from "~/lib/syntax/types.ts";
@@ -656,16 +656,7 @@ function FilesBar({
       {path === "" ? (
         // AT THE ROOT the path is the repository the header names, so the bar
         // says what the picker picks among instead, each a link to its list.
-        <span className="code-ref-counts">
-          <a className="code-ref-counts__link" href={repoHref(repo.name, { tab: "branches" })}>
-            <GitBranchGlyph size="sm" className="code-glyph" />
-            {plural(repo.branches, "branch", "branches")}
-          </a>
-          <a className="code-ref-counts__link" href={repoHref(repo.name, { tab: "branches" })}>
-            <BookmarkGlyph size="sm" className="code-glyph" />
-            {plural(repo.tags, "tag")}
-          </a>
-        </span>
+        <RefCounts repo={repo} />
       ) : (
         <nav aria-label="Path" className="code-crumbs">
           <a className="code-crumbs__root" href={at("")}>
@@ -695,6 +686,32 @@ function FilesBar({
         {path === "" && <CloneButton repo={repo.name} />}
       </span>
     </PageToolbar>
+  );
+}
+
+/** The branches and tags the picker picks among, each a link to its list on Branches. */
+function RefCounts({ repo, tags = true }: { repo: CodeRepoDetail; tags?: boolean }) {
+  return (
+    <span className="code-ref-counts">
+      <ButtonLink
+        size="small"
+        variant="ghost"
+        href={repoHref(repo.name, { tab: "branches" })}
+        leadingIcon={<GitBranchGlyph size="sm" />}
+      >
+        <strong>{fmtCount(repo.branches)}</strong> {repo.branches === 1 ? "Branch" : "Branches"}
+      </ButtonLink>
+      {tags && (
+        <ButtonLink
+          size="small"
+          variant="ghost"
+          href={repoHref(repo.name, { tab: "branches", view: "tags" })}
+          leadingIcon={<TagGlyph size="sm" />}
+        >
+          <strong>{fmtCount(repo.tags)}</strong> {repo.tags === 1 ? "Tag" : "Tags"}
+        </ButtonLink>
+      )}
+    </span>
   );
 }
 
@@ -1527,12 +1544,7 @@ function NoDefaultBranch({
     <Stack gap={3}>
       <PageToolbar>
         <RefPicker repo={repo} revisions={revisions} value="" onChoose={onRev} />
-        <span className="code-ref-counts">
-          <a className="code-ref-counts__link" href={repoHref(repo.name, { tab: "branches" })}>
-            <GitBranchGlyph size="sm" className="code-glyph" />
-            {plural(repo.branches, "branch", "branches")}
-          </a>
-        </span>
+        <RefCounts repo={repo} tags={false} />
       </PageToolbar>
       <Card className="code-setup">
         <Card.Header divided>

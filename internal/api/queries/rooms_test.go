@@ -512,8 +512,9 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // page its routing's, `code_change_routing`, a repository's own page those of
 // `code_repo` (which `crewlet gitlet status -repo` reads too) and of its
 // content, `code_refs`, `code_tree`, `code_blob`, `code_log`, `code_blame`,
-// `code_tree_commits` and `code_find`, and a commit's page and a comparison those of `code_commit`,
-// `code_diff` and `code_compare`, a seat's Code tab and My work's Reviews
+// `code_tree_commits` and `code_find`, and its tabs' `code_counts`, and a
+// commit's page and a comparison those of `code_commit`, `code_diff` and
+// `code_compare`, a seat's Code tab and My work's Reviews
 // that of `code_reviews`, and Gitlet › Queue, Gitlet › Checks and the checks
 // tabs those of a repository's merge queues and its checks, `code_queue`,
 // `code_checks`, `code_check` and `code_check_log`. And the tracker's own
@@ -537,9 +538,6 @@ var readOutsideTheDashboard = map[string]string{
 	// prints.
 	"work_inbox": "a script: GET /worklet/inbox, as docs/reference/api-endpoints.md prints it, and Worklet's " +
 		"own tool work_inbox",
-	// GITLET'S SECTION COUNTS, answered ahead of the tabs that draw them: until the first reads it, a script
-	// reads the reference's path.
-	"code_counts": "a script: GET /gitlet/counts, as docs/reference/api-endpoints.md prints it",
 	// MANY TIPS AT ONCE, answered ahead of the Branches and Tags screens that
 	// draw them: until the first reads it, a script reads the reference's path.
 	"code_tips": "a script: GET /gitlet/repos/{name}/tips, as docs/reference/api-endpoints.md prints it",

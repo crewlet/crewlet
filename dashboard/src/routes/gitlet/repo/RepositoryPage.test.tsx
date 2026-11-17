@@ -1334,8 +1334,9 @@ test("each commit carries its check for the branch read", async () => {
   );
   fireEvent.click(await screen.findByRole("button", { name: "Load older commits" }));
   await rowOf("Older work");
-  await waitFor(() => expect(marks).toHaveLength(2));
-  expect(marks).toEqual([{ commits: HEAD }, { commits: OTHER }]);
+  // THE CHECKS TAB'S MARKER asks the default branch's head too, on every tab.
+  await waitFor(() => expect(marks).toHaveLength(3));
+  expect(marks).toEqual([{ commits: HEAD }, { commits: HEAD }, { commits: OTHER }]);
 
   cleanup();
   mount("#/gitlet/repos/web?tab=commits&ref=feature");
@@ -1580,9 +1581,10 @@ test("a refused marks read is said once, and the rows still draw", async () => {
   const failed = await screen.findByText(
     "Checks and the changes each commit landed with could not be read.",
   );
-  expect(marksAsked).toHaveLength(1);
+  // ONE ASK BY THE HISTORY, one by the Checks tab's marker; Retry is the history's.
+  expect(marksAsked).toHaveLength(2);
   fireEvent.click(within(failed).getByRole("button", { name: "Retry" }));
-  await waitFor(() => expect(marksAsked).toHaveLength(2));
+  await waitFor(() => expect(marksAsked).toHaveLength(3));
 });
 
 /** The engine answering each history page with `page(url)`, every ask kept. */
@@ -3056,4 +3058,118 @@ test("the README's Edit opens the editor on it at the branch read, and is held a
   mount("#/gitlet/repos/web?ref=refs%2Ftags%2Fv1", "web", MAINTAINER);
   const held = await screen.findByRole("button", { name: "Edit README.md" });
   await waitFor(() => expect(held.getAttribute("title")).toMatch(/Choose a branch/));
+});
+
+// THE HEADER NAMES THE REPOSITORY UNDER ITS OWNER'S PATH, each unit a link to it, with who
+// reads it and its push mirror; a seat's repository is under the seat, and a unit the chart
+// lacks is its key. Mutation: drop the owner's path, or the mirror's mark, and this fails.
+test("the header names the repository under its unit's path, with its visibility and its push mirror", async () => {
+  stubEngine(
+    detail({
+      remotes: {
+        mirror_to: { url: "https://example.com/acme/web.git", as: "sre", credential: "${TOKEN}" },
+      },
+    }),
+  );
+  mount("#/gitlet/repos/web");
+  const title = await screen.findByRole("heading", { name: "Engineering, web" });
+  expect(within(title).getByRole("link", { name: "Engineering" }).getAttribute("href")).toMatch(
+    /peek=unit%3Aengineering/,
+  );
+  const header = within(title.closest("header")!);
+  expect(header.getByText("Company").closest("[title]")?.getAttribute("title")).toBe(
+    "Every seat reads it; every person does.",
+  );
+  expect(header.getByText("Push mirror").closest("[title]")?.getAttribute("title")).toBe(
+    "Pushes its default branch and refs/tags/* to https://example.com/acme/web.git as sre.",
+  );
+  expect(document.body.textContent).not.toContain("${TOKEN}");
+
+  cleanup();
+  stubEngine(detail({ owner: { kind: "seat", ref: "cto" }, kind: "scratch", visibility: "unit" }));
+  mount("#/gitlet/repos/web");
+  const seat = await screen.findByRole("heading", { name: "CTO, web" });
+  expect(within(seat).getByRole("link", { name: "CTO" })).toBeTruthy();
+  const seatHeader = within(seat.closest("header")!);
+  expect(seatHeader.getByText("Unit")).toBeTruthy();
+  expect(seatHeader.queryByText("Push mirror")).toBeNull();
+
+  cleanup();
+  stubEngine(detail({ owner: { kind: "unit", ref: "gone" } }));
+  mount("#/gitlet/repos/web");
+  const lost = await screen.findByRole("heading", { name: "gone, web" });
+  expect(within(lost).queryByRole("link")).toBeNull();
+});
+
+// CHANGES COUNTS THE LIVE CHANGES, its own read; a refused count draws no figure and the page
+// stays whole. Mutation: read the count off the repository's row, and this fails.
+test("the Changes tab counts the live changes, and a refused count draws no count", async () => {
+  const counts = { live: 4, draft: 1, open: 3, closed: 0, merged: 1 };
+  const asked = stubAnswering("code_counts", () =>
+    json({ counts: { changes: counts }, position: POSITION, level: "session" }),
+  );
+  mount("#/gitlet/repos/web");
+  const tab = await screen.findByRole("tab", { name: /Changes/ });
+  await waitFor(() => expect(tab.textContent).toBe("Changes4"));
+  const read = reads(asked, "code_counts")[0]!;
+  expect([read.searchParams.get("repo"), read.searchParams.get("parts")]).toEqual([
+    "web",
+    "changes",
+  ]);
+
+  cleanup();
+  stubAnswering("code_counts", () =>
+    engineJson({ error: "unavailable", detail: "no counts" }, 503),
+  );
+  mount("#/gitlet/repos/web");
+  await headRow("Start the storefront");
+  expect(screen.getByRole("tab", { name: /Changes/ }).textContent).toBe("Changes");
+});
+
+// CHECKS IS MARKED BY THE DEFAULT BRANCH'S HEAD: a dot when it passed, a count when it failed,
+// nothing while it runs or when refused. Mutation: mark a running head, and this fails.
+test("the Checks tab is marked by the default branch's head: a dot when it passed, a count when it failed, nothing while it runs", async () => {
+  const marked = (rollup: Record<string, unknown>) => () =>
+    json({
+      commit_marks: [{ commit: HEAD, checks: [{ ...PASSED_MAIN, ...rollup }] }],
+      position: POSITION,
+      level: "session",
+    });
+  const checksTab = () => screen.getByRole("tab", { name: /Checks/ });
+  const asked = stubAnswering("code_commit_marks", marked({}));
+  mount("#/gitlet/repos/web?tab=pushes");
+  await waitFor(() => expect(checksTab().textContent).toBe("ChecksEvery check on main passed"));
+  expect(reads(asked, "code_commit_marks")[0]!.searchParams.get("commits")).toBe(HEAD);
+
+  cleanup();
+  stubAnswering(
+    "code_commit_marks",
+    marked({ state: "failing", counts: { failed: 1, errored: 1 }, required_passed: 0 }),
+  );
+  mount("#/gitlet/repos/web?tab=pushes");
+  await waitFor(() => expect(checksTab().textContent).toBe("Checks22 checks on main failed"));
+
+  cleanup();
+  stubAnswering("code_commit_marks", marked({ state: "running", counts: { running: 2 } }));
+  mount("#/gitlet/repos/web?tab=pushes");
+  await screen.findByRole("tab", { name: /Checks/ });
+  await afterMicrotasks();
+  expect(checksTab().textContent).toBe("Checks");
+
+  cleanup();
+  stubAnswering("code_commit_marks", () => engineJson({ error: "unavailable" }, 503));
+  mount("#/gitlet/repos/web?tab=pushes");
+  await afterMicrotasks();
+  expect(checksTab().textContent).toBe("Checks");
+});
+
+// THE BAR'S COUNTS LEAD TO THEIR LISTS: Branches to the branches, Tags to the tags' view.
+test("the root's bar counts the branches and tags, each a link to its list", async () => {
+  stubEngine();
+  mount("#/gitlet/repos/web");
+  const branches = await screen.findByRole("link", { name: "2 Branches" });
+  expect(branches.getAttribute("href")).toBe("#/gitlet/repos/web?tab=branches");
+  expect(screen.getByRole("link", { name: "1 Tag" }).getAttribute("href")).toBe(
+    "#/gitlet/repos/web?tab=branches&view=tags",
+  );
 });

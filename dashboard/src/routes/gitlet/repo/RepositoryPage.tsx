@@ -41,7 +41,7 @@
  * About rail how far it went and where its mirrors stand.
  */
 
-import { useId, type ReactNode } from "react";
+import { Fragment, useId, type ReactNode } from "react";
 import {
   AsideLayout,
   ButtonLink,
@@ -54,16 +54,19 @@ import {
   Stack,
   Tabs,
   Tag,
+  VisuallyHidden,
   tabId,
 } from "@crewlethq/ui";
 import {
   CodeGlyph,
-  DiffGlyph,
   GitBranchGlyph,
+  GitCommitVerticalGlyph,
+  GitPullRequestGlyph,
   ListChecksGlyph,
-  RotateCcwClockGlyph,
+  LockGlyph,
   SettingsGlyph,
   UploadGlyph,
+  UsersGlyph,
 } from "@crewlethq/icons/glyphs";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
@@ -75,7 +78,7 @@ import { href, useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { CHANGE_STATE_FILTERS, isRepoName, repoStatusWord } from "~/lib/code.ts";
 import { fmtDateTime } from "~/lib/format.ts";
-import { indexOrg, unitByKey, useSeatBadgeOf } from "~/lib/seats.ts";
+import { indexOrg, seatPath, unitByKey, unitPlace, useSeatBadgeOf } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useHeldGrants } from "~/lib/viewer.ts";
@@ -106,6 +109,7 @@ import {
   RenameControl,
   SearchModeControl,
 } from "./RepoWrites.tsx";
+import { useDefaultChecks } from "./marks.ts";
 import { useRevisions } from "./refs.tsx";
 import "~/styles/gitlet.css";
 
@@ -132,8 +136,8 @@ const REPO_TAB_LABELS: Readonly<Record<RepoTab, string>> = {
 /** Each tab's glyph, as a code host marks its sections: decorative, the label names the tab. */
 const REPO_TAB_GLYPHS: Readonly<Record<RepoTab, ReactNode>> = {
   code: <CodeGlyph size="sm" />,
-  changes: <DiffGlyph size="sm" />,
-  commits: <RotateCcwClockGlyph size="sm" />,
+  changes: <GitPullRequestGlyph size="sm" />,
+  commits: <GitCommitVerticalGlyph size="sm" />,
   branches: <GitBranchGlyph size="sm" />,
   pushes: <UploadGlyph size="sm" />,
   checks: <ListChecksGlyph size="sm" />,
@@ -150,6 +154,13 @@ export function RepositoryPage({ repo }: { repo: string }) {
   // neither listing again (`refs.tsx`'s useRevisions).
   const current = read.data?.repo?.name ?? "";
   const revisions = useRevisions(current, current !== "" && (tab === "code" || tab === "commits"));
+  // CHANGES' COUNT AND CHECKS' MARKER on every tab: the live changes, and the default head's verdict.
+  const counts = useCodeQuery(
+    "code_counts",
+    { repo: current, parts: "changes" },
+    { enabled: current !== "", pollMs: REPO_POLL_MS },
+  );
+  const live = counts.data?.counts?.changes?.live;
   const panelId = useId();
   if (!named) {
     return (
@@ -189,20 +200,12 @@ export function RepositoryPage({ repo }: { repo: string }) {
       )}
       <header>
         <RepoHeader repo={detail} />
-        <Tabs
-          overflow="menu"
-          variant="underline"
-          ariaLabel="The repository's sections"
-          value={tab}
-          onValueChange={(next) => setTab(next as RepoTab)}
+        <RepoTabs
+          repo={detail}
+          tab={tab}
+          onTab={setTab}
           panelId={panelId}
-          items={REPO_TABS.map((value) => ({
-            value,
-            label: REPO_TAB_LABELS[value],
-            icon: REPO_TAB_GLYPHS[value],
-            ...(value === "branches" ? { count: detail.branches } : {}),
-            ...(value === "pushes" ? { count: detail.pushes } : {}),
-          }))}
+          {...(live !== undefined ? { live } : {})}
         />
       </header>
       {detail.status === "deleted" && <DeletedNotice repo={detail} />}
@@ -243,6 +246,43 @@ export function RepositoryPage({ repo }: { repo: string }) {
   );
 }
 
+/** The page's tabs, Changes counting the live changes and Checks marked by the default head. */
+function RepoTabs({
+  repo,
+  tab,
+  onTab,
+  panelId,
+  live,
+}: {
+  repo: CodeRepoDetail;
+  tab: RepoTab;
+  onTab: (tab: RepoTab) => void;
+  panelId: string;
+  /** The live changes, where the count was answered. */
+  live?: number;
+}) {
+  const checks = useDefaultChecks(repo);
+  return (
+    <Tabs
+      overflow="menu"
+      variant="underline"
+      ariaLabel="The repository's sections"
+      value={tab}
+      onValueChange={(next) => onTab(next as RepoTab)}
+      panelId={panelId}
+      items={REPO_TABS.map((value) => ({
+        value,
+        label: REPO_TAB_LABELS[value],
+        icon: REPO_TAB_GLYPHS[value],
+        ...(value === "changes" && live !== undefined ? { count: live } : {}),
+        ...(value === "branches" ? { count: repo.branches } : {}),
+        ...(value === "pushes" ? { count: repo.pushes } : {}),
+        ...(value === "checks" && checks ? { marker: checks } : {}),
+      }))}
+    />
+  );
+}
+
 /** Who owns a repository, by name: a unit's off the chart (its key where the chart has none), a seat's badge. */
 function useOwnerName(): (owner: CodeOwner) => string {
   const org = useOrg();
@@ -256,9 +296,9 @@ function useOwnerName(): (owner: CodeOwner) => string {
 
 /**
  * The repository's marks beside its name: its state where it is not active,
- * what kind it is where it is not a project, a pull mirror, and a repository
- * only its owner's seats read. Outlined and uncoloured: each is a fact about
- * the repository, never a state of work.
+ * what kind it is where it is not a project, a pull mirror, who reads it and
+ * a push mirror. Outlined and uncoloured: each is a fact about the
+ * repository, never a state of work.
  */
 function RepoMarks({ repo }: { repo: CodeRepoDetail }) {
   const state = repoStatusWord(repo.status);
@@ -284,9 +324,32 @@ function RepoMarks({ repo }: { repo: CodeRepoDetail }) {
           Pull mirror
         </Tag>
       )}
-      {repo.visibility === "unit" && (
-        <Tag appearance="outline" title="Only its owner's seats read it; every person does.">
+      {repo.visibility === "company" ? (
+        <Tag
+          appearance="outline"
+          leadingIcon={<UsersGlyph size="xs" />}
+          title="Every seat reads it; every person does."
+        >
+          Company
+        </Tag>
+      ) : repo.visibility === "unit" ? (
+        <Tag
+          appearance="outline"
+          leadingIcon={<LockGlyph size="xs" />}
+          title="Only its owner's seats read it; every person does."
+        >
           Unit
+        </Tag>
+      ) : (
+        <Tag appearance="outline">{repo.visibility}</Tag>
+      )}
+      {repo.remotes?.mirror_to && (
+        <Tag
+          appearance="outline"
+          leadingIcon={<UploadGlyph size="xs" />}
+          title={pushMirrorStanding(repo) ?? undefined}
+        >
+          Push mirror
         </Tag>
       )}
     </>
@@ -294,19 +357,72 @@ function RepoMarks({ repo }: { repo: CodeRepoDetail }) {
 }
 
 /**
- * The repository's header: its name under its owner's, as a code host writes
+ * The repository's title as a code host writes it: its owner's path off the
+ * chart (each unit a link to it, or the seat), a slash, and its name.
+ */
+function RepoTitle({ repo }: { repo: CodeRepoDetail }) {
+  const org = useOrg();
+  const seatBadge = useSeatBadgeOf();
+  const { owner } = repo;
+  const unit = owner.kind === "seat" ? null : unitByKey(indexOrg(org), owner.ref);
+  const steps =
+    owner.kind === "seat"
+      ? [
+          {
+            key: owner.ref,
+            name: seatBadge(owner.ref).name || owner.ref,
+            to: href(seatPath({ handle: owner.ref, name: owner.ref })),
+          },
+        ]
+      : unit
+        ? unit.chain.map((u) => ({
+            key: u.id,
+            name: u.name,
+            to: href(unitPlace(u).path, unitPlace(u).query),
+          }))
+        : [{ key: owner.ref, name: owner.ref, to: "" }];
+  const slash = (
+    <>
+      <span className="code-repo-title__slash" aria-hidden="true">
+        {" /"}
+      </span>
+      <VisuallyHidden>,</VisuallyHidden>{" "}
+    </>
+  );
+  return (
+    <span className="code-repo-title">
+      <span className="code-repo-title__owner">
+        {steps.map((step, i) => (
+          <Fragment key={step.key}>
+            {i > 0 && slash}
+            {step.to ? (
+              <a className="code-repo-title__link" href={step.to}>
+                {step.name}
+              </a>
+            ) : (
+              step.name
+            )}
+          </Fragment>
+        ))}
+      </span>
+      {slash}
+      <span>{repo.name}</span>
+    </span>
+  );
+}
+
+/**
+ * The repository's header: its owner's path and its name, as a code host writes
  * `owner / name`, its marks, and its description. What it holds and where it
  * stands are the About rail's, beside its code: a header carrying the same
  * facts as the rail would be one answer given twice.
  */
 function RepoHeader({ repo }: { repo: CodeRepoDetail }) {
-  const ownerName = useOwnerName();
   return (
     <ObjectHeader
       kind="Repository"
       icon="square-code"
-      within={ownerName(repo.owner)}
-      title={repo.name}
+      title={<RepoTitle repo={repo} />}
       status={<RepoMarks repo={repo} />}
       {...(repo.description ? { description: repo.description } : {})}
     />

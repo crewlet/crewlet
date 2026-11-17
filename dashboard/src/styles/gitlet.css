@@ -966,13 +966,6 @@
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--spacing-1) var(--spacing-4);
-  font-size: var(--font-size-sm);
-}
-
-.code-ref-counts__link {
-  display: inline-flex;
-  align-items: center;
   gap: var(--spacing-1);
 }
 
@@ -2015,4 +2008,24 @@
 
 .code-find__hit {
   font-weight: var(--font-weight-semibold);
+}
+
+/* A REPOSITORY'S TITLE: its owner's path in the secondary ink, a slash, its name. */
+.code-repo-title {
+  overflow-wrap: anywhere;
+}
+
+.code-repo-title__owner,
+.code-repo-title__slash {
+  color: var(--color-text-secondary);
+  font-weight: var(--font-weight-regular);
+}
+
+.code-repo-title__link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.code-repo-title__link:hover {
+  color: var(--color-text-primary);
 }

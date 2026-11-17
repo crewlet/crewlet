@@ -4,9 +4,11 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { TabsMarker } from "@crewlethq/ui";
+import { plural } from "~/lib/format.ts";
 import { codeRest } from "~/lib/useCodeQuery.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
-import { QueryError, type CodeCommitMark } from "~/protocol/index.ts";
+import { QueryError, type CodeCommitMark, type CodeRepoDetail } from "~/protocol/index.ts";
 
 /** How often a page holding a running or pending rollup is asked again: the code log's minute. */
 export const MARKS_POLL_MS = 60_000;
@@ -152,4 +154,29 @@ export function useCommitMarks(repo: string, pages: readonly (readonly string[])
   }, []);
 
   return { of: (oid) => byOid.get(oid), failed, retry };
+}
+
+/**
+ * The Checks tab's marker, from the default branch's head: a dot where its
+ * rollup passed, a count where it is failing, none while it runs or is unknown.
+ */
+export function useDefaultChecks(repo: CodeRepoDetail): TabsMarker | undefined {
+  const head = repo.head ?? "";
+  const pages = useMemo(() => (head ? [[head]] : []), [head]);
+  const marks = useCommitMarks(repo.name, pages);
+  if (!head || marks.failed) return undefined;
+  const branch = repo.default_branch;
+  const rollup = marks.of(head)?.checks?.find((c) => c.target === `refs/heads/${branch}`);
+  if (rollup?.state === "passed") {
+    return { tone: "success", label: `Every check on ${branch} passed` };
+  }
+  if (rollup?.state === "failing") {
+    const failed = Math.max(1, (rollup.counts.failed ?? 0) + (rollup.counts.errored ?? 0));
+    return {
+      tone: "danger",
+      count: failed,
+      label: `${plural(failed, "check")} on ${branch} failed`,
+    };
+  }
+  return undefined;
 }
