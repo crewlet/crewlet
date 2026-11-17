@@ -108,17 +108,36 @@ describe("in the sheets", () => {
 const DIFF_FAMILY = /--color-diff-[\w-]+/g;
 
 /**
+ * The rules outside a diff that may read its sign inks, the step diff.css
+ * draws a line's sign in: a diffstat's figures and squares, and a file tree's counts.
+ */
+export const DIFFSTAT_READERS: readonly string[] = [
+  ".code-diffstat__plus",
+  ".code-diffstat__minus",
+  '.code-diffstat__squares > [data-kind="added"]',
+  '.code-diffstat__squares > [data-kind="removed"]',
+  '.code-ftree__counts > [data-sign="+"]',
+  '.code-ftree__counts > [data-sign="−"]',
+];
+
+/** The steps a diffstat reads. */
+const DIFFSTAT_STEP = /^--color-diff-(?:added|removed)-sign$/;
+
+/**
  * Every rule reading the diff family that is not wholly a coloured diff's in
- * `diff.css`, as `file selector -> token`.
+ * `diff.css`, nor a diffstat's step in `gitlet.css`, as `file selector -> token`.
  */
 export function uncodedDiffRules(rules: readonly SheetRule[]): string[] {
   return rules.flatMap((rule) => {
+    const selectors = splitSelectors(rule.selector);
     const coded =
-      rule.file === "diff.css" &&
-      splitSelectors(rule.selector).every((s) => /^\.diff-view--code(?![\w-])/.test(s));
+      rule.file === "diff.css" && selectors.every((s) => /^\.diff-view--code(?![\w-])/.test(s));
+    const stat = rule.file === "gitlet.css" && selectors.every((s) => DIFFSTAT_READERS.includes(s));
     return coded
       ? []
-      : [...rule.body.matchAll(DIFF_FAMILY)].map((m) => `${rule.file} ${rule.selector} -> ${m[0]}`);
+      : [...rule.body.matchAll(DIFF_FAMILY)]
+          .filter((m) => !(stat && DIFFSTAT_STEP.test(m[0])))
+          .map((m) => `${rule.file} ${rule.selector} -> ${m[0]}`);
   });
 }
 
@@ -180,6 +199,46 @@ describe("in Gitlet's sheets", () => {
       'diff.css .diff-view__line[data-kind="add"] -> --color-diff-added-row',
       "gitlet.css .code-ftree__status -> --color-diff-added-sign",
       "diff.css .diff-view--code .x, .y -> --color-diff-removed-sign",
+    ]);
+  });
+
+  // TWO-SIDED: every diffstat reader is a rule that reads a step, so the list holds no stale name.
+  test("every diffstat reader named reads a sign ink", () => {
+    const reading = sheetRules().filter(
+      (rule) => rule.file === "gitlet.css" && /--color-diff-/.test(rule.body),
+    );
+    const named = new Set(reading.flatMap((rule) => splitSelectors(rule.selector)));
+    expect(DIFFSTAT_READERS.filter((s) => !named.has(s))).toEqual([]);
+  });
+
+  test("it can tell: another rule reading a sign, or a diffstat reading a row or mark, is reported", () => {
+    expect(
+      uncodedDiffRules([
+        {
+          file: "gitlet.css",
+          selector: ".code-ftree__name",
+          body: "color: var(--color-diff-added-sign);",
+        },
+        {
+          file: "gitlet.css",
+          selector: ".code-diffstat__plus",
+          body: "background: var(--color-diff-added-row);",
+        },
+        {
+          file: "gitlet.css",
+          selector: '.code-diffstat__squares > [data-kind="added"]',
+          body: "background: var(--color-diff-added-mark);",
+        },
+        {
+          file: "gitlet.css",
+          selector: ".code-diffstat__plus",
+          body: "color: var(--color-diff-added-sign);",
+        },
+      ]),
+    ).toEqual([
+      "gitlet.css .code-ftree__name -> --color-diff-added-sign",
+      "gitlet.css .code-diffstat__plus -> --color-diff-added-row",
+      'gitlet.css .code-diffstat__squares > [data-kind="added"] -> --color-diff-added-mark',
     ]);
   });
 

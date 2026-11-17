@@ -20,8 +20,8 @@ export function Diffstat({
       role="img"
       aria-label={`${plural(added, "line")} added and ${fmtCount(deleted)} removed ${label}`}
     >
-      <span>+{fmtCount(added)}</span>
-      <span>−{fmtCount(deleted)}</span>
+      <span className="code-diffstat__plus">+{fmtCount(added)}</span>
+      <span className="code-diffstat__minus">−{fmtCount(deleted)}</span>
       {lines > 0 && (
         <span className="code-diffstat__squares">
           {[0, 1, 2, 3, 4].map((i) => (

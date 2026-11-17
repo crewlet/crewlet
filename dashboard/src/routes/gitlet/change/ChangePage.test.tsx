@@ -1852,12 +1852,12 @@ test("a change's files past one page are listed when the reader asks", async () 
   );
   mount("#/gitlet/repos/web/changes/42?tab=files");
 
-  const list = await screen.findByRole("list", { name: "Files changed" });
-  expect(await within(list).findByRole("button", { name: /app\.go/ })).toBeTruthy();
-  expect(within(list).queryByRole("button", { name: /z\.go/ })).toBeNull();
+  const list = await screen.findByRole("tree", { name: "Files changed" });
+  expect(await within(list).findByRole("treeitem", { name: /app\.go/ })).toBeTruthy();
+  expect(within(list).queryByRole("treeitem", { name: /z\.go/ })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Load more files" }));
 
-  expect(await within(list).findByRole("button", { name: /z\.go/ })).toBeTruthy();
+  expect(await within(list).findByRole("treeitem", { name: /z\.go/ })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Load more files" })).toBeNull();
   const second = changeAsked.find((u) => u.searchParams.get("cursor") === "f:1");
   expect(second?.searchParams.get("part")).toBe("files");

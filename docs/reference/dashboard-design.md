@@ -383,6 +383,10 @@ A diff's lines take the state of their blob's line, read by its id, under
 256 KiB, and of their hunk's first line past it; a changed run keeps the code's
 own text. A search hit is coloured on its own line.
 
+A diffstat's figures and squares take the sign inks a diff's lines draw their
+signs in, and a tree's file status its file ink, beside their words
+(`styles/diffs.test.ts` names the diffstat's rules).
+
 Outside Gitlet a JSON or YAML record is coloured by the kit's `CodeBlock`
 itself, handed `language="json"` or `"yaml"`: its own tokenizer, one span of
 text a token and never markup, plain past 256 KiB. A block whose text may not
@@ -8795,8 +8799,9 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   engine's interdiff), a page at a time — **Load more files** asks the page
   after from the cursor the last one ended at — drawn as a TREE beside the
   diff: their directories, a run of directories holding one more alone folded
-  into one row, each file its status letter, its name and its counts (in the
-  tertiary ink), grouped and never re-sorted, so a page loaded
+  into one row, each file its name, its counts in the diffstat's signs and
+  its status square in the kit's file ink, on the kit's tree model,
+  grouped and never re-sorted, so a page loaded
   later lands each file in its own directory; and one file's patch (`file=`)
   as git wrote it, under its head (its path, what became of it, its counts and
   the way to the file at the revision's head), read

@@ -508,8 +508,8 @@ test("opening another file drops the line the address named", async () => {
   );
 
   await screen.findByRole("region", { name: "Changes to app.go" });
-  const list = screen.getByRole("list", { name: "Files changed" });
-  fireEvent.click(within(list).getByRole("button", { name: /z\.go/ }));
+  const list = screen.getByRole("tree", { name: "Files changed" });
+  fireEvent.click(within(list).getByRole("treeitem", { name: /z\.go/ }));
 
   const region = await screen.findByRole("region", { name: "Changes to z.go" });
   await within(region).findByText("new");

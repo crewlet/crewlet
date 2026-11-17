@@ -263,8 +263,8 @@
   text-decoration: none;
 }
 
-/* THE TAB ROW'S NOTE: the head's lines added and removed, five squares told by
-   shape (filled added, hollow removed); the diff colours stay a diff's own. */
+/* A DIFFSTAT: lines added and removed, and five squares told by shape (filled
+   added, hollow removed) as well as by their marks. */
 .code-diffstat {
   display: inline-flex;
   align-items: center;
@@ -290,6 +290,42 @@
 
 .code-diffstat__squares > [data-kind="added"] {
   background: currentColor;
+}
+
+/* A DIFFSTAT'S FIGURES AND SQUARES take the sign inks diff.css reads; the shapes still tell. */
+.code-diffstat__plus,
+.code-ftree__counts > [data-sign="+"] {
+  color: var(--color-diff-added-sign);
+}
+
+.code-diffstat__minus,
+.code-ftree__counts > [data-sign="−"] {
+  color: var(--color-diff-removed-sign);
+}
+
+/* Each square's hairline and an added one's fill are its currentColor. */
+.code-diffstat__squares > [data-kind="added"] {
+  color: var(--color-diff-added-sign);
+}
+
+.code-diffstat__squares > [data-kind="removed"] {
+  color: var(--color-diff-removed-sign);
+}
+
+@media (forced-colors: active) {
+  .code-diffstat__squares > [data-kind] {
+    border-color: CanvasText;
+  }
+
+  .code-diffstat__squares > [data-kind="added"] {
+    background: CanvasText;
+  }
+
+  .code-diffstat__plus,
+  .code-diffstat__minus,
+  .code-ftree__counts > [data-sign] {
+    color: GrayText;
+  }
 }
 
 /* MORE: where the change came from, then whom its records notified. */
@@ -910,10 +946,9 @@
   color: var(--color-text-tertiary);
 }
 
-/* THE FILE TREE: directories with their glyph, files a row each — status
-   letter, name, counts — the one on screen pressed. */
-.code-ftree,
-.code-ftree__nested {
+/* THE FILE TREE: the kit's tree rows (`.code-tree__item`), each file's
+   badges, counts and status square at its end. */
+.code-ftree {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-0);
@@ -923,74 +958,40 @@
   min-width: 0;
 }
 
-.code-ftree__nested {
-  padding-inline-start: var(--spacing-4);
-}
-
-.code-ftree__dir {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.code-ftree__dirname {
-  display: flex;
+.code-ftree__facts {
+  display: inline-flex;
   align-items: center;
   gap: var(--spacing-2);
-  padding: var(--spacing-1) var(--spacing-2);
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-  overflow-wrap: anywhere;
-}
-
-.code-ftree__file {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  width: 100%;
-  padding: var(--spacing-1) var(--spacing-2);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: inherit;
-  font: inherit;
-  font-size: var(--font-size-sm);
-  text-align: start;
-  cursor: pointer;
-}
-
-.code-ftree__file:hover {
-  background: var(--color-surface-hover);
-}
-
-.code-ftree__file[aria-current="true"] {
-  background: var(--color-surface-pressed);
-  font-weight: var(--font-weight-medium);
-}
-
-.code-ftree__status {
-  flex: none;
-  display: inline-grid;
-  place-items: center;
-  inline-size: var(--spacing-4);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-xs);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-secondary);
-}
-
-.code-ftree__name {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow-wrap: anywhere;
+  font-size: var(--font-size-xs);
 }
 
 .code-ftree__counts {
-  flex: none;
-  font-size: var(--font-size-xs);
+  display: inline-flex;
+  gap: var(--spacing-1);
+  font-family: var(--font-family-mono);
   font-variant-numeric: tabular-nums;
+}
+
+/* A FILE'S STATUS in the kit's file ink, beside its word in the row's name. */
+.code-ftree__status {
+  display: inline-flex;
   color: var(--color-text-tertiary);
+}
+
+.code-ftree__status[data-status="A"] {
+  color: var(--color-file-added-ink);
+}
+
+.code-ftree__status[data-status="M"] {
+  color: var(--color-file-modified-ink);
+}
+
+.code-ftree__status[data-status="D"] {
+  color: var(--color-file-deleted-ink);
+}
+
+.code-ftree__status[data-status="R"] {
+  color: var(--color-file-renamed-ink);
 }
 
 /* ONE FILE'S DIFF: its head — path, what became of it, its counts, the way
@@ -1819,6 +1820,8 @@
 }
 
 .code-tree__item .code-ftree__name {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1836,7 +1839,8 @@
 }
 
 /* THE FILE ON SCREEN: the selected tint and the accent edge; forced colours paint its outline. */
-.code-tree__item[aria-current="page"] {
+.code-tree__item[aria-current="page"],
+.code-tree__item[aria-current="true"] {
   background: var(--color-surface-selected);
   box-shadow: inset 2px 0 0 var(--color-brand-accent);
   outline: 2px solid transparent;
