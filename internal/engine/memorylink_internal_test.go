@@ -10,8 +10,10 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/learning/memsync"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -22,11 +24,13 @@ import (
 // meter, which the queue makes on the connection it dials (a leaf's data
 // link, every connection to an external cluster). So the node's backends
 // carry the queue's meter, and the memory sync is configured from them: a
-// member and a leaf opened as a node opens its stream, the leaf joined to the
-// member, hand the memory sync no link and the leaf's own meter.
+// member, a leaf joined to it and a node on an external cluster, each opened
+// as a node opens its stream, hand the memory sync no link, the leaf's own
+// meter and the external dial's own meter.
 //
 // Mutant: the memory sync's configuration leaves the link out — the leaf
-// hands it none. Mutant: the backends carry no meter — the same.
+// hands it none. Mutant: the backends carry no meter — the same. Mutant: the
+// external branch's backends carry no meter — the external node hands none.
 func TestANodesHydrationReadsItsLinksMeter(t *testing.T) {
 	t.Parallel()
 	open := func(b *bootstrapOf) *Backends {
@@ -79,6 +83,23 @@ func TestANodesHydrationReadsItsLinksMeter(t *testing.T) {
 		t.Fatalf("the premise: the leaf's queue is %T with no meter of its link", onLeaf.Queue)
 	}
 
+	srv := externaltest.Start(t, queue.MaxPayloadBytes)
+	external := testBootstrap(t)
+	external.Node.ID = "metered-external"
+	external.Stream.Type = config.StreamNATS
+	external.Stream.URL = srv.URL()
+	external.Stream.Token = externaltest.Token
+	external.Coordination.Type = config.CoordinationEmbeddedKV
+	of = &bootstrapOf{b: &external}
+	onExternal := open(of)
+	if onExternal == nil {
+		t.Fatalf("open the external node's stream: %v", of.err)
+	}
+	eq, ok := onExternal.Queue.(*jetstream.Queue)
+	if !ok || eq.LinkMeter() == nil {
+		t.Fatalf("the premise: the external node's queue is %T with no meter of its link", onExternal.Queue)
+	}
+
 	for _, c := range []struct {
 		name     string
 		cfg      memsync.Config
@@ -87,11 +108,12 @@ func TestANodesHydrationReadsItsLinksMeter(t *testing.T) {
 	}{
 		{"the member", memoryConfig(&member, onMember, time.Second), nil, false},
 		{"the leaf", memoryConfig(&leaf, onLeaf, time.Second), q.LinkMeter(), true},
+		{"the external node", memoryConfig(&external, onExternal, time.Second), eq.LinkMeter(), true},
 	} {
 		if c.cfg.Link != c.want || c.cfg.AcrossLink != c.acrossIt {
 			t.Errorf("%s's memory sync reads a link %t (its queue's meter: %t), across a link %t; "+
 				"want a link %t, the queue's meter, across a link %t", c.name, c.cfg.Link != nil,
-				c.cfg.Link == memsync.Link(q.LinkMeter()), c.cfg.AcrossLink, c.want != nil, c.acrossIt)
+				c.want != nil && c.cfg.Link == c.want, c.cfg.AcrossLink, c.want != nil, c.acrossIt)
 		}
 	}
 }
