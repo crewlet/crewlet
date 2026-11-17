@@ -1,7 +1,7 @@
 /**
  * GITLET'S PAGES, LAID OUT: a comparison's title stays clear of the files'
- * sticky toolbar under it, the clone panel shows its whole address, and code
- * coloured by kind keeps the box it had plain.
+ * sticky toolbar under it, the revision picker and the clone panel stay inside
+ * the viewport, and code coloured by kind keeps the box it had plain.
  */
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { page } from "vitest/browser";
@@ -42,6 +42,21 @@ const MAIN_GO = [
   'func main() { serve(":8080") } // the storefront, on the port the shell and the health check both read',
   "",
 ];
+
+/** Ten branches by when each moved, one named past any panel's width. */
+const MOVED = [
+  "main",
+  `feature/${"a-very-long-branch-name-".repeat(5)}end`,
+  ...Array.from({ length: 8 }, (_, i) => `topic/${i}`),
+].map((name, i) => ({
+  ref: `refs/heads/${name}`,
+  oid: BASE,
+  position: POSITION,
+  moved_at: new Date(Date.UTC(2026, 10, 1, 12 - i)).toISOString(),
+  ...(name === "main"
+    ? { protection: { patterns: ["refs/heads/main"], direct_push: "none" } }
+    : {}),
+}));
 
 /** The engine, for one repository's comparison of feature into main, and one file. */
 function answer(url: URL): Response {
@@ -93,6 +108,9 @@ function answer(url: URL): Response {
         level: "session",
       });
     case "/query/code_refs":
+      if (url.searchParams.get("detail") === "true") {
+        return json({ refs_detail: MOVED, position: POSITION, level: "session" });
+      }
       return json({
         refs: [
           { ref: "refs/heads/feature", oid: HEAD, position: POSITION },
@@ -259,6 +277,53 @@ for (const width of [1440, 390]) {
     const under = card.getBoundingClientRect();
     expect(box.left).toBeGreaterThanOrEqual(Math.floor(under.left));
     expect(box.right).toBeLessThanOrEqual(Math.ceil(under.right));
+  });
+}
+
+// THE PICKER'S PANEL STAYS IN THE VIEWPORT with no sideways scroll, a long
+// branch name ellipsed on one line. Mutation: a name that wraps, or
+// `.code-picker { width: 24rem }`, fails it.
+for (const width of [1440, 1024, 390]) {
+  test(`the branch picker's panel stays inside the viewport and does not scroll sideways at ${width}px`, async () => {
+    await page.viewport(width, 900);
+    location.hash = "#/gitlet/repos/web";
+    mount(<RepositoryPage repo="web" />, width);
+    const picker = await eventually(() => {
+      const button = document.querySelector<HTMLElement>('[aria-label="Branch or tag: main"]');
+      expect(button).toBeTruthy();
+      return button!;
+    });
+    picker.click();
+    const panel = await eventually(() => {
+      const el = document.querySelector<HTMLElement>(
+        '.crewlet-popover[aria-label="Switch branches or tags"]',
+      );
+      expect(el).toBeTruthy();
+      expect(el!.style.visibility).not.toBe("hidden");
+      expect(document.activeElement?.getAttribute("aria-label")).toBe("Find a branch");
+      expect(el!.querySelectorAll("[role=option]")).toHaveLength(10);
+      return el!;
+    });
+    const list = panel.querySelector<HTMLElement>("[role=listbox]")!;
+    for (const box of [panel, list]) {
+      expect(box.scrollWidth).toBeLessThanOrEqual(box.clientWidth);
+      expect(box.scrollLeft).toBe(0);
+    }
+    const at = panel.getBoundingClientRect();
+    expect(at.left).toBeGreaterThanOrEqual(0);
+    expect(at.right).toBeLessThanOrEqual(window.innerWidth);
+    expect(at.width).toBeGreaterThanOrEqual(260);
+    for (const row of panel.querySelectorAll("[role=option], .code-picker__foot")) {
+      const r = row.getBoundingClientRect();
+      expect(r.left).toBeGreaterThanOrEqual(at.left);
+      expect(r.right).toBeLessThanOrEqual(at.right);
+    }
+    const long = [...panel.querySelectorAll<HTMLElement>(".code-picker__name")].find((n) =>
+      n.textContent?.startsWith("feature/"),
+    )!;
+    expect(long.scrollWidth).toBeGreaterThan(long.clientWidth);
+    const main = panel.querySelector<HTMLElement>(".code-picker__name")!;
+    expect(long.getBoundingClientRect().height).toBe(main.getBoundingClientRect().height);
   });
 }
 

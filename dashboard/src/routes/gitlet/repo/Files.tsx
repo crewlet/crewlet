@@ -133,7 +133,7 @@ import { Painted, paintFence, tokensOf, useGrammar, useLineStates } from "../syn
 import { gitletWrote, mergeTitle, subjectOf } from "./History.tsx";
 import { Entries } from "./Entries.tsx";
 import { useCommitMarks } from "./marks.ts";
-import { RefPicker, revisionWord, type Revisions } from "./refs.tsx";
+import { RefPicker, revisionWord } from "./refs.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import {
   EditFileButton,
@@ -163,7 +163,7 @@ function commitOf(rev: string, answer: CodeGitAnswer | null, param = "ref"): str
   return answer?.resolved?.[param]?.oid ?? "";
 }
 
-export function Files({ repo, revisions }: { repo: CodeRepoDetail; revisions: Revisions }) {
+export function Files({ repo }: { repo: CodeRepoDetail }) {
   const [ref, setRef] = useParam("ref", "", "filter");
   const [path] = useParam("path", "", "filter");
   const [lens, setLens] = useParam("lens", "", "filter");
@@ -173,12 +173,12 @@ export function Files({ repo, revisions }: { repo: CodeRepoDetail; revisions: Re
     // and a repository whose other branches are live while its default
     // branch holds nothing is read from them.
     return repo.branches > 0 ? (
-      <NoDefaultBranch repo={repo} revisions={revisions} onRev={setRef} />
+      <NoDefaultBranch repo={repo} onRev={setRef} />
     ) : (
       <EmptyRepository repo={repo} />
     );
   }
-  const place = { repo, revisions, rev: ref, path, onRev: setRef };
+  const place = { repo, rev: ref, path, onRev: setRef };
   return path === "" ? (
     <RootListing {...place} />
   ) : (
@@ -194,15 +194,13 @@ export function Files({ repo, revisions }: { repo: CodeRepoDetail; revisions: Re
 
 interface Place {
   repo: CodeRepoDetail;
-  /** The repository's branches and tags, read once by its page ([useRevisions]). */
-  revisions: Revisions;
   rev: string;
   path: string;
   onRev: (rev: string) => void;
 }
 
 /** The repository's root at the revision: its listing. */
-function RootListing({ repo, revisions, rev, path, onRev }: Place) {
+function RootListing({ repo, rev, path, onRev }: Place) {
   const params = useMemo(
     () => ({ name: repo.name, ...(rev ? { ref: rev } : {}) }),
     [repo.name, rev],
@@ -221,7 +219,6 @@ function RootListing({ repo, revisions, rev, path, onRev }: Place) {
     <Stack gap={4}>
       <FilesBar
         repo={repo}
-        revisions={revisions}
         rev={rev}
         path={path}
         onRev={onRev}
@@ -255,7 +252,6 @@ function RootListing({ repo, revisions, rev, path, onRev }: Place) {
 /** A path under the root: a directory's listing, or a file's lines or its blame. */
 function PathView({
   repo,
-  revisions,
   rev,
   path,
   onRev,
@@ -302,7 +298,6 @@ function PathView({
     <Stack gap={4}>
       <FilesBar
         repo={repo}
-        revisions={revisions}
         rev={rev}
         path={path}
         onRev={onRev}
@@ -634,7 +629,6 @@ function FileLines({
  */
 function FilesBar({
   repo,
-  revisions,
   rev,
   path,
   onRev,
@@ -652,7 +646,7 @@ function FilesBar({
   const at = (p: string) => repoHref(repo.name, { ref: rev, path: p });
   return (
     <PageToolbar>
-      <RefPicker repo={repo} revisions={revisions} value={rev} onChoose={onRev} />
+      <RefPicker repo={repo} value={rev} onChoose={onRev} />
       {path === "" ? (
         // AT THE ROOT the path is the repository the header names, so the bar
         // says what the picker picks among instead, each a link to its list.
@@ -1535,19 +1529,11 @@ function RepoDocs({
  * pushed: the picker reaches its branches, and its Settings make one of them
  * the default.
  */
-function NoDefaultBranch({
-  repo,
-  revisions,
-  onRev,
-}: {
-  repo: CodeRepoDetail;
-  revisions: Revisions;
-  onRev: (rev: string) => void;
-}) {
+function NoDefaultBranch({ repo, onRev }: { repo: CodeRepoDetail; onRev: (rev: string) => void }) {
   return (
     <Stack gap={3}>
       <PageToolbar>
-        <RefPicker repo={repo} revisions={revisions} value="" onChoose={onRev} />
+        <RefPicker repo={repo} value="" onChoose={onRev} />
         <RefCounts repo={repo} tags={false} />
       </PageToolbar>
       <Card className="code-setup">

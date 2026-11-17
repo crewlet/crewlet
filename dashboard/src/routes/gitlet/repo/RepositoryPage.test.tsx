@@ -954,17 +954,14 @@ test("refused or failed last commits are said once under the entries, and a fail
   expect(reads(asked, "code_tree_commits")).toHaveLength(2);
 });
 
-// THE BRANCHES AND TAGS ARE READ ONCE FOR THE PAGE, never once a picker: a
-// move from the root to a path draws another picker, and so does the
-// Commits tab, and none of them asks either listing again — each is up to a
-// thousand refs. Mutation: let each picker read its own listings, and this
-// fails.
-test("the revision picker's branches and tags are read once while the reader moves", async () => {
+// THE PICKER READS NOTHING UNTIL IT OPENS: the Code tab, a directory and
+// Commits ask no listing; an opening asks one page of the tab it shows.
+// Mutation: read the listings on the page again, and this fails.
+test("the revision picker reads nothing until it opens, and then one page of the tab it shows", async () => {
   const asked = stubEngine();
   mount("#/gitlet/repos/web");
 
   await screen.findByRole("link", { name: "src" });
-  await waitFor(() => expect(reads(asked, "code_refs")).toHaveLength(2));
   act(() => {
     location.hash = "#/gitlet/repos/web?path=src";
   });
@@ -973,9 +970,205 @@ test("the revision picker's branches and tags are read once while the reader mov
     location.hash = "#/gitlet/repos/web?tab=commits";
   });
   expect(await screen.findByRole("group", { name: "History of main" })).toBeTruthy();
+  expect(reads(asked, "code_refs")).toHaveLength(0);
+  expect(reads(asked, "code_tags")).toHaveLength(0);
 
-  const listings = reads(asked, "code_refs").map((u) => u.searchParams.get("prefix"));
-  expect(listings.sort()).toEqual([null, "refs/tags/"]);
+  fireEvent.click(screen.getByRole("button", { name: "Branch or tag: main" }));
+  const panel = await screen.findByRole("dialog", { name: "Switch branches or tags" });
+  await within(panel).findByRole("option", { name: /^feature/ });
+  const moved = reads(asked, "code_refs");
+  expect(moved).toHaveLength(1);
+  expect(Object.fromEntries(moved[0]!.searchParams)).toMatchObject({
+    order: "moved",
+    detail: "true",
+    limit: "10",
+  });
+  fireEvent.click(within(panel).getByRole("tab", { name: /Tags/ }));
+  await within(panel).findByRole("option", { name: /^v3/ });
+  expect(reads(asked, "code_tags").map((u) => u.searchParams.get("limit"))).toEqual(["10"]);
+
+  fireEvent.click(within(panel).getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Branch or tag: main" }));
+  await screen.findByRole("option", { name: /^feature/ });
+  expect(reads(asked, "code_refs")).toHaveLength(2);
+});
+
+/** Six branches by when each moved, main on the page's second row. */
+const MOVED = [
+  ["frontend/stream-shell", "2026-10-27T11:00:00Z"],
+  ["main", "2026-10-27T10:00:00Z"],
+  ["backend/network-token", "2026-10-27T09:00:00Z"],
+  ["frontend/badge-cache", "2026-10-27T08:00:00Z"],
+  ["release/2026.11", "2026-10-26T08:00:00Z"],
+  ["sre/drain", "2026-10-26T07:00:00Z"],
+].map(([name, at]) => ({
+  ref: `refs/heads/${name}`,
+  oid: name === "main" ? HEAD : OTHER,
+  position: POSITION,
+  moved_at: at,
+  ...(name === "main" || name === "release/2026.11"
+    ? { protection: { patterns: [`refs/heads/${name}`], direct_push: "none" } }
+    : {}),
+}));
+
+const openPicker = async (name = "Branch or tag: main") => {
+  fireEvent.click(await screen.findByRole("button", { name }));
+  return screen.findByRole("dialog", { name: "Switch branches or tags" });
+};
+
+const optionNames = (panel: HTMLElement) =>
+  within(panel)
+    .getAllByRole("option")
+    .map((o) => o.querySelector(".code-picker__name")?.textContent ?? o.textContent);
+
+// THE DEFAULT BRANCH IS PINNED FIRST with Default, the rest by when each moved,
+// the protected with their shield named by the rules. Mutation: list the page
+// in its own order, or drop the shield's words, and this fails.
+test("the picker pins the default branch with Default and lists the rest by when they moved, the protected with their shield", async () => {
+  stubListing((p) => json(refsListing(p, MOVED)), detail({ branches: 6 }));
+  mount("#/gitlet/repos/web");
+
+  const panel = await openPicker();
+  await within(panel).findByRole("option", { name: /^sre\/drain/ });
+  expect(optionNames(panel)).toEqual([
+    "main",
+    "frontend/stream-shell",
+    "backend/network-token",
+    "frontend/badge-cache",
+    "release/2026.11",
+    "sre/drain",
+  ]);
+  const main = within(panel).getAllByRole("option")[0]!;
+  expect(main.getAttribute("aria-current")).toBe("true");
+  expect(main.querySelector(".code-picker__check")).not.toBeNull();
+  expect(within(main).getByText("Default")).toBeTruthy();
+  expect(within(main).getByRole("img").getAttribute("aria-label")).toBe(
+    "Protected by main: no force-push, no delete, pushes through changes only",
+  );
+  const when = main.querySelector("time")!;
+  expect(when.getAttribute("datetime")).toBe("2026-10-27T10:00:00Z");
+  expect(when.getAttribute("title")).toBeTruthy();
+  const shields = within(panel)
+    .getAllByRole("img")
+    .map((s) => s.closest("[role=option]")?.querySelector(".code-picker__name")?.textContent);
+  expect(shields).toEqual(["main", "release/2026.11"]);
+  expect(within(panel).getAllByRole("option")[1]!.getAttribute("aria-current")).toBeNull();
+});
+
+// A BRANCH IS CHOSEN FROM THE FIELD: the arrows move the highlight, Enter takes
+// it, the panel closes and its button has the focus back. Mutation: move focus
+// into the list, or leave the panel open, and this fails.
+test("a branch is chosen by the keys, and the panel gives focus back to its button", async () => {
+  stubListing((p) => json(refsListing(p, MOVED)), detail({ branches: 6 }));
+  mount("#/gitlet/repos/web");
+
+  const panel = await openPicker();
+  await within(panel).findByRole("option", { name: /^sre\/drain/ });
+  const field = within(panel).getByRole("combobox", { name: "Find a branch" });
+  await waitFor(() => expect(document.activeElement).toBe(field));
+  fireEvent.keyDown(field, { key: "ArrowDown" });
+  fireEvent.keyDown(field, { key: "ArrowDown" });
+  expect(field.getAttribute("aria-activedescendant")).toBe(
+    within(panel).getAllByRole("option")[2]!.id,
+  );
+  fireEvent.keyDown(field, { key: "Enter" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(new URLSearchParams(location.hash.split("?")[1]).get("ref")).toBe("backend/network-token");
+  const button = await screen.findByRole("button", {
+    name: "Branch or tag: backend/network-token",
+  });
+  await waitFor(() => expect(document.activeElement).toBe(button));
+
+  const again = await openPicker("Branch or tag: backend/network-token");
+  fireEvent.keyDown(within(again).getByRole("combobox"), { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(new URLSearchParams(location.hash.split("?")[1]).get("ref")).toBe("backend/network-token");
+});
+
+// A FIND IS THE ENGINE'S, asked once the typing rests, and an empty page that
+// the engine stopped short offers to keep looking. Mutation: ask on every key,
+// or say "none" of a page the engine cut short, and this fails.
+test("a find asks the engine once the typing stops, and says when nothing matches", async () => {
+  const asked = stubListing(
+    (p) => {
+      if (p.get("contains") === "zzz" && !p.get("cursor")) {
+        return json({ refs_detail: [], next: "c2", position: POSITION, level: "session" });
+      }
+      return json(refsListing(p, MOVED));
+    },
+    detail({ branches: 6 }),
+  );
+  mount("#/gitlet/repos/web");
+
+  const panel = await openPicker();
+  await within(panel).findByRole("option", { name: /^sre\/drain/ });
+  const field = within(panel).getByRole("combobox", { name: "Find a branch" });
+  fireEvent.change(field, { target: { value: "front" } });
+  expect(within(panel).getByText("Looking for “front”…")).toBeTruthy();
+  expect(listed(asked).filter((u) => u.searchParams.get("contains"))).toHaveLength(0);
+  await within(panel).findByRole("option", { name: /^frontend\/badge-cache/ });
+  expect(optionNames(panel)).toEqual(["frontend/stream-shell", "frontend/badge-cache"]);
+  expect(listed(asked).map((u) => u.searchParams.get("contains"))).toEqual([null, "front"]);
+
+  fireEvent.change(field, { target: { value: "nothing" } });
+  expect(await within(panel).findByText("No branch name holds “nothing”")).toBeTruthy();
+  expect(within(panel).getByText("A find matches any part of a name, in any case.")).toBeTruthy();
+
+  fireEvent.change(field, { target: { value: "zzz" } });
+  expect(await within(panel).findByText("None among the branches read so far")).toBeTruthy();
+  fireEvent.mouseDown(within(panel).getByRole("option", { name: "Keep looking" }));
+  await waitFor(() =>
+    expect(listed(asked).map((u) => u.searchParams.get("cursor"))).toContain("c2"),
+  );
+  expect(await within(panel).findByText("No branch name holds “zzz”")).toBeTruthy();
+});
+
+// TAGS ARE NEWEST FIRST, Latest on the first only, dated in View all tags' words, chosen
+// by whole ref; a tag's find asks the names under refs/tags/ and says it carries no date.
+// Mutation: write a tag's short name, or Latest every row, and this fails.
+test("tags are newest first with Latest, and a tag is chosen by its whole ref", async () => {
+  const asked = stubEngine();
+  mount("#/gitlet/repos/web");
+
+  const panel = await openPicker();
+  fireEvent.click(within(panel).getByRole("tab", { name: /Tags/ }));
+  await within(panel).findByRole("option", { name: /^v1/ });
+  expect(optionNames(panel)).toEqual(["v3", "v2", "v1"]);
+  expect(within(panel).getAllByText("Latest")).toHaveLength(1);
+  const [, late, undated] = within(panel).getAllByRole("option");
+  expect(within(late!).getByText("after the year 9999")).toBeTruthy();
+  expect(within(undated!).getByText("undated").getAttribute("title")).toMatch(/no date of its own/);
+
+  const field = within(panel).getByRole("combobox", { name: "Find a tag" });
+  fireEvent.change(field, { target: { value: "v" } });
+  expect(await within(panel).findByText("Found by name; dates are on View all tags.")).toBeTruthy();
+  const found = reads(asked, "code_refs").find((u) => u.searchParams.get("contains") === "v")!;
+  expect(found.searchParams.get("prefix")).toBe("refs/tags/");
+  fireEvent.mouseDown(await within(panel).findByRole("option", { name: /^v1/ }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(new URLSearchParams(location.hash.split("?")[1]).get("ref")).toBe("refs/tags/v1");
+  expect(await screen.findByRole("button", { name: "Branch or tag: v1" })).toBeTruthy();
+});
+
+// A REFUSED MOVED LISTING SAYS THE ENGINE'S SENTENCE and lists nothing by name
+// instead. Mutation: fall back to the listing by name, and this fails.
+test("a refused moved listing says the engine's sentence and lists nothing by name", async () => {
+  const asked = stubListing(() =>
+    json({ error: "bad_params", detail: "order is not a key this build reads" }, 400),
+  );
+  mount("#/gitlet/repos/web");
+
+  const panel = await openPicker();
+  expect(
+    await within(panel).findByText(
+      "Listing branches by when they moved is unavailable: order is not a key this build reads",
+    ),
+  ).toBeTruthy();
+  expect(within(panel).queryAllByRole("option")).toHaveLength(0);
+  expect(
+    reads(asked, "code_refs").filter((u) => u.searchParams.get("detail") !== "true"),
+  ).toHaveLength(0);
 });
 
 // THE LINES AN ADDRESS PICKS ARE MARKED, a press on a number writes its line
@@ -2473,7 +2666,7 @@ test("a repository whose default branch holds nothing reads its other branches",
   ).toBeTruthy();
   expect(screen.queryByText(/Nobody has pushed/)).toBeNull();
   expect(screen.queryByText("This repository is empty")).toBeNull();
-  expect(screen.getByLabelText("Revision")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Branch or tag: main" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Add a file" })).toBeNull();
 });
 
