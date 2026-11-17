@@ -400,8 +400,13 @@ describe("whom it will reach", () => {
     expect(said()).toBeNull();
     fireEvent.change(field, { target: { value: "where are we on the release?" } });
     const line = await reachLine();
-    expect(line.getAttribute("role")).toBe("status");
-    await waitFor(() => expect(line.textContent).toContain("Will reach cto"));
+    const status = line.querySelector('[role="status"]')!;
+    await waitFor(() => expect(status.textContent).toBe("Will reach cto"));
+    // Drawn as the faces it reaches, the names in the receipt's name and tip.
+    expect(screen.getByRole("button", { name: "Will reach cto" })).toBeTruthy();
+    expect(
+      line.querySelector(".crewlet-delivery-receipt__faces .crewlet-avatar-stack"),
+    ).not.toBeNull();
   });
 
   test("warns, and says why, when the post will reach no agent", async () => {

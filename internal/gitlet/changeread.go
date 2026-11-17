@@ -683,6 +683,9 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	if q.FindingPaths {
 		return r.changeFindingPaths(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)
 	}
+	if q.Viewed {
+		return r.changeViewed(ctx, tx, q, repo.ref.ID, ChangeRef(repo.ref.Name, row.number), row, out)
+	}
 	switch q.Part {
 	case PartReviewers:
 		return r.changeReviewers(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)
@@ -863,14 +866,15 @@ type factsScan struct {
 	targetRef, targetOID, base, patch, node, digest sql.NullString
 	baseTree, headTree                              sql.NullString
 	owners, skipped, classes, touched               sql.NullString
-	targetPosition, position                        sql.NullInt64
+	targetPosition, position, measuredAt            sql.NullInt64
 	omitted, touchesAll                             sql.NullBool
 }
 
 // targets is where a scan of [revisionFactsColumns] writes, in their order.
 func (s *factsScan) targets() []any {
 	return []any{&s.n, &s.targetRef, &s.targetOID, &s.targetPosition, &s.base, &s.baseTree, &s.headTree, &s.patch,
-		&s.omitted, &s.touchesAll, &s.node, &s.digest, &s.position, &s.owners, &s.skipped, &s.classes, &s.touched}
+		&s.omitted, &s.touchesAll, &s.node, &s.digest, &s.position, &s.measuredAt, &s.owners, &s.skipped, &s.classes,
+		&s.touched}
 }
 
 // row is the facts as a read serves them, and nil for a revision of none.
@@ -891,9 +895,18 @@ func (s *factsScan) row() (*RevisionFactsRow, error) {
 			return nil, fmt.Errorf("its classes: %w", err)
 		}
 	}
+	if v := s.measuredAt.Int64; v > 0 {
+		f.MeasuredAt = store.DecodeTime(v)
+	}
 	if s.owners.String != "" {
-		if err := json.Unmarshal([]byte(s.owners.String), &f.RequestedOwners); err != nil {
+		var touched []TouchedOwner
+		if err := json.Unmarshal([]byte(s.owners.String), &touched); err != nil {
 			return nil, fmt.Errorf("its matched owners: %w", err)
+		}
+		// No answer names an owner's globs: the facts keep its first for the merge gate's sentence.
+		f.RequestedOwners = make([]Owner, len(touched))
+		for i, o := range touched {
+			f.RequestedOwners[i] = o.Owner
 		}
 	}
 	if s.skipped.String != "" {
@@ -1054,8 +1067,8 @@ const (
 	// revisionFactsColumns is every column of a revision's facts a read
 	// serves, in [factsScan]'s order.
 	revisionFactsColumns = `f.n, f.target_ref, f.target_oid, f.target_position, f.base_oid, f.base_tree,
-		f.head_tree, f.patch_id, f.patch_id_omitted, f.touches_all, f.node, f.owners_digest, f.position, f.owners,
-		f.skipped, f.classes, f.touched`
+		f.head_tree, f.patch_id, f.patch_id_omitted, f.touches_all, f.node, f.owners_digest, f.position,
+		f.measured_at, f.owners, f.skipped, f.classes, f.touched`
 	listedReposSQL = `SELECT id, name, status, owner_kind, owner, visibility FROM code_repos
 		WHERE id IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
 )

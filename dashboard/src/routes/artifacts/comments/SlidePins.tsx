@@ -19,7 +19,7 @@ import type { ArtifactCommentAnchor, DeckSlide } from "~/protocol/index.ts";
 
 import { clipBytes } from "~/runtime/comments.ts";
 import { drawRegion, padRegion } from "~/runtime/crop.ts";
-import { DraftPin, Outline, Repositioned, ThreadPin } from "./layer.tsx";
+import { DraftPin, Outline, Repositioned, ThreadPin, usePlacingCursor } from "./layer.tsx";
 import { useComments } from "./state.tsx";
 
 const SLIDE = { w: SLIDE_STAGE_WIDTH, h: SLIDE_STAGE_HEIGHT };
@@ -50,6 +50,7 @@ export function SlidePins({
   onGo: (id: string) => void;
 }) {
   const c = useComments();
+  const cursor = usePlacingCursor(c?.placing ?? false);
   const [boxes, setBoxes] = useState<ReadonlyMap<string, Box>>(new Map());
   const [hover, setHover] = useState<{ path: string; box: Box } | null>(null);
 
@@ -150,6 +151,7 @@ export function SlidePins({
       crop: undefined,
     });
     if (c.narrow) c.showPanel();
+    else c.stepAside();
     // THE PICTURE IS OF THE SLIDE AS DRAWN, at its own size: the element's
     // box on screen, taken back through the stage's scale.
     const at = canvas.getBoundingClientRect();
@@ -175,6 +177,7 @@ export function SlidePins({
       {c.placing && (
         <div
           className="artifact-comment-catch"
+          style={{ cursor }}
           aria-hidden="true"
           onPointerMove={(event) => {
             const hit = elementAt(event.clientX, event.clientY);

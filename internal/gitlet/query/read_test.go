@@ -41,11 +41,11 @@ import (
 // pathspecs), where git reads it as a path whatever it spells: a history's as a
 // literal pathspec, a blame's as itself. Every other path was fed to
 // cat-file's batch, `<id>:<path>`, where it is a name like any other, and a
-// filtered stat's and a patch's files to diff-pairs as the raw records
-// diff-tree wrote. This is what keeps diff-tree's, diff-pairs', rev-list's,
-// log's and blame's `--output` out — the writers gate argues their run-time
-// arguments in its allowance — so an argument a read adds is red here, and
-// so is a path moved before `--`. And every path `--output=x` spells is read
+// filtered stat's, a patch's and every file's patches' files to diff-pairs as
+// the raw records diff-tree wrote. This is what keeps diff-tree's,
+// diff-pairs', rev-list's, log's and blame's `--output` out — the writers gate
+// argues their run-time arguments in its allowance — so an argument a read
+// adds is red here, and so is a path moved before `--`. And every path `--output=x` spells is read
 // as the path it is: its history lists its commit, its blame its line. A
 // landed-in read's ancestry checks are held too: whole ids, both sides. And a
 // change's revisions: their facts walk and diff the paths by ids alone, and
@@ -88,6 +88,9 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 	for _, p := range []string{"--output=x/f", "-M", "-r"} {
 		mustRead(t, s, diffQ(repo, gitlet.DiffQuery{Base: base, Head: head, File: p}))
 	}
+	mustRead(t, s, diffQ(repo, gitlet.DiffQuery{Base: base, Head: head, Patches: true}))
+	mustRead(t, s, diffQ(repo, gitlet.DiffQuery{Base: base, Head: head, Patches: true,
+		Paths: []string{"--output=x", "-r"}}))
 	mustRead(t, s, compareQ(repo, base[:8], head))
 	tip, at := x.tip("refs/heads/main")
 	mustRead(t, s, landedQ(repo, base[:7], "refs/heads/main", tip, at, true))

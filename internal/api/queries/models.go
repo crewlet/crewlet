@@ -834,6 +834,10 @@ type ModelAliasRow struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
 	Detail string `json:"detail"`
+	// Model and Version are what it resolves to on the vendor's own service
+	// (the harness profile's), absent where the profile does not know.
+	Model   string `json:"model,omitempty"`
+	Version string `json:"version,omitempty"`
 }
 
 // catalogueProviders is the catalogue provider each harness reads, where it reads
@@ -888,7 +892,8 @@ func (s Sources) llmModels(ctx context.Context, p Params) (any, error) {
 		out.FetchedAt = &at
 	}
 	for _, a := range profile.ModelAliases {
-		out.Aliases = append(out.Aliases, ModelAliasRow{ID: a.ID, Name: a.Name, Detail: a.Detail})
+		out.Aliases = append(out.Aliases, ModelAliasRow{ID: a.ID, Name: a.Name, Detail: a.Detail,
+			Model: a.Model, Version: a.Version})
 	}
 	if named {
 		// SUCH A HARNESS TAKES <provider>/<model>, so that is the id it is offered.

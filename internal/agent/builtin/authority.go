@@ -338,6 +338,8 @@ var subjectOf = map[string]subject{
 	// a person's own alike.
 	CodeMarkInboxTool:     {kind: authz.KindPerson},
 	ArtifactMarkInboxTool: {kind: authz.KindPerson},
+	// And a person's viewed files of a change: the caller's own record, naming no handle.
+	CodeMarkViewedTool: {kind: authz.KindPerson},
 
 	// AND THE ONES THAT DO ARE DECIDED ON WHOSE RECORD THE NAME IS, NOT ON
 	// WHAT WAS TYPED. Each tool resolves its `handle` first
@@ -487,6 +489,7 @@ var ownBookkeeping = map[string]bool{
 	worklet.MarkInboxTool:    true,
 	worklet.SetPinsTool:      true,
 	CodeMarkInboxTool:        true,
+	CodeMarkViewedTool:       true,
 	ArtifactMarkInboxTool:    true,
 	chatlet.MarkChatReadTool: true,
 }

@@ -194,12 +194,26 @@ export interface CommentPoint {
   y: number;
 }
 
-/** What the host asks about: a declared anchor, or a point. */
-export type CommentTarget = { name: string } | { point: CommentPoint };
+/** What the host asks about: a declared anchor, a point of the document, or a point of the viewport. */
+export type CommentTarget = { name: string } | { point: CommentPoint } | { view: CommentView };
 
-/** Host to page, on the `comments` topic: the mode, a part to bring into view, or a part to draw. */
+/** A point of the page's viewport in CSS pixels, as a board names one: the page adds its own scroll. */
+export interface CommentView {
+  x: number;
+  y: number;
+}
+
+/** The longest placing cursor a page takes: the kit's pin is under 1 KiB. */
+export const COMMENT_CURSOR_MAX = 4096;
+
+/**
+ * Host to page, on the `comments` topic: the mode (with the CSS cursor to
+ * place by), a part to bring into view, or a part to draw.
+ */
 export type CommentRequest =
-  { mode: CommentMode } | { reveal: CommentTarget } | { capture: { id: number } & CommentTarget };
+  | { mode: CommentMode; cursor?: string }
+  | { reveal: CommentTarget }
+  | { capture: { id: number } & CommentTarget };
 
 /** One declared anchor as the page draws it, in CSS pixels of its document. */
 export interface CommentAnchorBox {
@@ -477,9 +491,13 @@ export function readCommentPoint(data: unknown): CommentPoint | null {
   return { x: fraction(p["x"]), y: fraction(p["y"]) };
 }
 
-/** Reads what a request names: a declared name, or a point. */
+/** Reads what a request names: a declared name, a point of the document, or one of the viewport. */
 function readTarget(data: Record<string, unknown>): CommentTarget | null {
   if (data["name"] !== undefined) return isAnchorName(data["name"]) ? { name: data["name"] } : null;
+  if (data["view"] !== undefined) {
+    const v = record(data["view"]);
+    return v && finite(v["x"]) && finite(v["y"]) ? { view: { x: v["x"], y: v["y"] } } : null;
+  }
   const point = readCommentPoint(data["point"]);
   return point ? { point } : null;
 }
@@ -488,9 +506,12 @@ function readTarget(data: Record<string, unknown>): CommentTarget | null {
 export function readCommentRequest(data: Record<string, unknown>): CommentRequest | null {
   if (data["mode"] !== undefined) {
     const mode = data["mode"];
-    return typeof mode === "string" && (COMMENT_MODES as readonly string[]).includes(mode)
-      ? { mode: mode as CommentMode }
-      : null;
+    if (typeof mode !== "string" || !(COMMENT_MODES as readonly string[]).includes(mode))
+      return null;
+    const cursor = data["cursor"];
+    return typeof cursor === "string" && cursor !== "" && cursor.length <= COMMENT_CURSOR_MAX
+      ? { mode: mode as CommentMode, cursor }
+      : { mode: mode as CommentMode };
   }
   const reveal = record(data["reveal"]);
   if (reveal) {

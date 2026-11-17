@@ -273,6 +273,7 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   trace: "live",
   events: "live",
   event: "live",
+  general: "settings",
   models: "settings",
   "mcp-tools": "settings",
   secrets: "settings",

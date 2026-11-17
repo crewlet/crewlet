@@ -21,7 +21,7 @@ const ready: AssistantControl = { open: false, unavailable: null, toggle: () => 
 /** The words the kit's tooltip shows once the button takes keyboard focus. */
 function tipOnFocus(button: HTMLElement): string {
   act(() => button.focus());
-  return screen.getByRole("tooltip").textContent ?? "";
+  return screen.getByRole("tooltip", { hidden: true }).textContent ?? "";
 }
 
 function draw(control: AssistantControl = ready) {

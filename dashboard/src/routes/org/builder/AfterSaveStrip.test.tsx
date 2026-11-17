@@ -920,7 +920,9 @@ describe("in the builder", () => {
     await save(engine, () => null);
     fireEvent.click(await screen.findByRole("button", { name: "Copy as YAML" }));
     const dialog = await screen.findByRole("dialog", { name: "The company as YAML" });
-    expect(await within(dialog).findByText(/name: Acme/)).toBeDefined();
+    // Coloured by kind, so the line is spans of its key, sign and value.
+    await waitFor(() => expect(dialog.querySelector("code")?.textContent).toBe("name: Acme"));
+    expect(dialog.querySelector(".crewlet-codeblock__tok--key")?.textContent).toBe("name");
     expect(within(dialog).getByRole("button", { name: "Copy" })).toBeDefined();
     expect(within(dialog).getByText("Credentials are hidden.")).toBeDefined();
   });

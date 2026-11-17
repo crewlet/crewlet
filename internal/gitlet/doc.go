@@ -246,7 +246,13 @@
 // owners on its chart, asks those who may review (code_reviewers, reason
 // [ReviewerPathOwner]), skips the rest by [SkipReason], and stamps whom else
 // the facts concern, so the apply judges nothing again; code_revision_facts
-// keeps one row a revision, and a change read's revisions carry it.
+// keeps one row a revision, and a change read's revisions carry it. Since
+// [OwnedPathsVersion] it carries when its home read the facts
+// ([Revise.MeasuredAt]) and each matched owner's globs ([MatchedOwner], none
+// where the revision touches all); the writer stamps the globs each ask is for
+// ([OwnerAsk], code_reviewers.owned_paths), and the facts keep each owner's
+// first glob and how many more ([TouchedOwner]), which the merge gate's
+// sentence names.
 //
 // A CHANGE'S MERGE READINESS IS JUDGED, NEVER TRUSTED (readiness.go): one pure
 // [ReadinessOf] over the rows one snapshot holds and the chart one epoch holds
@@ -317,6 +323,11 @@
 // A CHANGE'S PAGE (changepage.go): its detail names its participants, a reviewer row when the
 // record behind it landed (one notice of that record, none past the notices' horizon), a finding
 // when its review landed, and [ReadQuery.FindingPaths] counts its findings by path.
+//
+// A PERSON'S VIEWED FILES (viewed.go): kept on their own subject by HMAC-SHA256 digests under a key
+// their repository records before its first mark ([OpViewedKey]) and its purge deletes; the decide,
+// probing the change's repository, carries the ended changes for the apply to forget, the apply drops
+// the oldest past [MaxViewedFiles], and [ReadQuery.Viewed] reads the asker's own with the key.
 //
 // # A change wakes the seats its records concern
 //

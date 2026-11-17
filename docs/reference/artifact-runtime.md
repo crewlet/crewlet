@@ -460,9 +460,13 @@ height, which moves when the page reflows.
 
 The page takes no part in a comment and gains nothing from one. While the
 reader has comments on show, the runtime tells the host where each declared
-anchor is drawn (`comments.layout`); in Comment mode it reports the reader's
-click, the innermost anchor under it and that anchor's text, up to 1 KiB
-(`comments.pick`), and on the host's request it draws a picture of the region
+anchor is drawn (`comments.layout`), again whenever the page or an element in
+it scrolls; in Comment mode it draws the host's comment-pin pointer over the
+whole page (a link's or a button's own pointer included, since a click there
+places a comment and presses nothing), reports the reader's click, the innermost anchor
+under it and that anchor's text, up to 1 KiB (`comments.pick`), and on the
+host's request it draws a picture of the region as the reader sees it, each
+scrolled element, fixed bar and sticky header where the scroll has it
 (`comments.crop`). None of these needs a capability. The host checks every
 value, and writes the comment itself, as the reader, from its own composer; a
 page never sees a comment's words, never writes one and cannot open one.

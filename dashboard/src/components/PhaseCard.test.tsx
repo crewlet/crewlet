@@ -1225,13 +1225,18 @@ describe("a publishing call", () => {
 
   test("links the artifact it wrote", () => {
     render(<PhaseCard record={publishing(false)} defaultOpen />);
-    const link = screen.getByRole("link", { name: "Open “Vendor review”, version 1" });
+    // DRAWN AS A TASK'S KEY IS: the kind's glyph, the title and the version written.
+    const link = screen.getAllByRole("link").find((a) => a.textContent?.includes("Vendor review"))!;
     expect(link.getAttribute("href")).toBe(`#/artifacts/${ID}`);
+    expect(link.textContent).toBe("Sheet: Vendor review, version 1");
+    expect(link.querySelector(".crewlet-inline-ref__mark svg")).not.toBeNull();
   });
 
   test("links nothing when it failed", () => {
     render(<PhaseCard record={publishing(true)} defaultOpen />);
-    expect(screen.queryByRole("link", { name: /^Open/ })).toBeNull();
+    expect(
+      screen.queryAllByRole("link").some((a) => a.textContent?.includes("Vendor review")),
+    ).toBe(false);
   });
 });
 

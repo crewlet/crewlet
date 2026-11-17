@@ -346,7 +346,7 @@ export function FileStorage({ objects, now }: { objects?: FleetObjects; now: num
           control. Which node ran the last pass is a fact about the passes, and
           heads their card. */}
       <Card padding="none">
-        <Card.Header>
+        <Card.Header icon={<DatabaseGlyph size="sm" />} count={1}>
           <Card.Title id="file-storage-store">Where files are kept</Card.Title>
         </Card.Header>
         <SettingsTable aria-labelledby="file-storage-store">

@@ -100,6 +100,8 @@ const EDITING_ELEMENTS = new Set([
   // uilet's labelled value (FormField with its control), which every
   // configuration form and the dialogs that hold a value draw.
   "ValueField",
+  // uilet's one-setting panel, which every setting's pencil opens.
+  "SettingForm",
   "Textarea",
 ]);
 

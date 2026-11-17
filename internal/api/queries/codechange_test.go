@@ -363,6 +363,53 @@ func TestAChangeQuestionRefusesWhatItsPartDoesNotTake(t *testing.T) {
 	}
 }
 
+// A CHANGE'S DIFF PART ASKS EVERY PATCH WITH `patches`: of the revision's base..head, or with
+// since_revision of the interdiff; beside a file, or on another part, it is refused unread.
+//
+// Mutation: drop the !call.patches from the file arm → a diff naming no file is refused, red.
+func TestAChangesDiffPartAsksEveryPatch(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		params map[string]any
+		diff   bool
+	}{
+		{map[string]any{"part": "diff", "patches": "true"}, true},
+		{map[string]any{"part": "diff", "patches": "true", "since_revision": "1"}, false},
+	} {
+		all := map[string]any{"name": "web", "change": "1"}
+		for k, v := range tc.params {
+			all[k] = v
+		}
+		stub := &stubCode{answer: twoRevisions(atCodeSeq(1))}
+		if _, err := askNative(t, queries.Sources{Code: stub}, "code_change", all); err != nil {
+			t.Fatalf("%v: %v", tc.params, err)
+		}
+		q := stub.read[0]
+		switch {
+		case tc.diff && (q.Diff == nil || !q.Diff.Patches || q.Diff.Head != oid("2") || q.Diff.Base != oid("a")):
+			t.Errorf("%v read %+v, want every patch of revision 2's diff", tc.params, q.Diff)
+		case !tc.diff && (q.Interdiff == nil || !q.Interdiff.Patches || q.Interdiff.FromHead != oid("1")):
+			t.Errorf("%v read %+v, want every patch of the interdiff since revision 1", tc.params, q.Interdiff)
+		}
+	}
+	for name, params := range map[string]map[string]any{
+		"patches to the files":    {"part": "files", "patches": "true"},
+		"patches beside a file":   {"part": "diff", "patches": "true", "file": "a.go"},
+		"patches that is no flag": {"part": "diff", "patches": "yes"},
+	} {
+		all := map[string]any{"name": "web", "change": "1"}
+		for k, v := range params {
+			all[k] = v
+		}
+		stub := &stubCode{answer: twoRevisions(atCodeSeq(1))}
+		if _, err := askNative(t, queries.Sources{Code: stub}, "code_change", all); !errors.Is(err,
+			queries.ErrBadParams) || len(stub.asked) != 0 {
+			t.Errorf("%s: answered %v having asked the reader %d times, want bad_params before it", name, err,
+				len(stub.asked))
+		}
+	}
+}
+
 // A CHANGE'S READ BY OBJECT ID REFUSES IN THIS SURFACE'S VOCABULARY. Its
 // files, a file's patch and the placing of its findings are asked of the
 // repository's home Gitlet node, which answers what no row does: an object or a

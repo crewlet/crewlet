@@ -12,6 +12,7 @@ import { act, cleanup, fireEvent, screen, within } from "@testing-library/react"
 import { afterEach, expect, test, vi } from "vitest";
 import type { DelegatedDecisionsAnswer } from "~/contract/delegated.ts";
 import { CONFIG_WRITE_REASONS } from "~/lib/useWriteAccess.ts";
+import { typeSetting } from "~/test/settingField.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
 import {
   engineAnswer,
@@ -285,8 +286,7 @@ async function changeLimit(name: RegExp, value: string) {
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name }));
   });
-  const field = screen.getByRole("textbox");
-  fireEvent.change(field, { target: { value } });
+  const field = await typeSetting(value);
   await act(async () => {
     fireEvent.submit(field.closest("form")!);
   });
@@ -303,7 +303,7 @@ test("a limit the engine enforces is changed in place as a patch of its one key"
   const deadline = within(limits).getByRole("row", { name: /must answer within/ });
   expect(within(deadline).getByText("15 minutes")).toBeTruthy();
   expect(within(deadline).getByText("Default")).toBeTruthy();
-  await changeLimit(/Change An agent must answer within/, "1200");
+  await changeLimit(/Change An agent must answer within/, "20m");
   const [save] = writes(calls);
   expect(save!.headers.get("If-Match")).toBe('"r1"');
   expect(save!.body).toEqual({
@@ -330,7 +330,7 @@ test("a limit outside its range is said beside the field, and nothing is sent", 
   await show();
   await changeLimit(/Change Most allows per agent and kind/, "61");
   expect(calls).toEqual([]);
-  expect(screen.getByRole("textbox").getAttribute("aria-invalid")).toBe("true");
+  expect(screen.getByRole("spinbutton").getAttribute("aria-invalid")).toBe("true");
   expect(screen.getAllByText("From 1 to 60.").length).toBeGreaterThan(0);
 });
 

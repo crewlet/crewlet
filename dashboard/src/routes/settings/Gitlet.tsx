@@ -35,7 +35,7 @@
 
 import { useState } from "react";
 import { Button, Card, Disclosure, EmptyState, InlineCode, SettingsTable } from "@crewlethq/ui";
-import { BellGlyph } from "@crewlethq/icons/glyphs";
+import { BellGlyph, GitBranchGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { alarmTitle } from "~/lib/alarms.ts";
 import { PageFailed, QueryState } from "~/components/common.tsx";
@@ -403,6 +403,8 @@ export function CodePolicy() {
   return (
     <Card padding="none">
       <Card.Header
+        icon={<GitBranchGlyph size="sm" />}
+        count={rows.length + (domain ? 1 : 0)}
         subtitle="What the configuration's code block sets"
         actions={
           <a className="t-link" href={href(["settings", "config"])}>
@@ -437,7 +439,7 @@ export function CodePolicy() {
               area="Gitlet"
               reread="Reload to see the code policy as it is now."
               onApplied={refetch}
-              helper="The domain the engine's own commits are addressed in: engine@ and each seat's handle @ it, for a seat with no email of its own. Empty is the default."
+              hint="Commits are addressed engine@ and handle@ it, for a seat with no email."
             />
           )}
         </SettingsTable>

@@ -28,7 +28,10 @@ export type RepoTab = (typeof REPO_TABS)[number];
  * Where on a repository's page an address points, by its query keys: the tab,
  * and on Code and Commits the revision (`ref`, a branch, a tag, a whole ref
  * or a commit id; none is the default branch) and the path; on Code the lens
- * (`blame`) and the lines picked (`12`, `12-20`).
+ * (`blame`) and the lines picked (`12`, `12-20`); on Commits who pushed (`by`,
+ * a seat), from when (`when`) and words in a message (`q`); on Code at the root
+ * the document shown under the files (`doc`, the README where none); on
+ * Branches its tags (`view`).
  */
 export interface RepoAt {
   tab?: RepoTab;
@@ -36,6 +39,11 @@ export interface RepoAt {
   path?: string;
   lens?: "blame";
   lines?: string;
+  doc?: "license";
+  view?: "tags";
+  by?: string;
+  when?: "today" | "7d" | "30d" | "90d";
+  q?: string;
 }
 
 /**
