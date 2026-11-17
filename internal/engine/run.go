@@ -2554,9 +2554,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// THE SEAT'S DERIVED ID, never a roster lookup, so a seat a revision
 	// removed still flushes on release ([memoryAgentID]).
 	//
-	// HOW IT REACHES THE CHANGELOG ([memoryConfig]): across a link or not,
-	// on the stream's topology, and reading the link's meter where it
-	// crosses one.
+	// HOW IT REACHES THE CHANGELOG ([memoryConfig]).
 	e.memory, err = memsync.New(backends.Store, backends.CoordinationJetStream(),
 		func(handle string) string { return memoryAgentID(e.Company(), handle) },
 		memoryConfig(opts.Bootstrap, backends))
