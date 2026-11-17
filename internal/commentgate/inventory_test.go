@@ -172,7 +172,7 @@ var excessInventory = map[string]int{
 	"internal/notify":                               860,
 	"internal/objstore":                             256,
 	"internal/objstore/collect":                     186,
-	"internal/objstore/natsobj":                     361,
+	"internal/objstore/natsobj":                     351,
 	"internal/objstore/natsobj/replicated":          1,
 	"internal/objstore/objstoretest":                36,
 	"internal/objstore/references":                  23,

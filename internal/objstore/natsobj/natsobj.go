@@ -143,6 +143,50 @@
 //     and a delete interrupted between its purges both leave, and which no
 //     listing of the names shows. The library has no word for them at all.
 //
+// # The window across a link
+//
+// Every put on a connection shares one window of messages out ([window]),
+// and across a link it is [linkWindow], SIZED BY THE REQUESTS QUEUED BEHIND
+// IT. A link carries what the node sends in the order it was sent, so a
+// request sent while the window is full crosses only once the window has: a
+// read, a small write or a lease renewal on the same connection — the
+// coordination store's, which every lease renewal of the node rides — or on
+// another connection crossing the same link or a bottleneck on it that queues
+// first in first out. Every one of them is held to its term
+// ([jsapi.RequestTerm]) and is unknown past it, so the window crosses the
+// floor within what that term leaves after the request's own round trip,
+// [jsapi.WindowCrossing]: four seconds, at every lease TTL, and inside every
+// heartbeat config allows (config.MinLeaseTTL's, five seconds), so a renewal
+// behind a full window still lands within its heartbeat too. Sized by the
+// node's lease heartbeat instead, as it was, the shipped lease's window of
+// four messages held such a request fifteen seconds at the floor, past its
+// term. AT LEAST ONE, because a put holds a message out to move at all; one
+// message's crossing, 3.75 seconds, is inside the four.
+//
+// NOT SIZED BY A MEASURED RATE, which would recover a fast link's throughput:
+// a link that drops to the floor mid-transfer (a satellite's rain fade) then
+// holds a request behind a window sized for the faster rate, sixteen messages
+// a minute at the floor, past every term and every lease. The floor is a
+// promise about the slowest link the engine allows, and the window keeps it
+// there. It is also what keeps a stall honest across the link: no message
+// waits behind more than the window, so at the floor every one's bytes have
+// crossed within four seconds of its publish, its acknowledgement a round
+// trip behind them, and a leaf's compressed link, which delivers what it
+// flushed as one block, never more than the window in one.
+//
+// What a window of one costs is throughput on a fast link (measured below):
+// about half a fast link's through a leaf on loopback, and on a link with a
+// longer round trip the share lost is larger, since a window of one moves
+// 128 KiB a round trip: 1.31 MB/s across 100 ms, where four moved 5.24. That
+// is the price, on a link that did not need the bound, of a connection whose
+// small requests are answered inside their term on one that does.
+//
+// The window is the puts' alone, for what crosses the link outbound. Until
+// crewlet/crewlet#1035 puts one window across the link, both directions and
+// the downloads inside it, a memory replay's pull window is another, for what
+// crosses inbound (internal/learning/memsync), and a download's hand
+// ([readAhead]) crosses inbound unwindowed.
+//
 // # What it costs, measured
 //
 // `make bench` (BenchmarkBackend, through internal/objstore/objstoretest's

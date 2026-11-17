@@ -27,49 +27,11 @@ const messageCrossing = objstore.MiBPace * MessageBytes / objstore.MiB
 // linkWindow is the window across a link: the most whole messages a link at
 // the floor every leg is promised ([objstore.MiBPace]) carries within
 // [jsapi.WindowCrossing], at least one — ONE message, 128 KiB, crossing the
-// floor in 3.75 seconds, whatever lease the node holds.
-//
-// SIZED BY THE REQUESTS QUEUED BEHIND IT. A link carries what the node sends
-// in the order it was sent, so a request sent while the window is full crosses
-// only once the window has: a read, a small write or a lease renewal on the
-// same connection — the coordination store's, which every lease renewal of
-// the node rides ([window]) — or on another connection crossing the same link
-// or a bottleneck on it that queues first in first out. Every one of them is
-// held to its term ([jsapi.RequestTerm]) and is unknown past it, so the window
-// crosses the floor within what that term leaves after the request's own round
-// trip, [jsapi.WindowCrossing]: four seconds, at every lease TTL, and inside
-// every heartbeat config allows (config.MinLeaseTTL's, five seconds), so a renewal
-// behind a full window still lands within its heartbeat too. Sized by the
-// node's lease heartbeat instead, as it was, the shipped lease's window of four
-// messages held such a request fifteen seconds at the floor, past its term.
+// floor in 3.75 seconds, whatever lease the node holds — so a request sent
+// behind a full window is still answered inside its term. Neither a lease's
+// heartbeat nor a measured rate sizes it, and one message costs a fast link
+// half its throughput: the package doc's "The window across a link" says why.
 // A test holds the arithmetic against the terms' own constants.
-//
-// AT LEAST ONE, because a put holds a message out to move at all; one
-// message's crossing, 3.75 seconds, is inside the four.
-//
-// NOT SIZED BY A MEASURED RATE, which would recover a fast link's throughput:
-// a link that drops to the floor mid-transfer (a satellite's rain fade) then
-// holds a request behind a window sized for the faster rate, sixteen messages
-// a minute at the floor, past every term and every lease. The floor is a
-// promise about the slowest link the engine allows, and the window keeps it
-// there.
-//
-// It is also what keeps a stall honest across the link: no message waits
-// behind more than the window, so at the floor every one's bytes have crossed
-// within four seconds of its publish, its acknowledgement a round trip
-// behind them, and a leaf's compressed link, which delivers what it flushed
-// as one block, never more than the window in one.
-//
-// What a window of one costs is throughput on a fast link (the package doc's
-// figures, through a leaf on loopback at `stream.sync: always`): measured
-// interleaved (2026-10-18, on four vCPUs shared with other work), a lone
-// 16 MiB put at 47–83 MB/s and eight at once at 56–78 together, against
-// 120–139 and 130–135 with four, and two out at 109–125 and 102–122 — about
-// half a fast link's throughput, and on a link with a longer round trip than
-// loopback's the share lost is larger, since a window of one moves 128 KiB a
-// round trip: 1.31 MB/s across 100 ms, where four moved 5.24. That is the
-// price, on a link that did not need the bound, of a connection whose small
-// requests are answered inside their term on one that does.
 const linkWindow = max(int(jsapi.WindowCrossing/messageCrossing), 1)
 
 // memberWindow is the window on a MEMBER's own client — a data node, whose
