@@ -257,6 +257,7 @@ export function FileStack({
   notes,
   jump,
   onCurrent,
+  lead,
   foot,
 }: {
   change: CodeChangeDetail;
@@ -273,6 +274,8 @@ export function FileStack({
   notes: StackNotes;
   jump: StackJump | null;
   onCurrent: (path: string) => void;
+  /** What is said above the sections: how many a filter shows. */
+  lead?: ReactNode;
   foot?: ReactNode;
 }) {
   const walk = useStackPatches({ change, rev, since, moved });
@@ -392,6 +395,7 @@ export function FileStack({
   return (
     <div ref={root} className="code-stack">
       <VisuallyHidden as="h2">Files</VisuallyHidden>
+      {lead}
       {walk.refused && (
         <p className="muted" role="status">
           Every file's patch on one page is unavailable on this fleet yet: each file is read when

@@ -3711,3 +3711,70 @@
   align-items: center;
   gap: var(--spacing-1);
 }
+
+/* THE PANE'S HEAD: Filter files and its options, the options' dot when any narrows. */
+.code-files__filter {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+.code-files__words {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.code-files__options {
+  position: relative;
+  display: inline-flex;
+}
+
+.code-files__dot {
+  position: absolute;
+  inset-block-start: 2px;
+  inset-inline-end: 2px;
+  inline-size: 6px;
+  block-size: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-brand-accent);
+}
+
+.code-files__popover {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3);
+}
+
+.code-files__set {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.code-files__set > legend {
+  margin-block-end: var(--spacing-1);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+}
+
+.code-files__showing {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1);
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.code-ftree__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--color-text-secondary);
+}

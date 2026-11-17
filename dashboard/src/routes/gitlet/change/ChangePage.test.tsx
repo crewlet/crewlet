@@ -3036,3 +3036,131 @@ test("a finding on a line suggests its change as a diff of its own lines, and it
   );
   expect(marked.map((l) => l.querySelector(".diff-view__text")?.textContent)).toEqual(["new15"]);
 });
+
+/** The findings counted by path: one open on routes.go, one on stream.go raised on revision 1, two dismissed. */
+const FINDING_PATHS = page({
+  finding_paths: [
+    { path: "internal/server/routes.go", state: "open", revision: 2, findings: 1 },
+    { path: "internal/render/stream.go", state: "open", revision: 1, findings: 1 },
+    { path: "web/src/product/Page.tsx", state: "dismissed", revision: 1, findings: 2 },
+  ],
+});
+
+/** The stack's sections drawn, by path. */
+const sectionPaths = () =>
+  [...document.querySelectorAll<HTMLElement>("section.code-file")].map((s) => s.dataset.path);
+
+/** The tree's file rows, by the path their name starts with. */
+const treePaths = () =>
+  [...document.querySelectorAll<HTMLElement>('[role="treeitem"][aria-label]')].map(
+    (r) => r.getAttribute("aria-label")!.split(",")[0],
+  );
+
+// FILTER FILES NARROWS THE TREE AND THE STACK, and says how many it shows.
+// Mutation: filter the tree only, and the stack keeps five sections.
+test("Filter files narrows the tree and the stack, and says how many it shows", async () => {
+  stubStack();
+  mount("#/gitlet/repos/web/changes/42?tab=files&q=render");
+  await section("internal/render/stream.go");
+  expect(sectionPaths()).toEqual(["internal/render/page.go", "internal/render/stream.go"]);
+  expect(treePaths()).toEqual(["internal/render/page.go", "internal/render/stream.go"]);
+  expect(screen.getAllByText("Showing 2 of 5 files").length).toBeGreaterThan(0);
+  fireEvent.click(screen.getAllByRole("button", { name: "Clear filters" })[0]!);
+  await waitFor(() => expect(sectionPaths()).toHaveLength(5));
+  expect(new URLSearchParams(location.hash.split("?")[1]).has("q")).toBe(false);
+});
+
+// THE DIFF'S OWN EXTENSIONS, with their counts. Mutation: list a fixed set of
+// extensions, and .tsx's count is not the diff's.
+test("Filter options offer the diff's own extensions with their counts, and hide one unchecked", async () => {
+  stubStack();
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  await section("web/src/product/Shell.tsx");
+  fireEvent.click(screen.getByRole("button", { name: "Filter options" }));
+  const options = await screen.findByRole("dialog", { name: "Filter options" });
+  expect(within(options).getByRole("checkbox", { name: ".go 3" })).toBeTruthy();
+  fireEvent.click(within(options).getByRole("checkbox", { name: ".tsx 2" }));
+  await waitFor(() => expect(sectionPaths()).toHaveLength(3));
+  expect(new URLSearchParams(location.hash.split("?")[1]).get("ext")).toBe("go");
+});
+
+// A FILE WITH NO EXTENSION is its own box, written "." in ext=, and the last box
+// checked stays. Mutation: write it as "", and the Makefile is hidden by .go alone.
+test("a file with no extension stays shown when another extension is unchecked, and one box stays", async () => {
+  const makefile = {
+    path: "Makefile",
+    status: "M",
+    added: 1,
+    deleted: 0,
+    old_oid: "o6",
+    new_oid: "n6",
+  };
+  stubStack({ files: [...STACK_FILES, makefile] });
+  mount("#/gitlet/repos/web/changes/42?tab=files");
+  await section("Makefile");
+  fireEvent.click(screen.getByRole("button", { name: "Filter options" }));
+  const options = await screen.findByRole("dialog", { name: "Filter options" });
+  fireEvent.click(within(options).getByRole("checkbox", { name: ".tsx 2" }));
+  await waitFor(() => expect(sectionPaths()).toHaveLength(4));
+  expect(sectionPaths()).toContain("Makefile");
+  expect(new URLSearchParams(location.hash.split("?")[1]).get("ext")).toBe(".,go");
+  const none = within(options).getByRole("checkbox", {
+    name: "No extension 1",
+  }) as HTMLInputElement;
+  expect(none.checked).toBe(true);
+  fireEvent.click(within(options).getByRole("checkbox", { name: ".go 3" }));
+  await waitFor(() => expect(sectionPaths()).toEqual(["Makefile"]));
+  expect(none.disabled).toBe(true);
+});
+
+// WITH FINDINGS KEEPS THE FILES A STANDING FINDING WAS RAISED ON, by path, and
+// the tree badges them. Mutation: count resolved findings, and Page.tsx stays.
+test("With findings keeps the files with a standing finding, and the tree badges them", async () => {
+  stubStack({ parts: { finding_paths: FINDING_PATHS } });
+  mount("#/gitlet/repos/web/changes/42?tab=files&only=findings");
+  await section("internal/server/routes.go");
+  await waitFor(() =>
+    expect(sectionPaths()).toEqual(["internal/render/stream.go", "internal/server/routes.go"]),
+  );
+  const tree = screen.getByRole("tree", { name: "Files changed" });
+  expect(
+    within(tree).getByRole("treeitem", {
+      name: "internal/server/routes.go, modified, 1 line added and 1 removed, 1 open finding",
+    }),
+  ).toBeTruthy();
+  expect(screen.getByText("⚑ 2 open findings")).toBeTruthy();
+});
+
+// A REFUSED COUNT BY PATH draws no badge and holds the option with why.
+test("With findings is held with the unavailable sentence where findings by file are refused", async () => {
+  stubStack({
+    parts: { finding_paths: () => json({ error: "bad_params", detail: "unknown part" }, 400) },
+  });
+  mount("#/gitlet/repos/web/changes/42?tab=files&only=findings");
+  await section("internal/server/routes.go");
+  expect(
+    await screen.findByText("Findings by file are unavailable on this fleet yet."),
+  ).toBeTruthy();
+  // ONLY=FINDINGS IS HELD TOO: every file stays. Mutation: apply it while
+  // refused, and the stack is empty.
+  expect(sectionPaths()).toHaveLength(5);
+  fireEvent.click(screen.getByRole("button", { name: "Filter options" }));
+  const held = await screen.findByRole("checkbox", { name: /With findings/ });
+  expect((held as HTMLInputElement).disabled).toBe(true);
+  expect((held as HTMLInputElement).checked).toBe(false);
+  expect(document.querySelector(".code-ftree__badge")).toBeNull();
+});
+
+// A JUMP TO A FILE A FILTER HIDES clears the filters first (a toast says so).
+// Mutation: jump without clearing, and the file has no section to go to.
+test("going to a file a filter hides clears the filters", async () => {
+  stubStack();
+  mount("#/gitlet/repos/web/changes/42?tab=files&q=render");
+  await section("internal/render/page.go");
+  const field = screen.getByRole("combobox", { name: "Go to file" });
+  fireEvent.change(field, { target: { value: "shell" } });
+  await screen.findAllByRole("option");
+  fireEvent.keyDown(field, { key: "Enter" });
+  await section("web/src/product/Shell.tsx");
+  expect(new URLSearchParams(location.hash.split("?")[1]).has("q")).toBe(false);
+});
