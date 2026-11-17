@@ -634,6 +634,10 @@ var cacheWriters = []writerRow{
 			"the records it admits reach diff-pairs on its standard input), and " +
 			"query.TestAPathReachesGitOnlyAsData holds every argument list to its template, so no " +
 			"--output can be added unseen", nil},
+	{"internal/gitlet/query/excerpts.go", kindGit + " diff-tree",
+		"a finding's excerpt's rename walk: `-z -r --raw -M` of two whole commit ids a read resolved, its " +
+			"records matched in Go; a path never reaches the command line, and query.TestAPathReachesGitOnlyAsData " +
+			"holds the argument list to its template, so no --output can be added unseen", nil},
 	{"internal/gitlet/query/compare.go", kindGit + " rev-list",
 		"a seat's comparison of two commits: `--left-right --count <base>...<head>` over two whole commit " +
 			"ids a read resolved; query.TestAPathReachesGitOnlyAsData holds the argument list to its " +

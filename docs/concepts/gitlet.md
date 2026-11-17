@@ -2139,6 +2139,11 @@ changes](#reading-changes)).
   findings, its standing blockers and its requests for changes, and the
   version and position of its last record — the floor a read of its parts is
   asked at, so a comment just written is read back with the change.
+- **The detail names its participants**: everyone who takes part in its
+  conversation (each reviewer asked, each author of a comment, each reviewer
+  who reviewed and everyone a record mentioned), by handle, with each one's
+  standing verdict and the revision it judged; 32 at most, with how many
+  more. The change's opener and pushers are its authors.
 - **Comments come a thread at a time**: a thread's first comment and then its
   replies in the order they were said, threads in the order they started; a
   page holds 50 unless asked for fewer or more, 200 at most, and ends at the
@@ -2148,14 +2153,18 @@ changes](#reading-changes)).
   points at, and whether its thread is resolved and by whom.
 - **Reviewers come by handle**, a withdrawn ask among them, 200 a page and
   1 000 at most: who was asked, by whom, with what note, and whether the ask
-  stands.
+  stands. Each row says when the record that last moved it landed, read from
+  that record's notices on the change: known while one of them is kept (a
+  person's inbox horizon, a seat's thirty days) and unknown after, which the
+  page words "asked earlier". Two data nodes may answer differently close to
+  that horizon, since each sweeps its own notices.
 - **Reviews come in the order they were given**, 50 a page and 200 at most:
   the revision each judged, who reviewed, its verdict, its summary and how
   many findings it raised.
 - **Findings come by id** — the order the reviews that raised them were given
   — each with its text and its suggestion, its state and its last answer, 50
   a page and 200 at most, ending at the reply's byte budget first where
-  suggestions are long.
+  suggestions are long, each with when the review that raised it landed.
 - **Standing findings are the reader's own**, by id, paged as findings are:
   every finding they raised that still stands — open, resolved, won't fix or
   disputed — which is exactly what a review of theirs carries or, of a later
@@ -2163,6 +2172,11 @@ changes](#reading-changes)).
   to no seat. It is what a review dialog reads to its last page before it
   sends, where the findings part, oldest first, would have left a reviewer's
   newest standing findings past its first page.
+- **A change's findings by path** (`finding_paths`): how many of its findings
+  stand in each state on each path, by the revision they were raised on, in
+  path order, 500 a page and 1 000 at most: what a changed file's badge
+  counts. It is asked by a key of its own, never as a part, so a data node
+  that predates it refuses it and another answers.
 
 ### Asking for review
 
@@ -2319,6 +2333,16 @@ answer, and what each answer does:
   or disputing is refused `not_author` to anybody else, and dismissing
   `not_raiser`. An answer that asks for what every finding already says
   changes nothing and appends nothing.
+
+**A finding's excerpt** is the lines of the blob it points at around its
+range, three either side unless the reader asks for up to ten, marked as the
+change's Files tab marks that file: added, deleted or kept, the deleted lines
+of the old side shown between the new side's, and a file the revision renamed
+diffed against where it was. An excerpt holds at most 40 lines, so a longer
+range shows its first, and each line up to 1 KiB; a longer line is described
+by its size. A finding on a revision whose facts its home has not recorded
+has no excerpt yet. The excerpt is read on the repository's Gitlet node by
+object ids and kept there, so a page of findings read again costs no git.
 
 A write of a conversation that is refused appends nothing, and says why in one
 sentence:
@@ -3207,8 +3231,9 @@ repository, never by a node's own sweep:
   handle, or the engine on its own account (`system`, for [the ref
   lifecycle](#the-ref-lifecycle)'s deletions) — how the push's pack was built
   (`git`, sent by a client's git, `engine`, built by the engine itself,
-  `merge`, landed by a merge, or `expiry`, the ref lifecycle's deletion of
-  idle seat branches), and for a seat's push the turn that
+  `merge`, landed by a merge, `expiry`, the ref lifecycle's deletion of
+  idle seat branches, or `queue`, a merge queue's landing, `import` and
+  `mirror`, Gitlet's own), and for a seat's push the turn that
   made it, the work item that turn was charged to and the model it ran on —
   and for a push the seat's coding box made, the executor that pushed and the
   harness it ran, which is how the engine reads back what a run
@@ -3278,6 +3303,37 @@ retirement; a node last brought up to date before its removal reads the
 repository whole at its next sync, as after a forgotten deletion, and
 downloads nothing again.
 
+### Counting pushes
+
+A repository's pushes are counted by day and by who pushed, so a screen draws
+a repository's recent activity and who pushes to it without walking its push
+history:
+
+- every push row is counted on its UTC day, by the quarter-hour its record
+  landed in, the ref lifecycle's expiries too, as the push history lists them;
+- who pushed is counted per UTC day: a seat by its handle, a person by the
+  human seat they hold whichever credential they pushed with, and Gitlet for a
+  merge, a merge queue's landing, an import and a pull mirror's sync, never the
+  person or seat who merged or queued. The ref lifecycle's expiry is counted in
+  the day series and as nobody's push;
+- a reader's days are the boundaries its client sends, its own midnights:
+  every UTC offset in use is a whole quarter-hour, so each of its days is
+  counted exactly in any zone, across a clock change too;
+- who pushed is counted on the whole UTC days that begin within those days, so
+  its window can sit up to a day off the reader's own;
+- both are kept as the history is (181 days), and a first boundary older than
+  the history keeps whole, 181 days less two hours for the clocks it is kept
+  by, is refused rather than counted short;
+- they are kept, never walked: each push, each expiry of the history and each
+  purge step moves them, and a build that changes how they are counted
+  recounts them from the push history at its first boot, on every data node;
+- a deleted repository keeps them until its purge takes its pushes.
+
+They are asked with `day_bounds` beside `repo_facts=true` on a listing of
+repositories or one repository's detail, or on a push history
+(`GET /gitlet/repos/{name}/pushes`); see [the code
+reads](../reference/api-endpoints.md#the-code-reads).
+
 ### Deletion and purge
 
 A repository removed from `code.repos` is **deleted**, softly: its rows and
@@ -3304,7 +3360,7 @@ asks of a live repository's unreachable objects
   ([A scratch repository's idle expiry](#a-scratch-repositorys-idle-expiry));
 - each purge is a sequence of bounded **steps**, each one record removing a
   bounded part of the repository's rows — its push history, its refs, its
-  packs and the ones a compaction retired, its
+  packs and the ones a compaction retired, what its pushes are counted by, its
   [ref drops](#retention-and-history), then its [changes](#changes), each
   whole: a change's revisions, authors, [conversation](#reviews-and-findings)
   and description, then its row — then its [checks](#checks), each with its

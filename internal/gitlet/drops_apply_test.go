@@ -141,8 +141,8 @@ func TestAForcedOrDeletingCommandRecordsTheObjectItLeft(t *testing.T) {
 	}
 	// SIX REFS (ff, forced, gone, v1, new, turns), the three new entries'
 	// packs and push rows, the five drops and the counters — and no horizon
-	// due, the tombstones being fresh.
-	if wantTouched := 6 + 3 + 3 + len(want) + 1; touched != wantTouched {
+	// due, the tombstones being fresh; and the pushes' day row and pusher day.
+	if wantTouched := 6 + 3 + 3 + len(want) + 1 + pushDayRows + pusherDayRows; touched != wantTouched {
 		t.Fatalf("the record reports %d rows touched, want %d: its drops count in what it wrote",
 			touched, wantTouched)
 	}
@@ -221,10 +221,11 @@ func TestTheRefDropsTakeWhatTheTombstonesLeave(t *testing.T) {
 	e.seedDrops("repo-a", 1, time.Unix(0, 0), drops)
 
 	// A REF, A PACK, A PUSH ROW AND THE COUNTERS, then the sweep's whole
-	// budget and its mark.
+	// budget and its mark; its day row and pusher day on top.
 	if written := e.applyCounting(pushOf(t, "repo-a", pushEntry("p1",
-		move("refs/heads/one", ZeroOID, oid("one"))))); written != MaxRecordRows {
-		t.Fatalf("the first record touched %d rows, want its whole budget of %d", written, MaxRecordRows)
+		move("refs/heads/one", ZeroOID, oid("one"))))); written != MaxRecordRows+pushDayRows+pusherDayRows {
+		t.Fatalf("the first record touched %d rows, want its whole budget of %d and its two activity rows",
+			written, MaxRecordRows)
 	}
 	swept := MaxRecordRows - 4 - 1
 	if left := e.num(`SELECT COUNT(*) FROM code_refs WHERE target = ''`); left != int64(stones-swept) {
@@ -236,9 +237,9 @@ func TestTheRefDropsTakeWhatTheTombstonesLeave(t *testing.T) {
 	}
 
 	written := e.applyCounting(pushOf(t, "repo-a", pushEntry("p2", move("refs/heads/two", ZeroOID, oid("two")))))
-	if want := 4 + (stones - swept + 1) + drops; written != want {
+	if want := 4 + (stones - swept + 1) + drops + pushDayRows + pusherDayRows; written != want {
 		t.Fatalf("the second record touched %d rows, want %d: its four, the %d tombstones left and their "+
-			"mark, and every drop past its grace", written, want, stones-swept)
+			"mark, every drop past its grace, and its two activity rows", written, want, stones-swept)
 	}
 	if left := e.num(`SELECT COUNT(*) FROM code_ref_drops`); left != 0 {
 		t.Fatalf("%d drops left past their grace by a record with room for them all", left)
@@ -273,7 +274,7 @@ func TestTheRefDropExpiryHasWhatTheSweepLeavesBehindDeletions(t *testing.T) {
 		}()...)}, 996, 4},
 		{"the committer's fullest record", fullest(t, "deleting", 0, func(p, c int) Command {
 			return move(fmt.Sprintf("refs/heads/r%06d", p*MaxCommandsPerPush+c), oid("repo-a"), ZeroOID)
-		}), 64, 1_246},
+		}), 67, 1_242},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -289,8 +290,10 @@ func TestTheRefDropExpiryHasWhatTheSweepLeavesBehindDeletions(t *testing.T) {
 			e.seed("repo-a", 0, deletions, 0)
 			e.seedTombstones("repo-a", deletions, time.Unix(0, 0))
 			e.seedDrops("repo-a", 1, time.Unix(0, 0), MaxRecordRows)
-			if touched := e.applyCounting(pushOf(t, "repo-a", tc.pushes...)); touched != MaxRecordRows {
-				t.Fatalf("the record touched %d rows, want its whole budget of %d", touched, MaxRecordRows)
+			if touched := e.applyCounting(pushOf(t, "repo-a", tc.pushes...)); touched !=
+				MaxRecordRows+pushDayRows+pusherDayRows {
+				t.Fatalf("the record touched %d rows, want its whole budget of %d and its two activity rows",
+					touched, MaxRecordRows)
 			}
 			left := e.num(`SELECT COUNT(*) FROM code_ref_drops WHERE repo_id = 'repo-a' AND at < ?`,
 				store.EncodeTime(applyClock.Add(-PruneGrace)))
@@ -351,10 +354,10 @@ func TestTheRefDropExpiryKeepsPaceWithOneBulkForcedPushARecord(t *testing.T) {
 
 // THE DROPS' EXPIRY FALLS BEHIND A RECORD FULL OF FORCED UPDATES, AND THE
 // BACKLOG DRAINS AS LATER RECORDS LEAVE ROOM: the committer's fullest record
-// of forced updates — 1 965 in two pushes, each counted two rows — writes as
-// many drops and leaves their expiry the 65 rows its own leave of
+// of forced updates, 1 963 in two pushes each counted two rows, writes as
+// many drops and leaves their expiry the 69 rows its own leave of
 // MaxRecordRows, so once such records come past the grace of the ones before
-// them, the drops past it grow by 1 900 a record. They are only late: a
+// them, the drops past it grow by 1 894 a record. They are only late: a
 // one-command push forgets MaxRecordRows-4 of them, oldest first, and the
 // pushes after it the rest, down to exactly the drops still inside their
 // grace, none of which is forgotten.
@@ -389,9 +392,9 @@ func TestTheRefDropBacklogDrainsAsTheRecordsLeaveRoom(t *testing.T) {
 	// a ref and a drop a forced update, a pack and a push row a push, and the
 	// counters — and what that leaves its expiry.
 	room := MaxRecordRows - (2*drops + 2*len(made) + 1)
-	if drops != 1_965 || room != 65 {
+	if drops != 1_963 || room != 69 {
 		t.Fatalf("the committer's fullest record of forced updates carries %d of them and leaves its "+
-			"expiry %d rows — expireRefDrops' doc and doc.go say 1 965 and 65", drops, room)
+			"expiry %d rows: expireRefDrops' doc and doc.go say 1 963 and 69", drops, room)
 	}
 	at := applyClock
 	e.apply(pushOf(t, "repo-a", made...).at(at))
@@ -413,7 +416,8 @@ func TestTheRefDropBacklogDrainsAsTheRecordsLeaveRoom(t *testing.T) {
 		}
 		forgotten := min(due, int64(room))
 		touched := e.applyCounting(pushOf(t, "repo-a", record(round)...).at(at))
-		if want := MaxRecordRows - room + int(forgotten); touched != want {
+		// Its day row and pusher day come on top of its own.
+		if want := MaxRecordRows - room + int(forgotten) + pushDayRows + pusherDayRows; touched != want {
 			t.Fatalf("round %d touched %d rows, want %d: its own %d and the %d drops past their grace "+
 				"its rows left room for", round, touched, want, MaxRecordRows-room, forgotten)
 		}
@@ -436,9 +440,9 @@ func TestTheRefDropBacklogDrainsAsTheRecordsLeaveRoom(t *testing.T) {
 		forgotten := min(backlog, MaxRecordRows-4)
 		touched := e.applyCounting(pushOf(t, "repo-a", pushEntry(fmt.Sprint("drain-", i),
 			move(fmt.Sprintf("refs/heads/drain-%d", i), ZeroOID, oid(fmt.Sprint("drain-", i))))).at(at))
-		if want := 4 + int(forgotten); touched != want {
-			t.Fatalf("drain push %d touched %d rows, want %d: its own four and %d of the %d drops past "+
-				"their grace", i, touched, want, forgotten, backlog)
+		if want := 4 + int(forgotten) + pushDayRows + pusherDayRows; touched != want {
+			t.Fatalf("drain push %d touched %d rows, want %d: its own four, %d of the %d drops past "+
+				"their grace and its two activity rows", i, touched, want, forgotten, backlog)
 		}
 		backlog -= forgotten
 		if got := pastGrace(at); got != backlog {

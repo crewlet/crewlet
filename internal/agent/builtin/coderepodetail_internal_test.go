@@ -33,6 +33,7 @@ func TestCodeGetRepoCarriesEveryDetailFieldOrSaysWhy(t *testing.T) {
 			"when (protections)",
 		"version": "a log position the tags listing floors its read at; no seat tool lists tags, and a " +
 			"position says nothing a seat acts on",
+		"pushers": "answered only where repo_facts asks with day_bounds, which no seat tool asks",
 	}
 	jsonName := func(f reflect.StructField) string {
 		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")

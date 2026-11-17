@@ -409,3 +409,177 @@ func TestAChangesReadByObjectIDRefusesInThisSurfacesVocabulary(t *testing.T) {
 		}
 	}
 }
+
+// A CHANGE'S EXCERPTS ANCHOR EACH FINDING AT ITS OWN REVISION, at the floor of the revisions
+// they name; an unmeasured revision's findings, and an old side with no base, have none yet.
+//
+// Mutation: anchor at the head revision, drop the second chunk, or the no-base arm → red.
+func TestAChangesExcerptsAnchorEachFindingAtItsOwnRevision(t *testing.T) {
+	t.Parallel()
+	rev := func(n int64, base string, at uint64) gitlet.RevisionRow {
+		r := gitlet.RevisionRow{N: n, Head: oid(fmt.Sprint(n)), Position: atCodeSeq(at)}
+		if base != "" {
+			r.Facts = &gitlet.RevisionFactsRow{TargetRef: "refs/heads/main", TargetOID: oid("a"),
+				TargetPosition: atCodeSeq(at - 1), BaseOID: oid(base)}
+		}
+		return r
+	}
+	findings := []gitlet.FindingRow{
+		{ID: "new", Revision: 1, CommitOID: oid("1"), Path: "a.go", Side: gitlet.SideNew, BlobOID: oid("c"),
+			LineStart: 4, LineEnd: 5},
+		{ID: "old", Revision: 2, CommitOID: oid("b"), Path: "b.go", Side: gitlet.SideOld, BlobOID: oid("d"),
+			LineStart: 7, LineEnd: 7},
+		{ID: "pending", Revision: 3, CommitOID: oid("3"), Path: "c.go", Side: gitlet.SideNew, BlobOID: oid("e"),
+			LineStart: 1, LineEnd: 1},
+	}
+	rows := func(page []gitlet.FindingRow, first gitlet.RevisionRow) func(gitlet.ReadQuery) (gitlet.ReadAnswer,
+		error) {
+		return func(q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
+			out := gitlet.ReadAnswer{Level: q.Fresh.Level, Position: atCodeSeq(4800)}
+			switch {
+			case q.Part == gitlet.PartFindings:
+				out.Findings, out.Next = page, "after-the-page"
+			case q.Cursor == "2":
+				out.Revisions = []gitlet.RevisionRow{first}
+			case q.Cursor == "3":
+				out.Revisions = []gitlet.RevisionRow{rev(2, "b", 20)}
+			default:
+				out.Change = &gitlet.ChangeDetail{ChangeSummary: gitlet.ChangeSummary{ChangeRow: gitlet.ChangeRow{
+					ID: "change-1", RepoID: webID, Number: 1, State: gitlet.ChangeStateOpen, Revision: 3}}}
+				out.Revisions = []gitlet.RevisionRow{rev(3, "", 30)}
+			}
+			return out, nil
+		}
+	}
+	// git answers a chunk's first page with its first excerpt alone, and the rest after it.
+	git := func(q gitlet.GitQuery) (gitlet.GitAnswer, error) {
+		out := gitlet.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Excerpts: &gitlet.ExcerptsAnswer{}}
+		anchors := q.Excerpts.Anchors
+		if q.Cursor == "" && len(anchors) > 1 {
+			anchors, out.Next = anchors[:1], "x:1"
+		} else if q.Cursor == "x:1" {
+			anchors = anchors[1:]
+		}
+		for _, a := range anchors {
+			out.Excerpts.Excerpts = append(out.Excerpts.Excerpts, gitlet.Excerpt{ID: a.ID, Status: "M",
+				Lines: []gitlet.ExcerptLine{{Mark: "+", New: a.Start, Text: a.Path}}})
+		}
+		return out, nil
+	}
+
+	for _, context := range []string{"", "0", "2"} {
+		stub := &stubCode{answer: rows(findings, rev(1, "a", 10)), git: git}
+		params := map[string]any{"name": "web", "change": "1", "part": "excerpts"}
+		if context != "" {
+			params["context"] = context
+		}
+		answer, err := askNative(t, queries.Sources{Code: stub}, "code_change", params)
+		if err != nil {
+			t.Fatalf("context %q: %v", context, err)
+		}
+		got, ok := answer.(queries.CodeChangeExcerpts)
+		if !ok {
+			t.Fatalf("the excerpts part answered %T", answer)
+		}
+		wantContext := gitlet.DefaultExcerptContext
+		if context != "" {
+			wantContext = int(context[0] - '0')
+		}
+		if _, pending := got.Excerpts["pending"]; pending || len(got.Excerpts) != 2 || got.Context != wantContext ||
+			got.Next != "after-the-page" {
+			t.Errorf("context %q answered %+v, want the two placed findings at context %d beside the page's next",
+				context, got, wantContext)
+		}
+		want := []gitlet.ExcerptAnchor{
+			{LineAnchor: gitlet.LineAnchor{ID: "new", Path: "a.go", Side: gitlet.SideNew, BlobOID: oid("c"),
+				Start: 4, End: 5}, Base: oid("a"), Head: oid("1")},
+			{LineAnchor: gitlet.LineAnchor{ID: "old", Path: "b.go", Side: gitlet.SideOld, BlobOID: oid("d"),
+				Start: 7, End: 7}, Base: oid("b"), Head: oid("2")},
+		}
+		first := stub.read[0]
+		switch {
+		case first.Kind != gitlet.GitExcerpts || !reflect.DeepEqual(first.Excerpts.Anchors, want):
+			t.Errorf("context %q asked %+v, want the anchors %+v", context, first.Excerpts, want)
+		case (context == "") != (first.Excerpts.Context == nil),
+			context != "" && *first.Excerpts.Context != wantContext:
+			t.Errorf("context %q asked the Gitlet node context %v", context, first.Excerpts.Context)
+		case !reflect.DeepEqual(first.Fresh, statelog.FloorAt(statelog.ReadSession, atCodeSeq(20))):
+			t.Errorf("context %q asked at %+v, want session at revision 2's record", context, first.Fresh)
+		}
+	}
+
+	// SEVENTY FINDINGS are two reads, of 64 and 6, each page of each followed.
+	var many []gitlet.FindingRow
+	for i := range 70 {
+		f := findings[0]
+		f.ID = fmt.Sprintf("f%02d", i)
+		many = append(many, f)
+	}
+	stub := &stubCode{answer: rows(many, rev(1, "a", 10)), git: git}
+	answer, err := askNative(t, queries.Sources{Code: stub}, "code_change", map[string]any{"name": "web",
+		"change": "1", "part": "excerpts", "limit": "70"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := answer.(queries.CodeChangeExcerpts); len(got.Excerpts) != len(many) {
+		t.Errorf("seventy findings answered %d excerpts", len(got.Excerpts))
+	}
+	sizes := map[int]int{}
+	for _, q := range stub.read {
+		if q.Cursor == "" {
+			sizes[len(q.Excerpts.Anchors)]++
+		}
+	}
+	if len(stub.read) != 4 || sizes[gitlet.MaxExcerptAnchors] != 1 || sizes[len(many)-gitlet.MaxExcerptAnchors] != 1 {
+		t.Errorf("seventy findings were asked as %d reads, first pages of sizes %v", len(stub.read), sizes)
+	}
+
+	// A REVISION SHARING NO HISTORY with its target: its new side is every line added, from no
+	// base, and its old side holds no file to excerpt.
+	unrelated := rev(1, "a", 10)
+	unrelated.Facts.BaseOID = ""
+	added, gone := findings[0], findings[0]
+	added.ID = "added"
+	gone.ID, gone.Side, gone.CommitOID = "gone", gitlet.SideOld, oid("f")
+	stub = &stubCode{answer: rows([]gitlet.FindingRow{added, gone}, unrelated), git: git}
+	answer, err = askNative(t, queries.Sources{Code: stub}, "code_change", map[string]any{"name": "web",
+		"change": "1", "part": "excerpts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantUnrelated := []gitlet.ExcerptAnchor{{LineAnchor: gitlet.LineAnchor{ID: "added", Path: "a.go",
+		Side: gitlet.SideNew, BlobOID: oid("c"), Start: 4, End: 5}, Head: oid("1")}}
+	got := answer.(queries.CodeChangeExcerpts)
+	if _, ok := got.Excerpts["gone"]; ok || len(got.Excerpts) != 1 || len(stub.read) != 1 ||
+		!reflect.DeepEqual(stub.read[0].Excerpts.Anchors, wantUnrelated) {
+		t.Errorf("an unrelated revision's findings answered %+v from reads %+v, want the anchors %+v", got,
+			stub.read, wantUnrelated)
+	}
+}
+
+// AN EXCERPT'S CONTEXT IS ITS PART'S ALONE: `context` on another part, or past 0 to
+// gitlet.MaxExcerptContext lines, is refused before anything is read.
+//
+// Mutation: drop the part check (findings answered with a context) → red.
+func TestAnExcerptsContextIsItsPartsAlone(t *testing.T) {
+	t.Parallel()
+	for name, params := range map[string]map[string]any{
+		"on the findings":  {"part": "findings", "context": "2"},
+		"on the revisions": {"context": "2"},
+		"past the widest":  {"part": "excerpts", "context": "11"},
+		"below none":       {"part": "excerpts", "context": "-1"},
+		"no number":        {"part": "excerpts", "context": "x"},
+		"with a revision":  {"part": "excerpts", "revision": "1"},
+	} {
+		all := map[string]any{"name": "web", "change": "1"}
+		for k, v := range params {
+			all[k] = v
+		}
+		stub := &stubCode{answer: twoRevisions(atCodeSeq(1))}
+		if _, err := askNative(t, queries.Sources{Code: stub}, "code_change", all); !errors.Is(err,
+			queries.ErrBadParams) || len(stub.asked) != 0 {
+			t.Errorf("%s: answered %v having asked the reader %d times, want bad_params before it", name, err,
+				len(stub.asked))
+		}
+	}
+}

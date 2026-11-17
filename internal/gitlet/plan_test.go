@@ -179,6 +179,8 @@ func TestTheCommitMarksStatementsReadNoUnnestedAggregate(t *testing.T) {
 			args: []any{"repo-1", oid("head-3-3"), MaxCommitChanges + 1}},
 		"revisions a commit heads": {sql: commitHeadsSQL,
 			args: []any{oid("head-1-1"), "repo-1", MaxCommitChanges + 1}},
+		"when a page's reviewers last moved": {sql: reviewersMovedAtSQL,
+			args: []any{"repo-1-change-000001", "[3000,3001]"}},
 	} {
 		plan := storetest.Plan(t, db, st.sql, st.args)
 		if line, unnested := storetest.Decorrelated(plan); unnested {
@@ -411,6 +413,7 @@ const (
 	commentKey      = "sqlite_autoindex_code_comments_1"
 	findingKey      = "sqlite_autoindex_code_findings_1"
 	findingTextKey  = "sqlite_autoindex_code_finding_texts_1"
+	reviewKey       = "sqlite_autoindex_code_reviews_1"
 	factsKey        = "sqlite_autoindex_code_revision_facts_1"
 	mergeabilityKey = "sqlite_autoindex_code_mergeability_1"
 	activationKey   = "sqlite_autoindex_code_activation_1"
@@ -419,6 +422,8 @@ const (
 	layerPartsKey   = "sqlite_autoindex_code_layer_parts_1"
 	checkLogsKey    = "sqlite_autoindex_code_check_logs_1"
 	seatDaysKey     = "sqlite_autoindex_code_seat_days_1"
+	pushDaysKey     = "sqlite_autoindex_code_push_days_1"
+	pusherDaysKey   = "sqlite_autoindex_code_pusher_days_1"
 	repoKindsKey    = "sqlite_autoindex_code_repo_kinds_1"
 )
 
@@ -478,7 +483,7 @@ func registeredStatements() map[string]statement {
 		"purge all packs":     {purgeAllPacksSQL, []any{"repo-1"}, []string{packsKey + " (repo_id=?)"}},
 		"remove repo":         {removeRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"repo name":           {repoNameSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"remaining":           {remainingSQL, []any{"repo-1", PurgePartRows + 1}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)", refsKey + " (repo_id=?)", packsKey + " (repo_id=?)", retiredKey + " (repo_id=?)", dropsKey + " (repo_id=?)", changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", authorKey + " (change_id=?)", "COVERING INDEX " + bodyKey + " (change_id=?)", reviewerKey + " (change_id=?)", participantKey + " (change_id=?)", "COVERING INDEX code_findings_raiser_idx (change_id=?)", "COVERING INDEX code_comments_thread_idx (change_id=?)", "COVERING INDEX " + findingTextKey + " (change_id=?)", "COVERING INDEX code_reviews_change_idx (change_id=?)", factsKey + " (change_id=?)", mergeabilityKey + " (change_id=?)", conversationKey + " (change_id=?)", "COVERING INDEX " + checksEndedKey + " (repo_id=?)", checkLogsKey + " (repo_id=?)", "sqlite_autoindex_code_queue_1 (repo_id=?)", "sqlite_autoindex_code_candidates_1 (repo_id=?)", "sqlite_autoindex_code_landings_1 (repo_id=?)", "sqlite_autoindex_code_green_1 (repo_id=?)", "sqlite_autoindex_code_tips_due_1 (repo_id=?)"}},
+		"remaining":           {remainingSQL, []any{"repo-1", PurgePartRows + 1}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)", refsKey + " (repo_id=?)", packsKey + " (repo_id=?)", retiredKey + " (repo_id=?)", dropsKey + " (repo_id=?)", changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", authorKey + " (change_id=?)", "COVERING INDEX " + bodyKey + " (change_id=?)", reviewerKey + " (change_id=?)", participantKey + " (change_id=?)", "COVERING INDEX " + findingPathsKey + " (change_id=?)", "COVERING INDEX code_comments_thread_idx (change_id=?)", "COVERING INDEX " + findingTextKey + " (change_id=?)", "COVERING INDEX code_reviews_change_idx (change_id=?)", factsKey + " (change_id=?)", mergeabilityKey + " (change_id=?)", conversationKey + " (change_id=?)", "COVERING INDEX " + checksEndedKey + " (repo_id=?)", checkLogsKey + " (repo_id=?)", "sqlite_autoindex_code_queue_1 (repo_id=?)", "sqlite_autoindex_code_candidates_1 (repo_id=?)", "sqlite_autoindex_code_landings_1 (repo_id=?)", "sqlite_autoindex_code_green_1 (repo_id=?)", "sqlite_autoindex_code_tips_due_1 (repo_id=?)", "COVERING INDEX " + pushDaysKey + " (repo_id=?)", "COVERING INDEX " + pusherDaysKey + " (repo_id=?)"}},
 		"claim":               {claimSQL, []any{"token"}, []string{nameKey + " (token=?)"}},
 		"claims":              {claimsSQL, []any{`["token","other"]`}, []string{nameKey + " (token=?)"}},
 		"repos rows":          {reposRowsSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
@@ -647,7 +652,7 @@ func registeredStatements() map[string]statement {
 		"purge change walk": {purgeChangeWalkSQL, []any{"repo-1", PurgePartRows},
 			[]string{changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", authorKey + " (change_id=?)",
 				reviewerKey + " (change_id=?)", participantKey + " (change_id=?)",
-				"COVERING INDEX code_findings_raiser_idx (change_id=?)",
+				"COVERING INDEX " + findingPathsKey + " (change_id=?)",
 				"COVERING INDEX code_comments_thread_idx (change_id=?)",
 				"COVERING INDEX " + findingTextKey + " (change_id=?)",
 				"COVERING INDEX code_reviews_change_idx (change_id=?)", factsKey + " (change_id=?)",
@@ -660,7 +665,7 @@ func registeredStatements() map[string]statement {
 		"purge changes' comments": {purgeChangeCommentsSQL, []any{changeIDs},
 			[]string{"SCAN json_each AS j", "code_comments_thread_idx (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge changes' findings": {purgeChangeFindingsSQL, []any{changeIDs},
-			[]string{"SCAN json_each AS j", "code_findings_raiser_idx (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+			[]string{"SCAN json_each AS j", findingPathsKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge changes' finding texts": {purgeChangeFindingTextsSQL, []any{changeIDs},
 			[]string{"SCAN json_each AS j", findingTextKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge changes' reviews": {purgeChangeReviewsSQL, []any{changeIDs},
@@ -706,7 +711,7 @@ func registeredStatements() map[string]statement {
 			[]string{changesNumberKey + " (repo_id=?)", "code_comments_thread_idx (change_id=?)",
 				"INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge all findings": {purgeAllFindingsSQL, []any{"repo-1"},
-			[]string{changesNumberKey + " (repo_id=?)", "code_findings_raiser_idx (change_id=?)",
+			[]string{changesNumberKey + " (repo_id=?)", findingPathsKey + " (change_id=?)",
 				"INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge all finding texts": {purgeAllFindingTextsSQL, []any{"repo-1"},
 			[]string{changesNumberKey + " (repo_id=?)", findingTextKey + " (change_id=?)",
@@ -1343,6 +1348,29 @@ func registeredStatements() map[string]statement {
 			[]string{reviewsGivenKey + " (reviewer=?)"}},
 		"reviews given after": {reviewsGivenAfterSQL, []any{"seat-0", 3000, 50},
 			[]string{reviewsGivenKey + " (reviewer=? AND position<?)"}},
+		// THE PUSHES COUNTED BY DAY AND BY PUSHER (apply_activity.go, activity.go): the moves' prunes, the
+		// re-derivation's walks and reads, a purge's deletes, and the folds at the asker's bounds.
+		"prune push days": {prunePushDaysSQL, []any{"repo-1", "[1,2]"},
+			[]string{"SCAN json_each AS j", pushDaysKey + " (repo_id=? AND day=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"prune pusher days": {prunePusherDaysSQL, []any{"repo-1", `[[1,"agent","dev"]]`},
+			[]string{"SCAN json_each AS j", pusherDaysKey + " (repo_id=? AND day=? AND pusher_kind=? AND pusher=?)",
+				"INTEGER PRIMARY KEY (rowid=?)"}},
+		"push rows counted":           {pushRowsCountedSQL, []any{"repo-1"}, []string{"code_pushes_repo_idx (repo_id=?)"}},
+		"held push days":              {heldPushDaysSQL, []any{"repo-1"}, []string{pushDaysKey + " (repo_id=?)"}},
+		"held pusher days":            {heldPusherDaysSQL, []any{"repo-1"}, []string{pusherDaysKey + " (repo_id=?)"}},
+		"next pushed repository":      {nextPushedRepoSQL, []any{""}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id>?)"}},
+		"next push days repository":   {nextPushDaysRepoSQL, []any{""}, []string{"COVERING INDEX " + pushDaysKey + " (repo_id>?)"}},
+		"next pusher days repository": {nextPusherDaysRepoSQL, []any{""}, []string{"COVERING INDEX " + pusherDaysKey + " (repo_id>?)"}},
+		"purge left push days": {purgeLeftPushDaysSQL, []any{"repo-1", PurgePartRows},
+			[]string{"COVERING INDEX " + pushDaysKey + " (repo_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge left pusher days": {purgeLeftPusherDaysSQL, []any{"repo-1", PurgePartRows},
+			[]string{"COVERING INDEX " + pusherDaysKey + " (repo_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge all push days":   {purgeAllPushDaysSQL, []any{"repo-1"}, []string{pushDaysKey + " (repo_id=?)"}},
+		"purge all pusher days": {purgeAllPusherDaysSQL, []any{"repo-1"}, []string{pusherDaysKey + " (repo_id=?)"}},
+		"push days of": {pushDaysOfSQL, []any{`["repo-1","repo-2"]`, 0, 900000000},
+			[]string{"SCAN json_each AS j", pushDaysKey + " (repo_id=? AND day>=? AND day<?)"}},
+		"pusher days of": {pusherDaysOfSQL, []any{"repo-1", 0, 86400000000},
+			[]string{pusherDaysKey + " (repo_id=? AND day>=? AND day<?)"}},
 		// ONE PERSON'S CODE INBOX (inboxread.go, marks.go): a range of their
 		// notices newest first, every filter bound — under `unread` its lower
 		// bound the seen-through position — and the notices an unread mark
@@ -1376,19 +1404,32 @@ func registeredStatements() map[string]statement {
 		"whom a change reached after": {changeNoticesAfterSQL, []any{"repo-1-change-000001", 3000},
 			[]string{"code_notifications_change_idx (change_id=? AND log_seq<?)"}},
 		"findings of a change": {findingsOfSQL, []any{"repo-1-change-000001", 50},
-			[]string{findingTextKey + " (change_id=?)", findingKey + " (id=?)"}},
+			[]string{findingTextKey + " (change_id=?)", findingKey + " (id=?)", reviewKey + " (id=?)"}},
 		"findings of a change after": {findingsOfAfterSQL, []any{"repo-1-change-000001", "finding-1", 50},
-			[]string{findingTextKey + " (change_id=? AND finding_id>?)", findingKey + " (id=?)"}},
+			[]string{findingTextKey + " (change_id=? AND finding_id>?)", findingKey + " (id=?)",
+				reviewKey + " (id=?)"}},
 		// THE FINDINGS A WRITE NAMES, an apply's: each id one seek of the
 		// texts' whole key and one of the row's, whatever the change holds.
 		"findings a read names": {findingsNamedSQL,
 			[]any{`["finding-1","finding-2"]`, "repo-1-change-000001"},
 			[]string{"SCAN json_each AS j", findingTextKey + " (change_id=? AND finding_id=?)",
-				findingKey + " (id=?)"}},
+				findingKey + " (id=?)", reviewKey + " (id=?)"}},
 		"reviewers of a change": {reviewersOfSQL, []any{"repo-1-change-000001", 200},
 			[]string{reviewerKey + " (change_id=?)"}},
 		"reviewers of a change after": {reviewersOfAfterSQL, []any{"repo-1-change-000001", "seat-0", 200},
 			[]string{reviewerKey + " (change_id=? AND reviewer>?)"}},
+		// A CHANGE'S PAGE (changepage.go): its participants and their count, one notice of each
+		// record behind a page of its reviewers, and its findings by path.
+		"participants of a change": {participantsOfSQL, []any{"repo-1-change-000001", MaxDetailParticipants + 1},
+			[]string{participantKey + " (change_id=?)"}},
+		"participants counted": {participantsCountSQL, []any{"repo-1-change-000001"},
+			[]string{"COVERING INDEX " + participantKey + " (change_id=?)"}},
+		"when a page's reviewers last moved": {reviewersMovedAtSQL, []any{"repo-1-change-000001", "[3000,3001]"},
+			[]string{"SCAN json_each AS j", "code_notifications_change_idx (change_id=? AND log_seq=?)"}},
+		"findings by path": {findingPathsSQL, []any{"repo-1-change-000001", 500},
+			[]string{"COVERING INDEX " + findingPathsKey + " (change_id=?)"}},
+		"findings by path after": {findingPathsAfterSQL, []any{"repo-1-change-000001", "a.go", "open", 1, 500},
+			[]string{"COVERING INDEX " + findingPathsKey + " (change_id=? AND path>=?)"}},
 		"comments of a change": {commentsOfSQL, []any{"repo-1-change-000001", 50},
 			[]string{"code_comments_thread_idx (change_id=?)"}},
 		"comments of a change after": {commentsOfAfterSQL, []any{"repo-1-change-000001", "comment-1", "comment-1",

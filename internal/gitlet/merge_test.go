@@ -180,6 +180,7 @@ func TestAMergeMovesTargetDeletesSourceInOneRecord(t *testing.T) {
 	if after := n.end(); after != before+1 {
 		t.Fatalf("the merge appended %d records, want one", after-before)
 	}
+	n.activityHolds()
 	at := res.Position.Packed()
 
 	got := n.mergedChange(change)
