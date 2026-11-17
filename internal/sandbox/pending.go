@@ -460,8 +460,11 @@ type RecordedEnding struct {
 	// announcement is published under ([endingEventID]).
 	ID string `json:"id"`
 
-	// At is when the ending was decided, on the store's clock, and the
-	// instant its announcement carries.
+	// At is when the ending was decided, on the clock of the node whose store
+	// handle decided it, and the instant its announcement carries. Only that
+	// node reads it as an age on one clock: any other node's clock may stand
+	// apart from it by up to twice objstore.AssumedClockSkew, which is what a
+	// stop's give-up of a silent host allows it ([Coordinator.hostGivenUp]).
 	At time.Time `json:"at"`
 
 	// Reason and Detail are what it announces; an empty Reason announces
@@ -793,8 +796,9 @@ type BridgeCall struct {
 	// through every write it makes of the log (wirekeys.go).
 	CallID string `json:"call_id,omitempty"`
 
-	// At is when the log recorded the call, on the store's clock — what the
-	// Executors board lists a run's calls by. Always set: the store stamps it.
+	// At is when the log recorded the call, on the clock of the node whose
+	// store handle wrote it — what the Executors board lists a run's calls
+	// by. Always set: the writing node's store handle stamps it.
 	// It is the order the calls FINISHED in, and a harness making several calls
 	// at once finishes them in whatever order their tools take.
 	At time.Time `json:"at"`
@@ -1227,9 +1231,9 @@ type PendingRun struct {
 	Harness   string `json:"harness"`
 
 	// BoxSince is when the box this row names was first attached to it, by
-	// the store's own clock: the age a relaunch reads off the box before it
-	// continues in it ([KeptBoxMaxAge], [PriorBox.ContinuesIn]). Zero where
-	// the row names no box.
+	// the clock of the node whose attach wrote it: the age a relaunch reads
+	// off the box before it continues in it ([KeptBoxMaxAge],
+	// [PriorBox.ContinuesIn]). Zero where the row names no box.
 	//
 	// WRITTEN BY THE ATTACH OF A BOX THE ROW DOES NOT ALREADY NAME, and kept
 	// by every other one: a job continued in the turn's kept box attaches the
@@ -3070,7 +3074,8 @@ type PendingStore interface {
 	// completion, a park or an ending moved the row on, and a verdict about
 	// a job the row no longer holds — or a box on another node — is a
 	// verdict about nothing. False with no error is that, and so is a row
-	// that is gone. A zero loss.At is the store's clock.
+	// that is gone. A zero loss.At is stamped by the clock of the node whose
+	// store handle writes the loss.
 	MarkLost(ctx context.Context, turnID, launch string, loss JobLoss) (bool, error)
 
 	// MarkClaimLost records on a job CLAIMED for its collection the verdict
@@ -4652,8 +4657,11 @@ type Suspension struct {
 // ONE FIELD RATHER THAN FOUR for the same reason: a fact added here later is
 // replaced with its job by construction.
 type LaunchRecord struct {
-	// StartedAt is when the job was launched, on the store's clock —
-	// written by [PendingStore.BeginLaunch], the moment the launch exists.
+	// StartedAt is when the job was launched, on the clock of the node whose
+	// store handle wrote it — written by [PendingStore.BeginLaunch], the
+	// moment the launch exists. Any other node reading it as an age reads it
+	// across two machines' clocks, which may stand apart by up to twice
+	// objstore.AssumedClockSkew.
 	StartedAt time.Time `json:"started_at,omitzero"`
 
 	// Started is whether the job's harness was started in its box: written by

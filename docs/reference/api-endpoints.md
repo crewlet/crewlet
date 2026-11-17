@@ -13017,9 +13017,13 @@ in a key domain of its own — because a member carries a removal out through
 its system account, and the broker's admission vouches for a connection, never
 a request: anything the broker admitted could send an unsigned request on the
 member's subject and change the quorum past every check this route makes. Each
-request is bound to an id and a deadline inside its signature, so one captured
-off the wire is not carried out twice, and the
-answer is believed only where the fleet signed it for that request. A member
+request is bound to an id and a deadline inside its signature, and a member
+refuses an id it has taken for as long as that deadline could still admit the
+request. A member that restarted inside that window has forgotten the ids it
+took, so a request captured off the wire and sent to it again there asks once
+more for the removal it named, of a voter already removed unless it rejoined
+within those seconds. The answer is believed only where the fleet signed it
+for that request. A member
 that does not hold the key a request is signed under runs nothing and says
 so, and the next member is asked; a request the fleet did not sign is refused
 and logged at error on the member (`fleet_broker_request_refused`). The
