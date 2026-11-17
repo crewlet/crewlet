@@ -1152,6 +1152,11 @@ type FakeSession struct {
 	// pack and a scrub at their bound do: it is handed the take's context.
 	Taking func(ctx context.Context)
 
+	// Streaming, where set, runs as the take's archive is first read, once its
+	// place is reserved and it spools, handed the take's context, so a case can
+	// spend the take's time where a stream at its bound spends it.
+	Streaming func(ctx context.Context)
+
 	// Keeping, where set, runs as the take's digest is recorded in the box
 	// ([TakenSession.Keep]), before it is, handed the digest's context, so a
 	// case can stand in for a box slow to answer the write.
@@ -1195,9 +1200,13 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 	if session.Count != nil {
 		count = func() *ResumedCount { counted := *session.Count; return &counted }
 	}
+	body := io.Reader(bytes.NewReader(session.Body))
+	if session.Streaming != nil {
+		body = &firstRead{Reader: body, first: func() { session.Streaming(ctx) }}
+	}
 	return TakenSession{
 		Archive: session.Archive,
-		Body:    io.NopCloser(bytes.NewReader(session.Body)),
+		Body:    io.NopCloser(body),
 		Context: func() int64 { return session.ContextTokens },
 		Count:   count,
 		Keep: func(ctx context.Context) error {
@@ -1211,6 +1220,18 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 			return nil
 		},
 	}, nil
+}
+
+// firstRead is a reader that runs first once, as it is first read.
+type firstRead struct {
+	io.Reader
+	first func()
+	once  sync.Once
+}
+
+func (r *firstRead) Read(p []byte) (int, error) {
+	r.once.Do(r.first)
+	return r.Reader.Read(p)
 }
 
 // Takes is every capture asked of this runner, in order.

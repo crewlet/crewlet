@@ -274,9 +274,9 @@ const handedToken = "the-entrys-own-token"
 // EVERY CASE OF A KEEPING OR A LOGGING RIG RUNS IN ONE ([keepingRig],
 // [loggingRig]). A rig cuts a record's budget to 200 ms and ages a capture on
 // its own clock, which only a case moves, while an end, or a read standing by,
-// waits for a capture on the clock it runs on: an end for as long as the
-// turn's last capture can still land ([endCaptureWait], over an hour), a
-// read standing by for as long as a standby may stand ([standbyBudget]). On
+// waits for a capture on the clock it runs on: an end for each capture's whole
+// life from when it first sees it ([captureLife], over an hour), a read
+// standing by for the capture it stands by for ([standbyWait]). On
 // the machine's clock a runner starved for those 200 ms inside a keep's stamp
 // of its capture's outcome left the capture begun with nothing to settle it,
 // and the end's wait outlasted the package's timeout (#1022). In the bubble

@@ -519,7 +519,7 @@ func TestAReadStandingByWhoseTakerIsGoneIsWithdrawnNotWaitedFor(t *testing.T) {
 }
 
 // A TURN'S END WAITS FOR A STANDBY'S TAKEOVER AND ITS KEEP. The read holding the
-// place keeps for as long as a capture can take and is refused at the end of
+// place keeps for as long as a capture can live and is refused at the end of
 // it; only then does the read standing by for it take the place after it, and
 // its keep of its own session there takes as long as a keep can. The turn's
 // end, a loss's whose box is gone, waits for all of it: once the standby's
@@ -529,9 +529,9 @@ func TestAReadStandingByWhoseTakerIsGoneIsWithdrawnNotWaitedFor(t *testing.T) {
 // IN A SYNCTEST BUBBLE, so the end's wait and the two keeps run on the bubble's
 // clock, which only their own waits advance.
 //
-// Mutation: hold the end's wait to a capture's own budget, as it was, and it
-// gives up on the standby's keep and records the end ahead of it, naming the
-// standby's capture begun and never finished.
+// Mutation: hold the end's wait to one capture's life from its own start, and
+// it gives up on the standby's keep and records the end ahead of it, naming
+// the standby's capture begun and never finished.
 func TestATurnsEndWaitsForAStandbysTakeoverAndKeep(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -551,8 +551,8 @@ func TestATurnsEndWaitsForAStandbysTakeoverAndKeep(t *testing.T) {
 		go func() {
 			defer close(kept)
 			// THE READ HOLDING THE PLACE, refused at the end of a capture's
-			// budget; the standby's takeover, and its keep at a keep's.
-			time.Sleep(SessionCaptureBudget - time.Minute)
+			// life; the standby's takeover, and its keep at a keep's.
+			time.Sleep(captureLife - time.Minute)
 			refused := begun
 			refused.State, refused.Reason = CaptureRefused, "the session could not be uploaded"
 			if took, err := rig.pending.StampCapture(context.WithoutCancel(t.Context()), "t1", refused); err != nil ||
@@ -1180,10 +1180,11 @@ func TestAWaitLeavesAReadStandingByWhoseTakerHolds(t *testing.T) {
 	})
 }
 
-// A READ STANDING BY TAKES OVER A CAPTURE BEGUN PAST WHAT A CAPTURE CAN TAKE. The
-// read holding the place is node-a's, whose taker lease still holds, and its
-// capture has stood begun longer than a capture can take: it will come to
-// nothing a standby could wait for. The standby takes the place after it and
+// A READ STANDING BY TAKES OVER A CAPTURE BEGUN PAST WHAT ANY NODE'S CLOCK READS
+// A CAPTURE AS ABLE TO TAKE. The read holding the place is node-a's, whose
+// taker lease still holds, and its capture has stood begun longer than any
+// node's clock reads a capture as able to take ([SessionCaptureBudget]): it
+// will come to nothing a standby could wait for. The standby takes the place after it and
 // keeps its own session there, rather than wait out its own time and keep
 // nothing.
 //

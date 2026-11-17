@@ -1074,8 +1074,8 @@ type ContinuedSession struct {
 // applied within the publisher's five-second wait
 // (statelog.DefaultResolveBudget). Three times that is room for a store having
 // a slow moment; a keep past it is one a slow upload of a large session, an
-// outage or a stopped node is holding, whose own budget runs to minutes
-// ([SessionCaptureBudget]) — which the frame does not wait out.
+// outage or a stopped node is holding, whose own life runs past an hour at the
+// floor ([captureLife]) — which the frame does not wait out.
 const relaunchCaptureWait = 15 * time.Second
 
 // ContinuedCapture is the session a relaunch of turnID continues — the kept
