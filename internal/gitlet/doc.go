@@ -272,7 +272,8 @@
 // [NeedPerson] seeks — a home refreshing it, merging nothing, once a review,
 // an ask, an answer to findings, facts or the change's own row moves them
 // ([Mergeability.Refresh]). It reads the change's own review objects, never a
-// decision of the tracker's.
+// decision of the tracker's. A listing narrowed to [BucketReady] seeks the
+// stored answer too, as [NeedPerson] does.
 //
 // AND IT IS JUDGED UNDER ITS TARGET'S MERGE GATE (gatejudge.go): every reader
 // and every decide of a merge asks ONE pure [JudgeGate] over the facts one

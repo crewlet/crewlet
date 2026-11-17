@@ -2050,12 +2050,15 @@ merge stands in one bucket:
 
 **A change stands in one bucket**: the one its first unmet precondition
 names, in the order a change moves through, else its first `computing`
-one's ([Merge readiness](#merge-readiness)). So no change is in two buckets,
-and the sentence its readiness leads with matches the bucket it is listed
-under. The merge authority is set aside: it is the one precondition that
-depends on who asks, so a bucket lists the same changes whoever asks, each
-still held to the reader's grant, and a ready change a seat may not merge
-itself is listed as ready, its readiness naming who merges it.
+one's ([Merge readiness](#merge-readiness)). So no change is in two buckets.
+The merge authority is set aside: it is the one precondition that depends
+on who asks, so a bucket lists the same changes whoever asks, each still
+held to the reader's grant. For a reader who may merge the change, the
+sentence its readiness leads with matches the bucket it is listed under.
+For one who may not, an unmet merge authority comes before a check still
+queued or running, so the readiness can lead with who merges the change
+while it is listed under `checks`, and a ready change it may not merge is
+listed as ready, its readiness naming who merges it.
 
 **Some open changes stand in none**: a draft, a change whose facts its home
 has not recorded yet, one that does not merge cleanly, and one its target's
