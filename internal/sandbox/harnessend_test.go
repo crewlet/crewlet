@@ -7,6 +7,7 @@ import (
 	"maps"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -270,6 +271,100 @@ func TestAReadIsNeverRecordedOverAWordThisBuildDoesNotKnow(t *testing.T) {
 	}
 }
 
+// EACH OF A TAKE'S RECORDS IS GIVEN ITS OWN GRACE. The read that collects a job
+// makes two records after its take, one after the other, in the room it leaves
+// them before its pause (Coordinator.takeRecordsRoom): the take's own (the
+// digest it leaves in the box where it spooled the session, or the stamp of its
+// refusal) and how the job's harness ended, each asked under a grace of its
+// own from where it is asked. A room of one grace for the pair let a take at
+// its bound whose own record took its whole room leave the harness end a grace
+// short of its own, and none at all in the store's own process, where the room
+// was that grace alone: cut where the read's room for its records ends, and
+// said as unrecorded.
+// So here, in that process, the take runs to a second inside its deadline, its
+// digest answers a second inside its grace, and the store answers the harness
+// end a second inside its own: the record lands, and so does the digest.
+//
+// IN A SYNCTEST BUBBLE, where each answer comes exactly when its wait ends and
+// the read's deadline is exact arithmetic.
+//
+// Mutation: count one grace for the pair in takeRecordsRoom, and the harness
+// end is cut at the read's room for it and goes unrecorded.
+func TestEachOfATakesRecordsIsGivenItsOwnGrace(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		var slow *answeredMarks
+		rig, _, _ := keepingRigWith(t, func(o *CoordinatorOptions) {
+			slow = &answeredMarks{PendingStore: o.Pending}
+			o.Pending = slow
+		})
+		// THE STORE ANSWERS A SECOND INSIDE THE RECORD'S GRACE, whatever the
+		// deadline it was asked under: one past that deadline is cut.
+		slow.answer = func(ctx context.Context) error {
+			select {
+			case <-time.After(discardGrace - time.Second):
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		rig.launchKept(t, "t1")
+		session := rig.runner.Session
+		// THE TAKE AT ITS BOUND, a second inside its deadline, wherever the
+		// read's room for its records puts that.
+		session.Taking = func(take context.Context) {
+			deadline, ok := take.Deadline()
+			if !ok {
+				t.Error("the take was asked under no deadline, want the one the read's room sets")
+				return
+			}
+			time.Sleep(time.Until(deadline) - time.Second)
+		}
+		// AND ITS DIGEST, a second inside its own grace.
+		session.Keeping = func(context.Context) { time.Sleep(discardGrace - time.Second) }
+		rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1", Captured: &session.Archive})
+		// A READ WITH A DEADLINE, in the store's own process: its pause keeps a
+		// grace before it, its records the room before that, and its take the
+		// ten seconds before those.
+		read, cancel := context.WithTimeout(t.Context(), 10*time.Second+3*discardGrace)
+		defer cancel()
+		if _, _, err := rig.coordinator.readBox(read, rig.get("t1"), BoxReadCollect); err != nil {
+			t.Fatalf("readBox: %v", err)
+		}
+		rig.awaitKeeps()
+		if got := session.Kept(); got != 1 {
+			t.Errorf("the take's digest was recorded in the box %d times, want once", got)
+		}
+		if got := slow.landed.Load(); got != 1 {
+			t.Errorf("the store took %d records of how the job's harness ended, want one, given its whole "+
+				"grace after the take's own record had its own", got)
+		}
+		if got := rig.get("t1").Launch.HarnessEnd; got != HarnessEndOwnRun {
+			t.Errorf("the job's record says its harness ended %q, want %q", got, HarnessEndOwnRun)
+		}
+	})
+}
+
+// answeredMarks is a coordination store that answers each record of how a
+// job's harness ended once answer returns, passing it on only where answer
+// returns nil, and counts the records it passed on that landed.
+type answeredMarks struct {
+	PendingStore
+	answer func(ctx context.Context) error
+	landed atomic.Int32
+}
+
+func (a *answeredMarks) MarkHarnessEnd(ctx context.Context, turnID, launch string, read EndRead) (bool, error) {
+	if err := a.answer(ctx); err != nil {
+		return false, err
+	}
+	marked, err := a.PendingStore.MarkHarnessEnd(ctx, turnID, launch, read)
+	if err == nil && marked {
+		a.landed.Add(1)
+	}
+	return marked, err
+}
+
 // heldMarks is a coordination store that holds every record of how a job's
 // harness ended until the context it was asked under ends, as a store slow past
 // every deadline does, noting for each how many sessions the runner had taken by
@@ -314,7 +409,7 @@ func (h *heldMarks) asked() []heldMark {
 // its take is done, under a deadline no later than its own less the pause's
 // grace, and a store that never answers it still leaves the box its pause.
 //
-// IN A SYNCTEST BUBBLE: the take spends twenty seconds of the bubble's clock, so
+// IN A SYNCTEST BUBBLE: the take spends fifty seconds of the bubble's clock, so
 // the record's own grace, counted from where it is asked, ends past the read's
 // room for it, and the store holds the record until its deadline, which the
 // bubble's clock reaches exactly.
@@ -332,12 +427,13 @@ func TestAJobsHarnessEndIsRecordedAfterItsTakeWithinTheReadsRoom(t *testing.T) {
 		held.taken = func() int { return len(rig.runner.Takes()) }
 		rig.launchKept(t, "t1")
 		session := rig.runner.Session
-		session.Taking = func() { time.Sleep(20 * time.Second) }
+		session.Taking = func(context.Context) { time.Sleep(50 * time.Second) }
 		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
 		// THE READ'S DEADLINE: its take's own ends five seconds in, and the
-		// room it leaves its records thirty-five seconds in, before a record
-		// asked once the take is done would end by its own grace.
-		deadline := time.Now().Add(2*discardGrace + 5*time.Second)
+		// room it leaves its records, a grace for each of the two, sixty-five
+		// seconds in, before a record asked once the take is done would end by
+		// its own grace.
+		deadline := time.Now().Add(3*discardGrace + 5*time.Second)
 		ctx, cancel := context.WithDeadline(t.Context(), deadline)
 		defer cancel()
 		if _, _, err := rig.coordinator.readBox(ctx, rig.get("t1"), BoxReadCollect); err != nil {

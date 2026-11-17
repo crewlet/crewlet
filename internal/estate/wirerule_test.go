@@ -511,6 +511,43 @@ func TestACountsPartThisBuildDoesNotDeclareIsRefusedUnread(t *testing.T) {
 	}
 }
 
+// A VIEWED MARK THIS BUILD DOES NOT DECLARE IS REFUSED UNREAD: a code.mark whose files gesture
+// carries a member this build does not know is refused naming it, the code half never asked, so the
+// walk asks another; the gesture whole is asked once.
+// Mutation: decode the arguments without RejectUnknownMembers, and the code half is asked, red.
+func TestAViewedMarkThisBuildDoesNotDeclareIsRefusedUnread(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a")
+	node := f.nodes["data-a"]
+	start := f.start(t)
+	ask := func(extra string) reply {
+		return askSigned(t, start, "data-a", request{Op: opCodeMark.spec.name, Args: json.RawMessage(
+			`{"op_id":"op-viewed","asker":{"kind":"operator","operator_id":"pat:ada","seat":"founder"},` +
+				`"handle":"founder","seen":{"stream":"` + codeStream + `","generation":1,"seq":3},` +
+				`"files":{"repo_id":"` + repoID(1) + `","change_id":"` + repoID(2) + `",` +
+				`"viewed":[{"path":"a.go","blob_oid":"` + strings.Repeat("a", 40) + `","mode":"100644"}]` + extra +
+				`}}`)})
+	}
+	rep := ask(`,"later":true`)
+	var refused *ErrUnknownKeys
+	if err := decodeError(rep.Err); rep.Unserved != "" || rep.Result != nil || !errors.As(err, &refused) ||
+		refused.Op != opCodeMark.spec.name || !slices.Equal(refused.Keys, []string{"args.files.later"}) {
+		t.Fatalf("a viewed mark naming a member this build does not declare was answered %+v, want it refused "+
+			"naming args.files.later", rep)
+	}
+	if node.askedFor(opCodeMark.spec.name) {
+		t.Fatal("the code half was asked a viewed mark this build does not declare")
+	}
+	if rep = ask(""); rep.Err != nil {
+		t.Fatalf("a viewed mark this build declares was refused: %v", decodeError(rep.Err))
+	}
+	node.mu.Lock()
+	defer node.mu.Unlock()
+	if len(node.marks) != 1 || node.marks[0].Files == nil || len(node.marks[0].Files.Viewed) != 1 {
+		t.Fatalf("the code half was asked %+v, want the one gesture whole", node.marks)
+	}
+}
+
 // A QUEUE READ ASKING FOR TRAINS IS ASKED OF A BUILD THAT READS IT: the node whose build does
 // not declare `trains` refuses the read unread, its code half never asked, and the walk asks the
 // next, which answers; a read not asking for them is served by the first node asked.

@@ -1457,6 +1457,10 @@ type ReadQuery struct {
 	// ([ReadAnswer.FindingPaths]), paged by Limit and Cursor; refused on every other kind and beside
 	// a part, detail_only, brief or finding_ids. A key of its own, so an older build refuses it unread.
 	FindingPaths bool `json:"finding_paths,omitempty"`
+	// Viewed asks a `change` read for the asker's own viewed marks on its files ([ReadAnswer.Viewed]),
+	// paged by Limit and Cursor in digest order; refused on every other kind and beside a part,
+	// detail_only, brief, finding_ids or finding_paths. A key of its own, so an older build refuses it unread.
+	Viewed bool `json:"viewed,omitempty"`
 	// Introduced is an `introduced` read's range: REQUIRED for that kind,
 	// refused on every other.
 	Introduced *IntroducedQuery `json:"introduced,omitempty"`
@@ -1658,12 +1662,17 @@ type ReadAnswer struct {
 	Reviews   []ReviewRow   `json:"reviews,omitempty"`
 	Findings  []FindingRow  `json:"findings,omitempty"`
 	// FindingPaths is a `finding_paths` page of a change ([ReadQuery.FindingPaths]).
-	FindingPaths []FindingPathRow       `json:"finding_paths,omitempty"`
-	Routed       *RoutedPage            `json:"routed,omitempty"`
-	Introduced   []IntroducedRow        `json:"introduced,omitempty"`
-	Due          []CompactionCandidate  `json:"due,omitempty"`
-	Publish      []PublicationCandidate `json:"publish,omitempty"`
-	Expunge      []ExpungeCandidate     `json:"expunge,omitempty"`
+	FindingPaths []FindingPathRow `json:"finding_paths,omitempty"`
+	// Viewed is a `viewed` page of a change ([ReadQuery.Viewed]): the asker's own marks.
+	Viewed []ViewedRow `json:"viewed,omitempty"`
+	// ViewedKey is the change's repository's viewed key, beside a Viewed page holding a mark: what the
+	// asker's screen digests the files it shows under, to match the page.
+	ViewedKey  ViewedKey              `json:"viewed_key,omitempty"`
+	Routed     *RoutedPage            `json:"routed,omitempty"`
+	Introduced []IntroducedRow        `json:"introduced,omitempty"`
+	Due        []CompactionCandidate  `json:"due,omitempty"`
+	Publish    []PublicationCandidate `json:"publish,omitempty"`
+	Expunge    []ExpungeCandidate     `json:"expunge,omitempty"`
 	// Imports is an `imports_due` read's page, Mirrors a `mirrors_due`
 	// read's.
 	Imports []ImportCandidate `json:"imports,omitempty"`

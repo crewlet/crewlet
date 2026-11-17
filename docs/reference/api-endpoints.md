@@ -963,7 +963,7 @@ told they lead nobody goes looking for an authority they already hold.
 | `worklet` | The reads under `/worklet/*`, the [write surface's](#the-human-write-surface) item routes, a project's files (`GET`/`PUT /worklet/files/…`; removing one is the project lead's), every `work_*` question, the inbox's tracker half and the socket's `inbox_changed` push for it, and `/operator/mcp`'s Worklet half. Some verbs also ask a RELATION beside the app: re-routing, a project's policy and taking an item out of circulation are its project lead's, and a person's inbox, queue and person view are their own and their lead's |
 | `doclet` | The reads under `/doclet/pages/*` and `/containers`, the page questions, and writing Doclet's pages. A rename, the trash and a restore are also the container's lead's or the page's creator's; see [the write surface](#the-human-write-surface) |
 | `chatlet` | The reads under `/chatlet/*`, every `chat_*` question, the socket's eight `chat_*` pushes, and the chat tools of `/operator/mcp` and `/operator/act` — each made **as a seat**, so a principal acting as itself is refused them `unseated` whatever else it holds, and which room it reaches is the chat domain's own rule rather than a permission (see [Chatlet](#chatlet)). A room's horizon, an erase and a prune are `admin`'s instead, with a recent proof; see [A chat erase, prune or horizon](#a-chat-erase-prune-or-horizon) |
-| `gitlet` | Every door to the company's code ([ADR-0110](../../adr/0110-reaching-a-repository-takes-the-gitlet-permission.md)): git under `/git/`, the reads under `/gitlet/*` and every `code_*` question but who read a repository and the Gitlet nodes' cache report, the inbox's code half, `code_mark_inbox` and the socket's `inbox_changed` push for that half, a turn's `code_change` origin, and the code tools of `/operator/mcp` and `/operator/act`. A principal without it is refused `403 unauthorized` naming `gitlet` before any repository is read. Behind it, WHICH repository and what on it is the repository's grant ([Gitlet](#gitlet-git-and-gitlet)): a person maintains every one, a credential bound to no seat reads every one and pushes none. Who read a repository (`GET /gitlet/repos/{name}/readers`, `code_repo_readers`), a verify (`/gitlet/repos/{name}/verify`) and `code_status` are `admin`'s instead |
+| `gitlet` | Every door to the company's code ([ADR-0110](../../adr/0110-reaching-a-repository-takes-the-gitlet-permission.md)): git under `/git/`, the reads under `/gitlet/*` and every `code_*` question but who read a repository and the Gitlet nodes' cache report, the inbox's code half, `code_mark_inbox`, `code_mark_viewed` and the socket's `inbox_changed` push for that half, a turn's `code_change` origin, and the code tools of `/operator/mcp` and `/operator/act`. A principal without it is refused `403 unauthorized` naming `gitlet` before any repository is read. Behind it, WHICH repository and what on it is the repository's grant ([Gitlet](#gitlet-git-and-gitlet)): a person maintains every one, a credential bound to no seat reads every one and pushes none. Who read a repository (`GET /gitlet/repos/{name}/readers`, `code_repo_readers`), a verify (`/gitlet/repos/{name}/verify`) and `code_status` are `admin`'s instead |
 | `admin` | Running the company and the engine, and **host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `providers.llm` model (a harness the host runs) and a `direct` cell, an entry's `run_in` or `providers.sandbox.default_run_in`, which runs agent seats' executors there as fully permissioned harnesses), so a holder can run anything there and read whatever a process there can, the keyring included (see [Identity and Access](../concepts/identity-and-access.md#what-admin-runs)). Every route under `/config*` (the org chart's leads may also read and write what is inside the units they lead: [A lead edits their own team](#a-lead-edits-their-own-team)), `/integrations`, the administrator's reading of `/mcp-servers`, `/mcp-servers/{name}` and `/mcp-catalogue` and a restart (`POST /mcp-servers/{name}/retry`), `/setup`, every `/secrets` route, every `/iam/*` route about anybody but the caller, the deployment's own controls (`/fleet`, `/fleet/broker*`, every `/worklet/retention*` route, `/feeds/dead-letters*`, `/backup`, `/backups`), the company-wide trail (`/events*`, the socket's `event` push and the snapshot's `events` section, the turn, phase, trace and A2A-channel questions, `/iam/audit`, `/artifacts/trail`), a seat's resolved model chain and tool sources on `/org`, the workspace catalogue's writes, a page in the tool-skills container, the artifacts' quota counters (`GET /artifacts/usage`), the three purges (`/worklet/items/{key}/purge`, `/doclet/pages/{id}/purge`, `/artifacts/{id}/purge`) and chat's three destructions (`/chatlet/channels/{channel_id}/erase`, `/prune` and `/retention`). It **includes every app**, and it is the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
 | `audit.seat.read` | One seat's own trail — `/agents/{id}/memory`, `/agents/{id}/memory/episodes/{episode}`, `memory_overview` (filtered to the seats the caller may read), `turns?seat=` and `phases?seat=`, an executor's tail (`/executors/{turn_id}/tail`), and the seat's executor sessions with each one's transcript (`/agents/{id}/sessions`, `/agents/{id}/sessions/{turn_id}`) — decided per seat: **its lead**, or `admin` |
 
@@ -6993,11 +6993,12 @@ land, and nothing a call does not name changes:
 |---|---|
 | `mark_inbox` | `read`, `unread`, `unsnooze` — lists of the `record_id`s `work_inbox` returns; `snooze` — `[{record_id, until}]`, `until` RFC3339, in the future and at most a year away; `read_through` — a log position, `<stream>@<generation>:<sequence>`, that only ever moves forward; `primary_reasons` — omitted leaves the choice, `[]` takes the default back; `seen` (optional) — how far you read the tracker's log, `CREWLET_TRACKER_LOG@<generation>:<sequence>`, the `position` of the newest work notice you were shown, or the tracker source's `newest`: a mark is decided by whichever data node it is asked of, which may not yet have applied a notice the page was read with elsewhere, so the decide waits for `seen` first, and a node that cannot reach it within the write budget answers `unavailable` (behind) and appends nothing — the same call lands once it has — rather than refusing a notice you were shown as no change the company recorded. Without it the mark waits for nothing, and a notice the deciding node has not reached is refused `invalid`; a `seen` on another log is refused `invalid`. The dashboard sends each notice's own position, the furthest of the notices an answered question marks, and "Mark all read" the position it reads through; `PUT /worklet/people/{handle}/inbox` takes it in its body likewise. A notice named twice in one call is refused `invalid`; a list the call would leave past 256 entries is refused `inbox_full`. |
 | `code_mark_inbox` | The same arguments as `mark_inbox`, over your own CODE notices — the `record_id`s `inbox` answers under `source: "code"`, and a `read_through` on the code log (`CREWLET_CODE_LOG@<generation>:<sequence>`); `primary_reasons` names Gitlet's reasons (`mention`, `review_requested`, `changes_requested`, `checks_failed`, `target_broken`, `conflicted`, `dequeued`, `finding_replied`, `ready_to_merge`, `merged`, `review_submitted`, `re_review`, `thread`, `watcher`, `lead_fallback`). Each domain keeps the marks over its own notices on its own log, so a position on one says nothing of the other's. `seen` (optional) is how far you read the code log, `CREWLET_CODE_LOG@<generation>:<sequence>` — the `position` of the newest code notice you were shown, or the code source's `newest`: a mark is decided by whichever data node it is asked of, which may not yet have applied a notice the page was read with elsewhere, so the decide waits for `seen` first, and a node that cannot reach it within the write budget hands the mark to the next one rather than refusing a notice you were shown as none of yours. Without it the mark waits for nothing, and a notice the deciding node has not reached is refused `invalid`; a `seen` on another log is refused. The dashboard sends each notice's own position, and "Mark all read" the position it reads through. Your own record alone, as the human seat you hold: a mark of anybody else's — whatever authority the caller holds — and a record that reached somebody else are refused. It takes `gitlet`, as Worklet's marks take `worklet`: without it no code notice is yours to list, count or mark. Offered where the company hosts code. |
+| `code_mark_viewed` | `repo` and `change`, the change; `viewed`, the files to mark, each `{path, blob_oid, mode}`: the path as `code_get_change` part=files names it and that file's `new_oid` and `new_mode` from the same answer, neither for a file the change deletes; `unviewed`, the paths whose mark to take back; `seen` (optional), the `position` the change was read at. At most 32 files a call. A mark stays while later revisions give the file the same object id and mode, and reads unviewed once either changes; only a draft or open change keeps marks (a closed or merged one is refused `conflict`), and a person holds at most 2 000, the oldest going first. The caller's own record alone; a seat is never offered it. |
 | `artifact_mark_inbox` | The same arguments as `mark_inbox`, over your own COMMENT notices: the `record_id`s `inbox` answers under `source: "artifacts"`, a `read_through` and a `seen` on the artifacts log (`CREWLET_ARTIFACTS_LOG@<generation>:<sequence>`), and `primary_reasons` naming the comment reasons (`owner`, `assignee`, `mention`, `participant`; the default primary half is `owner`, `mention` and `assignee`). Your own record alone, as the human seat you hold, and no app: a comment is a relation to an artifact, never an app. Served beside the artifacts tools, and no seat is given it. |
 | `set_pins` | `views` and `favorites`, each `{add, remove}` or `{set}` — never both, and a bare list is refused naming the shape. The caps are held against the list the change would leave. |
 | `set_priorities` | `handle`, `items` — the whole order, most important first — and `if_match`, the `version` `get_person` answered: given, a reorder against an older record is refused `stale_version`. |
 
-Plus **twenty-nine no seat is given**: `list_work_views`, `save_work_view`,
+Plus **thirty no seat is given**: `list_work_views`, `save_work_view`,
 `delete_work_view`, `write_work_catalogue`, `get_person`, `work_inbox`,
 `mark_inbox`, `set_pins`, `set_priorities`,
 `remove_work_item`, `restore_work_item`,
@@ -7013,7 +7014,8 @@ and, beside the code reads and on their terms,
 [`code_repo_readers`](#get-gitletreposnamereaders), who read a `visibility: unit`
 repository, and beside the code writes `code_mark_inbox`, a person's marks
 over their own code notices: a seat is woken, never shown an inbox, so it has
-none to mark. A view is furniture (a name, a shape
+none to mark; and `code_mark_viewed`, the files of a change a person marked
+viewed: a seat reviews a change whole and keeps none. A view is furniture (a name, a shape
 and a filter, arranged so a person finds the same question tomorrow), and a
 seat's job is the work rather than the furniture around it. And the
 catalogue is the company's own vocabulary: a seat adding a type so its own
@@ -10282,6 +10284,21 @@ at most 32, and `omitted`), each reviewer row `at`, when the record that last
 moved it landed (absent past the notices' horizon), and each finding
 `raised_at`, when the review that raised it landed.
 
+`?part=viewed` on `GET /gitlet/repos/{name}/changes/{n}` answers `viewed`: the
+files the asker marked viewed with `code_mark_viewed`, in `path_digest` order,
+each with `path_digest`, `file_digest` and `at`, and beside a page that holds
+one, `viewed_key`, the repository's key in lowercase hex (`?limit=` 1 to
+1 000, unset or `0` is 500, and `?cursor=`, a digest). `path_digest` is the
+HMAC-SHA256 under the key of the path's UTF-8 bytes, and `file_digest` that of
+the path, a NUL byte, the object id, a NUL byte and the mode the mark was made
+at (both empty for a file the change deletes), each in lowercase hex. A mark is
+current while the revision shown gives the file a `file_digest` equal to the
+mark's. A person's own alone: a seat or a credential bound to no seat is
+answered none, and so is a change that is closed or merged; a read
+Ask Crewlet makes for a person is answered the marks without the key.
+`revision`, `file` or `context` beside it is `400 bad_params`. An older data
+node refuses it and another answers.
+
 A part read by object id — `files`, `diff`, and `findings`' placing — reads
 the change's rows first, at the caller's freshness, then every other row it
 needs at `session` floored at that first read's position, and asks the
@@ -10332,7 +10349,9 @@ discussed and answered through the code tools — a seat's, or a person's on
 made as the human seat they hold — and every record those writes leave tells
 the seats and people it concerns: a seat is woken, and a person's notice is
 read through the composed [`inbox`](#queries) question and marked with
-`code_mark_inbox` ([Who a change wakes](../concepts/gitlet.md#who-a-change-wakes)).
+`code_mark_inbox` ([Who a change wakes](../concepts/gitlet.md#who-a-change-wakes)),
+and a change's files are marked viewed with `code_mark_viewed`
+([Viewed files](../concepts/gitlet.md#viewed-files)).
 The steps a person takes are [Review a
 change](../guides/gitlet.md#review-a-change).
 
@@ -11102,8 +11121,10 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   has neither taken its final capture nor begun its turn; its capture is still
   being kept, or its record was sent and never answered, which a relaunch asks
   the executor log for again before it decides, continuing the capture where it
-  landed (until the capture's object is past the twelve hours a record may name
-  it in, when the ask refuses it unasked); what the launch is launched on
+  landed (until fourteen hours have passed since the capture's object was
+  minted, on the reading node's clock: the twelve a record may name it in,
+  past which the executor log refuses the record on its own clock, and the two
+  any two machines' clocks may stand apart); what the launch is launched on
   cannot be said (every member of
   the seat's chain sitting out its plan, no node holding the seat, the node
   holding it not answering); only the resume of a collected job decides the
@@ -13322,7 +13343,10 @@ it, for a person's stop. Such a run is over, and its `status` is the one it
 was ended in: its record waits only for the ending's last steps, which on an
 engine that records every turn's end include [recording that
 end](../concepts/turn-engine.md#how-a-turn-ends-on-the-executor-log) once the
-turn's captures have settled, and can take minutes. The seat's next work
+turn's captures have settled, and can take minutes, and up to about three
+hours and fifty minutes from the moment the end first sees a read standing
+by for one of them, where a store answers each change of a run's record at
+the slowest pace a link is allowed. The seat's next work
 waits behind it. `answerable_in_chat` is `false`
 for a run whose turn was triggered by something other than an inbound
 message — a schedule's fire, a task assignment, an A2A wake — because the

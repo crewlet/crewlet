@@ -604,7 +604,9 @@ var allowedReplicatedWriter = []allowance{
 			"row with its log and its horizon, the home's dispatch of a " +
 			"change head under its target's checks file (apply_dispatch.go), " +
 			"a person's marks over their own code notices on their own " +
-			"subject (apply_marks.go), and the counts of a repository's " +
+			"subject (apply_marks.go), a person's viewed files of a change on " +
+			"their own subject and a repository's viewed key on its own " +
+			"(apply_viewed.go), and the counts of a repository's " +
 			"changes and their tallies by owner, and their re-derivation " +
 			"(apply_counts.go), and the repositories tallied by owner, " +
 			"visibility, kind and status (apply_repotallies.go).",

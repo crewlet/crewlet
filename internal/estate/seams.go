@@ -1439,7 +1439,8 @@ func (c CodeSeam) Converse(ctx context.Context, w gitlet.ConversationWrite) (git
 // notices, and raises this node's SESSION floor past the record it landed in —
 // the person's own write, which their next read of their inbox must see on
 // whichever node answers it. A mark answered UNCHANGED landed no record, and
-// raises nothing.
+// raises nothing. A gesture over the files of one change they read
+// (gitlet.MarkWrite.Files) is asked the same way.
 func (c CodeSeam) Mark(ctx context.Context, w gitlet.MarkWrite) (gitlet.MarkResult, error) {
 	out, err := call(ctx, c.r, opCodeMark, nil, w)
 	if !out.Unchanged && (out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending) {

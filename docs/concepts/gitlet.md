@@ -2185,6 +2185,13 @@ changes](#reading-changes)).
   path order, 500 a page and 1 000 at most: what a changed file's badge
   counts. It is asked by a key of its own, never as a part, so a data node
   that predates it refuses it and another answers.
+- **The reader's viewed files** (`viewed`): the files they marked viewed on the
+  change, each as two digests under its repository's viewed key (`path_digest`
+  of the path, `file_digest` of the path with the object id and mode it was
+  marked at) and when, with the key beside a page that holds one, 500 a page
+  and 1 000 at most; none for a seat, a credential bound to no seat, or a
+  change that ended ([Viewed files](#viewed-files)). It is asked by a key of
+  its own, so a data node that predates it refuses it and another answers.
 
 ### Asking for review
 
@@ -2384,6 +2391,50 @@ sentence:
 `crewlet.code.conversation.writes` counts every write of a conversation a
 node's change writer was asked to decide, by its write and what became of it
 (the [metrics reference](../reference/metrics.md)).
+
+### Viewed files
+
+A person marks the files of a change **viewed**, one gesture at a time: the
+Viewed toggle on a change's files, or `code_mark_viewed` from their own
+assistant. The marks are their own record, kept on the code log beside their
+inbox's marks; a seat, a credential bound to no seat and anybody marking
+another person's files are refused. A seat reviews a change whole and keeps
+none.
+
+- **A mark is a file at a state.** Each file is marked at the object id and
+  mode the revision the person read gives it, or with neither for a file the
+  change deletes. A mark is current while the revision shown gives the file
+  that object id and that mode, so it survives a revision that leaves the file
+  alone, and the file reads unviewed once a revision changes either; marking it
+  again marks the new ones. A revision that only moves the base under a file
+  leaves its mark.
+- **A mark keeps no path, object id or mode.** It keeps two HMAC-SHA256
+  digests under a key of its repository's own, 32 random bytes recorded on the
+  repository the first time any of its files is marked: one of the path, and
+  one of the path with the object id and the mode. A screen digests the files
+  it shows under the same key and compares; the read answers the key to the
+  person beside their marks, and never to Ask Crewlet. A repository's purge
+  deletes its key, after which its changes' marks, which are each person's and
+  no purge removes, name no file to anybody once the code log is trimmed past
+  the key's record, which it keeps as it keeps the repository's other records
+  ([Deletion and purge](#deletion-and-purge)).
+- **Only a draft or open change takes marks.** A closed or merged change reads
+  none and refuses new ones, and the person's next mark forgets them; a change
+  reopened before then shows its old marks again, each current only where its
+  file is unchanged. A purged change's marks are left to the cap.
+- **A gesture names at most 32 files, and a person holds at most 2 000 marks**,
+  the oldest dropped past them. Marking a file again at a new object id or
+  mode makes its mark the newest; marking it again as it stands changes
+  nothing, unless the same gesture changes another mark, which makes both the
+  newest.
+- **A mark is decided by a data node holding nothing of the change's
+  repository back**, so a change opened or reopened a moment ago is never
+  refused as ended by a node behind it; the mark waits for the position its
+  change was read at.
+- **During an upgrade** a data node of an older build holds viewed records
+  back, and the key record of a repository first marked during it with that
+  repository's later records behind it, until it is upgraded; the router asks
+  a current node meanwhile.
 
 ---
 
@@ -3410,6 +3461,8 @@ asks of a live repository's unreachable objects
   with a current node; on a fleet whose only worker data node is stuck, every
   purge waits for its apply to succeed.
 
+The last step also deletes the repository's [viewed key](#viewed-files).
+
 A push to a repository that is not there to take it is refused
 `repo_deleted`, and what follows the code says which of four states the
 committer found, because each has its own remedy:
@@ -3428,6 +3481,13 @@ later. The code log itself is trimmed like every other log (see
 [Retention](../guides/retention.md)), and a node whose copy of it is out of
 service declines the duty rather than purge from rows the fleet may not agree
 with.
+
+A person's viewed marks on a purged repository's changes are the person's, not
+the repository's: no purge removes them, and they hold each file's path, object
+id and mode only as digests under the key the purge deleted, so they name no
+file once the code log is trimmed past the key's record; they are never answered once the change is gone, and leave
+with the person's oldest marks past their cap ([Viewed files](#viewed-files)).
+Nothing sweeps the marks of a person who marks nothing more.
 
 ### The ref lifecycle
 

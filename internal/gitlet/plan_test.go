@@ -384,6 +384,9 @@ var sortingStatements = map[string]string{
 	"due rechecks": "one repository's live changes behind a moved target, at most one a live branch " +
 		"(code_changes_open_idx), so MaxRefsPerRepo bounds them: no index orders a repository's changes by " +
 		"when their merge was recorded without one written by the records of two subjects (changesdue.go)",
+	"drop a person's oldest viewed marks": "one person's own marks, at most MaxViewedFiles + MaxViewedPerMark, " +
+		"sorted only when a record takes them past the cap: no index orders a person's marks by when they were " +
+		"made without an entry paid on every mark",
 	"every repository's ejections counted": "at most MaxQueueCounted index entries of the day's ejections: " +
 		"the inner LIMIT bounds what the group sorts",
 	"every repository's live entries counted": "at most MaxQueueCounted index entries of the live entries: " +
@@ -429,6 +432,8 @@ const (
 	pushDaysKey     = "sqlite_autoindex_code_push_days_1"
 	pusherDaysKey   = "sqlite_autoindex_code_pusher_days_1"
 	repoKindsKey    = "sqlite_autoindex_code_repo_kinds_1"
+	viewedFilesKey  = "sqlite_autoindex_code_viewed_files_1"
+	viewedKeysKey   = "sqlite_autoindex_code_viewed_keys_1"
 )
 
 // registeredStatements is every statement this package spells against its
@@ -1423,6 +1428,26 @@ func registeredStatements() map[string]statement {
 			[]any{`[["record-1","repo-1-change-000001"],["record-2","repo-1-change-000002"]]`, "founder"},
 			[]string{"SCAN json_each AS j",
 				"sqlite_autoindex_code_notifications_1 (record_id=? AND change_id=? AND recipient=?)"}},
+		"a repository's viewed key": {viewedKeySQL, []any{"repo-1"}, []string{viewedKeysKey + " (repo_id=?)"}},
+		"a person's viewed marks a gesture names": {viewedNamedSQL,
+			[]any{"founder", "repo-1-change-000001", `["digest-a","digest-b"]`},
+			[]string{"SCAN json_each AS j", viewedFilesKey + " (handle=? AND change_id=? AND path_digest=?)"}},
+		"the ended changes a person's marks name": {viewedEndedSQL, []any{"founder", MaxViewedForget},
+			[]string{"COVERING INDEX " + viewedFilesKey + " (handle=?)", changeKey + " (id=?)"}},
+		"a change's viewed marks": {viewedPageSQL, []any{"founder", "repo-1-change-000001", 500},
+			[]string{viewedFilesKey + " (handle=? AND change_id=?)"}},
+		"a change's viewed marks after": {viewedPageAfterSQL,
+			[]any{"founder", "repo-1-change-000001", "digest-a", 500},
+			[]string{viewedFilesKey + " (handle=? AND change_id=? AND path_digest>?)"}},
+		"forget a person's marks of ended changes": {forgetViewedSQL,
+			[]any{"founder", `["repo-1-change-000001"]`},
+			[]string{"SCAN json_each AS j", viewedFilesKey + " (handle=? AND change_id=?)"}},
+		"take back a person's viewed marks": {unviewSQL, []any{"founder", "repo-1-change-000001", `["digest-a"]`},
+			[]string{"SCAN json_each AS j", viewedFilesKey + " (handle=? AND change_id=? AND path_digest=?)"}},
+		"count a person's viewed marks": {viewedCountSQL, []any{"founder"},
+			[]string{"COVERING INDEX " + viewedFilesKey + " (handle=?)"}},
+		"drop a person's oldest viewed marks": {dropOldestViewedSQL, []any{"founder", 3},
+			[]string{viewedFilesKey + " (handle=?)"}},
 		"whom a change reached": {changeNoticesSQL, []any{"repo-1-change-000001"},
 			[]string{"code_notifications_change_idx (change_id=?)"}},
 		"whom a change reached after": {changeNoticesAfterSQL, []any{"repo-1-change-000001", 3000},
@@ -1495,6 +1520,7 @@ func registeredStatements() map[string]statement {
 		"publish counters":      {publishCountersSQL, []any{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"purge all layer parts": {purgeAllLayerPartsSQL, []any{"repo-1"}, []string{layerPartsKey + " (repo_id=?)"}},
 		"purge all layers":      {purgeAllLayersSQL, []any{"repo-1"}, []string{layersKey + " (repo_id=?)"}},
+		"purge the viewed key":  {purgeViewedKeySQL, []any{"repo-1"}, []string{viewedKeysKey + " (repo_id=?)"}},
 		"layer parts of":        {layerPartsOfSQL, []any{"repo-1"}, []string{layerPartsKey + " (repo_id=?)"}},
 		"publication due first": {publicationDueFirstSQL, []any{MaxSnapshotItems}, []string{"code_repos_unpublished_idx (published_at>=?)"}},
 		"publication due after": {publicationDueAfterSQL, []any{30, 30, "repo-2", MaxSnapshotItems}, []string{"code_repos_unpublished_idx (published_at>=?)"}},

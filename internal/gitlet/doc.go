@@ -325,6 +325,11 @@
 // record behind it landed (one notice of that record, none past the notices' horizon), a finding
 // when its review landed, and [ReadQuery.FindingPaths] counts its findings by path.
 //
+// A PERSON'S VIEWED FILES (viewed.go): kept on their own subject by HMAC-SHA256 digests under a key
+// their repository records before its first mark ([OpViewedKey]) and its purge deletes; the decide,
+// probing the change's repository, carries the ended changes for the apply to forget, the apply drops
+// the oldest past [MaxViewedFiles], and [ReadQuery.Viewed] reads the asker's own with the key.
+//
 // # A change wakes the seats its records concern
 //
 // Every record about a change that concerns anybody carries whom it concerns,
