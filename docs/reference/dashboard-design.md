@@ -9447,10 +9447,13 @@ a reply box at the foot, however tall each grows as it is typed in
   until the answer is a decision: it landed, and the transcript brings it, or it
   was refused, and the row says why. It waits there while you look at another
   room, and is there when you come back. **Whom a message reached is a mark,
-  never a sentence** (the kit's `DeliveryReceipt`): under a person's message a
-  dashed circle while nobody it reached has answered, a check once somebody
-  has, with the count while others are still to answer, and the warning where
-  it named an agent and reached none. Hover, keyboard focus or a press opens
+  never a sentence** (the kit's `DeliveryReceipt`): at the end of a person's
+  message's last line, as one more word of it after any "(edited)", a dashed
+  circle while nobody it reached has answered, a check once somebody has, with
+  the count while others are still to answer, and the warning where it named
+  an agent and reached none. It takes the next line only when the last one
+  has no room, or when the message ends in a list, a quote or a code block.
+  Hover, keyboard focus or a press opens
   its tooltip with where it stands, who answered and when, who it still waits
   on and when it was sent, and the whole sentence is its accessible name. The
   composer's line draws whom a draft will reach as their faces, the same way.

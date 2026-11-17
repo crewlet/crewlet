@@ -384,20 +384,34 @@
   max-width: none;
 }
 
-/* "(edited)" ends the last paragraph's line rather than taking one of its
-   own: only a body that carries the mark runs the paragraph before it
-   inline, and the block before that keeps the gap an inline paragraph
-   cannot take (two block margins collapse to one). */
+/* "(edited)" and the delivery receipt end the last paragraph's line rather
+   than taking one of their own: only a body that carries them runs the
+   paragraph before them inline, and the block before that keeps the gap an
+   inline paragraph cannot take (two block margins collapse to one). */
 .chat-body.has-after > p:nth-last-child(2) {
   display: inline;
 }
 
-.chat-body.has-after > :nth-last-child(3) {
+/* Four classes: the kit's reset of a message's block margins has three, and
+   its sheet lands after this one. */
+.prose.chat-body.has-after > :nth-last-child(3) {
   margin-bottom: var(--crewlet-chat-block-gap);
 }
 
+/* One more word of the line, after a space: the marks wrap together, and
+   only when the line has no room for them. */
 .chat-body-after {
-  margin-left: var(--spacing-1);
+  white-space: nowrap;
+}
+
+.chat-body-after > * + * {
+  margin-inline-start: var(--spacing-1);
+}
+
+/* Centred on the lower-case letters, as text sets an inline mark: its count
+   then stands on the words' baseline. */
+.chat-body-after > .chat-receipt {
+  vertical-align: middle;
 }
 
 .chat-edited {
