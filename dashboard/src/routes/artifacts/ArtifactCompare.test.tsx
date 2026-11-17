@@ -10,7 +10,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { ArtifactCompare } from "./ArtifactCompare.tsx";
 import { Router } from "~/app/router.tsx";
-import { MAX_EDITS } from "~/lib/lineDiff.ts";
+import { MAX_EDITS } from "@crewlethq/ui";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
 import type { ArtifactDetail, ArtifactEntry } from "~/protocol/index.ts";
 
@@ -110,11 +110,11 @@ const mount = (picked: number, against: number) =>
 
 /** A diff's lines as `[kind, path or the older and newer numbers, text]`, in order. */
 function linesOf(diff: HTMLElement): string[][] {
-  return [...diff.querySelectorAll<HTMLElement>(".diff-view__line")].map((line) => [
+  return [...diff.querySelectorAll<HTMLElement>(".crewlet-diff-view__line")].map((line) => [
     line.dataset.kind ?? "",
-    line.querySelector(".diff-view__path")?.textContent ??
-      [...line.querySelectorAll(".diff-view__number")].map((n) => n.textContent).join("|"),
-    line.querySelector(".diff-view__text")?.textContent ?? "",
+    line.querySelector(".crewlet-diff-view__path")?.textContent ??
+      [...line.querySelectorAll(".crewlet-diff-view__number")].map((n) => n.textContent).join("|"),
+    line.querySelector(".crewlet-diff-view__text")?.textContent ?? "",
   ]);
 }
 
@@ -145,6 +145,30 @@ test("the files are compared by digest, and the changed page line by line", asyn
     ["add", "|2", "<p>Final</p>"],
   ]);
   expect(within(lines).getByText("1 unchanged line")).toBeTruthy();
+});
+
+// A FILE IS NAMED ONCE: with two text files changed, the picker names the one
+// compared, and the heading over its lines counts its changes without naming it
+// again. Mutation: name the file in that heading beside the picker, and this is red.
+test("the file the picker names is not named again over its lines", async () => {
+  const query = vi.fn(async (what: string, args: { n?: number }) => {
+    if (what !== "artifact_version") return {};
+    return args.n === 11
+      ? version(11, [file("index.html", "a"), file("app.js", "b", "text/javascript")])
+      : version(12, [file("index.html", "A"), file("app.js", "B", "text/javascript")]);
+  });
+  vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
+  const scripts = [11, 12].map((n) => `/artifacts/${ID}/versions/${n}/files/app.js`);
+  texts[scripts[0]!] = "let a = 1;\n";
+  texts[scripts[1]!] = "let a = 2;\n";
+  try {
+    mount(12, 11);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "1 change" })).toBeTruthy());
+    expect(screen.getAllByText("index.html").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("heading", { name: /index\.html/ })).toBeNull();
+  } finally {
+    for (const path of scripts) delete texts[path];
+  }
 });
 
 // A COMPARISON NOT MADE IS SAID, never drawn: past the line diff's bounds a

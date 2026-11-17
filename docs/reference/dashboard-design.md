@@ -46,7 +46,7 @@ phase is one colour on every chart. `contract/spend.ts`' `PHASE_BANDS` is that
 fold written out by phase, and `internal/api/queries` holds it against the
 engine's in both directions.
 
-There are seven exceptions, and each is held to exactly what makes it one.
+There are eight exceptions, and each is held to exactly what makes it one.
 
 The first is a **third-party app's own mark** on Company › Integrations
 (`VendorMark`, from `@crewlethq/icons`): Slack's four colours,
@@ -133,7 +133,7 @@ filled only from a value that passed the design system's `#rrggbb` gate, never
 from raw CSS; and drawn with an edge of its own, so a colour that matches the
 ground is still a swatch.
 
-The seventh is **code read in Gitlet**: its diffs (`hue="code"`), its code
+The seventh is **code read in Gitlet**: its code
 coloured by kind in its files, diffs and search hits, a change's state pill and
 a branch chip wear the kit's code host colours, each hue a kind beside its
 sign, word or glyph: never done, a fault or an action. A **JSON or YAML record**
@@ -144,9 +144,13 @@ arguments and the company's YAML colour each key, string, number, boolean,
 null and sign in the kit's syntax ink for its kind, and nothing else of the
 code host's family.
 
-Outside Gitlet no diff wears them; the pill, the state's glyph and the chip appear only in
+The pill, the state's glyph and the chip appear only in
 its change rows (a task, a seat, My work, Home's code card), its peek and the
-Inbox's code notice (`styles/diffs.test.ts`, `codehost.test.ts`, `tone.test.ts`).
+Inbox's code notice (`codehost.test.ts`, `tone.test.ts`).
+
+The eighth is **a diff's lines**: every diff of lines tints an added line light
+green and a removed one light red, with its glyph and word beside the tint (see
+[Every diff is tinted](#every-diff-is-tinted)).
 
 **A readiness is a meter of its conditions, each in the tone of where it stands**: met in
 success, measured or waiting on an agent in info, waiting on a person in warning, a failed
@@ -225,40 +229,31 @@ that read as activity, and the fix for that is not a duller hue — it is none.
 `warning` and `danger` are separate because a seat parked on a question and a
 seat that fell over have both stopped, and only one of them is a failure.
 
-### A diff carries no hue outside Gitlet
+### Every diff is tinted
 
-Every diff of lines the dashboard draws is one component,
-`components/DiffView.tsx`, and outside Gitlet no line of it is coloured: Settings ›
-Configuration's Diff lens, a Doclet page's History and its editor's view of a
-colleague's save, a principle somebody saved while it was being written, an artifact's versions compared by file and by line, and an
-MCP server's changed tool under review. A removed line is not a failure and an
-added one is not done, so the state hues are not spent on them; and on a
-screen that also draws a state, a red removed line beside a red failed check
-would make one red mean two things. The design system's own `DiffView`,
-`DiffSummary` and `DiffList` paint an added line in the success state's tint
-and a removed one in the danger state's wherever they are drawn, which is why
-the dashboard draws its own from the package's tokens, and draws none of the
-three.
+Every diff of lines the dashboard draws is the design system's `DiffView`,
+which `components/DiffView.tsx` hands the screens' props (`hunks` for its
+`sections`): Settings › Configuration's Diff lens, a Doclet page's History and
+its editor's view of a colleague's save, a principle saved while it was being
+written, an artifact's versions compared, an assistant's proposal, an MCP
+server's changed tool under review, and every Gitlet change and commit. The
+dashboard keeps no diff renderer, sheet or line comparison of its own
+(`components/DiffView.test.tsx`).
 
-**In Gitlet a diff is code read in a code host** (the seventh exception), so
-every diff it draws passes `hue="code"`: the kit's diff colours tint each
-changed line and its changed run and ink its sign and its numbers, on a band.
-
-A line's kind is said three ways, each enough alone, the tints standing in for
-the surface steps in Gitlet:
+Every one of them, in light and dark, draws an added line on the diff family's
+light green row and a removed one on its light red row, the numbers on a band
+in the sign's ink, an edited run on its word tint and a gap on the hunk row;
+the design system measures the text on each tint at 4.5:1 or more. The diff
+family is its own and never a state: a removed line is not a failure and an
+added one is not done. A line's kind is said three ways, each enough alone:
 
 - **The glyph gutter**: `+` for an added line and `−` for a removed one, with
   *Added* or *Removed* read in its place, because a minus sign is announced as
   anything from "minus" to nothing at all.
-- **Two surface steps off the diff's own ground.** The diff paints the card
-  rung inside the card's hairline wherever it stands, because a rung is right
-  only against the ground it was picked for. An added line is raised one rung
-  (`--color-surface-elevated`) and a removed one sunk one
-  (`--color-surface-background`, the sheet): steps the palette holds three ΔE
-  and 1.5 ΔE off the card in every theme, and opaque rungs, which every text
-  step is measured on.
+- **The tint**: the diff family's row, on the card rung the diff paints for
+  its own ground, where the design system measures it.
 - **The word underline.** Where a removed line and an added line are one line
-  edited, the run of each that differs is underlined (`lib/wordDiff.ts`): ONE
+  edited, the run of each that differs is underlined (`changedRuns`): ONE
   run, between what the two lines share at their start and at their end, in
   whole words, and none at all when all they share is spacing and
   punctuation. A word-by-word diff would mark every word the edit moved past,
@@ -281,10 +276,11 @@ compares two versions of a page by block and then by word, with the line
 diff's own comparison (`compareSequences`) and its bounds, and
 `components/ProseDiff.tsx` renders each block with the dashboard's markdown
 renderer, its changed words in `DocumentDiffAdded` and `DocumentDiffRemoved`.
-It carries no hue either: an added run is underlined on the raised rung and a
-removed one struck in the tertiary ink on the sunk rung, each said in words.
+It is prose rather than lines, so it carries no tint: an added run is underlined
+on the raised rung and a removed one struck in the tertiary ink on the sunk
+rung, each said in words.
 
-Two texts are compared by the dashboard's one line diff, `lib/lineDiff.ts`,
+Two texts are compared by the design system's line diff, `compareLines`,
 which every diff, preview and merge of a text compares with: the shortest edit
 between their lines (Myers' algorithm, the one git's own diff runs), in linear
 space, over lines interned to numbers, with the stretch the two share at their
@@ -292,11 +288,7 @@ start and end walked once and compared no further, so what a comparison costs
 follows what changed rather than the length of the text. It is bounded, and
 says so: past 20,000 lines a side in what changed, or 4,000 lines removed and
 added, two texts are NOT compared, and the diff is a sentence saying which in
-place of every row, never a comparison drawn that was not made. The design
-system's own `diffLines` is why that matters: it fills a table quadratic in
-the two texts, so it stops at 2,000 lines a side, and there it answers every
-line of the older text removed and every line of the newer added, which drew a
-page edited on one line as a page rewritten.
+place of every row, never a comparison drawn that was not made.
 
 A diff of a text is numbered in both versions, in Geist Mono at the document's
 13px. A diff of SETTINGS — a configuration's paths, an artifact's files — is
@@ -325,18 +317,14 @@ In Gitlet a host hands it each line's coloured spans (`tokens`), asked as a
 row is drawn: from the blob under 256 KiB, else from the hunk's first line, so
 past it a hunk opening inside a comment may colour wrong until it closes.
 A coloured diff paints plain until its blobs are read, then walks each once.
-Its rules are a sheet of its own, `diff.css`, which arrives with the first
-screen that draws a diff rather than in the first paint: every one of those
-screens is a lazy chunk.
 
 **A host can write on a diff.** A change's review is read in its diff, so the
 component takes what a host anchors to a line (`notes`, drawn under that
 line, and under its row across both sides of a split diff, once) and lets a
 host pick lines (`onPick`): each line's own number — its newer one, else its
 older, the number a finding names — becomes a button, Shift extending the
-host's pick from where it began, and a picked line is ruled at its edge
-(`picked`), never tinted outside Gitlet, since a pick is the reader's place and
-not the line's. What is drawn under a line and what a pick does are the host's; a
+host's pick from where it began, and a picked line (`picked`) takes the
+selected tint in place of its tints, with an accent bar at its start. What is drawn under a line and what a pick does are the host's; a
 diff given neither draws exactly what it drew before. A host that opens on a
 line — a failed check's — hands the diff the line to bring into view
 (`reveal`) rather than looking for it on the page: past the window's first
@@ -344,24 +332,15 @@ block the line has no element until its block is drawn, so the diff scrolls
 to that block's box, which brings it within the window, and then centres the
 line, once.
 
-In Gitlet the hunk row takes the family's hunk tint, and a picked line, in a diff
-or a file, the selected tint in place of its tints and band, keeping its sign, its run's
-underline and an accent bar at its start.
+A picked line in a diff and in a Gitlet file take one look: the selected tint
+in place of the line's tints and band, its sign, its run's underline and an
+accent bar at its start.
 
-`styles/diffs.test.ts` holds the rule in the sheets (no rule naming a diff
-spends a state's, a chart series' or an identity's hue, only
-`.diff-view--code` reads the diff colours, and nothing takes a changed run's
-underline away or colours code inside it), in the palette (the two steps are
-the rungs either side of the ground, measured off it in every state of every
-theme, and the coloured steps are the kit's, on a ground it measures them on)
-and in the tree (every diff Gitlet draws passes `hue="code"` and `tokens`, and
-no other passes either; nothing reaches the
-package's diffs — by name, by their own modules, or through a namespace, a
-dynamic import or a re-export of any module that hands them on in the package
-as installed — and no `VersionCompare` is handed the two texts that would make
-it draw one);
-`lib/lineDiff.test.ts` holds the same of the package's `diffLines`, which
-nothing compares with; `components/DiffView.test.tsx` holds what it draws.
+`components/DiffView.test.tsx` holds that every diff is the design system's:
+no module writes a `diff-view` class or declares a line comparison of its own,
+no sheet styles one, and the adapter draws the kit's tinted lines. The design
+system's own suites hold what `DiffView` draws, its line diff and the contrast
+of the text on each tint.
 
 ### Code is coloured by kind in Gitlet
 
@@ -399,9 +378,7 @@ other way round. The dashboard's own sheets (`tokens.css`, `base.css`,
 screen's own, imported by the module that draws it so that it arrives with
 that chunk rather than in the first paint: `create.css`, the create pages'
 (`routes/artifacts/new/CreateShell.tsx`), `charter.css`, the Principles
-editor's, `brand.css`, the brand's, `folders.css`, the folders', and
-`diff.css`, the one diff's (`components/DiffView.tsx`, which every screen
-drawing a diff reaches). Each lands after every other sheet, so it selects
+editor's, `brand.css`, the brand's, and `folders.css`, the folders'. Each lands after every other sheet, so it selects
 only its own classes (`styles/classes.test.ts`), and never a kit class
 (`TestNoLazyStylesheetCarriesTheDesignSystem`).
 
@@ -4878,12 +4855,11 @@ would drift exactly as `textcut`'s four copies and `whsec`'s two did, and the
 clause that would go first is the fence.
 
 A page's history shows **what a save changed**, not only what one version
-said. The two revisions are compared by the dashboard's one line diff (the
+said. The two revisions are compared by the design system's line diff (the
 shortest edit between their lines; past 20,000 lines a side in what changed,
 or 4,000 lines removed and added, a sentence saying the two were not compared
-line by line, and why, in place of any row) and drawn by the one
-`DiffView` ([A diff carries no hue outside
-Gitlet](#a-diff-carries-no-hue-outside-gitlet)), over the count of
+line by line, and why, in place of any row) and drawn by `DiffView`
+([Every diff is tinted](#every-diff-is-tinted)), over the count of
 lines added and removed against the revision before. Inside an edited line
 it underlines ONE run, never a word-by-word diff, because these documents are
 rewritten in paragraphs and a word diff makes a small edit prettier and a
@@ -9894,7 +9870,8 @@ as a second `h1` gave a screen reader two page titles, and a body written from
 - **History** swaps the outline for the revisions and the comments for the
   page's changes, each drawn as the person, the change and the turn that made
   it. It reads one revision in the page's place, as what it changed against
-  the one saved before it (by line) or as its full text.
+  the one saved before it (by line) or as its full text, headed once, by the
+  title that names the revision.
 - **Edit writes as you, in place.** The page itself becomes the editor (the
   design system's `RichEditor`, [ADR-0044](../../adr/0044-a-page-is-edited-in-place-and-saved-as-the-markdown-it-was.md)): it looks the same while it is
   edited as when it is read, blocks come from a slash menu or from Markdown
@@ -9909,7 +9886,7 @@ as a second `h1` gave a screen reader two page titles, and a body written from
   while you edited", offers their change as a diff, and "Keep editing on top of
   it" MERGES their change into the draft by line before the base moves
   (`lib/merge.ts`, a three-way merge over the revision the edit started from,
-  each side compared with it by the dashboard's one line diff, so the merge
+  each side compared with it by the design system's line diff, so the merge
   works on the edits "their change" shows; a side that diff does not compare
   is one clash of the whole page, the person's to settle).
   A change only one side made is taken as it is; where both changed the same
@@ -10847,8 +10824,8 @@ edits as one revision was declined. The source is
   charter back rather than sent twice.
 - **A colleague's change to the same part** is never written over unseen. The
   card says the part changed while the person was editing, shows what changed
-  line by line (the kit's `ConflictNote` over the dashboard's one
-  [diff](#a-diff-carries-no-hue-outside-gitlet)), keeps the draft, and offers
+  line by line (the kit's `ConflictNote` over a
+  [diff](#every-diff-is-tinted)), keeps the draft, and offers
   **Keep my draft** (save it over theirs knowingly) or **Use theirs**.
 - **Unsaved writing is never lost to a stray key.** Cancel or `Esc` on a part
   with changes asks first (*Discard your changes?*), and so does a move to
@@ -11656,11 +11633,16 @@ alarm's fix) is reviewed in a dialog over the detail's `changes`: the changed
 tools in the kit's rail, one that now claims less risk first and flagged, and
 for the one chosen its title or description as a text diff, its arguments a
 line each and the hints that moved keyed by the hint, its old word removed and
-its new one added, all in the one `DiffView`
-([A diff carries no hue outside Gitlet](#a-diff-carries-no-hue-outside-gitlet));
+its new one added, all in `DiffView`
+([Every diff is tinted](#every-diff-is-tinted));
 **Accept change**,
 **Accept the new tool** or **Accept that it went**, and **Keep blocked**, each
-sent by the digest of the definition shown. On the Tools tab a changed tool is
+sent by the digest of the definition shown. It says each thing once: its one
+subtitle is how many tools ask for approval until decided, a rail row is the
+tool's name alone (the dialog is wide enough for the rail, which folds into
+its picker only on a narrow window), the chosen tool is not named again over
+its diff, and a part is named by its label alone, one it cannot show saying
+"This part changed" under it. On the Tools tab a changed tool is
 marked *Changed*, *New* or *Removed*, the changes are counted with **Review**,
 **Changed** filters them, a held tool's *Always allow* says it applies once
 its change is reviewed, and the tab is marked while any wait.
@@ -11992,8 +11974,8 @@ over an empty page, and still fits the view it is scrolled to. **The Diff lens d
 are picked from under them — beneath fifteen rows of history the changes began
 off the screen, so **See its changes** landed on a list — and a revision
 pressed further down brings the changes back on screen (only when they are off
-it; focus stays in the list). **A change is drawn whole**, as the one
-[diff](#a-diff-carries-no-hue-outside-gitlet) draws a setting: an added
+it; focus stays in the list). **A change is drawn whole**, as a
+[diff](#every-diff-is-tinted) draws a setting: an added
 setting is its new value
 added, a removed one its old value removed, and a changed one both — its old
 value removed and its new one added, the run that moved underlined — each with
@@ -12002,10 +11984,9 @@ rather than cut, and its value as JSON — an object or a list in the document's
 own indented shape — in tracks every line shares, so the values start at one
 edge; on a diff narrower than a phone's 640px the value takes the line under
 its path. **A value of several lines is that many lines of the diff**, each
-with its own mark and surface step, its path written once on the first of
+with its own mark and tint, its path written once on the first of
 them, and paired with the other side's lines of that path by the rule a text's
-lines are ([A diff carries no hue outside
-Gitlet](#a-diff-carries-no-hue-outside-gitlet)): drawn as one line, a
+lines are ([Every diff is tinted](#every-diff-is-tinted)): drawn as one line, a
 removed seat was marked on its first row alone and the rest of it hung
 unmarked in the value track. **An empty diff names the side it was read
 against**, from the one function the card's subtitle reads ("Identical to
@@ -12638,14 +12619,9 @@ brings that carries a design-system rule.
   package's: the badge, the panel, the empty state, the stat row, the
   skeleton, the select, the tab strip, the avatar, the banner, the disclosure,
   the search input, the button and the chip — and the ranked list, the legend,
-  the stacked bar, the activity strip and the sparkline with them. The one
-  peer the dashboard does not draw is the package's diff: its `DiffView`,
-  `DiffSummary` and `DiffList` paint the code host's tints wherever they are
-  drawn, which only Gitlet's diffs wear, so every diff is
-  `components/DiffView.tsx`, built from the package's tokens over the
-  dashboard's own line diff, since the package's stops comparing at 2,000
-  lines a side ([A diff carries no hue outside
-  Gitlet](#a-diff-carries-no-hue-outside-gitlet)).
+  the stacked bar, the activity strip and the sparkline with them, and the
+  diff: every diff is the package's `DiffView` ([Every diff is
+  tinted](#every-diff-is-tinted)).
 - **What is left of `src/ui/` is of three kinds, and none of them is a second
   recipe for something the package already draws.** A VOCABULARY the package
   does not have and should not — `Tone`, the six words the engine's own
@@ -13312,12 +13288,11 @@ to.
    colour its author chose, a QR code's black on white (`@crewlethq/ui`'s
    `QrCode`, whose two inks are the fixed `color.qr` tokens), a
    collaborator's presence colour in an artifact, a colour value's swatch
-   (`ColorChip`) and code read in Gitlet (the kit's code host colours) are
-   the seven bounded exceptions (see "The one rule" above); nothing else is.
-   **A diff carries no hue outside Gitlet, not even a state's**: a line's kind
-   is its glyph, one of two surface steps and, on a line edited, an underline,
-   and in Gitlet the kit's diff colours in place of the steps (see [A diff
-   carries no hue outside Gitlet](#a-diff-carries-no-hue-outside-gitlet)). The
+   (`ColorChip`), code read in Gitlet (the kit's code host colours) and a
+   diff's lines are the eight bounded exceptions (see "The one rule" above);
+   nothing else is. **Every diff is tinted, never in a state's hue**: a line's
+   kind is its glyph, the diff family's tint and, on a line edited, an
+   underline (see [Every diff is tinted](#every-diff-is-tinted)). The
    character and colour lists are the
    contract's (`contract/avatar.ts`), held to the engine's and to the design
    system's, and one reading of them (`lib/avatar.ts`'s `avatarOf`) draws a

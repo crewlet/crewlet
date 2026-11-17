@@ -263,8 +263,8 @@ creates and removes; `src/test/ownedTmpdir.test.ts` fails a run that was
 started without it.
 
 No gate runs a benchmark, since a time is the machine's it was taken on. A
-benchmark is the measurement a bound's comment quotes (`src/lib/lineDiff.bench.ts`
-for the line diff's two bounds), kept so a change to the code under the bound
+benchmark is the measurement a bound's comment quotes (`src/lib/syntax/syntax.bench.ts`
+for the syntax colouring's size bound), kept so a change to the code under the bound
 is timed against the cases that set it: rerun it, and update the figures the
 comment quotes, with the machine they came from.
 

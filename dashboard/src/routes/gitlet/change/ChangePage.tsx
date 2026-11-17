@@ -90,6 +90,7 @@ import { menuHold, type WriteAccess } from "~/lib/useWriteAccess.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { CodeChangeDetail, CodeRevisionRow, CodeVerdict } from "~/protocol/index.ts";
+import { DiffCounts } from "../FileTree.tsx";
 import { ChangeStateTag, ReadinessMeter } from "../ChangeRow.tsx";
 import { CodeNotFound } from "../NotFound.tsx";
 import { ReviewerPicker } from "../ReviewerPicker.tsx";
@@ -168,8 +169,9 @@ function Diffstat({
       role="img"
       aria-label={`${plural(added, "line")} added and ${fmtCount(deleted)} removed in revision ${revision}`}
     >
-      <span>+{fmtCount(added)}</span>
-      <span>−{fmtCount(deleted)}</span>
+      <span>
+        <DiffCounts added={added} deleted={deleted} />
+      </span>
       {lines > 0 && (
         <span className="code-diffstat__squares">
           {[0, 1, 2, 3, 4].map((i) => (
@@ -688,7 +690,7 @@ function ReviewDialog({
       <p className="muted">
         {drafts.length === 0
           ? "No finding is drafted on this revision's lines."
-          : `${drafts.length} drafted finding${drafts.length === 1 ? "" : "s"} on revision ${change.revision} will be raised with it.`}
+          : `${drafts.length} drafted finding${drafts.length === 1 ? "" : "s"} on this revision will be raised with it.`}
         {elsewhere.length > 0 &&
           ` Drafts on revision ${elsewhere.map((d) => d.revision).join(", ")} stay in this tab: a review raises findings on the revision it judges.`}
       </p>
