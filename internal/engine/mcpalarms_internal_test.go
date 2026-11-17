@@ -289,3 +289,51 @@ func TestAnMCPOutageAnUncountedLiveNodeHoldsStandsOnItsLastRecord(t *testing.T) 
 	claimedAgain(t, leases, "node-b", epoch)
 	down("node-b claimed its presence again", 0)
 }
+
+// THIS NODE'S OWN MCP ROWS ARE ITS MEMORY WHERE NO RECORD OF ITS OWN COUNTS,
+// never a record of its own kept as a peer's is: a live peer whose record aged
+// out keeps its last one because it is not saying ([coord.LiveNodeStatusesKept]),
+// but this node holds what its record is written from, and kept, an outage its
+// servers no longer had stood raised for as long as its record's writes failed.
+//
+// Mutation: keep this node's own last record as a peer's is kept, and the
+// outage stays raised once its memory holds none.
+func TestThisNodesOwnMCPRowsAreItsMemoryWhereNoRecordOfItsCounts(t *testing.T) {
+	t.Parallel()
+	live := t.Context()
+	c := mcpAlarmFixture(t)
+	now := time.Date(2026, 11, 17, 9, 0, 0, 0, time.UTC)
+	leases := coordmemory.New()
+	fleet := coordmemory.NewFleet()
+	epoch := liveNode(t, leases, "node-a")
+	if err := fleet.PutNodeStatus(live, coord.NodeStatusRecord{Node: "node-a", Epoch: epoch, At: now,
+		MCP: []coord.MCPServerStatus{
+			{Server: "docs", Shared: true, Failed: 1, DownSince: now.Add(-time.Hour), Error: "exit status 1"},
+		}}); err != nil {
+		t.Fatalf("node-a's record: %v", err)
+	}
+	e := epochEngine(c)
+	e.backends, e.testNode = &Backends{Coord: leases, Fleet: fleet}, "node-a"
+	if rows := e.mcpStatus(live); len(rows) != 0 {
+		t.Fatalf("the premise: this node's own servers say %+v", rows)
+	}
+	down := func(step string, want int) {
+		t.Helper()
+		var got statelog.Reading
+		e.entriesReading(live, now, &got)
+		for _, server := range got.MCPServers {
+			if server.Server == "docs" {
+				if server.Failed != want {
+					t.Fatalf("%s: docs has %d instance(s) down, want %d", step, server.Failed, want)
+				}
+				return
+			}
+		}
+		t.Fatalf("%s: no condition for docs in %+v", step, got.MCPServers)
+	}
+	down("this node's record counted", 1)
+	if err := fleet.DeleteNodeStatus(live, "node-a", epoch); err != nil {
+		t.Fatalf("remove node-a's record: %v", err)
+	}
+	down("this node's record aged out while it lives", 0)
+}

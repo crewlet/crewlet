@@ -40,7 +40,11 @@ import (
 // as the runs waiting for an operator do ([Engine.executorReading]): a record
 // that aged out while its node lives is a node not saying, and read as one with
 // no rows, a sit-out or an outage only that node held cleared for one
-// evaluation and was raised again on the next.
+// evaluation and was raised again on the next. ALL BUT THIS NODE, whose own
+// rows are its memory wherever no record of its own counts: it holds what that
+// record is written from, and its last record kept in their place stood raised
+// on a sit-out or an outage its memory no longer held, for as long as its
+// writes failed.
 //
 // ONE LISTING OF THE RECORDS FEEDS THE MCP ALARMS TOO ([mcpConditions]), read
 // here once per evaluation, so a model's and a server's conditions are judged
@@ -79,7 +83,10 @@ func (e *Engine) entriesReading(ctx context.Context, now time.Time, out *statelo
 			"detail", "the model and MCP alarms are judged on the last status records this node read")
 		statuses = in.statuses
 	} else {
-		statuses = coord.LiveNodeStatusesKept(records, leases, in.statuses)
+		// NEVER THIS NODE'S OWN, which its memory answers below.
+		last := maps.Clone(in.statuses)
+		delete(last, e.selfNode())
+		statuses = coord.LiveNodeStatusesKept(records, leases, last)
 		in.statuses = statuses
 	}
 	in.mu.Unlock()
@@ -88,8 +95,9 @@ func (e *Engine) entriesReading(ctx context.Context, now time.Time, out *statelo
 	}
 	statuses = maps.Clone(statuses)
 	if _, reported := statuses[e.selfNode()]; !reported {
-		// THIS NODE'S OWN ROWS, read now where no record of its counts
-		// yet (a node before its first write at its presence epoch).
+		// THIS NODE'S OWN ROWS, read now where no record of its counts in
+		// this listing: a node before its first write at its presence
+		// epoch, or one whose record aged out while its writes failed.
 		statuses[e.selfNode()] = coord.NodeStatusRecord{Node: e.selfNode(),
 			Models: e.modelStatus(ctx), MCP: e.mcpStatus(ctx)}
 	}

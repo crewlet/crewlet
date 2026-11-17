@@ -337,7 +337,9 @@ func LiveNodeStatuses(records []NodeStatusRecord, presence []Lease) map[string]N
 // presence is gone, or was claimed again at a new epoch, keeps nothing: what it
 // held moves to holders that say their own, and a restarted node's memory went
 // with its process. A reader that decides once, rather than judging a standing
-// condition, reads [LiveNodeStatuses] itself.
+// condition, reads [LiveNodeStatuses] itself, and one with a truer word for a
+// node than its last record, its own memory for the node it runs on, leaves
+// that node out of last.
 func LiveNodeStatusesKept(records []NodeStatusRecord, presence []Lease,
 	last map[string]NodeStatusRecord) map[string]NodeStatusRecord {
 	out := LiveNodeStatuses(records, presence)

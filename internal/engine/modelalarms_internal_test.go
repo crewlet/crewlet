@@ -141,3 +141,45 @@ func TestAModelSitOutAnUncountedLiveNodeHoldsStandsOnItsLastRecord(t *testing.T)
 	claimedAgain(t, leases, "node-b", epoch)
 	sitsOut("node-b claimed its presence again", false)
 }
+
+// THIS NODE'S OWN MODEL ROWS ARE ITS MEMORY WHERE NO RECORD OF ITS OWN COUNTS,
+// never a record of its own kept as a peer's is: a live peer whose record aged
+// out keeps its last one because it is not saying ([coord.LiveNodeStatusesKept]),
+// but this node holds what its record is written from, and kept, a sit-out its
+// plan no longer held stood raised for as long as its record's writes failed.
+//
+// Mutation: keep this node's own last record as a peer's is kept, and the
+// sit-out stays raised once its memory holds none.
+func TestThisNodesOwnModelRowsAreItsMemoryWhereNoRecordOfItsCounts(t *testing.T) {
+	t.Parallel()
+	live := t.Context()
+	c, _ := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "opus", subscription: true})
+	now := time.Date(2026, 11, 17, 9, 0, 0, 0, time.UTC)
+	leases := coordmemory.New()
+	fleet := coordmemory.NewFleet()
+	epoch := liveNode(t, leases, "node-a")
+	window := &coord.ModelSitOut{Until: now.Add(time.Hour), Since: now.Add(-time.Minute), Window: "weekly",
+		Said: "You've hit your weekly limit"}
+	if err := fleet.PutNodeStatus(live, coord.NodeStatusRecord{Node: "node-a", Epoch: epoch, At: now,
+		Models: []coord.ModelStatus{{Key: "plan", SittingOut: window}}}); err != nil {
+		t.Fatalf("node-a's record: %v", err)
+	}
+	e := epochEngine(c)
+	e.backends, e.testNode = &Backends{Coord: leases, Fleet: fleet}, "node-a"
+	if out := rowOf(t, e.modelStatus(live), "plan").SittingOut; out != nil {
+		t.Fatalf("the premise: this node's own plan sits out %+v", out)
+	}
+	sitsOut := func(step string, want bool) {
+		t.Helper()
+		var got statelog.Reading
+		e.entriesReading(live, now, &got)
+		if out := conditionOf(t, got.Models, "plan").SittingOut; (out != nil) != want {
+			t.Fatalf("%s: the plan entry sits out %+v, want a window: %v", step, out, want)
+		}
+	}
+	sitsOut("this node's record counted", true)
+	if err := fleet.DeleteNodeStatus(live, "node-a", epoch); err != nil {
+		t.Fatalf("remove node-a's record: %v", err)
+	}
+	sitsOut("this node's record aged out while it lives", false)
+}
