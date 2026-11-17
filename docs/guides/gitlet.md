@@ -135,15 +135,18 @@ address to clone it from and the two commands that push a repository you
 already have into it. Its **Code** tab lists each entry with the commit that
 last changed it; press `t`, or **Go to file**, to find a file by name. Pick a
 branch or a tag from the button before the files; **Find a branch** matches
-any part of a name. Its README and its LICENSE are tabs under the files.
+any part of a name. Its README and its LICENSE are tabs under the files. A file
+opens beside the repository's tree. Press a line's number to pick it, Shift to
+pick a run, and **…** to copy the lines or a link to them.
 Beside the files, the repository's rail says who owns it and how it is read,
 lists its open changes, who pushed to it over the last 30 days and how many
 pushes landed each day, where it is mirrored and its newest tag. From then on
 the repository's page writes it from the browser, each write one commit or one
 ref moved, as you:
 
-- **Code**, on a branch: **Edit** a text file of up to 256 KiB (the README's
-  pencil too), **Delete file**, or **New file** in a directory
+- **Code**, on a branch: **Edit** a text file of up to 256 KiB (its pencil, the
+  README's too), **Delete file** (under a file's **More**), or **New file** in a
+  directory (or the plus at the head of a file's tree)
   (`code_commit_files`), each at the
   commit the page read, so a push made since is refused rather than written
   over;
@@ -377,8 +380,9 @@ it means](../concepts/gitlet.md#what-git-prints-and-what-it-means).
 `/git/{name}/-/archive.zip` serves it.
 
 Anybody who may fetch a repository may download one file of a commit, or the
-whole commit as a ZIP, without git: from the dashboard, signed in, once its
-code screens offer the buttons, or from a script with a token. Name the commit
+whole commit as a ZIP, without git: from the dashboard, signed in, from a
+file's **Raw** and **Download** or **Code** › **Download ZIP**, or from a
+script with a token. Name the commit
 by its whole id:
 
 ```sh
