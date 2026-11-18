@@ -14,25 +14,13 @@ import (
 // in, beside the transport's own namespace.
 //
 // BOTH HOLD THE IDS AN EVENT NAMES ITS SENDER BY, and [Registry.ByExternalID]
-// consults both, so a fellow agent's message is annotated exactly as a
-// person's is. The companion holds what a surface gives an agent as a BOT —
-// a chat bot's user id, a GitHub App's bot login — and the transport's own
-// namespace everything else: the people's ids (a Slack member id, the user id
-// a Mattermost username resolves to), and an agent's own account where the
-// surface gives it no bot (a GitLab username, a Jira account id). Neither
-// holds an address a message is written with: a Mattermost username is
-// resolved to the id its posts carry before it is registered.
-//
-// Kept apart rather than in one map because the two are written by
-// different owners on different schedules — the human reconcile and the
-// people's transport, an integration's agents at connect or on an apply —
-// and each withdraws only what it wrote.
-//
-// DERIVED rather than a per-backend table. A table's failure mode is stated
-// plainly: it silently stops covering the third backend nobody remembered to
-// add. A derivation cannot forget one. A transport with no bot identities
-// simply never has the companion namespace populated, and the extra lookup
-// on a miss costs one absent map read.
+// consults both. The companion holds what a surface gives an agent as a BOT
+// (a chat bot's user id, a GitHub App's bot login); the transport's own
+// namespace holds the rest: people's ids and an agent's account where there
+// is no bot (GitLab username, Jira account id), never an address a message is
+// written with. Kept apart because different owners write them on different
+// schedules, each withdrawing only what it wrote. DERIVED rather than a
+// per-backend table, which silently misses the backend nobody added.
 const botSuffix = "_bot"
 
 // BotNamespace is the companion namespace for a transport's own agents.
@@ -40,26 +28,14 @@ func BotNamespace(transport string) string { return transport + botSuffix }
 
 // Register maps an external identity to a seat.
 //
-// # It is BIDIRECTIONAL, and that is the whole point
-//
-// A seat's external id is not fixed for the life of a process: an apply can
-// correct a person's member id, and a Mattermost person's username can come
-// to name another account, which the transport then registers in its
-// place. Writing only the handle -> id direction would leave the OLD id
-// still resolving to this seat — a stale alias that outlives the seat's own
-// decommission (which removes only the current id) and then silently
-// swallows a later seat legitimately registered under the freed id. So a
-// re-registration withdraws the id this handle previously held in the same
-// namespace.
-//
-// # A cross-seat steal is an ERROR, not a silent overwrite
-//
-// Re-registering the same pair is idempotent, which is what makes a
-// reconcile cheap to re-run. But an id already held by a DIFFERENT seat
-// means two seats claim one identity, and whichever registered last would
-// quietly take every message addressed to the other. Refusing names both
-// seats in a boot log line; overwriting produces a company where one agent's
-// mail arrives at another with nothing to see.
+// BIDIRECTIONAL: a seat's external id changes within a process (an apply
+// corrects it). Writing only handle -> id would leave the OLD id resolving to
+// this seat, a stale alias that swallows a later seat registered under the
+// freed id, so a re-registration withdraws the id the handle held.
+// A cross-seat steal is an ERROR, not an overwrite: the same pair again is
+// idempotent, but an id held by a DIFFERENT seat means two seats claim one
+// identity, and the last would quietly take the other's mail. Refusing names
+// both seats in a boot log line.
 func (r *Registry) Register(namespace, externalID, handle string) error {
 	namespace, externalID = strings.TrimSpace(namespace), strings.TrimSpace(externalID)
 	if namespace == "" {
@@ -141,22 +117,11 @@ func (r *Registry) Unregister(namespace, externalID, expected string) bool {
 
 // ByExternalID resolves a transport-scoped external id to a party.
 //
-// Pure map lookups: this is the inbound hot path, run once per sender per
-// changelog line, so there are no org walks here. The registry IS the
-// maintained index.
-//
-// Both namespaces are consulted — the transport's own, then its bot
-// companion — so a fellow agent's message annotates exactly the way a
-// human's does. See [botSuffix].
-//
-// AN ENGINE SURFACE'S ID IS THE HANDLE: on a namespace [NewRegistry] was
-// handed as one whose ids are seat handles, this is [Registry.ByHandle]. So a
-// person's comment on the engine's own tracker resolves to the seat they
-// write as, exactly as their message on a vendor's chat resolves to the seat
-// their member id is registered for.
-//
-// A miss is ORDINARY, not an error: most senders on a shared channel are
-// not colleagues, and the caller renders them as an outside party.
+// Pure map lookups, no org walks: the inbound hot path, once per sender per
+// changelog line. Consults the transport's namespace, then its bot companion
+// ([botSuffix]). On a namespace [NewRegistry] was handed as holding seat
+// handles (an engine surface's id IS the handle) it is [Registry.ByHandle].
+// A miss is ORDINARY: most senders in a shared channel are outside parties.
 func (r *Registry) ByExternalID(transport, externalID string) (Party, bool) {
 	if transport == "" || externalID == "" {
 		return Party{}, false
@@ -291,53 +256,16 @@ type SharedIdentity struct {
 }
 
 // ReconcileHumanContacts brings the registry in line with the human seats'
-// declared contact ids.
-//
-// # A RECONCILE, not an append
-//
-// Pairs a previous pass registered that are no longer declared — a corrected
-// user id, a removed seat, a human seat flipped to an agent — are withdrawn
-// first. Without that, an edited id keeps attributing the old value to the
-// seat for the life of the process, and an id that legitimately moved to
-// another seat stays blocked by the conflict guard until restart.
-//
-// Only pairs THIS function registered are ever withdrawn. An agent identity
-// that happens to collide is left exactly where it is: a human must never
-// silently take over an agent's mapping, or the reverse.
-//
-// And an id two human seats both declare is registered for NEITHER, and
-// reported ([SharedIdentity]): whichever the walk reached last used to keep
-// it, which is a guess about which person an account is, made silently.
-//
-// # Human ids need no integration — except a NAME
-//
-// Unlike agent identities, which each transport resolves against the
-// third-party app at connect, a human's ids are declared in config.
-// Registration is therefore synchronous and runs at boot and on every org
-// swap, with no network and nothing to await.
-//
-// The exception is a contact the chart declares as the name a person is
-// addressed by on a surface whose events carry an account id instead
-// ([org.Transport.AddressedByName] — Mattermost's username). That name is
-// skipped here, because registered as written it is a key no event looks up:
-// every post its owner wrote reached the agents from a stranger. The
-// surface's transport resolves it against its server and registers the id it
-// is answered with, into this same registry.
-//
-// lookup resolves ${VAR} references; nil reads the process environment. An
-// identity whose reference does not resolve is skipped and counted, never
-// registered as its literal text — a raw ${VAR} matches no payload any
-// third-party app will ever send.
-//
-// # And the directory decides who may still be reached
-//
-// standing is one reading of the identity directory ([Standing]): a seat whose
-// holder is suspended, retired or removed has its declared identities left out
-// — so on this registry an inbound message from them resolves to an outside
-// party, and nothing attributes their word to the seat. The reading is applied
-// to o through [Standing.Seats]. The zero Standing is chart-only and withholds nothing. The
-// registry remembers which reading it was built from ([Registry.Standing]),
-// because that reading is half of what it answers for.
+// declared contact ids. A RECONCILE, not an append: pairs a previous pass
+// registered that are no longer declared are withdrawn first, or an edited id
+// keeps its old value and a moved id stays blocked by the conflict guard. Only
+// pairs THIS function registered are withdrawn (a human never takes over an
+// agent's mapping), and an id two human seats declare is registered for
+// NEITHER and reported ([SharedIdentity]). lookup resolves ${VAR}, nil reading the process
+// environment; an unresolved reference is skipped and counted, never
+// registered as literal text. standing ([Standing], applied through
+// [Standing.Seats]) leaves out a suspended, retired or removed holder's
+// identities; the registry keeps it ([Registry.Standing]).
 func (r *Registry) ReconcileHumanContacts(o *org.Organization, lookup org.EnvLookup,
 	standing Standing) Reconciliation {
 
@@ -367,10 +295,12 @@ func (r *Registry) ReconcileHumanContacts(o *org.Organization, lookup org.EnvLoo
 			}
 			for _, id := range resolved {
 				if id.Transport.AddressedByName() {
-					// The transport's to register: see "except a
-					// NAME" above. Still counted as declared and
-					// resolved, because an unset ${VAR} behind it
-					// is this function's to report either way.
+					// A contact declared as the name a person is
+					// addressed by where events carry an account id
+					// (Mattermost's username) is a key no event
+					// looks up: the transport registers its resolved
+					// id. Still counted, since an unset ${VAR}
+					// behind it is reported here either way.
 					continue
 				}
 				key := identityKey{string(id.Transport), id.ExternalID}

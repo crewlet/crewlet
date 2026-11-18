@@ -10,18 +10,13 @@ import (
 
 // Generic is the prompt for a source nobody has written one for.
 //
-// An extension's own events, or a third-party app added to config before its
-// prompt exists. Its answers are the CONSERVATIVE reading of each question,
-// which is not the same as the empty one:
-//
-//   - It renders the body in full, because for a source the spine knows
-//     nothing about, the body is all the context there is.
-//   - It therefore reports no recon needed: the trigger IS the context, so
-//     the turn-start filters have something real to filter against.
-//   - It derives no partition key, so its events are never merged. Merging
-//     two triggers the spine cannot tell apart loses one of them.
-//   - It supersedes nothing, because it has no idea which of this
-//     third-party app's bodies are state and which are messages.
+// Its answers are the CONSERVATIVE reading of each question, not the empty one:
+//   - The body renders in full: it is all the context there is.
+//   - No recon is needed: the trigger IS the context, so the turn-start
+//     filters have something real to filter against.
+//   - No partition key, so events are never merged; merging two triggers the
+//     spine cannot tell apart loses one.
+//   - Nothing is superseded: it cannot tell state bodies from messages.
 type Generic struct{}
 
 var _ Prompt = Generic{}

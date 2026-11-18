@@ -8,25 +8,16 @@ import (
 
 // Reading a conversation back: the mirror of the write side in this package.
 //
-// [StatusPoster] and [Statuses] let the engine say something ON a chat
-// surface. This is the other direction — asking a surface what has already
-// been said in a thread — and it exists because the engine was telling agents
-// to go and do that themselves. On a company whose chat tools come from a
-// per-role MCP server that instruction costs three rounds (list the server's
-// tools, activate one, then call it, with the schema arriving only on the
-// next message), and an agent that skips it answers eleven words of trigger
-// text with no idea what the thread is about. Every value needed to just hand
-// it over is already on this node: the channel and the thread root are on the
-// trigger's metadata, and each seat's own authenticated client is held by its
-// transport.
+// [StatusPoster] and [Statuses] let the engine speak ON a chat surface; this
+// asks a surface what was already said, so agents need not (three rounds via
+// a per-role MCP server; one that skips it answers blind). The channel and
+// thread root are on the trigger's metadata and each seat's client is held by
+// its transport.
 //
 // # Vendor-neutral by construction
 //
-// A [Message] carries no vendor shape at all — no timestamps in a backend's
-// own format, no subtype, no props. What differs between backends is which
-// endpoint answers and how a seat's own post is recognised, and both of those
-// are the transport's business. What the renderer needs is who said what, in
-// order, and which of them was this seat.
+// A [Message] carries no vendor shape; the renderer needs only who said what,
+// in order, and which was this seat.
 
 // Message is one thing somebody said in a thread.
 //
@@ -168,18 +159,14 @@ type Thread struct {
 
 // ThreadOf resolves the existing thread a trigger points at.
 //
-// It reports false for a trigger that is not a chat message, for a top-level
-// chat message that has no thread yet, and for metadata missing either half
-// of the address — all three of which mean the same thing to a caller: there
-// is no earlier conversation to hand over.
+// It reports false for a non-chat trigger, a top-level message with no thread
+// yet, and metadata missing either half of the address: all mean there is no
+// earlier conversation to hand over.
 //
-// The discriminator is the `transport` key every chat transport stamps on
-// what it parses, read rather than passed in, because the caller here is
-// asking WHICH backend this trigger came from rather than whether it came
-// from one particular one. That key survives inbox coalescing (the merged
-// event mirrors the latest constituent's metadata, and a chat partition is
-// thread-grained wherever a thread exists, so a coalesced burst can never
-// straddle two threads) and the detached-sandbox round trip.
+// The `transport` key is read, not passed in, because the caller asks WHICH
+// backend the trigger came from. It survives inbox coalescing (a chat
+// partition is thread-grained wherever a thread exists, so a coalesced burst
+// never straddles two threads) and the detached-sandbox round trip.
 func ThreadOf(metadata map[string]string) (Thread, bool) {
 	backend := metadata[TransportField]
 	channel := metadata[ChannelField]
@@ -199,19 +186,16 @@ type ThreadReader interface {
 	// thread into the other's turn.
 	ThreadBackend() string
 
-	// ReadThread returns the thread's messages OLDEST FIRST, with the
-	// thread's own root first: the root is what the thread is about, and
-	// a renderer that has to bound the block keeps it whatever else it
-	// drops. A backend that could not reach the end of the thread says so
-	// on the [Transcript] rather than answering as though it had.
+	// ReadThread returns the thread's messages OLDEST FIRST, root first: the
+	// root is what the thread is about, and a renderer bounding the block
+	// keeps it. A backend that could not reach the end of the thread says so
+	// on the [Transcript].
 	//
-	// It never returns an error. A false second result means nothing
-	// could be read — no such seat on this node, a refused credential, a
-	// backend that answered an error, a deadline — and the caller renders
-	// that as a different sentence from an empty thread, because the two
-	// send an agent to opposite places. A bool rather than an error for
-	// the reason [StatusPoster.SetStatus] returns one: no caller here
-	// acts on which failure it was.
+	// It never returns an error. False means nothing could be read (no such
+	// seat here, a refused credential, a backend error, a deadline), which the
+	// caller renders differently from an empty thread, since the two send an
+	// agent to opposite places. A bool for the reason [StatusPoster.SetStatus]
+	// returns one: no caller acts on which failure it was.
 	ReadThread(ctx context.Context, handle, channel, root string) (Transcript, bool)
 }
 

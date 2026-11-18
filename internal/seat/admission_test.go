@@ -328,18 +328,16 @@ func TestAdmissionIsReportedOnTheEdgeNotEveryHeartbeat(t *testing.T) {
 func TestADeferredDeliveryIsResumedByTheNextHealthyRenew(t *testing.T) {
 	t.Parallel()
 	// A seat that defers on freshness must not go deaf forever, and this
-	// needs no failure at all to reach — which is what makes it worth a
-	// test of its own. MayStart refuses once the last renew is older than
-	// one heartbeat interval, and consecutive renews are one heartbeat
-	// apart PLUS the duration of the pass, so every cycle has a real window
-	// where a healthy, successfully-renewing seat answers false. A batch
-	// landing in that window defers, and the queue quiesces the attachment.
+	// needs no failure to reach. MayStart refuses once the last renew is
+	// older than one heartbeat interval, and renews are one heartbeat apart
+	// PLUS the pass's duration, so every cycle has a window where a healthy
+	// seat answers false. A batch landing in it defers, and the queue
+	// quiesces the attachment.
 	//
-	// Nothing resumed it: the admission signal is edge-triggered, the
-	// deferral never entered the set, so the next successful renew reported
-	// "still admitted", short-circuited, and never called the hook. The
-	// node kept the lease, kept renewing, stayed attached, and read nothing
-	// from that inbox again until the process restarted.
+	// The admission signal is edge-triggered and the deferral never entered
+	// the set, so the next successful renew reported "still admitted",
+	// short-circuited, and never called the hook: the node kept the lease
+	// and read nothing from that inbox until the process restarted.
 	f := newFleet(t)
 	hooks := &hookLog{}
 	h := f.newHost("node-a", Config{Seats: seatsNamed("ceo"), Hooks: hooks})
@@ -516,19 +514,15 @@ func TestAPanicInAPassCostsOnlyWhatPanicked(t *testing.T) {
 
 // Invariant 11: the clock is read PER SEAT, as its renewal is sent.
 //
-// One timestamp read for the pass and assigned to every seat's last-renew
-// stamp credits a seat sent in a later batch with a renewal earlier than it
-// happened — narrowing its grace, and its admission window, as the seat count
-// grows. Here a pass of one batch of [renewConcurrency] seats and two more,
-// over a store that answers each renewal ten seconds after it is asked, on a
-// bubble's clock: the first batch is sent at the pass's start and the last two
-// seats ten seconds in, once a worker is free, so when the pass ends, twenty
-// seconds in, the first batch's renewals are older than the fifteen-second
-// heartbeat and the last two's are not. Only a clock read per send tells them
-// apart; a clock read at each answer would admit the first batch too.
-//
-// Mutation: stamp every seat once for the pass (the last two refused), or at
-// its answer (the first batch admitted).
+// One timestamp for the whole pass credits a later batch's seat with a
+// renewal earlier than it happened, narrowing its grace and admission window
+// as the seat count grows. Here a batch of
+// [renewConcurrency] seats and two more, over a store that answers each
+// renewal ten seconds after it is asked: the first batch is sent at the
+// start and the last two ten seconds in, so at twenty seconds the first
+// batch's renewals are older than the fifteen-second heartbeat and the last
+// two's are not. Only a clock read per send tells them apart. Mutation: stamp
+// once for the pass (last two refused) or at the answer (first admitted).
 func TestTheHeartbeatReadsTheClockPerSeat(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {

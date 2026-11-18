@@ -309,12 +309,10 @@ func (b *countReader) Renew(ctx context.Context, resource, owner string, epoch i
 // seat a peer took.
 //
 // The presence's claim goes beside the seats' renewals, so it can read the
-// count before the pass has applied a single answer — and here it does, since
-// each seat's teardown waits for the claim to be sent. Advertised only at the
-// next pass, the seat stayed in this node's `seats_held` for a renew period,
-// and a peer with room read the fleet as full and left the seat unclaimed: the
-// bug finishRelease renews the presence for on every other path a seat is
-// given back by.
+// count before the pass applied any answer (here each teardown waits for the
+// claim to be sent). Advertised only at the next pass, the seat stayed in
+// `seats_held` for a renew period and a peer with room left it unclaimed, as
+// finishRelease's presence renewal prevents on every other give-back path.
 //
 // Mutation: renew the presence only beside the seats (one seat held, still).
 func TestAPassAdvertisesTheCountItLeaves(t *testing.T) {
