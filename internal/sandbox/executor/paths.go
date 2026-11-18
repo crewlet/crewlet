@@ -430,10 +430,12 @@
 // nothing more, whatever its length (BenchmarkAReaderAtALineOfAnyLength): a
 // whole PDF's Read, 55,924,056 bytes on one line, reads in 26 to 35 ms holding
 // 146.5 to 151.5 KiB, and a 64 MiB prompt in 264 to 268 ms holding 145.8 KiB.
-// A reader keeps two buffers more once a line's values grow them, the
-// scanner's capture to [threadValueMax] and its scratch up to
-// [lineScratchKeep] each, about 280 KiB in all. A line of the smallest
-// results, which no release writes, holds 16,384 of them within the bound, the
+// Between lines a reader keeps two buffers more once a line's values grow
+// them, the scanner's capture to [threadValueMax] and its scratch up to
+// [lineScratchKeep] each, about 280 KiB in all; within a line that grows every
+// scratch buffer it holds up to 1.7 MiB ("A collection's read of a thread",
+// THE COEFFICIENTS). A line of the smallest results, which no release writes,
+// holds 16,384 of them within the bound, the
 // reader and its facts 2,450 KiB, read in 34 to 42 ms, and one more is
 // refused, a line of about 656 KiB, since a list is charged at every size it
 // doubles through. A reading's coincident worst is the resume's model of the

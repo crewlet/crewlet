@@ -3017,9 +3017,11 @@ in 0.55 to 0.59 s and 0.91 to 0.98 s holding 13 and 11 MiB; and that line of the
 smallest results as the record that fills both, read while the model decides, in
 2.6 to 2.8 s holding 39 MiB, its heap peaking at 57 MiB: within what a seat's
 read for words holds at its worst in the same slot, about 133 MiB. A reader's
-own buffers hold about 146 KiB whatever a line's length, about 280 KiB once a
-line's values grow its capture and its scratch, and what no reader reads of a
-line costs it nothing more (`BenchmarkAReaderAtALineOfAnyLength`). An id the
+own buffers hold about 146 KiB whatever a line's length, about 280 KiB between
+lines once a line's values grow its capture and its scratch, up to 1.7 MiB
+within a line that grows every scratch buffer (internal/sandbox/executor's "A
+collection's read of a thread"), and what no reader reads of a line costs it
+nothing more (`BenchmarkAReaderAtALineOfAnyLength`). An id the
 call-id rule refuses is never kept: 96 Agent calls under ids as long as a value
 read whole, and 1,024 metadata naming ids of 65,000 bytes, read in 29 to 34 ms
 and 0.22 to 0.31 s holding 1 and 2 MiB; and one past `threadValueMax` ends the
