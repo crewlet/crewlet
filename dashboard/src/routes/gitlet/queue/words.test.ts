@@ -230,6 +230,21 @@ describe("ejectionWords", () => {
     );
   });
 
+  // NOTHING RAN, so nothing failed: the branch's checks file defines the checks in no form
+  // that runs. Mutation: word checks_undefined as check_failed, and it says "failed on the train".
+  test("checks no checks file defines say so, and what to do, never that they failed", () => {
+    const why = ejectionWords(
+      ejected({ reason: "checks_undefined", checks: ["lint", "unit"] }),
+    ).why;
+    expect(why).toBe(
+      "main requires lint and unit, which main's .crewlet/checks.yaml does not define in a form that runs, so the queue could not test it. Define them there, or change main's gate, then add it again",
+    );
+    expect(why).not.toContain("failed");
+    expect(ejectionWords(ejected({ reason: "checks_undefined", checks: ["e2e"] })).why).toContain(
+      "Define it there",
+    );
+  });
+
   test("a conflict names its paths; another reason is its word", () => {
     expect(ejectionWords(ejected({ reason: "conflict", paths: ["a.go"] })).why).toBe(
       "its merge conflicted on a.go",

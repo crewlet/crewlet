@@ -108,6 +108,7 @@ export function queueStateWord(state: string): string {
  */
 const EJECT_WORDS: Readonly<Record<string, string>> = {
   check_failed: "a required check failed",
+  checks_undefined: "its branch's checks file defines a required check in no form that runs",
   conflict: "its merge conflicted",
   gate_unmet: "it no longer met the branch's gate",
   head_moved: "its head moved",
