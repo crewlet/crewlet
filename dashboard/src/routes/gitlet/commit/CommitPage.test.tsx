@@ -944,7 +944,7 @@ test.each([
   expect(acted).toHaveLength(0);
 });
 
-// THE PAGE BAR HOLDS BROWSE FILES, REVERT AND CHERRY-PICK, the writes drawn
+// THE PAGE BAR HOLDS BROWSE FILES, REVERT, CHERRY-PICK AND TAG, the writes drawn
 // for every reader and held with the reason. Mutation: draw Revert under the
 // header, outside the page bar.
 test.each([
@@ -955,7 +955,7 @@ test.each([
   ],
   ["a person the engine does not serve", { ...VIEWER, acts: [] }, WRITE_REASONS.not_served],
 ])(
-  "the page bar holds Browse files, Revert and Cherry-pick, held for %s",
+  "the page bar holds Browse files, Revert, Cherry-pick and Tag, held for %s",
   async (_who, viewer, reason) => {
     const { acted } = stubEngine();
     mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`, viewer);
@@ -964,7 +964,7 @@ test.each([
     expect(browse.getAttribute("href")).toBe(`#/gitlet/repos/web?ref=${SHA}`);
     const bar = browse.closest<HTMLElement>(".page-actions")!;
     expect(bar).not.toBeNull();
-    for (const name of ["Revert", "Cherry-pick"]) {
+    for (const name of ["Revert", "Cherry-pick", "Tag"]) {
       const write = within(bar).getByRole("button", { name });
       await waitFor(() => expect(write.getAttribute("title")).toBe(reason));
       fireEvent.click(write);
@@ -998,6 +998,30 @@ test("a commit is reverted on the branch chosen, at the head its listing showed"
   expect(acted[0]).toEqual({
     tool: "code_revert",
     args: { repo: "web", branch: "main", expected_head: MAIN, commit: SHA },
+  });
+});
+
+// TAG TAGS THIS COMMIT by its whole id, annotated where a message is typed.
+// Mutation: send the short id or the default branch, and this fails.
+test("a commit is tagged at its whole id from the page bar", async () => {
+  const { acted } = stubEngine();
+  mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`, {
+    ...ADMIN_VIEWER,
+    acts: ["code_create_tag"],
+  });
+
+  const tag = await screen.findByRole("button", { name: "Tag" });
+  await waitFor(() => expect(tag.getAttribute("title")).toBeNull());
+  fireEvent.click(tag);
+  const dialog = await screen.findByRole("dialog", { name: "Tag 0123456" });
+  expect(within(dialog).queryByLabelText(/Points at/)).toBeNull();
+  fireEvent.change(within(dialog).getByLabelText(/^Name/), { target: { value: "v2.0.0" } });
+  fireEvent.change(within(dialog).getByLabelText(/^Message/), { target: { value: "Release two" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create tag" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_create_tag",
+    args: { repo: "web", tag: "v2.0.0", at: SHA, message: "Release two" },
   });
 });
 

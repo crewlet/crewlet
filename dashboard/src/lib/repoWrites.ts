@@ -619,6 +619,33 @@ export function branchDeleteHeld(repo: CodeRepoSummary, viewer: Reader): string 
   return undefined;
 }
 
+/** Why the reader cannot create a tag, or undefined: what holds every push, and a grant below write. */
+export function tagWriteHeld(repo: CodeRepoSummary, viewer: Reader): string | undefined {
+  const held = pushHeld(repo, viewer);
+  if (held) return held;
+  if (repo.access && repo.access !== "write" && repo.access !== "maintain") {
+    return `You ${repo.access} ${repo.name}; creating a tag takes write.`;
+  }
+  return undefined;
+}
+
+/** Why the reader cannot delete a tag, or undefined: it takes maintain. */
+export function tagDeleteHeld(repo: CodeRepoSummary, viewer: Reader): string | undefined {
+  const held = pushHeld(repo, viewer);
+  if (held) return held;
+  if (repo.access && repo.access !== "maintain") {
+    return `You ${repo.access} ${repo.name}; deleting a tag takes maintain.`;
+  }
+  return undefined;
+}
+
+/** Why a new-tag form cannot be sent yet, or undefined. */
+export function tagFormHeld(name: string): string | undefined {
+  const n = name.trim();
+  if (n === "" || /\s/.test(n)) return "Name the tag, with no spaces.";
+  return undefined;
+}
+
 /** Why a new-branch form cannot be sent yet, or undefined. */
 export function branchFormHeld(name: string): string | undefined {
   const n = name.trim();

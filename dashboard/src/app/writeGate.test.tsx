@@ -274,6 +274,12 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "held with the engine's sentence where its rules refuse a delete",
     suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
   },
+  "routes/gitlet/repo/TagWrites.tsx": {
+    why:
+      "the Tags view's New tag, a tag's Delete (held with the engine's sentence where a rule " +
+      "keeps the tag) and a commit page's Tag (code_create_tag, code_delete_tag)",
+    suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
+  },
   "routes/gitlet/repo/FileWrites.tsx": {
     why:
       "a branch's files: Edit (a pencil), New file (a plus in a file's tree), Delete file " +
