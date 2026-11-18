@@ -266,7 +266,7 @@ type ConversationSession struct {
 	MaxBytesPerSeat int64 `yaml:"max_bytes_per_seat,omitempty" json:"max_bytes_per_seat,omitempty" js:"min=34603008;max=68719476736" desc:"Object-store bytes one seat's captured executor sessions may hold; past it the oldest ended turns' sessions are released. It is also the allowance of the seat's saves of running sessions, which the object store keeps for about a day once a newer one replaces them, so a seat holds up to twice it (default 64 MiB, 33 MiB..64 GiB)."`
 
 	// SaveIntervalSeconds is the shortest time between saves of a running
-	// Claude Code executor's session: the node driving its box keeps what
+	// executor's session: the node driving its box keeps what
 	// the harness has written so far as the turn's newest capture, so a run
 	// whose box or node is lost continues from that save. A seat's saves are
 	// paced by their size beyond it, so its superseded saves hold at most
@@ -277,7 +277,7 @@ type ConversationSession struct {
 	// and the node another). There is no "off" short of `enabled: false`,
 	// which keeps no session at all. Each node reads it off its own
 	// revision, since a cadence binds only the node driving the box.
-	SaveIntervalSeconds int `yaml:"save_interval_seconds,omitempty" json:"save_interval_seconds,omitempty" js:"min=0;max=3600" desc:"Shortest time in seconds between saves of a running executor's session (Claude Code runs; default 600, 0 takes it, 300..3600). A seat's saves are paced by their size beyond it, so at the default max_bytes_per_seat a session past about 0.4 MiB sealed is saved about every 27 minutes per sealed MiB, twice that once the seat has saved for a day."`
+	SaveIntervalSeconds int `yaml:"save_interval_seconds,omitempty" json:"save_interval_seconds,omitempty" js:"min=0;max=3600" desc:"Shortest time in seconds between saves of a running executor's session (default 600, 0 takes it, 300..3600). A seat's saves are paced by their size beyond it, so at the default max_bytes_per_seat a session past about 0.4 MiB sealed is saved about every 27 minutes per sealed MiB, twice that once the seat has saved for a day."`
 }
 
 // The per-seat session budget's default and bounds.

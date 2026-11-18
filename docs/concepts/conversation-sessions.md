@@ -399,7 +399,7 @@ turn_engine:
                                   #   may hold, and again its saves'
                                   #   allowance (33 MiB..64 GiB)
     save_interval_seconds: 600    # shortest time between saves of a running
-                                  #   Claude Code job's session (300..3600;
+                                  #   executor job's session (300..3600;
                                   #   0 takes 600), paced by size beyond it
 ```
 
@@ -450,7 +450,7 @@ quarter of it, so a company of twenty seats or more belongs on S3
 files included.
 
 **`save_interval_seconds`** is the shortest time between saves of a running
-Claude Code job's session, 600 s by default, 300 to 3600 taken and anything
+executor job's session, 600 s by default, 300 to 3600 taken and anything
 else refused, never clamped (0 takes the default). It bounds what a run lost
 with its box does again: about the interval and one save's take. A seat's saves
 are spaced by size beyond it, so its superseded saves stay within its
