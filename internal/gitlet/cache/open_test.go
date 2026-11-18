@@ -19,10 +19,10 @@ import (
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 )
 
-// hangDetector bounds a case's wait for a second process or for the
-// janitor: a claim that blocked rather than refused, or a kick nothing
-// answered, would otherwise hold the case until the package's timeout and say
-// nothing about why. Never a performance claim.
+// hangDetector bounds a case's wait for a second process or the janitor, so a
+// claim that blocked rather than refused, or a kick nothing answered, fails
+// the case by name instead of at the package's timeout. Never a performance
+// claim.
 const hangDetector = 30 * time.Second
 
 // Repository ids the cases use.
@@ -32,43 +32,17 @@ const (
 	repoC = "c3a1f9d2-6b1e-4c2a-8f3d-2e5b7a9c0d14"
 )
 
-// eventually waits, under the hang detector, until cond holds. Its deadline
-// only ends a wait that has failed, and its pace only paces the poll: no
-// caller's cond is one a build that missed the event it waits for meets later
-// inside the bound, so neither decides a claim. A cache never started runs
-// nothing behind the serving: what a cond reads is made by the case's own
-// calls and the work they start, whose waits on the machine's clock — a slot
-// of the pool, a git's deadline or stall, a check's or a hint's bound — end
-// that work in a failure, never in the event. A started one runs every loop
-// Start begins, and no wait those loops keep on the machine's clock makes a
-// caller's cond inside the bound:
-//
-//   - The janitor's tick is the case's wherever the cond is a pass of it to
-//     make: trash/ emptied, an eviction, the memo trimmed, a last use
-//     stamped. Where it ticks on the machine's clock, a minute apart, the
-//     case waits for a graph, rounds, the scrubber or the installer, none of
-//     which its passes move.
-//   - The maintainer's tick is the case's wherever a run of it could make the
-//     cond: a graph, or the janitor kicked as a run ends. Where it ticks on
-//     the machine's clock, every ten seconds, the case waits for the
-//     scrubber or the installer, which no run of it moves, or for the janitor
-//     over copies no round of the process has read whole, on which it starts
-//     no run.
-//   - The scrubber's interval and the backfill's horizon are a day away, and
-//     the installer waits on the case's clock wherever it waits at all.
-//   - The backfill paces its steps by twice a page's own duration,
-//     milliseconds, and retries a step only after it failed, about five
-//     seconds on, which no step does in any caller's world: the fake log
-//     answers every page, and copies no round has read whole give it no
-//     step. A step's pin is no use, so it wakes no scrubber, and its release
-//     kicks the janitor only as a reader's release would, as the copy's last
-//     pin past the budget.
-//   - The indexer never runs: no caller's world gives the cache a placement.
-//
-// A claim a broken build would still meet in time by another way is read
-// where only the code under test makes it, never by how soon this saw it: the
-// round's kick of the janitor, which a maintenance run's end sends too, is
-// read off the kick (TestAGrowingRoundKicksTheJanitor).
+// eventually waits, under the hang detector, until cond holds. The deadline
+// only fails a wait and the pace only paces the poll: no caller's cond is one
+// a build that missed its event meets later inside the bound. Unstarted, a
+// cache runs nothing in the background, and its requests' machine-clock waits
+// end in failure, never the event. Started, no loop's machine-clock wait makes
+// a cond: the janitor's and maintainer's ticks are the case's wherever a pass
+// could make it; the scrubber's interval and the backfill's horizon are a day
+// away; the installer waits on the case's clock; the backfill retries only a
+// failed step and the fake log fails none; no world gives the indexer a
+// placement. A claim a broken build could still meet another way is read off
+// its signal (TestAGrowingRoundKicksTheJanitor reads the round's kick).
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(hangDetector)
@@ -81,10 +55,9 @@ func eventually(t *testing.T, what string, cond func() bool) {
 }
 
 // OPEN TAKES ONLY WHAT PREPARE RETURNED, ONCE: the Layout carries Prepare's
-// claim and its reading of repos/, so a Layout built by hand — even one naming
-// a prepared directory — has neither, a Layout whose directory was changed
-// names one Prepare did not read, and a Layout already opened has handed both
-// on.
+// claim and its reading of repos/, which a hand-built Layout (even over a
+// prepared directory) lacks, a changed Dir does not match, and an opened one
+// has handed on.
 func TestOpenTakesOnlyALayoutPrepareReturned(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -122,9 +95,8 @@ func TestOpenTakesOnlyALayoutPrepareReturned(t *testing.T) {
 }
 
 // ONE CACHE A POOL. The pool reports every run to one observer, which Open
-// installs last: a second cache opened over a pool another cache observes is
-// refused by name, and once that cache stops — Stop gives its observer back —
-// a cache over the same pool opens.
+// installs last: a second cache over an observed pool is refused by name, and
+// opens once the first stops and Stop gives its observer back.
 //
 // Mutation: Stop keeping its observer (the second cache is refused).
 func TestOneCacheObservesAPool(t *testing.T) {
@@ -156,12 +128,11 @@ func TestOneCacheObservesAPool(t *testing.T) {
 	second.Stop(context.Background())
 }
 
-// ONE PROCESS A CACHE DIRECTORY. Two engines pointed at one gitlet.cache_dir
-// would empty each other's tmp/ and scratch/ at boot and race on every
-// repository's files, so the second is refused, told who holds it — from the
-// first one's Prepare on, and before the second's Prepare moves the holder's
-// live HOME aside — and the claim is the kernel's, so it is free again the
-// moment the holder stops.
+// ONE PROCESS A CACHE DIRECTORY. Two engines on one gitlet.cache_dir would
+// empty each other's tmp/ and scratch/ and race on every repository, so the
+// second is refused and told the holder, from the first's Prepare on and
+// before the second's Prepare moves the holder's live HOME aside. The claim is
+// the kernel's, free again the moment the holder stops.
 func TestTwoProcessesNeverShareACache(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -181,8 +152,7 @@ func TestTwoProcessesNeverShareACache(t *testing.T) {
 	}
 
 	refusedElsewhere("between its Prepare and its Open")
-	// Its pool made a HOME of its own at the same path had it moved the
-	// holder's, so the question is whether the directory is the same one.
+	// A moved HOME would be replaced at the same path, so compare identity.
 	if after, err := os.Stat(w.layout.Home); err != nil || !os.SameFile(home, after) {
 		t.Errorf("the refused process moved the holder's HOME aside (%v)", err)
 	}
@@ -215,9 +185,9 @@ func openInAnotherProcess(t *testing.T, dir string) (string, error) {
 	return string(out), err
 }
 
-// EVERY REQUIRED FIELD IS REFUSED BY NAME, before the directory is touched: a
-// cache missing its pool, its rows or its object store would open and then
-// fail its first sync, in a request, far from the wiring that forgot it.
+// EVERY REQUIRED FIELD IS REFUSED BY NAME, before the directory is touched:
+// otherwise the cache would open and fail its first sync in a request, far
+// from the wiring that forgot it.
 func TestOptionsAreRefusedByName(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -253,8 +223,8 @@ func TestOptionsAreRefusedByName(t *testing.T) {
 		}
 	})
 
-	// Every refusal left the directory as it was and the Layout unopened —
-	// and a nil Logger and a nil Metrics are legal.
+	// Every refusal left the directory and the Layout untouched; a nil Logger
+	// and Metrics are legal.
 	if !exists(w.path("tmp", "kept")) {
 		t.Fatal("a refused Open touched tmp/")
 	}
@@ -265,10 +235,9 @@ func TestOptionsAreRefusedByName(t *testing.T) {
 	c.Stop(context.Background())
 }
 
-// A BOOT CLEARS WHAT THE LAST PROCESS LEFT IN FLIGHT, at once and without
-// waiting on it: scratch/ and tmp/ held only that process's requests, so they
-// are moved into trash/ as Open runs, and the janitor removes trash/ in the
-// background. repos/ is the repositories, and is the scan's.
+// A BOOT CLEARS WHAT THE LAST PROCESS LEFT IN FLIGHT without waiting on it:
+// scratch/ and tmp/ held only its requests, so Open moves them into trash/
+// and the janitor removes trash/ in the background. repos/ is the scan's.
 func TestABootSweepsScratchAndTmp(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -299,9 +268,7 @@ func TestABootSweepsScratchAndTmp(t *testing.T) {
 }
 
 // THE HOOK EXECS EXACTLY THE CONFIGURED COMMAND, whatever its arguments hold,
-// and is settled before Open returns: a script just written can be refused by
-// the kernel (text file busy) while a forked child still holds it open for
-// writing, and the first push's receive-pack would be the one refused.
+// and is settled before Open returns (TestTheHookIsSettledBeforeOpenReturns).
 func TestTheHookScriptExecsTheConfiguredCommand(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -334,8 +301,7 @@ func TestTheHookScriptExecsTheConfiguredCommand(t *testing.T) {
 		t.Errorf("the probe = %q, %v: want nothing and exit 0", out, err)
 	}
 
-	// A later Open writes it again: the binary's path changes across an
-	// upgrade.
+	// Every Open rewrites it: the binary's path changes across an upgrade.
 	c.Stop(context.Background())
 	w.open(t, func(o *cache.Options) { o.HookCommand = []string{"/bin/true"} })
 	if got := read(t, hook); !strings.HasSuffix(got, "exec '/bin/true'\n") {
@@ -344,14 +310,11 @@ func TestTheHookScriptExecsTheConfiguredCommand(t *testing.T) {
 }
 
 // THE HOOK CAN BE EXEC'D THE MOMENT OPEN RETURNS, whatever else the process
-// is forking: a child forked while the script is open for writing holds it
-// until that child execs — or, here, for as long as it lives, since the
-// case hands it the descriptor — and the kernel refuses to exec a file
-// anything holds open for writing (text file busy). The engine forks
-// constantly — every git process — so the first push's receive-pack would be
-// the exec refused. The case makes the window certain rather than likely: a
-// child holds the staged hook's write descriptor for most of a second, and
-// the hook is exec'd the moment Open returns, with no retry.
+// forks: a child forked while the script is open for writing holds it, and the
+// kernel refuses to exec it (text file busy). The engine forks for every git
+// process, so the first push's receive-pack would be refused. The case makes
+// the window certain: a child holds the staged hook's write descriptor for
+// most of a second, and the hook is exec'd as Open returns, with no retry.
 func TestTheHookIsSettledBeforeOpenReturns(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -382,10 +345,9 @@ func TestTheHookIsSettledBeforeOpenReturns(t *testing.T) {
 }
 
 // A REPOSITORY HAS ONE DIRECTORY AFTER A BOOT: its highest incarnation, which
-// holds the newest downloads whether it is a finished rebuild or a partial
-// one. Every other entry of repos/ — a lower incarnation, a name that is not
-// a repository's, a number spelled with a leading zero, an id not in its
-// canonical spelling, a link — is moved aside and said so.
+// holds the newest downloads, finished rebuild or not. Every other entry of
+// repos/ (a lower incarnation, a foreign name, a leading-zero number, a
+// non-canonical id, a link) is moved aside and logged.
 func TestOpenKeepsOneIncarnationPerRepository(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -432,35 +394,24 @@ func TestOpenKeepsOneIncarnationPerRepository(t *testing.T) {
 	if opened[0]["repos"] != float64(1) || opened[0]["trashed"] != float64(6) {
 		t.Errorf("code_cache_opened = %v, want one repository and six trashed", opened[0])
 	}
-	// With no state, what the incarnation holds is measured: its objects
-	// and packed-refs, and nothing else of it.
+	// With no state, the incarnation is measured: objects and packed-refs only.
 	if opened[0]["bytes"] != float64(320) {
 		t.Errorf("code_cache_opened reports %v bytes, want the 320 under objects/ and packed-refs", opened[0]["bytes"])
 	}
 }
 
 // STOP GIVES THE DIRECTORY BACK BEFORE IT RETURNS when nothing of the cache's
-// is running in it, whatever its context says. A harness stops with a
-// context the test has already ended, and a node stops with one its shutdown
-// may already have spent; deciding "is anything running?" by racing that
-// context against the answer took the dead context's branch nearly every
-// time, logged a stop that had not happened, and left the claim held past
-// Stop — so the next boot of the directory was refused. Here every round's
-// Stop gets an ended context, and the directory is prepared again at once; a
-// started cache whose loops are all parked between passes holds nothing
-// either.
-//
-// "PARKED" IS A STATE THE CASE BRINGS ABOUT, never one it samples. Start
-// launches six loops and four of them pass at once, so a moment in which
-// nothing runs can come before a loop's first pass has begun — the pass then
-// runs into the Stop, which logs it as it should (crewlet#755). In a synctest
-// bubble synctest.Wait returns only once every loop is durably blocked
-// between passes, and the bubble's clock moves only when the case itself
-// blocks, so no tick or timer wakes one before the Stop.
+// runs, whatever its context says: harnesses and shutdowns stop with spent
+// contexts, and racing one against "is anything running?" keeps the claim
+// past Stop. Each Stop here gets an ended context and the directory is
+// prepared again at once, for a cache never started and one with every loop
+// parked. Parked is brought about, never sampled: a loop's first pass may not
+// have begun, and one that runs into the Stop is logged (crewlet#755).
+// synctest.Wait returns once every loop is durably blocked, and the bubble's
+// clock moves only when the case blocks.
 //
 // Mutation: decide "is anything running?" by the wait alone (Stop's idle
-// branch taken out) — the first round's Stop keeps the claim, and the
-// Prepare after it is refused.
+// branch taken out): the first round's Stop keeps the claim.
 func TestStopWithNothingRunningFreesTheDirectoryAtOnce(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -490,10 +441,9 @@ func TestStopWithNothingRunningFreesTheDirectoryAtOnce(t *testing.T) {
 	})
 }
 
-// A STARTED CACHE EMPTIES trash/ WHEN KICKED, with no pass asked of it: the
-// boot's own moves at once, and a retired incarnation nobody holds the moment
-// it is retired — not at a tick, which this case never delivers, so no tick
-// can pass for the kick.
+// A STARTED CACHE EMPTIES trash/ WHEN KICKED: the boot's moves at once, and an
+// unheld incarnation the moment it is retired. The case delivers no tick, so
+// none can pass for the kick.
 func TestAStartedCacheEmptiesTrashWhenKicked(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -513,20 +463,14 @@ func TestAStartedCacheEmptiesTrashWhenKicked(t *testing.T) {
 }
 
 // NOTHING OF A STOPPED CACHE STARTS AGAIN: a Start after Stop runs no
-// janitor, so nothing of this process touches a directory that may already be
-// the next boot's — here a file of trash/ the next boot wrote before the
-// Start. "Nothing" is read in a synctest bubble, twice, never after a pause:
-// once every goroutine of the case is durably blocked or gone (synctest.Wait)
-// — a janitor the Start began has made its first pass over trash/ by then,
-// however late it ran — and again once the clock has moved past every timer
-// the cache arms (pastEveryTimer) and every goroutine has blocked again — a
-// janitor begun behind a wait on that clock has made its pass by then too. On
-// a healthy build the Start begins nothing, so nothing runs in the span.
+// janitor, so this process never touches a directory that may be the next
+// boot's (here, a trash/ file it wrote). "Nothing" is read in a synctest
+// bubble, never after a pause: once synctest.Wait returns, by when a started
+// janitor has made its first pass, and again past every timer the cache arms
+// (pastEveryTimer), by when a janitor behind a clock wait has too.
 //
-// Mutations: Stop stops nothing (marks nothing stopped and leaves the cache's
-// lifetime running) — the Start after it begins the janitor, whose first pass
-// empties trash/; and the same with the janitor begun a minute after the
-// Start — its pass empties trash/ once the clock has moved.
+// Mutations: Stop stops nothing, so the Start begins the janitor and its
+// first pass empties trash/; the same with the janitor begun a minute late.
 func TestStartAfterStopDoesNothing(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -552,8 +496,8 @@ func TestStartAfterStopDoesNothing(t *testing.T) {
 	})
 }
 
-// heldRemoval opens a started cache whose janitor stops inside its first
-// removal until release is called — a pass in flight, held still.
+// heldRemoval opens a started cache whose janitor holds inside its first
+// removal until release is called: a pass in flight.
 func heldRemoval(t *testing.T, w *world) (c *cache.Cache, release func()) {
 	t.Helper()
 	write(t, w.path("trash", "large"), "what the pass is removing")
@@ -583,20 +527,14 @@ func heldRemoval(t *testing.T, w *world) (c *cache.Cache, release func()) {
 }
 
 // STOP WAITS FOR A PASS IN FLIGHT before it gives the directory back: a
-// janitor still removing in trash/ is this process writing in a directory the
-// next boot would own. The Stop is read in a synctest bubble, twice, never
-// after a pause: once every goroutine of the case is durably blocked
-// (synctest.Wait) — a Stop that did not wait has returned by then, however
-// late it ran — and again once the clock has moved past every timer the cache
-// arms (pastEveryTimer) and every goroutine has blocked again — a Stop that
-// waited for the pass only as long as a grace of its own has returned by then
-// too. On a healthy build the Stop has ended the cache's loops by the first
-// read, and the held pass waits on no clock, so nothing runs in the span.
+// janitor still removing in trash/ writes in a directory the next boot would
+// own. The Stop is read in a synctest bubble, never after a pause: once
+// synctest.Wait returns, by when a Stop that did not wait has returned, and
+// again past every timer the cache arms (pastEveryTimer), by when one that
+// waited only for a grace of its own has too. The held pass waits on no clock.
 //
-// Mutations: Stop takes the cache for idle whatever runs in it (idle read as
-// true) — it gives the claim back and returns while the pass is held; Stop
-// waits for the pass a minute at most — it returns while the pass is held,
-// once the clock has moved.
+// Mutations: Stop reads the cache as idle whatever runs; Stop waits for the
+// pass a minute at most. Each returns while the pass is held.
 func TestStopWaitsForAPassInFlight(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -639,10 +577,9 @@ func TestStopWaitsForAPassInFlight(t *testing.T) {
 	})
 }
 
-// A STOP ITS CONTEXT CUTS SHORT KEEPS THE CLAIM until the last of the cache's
-// work has ended: it returns, and says so, but another process is refused
-// the directory while this one is still writing in it — and gets it once the
-// work ends.
+// A STOP ITS CONTEXT CUTS SHORT KEEPS THE CLAIM until the cache's work ends: it
+// returns and logs so, but another process is refused the directory until
+// then.
 func TestAStopCutShortKeepsTheClaimUntilTheWorkEnds(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -670,15 +607,13 @@ func TestAStopCutShortKeepsTheClaimUntilTheWorkEnds(t *testing.T) {
 	}
 }
 
-// A REPOSITORY'S LAST USE SURVIVES A RESTART, to within a tick: a boot reads
-// it from the disk, and a state is rewritten only when its directory changes,
-// so a repository read all day and pushed to rarely came back from every
-// restart as the oldest entry there is — the first the budget evicts, and a
-// GET a push to bring back. Each tick stamps the moment of last use on what
-// the boot reads, and only for a repository used since its last stamp. The
-// tick's step is run here synchronously (RecordUse), over a repository with a
-// state and one without; TestTheJanitorsTickStampsTheLastUse is the janitor
-// running it at its tick, and at nothing else.
+// A REPOSITORY'S LAST USE SURVIVES A RESTART, to within a tick: a boot reads it
+// from disk and a state is rewritten only when its directory changes, so
+// without a stamp a repository read all day but rarely pushed would boot as
+// the oldest, the first the budget evicts. Each tick stamps the last use on
+// what the boot reads, only for repositories used since the last stamp. The
+// step runs synchronously here (RecordUse), over a repository with a state and
+// one without; TestTheJanitorsTickStampsTheLastUse runs it at the tick.
 func TestALastUseSurvivesARestart(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -690,7 +625,7 @@ func TestALastUseSurvivesARestart(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// C has no state: what a boot reads is its directory's.
+	// C has no state: a boot reads its directory's time.
 	write(t, w.path("repos", repoC+".1.git", "objects", "pack", "pack-1.pack"), "p")
 	if err := os.Chtimes(w.path("repos", repoC+".1.git"), then, then); err != nil {
 		t.Fatal(err)
@@ -723,12 +658,10 @@ func TestALastUseSurvivesARestart(t *testing.T) {
 	}
 }
 
-// THE JANITOR'S TICK IS WHAT STAMPS A LAST USE, and only its tick: a started
-// cache stamps, at each tick, the last use of every repository used since the
-// one before — nothing asks for it, so a node that ran a day comes back from a
-// restart knowing what it served — and a pass a kick woke stamps nothing,
-// which is what holds the cost to one metadata write per used repository per
-// tick however often the janitor is kicked.
+// THE JANITOR'S TICK IS WHAT STAMPS A LAST USE, and only its tick: each tick
+// stamps every repository used since the one before, unasked, and a pass a
+// kick woke stamps nothing, holding the cost to one metadata write per used
+// repository per tick however often the janitor is kicked.
 func TestTheJanitorsTickStampsTheLastUse(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -754,16 +687,14 @@ func TestTheJanitorsTickStampsTheLastUse(t *testing.T) {
 		o.Now = func() time.Time { return used }
 		cache.TicksFrom(o, ticks)
 	})
-	// B is never used. Its state is moved to a time of its own once the boot
-	// has read its last use, so a stamp of B shows even when what it writes
-	// is the last use the boot read.
+	// B is never used. Its state gets a time of its own after the boot read
+	// it, so a stamp of B shows even when it writes the last use the boot read.
 	untouched := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
 	if err := os.Chtimes(stateOf(repoB), untouched, untouched); err != nil {
 		t.Fatal(err)
 	}
 	c.Start(t.Context())
-	// Nothing of the cache's is running and trash/ is empty only once the
-	// pass that emptied it has ended, whatever that pass was going to stamp.
+	// Both hold only once the pass that emptied trash/ has ended, stamps and all.
 	passed := func() bool { return cache.Running(c) == 0 && len(names(t, w.path("trash"))) == 0 }
 	eventually(t, "the janitor's first pass", passed)
 
@@ -773,8 +704,7 @@ func TestTheJanitorsTickStampsTheLastUse(t *testing.T) {
 	}
 	s.Release()
 
-	// A kick: C, retired with nobody holding it, goes into trash/ and wakes
-	// the janitor.
+	// A kick: C, retired unheld, goes into trash/ and wakes the janitor.
 	if !cache.Retire(c, repoC) {
 		t.Fatal("nothing to retire")
 	}

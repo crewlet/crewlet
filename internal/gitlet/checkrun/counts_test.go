@@ -63,10 +63,10 @@ func numbered(n, width int) string {
 	return b.String()
 }
 
-// A FAILED RUN COUNTS ITS OUTPUT'S LINES IN ITS BOX, a container's and an e2b box's alike: an
-// output shorter than the tail is counted whole and numbered from its first line; one longer is
-// counted up to the tail's end, its tail cut where the byte before it is no newline and whole where
-// it is one; and in each the tail's first line, plus its own lines less one, is the output's last.
+// A FAILED RUN COUNTS ITS OUTPUT'S LINES IN ITS BOX, container and e2b alike: an output shorter
+// than the tail is counted whole from line 1; a longer one up to the tail's end, the tail cut where
+// the byte before it is no newline and whole where it is one; in each, the tail's first line plus
+// its own lines less one is the output's last.
 //
 // Mutation: read CheckTailBytes rather than one byte more (the cut is never seen, red).
 func TestAFailedRunCountsItsOutputsLinesInItsBox(t *testing.T) {
@@ -211,8 +211,8 @@ func TestALineCountTheBoxCannotMakeLeavesTheEndingUncounted(t *testing.T) {
 	}
 }
 
-// errNoneReads is the estate's answer to an ending no data node reads: a stand-in for the unknown
-// keys refused over a whole walk, which the engine's Options.Unread recognises.
+// errNoneReads stands in for the estate's refusal of an ending no data node reads (its unknown keys
+// refused over a whole walk), which the engine's Options.Unread recognises.
 var errNoneReads = errors.New("no data node reads the ending's counts")
 
 // unreadCounts is a fleet's estate recording each ending's operation: where refuse is set its data
@@ -250,8 +250,8 @@ func (u *unreadCounts) asked() []string {
 }
 
 // AN ENDING NO DATA NODE READS IS RECORDED WITHOUT ITS COUNTS: refused for its counts over a whole
-// walk, it is sent again without them under the same operation and recorded, said once; with no
-// Unread the ending is not recorded, as before; and an ending answered busy first keeps its counts.
+// walk, it is sent again without them under the same operation and recorded, logged once; with no
+// Unread it is not recorded; and an ending answered busy first keeps its counts.
 //
 // Mutation: strip the counts on every error (the busy ending loses them, red).
 func TestAnEndingNoDataNodeReadsIsRecordedWithoutItsCounts(t *testing.T) {

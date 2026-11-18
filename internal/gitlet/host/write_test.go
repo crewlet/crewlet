@@ -74,9 +74,9 @@ func newWriteCase(t *testing.T, o gitlettest.SoloOptions, seed map[string]string
 	return seedWriteCase(newCase(t, o, gitlettest.Settings()), seed)
 }
 
-// seedWriteCase is the write case of c, main holding seed: ceo's push of it
-// is c's first request, so what a case hands its host before this is in
-// place for every request the host serves.
+// seedWriteCase is the write case of c, main holding seed. ceo's push of it is
+// c's first request, so whatever a case hands its host before this governs
+// every request.
 func seedWriteCase(c *gitlettest.Case, seed map[string]string) *writeCase {
 	c.T.Helper()
 	p := gitlettest.NewPerson(c.T, c.Fleet, "ceo")
@@ -131,15 +131,14 @@ func (c *writeCase) objects() []string {
 }
 
 // AN ENGINE COMMIT IS THE ACTING PRINCIPAL'S (ADR-0092): its author is the
-// seat the signer names, at the address it names; its committer the engine,
+// signer's seat at the address it names; its committer the engine,
 // `Crewlet <engine@seats.invalid>` with code.identity_domain unset; its author
-// date the operation's own second, and its committer date the same while the
-// parent is older. And it is a pure function of the write and its parent: the
-// same write built on two Gitlet nodes' scratches is one commit, byte for byte.
+// date the operation's own second, its committer date too while the parent is
+// older. It is a pure function of the write and its parent: built in two
+// Gitlet nodes' scratches, it is one commit, byte for byte.
 //
-// Mutations: the committer named from the author — the committer line is
-// alice's, red; the author date read from the node's clock — the operation
-// was minted an hour ago, red.
+// Mutations: name the committer from the author (alice's line), red; read the
+// author date from the node's clock (the op was minted an hour ago), red.
 func TestAnEngineCommitIsTheActingPrincipals(t *testing.T) {
 	t.Parallel()
 	minted := time.Now().UTC().Add(-time.Hour).Truncate(time.Second).Add(300 * time.Millisecond)
@@ -168,12 +167,12 @@ func TestAnEngineCommitIsTheActingPrincipals(t *testing.T) {
 }
 
 // A COMMIT IS NEVER DATED BEFORE ITS PARENT: over a parent committed an hour
-// after the operation was minted — a person's clock ahead — the commit's
-// author date is still the operation's second, and its committer date the
-// parent's, so no walk by date meets a child before its parent.
+// after the operation was minted (a person's clock ahead), the author date is
+// still the operation's second and the committer date the parent's, so no walk
+// by date meets a child before its parent.
 //
-// Mutations: clamp the author date too — it reads the parent's, red; leave the
-// committer date at the operation's — it reads an hour before the parent, red.
+// Mutations: clamp the author date too (it reads the parent's), red; leave the
+// committer date at the operation's (an hour before the parent), red.
 func TestACommitIsNeverDatedBeforeItsParent(t *testing.T) {
 	t.Parallel()
 	c := newWriteCase(t, gitlettest.SoloOptions{}, map[string]string{"README.md": "one\n"})
@@ -199,14 +198,14 @@ func TestACommitIsNeverDatedBeforeItsParent(t *testing.T) {
 }
 
 // A RETRIED ENGINE WRITE IS ONE PUSH (ADR-0092's first Enforced-by): one write
-// asked twice at once on one Gitlet node is built once — the second joins the
-// first, which holds the write's one scratch, and is answered its result — and
-// asked again once it landed is answered from its push's row with nothing
-// built; every answer names WritePushID of its operation, a canonical UUIDv7.
+// asked twice at once on one Gitlet node is built once, the second joining the
+// first (which holds the write's one scratch) for its result; asked again once
+// landed, it is answered from its push's row, nothing built. Every answer
+// names WritePushID of its operation, a canonical UUIDv7.
 //
-// Mutations: a named derivation for the push id — the scratch refuses its
-// name, red; drop the in-flight join — the second never joins, and its own
-// scratch of one push id is refused, red.
+// Mutations: a named derivation for the push id (the scratch refuses its
+// name), red; drop the in-flight join (the second's own scratch of the same
+// push id is refused), red.
 func TestARetriedEngineWriteIsOnePush(t *testing.T) {
 	t.Parallel()
 	e := &recording{}
@@ -290,10 +289,10 @@ func TestARetriedEngineWriteIsOnePush(t *testing.T) {
 }
 
 // A SEAT'S WRITE ON A NODE BEHIND THE CONFIGURATION IS UNREADY, behind_config,
-// with nothing synced, built or proposed — so the walk asks a current Gitlet node
-// — while a person's write, which reads no chart, lands there.
+// nothing synced, built or proposed, so the walk asks a current Gitlet node; a
+// person's write, which reads no chart, lands there.
 //
-// Mutation: drop the check — the seat's write lands, red.
+// Mutation: drop the check: the seat's write lands, red.
 func TestAWriteBehindTheConfigurationIsUnready(t *testing.T) {
 	t.Parallel()
 	e := &recording{}
@@ -315,11 +314,11 @@ func TestAWriteBehindTheConfigurationIsUnready(t *testing.T) {
 }
 
 // A WRITE'S REFUSAL IS JUDGED AT THE LOG'S HEAD before it is answered: over a
-// copy still holding a protection a revision has since removed, the write's
-// first judgement refuses — and the copy, synced through the barrier, judges
-// it again and lands it.
+// copy still holding a protection a revision has since removed, the first
+// judgement refuses; the copy, synced through the barrier, judges again and
+// lands it.
 //
-// Mutation: answer the first refusal — protected_direct, red.
+// Mutation: answer the first refusal (protected_direct), red.
 func TestAWriteRefusalIsJudgedAtLinearizable(t *testing.T) {
 	t.Parallel()
 	e := &recording{}
@@ -339,15 +338,14 @@ func TestAWriteRefusalIsJudgedAtLinearizable(t *testing.T) {
 }
 
 // A SEAT'S WRITE REFUSAL IS JUDGED AGAIN ONLY WHILE ITS RE-SYNCS LAST: a seat
-// writing onto a head the branch is not at, over a copy read as it stands, is
-// judged again at the log's head — one barrier a write — until its turn's
-// sixteen on the node are spent; then the refusal is answered from its
-// session, through no barrier, saying it was not judged again and when its
-// re-syncs come back. A person's write, charged to nobody, is still judged
-// again.
+// writing onto a head the branch is not at, over a stale copy, is judged again
+// at the log's head (one barrier a write) until its turn's gitlet.ResyncBurst
+// on the node are spent; then the refusal is answered from its session,
+// through no barrier, saying it was not judged again and when its re-syncs
+// return. A person's write, charged to nobody, is still judged again.
 //
-// Mutation: the re-judgement taken without the bucket (resync answering nil)
-// — the seventeenth write reads through the barrier — red.
+// Mutation: re-judge without the bucket (resync answering nil): the write past
+// the burst reads through the barrier, red.
 func TestASeatsWriteRefusalIsJudgedAgainWhileItsResyncsLast(t *testing.T) {
 	t.Parallel()
 	e := &recording{}
@@ -387,16 +385,15 @@ func TestASeatsWriteRefusalIsJudgedAgainWhileItsResyncsLast(t *testing.T) {
 }
 
 // A SEAT'S WRITE IS HELD TO WHOEVER ITS TURN WORKS FOR, on the Gitlet node that
-// builds it (gitlet.EngineWrite.Ceiling, M3-decisions U40 (a)): alice, who
-// writes the fixture repository, moves main for the unit's lead, who writes it
-// too, and not for bob, who only reads it, nor for nobody — a stranger, or a
-// person who may not act — each refused not_permitted in words saying whom the
-// work is for, nothing built; and under every ceiling she still writes under
-// her own namespace, her own work.
+// builds it (gitlet.EngineWrite.Ceiling, M3-decisions U40 (a)): alice moves
+// main for the unit's lead, who writes the repository too, but not for bob,
+// who only reads it, nor for nobody (a stranger, or a person who may not act):
+// each refused not_permitted saying whom the work is for, nothing built. Under
+// every ceiling she still writes her own namespace.
 //
-// Mutations: build with the seat's own grant alone (drop the ceiling in
-// rules) — bob's and nobody's main lands, red; refuse the seat's own work under
-// a ceiling (OwnWork answering false) — the namespace write is refused, red.
+// Mutations: build with the seat's own grant alone (no ceiling in rules): bob's
+// and nobody's main land, red; OwnWork answering false: the namespace write is
+// refused, red.
 func TestASeatsWriteIsHeldToWhoeverItsTurnWorksFor(t *testing.T) {
 	t.Parallel()
 	c := newWriteCase(t, gitlettest.SoloOptions{}, map[string]string{"README.md": "one\n"})
@@ -434,11 +431,11 @@ func TestASeatsWriteIsHeldToWhoeverItsTurnWorksFor(t *testing.T) {
 }
 
 // A RETRIED WRITE THAT LANDED IS ANSWERED FROM ITS ROW: its branch moved on by
-// a later push, the write asked again finds a head that is not the one it
-// read, asks its own push's outcome before calling it stale, and answers
-// applied with its first commit — building nothing.
+// a later push, the write asked again asks its own push's outcome before
+// calling the head stale, and answers applied with its first commit, building
+// nothing.
 //
-// Mutation: answer stale before asking the outcome — stale, red.
+// Mutation: answer stale before asking the outcome: stale, red.
 func TestARetriedWriteThatLandedIsAnsweredFromItsRow(t *testing.T) {
 	t.Parallel()
 	c := newWriteCase(t, gitlettest.SoloOptions{}, map[string]string{"README.md": "one\n"})
@@ -464,12 +461,12 @@ func TestARetriedWriteThatLandedIsAnsweredFromItsRow(t *testing.T) {
 	}
 }
 
-// A WRITE WHOSE CALLER LEFT NO TIME FOR ITS PROPOSAL UPLOADS NOTHING: a caller
-// whose deadline cannot hold the bundle's upload and the proposal after it is
-// answered busy before a byte is stored — a slow bucket costs a refusal, never
-// a PUT nobody proposes.
+// A WRITE WHOSE CALLER LEFT NO TIME FOR ITS PROPOSAL UPLOADS NOTHING: a
+// deadline that cannot hold the bundle's upload and then the proposal is
+// answered busy before a byte is stored, so a slow bucket costs a refusal,
+// never a PUT nobody proposes.
 //
-// Mutation: drop the rule — the bundle is stored, red.
+// Mutation: drop the rule: the bundle is stored, red.
 func TestAWriteWithNoTimeForItsProposalUploadsNothing(t *testing.T) {
 	t.Parallel()
 	e := &recording{}
@@ -491,13 +488,11 @@ func TestAWriteWithNoTimeForItsProposalUploadsNothing(t *testing.T) {
 	}
 }
 
-// A CREATE AND A DELETE OF A BRANCH BUILD NOTHING: no git writer runs, no
-// pack is stored and no unit of the seat share is taken — a create's target
-// is checked present, the connectivity a receive-pack would have checked —
-// and both land as pushes.
+// A CREATE AND A DELETE OF A BRANCH BUILD NOTHING: no git writer runs, no pack
+// is stored, no unit of the seat share is taken; a create's target is checked
+// present (receive-pack's connectivity check); both land as pushes.
 //
-// Mutation: take a unit for them — the share holds one while the create
-// lands, red.
+// Mutation: take a unit for them: one is held while the create lands, red.
 func TestCreateAndDeleteBranchBuildNothing(t *testing.T) {
 	t.Parallel()
 	c := newWriteCase(t, gitlettest.SoloOptions{}, map[string]string{"README.md": "one\n"})
@@ -545,12 +540,11 @@ func TestCreateAndDeleteBranchBuildNothing(t *testing.T) {
 }
 
 // NO WRITE DELETES THE DEFAULT BRANCH: code_delete_branch, a person's from the
-// dashboard included, is judged by the push decide's own rule before anything
-// lands (gitlet.DefaultBranchRefusal): refused default_branch with its
-// sentence, the branch still a row, on a repository whose default branch no
-// protection rule names, where nothing else would refuse it.
+// dashboard included, is judged by the push decide's own rule
+// (gitlet.DefaultBranchRefusal) and refused default_branch with its sentence,
+// the branch still a row, even where no protection rule names the branch.
 //
-// Mutation: drop the rule from the write's judge and the deletion lands, red.
+// Mutation: drop the rule from the write's judge: the deletion lands, red.
 func TestNoWriteDeletesTheDefaultBranch(t *testing.T) {
 	t.Parallel()
 	settings := gitlettest.Settings()
@@ -567,12 +561,12 @@ func TestNoWriteDeletesTheDefaultBranch(t *testing.T) {
 	}
 }
 
-// A WRITE'S BUILD HOLDS ONE UNIT OF THE SEAT SHARE, AND ITS LANDING NONE: while
-// its git runs the node's seat git work holds its unit; given back before the
-// upload, the proposal and the wait for its row, none of which is git.
+// A WRITE'S BUILD HOLDS ONE UNIT OF THE SEAT SHARE, AND ITS LANDING NONE: the
+// unit is held while its git runs and given back before the upload, the
+// proposal and the wait for its row, none of which is git.
 //
-// Mutation: give the unit back after the landing — it is held at the
-// proposal, red.
+// Mutation: give the unit back after the landing: it is held at the proposal,
+// red.
 func TestAWritesBuildHoldsTheShareAndItsLandingNone(t *testing.T) {
 	t.Parallel()
 	c := newWriteCase(t, gitlettest.SoloOptions{}, map[string]string{"README.md": "one\n"})
@@ -602,15 +596,13 @@ func TestAWritesBuildHoldsTheShareAndItsLandingNone(t *testing.T) {
 
 // A WRITE READS WHAT ITS PATHS ARE IN ITS BUILD: a commit_files onto the head
 // it read, naming no object by id, asks git nothing before its build but where
-// its branch is, and its first cat-file — what every path it names and every
-// directory above one is at that head, each asked whole as `<head>:<path>` —
-// runs holding the build's unit of the seat share and charged to the build's
-// budget of git. git walks each of those paths from the root, so their cost
-// grows with the square of a path's depth, which no short check outside the
-// share may run up.
+// its branch is; its first cat-file, of every named path and each directory
+// above one as `<head>:<path>`, runs holding the build's share unit and
+// charged to the build's git budget. git walks each path from the root, a cost
+// growing with the square of depth, which no check outside the share may run up.
 //
-// Mutation: read the paths in the check, before the build takes its unit —
-// the read runs with no unit held, red.
+// Mutation: read the paths before the build takes its unit: the read runs
+// with none held, red.
 func TestAWriteReadsItsPathsInItsBuild(t *testing.T) {
 	t.Parallel()
 	c := newWriteCase(t, gitlettest.SoloOptions{}, map[string]string{"docs/a/b.md": "one\n"})
@@ -644,16 +636,13 @@ func TestAWriteReadsItsPathsInItsBuild(t *testing.T) {
 }
 
 // A WRITE PAST THE DEPTH BOUND RUNS NO GIT, and one at it builds a level at a
-// time: a commit_files putting a file one component deeper than a write may
-// name (gitlet.MaxTreePathDepth), or moving an entry there, is refused
-// ErrInvalid naming the bound before any git process runs; and a put at the
-// bound lands, its build running one mktree a level — as many as the bound,
-// and no more. Every cost of a build that grows with depth is held down by
-// that bound: the directories it rewrites, its mktree a level, and its read of
-// what each named path and each directory above one is, which git walks from
-// the root.
+// time: a commit_files putting or moving an entry one component past
+// gitlet.MaxTreePathDepth is refused ErrInvalid naming the bound before any
+// git runs; a put at the bound lands with one mktree a level, no more. The
+// bound holds down every build cost that grows with depth: the directories
+// rewritten, the mktrees, and the read of each named path, walked from the root.
 //
-// Mutation: drop the depth bound — the deeper put runs git, red.
+// Mutation: drop the depth bound: the deeper put runs git, red.
 func TestAWritePastTheDepthBoundRunsNoGit(t *testing.T) {
 	t.Parallel()
 	c := newWriteCase(t, gitlettest.SoloOptions{}, map[string]string{"README.md": "one\n"})
@@ -685,11 +674,10 @@ func TestAWritePastTheDepthBoundRunsNoGit(t *testing.T) {
 	}
 }
 
-// A WRITE'S BUILD IS ONE READ'S DEADLINE: its git — every process of it,
-// together — is given gitproc.ReadDeadline of run time, gitlet.WriteBuildDeadline,
-// which this package's constant names apart since gitlet imports no git; and a
-// build whose git runs the whole of it is too_large, a change no node builds
-// faster.
+// A WRITE'S BUILD IS ONE READ'S DEADLINE: all its git together gets
+// gitproc.ReadDeadline of run time, named apart as gitlet.WriteBuildDeadline
+// since gitlet imports no git; a build whose git runs the whole of it is
+// too_large, a change no node builds faster.
 func TestAWriteBuildIsOneReadsDeadline(t *testing.T) {
 	t.Parallel()
 	if gitlet.WriteBuildDeadline != gitproc.ReadDeadline {
@@ -720,12 +708,11 @@ func TestAWriteBuildIsOneReadsDeadline(t *testing.T) {
 }
 
 // A CHANGE IS JUDGED ON THE TREE AS THE CALL LEAVES IT, and built as it says:
-// a path beneath one the call removes may be made anew there, while every
-// other nesting of two paths a call names, a put over a directory, a move
-// onto an entry, and an edit or a mode of what is no file is refused by name;
-// what the change leaves is exactly the parent with the change made — a put
-// keeping an executable's mode, an emptied directory dropped, an emptied root
-// the empty tree — and a change that leaves the tree as it is makes nothing.
+// a path beneath one the call removes may be made anew; every other nesting of
+// two named paths, a put over a directory, a move onto an entry, and an edit
+// or mode of a non-file is refused by name. The result is exactly the parent
+// with the change made (a put keeps an executable's mode, an emptied directory
+// drops, an emptied root is the empty tree); a no-op change makes nothing.
 func TestAChangeIsJudgedOnTheTreeAsTheCallLeavesIt(t *testing.T) {
 	t.Parallel()
 	c := newWriteCase(t, gitlettest.SoloOptions{}, map[string]string{"a.txt": "a\n", "d/x.txt": "x\n",

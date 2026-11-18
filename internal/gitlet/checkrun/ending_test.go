@@ -36,13 +36,13 @@ func (u *digestUploader) Put(_ context.Context, r io.Reader, _ int64, _ objstore
 	return objstore.Object{Size: n}, nil
 }
 
-// A KEPT LOG READS ONLY THE BYTES IT KEEPS FROM THE BOX: a run whose output is
-// a MiB past gitlet.MaxCheckLogBytes keeps the output's last MaxCheckLogBytes,
-// byte for byte, and the box hands out exactly those — never the MiB before
-// them, which a remote box would send over the wire for nothing.
+// A KEPT LOG READS ONLY THE BYTES IT KEEPS FROM THE BOX: an output a MiB past
+// gitlet.MaxCheckLogBytes keeps its last MaxCheckLogBytes, byte for byte, and
+// the box hands out exactly those, never the MiB before, which a remote box
+// would send over the wire for nothing.
 //
-// Mutation: open the output from its start and read the earlier bytes away —
-// the box hands out the whole output, red.
+// Mutation: read from the output's start and discard the earlier bytes (the box
+// hands out the whole output, red).
 func TestAKeptLogReadsOnlyItsKeptBytesFromTheBox(t *testing.T) {
 	t.Parallel()
 	output := make([]byte, gitlet.MaxCheckLogBytes+1<<20)
@@ -98,11 +98,10 @@ func TestARunsEndingIsRecordedWhileItsLogStalls(t *testing.T) {
 	}
 }
 
-// THE SWEEP WAITS OUT A RUN'S ENDING: the patience the home's sweep gives a
-// running attempt past its timeout and its setup's grace covers the poll that
-// finds its command ended, the reading of its ending, the asking for it to be
-// recorded and a poll more — so a runner still reading or uploading what its
-// run left is never taken for a lost one.
+// THE SWEEP WAITS OUT A RUN'S ENDING: the patience the home's sweep gives an
+// attempt past its timeout and setup grace covers the poll that finds its
+// command ended, reading its ending, asking for it to be recorded and one poll
+// more, so a runner still reading or uploading is never taken for a lost one.
 //
 // Mutation: SweepPolls of four, with no time for the ending's reads, red.
 func TestTheSweepWaitsOutARunsEnding(t *testing.T) {
@@ -212,10 +211,10 @@ func (s *sarifStream) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// A SARIF LOG IS READ A RESULT AT A TIME: a log of some 48 MiB, a hundred and
-// fifty thousand failing results, is read with the heap growing by a fraction
-// of it — the failures an ending keeps and the result in hand, never the log
-// or every result decoded — and its results all counted.
+// A SARIF LOG IS READ A RESULT AT A TIME: a log of some 48 MiB, 150,000
+// failing results, is read with the heap growing by a fraction of it (the
+// failures an ending keeps and the result in hand, never the whole log) and
+// every result counted.
 //
 // Not parallel, so the heap it samples is its own.
 //

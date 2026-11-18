@@ -10962,8 +10962,8 @@ both, per seat, exactly as it decides
 [`executor_tail`](#queries) and a seat's phases with their prompts and
 responses: a session reaches nobody the run's live output did not. **What it
 shows them is more than the live output did.** The live output names each
-tool call's subject on one line and a failed result's first line, and never a
-successful result's body; a transcript holds every call's whole input and each
+tool call's subject, whole only within 8 KiB, and a failed result's first line,
+and never a result's body; a transcript holds every call's whole input and each
 result's text to an entry's bound — the contents of the files the run read and
 what its commands printed — and every subagent's thread. The redaction at the
 read matches the credential shapes the engine knows, not values: a secret of no

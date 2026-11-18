@@ -50,7 +50,7 @@ const (
 // encodeWindow's bytes.
 const treeWindowFormat = "tree_window/1"
 
-// treeWalkBounds are the bounds above, a Server's so a case can scale them.
+// treeWalkBounds are the bounds above, held per Server so a case can scale them.
 type treeWalkBounds struct {
 	span, window, narrowRecords, narrowEntries, narrowWalks, narrowBytes, memoRecords int
 }
@@ -425,7 +425,7 @@ type router struct {
 	tasks []routeTask
 	page  int // the entries of the page, ranked first
 	// windowsOnly: the page is answered, so the walks left only complete
-	// windows, and a budget, a due answer or a busy lane ends them quietly.
+	// windows and end quietly (endsQuietly).
 	windowsOnly bool
 }
 
@@ -821,8 +821,7 @@ const (
 	walkStatus                   // after a path: a status, or the next id
 )
 
-// walkTokenBytes is the most of a token a walk holds, as newRecords holds a
-// record.
+// walkTokenBytes is the most of a token a walk holds: newRecords' record bound.
 const walkTokenBytes = gitproc.MaxLine + gitlet.MaxGitPathBytes
 
 func newTreeWalk(rt *router, take func(*walkRecord) error) *treeWalk {

@@ -15,36 +15,16 @@ import (
 )
 
 // THE JANITOR: one goroutine, owned by Start, that gives back the disk the
-// cache has decided to give back, and holds the cache to its budget. Whatever
-// is removed is first RENAMED into trash/ — an instant at any size, on one
-// filesystem — and removed here, in the background: a request that lets go
-// of the last pin on a 20 GiB directory, or a boot that moves a crashed
-// process's scratch aside, returns at once rather than waiting on the
-// removal.
+// cache has decided to give back and holds it to its budget (package doc,
+// "Kept while there is room"). What is removed is first RENAMED into trash/,
+// instant at any size on one filesystem, so a request releasing the last pin
+// on a 20 GiB directory, or a boot moving scratch aside, never waits on it.
 //
-// A CACHE IS EVICTED TO ITS BUDGET AND FOR NO OTHER REASON. Over the budget,
-// the repositories used least recently go first, each a directory renamed
-// into trash/; under it, nothing goes, however long a repository has been
-// idle — and what the memo holds past its share is never a repository's to
-// make room for (overBudget): the memo's own trim gives it back. An idle repository costs disk the budget already bounds, while
-// evicting it costs ONE GET A PUSH the next time anybody fetches it — nothing
-// compacts a repository's packs — so a weekend's idle eviction was every
-// repository nobody fetched re-downloaded whole on Monday, on every Gitlet node.
-// A cache older than the rows' tombstone horizon is brought forward by a
-// whole read that reuses every pack it holds, so correctness never needed an
-// eviction either. A repository a request holds is never evicted, even over
-// the budget: it is served, and goes the first pass after its last reader —
-// or the maintenance run that pinned it — lets go, which kicks the janitor
-// for exactly that, as a round that grows the cache past its budget does,
-// rather than leaving it to the tick.
-//
-// It is also what makes a repository's LAST USE survive a restart: a boot
-// reads it from the disk (the state file's modification), and a state is
-// rewritten only when its directory changes, so a repository fetched all day
-// and pushed to rarely would otherwise come back from every restart as the
-// least recently used entry there is — the first the budget evicts. Every
-// tick stamps the moment of last use onto each repository used since the tick
-// before — a metadata write, no content and no fsync, so a boot finds it to
+// It also makes a repository's LAST USE survive a restart. A boot reads it
+// from the state file's modification time, and a state is rewritten only when
+// its directory changes, so a repository fetched all day would come back as
+// the least recently used. Every tick stamps last use onto each repository
+// used since the tick before (metadata only, no fsync), so a boot finds it to
 // within [EvictInterval].
 
 // janitor runs a pass at once (the boot has just moved scratch/ and tmp/
@@ -87,37 +67,21 @@ func (c *Cache) janitor(ctx context.Context) {
 	}
 }
 
-// janitorPass is one pass, in order: trash/ emptied; scratch/ measured; every
-// copy's memo tree this process has not yet listed listed, its cohorts' names
-// alone (memo.go) — one whose last listing failed only on a ticked pass, for
-// the reason the states are written once a tick (listMemos); the memo
-// trimmed to its share of the budget (MemoShare) a
-// cohort at a time, the oldest first, the pages runs have staged for it
-// counted with those it keeps — and on a ticked pass held to maxMemoCohorts
-// too — BEFORE any repository goes — an answer
-// evicted costs one git process to compute again, a repository a cold sync of
-// every pack it holds; the cache evicted to its budget for what the
-// repositories hold past their room (overBudget), least recently used first —
-// and trash/ emptied again when anything was moved there, so an eviction gives
-// its disk back within the pass; on a TICKED pass alone, every repository's
-// last use stamped and the states whose memo moved written again; then the
-// gauges.
+// janitorPass is one pass, in order: trash/ emptied; scratch/ measured;
+// unclaimed staged layers expired; unlisted memo trees listed (listMemos);
+// the code indexes and the memo trimmed to their shares BEFORE any repository
+// goes, since an evicted answer costs one git process and an evicted
+// repository a cold sync of every pack it holds; repositories evicted to the
+// budget (evictToBudget); trash/ emptied again if anything moved there, so an
+// eviction's disk comes back within the pass; on a TICKED pass alone, last
+// use stamped and moved memos' states written; then the gauges.
 //
-// THE STATES ONCE A TICK, never once a pass: a state written is two syncs —
-// the file and its directory (persist) — on the janitor's goroutine, beside
-// the durability syncs of rounds and adoptions on the same disk, and passes
-// follow kicks, which on a busy node come after every few misses (a placement
-// past the share, a release with an eviction due). Written at most once an
-// EvictInterval a copy, a boot still counts the memo within a tick of its
-// writes (Layout.Held), which is all the state is there for: a memo is a
-// cache of a cache, and the bytes a crash costs the count are a tick's.
+// States are written once a tick, never once a pass: each is two syncs
+// (persist) beside the rounds' on the same disk, and a busy node kicks
+// every few misses. A crash costs a boot's memo count (Layout.Held) a tick.
 func (c *Cache) janitorPass(ctx context.Context, ticked bool) {
 	c.emptyTrash(ctx)
 	c.measureScratch(ctx)
-	// A layer staged for a placement that took none of it within
-	// objstore.RecordWithin: an adoption whose record never applied
-	// (AdoptLayer), or a fetch a moved placement held (holdFetched) that
-	// every plan of its copy since has passed by.
 	c.expireStagedLayers()
 	c.listMemos(ctx, ticked)
 	trimmed := c.trimCodeIndexes(ctx)
@@ -157,21 +121,17 @@ func (c *Cache) emptyTrash(ctx context.Context) {
 	}
 }
 
-// measureScratch sets what scratch/ holds — a push's scratch repository, an
-// advertisement view — from the disk, the only thing that knows: what a
-// receive-pack writes there is the client's to decide. An entry there that
-// cannot be read is logged and left out, while one the host removes from
-// under the walk is nothing to count and nothing to log (sizeUnder); an
-// ended ctx keeps the last measure.
+// measureScratch sets what scratch/ holds (a push's scratch repository, an
+// advertisement view) from the disk, the only thing that knows: what a
+// receive-pack writes there is the client's to decide. An unreadable entry is
+// logged and left out; one removed under the walk is nothing to count or log
+// (sizeUnder); an ended ctx keeps the last measure.
 //
-// Only a file whose ONLY NAME is in scratch/ counts. A file there with a
-// second name is one of the cache's own — a view's packed-refs linked from
-// its incarnation, an adopted push's pack linked into the incarnation before
-// its scratch goes — whose bytes are on the disk once and already in the
-// total through that incarnation. Counted again, every adopted push would
-// evict as many bytes more of the repositories used least recently, each a
-// cold sync later. The other name is never in trash/: the pass empties trash/
-// before it measures.
+// Only a file whose ONLY NAME is in scratch/ counts. One with a second name is
+// the cache's own (a view's packed-refs, an adopted push's pack linked into
+// its incarnation), already in the total through that incarnation; counted
+// again, every adopted push would evict as many bytes more, each a cold sync
+// later. The other name is never in trash/: the pass empties it first.
 func (c *Cache) measureScratch(ctx context.Context) {
 	var listing func(dir string)
 	if c.knobs != nil {
@@ -206,23 +166,18 @@ func (c *Cache) memoExcess() int64 {
 }
 
 // overBudget is what the cache holds past its budget that a REPOSITORY'S
-// eviction is for: its total less the memo's excess over its share
-// (memoExcess), positive when an eviction is due. The memo's excess is its own
-// trim's to give back, never a repository's: one evicted for a page a read is
-// still cutting, or for pages the memo holds past its share, costs a cold sync
-// of every pack it holds — a GET each from the object store — for bytes the
-// memo was never entitled to, and the trim then takes the pages anyway. The
-// code indexes' excess over their share (codeIndexExcess) is theirs to give
-// back likewise, for the same reason.
+// eviction is for, positive when one is due: its total less the memo's and
+// the code indexes' excess over their shares (memoExcess, codeIndexExcess).
+// That excess is their own trims' to give back: a repository evicted for it
+// costs a cold sync of every pack it holds, a GET each, for bytes the memo
+// was never entitled to, and the trim takes them anyway.
 func (c *Cache) overBudget() int64 {
 	return c.total() - c.memoExcess() - c.codeIndexExcess() - c.maxBytes
 }
 
 // evictToBudget evicts repositories, least recently used first, while an
-// eviction is due (overBudget), and answers how many. Only an EVICTABLE
-// entry is a candidate (evictable), and one that stops being one before its
-// turn is passed over; none left with an eviction due, and the pass stops
-// there.
+// eviction is due (overBudget), and answers how many. A candidate that stops
+// being evictable before its turn is passed over.
 func (c *Cache) evictToBudget(ctx context.Context) int {
 	if c.overBudget() <= 0 {
 		return 0
@@ -257,25 +212,24 @@ func (c *Cache) evictToBudget(ctx context.Context) int {
 }
 
 // evictable reports whether e may be evicted now; e.mu is held. Its current
-// incarnation unpinned — a request is reading it, or the maintainer is — with
-// no round running or queued, no maintenance running, and no RETIRING
-// incarnation: a reader still finishing on one a rebuild replaced keeps that
-// directory in repos/, and is served from it whatever becomes of the entry.
+// incarnation unpinned (by a request or the maintainer), no round running or
+// queued, no maintenance running, and no RETIRING incarnation: a reader still
+// on one a rebuild replaced keeps that directory in repos/ and is served from
+// it whatever becomes of the entry.
 func evictable(e *entry) bool {
 	return !e.dead && e.current != nil && e.current.pins == 0 && e.running == nil && e.next == nil &&
 		e.maint == nil && len(e.retiring) == 0
 }
 
-// evict takes e out of the cache: the entry dead and gone from the cache's
-// map — the next sync of the repository starts cold, with a new entry — and
-// its incarnation's directory renamed into trash/. The DECISION is made under
-// the cache's mu and then the entry's, the conditions checked again, so
-// nothing that pinned or started on it since it was chosen loses its
-// directory; the rename and the log line come after both are let go, because
-// every sync of every repository on the node takes the cache's mu to find its
-// entry, and a budget held tight evicts after nearly every cold sync. A sync
-// of the repository in between makes a new entry, whose first incarnation
-// takes the next free number beside the directory still on its way out.
+// evict takes e out of the cache: the entry dead and gone from the map, so
+// the next sync starts cold with a new entry, and its incarnation's directory
+// renamed into trash/. The DECISION is made under the cache's mu then the
+// entry's, evictable checked again, so nothing pinned or started since it was
+// chosen loses its directory. The rename and the log come after both are let
+// go: every sync on the node takes the cache's mu to find its entry, and a
+// tight budget evicts after nearly every cold sync. A sync in between makes a
+// new entry, whose first incarnation takes the next free number beside the
+// directory still on its way out.
 func (c *Cache) evict(e *entry) bool {
 	c.mu.Lock()
 	e.mu.Lock()
@@ -305,14 +259,12 @@ func (c *Cache) evict(e *entry) bool {
 	return true
 }
 
-// recordUse stamps each repository's last use onto the disk, where the next
-// boot reads it: the modification time of its current incarnation's state
-// file — its directory's, when it has none — set to the moment a reader last
-// took or released it, for every incarnation used since its last stamp. One
-// metadata write per repository used since the last tick, never a rewrite of
-// the state, so a repository that is only ever read costs nothing more than
-// that. A stamp that fails is logged and tried at the next tick; an
-// incarnation retired meanwhile has moved, and is passed over.
+// recordUse stamps, for every incarnation used since its last stamp, its last
+// use (a reader's last take or release) onto the disk for the next boot
+// (stampUse). One metadata write per
+// repository used, never a rewrite of the state, so a repository only ever
+// read costs nothing more. A failed stamp is logged and tried next tick; an
+// incarnation retired meanwhile has moved and is passed over.
 func (c *Cache) recordUse(ctx context.Context) {
 	type due struct {
 		e   *entry
@@ -347,8 +299,7 @@ func (c *Cache) recordUse(ctx context.Context) {
 
 // stampUse sets the modification time a boot reads an incarnation's last use
 // from (lastUsedOn): its state file's, else its directory's. An incarnation
-// that is gone — retired and moved into trash/ since it was chosen — is no
-// failure.
+// retired into trash/ since it was chosen is no failure.
 func stampUse(dir string, at time.Time) error {
 	err := os.Chtimes(filepath.Join(dir, stateName), time.Time{}, at)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -360,11 +311,9 @@ func stampUse(dir string, at time.Time) error {
 	return err
 }
 
-// setGauges sets crewlet.code.cache.bytes — the total the budget is held to
-// (total) — crewlet.code.cache.repos, the repositories with a directory on
-// this node, and crewlet.code.cache.memo.bytes, what the memo holds of the
-// total: all from the running totals, so a round that sets them after it ends
-// pays a few loads, however many repositories the node holds.
+// setGauges sets the cache's gauges (crewlet.code.cache.bytes is total, what
+// the budget is held to) from running totals, so a round that sets them as it
+// ends pays a few loads however many repositories the node holds.
 func (c *Cache) setGauges() {
 	if c.metrics == nil {
 		return

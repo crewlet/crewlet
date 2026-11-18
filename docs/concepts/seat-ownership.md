@@ -509,23 +509,19 @@ on that link waits behind whatever of it is still crossing — a read, a small
 write or a lease renewal, on the coordination connection the replay and every
 renewal ride or on another crossing the same link — and each is held to a
 five-second term: a request behind a full window still has the second its own
-round trip needs, at every lease TTL, as the object store windows an upload. A
-row larger than the window crosses alone, in a pull of one message at the
-broker's limit. The window's price is round trips on a fast distant link: a
-year of episodes takes 1,380 pulls, about two and a half minutes with its
-writes across 100 ms at 100 Mbit/s. What it does not cover
-([#1035](https://github.com/crewlet/crewlet/issues/1035)): the window is the
-hydration's own, one for the link's inbound direction, and the object store's
-upload window is another, for its outbound, so a request whose bytes cross
-behind an upload and whose reply crosses behind a pull waits behind both, 7.75
-seconds at the floor beyond its own round trip, past its term, a lease renewal
-sent there among them; and nothing windows the rest of what crosses the link
-toward the node — a download holds four of the object store's 128 KiB messages
-in hand, fifteen seconds at the floor, for each download in flight, and an
-event for one of the node's seats crosses whole — so a request whose reply
-crosses behind them waits for all of it, a lease renewal among them. A pull's
-next row waiting there refuses no seat: the replay waits while the link moves
-(above). One row larger than the window holds the link for its own crossing. A memory row is bounded only by the broker (an episode keeps its ask whole), so a pull
+round trip needs, at every lease TTL. The window is **the link's one window**,
+both ways: a pull takes it before it is asked, beside the object store's
+uploads, downloads and listings on the same link, first come first served
+([ADR-0161](../../adr/0161-a-link-carries-one-window-both-ways-sized-to-a-requests-term.md)),
+so whatever the node has in flight a request crosses inside its term; and a
+pull waiting its turn is no silence of its copy's. A row larger than the window
+crosses alone, in a pull of one message at the broker's limit, once the window
+is empty. The window's price is round trips on a fast distant link: a year of
+episodes takes 1,380 pulls, about two and a half minutes with its writes across
+100 ms at 100 Mbit/s. What it does not hold is an event for one of the node's
+seats, which crosses whole, so a request whose reply crosses behind one waits
+for it, a lease renewal among them. A pull's next row waiting there refuses no
+seat: the replay waits while the link moves (above). One row larger than the window holds the link for its own crossing. A memory row is bounded only by the broker (an episode keeps its ask whole), so a pull
 bounded by its rows alone
 held up to 256 rows of 8 MiB each, 2 GiB, inside seat acquisition
 ([#1052](https://github.com/crewlet/crewlet/issues/1052)). The broker sends a

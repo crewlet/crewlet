@@ -171,16 +171,13 @@ func v(major, minor int) gitproc.Version { return gitproc.Version{Major: major, 
 // before reports whether running is older than at.
 func before(running, at gitproc.Version) bool { return !running.AtLeast(at) }
 
-// The formats git prints over only part of the node's range of versions —
-// [From, To), To zero for every later git — every other row being printed by
-// every git from the node floor (gitproc.NodeMinVersion, 2.55): the gits a
-// pool admits, each run by onNodeGits on its two ends. Measured on 2.55.0 and
-// 2.56.0, the two gits the suite runs every pool on. A span is stated only
-// over admitted gits: one beginning below the floor describes a git no pool
-// runs, and one ending at or below it names a row no admitted git prints,
-// which is deleted rather than kept for a git that can never meet it — so
-// TestTheFormatTableIsWhatGitSays refuses both, and a raised floor makes
-// every claim it retires fail by name.
+// span is the versions [From, To) that print a format, To zero for every
+// later git; a row not in printedOver is printed by every git from the node
+// floor (gitproc.NodeMinVersion) on, the two ends onNodeGits runs. A span is
+// stated only over admitted gits: one below the floor describes a git no pool
+// runs, and a row ending at or below it is deleted, so
+// TestTheFormatTableIsWhatGitSays refuses both and a raised floor fails every
+// claim it retires by name.
 type span struct{ From, To gitproc.Version }
 
 func (s span) holds(running gitproc.Version) bool {
@@ -192,7 +189,7 @@ var printedOver = map[string]span{
 	`packed object %s (stored in %s) is corrupt`: {v(2, 55), v(2, 56)},
 }
 
-// span is the versions that print format.
+// spanOf is the versions that print format.
 func spanOf(format string) span {
 	if s, ok := printedOver[format]; ok {
 		return s
@@ -200,8 +197,7 @@ func spanOf(format string) span {
 	return span{From: gitproc.NodeMinVersion}
 }
 
-// spanProblem is why s cannot be a span of the format table — "" when it can:
-// it begins below the node floor, or ends at or below it.
+// spanProblem is why s cannot be a span of the format table, "" when it can.
 func spanProblem(s span) string {
 	switch {
 	case !s.From.AtLeast(gitproc.NodeMinVersion):
@@ -214,19 +210,18 @@ func spanProblem(s span) string {
 	return ""
 }
 
-// result is what a run is held to: the table's formats its events matched
-// (spelled as the table spells them), its kind — nil for a run that answered
-// — the parts its Damage named (none: no Damage) and the hints it recorded.
-// No run ends by a signal: every damage here is one each admitted git names
-// or reads around, so a signal is the failure of an arm.
+// result is what a run is held to: the table rows its events matched, its
+// kind (nil: it answered), its Damage's parts (none: no Damage) and its hints.
+// No run may end by a signal: every damage here is one each admitted git
+// names or reads around.
 type result struct {
 	rows  []string
 	kind  error
 	parts gitproc.Part
 	hints int
-	// noDrops is an arm whose damage is no derived damage whatever its
-	// case's drops: what the arm's process named is a pack or an object, of
-	// the bytes the derived file placed it at, never the file itself.
+	// noDrops: the damage is not derived whatever the case's drops, since
+	// the process named the pack or object at the bytes a derived file
+	// pointed to, never that file.
 	noDrops bool
 }
 
@@ -313,18 +308,14 @@ func bitmapWalk(_ *testing.T, d *damaged) gitproc.Cmd {
 }
 
 // writeMidx writes the maintainer's multi-pack-index with its bitmap over d's
-// packs, PREFERRING THE OLDER ONE — named, never left to the writer. With no
-// --preferred-pack, git prefers the pack whose .pack is oldest to the second
-// and, among packs of one second, whichever the directory listed first
-// (gittest.PreferredPack), and gittest.Bare writes the fixture's two packs one
-// after the other, nearly always within one second: so the preferred pack was
-// the filesystem's choice, and a case whose damage is in the newer pack met a
-// different git on another disk. The tip
-// and its blob are in the newer pack, so a clone reuses their entries through
-// their own pack's .idx and .rev (write_reuse_object) rather than send them as
-// the preferred pack's stored bytes — on a runner whose listing put the newer
-// pack first, the IO case met the bitmap's verbatim path instead, a BUG and a
-// SIGABRT, and none of the rows its want names.
+// packs, PREFERRING THE OLDER ONE by name. Left to git, the preferred pack is
+// the oldest .pack by the second, ties going to directory order
+// (gittest.PreferredPack), and gittest.Bare writes both packs within one
+// second: the filesystem would choose. The tip and its blob are in the newer
+// pack, so with the older preferred a clone reuses their entries through
+// that pack's .idx and .rev (write_reuse_object); with the newer, the IO
+// case meets the bitmap's verbatim path, a BUG and a SIGABRT, and none of
+// its rows.
 func writeMidx(t *testing.T, d *damaged) {
 	t.Helper()
 	c := maintenance(d.dir, "multi-pack-index", "write", "--bitmap", "--no-progress",
@@ -336,12 +327,10 @@ func writeMidx(t *testing.T, d *damaged) {
 	}
 }
 
-// writeChain writes the published chain a cache installs over d's packs, as
-// a repository's maintainer writes one: a root layer over the older pack and a
-// layer over the newer, each an incremental multi-pack-index with its bitmap
-// over a chain file naming exactly its base — the refs at the newest commit
-// the layer's packs and its base close over while it is written, and at the
-// tip again after.
+// writeChain writes the published chain a cache installs over d's packs: a
+// root layer over the older pack and one over the newer, each an incremental
+// multi-pack-index with its bitmap over a chain file naming exactly its base,
+// written with the refs at the newest commit its packs close over.
 func writeChain(t *testing.T, d *damaged) {
 	t.Helper()
 	chain := filepath.Join(d.dir, "objects", "pack", "multi-pack-index.d", "multi-pack-index-chain")
@@ -401,10 +390,9 @@ func removePack(t *testing.T, stem string) {
 	}
 }
 
-// formatCases is every damage a cache can hold that git names — and the
-// commands over it that the engine runs — with what each git says. Each case
-// damages its own copy, every byte offset read from the file's own header and
-// table of contents.
+// formatCases is every damage a cache can hold that git names, the commands
+// the engine runs over it, and what each git says. Each case damages its own
+// copy, every offset read from the file's own header and table of contents.
 func formatCases(f *fixture) []damageCase {
 	// corrupt is a pack's damage named by r; where the row naming a corrupt
 	// packed object is among them, the pack it names is a hint as well.
@@ -415,13 +403,10 @@ func formatCases(f *fixture) []damageCase {
 		}
 		return res
 	}
-	// corruptObject is a damaged object of a pack that git names by r and
-	// then by the object's own sentence, "packed object … is corrupt",
-	// naming the pack: on 2.55 that sentence is the row (packedRow), from
-	// 2.56 it is reported through a bare "%s" — no row, the same hint — so
-	// either way one hint names the pack. A tree read through a damaged delta
-	// (P, P3) is one of these on both gits: 2.55 prints the sentence after
-	// the delta's own rows exactly as it does after a blob's.
+	// corruptObject is a damaged packed object git names by r and then by
+	// "packed object … is corrupt": the row packedRow on 2.55, a bare "%s"
+	// from 2.56, one hint naming the pack either way. A tree read through a
+	// damaged delta (P, P3) is one too.
 	corruptObject := func(r ...string) func(gitproc.Version) result {
 		return func(running gitproc.Version) result {
 			if running.AtLeast(v(2, 56)) {
@@ -548,11 +533,10 @@ func formatCases(f *fixture) []damageCase {
 			on("rev-list over its bitmap", bitmapWalk, midxFatal(`invalid MIDX object position, MIDX is likely corrupt`)),
 			on("upload-pack v2", fetchTip, midxFatal(`invalid MIDX object position, MIDX is likely corrupt`))),
 		// THE PUBLISHED CHAIN a cache installs (cache's layers.go): its top
-		// layer's reverse index overwritten, as E's, and the chain file
-		// listing its layers the other way round — a layer over the wrong
-		// base, which every file's own check passes and the first read
-		// through the bitmap meets (M16): the cache's canary, as its
-		// placement runs it.
+		// layer's reverse index overwritten, as E's; and (E3) its layers
+		// listed the other way round, a layer over the wrong base that every
+		// file's own check passes and only a read through the bitmap meets
+		// (M16): the cache's canary.
 		{name: "E2 a published layer whose reverse index is overwritten beside its bitmap", setup: writeChain,
 			damage: func(t *testing.T, d *damaged) {
 				ids, _ := chainLayers(t, d)
@@ -669,20 +653,17 @@ func formatCases(f *fixture) []damageCase {
 		// The index's fanout out of order: fatal, every reader that loads
 		// the index refusing it, and so does the maintainer's write over it.
 		midxCase("FO a multi-pack-index's fanout out of order", func(t *testing.T, d *damaged) { gittest.Damage(t, d.dir, gittest.MidxFanout) }, gitproc.PartMultiPackIndex, midxFanout(midxFatal)...),
-		// THE MAINTAINER'S WRITE over an index damaged where its readers
-		// read around it: git says the old index's checksum is wrong and
-		// writes on — the one report of the damage a run that succeeds makes,
-		// which the cache repairs the index on.
+		// THE MAINTAINER'S WRITE over an index its readers read around: git
+		// reports the old index's checksum and writes on, the one report the
+		// cache repairs the index on.
 		midxCase("E the maintainer's write over a multi-pack-index whose reverse index is overwritten", func(t *testing.T, d *damaged) { gittest.Damage(t, d.dir, gittest.MidxRidx) }, gitproc.PartMultiPackIndex,
 			on("multi-pack-index write", midxWrite, answered(gitproc.PartMultiPackIndex, ignoring))),
-		// AN INDEX'S OFFSET FOR ONE OBJECT ANOTHER'S: the bytes read for an
-		// id are not that id's. The maintainer's write ignores the old
-		// index's entries yet still reads objects through it, so it fails
-		// on every git (and keeps the damaged index: only a drop repairs
-		// it); a merge-base reads the tip's commit through it and fails too.
-		// Neither process names which file placed the wrong bytes there —
-		// `hash mismatch` is a pack part, which the cache's scrub decides —
-		// so neither failure is a derived damage on its own.
+		// AN INDEX'S OFFSET FOR ONE OBJECT ANOTHER'S. The maintainer's write
+		// still reads objects through the old index, so it fails (keeping
+		// the damaged index: only a drop repairs it), as does a merge-base.
+		// Neither names which file placed the wrong bytes (`hash mismatch`
+		// is a pack part, the cache's scrub decides), so neither is a
+		// derived damage on its own.
 		midxCase("MO the maintainer's write over a multi-pack-index with one object's offset another's", func(t *testing.T, d *damaged) { gittest.Damage(t, d.dir, gittest.MidxOffset, f.Tip(), f.blob(t)) }, gitproc.PartMultiPackIndex,
 			on("multi-pack-index write", midxWrite, result{rows: rows(ignoring, hashMismatch), kind: gitproc.ErrCorrupt,
 				parts: gitproc.PartMultiPackIndex | gitproc.PartPack, noDrops: true}),
@@ -866,14 +847,12 @@ func receiveCut(_ *testing.T, d *damaged) gitproc.Cmd {
 		Stdin: bytes.NewReader(d.stdin), Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: gitproc.ReadDeadline, Indexed: indexed}
 }
 
-// packedRow is the row naming a corrupt packed object: a pack's damage,
-// whose message names the pack — recorded as a hint as well, as the same
-// sentence through a bare "%s" is from 2.56.
+// packedRow is the row naming a corrupt packed object, whose pack is also a
+// hint (as the same sentence through a bare "%s" is from 2.56).
 const packedRow = `packed object %s (stored in %s) is corrupt`
 
-// unknownType is what an entry of an unknown type is reported as: the pack
-// named as a hint on every git — by the row naming the corrupt object on
-// 2.55, and by its sentence through "%s" from 2.56.
+// unknownType is an entry of an unknown type, its pack a hint on every git:
+// through packedRow on 2.55, through "%s" from 2.56.
 func unknownType(running gitproc.Version) result {
 	r := result{rows: rows(`unknown object type %i at offset %lu in %s`), kind: gitproc.ErrCorrupt,
 		parts: gitproc.PartPack, hints: 1}
@@ -883,9 +862,8 @@ func unknownType(running gitproc.Version) result {
 	return r
 }
 
-// sizeOff is S1 on each git, whichever command meets it: on 2.55 the
-// corrupt object's own row — the pack it names a hint as well — and from 2.56
-// that sentence through "%s" alone — no kind, no damage, one hint.
+// sizeOff is S1 on each git, whichever command meets it: packedRow on 2.55;
+// from 2.56 its sentence through "%s" alone, no kind or damage, one hint.
 func sizeOff(running gitproc.Version) result {
 	if running.AtLeast(v(2, 56)) {
 		return result{kind: gitproc.ErrFailed, hints: 1}
@@ -907,14 +885,12 @@ func revArms(format string) []arm {
 	}
 }
 
-// deltaCopy replaces the case's copy with one holding a directory of three
-// hundred files and a commit that changes one of them, both root trees in ONE
-// pack written as a push's pack is (--delta-base-offset: receive-pack
-// advertises ofs-delta, so every client sends one), so one tree is stored as
-// an OFS_DELTA on the other. Trees rather than blobs because cat-file -p
-// STREAMS a blob, asking its size first, and a damaged delta then fails in
-// the size's lookup ("delta data unpack-initial failed", which names nothing)
-// before any reader resolves it; a tree is read whole, as every walk reads it.
+// deltaCopy replaces the case's copy with three hundred files and a commit
+// changing one, both root trees in ONE pack written as a push's is
+// (--delta-base-offset: receive-pack advertises ofs-delta), so one tree is an
+// OFS_DELTA on the other. Trees, not blobs: cat-file -p STREAMS a blob, and a
+// damaged delta then fails in the size lookup ("delta data unpack-initial
+// failed", naming nothing); a tree is read whole, as every walk reads it.
 func deltaCopy(f *fixture) func(t *testing.T, d *damaged) {
 	return func(t *testing.T, d *damaged) {
 		t.Helper()
@@ -973,21 +949,16 @@ func tableRows(t gitproc.Trace) []string {
 }
 
 // THE FORMAT TABLE IS WHAT GIT SAYS, BOTH WAYS, ON BOTH ENDS OF WHAT A POOL
-// RUNS. Every damage a cache can hold that git names, the commands the engine
-// runs over it, run through a pool on the node pin and on the node floor's own
-// build (onNodeGits): the run's kind, its Damage (kind, parts, Derived,
-// Drops), its hints, and the TABLE ROWS its events matched — equal to the rows
-// the case expects on THAT git's version, so a row git stops printing fails as
-// surely as one it starts printing beside the case's own. And every row of the
-// table is expected by some case on every git that prints it, so a row
-// nothing provokes fails too. Every span begins and ends above the floor
-// (spanProblem), so a row only gits below it print cannot stay in the table.
+// RUNS (onNodeGits). Each formatCases arm's kind, Damage, hints and the TABLE
+// ROWS its events matched equal what the case expects on THAT git, so a row
+// git stops printing fails as surely as a new one; every row is expected by
+// some case on every git that prints it; every span lies above the floor
+// (spanProblem).
 //
-// Mutations, each red: a row deleted (its case finds a format the table
-// lacks), a row's kind or part swapped, a row added that no case provokes, a
-// span narrowed or widened, canonicalFormat replaced by the identity (every
-// %lu row), PartChunk dropping only the index (the I5 and F5 drops), and the
-// node floor raised to 2.56 (the packed-object row's span ends at it).
+// Mutations, each red: a row deleted, its kind or part swapped, or one added
+// that no case provokes; a span narrowed or widened; canonicalFormat as the
+// identity (every %lu row); PartChunk dropping only the index (I5, F5); the
+// node floor raised to 2.56 (the packed-object row's span ends there).
 func TestTheFormatTableIsWhatGitSays(t *testing.T) {
 	t.Parallel()
 	for format, s := range printedOver {
@@ -1132,12 +1103,9 @@ func TestNoRowIsAFormatARequestWrites(t *testing.T) {
 	}
 }
 
-// requestFormats is every format a request makes upload-pack die with,
-// against a healthy copy, on every git a pool admits: what the forms
-// TestARequestCannotNameTheDamage replays meet, on the node pin and on the
-// node floor's own build alike — the planning pass's 74 forms, the
-// response-end refusal the replay found beside them, and a deepen-not of a
-// name a branch and a tag both hold.
+// requestFormats is every format a request makes upload-pack die with over a
+// healthy copy, on every git a pool admits: what the forms
+// TestARequestCannotNameTheDamage replays meet.
 var requestFormats = map[string]bool{
 	`%s`:                       true,
 	`unexpected line: '%s'`:    true,
@@ -1198,11 +1166,10 @@ func TestTheCanonicalFormMatchesEveryConversion(t *testing.T) {
 }
 
 // AN ANSWER READ OVER DAMAGE SAYS SO, whatever the exit status: cat-file
-// --batch-check calls the tip of a pack whose index is truncated `missing`
-// and exits 0, only its report naming the index, so Result.Damage is what
-// tells that answer from an object the repository does not hold — a removed
-// pack, which reports nothing. A failed run carries its damage there too, and
-// a refusal that is no damage (`not our ref`) carries none.
+// --batch-check calls the tip behind a truncated index `missing` and exits 0,
+// so Result.Damage alone tells it from an object the repository does not hold
+// (a removed pack, which reports nothing). A failed run carries its damage
+// too; a refusal that is no damage (`not our ref`) carries none.
 //
 // Mutation: compute Result.Damage only for a failed run, and the first arm
 // fails.
@@ -1264,10 +1231,9 @@ func resultNamesTheDamageOn(t *testing.T, git string) {
 	}
 }
 
-// A FLIPPED PACK IS SERVED VERBATIM — documented, not a classification: pack
-// reuse copies the damaged bytes and git reports nothing. The day git starts
-// checking, this goes red and the cache's verify-on-read assumption is
-// revisited.
+// A FLIPPED PACK IS SERVED VERBATIM: pack reuse copies the damaged bytes and
+// git reports nothing, the cache's verify-on-read premise. A git that starts
+// checking turns this red.
 func TestAFlippedPackIsServedVerbatim(t *testing.T) {
 	t.Parallel()
 	onNodeGits(t, func(t *testing.T, git string) {
@@ -1286,12 +1252,10 @@ func TestAFlippedPackIsServedVerbatim(t *testing.T) {
 	})
 }
 
-// AN EXIT ERROR IS EVERY KIND ITS EVENTS NAMED. A merge-base over an old id
-// this company never held, in a copy whose commit-graph git reads around:
-// its events name the graph's chunk (ErrCorrupt) and the id it could not
-// find (ErrMissingObject). The Kind is the higher, and errors.Is reaches
-// both — so a force check asking "was the old commit missing?" is told yes —
-// and no kind the run did not name.
+// AN EXIT ERROR IS EVERY KIND ITS EVENTS NAMED. A merge-base whose events
+// name a graph chunk (ErrCorrupt) and an id it could not find
+// (ErrMissingObject): the Kind is the higher, and errors.Is reaches both (a
+// force check asking "was the old commit missing?" is told yes) and no other.
 //
 // Mutation: Is over Kind alone, and the ErrMissingObject arm is red.
 func TestAnExitErrorIsEveryKindItsEventsNamed(t *testing.T) {
@@ -1326,13 +1290,12 @@ func TestAnExitErrorIsEveryKindItsEventsNamed(t *testing.T) {
 	}
 }
 
-// A NARROWED CHUNK IS THE ONE FILE ITS PROCESS LOADED. A chunk-format report
-// names neither derived file, so a repair of it drops both (Damage.Drops); a
-// caller whose process loads only one of the two says so (Damage.Narrow),
-// and the chunk is then that file's — every other part kept, the damage's
-// kind, format and message unchanged, and the damage it was made from left
-// as it was. A process that may load both, a narrowing that names neither,
-// and a damage naming no chunk are answered as they are.
+// A NARROWED CHUNK IS THE ONE FILE ITS PROCESS LOADED. A chunk report names
+// neither derived file, so its repair drops both (Damage.Drops); a caller
+// whose process loads only one says so (Damage.Narrow), and the chunk becomes
+// that file, every other part, the kind, format and message kept and the
+// original damage untouched. Loading both, naming neither, or no chunk at all
+// leaves the damage as it is.
 //
 // Mutations: narrow to the index whatever the process loads (the graph's arm
 // is red); drop the chunk without adding the file (the narrowed damage drops
@@ -1370,14 +1333,11 @@ func TestANarrowedChunkIsTheOneFileItsProcessLoaded(t *testing.T) {
 }
 
 // ONLY A PEEL LOADS THE COMMIT-GRAPH: the premise the cache's wants check
-// narrows its chunk reports by (cache.Missing, Damage.Narrow). A cat-file
-// asked about object ids alone reads them through the packs' indexes and the
-// multi-pack-index and parses no commit, so a commit-graph whose table of
-// contents is damaged (I5′) is never read — no event; the same cat-file
-// asked to peel the id ("<id>^{}", as the cache peels its tags) parses the
-// commit and reports the graph's chunk. A git that began loading the graph
-// for an id alone would turn the first arm red, and the wants check's
-// narrowing with it.
+// narrows its chunk reports by (cache.Missing, Damage.Narrow). A cat-file of
+// bare ids parses no commit, so a graph with a damaged table of contents
+// (I5′) raises no event; peeling the id ("<id>^{}", as the cache peels tags)
+// parses the commit and reports the chunk. A git that loads the graph for a
+// bare id turns the first arm red, and the narrowing is wrong with it.
 func TestOnlyAPeelLoadsTheCommitGraph(t *testing.T) {
 	t.Parallel()
 	onNodeGits(t, peelLoadsTheGraphOn)

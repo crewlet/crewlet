@@ -19,14 +19,11 @@ import (
 )
 
 // EVERY TRANSFER CARRIES ITS CREDENTIAL'S SHARE (gitproc.Cmd.Share): a
-// person's push, clone and fetch — the advertisement each begins with, the
-// receive-pack and the upload-pack — are charged to the PERSON, by the handle
-// of the human seat their credential acts as (gitlettest's persons are each a
-// Tier A token the directory binds to a human seat nobody else holds, named
-// after it: `token:ceo` acts as the seat `ceo`), never by the credential's
-// name; a credential bound to nobody's clone and fetch to the credential's
-// NAME, `token:ci`, as a machine. What the transfer lane grants a contended
-// slot by is only as true as what the host tells it.
+// person's push, clone and fetch (advertisements, receive-pack, upload-pack)
+// are charged to the PERSON, by the human seat their credential acts as
+// (`token:ceo` acts as `ceo`), never the credential's name; an unbound
+// credential's clone and fetch to its NAME, `token:ci`, as a machine. The
+// transfer lane grants a contended slot only as truly as the host says.
 //
 // Mutations: share() naming the credential for a bound one too, or the
 // machine class for every credential — red; any of the four transfer sites
@@ -80,8 +77,8 @@ func TestEveryTransferCarriesItsCredentialsShare(t *testing.T) {
 			t.Errorf("%s is charged to %+v, want %+v", step.name, got, step.want)
 		}
 	}
-	// EVERY TRANSFER OF EACH CREDENTIAL, not just the first of each kind: the
-	// machine's steps hold a person's push between them, so each transfer is
+	// EVERY TRANSFER OF EACH CREDENTIAL, not just the first of each kind: a
+	// person's push runs between the machine's steps, so each transfer is
 	// judged by the credential whose request ran it.
 	for _, cmd := range persons {
 		if cmd.Class == gitproc.ClassTransfer && cmd.Share != person {
@@ -118,28 +115,14 @@ func transferring(sub string) func(gitproc.Cmd) bool {
 	}
 }
 
-// A PUSH IS SERVED BESIDE A FULL READ SHARE. A Gitlet node's read lane is also
-// where a person's push scans and its sync round's peel wait, FIFO, for at
-// most gitproc.SlotWait — so the seats' reads of the node hold at most half
-// of it (gitlet.ShareOf). On a node of four read slots, two seat reads hold the
-// share, each holding a REAL read-lane process open (the query server's pool
-// is wrapped to run one before each listing, held on a standard input the
-// case releases), sixty-four more wait on the share, and a person's push lands
-// meanwhile — its scans and the round's peel admitted to the lane's free half,
-// never waiting out SlotWait. The share is never past its two units, and
-// every read is served once released or answered unready, the share full,
-// never failed.
-//
-// THE PUSH LANDING IS THE PROOF IT NEVER WAITED OUT THE LANE: a scan or a peel
-// that waits gitproc.SlotWait for a slot is refused busy (gitproc.ErrBusy),
-// and the push with it (503) — so a push that lands was admitted to the free
-// half, whatever the runner's clock says it took.
-//
-// EVERY READ LISTS A DIRECTORY OF ITS OWN, so each is a page no other read is
-// cutting and runs its own listing under its own unit of the share: reads of
-// ONE page are a single flight (query.Server), the first leading and every
-// other waiting on its run with no unit of the share and no slot of the lane,
-// which would leave the share holding one unit and no read waiting on it.
+// A PUSH IS SERVED BESIDE A FULL READ SHARE: a push's scans and its sync
+// round's peel wait in the read lane too, so seat reads hold at most half of
+// it (gitlet.ShareOf). On four read slots, two seat reads hold the share with
+// REAL read-lane processes (holdingPool), sixty-four more wait on it, and a
+// push lands meanwhile. The share never passes two units, and every read is
+// served or unready with the share full. THE LANDING IS THE PROOF: a scan or
+// peel waiting out gitproc.SlotWait is refused busy, and the push with it.
+// Reads list their own directories, as one page's reads are a single flight.
 //
 // Mutations: ShareOf answering the whole read lane — four reads hold every
 // slot, and the push is refused busy, red; every read listing the same
@@ -205,9 +188,8 @@ func TestAPushIsServedBesideAFullReadShare(t *testing.T) {
 // readDir is the directory the share case's i-th read lists.
 func readDir(i int) string { return fmt.Sprintf("d%02d", i) }
 
-// holdingPool runs, before every listing a read runs, a read-lane process
-// held open on a standard input the case releases, so the read holds a real
-// slot of the lane for as long as the case wants.
+// holdingPool runs a read-lane process before every listing, held open on a
+// standard input the case releases, so each read holds a real lane slot.
 type holdingPool struct {
 	inner   query.Pool
 	release chan struct{}

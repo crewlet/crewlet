@@ -23,130 +23,29 @@ import (
 )
 
 // THE BEHAVIOURAL HALF of TestNothingButSyncWritesACache: after any
-// interleaving of what a node's cache meets, every cache equals a cache
-// rebuilt from nothing at the same position — HEAD, config and packed-refs
-// byte for byte, the same pack files and nothing outside the image (imageOf)
-// — its published chain installed to the same layer as that fresh cache's,
-// but for a layer it installed before the store lost a part of it (the
-// layers' check, interleavings_layers_test.go); no file under repos/ holds
-// the pack of a push no row names, and every repository's index of pushes,
-// backfilled as far as it goes, says within the coverage it claims exactly
-// what the push rows say (indexAgainstLog): the push that introduced each
-// commit, and every move of every ref in log order.
+// interleaving, every cache equals one rebuilt from nothing at the same
+// position (imageOf: HEAD, config and packed-refs byte for byte, the same
+// packs, nothing else), its chain installed to the fresh cache's layer but for
+// one installed before the store lost a part of it; no file under repos/ holds
+// a refused push's pack; and each index of pushes says, within its coverage,
+// what the rows say (indexAgainstLog). check says how each is held.
 //
-// Each seed draws interleavingSteps operations by weight over two
-// repositories, each with a pushed commit to start from, and checks every
-// repository every checkEvery steps and at the end: a linearizable sync, and
-// its image against a fresh cache's. The operations are what a Gitlet node
-// meets, at the cache's own seams:
-//
-//   - a push, a tag (annotated: a pack of its own; lightweight: a ref), a
-//     ref deleted — rows written to the log, as another node's committer
-//     would, and nothing else;
-//   - a REFUSED push: received into a scratch over a linearizable sync, its
-//     bundle uploaded to the store, and no row ever naming it — the committer
-//     refused it, or the node died before its record landed;
-//   - an adoption: a push received into a scratch, its row written, and the
-//     pack linked in (Adopt) — the receiving node's own pack;
-//   - a sync at stale, at the session floor of the repository's last write,
-//     and at linearizable; and one KILLED at sync.download, sync.refs or
-//     sync.state;
-//   - a restart that is a CRASH: the process ends with a maintenance run's
-//     lock and temporary files left in one repository's incarnation, as git
-//     leaves them when it is killed (maintain.go), and the next boot opens the
-//     same directory;
-//   - an eviction of every repository (the budget at one byte for one
-//     janitor pass), a rebuild, a maintenance pass with the clock past the
-//     debounce, tombstones swept from the log, and the log recreated holding
-//     an earlier state's rows;
-//   - a COMPACTION — two or three live packs merged into one by git's own
-//     merge and a record retiring them — which the copy's next round takes
-//     out of it by a swap (swap.go); one an idle, maintained copy misses
-//     until its retirements are swept, so its next round takes the packs out
-//     as no retirement accounts for, the graph with them; the retirements
-//     swept from the rows, so a copy below them reads them as packs no
-//     retirement accounts for; a swap killed at its rename, which the copy's
-//     next round tries again; and that kill followed by a restart, the next
-//     boot reading what was leaving from the state's floor;
-//   - DAMAGE A PREVIOUS PROCESS LEFT: a byte of an index file — a pack's .idx
-//     or .rev, a multi-pack-index, its bitmap, the commit-graph, or a chained
-//     copy's layer files, graph layers, tip and chain files — flipped in
-//     place, its identity kept, and the same directory booted again; and a
-//     file replaced under another identity while the check hashes it
-//     (interleavings_check_test.go);
-//   - DAMAGE AFTER THE VOUCH: a byte of any file of a held copy — a pack
-//     itself among them — flipped in place while the cache runs; a run's
-//     REPORT of a derived file, a pack, an object, or a crash, begun now or
-//     before anything this process wrote, a third of them with a check
-//     admitted around it; and a SCRUB with the clock past ScrubInterval
-//     (interleavings_scrub_test.go);
-//   - a PUBLICATION of the first repository's next layer — the second is
-//     never published, so every operation meets a copy in own mode too — by
-//     THIS node, its maintainer: the production compactor's, decided and
-//     applied on the log, its layer and any repack's outputs adopted here, a
-//     third of them after a burst of pushes past compact.LayerRepackPacks,
-//     whose plan repacks them first; one by ANOTHER Gitlet node, a cache of its
-//     own over the same log and store, whose layer this node's installer
-//     fetches, a third of them from a git newer than this one's and a third
-//     with this node's installer meeting a store that fails to answer for
-//     the layer's part; a request's sync and a pass of the INSTALLER behind
-//     it; a part of a published layer LOST from the store or SPOILED in it;
-//     and a push into a chained copy's tail with the maintainer's pass over
-//     it, the node's TIP commit-graph (interleavings_layers_test.go).
-//
-// Every check first scrubs every copy — the clock past ScrubInterval and
-// each repository used — and then holds every file a scrub reads to its
-// checksum: whatever damage the run left, the scrub found and the round
-// before the check repaired. Each copy's installed chain is held sound as it
-// stands, its round at the log's head having handed what moved to the
-// installer; then the installer has its say, and each copy's chain is held
-// to the rows' — installed to a prefix of it, the next layer refused — and
-// to the fresh cache's.
-//
-// A failure names the seed, the step and every operation drawn before it.
-//
-// SIXTEEN SEEDS, because four did not reach what this half claims: at four,
-// the log was never recreated with rows it no longer held (at a weight of one
-// in a hundred it was drawn once, at a first step with nothing earlier to go
-// back to), and no seed drew the crash that left a maintenance run's lock in
-// a repository whose first round after it indexed its packs — the
-// interleaving that showed the sweep moving the lock only after the round's
-// index had been refused over it. A round indexes from
-// interleavingRoundPacks packs here, not MidxRoundPacks, which two
-// repositories over a run's steps never reach; the seeds draw that crash and
-// that round ("round index over a crash's lock"), and putting the round's
-// index back before the sweep turns the outcome — and the run — red. The
-// maintainer is due again from interleavingMidxPacks packs beside its index
-// rather than MidxPacks, at whose production count no seed maintains a
-// repository over its own index and bitmap; and it is drawn at a weight of
-// six, since a report's repair drops the index it would run over — at four,
-// once the reports were drawn, no seed maintained a repository over its own
-// index. A rebuild is drawn at a weight of five: at three, once the
-// compaction's four operations were drawn beside the rest, no seed's rebuild
-// met a copy a repair had just written, so none answered a request from the
-// copy as it stands. A compaction a copy misses is an operation of its own
-// rather than a compaction and a sweep meeting by chance: drawn apart, they
-// met with no round of the repository between them over a copy holding its
-// graph on no seed, so none reached a swap that dropped a graph the copy held.
-// A tag move is drawn at four (at one, two seeds moved a tag; at four,
-// seven), and a layer's part lost at four: at two beside it, no seed reached
-// "layer missing".
-// interleavingOutcomes holds the seeds to reaching every outcome; sixteen
-// reach them all, in about half a minute under the race detector on two
-// cores, the seeds in parallel. Sixty-four steps a seed, a check every ten:
-// enough history for a recreation to go back to and short enough that a
-// failure's trace reads in two screens. Forty were enough until the published
-// chain's six operations drew a sixth of the steps and kept one repository's
-// copy chained for most of a run, where a damage meets a layer's file rather
-// than own mode's: at forty-eight, no seed's rebuild then answered a request
-// from the copy as it stands, nor did any check drop a derived file.
+// Sixteen seeds reach every interleavingOutcomes entry (four did not), in about
+// half a minute under -race on two cores. Sixty-four steps give a recreation
+// history to go back to and a failure's trace that reads in two screens; at
+// forty-eight, a rebuild answering from the copy as it stands went unreached.
 const (
 	interleavingSeeds = 16
 	interleavingSteps = 64
 	checkEvery        = 10
 )
 
-// interleavingOps are the operations an interleaving draws, by weight.
+// interleavingOps are the operations an interleaving draws, by weight: what a
+// Gitlet node meets, at the cache's own seams. Some are raised so the seeds
+// reach interleavingOutcomes: rebuild 5 (at three, none answered from the copy
+// as it stands), maintain 6 (at four, none over its own index), lose a layer's
+// part 4 (at two, none reached "layer missing"), move a tag 4 (at one, two
+// seeds moved one).
 var interleavingOps = []struct {
 	name   string
 	weight int
@@ -185,11 +84,10 @@ var interleavingOps = []struct {
 	{"tip", 3, (*interleaving).tip},
 }
 
-// interleavingOutcomes is every outcome the seeds must reach between them —
-// an operation that did something: a sync killed at each of its points, an
-// eviction that evicted, a rebuild that was not refused, a log recreated
-// with rows it no longer holds. An outcome no seed reaches is an operation
-// this test only claims to interleave, so the seeds are held to all of them.
+// interleavingOutcomes is every outcome the seeds must reach between them: an
+// operation that did something (a sync killed at each point, an eviction that
+// evicted, a rebuild not refused). An outcome no seed reaches is an operation
+// this test only claims to interleave.
 var interleavingOutcomes = []string{
 	"push", "tag annotated", "tag lightweight", "tag moved", "delete a ref", "refused push", "adopt",
 	"sync stale", "sync session", "sync linearizable",
@@ -282,10 +180,9 @@ type interleaved struct {
 	heads map[string]string
 }
 
-// startInterleaving is one seed's run before its first step: a world of two
-// repositories, each with a pushed commit to start from, and a cache open
-// over it on the run's clock and fault script — the start every interleaving
-// of this package's shares, whatever operations it draws after.
+// startInterleaving is one seed's run before its first step: two
+// repositories, each with a pushed commit, and a cache open over them on the
+// run's clock and fault script.
 func startInterleaving(t *testing.T, seed uint64) *interleaving {
 	w := newSyncWorld(t, onMemory)
 	in := &interleaving{
@@ -359,9 +256,9 @@ const interleavingRoundPacks = 4
 // maintained over its own index and bitmap, only over none or over a round's.
 const interleavingMidxPacks = 2
 
-// options runs the cache on the interleaving's clock and fault script, its
-// rounds indexing from interleavingRoundPacks packs and telling the run
-// where they did, and the maintainer due again at interleavingMidxPacks.
+// options runs the cache on the run's clock and fault script, at the
+// interleaving's pack counts, with hooks telling the run where rounds indexed
+// and swept and what the check hashed.
 func (in *interleaving) options(o *cache.Options) {
 	o.Now, o.Faults = in.clk.Now, in.faults
 	cache.RoundPacksAt(interleavingRoundPacks)(o)
@@ -593,12 +490,10 @@ func (in *interleaving) killedSync(repo string) string {
 	return ""
 }
 
-// restart is a crash: the cache stops with a maintenance run's lock and
-// temporary files in one repository's incarnation — what git leaves when it
-// is killed — and the same directory boots again. Stop stands in for the
-// process's end: what a crash leaves in tmp/ and scratch/ instead, the next
-// boot moves into trash/ whichever way the process ended, and what a killed
-// git leaves in an incarnation is what is written here.
+// restart is a crash: the cache stops with a killed maintenance run's lock
+// and temporary files in one repository's incarnation, and the same directory
+// boots again. Stop stands in for the process's end, since the next boot moves
+// tmp/ and scratch/ into trash/ however the process ended.
 func (in *interleaving) restart(string) string {
 	held := cache.Repos(in.c)
 	var victims []string
@@ -625,8 +520,8 @@ func (in *interleaving) restart(string) string {
 		delete(in.indexed, dir)
 		in.indexMu.Unlock()
 	}
-	// What a killed swap left leaving the next process reads from the
-	// state, in place: no swap of this one's follows it.
+	// The next process reads a killed swap's leaving packs from the state,
+	// in place: no swap of the killed process follows it.
 	clear(in.killed)
 	in.c = in.w.open(in.t, in.options)
 	return detail
@@ -649,12 +544,11 @@ func (in *interleaving) evict(string) string {
 	return fmt.Sprintf("%d of %d repositories evicted", evicted, before)
 }
 
-// rebuild is a request's pack or object failure over repo's current
-// incarnation handed to Rebuild: answered from the copy as it stands when the
-// failing run began before the cache last wrote into it (half the runs began
-// an hour ago), repaired in place when its forced round or its scrub finds
-// what to fetch again, and otherwise the whole rebuild, seeded with what the
-// scrub found whole — or refused.
+// rebuild hands Rebuild a request's pack or object failure over repo's
+// current incarnation: answered from the copy as it stands when the run began
+// before the cache last wrote into it (half began an hour ago), repaired in
+// place when its forced round or scrub finds what to fetch again, otherwise
+// the whole rebuild — or refused.
 func (in *interleaving) rebuild(repo string) string {
 	s := in.syncAt(repo, linearizable)
 	defer s.Release()
@@ -684,9 +578,9 @@ func (in *interleaving) rebuild(repo string) string {
 	return ""
 }
 
-// maintain runs a maintainer pass with the clock past the interval. A run in a
-// repository that already holds the maintainer's bitmap is the one
-// MidxPacks makes due again: it writes over its own index and bitmap.
+// maintain runs a maintainer pass with the clock past the interval. A run
+// over a repository already holding the maintainer's bitmap writes over its
+// own index and bitmap.
 func (in *interleaving) maintain(string) string {
 	in.clk.Add(cache.MidxMinInterval + cache.MidxDebounce)
 	bitmapped := map[string]bool{}
@@ -744,11 +638,10 @@ func (f *fakeLog) retiredRows(repo string) int {
 	return len(f.repos[repo].retired)
 }
 
-// compact merges two or three of repo's live packs into one, as a Gitlet node's
-// compaction would, and writes the record retiring them and adding it: what
-// the copy's next round takes out of it by a swap (swap.go). Never a pack a
-// published layer names, as no compaction's plan takes one and the decide
-// refuses one: a copy's chain loads only over every pack it names.
+// compact merges two or three of repo's live packs into one and writes the
+// record retiring them, which the copy's next round swaps out (swap.go). Never
+// a pack a published layer names: no plan takes one, the decide refuses one,
+// and a copy's chain loads only over every pack it names.
 func (in *interleaving) compact(repo string) string {
 	live := in.w.log.unpublishedPacks(repo)
 	if len(live) < 2 {
@@ -762,11 +655,10 @@ func (in *interleaving) compact(repo string) string {
 	return fmt.Sprintf("%d packs into pack-%s", n, out.GitChecksum)
 }
 
-// sweepRetirements takes every retirement of repo the rows keep out of them,
-// as the code-retention duty does a day after a compaction: a copy last
-// synced below it reads its next round whole, and that answer serves none of
-// them, so whatever the copy still holds of them leaves as packs no
-// retirement accounts for.
+// sweepRetirements takes every retirement of repo out of the rows, as the
+// code-retention duty does a day after a compaction: a copy synced below the
+// sweep reads its next round whole, so what it still holds of them leaves as
+// packs no retirement accounts for.
 func (in *interleaving) sweepRetirements(repo string) string {
 	n := in.w.log.retiredRows(repo)
 	if n == 0 {
@@ -778,24 +670,19 @@ func (in *interleaving) sweepRetirements(repo string) string {
 	return fmt.Sprintf("%d swept", n)
 }
 
-// missedCompaction is a day on an idle repository's copy: the maintainer
-// indexes it — its commit-graph first — and then a compaction retires some
-// of its packs and the code-retention duty sweeps the retirements before the
-// copy's next round, which reads it whole below the sweep: its answer serves
-// none of them, so the packs the compaction took out leave the copy as packs
-// no retirement accounts for, by a swap that takes the graph with them. One
-// operation rather than three: a compaction and a sweep, each drawn on its
-// own, all but never met with no round of the repository between them over a
-// copy holding its graph, and no seed of sixteen reached a swap that dropped
-// a graph the copy held until this was drawn.
+// missedCompaction is a day on an idle copy: the maintainer indexes it (its
+// commit-graph first), then a compaction and its retirements' sweep land before
+// the copy's next round, whose swap takes the packs out as no retirement
+// accounts for, the graph with them. One operation, because drawn apart they
+// almost never meet with no round between them over a copy holding its graph,
+// and no seed reached a swap that dropped one.
 func (in *interleaving) missedCompaction(repo string) string {
 	return strings.Join([]string{in.maintain(repo), in.compact(repo), in.sweepRetirements(repo)}, "; ")
 }
 
-// killedSwap is a compaction, then a linearizable sync whose swap fails at
-// the point before its rename: the round answers from the copy it applied
-// to, which keeps every pack, and what is leaving waits for the next round
-// to swap it — whichever comes, the check's own included (noteSwaps).
+// killedSwap is a compaction, then a linearizable sync whose swap fails before
+// its rename: the round answers from the copy it applied to, every pack kept,
+// and the next round, the check's included, swaps what is leaving (noteSwaps).
 func (in *interleaving) killedSwap(repo string) string {
 	detail := in.compact(repo)
 	hits := in.faults.Hits(gitletfault.SyncSwapBeforeRename)
@@ -813,10 +700,8 @@ func (in *interleaving) killedSwap(repo string) string {
 	return fmt.Sprintf("%s; the swap from incarnation %d killed at its rename", detail, n)
 }
 
-// crashMidSwap is a killed swap and then a restart: the process ends with
-// what was leaving the copy still in it, and the next boot's first round
-// reads it from the state's floor (LeavingSince) as the retirements it is,
-// in place.
+// crashMidSwap is a killed swap and then a restart: the next boot's first
+// round reads what was leaving from the state's floor (LeavingSince), in place.
 func (in *interleaving) crashMidSwap(repo string) string {
 	detail := in.killedSwap(repo)
 	_, killed := in.killed[repo]
@@ -858,28 +743,27 @@ func (in *interleaving) noteSwaps() {
 	}
 }
 
-// check holds every repository's cache to a fresh cache's at the log's
-// position now, and repos/ to holding no refused push's pack — after a scrub
-// of every copy, whose findings the linearizable sync's round repairs.
+// check first scrubs every copy, so whatever damage the run left is found and
+// repaired by the round before it. It then holds each copy's files to their
+// checksums and its chain sound as it stands, lets the installer have its say,
+// and holds each cache to a fresh one at the log's position (its chain a
+// prefix of the rows', the next layer refused), its index of pushes to the
+// rows, and repos/ to holding no refused push's pack.
 func (in *interleaving) check(step int) {
 	t := in.t
 	in.scrubAll()
 	in.noteReports()
-	// THE INDEX OF PUSHES, read back as far as it goes: the first
-	// repository's history wanted, as a seat's read of it here as its home
-	// would want it, and every step the backfill has due taken — the gaps
-	// the run's full rounds passed over, that history, the horizon — so the
-	// check below holds what the backfill wrote as well as what the rounds
-	// folded.
+	// THE INDEX OF PUSHES, backfilled as far as it goes (the first
+	// repository's history wanted, as a seat read at its home would), so the
+	// check holds what the backfill wrote as well as what rounds folded.
 	in.c.WantHistory(in.repos[0])
 	if _, err := cache.BackfillPass(in.c); err != nil {
 		in.fatalf("the backfill: %v", err)
 	}
-	// THE PUBLISHED CHAIN AS IT STANDS, each copy's round at the log's head
-	// having handed what moved to the installer; then the installer let have
-	// its say, and every copy held to the rows' chain and to a fresh
-	// cache's — its packs back to the rows' once the replacement of a layer
-	// that held some is placed (the chain holds its packs until then).
+	// THE PUBLISHED CHAIN AS IT STANDS after a round at the log's head;
+	// then, the installer settled, every copy is held to the rows' chain
+	// and a fresh cache's, its packs back to the rows' once a layer that
+	// held some is replaced (the chain holds them until then).
 	for _, repo := range in.repos {
 		s := in.syncAt(repo, linearizable)
 		in.checkLayersAsTheyStand(step, repo, s.Dir)

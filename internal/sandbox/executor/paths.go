@@ -83,6 +83,79 @@
 // archive at [threadPlainMax] with the scrub's own meter and handing each
 // member it reads what is left of that budget.
 //
+// # A thread line is read in one scanner pass, never held
+//
+// The scan reader (claudelinescan.go, [scanReader]) reads a member a line at a
+// time as [threadReader] does and answers each line as it does, but reads it
+// through [jsonscan] in ONE PASS that never holds the line, so a line of any
+// length costs what its readers read of it: Claude Code keeps no bound on a
+// line (a whole-PDF Read writes 55,924,056 bytes on one). Until it takes the
+// old reader's place, a differential holds it to the whole decode line by
+// line (claudelinescan_internal_test.go).
+//
+// A LINE IS ITS OWN READER ([lineSource]): it ends at the break and hands the
+// scanner the line without it, so the scanner reads one JSON text a line.
+// Every byte it takes of the member passes first through the member's meter
+// and through the line's byte facts ([lineBytes]), a tee of the raw bytes,
+// never of the tokens, since a pattern a reader of bytes reads can begin
+// inside a name, through an escaped quote ([threadBytes]). The context is
+// asked before each piece of at most [lineChunkBytes], so a reading overruns
+// its caller's wait by one piece whatever the line's length, and a line
+// refused part way is drained to its break through the same take.
+//
+// NOTHING OF A LINE COMMITS BEFORE ITS BREAK AND THE SCANNER'S END OF IT, and
+// a piece the member ends with no break commits nothing. Then the line is
+// judged in the order Claude Code's load reads it ([scanReader.commit]): a
+// fault of the grammar first, wherever it lies (a NUL or a byte order mark
+// first is faultLead, a cut value faultPrefix, too deep faultDepth, more after
+// the value faultTrailing, else faultSyntax), since the whole decode reads the
+// whole value before its head; then one value that is no object; then the head,
+// each key by its last occurrence; then the bounds below; only then a record,
+// each frame settled to its type ([settle]). So a late fault beats what the
+// line said before it, and a line past a bound is classed exactly where its
+// grammar or head refuses it: past a bound the pass keeps scanning, holding
+// nothing more.
+//
+// EVERY MEMBER IS READ BY ITS DECODED NAME, exactly, case kept, as the whole
+// decode reads a key under [threadDecoding] (`"type"` is `type`; `"Type"`
+// no key the layer reads), and a key written twice by its last value,
+// wholesale: each occurrence replaces what the one before it left, a frame's
+// all of it, never merged with it.
+//
+// EVERY VALUE IS READ BY ONE OF THREE MEANS, or passed over unheld
+// ([jsonscan.Scanner.Skip]). A small value the layer's own code decodes (a
+// uuid, a timestamp, a usage, a block's id) is CAPTURED as written within
+// [threadValueMax] ([jsonscan.Scanner.Capture]), copied into the facts or held
+// in the reader's buffers until its object ends; a capture past that bound
+// fails the line closed, never read as a guess. A container its readers walk
+// is a FRAME, read member by member, keeping only what its readers ask (a
+// message's kind, its blocks counted by kind, its calls) and deciding each
+// object by the layer's one rule of it ([blockCallOf]) once every key of it
+// has been met. A text its readers ask a property of STREAMS into the
+// automaton that answers it at any length ([textSays], [textNotice],
+// [textHandback], [textResult]). A list is read an element at a time by the
+// layer's one rule of an element, up to the first it refuses, as
+// [eachElement] hands it; an entry read by its first characters (a
+// retraction's, a kept uuid) is read one byte past them
+// ([lineDecoder.opening]), and a skill's name streams into its UTF-16 length
+// and whether its bytes were UTF-8 ([jsonscan.Scanner.InvalidUTF8]).
+//
+// A RECORD'S TYPE GATES ITS FRAMES ([gates]): a frame read on records of some
+// types alone is passed over where the `type` written before it names none of
+// them ([lineDecoder.admits]), since an api-request-blob writes its type first
+// and then a message repeating a whole request. A type is known only at the
+// line's end, though (an assistant writes its message first), so a frame met
+// before any type, or after one that is no string, is read; a line whose last
+// type reads a frame passed over for an earlier one fails closed; and a frame
+// the last type or subtype does not read is dropped at the commit.
+//
+// THE FACTS ARE HELD TO [threadLineMax] IN SUM ([lineMeter]), since a bound on
+// each value lets a line of a million tiny calls hold a million calls: every
+// allocation the facts keep is charged as it is made, an array before it is
+// made ([grow]), and nothing is refunded, so a key written many times pays for
+// every copy. What a line allocates and drops (a refused block's strings, an
+// error's text) is not charged: a line of many blocks costs time, not memory.
+//
 // # A run's harness session, carried between boxes
 //
 // Every run names the harness session it works in before the harness starts

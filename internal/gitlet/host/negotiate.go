@@ -11,23 +11,19 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 )
 
-// AN UPLOAD-PACK REQUEST, READ FOR THREE FACTS: which level the answer needs
-// (an `ls-refs` names refs, so it is read at the request's refs level —
-// linearizable for a person, a box's run's session; a fetch by object id
-// names none), which objects it wants (so a node that lacks one syncs once before
-// it answers), and whether it offers any object the client already has — a
-// fetch that offers none is sent each want's whole history, which the
-// repository's heat counts as a clone (cache.Use.Clones). A fetch never names
-// a ref: the host offers no ref-in-want (cache.ServeConfig says why), and
-// upload-pack refuses a `want-ref` it did not offer. Never a refusal: a
-// malformed request is passed to upload-pack, which refuses it in its own
-// words. Read as a STREAM from wherever the request is held — memory and a
-// spool — so a partial clone's request of a million wants is never held
-// whole.
+// AN UPLOAD-PACK REQUEST, READ FOR THREE FACTS: the level its answer needs (an
+// `ls-refs` names refs, so is read at the request's refs level; a fetch by
+// object id names none), the objects it wants (a node lacking one syncs once
+// before it answers), and whether it offers any `have` (one offering none is
+// sent each want's whole history, a clone to the heat: cache.Use.Clones). A
+// fetch never names a ref: the host offers no ref-in-want (cache.ServeConfig),
+// and upload-pack refuses a `want-ref` it did not offer. Never a refusal: upload-pack refuses a malformed request in its own words.
+// Read as a STREAM from memory or a spool, so a partial clone's million wants
+// are never held whole.
 
 // The fetch commands a request is recorded as (crewlet.code.fetch.duration's
-// `command`). A closed set: a v2 command this build does not name is recorded
-// as a fetch, which is what upload-pack does with it if it does anything.
+// `command`), a closed set: a v2 command this build does not name records as a
+// fetch, as upload-pack treats it.
 const (
 	commandAdvertise = "advertise"
 	commandLsRefs    = "ls-refs"
@@ -36,19 +32,18 @@ const (
 
 // negotiation is what an upload-pack request asks.
 type negotiation struct {
-	// v2 is a protocol v2 request: a command, its capabilities, its
-	// arguments.
+	// v2 is a protocol v2 request: a command, its capabilities, its arguments.
 	v2 bool
 	// command is the v2 command, or commandFetch for v0.
 	command string
 	// wants is whether it names any object by id.
 	wants bool
-	// haves is whether it offers any object the client already has (`have
-	// <oid>`), which the answer is cut by.
+	// haves is whether it offers any object the client has (`have <oid>`),
+	// which cuts the answer.
 	haves bool
 }
 
-// command is what the request is recorded as.
+// recorded is the command the request is recorded as.
 func (n negotiation) recorded() string {
 	if n.v2 && n.command == commandLsRefs {
 		return commandLsRefs
@@ -56,35 +51,28 @@ func (n negotiation) recorded() string {
 	return commandFetch
 }
 
-// clone reports a fetch that wants objects and offers none the client has:
-// the client is sent each want's whole history. Git negotiates nothing for a
-// fresh clone of any shape — full, shallow, partial — and nothing for a
-// partial clone's fetch of what it lacks, so both read as this; a fetch from
-// a repository the client holds offers its tips, and one whose client is up to
-// date sends no fetch at all.
+// clone reports a fetch that wants objects and offers none, so is sent each
+// want's whole history. Git negotiates nothing for any fresh clone (full,
+// shallow, partial) nor a partial clone's fetch of what it lacks, so both
+// count; a client holding the repository offers its tips.
 func (n negotiation) clone() bool {
 	return n.recorded() == commandFetch && n.wants && !n.haves
 }
 
-// namesRefs reports whether the answer names a ref, and so is read at the
-// request's refs level (admission.refs) — through the code log's barrier for
-// a person, at a box's run's session — rather than from whatever the cache
-// holds: an `ls-refs`.
+// namesRefs reports an `ls-refs`, whose answer names refs and so is read at the
+// request's refs level (admission.refs), not from whatever the cache holds.
 func (n negotiation) namesRefs() bool {
 	return n.v2 && n.command == commandLsRefs
 }
 
 // parseNegotiation reads a request until it has learnt what it reads for, or
-// to the first packet it cannot read — what it learnt by then is the answer,
-// since upload-pack, not this parse, is what refuses a malformed request. Only
-// the source's own read failing is an error.
+// to the first packet it cannot read: what it learnt by then is the answer,
+// since upload-pack refuses a malformed request (readFailure).
 //
-// v2: `command=<c>` (the first pkt-line), capability lines to the delimiter,
-// then arguments to the flush — `want <oid>` and `have <oid>` among them. v0:
-// `want <oid>[ <caps>]` lines (and any shallow and deepen lines) to the first
-// flush, then the round's `have <oid>` lines and its `done` or flush — read
-// past the first flush only to its first have, which is all the clone test
-// asks, and a clone's request holds none: its next line is its `done`.
+// v2: `command=<c>`, capability lines to the delimiter, then arguments to the
+// flush. v0: `want` lines (and any shallow and deepen lines) to the first
+// flush, then only to the round's first `have`: all clone asks, and a clone's
+// next line is its `done`.
 func parseNegotiation(src io.Reader, size int64, v2 bool) (negotiation, error) {
 	n := negotiation{v2: v2, command: commandFetch}
 	r := pktReader(src, size)
@@ -129,12 +117,12 @@ func parseNegotiation(src io.Reader, size int64, v2 bool) (negotiation, error) {
 	}
 }
 
-// wantOID is the object a `want <oid>[ <caps>]` line names, or "": the id as
-// upload-pack reads it (receive_needs for v0, parse_want for v2) — the
+// wantOID is the object a `want <oid>[ <caps>]` line names, or "", read as
+// upload-pack reads it (receive_needs for v0, parse_want for v2): the
 // gitref.OIDHexLen bytes after `want `, hex in either case (wireOID), whatever
-// follows them, since git reads the id and nothing past it. A want read more
-// narrowly than git reads it is one this node never checks it holds, and
-// upload-pack answers it `not our ref` on a node one sync from serving it.
+// follows. A want read more narrowly than git reads it is never checked as
+// held, and upload-pack answers it `not our ref` on a node one sync from
+// serving it.
 func wantOID(line string) string { return oidAfter(line, "want ") }
 
 // haveOID is the object a `have <oid>` line offers, or "": the id read as a
@@ -155,10 +143,9 @@ func oidAfter(line, prefix string) string {
 	return oid
 }
 
-// wantsOf is the object ids a request wants, read from src as a stream — the
-// argument lines of a v2 fetch, or v0's want lines — skipping any want that
-// names no object id, which upload-pack refuses in its own words. A source
-// that fails to read yields its error and ends.
+// wantsOf is the object ids a request wants, read from src as a stream (a v2
+// fetch's arguments, or v0's want lines), skipping a want naming no object id,
+// which upload-pack refuses itself. A failed read yields its error and ends.
 func wantsOf(src func() io.Reader, size int64, v2 bool) iter.Seq2[string, error] {
 	return func(yield func(string, error) bool) {
 		r := pktReader(src(), size)
@@ -190,17 +177,15 @@ func wantsOf(src func() io.Reader, size int64, v2 bool) iter.Seq2[string, error]
 	}
 }
 
-// pktReader buffers a request of size bytes for reading its packets: as
-// large as the request, up to 64 KiB — a few hundred bytes for a clone's
-// negotiation, never a fixed 64 KiB a parse.
+// pktReader buffers a request of size bytes: as large as the request, up to
+// 64 KiB, so a clone's negotiation of a few hundred bytes never costs 64 KiB.
 func pktReader(src io.Reader, size int64) *bufio.Reader {
 	return bufio.NewReaderSize(src, int(min(max(size, 16), 64<<10)))
 }
 
-// readFailure is a request parse's ending as its caller sees it: the end of
-// the bytes, or a packet that is not one, is no failure — what was read so far
-// is the answer, and upload-pack is what refuses a malformed request — while
-// the source's own read failing is.
+// readFailure is a parse's ending as its caller sees it: the end of the bytes,
+// or a packet that is not one, is no failure (what was read is the answer;
+// upload-pack refuses a malformed request); the source's own read failing is.
 func readFailure(err error) error {
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, errMalformed) {
 		return nil

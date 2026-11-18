@@ -17,12 +17,9 @@ import (
 )
 
 // THE PAGES STATE THE PUBLICATION'S CADENCE: docs/concepts/gitlet.md and
-// docs/concepts/scaling.md tell an operator when a repository is published —
-// the tail's packs, its share of the objects and its objects, the debounce,
-// the ceiling, the pace and the duty cycle, the chain's split and repack
-// rules — in the constants' own figures, held here, so a re-derivation by
-// BenchmarkMidx's arms (internal/gitlet/cache), on this pin or the next, cannot
-// leave a page saying what the code no longer does.
+// docs/concepts/scaling.md say when a repository is published in the
+// constants' own figures, so re-deriving them (internal/gitlet/cache's
+// BenchmarkMidx) cannot leave a page saying what the code no longer does.
 //
 // Mutation: change PublishPacks, PublishShare or PublishTailObjects, and
 // neither page says any longer when a repository is published.
@@ -64,15 +61,11 @@ func TestThePagesStateThePublicationsCadence(t *testing.T) {
 }
 
 // THE PAGES STATE THE EXPUNGE'S BOUNDS: docs/concepts/gitlet.md,
-// docs/guides/gitlet.md and docs/concepts/object-store.md (what a hosting
-// company's bucket grows by) tell an operator when an expunge is due (its
-// share and its least), how often a repository is asked (its interval), how
-// long what a force-push left is kept (the prune grace), how many packs a
-// begin takes and writes, how long the object store keeps what it dropped
-// (the retire grace) and what its builds are admitted at — in the constants'
-// own figures, held here, so moving one (ExpungeMinBytes is provisional until
-// BenchmarkExpunge decides it) cannot leave a page saying what the code no
-// longer does.
+// docs/guides/gitlet.md and docs/concepts/object-store.md state the expunge's
+// due share and least, interval, prune and retire graces, a begin's pack
+// bounds and its builds' admission in the constants' own figures, so moving
+// one (ExpungeMinBytes is provisional until BenchmarkExpunge decides it)
+// cannot leave a page saying what the code no longer does.
 //
 // Mutation: change gitlet.ExpungeShare, gitlet.ExpungeMinBytes, gitlet.PruneGrace,
 // gitlet.ExpungeInterval, gitlet.MaxExpungeInputs, gitlet.MaxExpungeOutputs,
@@ -170,8 +163,7 @@ func span(t *testing.T, d time.Duration) string {
 	return w
 }
 
-// spaced is n as the docs write a number: its thousands set apart by a space
-// (90 909).
+// spaced is n as the docs write a number, thousands set apart (90 909).
 func spaced(n int64) string {
 	s := strconv.FormatInt(n, 10)
 	for i := len(s) - 3; i > 0; i -= 3 {

@@ -17,12 +17,10 @@ import (
 )
 
 // THE ENVIRONMENT IS BUILT, NOT INHERITED: every variable git reads that the
-// engine's own environment could carry — its secrets, a trace, an exec path,
-// an alternate object directory, a config of its own, a tree to read
-// attributes from, a commit's identity — is absent, and what is present is
-// exactly the pool's table, its base configuration first. The trace2 event
-// stream is the pool's own (fd 3, brief, nesting 1), whatever the engine's
-// environment names.
+// engine's environment could carry (secrets, a trace, an exec path, alternate
+// objects, a config, an attributes tree, a commit's identity) is absent, and
+// what is present is exactly the pool's table, its base configuration first.
+// The trace2 event stream is the pool's own (fd 3, brief, nesting 1).
 func TestTheEnvironmentIsBuiltNotInherited(t *testing.T) {
 	for name, value := range map[string]string{
 		"CREWLET_SECRET_X":                 "leaked",
@@ -148,16 +146,12 @@ func TestAClientProtocolIsPassedOnlyWhenWellFormed(t *testing.T) {
 	}
 }
 
-// THE HOME CAN NEVER CONFIGURE A GIT PROCESS — even when something writes into
-// it after the pool checked it was empty — and neither can the HOST: no
-// configuration and no ATTRIBUTES are read from either. The attributes are the
-// half GIT_CONFIG_NOSYSTEM and GIT_CONFIG_GLOBAL do not reach: git reads
-// $HOME/.config/git/attributes unless core.attributesFile names another file,
-// and /etc/gitattributes unless GIT_ATTR_NOSYSTEM is set, and pack-objects
-// asks a path's `delta` attribute whenever it searches for a delta — so a
-// `* -delta` in either would have every delta a compaction recomputes, and
-// every object stored whole, written undeltified (the deltas a clone reuses
-// it leaves alone; the package doc has the measurement).
+// THE HOME CAN NEVER CONFIGURE A GIT PROCESS, even when written to after the
+// pool checked it was empty, and neither can the HOST: no configuration and no
+// ATTRIBUTES are read from either. Attributes escape GIT_CONFIG_NOSYSTEM and
+// GIT_CONFIG_GLOBAL, and a `* -delta` in either file would have a compaction
+// write every delta it recomputes undeltified (package doc, "A git process is
+// configured by the engine and by nothing else").
 func TestTheHomeCanNeverConfigureAGitProcess(t *testing.T) {
 	t.Parallel()
 	onNodeGits(t, homeCannotConfigureOn)
@@ -208,8 +202,8 @@ func homeCannotConfigureOn(t *testing.T, git string) {
 		t.Fatalf("hook run with a planted hooksPath = exit %d, %v; want no hook run", res.Exit, err)
 	}
 
-	// The planted attributes file answers nothing, and the path that
-	// replaces it — one that can never exist — costs no warning either.
+	// The planted attributes file answers nothing, and the path replacing it,
+	// which can never exist, costs no warning either.
 	res, err = p.Run(t.Context(), gitproc.Cmd{Dir: bare, Args: []string{"check-attr", "delta", "--", "x"},
 		Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
 	if err != nil || string(res.Stdout) != "x: delta: unspecified\n" || res.Stderr != "" {
@@ -218,9 +212,8 @@ func homeCannotConfigureOn(t *testing.T, git string) {
 	}
 
 	// The HOST's attributes file cannot be planted from a test, so git is
-	// asked: `git var GIT_ATTR_SYSTEM` names the system file only while it
-	// is read, and answers 1 otherwise. GIT_ATTR_GLOBAL names the global
-	// file git reads, which must be the base's path that cannot exist.
+	// asked: `git var GIT_ATTR_SYSTEM` names the system file only while it is
+	// read (exit 1 otherwise), and GIT_ATTR_GLOBAL must be the base's path.
 	res, err = p.Run(t.Context(), gitproc.Cmd{Args: []string{"var", "GIT_ATTR_SYSTEM"}, Answers: []int{1},
 		Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
 	if err != nil || res.Exit != 1 {
@@ -265,12 +258,9 @@ func TestARepositoryCanNeverConfigureAGitProcess(t *testing.T) {
 }
 
 // A FILE THAT COULD NOT BE READ IS NOT A REPOSITORY OF THE WRONG SHAPE.
-// ErrRepoShape is a definite answer — the config absent or holding other
-// bytes, a commondir present, an alternate that is not the engine's — and a
-// read that failed (a busy node out of descriptors, an I/O error) answers
-// nothing about the shape: it is the read's own error, wrapped, so neither a
-// caller nor the operator reading it is told a healthy repository was
-// tampered with.
+// ErrRepoShape is a definite answer; a failed read (a node out of descriptors,
+// an I/O error) is the read's own error, wrapped, so nobody is told a healthy
+// repository was tampered with.
 func TestAnUnreadableRepositoryIsNotCalledMisshapen(t *testing.T) {
 	t.Parallel()
 	recorder, calls := gittest.Recording(t)
@@ -314,8 +304,7 @@ func TestAnUnreadableRepositoryIsNotCalledMisshapen(t *testing.T) {
 }
 
 // replaceWithDir puts an empty directory where path's file was, so reading
-// it fails with EISDIR — a read that fails whoever runs it, root included,
-// where a mode of 0000 is no refusal at all.
+// it fails with EISDIR even as root, which a mode of 0000 would not.
 func replaceWithDir(t *testing.T, path string) {
 	t.Helper()
 	if err := os.RemoveAll(path); err != nil {
@@ -349,11 +338,10 @@ func TestACommondirIsRefused(t *testing.T) {
 
 // AN ALTERNATE IS THE CALL'S, AND HELD TO THE SAME SHAPE, one hop further than
 // the process's own repository, because git lists an alternate's refs with a
-// git it configures with nothing of the pool's. A repository does not choose
-// its alternate: an alternates file the call did not name is refused, so a
-// cache — which never has one — cannot be made to serve another repository's
-// objects by id through a file planted in it. Every refusal says which rule
-// it is and which repository broke it.
+// git configured with nothing of the pool's. An alternates file the call did
+// not name is refused, so one planted in a cache (which never has one) cannot
+// make it serve another repository's objects by id. Every refusal names its
+// rule and the repository that broke it.
 func TestAnAlternateIsTheCallsAndHeldToTheSameShape(t *testing.T) {
 	t.Parallel()
 	recorder, calls := gittest.Recording(t)
@@ -407,9 +395,8 @@ func TestAnAlternateIsTheCallsAndHeldToTheSameShape(t *testing.T) {
 		}
 	})
 	t.Run("an alternates file the call does not name", func(t *testing.T) {
-		// What a cache planted with an alternates file is to every process
-		// run in it: a well-formed line naming a repository of the engine's
-		// own shape — another repository's cache — refused all the same.
+		// A cache planted with a well-formed line naming another repository's
+		// cache, of the engine's own shape: refused all the same.
 		c, other := gittest.Empty(t), gittest.Empty(t)
 		write(t, alternates(c), other+"/objects\n")
 		refused(t, run(t, c, ""), c, gitproc.ShapeAlternates, c, false)
@@ -449,12 +436,11 @@ func TestAnAlternateIsTheCallsAndHeldToTheSameShape(t *testing.T) {
 			refused(t, run(t, s, c), s, tc.rule, c, true)
 		})
 	}
-	// GIT LISTS AN ALTERNATE'S REFS AT ITS REAL PATH — the line resolved,
-	// "/objects" stripped — so an alternate whose objects directory is a link
-	// would be configured by the repository the link leads to. Its objects
-	// directory must be its own, which makes the alternate checked the one git
-	// runs in: a link is refused wherever it leads, a repository of the
-	// engine's own shape included.
+	// GIT LISTS AN ALTERNATE'S REFS AT ITS REAL PATH (the line resolved,
+	// "/objects" stripped), so an alternate whose objects directory is a link
+	// would be configured by the repository it leads to. A link is refused
+	// wherever it leads, an engine-shaped repository included, so the
+	// alternate checked is the one git runs in.
 	link := func(t *testing.T, c, target string) {
 		t.Helper()
 		if err := os.RemoveAll(filepath.Join(c, "objects")); err != nil {
@@ -522,10 +508,9 @@ func TestAnAlternateIsTheCallsAndHeldToTheSameShape(t *testing.T) {
 }
 
 // EVERY SHAPE RULE IS ONE THE POOL REFUSES BY, AND CheckShape IS THE POOL'S
-// OWN CHECK: a repository CheckShape refuses under a rule, Run refuses under
-// the same rule before any git starts, and one CheckShape accepts, Run runs
-// in. The cache's sweep holds what it repairs to CheckShape, so the two can
-// never disagree about what the pool runs in.
+// OWN CHECK: Run refuses what CheckShape refuses, under the same rule and
+// before any git starts, and runs in what it accepts. The cache's sweep
+// repairs to CheckShape, so the two must never disagree.
 func TestCheckShapeIsThePoolsOwnCheck(t *testing.T) {
 	t.Parallel()
 	recorder, calls := gittest.Recording(t)
@@ -786,13 +771,11 @@ func TestAnEnvironmentNameOutsideTheTwoIsRefused(t *testing.T) {
 	}
 }
 
-// A MALFORMED COMMAND IS REFUSED before any process: nothing a Cmd says can
-// make git something other than a subcommand in a repository the engine made.
-// Every case is put to a pool of the machine's cores and to a pool of ONE,
-// whose read lane has nothing to lend: a rule about loans that held only where
-// a loan is made — the Indexed a push's receive-pack must carry above all —
-// would pass a call site's tests on a one-core runner and fail it everywhere
-// else.
+// A MALFORMED COMMAND IS REFUSED before any process: no Cmd makes git anything
+// but a subcommand in a repository the engine made. Each case runs on a pool
+// of the machine's cores and on one of ONE, whose read lane lends nothing: a
+// loan rule (above all the Indexed a push's receive-pack carries) held only
+// where a loan is made would pass on a one-core runner and fail elsewhere.
 func TestAMalformedCommandIsRefused(t *testing.T) {
 	t.Parallel()
 	recorder, calls := gittest.Recording(t)
@@ -827,9 +810,8 @@ func TestAMalformedCommandIsRefused(t *testing.T) {
 		"a transfer with no Share": func(c *gitproc.Cmd) {
 			c.Args, c.Class = []string{"upload-pack"}, gitproc.ClassTransfer
 		},
-		// A principal no identity is given: past every name the bound
-		// leaves room for, or holding a NUL — a caller handing the share
-		// the wrong string.
+		// A principal no identity is given: past the bound, or holding a
+		// NUL (a caller handing the share the wrong string).
 		"a transfer whose principal is over-long": func(c *gitproc.Cmd) {
 			c.Args, c.Class = []string{"upload-pack"}, gitproc.ClassTransfer
 			c.Share = gitproc.Share{Class: gitproc.ShareMachine, Principal: strings.Repeat("p", 256)}
@@ -847,17 +829,16 @@ func TestAMalformedCommandIsRefused(t *testing.T) {
 		// held through the hook, the upload and the wait for its record.
 		"a push's receive-pack without Indexed":     receivePack(nil, "--stateless-rpc", "/r"),
 		"a receive-pack with no options or Indexed": receivePack(nil, "/r"),
-		// A push's ADVERTISEMENT — by either full name of the option, and
-		// wherever it stands, as git reads it — starts no index-pack and
-		// reaches no hook, so nothing would ever close one.
+		// A push's ADVERTISEMENT (either full option name, anywhere git
+		// reads it) starts no index-pack and reaches no hook, so nothing
+		// would ever close one.
 		"Indexed on an advertisement":                     receivePack(make(chan struct{}), "--stateless-rpc", "--advertise-refs", "/r"),
 		"Indexed on an advertisement by its other name":   receivePack(make(chan struct{}), "--stateless-rpc", "--http-backend-info-refs", "/r"),
 		"Indexed on an advertisement after its directory": receivePack(make(chan struct{}), "/r", "--advertise-refs"),
 		// The pool tells an advertisement from a push by its options, so it
-		// admits only the spellings it reads exactly as git does: git also
-		// reads an abbreviation, a negation and "--", and each would be
-		// judged a push — or a push judged an advertisement — by a rule
-		// that guessed.
+		// admits only spellings it reads exactly as git does: git also reads
+		// an abbreviation, a negation and "--", which a guessing rule would
+		// misjudge either way.
 		"an abbreviated option": receivePack(make(chan struct{}), "--stateless-rpc", "--adv", "/r"),
 		"a negated option":      receivePack(nil, "--stateless-rpc", "--advertise-refs", "--no-advertise-refs", "/r"),
 		"a short option":        receivePack(make(chan struct{}), "-q", "/r"),
@@ -934,16 +915,12 @@ func pkt(s string) string {
 	return fmt.Sprintf("%04x%s", len(s)+4, s)
 }
 
-// NO CONFIGURATION MOVES THE TRACE. git reads its trace2 targets from its
-// system and global configuration as well as the environment, so a HOME that
-// names every trace2 key — the targets moved to files, the event stream made
-// verbose and nested, every configuration value and environment variable
-// listed — would move or bloat the stream the pool classifies from. After
-// the pool is built its HOME gains both files naming them: a run's stream
-// still holds its version event and exactly the events it held before (no
-// def_param, no def_param per variable), and nothing is written at any
-// target. A call site's own configuration naming a trace2 key is refused
-// before git starts.
+// NO CONFIGURATION MOVES THE TRACE. git reads trace2 keys from its system and
+// global configuration too, so a HOME naming every one would move or bloat the
+// stream the pool classifies from. With both HOME files planted after New, a
+// run's stream holds its version event and exactly its earlier events (no
+// def_param), and nothing is written at any target; a call site's own trace2
+// key is refused before git starts.
 //
 // Mutation: drop GIT_CONFIG_GLOBAL=/dev/null from the base environment, and
 // the run's events grow by the def_param lines and the targets fill.

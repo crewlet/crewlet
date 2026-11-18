@@ -16,10 +16,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// A SNAPSHOT THAT MOVES IS READ AGAIN, from its first page and FROM THE SAME
-// POSITION: page 1 decides full or delta afresh, so a restart converges — and
-// a round that keeps finding its history moved past MaxSnapshotRestarts fails
-// rather than read for ever.
+// A SNAPSHOT THAT MOVES IS READ AGAIN from page 1 at the SAME position, so a
+// restart converges; past MaxSnapshotRestarts the round fails rather than read
+// for ever.
 func TestASnapshotThatMovesIsReadAgain(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -80,14 +79,12 @@ func TestASnapshotThatMovesIsReadAgain(t *testing.T) {
 	}
 }
 
-// A STREAM CHANGE IS A FULL SYNC: a log RECREATED under the cache — provisioned
-// anew, its stamp not the one the cache read under (ADR-0083) — answers a
-// delta from the cache's position with the rows of an earlier state, which a
-// delta cannot carry; the cache sees the stream it read from is not this one,
-// reads the whole answer, and converges to the recreated rows — packs they do
-// not name swept, refs back where they were. And every other repository of
-// the node is read whole at its next round, answered at once from nothing
-// until then: one log is under every one of them.
+// A STREAM CHANGE IS A FULL SYNC: a log RECREATED under the cache (a new
+// stamp, ADR-0083) answers a delta with an earlier state's rows, which a delta
+// cannot carry; the cache reads the whole answer and converges to them,
+// sweeping unnamed packs. Every other repository on the node, being on the
+// same log, is read whole at its next round and answered from nothing at once
+// until then.
 func TestAStreamChangeIsAFullSync(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -141,14 +138,12 @@ func TestAStreamChangeIsAFullSync(t *testing.T) {
 	}
 }
 
-// AN ANSWER BEHIND THE CACHE CHANGES NOTHING — unless it was read at the log's
-// head. A delta from a stale copy, on the stream the cache read from, below
-// where the cache already is, changes nothing: the cache never moves backwards
-// for one (a client that fetched from this node must not see its refs go
-// back). A FULL answer below it — the first round after a restart — is asked
-// again at linearizable before anything is concluded from it: there the copy
-// was only behind, and the log's head answers at the cache's own position,
-// which the cache converges to unchanged.
+// AN ANSWER BEHIND THE CACHE CHANGES NOTHING unless read at the log's head. A
+// stale delta on its stream below the cache never moves it back (a client
+// that fetched here must not see its refs go back). A FULL answer below it,
+// as after a restart, is asked again at linearizable first: the copy was only
+// behind, and the head answers at the cache's own position, leaving the cache
+// unchanged.
 func TestAnAnswerBehindTheCacheChangesNothing(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -206,14 +201,12 @@ func TestAnAnswerBehindTheCacheChangesNothing(t *testing.T) {
 	}
 }
 
-// A LOG RESTORED BEHIND THE CACHE IS FOLLOWED BACK. A broker brought back from
-// an older copy keeps its stream's identity (ADR-0083), so nothing but where it
-// ends says it went back — and only a read at the log's head can say that: a
-// linearizable answer below a position this cache read, whether its own
-// repository's or another's. The cache then reads the repository whole and
-// converges to the rows the log holds — the refs and packs written after the
-// copy gone — and marks every other repository on the node to be read whole
-// at its next round, answering nothing from them at once until then.
+// A LOG RESTORED BEHIND THE CACHE IS FOLLOWED BACK. A restored broker keeps
+// its stream's identity (ADR-0083), so only a linearizable answer below a
+// position this cache read, for any repository, says it went back. The cache
+// then reads the repository whole, converging to the log's rows, and marks
+// every other repository on the node to be read whole at its next round,
+// answering none of them at once until then.
 func TestALogRestoredBehindTheCacheIsFollowedBack(t *testing.T) {
 	t.Parallel()
 	restored := func(t *testing.T, w *syncWorld, c *cache.Cache, repo string) {
@@ -242,9 +235,8 @@ func TestALogRestoredBehindTheCacheIsFollowedBack(t *testing.T) {
 
 		w.log.restore(earlier)
 		c = w.reopen(t, c)
-		// A stale caller of the restarted cache is not answered from the
-		// state a previous process left, and its whole answer below the
-		// cache is asked of the log's head, which says the log went back.
+		// A stale caller is not answered from a previous process's state,
+		// and its whole answer below the cache is asked of the log's head.
 		s, err := c.Sync(t.Context(), repo, stale)
 		if err != nil {
 			t.Fatal(err)
@@ -300,9 +292,8 @@ func TestALogRestoredBehindTheCacheIsFollowedBack(t *testing.T) {
 		w.push(t, busy, "refs/heads/main", nil)
 		w.sync(t, c, busy).Release()
 
-		// The log goes back to before busy's pushes and is written again:
-		// quiet's own position is still the log's, and only the mark of
-		// what busy read says the log went back.
+		// quiet's own position is still the log's: only the mark of what
+		// busy read says the log went back.
 		w.log.restore(earlier)
 		w.push(t, quiet, "refs/heads/main", nil)
 		w.sync(t, c, quiet).Release()
@@ -352,12 +343,9 @@ func TestManyPagesInstallWhatOnePageWould(t *testing.T) {
 	}
 }
 
-// EVERY PAGE THE ESTATE ANSWERS IS TIMED BY WHAT IT SERVED: a full read's
-// every page under `full`, a delta's under `delta` —
-// crewlet.code.cache.read.page.duration is production's reading of the page
-// MaxFullRounds was measured against, so a page it misses is a full read the
-// cap's evidence never sees — and a page the estate refuses is no page
-// served, timed under neither.
+// EVERY PAGE THE ESTATE ANSWERS IS TIMED BY WHAT IT SERVED: every page of a
+// full read under `full`, a delta's under `delta`, a refused page under
+// neither; a missed page is evidence MaxFullRounds' sizing never sees.
 //
 // Mutation: time page 1 alone, and a full read of many pages counts one;
 // time a page by the read it was asked as, and a delta's page counts as full.
@@ -419,10 +407,9 @@ func TestEveryPageTheEstateAnswersIsTimedByWhatItServed(t *testing.T) {
 	}
 }
 
-// A TAIL PAGE SERVES THE PACKS ITS REFS NEED: a push that lands between two
-// pages of a full snapshot moves a ref the later page serves, and adds a pack
-// the packs phase has already passed (its id sorts below every other) — the
-// tail is what installs it.
+// A TAIL PAGE SERVES THE PACKS ITS REFS NEED: a push between two pages of a
+// full snapshot adds a pack the packs phase has passed (its id sorts first)
+// and moves a ref a later page serves; the tail installs the pack.
 func TestATailPageServesThePacksItsRefsNeed(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -452,10 +439,8 @@ func TestATailPageServesThePacksItsRefsNeed(t *testing.T) {
 	}
 }
 
-// A REF MOVED BETWEEN TWO PAGES OF A DELTA TAKES ITS NEWEST ROW: a delta's
-// refs are served by position, so a ref that moves after a page served it is
-// served again at its new position — and the second row is the one that is
-// true.
+// A REF MOVED BETWEEN TWO PAGES OF A DELTA TAKES ITS NEWEST ROW: a delta
+// serves it again at its new position, and the second row is the true one.
 func TestARefMovedBetweenPagesTakesItsNewestRow(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -488,10 +473,10 @@ func retiredAt(row gitlet.PackRow, at statelog.Position) gitlet.RetiredRow {
 		RetiredAt: time.Unix(1_800_000_000, 0).UTC(), Position: at}
 }
 
-// A ROW THE CACHE CANNOT INSTALL FAILS THE SYNC, before anything is written: a
+// A ROW THE CACHE CANNOT INSTALL FAILS THE SYNC before anything is written: a
 // ref goes into a file git parses line by line, an object id is a path, a
-// pack this build does not split is no pack it can install, and a retirement
-// the snapshot cannot place is none it can take out.
+// part this build does not split is no installable pack, and a retirement the
+// snapshot cannot place is none it can take out.
 func TestARowTheCacheCannotInstallFailsTheSync(t *testing.T) {
 	t.Parallel()
 	ref := func(name, oid string) func(*gitlet.RepoSnapshot, gitlet.PackRow, string) {
@@ -542,10 +527,8 @@ func TestARowTheCacheCannotInstallFailsTheSync(t *testing.T) {
 		{name: "a ref twice in a full answer", full: true, alter: func(s *gitlet.RepoSnapshot, _ gitlet.PackRow, tip string) {
 			s.Refs = append(s.Refs, gitlet.RefRow{Ref: "refs/heads/main", OID: tip, Position: s.Position})
 		}},
-		// THE RETIRED PHASE: what a round takes out of the copy (swap.go), so
-		// a retirement it cannot place — a floor that is not the one asked, a
-		// row outside the phase's bounds or out of its order — fails the sync
-		// as any other row does.
+		// THE RETIRED PHASE (swap.go): a floor other than the one asked, or a
+		// row outside the phase's bounds or order, fails like any other row.
 		{name: "a delta serving the retirements above another floor", alter: func(s *gitlet.RepoSnapshot, _ gitlet.PackRow,
 			_ string) {
 			s.RetiredFrom.Seq--

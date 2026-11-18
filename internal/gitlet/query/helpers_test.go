@@ -133,11 +133,10 @@ func (f *fetches) all() []types.CodeFetched {
 // every push its rows hold into the node's index.
 //
 // A CASE WHOSE CLAIM IS NOT THE READ'S OWN SYNC CALLS IT BEFORE IT READS, and
-// waits on the sync itself, as long as it takes: a read's own sync waits at
-// most statelog.ReadBudget and is then refused as syncing, so a read made
-// straight after a chain of pushes, forced moves above all, decided the case on
-// whether a loaded machine folded them within two seconds. The landing cases'
-// five forced rewrites did not, on an eight-core machine running make check.
+// it waits however long the sync takes: a read's own sync waits at most
+// statelog.ReadBudget, then is refused as syncing, so a read straight after
+// pushes (forced moves above all) would rest on how fast a loaded machine
+// folds them.
 func (x *fixture) synced(i int, repo string) {
 	x.t.Helper()
 	s, err := x.f.Nodes()[i].Cache().Sync(x.t.Context(), repo, gitlettest.Linearizable)
@@ -147,12 +146,10 @@ func (x *fixture) synced(i int, repo string) {
 	s.Release()
 }
 
-// decoration is what q's provenance adds to every page of its answer on the
-// first Gitlet node — the push that introduced each commit it names, and what
-// the node's index holds (gitlet.GitAnswer.PushedBy, Coverage) — read whole once
-// the copy is level with the log, so every page read after it carries the
-// same: the room a case scaling the page bound leaves for it, beside the
-// kind's own.
+// decoration is what q's provenance (gitlet.GitAnswer.PushedBy, Coverage)
+// adds to every page of its answer on the first Gitlet node, read once the
+// copy is level with the log so every later page carries the same: the room a
+// case scaling the page bound leaves for it.
 func (x *fixture) decoration(q gitlet.GitQuery) int {
 	x.t.Helper()
 	x.synced(0, q.RepoID)

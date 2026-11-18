@@ -480,23 +480,18 @@ the dependency surface before choosing a host for it:
   refused once it has heard nothing for about 253 seconds; its other requests
   are held up to 248 seconds past their own bounds the same way
   ([across a link, silence is the link's](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
-  It windows its pulls to what the link carries in four seconds at the
-  floor, as an upload is windowed to one 128 KiB message, so a request sent
-  behind either alone on the link — a lease renewal among them — is still
-  answered inside its five-second term at any rate the engine allows. Until
-  [#1035](https://github.com/crewlet/crewlet/issues/1035), more still holds
-  a request past its term. Each direction has a window of its own, so with
-  an upload and a hydration both in flight a request whose bytes wait behind
-  the one and whose reply waits behind the other can take 7.75 seconds at the
-  floor beyond its own round trip. Nothing windows the object store's other
-  reads toward the node — a download, which holds four 128 KiB messages in
-  hand, fifteen seconds at the floor, a listing's walk, or a read's check of
-  what the stream's leader holds, answered with a whole message — nor an
-  event delivered to one of the node's seats, which crosses whole, so a
-  request whose reply crosses behind them waits for all of it, as one sent
-  behind what the node sends whole does (next item). A hydration's next row
-  waiting there is waited for while the link moves, as above, but a lease
-  renewal is not. Meanwhile the
+  Its pulls share the link's **one window** with the object store's
+  uploads, downloads and listings, both ways: what the link carries in four
+  seconds at the floor, one 128 KiB piece of a file either way, so whatever
+  the node has in flight, a request sent behind it on the link — a lease
+  renewal among them — is still answered inside its five-second term at any
+  rate the engine allows
+  ([one window per link](../concepts/object-store.md#the-fleets-own-bucket--nats-the-default)).
+  What the window does not hold is an event delivered to one of the node's
+  seats, which crosses whole, so a request whose reply crosses behind one
+  waits for it, as one sent behind what the node sends whole does (next
+  item). A hydration's next row waiting there is waited for while the link
+  moves, as above, but a lease renewal is not. Meanwhile the
   node's placement pass waits for it (see
   [a seat's memory follows it](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
   A restart costs that
@@ -512,26 +507,37 @@ the dependency surface before choosing a host for it:
   every lap of the seats
   ([#1040](https://github.com/crewlet/crewlet/issues/1040); see
   [what a crash and a handoff lose](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
-- **A fair queue at the link's bottleneck, each way.** The satellite
-  windows its uploads, one 128 KiB message at a time, and its memory
-  replay's pulls toward it, four seconds at the floor, so a small request
-  sent behind either alone is answered inside its five-second term even at
-  thirty seconds a mebibyte. Whatever else a first-in-first-out queue at a
-  bottleneck holds is added to that wait: another flow's bulk, such as a
-  harness's own upload or download, keeps the queue full for as long as it
-  takes to drain, and a request on the leaf link waits as long — a 256 KiB
-  buffer is 7.5 seconds at the floor, a cellular modem's buffer of
-  megabytes minutes — and behind a full window, a queue of more than a
-  fraction of a second of the link's rate puts the request past its term
-  ([#1035](https://github.com/crewlet/crewlet/issues/1035)). So the queue at
-  each direction's bottleneck must be fair (`fq_codel` or CAKE), which sends
-  a sparse flow's packets ahead of a bulk flow's, and the node's broker
-  traffic must get at least the floor beside the other flows. The host's own
-  queue discipline counts only where the host is the bottleneck: a host
-  whose interface is faster than its link queues at the modem or the router
-  instead, and keeps the queue its own only by shaping its egress just below
-  the uplink's rate and its ingress just below the downlink's (CAKE in
-  `ingress` mode on an IFB device). Neither reorders the bytes of one flow, and a
+- **A fair queue at the link's bottleneck, each way.** The satellite holds
+  its uploads, downloads, walks and memory replays to one window across its
+  link, both ways together, four seconds at the floor, so a small request
+  sent behind them is answered inside its five-second term even at thirty
+  seconds a mebibyte. The floor is the rate the link gives the node's broker
+  traffic beside its own background reads: a link at exactly thirty seconds
+  a mebibyte whose presence reads take two fifths of it carries a full window
+  in 6.7 seconds. Whatever else a first-in-first-out queue at a bottleneck
+  holds is added to that wait: another flow's bulk, such as a harness's own
+  upload or download, keeps the queue full for as long as it takes to drain,
+  and a request on the leaf link waits as long — a 256 KiB buffer is 7.5
+  seconds at the floor, a cellular modem's buffer of megabytes minutes
+  ([#1035](https://github.com/crewlet/crewlet/issues/1035)). So:
+  - The queue at each direction's bottleneck is fair (`fq_codel` or CAKE),
+    which sends a sparse flow's packets ahead of a bulk flow's. The host's
+    own queue discipline counts only where the host is the bottleneck: a
+    host whose interface is faster than its link queues at the modem or the
+    router instead, and keeps the queue its own only by shaping its egress
+    just below the uplink's rate and its ingress just below the downlink's
+    (CAKE in `ingress` mode on an IFB device).
+  - A first-in-first-out queue protects only the lease link, and only where
+    the two directions' queues together hold no more than four seconds of
+    the link's rate, 140 KB at the floor: a renewal then waits at the
+    bottleneck and never in the data link's sockets. The data link's own
+    requests are held to their term only behind fair queues, since at a
+    first-in-first-out queue the other flows' bytes add to the node's window.
+  - The node's broker traffic gets at least the floor beside its background
+    reads.
+
+  Whatever the queues do, no hold, hydration or transfer is refused while the
+  link is moving. Neither queue discipline reorders the bytes of one flow, and a
   satellite's broker traffic is one flow, its leaf link, so what it sends
   whole — an event or a dead letter of up to 8 MiB, a fleet record of up to
   6 MiB — still holds every request sent after it on that link for the whole

@@ -19,52 +19,18 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 )
 
-// BenchmarkPackReuse is what ServeConfig's pack.allowPackReuse costs a CLONE
-// in each value git offers a multi-pack-index bitmap — `single`, the
-// bitmap's preferred pack sent verbatim and every other object packed as
-// pack-objects always packs one (a stored delta reused, a whole copy searched
-// for a delta), and `multi`, verbatim from every pack the bitmap covers — in
-// the two figures the value is decided on: the BYTES the clone is sent
-// ("bytes", what the client's link paces the transfer slot by and every CI
-// clone downloads) and the node's CPU for the clone's pack-objects
-// ("server-cpu-ms", gitproc.Result.CPU). Everything else is the serve
-// configuration as it stands.
-//
-// Every arm is a copy THE CACHE MADE: each push received as a person's git
-// pushes it — a THIN pack, completed by receive-pack's index-pack --fix-thin,
-// which APPENDS WHOLE every base the push's deltas borrowed from the packs
-// before it, and kept as one pack (transfer.unpackLimit=1) — stored as its
-// bundle and its row, installed by a cold round, and indexed by the cache's
-// own maintainer, its bitmap written by the git that then serves it — so the
-// bitmap prefers the pack git chooses for an index written with no
-// --preferred-pack: the oldest .pack to the second, and among a second's
-// packs, which a cold round's nearly all are, whichever git lists first,
-// reported beside each arm (preferredShare). So an object a later push
-// edited sits in two packs, a delta in its own push's and whole in the next
-// one's, and the multi-pack-index keeps ONE copy, as git's midx_oid_compare
-// orders them: the preferred pack's; else the copy in the pack whose .pack
-// is newer to the second; and among one second's packs the first in the
-// write's own listing of the pack directory, the filesystem's order, never
-// the pushes' (an entry carried from an index already on disk counts as
-// oldest of all). A cold round installs nearly every pack within one second,
-// so on these copies the listing chooses which edited objects the index
-// keeps whole and which as their deltas — and `multi` sends as they are
-// stored the whole copies it keeps.
-//
-//   - history=tree is 200 pushes each ADDING fifty files of 3 000 random
-//     bytes (gitlet/host's BenchmarkCloneWarm tree): nothing is edited, so a
-//     duplicate is only a tree a later push borrowed.
-//   - history=edits is gittest.History's seeded history of edits (every
-//     commit four files of one directory, each version rewriting a window of
-//     its file) pushed as 200 pushes: every push edits files an earlier push
-//     wrote, as a team's pushes do, and borrows each one whole.
-//   - history=compacted is edits once all but its last 20 pushes are ONE pack
-//     written by pack-objects — no base appended, every delta searched — the
-//     layout geometric compaction leaves (M3's compactor), its tail still a
-//     pack a push.
-//
-// On the node pin and on the node floor's own build (git=pin, git=floor),
-// since what each value sends is the serving git's doing.
+// BenchmarkPackReuse measures each pack.allowPackReuse value a multi-pack-index
+// bitmap offers (single: its preferred pack verbatim; multi: verbatim from every
+// pack it covers) in the figures ServeConfig's value is decided on (serve.go):
+// "bytes" a clone is sent and "server-cpu-ms" of its pack-objects. Every arm
+// serves a copy THE CACHE MADE (thin pushes received as one pack each, a cold
+// round, the maintainer's bitmap), since that layout decides which pack the
+// bitmap prefers (preferredShare) and which copy of an edited object the index
+// keeps. Histories: tree (200 pushes adding files, nothing edited), edits
+// (gittest.History as 200 pushes, each editing earlier files) and compacted
+// (edits with all but its last 20 pushes one pack-objects pack, as geometric
+// compaction leaves it); each on git=pin and git=floor, since what a value
+// sends is the serving git's doing.
 func BenchmarkPackReuse(b *testing.B) {
 	quiet(b)
 	w := newSyncWorld(b, onMemory)
@@ -158,13 +124,11 @@ func (w *syncWorld) reuseArms(b *testing.B, repo, git string, n int) {
 	}
 }
 
-// preferredShare is what the copy at dir's bitmap PREFERS — the pack single
-// reuse sends as it is stored, git's choice for the maintainer's index: its
-// share of the objects every pack holds, in percent, and its rank among the
-// packs by object count (1, the most). Reported beside each arm, because the
-// choice is the oldest .pack to the second and, among a second's packs,
-// whichever git lists first, so a copy installed cold prefers a pack no rule
-// of the cache picked — and that pack is what single sends as it is stored.
+// preferredShare is the share, in percent, of all objects held by the pack
+// the copy at dir's bitmap PREFERS (what single sends as stored), and its rank
+// by object count (1, the most). Reported beside each arm because git, not the
+// cache, picks it: the oldest .pack to the second, then whichever git lists
+// first.
 func preferredShare(b *testing.B, dir string) (percent float64, rank int) {
 	b.Helper()
 	objects := func(idx string) int64 {
@@ -191,9 +155,8 @@ func preferredShare(b *testing.B, dir string) (percent float64, rank int) {
 	return 100 * float64(mine) / float64(all), rank
 }
 
-// withReuse is config with pack.allowPackReuse set to value, and every other
-// pair as it is — a serve configuration with no such pair fails the arm,
-// since there would be nothing it measures.
+// withReuse is config with pack.allowPackReuse set to value; a config with no
+// such pair panics, since the arm would measure nothing.
 func withReuse(config []gitproc.KV, value string) []gitproc.KV {
 	out := slices.Clone(config)
 	for i, kv := range out {
@@ -205,8 +168,7 @@ func withReuse(config []gitproc.KV, value string) []gitproc.KV {
 	panic("ServeConfig sets no pack.allowPackReuse")
 }
 
-// byteCount counts what it is given and keeps none of it: the pack a clone is
-// sent, measured.
+// byteCount counts the bytes of a clone's pack and keeps none.
 type byteCount struct{ n int64 }
 
 func (c *byteCount) Write(p []byte) (int, error) {
@@ -214,16 +176,14 @@ func (c *byteCount) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// receivePack is the receive-pack a person's push reaches in received: one
-// pack a push, never unpacked, as Gitlet's receive configuration keeps
-// it (host/receive.go), and named on its command line because a local push
-// runs it with none of the pushing process's configuration.
+// receivePack keeps one pack a push, never unpacked, as Gitlet's receive
+// configuration does (host/receive.go); its configuration is on its command
+// line because a local push runs it with none of the pusher's.
 const receivePack = "git -c transfer.unpackLimit=1 -c receive.autogc=false -c pack.writeReverseIndex=true receive-pack"
 
-// received is each of tips pushed in turn from src into a repository of its
-// own, as a person's git pushes — thin, so receive-pack completes each pack
-// with the whole bases it borrowed — read back as the bundle each push
-// stores, in push order.
+// received pushes each of tips in turn from src into a fresh repository, thin
+// as a person's git pushes (so receive-pack appends the whole bases each
+// borrowed), and answers the bundle each push stores, in push order.
 func received(b *testing.B, client *gittest.Client, src string, tips []string) []gittest.Bundled {
 	b.Helper()
 	recv := gittest.Empty(b)
@@ -257,8 +217,8 @@ func received(b *testing.B, client *gittest.Client, src string, tips []string) [
 
 // reuseTreeStream is the history=tree fast-import stream: pushes commits on
 // main, each adding files new files of size seeded random bytes, file f in
-// directory f mod pushes·files/100 — so every push touches every directory
-// it writes into, as host's treeFixture does.
+// directory f mod pushes·files/100, so every push touches every directory it
+// writes into, as host's treeFixture does.
 func reuseTreeStream(pushes, files int, size int64) func(*bufio.Writer) error {
 	return func(w *bufio.Writer) error {
 		data, _ := chacha(drawsReuse, 0)
@@ -300,9 +260,9 @@ func reuseEdits(b *testing.B, w *syncWorld) (editHistory, []string) {
 	return editHistory{src: src, bundles: received(b, w.client, src, tips)}, tips
 }
 
-// reuseCompacted is ONE pack of every object tip reaches in src, written by
-// pack-objects with its delta search — what a compaction of every push up to
-// tip stores — read back as its bundle.
+// reuseCompacted is ONE pack-objects pack (delta search on) of every object
+// tip reaches in src, as a compaction up to tip stores it, read back as its
+// bundle.
 func reuseCompacted(b *testing.B, w *syncWorld, src, tip string) gittest.Bundled {
 	b.Helper()
 	dir := gittest.Empty(b)

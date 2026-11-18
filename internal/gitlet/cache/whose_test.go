@@ -15,21 +15,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A SYNC'S FAILURE SAYS WHOSE IT IS, by what failed and never by
-// elimination. The estate failing to answer a page is the code log's
-// (ErrLogRead); the object store failing to hand a pack over — at its open or
-// part way through its read — for no reason that is an answer about the pack
-// is the store's (ErrStoreRead), never a pack declared missing; this node's
-// own disk refusing a write into the download's staged files is neither; and
-// the log's ANSWER that no row holds the repository is that answer, not a
-// failure to read it. The host answers each with its own sentence, and only
-// the code log's tells a person the node is cut off from the fleet — which,
-// given to a store throttle, sent them to the fleet's quorum, and the store's,
-// given to a full volume, sent them to the bucket.
+// A SYNC'S FAILURE SAYS WHOSE IT IS, by what failed, never by elimination:
+// the estate failing to answer a page is the code log's (ErrLogRead); the
+// object store failing to hand a pack over, at its open or mid-read, for any
+// reason but an answer about the pack, is the store's (ErrStoreRead), never a
+// pack declared missing; this node's disk refusing a staged write is neither;
+// and the log's answer that no row holds the repository is no read failure.
+// Each gets its own sentence from the host, and only the code log's says the
+// node is cut off from the fleet: misattributed, a store throttle sends a
+// person to the quorum, and a full volume to the bucket.
 //
-// Mutations: drop logRead's wrap, and the code log's failure is no
-// ErrLogRead; drop storeFailure's, and the store's is no ErrStoreRead; mark
-// the whole copy's failure as the store's (download), and the disk's is.
+// Mutations: drop logRead's or storeFailure's wrap, and that sentinel is lost;
+// mark the whole copy's failure the store's (download), and the disk's is.
 func TestASyncFailureSaysWhoseItIs(t *testing.T) {
 	t.Parallel()
 	linearizable := statelog.Freshness{Level: statelog.ReadLinearizable}
@@ -80,9 +77,8 @@ func TestASyncFailureSaysWhoseItIs(t *testing.T) {
 		}
 	})
 	t.Run("this node's disk", func(t *testing.T) {
-		// The download's other side: a write into the round's own staged
-		// files failing — a full or failing cache volume — is this node's,
-		// never the object store's.
+		// A full or failing cache volume refusing the round's staged write is
+		// this node's, never the object store's.
 		t.Parallel()
 		w := newSyncWorld(t, onMemory)
 		repo := w.repo(t, 1)

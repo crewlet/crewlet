@@ -17,16 +17,14 @@ import (
 )
 
 // splitLists is how many seeded lists of packs TestTheRollIsGitsGeometricSplit
-// holds the split to, and splitMaxPacks and splitMaxObjects the most packs a
-// list holds and the most objects a pack does.
+// holds the split to, splitMaxPacks the most packs a list holds and
+// splitMaxObjects the most objects a pack does.
 //
-// UP TO 4 096 OBJECTS A PACK, not the millions a repository's packs hold:
-// git's split compares weights only against factor times another weight or a
-// sum of them, so it is the same at every scale, and what a list exercises is
-// the ORDER of its weights — 2 to 40 packs, each count drawn log-uniformly so
-// a list mixes packs a thousand times apart, which is where the progression
-// breaks and the roll-up swallows. Sixty-four lists of up to forty such packs
-// are a few hundred thousand blobs, a few seconds of fast-import.
+// UP TO 4 096 OBJECTS A PACK suffices: git's split compares a weight only with
+// factor times another weight or a sum of them, so it is scale-free and a list
+// exercises the ORDER of its weights. Counts drawn log-uniformly mix packs a
+// thousand times apart, where the progression breaks and the roll-up
+// swallows; 64 lists of up to 40 packs are a few seconds of fast-import.
 const (
 	splitLists      = 64
 	splitMaxPacks   = 40
@@ -34,11 +32,10 @@ const (
 )
 
 // THE ROLL IS GIT'S OWN GEOMETRIC SPLIT: for every seeded list of packs, the
-// packs `git repack --geometric=2 -d` replaces — built as real packs of those
-// object counts, on the node pin's git — are exactly the lightest the plan's
-// split rolls up, so a compaction merges what git's own maintenance would.
-// Every count in a list is distinct, so which packs are the lightest is never
-// a tie git's sort may break either way.
+// packs `git repack --geometric=2 -d` replaces (real packs of those object
+// counts, on the node pin's git) are exactly the lightest the plan's split
+// rolls up, so a compaction merges what git's own maintenance would. Counts in
+// a list are distinct, so the lightest are never a tie git may break either way.
 //
 // Mutation: drop the split's second pass (the roll-up of packs the new pack
 // would put out of progression), and lists that need it disagree with git.
@@ -51,9 +48,9 @@ func TestTheRollIsGitsGeometricSplit(t *testing.T) {
 			t.Parallel()
 			weights := drawWeights(rand.New(rand.NewPCG(seed, 1)))
 			repo := gittest.Empty(t)
-			// EVERY CHECKPOINT A PACK: fast-import loosens a pack of fewer
-			// objects than its unpack limit (transfer.unpackLimit's 100,
-			// unset), and a list's light packs would be no packs at all.
+			// EVERY CHECKPOINT A PACK: fast-import loosens a pack under its
+			// unpack limit (transfer.unpackLimit's 100 when unset), which
+			// would leave a list's light packs no packs at all.
 			client.Run(t, repo, "config", "fastimport.unpackLimit", "0")
 			gittest.FastImport(t, client, repo, packsOf(weights))
 			before := packCounts(t, repo)
@@ -73,8 +70,8 @@ func TestTheRollIsGitsGeometricSplit(t *testing.T) {
 			split := compact.GeometricSplit(sorted, gitlet.CompactFactor)
 			want := sorted[:split]
 			if split < 2 {
-				// ONE PACK IS NOTHING TO MERGE: git leaves a roll of one
-				// pack as it is, as the plan calls it not due.
+				// ONE PACK IS NOTHING TO MERGE: git leaves it, as the plan
+				// calls it not due.
 				want = nil
 			}
 			if !slices.Equal(rolled, want) {
@@ -103,8 +100,7 @@ func drawWeights(rng *rand.Rand) []int64 {
 }
 
 // packsOf is a fast-import stream writing one pack of weights[i] distinct blobs
-// for each i, in the list's order: fast-import's checkpoint closes the pack it
-// is writing, so each run of blobs between two is a pack of its own.
+// for each i, in order: each checkpoint closes the pack being written.
 func packsOf(weights []int64) func(*bufio.Writer) error {
 	return func(w *bufio.Writer) error {
 		for i, n := range weights {

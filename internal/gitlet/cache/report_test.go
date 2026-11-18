@@ -101,11 +101,10 @@ func (r *reportedCopy) quiet(t *testing.T) {
 }
 
 // rewritten waits until the file find names is on disk as a file other than
-// old — written again, not the damaged one kept — with nothing running on
-// the copy, running the maintainer's pass whenever the copy is quiet without
-// it (the clock never moved, so only what is due at once runs), and fails t
-// unless every index file of the copy then holds to its trailer. It answers
-// the new file.
+// old, with nothing running on the copy, running the maintainer's pass while
+// the copy is quiet without it (the clock never moved: only what is due at
+// once runs). It fails t unless every index file then holds to its trailer,
+// and answers the new file.
 func (r *reportedCopy) rewritten(t *testing.T, what string, find func() string, old os.FileInfo) os.FileInfo {
 	t.Helper()
 	var now os.FileInfo
@@ -194,17 +193,14 @@ func (h *roundHold) wait(t *testing.T) {
 	}
 }
 
-// A DERIVED FILE ANY RUN NAMES DAMAGED IS DROPPED AND WRITTEN AGAIN AT ONCE —
-// whether or not the run failed. git reads around a damaged commit-graph
-// (I), a truncated multi-pack-index (F2) and a bitmap whose signature is
-// overwritten (K1): it warns, answers from the packs and exits 0, and a
-// caller that got its answer never looks. The pool hands every run to the
-// cache's observer, which queues a repair round with no request waiting:
-// the round drops the file, and the maintainer writes it again AT ONCE — the
-// graph first, the index as a repair — with the case's clock never moved
-// past the debounce or the interval. Meanwhile the copy keeps answering: a
-// reader at once is answered from it while the repair round holds the
-// repository, because a tolerated report takes nothing out of service.
+// A DERIVED FILE ANY RUN NAMES DAMAGED IS DROPPED AND WRITTEN AGAIN AT ONCE,
+// whether or not the run failed: git reads around a damaged commit-graph (I),
+// a truncated multi-pack-index (F2) and a bitmap with an overwritten signature
+// (K1), warning and exiting 0, so no caller looks. The cache's observer queues
+// a repair round that drops the file, and the maintainer writes it again AT
+// ONCE (graph first, index as a repair), the clock never moved past the
+// debounce or the interval. A reader is answered from the copy while the
+// round holds the repository: a tolerated report takes nothing out of service.
 //
 // Mutations: observe only failed runs (no round, the damage stays); no
 // indexRepair (the index waits MidxMinInterval); markWhole for a tolerated
@@ -273,26 +269,17 @@ func TestAReportedDerivedFileIsDroppedAndRewrittenAtOnce(t *testing.T) {
 }
 
 // A REPORT A DECLARATION KEEPS ITS FILES ON RECORDS NO DROP, AND ASKS NONE.
-// A report of the multi-pack-index is EventReported for the index's
-// declaration, and what it does is the declaration's to say (OnReported).
-// With the build's declarations it drops: one repair round drops the index,
-// logs it repaired and makes its rewrite due at once, and the copy's scrub is
-// not asked. Over declarations in which the index keeps its files on a
-// report, the report is damage no drop repairs: no round is queued — one
-// would read the copy whole and move nothing, for every git process that
-// reported it — nothing says the index was repaired, the same file stays on
-// disk, and the report makes the copy's scrub due, where the bytes decide.
-// That scrub over a sound index finds nothing, and the next report falls in
-// its cooldown: still no round. And what the bytes decide is no report: the
-// same index damaged in place, its next scrub finds it failing its trailer
-// and the repair round drops it, logged and due, whatever its declaration
-// says of a report.
+// A multi-pack-index report does what its declaration's OnReported says. The
+// build's drops: one repair round drops it, logged and due at once, no scrub
+// asked. Kept: no round (it would read the copy whole and move nothing, per
+// report), nothing logged, the file stays and the scrub is due; over a sound
+// index it finds nothing, and the next report is in its cooldown. The bytes
+// still decide: damaged in place, the next scrub's round drops it.
 //
-// Mutations: queue a repair round for every declaration a report names
-// (report.go observe) — the kept arm sweeps the copy for the report and
-// makes no scrub due; drop what a check or a scrub found as a report
-// (dropDamaged's eventFailedCheck as EventReported) — the kept arm keeps the
-// index failing its trailer, logs nothing and makes nothing due.
+// Mutations: queue a repair round for every declaration (report.go observe:
+// the kept arm sweeps and makes no scrub due); dropDamaged's eventFailedCheck
+// as EventReported (the kept arm keeps the index failing its trailer, logs
+// nothing and makes nothing due).
 func TestAReportADeclarationKeepsItsFilesOnRecordsNoDrop(t *testing.T) {
 	t.Parallel()
 	keep := cache.DerivedFiles()
@@ -373,12 +360,10 @@ func TestAReportADeclarationKeepsItsFilesOnRecordsNoDrop(t *testing.T) {
 				t.Errorf("two reports of a kept index swept the copy in %d full rounds, want none", rounds)
 			}
 
-			// What the bytes decide is not the declaration's to keep: past the
-			// cooldown, the index damaged in place — its identity kept, as
-			// media damage keeps it — is reported again, the scrub that report
-			// asks finds it failing its trailer, and the repair round drops it
-			// and makes it due. Kept, it would be served failing its check
-			// and found again by every scrub a report of it asked.
+			// What the bytes decide is not the declaration's to keep: the index
+			// damaged in place (identity kept, as media damage keeps it) and
+			// reported past the cooldown fails its trailer in the scrub that
+			// asks, and the round drops it; kept, it would be served failing.
 			r.clk.Add(cache.ScrubCooldown)
 			gittest.DamageInPlace(t, r.s.Dir, gittest.MidxTrailer)
 			report()
@@ -404,13 +389,11 @@ func TestAReportADeclarationKeepsItsFilesOnRecordsNoDrop(t *testing.T) {
 }
 
 // A SCRATCH'S DERIVED REPORT IS ITS ALTERNATE'S, AND NOTHING ELSE IT REPORTS
-// IS. A process in a push's scratch reads the incarnation only as its
-// alternate, and reads the alternate's derived files: a merge-base there
-// over a damaged commit-graph names the graph, and the incarnation's graph is
-// dropped and written again. Its pack and object parts are another matter:
-// index-pack reading a client's pack cut short says `early EOF`, a pack's
-// format — the CLIENT's pack — so it is counted `unrouted` and queues
-// nothing.
+// IS. A push's scratch reads the incarnation as its alternate, derived files
+// included, so a merge-base there over a damaged commit-graph gets the
+// incarnation's graph dropped and written again. Its pack and object parts may
+// be the CLIENT's pack (index-pack's `early EOF` on one cut short), so they
+// count `unrouted` and queue nothing.
 //
 // Mutation: route a scratch's pack parts to its alternate (the unrouted count
 // stays zero, and the incarnation's scrub is made due).
@@ -466,12 +449,10 @@ func TestAScratchsDerivedReportIsItsAlternates(t *testing.T) {
 }
 
 // A MERGE'S REPORT IS ITS INCARNATION'S. A compaction's build runs in a
-// scratch over a store holding nothing but the incarnation's own packs,
-// linked, and reads nothing else: what it names of a pack — never a client's,
-// as a push's scratch's may be — is that copy's, and makes the copy's scrub
-// due, where a push's scratch's is counted unrouted; a derived part, of which
-// the store holds none, is nobody's and asks nothing. Once its scratch is
-// removed the store is no merge's, and a report naming it reaches nothing.
+// scratch over a store linking only the incarnation's own packs, so a pack it
+// names (never a client's, unlike a push's scratch's) makes that copy's scrub
+// due; a derived part, which the store lacks, asks nothing. Once its scratch
+// is removed, a report naming the store reaches nothing.
 //
 // Mutation: route a merge's report as a push's scratch's (its pack part
 // counted unrouted, the scrub not made due).
@@ -527,11 +508,11 @@ func TestAMergesReportIsItsIncarnations(t *testing.T) {
 }
 
 // A REPORT ABOUT A FILE SINCE REWRITTEN DROPS NOTHING. A run that began
-// before this process wrote a derived file may have read the file the write
-// replaced, so its report — however late it arrives — names a file that is
-// gone: a long clone over a damaged graph would otherwise drop each rewrite
-// in turn. Held on the MONOTONIC clock: the cache's own clock here is an hour
-// behind, and a stamp read from it would place the rewrite before the run.
+// before this process wrote a derived file may have read the file it
+// replaced, so its late report names a file that is gone; honoured, a long
+// clone over a damaged graph would drop each rewrite in turn. Held on the
+// MONOTONIC clock: the cache's clock here is an hour behind, so a stamp from
+// it would place the rewrite before the run.
 //
 // Mutations: drop the Began guard (the fresh graph is dropped); stamp
 // written with Options.Now (the same).
@@ -568,13 +549,12 @@ func TestAReportAboutAFileSinceRewrittenDropsNothing(t *testing.T) {
 	}
 }
 
-// A FAILED REQUEST'S DROP SPARES A FILE WRITTEN AFTER IT BEGAN. pre7's path —
-// a request whose git failed on a damaged multi-pack-index asks Rebuild to
-// drop it — carries when its run began (cache.Failure.Began), and a
-// multi-pack-index this process wrote after that is not the file the run
-// failed on: the round drops nothing.
+// A FAILED REQUEST'S DROP SPARES A FILE WRITTEN AFTER IT BEGAN. A request
+// whose git failed on a damaged multi-pack-index asks Rebuild to drop it,
+// carrying when its run began (cache.Failure.Began); an index this process
+// wrote after that is not the one the run failed on, so nothing is dropped.
 //
-// Mutation: drop unguarded, as pre7 did (the fresh index is dropped).
+// Mutation: drop unguarded (the fresh index is dropped).
 func TestAFailedRequestsDropSparesAFileWrittenAfterItBegan(t *testing.T) {
 	t.Parallel()
 	r := newReportedCopy(t, nil)
@@ -604,13 +584,11 @@ func TestAFailedRequestsDropSparesAFileWrittenAfterItBegan(t *testing.T) {
 }
 
 // NOTHING IS REPAIRED UNDER A CHECK. A check holds rounds off only for its
-// listing, so a repair between its listing and its hashing would take a
-// file the listing admitted: what a run reports while a check is admitted is
-// recorded and DEFERRED, and the check's release asks the round. Here the
-// check's own freshness sync peels a tag over a truncated multi-pack-index
-// (F2), which git reads around and reports; the check still finds the index
-// and names it, and only once it is let go is the index dropped and written
-// again.
+// listing, so a repair before its hashing would take a file the listing
+// admitted: a report made while a check is admitted is DEFERRED, and the
+// check's release asks the round. Here the check's own freshness sync peels a
+// tag over a truncated multi-pack-index (F2), which git reads around and
+// reports; the check still names the index, rewritten only once let go.
 //
 // Mutations: start the repair round at once (the check's listing misses the
 // index, or its hashing finds it gone); never start it after the release
@@ -645,13 +623,11 @@ func TestNothingIsRepairedUnderACheck(t *testing.T) {
 }
 
 // A REPAIR ROUND SWEEPS NO ADOPTED PACK. A full round's sweep removes every
-// pack its snapshot does not name, and drops the index and the graph with
-// it; an adoption installs a pack once its row has applied, past the
-// incarnation's own position. So the repair round a report queues reads
-// LINEARIZABLE: its snapshot names the adopted pack, which stays, and so does
-// the index beside it — only the graph the report named is dropped. The log
-// here answers any other level from before the adoption, as a data node
-// behind it would.
+// pack its snapshot does not name, with the index and graph, and an adoption
+// installs a pack past the incarnation's own position, so the repair round a
+// report queues reads LINEARIZABLE: the adopted pack and the index beside it
+// stay, and only the reported graph is dropped. The log here answers any other
+// level from before the adoption, as a data node behind it would.
 //
 // Mutation: read the repair round at session from the incarnation's position
 // (the adopted pack is swept, and the index with it).
@@ -694,32 +670,23 @@ func TestARepairRoundSweepsNoAdoptedPack(t *testing.T) {
 	}
 }
 
-// A DERIVED FILE DAMAGED AGAIN AFTER ITS REPAIR WAITS ITS TURN. A graph a
-// repair wrote that is reported damaged again is a disk that keeps damaging
-// what is written to it, or a git that rejects its own write: it is dropped,
-// but not written again at once — the graph waits for the ordinary rules
-// (graphFailed) — logged once and counted `again`, so the loop costs one
-// rewrite rather than one a report. A report of the graph once it is gone
-// reaches no file of the copy — counted stale, nothing dropped, no round —
-// and the graph stays waiting. The ordinary write that follows ends
-// nothing: it lands on the same disk, and a report of it within RebuildQuiet
-// of the last drop for damage waits its turn too, where a mark the ordinary
-// write cleared made every other damage a rewrite at once — one at once and
-// one ordinary, alternating for ever. A RebuildQuiet after the last drop for
-// damage, damage is new again and is repaired at once.
+// A DERIVED FILE DAMAGED AGAIN AFTER ITS REPAIR WAITS ITS TURN (D13). A
+// repaired graph reported damaged again is a disk damaging its writes or a git
+// rejecting its own: it is dropped and left to the ordinary rules
+// (graphFailed), logged once and counted `again`, so the loop costs one
+// rewrite, not one per report; a report once it is gone counts stale. The
+// ordinary write lands on the same disk, so its report within RebuildQuiet of
+// the last drop for damage waits too (else rewrites alternate for ever); past
+// RebuildQuiet, damage is new and repaired at once.
 //
-// Mutation: no D13 — every drop for damage is made due at once (a second
-// graph-first run writes the graph again). Mutation: the maintainer's
-// ordinary graph write forgets the last drop for damage (the report after
-// it is repaired at once).
+// Mutations: no D13, every drop for damage due at once (a second graph-first
+// run writes the graph again); the ordinary graph write forgets the last drop
+// for damage (the report after it is repaired at once).
 func TestADerivedFileDamagedAgainAfterItsRepairWaitsItsTurn(t *testing.T) {
 	t.Parallel()
 	r := newReportedCopy(t, nil)
-	// THE GRAPH AS REPORTED, read before the report: the report queues the
-	// round that drops it, and that round runs on its own goroutine, so a
-	// graph read after the report may already be gone (CI run 41729197183:
-	// `lstat : no such file or directory`) — or already rewritten, the very
-	// file the case waits to see replaced.
+	// Read before the report: the round it queues runs on its own goroutine,
+	// so a graph read after may be gone or already rewritten.
 	graph := stat(t, r.graph())
 	cache.Report(r.c, derivedReport(r.s.Dir, gitproc.PartCommitGraph, time.Now()))
 	r.rewritten(t, "the commit-graph", r.graph, graph)
@@ -838,11 +805,10 @@ func TestAnObserverNeverWaitsForARound(t *testing.T) {
 }
 
 // A MAINTAINER'S FAILED WRITE DROPS THE INDEX IT COULD NOT REPLACE. Writing a
-// multi-pack-index over one whose offsets are damaged (MO) is no repair:
-// git says it is ignoring the existing index and then fails reading objects
-// through it, every time. The maintainer's own run is observed like any
-// other, so its `ignoring existing multi-pack-index; checksum mismatch`
-// reaches the cache: the index is dropped and written again at once, sound.
+// multi-pack-index over one with damaged offsets (MO) always fails: git
+// ignores the existing index, then fails reading objects through it. The
+// maintainer's own run is observed like any other, so its `ignoring existing
+// multi-pack-index; checksum mismatch` drops the index, written again at once.
 //
 // Mutation: drop that row from gitproc's table (the run names nothing, and
 // every later write fails the same way over the damaged index).

@@ -24,69 +24,36 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
-// THE INSTALL: one GET a pack, split into its three files as it streams,
-// checked, and three renames — no git process. A push stores ONE object, its
-// pack BUNDLE: the pack, then the .idx (version 2) and the .rev (version 1)
-// the receiving node's receive-pack wrote, back to back. Every byte is
-// SHA-256 verified against the row on the way in (objstore holds back the
-// byte that completes the object until the whole of it is verified), and the
-// three sections are held to the row by gitlet.CheckBundle: their heads, their
-// counts and their pack checksums. A bundle that is not its row's is refused
-// and never retried — the row and the bytes disagree, and asking again fixes
-// neither.
-//
-// WHY NO index-pack: the receiving node's receive-pack ran index-pack
-// --strict --fix-thin over exactly these bytes against the repository, and
-// an .idx is a pure function of its pack; re-indexing would spend 0.13–0.18 s
-// of a core a mebibyte, on every Gitlet node, recomputing a file the row
-// already names — and make a cold sync bound by CPU rather than by the
-// object store.
-//
-// THE BYTE PATH IS SHAPED FOR S3, whose GETs are latency-bound and want
-// width: up to fetchConcurrency downloads a round, at most NodeFetches across
-// every round on the node, LARGEST FIRST — the round ends when its last
-// download does, so the longest start first and the small ones fill the gaps.
-// A round hands out its packs in that order, each to a worker of its own that
-// exists only once the pack is IN HAND, the round's and the node's
-// (installsPerFetch). The round makes the bundle's three files as it hands
-// the pack out (stageBundle), so in its order; the worker waits for its TURN
-// — the worker before it holding its GET, so the round's GETs are granted in
-// its order however the scheduler runs its workers — then for the round's
-// share and a node slot, downloads and checks the one pack it was given, and
-// places it (placePack): its three files made durable at once, then renamed
-// in.
-//
-// A GET'S SLOT AND SHARE ARE THE GET, and nothing else. A node slot's copy
-// buffer is handed out with it and back with it, so the node's download
-// memory is NodeFetches buffers however many rounds wait — a node joining a
-// fleet asked for 500 cold repositories at once holds 8 MiB of them, not a
-// buffer for every round's every worker. And the slot and the round's share
-// go back the moment the store's reader closes: the split's seal check, the
-// syncs and the renames that follow are local disk work, and a GET slot spent
-// on them is a GET the node does not make. What bounds that disk work instead
-// is the packs IN HAND (installsPerFetch), the round's and the node's.
+// THE INSTALL (package doc, "The byte path is shaped for S3"): one GET a pack
+// BUNDLE, split into its .pack, .idx and .rev as it streams, held to its row
+// (objstore's SHA-256, then gitlet.CheckBundle) and renamed in. No index-pack:
+// the receiving node's already indexed these bytes, and an .idx is a pure
+// function of its pack, so re-indexing would make a cold sync CPU-bound.
+// The round hands packs out LARGEST FIRST, staging each bundle's files in its
+// order (stageBundle); each worker waits for its TURN, then the round's share
+// and a node slot, downloads, and places the pack (placePack). The slot, the
+// share and the slot's copy buffer are held for the GET alone; the disk work
+// after it is bounded by the packs IN HAND (installsPerFetch).
 
 // copyBuffer is the buffer one download is copied through: 256 KiB, so a
-// 150 KB bundle is one read of the store's stream and a large one a few
-// thousand. One a node slot ([fetchSlots]), so NodeFetches of them — 8 MiB —
-// is every download buffer the node holds at once.
+// 150 KB bundle is one read. One a node slot ([fetchSlots]), so NodeFetches
+// of them (8 MiB) is all the node's download memory.
 const copyBuffer = 256 << 10
 
 // fetchSlots is the node's downloads: NodeFetches slots, each handed out with
-// the copy buffer its download runs through and taken back with it — and the
-// packs the node holds IN HAND, installsPerFetch for every slot, each taken
-// before its GET and given back once the pack is in place or abandoned.
+// its copy buffer, and the packs the node holds IN HAND, installsPerFetch a
+// slot, each taken before its GET and given back once the pack is placed or
+// abandoned.
 type fetchSlots struct {
 	sem *semaphore.Weighted
-	// free holds the buffers no slot holds: never more than the slots, so
-	// buffers made and buffers kept together never exceed them.
+	// free holds the buffers no slot holds, capped at the slots, so buffers
+	// never outnumber them.
 	free chan []byte
 	// out is the buffers handed out now, most the most at once, and waiting
-	// the downloads waiting for a slot — what the suite holds to the node's
-	// bound.
+	// the downloads waiting for a slot: what the suite holds to the bound.
 	out, most, waiting atomic.Int64
-	// hands bounds the node's packs in hand, and held, mostHeld and
-	// handWaiting count them as out, most and waiting count the buffers.
+	// hands bounds the node's packs in hand; held, mostHeld and handWaiting
+	// count them as out, most and waiting count the buffers.
 	hands                       *semaphore.Weighted
 	held, mostHeld, handWaiting atomic.Int64
 }
@@ -98,8 +65,8 @@ func newFetchSlots(n int64) *fetchSlots {
 	}
 }
 
-// hold waits for a pack in hand: one the node's rounds may be downloading or
-// have downloaded and not yet placed.
+// hold waits for a pack in hand: one the node may be downloading or have
+// downloaded and not yet placed.
 func (s *fetchSlots) hold(ctx context.Context) error {
 	s.handWaiting.Add(1)
 	err := s.hands.Acquire(ctx, 1)
@@ -156,25 +123,18 @@ func (s *fetchSlots) give(buf []byte) {
 	s.sem.Release(1)
 }
 
-// installsPerFetch is how many packs a round, and the node, hold IN HAND for
-// every GET they may run at once: a pack is in hand from the moment it is
-// given to a worker until it is renamed into place or abandoned — its files'
-// creation, its GET, then its checks, its syncs and its renames.
+// installsPerFetch is how many packs a round, and the node, hold IN HAND per
+// GET they may run at once: from being handed to a worker until renamed into
+// place or abandoned.
 //
-// TWO, so a GET never waits on this node's disk: the round's share and the
-// node's slot go back the moment a GET ends, and while one share of bundles
-// is being read the one before it is made durable and renamed in. A share's
-// GETs bring a bundle every 2 ms at sixteen and the S3 fake's 30 ms first
-// byte — every 6 to 12 ms at S3's own 100 to 200 ms — while this node's own
-// side took 1.1 to 1.5 ms a bundle from memory (Measured) — so a second share
-// covers a share's disk work, by more at a real bucket's first byte, and a
-// disk slower than its link holds the GETs back rather than growing a
-// backlog. It is what bounds
-// that disk work: tmp/ holds at most a round's 2 × FetchConcurrency and the
-// node's 2 × NodeFetches largest bundles, and the syncs a node has in flight
-// at once are three files a pack of them — never a backlog, nor a thread a
-// sync, that grows with the rounds a joining node starts at once while its
-// disk stalls.
+// TWO, so a GET never waits on this node's disk: while one share's bundles
+// are read, the share before is synced and renamed in. A share brings a
+// bundle every 2 ms from the S3 fake's 30 ms first byte, 6 to 12 ms from S3's
+// own, against 1.1 to 1.5 ms of this node's work a bundle (package doc,
+// "Measured"); a disk slower than its link holds the GETs back rather than
+// growing a backlog. It bounds tmp/ to 2 × FetchConcurrency bundles a round
+// and 2 × NodeFetches a node, and the syncs in flight to three a pack in
+// hand, however many rounds a joining node starts while its disk stalls.
 const installsPerFetch = 2
 
 // The modes an installed pack's files take: the .pack read-only to the node
@@ -186,104 +146,41 @@ const (
 )
 
 // install brings into inc every pack snap names that the directory does not
-// hold, and answers how many it added and how many it installed again over
-// the files of a pack it held damaged.
-//
-// A pack is installed when its .idx, .pack and .rev all exist — git counts a
-// pack once its .idx does — and, on a FULL round, each at the size its row
-// says: three stats a pack, once per repository per process, so a file a disk
-// fault truncated is caught here rather than by the next client.
-//
-// A PACK HELD DAMAGED IS INSTALLED AGAIN BY RENAMING OVER ITS FILES, NEVER
-// REMOVED FIRST: one at the wrong size, and one whose .idx, .rev or .pack a
-// check, a scrub or a confirmed hint found failing and that is still the
-// file found so (checked.still). Removed before its download, its objects
-// were missing for the whole of that download to every git process over the
-// copy that opened the pack meanwhile; renamed over, a process holding the
-// old files reads the inodes it opened, and one that opens the path
-// afterwards reads the new ones. Such a reinstall adds no pack to the counts;
-// the incarnation's size moves by the difference.
-//
-// THE DERIVED FILES GO ONLY WHERE THEY MAY HAVE BEEN BUILT FROM THE DAMAGE —
-// once, before the first such placement: a pack whose .idx failed, a pack at
-// the wrong size, or one a confirmed hint named whose .idx this process has
-// not held to its trailer (the hint names the bundle, not the file). The
-// multi-pack-index and its bitmap record each object's offset as the pack's
-// .idx placed it, and the commit-graph was built reading commits through it;
-// a pack whose .pack or .rev alone failed is installed again byte for byte
-// — its name is its checksum, its bundle held to its row — so every offset
-// the index and the bitmap record, and every commit the graph does, is the
-// same over the new files. Dropped for a .pack's body, a copy lost its
-// bitmap for the whole rewrite over its history — and for good where the
-// node's memory no longer holds the bitmap's charge.
-//
-// A REINSTALL IS A REPAIR, NEVER THE ROUND'S PRECONDITION: one whose download
-// fails — the object store unreachable, or a bundle it no longer holds — is
-// logged, its pack left as it stands, and the round goes on and converges,
-// installing every other pack, the pushes it was asked for among them. The
-// finding stays on the repair mark, held off for a backoff that doubles from
-// RebuildCooldown to RebuildBackoffCap (repairMark.fetchFailed), during which
-// no round tries that pack again; failing the round instead failed every
-// later one of the repository — each one full, since the mark asks for a
-// full round — and every advertisement of it with them, for as long as the
-// store could not hand the pack over.
-//
-// A failure of anything else removes every temporary file the round made; the
-// packs installed before it stay, named by rows, and the next round skips
-// them.
-//
-// EACH PACK GOES WHERE ITS ROWS PLACE IT once the round has applied
-// (placesAfter): objects/pack, or — for a pack only rows an expunge's begin
-// left dropping name — the incarnation's DROPPING VIEW, made with the first
-// pack placed in it (ensureView), which only a process serving the copy reads
-// (packPlace). A pack its rows moved from one to the other is installed at
-// its new place, one GET, its files at the old leaving with the swap.
-//
-// A FULL ROUND'S LAYERS JOIN THE SAME QUEUE (layers.go): every part of every
-// layer of chain.want — the published chain above what the copy keeps, root
-// first — is handed out BEHIND the round's packs in the one turn chain, in
-// the round's share and the node's slots, so a layer's GET begins the moment
-// a slot the packs' tail no longer needs frees, and no layer waits for the
-// one below it: CheckLayer reads a layer's own files and the base's graph ids
-// from the rows. Each layer is staged in tmp/ and checked, and answered in
-// installs.layers for the round to place — never placed here, and never the
-// round's failure: a layer that cannot be fetched leaves the copy serving
-// from the prefix below it. A layer the repository's maintainer adopted on
-// this node (AdoptLayer) is taken from its files, no GET. What the round
-// does not place goes from tmp/ with it.
+// hold whole, and stages every layer of chain.want, answering what it did.
+// A pack is held once its three files exist and, on a FULL round, each is at
+// its row's size, so a file a disk fault truncated is caught here, not by a
+// client. A pack held damaged is installed again by renaming over its files,
+// never removed first, dropping the derived files only where the damage may
+// have built them (reinstallWhy); a reinstall whose download fails is logged
+// and backed off (repairMark.fetchFailed), never the round's failure (package
+// doc, "Damage is repaired once, in place where nothing is lost"). Any other
+// failure removes the round's temporary files; packs placed stay, named by
+// rows. Each pack goes where its rows place it once the round has applied
+// (placesAfter; package doc, "The dropping view").
 func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap snapshot, ck checked,
 	chain chainPlan) (installs, error) {
 
 	var out installs
 	reinstall, _ := ck.still(c.image, inc.dir)
 	var todo []gitlet.PackRow
-	// over is every pack this install places over files present, by its
-	// checksum, with what found it damaged and why that looked; absent, every
-	// pack it installs that the directory LOST — held before this round (lost)
-	// and gone from it since — a REPAIR as much as one installed again,
-	// WHICHEVER ROUND PUTS IT BACK: a request's forced round, a round's own
-	// repair, or any round reading the copy whole (a shape's, a report's, a
-	// boot's). A failure a lost pack caused is ended by whatever puts the pack
-	// back, so the guard reads that write as it reads any repair
-	// (incarnation.repairWrite); counted only by a forced round, a request
-	// whose git began before another round put the pack back was handed a
-	// forced round that found nothing, the scrub and a whole rebuild of a copy
-	// nothing was wrong with any more. A pack the rows name that the copy never
-	// held is a push it has not read yet, which repairs nothing.
+	// over is every pack placed over files present, by checksum, and why
+	// (reinstallWhy). absent is every pack placed that the directory LOST
+	// (lost): a REPAIR whichever round puts it back, since whatever puts it
+	// back ends the failure its loss caused (incarnation.repairWrite); were it
+	// counted only by a forced round, a request whose git began before another
+	// round restored it got a forced round, a scrub and a rebuild for nothing. A
+	// pack the copy never held is a push not yet read, and repairs nothing.
 	over := map[string]reinstallWhy{}
 	absent := map[string]bool{}
 	now := c.now()
 	e.mu.Lock()
 	before := inc.state
 	heldOff := inc.repair.heldOff(now)
-	// WHERE EACH PACK GOES: where the live set places it once the round has
-	// applied the snapshot — the dropping view for a pack only rows an
-	// expunge's begin left dropping name, objects/pack for any other.
+	// Where the live set places each pack once the round has applied snap.
 	places := placesAfter(inc, snap)
 	e.mu.Unlock()
 	for _, p := range snap.packs {
-		// Two rows of one checksum name one set of files, which one place
-		// holds: their rows place it together.
+		// Rows sharing a checksum name one set of files, placed together.
 		place := places[p.GitChecksum]
 		have, err := installed(filepath.Join(inc.dir, place.rel()), p, snap.full)
 		f, failed := reinstall[p.GitChecksum]
@@ -293,8 +190,8 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 		case have == packWhole && !failed:
 			continue
 		case have != packAbsent && heldOff[p.GitChecksum]:
-			// Its last download to install it again failed, and its backoff
-			// has not passed: left as it stands, its finding on the mark.
+			// Its last reinstall's download failed and its backoff has not
+			// passed: left as it stands, its finding on the mark.
 			continue
 		case have == packWhole && f.hinted:
 			over[p.GitChecksum] = reinstallWhy{found: "hint", trigger: f.trigger,
@@ -304,9 +201,8 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 		case have == packWrongSize:
 			over[p.GitChecksum] = reinstallWhy{found: "size", trigger: ck.trigger, drops: true}
 		case lost(before, snap, p) && !heldAt(inc.dir, place.other(), p):
-			// Lost, not MOVED: a pack its rows place anew — out of
-			// objects/pack into the dropping view, or back — is installed at
-			// its new place, and is no repair.
+			// Lost, not MOVED: a pack its rows moved between objects/pack
+			// and the dropping view is installed at its new place, no repair.
 			absent[p.GitChecksum] = true
 		}
 		todo = append(todo, p)
@@ -314,14 +210,11 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 	if len(todo) == 0 && len(chain.want) == 0 {
 		return out, nil
 	}
-	// dropOnce drops what the declarations drop when a pack is removed
-	// (EventPackRemoved) before the first placement over a present pack —
-	// its old files go, and whatever named them was naming bytes no longer
-	// there — and answers every later one with its outcome. addOnce is the
-	// same for the first pack ADDED (EventPackAdded), which no declaration
-	// drops today, so it moves nothing; it is here because what a
-	// declaration says of an event is the declaration's to change, never a
-	// call site's.
+	// dropOnce drops what the declarations drop for EventPackRemoved before
+	// the first placement over a present pack, since what named its old files
+	// names bytes gone; addOnce does so for EventPackAdded before the first pack
+	// added. No declaration drops on that today, but what an event drops is
+	// the declaration's to decide, never a call site's.
 	var droppedOver atomic.Bool
 	var dropped derivedSet
 	dropOnce := sync.OnceValue(func() error {
@@ -343,36 +236,18 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 		return cmp.Or(cmp.Compare(b.Size, a.Size), cmp.Compare(a.PackID, b.PackID), cmp.Compare(a.Part, b.Part))
 	})
 
-	// The round's pack in hand, then the node's; then the round makes the
-	// bundle's files (stageBundle) and starts a worker, which waits for its
-	// TURN, then for the round's share and a node slot — its GET's alone,
-	// both given back when the GET ends (download) — and then places the
-	// pack. Goroutines and files are bounded by the packs in hand, and no
-	// buffer is held but a slot's. The packs in hand go back once the pack is
-	// in place or abandoned (letGo). The first failure — a worker's, the
-	// round's own staging or its context — ends rctx, which ends the waits
-	// below, so the round hands out nothing more.
+	// Per pack: the round's pack in hand, then the node's; the round stages
+	// its files (stageBundle) and starts a worker, which waits for its TURN,
+	// then the round's share and a node slot, held for the GET alone
+	// (download), then places the pack. The packs in hand bound goroutines
+	// and files and go back once it is placed or abandoned (letGo). The first
+	// failure ends rctx, so the round hands out nothing more.
 	//
-	// THE ROUND'S ORDER HOLDS AT BOTH STEPS, because the scheduler keeps
-	// none: it runs a newly started goroutine next, so of the workers in
-	// hand the one started LAST usually runs first. Workers that asked for a
-	// GET as soon as they could granted a round's first shares to the packs
-	// it handed out last, scrambling its order across every window of packs
-	// in hand; so each worker asks only once the worker before it holds its
-	// share and its node slot, and passes its own turn on once it holds both
-	// (or as it stops without them). The turn costs no GET: a worker waiting
-	// for it would wait behind the one before it for the share and the
-	// node's slots anyway, each granted first come, first served. And workers
-	// that made their own bundles' files made them in that scrambled order
-	// too, so under the turn the round's first GET waited for whichever
-	// pack's files were made last — a directory makes its files one at a
-	// time, however many goroutines ask, so up to a hand of bundles' files,
-	// at every round's start. The round makes them itself, in its order,
-	// which costs no file a second for the same reason (BenchmarkColdSync's
-	// 200 pushes from the S3 fake, medians of five interleaved runs: 390
-	// and 507 bundles a second at sixteen and thirty-two GETs with the
-	// workers making them, 400 and 530 with the round — and 401 and 527
-	// with neither the turn nor the order).
+	// THE ROUND KEEPS ITS ORDER, as the scheduler runs the newest goroutine
+	// first: a worker asks only once the one before holds its share and slot,
+	// costing no GET (both are first come, first served), and the round makes
+	// the files, or its first GET waits for files a directory made last, one
+	// at a time (BenchmarkColdSync: no slower).
 	rctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	var failOnce sync.Once
@@ -413,8 +288,7 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 	}
 	var workers sync.WaitGroup
 	var waited error
-	// placedIn is every directory a pack was placed in, by its place: each
-	// synced once the install ends, before any ref names what it holds.
+	// placedIn is every place a pack landed in, each synced once at the end.
 	var placedIn [placeDropping + 1]atomic.Bool
 	viewMade := false
 	turn := make(chan struct{})
@@ -427,19 +301,16 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 		place := places[p.GitChecksum]
 		packDir := filepath.Join(inc.dir, place.rel())
 		if place == placeDropping && !viewMade {
-			// The dropping view, made durable before any pack is placed in
-			// it — the copy's first dropping pack makes it.
+			// The dropping view, made durable before any pack goes in it.
 			if err := c.ensureView(inc.dir); err != nil {
 				fail(fmt.Errorf("cache: sync %s: install: %w", e.id, err))
 				break
 			}
 			viewMade = true
 		}
-		// A pack this node's own push wrote, handed to the round by its
-		// adoption (adopt.go), is installed from those files — three links
-		// rather than a GET — once the round reaches it: a pack ADDED like
-		// any other, so what a declaration says of one comes first
-		// (dropFor's order rule), as it does before a download's placement.
+		// A pack this node's own push wrote, handed over by its adoption
+		// (adopt.go), is linked from those files, no GET: still a pack ADDED,
+		// so what a declaration says of one comes first (dropFor's order rule).
 		if st := c.claimHanded(e, p); st != nil {
 			if _, present := over[p.GitChecksum]; !present {
 				if err := addOnce(); err != nil {
@@ -472,9 +343,8 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 		mine, next := turn, make(chan struct{})
 		turn = next
 		workers.Go(func() {
-			// Passed on once this worker holds its GET's share and slot, or
-			// as it stops without them — the round has failed then, and the
-			// next worker finds rctx ended.
+			// Passed on once this worker holds its share and slot, or as it
+			// stops without them, when the next worker finds rctx ended.
 			pass := sync.OnceFunc(func() { close(next) })
 			defer pass()
 			defer letGo()
@@ -484,8 +354,8 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 			why, present := over[staged.p.GitChecksum]
 			switch {
 			case err != nil && present && rctx.Err() == nil:
-				// A REPAIR THAT COULD NOT DOWNLOAD: the pack stays as it
-				// stands, and the round goes on without it.
+				// A REPAIR THAT COULD NOT DOWNLOAD: the pack stays as it is,
+				// and the round goes on.
 				failedMu.Lock()
 				if out.failed == nil {
 					out.failed = map[string]error{}
@@ -507,8 +377,7 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 				}
 			}
 			if !present {
-				// A pack added: what a declaration says of one, before
-				// the first is placed (dropFor's order rule).
+				// A pack added (dropFor's order rule).
 				if err := addOnce(); err != nil {
 					fail(err)
 					return
@@ -533,7 +402,13 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 				"pack_id", staged.p.PackID, "found", why.found, "trigger", string(why.trigger))
 		})
 	}
-	// THE LAYERS, behind the packs in the same turn chain (above).
+	// THE LAYERS (layers.go) queue behind the packs in the one turn chain, so
+	// a layer's GET starts as the packs' tail frees a slot, and none waits for
+	// the one below (CheckLayer reads the base's graph ids from the rows).
+	// Each is staged and checked for the round to place, never placed here
+	// and never the round's failure: one not fetched leaves the copy serving
+	// the prefix below it. One adopted here (AdoptLayer) needs no GET. What
+	// the round does not place leaves tmp/ with it.
 	out.layers = make([]layerFetch, len(chain.want))
 	for i, row := range chain.want {
 		out.layers[i] = layerFetch{row: row}
@@ -563,8 +438,7 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 			out.layers[i].err, out.layers[i].outcome = err, layerFailed
 			continue
 		}
-		// A layer's own end, which a part's failure brings about and which
-		// ends none of the round's other work.
+		// A layer's own end: a part's failure ends no other work of the round.
 		lctx, lcancel := context.WithCancelCause(rctx)
 		parts := make([]error, len(row.Layer.Parts))
 		var partsDone sync.WaitGroup
@@ -624,8 +498,7 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 	if droppedOver.Load() {
 		out.dropped = dropped
 	}
-	// The renames are durable before any ref names what they installed: each
-	// directory a pack landed in synced once.
+	// The renames are durable before any ref names what they installed.
 	for _, place := range []packPlace{placeLive, placeDropping} {
 		if !placedIn[place].Load() {
 			continue
@@ -638,10 +511,9 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 }
 
 // ensureView makes the dropping view of the incarnation at dir where it is
-// not there yet — its two directories, gitproc.DroppingDir and its pack
-// directory — each new entry durable before any pack is placed in it, as
-// durable.go's rule asks of what a file names. Something else at either name
-// fails it: the next full round's sweep moves that aside (sweep.go's image).
+// missing, gitproc.DroppingDir and its pack directory, each new entry durable
+// before any pack goes in (durable.go's rule). Something else at either name
+// fails it, for the next full round's sweep to move aside (sweep.go's image).
 func (c *Cache) ensureView(dir string) error {
 	view := filepath.Join(dir, droppingRel)
 	if info, err := os.Lstat(view); err == nil && info.IsDir() {
@@ -659,8 +531,8 @@ func (c *Cache) ensureView(dir string) error {
 }
 
 // heldAt reports whether the incarnation at dir holds p whole at place: what
-// tells a pack its rows MOVED — out of objects/pack into the dropping view, or
-// back — from one the copy lost. A file that cannot be read says it does not.
+// tells a pack its rows MOVED between objects/pack and the dropping view from
+// one the copy lost. A file that cannot be read says it does not.
 func heldAt(dir string, place packPlace, p gitlet.PackRow) bool {
 	if place == placeNone {
 		return false
@@ -670,14 +542,13 @@ func heldAt(dir string, place packPlace, p gitlet.PackRow) bool {
 }
 
 // reinstallWhy is why an install places a pack over files the directory
-// holds: what found them damaged — `trailer` (a check or a scrub held one to
-// its checksum), `hint` (a confirmed hint named it: ConfirmHint held its
-// bytes to its row) or `size` (a full round found one at another size than
-// its row's) — and the trigger of the check or scrub that looked, both logged
-// with code_cache_pack_reinstalled; any round logs a pack the directory lost
-// (lost) as `absent`, with its own check's trigger. drops: the derived files
-// may have been built from the damage, so they go before it is placed
-// (install's doc).
+// holds, logged with code_cache_pack_reinstalled beside the trigger of the
+// check that looked: found is `trailer` (a check or scrub held a file to its
+// checksum), `hint` (ConfirmHint held its bytes to its row) or `size` (a full
+// round); a lost pack logs as `absent`. drops: the derived files may have
+// been built from the damage (a failed .idx, a wrong size, or a hint, which
+// names the bundle, over an .idx not vouched), so they go before it is
+// placed; a .pack or .rev alone comes back byte for byte, at the same offsets.
 type reinstallWhy struct {
 	found   string
 	trigger checkTrigger
@@ -689,18 +560,15 @@ type reinstallWhy struct {
 // before the first of those.
 type installs struct {
 	added, replaced int
-	// restored is how many of the added were packs the copy had lost (lost):
-	// a repair, whichever round put them back, where the rest are pushes it
-	// had not yet read.
+	// restored is how many of the added were packs the copy had lost (lost),
+	// a repair; the rest are pushes it had not yet read.
 	restored int
 	dropped  derivedSet
-	// failed is the packs, by checksum, it was to install again over their
-	// files and could not download, each with the download's failure: left as
-	// they stand.
+	// failed is the reinstalls, by checksum, whose download failed, each with
+	// its failure: left as they stand.
 	failed map[string]error
-	// layers is what became of each layer of the chain the round fetches
-	// (chainPlan.want), in chain order: staged and checked, or the failure
-	// that stopped it.
+	// layers is what became of each layer of chainPlan.want, in chain order:
+	// staged and checked, or the failure that stopped it.
 	layers []layerFetch
 }
 
@@ -717,14 +585,12 @@ func (c *Cache) indexVouched(e *entry, inc *incarnation, place packPlace, cs str
 }
 
 // lost reports whether p, a pack the directory does not hold, is one the
-// incarnation held before the round began (st, its state then): its row added
-// on the log st was read from, at or before st's position — so the copy had
-// it and has lost it. A row added since is a push the copy has not yet read,
-// and no state (or another stream's) says nothing either way — nor does an
-// answer BELOW st's position: only a log gone back under the copy gives one to
-// a round (converge's rewound read), and such a log hands the positions past
-// the copy it was restored from to other records, so a push it takes there
-// sits at a position the copy had read without the copy ever having held it.
+// incarnation held before the round (st, its state then): its row added on
+// st's stream at or before st's position. A row added since is a push not yet
+// read; no state, or another stream's, says nothing. Nor does a snapshot
+// BELOW st's position: only a log rewound under the copy gives one
+// (converge's rewound read), and it hands positions the copy had read to
+// other records, so a push there was never held.
 func lost(st *state, snap snapshot, p gitlet.PackRow) bool {
 	if st == nil || !st.StreamCreated.Equal(snap.streamCreated) || p.Added.IsZero() ||
 		!reached(snap.position, st.Position) {
@@ -765,35 +631,17 @@ func installed(packDir string, p gitlet.PackRow, sized bool) (packHeld, error) {
 	return held, nil
 }
 
-// placePack makes s durable and renames it into the directory place puts it in
-// — objects/pack, or the dropping view (packPlace) — counting the pack into
-// inc: its three files synced at once while still in tmp/, then renamed
-// .pack, .rev, and the .idx LAST, because git counts a pack present once its
-// .idx exists. Whatever of s is not placed is removed, failure or not. A pack
-// in the dropping view is counted in the bytes inc holds (setDropping beside
-// setSize) and in none of the packs or objects an index covers (inc.packs,
-// inc.objects), which never covers the view.
+// placePack makes s durable and renames it into place (packPlace), counting
+// it into inc: its three files synced at once in tmp/, then renamed .pack,
+// .rev and the .idx LAST, since git counts a pack once its .idx exists, also
+// over damaged files. Whatever of s is not placed is removed. What it placed
+// is vouched (check.go); placed over damage, or a pack the copy had lost, it
+// is a REPAIR (incarnation.repairWrite).
 //
-// THE SYNCS ARE ISSUED TOGETHER: a sync is a journal commit, and a bundle's
-// three made one after another were three commits a bundle — half of a cold
-// sync's node side one bundle at a time, when every bundle paid them in turn
-// with its GET's share held (321 bundles a second from memory, against 600
-// with them issued together). In flight at once they wait for one commit,
-// and so do those of every other worker placing a bundle meanwhile: the
-// filesystem groups concurrent syncs into one commit. A per-round placer
-// that took every bundle downloaded meanwhile, synced them together and
-// renamed them one after another was built and measured as well
-// (BenchmarkColdSync): no faster from the S3 fake, and slower from memory at
-// sixteen (597 bundles a second against 662), its one goroutine's
-// sync-then-rename becoming the round's pace.
-//
-// OVER a pack the directory holds damaged, the renames replace its files in
-// the same order, so the .idx that names the new .pack is the last to land;
-// the pack is counted already, and the incarnation's size moves by what the
-// files it replaced held. What it placed is vouched either way: this process
-// wrote it, from a bundle held to its row (check.go). A placement over damaged
-// files, or of a pack the copy had lost, is a REPAIR (incarnation.repairWrite):
-// a request that failed before it may have failed on what it replaced.
+// THE SYNCS ARE ISSUED TOGETHER, so the filesystem groups them, and every
+// other worker's, into one journal commit: three in turn halved the node
+// side's bundles a second. A per-round placer syncing every bundle together
+// was slower (BenchmarkColdSync), its one goroutine becoming the round's pace.
 func (c *Cache) placePack(e *entry, inc *incarnation, place packPlace, s *stagedPack, over, repairs bool) error {
 	defer s.remove(c)
 	if err := c.syncStaged(s); err != nil {
@@ -820,19 +668,18 @@ func (c *Cache) placePack(e *entry, inc *incarnation, place packPlace, s *staged
 	if over || repairs {
 		repaired(inc)
 	}
-	// In place: a backoff its download earned while it could not be fetched
-	// is over (repairMark.fetchFailed).
+	// In place: any backoff its failed download earned is over
+	// (repairMark.fetchFailed).
 	delete(inc.repair.fetchFailed, s.p.GitChecksum)
 	e.mu.Unlock()
 	c.vouchPack(e, inc, place, s.p.GitChecksum)
 	return nil
 }
 
-// counted counts a pack of objects objects placed at place into inc — added,
-// a pack it did not hold there before, or placed over files it held, which
-// moves its bytes by grew alone: the bytes on its disk, of them the dropping
-// view's, and the packs and objects an index covers, which a pack in the view
-// is none of. e.mu is held.
+// counted counts a pack of objects objects placed at place into inc, added or
+// over files it held (its bytes then move by grew alone): the bytes on disk,
+// the dropping view's among them, and the packs and objects an index covers,
+// which never covers a pack in the view. e.mu is held.
 func (c *Cache) counted(inc *incarnation, place packPlace, objects int64, added bool, grew int64) {
 	if added && place != placeDropping {
 		inc.packs++
@@ -844,12 +691,11 @@ func (c *Cache) counted(inc *incarnation, place packPlace, objects int64, added 
 	}
 }
 
-// installHanded installs p from the staging an adoption handed the round —
-// the receiving node's own files, the bundle the host sealed and held to the
-// row before it was handed — by linking them into place in the install's
-// order, and reports whether it did. One it could not link is logged and
-// left to the download, which needs nothing from it: the staging is dropped
-// either way, and the directory is synced with the round's other installs.
+// installHanded installs p from the staging an adoption handed the round (the
+// receiving node's own files, sealed and held to the row) by linking them in
+// the install's order, and reports whether it did. One it could not link is
+// logged and left to the download; the staging is dropped either way, and the
+// directory is synced with the round's other installs.
 func (c *Cache) installHanded(e *entry, inc *incarnation, place packPlace, p gitlet.PackRow, st *staging) bool {
 	defer c.dropStaging(st)
 	packDir := filepath.Join(inc.dir, place.rel())
@@ -880,10 +726,10 @@ func (c *Cache) hookInstall(name, packDir string) {
 	}
 }
 
-// stagedPack is one bundle's three files in tmp/ — made by its round, then
-// written, checked and closed by its download — until each is renamed into
-// place: whatever is still here when the install ends is removed, and counted
-// out of the bytes in flight.
+// stagedPack is one bundle's three files in tmp/, made by its round and
+// written, checked and closed by its download, until each is renamed into
+// place; whatever is left when the install ends is removed and counted out of
+// the bytes in flight.
 type stagedPack struct {
 	p     gitlet.PackRow
 	stem  string
@@ -919,8 +765,7 @@ func (s *stagedPack) remove(c *Cache) {
 // install failed before it was placed.
 func (s *stagedPack) abandon(c *Cache) {
 	for _, f := range s.files {
-		// The files are removed next, and one already closed answers an
-		// error that says nothing.
+		// Removed next; an already-closed file's error says nothing.
 		_ = f.Close()
 	}
 	s.files = nil
@@ -928,9 +773,9 @@ func (s *stagedPack) abandon(c *Cache) {
 }
 
 // stageBundle makes p's three files in tmp/, open for its GET to write, and
-// counts p into the bytes in flight. The round calls it as it hands p out — on
-// its own goroutine, in its order (install says why) — and whatever of them is
-// not placed is removed (abandon, placePack).
+// counts p into the bytes in flight. The round calls it on its own goroutine,
+// in its order (install says why); whatever is not placed is removed
+// (abandon, placePack).
 func (c *Cache) stageBundle(id string, p gitlet.PackRow) (*stagedPack, error) {
 	ref := p.Ref()
 	f, err := os.CreateTemp(filepath.Join(c.dir, tmpDir), "pack-*.pack")
@@ -960,13 +805,12 @@ func (c *Cache) stageBundle(id string, p gitlet.PackRow) (*stagedPack, error) {
 	return s, nil
 }
 
-// download streams s's bundle from the object store into its three files,
-// split as its row says and teed through gitlet's seal, checks the seal against
-// the row, and closes the files: making them durable is placePack's, on no GET
-// slot. getSlot waits for the GET's turn, share and node slot — the files
-// already made — and answers the slot's copy buffer and what gives the share
-// and the slot back, called the moment the store's reader is closed. Whatever
-// fails abandons s.
+// download streams s's bundle into its three files, split as its row says and
+// teed through gitlet's seal, checks the seal against the row, and closes the
+// files; syncing them is placePack's, off the GET slot. getSlot waits for the
+// GET's turn, share and node slot, and answers the copy buffer and what gives
+// both back, called the moment the store's reader closes. Any failure
+// abandons s.
 func (c *Cache) download(ctx context.Context, id string, s *stagedPack,
 	getSlot func(context.Context) ([]byte, func(), error)) error {
 
@@ -1006,16 +850,15 @@ func (c *Cache) download(ctx context.Context, id string, s *stagedPack,
 		{w: files[1], left: ref.IndexBytes},
 		{w: files[2], left: ref.ReverseBytes},
 	}}
-	// WHOSE FAILURE A COPY'S IS, by which side of it failed — never by
-	// elimination: the store's reader is the object store's (fromStore), and
-	// a write into the staged files is this node's own disk, which told as
-	// the store's sent an operator to the bucket for a full volume here.
+	// WHOSE FAILURE A COPY'S IS, by the side that failed, never by
+	// elimination: the reader's is the store's (fromStore), a write's is this
+	// node's disk, which told as the store's sends an operator to the bucket
+	// for a full local volume.
 	_, err = io.CopyBuffer(split, fromStore{rc}, buf)
 	if cerr := rc.Close(); err == nil && cerr != nil {
 		err = storeErr{cerr}
 	}
-	// The GET is over: what follows is this node's disk, and the slot is
-	// another download's.
+	// The GET is over: what follows is local disk, and the slot another's.
 	giveBack()
 	var store storeErr
 	switch {
@@ -1114,11 +957,9 @@ func (f failingWriter) Write(p []byte) (int, error) {
 }
 
 // storeFailure is what the object store's failure to hand p over means:
-// absent and damaged are DEFINITE (an *ErrPackMissing — logged by the round
-// once it is final: a damaged pack at once, and an absent one only once a
-// read at the log's head made after this answer, whatever level the round
-// read at, still names it), anything else the store failing, wrapped as
-// ErrStoreRead.
+// absent or damaged is DEFINITE, an *ErrPackMissing the round logs once final
+// (damaged at once, absent once a read at the log's head made after this
+// answer still names it); anything else wraps ErrStoreRead.
 func (c *Cache) storeFailure(id string, p gitlet.PackRow, err error) error {
 	var damaged bool
 	switch {
@@ -1132,11 +973,11 @@ func (c *Cache) storeFailure(id string, p gitlet.PackRow, err error) error {
 	return &ErrPackMissing{Repo: id, Pack: p, Damaged: damaged, Err: err}
 }
 
-// rejected is a bundle whose verified bytes are not its row's, logged under
-// the one name the node gives that fact: Gitlet logs it again, by the
-// same name, for each git request the failed sync answers, and names it to the
-// client — code_pack_rejected is the receiving node refusing a push's own
-// pack, a different fault with a different remedy.
+// rejected is a bundle whose verified bytes are not its row's, logged as
+// code_pack_checksum_mismatch, the one name the node gives that fact (Gitlet
+// logs it again for each git request the failed sync answers). Not
+// code_pack_rejected: that is the receiving node refusing a push's own pack,
+// a different fault with a different remedy.
 func (c *Cache) rejected(id string, p gitlet.PackRow, err error) error {
 	c.log.Error("code_pack_checksum_mismatch", "repo", id, "pack_id", p.PackID, "object", p.Object.String(),
 		"error", err)

@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/queue/jetstream`
-- **Enforced-by:** `internal/queue/jetstream.TestALinksMeterCountsWhatCrossesItEachWay`, `internal/queue/jetstream.TestALinksMeterStandsStillOnABlackholedLink`, `internal/learning/memsync.TestAHydrationBehindADownloadOnItsLinkIsNotRefused`, `internal/learning/memsync.TestAHydrationOnASilentLinkIsRefusedForItsSilence`, `internal/learning/memsync.TestAReplayHearingNothingOnAMovingLinkIsPlacedAgainPastOneTransportPull`, `internal/jsprovision.TestACeilingRunsOnlyWhileItsLinkIsStill`, `internal/engine.TestANodesHydrationReadsItsLinksMeter`
+- **Enforced-by:** `internal/queue/jetstream.TestALinksMeterCountsWhatCrossesItEachWay`, `internal/queue/jetstream.TestALinksMeterStandsStillOnABlackholedLink`, `internal/learning/memsync.TestAHydrationBehindADownloadOnItsLinkIsNotRefused`, `internal/learning/memsync.TestAHydrationOnASilentLinkIsRefusedForItsSilence`, `internal/learning/memsync.TestAReplayHearingNothingOnAMovingLinkIsPlacedAgainPastOneTransportPull`, `internal/jsprovision.TestACeilingRunsOnlyWhileItsLinkIsStill`, `internal/engine.TestANodesHydrationReadsItsLinksMeter`, `internal/objstore/natsobj.TestATransferBehindAMovingLinkIsNotStalled`
 - **Measured:** the meter reads its link every 250 ms (a quarter of a read term) and keeps a minute of readings; a link is moving at 70% of the floor of 30 s a MiB, about 24.5 KB/s, in either direction, midway between the 40% of background a documented fleet's quiet link carries and the floor a busy one does; one message at the transport's 8 MiB takes 240 s to cross at the floor, and 248 s to arrive with its handling, which caps every hold; a replay is placed again past 8.5 MB read across a link (one transport message and a 139,810-byte window) and refused at 253 s with nothing heard; a held wait is judged again every 250 ms (a request) or every second (a replay), so a link that falls still ends it within its span and that judgment of its last byte
 - **Cost-when-tried:** a replay timed by words alone was refused behind one download in flight on its own link (15.5 s of it against a 20.5 s stall at the shipped lease), and behind any event past about 0.67 MiB; at the floor lease the stall was 10.2 s, so one download refused it there too
 - **Tag-status:** unreleased
@@ -24,8 +24,8 @@ transport's ceiling takes to cross at the floor (`Timing.Following`'s beyond,
 memsync's `quietCap`), and a replay that has watched one such message and one
 of its own pulls cross with nothing for it is placed again (memsync's
 `quietBytes`). That is not a bound on what may be ahead of a reply: any number
-of messages may be (below), and until the node's own bulk is windowed its
-transfers may be too. A reply behind more than the cap allows is cut at the
+of messages may be (below), beside the node's own bulk, held to its link's one
+window (ADR-0161). A reply behind more than the cap allows is cut at the
 cap, where it was cut at its span before, and a replay behind more is placed
 again needlessly. A held wait is judged again as the meter reads (a request's
 every quarter second, a replay's every second, over the span before each
@@ -43,8 +43,13 @@ link's port to be left out of mesh capture and kept clear of such proxies
 firewall and a VPN that forwards packets do not terminate TCP.
 
 The first readers are a seat's hydration and the ceilings of its hedged
-requests. A wait that has no meter to read keeps its time bound; making every
-request bound across a link read the meter is a separate change.
+requests, and the object store's transfers across a link: a put's wait for its
+acknowledgements, and a download's or a walk's for its next message, whose
+consumer is made again once two heartbeats go missing on a still link or the
+link has read one message at the transport's bound and a window since it
+heard a word (`internal/objstore/natsobj`). A wait that has no meter to read
+keeps its time bound; making every request bound across a link read the meter
+is a separate change.
 
 ## Why the obvious alternative is wrong
 

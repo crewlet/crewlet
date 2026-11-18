@@ -19,11 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE MEMO (memo.go): answers by object id kept beside the copy they were cut
-// from, each entry whole or not served, held to a sixteenth of the budget
-// before any repository goes, counted by its running total — never by a
-// measure of its directory — kept by a rebuild and dropped by a history gone,
-// with nothing read over the history it replaced placed after the drop.
+// THE MEMO (memo.go; package doc, "The memo").
 
 // memoKeys is n keys of the case named name.
 func memoKeys(name string, n int) []cache.MemoKey {
@@ -66,12 +62,10 @@ func memoEntries(n int) int64 {
 	return total
 }
 
-// AN ENTRY IS READ ONLY WHOLE. Every read holds an entry to its header — the
-// key it answers, its body's length and the SHA-256 of what it holds — so an
-// entry cut short, one whose bytes changed, and another key's answer under
-// this key's name are each a miss, removed from the tree and from what the
-// memo counts, and counted lookups{outcome=corrupt}; a whole one is answered,
-// body and tail.
+// AN ENTRY IS READ ONLY WHOLE. A read checks an entry's header (its key, body
+// length and SHA-256), so an entry cut short, one with a changed byte, and
+// another key's answer under this key's name are each a miss: removed from
+// the tree and the memo's count, and counted lookups{outcome=corrupt}.
 //
 // Mutation: read past the digest (readMemo's last case) — the flipped entry is
 // served.
@@ -135,25 +129,22 @@ func TestAMemoEntryIsReadOnlyWhole(t *testing.T) {
 }
 
 // THE MEMO IS TRIMMED A COHORT AT A TIME, THE LEAST RECENTLY USED FIRST. A
-// sixteenth of the share placed in the node's newest cohort opens another, so
-// five runs' pages of four answers each, each run a sixteenth of the share, are
-// five cohorts; a read of an answer in an older cohort moves it into the
-// newest; and the janitor, with the memo past its share, drops the OLDEST
-// cohort whole — one rename of its directory — and no more than the memo's
-// share asks. So the first run's three answers nobody read since go together,
-// and its fourth, read after the fifth run, stays with every later run's.
+// sixteenth of the share placed opens a new cohort, so five runs of a
+// sixteenth each are five cohorts; a read moves its answer into the newest;
+// and the janitor drops the OLDEST cohort whole (one rename), no more than the
+// share asks. So the first run's three unread answers go together, and its
+// fourth, read after the fifth run, stays.
 //
-// Mutations: serve a hit where it is (memoUse doing nothing) — the first
-// run's read answer goes with its cohort; drop the newest cohort rather than
-// the oldest — the latest runs' answers go.
+// Mutations: serve a hit where it is (memoUse doing nothing) — the read answer
+// goes with its cohort; drop the newest cohort — the latest runs' answers go.
 func TestTheMemoIsTrimmedACohortAtATimeTheLeastRecentlyUsedFirst(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
 	repo := w.repo(t, 1)
 	w.push(t, repo, "refs/heads/main", nil)
 	c := w.open(t)
-	// A share of 18 answers: a cohort is opened past every 4.5 KiB
-	// placed, so each run of four answers, 16 KiB, closes its own.
+	// A share of 18 answers: a cohort opens past every 4.5 KiB placed, so
+	// each run of four answers (16 KiB) closes its own.
 	share := 18 * memoEntry(0)
 	cache.SetMaxBytes(c, cache.MemoShare*share)
 	s := w.sync(t, c, repo)
@@ -189,13 +180,11 @@ func TestTheMemoIsTrimmedACohortAtATimeTheLeastRecentlyUsedFirst(t *testing.T) {
 	}
 }
 
-// A TRIM FALLS DUE ONCE A COHORT, NOT ONCE A MISS. With the memo at its share,
-// every placement takes it past it, and the janitor passes after each, as the
-// placement's kick has it pass: a trim drops the oldest cohort, a sixteenth of
-// the share, so the memo is then that far under its share and the next trim
-// is due once as much again has been placed. So 32 placements of an answer
-// past a full memo, a cohort being four answers, are eight trims — where
-// trimming to the share exactly trimmed at every one of the 32.
+// A TRIM FALLS DUE ONCE A COHORT, NOT ONCE A MISS. With the memo at its share
+// every placement passes it, and the janitor passes after each (as the
+// placement's kick has it); a trim drops the oldest cohort, a sixteenth of the
+// share, so the next is due only once as much again is placed. 32 placements
+// past a full memo of four-answer cohorts are eight trims, not 32.
 //
 // Mutation: open a cohort at every placement (memoPlaced always opening the
 // next) — every placement past the share is a trim.
@@ -233,17 +222,12 @@ func TestATrimFallsDueOnceACohort(t *testing.T) {
 }
 
 // THE TRIM COUNTS ONLY THE COHORTS IT MOVED. It moves the oldest cohort out of
-// each copy that holds it, under that copy's memo lock, which keeps the tree
-// still but not the copy: a purge may retire a copy the trim has found holding
-// the cohort and move its directory into trash/ whole — the cohort with it —
-// before the trim's own move. That cohort left with its copy, whose bytes the
-// purge took out of the totals, so the trim counts neither it nor its bytes:
-// code_cache_memo_trimmed reports the copies the trim dropped the cohort from
-// and what that gave back.
-//
-// The case puts one answer of each of two copies in the node's oldest cohort,
-// fills one of them past the memo's share in cohorts of their own, and purges
-// the other as the trim is about to move its cohort.
+// each copy under that copy's memo lock, which keeps the tree still but not
+// the copy: a purge may move the copy's directory, cohort and all, into trash/
+// before the trim's move, and the purge already took those bytes out of the
+// totals. So code_cache_memo_trimmed reports only the copies the trim dropped
+// the cohort from, and their bytes. The case purges one of two copies sharing
+// the oldest cohort as the trim is about to move it.
 //
 // Mutation: count a cohort whose move met its copy's absence (trimCohortOf
 // without its discarded case) — the trim reports both copies and both answers.
@@ -267,9 +251,8 @@ func TestTheTrimCountsOnlyTheCohortsItMoved(t *testing.T) {
 			if retired || gone == "" || !strings.HasPrefix(dir, gone+string(filepath.Separator)) {
 				return
 			}
-			// The trim has found the purged repository's copy holding the
-			// cohort and is about to move it: a purge takes the copy, which
-			// nobody holds, there.
+			// The trim is about to move the purged repository's cohort: a
+			// purge takes the copy, which nobody holds, there.
 			retired = cache.Retire(c, purged)
 		})
 	})
@@ -324,22 +307,17 @@ func TestTheTrimCountsOnlyTheCohortsItMoved(t *testing.T) {
 	}
 }
 
-// A RUN'S STAGED PAGES ARE THE MEMO'S. A page a read's run has staged and not
-// yet placed counts against the memo's share beside the pages it keeps, so the
-// janitor makes room for it from the memo's own answers — never by evicting a
-// repository, which would cost a cold sync of every pack it holds, a GET each
-// from the object store, for bytes the memo was never entitled to.
+// A RUN'S STAGED PAGES ARE THE MEMO'S. A page staged and not yet placed counts
+// against the memo's share beside its kept pages, so the janitor makes room
+// for it from the memo's own answers, never by evicting a repository (a cold
+// sync of every pack, a GET each, for bytes the memo was never entitled to).
+// The case stages a page that takes the cache one byte past its budget, the
+// kept pages within the share and kept plus staged past it, so only the
+// share's count of the staged page decides whether the idle copy goes.
 //
-// The case stages one page that takes the cache one byte past its budget,
-// with the memo's kept pages within their share and those and the staged page
-// together past it: so only the share's count of the staged page decides
-// whether a repository goes. The idle copy is the only one an eviction may
-// take; the copy the run reads stays pinned.
-//
-// Mutation: hold only the kept pages to the share (trimMemo reading
-// memoBytes alone) — the pass leaves the kept and staged pages together past
-// the share; and with the eviction counting the memo's excess too (overBudget
-// reading the total alone), the idle repository is evicted for the page.
+// Mutations: hold only the kept pages to the share (trimMemo reading memoBytes
+// alone) — kept and staged stay past the share; evict for the memo's excess
+// too (overBudget reading the total alone) — the idle repository goes.
 func TestARunsStagedPagesAreTheMemos(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -355,9 +333,8 @@ func TestARunsStagedPagesAreTheMemos(t *testing.T) {
 	s := w.sync(t, c, hot)
 	defer s.Release()
 
-	// The kept pages, m of them at a block each, and one staged page of a
-	// block's body: the most m whose pages fit the share once the budget is
-	// one byte short of the staged page — which then takes them past it.
+	// m is the most kept pages that fit the share once the budget is one
+	// byte short of the staged page, which then takes them past it.
 	repos := cache.Total(c)
 	body := make([]byte, 4096)
 	staged := cache.MemoStagedBytes(len(body))
@@ -399,12 +376,11 @@ func TestARunsStagedPagesAreTheMemos(t *testing.T) {
 	repoKept("once the page is placed")
 }
 
-// A PAGE PAST THE MEMO'S SHARE IS NEVER STAGED. A run's page that would take
-// every run's staged pages past the memo's share is not staged at all: the
-// memo could never keep it, and staged it would hold room the repositories'
-// budget is for. So four pages of some 6 KB against a share of a few hundred
-// bytes are answered unmemoized, none of their bytes is counted, and no
-// repository goes for them, while they are cut or after.
+// A PAGE PAST THE MEMO'S SHARE IS NEVER STAGED. A page that would take every
+// run's staged pages past the share is not staged: the memo could never keep
+// it, and staged it would hold room the repositories' budget is for. So ~6 KB
+// pages against a share of a few hundred bytes are answered unmemoized,
+// uncounted, and evict no repository, while cut or after.
 //
 // Mutation: stage whatever the share (stageMemo always finding room) — the
 // staged pages hold more than the share.
@@ -452,12 +428,10 @@ func TestAPagePastTheMemosShareIsNeverStaged(t *testing.T) {
 }
 
 // WHAT THE MEMO HOLDS PAST ITS SHARE IS NO REPOSITORY'S TO MAKE ROOM FOR. An
-// eviction is for what the repositories hold past their room — the budget
-// less what the memo may hold — never for the memo's own excess, which its
-// trim gives back: so an eviction pass on its own, with the memo past its
-// share and the cache past its budget by no more than that, evicts nothing.
-// It closes what the trim before it cannot: a page staged between the trim
-// and the eviction.
+// eviction is for the repositories' excess over the budget less the memo's
+// share, never the memo's own, which its trim gives back; so an eviction pass
+// alone, the cache past its budget by no more than the memo's excess, evicts
+// nothing. It covers a page staged between the trim and the eviction.
 //
 // Mutation: evict while the total is past the budget (overBudget counting the
 // memo's excess) — the idle repository is evicted.
@@ -487,10 +461,10 @@ func TestTheMemosExcessEvictsNoRepository(t *testing.T) {
 	}
 }
 
-// A PLACEMENT PAST THE MEMO'S SHARE WAKES THE JANITOR. No eviction is due for
-// the memo's excess (overBudget), so no release or round kicks a pass for it:
-// the placement that takes the memo past its share does, and the trim follows
-// at once rather than at the janitor's tick, which never comes here.
+// A PLACEMENT PAST THE MEMO'S SHARE WAKES THE JANITOR. The memo's excess makes
+// no eviction due (overBudget), so no release or round kicks a pass for it:
+// the placement does, and the trim follows at once, not at a tick (none comes
+// here).
 //
 // Mutation: place without the kick — the memo stays past its share.
 func TestAPlacementPastTheShareWakesTheJanitor(t *testing.T) {
@@ -512,13 +486,10 @@ func TestAPlacementPastTheShareWakesTheJanitor(t *testing.T) {
 }
 
 // A PREVIOUS PROCESS'S ANSWERS NOBODY READ SINCE GO FIRST. A boot opens the
-// node's newest cohort past every one a state records — and every one its
-// previous process reserved (TestABootOpensItsNewestCohortPastEveryOneItsCacheReserved)
-// — so what a previous process left is older than anything placed or read
-// since: the trim that the memo past its share asks takes the cold copy's
-// answers — the whole cohort
-// they share, one rename — before any the warm copy's run placed after the
-// restart, and the cold answer a read moved on after the restart stays.
+// newest cohort past every one the states record and the previous process
+// reserved (TestABootOpensItsNewestCohortPastEveryOneItsCacheReserved), so a
+// trim takes the cold copy's pre-restart cohort whole before any answer the
+// warm copy placed after it, and the cold answer read after the restart stays.
 //
 // Mutation: open no cohort at the boot (the newest at the last one recorded)
 // — the warm copy's answers share the cold ones' cohort, and go with them.
@@ -576,17 +547,14 @@ func TestAPreviousProcesssAnswersNobodyReadSinceGoFirst(t *testing.T) {
 	}
 }
 
-// A REBUILD MOVES THE MEMO WHOLE. A rebuild repairs packs, not answers, and
-// the memo of the copy it replaces MOVES into the new one as that is promoted:
-// one rename of its tree, whatever it holds — so the tree in the rebuilt copy
-// is the very directory the replaced copy held, never a new one filled an
-// entry at a time, and the round that holds the repository pays nothing an
-// answer for it. Every entry is answered there as it was and counted once;
-// the replaced copy, which a reader still holds, answers none from then on.
+// A REBUILD MOVES THE MEMO WHOLE. A rebuild repairs packs, not answers: the
+// replaced copy's memo tree is renamed into the new copy as it is promoted
+// (the very directory, never refilled an entry at a time), so the round pays
+// nothing per answer. Every entry is answered there as it was, counted once;
+// the replaced copy, which a reader still holds, answers none.
 //
-// Mutations: link the tree an entry at a time, as a seeding would — the
-// rebuilt copy's tree is another directory; carry nothing — the rebuilt copy
-// answers none.
+// Mutations: link the tree an entry at a time — the rebuilt copy's tree is
+// another directory; carry nothing — the rebuilt copy answers none.
 func TestARebuildMovesTheMemoWhole(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -639,15 +607,14 @@ func TestARebuildMovesTheMemoWhole(t *testing.T) {
 }
 
 // A REBUILD OVER ANOTHER HISTORY CARRIES NO MEMO. An answer is a function of
-// object ids only while the history it was cut from stands, so a rebuild
-// whose round reads another history carries nothing of the replaced copy's
-// memo: not over a log recreated under the node, which marks the replaced
-// copy's history gone, nor over a log reanchored at another generation, whose
-// copy the rebuild's own round finds gone and drops a memo of.
+// object ids only while its history stands, so a rebuild whose round reads
+// another history carries none of the memo: not over a log recreated under
+// the node (the replaced copy's history marked gone), nor over one reanchored
+// at another generation (the rebuild's own round drops the memo).
 //
 // Mutations: carry a memo whose history is marked gone (carryMemo's
-// historyGone) — the recreated case's rebuilt copy answers it; carry into a
-// copy that dropped a memo (carryMemo's generation) — the reanchored one's.
+// historyGone) — the recreated case answers it; carry into a copy that
+// dropped a memo (carryMemo's generation) — the reanchored one's.
 func TestARebuildOverAnotherHistoryCarriesNoMemo(t *testing.T) {
 	t.Parallel()
 	for _, how := range []string{"recreated", "reanchored"} {
@@ -690,12 +657,11 @@ func TestARebuildOverAnotherHistoryCarriesNoMemo(t *testing.T) {
 	}
 }
 
-// A RECREATED LOG DROPS THE MEMO. A log recreated under the cache, or restored
-// from an older copy, is another history, which the memo cannot tell entry by
-// entry: the full round that converges the copy to it drops the whole tree —
-// before any git process of the round runs there, which the round's tidy
-// precedes — and its record, so nothing the old history answered is answered
-// again.
+// A RECREATED LOG DROPS THE MEMO. A log recreated, or restored from an older
+// copy, is another history, which the memo cannot tell entry by entry: the
+// full round converging the copy drops the whole tree and its record before
+// the round's tidy (so before any git process runs there), and nothing the old
+// history answered is answered again.
 //
 // Mutation: keep the memo on a history gone (OnHistoryGone Keep) — the round
 // tidies a copy still holding the old answers, which are still answered.
@@ -758,20 +724,17 @@ func TestARecreatedLogDropsTheMemo(t *testing.T) {
 }
 
 // NOTHING READ OVER A GONE HISTORY IS MEMOIZED AFTER ITS DROP. A batch begun
-// before the history went — its run read the copy as the old history left it
-// — places nothing once the drop has moved the memo's generation; and while
-// the old history's packs are still in a copy, its memo is shut: no batch
-// begins, since a read then may meet objects of either history. Once they are
-// out, answers are memoized again — in the same copy, where the round that
-// dropped the memo swept them IN PLACE (a copy no reader holds), and in the
-// copy's NEXT incarnation where a reader holds it and they leave by the SWAP
-// (swap.go): the copy the swap leaves keeps them for its readers, and its memo
-// stays shut, through the swap's own window and after.
+// before the history went places nothing once the drop has moved the memo's
+// generation; and while the old history's packs are in a copy, its memo is
+// shut (a read may meet either history's objects). Once they are out it
+// memoizes again: in the same copy where the round swept them in place (no
+// reader holds it), else in the NEXT incarnation (swap.go): the copy the swap
+// leaves keeps them for its readers, so its memo stays shut.
 //
-// Mutations: let Place ignore the generation — the batch from before the drop
-// places its answer in place; let Memo ignore the shut memo — the round's own
-// window begins a batch; reopen the memo of a copy whose strays leave by the
-// swap (apply) — a batch begins over the copy the swap is leaving.
+// Mutations: let Place ignore the generation — the earlier batch places its
+// answer; let Memo ignore the shut memo — the round's window begins a batch;
+// reopen the memo of a copy whose strays leave by the swap (apply) — a batch
+// begins over the copy the swap is leaving.
 func TestNothingReadOverAGoneHistoryIsMemoizedAfterItsDrop(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -825,8 +788,8 @@ func TestNothingReadOverAGoneHistoryIsMemoizedAfterItsDrop(t *testing.T) {
 				s.Release()
 				now = w.sync(t, c, repo)
 			} else {
-				// The swap's own window: the copy it leaves is staged out of,
-				// the old history's pack still in it, and nothing renamed yet.
+				// The swap's window: the old history's pack still in the
+				// copy it leaves, nothing renamed yet.
 				release, reached := make(chan struct{}), make(chan struct{})
 				faults.Arm(gitletfault.SyncSwapBeforeRename, gitletfault.Action{Once: true, Block: release,
 					Reached: reached})
@@ -883,14 +846,12 @@ func TestNothingReadOverAGoneHistoryIsMemoizedAfterItsDrop(t *testing.T) {
 	}
 }
 
-// THE HELD BYTES COUNT THE MEMO, by its running total and never by a measure
-// of its tree: a maintenance run and a full round's index each measure the
-// derived files and record what they measure, and a tree measured as a
-// directory is its inode's few KiB however many answers it holds — written
-// into the record, a memo of gigabytes would have counted as nothing. So the
-// record keeps the entries' bytes through both, nothing under the tree is
-// stated by either, the janitor writes the state once the memo moved, and a
-// boot's layout counts the memo from it.
+// THE HELD BYTES COUNT THE MEMO by its running total, never by measuring its
+// tree: a maintenance run and a full round's index each measure the derived
+// files, and a directory measures as its inode's few KiB however many answers
+// it holds. So the record keeps the entries' bytes through both, neither
+// stats anything under the tree, the janitor writes the state once the memo
+// moved, and a boot's layout counts the memo from it.
 //
 // Mutation: measure a tree as any owned entry (image.sizes stats it, and
 // recordDerived takes the measure) — the record is the directory's size.
@@ -952,11 +913,10 @@ func TestTheHeldBytesCountTheMemo(t *testing.T) {
 	}
 }
 
-// A COPY'S MEMO IS WRITTEN DOWN ONCE A TICK AT MOST. A state written is two
-// syncs, the file and its directory, so the janitor writes a copy's state for
-// its memo's moves on its TICK alone — however many passes kicks run between
-// two ticks, and however often the memo moves — and the tick writes each copy
-// whose memo moved once, the state then recording what the memo holds.
+// A COPY'S MEMO IS WRITTEN DOWN ONCE A TICK AT MOST. A state write is two
+// syncs (file and directory), so the janitor writes a copy's state for its
+// memo's moves on its TICK alone, however many kicked passes run between,
+// once per copy whose memo moved.
 //
 // Mutation: write the moved memos' states on every pass (stateMemos outside
 // the ticked branch) — the kicked passes write them.
@@ -1012,23 +972,18 @@ func TestACopysMemoIsWrittenDownOnceATickAtMost(t *testing.T) {
 	}
 }
 
-// A TICK WRITES A COPY'S STATE ONLY WHILE THE COPY IS DUE ONE, and reports a
-// failed write only for a copy still due. The tick picks every copy whose memo
-// moved since its state was written, then writes them one after another, two
-// syncs each, holding no lock of theirs: a purge, a rebuild's promote or a swap
-// may retire a copy meanwhile — and move its directory into trash/ under the
-// write once nobody holds it — and a round may write its state. A copy no
-// longer due is not written. A write that fails for one is nothing lost and
-// nothing the next tick takes up, so it is not logged: code_cache_memo_unstated
-// tells an operator the node tries again at its next tick. A copy still due
-// whose write fails is logged once, and the next tick writes it.
+// A TICK WRITES A COPY'S STATE ONLY WHILE THE COPY IS DUE ONE, and logs a
+// failed write only for a copy still due. The tick picks the copies whose memo
+// moved, then writes each holding none of their locks, so a purge, promote or
+// swap may retire one meanwhile (into trash/ once unheld) and a round may
+// write its state. A copy no longer due is not written, nor its failure
+// logged (code_cache_memo_unstated would promise a retry no tick makes); one
+// still due is logged once and written at the next tick.
 //
-// Mutations: log no failure of the tick's writes — the first row logs none;
-// log every failure (no look at the copy once its write failed) — the second
-// and third rows log one; excuse a failure only for a copy moved into trash/
-// (judged by discarded alone) — the third row, whose copy a reader still
-// holds, logs one; write every copy the tick picked (no look as each write
-// begins) — the fourth and fifth rows write the other copy's state.
+// Mutations: log no failure — row 1 logs none; log every failure — rows 2 and
+// 3 log one; excuse only a copy in trash/ (judged by discarded alone) — row 3,
+// which a reader holds, logs one; write every copy picked (no look as each
+// write begins) — rows 4 and 5 write the other copy's state.
 func TestATickWritesACopysStateOnlyWhileItIsDue(t *testing.T) {
 	t.Parallel()
 	refused := errors.New("the disk refused the state")
@@ -1159,13 +1114,11 @@ func TestATickWritesACopysStateOnlyWhileItIsDue(t *testing.T) {
 		}
 	})
 
-	// two is a world of two repositories whose copies' memos moved since their
-	// states were written, its cache opened with a knob on the tick's state
-	// writes: the first of them meets the OTHER repository's copy with meet —
-	// what befalls that copy as the tick writes this one's state, whichever of
-	// the two the tick picked first. It answers the world, the cache, the
-	// repositories, and what the tick did: every repository whose state it
-	// wrote, in order, and the one meet met.
+	// two is a world of two repositories whose memos moved since their states
+	// were written; as the tick writes its first state, meet acts on the OTHER
+	// repository's copy. It answers the world, the cache, the repositories,
+	// and what the tick did: the repositories whose state it wrote, in order,
+	// and the one meet met.
 	two := func(t *testing.T, meet func(c *cache.Cache, other string)) (*syncWorld, *cache.Cache, [2]string,
 		func() (written []string, met string)) {
 		t.Helper()
@@ -1258,60 +1211,17 @@ func TestATickWritesACopysStateOnlyWhileItIsDue(t *testing.T) {
 	})
 }
 
-// THE JANITOR LISTS EVERY COPY'S TREE ONCE A PROCESS, behind the serving, and
-// makes the copy's record what its tree holds — reading the names of its
-// cohorts, never their answers. A crash keeps the state a tick last wrote, so
-// a boot may find in a tree a cohort no state records, placed after that
-// state, which the listing measures and counts and opens the node's newest
-// past; a cohort recorded whose directory is gone, which it forgets; and a
-// tree of another layout — answers in the tree itself, as a build that kept
-// the memo in one directory left them — which is no memo of this build's and
-// goes whole, unread. What the listing records, the tick writes down.
-//
-// The memo's lock keeps the tree still while it is listed, but not the copy:
-// a purge retires it and moves its directory into trash/ whole, with no memo
-// lock taken, between the listing that names a cohort and the measure that
-// opens it. That cohort is nothing to count and no failure, so nothing is
-// logged — code_cache_memo_unlisted says the copy is listed again at the next
-// tick, of a copy that is gone. A cohort still there that the measure cannot
-// read is logged: here one replaced by a file, the one such failure a case
-// can make whoever runs it. And a listing the pass's end cuts short — the
-// engine stopping — failed at nothing: it logs nothing and leaves the copy to
-// the next pass, which lists it.
-//
-// The measure holds each entry of the cohort to the same rule once the
-// cohort's listing has named it. One gone by its stat — removed by something
-// outside the engine — counts nothing, and the rest of the cohort counts. One
-// still named whose stat fails is logged, and the copy counts what its state
-// recorded until a tick's listing measures the cohort whole: passed over, its
-// bytes would be on the disk and in no count, the budget held to a total short
-// by them. Here the cohort becomes a file under the measure, so the stat answers
-// ENOTDIR, the one such failure a case can make whoever runs it.
-//
-// The listing passes over every cohort a record names, which is sound only
-// because nothing placed or read after a boot reaches a cohort a previous
-// process made: the boot opens its newest past every one that process
-// reserved, which the crash's own cohort is among. So a run's placement and a
-// read's hit before the first listing leave the crash's cohort for it to count
-// whole; and while the disk refuses to stat it, a placement between two
-// listings that fail does not put it in the record, nor the tick in the state.
-//
-// Mutations: pass over a cohort no state records (listMemo measuring nothing)
-// — the first row's record lacks it; keep a recorded cohort the tree no longer
-// holds — the second row's record keeps it; leave a tree of another layout's
-// names be — the third row's tree is still there; log a cohort gone from
-// under the measure (listMemo without its fs.ErrNotExist case) — the fourth
-// row logs it; excuse every error of a cohort's measure — the fifth row logs
-// nothing; log a measure the pass's end cut short (listMemo without its
-// ended-context case) — the sixth row logs it; take an entry gone by its stat
-// for the measure's failure (measureCohort without its fs.ErrNotExist case) —
-// the seventh row's record lacks the cohort; pass over an entry whose stat
-// fails (measureCohort counting only what it stats) — the eighth row logs
-// nothing and lists the copy; open the boot's newest past what the states
-// record alone (openMemo ignoring the reservation) — the ninth row's
-// placement and hit land in the crash's cohort, which the record then counts
-// short of its directory, and the tenth row's placement puts it in the record
-// and the state, and lists the copy at the tick.
+// THE JANITOR LISTS EVERY COPY'S TREE ONCE A PROCESS, behind the serving, by
+// its cohorts' names alone (package doc, "The memo"). It counts a cohort a
+// crash left unrecorded, forgets a recorded one gone, and drops a tree of
+// another layout (answers outside any cohort) whole, unread; the tick writes
+// down what it records. A cohort or entry gone under the measure (a purge
+// takes no memo lock; something outside the engine) is no failure; one still
+// named that cannot be read is logged (code_cache_memo_unlisted), and the
+// copy keeps its state's count until a listing measures it whole, lest its
+// bytes sit on disk in no count. Passing over recorded cohorts is sound only
+// because the boot opens past every cohort the previous process reserved.
+// Each row's mutation is above it.
 func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 	t.Parallel()
 	block := memoEntry(0)
@@ -1343,6 +1253,8 @@ func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 		return w.reopen(t, c, mutate...), repo, dir, first, w
 	}
 
+	// Mutation: pass over a cohort no state records (listMemo measuring
+	// nothing) — the record lacks it.
 	t.Run("a cohort no state records is counted", func(t *testing.T) {
 		t.Parallel()
 		c, repo, dir, first, _ := crashed(t, nil)
@@ -1373,6 +1285,7 @@ func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 		}
 	})
 
+	// Mutation: keep a recorded cohort the tree no longer holds.
 	t.Run("a recorded cohort gone is forgotten", func(t *testing.T) {
 		t.Parallel()
 		c, repo, _, first, _ := crashed(t, func(dir string, first uint64) {
@@ -1388,6 +1301,7 @@ func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 		}
 	})
 
+	// Mutation: leave a tree of another layout's names be.
 	t.Run("a tree of another layout goes whole", func(t *testing.T) {
 		t.Parallel()
 		w := newSyncWorld(t, onMemory)
@@ -1412,6 +1326,8 @@ func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 		}
 	})
 
+	// Mutation: log a cohort gone from under the measure (listMemo without its
+	// fs.ErrNotExist case).
 	t.Run("a cohort gone with its copy under the listing is no failure", func(t *testing.T) {
 		t.Parallel()
 		var (
@@ -1446,6 +1362,8 @@ func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 		}
 	})
 
+	// The cohort becomes a file: the one read failure a case can make
+	// whoever runs it. Mutation: excuse every error of a cohort's measure.
 	t.Run("a cohort the measure cannot read is logged", func(t *testing.T) {
 		t.Parallel()
 		var (
@@ -1487,6 +1405,9 @@ func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 		}
 	})
 
+	// The engine stopping fails at nothing: the next pass lists the copy.
+	// Mutation: log a measure the pass's end cut short (listMemo without its
+	// ended-context case).
 	t.Run("a listing the pass's end cuts short is no failure", func(t *testing.T) {
 		t.Parallel()
 		ctx, stop := context.WithCancel(t.Context())
@@ -1527,6 +1448,9 @@ func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 		}
 	})
 
+	// Mutation: take an entry gone by its stat for the measure's failure
+	// (measureCohort without its fs.ErrNotExist case) — the record lacks the
+	// cohort.
 	t.Run("an entry gone by its stat counts nothing", func(t *testing.T) {
 		t.Parallel()
 		var (
@@ -1568,6 +1492,8 @@ func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 		}
 	})
 
+	// Mutation: pass over an entry whose stat fails (measureCohort counting
+	// only what it stats) — nothing is logged and the copy is listed.
 	t.Run("an entry the measure cannot stat is logged", func(t *testing.T) {
 		t.Parallel()
 		var (
@@ -1618,6 +1544,9 @@ func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 		}
 	})
 
+	// Mutation, for this row and the next: open the boot's newest past the
+	// states alone (openMemo ignoring the reservation) — the placement and
+	// hit land in the crash's cohort, which the record then counts short.
 	t.Run("a placement and a hit before the listing leave the crash's cohort to it", func(t *testing.T) {
 		t.Parallel()
 		c, repo, dir, first, w := crashed(t, nil)
@@ -1642,6 +1571,8 @@ func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 		}
 	})
 
+	// Under that mutation the placement puts the crash's cohort in the record
+	// and the state, and the tick lists the copy.
 	t.Run("a placement between two failed listings leaves the crash's cohort out of every state", func(t *testing.T) {
 		t.Parallel()
 		var (
@@ -1693,11 +1624,10 @@ func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 	})
 }
 
-// crashCounted is what the record of the crashed copy at dir (crashed) must
-// say once its tree is listed: every cohort the tree holds, each at what its
-// directory holds, but the first, which the state recorded before the crash
-// and is counted as it said — short by the two answers placed in it after
-// that state, which is what a crash costs the count.
+// crashCounted is what the crashed copy's record (crashed) must say once its
+// tree is listed: each cohort at what its directory holds, but the first,
+// counted as the pre-crash state said: short by the two answers placed in it
+// after, which is what a crash costs the count.
 func crashCounted(t *testing.T, dir string, first uint64, block int64) ([]uint64, []int64) {
 	t.Helper()
 	cohorts, held := cohortsOnDisk(t, dir, block)
@@ -1709,20 +1639,17 @@ func crashCounted(t *testing.T, dir string, first uint64, block int64) ([]uint64
 }
 
 // A BOOT OPENS ITS NEWEST COHORT PAST EVERY ONE ITS CACHE RESERVED. A cohort's
-// number is made durable in the cache's root before the node's newest moves
-// to it, so a boot opens past the newest a previous process may have placed
-// in — past every one its states record too — and reserves its own before
-// anything is placed. A root that holds copies and no readable reservation —
-// removed, or damaged — is logged, and the boot opens past what the states
-// record; a cache no process has opened holds none to read and logs nothing;
-// and a root that takes no write opens no cache.
+// number is durable in the cache's root before the node's newest moves to it,
+// so a boot opens past every cohort a previous process may have placed in (and
+// past the states'), reserving its own before any placement. A root holding
+// copies and no readable reservation is logged and the boot opens past the
+// states; a fresh cache logs nothing; a root that takes no write opens no cache.
 //
 // Mutations: open past the states alone (openMemo ignoring the reservation) —
-// the first row opens at the state's; reserve nothing at the boot — every
-// row's reservation is still the previous process's; log nothing for a
-// reservation the boot could not read — the second and third rows log
-// nothing; log a fresh cache's absence too — the fresh case logs; open a
-// cache whose reservation could not be written — the last case opens.
+// row 1 opens at the state's; reserve nothing at the boot — every row's
+// reservation is the previous process's; log no unread reservation — rows 2
+// and 3 log nothing; log a fresh cache's absence — the fresh case logs; open
+// a cache whose reservation could not be written — the last case opens.
 func TestABootOpensItsNewestCohortPastEveryOneItsCacheReserved(t *testing.T) {
 	t.Parallel()
 	block := memoEntry(0)
@@ -1831,18 +1758,16 @@ func TestABootOpensItsNewestCohortPastEveryOneItsCacheReserved(t *testing.T) {
 }
 
 // A COHORT OPENS ONLY ONCE ITS NUMBER IS DURABLE. The placement that fills the
-// node's newest cohort reserves the next in the cache's root before it opens
-// it, so a crash after it leaves a reservation the boot opens past. A
-// reservation the root refuses opens nothing: it is logged, the newest stays
-// open, and the next is tried once another sixteenth of the share has been
-// placed — not at every placement after — and opens once the root takes it.
+// newest cohort reserves the next in the cache's root before opening it, so a
+// crash after leaves a reservation the boot opens past. A refused reservation
+// opens nothing: it is logged, the newest stays open, and the next is tried
+// once another sixteenth of the share is placed, not at every placement.
 //
-// Mutations: open the next cohort whatever its reservation answered
-// (memoPlaced moving the newest on a refusal) — the refused reservation opens
-// one; open it unreserved (memoPlaced reserving nothing) — the root never
-// names it, and the boot after opens past nothing the process opened; try
-// again at every placement (memoPlaced keeping the fill it failed at) — the
-// short run logs again.
+// Mutations: open on a refusal (memoPlaced moving the newest anyway) — the
+// refused reservation opens one; open unreserved (memoPlaced reserving
+// nothing) — the boot after opens past nothing the process opened; retry at
+// every placement (memoPlaced keeping the fill it failed at) — the short run
+// logs again.
 func TestACohortOpensOnlyOnceItsNumberIsDurable(t *testing.T) {
 	t.Parallel()
 	block := memoEntry(0)
@@ -1898,18 +1823,15 @@ func TestACohortOpensOnlyOnceItsNumberIsDurable(t *testing.T) {
 	}
 }
 
-// A LISTING THAT FAILED IS TRIED AGAIN AT THE TICK, NOT AT EVERY PASS. Passes
-// follow kicks, which on a busy node come back to back, and a listing measures
-// every cohort no record names under the copy's memo lock, which a read's
-// placement waits on: so a copy whose listing failed waits for the janitor's
-// tick, and a kicked pass neither measures it again nor logs; the tick does
-// both, and lists it whole once the disk is fixed. A copy never listed is
+// A LISTING THAT FAILED IS TRIED AGAIN AT THE TICK, NOT AT EVERY PASS. Kicked
+// passes come back to back on a busy node, and a listing holds the copy's memo
+// lock, which a read's placement waits on: so a failed copy waits for the
+// tick, and a kicked pass neither measures nor logs it. A copy never listed is
 // listed at any pass.
 //
-// Mutations: list a copy whose listing failed at every pass (listMemos
-// ignoring memoUnlisted) — the kicked pass after the failure measures and
-// logs again; never list it again (listMemos passing it over on a tick too) —
-// the tick measures nothing, and the fixed disk's tick lists nothing.
+// Mutations: list a failed copy at every pass (listMemos ignoring
+// memoUnlisted) — the kicked pass measures and logs again; never list it again
+// (listMemos passing it over on a tick too) — the tick measures nothing.
 func TestAFailedListingIsTriedAgainAtTheTick(t *testing.T) {
 	t.Parallel()
 	block := memoEntry(0)
@@ -1975,16 +1897,12 @@ func TestAFailedListingIsTriedAgainAtTheTick(t *testing.T) {
 	}
 }
 
-// A FAILED LISTING STILL WAITS FOR THE TICK AFTER A SWAP. A swap moves the
-// memo's tree whole into the next incarnation (carryMemo), and a tree whose
-// last listing failed is the same tree on the same disk there: so the next
-// incarnation is listed again at the janitor's tick alone, as the copy the
-// swap left was, and a kicked pass after the swap neither measures nor logs
-// it.
+// A FAILED LISTING STILL WAITS FOR THE TICK AFTER A SWAP: the swap moves the
+// same tree whole into the next incarnation (carryMemo), so that incarnation
+// too is listed again only at the tick.
 //
-// Mutation: carry memoListed alone (carryMemo leaving the next incarnation's
-// memoUnlisted false): the first kicked pass after the swap measures the tree
-// again and logs code_cache_memo_unlisted a second time.
+// Mutation: carry memoListed alone (carryMemo leaving memoUnlisted false) —
+// the first kicked pass after the swap measures and logs again.
 func TestAFailedListingWaitsForTheTickAcrossASwap(t *testing.T) {
 	t.Parallel()
 	k := newCompactable(t, false)
@@ -2066,15 +1984,13 @@ func cohortsOnDisk(t *testing.T, dir string, block int64) ([]uint64, []int64) {
 	return cohorts, held
 }
 
-// THE NODE KEEPS AT MOST MaxMemoCohorts COHORTS, whatever they hold. A cohort
-// is opened only by placements, and the trim drops one once the memo holds its
-// share, so a memo the disk keeps holds some seventeen; but what thins old
-// cohorts without the memo filling — damaged answers removed, answers a read
-// moves on — would leave ever more of them, each one more name every miss
-// opens. So the janitor's tick drops the oldest while the node keeps more
-// than the bound, though the memo is far within its share. Here each run
-// places an answer in a cohort of its own and the answer before it is read
-// damaged and removed, so the memo holds one answer across forty cohorts.
+// THE NODE KEEPS AT MOST MaxMemoCohorts COHORTS, whatever they hold. Cohorts
+// open only by placement and the trim drops one per sixteenth, so a full memo
+// holds some seventeen; but what thins old cohorts without filling the memo
+// (damaged answers removed, answers a read moves on) would leave ever more,
+// each one more name every miss opens. So the tick drops the oldest past the
+// bound even far within the share. Here the memo holds one answer across
+// forty cohorts.
 //
 // Mutation: drop for the share alone (trimMemo ignoring maxMemoCohorts) — the
 // tick leaves all forty.
@@ -2114,18 +2030,15 @@ func TestTheNodeKeepsAtMostMaxMemoCohorts(t *testing.T) {
 	}
 }
 
-// A STATE WRITTEN BEHIND THE SERVING KEEPS THE COPY'S LAST USE. A boot reads a
-// copy's last use from its state's modification time, and the janitor writes
-// a copy's state at its tick once its memo moved — a trim that took the
-// copy's oldest cohort among the moves, which is no use of the copy: so the
-// state it writes carries the copy's last use, never the moment of the write,
-// and a copy nobody read since comes back from a restart no more recently
-// used than it was — not the one read last, which the budget would keep while
-// it evicted the copies seats do read.
+// A STATE WRITTEN BEHIND THE SERVING KEEPS THE COPY'S LAST USE. A boot reads
+// a copy's last use from its state's mtime, and the tick writes the state once
+// the memo moved, a trim among the moves, which is no use of the copy. So the
+// write stamps the last use, never its own moment; else an unread copy would
+// come back from a restart as the most recently used, and the budget would
+// keep it while evicting copies seats do read.
 //
 // Mutation: write the state as it is staged (writeState's stamp dropped) — the
-// copy comes back from the restart used at the moment the trim's state was
-// written.
+// copy comes back from the restart used at the moment of the trim's write.
 func TestAStateWrittenBehindTheServingKeepsTheLastUse(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -2160,16 +2073,14 @@ func TestAStateWrittenBehindTheServingKeepsTheLastUse(t *testing.T) {
 	}
 }
 
-// A RUN'S EXTENSION OF A PAGE IS THE PAGE'S. What a run appends to a page it
-// staged before its end (MemoBatch.Extend) — a diff stat's page's files'
-// counts, once the stat has counted past it — is part of the entry the tail
-// completes: read back whole, the page, the extension and the tail in that
-// order, counted in the memo's record as one entry; and an extension that,
-// with the tail, would pass what a run may append to a page gives that page
-// back unmemoized, its staged bytes with it.
+// A RUN'S EXTENSION OF A PAGE IS THE PAGE'S. What a run appends to a staged
+// page (MemoBatch.Extend; a diff stat's file counts) is part of the entry:
+// read back as page, extension, tail, and counted as one entry. An extension
+// that with the tail would pass memoMaxTail gives the page back unmemoized,
+// its staged bytes with it.
 //
-// Mutation: append the extension and leave it out of the entry's digest
-// (Extend's sum left alone) — the entry fails its digest and is no answer.
+// Mutation: leave the extension out of the entry's digest (Extend's sum left
+// alone) — the entry fails its digest and is no answer.
 func TestARunsExtensionOfAPageIsThePages(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)

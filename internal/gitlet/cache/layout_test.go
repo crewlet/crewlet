@@ -32,15 +32,12 @@ func prepare(t *testing.T, dir string) cache.Layout {
 	return layout
 }
 
-// PREPARE TAKES ONLY WHAT IS ITS OWN: an empty directory or one that already
-// carries this cache's tag. Open empties tmp/ and scratch/ at every boot, so
-// gitlet.cache_dir pointed at a populated directory — /var, a home — would
-// otherwise empty /var/tmp; and a directory another tool tagged under the
-// same standard is that tool's. A directory it took, Prepared again, it finds
-// prepared and rewrites nothing: the tag keeps its inode, its bytes and the
-// modification the case stated for it — an instant long past, which any write
-// moves to now. Read off the tag's own stamp before and after, the claim
-// passed a rewrite in place within one tick of a coarse file clock.
+// PREPARE TAKES ONLY WHAT IS ITS OWN: an empty directory or one carrying this
+// cache's tag. Open empties tmp/ and scratch/ at every boot, so a cache_dir
+// of /var would otherwise empty /var/tmp, and a directory another tool
+// tagged is that tool's. Prepared again, a directory it took is not rewritten:
+// the tag keeps its inode, its bytes and a modification time set long past,
+// which any write moves to now, even within one tick of a coarse file clock.
 //
 // Mutation: a second Prepare rewrites the tag it finds its own, in place
 // (writeTag in adoptDirectory's tagOurs arm), on the filesystem's clock or on a
@@ -187,11 +184,9 @@ func TestPrepareRefusesADirectoryThatIsNotACache(t *testing.T) {
 				}
 			}
 
-			// A second Prepare finds it prepared and rewrites nothing — once
-			// the first has given its claim back. The tag's modification is
-			// put at a stated instant first, an even second every file clock
-			// holds exactly, so a write of it lands elsewhere however coarse
-			// the clock that stamps it.
+			// A second Prepare, once the first gave its claim back, rewrites nothing.
+			// The tag's modification is first set to an even second, which every file
+			// clock holds exactly, so any write moves it however coarse the clock.
 			tagPath := filepath.Join(resolved, "CACHEDIR.TAG")
 			stated := time.Date(2001, time.February, 3, 4, 5, 6, 0, time.UTC)
 			if err := os.Chtimes(tagPath, stated, stated); err != nil {
@@ -258,18 +253,13 @@ func TestAPreparedDirectoryIsHeldUntilItsCacheStops(t *testing.T) {
 	prepare(t, w.layout.Dir)
 }
 
-// HELD IS EVERY BYTE THE CACHE OWNS, counted the cheap way: the incarnation
-// a boot keeps, with a state of this build, counts what its state says it
-// holds — one small read a repository, never a stat of its packs, which at
-// one pack a push is a walk of millions of files at every restart — and only
-// what has no state, and what the boot gives back, is walked: an older
-// incarnation beside the kept one, and the leftovers — trash/, scratch/,
-// tmp/ and a home/ a killed git populated — which the janitor gives back
-// seconds after the boot, so the next boot finds them as free space, and
-// left out here they would make this boot's budget smaller than the next
-// one's. What the boot gives back counts each file once, and none the kept
-// incarnation also holds (TestABootCountsEachFileOnce). A symbolic link is
-// counted as itself, never as what it points at.
+// HELD IS EVERY BYTE THE CACHE OWNS, counted the cheap way: a kept
+// incarnation with a state of this build counts what its state says, one small
+// read a repository, never a walk of its packs; only what has no state and
+// what the boot gives back (an older incarnation beside the kept one, trash/,
+// scratch/, tmp/ and a populated home/) is walked. Given-back files count once
+// each, and never when the kept incarnation holds them
+// (TestABootCountsEachFileOnce). A symbolic link counts as itself.
 func TestPrepareMeasuresWhatTheCacheHolds(t *testing.T) {
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "c")
@@ -297,9 +287,8 @@ func TestPrepareMeasuresWhatTheCacheHolds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// B's older incarnation, which Open moves aside, counts the files it
-	// holds — here its state and a pack of its own — whatever its state says
-	// it holds.
+	// B's older incarnation, which Open moves aside, counts the files it holds
+	// (its state and a pack of its own), whatever its state says.
 	older := aState(repoB)
 	older.DiskBytes = 50
 	older.Derived = map[string]derivedDoc{
@@ -352,33 +341,18 @@ func linkAt(t *testing.T, oldname, newname string) {
 	}
 }
 
-// A BOOT COUNTS EACH FILE ONCE, however many names the cache gave it. The
-// cache hard-links one file into many places — a rebuild links every pack a
-// check found whole into the copy it builds (seedRebuild), a swap every live
-// pack, the packed-refs and the derived files it carries (swap.go) — and a
-// boot can find a file under several of them: an older incarnation a crash
-// left beside the one kept (a reader still held it when the node died); a
-// copy a swap replaced, or a failed swap's staging, in trash/ because the
-// process ended before the janitor removed it; a purged repository's two
-// copies, in trash/ together. The kept incarnation's state counts what it
-// holds, so Layout.Held counts what the boot gives back each file once and
-// only where no name of the file is the kept one's. Counted by every name,
-// the shared bytes were counted twice or three times, and the engine — which
-// adds Layout.Held to the volume's free space to derive the cache's budget —
-// gave the cache room the volume did not have, for the life of the process;
-// counted only where a file has one name, a file two of those trees share
-// counted nowhere.
+// A BOOT COUNTS EACH FILE ONCE, however many names the cache gave it. A
+// rebuild (seedRebuild) and a swap (swap.go) hard-link files across
+// incarnations, so one file can sit in the kept incarnation, an older one a
+// crash left beside it, a replaced copy or failed staging in trash/, or a
+// purged repository's two copies. Held counts each given-back file once and
+// none the kept one's state counts (by every name the budget overclaims; by
+// sole names a shared file counts nowhere); countedOnce expects by inode.
 //
-// What Held should be is counted here by inode rather than by link count
-// (countedOnce): each kept incarnation as its state says, and every other
-// file under repos/, trash/, scratch/, tmp/ and home/ once an inode, but an
-// inode the kept one holds.
-//
-// Mutations: count an older incarnation by its state (readBoot) — the two
-// arms of an older incarnation in repos/ count its linked files twice; count
-// trash/ by every name — the two arms of what sits in trash/ count the
-// shared files twice; count trash/ by its sole names — the purged
-// repository's arm counts the files its two copies share nowhere.
+// Mutations: count an older incarnation by its state (readBoot), and the
+// repos/ arms count its linked files twice; count trash/ by every name, and
+// the trash/ arms count shared files twice; by sole names, and the purged
+// repository's arm counts them nowhere.
 func TestABootCountsEachFileOnce(t *testing.T) {
 	t.Parallel()
 	t.Run("a rebuild's predecessor in repos/", func(t *testing.T) {
@@ -499,12 +473,11 @@ func requireIn(t *testing.T, dir string) {
 }
 
 // countedOnce boots w's directory again and holds Layout.Held to every byte
-// the cache holds there counted ONCE: the incarnation the boot keeps at kept
-// ("" for none) as its state says, and every other file — under repos/,
-// trash/, scratch/, tmp/ and home/, all of which the boot gives back — once
-// an inode, but an inode the kept one holds, which its state counts. It
-// requires the case's subject: a file the boot gives back under a second
-// name, the kept incarnation's or another it gives back.
+// there counted ONCE: the incarnation kept at kept ("" for none) as its state
+// says, and every other file under repos/, trash/, scratch/, tmp/ and home/
+// once an inode, but none the kept one holds. It requires the case's subject:
+// a given-back file with a second name, in the kept incarnation or another
+// given-back tree.
 func countedOnce(t *testing.T, w *syncWorld, kept string) {
 	t.Helper()
 	keptInodes := map[uint64]bool{}

@@ -66,9 +66,8 @@ func BenchmarkFind(b *testing.B) {
 }
 
 const (
-	// findFiles and findDirs are the benchmark's tree: a hundred thousand
-	// files, the plan's figure for a large monorepo's, a hundred to a
-	// directory.
+	// findFiles and findDirs are the benchmark's tree: a large monorepo's
+	// hundred thousand files, a hundred to a directory.
 	findFiles = 100_000
 	findDirs  = 1_000
 )

@@ -27,12 +27,11 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE HOME'S MERGE OVER A REAL COPY: a solo fleet's one Gitlet node — its cache
-// and its pool — holding a repository a person pushed branches to, and the
-// home's loop over it, its estate the stand-in that lists the changes a case
-// makes due (estate): so each case merges real commits with the Gitlet node's
-// own git, in the scratch the loop makes beside the node's copy, and reads
-// what the loop asked to be recorded.
+// THE HOME'S MERGE OVER A REAL COPY: a solo fleet's one Gitlet node holding a
+// repository a person pushed to, and the home's loop over it with the estate
+// stand-in listing the changes a case makes due: each case merges real commits
+// with the node's own git, in the loop's scratch beside the node's copy, and
+// reads what the loop asked to be recorded.
 
 // gitHome is a solo fleet holding gitlettest.RepoName, a person who pushes to
 // it and their work tree, the repository's id once pushed, and the stand-in
@@ -132,9 +131,9 @@ func (h *gitHome) holds(dir, id string) bool {
 	return err == nil
 }
 
-// homeLoop is the Gitlet node's loop over h's estate — home to the repository,
-// merging over the node's own cache and pool — its backstop backstop and its
-// clock now, started; tune sets what a case scales before the start.
+// homeLoop is the node's started loop over h's estate, home to the repository
+// and merging over the node's cache and pool, at backstop and clock now; tune
+// sets what a case scales before the start.
 func (h *gitHome) homeLoop(t *testing.T, n *nudges, backstop time.Duration, now func() time.Time,
 	tune ...func(*home.Loop)) (*home.Loop, *metrics.Recorder) {
 
@@ -197,16 +196,14 @@ func looseObjects(t *testing.T, dir string) map[string]int64 {
 	return out
 }
 
-// MERGEABILITY RUNS IN A SCRATCH: a home's merge of a change into its target —
-// one that merges clean and one that conflicts — writes the merged tree, and
-// every blob a conflict leaves marked, into a scratch of its own beside the
-// node's copy and never into the copy, whose objects are its rows' alone (the
-// cache's writers gate): after both merges are recorded the copy holds no
-// object it did not hold before — no loose object, and neither merged tree —
-// and the scratches are gone with the turn that made them.
+// MERGEABILITY RUNS IN A SCRATCH: a home's merge, clean or conflicting, writes
+// its merged tree and every blob a conflict leaves marked into a scratch beside
+// the node's copy, never into the copy, whose objects are its rows' alone (the
+// cache's writers gate): after both merges the copy holds no new loose object
+// and neither merged tree, and the scratches are gone with their turn.
 //
-// Mutation: run the merge-tree in the copy's own directory (the synced
-// incarnation) rather than the scratch, and the copy holds the merged trees.
+// Mutation: run the merge-tree in the synced incarnation rather than the
+// scratch, and the copy holds the merged trees.
 func TestMergeabilityRunsInAScratch(t *testing.T) {
 	t.Parallel()
 	h := newGitHome(t, gitlettest.Settings())
@@ -264,14 +261,12 @@ func TestMergeabilityRunsInAScratch(t *testing.T) {
 }
 
 // A MERGE'S LANDING THAT DECIDED NOTHING FAILS THE TURN: a change owing its
-// merge alone whose head its target came to hold — found by the merge's
-// ancestry, its landing asked of the committer — whose landing the committer
-// answers busy ends its turn FAILED, counted so and logged
-// code_home_turn_failed, with no merge recorded of it.
+// merge alone, whose head the merge's ancestry finds in its target, and whose
+// landing the committer answers busy, ends its turn FAILED (counted so, logged
+// code_home_turn_failed), with no merge recorded of it.
 //
 // Mutation: drop the landing's error on the merge branch of the change's step
-// (answer `true` and the other steps' errors alone once the merge found it
-// landed), and the turn counts worked.
+// (answer `true` once the merge found it landed), and the turn counts worked.
 func TestAMergesLandingThatDecidedNothingFailsTheTurn(t *testing.T) {
 	t.Parallel()
 	h := newGitHome(t, gitlettest.Settings())
@@ -314,11 +309,9 @@ func moving(n int, seq uint64, ref, old, new string) gitlet.IntroducedRow {
 		Moves: []gitlet.RefMove{{Ref: ref, Old: old, New: new}}}
 }
 
-// mergedRepo is a repository whose change's head is merged into main and
-// pushed on: base, then main moved on to a, the change's head — a child of
-// base on its own branch — merged into main by the merge commit m1, and m2
-// committed on top of it; both branches pushed, so the node's copy holds
-// every commit a walk asks about.
+// mergedRepo is base, main moved on to a, the change's head (a child of base
+// on its own branch) merged into main by m1, and m2 on top; both branches
+// pushed, so the node's copy holds every commit a walk asks about.
 func mergedRepo(h *gitHome) (base, a, head, m1, m2 string) {
 	h.t.Helper()
 	base = h.commit(map[string]string{"a.go": "a\n"}, "base")
@@ -333,22 +326,17 @@ func mergedRepo(h *gitHome) (base, a, head, m1, m2 string) {
 	return base, a, head, m1, m2
 }
 
-// A LANDING NAMES THE PUSH THAT BROUGHT ITS HEAD IN, never the push that
-// moved its target last: a change merged by dev's push of a merge commit onto
-// main (a → m1), and pushed on by somebody else (m1 → m2) before the home
-// read the target, is found in m2 — and the landing names dev's push, whether
-// the push on top shared its group-commit record or landed in a later one, a
-// push of another branch to the same commit in the record beside them telling
-// nothing. The walk goes newest first from the tip, each move's old commit
-// asked of git: a target forced back behind the head and merged again names
-// the push that merged it again; a target made at a commit holding the head
-// names the push that made it; and one whose every move the history keeps
-// already held the head names nobody.
+// A LANDING NAMES THE PUSH THAT BROUGHT ITS HEAD IN, never the target's last:
+// merged by dev's push a → m1 and pushed on m1 → m2 before the home read it,
+// the landing names dev's push, in the same group-commit record or a later
+// one, and another branch's push to m1 tells nothing. The walk goes newest
+// first, asking git of each move's old commit: forced back behind the head
+// and merged again names the second merge; made holding the head names its
+// making; and a head held before every kept move names nobody.
 //
-// Mutation: name the push that moved the target to the tip (stop the walk at
-// its first move) → the two pushed-on cases name the push on top; skip the
-// old commit's ancestry and take the oldest move read → the forced case
-// names the first merge, and the held-before case names one.
+// Mutation: stop the walk at the target's first move → the pushed-on cases
+// name the push on top; skip the old commit's ancestry and take the oldest
+// move → the forced case names the first merge, the held-before case one.
 func TestALandingNamesThePushThatBroughtItsHeadIn(t *testing.T) {
 	t.Parallel()
 	h := newGitHome(t, gitlettest.Settings())
@@ -403,14 +391,12 @@ func TestALandingNamesThePushThatBroughtItsHeadIn(t *testing.T) {
 	}
 }
 
-// A CHANGE WHOSE HEAD IS IN ITS TARGET IS LANDED: its facts read, finding the
-// head inside the target's tip — the target moved past it — the home lands it
-// through its merge step, at the change's revision and head and the tip it
-// read, naming the push that merged it, and records no facts of it; a change
-// whose head is not in its target has its facts recorded, its touched paths
-// matched against the repository's path owners on the home, beside the digest
-// of the owners matched against and the instant the home measured them, its
-// clock to the microsecond.
+// A CHANGE WHOSE HEAD IS IN ITS TARGET IS LANDED: facts that find the head in
+// the target's tip make the home land it through its merge step, at the
+// change's revision, head and read tip, naming the push that merged it, and
+// record no facts; a head not in its target has its facts recorded, its
+// touched paths matched against the path owners beside the owners' digest
+// and the home's clock to the microsecond.
 //
 // Mutation: record the facts of a head its target holds rather than land it,
 // and the landing is never asked; send no instant, or the clock's nanoseconds,
@@ -456,17 +442,14 @@ func TestAChangeWhoseHeadIsInItsTargetIsLanded(t *testing.T) {
 	}
 }
 
-// A LANDING THAT DECIDED NOTHING FAILS THE TURN: a change whose head its
-// target holds, owing its facts and its merge, whose landing the committer
-// answers busy — or whose Change call fails before any answer — ends its
-// turn FAILED, counted so and logged code_home_turn_failed, and that turn does
-// no more work on the change: no merge is recorded of it, and the landing is
-// asked once. A repository whose landings keep failing reads as failing,
-// never as healthy.
+// A LANDING THAT DECIDED NOTHING FAILS THE TURN: a change owing facts and
+// merge, whose head its target holds and whose landing the committer answers
+// busy (or whose Change call fails), ends its turn FAILED (counted so, logged
+// code_home_turn_failed), asks the landing once and records no merge, so a
+// repository whose landings keep failing never reads as healthy.
 //
-// Mutation: drop the landing's error on the facts branch of the change's step
-// (answer the merge step's landing with a nil error), and both turns count
-// worked.
+// Mutation: drop the landing's error on the facts branch of the change's step,
+// and both turns count worked.
 func TestALandingThatDecidedNothingFailsTheTurn(t *testing.T) {
 	t.Parallel()
 	for name, refuse := range map[string]func(*estate){
@@ -500,10 +483,9 @@ func TestALandingThatDecidedNothingFailsTheTurn(t *testing.T) {
 }
 
 // A MERGE IS TIMED ALONE: crewlet.code.home.merge.duration observes a home's
-// merge when the merge answers, never the record of it on the change — a
-// change writer that takes an hour on the home's clock adds nothing to it —
-// and observes a preview only once its merge-tree ran: a preview its asker's
-// grant refuses is no merge, and observes nothing.
+// merge when the merge answers, so a change writer taking an hour to record it
+// adds nothing, and a preview only once its merge-tree ran, so one its asker's
+// grant refuses observes nothing.
 //
 // Mutations: observe the home's merge once its record has answered, and it
 // takes the writer's hour; observe a preview from its start, and the refused
@@ -563,19 +545,14 @@ func TestAMergeIsTimedAlone(t *testing.T) {
 	}
 }
 
-// A CONFLICT NAMES ITS PATHS: a home's merge that leaves paths conflicted
-// records each once, in git's order — a content conflict, a modification
-// against a deletion, two adds of one path, a nested path — and never a path
-// that merged cleanly beside them; a path a record cannot carry (not UTF-8) is
-// counted rather than listed; past MaxConflictPaths the rest are counted, the
-// list cut where it fills; and a history sharing no commit with its target's
-// merges from the empty tree, every path both sides add differently a
-// conflict and every other path merged.
+// A CONFLICT NAMES ITS PATHS: a home's merge records each conflicted path once,
+// in git's order (content, modify/delete, add/add, nested), never a clean one
+// beside them; a path a record cannot carry (not UTF-8) is counted, not
+// listed; past MaxConflictPaths the rest are counted; and an unrelated history
+// merges from the empty tree, every path both sides add differently a conflict.
 //
-// Mutations: list every record merge-tree writes rather than the paths alone
-// (drop --name-only), and each conflict's stages arrive as paths; refuse an
-// unrelated history (drop --allow-unrelated-histories), and its merge fails
-// every pass rather than record what its facts measure.
+// Mutations: drop --name-only, and each conflict's stages arrive as paths;
+// drop --allow-unrelated-histories, and the unrelated merge fails every pass.
 func TestAConflictNamesItsPaths(t *testing.T) {
 	t.Parallel()
 	h := newGitHome(t, gitlettest.Settings())
@@ -662,22 +639,18 @@ func (c *clock) advance(d time.Duration) {
 	c.now = c.now.Add(d)
 }
 
-// A TARGET MOVE RECHECKS WITHIN ITS BUDGET: the changes a moved target asks
-// merged again are merged the oldest first, and no more of them between two
-// of the home's paced passes than a repository's budget — whichever turns, a
-// pass's or a nudge's, run them — each listing asking only what is left of the
-// budget, and asked at the home's clock less its refresh; a new head
-// revision's merge takes none of the budget, merged at once while the budget
-// is spent; a pass a watch's gap asks early renews nothing; and the next paced
-// pass merges the recheck the last one had no room for, however soon after
-// the last one's its turn runs on the clock.
+// A TARGET MOVE RECHECKS WITHIN ITS BUDGET: a moved target's rechecks merge
+// oldest first, no more between two paced passes than the repository's budget
+// whichever turns run them, each listing asking what is left of it at the
+// home's clock less its refresh; a new revision's merge takes no budget; a
+// pass a watch's gap asks early renews nothing; and the next paced pass merges
+// the leftover however soon its turn runs on the clock.
 //
-// Mutations: spend nothing on a recheck, and the third is merged in the first
-// pass; count a new revision's merge against the budget, and it waits for the
-// next pass; ask the listing for the whole budget every turn, and the nudged
-// turn merges past it; renew the share on a gap's pass, and the gap's turn
-// merges the leftover; renew it on no tick, and the next paced pass merges
-// nothing.
+// Mutations: spend nothing on a recheck → the third merges in the first pass;
+// count a new revision's merge against the budget → it waits; ask the whole
+// budget every turn → the nudged turn merges past it; renew on a gap's pass →
+// the gap's turn merges the leftover; renew on no tick → the next paced pass
+// merges nothing.
 func TestATargetMoveRechecksWithinItsBudget(t *testing.T) {
 	t.Parallel()
 	h := newGitHome(t, gitlettest.Settings())
@@ -754,8 +727,7 @@ func TestATargetMoveRechecksWithinItsBudget(t *testing.T) {
 			"no share", last.Rechecks, len(h.e.merged()))
 	}
 
-	// THE NEXT PACED PASS merges the recheck the first had no room for —
-	// whenever its turn comes on the clock, here a backstop less a
+	// THE NEXT PACED PASS merges the leftover recheck, here a backstop less a
 	// millisecond after the first's.
 	c.advance(home.Backstop - time.Millisecond)
 	ticks <- c.Now()
@@ -808,16 +780,14 @@ var (
 	alice  = gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: gitlettest.FixtureAlice}
 )
 
-// A MERGE PREVIEW IS THE SAME MERGE: what a comparison's preview of merging a
-// head into a tip answers — its state, the conflicted paths it holds and how
-// many more there were — is what the repository's home records of the same
-// two commits as a change's mergeability, for a clean merge, a conflict, a
-// conflict past MaxConflictPaths and a history sharing no commit with its
-// target's alike.
+// A MERGE PREVIEW IS THE SAME MERGE: a preview's state, conflicted paths and
+// omitted count are what the home records of the same two commits as a
+// change's mergeability: clean, in conflict, past MaxConflictPaths, and an
+// unrelated history alike.
 //
-// Mutation: give the preview a merge of its own that refuses an unrelated
-// history (no --allow-unrelated-histories), and the preview of a history of
-// its own fails where its change records a conflict.
+// Mutation: give the preview its own merge without
+// --allow-unrelated-histories, and the unrelated preview fails where its
+// change records a conflict.
 func TestAMergePreviewIsTheSameMerge(t *testing.T) {
 	t.Parallel()
 	h := newGitHome(t, gitlettest.Settings())
@@ -885,13 +855,12 @@ func TestAMergePreviewIsTheSameMerge(t *testing.T) {
 }
 
 // A MERGE PREVIEW IS ANSWERED AS A READ BY OBJECT ID IS: a seat's preview is
-// refused about the node where it holds no chart or is behind the company's
-// configuration; a node holding no copy answers a preview not its walk's
-// home's not_held, having started nothing; a seat outside the repository's
-// unit is not permitted; a commit the copy lacks is not found, an id of a tree
-// is no commit to merge; a preview of a `visibility: unit` repository is its
-// asker's read, recorded as a merge preview's; and stopped previews answer
-// unready about the node.
+// unready on a node with no chart or behind the configuration; a node with no
+// copy answers a preview not its walk's home's not_held, starting nothing; a
+// seat outside the repository's unit is not permitted; a commit the copy lacks
+// is not found, and a tree's id is invalid; a preview of a `visibility: unit`
+// repository is recorded as its asker's merge preview read; and stopped
+// previews answer unready about the node.
 //
 // Mutations: judge no seat's grant, and the outsider is answered; record no
 // preview, and the unit repository's read is missing; answer previews after
@@ -991,12 +960,11 @@ func TestAMergePreviewIsAnsweredAsAReadByObjectIDIs(t *testing.T) {
 	}
 }
 
-// A REPEATED MERGE PREVIEW RUNS NO GIT: the second preview of the same two
-// commits — by another principal, its grant judged as the first's was — is
-// answered from the node's memo with no git process at all, the same state
-// and conflicted paths as the first, and is still recorded as its asker's
-// read of the `visibility: unit` repository; a preview of two other commits
-// merges as any first does.
+// A REPEATED MERGE PREVIEW RUNS NO GIT: a second preview of the same two
+// commits, by another principal whose grant is still judged, is answered from
+// the node's memo with no git process, as the first was, and still recorded as
+// its asker's read of the `visibility: unit` repository; two other commits
+// merge afresh.
 //
 // Mutations: memoize nothing, and the second preview runs git; answer a hit
 // before judging the grant, and the outsider is answered.
@@ -1078,18 +1046,15 @@ func (g *countedGit) count() int {
 }
 
 // BenchmarkMergeability is one home's merge of a change into its moved target
-// over a copy of the repository on its Gitlet node — the step a change's
-// mergeability is recorded by, and what a moved target's rechecks cost a home
-// one each: the copy synced and pinned, a scratch beside it, the ancestry
-// asked, the merge, the scratch removed. Each arm merges a change touching
-// `touched` files into a target whose tip moved by `touched` files, over a
-// tree of `files` files in directories of a hundred, each of the target's
-// files beside one of the change's in its directory — so the merge descends
-// into every directory either side touched, where one side's directories
-// apart from the other's would be taken whole — or, `conflicting`, the same
-// files both ways, each a content merge that conflicts: the figures
-// MergeabilityDeadline and MergeabilityPerPass are read against (a merge well
-// inside the deadline; a pass's PerPass merges inside one core of a minute).
+// (copy synced and pinned, scratch, ancestry, merge, scratch removed): what a
+// mergeability record and each recheck cost. Each arm merges `touched` files
+// against a tip moved by `touched` files, in a tree of `files` files in
+// directories of a hundred, each target file beside a change file so the merge
+// descends into every touched directory (apart, they would be taken whole), or
+// with `conflicting` the same files both ways, each a content conflict. It is
+// the figure MergeabilityDeadline and MergeabilityPerPass are read against: a
+// merge well inside the deadline, a pass's PerPass merges inside one core of
+// a minute.
 func BenchmarkMergeability(b *testing.B) {
 	for _, arm := range []struct {
 		files, touched int
@@ -1103,9 +1068,8 @@ func BenchmarkMergeability(b *testing.B) {
 				tree[fmt.Sprintf("d%03d/f%03d.go", i/100, i%100)] = fmt.Sprintf("package d\n\n// file %d\n", i)
 			}
 			base := h.commit(tree, "base")
-			// EVERY stride-th FILE the change's, the target's the file beside
-			// each in its directory — or the change's own files, where the arm
-			// conflicts.
+			// Every stride-th file is the change's; the target's is the one
+			// beside it, or the same one where the arm conflicts.
 			stride := arm.files / arm.touched
 			offset := 1
 			if arm.conflicting {

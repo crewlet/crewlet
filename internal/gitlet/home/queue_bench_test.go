@@ -11,51 +11,18 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/home"
 )
 
-// BenchmarkQueueThroughput is what decides config.CodeDefaultQueueBatch
-// (M5-D13): a queue simulated round by round — a round one
-// required check's run, the unit every candidate and every bisect probe
-// costs — for each failure rate p (1, 5, 10 %), depth D (1, 4, 8) and batch
-// B (1, 2, 4, 8), under SATURATING arrivals: D changes a round, the most a
-// queue of depth D lands with every candidate green and one change each, so
-// its trains always run full. Each round the worker's own [home.BatchOf]
-// cuts the train: up to D candidates of min(B, ⌈W/D⌉) waiting changes; the
-// longest green prefix lands; the first red candidate — first once the
-// prefix before it landed, as the worker's later candidates stand on it — is
-// bisected, a probe a round, in ⌈log₂ n⌉ rounds while the queue lands
-// nothing, and its culprit ejected, the rest waiting again at the front.
-//
-// It reports, per cell: `p99-rounds`, a landed change's p99 TIME TO LAND —
-// rounds from the train that first tested it to the round that landed it,
-// which is what a batch costs the changes beside a broken one; `p99-wait`,
-// the p99 from its arrival, which grows with the run wherever the queue
-// lands fewer than D a round — the backlog no batch rule can bound, only a
-// higher rate of landing; and `checks/landed`, the check runs (candidates and
-// probes) a landed change costs.
-//
-// DefaultQueueBatch is the B whose changes land soonest FROM ARRIVAL — the
-// lowest `p99-wait` — at p = 5 % and the default depth, the larger of a tie
-// (it costs fewer checks); TestTheDefaultQueueBatchLandsSoonestFromArrival
-// reads the same simulation. The design's rule, the largest B whose p99
-// from first test is at most 3 rounds, picks the same B = 2 today (2, 3, 7
-// and 9 rounds at B = 1, 2, 4 and 8), but it would keep B = 1 wherever a
-// batch of two missed it, and B = 1 is the one batch whose backlog grows
-// without bound under saturation (148 rounds from arrival at p99 over 2 000
-// rounds, against 5 at B = 2) — the time a person waits for a change, from
-// the moment it was queued, is what a batch is there to bound, so that is
-// the rule the test holds. Bounded: -benchtime 1x runs each cell's 2 000
-// rounds once, a fixed seed a run.
-//
-// THE WORKER CANCELS A GIVEN-UP TRAIN'S CHECKS (queue.go's cancelAbandoned),
-// and the model holds it as it stands: a run lasts one round, and a train is
-// given up only between rounds — its culprit ejected after its bisect, its
-// target moved by a landing, a new train recorded — when every run it queued
-// has ended, so a cancellation ends no run the model charges and
-// `checks/landed` is what the worker spends with every cell it asks for free.
-// What cancelling saves is CELL TIME UNDER CONTENTION — a Gitlet node's
-// `gitlet.max_checks` containers, the company's e2b box time — that a dead
-// train's runs would hold ahead of the live train's and its probes', which
-// claim oldest first: a model of unbounded cells prices none of it, so the
-// cancellation moves no figure here and no default.
+// BenchmarkQueueThroughput decides config.CodeDefaultQueueBatch (M5-D13): a
+// queue simulated round by round (a round is one required check's run, the
+// cost of each candidate and bisect probe) for each failure rate p, depth D
+// and batch B under SATURATING arrivals, D changes a round, so trains always
+// run full. [home.BatchOf] cuts each train, the longest green prefix lands,
+// and the first red candidate is bisected a probe a round, landing nothing,
+// its culprit then ejected. Per cell: `p99-rounds`, from first test to
+// landing (what a batch costs the changes beside a broken one); `p99-wait`,
+// from arrival, growing wherever the queue lands fewer than D a round; and
+// `checks/landed`, check runs per landed change. The default's rule is
+// TestTheDefaultQueueBatchLandsSoonestFromArrival's. -benchtime 1x runs each
+// cell's 2 000 rounds once, a fixed seed a run.
 func BenchmarkQueueThroughput(b *testing.B) {
 	for _, pct := range []int{1, 5, 10} {
 		for _, depth := range []int{1, 4, 8} {
@@ -88,7 +55,12 @@ type simChange struct {
 }
 
 // simulateQueue runs rounds rounds of a queue at failure rate p, depth and
-// batch, seeded by seed, and answers its figures.
+// batch, seeded by seed, and answers its figures. It charges nothing for the
+// worker cancelling a given-up train's checks (queue.go's cancelAbandoned): a
+// run lasts one round and a train is given up only between rounds, so a
+// cancellation ends no run the model charges. What cancelling saves is cell
+// time under contention (`gitlet.max_checks` containers, e2b box time), which
+// a model of unbounded cells cannot price, so it moves no figure or default.
 func simulateQueue(seed uint64, p float64, depth, batch, rounds int) queueRun {
 	rng := rand.New(rand.NewPCG(seed, 0x51ab))
 	var (
@@ -132,11 +104,11 @@ func simulateQueue(seed uint64, p float64, depth, batch, rounds int) queueRun {
 		if red < 0 {
 			continue
 		}
-		// THE RED CANDIDATE, first once its green prefix landed — the
-		// worker's candidates after a landing stand, each built onto the one
-		// before, so it is bisected next and never tested again:
-		// ⌈log₂ n⌉ probes, a round each, while changes keep arriving, then
-		// its first bad change ejected and the rest waiting at the front.
+		// THE RED CANDIDATE, first once its green prefix landed (the worker's
+		// later candidates stand, each built onto the one before), is
+		// bisected next, never tested again: ⌈log₂ n⌉ probes, a round each
+		// while changes keep arriving, then its first bad change ejected and
+		// the rest waiting at the front.
 		size := min(n, take-upto)
 		for range bits.Len(uint(size - 1)) {
 			checks++
@@ -156,13 +128,16 @@ func simulateQueue(seed uint64, p float64, depth, batch, rounds int) queueRun {
 }
 
 // TestTheDefaultQueueBatchLandsSoonestFromArrival holds
-// config.CodeDefaultQueueBatch to BenchmarkQueueThroughput's rule: of the
-// batches the benchmark measures, the one whose changes land soonest from
-// their arrival at p99, at a 5 % failure rate and the default depth under
-// saturating arrivals, the larger of a tie — read off the same simulation
-// through the worker's own [home.BatchOf], so a change to the worker's
-// batching that moves the answer fails here before the constant is left
-// wrong.
+// config.CodeDefaultQueueBatch to the batch whose changes land soonest FROM
+// ARRIVAL at p99, at a 5 % failure rate and the default depth, the larger of
+// a tie (fewer checks), off BenchmarkQueueThroughput's simulation through the
+// worker's own [home.BatchOf], so a batching change that moves the answer
+// fails here. Not the design's rule (the largest B whose p99 from first test
+// is at most 3 rounds): it would keep B = 1 wherever a batch of two missed
+// it, and B = 1 is the one batch whose backlog grows without bound under
+// saturation (148 rounds from arrival at p99, against 5 at B = 2). A person
+// waits from the moment a change was queued, and that is what a batch is
+// there to bound.
 func TestTheDefaultQueueBatchLandsSoonestFromArrival(t *testing.T) {
 	t.Parallel()
 	best, bestWait := 0, 0.0

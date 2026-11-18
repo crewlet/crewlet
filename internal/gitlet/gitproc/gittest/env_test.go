@@ -9,14 +9,11 @@ import (
 )
 
 // A CLIENT READS NOTHING OF THE MACHINE: its environment is exactly its own
-// table, whatever the test's holds, and every file git would otherwise read
-// from the host — the system configuration, the system ATTRIBUTES — is off,
-// and the global ones are the client's. The attributes are the half that is
+// table, whatever the test's holds; the system configuration and system
+// ATTRIBUTES are off, and the global ones are the client's. The attributes are
 // easy to miss: GIT_CONFIG_NOSYSTEM does not reach them, and a host's
-// /etc/gitattributes decides what a commit stores (working-tree-encoding,
-// text and eol), what a merge does (merge=union) and what check-attr answers,
-// so a fixture built under one is other bytes than the same fixture
-// elsewhere.
+// /etc/gitattributes changes what a commit stores (working-tree-encoding,
+// text, eol), what a merge does and what check-attr answers.
 func TestAClientReadsNothingOfTheMachine(t *testing.T) {
 	for name, value := range map[string]string{
 		"GIT_DIR":           "/nonexistent",
@@ -49,10 +46,9 @@ func TestAClientReadsNothingOfTheMachine(t *testing.T) {
 		t.Errorf("the client's environment is\n  %v\nwant exactly\n  %v", env, want)
 	}
 
-	// And git agrees, where it can say so: `git var GIT_ATTR_SYSTEM` names
-	// the system attributes file only while it is read (git 2.42 and newer;
-	// an older git knows no such variable and names nothing either way, and
-	// the table above is what holds the line there).
+	// And git agrees where it can say so: `git var GIT_ATTR_SYSTEM` names the
+	// system attributes file only while it is read (git 2.42+; an older git
+	// names nothing either way, and the table above holds the line there).
 	if out, _, err := c.Try(t, "", nil, "var", "GIT_ATTR_SYSTEM"); err == nil {
 		t.Errorf("the client's git reads the system attributes file %s", strings.TrimSpace(out))
 	}

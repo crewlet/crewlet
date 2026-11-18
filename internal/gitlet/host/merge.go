@@ -19,88 +19,22 @@ import (
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// A CHANGE'S MERGE IS BUILT HERE AND LANDS AS ONE MERGE RECORD (ADR-0096,
-// M5-D11): a merge_change (gitlet.WriteMergeChange) is an engine write — the
-// same admission, the same sync to its caller's floor, the same scratch named
-// by its push id, the same one budget of git run time, the same self-contained
-// pack checked by `index-pack --strict`, the same deadline rule and the same
-// landing every push takes (land.go) — whose proposal is a MERGE RECORD
-// (gitlet.MergeProposal) rather than a push: the record that marks the change
-// merged is the record that moves its target, decided by the repository's
-// committer from one snapshot against the change's merge gate.
-//
-// # Judged before anything is built
-//
-// The copy is synced to the caller's floor and the change read at it (the
-// `change` read, as the caller who asks it): a change that is not there, not
-// live, a draft, into another branch or at another head than the caller read
-// is refused before anything is built, and so — for a merge its gate holds —
-// is one whose readiness, judged with its asker as the merger, names a
-// precondition unmet besides the merge its build proves (gate_unmet, every one
-// named), a seat's override (not_person), and a seat's merge — or enqueue —
-// that whoever its turn works for may not make (not_permitted,
-// [writing.mergeCeiling]). Every such refusal is judged
-// again at the log's head before it is answered, as every write's is, and a
-// change found merged is first looked up as this write's own merge (its push
-// id names the merge's push row): found, it is answered from that row, nothing
-// built. A target whose merge gate requires a check (gitlet.GateRules.
-// QueueTarget, read from the repository's gates only where a rule protects the
-// target) takes the change through its QUEUE: the write builds nothing and asks
-// the committer to enqueue it (gitlet.QueueProposal), its gate the enqueue's
-// decide — unless a person overrides the gate, which merges directly.
-//
-// # Built onto the tip the copy holds
-//
-// A fast_forward builds nothing: the target's tip must be an ancestor of the
-// head (`merge-base --is-ancestor`), or it is refused not_fast_forward. A merge
-// or a squash runs ONE `merge-tree --write-tree -z --allow-unrelated-histories`
-// of the tip and the head — the merge a change's mergeability is recorded by,
-// so the two say one thing — under gitlet.MergeBuildDeadline: a conflict is
-// answered with its paths, nothing stored, and a head the tip already holds is
-// nothing_to_change. Then ONE `commit-tree`: a merge commit of the tip and the
-// head, authored by WHO MERGED (U43 a: the person, or the seat); one squashed
-// commit on the tip, authored by the CHANGE'S OWNER with a `Co-authored-by:`
-// trailer for each of its other authors (U43 a); each committed by the engine
-// at U18 c's dates — the author's the operation's instant, the committer's that
-// or the later parent's (commitDates) — so a retry builds the same commit.
-//
-// # Recomputed onto a moving target
-//
-// The committer's decide holds the target to the tip the merge was built onto,
-// read from its own snapshot; a target that moved since is refused
-// target_moved, and the merge is built again onto the tip a linearizable sync
-// finds — at most gitlet.MergeRecomputes times, after which it is answered
-// target_moving: a branch moving faster than its merges are built is its
-// queue's to land, or a quieter moment's. A merge refused expunging — built
-// from a copy at another drop epoch than the repository's, an expunge having
-// begun since (M6-D4) — is built again the same way, from a copy a
-// linearizable sync brings past the begin, and answered expunging where
-// every rebuild meets it: a begin is rare and its sync quick, so one rebuild
-// almost always lands it.
-//
-// EVERY ROUND DRAWS ON ONE BUDGET, AND FITS ONE ATTEMPT. The merge's git is
-// gitlet.MergeBuildDeadline across its first build and every rebuild together,
-// never that much a round: the router sizes the write's attempt on a Gitlet node
-// for ONE build of it (internal/estate's Timing.GitWriteAttemptFor), so five
-// rounds of thirty seconds each would run past the attempt on exactly the
-// busy target rebuilds exist for — answered unready during a build, which
-// sends the walk's runner-up Gitlet node to start the whole merge again, or busy
-// at the landing, either after builds and stored bundles nobody proposes. So
-// a rebuild is started only where it fits — the round before it as the
-// measure of it, since it merges the same change onto a tip moved by a push
-// or two: what is left of the budget must hold the git that round ran, and
-// what is left of the attempt the waits the attempt holds for one write (the
-// share's, and three reads' at a read's budget each), that git, and the
-// upload and proposal that round's landing was held to (the deadline rule's)
-// — and a merge with no room for one is answered target_moving with its
-// rebuilds so far, as is a rebuild whose git runs out the budget the rounds
-// before it left: the change is no larger than its first build proved it,
-// its target moved under it.
+// A CHANGE'S MERGE is an engine write landing as ONE MERGE RECORD
+// (gitlet.MergeProposal; ADR-0096, M5-D11; package doc, "An engine write is
+// built beside the copy and lands as a push"). Every refusal is judged before
+// anything is built (mergeVerdict), and again at the log's head; a target whose
+// gate requires a check takes an enqueue instead (enqueue), unless a person
+// overrides the gate. Its one merge-tree is the one the change's mergeability
+// is recorded by, so the two agree. A record refused target_moved or expunging
+// (M6-D4) is rebuilt from a linearizable sync at most gitlet.MergeRecomputes
+// times, every round drawing on ONE gitlet.MergeBuildDeadline: the router sizes
+// the write's attempt for one build (internal/estate's
+// Timing.GitWriteAttemptFor), so a budget per round would overrun it on exactly
+// the busy target rebuilds exist for (roomToRebuild).
 
-// mergeCarrying is p as its landing proposes it: carrying pack — the bundle
-// its landing stored, nil for a merge that stores none — as its record names
-// it, and the drop epoch of the copy it was built from (gitlet.MergeProposal.
-// DropEpoch), the landing's pinned one, as a push's proposal carries it.
+// mergeCarrying is p as its landing proposes it: with pack, the bundle the
+// landing stored (nil where it stored none), and epoch, the drop epoch of the
+// copy it was built from (gitlet.MergeProposal.DropEpoch), as a push's carries.
 func mergeCarrying(p gitlet.MergeProposal, pack *gitlet.PackRef, epoch int64) gitlet.MergeProposal {
 	p.Merge.Pack = pack
 	p.DropEpoch = epoch
@@ -135,8 +69,8 @@ func (wr *writing) runMerge(ctx context.Context) (gitlet.EngineWriteResult, erro
 	return res, err
 }
 
-// The outcomes crewlet.code.merge.recomputes records a merge under beside a
-// refusal's own code, which is its outcome where it was refused.
+// The outcomes crewlet.code.merge.recomputes records beside a refusal's own
+// code.
 const (
 	// mergeMerged is a merge whose record applied or is pending — or one
 	// found already landed.
@@ -145,20 +79,14 @@ const (
 	mergeQueued = "queued"
 )
 
-// recordRecomputes observes how many times one merge_change was built again
-// onto a target that moved under it (gitlet.MergeAnswer.Recomputes) on
-// crewlet.code.merge.recomputes, by how it ended: merged, queued, a refusal's
-// own code — target_moving where gitlet.MergeRecomputes rebuilds, or the merge's
-// one budget, ran out — unknown, unready (another Gitlet node is asked, and
-// records its own), refused (an argument the build found invalid, or an
-// object it named missing) or failed. ONCE A MERGE, from the count its answer
-// carries, so the distribution is merges rather than rounds: a branch moving
-// under its merges is the mean a merge took (the sum over the count, exact
-// where the count boundaries put 0 and 1 in one bucket) climbing towards
-// gitlet.MergeRecomputes, which target_moving at the cap names, where
-// crewlet.code.merge.outcomes' committer counts only target_moved records and
-// cannot tell four rebuilds that landed from four merges that each rebuilt
-// once.
+// recordRecomputes observes on crewlet.code.merge.recomputes how many times
+// one merge_change was rebuilt (gitlet.MergeAnswer.Recomputes), by how it ended
+// (mergeOutcome; an unready one is recorded again by the Gitlet node asked
+// next). ONCE A MERGE, not a round: a branch moving under its merges shows as
+// the mean (sum over count, exact though the buckets lump 0 and 1) climbing
+// towards gitlet.MergeRecomputes, which crewlet.code.merge.outcomes' count of
+// target_moved records cannot show: four rebuilds that landed look there like
+// four merges that each rebuilt once.
 func (wr *writing) recordRecomputes(res gitlet.EngineWriteResult, err error) {
 	if wr.s.o.Metrics == nil {
 		return
@@ -192,17 +120,14 @@ func mergeOutcome(res gitlet.EngineWriteResult, err error) string {
 }
 
 // mergeRounds is a merge_change's steps from its sync on: judged, built,
-// landed — and built again onto a target that moved under it, or from a copy
-// an expunge's begin overtook, at most gitlet.MergeRecomputes times, every
-// round drawing on the merge's ONE budget of git and started only where it
-// fits what is left of that budget and of the write's attempt
-// (roomToRebuild).
+// landed, and rebuilt onto a moved target or past an expunge's begin at most
+// gitlet.MergeRecomputes times, each rebuild only where roomToRebuild finds
+// room.
 func (wr *writing) mergeRounds(ctx context.Context) (gitlet.EngineWriteResult, error) {
 	s := wr.s
 	fresh := wr.fresh()
-	// ONE BUDGET FOR EVERY ROUND (gitlet.MergeBuildDeadline): charged by each
-	// round's git and never given afresh, so the merge's git is the one
-	// build its attempt was sized for.
+	// ONE BUDGET FOR EVERY ROUND, never given afresh: the attempt was sized for
+	// one build (this file's head).
 	wr.left = s.buildBudget(wr.w.Kind)
 	var again *gitlet.MergeAnswer
 	for recomputes := 0; ; recomputes++ {
@@ -260,16 +185,14 @@ func (wr *writing) notRebuilt(last *gitlet.MergeAnswer, builds int, why string) 
 			"is built onto it — merge again once it is quieter", wr.w.Ref, builds, stopped)}}
 }
 
-// roomToRebuild is why the merge cannot be built again — "" where it can —
-// judged with the round just landed, whose git ran lastGit, as the measure of
-// the next: what is left of the merge's budget of git must hold lastGit, and
-// what is left of the write's attempt the waits an engine write's attempt
-// holds beside its build (internal/estate's GitWriteAttempt: the share's
-// gitlet.GitShareWait, and three at a read's budget each — the sync, the read
-// of a moved head as the write's own push, the sync at the log's head a
-// refusal is judged at — each this host's syncWait), the build's lastGit,
-// and the upload and proposal the last landing was held to (writing.landNeed,
-// the deadline rule's). A caller with no deadline holds any.
+// roomToRebuild is why the merge cannot be built again ("" where it can),
+// taking the last round's git, lastGit, as the measure of the next (it merges
+// the same change onto a tip a push or two moved): the budget left must hold
+// lastGit, and the attempt left must hold lastGit, the waits internal/estate's
+// GitWriteAttempt sizes beside a build (gitlet.GitShareWait and three syncWaits:
+// the sync, the read of a moved head as the write's own push, the re-sync a
+// refusal is judged at) and the last landing's upload and proposal
+// (writing.landNeed). A caller with no deadline holds any.
 func (wr *writing) roomToRebuild(ctx context.Context, lastGit time.Duration) string {
 	s := wr.s
 	if wr.left < lastGit {
@@ -338,14 +261,10 @@ func (wr *writing) judgeMerge(ctx context.Context, fresh statelog.Freshness) (me
 }
 
 // mergeStatusRefusal is the refusal a repository's row gives a merge and each
-// of a queue's steps toward one — the push refusal its status reads
-// ([Server.statusRefusal]) as the merge's code: repo_deleted, repo_archived,
-// repo_importing or repo_mirrored, in the domain's one sentence for the state
-// — or "" for a repository that takes one. THE ONE MAPPING the merge's verdict
-// and a queue's chain ([Server.BuildChain]) both read BEFORE they build: the
-// decide refuses each from the same row, but only once a scratch, a share unit
-// of the seat git-work and a stored pack were spent on a merge it could never
-// take.
+// queue step toward one ([Server.statusRefusal]'s, as a merge code), or "" for
+// a repository that takes one. The merge's verdict and a queue's chain
+// ([Server.BuildChain]) both read it BEFORE building: the decide refuses the
+// same row, but only after a scratch, a share unit and a stored pack are spent.
 func (s *Server) mergeStatusRefusal(repo gitlet.RepoRef) (gitlet.MergeRefusal, string) {
 	switch reason, words := s.statusRefusal(repo); reason {
 	case gitlet.RefusalRepoDeleted:
@@ -360,14 +279,12 @@ func (s *Server) mergeStatusRefusal(repo gitlet.RepoRef) (gitlet.MergeRefusal, s
 	return "", ""
 }
 
-// mergeVerdict judges the merge on the synced copy, in the order its record's
-// decide reads its rules: the repository's status, the change as the caller
-// read it, a seat's override, the target's tip, and — for a merge its gate
-// holds — whether its target is a queue's and whether its readiness, with its
-// asker as the merger, is met but for the merge its build proves. The change
-// is read as its DETAIL ALONE (gitlet.ReadQuery.DetailOnly): a merge reads no
-// revision, and this read is made again at the log's head before a refusal
-// and on every rebuild, each a page of revisions' facts shipped for nothing.
+// mergeVerdict judges the merge on the synced copy in the order its record's
+// decide reads its rules: status, the change as the caller read it, a seat's
+// override, the target's tip, then for a gated merge the queue and readiness
+// (its asker the merger; all but the merge its build proves). The change is
+// read DETAIL ONLY (gitlet.ReadQuery.DetailOnly): a merge needs no revision, and
+// this read repeats at the log's head and on every rebuild.
 func (wr *writing) mergeVerdict(ctx context.Context, gone bool) (mergeJudgement, mergeVerdict, error) {
 	s, w := wr.s, wr.w
 	repo := wr.synced.Repo
@@ -462,27 +379,18 @@ func (wr *writing) mergeVerdict(ctx context.Context, gone bool) (mergeJudgement,
 	return j, mergeVerdict{}, nil
 }
 
-// mergeCeiling is why a seat's merge may not be made for whoever its turn
-// works for (gitlet.EngineWrite.Ceiling, M3-decisions U40 (a)), as a refusal,
-// or none where it may — judged here, from this node's chart and the synced
-// row, as every engine write's ceiling is (write.go's rules), and before the
-// merge is built or enqueued, since an enqueue is the gate (M5-D8) and its
-// landing lands it as its enqueuer:
-//
-//   - THE SEAT'S OWN WORK — a target under its own namespace, or any target
-//     of a repository its seat owns (gitlet.Grant.OwnWork) — is steered by
-//     whoever woke the turn, nobody included, as every write's is;
+// mergeCeiling is the refusal, if any, of a seat's merge made for whoever its
+// turn works for (gitlet.EngineWrite.Ceiling, M3-decisions U40 (a)), judged as
+// every engine write's ceiling is (write.go) and before building or enqueuing,
+// since an enqueue is the gate (M5-D8) and lands as its enqueuer:
+//   - the seat's own work (gitlet.Grant.OwnWork) is steered by anyone, nobody
+//     included;
 //   - NOBODY (gitlet.WriteCeilingNobody) steers nothing else;
-//   - a COLLEAGUE SEAT is held to the merge authority the colleague itself
-//     holds into the target (M5-D2) — gitlet.MergeAuthority, the one rule a
-//     readiness's merge_authority term is judged by, judged here for the
-//     colleague from this node's chart, the synced row and the target's gate
-//     this merge reads anyway ([mergeGate]) — so a seat never merges for a
-//     colleague a merge the colleague could not make, and one the colleague
-//     may not read (gitlet.Grant.MayRead) is refused as one it may not merge.
-//     No read of the change is made again as the colleague: the term reads
-//     nothing of the change but its target, which the write names and the
-//     caller's own read already held to the change's.
+//   - a COLLEAGUE seat is held to the merge authority it holds into the target
+//     (M5-D2, gitlet.MergeAuthority, readiness's merge_authority rule), and one
+//     that may not read the repository (gitlet.Grant.MayRead) may not merge.
+//     The change is not read again as the colleague: the rule reads only its
+//     target, which the caller's own read held to the change's.
 func (wr *writing) mergeCeiling(ctx context.Context, gate *mergeGate, named string) (mergeVerdict, error) {
 	s, w, repo := wr.s, wr.w, wr.synced.Repo
 	roster := s.o.Roster()
@@ -517,16 +425,12 @@ func (wr *writing) mergeCeiling(ctx context.Context, gate *mergeGate, named stri
 	return mergeVerdict{}, nil
 }
 
-// deletesSource is whether this merge deletes the change's source branch: its
-// caller's word where it said one (gitlet.EngineWrite.DeleteSource), and
-// otherwise THE DEFAULT, decided here on the snapshot the merge is judged on
-// — a source in a seat's namespace is deleted unless a gate over the target
-// keeps it (gitlet.GateRules.KeepsSource, from the gate this judgement reads
-// anyway wherever a rule protects the target), and every other source is
-// kept (Q4): a seat's branch is the engine's working copy, and a person's is
-// theirs. Decided here rather than by the caller, so a merge from a seat's
-// branch costs its caller no read of the gates, and the rule a merge deletes
-// by is the one its own judgement read.
+// deletesSource is whether this merge deletes the change's source branch: the
+// caller's word (gitlet.EngineWrite.DeleteSource), else the default (Q4): a
+// source in a seat's namespace is deleted unless the target's gate keeps it
+// (gitlet.GateRules.KeepsSource), every other kept, since a seat's branch is the
+// engine's working copy and a person's is theirs. Decided here, not by the
+// caller, so the caller reads no gates and the rule is the one judged by.
 func (wr *writing) deletesSource(ctx context.Context, gate *mergeGate, source string) (bool, error) {
 	if said := wr.w.DeleteSource; said != nil {
 		return *said, nil
@@ -548,13 +452,10 @@ func deletedSource(cmds []gitlet.Command) bool {
 	return len(cmds) > 1 && cmds[1].New == gitlet.ZeroOID
 }
 
-// mergeGate is the gate one judgement of a merge holds its target to — every
-// rule of the repository matching it, with its merge gate, combined with
-// code.merge_by_floor on this node's epoch (gitlet.GateRulesOf) — read at most
-// once a judgement, and only where something asks it: whether the target is a
-// queue's, the merge authority of the colleague a seat's merge is made for,
-// and whether a merge from a seat's branch deletes it by default. Read where the judgement's floor holds the synced copy, so each
-// question is asked of the snapshot the merge is judged on.
+// mergeGate is the gate one judgement holds its target to (gitlet.GateRulesOf:
+// the repository's matching rules with code.merge_by_floor on this node's
+// epoch), read at most once a judgement and only when asked, at the
+// judgement's floor so every answer is of the snapshot the merge is judged on.
 type mergeGate struct {
 	wr    *writing
 	floor statelog.Freshness
@@ -604,11 +505,9 @@ func (m *mergeGate) rules(ctx context.Context) (gitlet.GateRules, error) {
 	return gate, nil
 }
 
-// enqueue puts the change in its target's queue, at the head its caller read —
-// the enqueue's decide its gate — and answers what became of it. The
-// enqueue's asker names no run: an entry is its enqueuer's, never a turn's.
-// It is made for whom the write was (gitlet.EngineWrite.WrittenFor), handed on
-// as the write stated it.
+// enqueue puts the change in its target's queue at the head its caller read,
+// the enqueue's decide its gate. Its asker names no run (an entry is its
+// enqueuer's, never a turn's); it is made for gitlet.EngineWrite.WrittenFor.
 func (wr *writing) enqueue(ctx context.Context, j mergeJudgement) (gitlet.EngineWriteResult, error) {
 	w := wr.w
 	asker := w.Principal
@@ -713,10 +612,8 @@ func (wr *writing) buildAndLandMerge(ctx context.Context, j mergeJudgement) (res
 }
 
 // buildMergeShared is a merge's build under one unit of the node's seat
-// git-work share and what is left of its budget of git run time
-// (gitlet.MergeBuildDeadline, every round's together: mergeRounds gives it once):
-// a fast-forward's ancestry, or a merge's or a squash's merge, commit and
-// pack. Past gitlet.GitShareWait the share is unready, about this node; a build
+// git-work share and what is left of the merge's budget (mergeRounds gives it
+// once). Past gitlet.GitShareWait the share is unready, about this node; a build
 // that runs out the budget is errBuildSpent, which mergeRounds answers.
 func (wr *writing) buildMergeShared(ctx context.Context, sc *cache.Scratch, j mergeJudgement) (string,
 	gitlet.EngineWriteResult, bool, error) {
@@ -737,8 +634,8 @@ func (wr *writing) buildMergeShared(ctx context.Context, sc *cache.Scratch, j me
 	return commit, res, done, err
 }
 
-// buildMerge is the merge's build in sc, onto j.tip: see this file's head —
-// its one merge (mergeOnto), then its pack.
+// buildMerge is the merge's build in sc onto j.tip: its one merge (mergeOnto),
+// then its pack.
 func (wr *writing) buildMerge(ctx context.Context, sc *cache.Scratch, j mergeJudgement) (string,
 	gitlet.EngineWriteResult, bool, error) {
 
@@ -779,15 +676,14 @@ func (wr *writing) mergeOf(j mergeJudgement) mergeOf {
 }
 
 // mergeOnto is ONE change's merge onto m.tip in the build's scratch, every
-// process charged to what is left of the build's budget: a fast-forward's
-// ancestry, its commit the head itself; or a merge's or a squash's one
-// merge-tree and one commit-tree, U43 (a)'s identity (mergeIdentity) at
-// commitDates of m.instant over the later parent. A head the tip already
-// holds, a fast-forward the tip's history refuses, a squash that changes
-// nothing and a merge that conflicts are answered as the change's refusal
-// (done), nothing committed — though a merge that conflicts has written its
-// tree and its marked files into the scratch. It packs nothing: a
-// merge_change packs its one commit, a chain every entry's at once.
+// process charged to the build's budget: a fast-forward's ancestry, its commit
+// the head itself; or one merge-tree and one commit-tree (mergeIdentity, at
+// commitDates of m.instant over the later parent, so a retry builds the same
+// commit). A head the tip holds, a fast-forward the tip's history refuses, a
+// squash that changes nothing and a conflict are the change's refusal (done),
+// nothing committed, though a conflict has written its tree and marked files
+// into the scratch. It packs nothing: a merge_change packs its one commit, a
+// chain every entry's at once.
 func (b *building) mergeOnto(ctx context.Context, m mergeOf) (string, gitlet.EngineWriteResult, bool, error) {
 	wr := b.wr
 	named := gitlet.ChangeRef(wr.repoName(), m.change.Number)
@@ -854,13 +750,12 @@ func (b *building) mergeOnto(ctx context.Context, m mergeOf) (string, gitlet.Eng
 }
 
 // mergeIdentity is a merge's commit's identity and message (U43 a): a merge
-// commit authored by WHO MERGED it — the write's principal, or the enqueuer
-// of a chain's entry — and titled by the change; a squash authored by the
-// CHANGE'S OWNER, its message the change's title and description and a
-// `Co-authored-by:` trailer for every other author of it, in the order they
-// first wrote it. Committed by the engine either way. A signer that names a
-// part git would not write as given is the signer's bug, told before the
-// commit.
+// commit authored by WHO MERGED it (the write's principal, or a chain entry's
+// enqueuer) and titled by the change; a squash by the CHANGE'S OWNER, its
+// message the change's title and description and a `Co-authored-by:` trailer
+// for each other author in the order they first wrote it; committed by the
+// engine either way. A signer part git would not write as given is the
+// signer's bug, refused before the commit.
 func (wr *writing) mergeIdentity(m mergeOf) (*gitproc.Identity, string, error) {
 	s, c := wr.s, m.change
 	sig, err := s.o.Signer.Sign(m.merger)

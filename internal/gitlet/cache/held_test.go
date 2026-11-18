@@ -13,11 +13,8 @@ import (
 )
 
 // A FAILURE ITS REQUEST REPAIRS IS THAT REQUEST'S (report.go, HELD FOR THE
-// REQUEST): what a run reports that the copy's scrub would answer is held for
-// the reader whose run it was while that reader may still repair it — consumed
-// by the repair it asks, or handed to the ordinary rules as it lets the copy
-// go — so the scrub a report makes due never runs beside the repair a request
-// is already making of the same damage.
+// REQUEST): a run's report is held for its reader while that reader may still
+// repair it, so a report's scrub never runs beside the request's own repair.
 
 // scrubIdle fails t when repoID's copy has a scrub due or running, or has run
 // one: what a report held for its request leaves it.
@@ -32,21 +29,17 @@ func scrubIdle(t *testing.T, c *cache.Cache, repoID, when string) {
 	}
 }
 
-// A REPORT ITS REQUEST REPAIRS IS THAT REQUEST'S. A process the host runs over
-// a copy for a request that repairs what the process fails with names the
-// request's reader on its Cmd (Synced.Repairer), and what it reports — here a
-// pack index truncated (B), which the read fails on naming the pack — is HELD
-// for that request rather than making the copy's scrub due beside the repair:
-// nothing is due while the request decides; the repair it asks (its forced
-// round finds the index at another size and fetches that one pack again)
-// consumes the report, counted reports{part=pack,outcome=request}; and its
-// release hands nothing on. No scrub reads the copy at all — neither the
-// report's nor the request's — for a repair of one pack.
+// A REPORT ITS REQUEST REPAIRS IS THAT REQUEST'S. A run the host makes for a
+// request names the request's reader (Synced.Repairer), and what it reports
+// (here a truncated pack index) is HELD for that request rather than making
+// the scrub due: nothing is due while the request decides; its repair (a
+// forced round fetching that one pack again) consumes the report, counted
+// reports{part=pack,outcome=request}; its release hands nothing on; and no
+// scrub reads the copy for a repair of one pack.
 //
-// Mutations: the observer ignores Ran.Repairer — the scrub is due for the
-// report as the run ends; Rebuild consumes nothing — the request's release
-// hands the report on, counted `queued`, and the scrub is due once the request
-// is done.
+// Mutations: the observer ignores Ran.Repairer, and the scrub is due as the
+// run ends; Rebuild consumes nothing, and the release hands the report on,
+// counted `queued`, with the scrub due once the request is done.
 func TestAReportItsRequestRepairsIsThatRequests(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -85,21 +78,17 @@ func TestAReportItsRequestRepairsIsThatRequests(t *testing.T) {
 	}
 }
 
-// A REPORT ITS REQUEST DOES NOT REPAIR GOES ON WITH THE REQUEST'S PIN. What a
-// request's run reports is held only while that request may still repair it.
-// A request that fails past its first byte (no status is left to retry with),
-// whose failure the host does not repair (a crash names nothing; a hint whose
-// pack holds to its row asks nothing), or that never fails at all (git read
-// around the damage and answered) ends without asking — and its pin's release
-// hands each report held for it to the ordinary rules, as though it had just
-// arrived: the copy's scrub is due for it, counted reports{outcome=queued}.
-// Until then nothing is counted and nothing is due. A derived file's report is
-// never held: it is dropped in place by a round of its own at once, which
-// races no repair.
+// A REPORT ITS REQUEST DOES NOT REPAIR GOES ON WITH THE REQUEST'S PIN. A
+// request that fails past its first byte (no status left to retry with), whose
+// failure the host does not repair (a crash names nothing; a hint whose pack
+// holds to its row asks nothing), or that never fails (git read around the
+// damage) ends without asking, and its pin's release hands each held report
+// to the ordinary rules as though just arrived: the scrub is due, counted
+// reports{outcome=queued}, and not before. A derived file's report is never
+// held: a round of its own drops it at once, racing no repair.
 //
-// Mutations: the release hands nothing on — each arm's report is lost, no
-// scrub due and nothing counted; hold a derived report — the graph's drop is
-// counted only at the release.
+// Mutations: the release hands nothing on, and each arm's report is lost; hold
+// a derived report, and the graph's drop is counted only at the release.
 func TestAReportItsRequestDoesNotRepairGoesOnWithItsPin(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -165,17 +154,15 @@ func TestAReportItsRequestDoesNotRepairGoesOnWithItsPin(t *testing.T) {
 	})
 }
 
-// TWO REQUESTS ON ONE COPY EACH HOLD THEIR OWN REPORTS. Every reader of a copy
-// is named apart (Synced.Repairer), so what one request's run reports is held
-// for that request alone: the first request's repair consumes its own report
-// and leaves the second's held — still nothing due while the second has not
-// decided — the first's release hands on nothing, and the second's release
-// hands its report to the ordinary rules.
+// TWO REQUESTS ON ONE COPY EACH HOLD THEIR OWN REPORTS. Every reader is named
+// apart (Synced.Repairer), so the first request's repair consumes only its own
+// report, nothing is due while the second has not decided, the first's release
+// hands on nothing, and the second's hands its report on.
 //
-// Mutations: hold reports under the copy rather than its reader — the first
-// request's repair consumes the second's report too, and nothing is ever due
-// for it; the release hands on every reader's reports — the first's release
-// makes the scrub due for the second's.
+// Mutations: hold reports under the copy rather than its reader, and the
+// first's repair consumes the second's report too, nothing ever due for it;
+// hand on every reader's reports at a release, and the first's release makes
+// the scrub due for the second's.
 func TestTwoRequestsOnOneCopyEachHoldTheirOwnReports(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -216,21 +203,18 @@ func TestTwoRequestsOnOneCopyEachHoldTheirOwnReports(t *testing.T) {
 	}
 }
 
-// A REQUEST'S HELD REPORTS FOLLOW IT ACROSS AN IN-PLACE REPAIR. The host
-// repairs a request's derived damage (or a shape) in place and runs again over
-// the copy that repair hands back, releasing the pin it failed over before the
-// retry (host's repair). What that pin's run reported beside the derived damage
-// — here a crash — is no part a drop answers, so the repair neither consumes
-// it nor lets the failed pin's release hand it on: it is carried to the reader
-// the repair handed back (Synced.Repairer), on the same incarnation, and
-// nothing is due while the request goes on. When the retry then fails on a
-// pack — the escalation the host's maxRepairs exists for — the repair it asks
-// answers the carried crash with the pack's own report, both counted
-// outcome=request, and no scrub hashes a pack for a report beside that repair.
+// A REQUEST'S HELD REPORTS FOLLOW IT ACROSS AN IN-PLACE REPAIR. A derived
+// repair hands back the same copy under a new reader and the host releases the
+// failed pin; a crash reported beside the derived damage is no part a drop
+// answers, so it is carried to that reader (Synced.Repairer), neither consumed
+// nor handed on, and nothing is due. When the retry fails on a pack (the
+// escalation the host's maxRepairs bounds), its repair answers the carried
+// crash with the pack's report, both outcome=request, and no pack is hashed
+// for a report.
 //
-// Mutation: drop the carry (Rebuild's in-place answer moves nothing) — the
-// failed pin's release hands the crash on, counted queued, and the copy's
-// scrub is due for a report while the request still holds the repaired copy.
+// Mutation: drop the carry (Rebuild's in-place answer moves nothing), and the
+// failed pin's release hands the crash on, counted queued, the scrub due while
+// the request still holds the repaired copy.
 func TestARequestsHeldReportsFollowItAcrossAnInPlaceRepair(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)

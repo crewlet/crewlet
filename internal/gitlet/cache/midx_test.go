@@ -18,25 +18,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// A DAMAGED MULTI-PACK-INDEX IS REPAIRED IN PLACE, WITH NO DOWNLOAD. The index
-// (its reverse index, its bitmap) is a DERIVED file the maintainer writes from
-// the packs the incarnation already holds, so [cache.RebuildDerived] drops it and
-// reads the incarnation whole in place — the SAME incarnation, not a byte
-// fetched from the object store — where [cache.RebuildCorrupt] reads the whole
-// repository into a new directory, downloading every pack. The detection (git
-// 2.47's "invalid MIDX object position", which pack-objects reports to the
-// trace) is held in internal/gitlet/host; this holds the REPAIR, so it needs no
-// git that checks the index and runs on any.
+// A DAMAGED MULTI-PACK-INDEX IS REPAIRED IN PLACE, WITH NO DOWNLOAD: it is a
+// DERIVED file, so [cache.RebuildDerived] drops it and reads the SAME
+// incarnation whole, where [cache.RebuildCorrupt] reads into a new directory
+// and downloads every pack. The commit-graph names no position in the index,
+// so it is kept: dropped too, every walk would go by commit date until the
+// maintainer rewrote it. The detection (git 2.47's "invalid MIDX object
+// position") is held in internal/gitlet/host; this holds the repair, on any git.
 //
-// The commit-graph beside the index names no position in it, so the repair
-// keeps it: dropped too, every walk of the repository would go by commit date
-// until the maintainer had written it again.
-//
-// Mutation: handle RebuildDerived as a rebuild into a new incarnation (drop its
-// inPlace branch), and the incarnation moves and the GET count rises; drop the
-// round's dropDamaged step (apply), and the damaged index survives the repair;
-// name the commit-graph's declaration by the multi-pack-index's part too
-// (derived.go, Part), and the graph is dropped with the index and gone.
+// Mutations: handle RebuildDerived as a rebuild into a new incarnation (drop
+// its inPlace branch; the incarnation moves, GETs rise); drop the round's
+// dropDamaged step (apply; the index survives); give the commit-graph's
+// declaration the index's Part too (derived.go; the graph is dropped).
 func TestADamagedMidxIsRepairedInPlace(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -116,20 +109,16 @@ func TestADamagedMidxIsRepairedInPlace(t *testing.T) {
 }
 
 // A MULTI-PACK-INDEX NAMED DAMAGED IS DROPPED WHATEVER ELSE ITS COPY IS BEING
-// READ WHOLE FOR. Dropping it is a mark of its own on the incarnation, never
-// the reason its whole read is counted under: a copy already marked to be read
-// whole — for its shape, by a request beside this one, or for a code log
-// recreated under the node — when a git process names its
-// multi-pack-index damaged still has the index dropped by the round
-// Rebuild(RebuildDerived) joins, in place and with no download, and the
-// maintainer rewrites it. Keyed on the read's reason instead, that round kept
-// the damaged index, the fetch's retry met the same damage, and the request
-// was answered as a copy still damaged after its repair — until the next
-// request, once the mark had cleared.
+// READ WHOLE FOR. The drop is a mark of its own on the incarnation, never the
+// reason the whole read is counted under: a copy already marked to be read
+// whole (for its shape, by a request beside this one, or for a recreated code
+// log) still has the index dropped by the round Rebuild(RebuildDerived) joins,
+// in place with no download, and the maintainer rewrites it. Keyed on the
+// reason, the round would keep the damaged index and the fetch's retry meet it
+// again.
 //
 // Mutation: drop the index only when the whole read's reason is derived
-// (inc.reread), and both arms fail: the damaged index survives the round and
-// the maintainer is not due.
+// (inc.reread): both arms fail, the index surviving and the maintainer not due.
 func TestADamagedMidxIsDroppedWhateverElseItsCopyIsReadWholeFor(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -206,32 +195,18 @@ func TestADamagedMidxIsDroppedWhateverElseItsCopyIsReadWholeFor(t *testing.T) {
 	}
 }
 
-// A ROUND'S OWN GIT MEETING A DAMAGED INDEX DROPS IT IN PLACE. A delta round
-// peels the tags it sets with cat-file, which loads the multi-pack-index, and
-// an index git cannot read at all — its signature overwritten (F), or a chunk
-// it requires missing (F7) — fails that peel with a report of the index's
-// format: a DERIVED file. The round marks the incarnation to be read whole
-// with the index dropped, and the caller is answered by the next, full round
-// in the SAME incarnation — the index gone, no pack fetched again beyond the
-// tag's own — counted `derived`. Sent to a rebuild instead, a derived file
-// cost a new incarnation and a download of every pack.
+// A ROUND'S OWN GIT MEETING A DAMAGED INDEX DROPS IT IN PLACE. A delta round's
+// cat-file peel loads the multi-pack-index; one git cannot read (signature
+// overwritten, F; a required chunk missing, F7) is a DERIVED file, so the next
+// full round answers in the SAME incarnation, counted `derived`, nothing
+// fetched beyond the tag's pack. Damage that survives the drop (a knob writes
+// it back before every peel) is a pack's: a FORCED round in place, the scrub,
+// then one `corrupt` rebuild SEEDED with every pack the scrub found whole,
+// downloading nothing — never the same drop marked again for ever.
 //
-// And damage that survives the drop: a round that dropped the very files its
-// git then names (here a knob writes the damaged index back before every peel
-// of the incarnation) has met a pack's damage, repaired as a request's is —
-// a FORCED round in place, which drops the index again by its checksum and
-// meets the damage again; the scrub, which finds the index rewritten and
-// hands it to a round that meets it again; and only then a whole rebuild,
-// `corrupt`, SEEDED with every pack the scrub found whole, which replaces the
-// incarnation once and downloads nothing — rather than marking the same drop
-// again for ever.
-//
-// Mutations: send RebuildDerived to askRebuild from damagedRound (a new
-// incarnation and every pack fetched again); drop the dropped guard (the
-// second arm marks the drop again and again, never answering); ask the whole
-// rebuild for damage that survived its drop without the in-place steps
-// (repairDamaged — no forced round's check, no scrub); seed it with nothing
-// (every pack downloaded again).
+// Mutations: damagedRound sends RebuildDerived to askRebuild (every pack
+// fetched again); drop the dropped guard (never answered); skip repairDamaged's
+// in-place steps; seed the rebuild with nothing (every pack downloaded again).
 func TestARoundsOwnGitMeetingADamagedIndexDropsItInPlace(t *testing.T) {
 	t.Parallel()
 	damages := map[string]func(t *testing.T, midx string){
@@ -342,22 +317,18 @@ func TestARoundsOwnGitMeetingADamagedIndexDropsItInPlace(t *testing.T) {
 	}
 }
 
-// A ROUND'S DAMAGE NO DROP REPAIRS IS REPAIRED AS A PACK'S IS, as a
-// request's is (TestARequestsDamageNoDropRepairsIsRepairedAsAPacks). A
-// round's own git meeting damage in a derived file whose declaration KEEPS
-// its files on a report (OnReported Keep) has no drop to ask for: the next
-// round would keep the file, its git meet the same damage, and the round
-// after it mark the same drop again for ever. So the round's damage is a
-// pack's, repaired in place first: a forced round holds every index file to
-// its trailer whatever its vouch, the index fails its check and is dropped by
-// that rule, the bytes having decided — the same incarnation, counted
-// `derived`, nothing fetched beyond the tag's own pack, the drop logged as
-// the check's and never as the report's.
+// A ROUND'S DAMAGE NO DROP REPAIRS IS REPAIRED AS A PACK'S IS, as a request's
+// is (TestARequestsDamageNoDropRepairsIsRepairedAsAPacks). A derived file whose
+// declaration KEEPS its files on a report (OnReported Keep) has no drop to ask
+// for: each round would meet the same damage and mark the same drop for ever.
+// So it is a pack's damage, repaired in place: a forced round holds every index
+// file to its trailer whatever its vouch, and the index fails and is dropped —
+// same incarnation, counted `derived`, nothing fetched beyond the tag's pack,
+// logged as the check's drop, never the report's.
 //
-// Mutations: have damagedRound ask the drop of every declaration the damage
-// names, whatever its declaration says of a report — the sync is never
-// answered; send a round's pack damage to the whole rebuild (damagedRound's
-// askRebuild) — a new incarnation, counted `corrupt`.
+// Mutations: damagedRound asks the drop of every declaration the damage names
+// (the sync never answers); it sends pack damage to askRebuild (a new
+// incarnation, counted `corrupt`).
 func TestARoundsDamageNoDropRepairsIsRepairedAsAPacks(t *testing.T) {
 	t.Parallel()
 	keep := cache.DerivedFiles()
@@ -413,20 +384,17 @@ func TestARoundsDamageNoDropRepairsIsRepairedAsAPacks(t *testing.T) {
 	}
 }
 
-// A REQUEST'S DAMAGE NO DROP REPAIRS IS REPAIRED AS A PACK'S IS. A request
-// whose git met damage in a derived file whose declaration KEEPS its files on
-// a report (OnReported Keep) asks a derived repair — and a drop of it would
-// move nothing: the incarnation read whole, the same file kept, the request
-// answered from the copy that failed it. So Rebuild repairs it as a pack's
-// damage, at once: the forced round holds every index file to its trailer
-// whatever its vouch, and the index — damaged in place, so its identity and
-// its vouch are what the maintainer wrote — fails its check and is dropped,
-// the bytes having decided. In place, counted `derived`, nothing fetched.
+// A REQUEST'S DAMAGE NO DROP REPAIRS IS REPAIRED AS A PACK'S IS. A request whose
+// git met damage in a derived file declared OnReported Keep gains nothing from
+// a drop: the same file kept, the request answered from the copy that failed
+// it. So Rebuild repairs it as a pack's damage at once: the forced round holds
+// every index file to its trailer whatever its vouch, and the index, damaged
+// in place under the maintainer's identity and vouch, fails its check and is
+// dropped. In place, counted `derived`, nothing fetched.
 //
-// Mutation: have Rebuild mark the incarnation for a derived drop whatever the
-// damage's declarations say of a report (rebuild.go) — the round reads the
-// copy whole, holds only what it has not vouched for to a trailer, and keeps
-// the damaged index.
+// Mutation: Rebuild marks a derived drop whatever the damage's declarations
+// say of a report (rebuild.go): the round holds only what it has not vouched
+// for to a trailer and keeps the damaged index.
 func TestARequestsDamageNoDropRepairsIsRepairedAsAPacks(t *testing.T) {
 	t.Parallel()
 	keep := cache.DerivedFiles()
@@ -471,26 +439,17 @@ func TestARequestsDamageNoDropRepairsIsRepairedAsAPacks(t *testing.T) {
 }
 
 // A DAMAGED GRAPH IS DROPPED IN PLACE AND ITS INDEX KEPT. A commit-graph whose
-// commits name a parent past the graph (I8: every first-parent field
-// 0x00ffffff) is fatal to any walk (`invalid parent position %u`, a
-// commit-graph format): the repair drops the GRAPH alone, the
-// multi-pack-index and its bitmap left on disk, no pack fetched, counted
-// `derived`, and the maintainer's next pass writes the graph again (a copy
-// read whole with none gets its graph first). A chunk-format message names
-// neither file — a graph whose table of contents has its first id zeroed
-// (I5′: `terminating chunk id appears earlier than expected`) — so its
-// repair drops BOTH.
+// commits name a parent past it (I8: every first-parent field 0x00ffffff;
+// `invalid parent position %u`, fatal to any walk) has the GRAPH alone dropped,
+// the multi-pack-index and bitmap kept, nothing fetched, counted `derived`; the
+// maintainer writes the graph first next pass. A chunk-format message names
+// neither file (I5′, the first chunk id zeroed: `terminating chunk id appears
+// earlier than expected`), so its repair drops BOTH. Each repair is asked with
+// a real git run's classification (cache.DamageReason).
 //
-// Each repair is asked with what a real git run over the damaged copy was
-// classified as (cache.DamageReason: its Reason and Drops), so the case holds
-// the classification and the drop together.
-//
-// Mutations: set the commit-graph declaration's OnReported to Keep
-// (derived.go; the I5′ arm's request drops the index alone and its graph
-// falls only to the round's check, two repairs logged where the damage asked
-// one — the I8 arm's graph, failing its trailer, is dropped by the forced
-// check of the pack's-damage repair a kept declaration's request takes);
-// have PartChunk drop the index alone (the I5′ arm keeps its graph).
+// Mutations: set the commit-graph's OnReported to Keep (derived.go; I5′ logs
+// two repairs for one, I8's graph still falls to the forced check); have
+// PartChunk drop the index alone (I5′ keeps its graph).
 func TestADamagedGraphIsDroppedInPlaceAndItsIndexKept(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

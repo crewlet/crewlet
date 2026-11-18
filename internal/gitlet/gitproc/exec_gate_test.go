@@ -21,151 +21,17 @@ import (
 )
 
 // TestOnlyGitprocExecsGit fails the build when any Go file of the module
-// outside cmd/ but the pool's own exec and gittest's starts git (ADR-0008).
+// outside cmd/ but the pool's own exec and gittest's starts git (ADR-0008): a
+// second exec.Command is a place to forget one of the pool's six decisions
+// (package doc, "Why one wrapper"), and nothing about it looks wrong. Test
+// files are held too, by FILE (allowedGitExecs): a test's git needs the same
+// hermetic environment, which gittest gives. The walk starts at the module
+// root, so a new directory is read unlisted, and skips testdata and cmd/,
+// whose `crewlet gitlet import` and `export` run the OPERATOR's git.
 //
-// # Why it fails the build rather than reporting
-//
-// A git process is configured by six decisions — the environment, the
-// configuration, the repository it may trust, the slot, the end of its
-// process tree and what its failure means — and gitproc's package doc is the
-// record of what each one cost when it was got wrong: a repository config that
-// serves every object to anyone, a planted commondir that redirects refs, a
-// WaitDelay that cuts the tail off a slow clone, a cancel that ends the leader
-// and leaves the group running. A second exec.Command is a place to forget one
-// of them, and nothing about it looks wrong: the process starts, the test
-// passes, the push succeeds. So the pool is the one way in, and this is what
-// makes it the one way rather than the recommended one.
-//
-// # Why test files too
-//
-// A test's git needs the same hermetic environment everywhere — a
-// developer's own ~/.gitconfig signing commits, an init.defaultBranch, a
-// url.insteadOf or a credential helper otherwise decides what a fixture
-// builds — and every suite that drives git (the ref grammar's oracle, the
-// cache's and the host's fixtures, the fleet cases) would otherwise write that
-// rule for itself, which is ADR-0008's failure in test code. gittest is the
-// one client, and the allowance below is keyed by FILE rather than by package
-// so that gitproc's own tests are held to it like everybody else's.
-//
-// # Where it looks
-//
-// Every .go file of the module, production and test alike — internal/, and
-// the Go beside it (static/'s tests, scripts/) — but testdata, which is not
-// compiled, and cmd/, which is outside the walk on purpose: `crewlet gitlet
-// import` and `export` run the OPERATOR's git, with the operator's
-// environment and credentials, which is the one git the pool must not
-// configure. The walk starts at the module root and steps over cmd/ by name,
-// so a directory that is added beside internal/ is read without anybody
-// remembering to add it.
-//
-// # What it flags
-//
-// A construct that starts a process — os/exec's Command and CommandContext,
-// os.StartProcess, syscall's Exec, ForkExec and StartProcess,
-// golang.org/x/sys/unix's Exec, and a keyed literal (with or without &) of
-// os/exec's Cmd or of net/http/cgi's Handler, which starts its Path for every
-// request it serves and is the standard library's way of serving
-// git-http-backend — whose PROGRAM is git. The construct is a selector
-// resolved against the file's own import of its package, so a renamed import
-// is covered and a local variable named exec is not. The program is git when
-// it is:
-//
-//   - a string literal whose last path element is git or one of git's own
-//     programs, git-<name>: "git", "/usr/bin/git", "git-upload-pack",
-//     "/usr/lib/git-core/git-http-backend" — each a git process whose
-//     configuration is exactly what the pool exists to own; never
-//     "gitlab-runner" or ".git/hooks/pre-commit";
-//   - a name with a WORD equal to git, words split at case changes, digits and
-//     underscores — git, gitPath, realGit, GitBinary, o.Git; never gitlab,
-//     digit or legit;
-//   - a call whose callee, read as a program, is git — a name above
-//     (gitPath(), o.GitBinary(), findGit[T]()), or a variable or an element
-//     holding one (find := findGit; find()) — or any of whose arguments is
-//     git by its VALUE: a literal above, a constant or variable the file gives
-//     one, or a collection holding one, handed whole or spread
-//     (filepath.Join(dir, "git"), filepath.Join(d, name) after name := "git",
-//     filepath.Join(parts...)). A name's own words make a PROGRAM git and
-//     never a part of one, so filepath.Join(gitDir, "objects") is not;
-//   - a concatenation one of whose operands is git by its value (dir + "/git");
-//   - a call of what gittest hands out as a git binary — Require and
-//     RequireNode (the PATH's git, held to each floor), NodeFloor and
-//     ClientFloor (the floors' own builds), and the stand-ins Fake, Wrap and
-//     Recording, the last two of which exec the real git;
-//   - a constant or variable given one of those anywhere in the same file —
-//     declared, defined, assigned or written through a pointer (*p = …; a
-//     pointer and what it points at are one value here, whichever of the two
-//     is written), a constant repeating the spec before it (const ( a =
-//     "git"; b )) — followed through the object the parser resolves it to,
-//     never its name: bin := gittest.Require(t) then exec.Command(bin) is the
-//     laundering a test reaches for without meaning to, and const bin = "git"
-//     the one production code does. Flow-insensitively: a variable that ever
-//     holds git is git wherever it is read;
-//   - an ELEMENT of a collection — read by an index (argv[0], tools[k]), as a
-//     range clause's key or value, or received from a channel — when the
-//     collection holds a value that is git by its value anywhere inside it
-//     (as an element or a key, at any depth: in a literal, built by append,
-//     filled by copy, assigned element by element — argv[0] = …, m[k] = … —
-//     or sent on), when the key is git by its value (tools["git"]), or when
-//     what is read is git READ AS A PROGRAM: the collection's own name has a
-//     git word (gitArgv[0], o.GitArgv[0], <-gitPaths), or the element read
-//     does. Which element that is, the file's literals decide where they can:
-//     a constant index into a literal the file writes — through the variables
-//     it is given to, the appends that grow it, make and the elements
-//     assigned one by one, at any depth — reads that element alone, so
-//     argv[0] of []string{gitPath, "init"} is git and of []string{"go",
-//     "test", gitDir} is not, nor is c[0] for each c of [][]string{{"go",
-//     "test", gitDir}}. Where nothing decides it — an index that is not a
-//     constant, a range clause, a receive — every element is read;
-//   - a conversion (string(name)), a slice of a string, a type assertion, or
-//     a parenthesised, dereferenced or addressed one of those.
-//
-// A literal of a collection of Cmds or Handlers whose element type is elided
-// ([]*exec.Cmd{{Path: "git"}}) is judged like the literal it elides.
-//
-// # Coverage boundary
-//
-// It follows the constants and variables a file declares, through everything
-// above, and nothing else. So it does not see:
-//
-//   - a git path that reaches the starter through anything else with no git
-//     word, EVEN WHEN THE SAME FILE GIVES IT GIT: what a call passes to a
-//     parameter (run("git") into func run(bin string)), what a struct field
-//     is set to (o.bin = "git", T{bin: "git"}, an Options{Path: …} later
-//     run as opts.Path), what a function returns (func bin() string { return
-//     "git" }), or a package-level name declared in another file;
-//   - a program named by the environment (os.Getenv("GIT"));
-//   - a collection built by a call other than append and make, or filled by
-//     one other than copy (strings.Fields("git status"), slices.Insert(argv,
-//     0, "git")), and a range over one;
-//   - a git-word name moved into place by a definition that reaches back to
-//     itself (argv = argv[1:], then argv[0]): a cycle is followed once round
-//     and no further, so only the values it holds are seen there;
-//   - a program another program runs: a shell string (`sh -c "git …"`), which
-//     is how a box runs its own git, and that git is the agent's rather than
-//     the engine's; or ssh's remote command (`ssh host git-upload-pack …`),
-//     which runs on another machine;
-//   - a dot import; a function value (f := exec.Command); a Path assigned to
-//     a Cmd or a Handler after it was built (new(exec.Cmd), then .Path = …);
-//     a literal whose type is elided two collections deep;
-//   - cmd/ (above).
-//
-// A name WITH a git word that does not run git — a GitHub CLI held as
-// cfg.GitHub, an element of a collection named gitArgs — is a hit, and the
-// remedy is a name that says what the program is.
-//
-// If the rule ever legitimately goes away, DELETE this guard rather than
-// weakening it. A guard kept alive past its subject is how an allowance list
-// quietly grows.
-//
-// # Cost
-//
-// It reads every .go file once and parses whole only those whose bytes spell
-// one of a starter's names and that import that starter's package — measured
-// when this was written, 43 of some 2,550 files, of which 34 hold a construct
-// that starts a process (the rest name exec.Cmd as a type, or spell a starter
-// only in a comment or a string; the test logs both counts on every run, so a
-// figure and its label cannot drift apart) — in about 0.6 s under the race
-// detector.
+// What counts as git is execJudge's, as is the coverage boundary. A git-word
+// name that runs another program is a hit: rename it. If the rule goes away,
+// DELETE this guard rather than weaken it.
 func TestOnlyGitprocExecsGit(t *testing.T) {
 	t.Parallel()
 
@@ -176,11 +42,9 @@ func TestOnlyGitprocExecsGit(t *testing.T) {
 		t.Fatalf("read %d files, parsed %d and found %d that start a process — this guard is "+
 			"certifying nothing. Check the module root and the walk", found.read, found.parsed, found.starting)
 	}
-	// A guard asserting an ABSENCE passes identically when the thing is
-	// absent and when the matcher has gone inert. The verdicts below are
-	// known, so a matcher that stopped recognising a shape fails HERE rather
-	// than certifying a clean tree — and every source it flags must pass the
-	// prefilter, or the walk would skip the very file it would have caught.
+	// A guard asserting an ABSENCE passes as well when its matcher has gone
+	// inert, so these known verdicts fail it first; and every source it flags
+	// must pass the prefilter, or the walk would skip that very file.
 	for _, c := range []struct {
 		src  string
 		want bool
@@ -394,9 +258,8 @@ func TestOnlyGitprocExecsGit(t *testing.T) {
 			func f(gitDir string) { argvs := [][]string{{"go", gitDir}}; exec.Command(argvs[0][0]) }`, false},
 		{`package p; import "os/exec"
 			func f() { argv := []string{"go", "x"}; argv = append(argv[1:], "y"); exec.Command(argv[0]) }`, false},
-		// The coverage boundary, pinned so the doc cannot claim less than
-		// the matcher sees: a struct field, a parameter, a function's result
-		// and the environment are not followed.
+		// The coverage boundary (execJudge), pinned so the doc cannot claim
+		// less than the matcher sees.
 		{`package p; import "os/exec"; func f(o *O) { o.bin = "git"; exec.Command(o.bin) }`, false},
 		{`package p; import "os/exec"; func run(bin string) { exec.Command(bin) }; func f() { run("git") }`, false},
 		{`package p; import "os/exec"; func bin() string { return "git" }; func f() { exec.Command(bin()) }`, false},
@@ -444,9 +307,7 @@ func TestOnlyGitprocExecsGit(t *testing.T) {
 }
 
 // judgeExecs splits the walk's hits into the execs no allowance excuses and
-// the allowances no exec uses. The allowance is exact in BOTH directions: an
-// entry whose site has moved or gone must be deleted, or the list becomes
-// somewhere a future exec hides behind a stale excuse.
+// the allowances no exec uses: a stale entry is where a future exec would hide.
 func judgeExecs(hits []gitExec, allowed map[string]string) (outside []gitExec, stale []string) {
 	seen := map[string]bool{}
 	for _, h := range hits {
@@ -463,10 +324,9 @@ func judgeExecs(hits []gitExec, allowed map[string]string) (outside []gitExec, s
 	return outside, stale
 }
 
-// allowedGitExecs is the closed set of FILES that may exec git, each with the
-// reason. Keyed by file rather than by package: gitproc's own tests sit in the
-// pool's directory and drive their client git through gittest like every
-// other suite, so excusing the directory would excuse them.
+// allowedGitExecs is the closed set of FILES that may exec git, with the
+// reason. By file, not package: gitproc's own tests share the pool's
+// directory and are held to gittest like every other suite.
 var allowedGitExecs = map[string]string{
 	"internal/gitlet/gitproc/run.go": "Pool.Run's exec.Command(p.git, …) — the one exec this " +
 		"gate exists to keep the only one",
@@ -481,11 +341,10 @@ var allowedGitExecs = map[string]string{
 // functions are git wherever they are called.
 const gittestPackage = "github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 
-// gittestBinaries are the gittest functions whose (first) result is a git
-// binary: Require and RequireNode are the real git on PATH, NodeFloor and
-// ClientFloor the floors' own builds, Fake a stand-in, and Wrap and Recording
-// stand-ins that exec the real git. The anchor below fails the build when one
-// is renamed, so this list cannot silently stop naming anything.
+// gittestBinaries are the gittest functions whose first result is a git
+// binary: the PATH's git (Require, RequireNode), the floors' builds
+// (NodeFloor, ClientFloor) and the stand-ins (Fake; Wrap and Recording exec
+// the real git). The anchor below fails the build when one is renamed.
 var gittestBinaries = map[string]bool{
 	"Require": true, "RequireNode": true, "NodeFloor": true, "ClientFloor": true,
 	"Fake": true, "Wrap": true, "Recording": true,
@@ -504,9 +363,9 @@ var starters = map[string]map[string]int{
 }
 
 // starterLiterals are the keyed composite literals that describe a process
-// to start, by the import path of their package and their type, with the
-// field that names the program: os/exec's Cmd, which runs it later, and
-// net/http/cgi's Handler, which starts it for every request it serves.
+// to start, by package import path and type, with the field naming the
+// program: os/exec's Cmd, and net/http/cgi's Handler, which starts it for
+// every request (how git-http-backend is served).
 var starterLiterals = map[string]map[string]string{
 	"os/exec":      {"Cmd": "Path"},
 	"net/http/cgi": {"Handler": "Path"},
@@ -520,11 +379,9 @@ func starterPackage(path string) bool {
 	return call || literal
 }
 
-// starterNames is the prefilter, per package: the identifiers a selector on
-// that package is compared against — its calls and its literals' types,
-// taken from the same tables, so the prefilter cannot fall behind them.
-// anyStarterName is their union, asked first so a file spelling none of them
-// is never parsed even for its imports.
+// starterNames is the prefilter's names per package, built from the same
+// tables so it cannot fall behind them. anyStarterName is their union, asked
+// first so a file spelling none is never parsed even for its imports.
 var starterNames, anyStarterName = func() (map[string]sourcetree.Identifiers, sourcetree.Identifiers) {
 	byPackage := map[string][]string{}
 	for path, calls := range starters {
@@ -543,17 +400,12 @@ var starterNames, anyStarterName = func() (map[string]sourcetree.Identifiers, so
 	return out, sourcetree.MustIdentifiers(slices.Compact(all)...)
 }()
 
-// admit reports whether the walk parses src whole.
-//
-// THE PREFILTER IS EXACT. A file is parsed whole only if, for a starter
-// package its imports name — parsed, never searched for as text, because an
-// import path is a string literal and a string can be spelled with escapes
-// its bytes never show — its bytes spell one of THAT package's names (an
-// identifier has no escapes). Every construct this judges is a selector on
-// such an import naming such a name, so a file failing it holds none. Per
-// package rather than for the union, because os is imported almost
-// everywhere and its one starter is rare: a file importing os and spelling
-// Command — an Execute, a CommandLine — holds no process start for that.
+// admit reports whether the walk parses src whole. It is EXACT: every
+// construct judged is a selector on a starter package's import naming one of
+// THAT package's names, so src must import one (imports parsed, not searched
+// as text: a path can be spelled with escapes) and spell one of its names (an
+// identifier has none). Per package, not the union: os is imported almost
+// everywhere, and an Execute or CommandLine beside it starts nothing.
 func admit(name string, src []byte) (bool, error) {
 	if !anyStarterName.In(src) {
 		return false, nil
@@ -577,12 +429,10 @@ type gitExec struct {
 	pos  string // file:line:column
 }
 
-// execWalk is what one walk found. read counts every .go file the walk
-// reached, before the prefilter, so the floor measures the walk rather than
-// the filter; parsed counts the files the prefilter admitted and that were
-// parsed whole, and starting the ones of those holding a construct that
-// starts a process, git or not — counted by the judge that visits each, so
-// what the log reports is what was measured.
+// execWalk is what one walk found. read counts every .go file reached,
+// before the prefilter, so the floor measures the walk rather than the
+// filter; parsed the files parsed whole; starting those holding a process
+// start, git or not, as the judge counted it.
 type execWalk struct {
 	read, parsed, starting int
 	hits                   []gitExec
@@ -600,8 +450,7 @@ func gitExecs(t *testing.T, root string) execWalk {
 		}
 		if d.IsDir() {
 			// testdata is not compiled, and the module's own cmd/ runs
-			// the operator's git (the coverage boundary above) — that
-			// directory only, never one named cmd somewhere below.
+			// the operator's git: that directory only, not any named cmd.
 			if d.Name() == "testdata" || path == operators {
 				return fs.SkipDir
 			}
@@ -654,23 +503,16 @@ func gitExecs(t *testing.T, root string) execWalk {
 	return out
 }
 
-// THE WALK, ON A TREE WHOSE VERDICT IS KNOWN: a test file starting git under a
-// renamed import and one starting it through an exec.Cmd literal (both hits,
-// neither allowed), the pool's own exec (a hit, allowed), a test BESIDE
-// internal/ starting git-upload-pack and one in a directory named cmd below
-// the root (hits — the walk starts at the root and steps over the module's
-// own cmd/ only), a file importing os/exec that runs sh and a script running
-// go (parsed, each a process start, no hit), a file importing os/exec that
-// spells a starter only in a comment (parsed, no process start), and four
-// files the walk reads and never parses whole: one spelling a starter that
-// imports none of their packages, one importing os/exec that spells none,
-// one importing os that spells only os/exec's names — each with a body that
-// is not Go, so a walk that parsed past its imports would fail — and one
-// spelling nothing at all. And two execs of git the walk must never reach:
-// one in testdata and one in the module's cmd/. Then THE VERDICT, against
-// the tree's own allowance, so both of its directions are exercised: the
-// main gate can only ever show the stale one failing on a tree that has
-// drifted.
+// TestTheExecWalkReadsEveryFileImportingExec runs the walk on a tree whose
+// verdict is known: git under a renamed import, in an exec.Cmd literal, in
+// the pool's run.go, beside internal/ and under a directory named cmd below
+// the root (hits); sh and a script's go (process starts, no hit); a starter
+// spelled only in a comment; four files never parsed past the prefilter
+// (u.go imports os, spelling only os/exec's names), three with bodies that
+// are not Go so a deeper parse fails; and git in testdata and the module's
+// cmd/, never reached. It then judges the hits against the tree's own
+// allowance, exercising the stale direction the main gate shows only on a
+// drifted tree.
 func TestTheExecWalkReadsEveryFileImportingExec(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -720,9 +562,8 @@ func TestTheExecWalkReadsEveryFileImportingExec(t *testing.T) {
 			found.read, found.parsed, found.starting, found.hits, want)
 	}
 
-	// Judged against the tree's own allowance, the pool's exec is excused,
-	// the other four are not, and gittest's entry — whose file this tree
-	// lacks — is reported stale rather than kept.
+	// The pool's exec is excused, the other four are not, and gittest's
+	// entry, whose file this tree lacks, is stale.
 	outside, stale := judgeExecs(found.hits, allowedGitExecs)
 	if got, want := files(outside), want[1:]; !slices.Equal(got, want) {
 		t.Errorf("outside the allowance: %q, want %q", got, want)
@@ -732,12 +573,9 @@ func TestTheExecWalkReadsEveryFileImportingExec(t *testing.T) {
 	}
 }
 
-// importNames maps the local name of each package the file imports by name
-// that the judge reads — a starter's, or gittest's — to its import path, and
-// is nil for a file importing no starter. A blank import names nothing, and a
-// dot import would need identifier resolution rather than a selector — none
-// exists in this tree, and the coverage boundary says the gate does not see
-// one.
+// importNames maps the local name of each starter or gittest import to its
+// path, and is nil for a file importing no starter. A blank import names
+// nothing; a dot import is past the coverage boundary (execJudge).
 func importNames(file *ast.File) map[string]string {
 	names := map[string]string{}
 	starts := false
@@ -769,24 +607,30 @@ func importNames(file *ast.File) map[string]string {
 	return names
 }
 
-// execJudge judges one parsed file.
+// execJudge judges one parsed file: a starter (starters, starterLiterals),
+// resolved against the file's own import so a renamed one counts and a local
+// named exec does not, whose program is git (is). Coverage boundary: it
+// follows only constants and variables the file declares, so it misses git
+// reaching a starter through a parameter, a struct field, a function's result,
+// another file's name, the environment, a collection built or filled by a call
+// other than append, make or copy, or a cycle past once round; a dot import, a
+// starter held as a function value, a Path set after the literal, a literal
+// elided two collections deep; and a program another program runs (sh -c,
+// ssh's remote command), which is the agent's or another machine's git.
 type execJudge struct {
 	file *ast.File
 	// imports maps a local name to the import path it names.
 	imports map[string]string
 	// given is every value each constant and variable of the file is given.
 	given map[variable][]given
-	// following is the variables being followed, each as what it is
-	// followed for, so a cycle (var a = b; var b = a, argv = append(argv,
-	// x)) ends rather than recursing.
+	// following is the variables being followed, and as what, so a cycle
+	// (var a = b; var b = a) ends rather than recursing.
 	following map[followed]bool
 }
 
-// variable identifies one constant or variable of a file by the node that
-// declares it and its name, as the parser's file-scoped resolution
-// (Ident.Obj, which the tree's other syntax guards read too) reports them —
-// so two variables sharing a name in two functions are two variables here,
-// and a parameter called bin is never the bin another function assigned git.
+// variable identifies one constant or variable of a file by its declaring
+// node and name, as the parser's file-scoped resolution (Ident.Obj) reports
+// them: a parameter called bin is never the bin another function assigned git.
 type variable struct {
 	decl any
 	name string
@@ -797,11 +641,10 @@ type variable struct {
 type given struct {
 	expr ast.Expr
 	rel  relation
-	// index is where in the variable an element or elements land, and nil
-	// where the syntax fixes no place: an element of an element, a copy
-	// into a part of the collection, a send. Kept as the expression and
-	// resolved when it is read, because a constant index may be declared
-	// further down the file.
+	// index is where in the variable the element(s) land, nil where the
+	// syntax fixes no place (an element of an element, a copy into a part, a
+	// send). An expression, resolved when read: a constant index may be
+	// declared further down the file.
 	index ast.Expr
 }
 
@@ -809,13 +652,11 @@ type given struct {
 type relation int
 
 const (
-	// isValue: the variable IS the value — declared, defined or assigned
-	// it, written through a pointer to it (*p = …), or holding the address
-	// of it (p := &bin gives bin the value p as well as p the value &bin,
-	// because a pointer and what it points at are one value here, whichever
-	// of the two is written). A copy into the whole of a collection is one
-	// too: copy(argv, src) leaves argv holding src's elements at src's
-	// indices.
+	// isValue: the variable IS the value: declared, defined or assigned it,
+	// written through a pointer (*p = …), or pointed at (p := &bin gives bin
+	// p as well as p &bin: a pointer and its target are one value, whichever
+	// is written). copy(argv, src) is one too: argv holds src's elements at
+	// src's indices.
 	isValue relation = iota
 	// inValue: the variable is an element or a key of the value — a range
 	// clause's key or value.
@@ -831,11 +672,10 @@ const (
 	key
 )
 
-// followed is one variable being followed, and as what. The index path a
-// collection is read at is deliberately NOT part of it: to reach a variable
-// again while following it is to follow its definition round a cycle,
-// whatever is being read of it, and a key holding the path would let a cycle
-// that shifts the path (argv = append(argv[1:], x)) recurse without end.
+// followed is one variable being followed, and as what. The index path is
+// deliberately NOT part of it: reaching the variable again is a cycle
+// whatever is read, and a path in the key would let one that shifts it (argv =
+// append(argv[1:], x)) recurse without end.
 type followed struct {
 	v variable
 	r takenAs
@@ -848,11 +688,10 @@ const (
 	// asProgram: the value is the program a starter runs, and a name's own
 	// words count — exec.Command(gitPath) is git.
 	asProgram takenAs = iota
-	// asPart: the value is a part of the program's path — an argument of
-	// the call that builds it, an operand of +, an element of a collection
-	// read by its value — and only the value it holds counts:
-	// filepath.Join(gitDir, "objects") is not git, and filepath.Join(dir,
-	// name) is once name := "git".
+	// asPart: the value is a part of the program's path (a call's argument,
+	// an operand of +, an element read by its value), and only the value it
+	// holds counts: filepath.Join(gitDir, "objects") is not git, and
+	// filepath.Join(dir, name) is once name := "git".
 	asPart
 	// asValues: the value is a collection, and a value anywhere inside it
 	// that is git by its value counts — argv[0] of argv := []string{"git",
@@ -891,9 +730,9 @@ func newExecJudge(file *ast.File) *execJudge {
 		case len(values) == n:
 			return values[i], true
 		case len(values) == 1:
-			// One call (or comma-ok form) assigning several: each name
-			// is the call's, which over-approximates the error or ok
-			// beside a path and never under-approximates the path.
+			// One call or comma-ok form assigning several: each name
+			// gets the call, over-approximating an error or ok beside a
+			// path but never missing the path.
 			return values[0], true
 		}
 		return nil, false
@@ -927,10 +766,9 @@ func newExecJudge(file *ast.File) *execJudge {
 				}
 			}
 		case *ast.RangeStmt:
-			// A range clause's key and value are each something inside
-			// what it ranges over. The parser declares them on a
-			// synthetic assignment the tree does not hold, which is why
-			// they are recorded here rather than as an AssignStmt.
+			// A range clause's key and value are inside what it ranges
+			// over. The parser declares them on a synthetic assignment
+			// the tree does not hold, so they are recorded here.
 			for _, e := range []ast.Expr{n.Key, n.Value} {
 				if e != nil {
 					j.assign(e, n.X, inValue)
@@ -951,16 +789,13 @@ func newExecJudge(file *ast.File) *execJudge {
 	return j
 }
 
-// assign records that value reaches lhs, standing to it as rel. A name is
-// given it; what a pointer points at is the pointer's, so *p = … gives p. A
-// value written to an element of a collection is given INSIDE the
-// collection, at its index and with its key (argv[0] = …, m[k] = …), as is
-// one sent on a channel (rel element) at no index; a value copied into a part
-// of one (copy(argv[1:], src)), or ranged into an element of one, gives the
-// collection its ELEMENTS. And a name given the address of another (p :=
-// &bin, p := &argv[0]) gives that other the name in turn, so a write through
-// either reaches both. Any other target — a struct field, a call's result —
-// is not followed (the coverage boundary).
+// assign records that value reaches lhs, standing to it as rel; *p = … gives
+// p. A value written to an element (argv[0] = …, m[k] = …) or sent on a
+// channel is given INSIDE the collection, at its index and with its key; one
+// copied into a part (copy(argv[1:], src)) or ranged into an element gives it
+// ELEMENTS. p := &bin and p := &argv[0] give the target p in turn, so a write
+// through either reaches both. Any other target (a struct field, a call's
+// result) is past the coverage boundary (execJudge).
 func (j *execJudge) assign(lhs, value ast.Expr, rel relation) {
 	if addr, ok := ast.Unparen(value).(*ast.UnaryExpr); ok && rel == isValue && addr.Op == token.AND {
 		j.assign(addr.X, lhs, isValue)
@@ -1057,9 +892,9 @@ func (j *execJudge) judge() judged {
 				literal(n, field)
 				return true
 			}
-			// A collection of them, whose elements' type is elided:
-			// []*exec.Cmd{{Path: "git"}}. The inner literal has no type
-			// of its own, so this is the one place it can be judged.
+			// A collection of them with the element type elided
+			// ([]*exec.Cmd{{Path: "git"}}): the inner literal has no
+			// type of its own, so it is judged here.
 			field, ok := j.literalField(elementType(n.Type))
 			if !ok {
 				return true
@@ -1111,10 +946,9 @@ func elementType(t ast.Expr) ast.Expr {
 	return elt
 }
 
-// imported is the import path x names, if x is the local name of an import
-// rather than anything declared in the file. ident.Obj is set for a name the
-// file declares — a variable or a parameter called exec — and never for an
-// import's.
+// imported is the import path x names, if x is an import's local name:
+// ident.Obj is set for a name the file declares (a parameter called exec) and
+// never for an import.
 func (j *execJudge) imported(x ast.Expr) (string, bool) {
 	ident, ok := x.(*ast.Ident)
 	if !ok || ident.Obj != nil {
@@ -1131,8 +965,8 @@ func builtin(fun ast.Expr, name string) bool {
 	return ok && id.Name == name && id.Obj == nil
 }
 
-// git reports whether e, the program a starter runs, is git (the rules in
-// TestOnlyGitprocExecsGit's doc).
+// git reports whether e, the program a starter runs, is git (is; the
+// controls in TestOnlyGitprocExecsGit pin each shape).
 func (j *execJudge) git(e ast.Expr) bool {
 	return j.is(e, asProgram)
 }
@@ -1169,10 +1003,9 @@ func (j *execJudge) is(e ast.Expr, r takenAs) bool {
 		// A generic instance is the function it instantiates.
 		return j.is(e.X, r)
 	case *ast.IndexExpr:
-		// An element of a collection: git by its value when the
-		// collection holds a git value anywhere or its key is one
-		// (tools["git"]), and — read as the program — when what the
-		// index reads is git read as a program.
+		// An element: git when the collection holds git anywhere or its
+		// key is git (tools["git"]), and, read as the program, when what
+		// the index reads is.
 		return j.holds(e.X) || j.is(e.Index, asPart) ||
 			names && j.element(e.X, []int{j.index(e.Index)})
 	case *ast.BinaryExpr:
@@ -1183,9 +1016,9 @@ func (j *execJudge) is(e ast.Expr, r takenAs) bool {
 		if builtin(e.Fun, "string") && len(e.Args) == 1 {
 			return j.is(e.Args[0], r)
 		}
-		// The callee read as a program: a name with a git word
-		// (gitPath(), o.GitBinary()), and what a variable or a collection
-		// holding a function gives it (find := findGit; find()).
+		// The callee read as a program: a git-word name (gitPath()), or
+		// a function a variable or collection holds (find := findGit;
+		// find()).
 		if names && j.is(e.Fun, asProgram) {
 			return true
 		}
@@ -1194,20 +1027,17 @@ func (j *execJudge) is(e ast.Expr, r takenAs) bool {
 				return true
 			}
 		}
-		// Git by an argument's value: an argument that is one, or a
-		// collection — spread into the call or handed whole — holding one
-		// (filepath.Join(parts...), strings.Join(parts, "/")).
+		// Git by an argument's value, or a collection argument, spread
+		// or whole, holding one (filepath.Join(parts...)).
 		return slices.ContainsFunc(e.Args, j.within)
 	}
 	return false
 }
 
-// holds reports whether e is a collection holding a value that is git by its
-// value anywhere inside it — as an element or a key, at any depth.
-// Over-approximating on purpose: a map's key and its value, or two levels of
-// a nested slice, are not told apart, because a collection with git anywhere
-// in it is one a reader would take an element of for git, and a false hit
-// names itself where a missed one says nothing.
+// holds reports whether e is a collection holding a value git by its value
+// anywhere inside it, as an element or a key, at any depth. Over-approximating
+// on purpose (keys, values and nesting levels are not told apart): a false hit
+// names itself, where a missed one says nothing.
 func (j *execJudge) holds(e ast.Expr) bool {
 	switch e := e.(type) {
 	case *ast.CompositeLit:
@@ -1232,7 +1062,7 @@ func (j *execJudge) holds(e ast.Expr) bool {
 		return j.holds(e.X)
 	case *ast.CallExpr:
 		// append is the one call whose result holds what its arguments
-		// do; every other collection a call builds is the boundary's.
+		// do; any other is past the coverage boundary.
 		if builtin(e.Fun, "append") {
 			return slices.ContainsFunc(e.Args, j.within)
 		}
@@ -1246,18 +1076,14 @@ func (j *execJudge) within(e ast.Expr) bool {
 	return j.is(e, asPart) || j.holds(e)
 }
 
-// element reports whether what the index path reads from the collection e —
-// outermost index first, -1 for one the syntax does not fix — is git read as
-// the program; an empty path reads e itself.
-//
-// A literal the file writes FIXES what a constant index reads — through the
-// variables it is given to, the appends that grow it, make, and the elements
-// assigned one by one — and then only that element counts: argv[0] of
-// []string{"go", "test", gitDir} is not git, nor is c[0] for every c ranged
-// over [][]string{{"go", "test", gitDir}}. Where nothing fixes it — an index
-// that is not a constant, a range clause, a receive — every element the
-// collection may hold is read; and a collection's own name with a git word
-// is git whatever is read of it (gitArgv[0], <-gitPaths).
+// element reports whether what the index path reads from the collection e
+// (outermost index first, -1 where the syntax fixes none) is git read as the
+// program; an empty path reads e itself. A literal the file writes FIXES what
+// a constant index reads, through variables, append, make and element
+// assignments, and only that element counts: argv[0] of []string{"go",
+// "test", gitDir} is not git. Unfixed (a variable index, a range, a receive),
+// every element is read; a git-word collection name is git whatever is read
+// (gitArgv[0], <-gitPaths).
 func (j *execJudge) element(e ast.Expr, path []int) bool {
 	if len(path) == 0 {
 		return j.is(e, asProgram)
@@ -1314,10 +1140,9 @@ func (j *execJudge) element(e ast.Expr, path []int) bool {
 	return false
 }
 
-// positional is the element of lit at index at — nil when it has none there
-// — and whether lit fixes that at all: not for an index that is not a
-// constant, nor for a literal keyed by anything but constant integers (a map
-// keyed by names).
+// positional is the element of lit at index at (nil when none) and whether
+// lit fixes it at all: not for a non-constant index, nor for a literal keyed
+// by anything but constant integers.
 func (j *execJudge) positional(lit *ast.CompositeLit, at int) (ast.Expr, bool) {
 	if at < 0 {
 		return nil, false
@@ -1340,9 +1165,9 @@ func (j *execJudge) positional(lit *ast.CompositeLit, at int) (ast.Expr, bool) {
 }
 
 // appended reports whether what path reads from append(base, …) is git read
-// as the program: the base's own element below the length the syntax fixes
-// for the base, the appended argument at that index where the base's length
-// is exact, and otherwise the base's element or any appended one.
+// as the program: the base's element below the base's fixed length, the
+// appended argument at that index where the length is exact, else the base's
+// element or any appended one.
 func (j *execJudge) appended(call *ast.CallExpr, path []int) bool {
 	at, rest := path[0], path[1:]
 	base, args := call.Args[0], call.Args[1:]
@@ -1365,9 +1190,8 @@ func (j *execJudge) appended(call *ast.CallExpr, path []int) bool {
 	return slices.ContainsFunc(args, func(arg ast.Expr) bool { return j.element(arg, rest) })
 }
 
-// unbounded is the length a collection measures at when measuring it reaches
-// the collection itself (argv = append(argv, x)): appending only lengthens,
-// so that path bounds nothing below what the collection's other values do.
+// unbounded is a collection's length when measuring it reaches itself (argv =
+// append(argv, x)): appending only lengthens, so that path bounds nothing.
 const unbounded = math.MaxInt
 
 // length is the fewest elements the collection e can hold, as far as the
@@ -1412,8 +1236,7 @@ func (j *execJudge) length(e ast.Expr) (int, bool) {
 				values++
 				least, exact = min(least, n), exact && ex
 			case inValue:
-				// An element of what a range clause ranges over: no
-				// length the syntax fixes.
+				// An element of a ranged collection: no fixed length.
 				return 0, false
 			}
 		}
@@ -1475,9 +1298,8 @@ func (j *execJudge) index(e ast.Expr) int {
 }
 
 // follow reports whether id names a constant or variable given git, read as
-// r — and, read as asElement, at the index path — anywhere in the file.
-// Flow-insensitive on purpose: a variable that ever holds git is one a reader
-// would take for git, and an exec of it is the laundering this follows.
+// r (as asElement, at the index path), anywhere in the file. Flow-insensitive
+// on purpose: a variable that ever holds git is one a reader takes for git.
 func (j *execJudge) follow(id *ast.Ident, r takenAs, path []int) bool {
 	v, ok := variableOf(id)
 	key := followed{v: v, r: r}
@@ -1498,10 +1320,9 @@ func (j *execJudge) reads(g given, r takenAs, path []int) bool {
 		case isValue:
 			return j.is(g.expr, r)
 		case inValue:
-			// Something inside what a range clause ranges over: git by
-			// its value anywhere there, and — read as the program — any
-			// element read as one (for _, bin := range []string{"sh",
-			// gitPath}).
+			// Inside a ranged collection: git by its value anywhere
+			// there, and, read as the program, any element read as one
+			// (range []string{"sh", gitPath}).
 			return j.holds(g.expr) || r == asProgram && j.element(g.expr, []int{-1})
 		}
 	case asValues:
@@ -1529,8 +1350,8 @@ func (j *execJudge) reads(g given, r takenAs, path []int) bool {
 			}
 			return j.element(g.expr, rest)
 		case key:
-			// A key is what a range clause reads of a map, which reads
-			// at no place the syntax fixes, and never what an index does.
+			// A key is what a range over a map reads, at no fixed
+			// place, and never what an index reads.
 			return at < 0 && j.element(g.expr, rest)
 		}
 	}
@@ -1548,11 +1369,9 @@ func gitLiteral(lit *ast.BasicLit) bool {
 }
 
 // gitProgram reports whether the last element of the slash-separated path s
-// is git or one of git's own programs, git-<name> — git-upload-pack,
-// git-receive-pack, git-upload-archive, git-http-backend, git-shell — which
-// are git processes reading git's configuration as much as git itself.
-// Never gitlab-runner, whose name merely starts with the letters, nor a path
-// inside a repository (.git/hooks/pre-commit).
+// is git or one of git's own programs, git-<name> (git-upload-pack,
+// git-http-backend…), which read git's configuration as git does. Never
+// gitlab-runner, nor a path inside a repository (.git/hooks/pre-commit).
 func gitProgram(s string) bool {
 	base := s[strings.LastIndex(s, "/")+1:]
 	return base == "git" || strings.HasPrefix(base, "git-")

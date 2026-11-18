@@ -130,10 +130,8 @@ func TestAMissingWantTakesOneLinearizableSync(t *testing.T) {
 
 // A WANT IS READ AS UPLOAD-PACK READS IT — the id after `want `, hex in either
 // case, whatever follows it — so a node that lacks the object syncs once at
-// the log's head and serves it however the client spelled it. Held to the
-// lowercase spelling alone, a want in capitals was no want here, though
-// upload-pack takes it: the node never checked it held the object, and
-// answered a fetch it was one sync from serving with `not our ref`.
+// the log's head and serves it however the client spelled it, never answering
+// `not our ref` to a fetch one sync from served.
 func TestAWantIsReadAsUploadPackReadsIt(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -180,11 +178,10 @@ func behindAMovedHead(t *testing.T, e *recording, o gitlettest.SoloOptions) (*gi
 // errNoQuorum is the estate's linearizable read refused.
 var errNoQuorum = errors.New("statelog: the barrier found no quorum")
 
-// A FETCH WHOSE SYNC AT THE LOG'S HEAD FAILS IS ANSWERED 503 — the node behind
-// that cannot reach the head is exactly the node this sync exists for — with
-// Retry-After and the code log's sentence, never a connection cut short: the
-// failed sync answers the zero Synced, and the directory the stale sync pinned
-// is still the one released.
+// A FETCH WHOSE SYNC AT THE LOG'S HEAD FAILS IS ANSWERED 503 (a node behind is
+// what the sync exists for) with Retry-After and the code log's sentence,
+// never a connection cut short: the failed sync answers the zero Synced, and
+// the directory the stale sync pinned is still the one released.
 func TestAFetchWhoseSyncAtTheHeadFailsIs503(t *testing.T) {
 	var failing atomic.Bool
 	e := &recording{state: func(ctx context.Context, inner host.Estate, q gitlet.StateQuery) (gitlet.RepoSnapshot, error) {
@@ -203,11 +200,10 @@ func TestAFetchWhoseSyncAtTheHeadFailsIs503(t *testing.T) {
 	}
 }
 
-// A PACK THE STORE HAS LOST is logged by the host as the cache logs the same
-// fact for the sync that found it: code_pack_missing, at WARN, naming the pack
-// by pack_id — the alarm is objects_missing, raised by the collector's audit —
-// so a line's name answers one level and one set of keys whichever component
-// wrote it, and an ERROR the operator alerts on is never this.
+// A PACK THE STORE HAS LOST is logged by the host as the cache logs it:
+// code_pack_missing at WARN naming pack_id, so a line's name has one level and
+// one set of keys whichever component wrote it. Never an ERROR the operator
+// alerts on: the alarm is the collector audit's objects_missing.
 func TestAMissingPackIsLoggedAsTheCacheLogsIt(t *testing.T) {
 	var l logs
 	c := newCase(t, gitlettest.SoloOptions{Logger: l.logger()}, gitlettest.Settings())
@@ -339,8 +335,7 @@ func truncateNewestIndex(t *testing.T, c *gitlettest.Case) {
 
 // Every request that finds every transfer slot busy for the slot wait — an
 // advertisement and an RPC alike — is answered 503 with Retry-After the wait,
-// and a sentence that says it again in words, since git does not read the
-// header.
+// and says it in words too, since git does not read the header.
 func TestBusySlotsAre503WithTheirRetryAfter(t *testing.T) {
 	t.Parallel()
 	c := newCase(t, gitlettest.SoloOptions{Shape: gitlettest.Shape{MaxTransfers: 1}}, gitlettest.Settings())
@@ -379,10 +374,8 @@ func TestBusySlotsAre503WithTheirRetryAfter(t *testing.T) {
 
 // A GIT PROCESS THIS NODE ENDED BEFORE ITS FIRST BYTE IS ANSWERED AS THAT — a
 // 503 saying git was stopped, why and how long to wait, logged as the fetch's
-// or the push's failure — never as the code log failing, which it is not: a
-// fetch's upload-pack and a push's receive-pack that stall before writing are
-// each ended by the pool, and the push, already received under its id, keeps
-// that id on its line and is recorded failed.
+// or the push's failure — never as the code log failing. The push, already
+// received under its id, keeps that id on its line and is recorded failed.
 func TestAGitProcessTheNodeEndedIsAnsweredAsThat(t *testing.T) {
 	// The stand-in's upload-pack and receive-pack — never their
 	// advertisements — read and write nothing until they are ended.
@@ -427,11 +420,9 @@ esac`)
 }
 
 // A FETCH WHOSE GIT THE NODE ENDED BEFORE ITS PACK BEGAN IS ANSWERED AS THAT,
-// though upload-pack had written its answer's first line: that line is held
-// with the rest of the answer until the pack begins (band.go), so nothing had
-// reached the client and the answer is still a status — the 503 any git the
-// node ends before its first byte is answered with, saying why. Before the
-// hold, the connection was cut, and git printed only that its RPC failed.
+// though upload-pack had written its answer's first line: band.go holds that
+// line until the pack begins, so nothing reached the client and the answer is
+// still the 503 saying why.
 func TestAFetchTheNodeEndedBeforeItsPackIsAnsweredAsThat(t *testing.T) {
 	// The stand-in's upload-pack reads the request, writes a v2 answer's
 	// section header and nothing more until it is ended.
@@ -456,15 +447,13 @@ esac`)
 	}
 }
 
-// A damaged cache is repaired and the fetch served — under either protocol,
-// whose wants are object ids. When the fetch is the first process to meet
-// the damage, the check of its missing wants does — upload-pack would refuse
-// a want it cannot read IN BAND, past the first byte a retry can be made
-// under — and the cache is repaired under the fetch, which is retried over
-// the same request, once. But any git process over the copy before it — the
-// protocol-0 advertisement, the maintainer — reads around an index it cannot
-// load and reports it, and the scrub that report makes due may repair the
-// copy first, in place: then the fetch meets nothing and retries nothing.
+// A damaged cache is repaired and the fetch served, under either protocol.
+// When the fetch first meets the damage, its wants check does (upload-pack
+// would refuse an unreadable want IN BAND, past the first byte a retry can be
+// made under), and the fetch is retried once over the same request. But a git
+// process over the copy before it (the v0 advertisement, the maintainer) may
+// report the index it cannot load, and the scrub that report makes due may
+// repair the copy first: then the fetch retries nothing.
 func TestACorruptCacheIsRepairedAndTheFetchRetried(t *testing.T) {
 	for _, v := range []int{0, 2} {
 		t.Run(fmt.Sprintf("protocol=%d", v), func(t *testing.T) {
@@ -494,31 +483,17 @@ func TestACorruptCacheIsRepairedAndTheFetchRetried(t *testing.T) {
 }
 
 // UPLOAD-PACK'S OWN DAMAGE IS REPAIRED UNDER THE REQUEST THAT MET IT, IN
-// PLACE. A cache whose tip commit's pack entry has its compressed bytes
-// damaged (G) passes the check of a fetch's wants — cat-file reads only the
-// entry's header and the index, and names nothing — and upload-pack then dies
-// parsing the want, BEFORE it writes its pack. Its trace names the damage by
-// git's own format, so the cache repairs it and the fetch runs again over the
-// same request and is served, under either protocol: the one damaged pack
-// fetched again over its files, the SAME incarnation answering — never the
-// whole repository downloaded into a new one. From 2.55 git names the pack
-// (the row naming a corrupt packed object, or its sentence through "%s" from
-// 2.56: a hint the host confirms against its row), and the request's in-place
-// round installs it again; before 2.55 it names none, the in-place round
-// finds every index file sound, and the scrub it runs for the request finds
-// the pack's body failing its trailer. Read only from its answer's side band,
-// as before, upload-pack's own failure was answered in git's words on every
-// fetch of such a copy until a later request elsewhere or an operator
-// repaired it.
-//
-// The retry is logged naming upload-pack's failure: had the wants check met
-// the damage, it would name cat-file's (TestTheWantsCheckRepairsWhatItsCatFileNames),
-// and the case would not be about upload-pack at all.
+// PLACE. Damaged compressed bytes in the tip's entry (G) pass the wants check
+// (cat-file reads only the header and the index), and upload-pack dies parsing
+// the want, before its pack: the one pack is fetched again, the SAME
+// incarnation answering, and the fetch runs again, under either protocol.
+// From 2.55 git names the pack (a row, or a "%s" hint from 2.56); before, the
+// request's scrub finds it failing its trailer. The retry names upload-pack's
+// failure, not cat-file's (TestTheWantsCheckRepairsWhatItsCatFileNames).
 //
 // Mutations: read an upload-pack run as a push's scratch is read (fetch.go's
-// inIncarnation → asAlternate), and every arm answers git's failure with
-// nothing repaired; repair a pack's damage by the whole rebuild first, and the
-// cache is a new incarnation.
+// inIncarnation → asAlternate) and nothing is repaired; repair a pack's
+// damage by the whole rebuild first and the cache is a new incarnation.
 func TestUploadPacksOwnDamageIsRepairedUnderTheRequest(t *testing.T) {
 	t.Parallel()
 	for _, v := range []int{0, 2} {
@@ -566,42 +541,18 @@ func TestUploadPacksOwnDamageIsRepairedUnderTheRequest(t *testing.T) {
 	}
 }
 
-// THE WANTS CHECK REPAIRS WHAT ITS CAT-FILE NAMES. A fetch's wants are asked
-// of the copy before upload-pack runs (cache.Missing's cat-file), and damage
-// that check meets is repaired under the fetch, IN PLACE — the SAME
-// incarnation answering — and the fetch served: an entry of a type git does
-// not know (G1: cat-file names a pack's damage, "unknown object type 5 at
-// offset …", the request's in-place round finds every index file sound, and
-// the scrub that repair runs for the request finds the pack failing its
-// trailer — on the node pin and the node floor alike) and a pack index whose
-// every offset lies past its pack (M, found by the request's in-place round)
-// by fetching that one pack again over its files, and a multi-pack-index
-// missing a chunk it requires (F7, fatal for every reader) by dropping the
-// derived file. Each fetch is the request alone, so
-// cat-file is the first git to read the copy, and a pack's damage (G1, M) is
-// made on a second push's pack once the maintainer is done with the copy
-// (maintainedCopy), so no maintenance run reads it. And a multi-pack-index whose
-// table of contents ends early (F6, a CHUNK-FORMAT report, which names
-// neither derived file): the check's cat-file is asked about object ids
-// alone, which loads the index and never the commit-graph, so the report is
-// the index's — the repair drops the index alone, and keeps the graph every
-// walk of the repository goes by. What the check's cat-file reports of a
-// pack's damage (G1, M) is the REQUEST'S (cache's report.go, HELD FOR THE
-// REQUEST): the check names the fetch's reader on its Cmd, so the report is
-// held for the repair the fetch asks and consumed by it
-// (reports{outcome=request}): the copy's scrub is never made due for it, and
-// no scrub but the one the fetch's own repair runs (G1's) reads a pack.
+// THE WANTS CHECK REPAIRS WHAT ITS CAT-FILE NAMES (cache.Missing), in place
+// under the fetch, which is served: G1 (type 5, its trailer failing the
+// request's scrub) and M (every index offset past its pack) by fetching that
+// pack again, F7 (a required chunk missing) and F6 (a table of contents ending
+// early: the check never loads the graph, so only the index goes) by dropping
+// the derived file. G1 and M damage a second push's pack after the maintainer
+// (maintainedCopy), so cat-file reads it first and its report is held for the
+// fetch's repair (package doc, "A damaged cache is repaired under the request
+// that found it").
 //
-// Mutations: map no row for F7's format (`multi-pack-index required pack-name
-// chunk missing or corrupted`, and before 2.43 `multi-pack-index missing
-// required pack-name chunk`) and its arm answers git's failure; read the
-// check's chunk report as both files' (no gitproc.Damage.Narrow) and F6's
-// repair drops the graph with the index; run the check's cat-file naming no
-// reader (no `Repairer: s.Repairer` in cache.Missing) and G1's and M's
-// reports make the copy's scrub due as they arrive, counted `queued` rather
-// than `request`; damage G1's or M's pack before the maintainer is done with
-// the copy, and its first run, kicked by the repair's own full round, reads it
-// beside the repair, counted `queued` under load.
+// Mutations: no F7 row; no gitproc.Damage.Narrow (F6 drops the graph); no
+// `Repairer: s.Repairer` in cache.Missing, or G1/M too early (`queued`).
 func TestTheWantsCheckRepairsWhatItsCatFileNames(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -616,10 +567,9 @@ func TestTheWantsCheckRepairsWhatItsCatFileNames(t *testing.T) {
 		// dropped is what the in-place repair says it dropped
 		// (code_cache_derived_repaired's files), where the case states it.
 		dropped string
-		// held is the crewlet.code.cache.reports part the check's cat-file
-		// reports of a pack's damage, held for the fetch's own repair and
-		// consumed by it (outcome=request); empty for a derived file's
-		// damage, whose report is never held.
+		// held is the crewlet.code.cache.reports part of the check's report
+		// of a pack's damage, consumed by the fetch's repair
+		// (outcome=request); empty for a derived file's, never held.
 		held string
 	}{
 		{"F6 a multi-pack-index's table of contents ending early", func(t *testing.T, c *gitlettest.Case, l *logs,
@@ -719,37 +669,17 @@ func TestTheWantsCheckRepairsWhatItsCatFileNames(t *testing.T) {
 }
 
 // THE PACK GIT NAMES AS HOLDING A CORRUPT OBJECT IS FETCHED AGAIN UNDER THE
-// REQUEST, IN PLACE, once it is held to its row. A packed object whose stated
-// size is wrong (S1) is reported by upload-pack, parsing the want, as "packed
-// object <id> (stored in ./objects/pack/pack-<sum>.pack) is corrupt": on 2.55
-// as a ROW of the table, a pack's damage, and from 2.56 through a bare "%s"
-// alone, which names no damage. Either way the run records the pack as a
-// HINT (gitproc), the host has the cache hash it against its row
-// (cache.Cache.ConfirmHint), and a pack that is not its row's is named to the
-// repair (cache.Failure.Packs): that one pack is fetched again over its files,
-// the same incarnation answering, and the fetch served — on every git a Gitlet
-// node runs, since the node floor is 2.55. What the failing upload-pack
-// reported is the REQUEST'S (cache's report.go, HELD FOR THE REQUEST): its
-// Cmd names the request's reader, so the report is held for the repair the
-// request asks and consumed by it (reports{outcome=request}), and the copy's
-// scrub is never made due to read the whole copy beside a one-pack repair —
-// which, raced against the request's own round, logged the reinstall
-// found=trailer in about one run in ninety on a loaded machine.
+// REQUEST, IN PLACE, once held to its row: a wrong stated size (S1) is git's
+// "packed object <id> (stored in <pack>) is corrupt", a row on 2.55 and a "%s"
+// HINT from 2.56; cache.Cache.ConfirmHint hashes the pack, the repair is told
+// it (cache.Failure.Packs), and the report is the request's. The control, a
+// stand-in naming a SOUND pack, repairs nothing (a message only nominates);
+// its report goes to the copy's scrub as the request lets the copy go.
 //
-// And its control, on any git: a HEALTHY copy whose upload-pack — a stand-in
-// in front of the real git — dies naming one of the copy's own packs in that
-// very sentence. The pack is hashed, found sound, and nothing is repaired: a
-// message only nominates. Its request asked no repair, so the report held
-// for it goes to the ordinary rules as the request lets the copy go: the
-// copy's scrub is due for it.
-//
-// Mutations: repair on a hint without hashing its pack (the control
-// repairs); drop the hint path from repair (S1 answers git's failure on
-// 2.56); hand the repair no pack (the in-place round finds nothing and the
-// scrub finds the pack: `found` is `trailer`, not `hint`); run upload-pack
-// with no Cmd.Repairer (the report makes the copy's scrub due as it arrives:
-// counted `queued`, not `request`); hand nothing on at a reader's release
-// (the control's report is never counted).
+// Mutations: repair a hint unhashed (the control repairs); no hint path (S1
+// fails on 2.56); hand the repair no pack (`found` is `trailer`, not `hint`);
+// no Cmd.Repairer (`queued`, not `request`); hand nothing on at a reader's
+// release (the control's report is never counted).
 func TestThePackGitNamesIsFetchedAgainInPlace(t *testing.T) {
 	t.Parallel()
 	t.Run("a pack whose object's size is wrong", func(t *testing.T) {
@@ -862,21 +792,15 @@ esac`)
 	})
 }
 
-// A REPORT PAST THE FIRST BYTE GOES TO THE SCRUB AS ITS REQUEST ENDS. A
-// process the host runs over a cache names the request's reader on its Cmd
-// (cache.Synced.Repairer), so what it reports is held for that request's
-// repair (cache's report.go, HELD FOR THE REQUEST) — but one that fails past
-// its answer's first byte leaves the request nothing to retry with, and the
-// host repairs nothing: here an advertisement — a stand-in in front of the
-// real git — writes its first line and dies naming one of the copy's packs in
-// git's sentence for a corrupt packed object. The request ends without asking
-// a repair, and the release of its copy hands the report to the ordinary
-// rules: the copy's scrub is due for it, counted
-// reports{part=hint,outcome=queued}, exactly as a report no request repairs
-// always was. Its hint is never confirmed and nothing is run again. Its end
-// is the same whether or not the advertisement names its reader — a report
-// held for nobody goes to the scrub as it arrives — so that the advertisement
-// does name it is held by TestAnAdvertisementsReportIsHeldForItsRequestsRepair.
+// A REPORT PAST THE FIRST BYTE GOES TO THE SCRUB AS ITS REQUEST ENDS. A report
+// is held for its request's repair (package doc, "A damaged cache is repaired
+// under the request that found it"), but a process failing past its first
+// byte leaves nothing to retry: here a stand-in advertisement writes its first
+// line and dies naming a pack in git's corrupt-packed-object sentence. The
+// copy's release hands the report on (reports{part=hint,outcome=queued}); no
+// hint is confirmed, nothing run again. That end is the same had the
+// advertisement named no reader, so
+// TestAnAdvertisementsReportIsHeldForItsRequestsRepair holds that it does.
 //
 // Mutation: hand nothing on at a reader's release (the report is lost: never
 // counted, no scrub due).
@@ -917,23 +841,17 @@ esac`)
 	}
 }
 
-// AN ADVERTISEMENT'S REPORT IS HELD FOR ITS REQUEST'S REPAIR. The
-// advertisement (`upload-pack --advertise-refs`, advertise.go) names the
-// request's reader on its Cmd like every process the host runs in the
-// incarnation, so what it reports before its first byte is held for the
-// repair its request asks (cache's report.go, HELD FOR THE REQUEST) and
-// consumed by it. Here the copy's tip has the wrong size in its entry header
-// (S1), and a stand-in in front of the real git has the first advertisement
-// after the push die before writing a byte, naming that pack in git's
-// sentence for a corrupt packed object: the host confirms the hint against
-// the pack's row, the repair fetches that one pack again in place, the
-// advertisement runs again — the real git now — and the clone is served, with
-// the report counted reports{part=hint,outcome=request}, nothing made the
-// copy's scrub due beside the repair, and no pack's body hashed.
+// AN ADVERTISEMENT'S REPORT IS HELD FOR ITS REQUEST'S REPAIR: advertise.go
+// names the request's reader on its Cmd like every process in the
+// incarnation. The tip's entry header has the wrong size (S1), and a stand-in
+// has the first advertisement after the push die before its first byte naming
+// that pack: the hint is confirmed, that one pack fetched again in place, the
+// advertisement run again on the real git and the clone served, counted
+// reports{part=hint,outcome=request}, with no scrub made due and no pack's
+// body hashed.
 //
-// Mutation: run the advertisement naming no reader (no `Repairer: in.Repairer`
-// in advertise.go) — the report makes the copy's scrub due as it arrives,
-// counted `queued` rather than `request`.
+// Mutation: no `Repairer: in.Repairer` in advertise.go (the report is counted
+// `queued` rather than `request`).
 func TestAnAdvertisementsReportIsHeldForItsRequestsRepair(t *testing.T) {
 	t.Parallel()
 	// armed is a directory only the first advertisement after the push can
@@ -1063,33 +981,17 @@ func mangled(b []byte) []byte {
 }
 
 // A CACHE WHOSE BITMAP GIT CALLS LIKELY CORRUPT IS REPAIRED IN PLACE UNDER THE
-// FETCH THAT FOUND IT, and the fetch served. A clone reads the maintainer's
-// multi-pack-index bitmap, and over a damaged reverse index the clone's
-// pack-objects dies "invalid MIDX object position, MIDX is likely corrupt" —
-// AFTER upload-pack's answer's first line ("packfile", or v0's NAK), and
-// reported on the trace2 stream every process of the tree writes to, at
-// pack-objects' depth (gitproc). So the host holds the answer until its pack
-// begins — the line pack-objects dies with is a report, which keeps the hold
-// (band.go) — and the run's trace names a damaged multi-pack-index, a DERIVED
-// file: the cache drops it in place (reason `derived`) and upload-pack runs
-// again over the same request. The repair is IN PLACE: dropped and rewritten
-// over the same packs the incarnation already holds — the SAME incarnation,
-// no download — where other corruption needs the whole repository read into
-// a new one. The repaired copy serves the clone without a bitmap until its
-// maintainer writes one. Before, every clone of such a copy failed "remote:
-// aborting due to possible repository corruption on the remote side" until
-// an operator's repair.
+// FETCH THAT FOUND IT, and the fetch served. Over a damaged reverse index the
+// clone's pack-objects dies "invalid MIDX object position, MIDX is likely
+// corrupt" AFTER upload-pack's first line, on the trace2 pipe its children
+// inherit (gitproc); a report keeps the answer held until its pack begins
+// (band.go), so the derived multi-pack-index is dropped in the SAME
+// incarnation (reason `derived`) and upload-pack runs again. The `progress`
+// arm holds band.go's "a band-2 line that is no report begins the pack".
 //
-// The `progress` arm clones with `--progress`, so pack-objects writes a
-// progress line before its pack: it holds the "a band-2 line that is no
-// report begins the pack" rule (band.go) against real git on the served
-// retry, where the damaged run dies before any progress.
-//
-// Mutation: drop the position row from gitproc's format table, keep the
-// trace pipe from the children (run.go's ExtraFiles), start the answer at its
-// first byte as before, take `fatal: ` out of the report prefixes, or replace
-// the in-place derived repair with a full rebuild (incarnation moves), and
-// this fails.
+// Mutation: drop gitproc's position row, keep the trace pipe from the children
+// (run.go's ExtraFiles), start the answer at its first byte, take `fatal: `
+// out of the report prefixes, or repair by a full rebuild (incarnation moves).
 func TestADamagedMidxBitmapIsRepaired(t *testing.T) {
 	t.Parallel()
 	for _, v := range []int{0, 2} {
@@ -1145,16 +1047,11 @@ func TestADamagedMidxBitmapIsRepaired(t *testing.T) {
 // maintainer has written the multi-pack-index's bitmap and the commit-graph —
 // a cache that has served for MidxDebounce past its last push holds both —
 // waiting up to a minute: the debounce, its tick, and a loaded runner.
-//
-// THE RUNS THAT WROTE THEM HAVE ENDED, read from l, the case's logger
-// (code_cache_maintained: a run naming the bitmap, and one writing the
-// graph): a bitmap file being there is not enough. git writes the bitmap
-// before it renames the index it belongs to into place, and the cache stamps
-// what a run wrote only as the run's step returns (cache's wrote), sparing a
-// file reported damaged by a process that began before the stamp as the file
-// the write replaced. A case that damaged the index in either window damaged
-// the old one, or had the repair it waits for spared: the wants check's case
-// failed so one run in about thirty of its package's.
+// It waits for the runs to END (l's code_cache_maintained), not the files:
+// git writes the bitmap before renaming its index into place, and the cache
+// stamps a run's writes only as its step returns (cache's wrote), sparing a
+// file reported by a process older than the stamp. Damage made in either
+// window hits the old index, or its repair is spared.
 func maintainersBitmap(t *testing.T, c *gitlettest.Case, l *logs) string {
 	t.Helper()
 	deadline := time.Now().Add(time.Minute)
@@ -1219,10 +1116,9 @@ func TestANotOurRefIsNeverARebuild(t *testing.T) {
 	if n := l.count("code_fetch_retried"); n != 0 {
 		t.Errorf("not our ref was retried %d times", n)
 	}
-	// THE RULE ITSELF, apart from where git happened to print it: real git
-	// reports `not our ref` in band first, so the fetch above never reaches
-	// the rebuild's question — the classification is what answers it
-	// wherever it is asked.
+	// THE RULE ITSELF: real git reports `not our ref` in band first, so the
+	// fetch above never reaches the rebuild's question; the classification
+	// answers it wherever it is asked.
 	for kind, repairs := range map[error]bool{gitproc.ErrNotOurRef: false, gitproc.ErrFailed: false,
 		gitproc.ErrCorrupt: true, gitproc.ErrMissingObject: true} {
 		if _, ok := cache.DamageReason(&gitproc.ExitError{Command: "upload-pack", Kind: kind}); ok != repairs {
@@ -1231,31 +1127,18 @@ func TestANotOurRefIsNeverARebuild(t *testing.T) {
 	}
 }
 
-// A CRAFTED REQUEST CANNOT FORCE A REBUILD. upload-pack ECHOES the client's
-// request text in the messages it dies with — "unexpected line: '<arg>'", a
-// bad filter's quoted value, a want it could not parse, newlines and all — so
-// a fetch whose argument carries git's own damage sentences would, if the
-// host read those messages, be taken for a damaged cache and rebuilt: a whole
-// repository read from the object store again, at the word of any token that
-// may fetch, a token bound to nobody among them. The host reads a run only by
-// the FORMATS of its trace2 reports (gitproc), which carry none of the
-// request's text, so none of these touches the cache: no rebuild of any
-// reason, no retry, no report of a git process (so no scrub made due), no
-// check a request's repair forces, and no hint hashed — the payload carries
-// git's sentence for a corrupt packed object, naming one of the copy's own
-// packs, which is a hint only as a report's whole message.
+// A CRAFTED REQUEST CANNOT FORCE A REBUILD. upload-pack ECHOES the request's
+// text in the messages it dies with, so were they read, any fetch token (one
+// bound to nobody included) could have a whole repository read from the
+// object store again. The host reads only trace2 reports' FORMATS (package
+// doc, "A damaged cache is repaired under the request that found it"), so no
+// text-carrying form, v2 or v0, touches the cache: no rebuild, retry, report,
+// forced check or hint hashed (a hint is only ever a report's whole message).
+// gitproc's TestARequestCannotNameTheDamage sends every row's sentence through
+// every form against real upload-pack.
 //
-// Every form a client can send upload-pack that carries text of its own is
-// sent, under v2 and v0, through the host's own request handling (a form the
-// host refuses itself reaches no git at all). The payload is a sentence of
-// git's for every part of the repository a report can name, and the hint's;
-// gitproc's TestARequestCannotNameTheDamage sends every row's sentence, its
-// format and 65 000 control bytes through every form against real
-// upload-pack, the layer that reads them.
-//
-// Mutations: read the run's stderr through the regexps this replaced, or
-// classify the events' messages by the rows' formats as substrings, and the
-// echo forms are taken as reports of a damaged copy, repaired and rebuilt.
+// Mutations: read the run's stderr by regexps, or match the events' messages
+// to the rows' formats as substrings, and the echo forms rebuild the copy.
 func TestACraftedRequestCannotForceARebuild(t *testing.T) {
 	t.Parallel()
 	var l logs
@@ -1395,10 +1278,10 @@ func TestACraftedRequestCannotForceARebuild(t *testing.T) {
 	}
 }
 
-// O14: A FETCH REQUEST PAST WHAT IS HELD IN MEMORY IS SPOOLED AND SERVED — a
-// partial clone's lazy fetch names every blob a checkout lacks in one request,
-// and git's own 10 MiB buffer refused it. The in-memory part is set to a
-// kibibyte so the request crosses it without megabytes of fixture.
+// A FETCH REQUEST PAST WHAT IS HELD IN MEMORY IS SPOOLED AND SERVED (package
+// doc, "A fetch request is spooled, and bounded by the repository it names").
+// The in-memory part is set to a kibibyte so the request crosses it without
+// megabytes of fixture.
 func TestALargeFetchRequestIsSpooledAndServed(t *testing.T) {
 	c := newCase(t, gitlettest.SoloOptions{}, gitlettest.Settings())
 	node := c.Fleet.Nodes()[0]
@@ -1466,12 +1349,10 @@ func assertNoSpool(t *testing.T, c *gitlettest.Case) {
 }
 
 // A FETCH'S BODY IS GIVEN BACK AT ITS ANSWER — its spool, its share of the
-// allowance and its memory — once upload-pack has read it and written the
-// answer's first byte, not when the transfer ends: a transfer runs at its
-// client's pace, no retry reads the body past that byte, and a body held
-// through the transfer held the node's spool and its credential's share for
-// nothing. The stand-in git keeps upload-pack's process alive past its answer,
-// as a slow client's transfer does.
+// allowance and its memory — once upload-pack has written the answer's first
+// byte, not when the transfer its client paces ends: no retry reads the body
+// past that byte. The stand-in git keeps upload-pack's process alive past its
+// answer, as a slow client's transfer does.
 func TestAFetchsBodyIsGivenBackAtItsAnswer(t *testing.T) {
 	dir := t.TempDir()
 	hold, started := filepath.Join(dir, "hold"), filepath.Join(dir, "started")
@@ -1594,11 +1475,10 @@ func TestAFetchRequestPastItsRepositorysBoundIs413(t *testing.T) {
 
 // THE LARGEST LENGTH A CLIENT MAY DECLARE IS ANSWERED: net/http admits a
 // `Content-Length` of math.MaxInt64, and a first buffer sized one past it
-// wrapped negative and was filled with nothing for ever — a core spun, and the
-// host's stop waited on the request, for as long as anybody holding a fetch
-// credential cared to send the header. Sent raw, since Go's client sends no
-// length its body lacks; the client's half-close ends the body short of what
-// it declared, which is answered as that.
+// would wrap negative and be filled with nothing for ever, spinning a core and
+// holding the host's stop for as long as a fetch credential sends the header.
+// Sent raw, since Go's client sends no length its body lacks; the half-close
+// ends the body short of what it declared, which is answered as that.
 func TestTheLargestDeclaredLengthIsAnswered(t *testing.T) {
 	c := newCase(t, gitlettest.SoloOptions{}, gitlettest.Settings())
 	node := c.Fleet.Nodes()[0]

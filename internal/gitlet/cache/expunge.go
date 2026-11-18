@@ -14,56 +14,38 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 )
 
-// WHAT AN EXPUNGE ASKS OF THE CACHE. A repository's maintainer expunges what
-// no ref reaches (internal/gitlet/compact) in two records, and the cache is
-// where it sorts the objects: for the BEGIN, a scratch whose own packs are the
-// inputs and whose alternate is a store of every other live pack
-// ([Cache.StageExpunge]), so `pack-objects --revs --local` from the tips packs
-// what a tip reaches of the inputs alone, and `--stdin-packs` over the inputs
-// less what was kept and less the rest packs what nothing reaches; for the
-// COMMIT's rescue, a scratch whose own packs are the dropping packs and whose
-// alternate is the incarnation's objects/ ([Cache.StageRescue]), so the same
-// `--revs --local` packs what a ref reaches of the dropping packs alone —
-// what a push landed between the scan and the begin revived. Both scratches
-// carry the incarnation's packed-refs, linked, so the refs the rewrite keeps
-// what they reach of are one moment's with the packs it sorts
-// ([Scratch.RefTips]); both are made under the entry's write lock (scratch.go's
-// A REWRITE'S REPOSITORIES); and neither writes an incarnation: what the
-// maintainer builds enters its copy by adoption once its rows have applied —
-// the kept and rescue packs live ([Cache.Adopt]), the dropping packs into the
-// dropping view ([Cache.AdoptDropping]) — and every other Gitlet node's by a
-// round's install, as the rows place each.
+// WHAT AN EXPUNGE ASKS OF THE CACHE (internal/gitlet/compact): a scratch for
+// each of its two records. The BEGIN's ([Cache.StageExpunge]) holds the inputs
+// over an alternate of every other live pack, so `pack-objects --revs --local`
+// from the tips packs what a tip reaches of the inputs alone, and
+// `--stdin-packs` over the inputs less the kept and the rest packs what nothing
+// reaches. The COMMIT's rescue ([Cache.StageRescue]) holds the dropping packs
+// over the incarnation's objects/, so `--revs --local` packs what a ref reaches
+// of them alone: what a push revived between the scan and the begin. Both link
+// the incarnation's packed-refs, one moment's with its packs ([Scratch.RefTips]),
+// are made under the entry's write lock (scratch.go's A REWRITE'S
+// REPOSITORIES), and write no incarnation: outputs enter this copy by adoption
+// once their rows apply ([Cache.Adopt], [Cache.AdoptDropping]), others by install.
 
-// ErrInputsLeaving is a rescue asked over a copy whose objects/ still holds the
-// inputs of the begin it rescues for, or of any begin past the one its
-// objects/ reflects (Synced.DropEpoch below Synced.Repo.DropEpoch): those
-// inputs hold every object the begin left dropping, so a rescue leaning on
-// that objects/ would find every revived object there, rescue none of them,
-// and the commit would retire what a ref reaches. A moment's state — the swap
-// that takes the inputs out is the round's — so the caller syncs again rather
-// than give up.
+// ErrInputsLeaving is a rescue asked over a copy whose objects/ still holds a
+// begin's inputs (Synced.DropEpoch below Synced.Repo.DropEpoch): they hold every
+// object the begin left dropping, so the rescue would find every revived object
+// there, rescue none, and the commit would retire what a ref reaches. The swap
+// that takes the inputs out is the round's, so the caller syncs again.
 var ErrInputsLeaving = errors.New("cache: the copy's objects/ still holds the inputs of a begin")
 
-// StageExpunge makes the scratch an expunge's BUILD writes into: scratch/
-// expunge-<id>.git, whose own objects/pack holds the inputs — every pack of
-// inputs, git checksums each live in objects/pack, named once — and whose one
-// alternate is a merge's store of EVERY OTHER pack the incarnation serving s
-// holds live (newRewriteScratch: s's own, unless a swap has replaced it),
-// both as hard links of that incarnation's files, with its packed-refs linked
-// beside them: the refs the scan keeps what they reach of
-// ([Scratch.RefTips]). It pins that incarnation until Remove.
-// id names it — the expunge's own id, a canonical lowercase UUID, since it is
-// a path component — once.
-//
-// THE STORE IS THE LIVE ROWS, NEVER THE DIRECTORY: a pack an installed layer
-// holds in objects/pack for no live row (layers.go) is a compaction's input,
-// every object of which is in the compaction's outputs — so in the store it
-// would hide from the build an object the inputs hold, kept nowhere once the
-// begin retires them.
-//
-// Refused ([ErrInvalid]), with nothing made: no input, an input named twice or
-// not live in objects/pack, and a copy holding a row an expunge's begin left
-// dropping — an expunge open, whose commit comes before another begin.
+// StageExpunge makes the scratch an expunge's BUILD writes into:
+// scratch/expunge-<id>.git (id the expunge's, a canonical lowercase UUID, as a
+// path component), whose objects/pack links the inputs (git checksums, each
+// live, named once) and whose one alternate stores EVERY OTHER live pack of
+// the incarnation serving s (newRewriteScratch), with its packed-refs linked
+// ([Scratch.RefTips]). It pins that incarnation until Remove. The store is the
+// live rows, never the directory: a pack a layer keeps for no live row
+// (layers.go) is a compaction's input, and would hide from the build an object
+// the inputs hold, kept nowhere once the begin retires them.
+// Refused ([ErrInvalid]), nothing made: no input, an input named twice or not
+// live, or a copy holding a dropping row (an expunge open, whose commit comes
+// before another begin).
 func (c *Cache) StageExpunge(ctx context.Context, s Synced, id string, inputs []string) (*Scratch, error) {
 	if err := c.handedOut(s, "an expunge's scratch"); err != nil {
 		return nil, err
@@ -103,18 +85,15 @@ func (c *Cache) StageExpunge(ctx context.Context, s Synced, id string, inputs []
 }
 
 // StageRescue makes the scratch an expunge's RESCUE writes into:
-// scratch/rescue-<id>.git, whose own objects/pack holds every pack the
-// incarnation serving s keeps in its dropping view (newRewriteScratch) —
-// linked from there — and whose one alternate is that incarnation's
-// objects/, its live packs and never
-// its dropping view, with the incarnation's packed-refs linked beside them:
-// the refs at the rescue's sync ([Scratch.RefTips]). A copy holding no
-// dropping pack makes a scratch holding none. It pins that incarnation until
-// Remove. id names it — the commit's own id, a canonical lowercase UUID — once.
+// scratch/rescue-<id>.git (id the commit's, a canonical lowercase UUID), whose
+// objects/pack links every pack in the dropping view of the incarnation serving
+// s (newRewriteScratch; none where the copy holds none) and whose one alternate
+// is that incarnation's objects/, its live packs only, with its packed-refs
+// linked: the refs at the rescue's sync ([Scratch.RefTips]). It pins that
+// incarnation until Remove.
 //
-// Refused [ErrInputsLeaving] where the copy's objects/ still holds a begin's
-// inputs (Synced.DropEpoch below the row's), and [ErrInvalid] for an id no
-// scratch may take; nothing is made either way.
+// Refused, nothing made: [ErrInputsLeaving] where the copy's objects/ still
+// holds a begin's inputs, and [ErrInvalid] for an id no scratch may take.
 func (c *Cache) StageRescue(ctx context.Context, s Synced, id string) (*Scratch, error) {
 	if err := c.handedOut(s, "a rescue's scratch"); err != nil {
 		return nil, err
@@ -139,13 +118,11 @@ func (c *Cache) StageRescue(ctx context.Context, s Synced, id string) (*Scratch,
 	})
 }
 
-// DroppingPacks is the rows of the incarnation s pins that an expunge's begin
-// left dropping, sorted by pack id — each row's id, its git checksum, its
-// bundle's bytes, its objects and its state, as [Cache.Packs] reads a live
-// one — what the expunge's commit retires, every one, and what its rescue is
-// charged by. Copied under the entry's lock. Refused [ErrSuperseded] where a
-// swap has replaced the incarnation s pins, which a swap leaves no live set,
-// so no dropping pack, as [Cache.Packs] is: a commit retiring none would be
+// DroppingPacks is the rows an expunge's begin left dropping in the incarnation
+// s pins, sorted by pack id and read as [Cache.Packs] reads a live one: what the
+// commit retires, every one, and charges its rescue by. Copied under the
+// entry's lock. Refused [ErrSuperseded] where a swap replaced that incarnation,
+// as [Cache.Packs] is: it would answer none, and a commit retiring none is
 // refused for not retiring what its expunge left dropping. [ErrInvalid] for a
 // Synced this cache did not hand out.
 func (c *Cache) DroppingPacks(s Synced) ([]gitlet.PackRow, error) {
@@ -170,17 +147,12 @@ func (c *Cache) DroppingPacks(s Synced) ([]gitlet.PackRow, error) {
 	return out, nil
 }
 
-// RefTips is every object the scratch's refs name, each once, sorted — the
-// object ids of its packed-refs, linked from the incarnation when the scratch
-// was made ([Cache.StageExpunge], [Cache.StageRescue]): the tips a rewrite
-// keeps what they reach of. A tag's peeled line is no tip of its own: the tag
-// object reaches what it peels to. A scratch with no packed-refs — one a push
-// receives into — names none.
-//
-// READ AS THE CACHE WROTE IT (refs.go): a header, then a line a ref, its
-// object id and its name, and a peeled line under an annotated tag; a line
-// outside that grammar is an error naming it, since a tip read wrong is an
-// object a rewrite would drop.
+// RefTips is every object the scratch's packed-refs name (linked from the
+// incarnation by [Cache.StageExpunge] or [Cache.StageRescue]), each once,
+// sorted: the tips a rewrite keeps what they reach of. A tag's peeled line is no
+// tip: the tag reaches it. A scratch with no packed-refs (one a push receives
+// into) names none. A line outside the grammar the cache writes (refs.go) is an
+// error naming it, since a tip read wrong is an object a rewrite would drop.
 func (s *Scratch) RefTips() ([]string, error) {
 	f, err := os.Open(filepath.Join(s.Dir, "packed-refs"))
 	if errors.Is(err, os.ErrNotExist) {
@@ -192,8 +164,7 @@ func (s *Scratch) RefTips() ([]string, error) {
 	defer func() { _ = f.Close() }()
 	seen := map[string]bool{}
 	lines := bufio.NewScanner(f)
-	// A LINE IS AT MOST AN ID, A SPACE AND A REF: what the cache writes, and
-	// the scanner's default buffer holds it.
+	// A line is at most an id, a space and a ref, as the cache writes it.
 	lines.Buffer(nil, gitref.OIDHexLen+1+gitref.MaxRefNameBytes+1)
 	for n := 1; lines.Scan(); n++ {
 		line := lines.Text()

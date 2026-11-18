@@ -38,19 +38,16 @@ func tipTurn(t *testing.T, e *checkEstate) ([]gitlet.ChecksRequest, []gitlet.Que
 	return slices.Clone(e.writes), slices.Clone(e.records), slices.Clone(e.read)
 }
 
-// A TIP CHECK IS DEFINED AT ITS LANDINGS' BASE (ADR-0098, M5-D15): main's
-// green is at G; two landings lie above it — X, which rewrites the checks file
-// so unit runs `true`, then T on top of it. The tip work reads the checks file
-// at G, the base of the first landing above the green, and never at a
-// landing: unit is queued on T alone (coalesced — X, no longer the newest, is
-// never dispatched), as a tip check, under G's definition and G's file, its
-// diff based at G. Once unit passed on T, main's green row is asked onto T, at
-// the record that landed it. And where G's file defines no unit, unit is
-// errored on T saying so — T's own file defining it changes nothing.
+// A TIP CHECK IS DEFINED AT ITS LANDINGS' BASE (ADR-0098, M5-D15): above main's
+// green G lie X, which rewrites the checks file so unit runs `true`, and T on it.
+// The tip work reads the file at G alone, never at a landing: unit is queued on T
+// alone (coalesced), a tip check under G's definition and file, based at G. Once
+// unit passed on T, main's green is asked onto T at the record that landed it.
+// Where G's file defines no unit, unit is errored on T, whatever T's file says.
 //
-// Mutation: read the checks file at the tip — unit is queued under X's
-// `true`, the landing judging itself, red; or refuse a tip's attempt errored
-// at its dispatch (gitlet.CheckQueued.Validate) — red.
+// Mutation: read the checks file at the tip (X's `true`, the landing judging
+// itself), red; or refuse a tip's attempt errored at its dispatch
+// (gitlet.CheckQueued.Validate), red.
 func TestATipCheckIsDefinedAtItsLandingsBase(t *testing.T) {
 	t.Parallel()
 	green, rewrite, tip := oid("1"), oid("2"), oid("3")
@@ -108,22 +105,17 @@ func TestATipCheckIsDefinedAtItsLandingsBase(t *testing.T) {
 	}
 }
 
-// A RED TIP IS BISECTED OVER LANDING ROWS: four landings lie above main's
-// green, each its own record, and unit failed on the tip while lint passed
-// there — and e2e, which main's gate requires and the green's checks file
-// does not define, errored on the tip for want of a definition, which no turn
-// can change while the green stays where it is, so it holds nothing back.
-// Each turn reads only the rows: it probes the landing midway between
-// the last one unit passed on (the green, at first) and the first it failed
-// on — the second landing, then the first — queuing unit alone, as a bisect
-// under the green's file; with unit passed on the first and failed on the
-// second, it records the SECOND landing broken for unit. A landing already
-// broken is recorded nothing again, and no turn ever asks main's green row
-// past a red tip.
+// A RED TIP IS BISECTED OVER LANDING ROWS: four landings, each its own record, lie
+// above main's green; on the tip unit failed, lint passed, and e2e, required but
+// undefined by the green's checks file, errored, holding nothing back. Each turn
+// reads only the rows and probes unit alone, a bisect under the green's file, midway
+// between the last landing unit passed on and the first it failed on: the second,
+// then the first. With unit passed on the first and failed on the second, the SECOND
+// is recorded broken for unit; a broken landing is recorded nothing again, and no
+// turn asks main's green past a red tip.
 //
-// Mutation: probe the landing just below the tip each round — a linear walk
-// back, the third landing probed first, red; or wait on the check the base
-// cannot define rather than bisect beside it — nothing probed, red.
+// Mutation: probe the landing just below the tip each round (a linear walk, the
+// third probed first), red; or wait on the check the base cannot define, red.
 func TestARedTipIsBisectedOverLandingRows(t *testing.T) {
 	t.Parallel()
 	green := oid("9") // never oid("0"): that is gitlet.ZeroOID, a branch with no base file
@@ -184,15 +176,13 @@ func TestARedTipIsBisectedOverLandingRows(t *testing.T) {
 	}
 }
 
-// A TIP WAITS FOR THE ROUND IN FLIGHT (ADR-0098): main's tip round runs on X,
-// and T has landed on top of it since, holding no attempt yet. The turn
-// dispatches nothing — T waits for X's round to end rather than start a second
-// round beside it, so a target landed on faster than its checks run keeps one
-// round in flight, not one a landing. Once no round is in flight, the very
-// same rows dispatch unit on T.
+// A TIP WAITS FOR THE ROUND IN FLIGHT (ADR-0098): main's tip round runs on X, and
+// T, holding no attempt, has landed on it since. The turn dispatches nothing, so a
+// target landed on faster than its checks run keeps one round in flight, not one a
+// landing. With no round in flight, the same rows dispatch unit on T.
 //
-// Mutation: dispatch the newest whatever round is in flight — unit queued on T
-// beside X's round, red.
+// Mutation: dispatch the newest whatever is in flight (unit queued on T beside X's
+// round), red.
 func TestATipWaitsForTheRoundInFlight(t *testing.T) {
 	t.Parallel()
 	green, earlier, tip := oid("1"), oid("2"), oid("3")
@@ -220,14 +210,12 @@ func TestATipWaitsForTheRoundInFlight(t *testing.T) {
 	}
 }
 
-// EVERY TARGET'S TIP IS WORKED WITHIN ONE TURN: main's and release's windows
-// each fill a page of the repository's check work, the listing naming the
-// target each page ended at. The one turn reads on past main's page to
-// release's and queues unit on both tips — a target past the first page is
-// never left to a later pass, which would read the same first page again.
+// EVERY TARGET'S TIP IS WORKED WITHIN ONE TURN: main's and release's windows each
+// fill a page of the check work. The one turn reads on past main's page and queues
+// unit on both tips: a target past the first page is never left to a later pass,
+// which would read the same first page again.
 //
-// Mutation: stop the turn at the page the heads' cursor ends — release never
-// read, red.
+// Mutation: stop the turn at the page the heads' cursor ends (release never read), red.
 func TestEveryTargetsTipIsWorkedWithinOneTurn(t *testing.T) {
 	t.Parallel()
 	green := oid("1")
@@ -252,16 +240,14 @@ func TestEveryTargetsTipIsWorkedWithinOneTurn(t *testing.T) {
 	}
 }
 
-// A CULPRIT PAST THE WINDOW IS WARNED OF ONCE A TIP: main's tip failed unit,
-// and the landing before it in the window passed unit, but the window was
-// read past a gap, so that landing is not the one before the tip on the
-// branch and no culprit can be named. Every check record of the repository
-// asks the home a turn, and the gap stands for as long as nothing moves, so
-// two turns of one loop warn code_tip_culprit_past_the_window ONCE; a new tip
+// A CULPRIT PAST THE WINDOW IS WARNED OF ONCE A TIP: main's tip failed unit and the
+// landing before it in the window passed it, but the window was read past a gap, so
+// no culprit can be named. The gap stands while nothing moves and every check record
+// asks a turn, so two turns warn code_tip_culprit_past_the_window ONCE; a new tip
 // past the same gap is warned of afresh.
 //
-// Mutation: warn on every turn that finds the gap — two warnings for one tip,
-// red; or forget the tip warned of whatever the turn found — the same, red.
+// Mutation: warn on every turn that finds the gap, or forget the tip warned of
+// whatever the turn found: two warnings for one tip, red.
 func TestACulpritPastTheWindowIsWarnedOfOnceATip(t *testing.T) {
 	t.Parallel()
 	green := oid("1")

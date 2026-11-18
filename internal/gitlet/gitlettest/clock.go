@@ -9,29 +9,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// Clock is a fleet's clock as a case moves it on: the instant its data nodes'
-// lifecycle stores decide by (gitlet.StoreOptions.Now), and the broker's own
-// instant on every record those nodes apply from the moment it was moved.
+// Clock is a fleet's clock as a case moves it: the instant its data nodes'
+// lifecycle stores decide by (gitlet.StoreOptions.Now) and the broker's
+// instant on every record they apply after a move; its zero value is the wall
+// clock. Both move together, as a month passing moves them: a release frees a
+// name only where its record's broker instant is past the redirect's end, so
+// moving the deciding clock alone frees nothing. The Gitlet nodes, the
+// client's git and the instant a case hands Fleet.Retain keep theirs.
 //
-// WHY BOTH, AND WHY THE BROKER'S AT ALL: what a month does to a repository is
-// judged twice, alike on every node — the node that decides a release reads
-// its own clock, and the record it publishes frees the name only where the
-// record's BROKER instant is past the redirect's end, so a release decided on
-// a clock ahead of the broker's frees nothing. A case that moved the deciding
-// clock alone would publish a release every node applies as nothing; one that
-// waited out gitlet.RedirectWindow would wait thirty days. So the clock moves
-// the two together, as a month passing moves them, and nothing else: the Gitlet
-// nodes, the client's git and the retention pass's own instant (which a case
-// hands Fleet.Retain) keep theirs.
-//
-// A MOVE IS A FACT ABOUT RECORDS, never about when they are applied: every
-// record past the furthest one the node had applied when the clock moved
-// reads the move, every record at or before it reads none — so a node that
-// replays its log after a restart reads each record's instant as it read it
-// the first time. A case levels the fleet (Fleet.Level) before it moves the
-// clock, so no record appended before the move is still unapplied.
-//
-// The zero value is the wall clock, moved by nothing.
+// A move is a fact about records, not about when they apply: only records past
+// the furthest one applied at the move read it, so a replay after a restart
+// reads each instant as before. A case levels the fleet (Fleet.Level) before
+// it moves the clock, so no record appended earlier is still unapplied.
 type Clock struct {
 	mu sync.Mutex
 	// ahead is how far the clock has been moved in all.

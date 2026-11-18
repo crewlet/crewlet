@@ -31,24 +31,16 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A CODING BOX'S GIT, MEASURED (ADR-0093): what the two clone recipes cost
-// a box and the Gitlet node it clones from (BenchmarkBoxClone), what
-// the box's own git costs once its checkout is made and which of git's
-// box-side settings earn a place in the engine's box git environment
-// (BenchmarkBoxWorktree), and what a box borrowing a node's copy would save
-// (BenchmarkBoxDissociate). Every box here is a box as the engine makes one:
-// a run launched on the fleet's run store given the repository, its token
-// minted for that launch, its requests through /box/git/ with the run's
-// credential, and its commands run as a box runs them — `sh -c`, under
-// EXACTLY the git environment the engine's launch gives it (sandbox.BoxGit
-// over a HOME with no configuration, as a template's box has) — never the
-// gittest client's, whose gc.auto=0 and
-// maintenance.auto=false would hide the gc a box's own git does. The node
-// is warm: every pack in its maintainer's index with the bitmap, and a
-// commit-graph written (warmBox), before any timer. Every figure is over
-// gitlettest's memobj; the package doc's measured section and
-// docs/concepts/code-sandbox.md's "What a clone costs" carry them, with the
-// decisions taken from them.
+// A coding box's git, measured (ADR-0093): the clone recipes
+// (BenchmarkBoxClone), the box's own git and which settings the engine's box
+// git environment carries (BenchmarkBoxWorktree), and borrowing a node's copy
+// (BenchmarkBoxDissociate). Every box is one as the engine makes it: a launched
+// run's token, requests through /box/git/, commands run by `sh -c` under
+// EXACTLY sandbox.BoxGit's environment over an empty HOME, never the gittest
+// client's, whose gc.auto=0 and maintenance.auto=false would hide a box's gc.
+// The node is warm before any timer (warmBox). Figures are over memobj; the
+// package doc's measured section and docs/concepts/code-sandbox.md's "What a
+// clone costs" carry them and the decisions taken from them.
 
 // boxSeat is the seat every benchmark box's run is launched for, and
 // boxBranch the branch its run works on.
@@ -57,9 +49,8 @@ const (
 	boxBranch = "seats/" + gitlettest.FixtureAlice + "/ENG-7"
 )
 
-// boxSize is a history BenchmarkBoxClone and BenchmarkBoxDissociate clone: a
-// gittest.History of bytes, pushed a session at a time; large is an arm
-// only CREWLET_BENCH_LARGE runs.
+// boxSize is a gittest.History of bytes, pushed a session at a time; large
+// runs only under CREWLET_BENCH_LARGE.
 type boxSize struct {
 	name  string
 	bytes int64
@@ -71,8 +62,8 @@ type boxSize struct {
 // pushes, 1 421 files in thirty directories over 455 680 commits.
 var boxSizes = []boxSize{{"100MB", 100 << 20, false}, {"1GB", 1 << 30, true}}
 
-// boxCone is the cone an arm's checkout narrows to: none, or ONE DIRECTORY
-// — the first, which every history and tree of gittest holds.
+// boxCone is the cone an arm's checkout narrows to: none, or the one directory
+// dir.
 func boxCone(cone, dir string) []string {
 	if cone == "one-dir" {
 		return []string{dir}
@@ -80,43 +71,20 @@ func boxCone(cone, dir string) []string {
 	return nil
 }
 
-// historyDir is the first directory of a gittest.History, which a cone of
-// one directory names.
+// historyDir is a gittest.History's first directory, the one-dir cone.
 const historyDir = "d000"
 
-// BenchmarkBoxClone is WHAT THE TWO RECIPES COST: a box given the
-// repository by sandbox.CloneRecipe, timed from the step's start to its
-// checked-out tree, on a warm node, a fresh box an operation.
+// BenchmarkBoxClone is what the two recipes cost: sandbox.CloneRecipe's step,
+// timed to the checked-out tree, a fresh box an operation, on a warm node,
+// over size (boxSizes), git=pin|client-floor (the node pin, or at 100MB
+// 2.40.4, the oldest a box may run), recipe (sandbox.ClonePurpose,
+// boxRepoFor), cone, and seats (boxSeatArms, at 100MB: other seats' branches
+// beside main, with clone=every-branch the control).
 //
-//   - size=100MB|1GB is the history (boxSizes; 1GB only under
-//     CREWLET_BENCH_LARGE), built once for every arm under it;
-//   - git=pin|client-floor is the box's git: the node pin `make bench` puts
-//     first on PATH, the image's, and the client floor's own build (2.40.4),
-//     the oldest git a box may run — a template's git is the operator's —
-//     at 100MB;
-//   - recipe=coding|single-sha is sandbox.ClonePurpose, each recipe given the
-//     repository its purpose takes (boxRepoFor): a blobless clone at the tip
-//     on the run's branch, or a check's one commit at depth one;
-//   - cone=none|one-dir checks out the whole tree or the history's first
-//     directory;
-//   - seats=0|1000|10000 is how many OTHER SEATS' BRANCHES the repository
-//     holds beside main, each boxSeatCommits commits off its tip — what a
-//     repository its company's seats work in holds — measured at 100MB on the
-//     pin by the coding recipe with no cone, after every other arm
-//     (boxSeatArms): clone=recipe is the recipe, which clones the default
-//     branch alone, and clone=every-branch the CONTROL, its clone as git makes
-//     one unless told otherwise, wanting every branch it is shown.
-//
-// Reported an operation: the wall time (s/op); sent-MB, what the node
-// answered the box, of which listed-KB sent no objects — the advertisements
-// and the clone's listing of the repository's refs, which a clone asks for
-// whichever branches it wants; fetches, the fetch commands the box sent, of
-// which lazy-fetches came after the recipe's own clone or fetch — its
-// checkout's fetch of the blobs it writes — bringing lazy-MB; objects, what
-// the box's repository holds; and server-cpu-ms, the node's git. Those lazy
-// fetches are all a build reading every file the checkout holds needs: the
-// checkout fetched every blob it wrote, so such a build asks git for nothing
-// more.
+// Reported: s/op; sent-MB, of which listed-KB carried no objects (the
+// advertisements and ref listing); fetches, of which lazy-fetches (lazy-MB)
+// came after the recipe's own; objects; server-cpu-ms. Those lazy fetches are
+// all a build reading the whole checkout needs: the checkout fetched every blob.
 func BenchmarkBoxClone(b *testing.B) {
 	gitlettest.Quiet(b)
 	for _, size := range boxSizes {
@@ -128,7 +96,7 @@ func BenchmarkBoxClone(b *testing.B) {
 			rows, commits, src := boxSource(b, f, p, size.bytes)
 			tip := commits[len(commits)-1]
 			if size.large {
-				// The seats arms run at 100MB alone, and a gigabyte's source
+				// Only the 100MB seats arms need the source, and a gigabyte's
 				// would hold its disk through every arm.
 				if err := os.RemoveAll(src); err != nil {
 					b.Fatal(err)
@@ -162,27 +130,22 @@ func BenchmarkBoxClone(b *testing.B) {
 	}
 }
 
-// boxSeats are the counts of other seats' branches BenchmarkBoxClone's seats
-// arms clone beside: none; a push's most commands (gitlet.MaxCommandsPerPush),
-// a hundred seats with ten work items each; and ten times that, a tenth of
-// the live refs a repository may hold (gitlet.MaxRefsPerRepo).
+// boxSeats are the seats arms' counts of other seats' branches: none;
+// gitlet.MaxCommandsPerPush, a hundred seats of ten work items; and ten times
+// that, a tenth of gitlet.MaxRefsPerRepo.
 var boxSeats = []int{0, gitlet.MaxCommandsPerPush, 10 * gitlet.MaxCommandsPerPush}
 
-// boxSeatCommits is how many commits each seat's branch carries off main: a
-// work item's few, each a new root tree, a new tree of the directory it
-// changes and a blob, as a seat's commit is.
+// boxSeatCommits is a seat branch's commits off main, a work item's few; each
+// is a new root tree, directory tree and blob, as a seat's commit is.
 const boxSeatCommits = 3
 
 // seatIdent is every seat commit's committer in the seats arms.
 const seatIdent = "Seat Work <seat@seats.invalid>"
 
-// boxSeatArms are BenchmarkBoxClone's seats arms over the history in src,
-// whose commits, oldest first, are commits: for each count of boxSeats in
-// turn, the seats' branches made up to it (pushSeatBranches) and the node
-// synced to them (syncedRows), then a fresh box on the pin cloning by the
-// coding recipe with no cone — clone=recipe — and, beside any seat's branch,
-// the same clone as git makes one unless told otherwise — clone=every-branch,
-// the control (everyBranch).
+// boxSeatArms are BenchmarkBoxClone's seats arms over src's history (commits,
+// oldest first): for each of boxSeats, the branches grown to it and the node
+// synced, then clone=recipe and, beside any branch, the control
+// clone=every-branch (everyBranch).
 func boxSeatArms(b *testing.B, f *gitlettest.SoloFleet, p *gitlettest.Person, src string, commits []string) {
 	b.Helper()
 	made := 0
@@ -204,14 +167,11 @@ func boxSeatArms(b *testing.B, f *gitlettest.SoloFleet, p *gitlettest.Person, sr
 	}
 }
 
-// pushSeatBranches makes the seats' branches numbered from to to (excluded)
-// in src — each boxSeatCommits commits off the history's tip, every commit
-// adding a file to the history's first directory — and pushes them to f's
-// Gitlet node as p, gitlet.MaxCommandsPerPush branches a push, so the node holds
-// a pack of their commits, trees and blobs a push, as seats' pushes leave it
-// packs until compaction merges them. Each refspec names its branch's tip by
-// its id, which git's push takes as it is rather than matching it against
-// every ref src holds.
+// pushSeatBranches makes seat branches [from, to) in src, each boxSeatCommits
+// commits off the tip, and pushes them gitlet.MaxCommandsPerPush a push, so the
+// node holds a pack a push as seats' pushes leave it until compaction. Each
+// refspec names its tip by id, which git takes as is rather than matching it
+// against every ref src holds.
 func pushSeatBranches(b *testing.B, f *gitlettest.SoloFleet, p *gitlettest.Person, src string, commits []string,
 	from, to int) {
 	b.Helper()
@@ -222,9 +182,8 @@ func pushSeatBranches(b *testing.B, f *gitlettest.SoloFleet, p *gitlettest.Perso
 		gittest.FastImport(b, p.Git(), src, func(w *bufio.Writer) error {
 			for i := lo; i < hi; i++ {
 				for c := range boxSeatCommits {
-					// Dated after the history and after every seat commit
-					// before it, so no walk of git's reads a skewed clock
-					// (gittest.After).
+					// Dated after every earlier commit, so no git walk reads a
+					// skewed clock (gittest.After).
 					date := strings.TrimPrefix(gittest.After(commits, i*boxSeatCommits+c), "@")
 					msg := fmt.Sprintf("change %d of ENG-%d\n", c, i)
 					fmt.Fprintf(w, "commit %s\ncommitter %s %s\ndata %d\n%s", seatBranch(i), seatIdent, date,
@@ -256,13 +215,10 @@ func pushSeatBranches(b *testing.B, f *gitlettest.SoloFleet, p *gitlettest.Perso
 	}
 }
 
-// syncedRows is the fleet's repository's rows once its Gitlet node holds every
-// pack they name — synced, and no more: the history's packs stay in the
-// node's bitmapped index as warmRows left them, and the seats' packs stand
-// beside it, as a repository's newest pushes do until gitlet/cache's MidxPacks
-// of them have gathered and the node's maintainer indexes them all. Never
-// warm again: a few packs never make the maintainer run, so a wait for its
-// index would wait out warmBoxWait.
+// syncedRows is the repository's rows once the node holds every pack they
+// name, and no more: the seats' packs stand outside the history's index, as
+// newest pushes do until gitlet/cache's MidxPacks gather. Not warmBox: a few
+// packs never make the maintainer run, so its wait would run out warmBoxWait.
 func syncedRows(b *testing.B, f *gitlettest.SoloFleet) gitlettest.Rows {
 	b.Helper()
 	rows, err := f.Rows(b.Context(), gitlettest.RepoName, gitlettest.Linearizable)
@@ -277,15 +233,11 @@ func syncedRows(b *testing.B, f *gitlettest.SoloFleet) gitlettest.Rows {
 	return rows
 }
 
-// seatBranch is the seats arms' branch i: seat i/10's branch for work item
-// ENG-i, ten work items a seat.
+// seatBranch is seat i/10's branch for work item ENG-i.
 func seatBranch(i int) string { return fmt.Sprintf("refs/heads/seats/seat%04d/ENG-%d", i/10, i) }
 
-// everyBranch is step's clone made as git makes one unless told otherwise —
-// wanting every branch and tag the host shows it, tracking each, under a
-// refspec of every branch — rather than of the default branch alone: the
-// coding recipe as it was before it named --single-branch, the seats arms'
-// control.
+// everyBranch is step's clone without --single-branch, wanting every branch
+// it is shown: the seats arms' control.
 func everyBranch(b *testing.B, step sandbox.SetupStep) sandbox.SetupStep {
 	b.Helper()
 	command := strings.Replace(step.Commands[0], " --single-branch ", " ", 1)
@@ -306,8 +258,7 @@ func cloneStep(b *testing.B, repo sandbox.RunRepo, purpose sandbox.ClonePurpose)
 	return step
 }
 
-// boxClones is one BenchmarkBoxClone arm: a fresh box's run of step, giving
-// it repo, an operation.
+// boxClones is one BenchmarkBoxClone arm: step in a fresh box an operation.
 func boxClones(b *testing.B, f *gitlettest.SoloFleet, p *gitlettest.Person, box *benchBox, repo sandbox.RunRepo,
 	step sandbox.SetupStep) {
 	b.Helper()
@@ -319,8 +270,7 @@ func boxClones(b *testing.B, f *gitlettest.SoloFleet, p *gitlettest.Person, box 
 	)
 	for b.Loop() {
 		b.StopTimer()
-		// A fresh box an operation, removed as the operation ends, so an
-		// arm holds one checkout at a time.
+		// Removed as the operation ends, so an arm holds one checkout at a time.
 		dir := b.TempDir()
 		box.proxy.take()
 		before := serverCPU(node.Metrics())
@@ -359,47 +309,18 @@ func boxClones(b *testing.B, f *gitlettest.SoloFleet, p *gitlettest.Person, box 
 	b.ReportMetric(cpu/n, "server-cpu-ms")
 }
 
-// BenchmarkBoxWorktree is WHAT A BOX'S OWN GIT COSTS ONCE ITS CHECKOUT IS
-// MADE, and so which of git's settings for a large work tree the engine's
-// box git environment carries:
+// BenchmarkBoxWorktree is what a box's own git costs once its checkout is
+// made, and so which large-tree settings sandbox.BoxGit carries: adopted on
+// medians, the gain past the p10-p90 spread (code-sandbox.md).
 //
-//   - files=10000|100000|1000000 is a gittest.Tree of that many files of 4
-//     KiB in directories of 48, pushed a commit at a time (1000000 only
-//     under CREWLET_BENCH_LARGE), the width a checkout's cost follows;
-//   - index=default|v4+untracked is the box's index configuration: git's own
-//     — the engine's two index entries taken back by entries after them, to
-//     version 2 and the untracked cache kept as the index has it — or the
-//     engine's (sandbox.BoxGit's entries 6 and 7: index.version=4 and
-//     core.untrackedCache=true, what feature.manyFiles sets but
-//     index.skipHash, which writes an index older libgit2 builds refuse);
-//   - cone=none|one-dir checks out the whole tree or its first directory;
-//   - op=checkout is the coding recipe's clone and checkout, a fresh box an
-//     operation; op=status a warm `git status` and op=commit `git commit -qam`
-//     of one changed file, each in one checkout the arm made beforehand and
-//     read twice before the timer;
-//   - fsmonitor=on, at cone=none, is op=status and op=commit with git's
-//     monitor on in the clone's own configuration, its daemon started by the
-//     first status, which first-status-ms reports — what sandbox.MonitorStep
-//     turns on in a box that can keep it;
-//   - fsmonitor=starved, at cone=none, is op=status with the monitor on and
-//     the box's git allowed half as many watches as the checkout has
-//     directories (starveWatches): a tree that has outgrown the kernel's
-//     budget, which every status then meets — daemon-starts is how many
-//     times each started the daemon again.
-//
-// Every op reports its median and its p10 and p90 in milliseconds: the rule
-// a setting is adopted by is judged on medians, the gain larger than the
-// spread (code-sandbox.md, "What a clone costs").
-//
-// session/history=20MB|100MB/maintenance=git|gc|gc-small runs sessionRounds
-// rounds of an agent's commands in a blobless coding clone of a history
-// (boxSession, sessionSizes):
-// with git's own automatic maintenance, with its gc task turned on, and with
-// that gc keeping every pack of at least sessionKeepPack — and, where a gc
-// runs, gc=foreground|detached. Each reports the packs the lazy fetches
-// leave, what the commands cost as they gather — status, log -p and commit,
-// the first ten rounds against the last ten — and what the gcs cost against
-// the session's git (gc-cpu-share), and whether any command met their lock.
+//   - files=10000|100000|1000000 (the last LARGE): 4 KiB files, 48 a directory;
+//   - index=default|v4+untracked: git's own, or BoxGit's entries 6 and 7
+//     (feature.manyFiles but index.skipHash, which older libgit2 refuses);
+//   - cone=none|one-dir; op=checkout fresh, op=status|commit warm in one checkout;
+//   - at cone=none, fsmonitor=on (sandbox.MonitorStep's; first-status-ms) and
+//     fsmonitor=starved (starveWatches; daemon-starts);
+//   - session/history/maintenance=git|gc|gc-small|incremental and
+//     gc=foreground|detached: an agent's rounds in a blobless clone (boxSession).
 func BenchmarkBoxWorktree(b *testing.B) {
 	gitlettest.Quiet(b)
 	for _, files := range []int{10_000, 100_000, 1_000_000} {
@@ -413,8 +334,7 @@ func BenchmarkBoxWorktree(b *testing.B) {
 				name      string
 				overrides []string
 			}{
-				// git's own: the engine's index entries taken back to what
-				// git does unset — version 2 (3 where an entry needs it) and
+				// git's own, unset: version 2 (3 where an entry needs it), and
 				// the untracked cache kept as the index has it, none.
 				{"default", []string{"index.version", "2", "core.untrackedCache", "keep"}},
 				// The engine's entries 6 and 7 (sandbox.BoxGit).
@@ -437,8 +357,7 @@ func BenchmarkBoxWorktree(b *testing.B) {
 					if cone != "none" {
 						continue
 					}
-					// THE SAME CHECKOUT with the monitor on, once the arms
-					// above have read it without.
+					// The same checkout, with the monitor on.
 					b.Run(arm+"/fsmonitor=on", func(b *testing.B) {
 						first, watches := boxFsmonitor(b, box, checkout, files)
 						b.Run("op=status", func(b *testing.B) {
@@ -449,8 +368,7 @@ func BenchmarkBoxWorktree(b *testing.B) {
 							boxCommits(b, box, checkout, files)
 						})
 					})
-					// The same checkout again, its tree past what the kernel
-					// lets the box's git watch.
+					// The same checkout, past the kernel's watch budget.
 					b.Run(arm+"/fsmonitor=starved/op=status", func(b *testing.B) {
 						boxStarved(b, box, checkout, files)
 					})
@@ -468,20 +386,16 @@ func BenchmarkBoxWorktree(b *testing.B) {
 					settings []string
 					detached []bool
 				}{
-					// git's own: on 2.55.0 and newer, no task of its automatic
-					// maintenance repacks a blobless clone's lazy-fetch packs,
-					// so no gc runs to be counted, attached or not.
+					// git's own: from 2.55.0 no automatic task repacks a
+					// blobless clone's lazy-fetch packs, so no gc runs.
 					{"maintenance=git", nil, []bool{false}},
-					// Its gc task on: gc --auto's own trigger, gc.autoPackLimit's
-					// fifty packs, then every pack repacked into one.
+					// gc --auto at gc.autoPackLimit's fifty packs, all repacked
+					// into one.
 					{"maintenance=gc", []string{"maintenance.gc.enabled", "true"}, size.detached},
-					// The same, keeping every pack of at least
-					// sessionKeepPack — the clone's own — so a gc writes the
-					// lazy fetches' alone.
+					// The same, keeping the clone's own pack (sessionKeepPack).
 					{"maintenance=gc-small", []string{"maintenance.gc.enabled", "true", "gc.bigPackThreshold",
 						sessionKeepPack}, size.detached},
-					// The incremental repack task on: a multi-pack-index over
-					// the packs, and the small ones repacked in batches —
+					// A multi-pack-index and small packs repacked in batches:
 					// work that follows the packs, not the history.
 					{"maintenance=incremental", []string{"maintenance.incremental-repack.enabled", "true"},
 						size.detached},
@@ -496,10 +410,8 @@ func BenchmarkBoxWorktree(b *testing.B) {
 							}
 						}
 						if !detached {
-							// So a gc's CPU is the CPU of the command that
-							// started it, which waits for it: detached, no
-							// process waits for it and its CPU is counted
-							// nowhere.
+							// So the command that started a gc waits for it and
+							// counts its CPU; detached, nothing does.
 							overrides = append(overrides, "gc.autoDetach", "false", "maintenance.autoDetach", "false")
 						}
 						b.Run(name, func(b *testing.B) {
@@ -513,12 +425,10 @@ func BenchmarkBoxWorktree(b *testing.B) {
 	})
 }
 
-// sessionSizes are the session arms' histories: twenty megabytes, 26 files
-// of a directory over 8 960 commits, a few hundred versions each — history
-// enough for every `log -p` a session reads — whose gcs are counted
-// attached and detached; and 100 MiB, five times the commits and trees
-// every gc repacks, which is what a gc's cost follows and a lazy fetch's
-// pack does not, counted attached alone.
+// sessionSizes are the session arms' histories: 20 MB (26 files over 8 960
+// commits, enough for every `log -p` a session reads), gcs attached and
+// detached; and 100 MiB, five times the commits and trees a gc repacks, which
+// a gc's cost follows and a lazy fetch's does not, attached alone.
 var sessionSizes = []struct {
 	name     string
 	bytes    int64
@@ -528,19 +438,14 @@ var sessionSizes = []struct {
 	{"100MB", 100 << 20, []bool{false}},
 }
 
-// starveWatches is how many inotify watches the fsmonitor=starved arm lets
-// the box's git take, against the checkout's directories: half of them, so
-// the daemon dies half-way through its first walk of the tree — a tree that
-// has grown to twice what the kernel lets the box watch, as a build's output
-// grows one.
+// starveWatches is the fsmonitor=starved arm's watch budget, a share of the
+// checkout's directories: half, so the daemon dies half-way through its first
+// walk, as when a build's output doubles a tree past the kernel's budget.
 const starveWatches = 0.5
 
-// boxStarved is the fsmonitor=starved arm: checkout's monitor on, every
-// git command run with a stand-in for the kernel's watch budget that refuses
-// the process its starveWatches share of the checkout's directories and on
-// (watchBudget), and a warm status an operation, reporting with its spread
-// how many times each started the monitor's daemon again (daemon-starts).
-// The daemon is stopped and the setting dropped when the arm ends.
+// boxStarved is the fsmonitor=starved arm: the monitor on, every git command
+// under watchBudget at starveWatches, a warm status an operation, reporting
+// daemon-starts, the daemon restarts a status made.
 func boxStarved(b *testing.B, box *benchBox, checkout string, files int) {
 	b.Helper()
 	if out, err := boxTry(b, checkout, box.env, "git fsmonitor--daemon status"); err != nil &&
@@ -584,8 +489,7 @@ func boxStarved(b *testing.B, box *benchBox, checkout string, files int) {
 	b.ReportMetric(float64(budget), "inotify-watches")
 }
 
-// daemonStarts is how many times the git commands whose trace2 events are in
-// the file at path started the monitor's daemon.
+// daemonStarts is how many monitor daemons the trace2 events at path started.
 func daemonStarts(b *testing.B, path string) int {
 	b.Helper()
 	body, err := os.ReadFile(path)
@@ -605,17 +509,12 @@ func daemonStarts(b *testing.B, path string) int {
 // watchBudgetEnv is the variable watchBudget's library reads its budget from.
 const watchBudgetEnv = "CREWLET_BENCH_WATCHES"
 
-// watchBudgetSource is a library that stands in for the KERNEL'S PER-USER
-// WATCH BUDGET in one process: preloaded, it lets the process add as many
-// inotify watches as watchBudgetEnv says and refuses every one past them
-// with ENOSPC, as Linux refuses a user at fs.inotify.max_user_watches. A
-// stand-in rather than the kernel's own limit because that limit is the
-// whole user's — lowering it, or spending it down, starves every other
-// watcher of the user running the benchmark — and a user namespace's own
-// lower limit needs a namespace a container's runtime may not let a process
-// make. Each process counts its own: the daemon a git command starts begins
-// its walk with the whole budget, as one would with the user's watches all
-// free.
+// watchBudgetSource is a preloaded stand-in for the kernel's per-user watch
+// budget: it refuses inotify watches past watchBudgetEnv with ENOSPC, as Linux
+// does at fs.inotify.max_user_watches. Not the kernel's limit: it is the whole
+// user's, so lowering or spending it starves the user's other watchers, and a
+// user namespace's lower limit needs a namespace a container may not allow.
+// Each process counts its own, so a daemon starts with the whole budget.
 const watchBudgetSource = `#define _GNU_SOURCE
 #include <dlfcn.h>
 #include <errno.h>
@@ -635,9 +534,8 @@ int inotify_add_watch(int fd, const char *path, uint32_t mask) {
 }
 `
 
-// watchBudget builds watchBudgetSource with the machine's C compiler and
-// answers the library's path, SKIPPING b, naming what is missing, where
-// there is none — the one arm that needs one.
+// watchBudget builds watchBudgetSource with cc and answers the library's path,
+// skipping b where there is no cc: the one arm that needs one.
 func watchBudget(b *testing.B) string {
 	b.Helper()
 	cc, err := exec.LookPath("cc")
@@ -655,7 +553,7 @@ func watchBudget(b *testing.B) string {
 	return lib
 }
 
-// boxCheckouts is an op=checkout arm: a fresh box's coding recipe of repo an
+// boxCheckouts is an op=checkout arm: the coding recipe in a fresh box an
 // operation.
 func boxCheckouts(b *testing.B, box *benchBox, repo sandbox.RunRepo) {
 	b.Helper()
@@ -666,8 +564,7 @@ func boxCheckouts(b *testing.B, box *benchBox, repo sandbox.RunRepo) {
 	var took []time.Duration
 	for b.Loop() {
 		b.StopTimer()
-		// A fresh box an operation, removed as the operation ends, so an
-		// arm holds one checkout at a time.
+		// Removed as the operation ends, so an arm holds one checkout at a time.
 		dir := b.TempDir()
 		b.StartTimer()
 		at := time.Now()
@@ -682,8 +579,8 @@ func boxCheckouts(b *testing.B, box *benchBox, repo sandbox.RunRepo) {
 	reportSpread(b, took)
 }
 
-// boxCheckout is a coding checkout of repo in a box, made once with no timer
-// for the arms that read it, and its directory.
+// boxCheckout makes a coding checkout of repo once, untimed, and answers its
+// directory.
 func boxCheckout(b *testing.B, box *benchBox, repo sandbox.RunRepo) string {
 	b.Helper()
 	step, err := sandbox.CloneRecipe(repo, sandbox.CloneCoding)
@@ -695,14 +592,11 @@ func boxCheckout(b *testing.B, box *benchBox, repo sandbox.RunRepo) string {
 	return filepath.Join(dir, repo.Repo)
 }
 
-// pastRacy waits until the clock has left the second checkout's index was last
-// written in. git compares a file whose mtime falls in its index's second by
-// its CONTENT — racily clean, at the second's grain the pinned git is built
-// with — so a status in that second hashes every such file rather than stat
-// it, and each rewrites the index in the same second again: right after a
-// checkout of thousands of files, that is the whole tree, a transient a box
-// leaves once its agent's first status runs seconds after its setup. The
-// status after this wait rewrites the index past it.
+// pastRacy waits until the clock has left the second checkout's index was
+// last written in. git hashes a file whose mtime falls in its index's second
+// (racily clean, at the pinned git's one-second grain), so right after a
+// checkout a status hashes the whole tree, a transient a box has left by its
+// agent's first status. The status after this wait rewrites the index past it.
 func pastRacy(b *testing.B, checkout string) {
 	b.Helper()
 	info, err := os.Stat(filepath.Join(checkout, ".git", "index"))
@@ -713,11 +607,9 @@ func pastRacy(b *testing.B, checkout string) {
 	time.Sleep(time.Until(info.ModTime().Truncate(time.Second).Add(time.Second + 10*time.Millisecond))) //fixedwait:measure the remaining time only sizes the wait past the index's second
 }
 
-// boxStatuses is an op=status arm: a warm `git status` of checkout an
-// operation, after two before the timer once the index has left its racy
-// second (pastRacy) — the first of which writes what the index caches — and
-// first, the first status's own time where the arm measured one
-// (fsmonitor's, which starts its daemon), reported beside.
+// boxStatuses is an op=status arm: a warm `git status` an operation, after
+// two untimed ones past the racy second (pastRacy), the first filling the
+// index's caches; first, where non-zero, is reported as first-status-ms.
 func boxStatuses(b *testing.B, box *benchBox, checkout string, first time.Duration) {
 	b.Helper()
 	pastRacy(b, checkout)
@@ -735,11 +627,9 @@ func boxStatuses(b *testing.B, box *benchBox, checkout string, first time.Durati
 	}
 }
 
-// boxCommits is an op=commit arm: one file of the tree changed, then `git
-// commit -qam` timed, an operation — git's own commit, with no hook: the
-// recipe writes none, and the attribution hook an executor's commits run is
-// its runner's (internal/sandbox/executor's attribution.go), which this arm
-// does not time.
+// boxCommits is an op=commit arm: one file changed, then `git commit -qam`
+// timed, an operation. No hook runs: the recipe writes none, and the
+// attribution hook is the executor runner's (internal/sandbox/executor).
 func boxCommits(b *testing.B, box *benchBox, checkout string, files int) {
 	b.Helper()
 	pastRacy(b, checkout)
@@ -748,9 +638,8 @@ func boxCommits(b *testing.B, box *benchBox, checkout string, files int) {
 	n := 0
 	for b.Loop() {
 		b.StopTimer()
-		// A file of the checkout, a different one each time, its first byte
-		// rewritten: one changed file in a tree of files (a cone holds the
-		// first directory).
+		// A different file each time, from the first directory, which a
+		// cone holds.
 		path := filepath.Join(checkout, filepath.FromSlash(gittest.TreeFile(n%min(files, 48))))
 		changeFile(b, path, n)
 		n++
@@ -761,13 +650,12 @@ func boxCommits(b *testing.B, box *benchBox, checkout string, files int) {
 	reportSpread(b, took)
 }
 
-// changes counts every change changeFile has made in this process, so no two
-// write the same bytes: an arm that changes a file an earlier arm changed the
-// same way would leave nothing to commit.
+// changes counts changeFile's writes in this process, so no two write the same
+// bytes and leave nothing to commit.
 var changes atomic.Int64
 
-// changeFile rewrites the first bytes of the file at path with n and a count
-// of its own, so each operation changes it whatever any before wrote.
+// changeFile rewrites the first bytes of the file at path with n and the next
+// of changes.
 func changeFile(b *testing.B, path string, n int) {
 	b.Helper()
 	f, err := os.OpenFile(path, os.O_WRONLY, 0)
@@ -783,12 +671,9 @@ func changeFile(b *testing.B, path string, n int) {
 }
 
 // boxFsmonitor turns git's file-system monitor on in checkout's own
-// configuration — the one place it could be adopted, the clone step, since
-// it runs a daemon — and answers the first status's time, which starts the
-// daemon, and the inotify watches the checkout needs (a directory each).
-// SKIPPED, naming git's own words, where the box's git has no monitor on
-// this platform; the daemon is stopped, and the setting dropped, when the
-// arm ends.
+// configuration (a daemon, so only the clone step could adopt it) and answers
+// the first status's time, which starts the daemon, and the inotify watches the
+// checkout needs. It skips where the box's git has no monitor here.
 func boxFsmonitor(b *testing.B, box *benchBox, checkout string, files int) (time.Duration, int) {
 	b.Helper()
 	if out, err := boxTry(b, checkout, box.env, "git fsmonitor--daemon status"); err != nil &&
@@ -810,11 +695,9 @@ func boxFsmonitor(b *testing.B, box *benchBox, checkout string, files int) (time
 	return first, watches
 }
 
-// stopMonitor stops the monitor's daemon of the checkout at dir, if any runs,
-// when b ends — before b's directories go: an arm that turns the monitor on
-// has the first git command that asks it start a daemon that would outlive
-// the benchmark. Not under b's context, which is cancelled before a cleanup
-// runs.
+// stopMonitor stops dir's monitor daemon, if any, when b ends and before its
+// directories go, or the daemon outlives the benchmark. Not under b's context,
+// which is cancelled before a cleanup runs.
 func stopMonitor(b *testing.B, box *benchBox, dir string) {
 	b.Helper()
 	b.Cleanup(func() {
@@ -824,24 +707,20 @@ func stopMonitor(b *testing.B, box *benchBox, dir string) {
 	})
 }
 
-// sessionRounds is a session's length: each of the shape's rounds lazily
-// fetches about three packs, so gc.autoPackLimit's fifty is crossed within
-// about seventeen rounds where a gc runs at all, and two hundred is a dozen
-// of its gcs — and, where none runs, six hundred packs to read the commands'
-// cost against.
+// sessionRounds is a session's length: a round lazily fetches about three
+// packs, so 200 rounds is a dozen gcs at gc.autoPackLimit's fifty, or, with
+// none, six hundred packs to read the commands' cost against.
 const sessionRounds = 200
 
-// sessionTrend is how many rounds at each end of a session the commands'
-// cost is compared over: the first ten against the last ten, medians, so the
-// round a gc ran in moves neither.
+// sessionTrend is the rounds at each end of a session whose medians are
+// compared, so the round a gc ran in moves neither.
 const sessionTrend = 10
 
 // sessionKeepPack is the maintenance=gc-small arm's gc.bigPackThreshold: a
-// pack of a mebibyte or more is kept as it is, so a gc repacks only the
-// lazy fetches' small packs and the pack an earlier gc made of them, never
-// the clone's own — every commit and tree of the history, several megabytes
-// at the session's twenty, 179 MB at a gigabyte's — which a gc would
-// otherwise repack whole every fifty lazy fetches.
+// pack of 1 MiB or more is kept, so a gc repacks only the lazy fetches'
+// packs and an earlier gc's, never the clone's own (every commit and tree,
+// 179 MB at a gigabyte), which it would otherwise repack whole every fifty
+// lazy fetches.
 const sessionKeepPack = "1m"
 
 // sessionCommands are a session's round, in order; the empty one is three
@@ -855,13 +734,10 @@ var sessionCommands = []string{
 }
 
 // sessionCommand is round r's command s over files, in a clone made at base.
-// The history step reads round r's file's three changes, in the history the
-// clone was given, before those the rounds before it read of that file —
-// each pass over the files three changes further back, as an agent tracing a
-// bug reads back through a file's history — so every round asks for versions
-// the clone has never held: read again and again at its tip, a file's last
-// changes are soon the session's own commits, which it holds, and the clone
-// would stop fetching once it had read each file once.
+// The history step reads three changes of round r's file from base, each pass
+// over the files three further back, as an agent tracing a bug does, so every
+// round wants versions the clone never held: read at its tip, a file's last
+// changes are soon the session's own commits and the clone stops fetching.
 func sessionCommand(r, s int, files []string, base string) string {
 	if sessionCommands[s] != "" {
 		return sessionCommands[s]
@@ -870,27 +746,17 @@ func sessionCommand(r, s int, files []string, base string) string {
 		sandbox.ShellQuote(files[r%len(files)])
 }
 
-// boxSession is a session arm: a blobless coding clone, then ROUNDS of an
-// agent's commands in it (sessionCommands) — status, grep, three of a file's
-// changes with their patches, each pass over the files further back
-// (sessionCommand), which is what makes a blobless clone fetch (each diff's
-// missing blobs: a lazy fetch, and so a pack), the recent log, and four files
-// of the tree changed and committed — sessionRounds of them, an operation.
+// boxSession is a session arm: a blobless coding clone, then sessionRounds of
+// sessionCommands in it, an operation; the log -p step's missing blobs make
+// each round's lazy fetches, so packs.
 //
-// Every command's CPU — its own and its waited children's, the lazy fetches
-// among them — is the session's git. A GC is a pack count that fell, during
-// a command or between two. FOREGROUND, a gc runs inside the command that
-// started it, which waits for it: its CPU is that command's above the median
-// of the same command in the rounds no gc ran in, and its share is of the
-// session's git. DETACHED, as a box's git runs it, no process waits for it
-// and its CPU is counted nowhere: that arm reports the commands that ran
-// while a gc held its gc.pid, and any command that failed or named a lock.
-//
-// Reported: gcs; packs, the most the clone held, and packs-end; the median
-// CPU of status, log -p and commit over the first and the last sessionTrend
-// rounds (status-first-ms, status-last-ms, log-p-…, commit-…), what the
-// packs a session gathers cost each command; session-cpu-ms; gc-cpu-ms and
-// gc-cpu-share (foreground); beside and lock-failures (detached).
+// Every command's CPU, waited children included, is the session's git. A gc
+// is a pack count that fell. FOREGROUND, its CPU is its command's above that
+// command's median in gc-free rounds; DETACHED, as a box runs it, nothing
+// counts it, so the arm reports commands run while gc.pid was held (beside)
+// and any that failed or named a lock (lock-failures). Also reported: gcs,
+// packs (the most) and packs-end, <command>-first-ms and -last-ms (medians over
+// sessionTrend rounds), session-cpu-ms, and foreground gc-cpu-ms/-share.
 func boxSession(b *testing.B, box *benchBox, repo sandbox.RunRepo, foreground bool) {
 	b.Helper()
 	step, err := sandbox.CloneRecipe(repo, sandbox.CloneCoding)
@@ -947,10 +813,8 @@ func boxSession(b *testing.B, box *benchBox, repo sandbox.RunRepo, foreground bo
 				}
 			}
 		}
-		// THE CLONE STILL KNOWS WHICH OBJECTS ITS REMOTE PROMISED: whatever
-		// repacked the lazy fetches' packs kept every object they held
-		// marked a promisor's, or a blob the clone never fetched reads as
-		// missing rather than as one to fetch.
+		// A repack must keep the lazy fetches' objects marked a
+		// promisor's, or an unfetched blob reads as missing, not fetchable.
 		if out, err := boxTry(b, clone, box.env,
 			"git rev-list --objects --all --missing=allow-promisor >/dev/null"); err != nil {
 			b.Fatalf("after %d rounds the clone cannot account for the objects it lacks: %v\n%s", sessionRounds,
@@ -996,8 +860,8 @@ func boxSession(b *testing.B, box *benchBox, repo sandbox.RunRepo, foreground bo
 	b.ReportMetric(float64(locks)/n, "lock-failures")
 }
 
-// medianOf is the median CPU of command s over rows, leaving out a row whose
-// s ran a gc (ran) — what the command costs, the gc it started apart.
+// medianOf is command s's median CPU over rows, leaving out those whose s ran
+// a gc (ran).
 func medianOf(rows [][]time.Duration, s int, ran [][]bool) time.Duration {
 	var took []time.Duration
 	for r, row := range rows {
@@ -1046,23 +910,17 @@ func packCount(b *testing.B, dir string) int {
 	return len(packs)
 }
 
-// BenchmarkBoxDissociate is BORROWING VERSUS COPYING: a box's checkout of
-// the history and a build that reads every file it holds, an operation, made
-// two ways on the node that holds the repository warm —
+// BenchmarkBoxDissociate is borrowing versus copying: a checkout and a build
+// reading every file, an operation, on a warm node, per boxSizes, reporting
+// sent-MB, server-cpu-ms and box-cpu-ms (the repack's included).
 //
-//   - borrow=none is the coding recipe over /box/git/, blobless, its
-//     checkout's lazy fetch bringing the tip's files;
-//   - borrow=reference-dissociate is `git clone --reference <the node's copy>
-//     --dissociate` and a checkout of the run's branch: every object borrowed
-//     from the copy and then copied into the box by the full repack
-//     --dissociate makes, nothing fetched but the refs.
+//   - borrow=none: the coding recipe, blobless, its checkout lazily fetched;
+//   - borrow=reference-dissociate: `git clone --reference <the node's copy>
+//     --dissociate`, every object copied in by its repack, only refs fetched.
 //
-// — at size=100MB and, under CREWLET_BENCH_LARGE, 1GB, reporting beside the
-// wall time sent-MB, the node's server-cpu-ms and box-cpu-ms, the box's own
-// git (the repack's included). Nothing here is adopted: no box holds a copy
-// of the node's to borrow (sandbox.CloneRecipe), a check's box included,
-// which fetches its one commit (sandbox.CloneSingleSHA); a borrow read in
-// place for a check's run is crewlet/crewlet#496's to measure first.
+// Nothing here is adopted: no box holds the node's copy to borrow
+// (sandbox.CloneRecipe), a check's box fetching its one commit
+// (sandbox.CloneSingleSHA); a borrow read in place is crewlet/crewlet#496's.
 func BenchmarkBoxDissociate(b *testing.B) {
 	gitlettest.Quiet(b)
 	for _, size := range boxSizes {
@@ -1109,8 +967,7 @@ func boxBorrows(b *testing.B, f *gitlettest.SoloFleet, box *benchBox, repo sandb
 	)
 	for b.Loop() {
 		b.StopTimer()
-		// A fresh box an operation, removed as the operation ends, so an
-		// arm holds one checkout at a time.
+		// Removed as the operation ends, so an arm holds one checkout at a time.
 		dir := b.TempDir()
 		box.proxy.take()
 		before := serverCPU(node.Metrics())
@@ -1136,22 +993,17 @@ func boxBorrows(b *testing.B, f *gitlettest.SoloFleet, box *benchBox, repo sandb
 	b.ReportMetric(own/n, "box-cpu-ms")
 }
 
-// benchBox is a coding box on a fleet's Gitlet node: its environment, as the
-// engine's launch makes it, and the proxy that records what the node
-// answered it.
+// benchBox is a coding box: its environment as the engine's launch makes it,
+// and the proxy recording what the node answered it.
 type benchBox struct {
 	env   []string
 	proxy *boxProxy
 }
 
-// newBenchBox launches a run of boxSeat given the repository rows names to
-// write, and answers its box: git, the box's git, first on PATH; a HOME of
-// its own with no configuration, as a template's box has; the engine's box
-// git environment (sandbox.BoxGit) for the run, its base the proxy's
-// /box/git; and overrides, pairs of key and value
-// handed to git through the environment AFTER the engine's own entries, so
-// for a key both set the arm's wins — what measures a box with a setting of
-// the engine's taken back to git's own.
+// newBenchBox launches a run of boxSeat writing rows' repository and answers
+// its box: git first on PATH, an empty HOME as a template's box has,
+// sandbox.BoxGit through the proxy's /box/git, and overrides, key and value
+// pairs set AFTER the engine's entries so the arm's win.
 func newBenchBox(b *testing.B, f *gitlettest.SoloFleet, rows gitlettest.Rows, git string, overrides ...string) *benchBox {
 	b.Helper()
 	if len(overrides)%2 != 0 {
@@ -1165,9 +1017,8 @@ func newBenchBox(b *testing.B, f *gitlettest.SoloFleet, rows gitlettest.Rows, gi
 	if err := os.WriteFile(global, nil, 0o600); err != nil {
 		b.Fatal(err)
 	}
-	// The variables a box's template sets of its own: none of git's
-	// configuration, the host's attributes kept out as a box image holds
-	// none, no terminal to prompt at, and a C locale for git's words.
+	// A template's own: no git configuration, no host attributes, no
+	// prompt, and a C locale for git's words.
 	base := []string{"HOME=" + home, "GIT_CONFIG_GLOBAL=" + global, "GIT_CONFIG_NOSYSTEM=1",
 		"GIT_ATTR_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0", "LC_ALL=C"}
 	env := appendConfig(b, boxEnv(b, base, git, sandbox.BoxGit{Base: proxy.srv.URL + "/box/git", User: host.BoxUser,
@@ -1180,8 +1031,8 @@ func newBenchBox(b *testing.B, f *gitlettest.SoloFleet, rows gitlettest.Rows, gi
 	return &benchBox{env: env, proxy: proxy}
 }
 
-// appendConfig is env with pairs, keys and values in turn, appended to git's
-// configuration through the environment after the entries env holds.
+// appendConfig is env with pairs (key, value, …) appended to git's
+// environment configuration after env's entries.
 func appendConfig(b *testing.B, env []string, pairs ...string) []string {
 	b.Helper()
 	if len(pairs) == 0 {
@@ -1207,17 +1058,16 @@ func appendConfig(b *testing.B, env []string, pairs ...string) []string {
 	return append(out, "GIT_CONFIG_COUNT="+strconv.Itoa(n))
 }
 
-// boxRepo is the run's repository as its launch resolved it: rows' at tip,
-// on the run's branch, to write, narrowed to cone.
+// boxRepo is the run's repository as its launch resolved it: at tip, on
+// boxBranch, to write, narrowed to cone.
 func boxRepo(rows gitlettest.Rows, tip string, cone []string) sandbox.RunRepo {
 	return sandbox.RunRepo{Repo: gitlettest.RepoName, RepoID: rows.Repo.ID, Base: tip, Branch: boxBranch,
 		Access: sandbox.RepoWrite, Paths: cone}
 }
 
-// boxRepoFor is the repository a box is given for purpose, in the shape
-// sandbox.RunRepo.ValidateFor holds that purpose's to: an executor's
-// (boxRepo), or a check's — its one commit at tip, on no branch, to read —
-// since a value a purpose does not read is refused rather than ignored.
+// boxRepoFor is boxRepo in the shape sandbox.RunRepo.ValidateFor holds
+// purpose to: a check's has no branch and reads, since a value a purpose does
+// not read is refused rather than ignored.
 func boxRepoFor(rows gitlettest.Rows, tip string, cone []string, purpose sandbox.ClonePurpose) sandbox.RunRepo {
 	repo := boxRepo(rows, tip, cone)
 	if purpose == sandbox.CloneSingleSHA {
@@ -1226,9 +1076,8 @@ func boxRepoFor(rows gitlettest.Rows, tip string, cone []string, purpose sandbox
 	return repo
 }
 
-// boxHistory is a gittest.History of size bytes on f's Gitlet node, pushed by p a
-// session at a time as a team's pushes would have built it, the node warm
-// (warmBox): the repository's rows and its tip.
+// boxHistory pushes a gittest.History of size bytes a session at a time, as a
+// team would, and answers the warm repository's rows and its tip.
 func boxHistory(b *testing.B, f *gitlettest.SoloFleet, p *gitlettest.Person, size int64) (gitlettest.Rows, string) {
 	b.Helper()
 	rows, commits, src := boxSource(b, f, p, size)
@@ -1238,10 +1087,9 @@ func boxHistory(b *testing.B, f *gitlettest.SoloFleet, p *gitlettest.Person, siz
 	return rows, commits[len(commits)-1]
 }
 
-// boxSource is boxHistory keeping the repository the history was pushed from
-// and every commit of it, oldest first — what a fixture building on the
-// history makes its commits in (pushSeatBranches) — in b's temporary
-// directory, so it goes when b ends at the latest.
+// boxSource is boxHistory also answering the source repository (in b's
+// temporary directory) and every commit, oldest first, for a fixture building
+// on it (pushSeatBranches).
 func boxSource(b *testing.B, f *gitlettest.SoloFleet, p *gitlettest.Person, size int64) (gitlettest.Rows, []string,
 	string) {
 	b.Helper()
@@ -1250,8 +1098,8 @@ func boxSource(b *testing.B, f *gitlettest.SoloFleet, p *gitlettest.Person, size
 	return warmRows(b, f), commits, src
 }
 
-// boxTree is a gittest.Tree of files files on f's Gitlet node, pushed by p a
-// commit at a time, the node warm: the repository's rows and its tip.
+// boxTree pushes a gittest.Tree of files files a commit at a time and
+// answers the warm repository's rows and its tip.
 func boxTree(b *testing.B, f *gitlettest.SoloFleet, p *gitlettest.Person, files int) (gitlettest.Rows, string) {
 	b.Helper()
 	src, commits := gittest.Tree(b, p.Git(), files)
@@ -1275,15 +1123,13 @@ func warmRows(b *testing.B, f *gitlettest.SoloFleet) gitlettest.Rows {
 	return rows
 }
 
-// warmBoxWait bounds warmBox: the maintainer's index of a gigabyte's history
-// — its multi-pack-index, bitmap and commit-graph — on two cores is minutes,
-// past warmIndex's five.
+// warmBoxWait bounds warmBox: indexing a gigabyte's history (multi-pack-index,
+// bitmap, commit-graph) on two cores takes minutes, past warmIndex's five.
 const warmBoxWait = 30 * time.Minute
 
-// warmBox waits until node's copy of the repository is as a warm node serves
-// it: synced, every pack in its maintainer's multi-pack-index, with the
-// bitmap, and a commit-graph written — so no figure is of the minutes after a
-// push, while the node still walks a clone's objects without either.
+// warmBox waits until node's copy is synced, every pack in the maintainer's
+// multi-pack-index with its bitmap, and a commit-graph written, so no figure
+// is of the minutes after a push when the node walks without either.
 func warmBox(b *testing.B, node gitlettest.Node, repoID string) {
 	b.Helper()
 	s, err := node.Cache().Sync(b.Context(), repoID, gitlettest.Linearizable)
@@ -1315,9 +1161,8 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// boxStep runs step's commands as a box does — each through a shell in the
-// box's working directory dir, under env — failing b on the first that exits
-// non-zero.
+// boxStep runs step's commands as a box does (boxRun), failing b on the first
+// that exits non-zero.
 func boxStep(b *testing.B, dir string, env []string, step sandbox.SetupStep) {
 	b.Helper()
 	for _, command := range step.Commands {
@@ -1325,10 +1170,9 @@ func boxStep(b *testing.B, dir string, env []string, step sandbox.SetupStep) {
 	}
 }
 
-// boxRun runs command as a box does — through a shell in dir under env — and
-// answers its wall time and the CPU it and every process it waited for spent
-// (the box's git and its lazy fetches; never a process git detached), failing
-// b where it exits non-zero.
+// boxRun runs command as a box does, through a shell in dir under env, and
+// answers its wall time and the CPU of it and its waited children (never a
+// process git detached), failing b where it exits non-zero.
 func boxRun(b *testing.B, dir string, env []string, command string) (wall, cpu time.Duration) {
 	b.Helper()
 	wall, cpu, out, err := boxTimed(b, dir, env, command)
@@ -1346,8 +1190,8 @@ func boxTry(b *testing.B, dir string, env []string, command string) (string, err
 	return out, err
 }
 
-// boxTimed runs command through a shell in dir under env, and answers its
-// wall time, its CPU and its waited children's, its output and its failure.
+// boxTimed is boxRun's run, answering its output and failure rather than
+// failing b.
 func boxTimed(b *testing.B, dir string, env []string, command string) (wall, cpu time.Duration, out string,
 	err error) {
 	b.Helper()
@@ -1364,8 +1208,8 @@ func boxTimed(b *testing.B, dir string, env []string, command string) (wall, cpu
 	return wall, cpu, buf.String(), err
 }
 
-// readCheckout is a BUILD of the checkout at dir: every file it holds read
-// whole, outside .git — what a build that needs the whole tree reads.
+// readCheckout is a build needing the whole tree: every file outside .git
+// read whole.
 func readCheckout(b *testing.B, dir string) {
 	b.Helper()
 	read := 0
@@ -1390,9 +1234,8 @@ func readCheckout(b *testing.B, dir string) {
 	}
 }
 
-// countObjects is how many objects the box's repository at dir holds —
-// packed and loose — as `git count-objects -v` counts them, which fetches
-// nothing.
+// countObjects is the packed and loose objects at dir, by `git count-objects
+// -v`, which fetches nothing.
 func countObjects(b *testing.B, c *gittest.Client, dir string) int64 {
 	b.Helper()
 	var n int64
@@ -1418,11 +1261,9 @@ func reportSpread(b *testing.B, took []time.Duration) {
 	b.ReportMetric(quantile(took, 0.9), "p90-ms")
 }
 
-// boxProxy is a reverse proxy in front of a Gitlet node that records, in the
-// order they end, the git requests the node answered 200: whether each was a
-// FETCH — protocol v2's command=fetch, what a clone, a fetch by id and a lazy
-// fetch each send for objects, never ls-refs or an advertisement — and the
-// bytes of its answer.
+// boxProxy is a reverse proxy in front of a Gitlet node recording, in the
+// order they end, the requests answered 200: each answer's bytes, and whether
+// it was protocol v2's command=fetch, which alone sends objects.
 type boxProxy struct {
 	srv *httptest.Server
 
@@ -1483,9 +1324,8 @@ func (p *boxProxy) take() []boxAnswer {
 	return out
 }
 
-// isFetch reports whether an upload-pack request body, encoded as encoding
-// names (git compresses a large one), is protocol v2's fetch command: its
-// first pkt-line is command=fetch.
+// isFetch reports whether an upload-pack request body (gzip where encoding
+// says, as git sends a large one) opens with the pkt-line command=fetch.
 func isFetch(raw []byte, encoding string) (bool, error) {
 	body := io.Reader(bytes.NewReader(raw))
 	if encoding == "gzip" {
@@ -1523,6 +1363,5 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// Unwrap is the writer underneath, which the reverse proxy flushes a
-// streamed answer through.
+// Unwrap lets the reverse proxy flush a streamed answer.
 func (w *countingWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }

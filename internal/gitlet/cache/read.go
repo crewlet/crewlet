@@ -20,15 +20,13 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE READ: one complete snapshot of a repository's rows, every page applied
-// — the target a round converges to. The snapshot contract is the code
-// domain's (gitlet.Reader.Snapshot): page 1 decides full or delta and fixes the
-// position the WHOLE snapshot is complete as of; later pages read at session
-// from the cursor, possibly on other nodes; a snapshot of more than one page
-// ends with a TAIL of the packs added since page 1; and a later page that
-// finds the history moved under it answers gitlet.ErrSnapshotMoved, after which
-// the snapshot is read again from page 1. Every row is validated here, before
-// anything is written: a ref goes into a file git parses line by line.
+// THE READ: one complete snapshot of a repository's rows, the target a round
+// converges to, under the code domain's contract (gitlet.Reader.Snapshot):
+// page 1 decides full or delta and fixes the position the whole snapshot is
+// complete as of; a multi-page snapshot ends with a tail of the packs added
+// since page 1; gitlet.ErrSnapshotMoved restarts from page 1. Every row is
+// validated before anything is written: a ref goes into a file git parses
+// line by line.
 
 // snapshot is one complete answer, every page applied.
 type snapshot struct {
@@ -38,50 +36,45 @@ type snapshot struct {
 	streamCreated time.Time
 	// repo is the LAST page's row: the freshest settings.
 	repo gitlet.RepoRef
-	// packs is a SET keyed by (pack id, part), because the tail re-sends
-	// rows an earlier page served.
+	// packs is a set, because the tail re-sends rows an earlier page served.
 	packs map[packKey]gitlet.PackRow
-	// refs is in answer order; a full snapshot's are sorted by ref before
-	// use. In a delta, a ref moved between two pages is served once at each
-	// position, and the later row wins.
+	// refs is in answer order; a full snapshot's are sorted before use. A
+	// delta serves a ref moved between pages once per position; the later
+	// row wins.
 	refs []gitlet.RefRow
-	// behind is an answer on the incarnation's own stream BELOW its
-	// position. What that means is the level's to say (converge): below a
-	// linearizable read it is a log gone back, and below any other a copy
-	// that has not caught up.
+	// behind: an answer on the incarnation's own stream BELOW its position.
+	// The read level decides what it means (converge): a log gone back
+	// below a linearizable read, a lagging copy below any other.
 	behind bool
 	// restreamed: page 1 was a delta keyed to another stream than the
 	// incarnation's, and this is the whole answer read again.
 	restreamed bool
-	// since is a delta's floor — what it is a delta from — and pushes its
-	// pushes phase, where page 1 was asked for it (asked): every push
-	// applied in (since, position], in (position, push id) order, each once
-	// — what the round folds into the incarnation's index of pushes
-	// (provenance.go), so an asked phase with no row is no push.
+	// since is a delta's floor; pushes its pushes phase where page 1 asked
+	// for it (asked): every push in (since, position], in (position, push
+	// id) order, each once, folded into the index of pushes (provenance.go).
+	// An asked phase with no row is no push.
 	since  statelog.Position
 	pushes []gitlet.IntroducedRow
 	asked  bool
-	// retiredSince is page 1's StateQuery.RetiredSince: the floor a full
-	// answer was asked to serve the retirements above (retiredFloor) — zero
-	// where it asked for none. retiredFrom is the floor the answer's
-	// retired phase is complete above, the same on every page: since on a
-	// delta, retiredSince on a full answer that honoured it, ZERO on one
-	// that served none — a round then reads every pack file no row names
-	// as one no row accounts for (swap.go). retired is that phase's rows,
-	// in (position, pack id, part) order, each once: what a round takes out
-	// of the incarnation's live set.
+	// retiredSince is page 1's StateQuery.RetiredSince (retiredFloor), zero
+	// for none. retiredFrom is the floor the retired phase is complete
+	// above, the same on every page: since on a delta, retiredSince on a full
+	// answer that honoured it, ZERO on one that served none, after which a
+	// round treats every unnamed pack file as unaccounted for (swap.go).
+	// retired is that phase's rows, in (position, pack id, part) order, each
+	// once: what a round takes out of the live set.
 	retiredSince, retiredFrom statelog.Position
 	retired                   []gitlet.RetiredRow
-	// layers is the repository's published chain as of position, root first
-	// (gitlet.RepoSnapshot.Layers), and layersServed whether page 1 served it:
-	// on every full answer, and on a delta whose chain moved above its floor.
-	// A copy replaces the chain it records only when it is served.
+	// layers is the published chain as of position, root first
+	// (gitlet.RepoSnapshot.Layers); layersServed whether page 1 served it
+	// (every full answer, and a delta whose chain moved above its floor). A
+	// copy replaces its chain only when served.
 	layers       []gitlet.LayerRow
 	layersServed bool
 }
 
-// retiredChecksums is the checksums s's retired phase names, as a set: what
-// a full round reads a stray by (swap.go's strays).
+// retiredChecksums is the checksums s's retired phase names, as a set, by
+// which a full round reads a stray (swap.go's strays).
 func (s snapshot) retiredChecksums() map[string]bool {
 	out := make(map[string]bool, len(s.retired))
 	for _, r := range s.retired {
@@ -101,23 +94,18 @@ func (s snapshot) kind() SyncKind {
 // packKey is a pack row's key.
 type packKey struct{ packID, part string }
 
-// logMark is the code log AS THIS PROCESS HAS SEEN IT ANSWERED: the stream
-// identity of the last answer and the highest position any page 1 answered
-// at, for every repository. One mark for the node, because every repository's
-// rows are one log: a log recreated or gone back under one repository's
-// incarnation has done so under every one, and the first round of any of them
-// to see it is the one that tells the rest (Cache.reread).
+// logMark is the code log AS THIS PROCESS HAS SEEN IT ANSWERED: the last
+// answer's stream and the highest position any page 1 answered at. One mark
+// for the node, because every repository's rows are one log: a log recreated
+// or gone back under one incarnation has done so under all, and the first
+// round to see it tells the rest (Cache.reread).
 //
-// A position the mark holds was one the log held when it was answered, so a
-// LINEARIZABLE answer read after it — whose barrier is appended at the log's
-// head — is at or past it on a log that never goes back, WHICHEVER NODE
-// ANSWERS: an answer's position is the checkpoint the code reader's
-// transaction is handed (gitlet.Reader), current through the record before
-// that barrier, never the checkpoint row alone, which lags every barrier its
-// node has decoded and not committed — and so stood below an answer another
-// node had given, which read here as the log gone back. A round compares its
-// answer with the mark AS IT STOOD BEFORE ITS READ BEGAN: a position another
-// round recorded after this one's barrier is no statement about it.
+// A LINEARIZABLE answer read after a marked position is at or past it on a
+// log that never goes back, whichever node answers, because an answer's
+// position is the checkpoint the code reader's transaction is handed
+// (gitlet.Reader), never the checkpoint row alone, which lags uncommitted
+// barriers and would read as the log gone back. A round compares with the mark AS IT STOOD BEFORE ITS READ BEGAN: a
+// position recorded after its barrier says nothing about it.
 type logMark struct {
 	mu     sync.Mutex
 	stream time.Time
@@ -131,9 +119,9 @@ func (m *logMark) read() (time.Time, statelog.Position) {
 	return m.stream, m.at
 }
 
-// saw records a page 1's answer — the mark only rises on its stream — and
-// reports whether it is on another stream than the mark, the log recreated:
-// the mark starts again from it.
+// saw records a page 1's answer (the mark only rises on its stream) and
+// reports whether it is on another stream, the log recreated, from which the
+// mark starts again.
 func (m *logMark) saw(stream time.Time, at statelog.Position) (recreated bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -156,30 +144,16 @@ func (m *logMark) set(stream time.Time, at statelog.Position) {
 	m.stream, m.at = stream, at
 }
 
-// read is the snapshot of id an incarnation at at, on the stream made at
-// stream, converges to: full, or a delta from at, at fresh — a delta asked for
-// its pushes phase where pushes says the incarnation keeps an index of pushes
-// to fold them into (provenance.go). retired is the floor a full answer is
-// asked to serve the retirements above (StateQuery.RetiredSince), zero for
-// none: a round's is retiredFloor, and a check, which reads no retirement,
-// asks none.
-//
-//  1. Page 1 asks from at (zero when full), and a full answer for the
-//     retirements above retired.
-//  2. A page-1 DELTA keyed to another stream than the incarnation's is the
-//     log RECREATED under the cache — provisioned anew, its stamp not the
-//     one the cache read under (a snapshot restore keeps it, ADR-0083) —
-//     which Since cannot tell the reader: asked again from nothing, once
-//     (restreamed), and for no retirements, since at is a position of a
-//     log that is gone.
-//  3. An answer on the incarnation's own stream below at is BEHIND; what that
-//     means is the round's to decide by the level it read at (converge).
-//  4. Next is followed to its end; a page that answers gitlet.ErrSnapshotMoved
-//     starts the read again from page 1 with the SAME Since, at most
-//     MaxSnapshotRestarts times — page 1 decides full afresh wherever a sweep
-//     or a reanchor moved under a delta.
-//  5. Every page is validated (snapshot.add) — ErrBadSnapshot, naming the
-//     page and the row.
+// read is the snapshot of id that an incarnation at at, on stream, converges
+// to: full, or a delta from at with its pushes phase where pushes is set
+// (provenance.go). retired is a full answer's StateQuery.RetiredSince
+// (retiredFloor; zero for a check). A page-1 DELTA on another stream is the
+// log RECREATED (a restore keeps the stamp, ADR-0083), which Since cannot
+// tell the reader: asked again from nothing, once, with no retirements. An
+// answer on the own stream below at is BEHIND, for the round to judge by its
+// level (converge). gitlet.ErrSnapshotMoved restarts from page 1 with the
+// SAME Since, at most MaxSnapshotRestarts times (page 1 decides full or delta
+// afresh). Pages are validated by snapshot.add (ErrBadSnapshot).
 func (c *Cache) read(ctx context.Context, id string, at, retired statelog.Position, stream time.Time, full,
 	pushes bool, fresh statelog.Freshness) (snapshot, error) {
 
@@ -215,15 +189,13 @@ func (c *Cache) read(ctx context.Context, id string, at, retired statelog.Positi
 	}
 }
 
-// retiredFloor is the floor a round of an incarnation at at asks a full
-// answer for the retirements above (read's retired), so a full round can tell
-// a pack file a compaction retired from one no row accounts for (swap.go): at
-// itself — what the full answer stands in for a delta from, a delta's being
-// always those above its own floor, so page 1 weighs the two answers like with
-// like — or leaving, the incarnation's leavingSince, where it is lower: the
-// floor the retirements of the pack files it still holds are all above, which
-// a crash or a failed swap left it holding past the position its round
-// recorded. Zero for an incarnation at none.
+// retiredFloor is the floor a round asks a full answer for the retirements
+// above (read's retired), so a full round can tell a pack file a compaction
+// retired from one no row accounts for (swap.go): at, matching a delta's own
+// floor so page 1 weighs the two answers like with like, or leaving (the
+// incarnation's leavingSince) where lower, since a crash or a failed swap
+// left it holding pack files retired above that. Zero for an incarnation at
+// none.
 func retiredFloor(at, leaving statelog.Position) statelog.Position {
 	if below, err := leaving.Before(at); !leaving.IsZero() && err == nil && below {
 		return leaving
@@ -232,23 +204,18 @@ func retiredFloor(at, leaving statelog.Position) statelog.Position {
 }
 
 // fullRounds is the node's slots for FULL READS of a repository's rows
-// against the estate (MaxFullRounds): every page of a full read is one read
-// transaction on a data node — one of the answers its lane gives the whole
-// fleet's reads at once, and one of the reader connections every one of
-// those reads takes too — so a node coming up with hundreds of repositories
-// asked of it holds at most this many of them, however many it was asked
-// for. Granted first come, first served (semaphore.Weighted), so no
-// repository's read waits behind one that asked after it.
+// (MaxFullRounds; package doc, "A node reads few repositories whole at
+// once"). First come, first served (semaphore.Weighted), so no read waits
+// behind one that asked after it.
 type fullRounds struct {
 	slots *semaphore.Weighted
 	size  int64
 	rec   *metrics.Recorder
 
-	// mu orders every change of the counts with the gauge's setting of
-	// them, so the gauge never holds a count a later change superseded:
-	// running is the slots held now, most the most held at once, and
-	// waiting the reads waiting for one — what the gauge publishes and the
-	// suite holds to the bound.
+	// mu orders every change of the counts with the gauge's setting, so the
+	// gauge never holds a superseded count. running is the slots held, most
+	// the most held at once (which the suite holds to the bound), waiting
+	// the reads waiting for one.
 	mu                     sync.Mutex
 	running, most, waiting int64
 }
@@ -259,7 +226,7 @@ const (
 	fullWaiting = "waiting"
 )
 
-// newFullRounds is size slots, reported to rec — both states at zero from
+// newFullRounds is size slots, reported to rec with both states at zero from
 // the start, so a node's panel shows its full reads before its first.
 func newFullRounds(size int64, rec *metrics.Recorder) *fullRounds {
 	f := &fullRounds{slots: semaphore.NewWeighted(size), size: size, rec: rec}
@@ -267,10 +234,10 @@ func newFullRounds(size int64, rec *metrics.Recorder) *fullRounds {
 	return f
 }
 
-// hold waits for a slot under ctx: the cache's lifetime for a round's read,
-// whose callers each wait under their own bound (MaxFullRounds, THE WAIT IS
-// THE CALLER'S), and a check's or a hint's own bound for theirs. A free slot
-// nobody waits for is taken without counting a wait.
+// hold waits for a slot under ctx: the cache's lifetime for a round (its
+// callers wait under their own bounds, MaxFullRounds), a check's or a hint's
+// own bound for theirs. A free slot nobody waits for is taken without
+// counting a wait.
 func (f *fullRounds) hold(ctx context.Context) error {
 	if f.slots.TryAcquire(1) {
 		f.count(1, 0)
@@ -304,9 +271,9 @@ func (f *fullRounds) count(running, waiting int64) {
 	}
 }
 
-// holdFull waits for one of the node's full-read slots for id's read: a
-// cache stopping while it waits is ErrStopped, as every sync of a stopped
-// cache is, and the read's own bound ending first says what it waited for.
+// holdFull waits for a full-read slot for id: ErrStopped if the cache stops
+// meanwhile, as every sync of a stopped cache is; the read's own bound ending
+// first says what it waited for.
 func (c *Cache) holdFull(ctx context.Context, id string) error {
 	err := c.full.hold(ctx)
 	switch {
@@ -319,11 +286,9 @@ func (c *Cache) holdFull(ctx context.Context, id string) error {
 		c.full.size, err)
 }
 
-// logRead is the estate's failure to answer a page, marked as the code log's
-// (ErrLogRead) — but gitlet.ErrRepoNotFound, which is the log's ANSWER that no
-// row holds the repository, and gitlet.ErrSnapshotMoved, its answer that the
-// history moved under the read, which read gives a fresh start; each is
-// passed on as itself.
+// logRead marks the estate's failure to answer a page as ErrLogRead, except
+// gitlet.ErrRepoNotFound and gitlet.ErrSnapshotMoved, which are the log's
+// ANSWERS (no such repository; restart the read) and pass as themselves.
 func logRead(err error) error {
 	if errors.Is(err, gitlet.ErrRepoNotFound) || errors.Is(err, gitlet.ErrSnapshotMoved) {
 		return err
@@ -331,13 +296,11 @@ func logRead(err error) error {
 	return fmt.Errorf("%w: %w", ErrLogRead, err)
 }
 
-// readPacks reads the PACK ROWS of a full snapshot of id at fresh — what a
-// hint's confirmation looks a pack up in (hint.go): the snapshot's pages
-// until the first that serves a ref, or its last. A full snapshot serves
-// every pack before any ref (gitlet.Reader.Snapshot's phases), so its packs as
-// of page 1's position are whole there, and a repository of a hundred
-// thousand refs costs it the pages of its packs rather than every ref's. Read
-// again from page 1 when the history moves under it, as read is.
+// readPacks reads the PACK ROWS of a full snapshot of id, for a hint's
+// confirmation (hint.go): pages up to the first that serves a ref. A full
+// snapshot serves every pack before any ref (gitlet.Reader.Snapshot's
+// phases), so the packs are whole there without paying for every ref's page.
+// Restarted from page 1 when the history moves, as read is.
 func (c *Cache) readPacks(ctx context.Context, id string, fresh statelog.Freshness) (snapshot, error) {
 	for restarts := 0; ; restarts++ {
 		snap, err := c.readOnce(ctx, id, statelog.Position{}, statelog.Position{}, fresh, false, true)
@@ -347,17 +310,13 @@ func (c *Cache) readPacks(ctx context.Context, id string, fresh statelog.Freshne
 	}
 }
 
-// readOnce reads every page of one snapshot — a delta asked for its pushes
-// phase where pushes says so, a full one asked for the retirements above
-// retiredSince, or, packsOnly, a full one's pages up to the first that serves
-// a ref (readPacks) — or answers the first page's failure as it is: the
-// estate's, as ErrLogRead (logRead). Every page the estate answers is timed
-// (pageAnswered).
+// readOnce reads every page of one snapshot (packsOnly: up to the first that
+// serves a ref, readPacks), or returns the first failure (logRead). Every
+// answered page is timed (pageAnswered).
 //
-// A FULL READ HOLDS ONE OF THE NODE'S SLOTS (fullRounds, MaxFullRounds) from
-// the page it first knows it is full to its last: its first, asked from
-// nothing; its second, when the log answers a delta in full, since page 1
-// decides and was asked as a delta's. A delta's pages hold none.
+// A FULL READ HOLDS A SLOT (fullRounds) from the page it first knows it is
+// full to its last: page 1 when asked from nothing, page 2 when the log
+// answers a delta in full. A delta's pages hold none.
 func (c *Cache) readOnce(ctx context.Context, id string, since, retiredSince statelog.Position,
 	fresh statelog.Freshness, pushes, packsOnly bool) (snapshot, error) {
 
@@ -397,8 +356,8 @@ func (c *Cache) readOnce(ctx context.Context, id string, since, retiredSince sta
 			break
 		}
 		if snap.full && !held {
-			// A DELTA THE LOG ANSWERED IN FULL: every page from here is a
-			// whole repository's, as a full round's are.
+			// A delta the log answered in full: the rest are whole-repository
+			// pages.
 			if err = c.holdFull(ctx, id); err != nil {
 				return snapshot{}, err
 			}
@@ -417,13 +376,9 @@ func (c *Cache) readOnce(ctx context.Context, id string, since, retiredSince sta
 	return snap, nil
 }
 
-// pageAnswered records how long one page of a snapshot took the estate to
-// answer, from the ask to the answer — the data node's lane, its reader and
-// its scan, and the crossing; on a node that holds the data, its own store's
-// — by what the page served, a whole repository's or what moved since a
-// position: crewlet.code.cache.read.page.duration, production's reading of
-// the page MaxFullRounds was measured against. A page refused is no page
-// served, and is counted nowhere here.
+// pageAnswered records one page's ask-to-answer time by what it served (full
+// or delta) as crewlet.code.cache.read.page.duration, production's check on
+// the page MaxFullRounds was sized against. A refused page is not counted.
 func (c *Cache) pageAnswered(page gitlet.RepoSnapshot, took time.Duration) {
 	if c.metrics == nil {
 		return
@@ -455,8 +410,7 @@ func (s *snapshot) add(id string, n int, page gitlet.RepoSnapshot, seen map[stri
 	case page.RetiredFrom != s.retiredFrom:
 		return bad("it serves the retirements above %s, and page 1 those above %s", page.RetiredFrom, s.retiredFrom)
 	case !s.full && s.retiredFrom != s.since:
-		// A delta's retirements are every one above its own floor: what it
-		// takes out of the incarnation it is a delta of.
+		// A delta's retirements are every one above its own floor.
 		return bad("a delta from %s serves the retirements above %s", s.since, s.retiredFrom)
 	case s.full && !s.retiredFrom.IsZero() && s.retiredFrom != s.retiredSince:
 		return bad("a full answer asked for the retirements above %s serves those above %s", s.retiredSince,
@@ -502,9 +456,9 @@ func (s *snapshot) add(id string, n int, page gitlet.RepoSnapshot, seen map[stri
 		case s.full:
 			return bad("ref %s is served twice", r.Ref)
 		default:
-			// A DELTA serves a ref again when it moved between two pages
-			// (its row's position passed the cursor); the later row is the
-			// newer one, and two rows at one position are no history.
+			// A delta re-serves a ref that moved between pages; the later
+			// row must be newer, since two rows at one position are no
+			// history.
 			older, err := s.refs[i].Position.Before(r.Position)
 			if err != nil || !older {
 				return bad("ref %s is served twice at %s and %s", r.Ref, s.refs[i].Position, r.Position)
@@ -527,16 +481,13 @@ func (s *snapshot) add(id string, n int, page gitlet.RepoSnapshot, seen map[stri
 }
 
 // addLayers validates the published chain page 1 served and takes it in, as
-// the domain keeps it (gitlet.LayerRow): at most gitlet.MaxPublishedLayers rows,
-// each a layer every Gitlet node may hold to its files (gitlet.LayerRef.Check) and
-// none a replacement; Seq 1 up, one by one; the root over no base and every
-// other layer over the one below it — a layer is valid only over its exact
-// base, and the chain's order is the only thing that names it; no layer, and
-// no commit-graph layer, twice; no pack in two layers, since each covers what
-// none below it does; and every layer added at a position on the code log at
-// or below the snapshot's. Whether the copy holds a layer's packs is the
-// install's to decide (installable), never the read's: a chain over a pack it
-// lacks serves from the prefix below.
+// the domain keeps it (gitlet.LayerRow): at most gitlet.MaxPublishedLayers,
+// each passing gitlet.LayerRef.Check and none a replacement; Seq from 1; the
+// root over no base and each other over the one below, since a layer is
+// valid only over its exact base and the order is all that names it; no
+// layer, commit-graph layer or pack twice; each added on the code log at or
+// below the snapshot's position. Whether the copy holds a layer's packs is
+// the install's to decide (installable), never the read's.
 func (s *snapshot) addLayers(rows []gitlet.LayerRow) error {
 	if len(rows) > gitlet.MaxPublishedLayers {
 		return fmt.Errorf("its published chain holds %d layers, past the %d a chain holds (gitlet.MaxPublishedLayers)",
@@ -587,11 +538,10 @@ func (s *snapshot) addLayers(rows []gitlet.LayerRow) error {
 	return nil
 }
 
-// addRetired validates one row of the snapshot's retired phase and takes it
-// in: the retirement of a pack named by a checksum its files can carry, at a
-// position on the code log in (retiredFrom, position], after every row before
-// it in (position, pack id, part) order — so each is served once. A full
-// answer that serves no retirements serves no row of them either.
+// addRetired validates one retired row and takes it in: a valid pack
+// checksum, a code-log position in (retiredFrom, position], strictly after
+// the previous row in (position, pack id, part) order so each is served once,
+// and none at all on a full answer that serves no retirements.
 func (s *snapshot) addRetired(r gitlet.RetiredRow) error {
 	switch {
 	case s.retiredFrom.IsZero():
@@ -619,12 +569,10 @@ func (s *snapshot) addRetired(r gitlet.RetiredRow) error {
 	return nil
 }
 
-// addPush validates one row of a delta's pushes phase and takes it in: a
-// push the delta asked for, at a position on the code log in (since,
-// position], after every row before it in (position, push id) order — so
-// each push is served once — whose moves name refs and object ids and whose
-// commits are object ids: what a run of the index of pushes encodes
-// (provrun.go), held to it before anything is written.
+// addPush validates one row of a delta's asked-for pushes phase and takes it
+// in: a code-log position in (since, position], strictly after the previous
+// row in (position, push id) order so each is served once, and a push
+// validPush accepts.
 func (s *snapshot) addPush(p gitlet.IntroducedRow) error {
 	switch {
 	case !s.asked:
@@ -651,10 +599,10 @@ func (s *snapshot) addPush(p gitlet.IntroducedRow) error {
 	return nil
 }
 
-// validPush holds one push as the rows served it to what a run of the index
-// of pushes encodes (provrun.go) — its id a canonical UUID, its moves refs
-// between object ids, its commits object ids — before anything is written of
-// it: a delta's pushes phase (addPush) and the backfill's pages alike.
+// validPush holds a served push to what the index of pushes encodes
+// (provrun.go) before anything is written: a canonical UUID, moves of refs
+// between object ids, commits that are object ids. addPush and the backfill
+// both use it.
 func validPush(p gitlet.IntroducedRow) error {
 	if id, err := uuid.Parse(p.PushID); err != nil || id.String() != p.PushID {
 		return fmt.Errorf("push id %q is not a canonical UUID", p.PushID)
@@ -677,19 +625,17 @@ func validPush(p gitlet.IntroducedRow) error {
 }
 
 // checkPack is a pack row this build can install, decided before any GET:
-// the one part this build splits, and the row-level half of the one bundle
-// rule (gitlet.PackRef.Check) — the very rule the domain admitted the row by,
-// so a row no Gitlet node can install is one no proposal was ever published
-// with, rather than one this copy alone refuses on every Gitlet node for good.
+// the one part this build splits, and the row-level half of the bundle rule
+// (gitlet.PackRef.Check), the very rule the domain admitted the row by, so
+// no copy refuses for good a row the domain published.
 func checkPack(p gitlet.PackRow) error {
 	switch {
 	case p.Part != "pack":
 		// A newer peer's new part is not a bundle this build can install.
 		return fmt.Errorf("part %q is not one this build installs", p.Part)
 	case !p.State.Valid():
-		// Nor is a state it cannot place (packPlace): a pack it put in
-		// objects/pack would be one a push may rely on, whatever the state
-		// says of it.
+		// Nor is a state it cannot place (packPlace): a pack in
+		// objects/pack is one a push may rely on, whatever the state says.
 		return fmt.Errorf("state %q is not one this build places", p.State)
 	}
 	return p.Ref().Check()

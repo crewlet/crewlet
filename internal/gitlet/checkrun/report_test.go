@@ -32,10 +32,10 @@ func junitOf(failing, passing, messageBytes int) string {
 
 // A JUNIT REPORT YIELDS ITS FAILURES: each failed case's place, test id and
 // message, in the report's order; its suites' counts; at most
-// gitlet.MaxCheckFailures of them kept and the rest counted omitted; each
-// message at most gitlet.CheckFailureMessageBytes; and the list within
-// gitlet.MaxCheckFailureBytes encoded, so an ending carrying it is one its
-// record admits. A report that is no JUnit is an error, never a pass.
+// gitlet.MaxCheckFailures kept and the rest counted omitted; each message at
+// most gitlet.CheckFailureMessageBytes; and the list within
+// gitlet.MaxCheckFailureBytes encoded, so an ending carrying it validates. A
+// report that is no JUnit is an error, never a pass.
 //
 // Mutation: keep every failure past the cap — 250 kept, red; drop the
 // message's cut — a 5 KiB message kept whole, red.
@@ -103,10 +103,10 @@ func TestAJUnitReportYieldsItsFailures(t *testing.T) {
 	}
 }
 
-// A SARIF REPORT YIELDS ITS RESULTS: each result at level error or warning —
-// SARIF's default where a result names none — a failure with its rule, its
-// message and its place, the checkout's directory and a file scheme taken off
-// its path; a note judges nothing; and a log that is no SARIF is an error.
+// A SARIF REPORT YIELDS ITS RESULTS: each result at level error or warning
+// (SARIF's default where none is named) is a failure with its rule, message
+// and place, the checkout's directory and a file scheme taken off its path; a
+// note judges nothing; and a log that is no SARIF is an error.
 //
 // Mutation: count notes as failures — three kept, red.
 func TestASARIFReportYieldsItsResults(t *testing.T) {
@@ -135,10 +135,10 @@ func TestASARIFReportYieldsItsResults(t *testing.T) {
 	}
 }
 
-// FuzzJUnit: whatever bytes a check's command leaves where its JUnit report
-// should be, the reader neither panics nor keeps what an ending cannot carry —
-// at most gitlet.MaxCheckFailures failures, within gitlet.MaxCheckFailureBytes
-// encoded, each field valid UTF-8 and each message within
+// FuzzJUnit: whatever bytes sit where a check's JUnit report should be, the
+// reader neither panics nor keeps what an ending cannot carry: at most
+// gitlet.MaxCheckFailures failures, within gitlet.MaxCheckFailureBytes
+// encoded, each field valid UTF-8, each message within
 // gitlet.CheckFailureMessageBytes.
 func FuzzJUnit(f *testing.F) {
 	f.Add(junitOf(3, 2, 10))
