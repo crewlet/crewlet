@@ -102,6 +102,7 @@ import {
 } from "./changeQuery.ts";
 import { QueryBar } from "./QueryBar.tsx";
 import { RepoPicker } from "./RepoPicker.tsx";
+import { useGitletSectionCounts } from "./sectionCounts.ts";
 import { Face } from "./ui.tsx";
 import "~/styles/gitlet.css";
 import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
@@ -271,11 +272,6 @@ export function changeOrder(f: Filters, chosen: string): ChangeOrder {
 /** The state tabs, in the order a reader looks: what is live, then what ended. */
 const STATE_TABS: readonly KnownChangeState[] = ["open", "draft", "merged", "closed"];
 
-/** The question the state totals ask: the scope's alone, the company or the picked repository. */
-function countParams(repo: string): CodeParams {
-  return repo !== "" && isRepoName(repo) ? { parts: "changes", repo } : { parts: "changes" };
-}
-
 /** What the foot says it shows, of the scope's total where only the scope narrows. */
 export function footWords(
   f: Filters,
@@ -347,7 +343,15 @@ export function Changes() {
     changeIdOf,
     changesAfter,
   );
-  const counts = useCodeQuery("code_counts", countParams(repo), { pollMs: CHANGES_POLL_MS });
+  // THE STATE TOTALS: the section figures' answer for the company, a picked repository's its own.
+  const section = useGitletSectionCounts({ pollMs: CHANGES_POLL_MS });
+  const picked = repo !== "" && isRepoName(repo);
+  const own = useCodeQuery(
+    "code_counts",
+    { parts: "changes", repo },
+    { pollMs: CHANGES_POLL_MS, enabled: picked },
+  );
+  const counts = picked ? own : section;
   const unread = "params" in asked ? ignoredKey(asked.params, first.data) : undefined;
   const rows = unread ? [] : paged.items;
   const narrowed = narrowsTheWalk(filters);

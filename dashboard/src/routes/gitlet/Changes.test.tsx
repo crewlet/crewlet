@@ -145,7 +145,8 @@ const COUNTS = { changes: { live: 5, draft: 1, open: 4, closed: 3, merged: 54 } 
 /** The engine: `answer` takes the listing and the box; the counts answer the story's totals. */
 function stubFetch(
   answer: (url: URL) => Response | Promise<Response> | null,
-  counts: () => Response = () => json({ counts: COUNTS, position: POSITION, level: "session" }),
+  counts: (url: URL) => Response = () =>
+    json({ counts: COUNTS, position: POSITION, level: "session" }),
 ) {
   const asked: URL[] = [];
   vi.stubGlobal(
@@ -157,7 +158,7 @@ function stubFetch(
       if (url.pathname === "/query/code_repos") {
         return Promise.resolve(answer(url) ?? json({ position: POSITION, level: "stale" }));
       }
-      if (url.pathname === "/query/code_counts") return Promise.resolve(counts());
+      if (url.pathname === "/query/code_counts") return Promise.resolve(counts(url));
       return Promise.resolve(answer(url) ?? json({}, 404));
     }),
   );
@@ -513,8 +514,8 @@ test("Waiting on you comes from the card and from the readiness", async () => {
   expect(within(rowOf(list, "Change 61 of web")).queryByText("Waiting on you")).toBeNull();
 });
 
-// Mutation: count the tabs from the rows, or ask the counts without the picked repository.
-test("the state tabs count the scope from code_counts, and a picked repository narrows both", async () => {
+// Mutation: ask the tabs' totals beside the section figures' question.
+test("the state tabs and the section figures are one question where no repository is picked", async () => {
   const asked = stubFetch(engine([WEB_42]));
   mount(<Changes />);
   const tabs = await screen.findByRole("radiogroup", { name: "Change state" });
@@ -524,16 +525,39 @@ test("the state tabs count the scope from code_counts, and a picked repository n
   }
   expect(within(tabs).getByText("4")).toBeTruthy();
   expect(within(tabs).getByText("3")).toBeTruthy();
+  await settled(() => asked.length);
   const counts = asked.filter((u) => u.pathname === "/query/code_counts");
-  expect(counts[0]!.searchParams.get("parts")).toBe("changes");
+  expect(counts).toHaveLength(1);
+  expect(counts[0]!.searchParams.get("parts")).toBe("changes,repos,queue");
   expect(counts[0]!.searchParams.has("repo")).toBe(false);
-  cleanup();
-  const again = stubFetch(engine([WEB_42]));
+});
+
+// Mutation: ask the counts without the picked repository, or draw the company's on its tabs.
+test("a picked repository's tabs ask its own counts, and the figures stay the company's", async () => {
+  const web = { live: 3, draft: 1, open: 2, closed: 7, merged: 11 };
+  const asked = stubFetch(engine([WEB_42]), (url) =>
+    json({
+      counts: url.searchParams.has("repo") ? { changes: web } : COUNTS,
+      position: POSITION,
+      level: "session",
+    }),
+  );
   mount(<Changes />, "#/gitlet?repo=web");
   await theList();
-  const narrowed = again.filter((u) => u.pathname === "/query/code_counts")[0]!;
-  expect(narrowed.searchParams.get("repo")).toBe("web");
-  expect(listings(again)[0]!.searchParams.get("repo")).toBe("web");
+  const tabs = screen.getByRole("radiogroup", { name: "Change state" });
+  expect(await within(tabs).findByText("11")).toBeTruthy();
+  expect(within(tabs).queryByText("54")).toBeNull();
+  await settled(() => asked.length);
+  const counts = asked.filter((u) => u.pathname === "/query/code_counts");
+  expect(counts.map((u) => u.searchParams.get("parts")).sort()).toEqual([
+    "changes",
+    "changes,repos,queue",
+  ]);
+  const own = counts.find((u) => u.searchParams.get("parts") === "changes")!;
+  expect(own.searchParams.get("repo")).toBe("web");
+  const company = counts.find((u) => u.searchParams.get("parts") !== "changes")!;
+  expect(company.searchParams.has("repo")).toBe(false);
+  expect(listings(asked)[0]!.searchParams.get("repo")).toBe("web");
 });
 
 // Mutation: let a refused count take the list with it, or draw a zero.
