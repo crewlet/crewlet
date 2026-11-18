@@ -291,7 +291,7 @@
 //     piece's line repeats before a key's END: written whole, the block
 //     leaves the key's line opening with that run, so the rule reads it as
 //     the wrapping's and the END as no value, while the claims, reading the
-//     key's line as written, took the run for the value and kept the keys
+//     key's line as written, take the run for the value and keep the keys
 //     from reading it back; a second pass reads it as a key's and redacts it,
 //     and there redacting twice is not redacting once;
 //   - and a value below a key on a table's row that holds a key's END before

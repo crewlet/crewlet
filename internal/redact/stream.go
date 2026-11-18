@@ -585,8 +585,7 @@ func (c *claimSource) word(w [3]int) {
 // THE CHECK OF A WINDOW DECIDED EARLY READS IT AS ONE STRETCH, from its key to
 // its value's end ([keyStage.handed]), which holds every part of it an answer
 // can read: a claim that comes late over a window's footprint is a miss
-// whichever part the answers read, and a stream refuses the texts it refused
-// when a claim was that stretch.
+// whichever part the answers read.
 func (c *claimSource) valued(k [3]int, start, gutter int) {
 	w := [5]int{k[0], k[1], start, k[2], gutter}
 	end := max(w[1], w[3])
