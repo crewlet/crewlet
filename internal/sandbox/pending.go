@@ -4384,6 +4384,12 @@ type BoxRef struct {
 	// for a later relaunch to know whether the job restarted the session
 	// after its brief. Nil where it is not known.
 	Restart *string
+
+	// Continued is the save point of the kept capture the launch handed the
+	// job's run, and that capture's launch ([continuedLaunch.point]): written
+	// onto the job's record by the same attach ([LaunchRecord.Continued]).
+	// Nil where the launch handed none, or one stating no point above zero.
+	Continued *ContinuedPoint
 }
 
 // PriorBox is the box a relaunch found on its run's row — see
@@ -4929,6 +4935,16 @@ type LaunchRecord struct {
 	// have ([RestartedSince]).
 	BasisRestart *string `json:"basis_restart,omitempty"`
 
+	// Continued is the save point of the kept capture the launch handed its
+	// run, and that capture's launch ([ContinuedPoint]), written with
+	// BasisRestart by the attach that names the job's command, from the same
+	// capture: what a capture of this job no read places is raised to, once
+	// its take names the newest compaction BasisRestart does (savepoint.go).
+	// Nil for a launch that opened its round, the box's copy continued in
+	// place, the conversation's base, a session of the run's own, a kept
+	// capture stating no point or zero, and a record an older build wrote.
+	Continued *ContinuedPoint `json:"continued,omitempty"`
+
 	// Bridged is what this job's BRIDGED calls cost the engine — the
 	// auxiliary calls the seat's tools made for the harness and the
 	// workers it delegated to — as the newest of the totals the bridge
@@ -4953,6 +4969,17 @@ type LaunchRecord struct {
 	// leases, bridged calls and notes (wirekeys.go) — and dropped with the
 	// record by the relaunch that replaces it whole, since it is the job's.
 	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// ContinuedPoint is the save point of the kept capture a launch handed its run
+// ([SessionCapture.Through]), and that capture's launch ordinal
+// ([LaunchRecord.Continued]). No decision reads the capture's own place, so
+// none is kept. CLOSED, as [ResumedCount] is: a later build adds a key beside
+// it on the record, never a field, so it carries no Extra. A reader takes a
+// LaunchSeq or Through at or below zero for none.
+type ContinuedPoint struct {
+	LaunchSeq int64 `json:"launch_seq"`
+	Through   int   `json:"bridge_through"`
 }
 
 // OmittedCalls is the reads of the round the brief the job's run read counted

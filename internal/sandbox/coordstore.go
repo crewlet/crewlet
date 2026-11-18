@@ -2007,6 +2007,10 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 			// whether the job restarted it after its brief
 			// ([LaunchRecord.BasisRestart]).
 			run.Launch.BasisRestart = box.Restart
+			// AND THE POINT OF THE KEPT CAPTURE IT CONTINUED, off the same
+			// capture, for a later capture of the job to be raised to
+			// ([LaunchRecord.Continued]).
+			run.Launch.Continued = box.Continued
 		}
 		// The box's cell moves with the box — see [BoxRef.Placement] — and
 		// so does its host ([BoxRef.Node]).
