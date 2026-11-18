@@ -71,48 +71,30 @@ var BoxReads = []BoxRead{BoxReadCollect, BoxReadStop, BoxReadLoss}
 // Valid reports whether this build knows the read.
 func (r BoxRead) Valid() bool { return slices.Contains(BoxReads, r) }
 
-// BoxReader asks the node whose host a run's box is on to read it back — the
-// part of a collection that touches the box ([Coordinator.readBox]) — for a
-// node that holds the run's seat and not its box.
-//
-// What comes back is the run's own account, floored and with its transcript
-// and refs bounded ([boundBox]), and whether its turn's cap ended it; the
-// asker fits the rest ([Coordinator.fitText]).
-//
-// FOUR KINDS OF FAILURE, each told apart because each is handled apart: the
-// host said the box is gone (wrapping [ErrBoxGone]); the host gave no account
-// of the box ([ErrBoxHostSilent]) — it did not answer, or stopped as it read,
-// which is the same fact, carried apart from the host's own words
-// ([BoxReadReply.Withdrawn]), or answered that it was busy with other reads of
-// its boxes ([ErrBoxHostBusy]), or this node could not put the read to it at
-// all ([ErrBoxNotAsked]), each of which says nothing about the box and is
-// handled as a host that did not answer; the host's coordination store did not
-// answer its read of the run's row, which licenses the read ([ErrStoreSilent]),
-// carried apart the same way ([BoxReadReply.Unsettled]); and anything else the
-// host said, which is the box's own failure to be read, counted like one read
-// here.
+// BoxReader asks the node whose host a run's box is on to read it back (the
+// part of a collection that touches the box, [Coordinator.readBox]) for a node
+// that holds the run's seat and not its box: the run's own account, floored,
+// its transcript and refs bounded ([boundBox]), and whether its cap ended it.
+// FOUR KINDS OF FAILURE, each handled apart: the box gone ([ErrBoxGone]); no
+// account of the box ([ErrBoxHostSilent]: no answer, a host stopping as it
+// read, [BoxReadReply.Withdrawn], a busy host, [ErrBoxHostBusy], or no ask
+// made, [ErrBoxNotAsked]), which says nothing of the box; the host's store
+// silent on the run's row that licenses the read ([ErrStoreSilent],
+// [BoxReadReply.Unsettled]); and anything else, the box's own failure, counted.
 type BoxReader interface {
 	ReadBox(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error)
 }
 
 // ErrBoxHostSilent is a box read the node whose host the box is on gave no
-// account of the box: it is stopped, restarting, or gone, or it stopped as it
-// read ([BoxReadReply.Withdrawn]) — or it answered that it was busy
-// ([ErrBoxHostBusy]), or this node could not ask it ([ErrBoxNotAsked]), which
-// wrap this.
-//
-// NOT A FAILURE OF THE BOX, which is why a collection handed it gives its
-// claim back UNCOUNTED and acknowledges the completion: the host's own waiter
-// announces the completion again on its schedule once the host is back
-// (reannounce.go), and a host that never comes back is found gone by the
-// fleet's waiter, which has the run's round carried on in a box of its own
-// ([Waiter.goneAfter], [LossLaunchNodeGone]).
-// Counted, a host that restarted for a minute would have its runs given up as
-// unreadable. ACKNOWLEDGED ONLY WHERE NO CLOCK RUNS ON THAT HOST'S STORE, AND
-// THE RUN'S ROW SAYS NOTHING OF ONE: a host whose last answer was that its
-// store did not answer it reads the run's row through that store once it is
-// back, and announces nothing, so its collection's completion is handed back
-// for the queue's backoff and renewed instead ([Coordinator.hostClocked],
+// account of: stopped, restarting, gone, stopping as it read
+// ([BoxReadReply.Withdrawn]), busy ([ErrBoxHostBusy]) or not asked
+// ([ErrBoxNotAsked]). NOT A FAILURE OF THE BOX: a collection gives its claim
+// back UNCOUNTED and acknowledges the completion, which the host's waiter
+// announces again once it is back (reannounce.go), and a host that never comes
+// back is found gone ([Waiter.goneAfter], [LossLaunchNodeGone]); counted, a
+// minute's restart would give its runs up. Acknowledged only where no clock
+// runs on that host's store and the row says nothing of one; otherwise handed
+// back for the queue's backoff and renewed ([Coordinator.hostClocked],
 // [Coordinator.unannouncedJob], renew.go).
 var ErrBoxHostSilent = errors.New("sandbox: the node whose host the box is on did not answer")
 
@@ -269,10 +251,9 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // its bound across a link at the slowest pace allowed, must not be taken for.
 // Ordinary reads answer in seconds, a job ending in a few and a session of a
 // day's work being a mebibyte or two. A read that has not finished in that is
-// a host that is not answering, and is answered as one ([ErrBoxHostSilent]);
-// the host's own waiter announces the completion again on its schedule once
-// the host is back (reannounce.go). Only a node that asks ANOTHER node's host
-// waits on it: a box this node hosts it reads itself.
+// a host that is not answering, and is answered as one ([ErrBoxHostSilent]),
+// its waiter announcing the completion again once it is back (reannounce.go).
+// Only a node asking ANOTHER node's host waits on it: its own boxes it reads.
 func BoxReadBudget(run PendingRun, read BoxRead) time.Duration {
 	held := SessionTakeBudget + sessionRecordBudget + 3*discardGrace + boxReadChanges*coord.MaxValueCrossing
 	if read.mayEnd(run) {

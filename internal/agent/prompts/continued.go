@@ -19,15 +19,13 @@ import (
 // every note it read. What it is told is what it lacks
 // — what changed since its last message, and of a session cut off, that it was
 // or may have been and what it may not show ([InterruptedSession],
-// [InterruptedCopy], [MayBeInterruptedCopy]) or, of one saved while its run
-// still worked, when, and that the run went on after it ([SavedSession]), with
-// the messages that carried its work on, the calls and the notes it may lack
+// [InterruptedCopy], [MayBeInterruptedCopy], [SavedSession]), with the
+// messages that carried its work on, the calls and the notes it may lack
 // ([LeadsToldAgain], [CalledAfter], [NotesReadAgain]) — and, where the box it
 // runs in is not the one it was last worked in, what that changes. The fresh
 // brief a run that starts a session of its own is handed is
 // [BuildPhaseUserMessage]'s, and, for one carrying a round on, what became of
-// the run before it and every call of the round so far ([CalledBefore]), which
-// its session holds none of.
+// the run before it and every call of the round so far ([CalledBefore]).
 //
 // A CONVERSATION'S NEXT TURN continues the session its last turn left, in a box
 // of its own, and that session holds another turn: none of what this turn was
@@ -159,25 +157,14 @@ const InterruptedSession = "## The session above was cut off" +
 
 // SavedSession tells a run that continues a session saved while the run that
 // worked in it still worked (internal/agent/runner's SessionBasis.WentOn) that
-// it was saved then, and when (at), and that the run went on after it: the
-// session above ends where it was saved, not where its run stopped. A save is
-// cut off, so what [InterruptedSession] says is said here too, in its place:
-// the session may end mid-call.
-//
-// SAID OF THE SAVE, NOT OF A STOP. [InterruptedSession] is true of such a
-// session as well, but tells it only that it may end mid-call: the run reading
-// it then takes the session's end for the place its work stopped, while the job
-// went on in its box past it, running commands and reading and changing files
-// that no record keeps, beside the calls through the seat's tools that the
-// brief tells after it. So it is told the work went on, that only the calls
-// are told, and to read the working tree before doing any of it again.
-//
-// "ANY CALL ... IS TOLD BELOW", never "what it did is told below": a run that
-// made no call through the seat's tools after the save is told no list
-// ([CalledAfter] renders nothing for none), and the words stay true of it.
-// With at zero, as an older build's capture may state none, the instant is
-// left out rather than said as the zero time, as [BuildNextTurn] leaves out a
-// session's CapturedAt.
+// it was saved then, and when (at), and that the run went on: the session ends
+// where it was saved, not where its run stopped, and may end mid-call as
+// [InterruptedSession] says. Told only that, the run would take the session's
+// end for where its work stopped, while its job went on changing files no
+// record keeps; so it is told to read the working tree first. "Any call ... is
+// told below", never "what it did": a run that made no call after the save
+// gets no list ([CalledAfter]), and the words stay true. With at zero the
+// instant is left out, as [BuildNextTurn] leaves out a zero CapturedAt.
 func SavedSession(at time.Time) string {
 	var w strings.Builder
 	w.WriteString("## The session above was saved while its run still worked\nIt was saved")

@@ -630,6 +630,13 @@
 // nothing in two, a waits four cycles, 2k + 2 for k = 1. A smaller bound needs
 // per-turn state one resume cannot hold, and denying a cut turn its whole cycle
 // is the turn-after rule, which starves.
+//
+// A launch's floor for a session it may continue is that session's own
+// context with the brief that continues it: the turn's kept capture as that
+// capture measured it (runner's SessionBasis.ContextTokens), never its job's
+// newest capture's, and the job's own copy in its box as its newest capture
+// measured it, kept or not (SessionBasis.CopyContext), or its record where
+// larger.
 package engine
 
 import (

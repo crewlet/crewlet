@@ -66,21 +66,15 @@ func launchAfter(t *testing.T, rig *coordRig, want SessionCapture, reused bool,
 	return got
 }
 
-// A RELAUNCH CONTINUES THE NEWEST KEPT CAPTURE OF ITS JOB PAST ONE NOT KEPT. A
-// job whose newest capture was refused, begun and never finished, or sent and
-// never answered past the window a record may name it in, which the log
-// refuses once it is asked again, kept an older one,
-// which holds everything up to its own save point: the relaunch continues
-// that one, told every call after it, rather than start a session of its own
-// and lose all of it. It says, in the line that names what it continued, which
-// newer capture it went past and why that one was not kept. One whose taker
-// stopped is settled first, from the turn's row: where the log took it, it is
-// the one continued. A job that kept none before its newest still starts
-// without one, saying so, with what its copy carried as that newest capture
-// measured it, and no kept capture's own.
+// A RELAUNCH CONTINUES THE NEWEST KEPT CAPTURE OF ITS JOB PAST ONE NOT KEPT:
+// past a newest capture refused, unfinished or unanswered past its window, it
+// continues the older one the job kept, told every call after it, and its line
+// names the newer one passed over and why. One whose taker stopped is settled
+// from the turn's row first, and continued where the log took it. A job that
+// kept none before its newest starts without one, measured as that newest.
 //
-// IN A SYNCTEST BUBBLE, so the relaunch's wait runs on the bubble's clock, and
-// not parallel: it captures the process-wide logger ([captureLogs]).
+// In a synctest bubble, and not parallel: it captures the process-wide logger
+// ([captureLogs]).
 //
 // Mutation: continue only the job's newest capture, or drop the line that names
 // the one passed over, and a case goes red.
@@ -215,46 +209,17 @@ func TestARelaunchContinuesTheNewestKeptCaptureOfItsJobPastOneNotKept(t *testing
 }
 
 // A RELAUNCH CONTINUES THE NEWEST KEPT CAPTURE BESIDE A NEWER ONE STILL IN
-// FLIGHT. A newer capture of the job it follows, or a save of it under way,
-// may still land: being kept, a read standing by to keep it in the next place,
-// or its record sent and not yet answered. The relaunch waits its short wait
-// for it and asks its record again first, and continues it where it lands;
-// past the wait it continues the capture the job kept before it, says in the
-// line naming what it continued which newer one it did not wait out and how
-// that one may still be kept, and leaves it in flight. Only where the job kept
-// none does a keep still under way leave the relaunch without one, as before.
+// FLIGHT: it waits briefly for the newer one (or a save), asks its record again
+// first, and continues it where it lands; past the wait it continues the older
+// one and names the newer it left in flight. Where the newer lands between the
+// probe and the launch, the launch's own check refuses the older and the run
+// starts fresh or continues its box's copy. An ask that can land is asked in
+// time, and a keep under way beside an earlier job's kept capture is said
+// still being kept. In a synctest bubble; not parallel ([captureLogs]).
 //
-// THE RE-CHECK RACE: where the newer one lands after the probe chose the
-// older and before the launch, the record keeps the newer one, or the turn's
-// row names it, and the launch's own check refuses the older: its briefs were
-// built for that one, so the run starts a session of its own, or continues its
-// box's copy in the job's own box where it is offered it, never the newer
-// capture, and says so. A newer one still in flight at the launch changes
-// nothing, and the older one is continued.
-//
-// AND AN ASK THAT LANDS IS ASKED IN TIME: an unanswered save of the job beside
-// a final take of it still being kept is asked before the relaunch waits on
-// the final take, so its ask has the relaunch's wait to land in, and the save
-// it lands is continued rather than the older capture the job kept; and a
-// newer capture whose record goes unanswered while the relaunch waits ends
-// the wait, and is asked then, so the one the log took is continued rather
-// than the older one beside a row that names it.
-//
-// A KEEP STILL UNDER WAY BESIDE AN EARLIER JOB'S KEPT CAPTURE is the followed
-// job keeping none: the relaunch says it was still being kept when its wait
-// ran out, never that it was not kept.
-//
-// IN A SYNCTEST BUBBLE, so each wait runs and is measured on the bubble's
-// clock, and not parallel: it captures the process-wide logger
-// ([captureLogs]).
-//
-// Mutation: refuse the kept capture beside a newer one still in flight past the
-// wait, skip the wait where the job kept an older capture, drop the launch's
-// check that its record keeps the capture it was asked to continue, drop the
-// line that names the newer one passed over, ask an unanswered record only
-// where nothing else is in flight, drop the ask made again where the wait
-// ended early, or read an earlier job's kept capture as the followed job's,
-// and a case goes red.
+// Mutation: refuse the older beside one in flight, skip the wait, drop the
+// launch's check or the line, ask only with nothing else in flight, skip the
+// ask on an early end, or read an earlier job's capture as the followed job's.
 func TestARelaunchContinuesTheNewestKeptCaptureBesideANewerOneStillInFlight(t *testing.T) {
 	const wait = 2 * time.Second
 	// continuesKept fails t unless p's relaunch continued the capture its job

@@ -396,25 +396,16 @@ func TestAnEndDoesNotWaitOutACaptureWhoseTakersLeaseLapsed(t *testing.T) {
 	})
 }
 
-// A DRAINING TAKER'S CAPTURE IS NOT SETTLED UNDER IT. A drain gives the node's
-// presence up at its first step, while its turns finish and their captures
-// upload; the node's taker lease is held until the last of those keeps ends.
-// So a turn's end that waits on a capture the draining node is still keeping
-// reads its taker's lease held at the epoch the stamp names, and waits — one
-// read of the lease a pass, the turn's row on the log not read before a
-// record's budget of the wait has passed — until the keep lands, and then ends
-// the turn with that capture kept. Settled as gone on
-// the node's missing presence, the end would refuse the capture and tombstone
-// the turn before the keep's record landed: the record refused, and the turn's
-// last session lost.
+// A DRAINING TAKER'S CAPTURE IS NOT SETTLED UNDER IT. A drain gives presence up
+// at once while its keeps upload, but holds the taker lease until the last
+// ends, so a turn's end reads the lease held and waits (one lease read a pass,
+// the log not read before a record's budget) until the keep lands, then ends
+// with that capture kept. Settled on missing presence, the end would refuse
+// the capture and tombstone the turn ahead of its record. In a synctest
+// bubble, the keep landing once the wait has asked three times.
 //
-// IN A SYNCTEST BUBBLE: the keep lands once the end's wait has asked after its
-// taker three times — a witness the wait itself leaves — never on a timer a
-// starved runner could let run out before the wait's first pass.
-//
-// Mutation: read a taker whose node holds no presence as gone, or a lease held
-// at the stamp's epoch as lapsed, and the end names the capture refused under
-// a keep still uploading.
+// Mutation: read a taker with no presence as gone, or a lease held at the
+// stamp's epoch as lapsed, and the end names the capture refused.
 func TestADrainingTakersCaptureIsNotSettledUnderIt(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -684,25 +675,16 @@ func relaunchAfterTaker(t *testing.T, gone, landed bool,
 	return rig, begun, continued, why
 }
 
-// A RELAUNCH SETTLES A CAPTURE WHOSE TAKER IS GONE BEFORE IT DECIDES. A job lost
-// with its node's process — its box gone with the restart that replaced it —
-// is relaunched within a minute or two, and the newest capture of it can be one
-// that process was taking, still stamped begun. The relaunch waited its
-// fifteen seconds for it, said it was still being kept and started a session
-// of its own — beside a record the log may well have taken. Its taker's lease
-// has lapsed, so the relaunch's wait settles it from the turn's row at once:
-// one the row names landed, and is continued; one it does not was refused,
-// and the relaunch continues the capture the job kept before it. A taker whose
-// lease still holds is waited for, and once the wait has run out the turn's
-// row is read again: a capture it names landed, and is continued; one it does
-// not is still being kept, and left so, the relaunch continuing the capture
-// the job kept before it.
+// A RELAUNCH SETTLES A CAPTURE WHOSE TAKER IS GONE BEFORE IT DECIDES, from the
+// turn's row: landed where the row names it, and continued; refused where not,
+// the relaunch continuing the job's older kept capture. A taker whose lease
+// holds is waited for, and the row is read again once the wait runs out: one it
+// names landed and is continued, one it does not is left begun.
 //
-// Mutation: settle a capture landed only where its taker is gone, or drop the
-// read past the wait, and the third case continues the older capture; settle a
-// held taker's capture refused where the log has not taken it, and the
-// fourth's stamp is no longer left begun; continue only the job's newest
-// capture, and the second and the fourth continue nothing.
+// Mutation: settle landed only a gone taker's, or drop the read past the wait,
+// and the third case continues the older capture; settle a held taker's
+// refused, and the fourth's stamp is not left begun; continue only the newest,
+// and the second and fourth continue nothing.
 func TestARelaunchSettlesACaptureWhoseTakerIsGoneBeforeItDecides(t *testing.T) {
 	t.Parallel()
 	t.Run("its record landed", func(t *testing.T) {
@@ -760,51 +742,17 @@ func TestARelaunchSettlesACaptureWhoseTakerIsGoneBeforeItDecides(t *testing.T) {
 	})
 }
 
-// A CAPTURE THE LOG TOOK IS SETTLED LANDED WHATEVER ITS TAKER'S LEASE. A node
-// whose coordination store answers its leases and not its runs (the two are
-// other streams) keeps its taker lease while no stamp of its own reaches the
-// run's row: the job lost with it (launch_node_store_silent) leaves its
-// capture begun under a lease that holds, though the capture's record is on
-// the log. Settled by the lease alone, the relaunch carrying its round on
-// started without that capture, and the turn's end waited out its whole
-// budget. So a wait reads the turn's row for such a capture too, and settles
-// it landed where the row names its place: a relaunch once, after its wait has
-// run out, and the end at most once every record's budget, going on once the
-// log names the capture. The relaunch reads it however long ago the capture
-// began: the loss is found only once the silence has lasted the box's timeout,
-// so the capture can be past its budget, no longer waited for, and the log's
-// all the same. A save a refused final take overtook is read so as much as the
-// newest capture, by the end and by the relaunch. And the relaunch's read past
-// its wait is held to a wait of its own, as long as the relaunch's, the frame
-// still holding the seat: a store slow to answer the lease's read holds it no
-// longer, and one slow to take the settle's write holds it for that write's
-// own room past it, a record's budget and the row's crossing, as every settle
-// a wait decides is given, and no longer.
+// A CAPTURE THE LOG TOOK IS SETTLED LANDED WHATEVER ITS TAKER'S LEASE (the
+// package doc says why): the relaunch reads the turn's row once past its wait,
+// whatever the capture's age, and the end at most once a record's budget; a
+// save beside a refused final take as much as the newest; a lease the store
+// cannot say of as one that holds; the read past the wait held to a wait of its
+// own and its settle to its own room. In a synctest bubble.
 //
-// IN A SYNCTEST BUBBLE, so each wait is measured on the bubble's clock, which
-// only the waits' own timers advance; the record reaches the log once the
-// end's wait has read the row once, a witness the wait itself leaves.
-//
-// Mutation: settle a capture landed only where its taker is gone, and the
-// relaunch says it is still being kept and the end names it begun and never
-// finished; read the turn's row at every pass of a wait, and the relaunch
-// reads it before its wait has run out and the end more often than a
-// record's budget; read it past the relaunch's wait only for a capture still
-// being kept, and the relaunch of a capture past its budget starts without
-// it; read or settle the newest capture alone, and the end waits out the
-// save's whole budget, or the relaunch starts without the save; read the
-// lease or the row past the wait under the relaunch's own context, and a slow
-// store holds the relaunch an hour, or settle under no room of its own, and it
-// holds the relaunch for as long as it does not take the write;
-// read the row only for a lease that answers held, and where the store cannot
-// say of the taker's lease the relaunch starts without the capture the log
-// took and the end names it begun and never finished.
-//
-// WHATEVER THE STORE ANSWERS OF THE LEASE: where it cannot say (its reads
-// failing while the taker's renewals land), the end and the relaunch read the
-// row as for a lease that holds and decide as they do there, the capture
-// settled landed, where they once waited it out by its age, the end naming it
-// begun and never finished and the relaunch starting without it.
+// Mutation: settle landed only a gone taker's; read the row every pass; read it
+// past the wait only within the budget; settle the newest alone; read past the
+// wait under the relaunch's context, or settle in no room of its own; or read
+// only a lease answering held, and a case goes red.
 func TestACaptureTheLogTookIsSettledLandedWhateverItsTakersLease(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -1510,21 +1458,17 @@ func TestATakeWithNoTakerLeaseBeginsNoCapture(t *testing.T) {
 	}
 }
 
-// A STAMP WITH NO TAKER IS SETTLED BY ITS AGE ALONE. An older build names no
-// taker lease on its stamps, so nothing says whether the take that left one
-// begun still runs: a relaunch waits for it its fifteen seconds as before, and
-// a stamp older than a capture can take is read as one whose node stopped or
-// whose budget ran out. No lease is read, and the log is never read to settle
-// it, for a taker nobody named: the relaunch continues the capture its job
-// kept before it either way, reading the turn's row once, to decide, and the
-// line naming the stamp it went past says which it was.
+// A STAMP WITH NO TAKER IS SETTLED BY ITS AGE ALONE: nothing says whether its
+// take still runs, so a relaunch waits for it as before and reads one past a
+// capture's budget as stopped; no lease is read and the log never settles it.
+// The relaunch continues the job's older kept capture, reading the turn's row
+// once to decide, and its line says which the stamp was.
 //
-// IN A SYNCTEST BUBBLE, and not parallel: it captures the process-wide logger
+// In a synctest bubble, and not parallel: it captures the process-wide logger
 // ([captureLogs]).
 //
-// Mutation: read a lease for a stamp with no taker, or settle one from the log,
-// or tell one past a capture's budget as still being kept, and a check below
-// goes red.
+// Mutation: read a lease for it, settle it from the log, or tell one past its
+// budget as still being kept, and a check goes red.
 func TestAStampWithNoTakerIsSettledByAge(t *testing.T) {
 	for _, c := range []struct {
 		name string

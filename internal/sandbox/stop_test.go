@@ -699,30 +699,16 @@ func (s *silentFromDecision) CollectStop(ctx context.Context, turnID string, c S
 }
 
 // A STOP WHOSE NODE SHARES ITS HOST'S STORE SILENCE IS KEPT, AND NEVER SAID
-// ENDED. Where this node's own store does not answer either, nothing the stop's
-// ending writes would land, so the bound a host that alone cannot read the box
-// is held to never ends it: past the box timeout too, the stop is kept, its
-// spend still on the box and charged once the stores answer. Nor does its log
-// say it was ended all the same on any attempt, which the record's write,
-// failing, would then belie. The attempt staged here is the one that meets it:
-// the retry read the row and decided the ending again, and the silence began
-// as that decision landed, so the attempt's own read of the row is the first
-// step this node's store does not answer, and the next attempt's read of the
-// row keeps the stop before any read of the box. And a silence both nodes
-// shared counts nothing toward the host's own: once this node's store answers
-// again, the host whose store alone is silent is waited for the box timeout
-// from this node's first ask of it then.
+// ENDED: nothing its ending writes would land, so no bound ends it, and no
+// attempt's log says it ended. Staged at the attempt whose own row read is the
+// first step this node's store does not answer. A silence both nodes shared
+// counts nothing toward the host's: once this node's store answers, the host
+// is waited for the box timeout from the first ask then.
 //
-// Mutation: bound the host's store's silence whatever the attempt's own read of
-// the row met (readStopped), or hand readStopped a read that answered whatever
-// it met (finishEnding), and nothing says the stop waits on a silence both
-// nodes share: its read is taken for a host given up, and the stop is kept
-// only by its record's write failing. (Said ended it never is, which is the
-// record's to say: [TestAStopIsSaidEndedUnreadOnlyOnceItsRecordSaysSo].) Count
-// the shared silence toward the host's, and the stop is ended unread as soon
-// as this node's store answers again.
-//
-// Not parallel: it captures the process-wide logger ([captureLogs]).
+// Mutation: bound the host's silence whatever the attempt's read met, or hand
+// readStopped an answered read whatever it met, and the stop is kept only by
+// its record's write failing; count the shared silence toward the host's, and
+// it ends unread as this node's store answers. Not parallel ([captureLogs]).
 func TestAStopWhoseNodeSharesItsHostsStoreSilenceIsKeptAndNeverSaidEnded(t *testing.T) {
 	logs := captureLogs(t)
 	rig := newCoordRig(t)

@@ -674,10 +674,7 @@ const floorUnusedOutcome = "the launch offers the session told without the readi
 //
 // EACH SESSION HELD TO ITS OWN FLOOR, never to the other's. A relaunch may be
 // offered both the session it was asked to continue in any box and the job
-// before's own copy in its box, each with a brief of its own and each with a
-// context of its own (the kept capture's own measure, [keptFloor]; the copy's,
-// the larger of its job's newest capture's and its record's,
-// [runner.Continuation.ContextTokens]), and its box
+// before's copy in its box, each with its own brief and context, and its box
 // decides which it takes up as the run starts: the first where it can, and the
 // copy only where it cannot (internal/sandbox's continueSession). So a session
 // whose own floor no window or model can carry is dropped alone, and the launch

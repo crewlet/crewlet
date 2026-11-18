@@ -196,19 +196,16 @@ func TestAnEndDoesNotWaitForASaveAKeptCaptureSuperseded(t *testing.T) {
 	})
 }
 
-// A SAVE WHOSE TAKER'S LEASE LAPSED IS SETTLED FROM THE TURN'S ROW. A save a
-// final take overtook is out of the row's newest place, and its taker can stop
-// mid-keep as any take's can: every wait settles it as it settles the newest,
-// once its taker's lease has lapsed, LANDED where the turn's row on the
-// executor log names its place, and then kept, REFUSED where it does not, and
-// then let go, rather than wait out the save's budget. A pass that finds both
-// the newest capture and the save begun under a gone taker reads the turn's
-// row ONCE, and the taker's lease once, and settles both: the one the row
-// names landed, the other refused.
+// A SAVE WHOSE TAKER'S LEASE LAPSED IS SETTLED FROM THE TURN'S ROW, as the
+// newest capture is: LANDED and kept where the turn's row on the executor log
+// names its place, REFUSED and let go where it does not, rather than waited out
+// to its budget. A pass that finds both the newest capture and the save begun
+// under a gone taker reads the turn's row once and the lease once, and settles
+// both.
 //
 // Mutation: settle the newest capture alone, and the end's wait runs to its
-// bound on the save; read the turn's row once for each stamp, or the lease
-// once for each, and the pass reads twice.
+// bound on the save; read the row or the lease once per stamp, and the pass
+// reads twice.
 func TestASaveWhoseTakersLeaseLapsedIsSettledFromTheTurnsRow(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -267,24 +264,16 @@ func TestASaveWhoseTakersLeaseLapsedIsSettledFromTheTurnsRow(t *testing.T) {
 	}
 }
 
-// AN UNRESOLVED SAVE IS ASKED AGAIN BEFORE A RELAUNCH OR AN END DECIDES. A save
-// whose record was sent and never answered may have landed, and where the
-// final take that overtook it was refused, it is the job's newest session
-// anybody kept: the turn's end and a relaunch each ask it again under its own
-// operation, as they ask the newest capture: the end before it records, so
-// its record keeps the save it landed; the relaunch before it decides, so the
-// record it decides on keeps the save, which it continues past the refused
-// final take, and its run is told the turn's own session is there to read. A
-// build that reads the newest place alone never asks it. AND THE END ASKS IT
-// RATHER THAN WAIT FOR IT: a save whose record went unanswered is no keep in
-// flight, as an unanswered newest capture is not, since nothing of it is being
-// kept any more and only an ask can say whether the log took it, so the end's
-// wait ends at once beside it.
+// AN UNRESOLVED SAVE IS ASKED AGAIN BEFORE A RELAUNCH OR AN END DECIDES: beside
+// a refused final take it is the job's newest session anybody kept, so the end
+// asks it before it records and the relaunch before it decides, which then
+// continues it and names the turn's own session to its run. The end asks it
+// rather than wait for it: nothing of it is being kept any more, and only an
+// ask can say whether the log took it.
 //
-// Mutation: ask the newest capture alone, and neither asks the save: the end
-// records beside a record keeping nothing, and the relaunch decides on one,
-// continuing nothing; count a save awaiting its answer as a keep in flight,
-// and the end's wait runs to its whole bound before the end asks it.
+// Mutation: ask the newest capture alone, and the end records beside a record
+// keeping nothing and the relaunch continues nothing; count a save awaiting its
+// answer as a keep in flight, and the end waits its whole bound first.
 func TestAnUnresolvedSaveIsAskedAgainBeforeARelaunchOrAnEndDecides(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -347,19 +336,14 @@ func TestAnUnresolvedSaveIsAskedAgainBeforeARelaunchOrAnEndDecides(t *testing.T)
 	}
 }
 
-// A RELAUNCH WAITS BRIEFLY FOR A SAVE OF THE JOB IT FOLLOWS, as for the job's
-// newest capture. A final take of the job overtook a save still uploading, and
-// the final take was refused: the save is the job's newest session anybody may
-// keep, so a relaunch waits its short wait for it, and decides on the record
-// as it stands once the save landed: the record keeping it, the relaunch
-// continuing it past the refused final take, and the turn's own session named
-// to the relaunch's run as one it may read. A save still
-// being kept when the wait runs out is named by its own place, never by the
-// refused final take that holds the newest place.
+// A RELAUNCH WAITS BRIEFLY FOR A SAVE OF THE JOB IT FOLLOWS, as for its newest
+// capture: beside a refused final take the save is the job's newest session
+// anybody may keep. Landed, the relaunch continues it and names the turn's own
+// session to its run; still being kept when the wait runs out, it is named by
+// its own place, never by the refused final take.
 //
-// Mutation: leave the save under way out of the relaunch's wait, and the
-// relaunch decides at once, before the save lands, and names the refused
-// final take rather than the save it would have waited on.
+// Mutation: leave the save out of the relaunch's wait, and the relaunch decides
+// at once and names the refused final take.
 func TestARelaunchWaitsBrieflyForASaveOfTheJobItFollows(t *testing.T) {
 	t.Parallel()
 	t.Run("kept while it waits", func(t *testing.T) {
@@ -415,28 +399,17 @@ func TestARelaunchWaitsBrieflyForASaveOfTheJobItFollows(t *testing.T) {
 	})
 }
 
-// A RELAUNCH WAITS ONLY FOR A CAPTURE ITS DECISION DEPENDS ON. Its wait holds
-// the seat's frame and a slot of the node's admission, so it waits for a keep
-// only where the keep's landing can change what it continues: a capture or a
-// save of the job it follows, and an earlier job's while the turn has kept
-// nothing. Beside a capture the turn kept, an earlier job's capture or save
-// still being kept changes nothing (a relaunch continues only a capture of
-// the job it follows, and the turn has already kept one), so the relaunch
-// decides at once, naming the job it follows, which left no capture. Where
-// the turn has kept nothing, an earlier job's save still being kept decides
-// whether the relaunch continues the session the turn's first launch was
-// handed: it waits, and continues that base once the save is refused, and no
-// base once the save lands, the turn then having kept a session of its own;
-// still being kept when the wait runs out, it is named as the earlier job's
-// keep it is, beside the job the relaunch follows having left no capture.
+// A RELAUNCH WAITS ONLY FOR A CAPTURE ITS DECISION DEPENDS ON, since its wait
+// holds the seat's frame and an admission slot: a capture or save of the job it
+// follows, and an earlier job's only while the turn has kept nothing. Beside a
+// kept capture it decides at once; with none kept, it waits for an earlier
+// job's save and continues the base once the save is refused, none once it
+// lands, and names a save still under way as the earlier job's.
 //
-// Mutation: wait on every stamp in flight whatever its job, and the relaunch
-// beside a capture the turn kept waits its whole wait for a keep that changes
-// nothing, naming that keep as the followed job's; wait only on the stamps of
-// the job the relaunch follows, and the relaunch of a turn that kept nothing
-// continues the base at once, beside a save about to end it; or name an
-// earlier job's keep as the followed job's, and the relaunch says the job it
-// follows is still being kept.
+// Mutation: wait on every stamp whatever its job, and the relaunch beside a
+// kept capture waits for nothing that changes it; wait only on the followed
+// job's, and it continues the base beside a save about to end it; or name an
+// earlier job's keep as the followed job's.
 func TestARelaunchWaitsOnlyForACaptureItsDecisionDependsOn(t *testing.T) {
 	t.Parallel()
 	for name, keeping := range map[string]func(t *testing.T, rig *coordRig) SessionCapture{

@@ -360,27 +360,17 @@ func TestALossCauseThisBuildDoesNotKnowIsCarriedOnInGeneralTerms(t *testing.T) {
 	}
 }
 
-// A LOST RUN'S LINE SAYS HOW LONG IT RAN AND SINCE ITS SAVE: the line that
-// carries a lost job's round on gives, in whole seconds to the instant the loss
-// was found, how long the job ran from its launch (ran_s) and how long since the
-// newest capture of its own launch that was kept (since_save_s): the time the
-// loss cost, and the work a relaunch continuing that capture does again. Each
-// is left out where its instant is not known, never said as a figure no clock
-// gave: a kept capture of an earlier launch says nothing of this job, and a
-// launch, a capture or a verdict stating no instant states nothing to count
-// from. A final capture kept after the loss was found lost no kept work, so
-// it gives zero, never a figure below it.
-//
-// The instants are literals and so are the seconds, the clocks being the
-// stamps' own.
+// A LOST RUN'S LINE SAYS HOW LONG IT RAN AND SINCE ITS SAVE, in whole seconds to
+// the loss: ran_s from its launch and since_save_s from the newest kept capture
+// of its own launch, each left out where no clock gave its instant (an earlier
+// launch's capture says nothing of this job), and a final capture kept after
+// the loss gives zero, never below it. The instants and seconds are literals.
 //
 // Not parallel: it captures the process-wide logger ([captureLogs]).
 //
-// Mutation: read the row's kept capture whatever its launch, and an earlier
-// launch's capture is counted as this job's; drop a guard on an instant not
-// known, and a figure is said from no instant; drop the clamp, and a capture
-// kept after the loss is said as one taken before it; drop the figures from
-// the line, and the carry says neither.
+// Mutation: read the kept capture whatever its launch; drop a guard on an
+// unknown instant; drop the clamp; or drop the figures from the line, and a
+// case goes red.
 func TestALostRunsLineSaysHowLongItRanAndSinceItsSave(t *testing.T) {
 	started := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
 	saved := time.Date(2026, 8, 23, 12, 1, 15, 0, time.UTC)

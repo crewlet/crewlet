@@ -969,20 +969,15 @@ func TestAnInPlaceContinuationIsHeldToTheLargerOfItsCopysAndItsCapturesMeasure(t
 	}
 }
 
-// AN IN-PLACE COPY BESIDE AN OLDER KEPT CAPTURE IS HELD TO THE COPY'S MEASURE.
-// A person's answer offers the relaunch two sessions: the turn's kept capture,
-// restored in whatever box the launch gets, and the asking job's own copy in its
-// box, which went as far as that job's newest capture and maybe further. Each
-// is held to what it sends: the kept continuation to its capture's own measure
-// (SessionBasis.ContextTokens), and the copy to its job's newest capture's
-// (SessionBasis.CopyContext), or the job's record's where that is larger. Where
-// the capture continued is older than the job's newest, the two differ, and
-// the copy held to the older capture's measure would be held to less than it
-// sends.
+// AN IN-PLACE COPY BESIDE AN OLDER KEPT CAPTURE IS HELD TO THE COPY'S MEASURE:
+// the kept continuation to its capture's own (SessionBasis.ContextTokens), the
+// job's copy to its newest capture's (SessionBasis.CopyContext) or its
+// record's where larger. Where the capture continued is older than the newest,
+// the two differ, and the copy held to the older's would be held to less than
+// it sends.
 //
-// Mutation: hand the in-place launch the kept capture's own figure
-// (basis.ContextTokens) in place of the copy's, and the copy is held to 40000
-// while it sends 150000.
+// Mutation: hand the in-place launch basis.ContextTokens, and the copy is held
+// to 40000 while it sends 150000.
 func TestAnInPlaceCopyBesideAnOlderKeptCaptureIsHeldToTheCopysMeasure(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct{ copied, want int64 }{

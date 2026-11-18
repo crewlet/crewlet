@@ -6,19 +6,14 @@ import (
 	"time"
 )
 
-// A SESSION SAVED WHILE ITS RUN WORKED SAYS WHEN AND THAT IT WENT ON. A run
-// continuing a capture taken while its job still worked is told the session
-// above was saved then, at the instant it was saved (in UTC, whatever zone the
-// instant was read in), and that the run went on after it, so the session ends
-// where it was saved and not where the run stopped; that it may end mid-call;
-// that any call through the seat's tools after it is told below; and that what
-// else the run did is in no record, so the working tree is read first. With no
-// instant stated it names none, never the zero time. It names no checkpoint,
-// which no other text of the engine calls a capture.
+// A SESSION SAVED WHILE ITS RUN WORKED SAYS WHEN AND THAT IT WENT ON: the
+// instant it was saved (in UTC, whatever zone it was read in), that the run
+// went on after it, that it may end mid-call, that calls after it are told
+// below, and that the working tree is read first. With no instant it names
+// none, never the zero time, and it names no checkpoint.
 //
-// Mutation: leave the instant out, and the run cannot tell where its session
-// ends; say it however it was read, or say the zero time, and the run is told
-// another instant, or a session saved in the year one.
+// Mutation: leave the instant out; say it in the zone it was read in; or say
+// the zero time, and the run is told the wrong instant.
 func TestASessionSavedWhileItsRunWorkedSaysWhenAndThatItWentOn(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 11, 8, 9, 20, 0, 0, time.UTC)

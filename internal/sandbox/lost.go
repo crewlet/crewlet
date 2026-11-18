@@ -84,13 +84,8 @@ const (
 	// collecting node's store answered ([hostUnsettled]): its box is there,
 	// but only that node can read it, and it could not. Recorded by the
 	// collection that found it so, on its own claim ([Coordinator.loseWithHost]).
-	// That node can still hold its taker lease, its leases another stream
-	// than its runs, so a capture it was keeping stays begun on the row with
-	// no stamp of its own to come: the relaunch that carries the round on
-	// reads the turn's row once its wait for that capture runs out, or at
-	// once where the capture is past its budget, which a silence as long as
-	// the box's timeout can make it, and continues it where the log took its
-	// record ([Coordinator.ContinuedCapture]).
+	// A capture that node was keeping stays begun under its held taker lease,
+	// so the relaunch reads the turn's row for it ([Coordinator.ContinuedCapture]).
 	// A build that does not know it reads it as a cause it does not know,
 	// which leaves no box to read and is said in general terms.
 	LossLaunchNodeStoreSilent LossCause = "launch_node_store_silent"
@@ -276,23 +271,14 @@ func (c *Coordinator) carryOnLost(ctx context.Context, run PendingRun) (*lostCar
 }
 
 // lossSpans is what the line that carries a lost job's round on says of the
-// time the loss cost, in whole seconds to at, the instant the loss was found
-// ([JobLoss.At]): how long the job ran (ran_s, from its launch,
-// [LaunchRecord.StartedAt]) and how long since the newest capture of its own
-// launch that was kept, final or not (since_save_s, [launchKept]), the work a
-// relaunch continuing that capture does again. Each is left out where its
-// instant is not known: a launch an older build recorded with no start, a
-// kept capture of an earlier launch, which says nothing of what this job did,
-// or a stamp, or a verdict, stating no instant.
-//
-// THREE CLOCKS, so each figure is an estimate: at is on the clock of the node
-// that found the loss, the start on the clock of the node whose store write
-// launched the job, and a capture's instant on its taker's. Each two of those
-// are held within twice objstore.AssumedClockSkew of each other by the
-// fleet's clock_skew alarm, which bounds each figure's error. A figure below
-// zero is one those clocks put there, or the final capture the loss's own take
-// kept off a box the loss left, taken after the loss was found, which lost no
-// kept work: zero, either way.
+// time the loss cost, in whole seconds to at, when the loss was found
+// ([JobLoss.At]): how long the job ran (ran_s, from [LaunchRecord.StartedAt])
+// and since the newest kept capture of its own launch (since_save_s,
+// [launchKept]), the work a relaunch continuing it does again. Each is left
+// out where its instant is unknown. Three clocks (the finder's, the
+// launcher's, the taker's) make each an estimate within twice
+// objstore.AssumedClockSkew, which the clock_skew alarm holds; a figure below
+// zero, those clocks' doing or the loss's own final take, is zero.
 func lossSpans(run PendingRun, at time.Time) []any {
 	if at.IsZero() {
 		return nil

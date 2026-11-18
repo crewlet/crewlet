@@ -138,11 +138,10 @@ import (
 // that copy at and the restart its launch's session held
 // ([LaunchRecord.ResumedCount], [LaunchRecord.BasisRestart]), and a refused
 // completion its seat's holder owes ([LaunchRecord.RefusalOwed], its condition
-// at most [MaxOwedConditionBytes]); the owed end and
-// the captures (the newest, the kept one and a save under way,
-// [PendingRun.Saving]), each with the reads its session holds only as a count
-// ([SessionCapture.Omitted]) and its count ([SessionCapture.ResumedCount]); and
-// what the job may do on Gitlet: the holds of
+// at most [MaxOwedConditionBytes]); the owed end and the captures (newest,
+// kept and [PendingRun.Saving]), each with the reads its session holds only
+// as a count ([SessionCapture.Omitted]) and its count
+// ([SessionCapture.ResumedCount]); and what the job may do on Gitlet: the holds of
 // its turn ([MaxCodeHolds]), its repositories ([MaxRunRepos], each held to its
 // grammar, its cone and its change's title, [MaxChangeTitleBytes], among
 // them), its floors and whom its pushes and its change are made for
@@ -199,9 +198,8 @@ const (
 	// ExtraRowBytes is the room, inside RestBytes, for keys a later build
 	// adds to the row, at its top ([PendingRun.Extra]) or in one of its
 	// sections ([LaunchRecord.Extra], [HeldCall.Extra], [OwedCall.Extra],
-	// [SessionCapture.Extra], carried in each of the row's three capture
-	// sections, [ConversationBase.Extra] and its session's and
-	// siblings', [RunSteer.Extra] and its notes', their hooks' serves' and
+	// [SessionCapture.Extra] in each capture section, [ConversationBase.Extra]
+	// and its session's and siblings', [RunSteer.Extra] and its notes', their hooks' serves' and
 	// the calls those answered), and that this build
 	// carries without reading: STATED HERE, so the next field a
 	// build adds is added inside it, and the build that adds it moves its own

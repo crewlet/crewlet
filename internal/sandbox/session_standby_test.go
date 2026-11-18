@@ -1232,54 +1232,17 @@ func TestAReadStandingByTakesOverACaptureBegunPastItsBudget(t *testing.T) {
 }
 
 // A READ STANDING BY KEEPS NOTHING WHERE THE LOG TOOK THE CAPTURE IT STOOD BY
-// FOR. The read holding the place is node-a's, whose taker lease still holds
-// while none of its stamps reaches the run's row (its coordination store
-// answering its leases and not its runs), and whose record the executor log
-// may have taken all the same. Once that capture has stood begun past what a
-// capture can take, the standby reads the turn's row on the log once before it
-// takes the place after it: where the row names that capture, it is settled
-// landed from the row and the standby keeps nothing, the session uploaded
-// once; where the log holds no record of it, the standby takes the place after
-// it and keeps its own; where the row names the save the capture overtook,
-// the log took that save's record and not the capture's, and the standby
-// keeps its own in the place after the capture all the same; and where the
-// log does not answer, the standby keeps its own all the same, a session that
-// may be kept twice rather than one nobody keeps. Every way the log is read at
-// that last decision alone, never while the capture is still within its
-// budget. Where node-a's stamp names no taker, which only a coordinator with
-// no taker lease writes, the capture is decided by its age alone: the log is
-// not read, even holding its record, and the standby takes the place after it
-// and keeps its own.
+// FOR. Node-a's lease holds while none of its stamps reach the row. Once that
+// capture is begun past its budget, the standby reads the turn's row on the log
+// once: named, it keeps nothing and withdraws on the log's word alone, whether
+// or not the store takes the landed settle; no record, the row naming only the
+// save, or a log that does not answer, it keeps its own; a lease the store
+// cannot say of is read as held; a stamp naming no taker goes by age, unread.
+// In a synctest bubble.
 //
-// ON THE LOG'S WORD ALONE: where the row names the capture and the run's
-// record does not take the landed settle, the standby keeps nothing all the
-// same and withdraws, the capture left begun on the record for a later wait to
-// settle, where it once read the capture back begun and took the place after
-// it by its age, a second upload beside the record the log holds. And whatever
-// the store answers of node-a's lease: where it cannot say, the row is read
-// as for a lease that holds, and the capture the log took is settled landed.
-//
-// IN A SYNCTEST BUBBLE, so the standby's wait ticks on the bubble's clock; the
-// coordinator's own clock moves past the capture's budget only once the wait
-// has ticked beside a capture still being kept and every goroutine of the case
-// is blocked.
-//
-// Mutation: decide the takeover by the capture's age alone, the log unread,
-// and the standby uploads the session a second time beside the record the log
-// took; settle a held taker's capture landed where the row does not name it,
-// or stand the standby down once it has read the log, or where the log does
-// not answer, and it keeps nothing where nobody may have kept the session;
-// read the log for a held taker at every pass of the wait, or once at the
-// standby's first pass whatever the capture's age, and it is read while the
-// capture is still within its budget; decide on the row as the store took the
-// settle rather than on the log's answer, and the standby uploads a second
-// time where the store did not take it; read the log only for a lease that
-// answers held, and it uploads a second time where the store cannot say of
-// node-a's lease; stand down where the row names any stamp the read settled,
-// the save beside the capture included, and the final session is kept by
-// nobody; admit a stamp that names no taker to that last read, and the log is
-// read for a capture every account leaves to its age. (A takeover asked after the settle whatever it found is refused by
-// the store, which takes over no capture that landed: [PendingStore.TakeOver].)
+// Mutation: decide by age with the log unread; read it every pass or early;
+// decide on the store's take; stand down on any named stamp or an unanswered
+// log; read only a lease answering held; or admit a stamp naming no taker.
 func TestAReadStandingByKeepsNothingWhereTheLogTookTheCaptureItStoodByFor(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {

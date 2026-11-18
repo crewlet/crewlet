@@ -38,10 +38,7 @@ import (
 //     held call, what became of it, which tells the call a person approved
 //     once: no list below tells it again ([carried.tellsHeld]) — or what cut it
 //     off;
-//   - that it may end mid-call, where its harness was cut off when it was saved,
-//     and, where it was saved while its job still worked
-//     ([SessionBasis.WentOn]), that, when, and that the run went on after it
-//     ([prompts.SavedSession]);
+//   - that it may end mid-call where cut off when saved ([prompts.SavedSession]);
 //   - where it may lack its job's brief ([SessionBasis.MayLackBrief]), what
 //     that brief opened with: the leads it told, told again in words of their
 //     own ([Runner.leadsAgain]), as messages it may already show;

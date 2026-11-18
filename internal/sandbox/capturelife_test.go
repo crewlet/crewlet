@@ -22,15 +22,14 @@ import (
 
 // A CAPTURE'S BUDGETS COUNT EVERY STEP OF ITS LIFE AT THE SLOWEST CROSSING, and
 // a reading on another machine's clock adds twice the skew allowed one. A keep
-// is two reads, upload and record; a take's life from its instant, the rest of
-// its take with its reservation's room, its digest, keep and stamp; an
-// unanswered takeover's, the takeover, the standby's withdrawal and read back,
-// keep and stamp; a standby's wait, the longer life and one read; its window,
-// the rest of its take, its digest and five changes past the wait (a settle
-// still writing, the read of the turn's row on the log and the settle it
-// decides, its last read, its takeover); a spool's longest wait, its digest,
-// the wait, seven changes and two reads. Each is the docs' figure at today's
-// bounds, to the nanosecond.
+// is two reads, upload and record; a take's life, the rest of its take with
+// its reservation's room, its digest, keep and stamp; an unanswered takeover's,
+// the takeover, withdrawal and read back, keep and stamp; a standby's wait, the
+// longer life and one read; its window, the rest of its take, its digest and
+// five changes past the wait (a settle still writing, the read of the log and
+// the settle it decides, its last read, its takeover); a spool's longest wait,
+// its digest, the wait, seven changes and two reads. Each is the docs' figure
+// at today's bounds, to the nanosecond.
 //
 // Mutation: drop any term, or the skew from either reading, and its row goes red.
 func TestACapturesBudgetsCountEveryStepAtTheSlowestCrossing(t *testing.T) {
@@ -570,14 +569,13 @@ func TestAnEndWaitsForEachCaptureItSeesItsWholeLifeFromFirstSight(t *testing.T) 
 }
 
 // A READ STANDING BY TAKES THE NEXT PLACE ONCE ITS OWN WAIT OUTLASTS THE
-// CAPTURE: the capture's life and one read on its own clock, never by the
-// capture's stamped instant, another machine's. Exact in a bubble, once the
-// wait runs out: a capture still begun under a live lease, stamped hours ahead,
-// has its place taken and the session kept after it; the same capture whose
-// record the log took (the turn's row on the log names its place) is read there
-// once, settled landed, and nothing is kept; a record unanswered may yet land,
-// so the standby stands down. A standby whose coordinator stops first takes
-// nothing.
+// CAPTURE, its life and one read on its own clock, never the capture's stamped
+// instant. Exact in a bubble, once the wait runs out: a capture still begun
+// under a live lease, stamped hours ahead, has its place taken and the session
+// kept; the same capture whose record the log took (named by the turn's row)
+// is read there once, settled landed, and nothing is kept; an unanswered
+// record may yet land, so the standby stands down; and a standby whose
+// coordinator stops first takes nothing.
 //
 // Mutation: stand down whatever the row says, decide without reading the turn's
 // row on the log, take the place beside an unanswered record, or take it
@@ -886,17 +884,15 @@ func (a *floorArchive) Read(p []byte) (int, error) {
 // EVERY CAPTURE'S OUTCOME LANDS WITHIN ITS LIFE, each step answering a second
 // inside its room at the slowest crossing. A stop's take, and a collection's
 // while its box's pause blocks (its keep starts once spooled), stamp within
-// [takeLife] of their instant; an unanswered takeover, within [takeOverLife]; a
-// standby whose capture's taker goes in the wait's last tick, its settle not
-// taken, reads the turn's row on the log, settles again, reads the row and
-// takes over within [standbyWindow] of its own instant. Each lands within
-// [captureLife] where a capture's, and within a minute of its figure, the life
-// it bounds.
+// [takeLife]; an unanswered takeover, within [takeOverLife]; a standby whose
+// capture's taker goes in the wait's last tick, its settle not taken, reads
+// the log, settles again, reads the row and takes over within [standbyWindow].
+// Each lands within [captureLife] where a capture's, and within a minute of its
+// figure, the life it bounds.
 //
 // Mutation: drop a step from a figure (a take's digest, a takeover's read back,
 // one change past a standby's wait), start a collection's keep behind its read,
-// skip the read of the log, or wait while any node reads the capture as kept,
-// and a case fails.
+// skip the read of the log, or wait while any node reads the capture as kept.
 func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 	t.Parallel()
 	// floor sets every fake of rig at the slowest crossing, and hands back

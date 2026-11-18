@@ -339,26 +339,18 @@ func TestARunThatContinuesASessionIsWiredForEitherSessionItsBoxStarts(t *testing
 	})
 }
 
-// THE BRIEF MATCHES WHAT THE RUN HAS. Of the three briefs, the launch hands the
-// one its box and its session make true: the continuation where the session is
-// taken up in the box it was last worked in — its own copy there where the job
-// before ended cleanly in it, the archive restored over the copy where that
-// job's harness was cut off — the new-box continuation in any other box, and
-// the fresh brief where the session cannot be taken up here at all: a box whose
-// harness cannot continue it, an object the store no longer holds, a turn whose
-// kept session moved since the launch chose it, a log row that names another
-// capture, and a kept capture of a job before the one this launch follows, a
-// seal that does not open whole, a spool that does not open again once
-// checked. A newer capture of the job that was not kept is none of these: the
-// kept one is the newest that job kept, and is continued beside it. Without a kept
-// capture, the job before's own session is continued in place only in its own
-// box. And whatever the launch hands, it leaves no spool of a session it
-// fetched behind once its run has started, or did not.
+// THE BRIEF MATCHES WHAT THE RUN HAS. The launch hands the continuation where
+// the session is taken up in the box it was last worked in (its own copy after
+// a clean end, the archive restored over a cut-off one), the new-box
+// continuation in any other box, and the fresh brief where it cannot be taken
+// up at all (a harness that cannot, an object gone, a kept session moved, a row
+// naming another capture or an earlier job's, a seal or a spool that does not
+// open). A newer capture not kept is none of these. It leaves no fetched spool
+// behind either way.
 //
-// Mutation: choose the brief before the box's harness and the object are asked,
-// restore over a cleanly ended box's own copy, skip any check the launch makes
-// of the record as it opened the job, or leave a fetched spool behind where its
-// fetch or its open fails, and a row goes red.
+// Mutation: choose the brief before the box and object are asked, restore over
+// a clean copy, skip a check of the record as opened, or leave a spool behind,
+// and a row goes red.
 func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -455,22 +447,15 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 	}
 }
 
-// A NOT-CONTINUED LINE NAMES WHAT THE LAUNCH CONTINUES INSTEAD. A launch whose
-// chosen session is refused falls to the session the box it reuses holds, the
-// job before's own copy, where it has one it may continue, and to a session of
-// its own otherwise; the line saying why the chosen one was refused is written
-// once that is decided, and names it — never "a session of its own" for a run
-// that goes on in the box's copy. A launch that refuses nothing says nothing,
-// and one that refuses the box's copy too says each, naming the same fallback.
-// A kept capture taken while its job still worked, which the box's copy of the
-// same session went on past, is passed over for that copy and said so
-// ([copyWentPast]); one the run's record does not keep as chosen is refused for
-// that, as any other.
+// A NOT-CONTINUED LINE NAMES WHAT THE LAUNCH CONTINUES INSTEAD: the box's copy
+// where it may continue it, else a session of its own, written once that is
+// decided, never "a session of its own" for a run going on in the copy. A
+// capture the copy went past is passed over for it and said so
+// ([copyWentPast]); one the record does not keep is refused for that.
 //
-// Mutation: log the refusal before the fallback is decided, name a session of
-// its own whatever the launch continues, pass a capture the copy went past
-// over without saying so, or judge one the record does not keep as chosen, and
-// a case goes red.
+// Mutation: log before the fallback is decided, name a session of its own
+// whatever the launch continues, pass a capture over silently, or judge one
+// the record does not keep, and a case goes red.
 //
 // Not parallel: it captures the process-wide logger ([captureLogs]).
 func TestANotContinuedLineNamesWhatTheLaunchContinuesInstead(t *testing.T) {
@@ -558,22 +543,15 @@ func TestANotContinuedLineNamesWhatTheLaunchContinuesInstead(t *testing.T) {
 }
 
 // A RELAUNCH IN ITS JOB'S OWN BOX CONTINUES THE COPY THAT WENT PAST ITS
-// CAPTURE. A kept capture taken while its job still worked is a point the job's
-// session passed through: the harness went on in the box after it. So a person's
-// answer that carries the round on in that box, offered the box's copy of the
-// same session, continues the copy, handed the brief that continues it there,
-// and restores nothing over it: the relaunch decided no kept session. Anywhere
-// else the capture is restored as before: in another box, which holds no copy;
-// where nothing offers the copy (a lost job's carry, a send-back, a copy its
-// floor could not carry); where the copy is another session; and where the
-// capture is final, holding the ended job's whole session, which its copy went
-// nowhere past. The same whether the kept capture is the job's newest or a
-// final take of the job was refused beside it, which the relaunch continues
-// the kept one past.
+// CAPTURE: a person's answer carrying the round on there, offered the box's
+// copy of a capture taken while the job still worked, continues the copy and
+// restores nothing over it. The capture is restored as before in another box,
+// where nothing offers the copy, where the copy is another session, and where
+// the capture is final; beside a refused final take as beside none.
 //
-// Mutation: restore the capture over the copy, pass a final capture over, pass
-// one over for a copy of another session or in a box that holds no copy, or
-// for no copy at all, and a case goes red.
+// Mutation: restore the capture over the copy, pass a final capture over, or
+// pass one over for another session's copy, a box with no copy or no copy at
+// all, and a case goes red.
 func TestARelaunchInItsJobsOwnBoxContinuesTheCopyThatWentPastItsCapture(t *testing.T) {
 	t.Parallel()
 	const (
@@ -724,34 +702,17 @@ func (f fakeRestorer) CheckCarry(context.Context, Sandbox, SessionArchive) (Carr
 }
 
 // WHETHER A SESSION CAN BE CONTINUED IS ONE DECISION, of the turn's row on the
-// executor log and its run's record. A live turn whose job the relaunch follows
-// left a kept capture, the newest that job kept, that the log's row names and
-// the runner a launch would take it up with restores: continued, beside a
-// newer capture of that job in whatever state, refused, begun at any age,
-// stood by for, unanswered, or a save under way beside a refused final take
-// (which may still land is the relaunch's wait to see, never this decision's
-// to read). A row naming no object, an
-// ended turn — saying only its conversation's next turn continues it — a turn
-// whose run is over, a turn whose end is owed on its record or recorded already (ending, and
-// no relaunch of it follows, though the log's row has not ended yet), a runner
-// of no harness that restores sessions, one that refuses the archive, a job
-// that left no capture of its own (an earlier job's holding none of what it
-// was told), a newest capture that was not kept
-// where the job kept none before it, a kept one that states no save point, a
-// log row naming another capture (one the log took ahead of its stamp among
-// them), and a turn that kept none: not, each saying why, the answer the
-// launch acts on and every reader states. A run
-// whose ending is decided is ending from the decision on, before its end is
-// owed: every launch refuses it. And a newest capture the run's record stamps
-// refused while the log's row names it — its record landed unseen by that
-// stamp — is not continued either, saying the log keeps it, never that it was
-// not kept, nor the older capture the record keeps beside it.
+// log and its run's record: continued where the followed job's newest kept
+// capture is named by the row and restored by the runner, whatever newer
+// capture or save sits beside it; not, each saying why, for every condition
+// [ContinuityOf] names (an ending decided among them). A newest capture the
+// record stamps refused while the row names it is not continued, nor the older
+// one kept beside it, and the reason says the log keeps it.
 //
-// Mutation: drop any one condition and its row goes red; answer the refused
-// capture the row names by the record alone, or by the log's naming alone,
-// and its row says the session the row keeps was not kept, or leaves the
-// reader to guess; continue only the job's newest capture, or refuse beside a
-// newer one not yet refused, and the rows beside a newer capture go red.
+// Mutation: drop any condition and its row goes red; answer the refused
+// capture by the record or the row alone, and its row misstates it; continue
+// only the newest, or refuse beside a newer one not yet refused, and the rows
+// beside a newer capture go red.
 func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
 	t.Parallel()
 	key := objstore.KeyAt(time.Now())
@@ -1416,56 +1377,17 @@ func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 }
 
 // WHAT A READER IS TOLD OF A RELAUNCH IS THE RELAUNCH'S OWN DECISION, and the
-// half a person's answer takes beside it. A live turn's kept capture the target's
-// runner restores continues in any box; one it does not — or one not kept — is
-// continued only in the box the run parked in, where the run holds that box and
-// it ran the row's session, the relaunch's member is of the box's harness in its
-// cell, and a box on an engine host is on the host of the node holding the seat:
-// the launch's own tests of a box it continues in; anywhere else, not at all —
-// and only that, in a company that keeps no session. A lost job's box continues
-// nothing. And it is undecided, never a no, wherever a relaunch would not decide
-// now either: a job still working, or a claim whose read has not taken the job's
-// final capture and whose turn has not begun, a capture still being kept, one
-// whose record awaits the log's answer, which the relaunch asks again and
-// continues where it landed (a save under way beside a refused final take that
-// overtook it as much as the newest capture, named by its own place), but for
-// an earlier job's, which no relaunch
-// continues; and of a capture or a save of an earlier job still being kept,
-// only while the turn has kept none, whose landing would end the session its
-// first launch was handed as the one a relaunch continues (beside a capture
-// the turn kept, its landing changes nothing a relaunch decides, and the row
-// is decided); one whose object is past the window a record may name it in and
-// twice the skew, past which the log refuses it on any clock the engine holds,
-// and in a company that keeps no session,
-// whose relaunch asks nothing — a target that cannot be said, a round lost a
-// second time, and a collected job's
-// resume, which carries its round on in its box only where its sign-in was
-// replaced while it ran — each until the resumed turn says, as it begins, what
-// it does with the round: from then on, its review included, the row is decided
-// on what it said, whether or not its read took a capture. A claim of a
-// person's answer reads no box, and is decided whatever its job kept. And a
-// row naming the capture its run's record stamps refused (the record a taker
-// handed on before its lease's window closed, landed after the relaunch's own
-// wait had settled it) is decided not continued, saying the log keeps it,
-// and the older capture the job kept beside it is not continued either. A newer capture of the job
-// that will never land (refused, or unanswered past its window) beside the one
-// the job kept is decided as the relaunch decides it: that one, in any box.
-// And beside every newer capture or save of the job that may still land, the
-// relaunch past its wait continues the kept one, and a reader is undecided.
+// half a person's answer takes beside it (the parked box, by the launch's own
+// tests of a box it continues in). Undecided, never a no, wherever a relaunch
+// would not decide now either ([ReadContinuityOf]'s list: a stamp it waits on
+// or asks, by its own place, an earlier job's keep only while the turn kept
+// none), and decided once the resumed turn says what it does. A row naming a
+// capture the record stamps refused is not continued, saying the log keeps it.
 //
-// Mutation: drop the parked box's half or any test of it — its host, the session
-// it ran — read any undecided state as a no, read a claim whose read took the
-// final capture, or whose turn has said what it does, as one still collecting,
-// leave a turn that said it undecided, let a box of another harness or cell
-// count as the parked one, tell a refused capture the row names by the
-// run's record alone, decide a capture or a save whose record awaits its
-// answer, or one still being kept, name the newest place for the save waited
-// on, or
-// wait on one past its window, an earlier job's, or one in a company that
-// keeps no session, or wait on an earlier job's keep beside a capture the
-// turn kept, or decide beside one while the turn has kept none, or continue
-// only the job's newest capture, or decide by [ContinuityOf] alone, and a case
-// goes red.
+// Mutation: drop the parked box's half or a test of it, read an undecided state
+// as a no or a decided one as undecided, decide or wait on the wrong stamp
+// (past its window, an earlier job's, a company keeping none), name the newest
+// place for a save, or decide by [ContinuityOf] alone, and a case goes red.
 func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
@@ -1750,26 +1672,15 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 }
 
 // A ROW IS READ AGAIN AS A RELAUNCH READS IT ONLY WHERE THAT CAN CHANGE ITS
-// ANSWER: where the decision reaches the row's capture and the row names
-// another than the one its run's record keeps — a copy of the log behind the
-// record — never where it names the kept one, which decides as the relaunch's
-// read would, nor where the job still works, its capture, or a save of it
-// under way beside a refused final take, is still being kept or awaits its
-// record's answer, or its turn has ended, which decide without the row's
-// capture. A capture unanswered past the window a record may name it in and
-// twice the skew, past which the log refuses it on any clock the engine
-// holds, awaits nothing, and its row is read again; so does an earlier job's
-// capture still being kept beside the capture the turn kept, which no
-// relaunch waits for; and so does a row naming the kept capture where the
-// record holds a newer capture of the job it did not keep, which the log may
-// have taken all the same, unseen by its stamp, and a relaunch would then
-// continue neither.
+// ANSWER ([RereadsRow]): where the decision reaches the row's capture and the
+// row names another than the record keeps, or the kept one beside a newer
+// capture the record did not keep; never where it names the kept one alone,
+// or the job works, or a stamp the relaunch waits on or asks is in flight, or
+// the turn ended. An earlier job's keep beside a kept capture, and a capture
+// past its window, wait on nothing, and the row is read again.
 //
-// Mutation: read every live row again, or none, or read again a row whose
-// job's save under way the relaunch would still wait for or ask, or leave
-// unread one beside an earlier job's keep the relaunch does not wait for, or
-// one naming the kept capture beside a newer one the record did not keep, and
-// a case goes red.
+// Mutation: read every live row again, or none, or the wrong one of the cases
+// above, and a case goes red.
 func TestARowIsReadAgainOnlyWhereThatCanChangeItsAnswer(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)

@@ -136,18 +136,14 @@ var savingRule = map[string]bool{"savingTake": true, "stampOnto": true, "savingA
 	"holdsStamp": true, "holdsSave": true}
 
 // EVERY READER OF A SAVE UNDER WAY READS IT THROUGH ONE RULE. A row may carry a
-// stale save, which a build without its section wrote back unchanged, so a
-// reader that read the field as a fact would wait on, or refuse beside, a save
-// that can change nothing ([PendingRun.savingTake]). So a walk of the module's
-// sources, tests and the test packages that certify the store aside, finds
-// every selector of the field outside the rule and the stamps that keep it,
-// and outside the reservation's write: only package sandbox declares it, and a
-// reader anywhere is reported, by its place. The walk must
-// have read the rule and the write, and a package beyond this one, or it read
-// nothing.
+// stale save a build without its section wrote back, so a reader taking the
+// field as a fact would wait on, or refuse beside, a save that changes nothing
+// ([PendingRun.savingTake]). A walk of the module's sources (the store's
+// certifying packages aside) reports every selector of the field outside the
+// rule, the stamps that keep it and the reservation's write, by its place; it
+// must have read the rule, the write and a package beyond this one.
 //
-// Mutation: read the field raw in the turn's end's wait (captureInFlight), and
-// the walk reports it.
+// Mutation: read the field raw in captureInFlight, and the walk reports it.
 func TestEveryReaderOfASaveUnderWayReadsItThroughOneRule(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)

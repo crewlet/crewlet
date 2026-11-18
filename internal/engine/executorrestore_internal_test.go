@@ -225,25 +225,16 @@ func (k keptLaunch) relaunch(t *testing.T, basis runner.SessionBasis, inPlace *r
 }
 
 // A RELAUNCH IS TOLD THE KEPT SESSION OF THE JOB IT FOLLOWS, AS ITS CAPTURE
-// ACCOUNTS FOR IT. The engine's launcher answers the runner's question from the
-// coordinator's choice and the turn's row on the executor log: the session, its
-// place, the calls it had been answered — its save point, how many of the
-// round's calls the log had taken when its capture read it, and the reads at
-// or below it that its job's brief counted without listing them — the notes it
-// had read, whether its harness was cut off, whether its job went on past it
-// (not here: the fixture's capture is its job's final one) and when it was
-// taken, where it was last worked, what its
-// last request carried, which the kept path's floor is made of, what its job's
-// newest capture measured, which the in-place floor is made of, the harness that
-// wrote it, which the member the launch picks must run, and the turn whose
-// session it is, which a run that starts one of its own instead is told it may
-// read; and the release that wrote it, which a reading of what the session
-// holds is read for.
+// ACCOUNTS FOR IT, from the coordinator's choice and the turn's row: the
+// session, its place, its save point and the reads its brief counted, the notes
+// it read, whether it was cut off or its job went on past it (not here: the
+// capture is final), when it was taken and where last worked, its last
+// request's measure and its job's newest capture's, its harness, its turn and
+// the release that wrote it.
 //
-// Mutation: drop any of them from the answer, and the brief that continues the
-// session tells it the wrong things, the floor counts nothing, the launch
-// cannot hold its member to the session's harness, or a fresh run is never told
-// the session is there.
+// Mutation: drop any of them from the answer, and the brief tells the session
+// the wrong things, a floor counts nothing, the launch cannot hold its member
+// to the session's harness, or a fresh run is never told the session is there.
 func TestAProbeAnswersTheKeptSessionOfTheJobARelaunchFollows(t *testing.T) {
 	t.Parallel()
 	k := newKeptLaunch(t, 40000, 0, 0)
@@ -278,15 +269,11 @@ func refuseAfter(t *testing.T, pending sandbox.PendingStore, turn string, after 
 }
 
 // A RELAUNCH THAT CONTINUES NO KEPT CAPTURE OF ITS JOB STILL ANSWERS WHAT ITS
-// JOB'S COPY CARRIED, AND AS THE COPY'S. A job whose newest capture was refused
-// left its own copy in its box, which went as far as that capture, and a
-// person's answer may carry the round on in it: the in-place floor is made of
-// that capture's measure (runner.SessionBasis.CopyContext), whether the probe
-// answers why it continues no kept capture (a turn whose earlier job kept one,
-// this job keeping none) or the base the turn's first launch froze (a turn
-// that kept none). Neither answer continues a capture of the turn's, so
-// neither carries a kept capture's own measure
-// (runner.SessionBasis.ContextTokens), which only the kept floor reads.
+// JOB'S COPY CARRIED, AS THE COPY'S: beside a refused newest capture, the copy
+// in its box went as far as that capture, so the in-place floor is that
+// measure (runner.SessionBasis.CopyContext), whether the probe answers why it
+// continues none or the frozen base; neither carries a kept capture's own
+// measure (runner.SessionBasis.ContextTokens).
 //
 // Mutation: answer the copy's measure as the kept capture's own on either
 // basis, and its case goes red.

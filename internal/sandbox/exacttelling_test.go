@@ -148,20 +148,15 @@ func TestABriefToldByAReadingIsHandedOnlyToABoxThatAnswersItsRelease(t *testing.
 	}
 }
 
-// A READING OF A CAPTURE THE BOX'S COPY WENT PAST IS SAID UNUSED. A kept
-// capture taken while its job still worked is passed over, in that job's own
-// box, for the box's copy of the same session, which went on past it
-// ([copyWentPast]): so a brief told by a reading of that capture is not handed,
-// and the launch says so once, naming the copy, as where it continues the
-// kept capture without the brief told by a reading. Said only where the copy
-// is what the launch continues: where the copy is a session its job ran out of
-// context in, the run starts a session of its own, and the not-continued lines
-// alone say why. Unsaid where the continuation carries no reading, and in another box,
-// where the capture is restored and handed the brief told by the reading.
+// A READING OF A CAPTURE THE BOX'S COPY WENT PAST IS SAID UNUSED. In its job's
+// own box, a kept capture taken while the job still worked is passed over for
+// the box's copy, which went on past it ([copyWentPast]), so a brief told by a
+// reading of it is not handed, and the launch says so once, naming the copy.
+// Said only where the copy is what the launch continues; unsaid where no
+// reading was carried, and in another box, where the capture is restored.
 //
-// Mutation: log nothing for the copy, log it where the continuation carried
-// no reading, or where the launch starts a session of its own, and a case
-// goes red.
+// Mutation: log nothing for the copy, or log it with no reading or where the
+// launch starts fresh, and a case goes red.
 //
 // Not parallel: it captures the process-wide logger ([captureLogs]).
 func TestAReadingOfACaptureTheBoxsCopyWentPastIsSaidUnused(t *testing.T) {

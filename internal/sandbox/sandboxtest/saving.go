@@ -159,29 +159,16 @@ func writtenAsOlderBuild(t *testing.T, runs coord.SandboxRuns, turnID string, ed
 }
 
 // A SAVE RESERVES ITS PLACE ONLY WHILE ITS JOB RUNS UNDECIDED. Each refusing
-// row breaks one conjunct of the license with every other holding, so the row
-// refuses through that conjunct alone, and nothing is written: a run not
-// running (its completion claimed, or parked); a save of another launch, by its
-// ordinal or by its job; a job the row records as over or whose completion it
-// records as announced (a final take of it as the newest capture, or kept
-// beside a newer one refused, how its harness ended read with no capture, its
-// cap seen ending it, its box read back by a collection, a collection whose
-// read failed, and a refusal of its completion owed); a loss marked; an ending
-// decided, an end owed, an end recorded; a capture of the turn that may still
-// land (being kept, a read standing by for it, its record awaiting its answer),
-// an earlier launch's final take still being kept as the newest capture, or a
-// save of an earlier launch still being kept; and a place one past or one
-// short of the next. A capture past its window's record, a save whose taker
-// stopped long ago, one a build without the section settled in the newest
-// place, and one a build without the let-go left behind a kept capture license
-// the next save. A save that is not one is an error before anything is
-// written, and the same reservation asked again is answered taken, writing
-// nothing.
+// row breaks one conjunct of the license with every other holding, and nothing
+// is written: a run not running; a save of another launch; a job recorded over
+// or its completion announced (each arm of [PendingRun.jobOver]); a loss, an
+// ending, an end owed or recorded; a capture or save of the turn that may still
+// land; a place off by one. A stale or expired stamp licenses the next save; a
+// malformed save is an error before any write, and a repeat is answered taken.
 //
-// Mutation: drop any one conjunct or check of the license or of the
-// malformed save, and its row reserves; read the license without how long a
-// take may keep, without the window a record may name its object in, or
-// reading a stale save as one in flight, and a licensing row refuses.
+// Mutation: drop any conjunct or check, and its row reserves; read the license
+// without a take's or a record's window, or a stale save as in flight, and a
+// licensing row refuses.
 func testASaveReservesItsPlaceOnlyWhileItsJobRunsUndecided(t *testing.T, s sandbox.PendingStore,
 	runs coord.SandboxRuns,
 ) {
@@ -612,19 +599,15 @@ func testOneSaveOfARunIsInFlightAcrossTheFleet(t *testing.T, s, other sandbox.Pe
 }
 
 // A SAVE STAYS IN SIGHT UNTIL IT CAN NO LONGER BE THE TURN'S KEPT CAPTURE. Past
-// a final take that overtook it, the save's own stamps move it on in its own
-// section: unresolved, it stays; refused, it goes; landed behind the refused
-// final, it goes and is the turn's kept capture. A final take that lands lets
-// it go. A save a build without the section left behind a kept capture stays as
-// it is beside a stamp that does not take, which is answered not taken. And a
-// stamp that takes decides on the newest capture as it FOUND it: a save that
-// build settled there refused is let go, and one it left unresolved there is
-// reconciled into the save's own section, before the newer take replaces the
-// newest place.
+// a final take that overtook it, its own stamps move it on: unresolved stays,
+// refused goes, landed behind a refused final goes and is kept; a final that
+// lands lets it go. A stale save stays beside a stamp that does not take, and a
+// stamp that takes decides on the newest capture as it FOUND it, letting go a
+// save settled refused there and reconciling one left unresolved.
 //
-// Mutation: never let the save go; let it go on a stamp that did not take;
-// keep no capture that lands behind a refused final take; decide the let-go
-// on the newest place after the stamp replaced it; or skip the reconcile.
+// Mutation: never let the save go; let it go on a stamp that did not take; keep
+// nothing landing behind a refused final; decide on the replaced newest place;
+// or skip the reconcile.
 func testASaveStaysInSightUntilItCanNoLongerBeTheTurnsKeptCapture(t *testing.T, s sandbox.PendingStore,
 	runs coord.SandboxRuns,
 ) {

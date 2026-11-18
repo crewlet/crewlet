@@ -20,19 +20,15 @@ var savedBasis = runner.SessionBasis{LaunchSeq: 1, CaptureSeq: 1, SessionID: "s-
 // savedHeader opens [prompts.SavedSession]'s words, whatever instant they name.
 const savedHeader = "## The session above was saved while its run still worked"
 
-// A SESSION SAVED WHILE ITS HARNESS WORKED IS SAID SO. A relaunch continuing a
-// kept capture taken while its job still worked tells the session it was saved
-// then, when, and that its run went on after it, in place of the words that say
-// only it was cut off: told those, the run takes the session's end for where its
-// work stopped, while its job went on in its box past it. A kept capture cut off
-// as its job ended is told it was cut off, as before, and never that its run
-// went on. A relaunch that continues no kept capture, starting a session of its
-// own or continuing the one its conversation's last turn left, is told neither:
-// its basis says nothing of a capture, and its zero value says nothing.
+// A SESSION SAVED WHILE ITS HARNESS WORKED IS SAID SO: a relaunch continuing a
+// capture taken while its job still worked tells the session it was saved
+// then, when, and that its run went on, in place of the cut-off words alone,
+// which would have it take the session's end for where its work stopped. A
+// final capture cut off is told it was cut off, never that it went on; a
+// relaunch continuing no kept capture is told neither.
 //
-// Mutation: tell a capture its job went on past only that it was cut off, or
-// tell a final capture cut off that its run went on (switch on Interrupted),
-// and a case goes red.
+// Mutation: tell a save only that it was cut off, or tell a final capture cut
+// off that its run went on (switch on Interrupted), and a case goes red.
 func TestASessionSavedWhileItsHarnessWorkedIsSaidSo(t *testing.T) {
 	t.Parallel()
 	final := keptBasis
