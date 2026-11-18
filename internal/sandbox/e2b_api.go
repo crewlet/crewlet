@@ -27,8 +27,9 @@ import (
 // to it: a box whose envd is unreachable is still killable, so a network blip
 // cannot leak a running VM.
 
-// The E2B addresses. The domain derives both the API and the per-box
-// hostnames, so a self-hosted cluster is one field, not two that can disagree.
+// The E2B addresses. The domain derives the API's and, unless E2B answers a
+// domain of its own for a box, the per-box hostnames, so a self-hosted cluster
+// is one field, not two that can disagree.
 const (
 	// DefaultE2BDomain is the vendor cloud.
 	DefaultE2BDomain = "e2b.dev"
@@ -185,6 +186,11 @@ type e2bBox struct {
 	// create or a connect answers a running box without it.
 	State string `json:"state,omitempty"`
 
+	// Domain is where E2B serves the box's ports: answered for a team on a
+	// cluster of its own, empty otherwise. A cluster can move to a new domain
+	// while its boxes run, so it is read from every answer that builds a handle.
+	Domain string `json:"domain,omitempty"`
+
 	// EnvdAccessToken is the credential a secured box's envd requires on
 	// every request (`X-Access-Token`), and every box this backend creates is
 	// secured ([e2bAPI.createBox]). E2B answers it on a create, a connect and
@@ -199,10 +205,13 @@ type e2bBox struct {
 // e2bPaused is the [e2bBox.State] of a snapshot.
 const e2bPaused = "paused"
 
-// host is the per-box envd hostname. A box that reports no client id has the
-// short form; the long form would be `49983-abc-.e2b.dev`, which resolves to
-// nothing.
+// host is the per-box envd hostname, on the domain E2B answered for the box,
+// else the deployment's. A box that reports no client id has the short form;
+// the long form would be `49983-abc-.e2b.dev`, which resolves to nothing.
 func (b e2bBox) host(domain string) string {
+	if b.Domain != "" {
+		domain = b.Domain
+	}
 	name := b.SandboxID
 	if b.ClientID != "" {
 		name += "-" + b.ClientID

@@ -55,6 +55,9 @@ type e2bStub struct {
 	connectStatus int
 	// clientID is what create reports; empty exercises the short hostname.
 	clientID string
+	// domain is the domain a create, a connect and a read answer for the box,
+	// as E2B does for a team on a cluster of its own; empty answers none.
+	domain string
 	// envdToken is the box's envd access token, answered by a create, a connect
 	// and a read of the box, and required by envd on every request, as a secured
 	// box's is. Empty is a box made without `secure`, whose envd requires nothing.
@@ -113,12 +116,15 @@ func newE2BStub() *e2bStub {
 func (s *e2bStub) boxJSON(extra string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	token := ""
+	fields := ""
 	if s.envdToken != "" {
-		token = `, "envdAccessToken": "` + s.envdToken + `"`
+		fields = `, "envdAccessToken": "` + s.envdToken + `"`
+	}
+	if s.domain != "" {
+		fields += `, "domain": "` + s.domain + `"`
 	}
 	return `{"sandboxID": "sbx1", "clientID": "` + s.clientID +
-		`", "templateID": "claude", "envdVersion": "0.1.0"` + token + extra + `}`
+		`", "templateID": "claude", "envdVersion": "0.1.0"` + fields + extra + `}`
 }
 
 // envdAdmits is a secured envd's own check (WithAuthorization in
@@ -678,6 +684,60 @@ func TestE2BTalksToTheBoxOnItsDerivedHost(t *testing.T) {
 	if !transport.SawHost("https://49983-sbx1.test.invalid") {
 		t.Errorf("a box with no client id got a hostname with a trailing "+
 			"dash: %v", transport.Hosts())
+	}
+}
+
+// A BOX IS REACHED AT THE DOMAIN E2B ANSWERS FOR IT: a team on a cluster of its
+// own has its boxes served there, answered on a create, a connect and a read
+// alike, and a box addressed on the deployment's domain answers no envd call.
+// The control plane stays the deployment's.
+//
+// Mutation: build the host on the deployment's domain alone, and every handle
+// here dials test.invalid.
+func TestE2BReachesABoxAtTheDomainE2BAnswersForIt(t *testing.T) {
+	t.Parallel()
+	stub := newE2BStub()
+	stub.domain = "cluster.example"
+	stub.frames = []any{startEvent(41), endEvent(0)}
+	server := httptest.NewServer(stub)
+	t.Cleanup(server.Close)
+	transport := httpxtest.Rewrite(t, server)
+	provider, err := sandbox.NewE2B(sandbox.E2BOptions{
+		APIKey: "k", Domain: "test.invalid",
+		HTTP: &http.Client{Transport: transport},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, reached := range []struct {
+		how string
+		box func() (sandbox.Sandbox, error)
+	}{
+		{"created", func() (sandbox.Sandbox, error) { return provider.Create(ctx, sandbox.Spec{Harness: "opencode"}) }},
+		{"connected", func() (sandbox.Sandbox, error) { return provider.Connect(ctx, "sbx1") }},
+		{"attached", func() (sandbox.Sandbox, error) { return provider.Attach(ctx, "sbx1") }},
+	} {
+		box, err := reached.box()
+		if err != nil {
+			t.Fatalf("%s: %v", reached.how, err)
+		}
+		before := len(transport.Hosts())
+		if _, err := box.Exec(ctx, "true", sandbox.ExecOptions{}); err != nil {
+			t.Fatalf("%s: Exec: %v", reached.how, err)
+		}
+		dialled := transport.Hosts()[before:]
+		if len(dialled) == 0 || slices.ContainsFunc(dialled, func(host string) bool {
+			return host != "https://49983-sbx1-cl1.cluster.example"
+		}) {
+			t.Errorf("the %s box's command dialled %v; want its envd on the domain E2B answered for it",
+				reached.how, dialled)
+		}
+	}
+	for _, host := range transport.Hosts() {
+		if !strings.HasPrefix(host, "https://49983-") && host != "https://api.test.invalid" {
+			t.Errorf("the control plane was addressed at %s; want the deployment's api.test.invalid", host)
+		}
 	}
 }
 
