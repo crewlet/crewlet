@@ -6,31 +6,14 @@ import "slices"
 // JetStream cluster, a leaf of those members, or a plain client of a cluster
 // somebody else runs.
 //
-// # Why it rides the presence profile beside the roles
-//
-// Holding the company's durable state and holding a vote in the broker were
-// one fact once — `data` meant both — and they are two now: a data node may
-// reach the broker as a leaf, and a member may hold no data. Every question
-// that is really about the BROKER has to be asked of this rather than of the
-// roles, and the one that forced it is the capacity seal. Its proof is that
-// every broker process restarted, because what retires a request the broker
-// has already queued is the process holding it going away; a member that
-// holds no data holds queued requests all the same, and a seal counted over
-// data nodes would pass without it.
-//
-// DERIVED, NEVER DECLARED. A node's kind is what its Tier A stream block
-// makes it — see config.Bootstrap.BrokerKind — so there is no setting that
-// could disagree with the broker the process actually started.
-//
-// # Three values and an absence
-//
-// The zero value is [BrokerUnknown]: a presence row advertising no kind this
-// build knows — a kind a newer build added, a value it cannot read, or a
-// profile nobody derived a kind for. It is NOT a leaf and not a client. A
-// reader that has to count members treats it as one, because leaving out a
-// node that might be a member is the reading that can
-// pass a seal it should hold, while counting one that is not merely waits for
-// an acknowledgement an operator can exclude.
+// It rides the presence profile because holding data and holding a broker vote
+// are two facts (a data node may be a leaf, a member may hold no data), so
+// BROKER questions, such as the capacity seal's proof that every broker process
+// restarted, are asked of this and not the roles. DERIVED, NEVER DECLARED: it
+// is what the Tier A stream block makes it (config.Bootstrap.BrokerKind). The
+// zero value is [BrokerUnknown], NOT a leaf or a client: a reader counting
+// members counts it as one, since omitting a possible member can pass a seal
+// that should hold.
 type BrokerKind string
 
 const (

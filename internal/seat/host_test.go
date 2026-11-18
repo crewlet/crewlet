@@ -1225,20 +1225,14 @@ func (c *floorCounter) FleetProtocolFloor(ctx context.Context) (int, bool, error
 
 // A SWEEP OVER SEATS ITS PEERS HOLD JUDGES NO GATE.
 //
-// A node whose share did not come out even has room for one more seat and
-// nothing free to take — the steady state of most of a fleet — and it used to
-// read the fleet's protocol floor on every sweep to rule the mixed-version
-// gate out. The floor is a question about every live presence and seat lease,
-// which the KV backend answers from a view that takes in every write to the
-// seat lease bucket while anybody asks it: asked every five seconds, the view
-// never went idle, and each such node took in the fleet's heartbeats — about
-// 670 messages a second at ten thousand seats — to learn what each refusal had
-// already said.
-// So here every seat is held, by this node's peer and by a node that has
-// given up its presence (a drain's first step), this node has room, and its
-// sweeps must read no floor at all. And the gate half stands: once an
-// older-protocol lease is live and a seat comes free, the floor is read and
-// the stall reported.
+// A node with room and nothing free to take (the steady state of most of a
+// fleet) must not read the fleet's protocol floor each sweep: the KV view
+// answering it takes in every seat-lease write while asked, so a node asking
+// every five seconds ingests the fleet's heartbeats (about 670 messages a
+// second at ten thousand seats). So here every seat is held, by a peer and by
+// a node that gave up its presence, and sweeps must read no floor. The gate
+// half stands: with an older-protocol lease live and a seat free, the floor
+// is read and the stall reported.
 func TestASweepOverSeatsItsPeersHoldJudgesNoGate(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -1561,31 +1555,17 @@ func TestTheHeartbeatFollowsTheConfiguredTTL(t *testing.T) {
 	}
 }
 
-// A HEALTHY NODE IS NEVER STALE BY CONSTRUCTION, which is the other half of
-// the ratio above and the half that was wrong twice.
+// A HEALTHY NODE IS NEVER STALE BY CONSTRUCTION: [Host.MayStart] refuses once
+// the last renew is over a heartbeat old, and a renew's stamp is its SEND
+// instant, so the renew period plus the renew's own time must fit in the
+// heartbeat. Rounding the pass to whole watchdog beats broke that both ways:
+// UP exceeded it wherever the beat did not divide it; DOWN equalled it
+// wherever the beat did (45 s, 15 s, 30 s, 90 s). internal/node then defers
+// the delivery and calls NoteDeliveryDeferred, quiescing the consumer.
 //
-// [Host.MayStart] refuses a delivery once the seat's last renew is more than a
-// heartbeat old, and that renew's stamp is the instant it was SENT, recorded
-// only once the store has answered. So the pass that renews it has to be SENT
-// early enough to be ANSWERED inside the window: the renew period plus the
-// renew's own time must fit in the heartbeat. Twice it did not:
-//
-//   - the pass ran every whole number of watchdog beats rounded UP, longer
-//     than the heartbeat wherever the beat did not divide it — a window in
-//     every cycle at 1 s, 3 s, 5 s, 10 s and 20 s, 16.1 % of samples at 3 s;
-//   - rounded DOWN, it equalled the heartbeat wherever the beat DID divide
-//     it — the shipped 45 s, 15 s, 30 s and 90 s — so each renew went out at
-//     the very instant the proof it replaced stopped admitting, and the seat
-//     refused its own work for the renew's whole round trip, every cycle.
-//
-// The cost is not cosmetic. internal/node defers such a delivery and calls
-// NoteDeliveryDeferred, which quiesces that seat's consumer until the renew in
-// flight lands and re-fires OnAdmission.
-//
-// OVER A RANGE, because each shape hid at a different set of TTLs. The renew
-// is given a beat to land in ([Host.renewPeriod]);
-// [TestAHealthyNodeAdmitsItsSeatThroughEveryRenew] runs the loop itself
-// against a store that takes time to answer.
+// OVER A RANGE, because each shape hid at different TTLs. The renew gets a
+// beat to land in ([Host.renewPeriod]);
+// [TestAHealthyNodeAdmitsItsSeatThroughEveryRenew] runs the loop itself.
 func TestAHealthyNodeNeverRefusesItsOwnSeat(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
