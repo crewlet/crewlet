@@ -200,12 +200,15 @@ export function useLatestChecks(change: CodeChangeDetail | undefined): LatestChe
     ...(live ? { pollMs: CHECKS_POLL_MS } : {}),
   });
   useAskAgainWhenMoved(change?.head, true, read.refetch);
-  const answered = read.data?.checks;
+  // AN ANSWER WITHOUT `checks` IS NO CHECK: the engine leaves an empty list
+  // out, so only a read not answered yet is "still reading".
+  const answer = read.data;
+  const answered = answer?.checks;
   const said = partRefusal({ error: read.error, refusal: read.refusal, items: answered ?? [] });
   const refused = said === "" ? (read.detail ?? "") : said;
   const rows = useMemo(
-    () => (answered === undefined ? null : byRequiredThenName(answered)),
-    [answered],
+    () => (answer === undefined ? null : byRequiredThenName(answered ?? [])),
+    [answer, answered],
   );
   return { rows, refused, loading: read.loading && rows === null };
 }

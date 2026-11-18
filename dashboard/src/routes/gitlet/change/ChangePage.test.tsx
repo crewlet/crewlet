@@ -4304,6 +4304,20 @@ test("checks past their horizon say so, and a refused read says why", async () =
   expect(tab.textContent).toBe("Checks");
 });
 
+// AN ANSWER WITHOUT `checks` IS A HEAD NO CHECK RAN ON: the engine leaves an
+// empty list out, so the box and the rail say so as soon as it answers, never
+// "Reading its checks" for good. Mutation: read an absent list as not answered.
+test("a checks answer that names no list says no check has run", async () => {
+  latest = () => json({ position: POSITION, level: "session" });
+  const { box } = await mountStory();
+  expect(
+    await within(box).findByRole("article", { name: "No check has run on its head" }),
+  ).toBeTruthy();
+  const rail = screen.getByRole("region", { name: "Checks" });
+  expect(await within(rail).findByText("No check has run on its head.")).toBeTruthy();
+  expect(screen.queryByText("Reading its checks…")).toBeNull();
+});
+
 // THE FINDINGS SECTION COUNTS THE OPEN ONES BY WEIGHT, and a standing blocker
 // turns it. Mutation: call a major a blocker, and this fails.
 test("the findings section weighs the open findings, and a blocker turns it", async () => {
