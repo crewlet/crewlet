@@ -80,7 +80,7 @@ func NewE2B(opts E2BOptions) (*E2BProvider, error) {
 		// REFUSED AT CONSTRUCTION, so the apply fails rather than every
 		// launch, each a 401 at its first create, minutes into a turn.
 		return nil, errors.New(
-			"e2b: providers.sandbox.api_key resolved empty — the API " +
+			"e2b: providers.sandbox.e2b.api_key resolved empty — the API " +
 				"authenticates every call, including against a self-hosted " +
 				"cluster, where `domain` changes which API is talked to and " +
 				"not whether it authenticates")

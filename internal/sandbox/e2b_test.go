@@ -514,11 +514,19 @@ func newE2B(t *testing.T, stub *e2bStub) (*sandbox.E2BProvider, *httptest.Server
 
 // A KEYLESS PROVIDER IS REFUSED AT CONSTRUCTION, so an apply fails rather
 // than every launch: the API authenticates every call, a self-hosted
-// cluster's included.
+// cluster's included. The refusal names the field an operator sets, under
+// the backend's own block.
+//
+// Mutation: name the key where it sat before the block had one of its own
+// (providers.sandbox.api_key), and this goes red.
 func TestE2BRefusesToBuildWithoutAKey(t *testing.T) {
 	t.Parallel()
-	if _, err := sandbox.NewE2B(sandbox.E2BOptions{Domain: "cluster.example"}); err == nil {
+	_, err := sandbox.NewE2B(sandbox.E2BOptions{Domain: "cluster.example"})
+	if err == nil {
 		t.Fatal("a keyless provider was built, so every create would 401")
+	}
+	if !strings.Contains(err.Error(), "providers.sandbox.e2b.api_key ") {
+		t.Errorf("the refusal does not name the field to set, providers.sandbox.e2b.api_key: %v", err)
 	}
 }
 

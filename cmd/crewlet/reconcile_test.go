@@ -1065,7 +1065,7 @@ func TestAnOverrideIsJudgedAgainstTheFleetsRevision(t *testing.T) {
 // pointer is read and the ignored file refuses the boot.
 func TestAFileThisNodeCannotBuildIsNeverImported(t *testing.T) {
 	t.Parallel()
-	unbuildable := errors.New("e2b: providers.sandbox.api_key resolved empty")
+	unbuildable := errors.New("e2b: providers.sandbox.e2b.api_key resolved empty")
 	refuses := func(*config.Company) error { return unbuildable }
 	file := parse(t, companyYAML)
 
