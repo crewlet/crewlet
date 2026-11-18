@@ -11,10 +11,12 @@
  */
 
 import { Fragment, type ReactNode } from "react";
-import { Card, EmptyValue, Stack, Tag } from "@crewlethq/ui";
+import { Card, Copyable, EmptyValue, Stack, Tag } from "@crewlethq/ui";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { href } from "~/app/router.tsx";
+import { AgoTime } from "~/components/AgoTime.tsx";
 import { QueryState } from "~/components/common.tsx";
+import { credentialOf, credentialWords } from "~/lib/attribution.ts";
 import { codeReasonPhrase, commitPath, refName, shortOID } from "~/lib/code.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime } from "~/lib/format.ts";
@@ -107,12 +109,15 @@ export function Provenance({ change }: { change: CodeChangeDetail }) {
         <>
           <Face who={change.owner} size="text" /> {seatBadge(change.owner).name}
           {change.owner_operator_id && (
-            <span className="muted mono"> via {change.owner_operator_id}</span>
+            <span className="muted">
+              {" "}
+              through <Through credential={change.owner_operator_id} />
+            </span>
           )}
         </>
       ),
     },
-    { label: "Opened", value: fmtDateTime(change.opened_at) },
+    { label: "Opened", value: <AgoTime value={change.opened_at} clock /> },
     {
       label: "Turn",
       value: change.created_turn ? (
@@ -161,7 +166,7 @@ export function Provenance({ change }: { change: CodeChangeDetail }) {
             label: "Merged",
             value: (
               <>
-                {change.merged_at && fmtDateTime(change.merged_at)}{" "}
+                {change.merged_at && <AgoTime value={change.merged_at} clock />}{" "}
                 {change.merged_via === "push" ? "by a push" : "through its gate"}
                 {change.merged_by && (
                   <>
@@ -185,9 +190,12 @@ export function Provenance({ change }: { change: CodeChangeDetail }) {
       ? [
           {
             label: "Closed",
-            value: `${change.closed_at ? fmtDateTime(change.closed_at) : ""}${
-              change.close_reason ? ` · ${change.close_reason}` : ""
-            }`,
+            value: (
+              <>
+                {change.closed_at && <AgoTime value={change.closed_at} clock />}
+                {change.close_reason && ` · ${change.close_reason}`}
+              </>
+            ),
           },
         ]
       : []),
@@ -199,6 +207,29 @@ export function Provenance({ change }: { change: CodeChangeDetail }) {
         groups={[{ properties: rows.map((row) => ({ label: row.label, value: row.value })) }]}
       />
     </Card>
+  );
+}
+
+/**
+ * The credential a person opened it through: its kind in words, the id behind a copy
+ * control ([credentialOf]), as Settings says a revision's. A token's id names nothing a
+ * reader knows, and its label is its owner's and an admin's to read, not every reader's.
+ */
+function Through({ credential }: { credential: string }) {
+  const named = credentialOf(credential);
+  if (!named) return <>{credentialWords(credential)}</>;
+  return (
+    <>
+      a{" "}
+      <Copyable
+        value={named.id}
+        display={named.kind}
+        displayWords
+        variant="inline"
+        ariaLabel={`Copy the ${named.kind}'s id, ${named.id}`}
+        title={`Copy ${named.id}`}
+      />
+    </>
   );
 }
 

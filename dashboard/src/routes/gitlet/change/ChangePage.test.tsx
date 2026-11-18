@@ -1071,6 +1071,32 @@ test("More holds where the change came from and whom it notified, and an old key
   expect(selected.textContent).toMatch(/^Conversation/);
 });
 
+// WHERE IT CAME FROM SAYS A CREDENTIAL BY ITS KIND AND AN INSTANT IN WORDS: a token's id
+// names nothing a reader knows, so it sits behind the copy control, and the exact instant is
+// the time's title, as the header's is. Mutation: draw owner_operator_id as written, or the
+// instant by fmtDateTime, and this fails.
+test("More says the credential a change was opened through by its kind, and when in words", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
+  const id = "01a1ef63-0000-7000-8000-000000000001";
+  stubEngine(detail({ owner: "jane", owner_kind: "person", owner_operator_id: `pat:${id}` }), () =>
+    json({}),
+  );
+  mount("#/gitlet/repos/web/changes/42?tab=more");
+  const card = await waitFor(() => {
+    const found = document.querySelector<HTMLElement>(".code-provenance");
+    expect(found?.textContent).toContain("through a personal access token");
+    return found!;
+  });
+  expect(card.textContent).not.toContain("pat:");
+  expect(
+    within(card).getByRole("button", { name: `Copy the personal access token's id, ${id}` }),
+  ).toBeDefined();
+  const opened = card.querySelector("time");
+  expect(opened?.textContent).toBe("yesterday at 11:00");
+  expect(opened?.getAttribute("title")).toBe(fmtDateTime("2026-10-27T10:00:00Z"));
+});
+
 // THE COUNTS' FILES READ IS FILES CHANGED'S OWN FIRST QUESTION.
 // Mutation: ask the counts with other parameters, and this fails.
 test("the files read for the counts is the Files changed tab's own first question", async () => {
