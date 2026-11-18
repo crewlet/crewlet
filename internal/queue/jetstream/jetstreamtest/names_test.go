@@ -11,20 +11,15 @@ import (
 // EVERY CLUSTER THIS HARNESS NAMES CARRIES A NAME NO OTHER ONE DOES, and every
 // member of one carries its cluster's.
 //
-// A member a case stops for good leaves its peers dialling its route port for
-// as long as they run, and a cluster another case starts in the same binary
-// can be handed that port. Under the one name every cluster here used to share,
-// that member was accepted into the first cluster's mesh and the two merged —
-// colliding server names, and so colliding JetStream peer ids. A name per
-// cluster is what makes the server refuse that route ([newClusterName]), so
-// this holds every way the harness names one against the others: each attempt
-// of a bring-up and a second bring-up, through the one retry loop every
-// started cluster and relay mesh passes ([withFreshPorts]), a relay mesh, and
-// a direct mesh, which reserves its ports outside that loop.
+// A stopped member's peers redial its route port for ever, and another cluster
+// in the binary can be handed it; a name per cluster makes the server refuse
+// that route instead of merging the two ([newClusterName]). This holds every
+// way the harness names one against the others: each attempt of a bring-up, a
+// second bring-up (both through [withFreshPorts]), a relay mesh, and a direct
+// mesh, which reserves its ports outside that loop.
 //
 // No member is started: what is held is the name each is handed, and that
-// [memberConfig] gives every member the name it is handed, so a case that
-// stood clusters up here would spend seconds proving what a value proves.
+// [memberConfig] gives every member its cluster's.
 func TestEveryClusterTheHarnessNamesIsNamedApart(t *testing.T) {
 	t.Parallel()
 	named := map[string]string{}

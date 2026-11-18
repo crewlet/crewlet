@@ -17,44 +17,32 @@ import (
 
 // The process-wide log sink for this package's tests.
 //
-// TestMain owns it, which is the ONLY legitimate owner besides the harness. What
-// happens when `run` installs a writer it was handed instead: 29 parallel tests
-// pointing the global at their own buffers, a data race, and one test's lines
-// in another's output. The single-engine cases here run in parallel with each
-// other (the fleet cases run alone, before them — see [noParallel]), so the
-// sink is installed exactly once, here, and the recorder below is safe to
-// write from many goroutines.
-//
-// It also runs through [solo.Run], which declares that this package needs the
-// test runner to itself: cluster_test.go stands up a fleet of engines, each
-// embedding its own NATS server, in this one process. See
-// `go doc ./internal/solo`.
-//
-// THE HOOK FIRST, before the sink is installed. Every node here that hosts
-// code execs THIS binary as its proc-receive hook ([gitlettest.HookCommand],
-// handed to the engine as engine.Options.GitHook), because the test binary is
-// not `crewlet`; started that way it is a push's hook and not a test run, and
-// it answers exactly as `crewlet gitlet hook` does — main()'s reason for asking
-// before anything else: the hook's stdout is git's protocol and its stderr
-// reaches the pushing client, so a log line on either is a corrupted push.
-//
-// And it is where this binary becomes one of the three processes a model call
-// re-executes it as: also before the sink or the framework, so the child's
-// stdout is exactly the stream it speaks, and as a dispatch here rather than a
-// test function, which every ordinary run would otherwise report as a skip. A
-// process is one of these or a test run, never two:
-//
-//   - the relay to a seat's tools, `<binary> mcp-relay <socket>`, which the
-//     engine names its own executable as ([mcprelay.DispatchIfRelay]) — this
-//     binary, under `go test`. Dispatched on ARGV, and BEFORE the scripted
-//     harness's variable: the scripted harness starts the relay, and hands it its own
-//     environment, that variable included.
-//   - the scripted model's harness ([scriptedHarnessEnv]).
-//   - the executor's harness in its box ([harnessEnv]).
+// TestMain is its ONLY legitimate owner besides the harness: `run` installing a
+// writer it was handed would point the global at 29 parallel tests' own
+// buffers (a data race, and one test's lines in another's output). The
+// single-engine cases run in parallel (the fleet cases run alone, before them:
+// [noParallel]), so the sink is installed once, here, and the recorder is
+// written from many goroutines. It runs through [solo.Run], since
+// cluster_test.go stands up a fleet of engines, each embedding its own NATS
+// server, in this one process (`go doc ./internal/solo`).
 func TestMain(m *testing.M) {
+	// THE HOOK FIRST, before the sink: every node here that hosts code execs
+	// THIS binary as its proc-receive hook ([gitlettest.HookCommand], handed
+	// over as engine.Options.GitHook). The hook's stdout is git's protocol and
+	// its stderr reaches the pushing client, so a log line on either corrupts
+	// a push.
 	if status, ok := gitlettest.RunHookIfAsked(); ok {
 		os.Exit(status)
 	}
+	// This binary is also one of three processes a model call re-executes it
+	// as, dispatched before the sink or the framework so the child's stdout is
+	// exactly the stream it speaks, and here rather than as a test function,
+	// which every ordinary run would report as a skip. A process is one of
+	// these or a test run, never two:
+	//   - the relay to a seat's tools ([mcprelay.DispatchIfRelay]), on ARGV and
+	//     BEFORE the scripted harness's variable, which it inherits;
+	//   - the scripted model's harness ([scriptedHarnessEnv]);
+	//   - the executor's harness in its box ([harnessEnv]).
 	mcprelay.DispatchIfRelay()
 	if os.Getenv(heldToolServerEnv) != "" {
 		os.Exit(runHeldToolServer())
@@ -83,43 +71,30 @@ func TestMain(m *testing.M) {
 
 // logs indexes what a test can assert on, and passes on what a PERSON needs.
 //
-// THREE JOBS, and conflating the first two cost a real CI investigation. This
-// is the engine's ONLY log destination for the whole package, so it sees every
-// line of every company boot at debug; keeping all of them would be a large
-// buffer for no reason, and discarding all but the asserted ones discarded the
-// engine's own account of every failure. A run of this suite failed in CI with
-// nothing but "timed out waiting for the suspended turn to be resumed";
-// `sandbox_resume_no_execute_state`, which named the cause on the line above
-// it, went nowhere, and `-v` on the gates job bought nothing at all.
-//
-//  1. A case that asserts on log lines WATCHES its trace before it starts the
-//     work, and only a watched trace's lines are kept ([traceRecorder.watch]).
-//  2. Every line at WARN or above is written through to stderr, which is the
-//     one record that survives a crash or a suite timeout — no cleanup runs
-//     for either.
-//  3. And it is KEPT, numbered, so a failing case prints the lines logged
-//     while it ran under its own name ([traceRecorder.attribute]). Stderr
-//     alone stopped doing that when the cases started running concurrently:
-//     `go test` frames a test's own t.Log output, and credits a line an
-//     engine goroutine writes to stderr to whichever test printed last.
+// THREE JOBS. This is the engine's ONLY log destination for the package, at
+// debug: keeping every line is a large buffer for nothing, and discarding all
+// but the asserted ones loses the engine's account of every failure.
+//  1. A case asserting on log lines WATCHES its trace before it starts the
+//     work; only a watched trace's lines are kept ([traceRecorder.watch]).
+//  2. Every line at WARN or above is written through to stderr, the one record
+//     that survives a crash or a suite timeout, which run no cleanup.
+//  3. It is KEPT, numbered, so a failing case prints the lines logged while it
+//     ran ([traceRecorder.attribute]): `go test` credits a stderr line from an
+//     engine goroutine to whichever test printed last.
 var logs = &traceRecorder{through: os.Stderr}
 
 // traceKept is how many lines one watched trace keeps, and loudKept how many
 // WARN and ERROR lines the ring holds.
 //
-// traceKept was the bound the whole RUN shared — the first 4096 trace-carrying
-// lines of the package, whichever cases logged them — so the one case that
-// reads lines back passed or failed on how many lines every case before it had
-// written, and "no log line carried the trace" blamed the engine for a harness
-// limit. Each watched trace keeps this many now: a turn logs a few hundred
-// lines at debug, so one that reached it has run away rather than run, and its
+// traceKept is per watched trace, not shared by the run, so a case reading
+// lines back does not depend on how many lines earlier cases wrote. A turn logs
+// a few hundred lines at debug, so one that reached it has run away, and its
 // first lines are the ones a correlation assertion reads.
 //
 // loudKept is about three and a half times the 2,345 WARN and ERROR lines one
-// whole run of this package logged (measured on the commit before the cases
-// ran in parallel), so a failing case's window — at most the whole parallel
-// phase — is not cut short by the ring in practice; when it is, the dump says
-// how many lines fell out rather than presenting what is left as the whole.
+// whole run of this package logged (measured before the cases ran in
+// parallel), so a failing case's window, at most the whole parallel phase, is
+// not cut short in practice; when it is, the dump says how many lines fell out.
 const (
 	traceKept = 4096
 	loudKept  = 8192

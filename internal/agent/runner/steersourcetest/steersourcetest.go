@@ -14,6 +14,10 @@
 // expired exactly once, by the record's ending and by nothing the source does.
 // What a source does beyond that — the box's bounds, the record's seals and
 // fences — stays in its own package's suite.
+//
+// A source with no record to write a brief on, or no store to stall, leaves
+// out only the part of a case that needs one and returns, never skips: a skip
+// not declared in internal/skipgate fails the suite.
 package steersourcetest
 
 import (

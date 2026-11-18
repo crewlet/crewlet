@@ -923,19 +923,15 @@ func testRetentionBacklog(t *testing.T, db *store.DB) {
 // testRelatedIndexed: the filter answers correctly, and the shape it answers
 // through is one the engine can seek rather than scan.
 //
-// This is the one that used to hurt: matching lived in a JSON blob, so a
-// QUIET seat in a busy org was the worst case — the reader walked the whole
-// retention window in pages to conclude there was nothing to show.
+// Matching once lived in a JSON blob, so a QUIET seat in a busy org walked the
+// whole retention window to find nothing.
 //
-// TWO ASSERTIONS OF DIFFERENT KINDS, and it is worth being straight about
-// which is which. The List calls are a behavioural test of this package. The
-// EXPLAIN is a TRIPWIRE on the schema and the engine's planner — it asks
-// whether the party index is there and gets used, the way capability_test.go
-// asks what the driver can do — and it re-states the join rather than
-// borrowing List's own string, so a rewrite of List that quietly stopped
-// joining would still pass here and be caught by the behavioural half plus
-// the plan going unused. Timing is deliberately not asserted: on a fixture
-// this small a scan is fast enough to pass.
+// TWO ASSERTIONS OF DIFFERENT KINDS. The List calls are a behavioural test.
+// The EXPLAIN is a TRIPWIRE on the schema and planner (is the party index there
+// and used, as capability_test.go asks of the driver), and it re-states the
+// join rather than borrowing List's string, so a List that quietly stopped
+// joining is caught by the behavioural half plus the unused plan. Timing is
+// deliberately not asserted: a scan is fast enough on a fixture this small.
 func testRelatedIndexed(t *testing.T, db *store.DB) {
 	db.SetEventSeats(seatsOf(map[string]string{"lead": "a-lead"}))
 	t.Cleanup(func() { db.SetEventSeats(nil) })

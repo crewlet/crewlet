@@ -58,20 +58,18 @@ var listingCases = []fleetCase{{
 		c.verdict(h.t, "Positions", raced, wrong)
 	},
 }, {
-	// A ROW'S INSTANT IS THE STORE'S, NEVER THE WRITER'S. Every row read back
-	// pairs the instant its writer stamped on it (At, the writer's clock) with
-	// the instant the store took it (StoredAt, the broker's) — the fleet's one
-	// reading of each node's clock against its broker's, which the engine's
-	// clock_skew alarm compares across the register. A listing handing back
-	// the writer's stamp would read every node as exactly in time with its
-	// broker, and one keeping a stamp the writer put in the field would let a
-	// writer say what the broker's clock read.
+	// A ROW'S INSTANT IS THE STORE'S, NEVER THE WRITER'S. Every row pairs
+	// the instant its writer stamped (At, the writer's clock) with the instant
+	// the store took it (StoredAt, the broker's): the fleet's one reading of
+	// each node's clock against its broker's, which the clock_skew alarm
+	// compares. A listing handing back the writer's stamp would read every node
+	// as in time with its broker, and one keeping a stamp the writer put in the
+	// field would let a writer say what the broker's clock read.
 	//
-	// The store's clock is this machine's wherever the suite runs — the twin's
-	// own, the broker embedded in the test's process — so the instant lies
-	// between the wall clock read before the put and after it. The row's own
-	// stamp is the suite's fixed base, months before any run, so neither can
-	// pass for the other.
+	// The store's clock is this machine's wherever the suite runs, so the
+	// instant lies between the wall clock read before the put and after it; the
+	// row's own stamp is the fixed base, months earlier, so neither can pass
+	// for the other.
 	name: "a row read back carries the instant its store took it",
 	fn: func(h *fleetHarness) {
 		for write := range 2 {
