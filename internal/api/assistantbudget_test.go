@@ -32,17 +32,15 @@ func seatRecord(t *testing.T, fx *assistApp, handle string) map[string]any {
 // AN APPROVED CEILING CHANGE IS BUDGETS' OWN WRITE, AND NOTHING MORE.
 //
 // Over the real configuration routes: set_token_budget's preview reads the
-// seat through the turn's read grant, and the approval's request is the seat
-// as read with only the one window's ceiling set, sent to PUT
-// /config/roles/{handle} under the If-Match the proposal's revision names,
-// exactly as Company › Budgets saves it. Carried on an exec grant bound to
-// it, it lands and every other field of the seat reads as before; the read
-// grant cannot send it; and a change prepared against a seat that moved since
-// is refused by the route itself (412 version_moved), while one prepared
-// before an unrelated seat changed still lands. The company's ceiling is a merge patch of
-// the document's one window, which lands the same way. Mutation: build the
-// body from the call instead of the seat as read and the seat loses its
-// model; send it without the derived If-Match and the route refuses it.
+// seat through the read grant, and the approval is the seat as read with only
+// one window's ceiling set, sent to PUT /config/roles/{handle} under the
+// proposal's If-Match. On an exec grant it lands and every other field reads
+// as before; the read grant cannot send it; a change prepared against a seat
+// that moved is refused (412 version_moved), one prepared before an unrelated
+// seat changed still lands; the company's ceiling lands as a merge patch.
+// Mutation: build the body from the call instead of the seat
+// as read and the seat loses its model; drop the derived If-Match and the
+// route refuses it.
 func TestAnApprovedCeilingChangeIsBudgetsOwnWrite(t *testing.T) {
 	t.Parallel()
 	fx, read := principlesApp(t)

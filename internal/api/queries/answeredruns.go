@@ -17,16 +17,12 @@ import (
 // DECISIONS (ADR-0068).
 //
 // A run asks in the shape a work item's decision is asked, and the person who
-// answered reads it back beside the work item asks they answered: what was
-// asked, what they chose or said, who answered and when. The run's own row
-// forgets its question once the run moves on, so the one account that outlives
-// it is the record of the answer, `executor_answered`, which carries the
-// question, its decision and the answer, and which every data node's event log
-// keeps for the window this read covers ([worklet.AnsweredWindow]). Read from
-// the FLEET's event log, never one node's ([FleetEvents]).
-//
-// ONLY ANSWERS THE RUN TOOK (`resumed`): an answer the run could not use was
-// not the decision, and the question it was given to waited for another.
+// answered reads it back beside their work item asks. The run's own row
+// forgets its question, so the account that outlives it is `executor_answered`
+// (question, decision, answer), kept by every data node's event log for the
+// window ([worklet.AnsweredWindow]). Read from the FLEET's event log, never
+// one node's ([FleetEvents]). ONLY ANSWERS THE RUN TOOK (`resumed`): one it
+// could not use was not the decision.
 
 // AnsweredRunAsk is one executor's question a person answered, as
 // `answered_decisions` lists it beside a work item's ([worklet.AnsweredAsk]):
@@ -57,13 +53,11 @@ type RunAsked struct {
 // window held more.
 //
 // SELECTED BY WHO ANSWERED, in the log's own read ([store.ListQuery.AnsweredBy],
-// a range seek on schema/0053's index) and over the window alone, and only
-// those read whole: a listing carries no payload, and the question and its
-// answer are in it. Read through the tags instead, every answer every person
-// gave in the window was paged through to keep one person's. By who answered
-// rather than by whom it was put to, because a run's question can be put to a
-// whole team, and one teammate's answer is that teammate's decision, not
-// everybody's.
+// a range seek on schema/0053's index) over the window alone, and only those
+// read whole: a listing carries no payload. Read through the tags, every
+// answer anyone gave in the window was paged through to keep one person's. By
+// who answered, not whom it was put to: a question can go to a whole team, and
+// one teammate's answer is that teammate's decision, not everybody's.
 func (s Sources) answeredRuns(ctx context.Context, handle string, since time.Time,
 ) ([]AnsweredRunAsk, bool, error) {
 	if s.Events == nil || handle == "" {

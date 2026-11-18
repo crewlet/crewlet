@@ -34,22 +34,15 @@ func routeRequest(pattern string) *http.Request {
 // THE ASSISTANT IS ADMITTED TO EVERY ROUTE IT MAY NAME EXACTLY AS ITS PERSON IS,
 // BUT FOR THE HUMAN-ONLY LIST (ADR-0052).
 //
-// The route-level half of the parity walk, in its strong form, over every
-// route the App binds for the assistant's generic tools (App.AssistantRoutes)
-// and five people (an administrator, and a person holding only the tracker,
-// only the knowledge base, only artifacts, or nothing but the overview), each
-// freshly proved. Each route is asked as the grant that would carry it: a read
-// grant for a GET or a HEAD, an approved exec grant for every other method, on
-// the object the route's own policy builds from the matched request. The
-// assistant's admission equals the person's on every route, presence rows
-// included (an approval is the person at the keyboard), and differs on exactly
-// the human-only list, where it is refused naming the assistant. A route the
-// table binds with no verb must be one that decides inside its handler, and
-// one of the four kinds that do (a question, a named read, an overview read,
-// the act route), each held to parity by its own walk; any other is a route
-// added with no decision, and fails here. Mutation: keep a presence row from an
-// exec grant, mount a GET on a write verb, let a verb leave the human-only
-// list, or bind an unguarded route, and this names the route.
+// The route-level half of the parity walk over every route bound for the
+// assistant's generic tools (App.AssistantRoutes) and five freshly proved
+// people. Each route is asked as the grant that would carry it: read for GET
+// or HEAD, approved exec otherwise. Admission equals the person's on every
+// route, presence rows included, and differs on exactly the human-only list.
+// A route bound with no verb must decide inside its handler as one of four
+// kinds (question, named read, overview read, act route), each held by its own
+// walk. Mutation: keep a presence row from an exec grant, mount a GET on a
+// write verb, drop a verb from the human-only list, or bind an unguarded route.
 func TestEveryGuardedRouteAdmitsTheAssistantAsItsPerson(t *testing.T) {
 	t.Parallel()
 	app := everySurfaceApp(t)

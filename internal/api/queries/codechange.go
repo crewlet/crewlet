@@ -11,48 +11,40 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A CHANGE'S ROWS AND ITS ROUTING, AS QUESTIONS: `code_changes`, a listing of
-// changes across repositories or of one (GET /gitlet/changes); `code_change`,
-// one change a part at a time (GET /gitlet/repos/{name}/changes/{n}) — its rows,
-// a revision's files and one file's patch, its findings each placed in the
-// revision asked about, the lines around each finding (`excerpts`), and the
-// files its asker marked viewed (`viewed`);
-// `code_change_routing`, whom its records reached (…/routing); and
-// `code_reviews`, the reviews one reviewer gave
-// (GET /gitlet/reviews). Each is decided per repository by the grant the
-// serving node derives (gitlet.GrantOf, ADR-0088), as every code question is,
-// and read at the caller's own freshness: a screen reads a change back at
-// `session` beside the position its write answered with.
-//
+// A CHANGE'S ROWS AND ITS ROUTING, AS QUESTIONS: `code_changes`, changes across
+// repositories or of one (GET /gitlet/changes); `code_change`, one change a
+// part at a time (GET /gitlet/repos/{name}/changes/{n}): its rows, a revision's
+// files and one file's patch, its findings placed in the revision asked about,
+// the lines around each (`excerpts`) and the files its asker marked viewed
+// (`viewed`); `code_change_routing`, whom its records reached (…/routing); and
+// `code_reviews`, the reviews one reviewer gave (GET /gitlet/reviews). Each is
+// decided per repository by the grant the serving node derives (gitlet.GrantOf,
+// ADR-0088) and read at the caller's own freshness.
+
 // # A revision's code is read by object id, by the code domain's one rule
 //
 // A change's files, a file's patch and where a finding sits now are reads of
 // the repository's CONTENT, answered by its home Gitlet node, never by the rows.
-// What they read between — the base a revision's facts record, the interdiff
-// of two revisions, the re-anchoring of a page of findings — and the floor
-// they are asked at are the code domain's rule (gitlet.RevisionDiff,
-// gitlet.PlaceFindings, gitlet.ObjectFloor), which the code tools' code_get_change
-// reads by too: a seat and a screen are shown one diff of one revision and
-// one finding on one line. The rows those reads name are read first, at the
-// caller's freshness, and every later read of the same answer at `session`
-// floored at the first's position, so the answer is never assembled from an
-// older copy than its first read saw.
+// What they read between (a revision's recorded base, the interdiff of two
+// revisions, the re-anchoring of findings) and the floor they are asked at are
+// the code domain's rule (gitlet.RevisionDiff, gitlet.PlaceFindings,
+// gitlet.ObjectFloor), which the code tools' code_get_change reads by too: a
+// seat and a screen see one diff of one revision. The rows are read first, at
+// the caller's freshness, and every later read at `session` floored at that
+// position, so the answer is never assembled from an older copy.
 
 // The reasons a change question's `not_found` names beside the code
 // questions' own ([ReasonNotDeclared], [ReasonNotHosted]), each remedied
 // differently:
-//
-//   - ReasonNoChange — the repository holds no change of that number;
-//   - ReasonNoRevision — the change holds no revision of that number;
+//   - ReasonNoChange, ReasonNoRevision — no change or revision of that number;
 //   - the files gaps (gitlet.FilesUnrecorded, gitlet.FilesUnrelated) — the
 //     revision's files cannot be read from its facts, which no wait clears;
-//   - ReasonNoObject — a read by object id names an object the repository
-//     holds no object of, or a path its revision holds no such directory or
-//     file at, in the Gitlet node's own sentence.
+//   - ReasonNoObject — a read by object id names an object, or a path in its
+//     revision, the repository does not hold, in the Gitlet node's sentence.
 //
 // A revision whose facts its home has not recorded YET (gitlet.FilesPending)
-// is no absence: it is [ErrUnavailable], which a wait clears — and so is a
-// read by object id no Gitlet node could answer in time.
+// is no absence: it is [ErrUnavailable], which a wait clears, as is a read by
+// object id no Gitlet node could answer in time.
 const (
 	ReasonNoChange   = "no_change"
 	ReasonNoRevision = "no_revision"

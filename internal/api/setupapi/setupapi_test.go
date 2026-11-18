@@ -740,20 +740,15 @@ func TestASurfaceHeldByACrewletServiceSaysWhichOne(t *testing.T) {
 	}
 }
 
-// The base every inbound third-party app is built on is answered ONCE, not
-// repeated in each tool: it is one setting, and asking for it seven times
-// would ask the operator to keep seven copies consistent.
-//
-// ONE FIELD WHERE THERE WERE FOUR. This used to be a Tier B pointer, so the
-// answer also carried `present`, `resolved` and the variable's `reference` —
-// three fields describing a state a `${VAR}` nobody exported produced.
-// The address is Tier A and required on a node serving this listing, so it
-// has one and those three describe nothing.
+// The base every inbound third-party app is built on is answered ONCE, not in
+// each tool: it is one setting, and seven copies would have to be kept
+// consistent. The address is Tier A and required on a node serving this
+// listing, so the answer carries no `present`, `resolved` or `reference`.
 //
 // AND IT IS THE VENDOR'S, named by the key it is read from: once a public
 // listener is set, vendors reach it rather than the person's address, so the
-// listing names `api.public.external_url` — the setting an operator would
-// have to change — rather than the one that answers those routes 404.
+// listing names `api.public.external_url`, the setting an operator would
+// change, not the one that answers those routes 404.
 func TestTheExternalURLIsAnsweredOnce(t *testing.T) {
 	t.Parallel()
 	const public = "https://hooks.example.com"
@@ -1016,17 +1011,13 @@ func TestAStaleRevisionIsRefused(t *testing.T) {
 }
 
 // A WRITE WHILE THE FLEET'S POINTER CANNOT BE READ IS RETRYABLE: the config
-// surface's own 503, never the 500 a caller reads as a broken install. Every
-// write here is checked against the pointer, so a coordination store between
-// leaders reached this as a fault.
+// surface's own 503, never the 500 a caller reads as a broken install.
 //
-// AND IT NAMES WHAT IT SEALED. A store that goes down after the credentials are
+// AND IT NAMES WHAT IT SEALED. A store failing after the credentials are
 // sealed, before the document is patched, leaves them in the fleet's store: the
-// answer and the log name them, as a write that lands does, rather than saying
-// nothing was written — the names are an operator's only record of values
-// nothing points at yet. A rotation's reload is the same write: the value under
-// the name the document already reads is overwritten before the reload reads
-// the pointer.
+// answer and the log name them, the operator's only record of values nothing
+// points at yet. A rotation's reload is the same write (the named value is
+// overwritten before the pointer is read).
 //
 // Mutations: drop the coord.ErrUnavailable case from refuse and every case is a
 // 500; drop the sealed names from it and the sealed cases lose them; return an
@@ -1151,26 +1142,16 @@ func TestASetupWriteStoredAndThenUnansweredIsAnUnknownOutcome(t *testing.T) {
 }
 
 // A SETUP WRITE LANDS ON THE REVISION ITS REQUIREMENTS WERE READ FROM, or is
-// refused as stale.
+// refused as stale. Without an if_match the write could decide on one document
+// and patch another: a fresh pointer over a literal put in the meanwhile-
+// activated revision, which `literal_in_config` refuses. Stale is refused
+// before sealing (the write's own check) or after (the activation's
+// compare-and-set), naming the credentials sealed and, for a revision stored
+// inert, it and the node holding it, as the config surface does.
 //
-// What each field holds decides the write: an empty slot is given a fresh
-// ${VAR}, a literal is refused. A submission with no if_match was built on
-// whatever the pointer named when it landed, so a write landing in between had
-// it decide on one document and patch another — here, a fresh pointer written
-// over the literal an operator put in the revision activated meanwhile, the
-// very write `literal_in_config` exists to refuse. The read this answer was
-// built from is its precondition now, so it is refused as stale instead:
-// before anything is sealed where the write's own check sees the change, and
-// after where only the activation's compare-and-set does — and then the
-// refusal names the credentials it sealed, which nothing points at yet. A
-// write that loses at that compare-and-set has stored its revision too, kept
-// inert, and the refusal names it and the node whose history alone holds it,
-// as the config surface's does.
-//
-// Mutations: send the caller's if_match alone, and the literal is
-// overwritten; drop the sealed names from refuse's raced arm, and the sealed
-// cases lose them; drop configapi.KeptRevision from that arm, or the node from
-// it, and the last case loses the revision or the node.
+// Mutations: send the caller's if_match alone, and the literal is overwritten;
+// drop the sealed names from refuse's raced arm, or configapi.KeptRevision or
+// the node, and the cases lose them.
 func TestASetupWriteLandsOnTheRevisionItWasReadFrom(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1289,19 +1270,15 @@ func TestASetupWriteLandsOnTheRevisionItWasReadFrom(t *testing.T) {
 // A ROTATION RELOADS THE REVISION IT WAS READ FROM, or is refused as stale —
 // after its value is sealed, and naming it.
 //
-// A rotation writes through the `${VAR}` the slot it read holds and then
-// reloads, because the value reaches the seats only at an activation. A reload
-// of whatever the pointer named by then republished a document a write in
-// between had changed — here, the company before the integration was
-// connected, whose slot reads no credential at all — and answered 201
-// `reloaded`, a rotation that reached nothing. Held to the revision it read,
-// the reload loses at its own read of the pointer: 409 revision_advanced, the
-// fleet left on the write in between, and the credential it overwrote named.
-// A seat's rotation is the same write through the entity route.
+// A rotation writes through the slot's `${VAR}`, then reloads. Reloading
+// whatever the pointer named by then would republish a document a write in
+// between had changed and answer 201 `reloaded` for a rotation that reached
+// nothing. Held to the revision it read, the reload loses: 409
+// revision_advanced, the fleet left on that write, the overwritten credential
+// named. A seat's rotation is the same through the entity route.
 //
-// Mutations: hand the reload no expectation, and both cases republish the
-// write in between and answer 201; return an empty result from a failed
-// reload, and its case loses the name.
+// Mutations: hand the reload no expectation, and both cases answer 201;
+// return an empty result from a failed reload, and it loses the name.
 func TestASetupRotationReloadsOnlyTheRevisionItWasReadFrom(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1370,20 +1347,15 @@ func TestASetupRotationReloadsOnlyTheRevisionItWasReadFrom(t *testing.T) {
 // A SEAL THE SECRET STORE DID NOT ANSWER IS SAID AS ONE, naming what was
 // sealed before it.
 //
-// The fleet's secret store is a coordination write, so a credential's write
-// fails with the very error a pointer read does, and the refusal said "the
-// fleet's activation could not be read" about a write that may have landed —
-// and named nothing, though the credential before it was in the store. The
-// document was not touched, so it is the retryable 503 with no `outcome`,
-// naming the credential whose write is unknown as a field a client branches on
-// (`unanswered_secret`), beside the names sealed before it: said only in the
-// reason, a 503 without `outcome` read as one that wrote nothing.
+// A failed seal carries a pointer read's error, and must not say "the fleet's
+// activation could not be read" about a write that may have landed. The
+// document was untouched: the retryable 503 with no `outcome`, naming the
+// credential whose write is unknown as a field clients branch on
+// (`unanswered_secret`) beside the names sealed before it.
 //
-// Mutations: let refuse answer a seal through its pointer-read arm, and the
-// reason is the pointer's and the field is gone; return an empty result from
-// the seal loop, and the first credential is not named; leave
-// `unanswered_secret` out of the seal arm, and the credential is named in the
-// reason alone.
+// Mutations: answer a seal through refuse's pointer-read arm, and the reason
+// is the pointer's and the field is gone; return an empty result from the
+// seal loop, or drop `unanswered_secret`, and the credential is not named.
 func TestASealTheStoreDidNotAnswerIsSaidAsOne(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -2641,19 +2613,15 @@ func firstRunes(s string, n int) string {
 // A SEAT OPTS IN BY BEING TURNED ON, and the roster says which side of that
 // each seat is on.
 //
-// The plan a provisioning pass runs is built from the seats whose
-// `integrations.<lane>` block says `enabled: true` (D9), and the engine seals
-// each one's credential under the seat's own name. So the two states are not
-// "has an account" and "does not": they are "no sync will look at this seat"
-// and "the next one will".
+// A provisioning pass plans from the seats whose `integrations.<lane>` block
+// says `enabled: true` (D9) and seals each credential under the seat's name.
+// So the states are "no sync will look at this seat" and "the next one will",
+// not "has an account" and "does not".
 //
-// Both were described wrongly, and each in the direction that misleads. A
-// seat nobody had opted in was promised an account on the next sync, which no
-// sync would ever create, so the card read Connected over an agent that had
-// none and never would. A seat that HAD opted in, which is a named variable
-// with nothing behind it yet, was reported as authenticating with nothing:
-// the one state an operator reaches by doing exactly the right thing, read as
-// a mistake.
+// An un-opted-in seat must not be promised an account (the card would read
+// Connected over an agent that never gets one), and an opted-in seat, a named
+// variable with nothing behind it yet, must not read as authenticating with
+// nothing: that is the state reached by doing the right thing.
 func TestAProvisionedSeatSaysWhichSideOfOptingInItIsOn(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -2849,24 +2817,14 @@ func TestOnlyDatadogChecksItsKeysTogether(t *testing.T) {
 	}
 }
 
-// EVERY DROPDOWN OPENS ON AN ANSWER, which is what makes "Choose one"
-// unreachable rather than merely unwanted.
+// EVERY DROPDOWN OPENS ON AN ANSWER. The form renders no "Choose one"
+// placeholder, which is honest only if a choice field always has something to
+// show: a property of the VENDOR's declaration, so it is checked here. It also
+// keeps the connect and settings forms one form: a defaultless choice would
+// render a placeholder only on the connect side.
 //
-// The form used to render an empty placeholder above every choice control
-// unconditionally, so each one opened with a question mark over the value it
-// was already showing. Removing it is only honest if a choice field always
-// has something to show — and that is a property of the VENDOR's declaration,
-// not of the screen, so it is checked here rather than hoped for.
-//
-// It also holds up an older promise. A connect form and a settings form are
-// meant to be one form, and a defaultless choice breaks that on its own: with
-// nothing stored the connect side would render a placeholder the settings
-// side does not, which is exactly the "the settings form is a different
-// screen" bug that invariant exists to stop.
-//
-// A DEFAULT IS A SUGGESTION, NEVER A STORED VALUE, so this costs a company
-// nothing: what it already answered still wins, and a default that turns out
-// to be wrong is one somebody changes rather than one they have to discover.
+// A DEFAULT IS A SUGGESTION, NEVER A STORED VALUE: what a company already
+// answered still wins.
 func TestEveryChoiceOpensOnAnAnswer(t *testing.T) {
 	t.Parallel()
 	resolve := func(string) (string, bool) { return "", false }
@@ -2925,20 +2883,15 @@ func TestEveryChoiceOpensOnAnAnswer(t *testing.T) {
 
 // A GATED FIELD IS DECLARED AFTER THE ANSWER THAT REVEALS IT.
 //
-// The form renders a vendor's list in the order the vendor wrote it, so a
-// field gated on a choice BELOW it appears above the question — it pops into
-// existence somewhere the reader has already scrolled past, which is the same
-// as not appearing at all for the one person it is addressed to.
+// The form renders a vendor's list in the vendor's order, so a field gated on
+// a choice BELOW it pops up where the reader has already scrolled past.
 //
-// Checked here rather than on the screen, because the screen's own test can
-// only prove the renderer preserves an order: which order it is handed is
-// this list's decision. Moving GitHub's organization token back above its
-// coverage question left every rendering test passing.
+// Checked here, not on the screen: the screen's test only proves the renderer
+// preserves an order, and which order it is handed is this list's decision.
 //
-// It also catches a gate naming a field that is not there at all, which
-// [setup.Requirement.Needed] reads as SHUT — a field nobody can ever reveal,
-// and silent, because one demanded for no reason looks exactly like one
-// genuinely needed.
+// It also catches a gate naming a field that is not there, which
+// [setup.Requirement.Needed] reads as SHUT: a field nobody can ever reveal,
+// silently.
 func TestAGatedFieldFollowsTheAnswerThatRevealsIt(t *testing.T) {
 	t.Parallel()
 	resolve := func(string) (string, bool) { return "", false }
@@ -2993,17 +2946,13 @@ func (v *vault) forget(names ...string) {
 
 // EVERY ROUTE HERE IS ADMIN'S, reading it included.
 //
-// These routes decided nothing: the guard in front of them answers only
-// whether somebody resolved, which meant "the operator" while an operator token
-// was the only credential. A person signed in holding a read-only permission
-// alone could then seal credentials into the fleet's store and point the
-// company document at them. So every route is stated against a caller holding
-// admin and against one holding EVERY APP — the most a caller can carry
-// without admin — which is refused naming admin alone (ADR-0033: which
-// credentials a company has not configured is a map of what to attack, and no
-// app opens it). A submission CARRYING a credential, a provisioning pass and a
-// GitHub App each also ask `secrets.write`, which admin opens too; refused on
-// the route, none of them reaches it, and nothing is sealed.
+// The guard in front of these routes answers only whether somebody resolved,
+// so a read-only signed-in person could otherwise seal credentials and point
+// the company document at them. Each route is stated against a caller holding
+// admin and one holding EVERY APP, the most a caller carries without admin,
+// refused naming admin alone (ADR-0033: which credentials are unconfigured is
+// a map of what to attack). A credential submission, a provisioning pass and a
+// GitHub App also ask `secrets.write`; refused on the route, none reaches it.
 func TestEverySetupRouteIsAdmins(t *testing.T) {
 	t.Parallel()
 	sealing := `{

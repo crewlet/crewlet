@@ -19,19 +19,14 @@ import (
 // THE ENGINE AND THE DASHBOARD CLOSE A SOCKET WITH ONE SET OF NUMBERS.
 //
 // A 44xx close is the one thing the dashboard's socket branches on that no
-// frame carries: 4401 reconnects (the browser may hold a newer cookie than the
-// socket was opened with) and 4403 STOPS and tells the reader why, because
-// reconnecting reaches the same person with the same access. The numbers were
-// two literals, one per side, with nothing holding them together — so an
-// engine that renumbered one would have a dashboard reconnecting for ever
-// against a withdrawn grant, or stopping dead over a cookie that merely
-// expired, with no test anywhere to say so.
+// frame carries: 4401 reconnects (the browser may hold a newer cookie) and
+// 4403 STOPS and says why, since reconnecting reaches the same access. A
+// renumbering on one side would reconnect for ever against a withdrawn grant,
+// or stop dead over an expired cookie.
 //
-// Read from the dashboard's SOURCE by declaration — its contract module
-// (dashboard/src/contract/closecodes.ts) — and held in both directions: each dashboard constant equals the engine's, and every 4000-range
-// close code the engine declares has a dashboard constant — a code the engine
-// sends and the dashboard has no name for is a close it handles as a network
-// blip.
+// Read from the dashboard's SOURCE (dashboard/src/contract/closecodes.ts) and
+// held both ways: each dashboard constant equals the engine's, and every
+// 4000-range engine close code has one, else it is handled as a network blip.
 func TestTheDashboardClosesOnTheEnginesCloseCodes(t *testing.T) {
 	t.Parallel()
 	dashboard := map[string]websocket.StatusCode{

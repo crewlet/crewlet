@@ -21,16 +21,13 @@ import (
 // agent's app.
 //
 // UNAUTHENTICATED, and it has to be: a redirect from GitHub carries no engine
-// credential, only the one-time code and the state that travelled with it. So
-// the state is what stands in for a credential here, and it is a signed token
-// this engine minted, naming the seat and its expiry. The completer validates
-// it before doing anything at all.
+// credential, only the one-time code and the state, a signed token this engine
+// minted naming the seat and its expiry. The completer validates it first.
 //
-// TWO ARRIVALS, one route. GitHub sends the browser here twice: once after
-// the app is CREATED, with a code to convert, and once after it is INSTALLED,
-// with nothing but the setup URL's own query. The second is a courtesy, since
-// the reconcile loop discovers the installation on its own, so it renders the
-// same page rather than failing for having no code.
+// TWO ARRIVALS, one route: after the app is CREATED (a code to convert) and
+// after it is INSTALLED (only the setup URL's own query). The second is a
+// courtesy, since the reconcile loop discovers the installation itself, so it
+// renders the same page rather than failing for having no code.
 
 // brandMark is the product's mark as a data: URL, which is how this page shows
 // it.
@@ -362,25 +359,15 @@ type GitHubRechecker interface{ RecheckGitHub() }
 
 // recheckEvery is the floor between two rechecks this route will ask for.
 //
-// # It is bounding an UNAUTHENTICATED caller, and it is the third bound
+// It bounds an UNAUTHENTICATED caller, as the third bound. A recheck believes
+// nothing (see [integration.Worker.Refresh]), so the exposure is WORK: passes
+// back to back spend the company's GitHub rate limit. The loop's coalescing
+// and the surface lease under it still allow about one pass per pass duration.
 //
-// A recheck is not a write and believes nothing (see
-// [integration.Worker.Refresh]), so the exposure is not trust but WORK: an
-// engine made to run GitHub passes back to back spends a company's GitHub
-// rate limit. Two bounds already sit under this one — the loop coalesces
-// asks that arrive before its tick, and a pass takes the surface lease, so
-// requests landing during one collapse into at most one more. Measured
-// against those alone an attacker could still drive passes continuously,
-// at roughly one per pass duration.
-//
-// FIVE SECONDS, from the two flows it has to separate. The real one is a
-// person redirected back from GitHub, and a GitHub install round trip
-// cannot complete in under five seconds — so consecutive installs, which a
-// multi-agent company does back to back, each get their recheck. Sustained
-// abuse drops to twelve passes a minute.
-//
-// Losing a recheck is not losing the work: the surface falls back to its
-// cadence, which is what it did before this existed.
+// FIVE SECONDS: a GitHub install round trip cannot complete faster, so
+// consecutive installs each get their recheck, while sustained abuse drops to
+// twelve passes a minute. Losing a recheck loses no work: the surface falls
+// back to its cadence.
 const recheckEvery = 5 * time.Second
 
 // askRecheck asks the loop to look at GitHub, at most once per
@@ -422,29 +409,16 @@ func (r *Receiver) githubAppLanding(w http.ResponseWriter, req *http.Request) {
 			"description", q.Get("error_description"))
 
 	case strings.TrimSpace(q.Get("installed")) != "":
-		// THE INSTALL ARRIVAL. GitHub names the seat and the installation
-		// in the query, and that query is the only thing this route has:
-		// it is unauthenticated, so what arrives here is whatever the
-		// caller typed.
+		// THE INSTALL ARRIVAL: an unauthenticated query, whatever the
+		// caller typed. SO NOTHING IS WRITTEN: adopting the id off the
+		// redirect would let anyone who can reach this port record an
+		// installation onto any seat with an app, with a config revision
+		// per request. The `code` arm has a signed state standing in for
+		// a credential; a private app's installations page sends none.
 		//
-		// SO NOTHING IS WRITTEN, and that is the whole of this arm.
-		// Adopting the id straight off the redirect made the Integrations
-		// screen right about a minute sooner, and paid for it by letting
-		// anyone who can reach this port record an installation onto any
-		// seat that has an app — no signature, no token, no state, and a
-		// fresh config revision on every request. The `code` arm below is
-		// not exposed that way because a signed state stands in for the
-		// credential a redirect cannot carry; there is no equivalent
-		// here, since an agent's app is private and GitHub sends no state
-		// back through the installations page such an app is installed
-		// from.
-		//
-		// The reconcile loop adopts the same installation on its next
-		// pass, having LISTED the app's own installations rather than
-		// believed a query — the verified path, and the one that already
-		// existed. What that costs is the minute, and the page below has
-		// always said so: this is word for word the message it already
-		// showed whenever the write failed.
+		// The reconcile loop adopts the installation on its next pass,
+		// having LISTED the app's own installations. The cost is the
+		// minute the page already says.
 		view.Heading = "App installed for"
 		// ONLY A HANDLE IS NAMED: the query is whatever the caller typed,
 		// and anything that cannot be a seat's handle is no seat this
@@ -455,25 +429,15 @@ func (r *Receiver) githubAppLanding(w http.ResponseWriter, req *http.Request) {
 			view.Heading = "App installed"
 		}
 		view.Done = true
-		// AND THE LOOP IS ASKED TO LOOK NOW, which is the half that makes
-		// the sentence below true.
+		// AND THE LOOP IS ASKED TO LOOK NOW, which makes the sentence
+		// below true. The ask carries no installation id and claims
+		// nothing ([integration.Worker.Refresh]); the arrival supplies
+		// only the TIMING: an admin-owed surface backs off from fifteen
+		// seconds to ten minutes, longest just when a person finishes
+		// what the card asks for.
 		//
-		// Nothing here is believed — see the note above, and
-		// [integration.Worker.Refresh]: the ask carries no installation
-		// id and makes no claim, so the pass that follows is the same
-		// verified one, listing the app's own installations. What the
-		// arrival supplies is the TIMING, and the timing is the whole
-		// problem: an admin-owed surface backs off from fifteen seconds
-		// to ten minutes, so the instant a person finishes the thing the
-		// card is asking for is the instant the wait is longest. Measured:
-		// an install done in about eight seconds, then several minutes of
-		// a card still asking for it, reloaded repeatedly, read as the
-		// install not having worked.
-		//
-		// The page says so either way. A refused ask — the rate limit, or
-		// a build with no loop wired — is a fall back to the cadence
-		// rather than a failure, and the operator is told which they are
-		// waiting on rather than a number that is right in one case.
+		// A refused ask (rate limit, or no loop wired) falls back to the
+		// cadence, and the page says which the operator is waiting on.
 		//
 		// "THIS AGENT" ONLY BESIDE A HANDLE: a page that names none says
 		// "the agent", or the sentence points at nothing on it.

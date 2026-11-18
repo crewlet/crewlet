@@ -18,16 +18,12 @@ import (
 //
 // # Why a gate rather than a convention
 //
-// The two halves live in different packages: internal/api/auth owns the
-// exemption list and this package owns the registration. They agree today
-// because the paths are shared constants — but a route ADDED here needs an
-// entry there, and nothing about writing `mux.HandleFunc` says so. The failure
-// is silent in the dangerous direction: a new route under /auth/ that should
-// need a session gets one that does not only if somebody remembers, and a
-// credential surface behind no credential looks exactly like a working one.
-//
-// So this walks what the surface registers and requires every pattern to be
-// named below. A route nobody classified fails the build.
+// internal/api/auth owns the exemption list and this package the registration;
+// a route ADDED here needs an entry there, and nothing about writing
+// `mux.HandleFunc` says so. The failure is silent in the dangerous direction:
+// a credential surface behind no credential looks like a working one. So this
+// walks what the surface registers and requires every pattern to be named
+// below. A route nobody classified fails the build.
 func TestEveryAuthRouteIsClassified(t *testing.T) {
 	t.Parallel()
 
@@ -99,20 +95,13 @@ func TestEveryAuthRouteIsClassified(t *testing.T) {
 
 // NOTHING THIS SURFACE ANSWERS MAY BE STORED.
 //
-// Its answers are a second-factor seed and the URI that carries it, recovery
-// codes shown exactly once, who somebody is, the address an invitation was sent
-// to and every sign-in's Set-Cookie — and none carried a Cache-Control, so a
-// browser's disk cache or a shared proxy was free to keep them long after the
-// tab, the session and the step-up that was needed to read them. Then only
-// what the routes wrote carried one: a wrapper around them could not reach the
-// answers written before them — the guard's refusals, the origin check's, the
-// mux's own 404 and 405. So the guard marks every answer under /auth, and this
-// walks EVERY route the surface registers through the REAL guard and origin
-// check a node runs them behind, and holds each answer, whatever its status
-// and whoever wrote it, to `no-store`: with no credential (the guard's 401 on
-// every guarded route), from another site, an enrolment-only session on a
-// route it may not reach, and a path and a method nothing serves.
-//
+// Its answers (a seed and its URI, recovery codes shown once, an invitation's
+// address, every Set-Cookie) must not outlive the tab in a cache or proxy. A
+// wrapper could not reach answers written before it (the guard's and origin
+// check's refusals, the mux's 404 and 405), so the guard marks every answer.
+// This walks EVERY route through the REAL guard and origin check and holds each
+// answer to `no-store`: no credential, another site, an enrolment-only session
+// on a route it may not reach, a path or method nothing serves.
 // Mutation: drop the guard's marking and every row fails.
 func TestNothingThisSurfaceAnswersMayBeStored(t *testing.T) {
 	t.Parallel()

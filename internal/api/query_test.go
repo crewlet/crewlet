@@ -464,15 +464,11 @@ func TestAnUnreachableCoordinationStoreIsUnavailableOnBothTransports(t *testing.
 
 // A NATIVE QUESTION ON A NODE WITH NO COMPANY IS ONE ANSWER ON BOTH TRANSPORTS.
 //
-// Worklet and Doclet come up with its first
-// revision, and until then every question over them is answered for what it
-// is: no company yet, come back at the reconcile poll, and why. REST answered
-// that — `503 no_active_revision`, the poll's fifteen seconds and the halves'
-// sentence — while the socket read the same error through the reading it
-// shares with REST, found no state-log refusal behind it and sent a bare
-// `unavailable` at the health tick's five: one question, two hints, and the
-// reason on one channel only. And a half the company keeps with a vendor is
-// the question this node does not have, on both.
+// Worklet and Doclet come up with the first revision; until then a question is
+// answered as no company yet: `503 no_active_revision`, the reconcile poll's
+// fifteen seconds and the halves' sentence, on the socket too (not a bare
+// `unavailable` at the health tick's five). A half the company keeps with a
+// vendor is the question this node does not have, on both.
 //
 // Mutation: drop the no-company arm from [stream.UnavailableOf] and the socket
 // answers five seconds and no refusal.
@@ -581,16 +577,12 @@ func TestANativeQuestionOnANodeWithNoCompanyIsOneAnswerOnBothTransports(t *testi
 // A STATE-LOG REFUSAL IS UNAVAILABLE ON BOTH TRANSPORTS, CARRYING ITS CODE,
 // ITS WORDS AND ITS OWN HINT.
 //
-// A linearizable read whose barrier the broker refused — a full log, a sealed
-// stream — reached the caller as a 500 `query_failed` with the refusal's words
-// sent only to the log, and a refusal waiting cannot clear, a record this node
-// cannot decode, always had. Neither is a fault. Both transports now answer
-// `unavailable` with the refusal's code and the state log's sentence for it,
-// what happened and what to do ([statelog.ConditionSentence]), and never the
-// refusal's own detail, which names a setting or the broker's words for
-// whoever runs the node and goes to the log; and the hint is the state log's:
-// none at all for a refusal no wait changes, so a client is told what to do
-// rather than to poll, and the derived hint for a node that is behind.
+// Neither a refused linearizable barrier (full log, sealed stream) nor an
+// undecodable record is a fault. Both transports answer `unavailable` with the
+// refusal's code and the state log's sentence ([statelog.ConditionSentence]),
+// never the refusal's own detail, which names a setting or the broker's words
+// for the operator and goes to the log. The hint is the state log's: none for a
+// refusal no wait changes, the derived one for a node that is behind.
 func TestAStateLogRefusalIsUnavailableOnBothTransports(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -655,14 +647,10 @@ func TestAStateLogRefusalIsUnavailableOnBothTransports(t *testing.T) {
 // EVERY CONDITION IS TOLD IN THE SAME WORDS ON EVERY TRANSPORT, not a
 // state-log refusal's alone.
 //
-// A coordination store that did not answer, no data node serving, a store
-// busy or closed, a queue down and a read that ran out of time are each
-// `unavailable` on the query surface, and were worded only where a state-log
-// refusal was behind them: REST answered the table's fixed message and the
-// socket no detail at all, while the act route, the work surface and the
-// artifacts told the same error in [builtin.ConditionSentence]'s words — one
-// read, three texts. Both transports now carry that sentence for every one,
-// and nothing of the error's own text.
+// A coordination store that did not answer, no data node serving, a store busy
+// or closed, a queue down and a read out of time are each `unavailable`, and
+// both transports carry [builtin.ConditionSentence]'s words for every one (as
+// the act route, work surface and artifacts do), never the error's own text.
 //
 // Mutation: word only a state-log refusal in stream.UnavailableOf, or carry
 // the detail only beside a refusal in Fields, and every row goes red.

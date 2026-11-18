@@ -54,42 +54,15 @@ type linkBody struct {
 // linkWorkItem links the path's artifact to a work item (`POST
 // /artifacts/{id}/work-items`), answering the item's key as linked.
 //
-// # Two decisions, each the one its own surface takes
-//
-// The ARTIFACT is admitted as a read, through [Gate.Read], which is how
-// `get_artifact` admits one: any role on it, viewer and above, a caller with no
-// relation answered exactly as for an artifact nothing holds, and the admin
-// path's override recorded before anything about the artifact is answered. A
-// link changes nothing a viewer could not already see; it says which work the
-// artifact belongs to.
-//
-// The ITEM is admitted as a write, `update_work_item` on a task, decided by the
-// authority table's own row ([authz.Decide]) exactly as `PATCH
-// /worklet/items/{key}` and the tool decide it: putting something on an item's
-// card is the item's writers' to do, whatever the caller's role on the
-// artifact.
-//
-// # The item must be one the tracker holds, and live
-//
-// Another log, read here before the record is formed: an item nobody filed is
-// refused, and so is a removed one, which the tracker holds frozen until it is
-// restored. The key the tracker answers is the one linked, so an id or a former
-// key links under the item's current key, the one its panel lists by.
-//
-// # A link sent right after the item was filed reads the item from there on
-//
-// The dashboard files a task and links the artifact to it in one gesture, and
-// on a fleet the link can reach a node that has not applied the create yet:
-// read at the surface's own level, the item is not there, and a task the
-// caller just filed was refused as one nobody filed. So the caller hands back
-// the position the create answered with as `after`, and the item is read
-// through the tracker's own read-your-writes floor ([statelog.Freshness]'s
-// Floors, the one `min_position` sets on every tracker read): the read
-// waits up to the read budget for this node to reach it, and a node that does
-// not is refused `behind`, answered as the tracker's own reads answer it.
-//
-// A link the artifact's history already makes answers success and writes
-// nothing (the domain's rule), so a retry under a fresh key is harmless.
+// The ARTIFACT is admitted as a read ([Gate.Read]), the ITEM as a write
+// (`update_work_item` on a task, [authz.Decide]). The item is read from the
+// tracker before the record is formed: one nobody filed or removed is refused;
+// an id or former key links under its current key. The dashboard files a task
+// and links it in one gesture, and on a fleet the link can reach a node that
+// has not applied the create. So the caller hands back the create's position
+// as `after`, read through the tracker's read-your-writes floor
+// ([statelog.Freshness]'s Floors): it waits up to the read budget, else is
+// refused `behind`. A repeat link writes nothing.
 func (s *Service) linkWorkItem(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r)
 	if !ok {

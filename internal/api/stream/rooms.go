@@ -20,61 +20,39 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// ARTIFACT ROOMS: a socket in an artifact's room receives what moves on that
-// artifact (`artifact_changed`), what its datastore commits (`artifact_data`)
-// and who else is there (`artifact_presence`), and tells the room what it is
-// doing (`presence`).
+// ARTIFACT ROOMS: a socket in one receives `artifact_changed`, `artifact_data`
+// and `artifact_presence`, and tells the room its `presence`. `artifact_join` is decided by `get_artifact`
+// ([Rooms.Access]), three-valued like a watch: allowed puts the socket in the
+// room at the role found; refused is a `not_found` error frame (no relation
+// reads as an id nothing holds), or `artifact_trashed` for a caller it is
+// disclosed to while trashed; undecidable is `unavailable` with its retry
+// hint. None closes the socket. The join is
+// DECIDED AGAIN on every decision of the credential and every movement that
+// can narrow who may read (share, trash, transfer, purge): a refusal withdraws
+// the room, a moved role shapes later pushes. Until it lands the room's
+// datastore pushes are withheld, so no document reaches a reader whose share
+// was just withdrawn; a member kept is told to re-read what it missed.
+
+// An undecidable decision (the estate router, an identity or chart copy that
+// cannot vouch) FAILS CLOSED, as the join does: the member stays in the room
+// and keeps hearing what moves and who is present, but its datastore pushes
+// are withheld. The room is decided again after a backoff
+// ([roomRedecideFloor] doubling to [roomRedecideCeiling], or the refusal's own
+// longer wait), and the decision that lands resumes the member at the role it
+// found or withdraws it. Keeping the earlier role would push documents, judged
+// on a possibly withdrawn share, to a reader nobody vouched for.
+
+// Every node serving the API is a data node applying both artifact logs, so
+// each pushes to its own sockets from its own appliers. A node whose copy is
+// OUT OF SERVICE hears a sound peer's appliers relayed (the engine's live
+// relay) while its reads go to a sound data node through the estate router;
+// every switch of source reaches the rooms as the domains' own reset, which
+// re-reads and decides again every room on the node.
 //
-// # A join is decided like reading the artifact, and stays decided
-//
-// `artifact_join` is decided by `get_artifact` ([Rooms.Access]), three-valued
-// like a watch: allowed puts the socket in the room at the role the decision
-// found, refused is a `not_found` error frame (a caller with no relation is
-// told the artifact does not exist, in the words an id nothing holds is
-// answered with) — or `artifact_trashed` for a caller the artifact is
-// disclosed to while it is in the trash, whose content no room carries until
-// its owner restores it — and undecidable an `unavailable` one with its retry
-// hint.
-// None closes the socket. The join is DECIDED AGAIN on every decision of the
-// socket's credential and on every movement that can narrow who may read the
-// artifact (a share or an unshare, the trash, a transfer, a purge): a refusal
-// withdraws the room with an error frame naming the artifact, and a role that
-// moved is the role later pushes are shaped by. From the moment such a movement
-// lands until its decision does, the room's datastore pushes are withheld from
-// its members, so no document reaches a reader whose share was just withdrawn;
-// a member kept is told to re-read what it missed.
-//
-// # An undecidable answer holds the room, and is asked again
-//
-// A decision this node could not reach (the estate router, an identity or
-// chart copy that cannot vouch, a record it could not read) FAILS CLOSED, as
-// the join itself does on the same answer: the membership stays in the room,
-// so it keeps hearing what moves and who is present, but its datastore pushes
-// are withheld until a decision lands. The room is decided again after a
-// backoff ([roomRedecideFloor] doubling to [roomRedecideCeiling], or the
-// refusal's own wait when it names a longer one) for as long as the answer
-// stays undecidable, and the decision that finally lands resumes the
-// membership at the role it found or withdraws it. Keeping the role the member
-// held before would push documents, judged on a share that may just have been
-// withdrawn, to a reader nobody vouched for.
-//
-// # Every data node pushes from the appliers it hears
-//
-// Every node serving the API is a data node and applies both artifact logs, so
-// each pushes to its own sockets from its own appliers after each commit. A
-// node whose copy is OUT OF SERVICE hears a sound peer's appliers instead,
-// relayed (the engine's live relay, one source at a time for every domain),
-// while the reads themselves are answered by a sound data node through the
-// estate router; and every switch of source reaches the rooms as the domains'
-// own reset, which re-reads and decides again every room on the node.
-//
-// # A datastore push is shaped per reader
-//
-// A document in an `own_rows`, `editors` or `private` collection reaches only
-// the members its rule admits, by the role each member's join decided and the
-// record each member is ([artifactdata.Readable], the rule every read path
-// asks). One payload is encoded per set of documents a reader may see, so a
-// room of readers who all see everything costs one encode.
+// A datastore push is shaped per reader: a document in an `own_rows`,
+// `editors` or `private` collection reaches only the members its rule admits,
+// by role and record ([artifactdata.Readable], the rule every read path asks).
+// One payload is encoded per set of documents a reader may see.
 
 // Rooms is what an artifact's room on this node is decided by and fed from.
 // The zero value serves no room: a join is answered `unknown_query`, the code

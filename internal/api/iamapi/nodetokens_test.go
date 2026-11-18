@@ -17,19 +17,16 @@ import (
 
 // THIS NODE'S TIER A TOKENS, JOINED TO THE ROWS THEIR LOGINS NAME.
 //
-// A label mistyped on one side of the join — in a node's Tier A, or on the
-// directory row — leaves a token acting as itself while its operator believes
-// it acts as a seat, and nothing else can say so: the labels are a node's
-// configuration and no directory read reaches them. Each answer is one the
-// dashboard renders differently — no row, a row naming no seat, a row naming
-// a seat — so each is asserted.
+// A label mistyped on one side of the join leaves a token acting as itself
+// while its operator believes it acts as a seat, and no directory read reaches
+// the labels. Each answer is one the dashboard renders differently (no row, a
+// row naming no seat, a row naming a seat), so each is asserted.
 //
-// AND A ROW IS REPORTED AS WHAT IT HOLDS, never judged: a seat the company no
-// longer holds is `/iam/check`'s finding about the same row, so the token
-// naming one reads exactly like a token naming a seat that is there, with no
-// verdict of this route's own beside it. Mutation: join on the bare label
-// instead of `token:<id>` and every row reads `none`; add a `binding` back and
-// the field check goes red.
+// A ROW IS REPORTED AS WHAT IT HOLDS, never judged: a seat the company no
+// longer holds is `/iam/check`'s finding, so that token reads like one naming
+// a seat that is there. Mutation: join on the bare label instead of
+// `token:<id>` and every row reads `none`; add a `binding` back and the field
+// check goes red.
 func TestNodeTokensJoinEachLabelToItsRow(t *testing.T) {
 	t.Parallel()
 	ops := uuid.MustParse("018f3a9c-0000-7000-8000-0000000000d4")

@@ -16,24 +16,16 @@ import (
 
 // A RAISE IS A PERSON'S, ON EVERY PATH THAT WRITES IT (D10).
 //
-// An agent seat's access to a vendor lives in the company document, so every
-// authored write of it can hand an agent an administration role at the vendor:
-// the Agents tab's save, and also `PATCH /config`, `PUT /config`, a seat's
-// `PUT /config/roles/{id}` and a revert. Each is held to the same rule, the
-// one [seataccess.AsksStepUp] states: where the write raises a seat's lane to
-// an administration grant, or the vendor's offer cannot say it does not, the
-// writer is asked [authz.ActionSetupAccessRaise] on top of the write's own
-// verb, which refuses a machine token and asks a person's fresh step-up.
-//
-// JUDGED FROM THE TWO DOCUMENTS, the revision replaced and the one proposed,
-// as admission is, so a write that resends a seat's setting unchanged is never
-// a raise and one that adds a seat already at an administration role is.
-//
-// NOT ASKED of the engine's own writes, which carry no principal (the Agents
-// tab's save asks it itself, before it writes), of a check, which writes
-// nothing and answers what a save would do in its plan, or of a document the
-// operator writes (Enforce mode): there the agent's access is set on its Seat
-// object, whose own authority decides it.
+// A seat's vendor access lives in the company document, so every authored
+// write (Agents tab save, `PATCH`/`PUT /config`, a seat's `PUT`, a revert) can
+// hand an agent an administration role. Each is held to
+// [seataccess.AsksStepUp]'s rule: where it raises a lane to an administration
+// grant, or the vendor's offer cannot say it does not, the writer is also
+// asked [authz.ActionSetupAccessRaise] (machine tokens refused, a person needs
+// a fresh step-up). JUDGED FROM THE TWO DOCUMENTS, replaced and proposed, so
+// resending a setting is no raise. NOT ASKED of the engine's own writes (no
+// principal), of a check, or of an operator-written document (Enforce mode),
+// where the Seat object's own authority decides.
 
 // Raises is which agent seats a write of the company document from prior to
 // next raises to an administration grant ([seataccess.RaisesBetween]).

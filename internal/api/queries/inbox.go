@@ -24,20 +24,16 @@ import (
 
 // workInbox answers a page of one person's notices.
 //
-// THE READER HAS ALWAYS EXISTED (`worklet.Reader.Inbox`, written, tested and
-// swept on a 365-day retention), and nothing registered it as a question, so
-// the richest record this engine keeps about a person reached no screen. Each
-// notice names the ONE reason of eighteen under which it found them, whether it
-// ASKS something or merely informs, whether it arrived only because nobody
-// better was found, and the person's own read and snooze marks. No commercial
-// tracker records why a notification reached you; this one always has.
+// Each notice (`worklet.Reader.Inbox`, kept 365 days) names the ONE reason of
+// eighteen under which it found the person, whether it ASKS something or
+// merely informs, whether it arrived only because nobody better was found, and
+// the person's own read and snooze marks.
 //
 // THE TRACKER'S, AND SCOPED. It is a question of the tracker's records, so it
-// takes the tracker; within it, see [Sources.recordHandle]: a caller reads
-// their own record, and naming anybody else's is [authz.ActionInboxRead] —
-// theirs, whoever leads them, or an admin. Gated on admin alone, the landing
-// screen would be the most-gated screen in the product, and the human teammate
-// — one of the two readers this dashboard is for — fictional.
+// takes the tracker; see [Sources.recordHandle]: a caller reads their own
+// record, and naming anybody else's is [authz.ActionInboxRead] (theirs,
+// whoever leads them, or an admin). Gated on admin alone, the landing screen
+// would be the most-gated in the product and the human teammate fictional.
 func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
 	handle, err := s.recordHandle(ctx, authz.ActionInboxRead,
 		strings.TrimSpace(p.String("handle")))
@@ -134,38 +130,13 @@ func reasonNames() []string {
 // native domain that told them something — the tracker's, Gitlet's and the
 // artifacts' comments — interleaved by when each happened ([inbox.Compose]).
 //
-// # Open to every signed-in person, each source under its own permission
-//
-// Whose inbox is decided first, by the composed question's own verb
-// ([authz.ActionInbox]): a caller reads their own, and naming anybody else's
-// is the owner-or-lead rule — theirs, whoever leads them, or an admin — WITH
-// NO APP, since an inbox is no app's: a person who uses no tracker still
-// hears about the changes they are asked to review. Then each source is read
-// only where its own permission holds: Worklet's notices where the company
-// runs Worklet and the caller holds the worklet permission on that record
-// ([authz.ActionInboxRead], `work_inbox`'s own rule); Gitlet's where the
-// company hosts code and the caller holds the gitlet permission (ADR-0110),
-// each notice held by Gitlet to the caller's grant on its repository; the
-// artifacts' under no app, each held to the caller's access to its artifact. A
-// source the caller may not read is not asked, and the answer's `sources`
-// says which were.
-//
-// # One floor per log
-//
-// A screen reads its own marks back at `session` with a floor on EACH log it
-// wrote — a "mark all read" is a record on the tracker's log and one on the
-// code log — so the read takes a floor on each ([statelog.Freshness.Floors]),
-// refuses one on any other log, and hands each half the floor on its own.
-//
-// # Cards only where they are drawn
-//
-// `cards` asks for what the cards of the page's notices draw beyond the
-// notices themselves — a code notice's description, open findings and where
-// its change's merge stands — read after the page is composed, for the
-// notices it kept ([inbox.Carded]). A list a person opens a notice from asks
-// it; a count, a badge and a widget's rows do not, and are answered bare.
-//
-// `work_inbox` stays the tracker's own question, and its tool.
+// OPEN TO EVERY SIGNED-IN PERSON, each source under its own permission. Whose
+// inbox is decided by [authz.ActionInbox] WITH NO APP: a person who uses no
+// tracker still hears of changes they must review. Worklet's source needs
+// [authz.ActionInboxRead]; Gitlet's the gitlet permission (ADR-0110) and a grant
+// on each repository; the artifacts' each artifact's access. A source not read
+// is named in `sources`. ONE FLOOR PER LOG: "mark all read" writes on the tracker's and the code log,
+// so the read takes a floor on each ([statelog.Freshness.Floors]), none other.
 func (s Sources) composedInbox(ctx context.Context, p Params) (any, error) {
 	principal, err := caller(ctx, "inbox")
 	if err != nil {

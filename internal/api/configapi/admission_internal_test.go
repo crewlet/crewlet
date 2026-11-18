@@ -95,15 +95,11 @@ var (
 
 // A REFUSED CONFIGURATION WRITE SAYS THE RULE THAT REFUSED IT.
 //
-// The answer used to be the FIRST part's reason beside a permission written
-// at the call site — `admin` — whatever had decided: an agent's seat was told
-// it needed admin, a write refused for a relation and for a credential named
-// the relation alone, and a lead whose proof had lapsed was handed every part
-// of their write as needing admin rather than the `403 step_up_required` a
-// client re-proves and replays on. The answer is now the write's own decision,
-// folded from its parts ([authz.Combine]) and rendered by the table's own
-// mapping ([authz.RefusalFields]), with every part a permission lifts listed
-// under its own reason and grants.
+// The answer is the write's own decision, folded from its parts
+// ([authz.Combine]) and rendered by the table's mapping ([authz.RefusalFields]),
+// with every part a permission lifts listed under its reason and grants: not
+// a hard-coded `admin` beside the first part's reason, which hid the `403
+// step_up_required` a client re-proves and replays on.
 //
 // Mutations: name admin beside the first part's reason again and the mixed,
 // the lapsed and the seat cases fail; list the parts refused only for their

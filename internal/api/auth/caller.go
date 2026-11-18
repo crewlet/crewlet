@@ -8,20 +8,13 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
-// THE ONE WAY A HANDLER ASKS WHO IS CALLING, and why it is a helper rather
-// than nineteen copies of a switch.
+// THE ONE WAY A HANDLER ASKS WHO IS CALLING.
 //
-// [iam.From] answers three-valued, and the value a handler is most likely to
-// drop is the one that matters: nineteen sites used to write `operator, _ :=`
-// because the prefix guard had already answered the question, and the
-// discarded half is now the UNKNOWN arm. Discarded, "this node could not tell"
-// reads as "you are nobody" — and goes on reading that way for as long as the
-// identity store is unreachable, which teaches everybody in the company to go
-// and check their password while nothing is wrong with it.
-//
-// So the switch lives here, once, and a handler gets a principal or nothing.
-// What makes that stick is that this returns no resolution for a caller to
-// ignore: there is no second value to drop.
+// [iam.From] answers three-valued, and the half a handler drops (`p, _ :=`) is
+// the UNKNOWN arm: "this node could not tell" would read as "you are nobody"
+// for as long as the identity store is unreachable, sending everybody to check
+// a password that is fine. So the switch lives here, once, and returns no
+// resolution to ignore: a handler gets a principal or nothing.
 
 // Caller is the principal behind a request, or writes the refusal and reports
 // false.

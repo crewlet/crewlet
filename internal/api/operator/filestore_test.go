@@ -53,19 +53,15 @@ func (noProjectFiles) RemoveFile(context.Context, string, string, string, uint64
 
 // A FILE STORE'S CONDITION IS ANSWERED ON THE ACT ROUTE AS ON THE UPLOAD ROUTE.
 //
-// write_project_file is served on this surface, and a full store it met went
-// out as `503` with a Retry-After of two seconds beside the tool's "Don't try
-// again", because the state log's rule did not know the store's sentinel —
-// while the project file's own upload answered the same refusal with none.
-// Both read one classification now ([builtin.RetryAfter]): a full store is
-// `503` with no Retry-After, under a message that says waiting won't help; a
-// store that did not answer is `503` under an election's wait. NEITHER CARRIES
-// A SENTENCE OF ITS OWN: the act route answers a person, so a condition nobody
-// has worded for one is told in its code's own message, and the tool's
-// sentence, written for a model, travels with neither (ADR-0060). Mutation:
-// drop the full store from the builtin classification and the first row's
-// Retry-After and message fail; drop the unanswered one and the second row's
-// do.
+// write_project_file is served on this surface and the project file's own
+// upload route answers the same refusals, so both read one classification
+// ([builtin.RetryAfter]): a full store is `503` with no Retry-After, under a
+// message that says waiting won't help; a store that did not answer is `503`
+// under an election's wait. NEITHER CARRIES A SENTENCE OF ITS OWN: the act
+// route answers a person, so the code's own message is told and the tool's
+// model-phrased sentence travels with neither (ADR-0060). Mutation: drop the
+// full store from the builtin classification and the first row fails; drop
+// the unanswered one and the second does.
 func TestAFileStoresConditionIsOneAnswerOnTheActRoute(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {

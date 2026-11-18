@@ -15,18 +15,12 @@ import (
 // A SECOND FACTOR'S SEED IS SEALED BEFORE IT ENTERS ANY RECORD, AND STILL
 // SIGNS ITS HOLDER IN.
 //
-// The seed is the one credential this estate keeps as a secret, and it went
-// into the credential set in the clear — so into the person's document, their
-// credential row and the trail entry, on every data node, in every snapshot and
-// every backup, and readable off the cluster port by whoever could read a
-// stream. The enrolment now seals it under the fleet keyring, bound to the
-// person and the credential it is enrolled as, before the write is formed: nothing the writer
-// is handed carries it, and the credential opens back to it as that credential
-// only. And sealing costs nothing at the door: the next sign-in checks a code
-// against it as before.
-//
-// Mutation: store in.Secret rather than the sealed value, and the set carries
-// the seed.
+// In the clear the seed would reach the person's document, credential row and
+// trail entry on every data node, snapshot and backup. The enrolment seals it
+// under the fleet keyring, bound to the person and credential, before the write
+// is formed: nothing the writer is handed carries it, and it opens only as that
+// credential. The next sign-in checks a code against it as before.
+// Mutation: store in.Secret rather than the sealed value and the set carries it.
 func TestASecondFactorsSeedIsSealedBeforeItEntersAnyRecord(t *testing.T) {
 	t.Parallel()
 	r := newSignInRig(t)

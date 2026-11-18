@@ -19,25 +19,17 @@ import (
 )
 
 // A RUNNING ENGINE'S CODE SURFACE TELLS A BOX WHY ONLY BY THE FLEET'S KEYRING.
-// [EngineCode]'s VerifyBox is the seam a deployment's box routes ask on a node
-// serving none of Gitlet ([App.boxGitRoute], [App.boxCodeRoute]); the
-// route suites drive a fake of it, so this holds the adapter itself, over a
-// real engine: a Gitlet node whose company hosts no code — Gitlet not built,
-// every node such a route answers for. An executor's token and a check's,
-// each minted over the keyring the node booted on, as any other node of its
-// fleet mints them, are told the reason — the company hosts no code, 404, in
-// the words a person's /git/ is told — on a box's git route and on a check's
-// box's read alike; the same tokens minted over another fleet's keyring, and
-// each of this fleet's presented under the other's user name, are answered the
-// box admission's own challenge, in its bytes.
+// [EngineCode]'s VerifyBox is the seam box routes ask on a node serving none of
+// Gitlet ([App.boxGitRoute], [App.boxCodeRoute]); route suites drive a fake, so
+// this holds the adapter over a real engine whose company hosts no code. An
+// executor's token and a check's, minted over the booted keyring, are told the
+// reason (404, as a person's /git/ is); tokens minted over another fleet's
+// keyring, or presented under the other's user name, get the box admission's
+// own challenge, in its bytes.
 //
-// Mutations: `return !host.VerifyBox(…)` in the adapter — every unsigned
-// request is told the reason, the leak M3-decisions U8 closed, and every
-// signed one is challenged, red; `return false` — a signed box is challenged
-// ("this run token is not valid here") where it should be told the reason it
-// acts on (on a 503, retry), red; the run tokens handed for the check tokens (or the engine
-// building either with Gitlet rather than at New) — the signed check
-// token is challenged, red.
+// Mutations, each red: `return !host.VerifyBox(…)` in the adapter; `return
+// false` (a signed box challenged instead of told the reason); run tokens
+// handed for the check tokens, or either built with Gitlet rather than at New.
 func TestTheEnginesCodeSurfaceTellsABoxWhyOnlyByTheFleetsKeyring(t *testing.T) {
 	t.Parallel()
 	e, boot := bootNode(t, "")

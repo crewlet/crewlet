@@ -18,81 +18,30 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// Worklet and Doclet, read for a screen.
+// Worklet and Doclet, read for a screen from a data node's copy of the estate
+// (SQL, not an O(keys) listing), through the router a seat's tools use.
 //
-// # These read A DATA NODE'S COPY, and that is the whole reason they are cheap
+// The halves are found PER QUESTION: a node's Worklet and Doclet come up with
+// its first company, so `NativeSources` resolves each on every question. A half
+// not up answers [ErrUnavailable]; one kept on a vendor answers [ErrUnknown]
+// (no wait brings it). A merging question asks each source as a [Keeper] and
+// leaves out the half not kept.
 //
-// Every other way to answer "what is on the board" is a listing over the
-// fleet's own record — O(keys) message deliveries, on a request path, for a
-// page a dashboard refreshes. A copy of the replicated estate is what makes it
-// a SQL query instead, and it is reached through the same estate router a
-// seat's own tools read through, so an operator and an agent looking at one
-// task see one task: this node's copy while it serves, another data node's
-// while it does not. Only a data node serves these screens — Tier A refuses
-// `ingress` without `data` — so the router is here for the copy that is out
-// of service, never for a node holding none.
-//
-// Both halves' rows are derived by a state-log applier from an ordered log, so
-// every answer carries the level it was served at and the position it
-// answered at, rather than a flag saying whether the copy was ready.
-//
-// # The halves are found PER QUESTION
-//
-// A node's Worklet and Doclet come up with its first company, which a node
-// that booted with none meets at an apply, long after this surface was wired —
-// so the sources `crewlet run` hands it (internal/api's `NativeSources`)
-// resolve their half for every question rather than once. A half not up yet
-// answers [ErrUnavailable]; a half this company keeps on a vendor answers
-// [ErrUnknown], exactly as a question nothing registered would, since no wait
-// brings it; and a question merging several halves asks each source first, as
-// a [Keeper], so it leaves out the half this company does not keep rather than
-// refusing whole.
-//
-// # A COPY THAT HAS NOT CAUGHT UP SAYS SO rather than answering empty
-//
-// Both native backends are state-log domains, so both say it the same way:
-// through the coverage every answer carries, which is a POSITION rather than a
-// boolean. "This company has no work" is an answer a person acts on — they
-// file the duplicate, they conclude the migration failed — and a node that has
-// not caught up must never be able to say it without saying so.
+// A copy that has not caught up says so through the coverage every answer
+// carries (a position), never an empty "no work" a person acts on.
 
 // Freshness is what THIS caller said about how old the answer may be,
 // resolved against this surface's own rules.
 //
-// # Why every question calls it, and why it is not a second parser
+// Every question taking a level calls it, so none hardcodes `stale`: a caller
+// asking for a linearizable answer must not be served this node's rows and
+// told they were. No level constant sits beside it on purpose.
 //
-// Thirteen registered questions here take a level and a staleness bound, and
-// exactly one of them read either: `work_items`, because it is the one that
-// goes through the query grammar. The other twelve wrote a hardcoded `stale`
-// into the query and never looked at `read_level`, `max_lag_seconds` or
-// `max_lag_seq` at all — so a caller asking a project listing for a
-// linearizable answer was served this node's rows and told, in the answer's
-// own `read_level` field, that it came back linearizable.
-//
-// A NAMED CONSTANT WOULD NOT HAVE FIXED THAT. Replacing thirteen `stale`
-// literals with one `dashboardReadLevel` makes them agree, which they already
-// did — what was wrong is that they were literals AT ALL, on the one surface
-// whose caller is allowed to choose. So the function is the unit here, and
-// there is no level constant beside it to reach for by mistake.
-//
-// The rules themselves are [statelog.ParseFreshness]'s and not restated here.
-// One grammar serves every domain's questions, the socket, the REST routes and
-// a seat's own tools, and a second reading of these keys would be the one
-// place a freshness key meant something slightly different. The FRAMEWORK'S
-// rather than a domain's, because this function serves every domain: read
-// through the tracker's, a bad `read_level` on a chat or a wiki question was
-// refused as "worklet: …", naming a domain the caller never asked about.
-//
-// WHAT THIS ADDS is the SURFACE, which the grammar cannot know: an absent or
-// unpermitted level resolves to this surface's default through
-// [statelog.LevelFor], and a dashboard is the one caller allowed to choose at
-// all — it renders the level and the lag beside the rows, so a person who
-// asked for a weaker answer is shown the one they got.
-//
-// What a reader does not serve stays its own refusal: a floor on a log the
-// question does not read, which the reader refuses as the request's mistake
-// ([ClassifyFailure]), never this grammar, which cannot know which log a
-// question reads.
+// The rules are [statelog.ParseFreshness]'s, the framework's rather than a
+// domain's (a tracker parse would refuse a chat question's bad `read_level`
+// as "worklet: …"). This adds the SURFACE: an absent or unpermitted level
+// resolves through [statelog.LevelFor]; a dashboard may choose. A floor on a
+// log the question does not read stays the reader's refusal ([ClassifyFailure]).
 func Freshness(p Params) (statelog.Freshness, error) {
 	got, err := statelog.ParseFreshness(p)
 	if err != nil {
@@ -176,18 +125,11 @@ type WorkReader interface {
 // any other error (a node that has not met its company yet answers
 // [ErrUnavailable]) when this node cannot tell yet.
 //
-// FOR THE QUESTIONS THAT MERGE SEVERAL HALVES, `company_feed` and
-// `decisions`. A question about one half is simply unanswerable where the half
-// is absent, and its own read says so. A merged answer is not: the half it
-// cannot read is a part to leave out, and the rest is still the answer.
-// Without a way to ask, each of them read the absent half, met its refusal and
-// refused WHOLE, so a company on Jira saw no executor parked on a question
-// to a person and no schedule run in its feed.
+// It serves the questions that merge several halves, `company_feed` and
+// `decisions`: the absent half is left out, not a refusal of the whole.
 //
-// OPTIONAL, read by [keptHere]: a source that does not implement it is one
-// whose half is here whenever the source is present at all, which is every
-// source but the engine's live ones (internal/api's `NativeSources`), whose
-// half can be absent by configuration while the source is wired.
+// OPTIONAL, read by [keptHere]: a source without it has its half here whenever
+// it is present, every source but the engine's live ones (`NativeSources`).
 type Keeper interface {
 	Kept() error
 }
@@ -228,21 +170,16 @@ type PageReader interface {
 
 func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	now := s.clock()
-	// THROUGH THE EXPANSION, so a `view=` or a `preset=` is the set of
-	// defaults it stands for rather than a key nothing reads.
+	// THROUGH THE EXPANSION, so a `view=` or `preset=` is the defaults it
+	// stands for rather than a key nothing reads.
 	//
-	// THE VIEWER IS THE CALLER and is not a parameter at all. It was one,
-	// read out of the bag and deleted from it again — so a screen selected
-	// WHOSE queue to render by typing a handle, on a surface where
-	// `preset=my_queue`, `preset=priorities` and every personal expansion
-	// resolve against it. Whose record that is has an answer now: the
-	// principal the guard resolved, under the name every tool writes their
-	// record with — [iam.RecordOwner] — so `preset=priorities` reads back
-	// the list `set_priorities` wrote for an unbound caller too.
+	// THE VIEWER IS THE CALLER, never a parameter: a typed handle would pick
+	// WHOSE queue `preset=my_queue` and every personal expansion render. The
+	// record owner is [iam.RecordOwner], the name every tool writes under, so
+	// `preset=priorities` reads back `set_priorities` for an unbound caller too.
 	//
-	// THE VIEWER'S OWN PROJECT comes from the chart, because
-	// `preset=my_queue` asks what is unclaimed in THEIR container and an
-	// unscoped second arm offers every unassigned task in the company.
+	// THE VIEWER'S OWN PROJECT comes from the chart: `my_queue` asks what is
+	// unclaimed in THEIR container, not every unassigned task in the company.
 	principal, how := iam.From(ctx)
 	if how == iam.Unknown {
 		return nil, unresolved(ctx, "work_items")
@@ -368,29 +305,17 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	// THE WHOLE FRESHNESS. This handed over the level alone once, on the
-	// claim that a single row has no set for a bound to be enforced
-	// against — but the bound is about this node's LAG, checked before
-	// any row is read, and a detail is exactly as far behind as a board
-	// on the same node. The floor travels for the same reason.
+	// THE WHOLE FRESHNESS, not the level alone: the bound is about this
+	// node's LAG, so a detail is as far behind as a board on the same node.
 	//
-	// EVERY PART, the custom fields included: a screen draws a properties
-	// panel from the ANNOTATED values — each with the slug, name and type
-	// that explain it — and a detail that left them out rendered a task
-	// filed with a severity as one that carried none, beside a board that
-	// had just filtered on that very field.
+	// EVERY PART, custom fields included (else a task filed with a severity
+	// shows as one with none), THE CHART so the panel reads "Engineering"
+	// where the row holds `eng` ([worklet.TaskDetail.Units]), and THE
+	// COMPANY'S CLOCK so the due date matches the board's overdue mark
+	// ([worklet.DueStanding]).
 	//
-	// AND THE CHART, so the properties panel reads "Engineering" where the
-	// row holds `eng` — the same seam the board column and the project
-	// directory resolve through, so one screen cannot call a team two
-	// things. See [worklet.TaskDetail.Units].
-	//
-	// AND THE COMPANY'S CLOCK, so the rail's due date says how it stands on
-	// the calendar the board's overdue mark was cut on — see
-	// [worklet.DueStanding].
-	//
-	// DECIDED BEFORE IT IS ANSWERED, and twice for somebody without the
-	// tracker — see [Sources.mayReadItem].
+	// DECIDED BEFORE IT IS ANSWERED, twice for somebody without the tracker:
+	// see [Sources.mayReadItem].
 	principal, how := iam.From(ctx)
 	if how == iam.Unknown {
 		return nil, unresolved(ctx, "work_item")
@@ -453,15 +378,10 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 // mayReadItem decides `get_work_item` ([authz.ActionWorkRead]) on object for
 // principal, and renders the decision as the error this surface refuses with.
 //
-// # Read the item, then decide again, only for somebody without Worklet
-//
-// A tracker holder reads any item, which the table answers before anything is
-// read. Somebody WITHOUT it reads one item: the one an open ask on it names
-// them on (ADR-0033's asked arm), so they can read what they were asked and
-// answer it. Only the item says whether an ask names them, so the table
-// answers that caller [authz.ErrUnresolved] — read it, resolve its asks, and
-// ask again — and this reports it as unread=true with no error. The second
-// decision, on the object the read resolved, is the answer.
+// Somebody WITHOUT Worklet reads only the item an open ask names them on
+// (ADR-0033's asked arm). Only the item says so, so the table answers
+// [authz.ErrUnresolved]; this reports unread=true with no error, the caller
+// reads the item, resolves its asks and decides again on the resolved object.
 //
 // AN UNDECIDABLE DECISION IS [ErrUnavailable] and never a refusal, for
 // [Sources.mayRead]'s reason.
@@ -484,22 +404,14 @@ func (s Sources) mayReadItem(ctx context.Context, principal iam.Principal,
 // workComments answers one page of a task's thread, walking back from the
 // newest.
 //
-// ITS OWN QUESTION BESIDE `work_item`, which returns the newest
-// [worklet.DetailComments] and a cursor, and nothing read that cursor: the
-// detail ignores it, so every comment older than the twentieth was
-// unreachable from every screen. A thread is also asked for far more often
-// than the rest of the detail (the Inbox's pane draws the conversation around
-// one notice and never the task's history, fields or links), so it is the
-// thread alone rather than the detail with a cursor bolted on.
+// ITS OWN QUESTION BESIDE `work_item`, whose cursor the detail ignores; a
+// thread is asked far more often than the rest of the detail.
 //
-// THE SAME READER AND THE SAME TRANSACTION as the detail, so a page and the
-// coverage it reports describe one instant, and a cursor from `work_item`'s
-// own `comments_cursor` continues exactly where that page stopped. `limit`
-// is held to [worklet.MaxCommentPage].
-//
-// `thread` narrows the pages to one comment's conversation and `with_root`
-// keeps that comment in it ([worklet.CommentThread]), so a pane drawing one
-// question's replies is told there are earlier ones only when there are.
+// THE SAME READER AND TRANSACTION as the detail, so a page and its coverage
+// describe one instant and `work_item`'s `comments_cursor` continues exactly
+// where that page stopped. `limit` is held to [worklet.MaxCommentPage].
+// `thread` narrows to one comment's conversation and `with_root` keeps that
+// comment in it ([worklet.CommentThread]).
 func (s Sources) workComments(ctx context.Context, p Params) (any, error) {
 	ref := strings.TrimSpace(p.String("item"))
 	if ref == "" {
@@ -597,25 +509,16 @@ func (s Sources) workItemTurns(ctx context.Context, p Params) (any, error) {
 
 // workViews answers one container's view strip.
 //
-// # Why the viewer is the CALLER and not a parameter
-//
-// A personal view is private to its OWNER, and the reader enforces that in
-// SQL. What the viewer selects is WHOSE strip to render — their personal views
-// and their pins — and it used to be a `viewer=` parameter on the reasoning
-// that a screen reaches this before it knows who is looking.
-//
-// A screen knows now. The principal the guard resolved names whose record it
-// is, so the parameter had exactly one honest value and any other was a free
-// choice of whose record to read: anybody could walk the org chart — which
-// `org` answers — and page through every seat's pinned views by handle.
+// The viewer is the CALLER, never a parameter: it selects WHOSE personal views
+// and pins render, and the reader enforces ownership in SQL. A typed handle
+// would let anybody walk the org chart (`org` answers it) and page through
+// every seat's pinned views.
 //
 // THE VIEWER IS [iam.RecordOwner]'s, the name `set_pins` and `save_work_view`
-// write under. It was the principal's SEAT, which is nothing for an unbound
-// person or a token — so their assistant pinned views and saved personal ones
-// under their login, and their strip, read under no name, showed the shared
-// views alone. A caller the engine can name nothing for still gets the shared
-// strip, which is the documented meaning of an empty
-// [worklet.ViewQuery.Viewer].
+// write under, not the principal's SEAT, which is nothing for an unbound person
+// or a token (their strip would show the shared views alone). A caller the
+// engine can name nothing for still gets the shared strip, the documented
+// meaning of an empty [worklet.ViewQuery.Viewer].
 func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 	container, err := viewContainer(p)
 	if err != nil {
@@ -788,22 +691,17 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 	return answer, nil
 }
 
-// workPerson answers one human's own state — their inbox, their queue and
-// their pins.
+// workPerson answers one human's own state: inbox, queue and pins.
 //
-// SCOPED BY [Sources.recordHandle], the same rule `work_my_work` and
-// `work_inbox` take: an absent handle is the caller's own record, and naming
-// anybody else's is [authz.ActionPersonRead] — theirs, whoever leads them, or
-// an admin, each with the tracker.
+// SCOPED BY [Sources.recordHandle], as `work_my_work` and `work_inbox` are: an
+// absent handle is the caller's own record, anybody else's is
+// [authz.ActionPersonRead] (theirs, whoever leads them, or an admin).
 //
-// It DEMANDED a handle and checked nothing, on the reasoning that the whole
-// surface is guarded so the caller already holds the company's credential.
-// That reasoning stopped holding once a guarded surface meant "somebody
-// signed in" rather than "the operator": every person holding Worklet
-// reaches this question, and its answer carries the richest personal record
-// the engine keeps — somebody's unread notices, what they mean to work on
-// next, and who set that order. The parameter selected whose. A scope rule
-// two of the three personal questions follow is not a rule.
+// A guarded surface means "somebody signed in", not "the operator": every
+// holder of Worklet reaches this question, whose answer is the richest
+// personal record the engine keeps (unread notices, next work, who set the
+// order), so the handle parameter must be scoped like the other two personal
+// questions.
 func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
 	handle, err := s.recordHandle(ctx, authz.ActionPersonRead,
 		strings.TrimSpace(p.String("handle")))
