@@ -1,13 +1,14 @@
 /**
- * A repository's pictures, shown from its raw route (`downloads.ts`): the bytes
- * read with the reader's session and shown through a typed object URL, since
- * the route answers every binary file as `application/octet-stream`.
+ * A repository's pictures, shown from its raw route (`downloads.ts`'s
+ * rawHref): the bytes read with the reader's session (`rest.blob`) and shown
+ * through a typed object URL, since the route answers every binary file as
+ * `application/octet-stream`.
  */
 import { useEffect, useState } from "react";
 import { Skeleton } from "@crewlethq/ui";
 import { baseName } from "~/lib/code.ts";
 import { fmtBytes } from "~/lib/format.ts";
-import { rawHref } from "./downloads.ts";
+import { pathSegment, rest } from "~/protocol/index.ts";
 
 /** Each picture's media type, by its file's extension. */
 const PICTURE_TYPES: Readonly<Record<string, string>> = {
@@ -85,14 +86,9 @@ async function readPicture(
   const type = pictureType(path);
   if (!type) return [path, { failed: "unread" }];
   try {
-    const res = await fetch(rawHref(repo, commit, path), { credentials: "same-origin", signal });
-    if (!res.ok) return [path, { failed: "unread" }];
-    if (Number(res.headers.get("Content-Length") ?? 0) > PICTURE_MAX_BYTES) {
-      void res.body?.cancel();
-      return [path, { failed: "too_large" }];
-    }
-    const bytes = await res.arrayBuffer();
-    if (bytes.byteLength > PICTURE_MAX_BYTES) return [path, { failed: "too_large" }];
+    const query = new URLSearchParams({ rev: commit, path });
+    const bytes = await rest.blob(`/git/${pathSegment(repo)}/-/raw?${query}`, signal);
+    if (bytes.size > PICTURE_MAX_BYTES) return [path, { failed: "too_large" }];
     return [path, { url: URL.createObjectURL(new Blob([bytes], { type })) }];
   } catch {
     return [path, { failed: "unread" }];
