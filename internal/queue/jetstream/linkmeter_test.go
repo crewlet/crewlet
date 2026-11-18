@@ -15,6 +15,7 @@ import (
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
@@ -438,12 +439,7 @@ func TestALeafLinksAgainAcrossALinkWhoseQueueIsDeep(t *testing.T) {
 // Mutant: the tunnel handed a death of its own — the broker's never closes.
 func TestALeafWhoseTunnelStopsAcceptingIsADeadBroker(t *testing.T) {
 	t.Parallel()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	nowhere := ln.Addr().String()
-	_ = ln.Close()
+	nowhere := httpxtest.Refusing(t)
 	cfg := testTimings(Config{FleetAuth: testFleetAuth()})
 	cfg.ServerName = "leaf"
 	cfg.LeafURLs = []string{"nats-leaf://" + nowhere}
