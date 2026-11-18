@@ -193,7 +193,7 @@ func readOpenGraph(ctx context.Context, tx *sql.Tx) (map[string]*openNode, error
 	read := 0
 	for rows.Next() {
 		var blocker, bKey, bHolder, bStatus, task, tKey, tHolder string
-		if err := rows.Scan(&blocker, &bKey, &bHolder, &bStatus, &task, &tKey, &tHolder); err != nil {
+		if err = rows.Scan(&blocker, &bKey, &bHolder, &bStatus, &task, &tKey, &tHolder); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("worklet: scan an open wait: %w", err)
 		}
@@ -205,7 +205,7 @@ func readOpenGraph(ctx context.Context, tx *sql.Tx) (map[string]*openNode, error
 		b.waiters = append(b.waiters, task)
 		node(task, tKey, tHolder, "")
 	}
-	if err := closeRows(rows); err != nil {
+	if err = closeRows(rows); err != nil {
 		return nil, fmt.Errorf("worklet: read the open waits: %w", err)
 	}
 	statement, args = openQuestionsStatement()
