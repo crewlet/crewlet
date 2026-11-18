@@ -1,6 +1,11 @@
 package sandbox
 
-import "context"
+import (
+	"context"
+	"errors"
+
+	"github.com/crewlet/crewlet/internal/queue"
+)
 
 // THE SEAT'S INBOX IS HELD WHILE A RUN HOLDS THE SEAT, OR AN ANSWER IS OWED.
 //
@@ -81,6 +86,24 @@ import "context"
 // queue client, keyed on the subscription, and is derived from this node's
 // counts of the seat's runs. A detach drops it with the attachment, and the
 // seat's next holder takes its own from its recovery pass.
+//
+// # A hold is taken for the attachment the seat holds
+//
+// Each hold names the attachment of the seat's inbox it is for
+// ([queue.Attachment]): the one the seat's recovery was handed as this node
+// took the seat ([Coordinator.RecoverSeat]), read in the step that decides the
+// hold. A node's release detaches the inbox before it tells the coordinator,
+// so a decision made while the seat was held here can reach the queue after
+// the detach, after the coordinator has forgotten the seat, and after this
+// node has taken the seat back. Named by the subscription alone, that hold was
+// put back on the inbox and carried onto the next attachment, with nothing on
+// this node recording it: a seat retaken with nothing to recover attached
+// held, and nothing lifted it, so it consumed no mail here until it moved.
+// Named by its attachment, the queue refuses it ([queue.ErrAttachmentGone]),
+// and a lift made for an ended attachment lifts nothing, never the hold the
+// next attachment's recovery took under the same reason. So nothing
+// compensates for a late call: no lift follows a hold the seat was released
+// under, which would itself race that recovery's hold.
 
 // SeatHold takes and lifts the hold on a seat's inbox — see the top of this
 // file for when.
@@ -94,11 +117,15 @@ import "context"
 // CALLED WITH THE SEAT'S HANDLE, which is what this node's own counts are kept
 // under, and IMPLEMENTED ON ITS ID: the inbox a hold sits on is named by the
 // seat's id, a pure function of its immutable handle (ADR-0013), so the
-// implementation derives the id and holds the mailbox it names — as every
+// implementation derives the id and holds the mailbox it names, as every
 // other hold on a seat's mailbox is keyed.
+//
+// AND WITH THE ATTACHMENT the hold is for, which the queue holds it to: Hold
+// refuses one that has ended with [queue.ErrAttachmentGone], and Release under
+// one lifts nothing.
 type SeatHold interface {
-	Hold(ctx context.Context, handle string) error
-	Release(ctx context.Context, handle string) error
+	Hold(ctx context.Context, handle string, inbox queue.Attachment) error
+	Release(ctx context.Context, handle string, inbox queue.Attachment) error
 }
 
 // wantsHoldLocked reports whether a seat's inbox must be held: a run holds the
@@ -148,13 +175,17 @@ func (c *Coordinator) reconcileHold(ctx context.Context, handle string) {
 		}
 		c.holdBusy[handle] = true
 		gen := c.holdGen[handle]
+		// THE ATTACHMENT THIS DECISION IS FOR, read with it: a release that
+		// lands before the queue call ends it, and the queue then refuses
+		// the hold rather than carry it onto the next attachment.
+		inbox := c.inboxes[handle]
 		c.mu.Unlock()
 
 		var err error
 		if want {
-			err = c.hold.Hold(ctx, handle)
+			err = c.hold.Hold(ctx, handle, inbox)
 		} else {
-			err = c.hold.Release(ctx, handle)
+			err = c.hold.Release(ctx, handle, inbox)
 		}
 
 		c.mu.Lock()
@@ -175,6 +206,19 @@ func (c *Coordinator) reconcileHold(ctx context.Context, handle string) {
 			}
 		}
 		c.mu.Unlock()
+		if errors.Is(err, queue.ErrAttachmentGone) {
+			// THE ATTACHMENT HAS ENDED: the seat's release detached it, or
+			// this node holds no attachment of the seat yet. Nothing is
+			// held, and nothing needs to be: the detach dropped every hold,
+			// and the seat's next recovery takes the hold its own attachment
+			// needs. Decided again if the seat was forgotten meanwhile.
+			log.DebugContext(ctx, "sandbox_seat_hold_attachment_ended", "agent", handle,
+				"attachment", uint64(inbox))
+			if !dirty {
+				return
+			}
+			continue
+		}
 		if err != nil {
 			// Logged and left: a hold that could not be taken lets the
 			// seat's mail reach the screening, which defers it and asks
@@ -192,18 +236,29 @@ func (c *Coordinator) reconcileHold(ctx context.Context, handle string) {
 	}
 }
 
-// forgetHold drops what this node believes about a seat's hold, for a seat it
-// has released: the release DETACHED the inbox, and a detach drops every hold
-// the attachment carried, so there is nothing to lift — and a Release from here
-// would act on the subscription this node takes its own hold on again the
-// moment it re-acquires the seat.
+// forgetHold drops what this node believes about a seat's hold, and the
+// attachment it was taken for, for a seat it has released: the release
+// DETACHED the inbox, and a detach drops every hold the attachment carried, so
+// there is nothing to lift.
 //
 // A GENERATION, because a reconcile may be out at the queue as this runs: left
 // to finish, it would record a hold on an attachment that no longer exists,
-// and a seat re-acquired here would then be believed held and never be.
+// and a seat re-acquired here would then be believed held and never be. What
+// that reconcile asked of the queue was for the ended attachment, so the queue
+// refused it and it gates nothing.
 func (c *Coordinator) forgetHold(handle string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.held, handle)
+	delete(c.inboxes, handle)
 	c.holdGen[handle]++
+}
+
+// attachInbox records the attachment of a seat's inbox this node is taking the
+// seat under, which every hold of it is taken for from here
+// ([Coordinator.RecoverSeat]).
+func (c *Coordinator) attachInbox(handle string, inbox queue.Attachment) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.inboxes[handle] = inbox
 }

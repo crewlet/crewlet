@@ -49,7 +49,7 @@ func TestARunStillWorkingIsHandedToTheNodeThatRecoversItsSeat(t *testing.T) {
 	if err := rig.recoverSeat(t.Context(), "node-c:1", 3); err != nil {
 		t.Fatalf("RecoverSeat at the newer lease: %v", err)
 	}
-	if err := stale.RecoverSeat(t.Context(), "swe", "node-b:1", 2); err != nil {
+	if err := stale.RecoverSeat(t.Context(), "swe", "node-b:1", 2, rigInbox); err != nil {
 		t.Fatalf("RecoverSeat at the older lease: %v", err)
 	}
 }

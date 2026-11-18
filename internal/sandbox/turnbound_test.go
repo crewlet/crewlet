@@ -3,7 +3,9 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -240,6 +242,167 @@ func TestAResumeThatKeepsFailingIsGivenUp(t *testing.T) {
 	ended, _ := rig.ending("t1", types.ExecutorFailureResumeFailing)
 	if want := "kind of: the turn could not be re-entered"; ended.ErrorKind != want {
 		t.Errorf("ErrorKind = %q, want %q", ended.ErrorKind, want)
+	}
+}
+
+// A RESUME THE NODE FAILED IS NOT THE RUN'S FAILURE, and counts nothing toward
+// the give-up. Half an hour of a coordination store that did not answer the
+// read of where the turn's writes are minted failed every attempt, and
+// counted, it ended a run whose job had finished, though the first attempt
+// after the outage would have resumed it. The failure is handed back as any
+// failure is, and the run waits on; the run's own failure after the outage is
+// still counted, from one.
+//
+// Mutation: count every failure that is not a wait, whatever
+// CoordinatorOptions.NodesFailure says, and the third attempt, half an hour
+// in, ends the run.
+func TestAResumeTheNodeFailedIsNotCountedTowardItsGiveUp(t *testing.T) {
+	t.Parallel()
+	outage := errors.New("coordination store unavailable: nats: timeout")
+	rig := newCoordRigWith(t, func(opts *CoordinatorOptions) {
+		opts.NodesFailure = func(_ context.Context, err error) bool { return errors.Is(err, outage) }
+	})
+	rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+	rig.resumer.failWith(fmt.Errorf("engine: read the rebase: %w", outage))
+
+	attempt := func() error {
+		payload, ev := rig.completion("t1")
+		return rig.coordinator.OnCompleted(t.Context(), payload, ev)
+	}
+	for i, after := range []time.Duration{0, 20 * time.Minute, 11 * time.Minute, 5 * time.Minute} {
+		rig.now = rig.now.Add(after)
+		if err := attempt(); err == nil {
+			t.Fatalf("failure %d was not handed back for a retry", i+1)
+		}
+		if got := rig.get("t1"); got.Status != StatusRunning || got.Launch.ResumeFailures != 0 {
+			t.Fatalf("after the node's failure %d, thirty-six minutes at most into the outage, the row "+
+				"is %s with %d failures counted, want it running with none", i+1, got.Status,
+				got.Launch.ResumeFailures)
+		}
+	}
+	if rig.gone("t1") || len(rig.failures()) != 0 {
+		t.Fatalf("a run whose resume only the node failed was ended: failures %+v", rig.failures())
+	}
+	rig.resumer.failWith(errors.New("the turn could not be re-entered"))
+	if err := attempt(); err == nil {
+		t.Fatal("the run's own failure was not handed back for a retry")
+	}
+	if got := rig.get("t1"); got.Launch.ResumeFailures != 1 {
+		t.Fatalf("the run's own failure after the outage counted %d, want 1", got.Launch.ResumeFailures)
+	}
+}
+
+// A RESUME ANOTHER BUILD CAN MAKE COUNTS TOWARD THE GIVE-UP ONLY ONCE NO LIVE
+// NODE CAN. A parked state a newer build wrote, met by an older node still
+// holding the seat through a roll, failed every attempt as a routing failure,
+// and counted, it ended at half an hour a run a newer node had parked, filed
+// as the engine's own defect. While a node that reads the state is live, the
+// failure is handed back and counts nothing; once none is, as after a
+// rollback, it counts from one, and the give-up ends the run as it ends any
+// other, so the seat is not held for ever.
+//
+// Mutation: count it whatever the fleet says, and the newer node's half hour
+// ends the run; skip it whatever the fleet says, and the rollback holds the
+// seat for ever.
+func TestAResumeAnotherBuildCanMakeIsCountedOnlyOnceNoLiveNodeCan(t *testing.T) {
+	t.Parallel()
+	var newerLive atomic.Bool
+	newerLive.Store(true)
+	var asked atomic.Value
+	rig := newCoordRigWith(t, func(opts *CoordinatorOptions) {
+		opts.ResumableElsewhere = func(_ context.Context, run PendingRun) (bool, error) {
+			asked.Store(run.TurnID)
+			return newerLive.Load(), nil
+		}
+	})
+	rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+	rig.resumer.failWith(fmt.Errorf("%w: execstate: unknown version: 9 (this build reads 8)",
+		ErrResumeElsewhere))
+
+	attempt := func() error {
+		payload, ev := rig.completion("t1")
+		return rig.coordinator.OnCompleted(t.Context(), payload, ev)
+	}
+	for i, after := range []time.Duration{0, 20 * time.Minute, 11 * time.Minute, 5 * time.Minute} {
+		rig.now = rig.now.Add(after)
+		if err := attempt(); !errors.Is(err, ErrResumeElsewhere) {
+			t.Fatalf("failure %d = %v, want it handed back for a node that can resume it", i+1, err)
+		}
+		if got := rig.get("t1"); got.Status != StatusRunning || got.Launch.ResumeFailures != 0 {
+			t.Fatalf("after failure %d with a node of the newer build live, the row is %s with %d "+
+				"failures counted, want it running with none", i+1, got.Status, got.Launch.ResumeFailures)
+		}
+	}
+	if asked.Load() != "t1" {
+		t.Fatalf("the fleet was asked about %v, want the run that failed, t1", asked.Load())
+	}
+	// THE ROLLBACK: no live node reads the state any more.
+	newerLive.Store(false)
+	for i, after := range []time.Duration{0, 20 * time.Minute} {
+		rig.now = rig.now.Add(after)
+		if err := attempt(); err == nil {
+			t.Fatalf("failure %d after the rollback was not handed back", i+1)
+		}
+		if got := rig.get("t1"); got.Launch.ResumeFailures != i+1 {
+			t.Fatalf("failure %d after the rollback counted %d, want %d", i+1,
+				got.Launch.ResumeFailures, i+1)
+		}
+	}
+	rig.now = rig.now.Add(11 * time.Minute)
+	if err := attempt(); err != nil {
+		t.Fatalf("the failure that spans the give-up window after the rollback asked for a retry: %v", err)
+	}
+	if !rig.gone("t1") || !rig.endedWith("t1", types.ExecutorFailureResumeFailing) {
+		t.Fatalf("the run no live node can resume was not given up: failures %+v", rig.failures())
+	}
+}
+
+// WHAT THE GIVE-UP COUNTS OF A RESUME THIS NODE CANNOT MAKE, by the fleet's
+// answer: one another node or build can make counts nothing while a live node
+// may, nor while the fleet cannot be read, and counts once none may; one no
+// node gets past (a run with no parked state) counts whatever the fleet says.
+//
+// Mutation: count a failure whose fleet read failed, or skip every resume
+// this node cannot make, and a row goes red.
+func TestWhatTheGiveUpCountsOfAResumeThisNodeCannotMake(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		err     error
+		live    bool
+		readErr error
+		counted int
+	}{
+		"another build's, a node of it live": {err: fmt.Errorf("%w: a newer state",
+			ErrResumeElsewhere), live: true},
+		"another build's, none live": {err: fmt.Errorf("%w: a newer state", ErrResumeElsewhere),
+			counted: 1},
+		"another build's, the fleet unread": {err: fmt.Errorf("%w: a newer state", ErrResumeElsewhere),
+			readErr: errors.New("coordination store unavailable")},
+		"one no node gets past, a node live": {err: fmt.Errorf("%w: run t1 has no parked turn state",
+			ErrResumeUnavailable), live: true, counted: 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRigWith(t, func(opts *CoordinatorOptions) {
+				opts.ResumableElsewhere = func(context.Context, PendingRun) (bool, error) {
+					return tc.live, tc.readErr
+				}
+			})
+			rig.launch("t1")
+			rig.runner.Finish(Result{Success: true, Text: "done"})
+			rig.resumer.failWith(tc.err)
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+				t.Fatal("the premise: a resume that failed is handed back")
+			}
+			if got := rig.get("t1").Launch.ResumeFailures; got != tc.counted {
+				t.Errorf("%v counted %d toward the give-up, want %d", tc.err, got, tc.counted)
+			}
+		})
 	}
 }
 

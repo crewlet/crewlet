@@ -621,6 +621,11 @@ func (k *Keeper) run(ctx context.Context) {
 }
 
 // Handle writes one custody batch into this node's log and settles it.
+//
+// A BATCH IT COULD NOT WRITE OR SETTLE GOES BACK for a retry, as THIS NODE'S
+// OWN failure unless the store refused the batch itself ([sendBack]), so a
+// batch an outage, this node's leaving or its own store failing spends is
+// kept with the custody group's unhandled deliveries, never with its poison.
 func (k *Keeper) Handle(ctx context.Context, ev *events.Event) queue.Result {
 	batch, ok := events.DataAs[*types.CustodyBatch](ev)
 	if !ok {
@@ -648,7 +653,7 @@ func (k *Keeper) Handle(ctx context.Context, ev *events.Event) queue.Result {
 	if err := k.log.WriteCustody(ctx, store.CustodyBatch{
 		ID: id, Origin: ev.Node, Records: records,
 	}, k.now()); err != nil {
-		return queue.Nak(fmt.Errorf("observe: write custody batch %s: %w", id, err))
+		return sendBack(ctx, fmt.Errorf("observe: write custody batch %s: %w", id, err))
 	}
 	if err := k.settle(ctx, id); err != nil {
 		if errors.Is(err, coord.ErrCustodyUndecidable) {
@@ -662,9 +667,49 @@ func (k *Keeper) Handle(ctx context.Context, ev *events.Event) queue.Result {
 		// UNSETTLED, and said by the pass that settles it; the delivery
 		// goes back, and whichever node takes it next is told the same
 		// keeper this one will be.
-		return queue.Nak(err)
+		return sendBack(ctx, err)
 	}
 	return queue.Ack()
+}
+
+// sendBack returns a batch Handle could not write or settle for a retry: as
+// the batch's own failure ([queue.Nak]) where the store refused it
+// ([store.ErrCustodyRefused]), and as THIS NODE'S OWN ([queue.NakNode])
+// otherwise. Both come back on the same backoff and spend the same budget;
+// what differs is where a batch whose budget is spent is kept
+// ([queue.RetiredTo]). Counted as the batch's, an outage, this node's leaving
+// or its own store failing put a stateless node's healthy events with the
+// custody group's poison; as the node's, they are kept with its unhandled
+// deliveries, as a batch no member handled.
+//
+// THE BATCH'S IS THE ONE FAILURE A BATCH CAN CAUSE, so it is the one told by
+// a mark: a batch no node can write, one naming no id or origin or holding a
+// record that cannot be stored, which the store refuses before it writes
+// anything. Everything else Handle meets names nothing of a batch but its id,
+// and is this node's:
+//
+//   - what the queue tells as its node's ([queue.NodeFault]: a broker that did
+//     not answer, a queue no longer live, a delivery whose context ended,
+//     which the keeper's leaving the group does to a batch in hand), the test
+//     internal/notify's wakes and internal/engine's seat mailbox and control
+//     topic ask too, and which wins over the mark: a refusal met as the keeper
+//     left is the leaving's;
+//   - a claim that named no keeper: every error a claim answers is UNKNOWN by
+//     its contract ([coord.Custody]), the store could not say, save one
+//     wrapping [coord.ErrCustodyUndecidable], the store's definite answer that
+//     the record cannot be read, which Handle acknowledges before anything is
+//     sent back; told by the step that met it and never by what a backend
+//     wrapped it in, since [coord.ErrUnavailable] is the KV backend's wrapping
+//     and an error a backend left unwrapped is no less unknown;
+//   - this node's own store failing: the write's transaction after every
+//     record validated, and the settle, which takes only the batch's id and
+//     the claim's answer. A full disk or a busy store fails a healthy batch
+//     that a peer, or this node a moment later, writes whole.
+func sendBack(ctx context.Context, err error) queue.Result {
+	if !queue.NodeFault(ctx, err) && errors.Is(err, store.ErrCustodyRefused) {
+		return queue.Nak(err)
+	}
+	return queue.NakNode(err)
 }
 
 // settle claims a batch this node wrote and keeps or deletes its copy on the

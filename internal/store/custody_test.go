@@ -214,3 +214,61 @@ func TestSettlingABatchNeverWrittenHereDoesNothing(t *testing.T) {
 		t.Error("settling an unknown batch deleted another batch's rows")
 	}
 }
+
+// A REFUSAL OF THE BATCH IS MARKED, AND A FAILURE OF THIS NODE'S STORE IS NOT.
+// The keeper sends a batch it could not write back as the batch's own failure
+// only where the store refused the batch itself (store.ErrCustodyRefused): a
+// batch no node can write, one naming no id or origin or holding a record that
+// cannot be stored. A write whose records all validated and whose transaction
+// then failed, and a settle that failed, are this node's store failing, and
+// carry no mark, so a healthy batch a closed, full or busy store failed is
+// never counted as poison.
+//
+// Mutation: leave the mark off any refusal and its row goes red; mark the
+// write's transaction failure as a refusal and the closed store's write row
+// does.
+func TestACustodyRefusalIsMarkedAndAStoreFailureIsNot(t *testing.T) {
+	t.Parallel()
+	refusals := map[string]func(b *store.CustodyBatch){
+		"a batch with no id":         func(b *store.CustodyBatch) { b.ID = "" },
+		"a batch with no origin":     func(b *store.CustodyBatch) { b.Origin = "" },
+		"a record with no id":        func(b *store.CustodyBatch) { b.Records[1].ID = "" },
+		"a record with no timestamp": func(b *store.CustodyBatch) { b.Records[0].Time = time.Time{} },
+	}
+	for name, refuse := range refusals {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			b := custodyBatch("refused", time.Now().UTC())
+			refuse(&b)
+			err := open(t).Events().WriteCustody(t.Context(), b, time.Now())
+			if !errors.Is(err, store.ErrCustodyRefused) {
+				t.Fatalf("write = %v, want the batch refused (store.ErrCustodyRefused)", err)
+			}
+		})
+	}
+	t.Run("a write and a settle this node's closed store failed", func(t *testing.T) {
+		t.Parallel()
+		db := open(t)
+		log := db.Events()
+		if err := log.WriteCustody(t.Context(), custodyBatch("written", time.Now().UTC()), time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		err := log.WriteCustody(t.Context(), custodyBatch("healthy", time.Now().UTC()), time.Now())
+		if err == nil {
+			t.Fatal("a write on a closed store succeeded")
+		}
+		if errors.Is(err, store.ErrCustodyRefused) {
+			t.Errorf("a healthy batch a closed store failed to write is marked refused: %v", err)
+		}
+		err = log.SettleCustody(t.Context(), "written", true)
+		if err == nil {
+			t.Fatal("a settle on a closed store succeeded")
+		}
+		if errors.Is(err, store.ErrCustodyRefused) {
+			t.Errorf("a settle a closed store failed is marked refused: %v", err)
+		}
+	})
+}

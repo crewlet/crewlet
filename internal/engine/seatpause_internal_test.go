@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,10 +19,12 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 // pausingEngine is an engine with a queue, a fleet store and its pause watch
@@ -88,6 +91,18 @@ func (s *seatTurns) seen() []string {
 	return slices.Clone(s.work)
 }
 
+// takeInbox records seat's inbox attachment on q with e, as a node's
+// acquisition hands it to the seat's preparation before the attach: every hold
+// e takes on the inbox names it.
+func takeInbox(t *testing.T, e *Engine, q queue.EventQueue, seat uuid.UUID) {
+	t.Helper()
+	at, err := q.Attachment(t.Context(), topics.AgentInbox(seat), topics.AgentInboxGroup(seat))
+	if err != nil {
+		t.Fatalf("Attachment: %v", err)
+	}
+	e.attachInbox(seat, at)
+}
+
 func attachSeat(t *testing.T, e *Engine, q *memory.Queue, handle string) *seatTurns {
 	t.Helper()
 	turns := &seatTurns{}
@@ -113,6 +128,7 @@ func attachSeat(t *testing.T, e *Engine, q *memory.Queue, handle string) *seatTu
 			return turn.Result{}, nil
 		},
 	}
+	takeInbox(t, e, q, seatOf(handle))
 	if err := q.SubscribeBatch(t.Context(), topics.AgentInbox(seatOf(handle)),
 		topics.AgentInboxGroup(seatOf(handle)),
 		func(ctx context.Context, evs []*events.Event) queue.Result {
@@ -184,8 +200,12 @@ func TestAPausedSeatParksAndHoldsItsInboxWhenADeliveryRacesTheHold(t *testing.T)
 	// The watch took the hold already. Dropping it here is the state a
 	// delivery races into: the pause has reached this node's copy and the
 	// inbox is not held yet.
+	at, err := q.Attachment(t.Context(), topics.AgentInbox(ceoSeat), topics.AgentInboxGroup(ceoSeat))
+	if err != nil {
+		t.Fatalf("Attachment: %v", err)
+	}
 	if err := q.ResumeTopic(t.Context(), topics.AgentInbox(ceoSeat),
-		topics.AgentInboxGroup(ceoSeat), seatPauseHold); err != nil {
+		topics.AgentInboxGroup(ceoSeat), at, seatPauseHold); err != nil {
 		t.Fatalf("ResumeTopic: %v", err)
 	}
 	sendTask(t, q, "ceo", "raced")
@@ -203,21 +223,56 @@ func TestAPausedSeatParksAndHoldsItsInboxWhenADeliveryRacesTheHold(t *testing.T)
 	})
 }
 
-// A PAUSED SEAT ACQUIRED HERE IS ATTACHED ALREADY HELD, and one that is not
-// paused is attached with nothing — the node's pre-attach question.
+// A PAUSED SEAT ACQUIRED HERE IS ATTACHED ALREADY HELD, for the attachment its
+// acquisition makes, and one that is not paused is attached with nothing: the
+// first step of the seat's preparation, which the node runs before the attach.
+// The seat is held elsewhere as the pause lands, so the pause itself takes
+// nothing here and the hold on the inbox is the acquisition's.
+//
+// Mutation: skip the hold, or take it for a seat that is not paused, and this
+// fails.
 func TestAPausedSeatIsAttachedUnderItsHold(t *testing.T) {
 	t.Parallel()
-	e, _, fleet := pausingEngine(t)
-	if got := e.attachHolds(ceoSeat); len(got) != 0 {
-		t.Fatalf("attachHolds(unpaused) = %v, want none", got)
+	ctx := t.Context()
+	e, q, fleet := pausingEngine(t)
+	subject, group := topics.AgentInbox(ceoSeat), topics.AgentInboxGroup(ceoSeat)
+	acquire := func() queue.Attachment {
+		t.Helper()
+		if _, err := q.Detach(ctx, subject, group); err != nil {
+			t.Fatalf("Detach: %v", err)
+		}
+		e.detachInbox(ceoSeat)
+		at, err := q.Attachment(ctx, subject, group)
+		if err != nil {
+			t.Fatalf("Attachment: %v", err)
+		}
+		if err := e.acquireInbox(ctx, ceoSeat, at); err != nil {
+			t.Fatalf("acquireInbox: %v", err)
+		}
+		return at
 	}
+
+	acquire()
+	if pauseHeld(q, ceoSeat) {
+		t.Fatal("a seat nobody paused was attached under the pause's hold")
+	}
+
+	e.detachInbox(ceoSeat)
 	pauseSeat(t, fleet, ceoSeat, false)
 	waitFor(t, "the copy to see the pause", func() bool {
 		_, paused, _ := e.pauseOf(ceoSeat)
 		return paused
 	})
-	if got := e.attachHolds(ceoSeat); !slices.Equal(got, []string{string(inbox.HoldSeatPaused)}) {
-		t.Errorf("attachHolds(paused) = %v, want the pause's hold", got)
+	at := acquire()
+	if !pauseHeld(q, ceoSeat) {
+		t.Fatal("a paused seat's acquisition left its inbox unheld")
+	}
+	e.pauses.mu.Lock()
+	recorded, held := e.pauses.held[ceoSeat]
+	e.pauses.mu.Unlock()
+	if !held || recorded != at {
+		t.Errorf("the hold is recorded for (%v, %v), want the attachment %v it was taken for",
+			recorded, held, at)
 	}
 }
 
@@ -470,5 +525,233 @@ roles:
 	}
 	if paused, _ := e.pauseOfHandle("chief"); paused {
 		t.Error("a colleague beside the paused seat reads paused")
+	}
+}
+
+// A RESUME THAT LANDS AS A PAUSED SEAT IS ACQUIRED LEAVES ITS INBOX UNHELD.
+//
+// The node that acquires a paused seat attaches its inbox already held, and the
+// resume that lifts the hold has to find it. So the hold is taken and recorded
+// as one step, under the lock every pause and resume is folded under: a resume
+// lands wholly before it (nothing paused, nothing held) or wholly after it (a
+// record, which it lifts). Recorded under that lock and taken after it, by the
+// node, a resume landing between the two lifted a hold that was not there yet,
+// and the hold the node took next was recorded nowhere: the seat attached held,
+// with nothing left to lift it until it moved or was paused and resumed again.
+//
+// The resume is staged at the queue's take of the hold, through the node's own
+// acquisition: it runs at once when nothing holds the pause lock, and otherwise
+// as soon as whatever holds it lets go, as a real one would.
+//
+// Mutation: take the hold outside the pause lock, and the seat attaches held.
+func TestAResumeAsAPausedSeatIsAcquiredLeavesItsInboxUnheld(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	e, q := engineOn(t)
+	subject, group := topics.AgentInbox(ceoSeat), topics.AgentInboxGroup(ceoSeat)
+
+	// THE SEAT HELD ELSEWHERE as the pause lands: this node holds no
+	// attachment of its inbox, so the pause takes nothing here.
+	if _, err := q.Detach(ctx, subject, group); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	e.detachInbox(ceoSeat)
+	e.adoptSeatPauses(ctx, map[uuid.UUID]coord.SeatPause{})
+	pause := coord.SeatPause{Seat: ceoSeat, By: "jane", ByKind: iam.ActorHuman, Reason: "looping"}
+	e.applySeatPause(ctx, coord.SeatPauseUpdate{Seat: ceoSeat, Pause: &pause})
+	if pauseHeld(q.(*memory.Queue), ceoSeat) {
+		t.Fatal("a pause took a hold on a seat this node does not hold")
+	}
+
+	staged := &resumeAtHold{
+		EventQueue: q, subject: subject, lock: &e.pauses.mu, resumed: make(chan struct{}),
+		resume: func() { e.applySeatPause(ctx, coord.SeatPauseUpdate{Seat: ceoSeat}) },
+	}
+	e.backends.Queue = staged
+	n, err := node.New(node.Config{
+		Queue:  staged,
+		Coord:  coordmem.New(),
+		NodeID: "node-a",
+		Owner:  "node-a:1",
+		Seats:  func() []placement.Seat { return nil },
+		Turn: func(context.Context, string, []*events.Event) queue.Result {
+			return queue.Ack()
+		},
+		// AS THE ENGINE WIRES ITS NODE ([New]).
+		SeatReady: func(ctx context.Context, s placement.Seat, lease coord.Lease, at queue.Attachment) error {
+			return e.prepareSeat(ctx, s, lease.Epoch, lease.Owner, at)
+		},
+	})
+	if err != nil {
+		t.Fatalf("node.New: %v", err)
+	}
+
+	seat := placement.Seat{ID: ceoSeat, Handle: "ceo"}
+	if err := n.OnAcquire(ctx, seat, coord.Lease{Epoch: 1, Owner: "node-a:1"}); err != nil {
+		t.Fatalf("OnAcquire: %v", err)
+	}
+	if !staged.fired.Load() {
+		t.Fatal("the acquisition of a paused seat took no pause hold before the attach")
+	}
+	<-staged.resumed
+
+	if _, paused, _ := e.pauseOf(ceoSeat); paused {
+		t.Fatal("the staged resume did not land")
+	}
+	if pauseHeld(q.(*memory.Queue), ceoSeat) {
+		t.Fatalf("the seat attached held %v by a pause a person had resumed",
+			q.(*memory.Queue).PauseHolds(subject, group))
+	}
+}
+
+// resumeAtHold is a queue that stages a person's resume at the take of the
+// pause hold on one inbox, once: at once, before the take, when nothing holds
+// lock, and otherwise on a goroutine that waits for lock as a real resume
+// does. resumed closes once the resume has run.
+type resumeAtHold struct {
+	queue.EventQueue
+	subject string
+	lock    *sync.Mutex
+	resume  func()
+	fired   atomic.Bool
+	resumed chan struct{}
+}
+
+func (s *resumeAtHold) PauseTopic(ctx context.Context, topic, group string, at queue.Attachment, reason string) error {
+	if topic == s.subject && reason == seatPauseHold && s.fired.CompareAndSwap(false, true) {
+		if s.lock.TryLock() {
+			s.lock.Unlock()
+			s.resume()
+			close(s.resumed)
+		} else {
+			go func() {
+				defer close(s.resumed)
+				s.resume()
+			}()
+		}
+	}
+	return s.EventQueue.PauseTopic(ctx, topic, group, at, reason)
+}
+
+// A PAUSE FOLDED WHILE A RESUME'S LIFT IS IN FLIGHT KEEPS THE SEAT HELD.
+//
+// The lift drops its record under the pause lock and makes its queue call
+// outside it, because the in-memory twin's resume drains into handlers that
+// read the pause copy. A pause folded in between holds the same attachment
+// again, which changes nothing on the queue, and records it, and the late
+// resume then lifts that pause's hold: the seat was paused and recorded held
+// with its inbox not held. So the lift reads the pause again once its call has
+// returned, and takes back the hold of one in force.
+//
+// The pause is staged at the queue's resume of the pause hold, before the
+// resume reaches the queue: inside the window, with the lock free.
+//
+// Mutation: drop the read after the resume, and the seat is left paused with
+// its inbox unheld.
+func TestAPauseFoldedAsAResumeIsLiftedKeepsTheSeatHeld(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	e, q := engineOn(t)
+	mq := q.(*memory.Queue)
+	e.adoptSeatPauses(ctx, map[uuid.UUID]coord.SeatPause{})
+	pause := coord.SeatPause{Seat: ceoSeat, By: "jane", ByKind: iam.ActorHuman, Reason: "looping"}
+	e.applySeatPause(ctx, coord.SeatPauseUpdate{Seat: ceoSeat, Pause: &pause})
+	if !pauseHeld(mq, ceoSeat) {
+		t.Fatal("the pause took no hold on a seat this node holds")
+	}
+
+	again := coord.SeatPause{Seat: ceoSeat, By: "pat", ByKind: iam.ActorHuman, Reason: "still looping"}
+	staged := &foldAtResume{EventQueue: q, subject: topics.AgentInbox(ceoSeat), hold: seatPauseHold,
+		fold: func() { e.applySeatPause(ctx, coord.SeatPauseUpdate{Seat: ceoSeat, Pause: &again}) }}
+	e.backends.Queue = staged
+	e.applySeatPause(ctx, coord.SeatPauseUpdate{Seat: ceoSeat})
+
+	if !staged.fired.Load() {
+		t.Fatal("the resume lifted no pause hold, so nothing was staged in its window")
+	}
+	if _, paused, _ := e.pauseOf(ceoSeat); !paused {
+		t.Fatal("the pause staged in the lift's window did not land")
+	}
+	if !pauseHeld(mq, ceoSeat) {
+		t.Errorf("the seat is paused by %s with its inbox unheld %v: the resume's late lift "+
+			"took the hold that pause owns", again.By, mq.PauseHolds(topics.AgentInbox(ceoSeat),
+			topics.AgentInboxGroup(ceoSeat)))
+	}
+	e.pauses.mu.Lock()
+	at, recorded := e.pauses.held[ceoSeat]
+	e.pauses.mu.Unlock()
+	if !recorded || at != e.inboxOf(ceoSeat) {
+		t.Errorf("the hold is recorded=%v for attachment %d, want recorded for %d, which "+
+			"the next resume lifts", recorded, at, e.inboxOf(ceoSeat))
+	}
+}
+
+// foldAtResume is a queue that runs fold once, at the resume of hold on one
+// inbox and before that resume reaches the queue: the window a lift leaves
+// between dropping its record under its lock and its queue call outside it.
+// Late, it runs fold once the resume has reached the queue and before it
+// returns, where the in-memory twin hands the resumed mail over.
+type foldAtResume struct {
+	queue.EventQueue
+	subject, hold string
+	late          bool
+	fold          func()
+	fired         atomic.Bool
+}
+
+func (s *foldAtResume) ResumeTopic(ctx context.Context, topic, group string, at queue.Attachment, reason string) error {
+	if topic != s.subject || reason != s.hold || !s.fired.CompareAndSwap(false, true) {
+		return s.EventQueue.ResumeTopic(ctx, topic, group, at, reason)
+	}
+	if !s.late {
+		s.fold()
+		return s.EventQueue.ResumeTopic(ctx, topic, group, at, reason)
+	}
+	err := s.EventQueue.ResumeTopic(ctx, topic, group, at, reason)
+	s.fold()
+	return err
+}
+
+// A SEAT'S RELEASE LEAVES NO RECORD OF A PAUSE HOLD BEHIND.
+//
+// The release's detach drops every hold on the seat's inbox and ends the
+// attachment each was taken for, and the release forgets the seat's parks.
+// The records of a person's pause hold and of the no-model pause were left:
+// each named the attachment that had ended, and a later lift lifted nothing
+// on it and logged that it had (`seat_pause_lifted`, `seat_inbox_resumed`).
+//
+// Mutation: keep either record at the release, and this fails.
+func TestASeatsReleaseLeavesNoRecordOfItsPauseHolds(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	e, q := engineOn(t)
+	e.adoptSeatPauses(ctx, map[uuid.UUID]coord.SeatPause{})
+	pause := coord.SeatPause{Seat: ceoSeat, By: "jane", ByKind: iam.ActorHuman, Reason: "looping"}
+	e.applySeatPause(ctx, coord.SeatPauseUpdate{Seat: ceoSeat, Pause: &pause})
+	if err := e.pause(ctx, "ceo", "no turn engine"); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	e.pauses.mu.Lock()
+	_, held := e.pauses.held[ceoSeat]
+	e.pauses.mu.Unlock()
+	if !held || !slices.Contains(recorded(e), "ceo") {
+		t.Fatalf("before the release: pause hold recorded=%v, no-model record %v; want both",
+			held, recorded(e))
+	}
+
+	// AS THE NODE RELEASES A SEAT: its inbox detached, then the hook.
+	if _, err := q.Detach(ctx, topics.AgentInbox(ceoSeat), topics.AgentInboxGroup(ceoSeat)); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	e.releaseSeat(ctx, placement.Seat{ID: ceoSeat, Handle: "ceo"})
+
+	e.pauses.mu.Lock()
+	at, held := e.pauses.held[ceoSeat]
+	e.pauses.mu.Unlock()
+	if held {
+		t.Errorf("the released seat's pause hold is still recorded, for the ended attachment %d", at)
+	}
+	if got := recorded(e); slices.Contains(got, "ceo") {
+		t.Errorf("the released seat's no-model pause is still recorded: %v", got)
 	}
 }

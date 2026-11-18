@@ -58,7 +58,10 @@ import (
 // does not open is never delivered, carried or attributed (logged at ERROR as
 // steer_note_unverified), and one sealed under a key this node does not hold
 // waits, with a WARN naming the keys it holds — the precedent is a person's
-// answer to a parked run (internal/sandbox, answerseal.go). An anchor this node
+// answer to a parked run (internal/sandbox, answerseal.go). The run's harness
+// confirming such a note here is turned away to ask again, for a node that
+// holds the key to record, and that is said once too, at WARN
+// (steer_read_key_unknown, [runSteers.waitsForItsKey]). An anchor this node
 // cannot open decides nothing, and one sealed under a key it does not hold is a
 // WARN naming the keys it holds (steer_seat_key_unknown), and steer_turn says
 // only who fixes it, as a condition of the fleet ([runSteers.openSeat]).
@@ -143,6 +146,19 @@ import (
 // ([retoldNotes], [sandbox.NoteRead.Retold]). Where that job started, the
 // ending reports the note delivered at its brief; where no later launch whose
 // job started told it, missed at the take.
+//
+// # An item for one job is that job's alone
+//
+// A record can hold an item for one job beside a person's notes
+// ([sandbox.RunNote.For]), which the store files only while that job is the
+// record's and removes at the next launch. So every reader of the record's
+// waiting notes names the job it reads inside ([runSteers.waiting]): the run
+// inbox the job it serves, and the review and a relaunch's brief none, which
+// hands them no item. And every step that reads a person's notes passes an
+// item over, whatever its read: the carry ([runSteers.carried]), the notes a
+// continued session may already show ([servedNotes]), the marks a brief tells
+// again ([unansweredNotes]), the record of a note delivered
+// ([runInbox.delivered]) and the ending ([sandbox.PendingRun.EndedNotes]).
 
 // SteerNoteDomain is the key domain a note on a run's record is sealed in: its
 // own, so no frame of another channel or a state log opens as a note, and no
@@ -266,6 +282,13 @@ type runSteers struct {
 	// warned is every note whose seal this node has logged it cannot open, so
 	// a view that follows a busy record does not say so on every write.
 	warned sync.Map
+
+	// turnedAway is every note a confirmation named that this node has logged
+	// it turned away, the note sealed under a key it does not hold
+	// ([runSteers.waitsForItsKey]), so a harness that confirms it again on its
+	// own backoff for as long as its run lasts does not have it said at every
+	// try.
+	turnedAway sync.Map
 
 	// stopped is closed when this node's teardown begins
 	// ([Engine.teardownSignal]), and stopWindow ends [steerSettleStopBudget]
@@ -863,11 +886,16 @@ func (s *runSteers) waitSettles() {
 // notes out of the order they were read in. A record holds such a note
 // whenever one waits while a later one is read: a seal this node cannot open
 // yet, or a later note a harness took first.
+//
+// AN ITEM FOR ONE JOB IS NEVER CARRIED, read or not ([sandbox.RunNote.For]): it
+// was that job's alone, and what resumes the turn is not inside it.
 func (s *runSteers) carried(run sandbox.PendingRun) []steer.Read {
 	if s == nil {
 		return nil
 	}
-	notes := slices.DeleteFunc(slices.Clone(run.Steer.Notes), sandbox.RunNote.Waiting)
+	notes := slices.DeleteFunc(slices.Clone(run.Steer.Notes), func(n sandbox.RunNote) bool {
+		return n.Waiting() || n.For != ""
+	})
 	slices.SortStableFunc(notes, func(a, b sandbox.RunNote) int {
 		return cmp.Or(cmp.Compare(a.Read.Order, b.Read.Order), cmp.Compare(a.Seq, b.Seq))
 	})
@@ -887,10 +915,16 @@ func (s *runSteers) carried(run sandbox.PendingRun) []steer.Read {
 // still: what a segment resuming the turn tells a continued session as notes it
 // may already show ([runner.Resume.Served]). In the clear, as a note's id is:
 // a note whose seal does not open is never told, served or not.
+//
+// AND EVERY NOTE A HOOK'S SERVE TO IT WAS LOST TO A CANCEL, though the loss
+// cleared its Served ([sandbox.HookServed.MayHold]): the harness gave the
+// hook's call up, and its answer may have reached the session all the same.
+// Told plainly only where every lost serve of it is proven absent from its
+// session. An item for one job is none of them ([sandbox.RunNote.For]).
 func servedNotes(run sandbox.PendingRun) []string {
 	var out []string
 	for _, n := range run.Steer.Notes {
-		if n.Served != "" {
+		if n.For == "" && (n.Served != "" || slices.ContainsFunc(n.Serves, sandbox.HookServed.MayHold)) {
 			out = append(out, n.ID)
 		}
 	}
@@ -903,8 +937,18 @@ type openedNote struct {
 	note steer.Note
 }
 
-// waiting is the record's waiting notes that open, oldest first.
-func (s *runSteers) waiting(turnID string, notes []sandbox.RunNote) []openedNote {
+// waiting is the record's waiting notes that open, oldest first, that a reader
+// inside job is handed ([forJob]): every reader names the job it reads inside,
+// the run inbox its bound job and the review and a relaunch's brief none.
+func (s *runSteers) waiting(turnID string, notes []sandbox.RunNote, job string) []openedNote {
+	return forJob(s.waitingItems(turnID, notes), job)
+}
+
+// waitingItems is every waiting note and item on the record that opens, oldest
+// first, whatever job an item is for: what a view of the record keeps
+// ([noteWatch]), each reader of it taking what its own job is handed
+// ([forJob]).
+func (s *runSteers) waitingItems(turnID string, notes []sandbox.RunNote) []openedNote {
 	var out []openedNote
 	for _, n := range notes {
 		if !n.Waiting() {
@@ -915,6 +959,13 @@ func (s *runSteers) waiting(turnID string, notes []sandbox.RunNote) []openedNote
 		}
 	}
 	return out
+}
+
+// forJob is the notes of opened a reader inside job is handed
+// ([sandbox.RunNote.IsFor]): every person's note, and an item for job alone. A
+// reader inside no job names "" and is handed no item.
+func forJob(opened []openedNote, job string) []openedNote {
+	return slices.DeleteFunc(slices.Clone(opened), func(o openedNote) bool { return !o.held.IsFor(job) })
 }
 
 // runIdentity is the turn a record of a note names, and the trace it is
@@ -1002,13 +1053,23 @@ func (s *runSteers) ended(ctx context.Context, run sandbox.PendingRun) error {
 // started; or the job an unconfirmed note was handed to, a step of the run's
 // harness in its execute phase, at the iteration the record keeps for that job
 // where it is the record's own and none where the record has moved on from it.
+// A note a hook was served is reported at that hook's serve instead
+// ([sandbox.EndedNote.Serve]): unconfirmed at the serve that was live before
+// every read of it that handed nothing over, and missed at the last of its
+// serves, every one lost, each at the step the hook answered.
 func noteEnd(run sandbox.PendingRun, n sandbox.EndedNote) steer.End {
 	switch n.Outcome {
 	case types.SteerDelivered:
 		return steer.Retold(readingOf(*n.Read))
 	case types.SteerMissed:
+		if n.Serve != nil {
+			return steer.Missed(servedAt(*n.Serve))
+		}
 		return steer.Missed(readingOf(*n.Read))
 	case types.SteerUnconfirmed:
+		if n.Serve != nil {
+			return steer.Unconfirmed(servedAt(*n.Serve))
+		}
 		at := steer.Reading{Phase: types.PhaseExecute, Round: 1, Boundary: types.SteerBoundaryStep,
 			Launch: n.Note.Served}
 		if n.Note.Served == run.LaunchID {
@@ -1018,6 +1079,14 @@ func noteEnd(run sandbox.PendingRun, n sandbox.EndedNote) steer.End {
 	default:
 		return steer.Expired()
 	}
+}
+
+// servedAt is the step a hook's serve handed a note over at, as the agent layer
+// states one: a step of the run's harness in its execute phase, at its one
+// round, the boundary and iteration the hook answered, of the serve's job.
+func servedAt(s sandbox.HookServed) steer.Reading {
+	return steer.Reading{Phase: types.PhaseExecute, Iteration: s.Iteration, Round: 1,
+		Boundary: types.SteerBoundary(s.Boundary), Launch: s.Launch, At: s.At}
 }
 
 // --- a resumed segment's notes: the run's record ---------------------------
@@ -1102,7 +1171,8 @@ func (r *rowSource) Take(ctx context.Context, at steer.Reading) []steer.Note {
 	if !found || !r.live(run.Status, run.LaunchID, run.Ending != nil) {
 		return notesOf(settled)
 	}
-	candidates := r.steers.waiting(run.TurnID, run.Steer.Notes)
+	// INSIDE NO JOB: the review reads a person's notes, and no job's item.
+	candidates := r.steers.waiting(run.TurnID, run.Steer.Notes, "")
 	return append(notesOf(settled), r.take(ctx, candidates, readOf(at))...)
 }
 
@@ -1262,8 +1332,14 @@ func notesTaken(candidates []openedNote, taken []sandbox.RunNote) []steer.Note {
 // which the launch's own write records read — and every note the record marks
 // unanswered, by id, read off the same record; and the place among the
 // record's reads of every note this segment's takes handed over, those the
-// brief carries among them ([rowSource.orders]), so the brief tells the turn's
-// read notes in the order the record numbered them.
+// brief carries among them ([rowSource.orders]), and of every note it peeks
+// that a hook's serve placed ([sandbox.RunNote.Place]), so the brief tells the
+// turn's notes in the order the record numbers them.
+//
+// A PEEKED NOTE A HOOK'S SERVE PLACED is read by the launch's write at that
+// place, ahead of a correction a person filed after it and the job's session
+// confirmed: handed with no place, it was told after every read, the
+// correction first.
 //
 // THE MARKS AS THE RECORD HOLDS THEM NOW, never only as the segment's claim
 // read them: a take's settle is made off the path that took, and can mark a
@@ -1293,10 +1369,20 @@ func (r *rowSource) Brief(ctx context.Context) steer.Briefing {
 	if !found || run.Ending != nil {
 		return steer.Briefing{Notes: notes, Orders: r.ordersNow()}
 	}
-	for _, o := range r.steers.waiting(run.TurnID, run.Steer.Notes) {
+	// INSIDE NO JOB: the brief is the next job's, and an item on the record is
+	// the job before it's, which the launch's write removes. Peeked here, one
+	// would be written back as a person's note the brief read.
+	orders := r.ordersNow()
+	for _, o := range r.steers.waiting(run.TurnID, run.Steer.Notes, "") {
 		notes = append(notes, o.note)
+		if o.held.Place > 0 {
+			if orders == nil {
+				orders = map[string]int{}
+			}
+			orders[o.held.ID] = o.held.Place
+		}
 	}
-	return steer.Briefing{Notes: notes, Unanswered: unansweredNotes(run), Orders: r.ordersNow()}
+	return steer.Briefing{Notes: notes, Unanswered: unansweredNotes(run), Orders: orders}
 }
 
 // ordersNow is the places among the record's reads of the notes this segment's
@@ -1309,11 +1395,12 @@ func (r *rowSource) ordersNow() map[string]int {
 }
 
 // unansweredNotes is every note on run's record whose read the record marks
-// unanswered ([sandbox.NoteRead.Unanswered]), by id.
+// unanswered ([sandbox.NoteRead.Unanswered]), by id: a person's, since a brief
+// tells no job's item ([sandbox.RunNote.For]).
 func unansweredNotes(run sandbox.PendingRun) []string {
 	var out []string
 	for _, n := range run.Steer.Notes {
-		if n.Read != nil && n.Read.Unanswered {
+		if n.For == "" && n.Read != nil && n.Read.Unanswered {
 			out = append(out, n.ID)
 		}
 	}
@@ -1387,8 +1474,10 @@ func (r *rowSource) Waiting() bool {
 	if pending {
 		return true
 	}
+	// A PERSON'S NOTE ALONE: the review takes no job's item, and a round
+	// ended for one would open the next with nothing.
 	view, opened, _ := r.watch.snapshot()
-	return view.Found && r.live(view.Status, view.LaunchID, view.EndingDecided) && len(opened) > 0
+	return view.Found && r.live(view.Status, view.LaunchID, view.EndingDecided) && len(forJob(opened, "")) > 0
 }
 
 // Close stops the segment's view of the record, and marks every take still
@@ -1464,7 +1553,9 @@ func (s *runSteers) inbox(ident runIdentity, round int) *runInbox {
 // Bind starts serving the inbox for the job launch: its view of the run's
 // record follows the record from here, under ctx stripped of its cancellation —
 // the inbox lives as long as the job's session, which outlives the turn that
-// launched it, and the view is stopped by [runInbox.Close] alone.
+// launched it, and the view is stopped by [runInbox.Close] alone. Bound before
+// the bridge files the session's opening ([Engine.openBridge]), so no opening
+// serves an inbox that serves no job yet.
 func (i *runInbox) Bind(ctx context.Context, launch string) {
 	if i == nil {
 		return
@@ -1526,13 +1617,13 @@ func (i *runInbox) Take(ctx context.Context, event string) string {
 			!slices.Contains(steerTakeStatuses, run.Status) {
 			return ""
 		}
-		candidates = i.steers.waiting(run.TurnID, run.Steer.Notes)
+		candidates = i.steers.waiting(run.TurnID, run.Steer.Notes, launch)
 	} else {
 		view, opened, _ := watch.snapshot()
 		if !liveFor(view, launch) {
 			return ""
 		}
-		candidates = opened
+		candidates = forJob(opened, launch)
 	}
 	if len(candidates) == 0 {
 		return ""
@@ -1596,7 +1687,9 @@ func (i *runInbox) take(ctx context.Context, launch string, candidates []openedN
 // the path that read them, under ids derived from the turn and each note — under
 // ctx stripped of its cancellation, because the take that read them is done and
 // the hook it answered may have gone: the read is on the record, and its record
-// is owed regardless.
+// is owed regardless. A PERSON'S NOTES ALONE: an item for one job
+// ([sandbox.RunNote.For]) is that job's, and what becomes of it is its filer's
+// to say, so no record of a person's notes names it.
 func (i *runInbox) delivered(ctx context.Context, taken []sandbox.RunNote, notes []steer.Note) {
 	if len(notes) == 0 {
 		return
@@ -1606,6 +1699,9 @@ func (i *runInbox) delivered(ctx context.Context, taken []sandbox.RunNote, notes
 		ctx, cancel := context.WithTimeout(base, steerPublishBudget)
 		defer cancel()
 		for k, note := range notes {
+			if taken[k].For != "" {
+				continue
+			}
 			read := readingOf(*taken[k].Read)
 			id := uuid.NewSHA1(steerDeliveredNamespace,
 				[]byte(i.ident.turn.TurnID+"/"+note.ID+"/delivered"))
@@ -1670,7 +1766,9 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 	}
 	var due []openedNote
 	var unserved []string
-	for _, o := range opened {
+	// THE JOB'S OWN ITEMS AND A PERSON'S NOTES ALONE: one for another job is
+	// never served to this one, so the cursor below would stop at it for good.
+	for _, o := range forJob(opened, launch) {
 		if o.held.Seq <= after {
 			continue
 		}
@@ -1727,19 +1825,61 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 //     published delivered all the same ([runInbox.confirmedBefore]), under the
 //     id that confirmation's report took and at its read's instant, so a note
 //     both reported is one record.
+//
+// AN INBOX THAT SERVES NO JOB TAKES NO READ, AND SAYS SO
+// ([mcpbridge.ErrNoteUntaken]): one closed, its opening's end having taken
+// it after the notes route found it serving, or one not yet bound, which no
+// opening serves, its bind coming before the bridge files the opening
+// ([Engine.openBridge]), and which says so too. Answered done, the plugin
+// never confirmed the note again, and the record kept it served and unread, for
+// the run's ending to report unconfirmed and a later launch to tell again as
+// one the session may already show. Turned away, the confirmation made again
+// reaches the inbox that serves the job now. DECIDED UNDER THE INBOX'S OWN
+// LOCK, which its Close takes ([runInbox.bound]): a read that found the inbox
+// serving records through the store, a write a later Close does not touch.
+//
+// NOR DOES AN INBOX WHOSE JOB ITS RECORD TAKES NO READ OF ANY MORE, and it says
+// so the same way: a note named that still waits on the record once the take
+// left it ([waitsUntaken]). The job's completion claimed the run, moving its
+// record out of [steerTakeStatuses] while its session still serves, until the
+// reclaim closes it; or the run's ending is decided; or a later job carries it
+// on. Answered done, that read too was recorded nowhere, the note kept served
+// and unread. Turned away, the confirmation made again is recorded where the
+// claim is handed back and the run goes on in its box, and refused once the
+// run is over. A note named that no longer waits is no such note, whoever
+// read it: answered done, reported where this job's earlier read holds it.
+//
+// NOR DOES A NOTE THIS NODE CANNOT OPEN FOR WANT OF ITS KEY, and the read says
+// so the same way: a note named that still waits on the record for the job,
+// sealed under a key this node does not hold, in a fleet whose nodes hold
+// different keys ([runSteers.waitsForItsKey]). A take hands over only a note
+// it opened, so this node's took no read of it, and the note waits for a node
+// that holds its key, as it does for every reader ([runSteers.open]).
+// Answered done, the plugin never confirmed it again and the read was
+// recorded nowhere. Turned away, the plugin confirms it again on its own
+// backoff, and the confirmation is recorded once it reaches a node that holds
+// the key, the run's seat having moved or its session opened again there; a
+// run that ends first leaves the note served and unread on its record, which
+// its ending reports unconfirmed where the node ending the run holds the key;
+// a node that does not records nothing of it (steer_note_end_unrecorded,
+// [runSteers.ended]). Every other note the read names is taken and reported
+// before it is turned away, as ever. A note this node cannot open that waits
+// no more, or waits for another job, is no such note.
 func (i *runInbox) Read(ctx context.Context, ids []string) error {
 	launch, watch := i.bound()
-	if launch == "" || len(ids) == 0 {
+	switch {
+	case launch == "":
+		return mcpbridge.ErrNoteUntaken
+	case len(ids) == 0:
 		return nil
 	}
 	_, opened, _ := watch.snapshot()
 	var candidates []openedNote
-	for _, o := range opened {
+	for _, o := range forJob(opened, launch) {
 		if slices.Contains(ids, o.held.ID) {
 			candidates = append(candidates, o)
 		}
 	}
-	var record *sandbox.PendingRun
 	if len(candidates) < len(ids) {
 		// A NOTE THE VIEW HAS NOT CAUGHT UP WITH, or one already read: the
 		// record decides, read now.
@@ -1750,9 +1890,8 @@ func (i *runInbox) Read(ctx context.Context, ids []string) error {
 		if !found {
 			return nil
 		}
-		record = &run
 		candidates = nil
-		for _, o := range i.steers.waiting(run.TurnID, run.Steer.Notes) {
+		for _, o := range i.steers.waiting(run.TurnID, run.Steer.Notes, launch) {
 			if slices.Contains(ids, o.held.ID) {
 				candidates = append(candidates, o)
 			}
@@ -1762,20 +1901,73 @@ func (i *runInbox) Read(ctx context.Context, ids []string) error {
 	if err != nil || len(taken) == len(ids) {
 		return err
 	}
-	// A NOTE NAMED THAT THIS CONFIRMATION DID NOT TAKE: off the record read
-	// above, or, where the view said every one waited, read now.
-	if record == nil {
-		run, found, err := i.steers.store.Get(ctx, i.ident.turn.TurnID)
-		if err != nil {
-			return err
-		}
-		if !found {
-			return nil
-		}
-		record = &run
+	// A NOTE NAMED THAT THIS CONFIRMATION DID NOT TAKE: the record decides,
+	// read after the take, which another reader may have overtaken.
+	run, found, err := i.steers.store.Get(ctx, i.ident.turn.TurnID)
+	if err != nil {
+		return err
 	}
-	i.confirmedBefore(ctx, *record, launch, ids, taken)
+	if !found {
+		return nil
+	}
+	i.confirmedBefore(ctx, run, launch, ids, taken)
+	// ASKED FIRST, so a note waiting for its key is said wherever the
+	// confirmation is turned away.
+	keyless := i.steers.waitsForItsKey(ctx, run, launch, ids)
+	if keyless || waitsUntaken(run, candidates) {
+		return mcpbridge.ErrNoteUntaken
+	}
 	return nil
+}
+
+// waitsForItsKey reports whether run's record, read after a confirmation's
+// take by job launch ([runInbox.Read]), still holds waiting a note the
+// confirmation names, one that job is handed ([sandbox.RunNote.IsFor]),
+// sealed under a key this node does not hold ([recordseal.KeyUnknown]). No
+// take of this node's records such a note, since a take hands over only a
+// note it opened, and a node that holds the key takes it as it takes any
+// ([runSteers.open]). Each is said once, at WARN with the keys this node
+// holds, as its open is ([runSteers.turnedAway]): the harness confirms it
+// again on its own backoff, for as long as its run lasts.
+func (s *runSteers) waitsForItsKey(ctx context.Context, run sandbox.PendingRun, launch string,
+	ids []string) bool {
+	found := false
+	for _, n := range run.Steer.Notes {
+		if !n.Waiting() || !n.IsFor(launch) || !slices.Contains(ids, n.ID) {
+			continue
+		}
+		if _, verdict := s.note.verifier.Open(n.Sealed); verdict != recordseal.KeyUnknown {
+			continue
+		}
+		found = true
+		if _, said := s.turnedAway.LoadOrStore(run.TurnID+"/"+n.ID, struct{}{}); !said {
+			log.WarnContext(ctx, "steer_read_key_unknown", "turn_id", run.TurnID, "note_id", n.ID,
+				"held_keys", s.note.verifier.KeyIDs(),
+				"detail", "the run's harness confirmed delivering a note sealed under a key this node "+
+					"does not hold, which no read of this node's can take: the confirmation is turned "+
+					"away to ask again until the run's session reaches a node that holds the key, and a "+
+					"run that ends first leaves the note unconfirmed; add the key to secrets.keys")
+		}
+	}
+	return found
+}
+
+// waitsUntaken reports whether run's record, read after a confirmation's take
+// ([runInbox.Read]), still holds waiting a note of the take's candidates: one
+// the take left. A take records every waiting note it names for its job while
+// the record takes reads of the job, so such a note waits on a record that took
+// none: its job's completion claimed the run, its ending is decided, or a later
+// job carries it on. A candidate another reader took meanwhile waits no more,
+// and is no such note.
+func waitsUntaken(run sandbox.PendingRun, candidates []openedNote) bool {
+	for _, c := range candidates {
+		if slices.ContainsFunc(run.Steer.Notes, func(n sandbox.RunNote) bool {
+			return n.ID == c.held.ID && n.Waiting()
+		}) {
+			return true
+		}
+	}
+	return false
 }
 
 // confirm records candidates read by job launch at the run's next step, and
@@ -1932,9 +2124,10 @@ func (w *noteWatch) follow(ctx context.Context) {
 	}
 }
 
-// update takes a new state of the record into the view.
+// update takes a new state of the record into the view: every waiting note and
+// item that opens, each reader taking what its own job is handed ([forJob]).
 func (w *noteWatch) update(view sandbox.NotesView) {
-	opened := w.steers.waiting(w.turnID, view.Steer.Notes)
+	opened := w.steers.waitingItems(w.turnID, view.Steer.Notes)
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.stopped {

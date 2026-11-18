@@ -45,7 +45,7 @@ var excessInventory = map[string]int{
 	"internal/api/opkey":                            40,
 	"internal/api/paced":                            141,
 	"internal/api/pagepolicy":                       115,
-	"internal/api/queries":                          1590,
+	"internal/api/queries":                          1574,
 	"internal/api/secretsapi":                       16,
 	"internal/api/setupapi":                         303,
 	"internal/api/stream":                           710,

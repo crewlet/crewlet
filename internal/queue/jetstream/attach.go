@@ -141,6 +141,40 @@ func (q *Queue) nakSpacing(n uint64) time.Duration {
 	return backoff.Doubling(int(min(n, math.MaxInt32)), q.nakDelay(), q.nakCeiling())
 }
 
+// LeastTimeToDeadLetter is the least time this backend carries a failing
+// message, at its defaults, from its first delivery to its dead letter: its
+// budget's deliveries ([maxDeliver]), every one but the last returned as a
+// failure to one attachment, each return spaced by [Queue.nakBackoff] at the
+// floor of its jitter. The spacings are 1, 2, 4, 8 and 16 s, then nineteen at
+// the 30 s ceiling, 601 s in all; at four fifths of each, about 481 s.
+//
+// FOR A LAYER ABOVE THAT LEANS ON A FAILING MESSAGE OUTLIVING A WAIT OF ITS
+// OWN, and holds the two apart in a test rather than in prose. internal/sandbox
+// is one: its waiter announces a finished job again on a schedule whose longest
+// gap is twenty poll intervals, while each announcement a node's own silent
+// store cannot claim is returned as a failure, so a fresh announcement has to
+// be out before the last one is dead-lettered.
+//
+// THE LEAST ON THE FAILURE PATH, NOT ON EVERY PATH. A hand-back returns at
+// once ([attachment.handBack]), and a failure to an attachment the message had
+// not failed on yet, another node's or this node's own after a re-attach, is
+// spaced from the first return again ([attachment.failures]), so a message
+// handed from node to node, or met by a re-attach, is dead-lettered sooner; and
+// a handler's own time adds to it. [Config.MaxDeliver], NakDelay and
+// NakCeiling, which only tests set, change it too.
+func LeastTimeToDeadLetter() time.Duration {
+	// THE DEFAULTS: a queue configured with nothing, whose spacing reads
+	// nothing else ([Queue.nakSpacing]). The floor is what [backoff.Jitter]
+	// returns at the far end of its spread.
+	defaults := &Queue{}
+	var least time.Duration
+	for n := uint64(1); n < uint64(budgetFor(defaults.cfg)); n++ {
+		spacing := defaults.nakSpacing(n)
+		least += spacing - time.Duration(float64(spacing)*nakJitter)
+	}
+	return least
+}
+
 // attachment is ONE consumer this process runs for a (topic, group) pair.
 //
 // A process may run several for one pair — the contract's "close this
@@ -509,17 +543,44 @@ func (a *attachment) wait(d time.Duration) {
 // --- pause holds ----------------------------------------------------------
 //
 // Holds live on the QUEUE, keyed by the (topic, group) pair, not on an
-// attachment. Two reasons, both learned the hard way.
+// attachment's consumer, and each is TAKEN FOR ONE ATTACHMENT of the pair.
+// Three reasons, all learned the hard way.
 //
 // Keyed by the PAIR rather than by topic alone, because a topic-keyed hold
 // also gated every other group on a shared subject, and because a second
 // subsystem gating one inbox must not release the first one's hold.
 //
-// Owned by the QUEUE rather than by an attachment, because a hold is
-// routinely taken BEFORE anything attaches: an engine that knows a seat is
-// busy pauses first and attaches after. A hold stored on the attachment
-// would simply be dropped in that window, and the seat would take exactly
-// the work it was told not to.
+// Owned by the QUEUE rather than by a consumer, because a hold is routinely
+// taken BEFORE anything attaches: an engine that knows a seat is busy pauses
+// first and attaches after. A hold stored on the consumer would simply be
+// dropped in that window, and the seat would take exactly the work it was
+// told not to.
+//
+// Taken FOR AN ATTACHMENT ([queue.Attachment]), because owned by the pair
+// alone a hold could not tell the attach it was taken before from the one a
+// release had just ended: a hold decided while a seat was held here and
+// asked after its release's Detach was carried onto the next attachment of
+// that inbox, which then fetched nothing, with nothing left that knew of the
+// hold to lift it. The pair's current attachment is minted on its first read
+// and ended by its Detach, and a hold asked for any other is refused.
+
+// Attachment answers the pair's current attachment, minting it on the first
+// read since the pair's last Detach.
+func (q *Queue) Attachment(_ context.Context, topic, group string) (queue.Attachment, error) {
+	key := attachKey{topic, group}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return 0, ErrClosed
+	}
+	at, ok := q.current[key]
+	if !ok {
+		q.minted++
+		at = q.minted
+		q.current[key] = at
+	}
+	return at, nil
+}
 
 func (q *Queue) held(key attachKey) bool {
 	q.mu.Lock()
@@ -527,8 +588,9 @@ func (q *Queue) held(key attachKey) bool {
 	return len(q.holds[key]) > 0
 }
 
-// PauseTopic takes a named hold on one subscription.
-func (q *Queue) PauseTopic(_ context.Context, topic, group, reason string) error {
+// PauseTopic takes a named hold on one subscription, for the attachment at
+// names, refusing an attachment that is not the pair's current one.
+func (q *Queue) PauseTopic(_ context.Context, topic, group string, at queue.Attachment, reason string) error {
 	if reason == "" {
 		reason = "default"
 	}
@@ -542,6 +604,10 @@ func (q *Queue) PauseTopic(_ context.Context, topic, group, reason string) error
 	if q.closed {
 		return ErrClosed
 	}
+	if cur, ok := q.current[key]; !ok || cur != at {
+		return fmt.Errorf("jetstream: hold %q on %s/%s for attachment %d: %w",
+			reason, topic, group, at, queue.ErrAttachmentGone)
+	}
 	if q.holds[key] == nil {
 		q.holds[key] = map[string]struct{}{}
 	}
@@ -549,8 +615,9 @@ func (q *Queue) PauseTopic(_ context.Context, topic, group, reason string) error
 	return nil
 }
 
-// ResumeTopic releases one reason's hold, flushing when none remain.
-func (q *Queue) ResumeTopic(_ context.Context, topic, group, reason string) error {
+// ResumeTopic releases one reason's hold on the attachment at names, flushing
+// when none remain; under an attachment that has ended it lifts nothing.
+func (q *Queue) ResumeTopic(_ context.Context, topic, group string, at queue.Attachment, reason string) error {
 	if reason == "" {
 		reason = "default"
 	}
@@ -559,6 +626,9 @@ func (q *Queue) ResumeTopic(_ context.Context, topic, group, reason string) erro
 	defer q.mu.Unlock()
 	if q.closed {
 		return ErrClosed
+	}
+	if cur, ok := q.current[key]; !ok || cur != at {
+		return nil
 	}
 	delete(q.holds[key], reason)
 	if len(q.holds[key]) == 0 {
@@ -1462,8 +1532,9 @@ func (q *Queue) Unquiesce(_ context.Context, topic, group string) (bool, error) 
 // published while nothing is attached are kept. That is what makes a seat
 // handoff cheap and an unowned seat safe.
 //
-// Releases this pair's pause holds — a hold is state about THIS attachment,
-// and one that outlived a detach would leave a node that re-attached later
+// Releases this pair's pause holds and ENDS ITS ATTACHMENT, attached or not:
+// a hold is state about THIS attachment, and one that outlived a detach, or
+// was taken for it after one, would leave a node that re-attached later
 // silently deaf.
 func (q *Queue) Detach(_ context.Context, topic, group string) (bool, error) {
 	key := attachKey{topic, group}
@@ -1475,6 +1546,7 @@ func (q *Queue) Detach(_ context.Context, topic, group string) (bool, error) {
 	atts := q.attachments[key]
 	delete(q.attachments, key)
 	delete(q.holds, key)
+	delete(q.current, key)
 	// Let go of, and still reported by Loops until each loop returns:
 	// Detach does not join a running handler, so a loop may outlive it.
 	q.retireLocked(atts)

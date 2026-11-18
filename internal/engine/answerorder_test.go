@@ -140,14 +140,25 @@ func (r *answerResumer) resumedWith() []string {
 // inboxHold is the engine's sandbox seat hold, on the queue under test.
 type inboxHold struct{ q queue.EventQueue }
 
-func (h inboxHold) Hold(ctx context.Context, handle string) error {
-	return h.q.PauseTopic(ctx, fixtureInbox(handle), fixtureInboxGroup(handle),
+func (h inboxHold) Hold(ctx context.Context, handle string, at queue.Attachment) error {
+	return h.q.PauseTopic(ctx, fixtureInbox(handle), fixtureInboxGroup(handle), at,
 		string(inbox.HoldSandbox))
 }
 
-func (h inboxHold) Release(ctx context.Context, handle string) error {
-	return h.q.ResumeTopic(ctx, fixtureInbox(handle), fixtureInboxGroup(handle),
+func (h inboxHold) Release(ctx context.Context, handle string, at queue.Attachment) error {
+	return h.q.ResumeTopic(ctx, fixtureInbox(handle), fixtureInboxGroup(handle), at,
 		string(inbox.HoldSandbox))
+}
+
+// fixtureAttachment is the attachment of handle's inbox on q that a seat taken
+// now is recovered for, as a node's acquisition reads it before the attach.
+func fixtureAttachment(t *testing.T, q queue.EventQueue, handle string) queue.Attachment {
+	t.Helper()
+	at, err := q.Attachment(t.Context(), fixtureInbox(handle), fixtureInboxGroup(handle))
+	if err != nil {
+		t.Fatalf("Attachment: %v", err)
+	}
+	return at
 }
 
 // fixtureOrg is the company the hand-built rigs in these cases stand in for.
@@ -452,7 +463,7 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 	if err := store.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
-	if err := coordinator.RecoverSeat(ctx, "swe", "node-a", 1); err != nil {
+	if err := coordinator.RecoverSeat(ctx, "swe", "node-a", 1, fixtureAttachment(t, q, "swe")); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 

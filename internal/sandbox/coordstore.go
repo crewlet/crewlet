@@ -241,9 +241,10 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 }
 
 // resetLaunch is [CoordStore.BeginLaunch]'s half for a row that was already
-// there — a second launch in this turn, or a redelivered kick-off —
-// reporting the row as it reset it and whether it did; a row that is gone is
-// neither.
+// there, a relaunch its turn's resumed frame makes, reporting the row as it
+// reset it and whether it did; a row that is gone is neither. A kick-off
+// delivered again never reaches it: it runs under a turn id of its own
+// ([TurnRef.TurnID], ADR-0017), and its launch creates a row of its own.
 //
 // Only the LAUNCH-SCOPED state is reset: the identity fields stay the existing
 // row's, and so do the turn's read of its conversation ([PendingRun.Base]),
@@ -451,7 +452,9 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// is whether its harness asked for them ([RunSteer.Pulled]), which a new
 		// job has not; and the brief's notes are read BY THIS JOB, in the
 		// write that names it, so its harness can never take them again — and
-		// the box's, if the launch hands any, filed after them.
+		// the box's, if the launch hands any, filed after them. An item for
+		// the job before alone ([RunNote.For]) is that job's too, and goes:
+		// [openNotes] removes every one first.
 		existing.Steer.Notes = slices.Clone(existing.Steer.Notes)
 		if len(existing.Steer.Seat) == 0 {
 			existing.Steer.Seat = bytes.Clone(run.Steer.Seat)
@@ -737,12 +740,46 @@ func (s *CoordStore) SettleBegun(ctx context.Context, turnID string, capture Ses
 	return s.stampCapture(ctx, turnID, capture, stillBegun)
 }
 
-// stillBegun reports whether run's newest capture is capture's own take, still
-// standing begun: the stamp a settle decided from it may be written over
-// ([PendingStore.SettleBegun]).
+// stillBegun reports whether run's newest capture, or its save under way
+// ([PendingRun.Saving]), is capture's own take, still standing begun: the stamp
+// a settle decided from it may be written over ([PendingStore.SettleBegun]). A
+// save a final take overtook is settled in its own section, where the row keeps
+// it in sight.
 func stillBegun(run PendingRun, capture SessionCapture) bool {
-	newest := run.Capture
-	return newest != nil && capture.sameTake(*newest) && newest.State == CaptureBegun
+	begun := func(section *SessionCapture) bool {
+		return section != nil && capture.sameTake(*section) && section.State == CaptureBegun
+	}
+	return begun(run.Capture) || begun(run.Saving)
+}
+
+// ReserveSave reserves a save's place on the turn's row. See the contract on
+// [PendingStore].
+//
+// ONE READ-DECIDE-WRITE OF THE ROW AS IT STANDS ([CoordStore.writeFound]),
+// fenced by nothing: any node may take a save's place, and the license is the
+// row's own state ([licensesSave]), decided on the clock of the node making
+// the write. Taken, the save holds the newest place by the row's own rule
+// ([stampOnto]) and its save under way beside it.
+func (s *CoordStore) ReserveSave(ctx context.Context, turnID string, save SessionCapture) (bool, error) {
+	if err := reservable(turnID, save); err != nil {
+		return false, err
+	}
+	// SET ON EVERY ASK OF decide, as a stamp's is ([CoordStore.stampCapture]).
+	var held bool
+	_, won, found, err := s.writeFound(ctx, turnID, false, Fence{}, func(run *PendingRun) bool {
+		held = holdsSave(*run, save)
+		if held || licensesSave(*run, save, s.clock()) != "" {
+			return false
+		}
+		stampOnto(run, save)
+		reserved := save
+		run.Saving = &reserved
+		return true
+	})
+	if err != nil {
+		return false, err
+	}
+	return won || (found && held), nil
 }
 
 // StandBy records capture's take as the read standing by for the row's newest
@@ -998,6 +1035,14 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		return false, errors.New("sandbox: a release cannot report a collection that both read its box " +
 			"back and failed to")
 	}
+	if release.BoxAnswered && !release.CollectFailedAt.IsZero() {
+		return false, errors.New("sandbox: a release cannot both count a failed collection and end the run " +
+			"of failures it counts onto")
+	}
+	if !release.HostStoreSilentSince.IsZero() && release.HostStoreAnswered {
+		return false, errors.New("sandbox: a release cannot say both that the host of the job's box found its " +
+			"coordination store silent and that it answered")
+	}
 	_, released, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if run.Status != StatusResumed || run.LaunchID != release.Launch || outranked(*run, release.Fence) {
 			return false
@@ -1047,6 +1092,23 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 			if run.Launch.CollectedAt.IsZero() && !release.CollectedAt.IsZero() {
 				run.Launch.CollectedAt = release.CollectedAt.UTC()
 			}
+		}
+		// AND AT ONE WHOSE READ ANSWERED though a later step handed it back
+		// uncounted: the box answered, and the job is not collected
+		// ([Release.BoxAnswered]).
+		if release.BoxAnswered {
+			run.Launch.CollectFailures = 0
+			run.Launch.CollectFailingSince = time.Time{}
+		}
+		// AND WHAT THE CLAIM'S COLLECTION LEARNED OF THE STORE OF THE HOST OF
+		// THE JOB'S BOX, where it learned anything ([LaunchRecord.HostStoreSilentSince]):
+		// the latest clock's start, since a waiter's announcement made
+		// before it says nothing of the silence it found.
+		switch {
+		case !release.HostStoreSilentSince.IsZero():
+			run.Launch.HostStoreSilentSince = release.HostStoreSilentSince.UTC()
+		case release.HostStoreAnswered:
+			run.Launch.HostStoreSilentSince = time.Time{}
 		}
 		// HELD, or not: every release decides it afresh, so a hold an
 		// earlier release put on the run does not outlast the attempt it
@@ -1105,9 +1167,40 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 		// And what condensing the collection that parked it cost, onto the
 		// record of the job the row holds — see [LaunchRecord.Condensed].
 		run.Launch.Condensed = q.Condensed
+		// THE PARK SETTLES THE JOB'S COMPLETION: a refusal of it the seat's
+		// holder owed is owed no more ([LaunchRecord.RefusalOwed]).
+		run.Launch.RefusalOwed, run.Launch.RefusalOwedSince = "", time.Time{}
 		return true
 	})
 	return err
+}
+
+// OweRefusal records on a job's record that the seat's holder acknowledged a
+// refused delivery of its completion. See the contract on [PendingStore].
+func (s *CoordStore) OweRefusal(ctx context.Context, turnID, launch string, owed OwedRefusal, fence Fence,
+) (bool, error) {
+	switch {
+	case owed.Condition == "":
+		return false, fmt.Errorf("sandbox: a refusal of run %s's completion names no condition to owe", turnID)
+	case len(owed.Condition) > MaxOwedConditionBytes:
+		return false, fmt.Errorf("sandbox: the condition a refusal of run %s's completion names is %d bytes, "+
+			"past the %d an owed refusal records", turnID, len(owed.Condition), MaxOwedConditionBytes)
+	case owed.Since.IsZero():
+		return false, fmt.Errorf("sandbox: a refusal of run %s's completion owed since no instant", turnID)
+	case launch == "":
+		return false, nil
+	}
+	_, written, err := s.write(ctx, turnID, true, fence, func(run *PendingRun) bool {
+		if run.LaunchID != launch || !run.completionUnsettled() || run.Launch.RefusalOwed != "" {
+			return false
+		}
+		run.Launch.RefusalOwed, run.Launch.RefusalOwedSince = owed.Condition, owed.Since.UTC()
+		return true
+	})
+	if errors.Is(err, ErrRunEnding) {
+		return false, nil
+	}
+	return written, err
 }
 
 // RecordAnswer records a reply as the answer to a parked run's question, under
@@ -1768,6 +1861,45 @@ func (s *CoordStore) MarkLost(ctx context.Context, turnID, launch string, loss J
 	})
 	if err != nil {
 		return false, fmt.Errorf("sandbox: record run %s's job as lost: %w", turnID, err)
+	}
+	return won || stands, nil
+}
+
+// MarkClaimLost records on a claimed job the verdict that it was lost with the
+// host its box is on, for the claim's own collection. See the contract on
+// [PendingStore].
+//
+// FENCED, unlike [CoordStore.MarkLost]: the verdict is the claim holder's, made
+// under its lease, and licenses that holder's own carrying on of the round; a
+// newer lease owns the run, and its collection, from the moment it takes the
+// seat.
+func (s *CoordStore) MarkClaimLost(ctx context.Context, turnID, launch string, loss JobLoss,
+	fence Fence,
+) (bool, error) {
+	if launch == "" {
+		return false, nil
+	}
+	stands := false
+	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.LaunchID != launch || run.Status != StatusResumed || outranked(*run, fence) ||
+			(loss.Node != "" && run.LaunchNode != loss.Node) {
+			return false
+		}
+		if run.Lost != nil {
+			stands = true
+			return false
+		}
+		at := loss.At
+		if at.IsZero() {
+			at = s.clock()
+		}
+		recorded := loss
+		recorded.At = at.UTC()
+		run.Lost = &recorded
+		return true
+	})
+	if err != nil {
+		return false, fmt.Errorf("sandbox: record run %s's claimed job as lost: %w", turnID, err)
 	}
 	return won || stands, nil
 }

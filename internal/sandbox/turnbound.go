@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -16,7 +17,8 @@ import (
 // it. A resume that fails is handed back, and one that meets a condition that
 // ends by waiting (a model's usage limit, a spent budget, a paused seat) is
 // held until that condition clears. Either way the waiter announces the job
-// again on its next poll, so the job comes round until its resume runs.
+// again on its schedule (reannounce.go), so the job comes round until its
+// resume runs.
 //
 // Two bounds keep that from going on for ever, and both END THE RUN, announced
 // on the board under a reason of its own, with the seat freed:
@@ -34,17 +36,42 @@ import (
 //     and anything that would make it wait or retry ends it instead
 //     ([Coordinator.completeAtDeadline], [Coordinator.endAtDeadline]).
 //   - THE RESUME GIVE-UP ([ResumeGiveUp], [MinResumeFailures]), for every
-//     turn, capped or not. A resume that FAILS (not one that waits) is
+//     turn, capped or not. A resume that FAILS for a reason of the run's own
+//     (not one that waits, not one the node or its infrastructure failed, and
+//     not one another node or build can get past while a live node may) is
 //     counted onto the job's record and, once it has failed that often for
-//     that long, the run is settled ([Coordinator.resumeGivenUp]). Uncounted,
-//     each poll's announcement was a fresh delivery with a fresh budget, so a
-//     resume that always failed was retried every poll for as long as the
-//     engine ran.
+//     that long, the run is settled ([Coordinator.resumeGivenUp]).
+//     Uncounted, each poll's announcement was a fresh delivery with a fresh
+//     budget, so a resume that always failed was retried every poll for as
+//     long as the engine ran.
 //
 // A WAIT ON A CONDITION is not bounded here for a turn with no deadline: the
 // condition names when it lifts, or the event that lifts it, and the seat
 // could not run other work through it meanwhile. An answer's resume is bounded
 // by its own series ([MaxAnswerAttempts]) and the run's pause TTL.
+//
+// NOR IS A CONDITION ONLY AN OPERATOR CLEARS. A resume that fails on this
+// node's disk (full, mounted read-only, or failing to read or write), on its
+// limit of open files, or on the fleet's nodes holding different keys or
+// running different builds is the node's or its infrastructure's
+// ([CoordinatorOptions.NodesFailure]), so it counts nothing toward the
+// give-up, and no wait clears it: the run and its seat wait for the operator,
+// the job's completion coming round on each announcement, and a turn with a
+// deadline still ends at it. Ending the run would throw away the review of a
+// job that finished, for a condition the next resume after the operator's fix
+// gets past. What the operator sees, condition by condition:
+//
+//   - every one: each attempt's `sandbox_resume_failed` line, at error, its
+//     `error` naming the condition (its `attempt` does not rise for these:
+//     it numbers only the run's own failures): the system's or the store
+//     driver's own words for a disk or the open files (such as "no space
+//     left on device", "database is full", "read-only file system",
+//     "input/output error", "too many open files"),
+//     the estate's "finish the upgrade" for builds that differ, and a note or
+//     a run's record this node could not verify for keys that differ;
+//   - a full disk that is the volume holding this node's databases: the
+//     `volume_low` alarm besides, raised while the volume has less free
+//     space than its next restore, vacuum or snapshot needs.
 
 // ResumeGiveUp is how long the resume of a finished job's turn may keep failing
 // before the run is settled as [types.ExecutorFailureResumeFailing].
@@ -99,7 +126,9 @@ func (c *Coordinator) pastDeadline(ctx context.Context, ev types.ExecutorFinishe
 func (c *Coordinator) completeAtDeadline(ctx context.Context, ev types.ExecutorFinished, fence Fence,
 	why string,
 ) error {
-	run, won, err := c.pending.ClaimForResume(ctx, ev.TurnID, CompletionTail(ev.LaunchID), fence)
+	// A CLAIM OF THE JOB LIKE ANY OTHER, held to what this node still owes
+	// the job's last claim ([Coordinator.claimCompletion]).
+	run, won, err := c.claimCompletion(ctx, ev, fence)
 	if err != nil {
 		return fmt.Errorf("sandbox: claiming %s to end it at its deadline: %w", ev.TurnID, err)
 	}
@@ -111,8 +140,11 @@ func (c *Coordinator) completeAtDeadline(ctx context.Context, ev types.ExecutorF
 	c.forgetRefused(ev.TurnID)
 	var result Result
 	if run.Lost == nil {
+		// A JOB THIS COLLECTION FINDS LOST with the host its box is on
+		// ([Coordinator.loseWithHost]) is ended here as a job the row held
+		// lost is: unread, at its deadline.
 		var collected bool
-		if run, result, collected, err = c.collectClaimed(ctx, run); !collected {
+		if run, result, collected, err = c.collectClaimed(ctx, run); !collected && run.Lost == nil {
 			return err
 		}
 	}
@@ -167,6 +199,24 @@ func deadlineDetail(deadline time.Time, delivered []string, elided int) string {
 // handled, and reports whether it did. The run's other failures are on its
 // job's record ([LaunchRecord.ResumeFailures]), so the count holds across
 // nodes and restarts.
+//
+// ONLY THE RUN'S OWN FAILURES COUNT ([Coordinator.runsOwnFailure]), and its
+// caller asks before it asks this. A resume the node or its infrastructure
+// failed (a coordination store that did not answer the read of where the
+// turn's writes are minted, a full disk, a stop that cut it short) is handed
+// back as any failure is, and comes round again when the poll announces the
+// job, but it is no evidence that the turn cannot be re-entered: counted, an
+// outage of half an hour ended every run whose job finished during it, the
+// work it reviewed thrown out with the run, though the next attempt after the
+// outage would have resumed it.
+//
+// NOR DOES A RESUME ANOTHER NODE OR BUILD CAN MAKE ([ErrResumeElsewhere]),
+// while a live node may make it: a parked state a newer build wrote, met by an
+// older node still holding the seat through a roll, is a failure of where the
+// completion went, and the run is resumed once a node that reads it holds the
+// seat. Once no live node reads the state's version, as after a rollback, it
+// is counted like the run's own, so the seat is not held for ever by a state
+// nobody running can read.
 func (c *Coordinator) resumeGivenUp(ctx context.Context, run PendingRun, now time.Time, cause error) bool {
 	attempts := run.Launch.ResumeFailures + 1
 	since := run.Launch.ResumeFailingSince
@@ -189,4 +239,29 @@ func (c *Coordinator) resumeGivenUp(ctx context.Context, run PendingRun, now tim
 	}
 	c.settleNoted(ctx, run, note)
 	return true
+}
+
+// runsOwnFailure reports whether err, the failure of run's resume, is the
+// run's own, which the give-up counts ([Coordinator.resumeGivenUp]), rather
+// than the node's or its infrastructure's ([CoordinatorOptions.NodesFailure]),
+// or one another node or build can get past while a live node may
+// ([ErrResumeElsewhere], [CoordinatorOptions.ResumableElsewhere]). A fleet
+// that cannot be read counts nothing: the store that did not answer is the
+// node's, and the next failure asks again.
+func (c *Coordinator) runsOwnFailure(ctx context.Context, run PendingRun, err error) bool {
+	if c.nodesFailure != nil && c.nodesFailure(ctx, err) {
+		return false
+	}
+	if !errors.Is(err, ErrResumeElsewhere) || c.resumableElsewhere == nil {
+		return true
+	}
+	elsewhere, readErr := c.resumableElsewhere(ctx, run)
+	if readErr != nil {
+		log.WarnContext(ctx, "sandbox_resume_elsewhere_unread",
+			"turn_id", run.TurnID, "agent", run.AgentHandle, "error", readErr.Error(),
+			"detail", "whether a live node can resume the run could not be read, so this "+
+				"failure is not counted toward the resume give-up; the next one asks again")
+		return false
+	}
+	return !elsewhere
 }

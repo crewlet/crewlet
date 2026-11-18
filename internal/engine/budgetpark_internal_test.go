@@ -110,6 +110,9 @@ type parkRig struct {
 	// ran last, which a turn the case plays launches for ([parkRig.turning]).
 	current Request
 	turnFn  func() (turn.Result, error)
+	// mailbox is the Lead's inbox handler, which [parkRig.retake] attaches
+	// again.
+	mailbox queue.BatchHandler
 }
 
 // turning is the request of the turn the rig's dispatcher is running.
@@ -208,19 +211,40 @@ func newFlooredParkRig(t *testing.T, dayCeiling, floor string) *parkRig {
 			return turn.Result{}, nil
 		},
 	}
+	r.mailbox = func(ctx context.Context, evs []*events.Event) queue.Result {
+		r.mu.Lock()
+		r.handed++
+		r.mu.Unlock()
+		return d.Dispatch(ctx, "lead", evs)
+	}
+	r.retake(t)
+	return r
+}
+
+// retake takes the Lead's seat on this rig's node, as a node's acquisition
+// does: the attachment of its inbox recorded, then the inbox attached.
+func (r *parkRig) retake(t *testing.T) {
+	t.Helper()
 	inbox, group := topics.AgentInbox(seatOf("lead")), topics.AgentInboxGroup(seatOf("lead"))
-	if err := q.SubscribeBatch(t.Context(), inbox, group,
-		func(ctx context.Context, evs []*events.Event) queue.Result {
-			r.mu.Lock()
-			r.handed++
-			r.mu.Unlock()
-			return d.Dispatch(ctx, "lead", evs)
-		},
+	takeInbox(t, r.e, r.q, seatOf("lead"))
+	if err := r.q.SubscribeBatch(t.Context(), inbox, group, r.mailbox,
 		func(ev *events.Event) string { return ev.ID.String() },
 		queue.DefaultBatchOptions()); err != nil {
 		t.Fatalf("SubscribeBatch: %v", err)
 	}
-	return r
+}
+
+// release lets the Lead's seat go as a node's release does, in its order: the
+// inbox detached, which drops every hold on it and ends its attachment, then
+// the engine told (the attachment forgotten and the seat's budget park with it).
+func (r *parkRig) release(t *testing.T) {
+	t.Helper()
+	if _, err := r.q.Detach(t.Context(), topics.AgentInbox(seatOf("lead")),
+		topics.AgentInboxGroup(seatOf("lead"))); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	r.e.detachInbox(seatOf("lead"))
+	r.e.forgetBudgetPark(seatOf("lead"))
 }
 
 // spend puts tokens on the Lead's counters in the windows of the rig's clock.
@@ -795,14 +819,16 @@ func (unreachableFleet) Used(context.Context, string, coord.Windows) (coord.Usag
 // A RELEASED SEAT TAKES ITS ALARM AND ITS HOLD WITH IT, and a stopping node
 // disarms every alarm: an alarm left armed would fire into a seat a peer now
 // serves, or into a queue client that has closed. The release's detach drops
-// every hold the inbox had then, and the release forgets the park after it;
-// but a park taken in between (a turn refused mid-flight, which the release
-// does not wait for) holds an inbox the detach is done with, and forgotten
-// without its hold, it kept the seat deaf on this node, with no park left to
-// lift it.
+// every hold the inbox had then and ends the attachment they were taken for,
+// and the release forgets the park after it; a park asked in between (a turn
+// refused mid-flight, which the release does not wait for) names that ended
+// attachment, and the queue refuses it. Taken anyway, as it was when holds
+// were keyed by the subscription alone, its hold kept the seat deaf on this
+// node once it came back, with no park left to lift it.
 //
-// Mutation: drop the hold's lift from the forget (seatParks.forget), and the
-// forgotten park's hold stays on the seat's inbox.
+// Mutation: take a park's hold for the inbox's current attachment rather than
+// the one the seat held, and the park asked between the detach and the forget
+// holds the inbox the seat comes back to.
 func TestAParkEndsWithItsSeatAndWithTheNode(t *testing.T) {
 	t.Parallel()
 	r := newParkRig(t, "100")
@@ -812,18 +838,28 @@ func TestAParkEndsWithItsSeatAndWithTheNode(t *testing.T) {
 		t.Fatalf("precondition: %d alarms armed and holds %v, want the park's alarm and hold",
 			len(r.alarms.live()), r.holds())
 	}
-	r.e.forgetBudgetPark(t.Context(), seatOf("lead"))
+	// THE RELEASE'S DETACH, and a park asked before the release tells the
+	// engine: a turn refused mid-flight parks once the turn has run.
+	if _, err := r.q.Detach(t.Context(), topics.AgentInbox(seatOf("lead")),
+		topics.AgentInboxGroup(seatOf("lead"))); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	if _, parked, err := r.e.budgetPark(t.Context(), "lead", nil, nil); !errors.Is(err, queue.ErrAttachmentGone) || parked {
+		t.Fatalf("a park asked once the release detached the inbox = %v, %v; want it refused", parked, err)
+	}
+	r.e.detachInbox(seatOf("lead"))
+	r.e.forgetBudgetPark(seatOf("lead"))
 	if n := len(r.alarms.live()); n != 0 {
 		t.Fatalf("a released seat left %d alarms armed", n)
 	}
 	if holds := r.holds(); slices.Contains(holds, pauseReasonBudget) {
-		t.Fatalf("a released seat's inbox is still held %v: its forgotten park left its hold", holds)
+		t.Fatalf("a released seat's inbox is still held %v: a park asked after its detach left its hold", holds)
 	}
 
 	// The seat comes back to this node, and the attachment is live again.
 	// The mail it kept is handed over and parks again, on the counters it
 	// finds.
-	r.renew(t)
+	r.retake(t)
 	if len(r.alarms.live()) != 1 || r.runs() != 0 {
 		t.Fatalf("precondition: %d alarms armed and %d turns run after parking again",
 			len(r.alarms.live()), r.runs())

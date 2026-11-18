@@ -193,8 +193,10 @@ type unfinishedCall struct {
 // holds in flight ([Coordinator.awaitCalls]), naming each it stopped waiting for
 // (`sandbox_calls_unfinished`); and reports whether the log held any, so the
 // caller reads what their updates wrote to the run's record — their spend —
-// again. An error is the wait's: its context ended, or the store could not be
-// watched, and the collection is handed back as any whose read failed.
+// again. An error is the wait's: its context ended, which the collection
+// judges as it judges every read its context ended; or the store could not be
+// watched ([ErrStoreSilent]), which hands the collection back uncounted, since
+// the store's silence is no failure of the box ([Coordinator.collectFailed]).
 func (c *Coordinator) drainCalls(ctx context.Context, run PendingRun) (bool, error) {
 	if c.ended != nil {
 		c.ended(run.TurnID)
@@ -234,13 +236,16 @@ func (c *Coordinator) nameUnfinished(ctx context.Context, run PendingRun, left [
 // watched again, after a jittered pause, and the store's watch reads the log
 // again as it begins ([PendingStore.WatchLog]), so nothing written between the
 // two is missed. A watch that cannot be made is an error: a store that cannot be
-// read could not have answered the read the collection makes next either.
+// read could not have answered the read the collection makes next either. It is
+// the store's silence ([ErrStoreSilent]), the first watch's and one made again
+// alike, and never the box's.
 func (c *Coordinator) awaitCalls(ctx context.Context, run PendingRun) ([]unfinishedCall, int, error) {
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
 	views, err := c.pending.WatchLog(ctx, run.TurnID)
 	if err != nil {
-		return nil, 0, fmt.Errorf("sandbox: watching the log of run %s for its calls in flight: %w", run.TurnID, err)
+		return nil, 0, storeSilent(ctx, fmt.Errorf("sandbox: watching the log of run %s for its calls in flight: %w",
+			run.TurnID, err))
 	}
 	tick := time.NewTicker(callsDrainTick)
 	defer tick.Stop()
@@ -309,7 +314,8 @@ func (c *Coordinator) watchAgain(ctx context.Context, turnID string, attempt int
 	}
 	views, err := c.pending.WatchLog(ctx, turnID)
 	if err != nil {
-		return nil, fmt.Errorf("sandbox: watching the log of run %s again for its calls in flight: %w", turnID, err)
+		return nil, storeSilent(ctx, fmt.Errorf("sandbox: watching the log of run %s again for its calls in "+
+			"flight: %w", turnID, err))
 	}
 	return views, nil
 }

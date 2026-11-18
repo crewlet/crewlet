@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -79,6 +80,33 @@ func (e *Engine) retiredState(ctx context.Context, decoded error) (*sandbox.Unre
 			"(version %d; this build reads %d), so after the upgrade it is ended rather than "+
 			"retried and its question is withdrawn; the work it pushed, if any, is on its branch",
 		version.Found, execstate.Version)}, nil
+}
+
+// resumableElsewhere is [sandbox.CoordinatorOptions.ResumableElsewhere]:
+// whether a live node other than this one reads the version of run's parked
+// state ([Engine.fleetReadsParkedState]), so a resume this node cannot make
+// for want of the build that wrote the state ([sandbox.ErrResumeElsewhere]) is
+// not counted toward the resume give-up while one can, and is once none can.
+// A run whose parked state names no version (none parked, or bytes that are no
+// state) is read by no node.
+func (e *Engine) resumableElsewhere(ctx context.Context, run sandbox.PendingRun) (bool, error) {
+	version, ok := parkedStateVersion(run.ExecuteState)
+	if !ok {
+		return false, nil
+	}
+	return e.fleetReadsParkedState(ctx, version)
+}
+
+// parkedStateVersion is the version a parked state was written at: the one a
+// build that does not read it names ([execstate.VersionError]), or this
+// build's for a state it decodes. False for none, or for bytes that are no
+// state.
+func parkedStateVersion(blob json.RawMessage) (int, bool) {
+	_, ok, err := execstate.Decode(blob)
+	if version, isVersion := errors.AsType[*execstate.VersionError](err); isVersion {
+		return version.Found, true
+	}
+	return execstate.Version, ok
 }
 
 // fleetReadsParkedState reports whether another live node may still read

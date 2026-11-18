@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // chatReply is a chat delivery offered as an answer: the conversation it came
@@ -114,7 +116,7 @@ type holdSpy struct {
 	log  []string
 }
 
-func (h *holdSpy) Hold(_ context.Context, handle string) error {
+func (h *holdSpy) Hold(_ context.Context, handle string, _ queue.Attachment) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.held == nil {
@@ -125,7 +127,7 @@ func (h *holdSpy) Hold(_ context.Context, handle string) error {
 	return nil
 }
 
-func (h *holdSpy) Release(_ context.Context, handle string) error {
+func (h *holdSpy) Release(_ context.Context, handle string, _ queue.Attachment) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delete(h.held, handle)
@@ -505,5 +507,119 @@ func TestAReplyToARunWhoseEndingIsDecidedIsAnOrdinaryMessage(t *testing.T) {
 		if told := rig.answeredRecords(); len(told) != 0 {
 			t.Errorf("%s: recorded %+v, want no record of a reply to a run that is ending", name, told)
 		}
+	}
+}
+
+// holdStep is a [holdSpy] that runs at with each hold before it takes it.
+type holdStep struct {
+	holdSpy
+	at func(handle string)
+}
+
+func (h *holdStep) Hold(ctx context.Context, handle string, inbox queue.Attachment) error {
+	h.at(handle)
+	return h.holdSpy.Hold(ctx, handle, inbox)
+}
+
+// AN OWED RUN HOLDS ITS SEAT'S MAIL ONLY BEHIND A SERIES RECORDED AND ARMED TO
+// DRIVE IT. Each way this node owes a seat's run for a series' retry records the
+// series, owes the run and arms the series' attempt in one step of the lock: an
+// answer by turn or a recovered seat's owed answer ([Coordinator.queueOwed]), an
+// ending that did not finish ([Coordinator.oweEndingAfter]), a dead claim's
+// revival that did not land ([Coordinator.oweRevival]) and an answer left to its
+// job's owed release ([Coordinator.leaveToRelease]). A seat's release
+// ([Coordinator.ReleaseSeat]) drops the series, its attempt and the seat's owed
+// runs, and a run owed in a step of its own after the one that recorded its
+// series was owed again with nothing to drive it: the seat's mail held on this
+// node until a settle of that run or the seat's next release. The attempt is
+// armed under the lock, so the case reads, as it is armed, whether the run is
+// owed yet; and the hold is taken once the step is over, so it reads the series
+// as the step left it.
+//
+// Mutation: owe the seat's run in a step after the one that records the series
+// and arms its attempt, as leaveToRelease did, and the run is not owed yet when
+// its series is armed; owe it and arm the series in steps after the one that
+// records it, as queueOwed, oweEndingAfter and oweRevival did, and the hold is
+// taken behind a series nothing has armed. Either split, at any of the four,
+// turns that one's case red.
+// ([TestASeatReleasedAsAnAnswerIsLeftToItsReleaseOwesItNothing] releases the
+// seat between leaveToRelease's two steps.)
+func TestAnOwedRunIsHeldBehindOnlyASeriesRecordedAndArmed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// keep keeps run's series as the case names.
+		keep func(t *testing.T, rig *coordRig, run PendingRun)
+		// records is what the series must hold for the run it keeps.
+		records func(r *answerRetry) bool
+	}{
+		{name: "an owed answer queued",
+			keep: func(t *testing.T, rig *coordRig, run PendingRun) {
+				rig.coordinator.queueOwed(t.Context(), run)
+			},
+			records: func(*answerRetry) bool { return true }},
+		{name: "an ending kept",
+			keep: func(t *testing.T, rig *coordRig, run PendingRun) {
+				rig.coordinator.oweEndingAfter(t.Context(), run, ending{launch: run.LaunchID}, answerRetryCeiling)
+			},
+			records: func(r *answerRetry) bool { return r.ending != nil }},
+		{name: "a revival kept",
+			keep: func(t *testing.T, rig *coordRig, run PendingRun) {
+				rig.coordinator.oweRevival(t.Context(), run, fenceOf(run),
+					errStoreUnavailable("revive the claim", run.TurnID))
+			},
+			records: func(r *answerRetry) bool { return r.revive != nil }},
+		{name: "an answer left to its job's owed release",
+			keep: func(t *testing.T, rig *coordRig, run PendingRun) {
+				claimed := run
+				claimed.Status = StatusResumed
+				rig.coordinator.mu.Lock()
+				_, _ = rig.coordinator.handingBackLocked(claimed, "", failure{}, nil)
+				rig.coordinator.mu.Unlock()
+				if !rig.coordinator.leaveToRelease(t.Context(), run) {
+					t.Error("the premise: the answer was not left to its job's owed release")
+				}
+			},
+			records: func(*answerRetry) bool { return true }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var mu sync.Mutex
+			var steps []string
+			note := func(step string) {
+				mu.Lock()
+				defer mu.Unlock()
+				steps = append(steps, step)
+			}
+			var rig *coordRig
+			rig = newCoordRigWith(t, func(o *CoordinatorOptions) {
+				// ARMED UNDER THE LOCK THE ARMING STEP HOLDS
+				// ([Coordinator.scheduleOwedLocked]): what the seat owes
+				// is read as that step has left it so far.
+				o.After = func(delay time.Duration, f func()) func() bool {
+					_, owed := rig.coordinator.owed["swe"]["t1"]
+					note(fmt.Sprintf("armed: owed %v", owed))
+					return rig.retries.after(delay, f)
+				}
+			})
+			run := rig.launch("t1")
+			rig.coordinator.hold = &holdStep{at: func(handle string) {
+				rig.coordinator.mu.Lock()
+				r := rig.coordinator.retries["t1"]
+				_, owed := rig.coordinator.owed[handle]["t1"]
+				recorded := r != nil && tc.records(r)
+				armed := r != nil && r.stop != nil
+				rig.coordinator.mu.Unlock()
+				note(fmt.Sprintf("%s held: owed %v, series recorded %v, armed %v", handle, owed, recorded, armed))
+			}}
+			tc.keep(t, rig, run)
+
+			mu.Lock()
+			defer mu.Unlock()
+			want := []string{"armed: owed true", "swe held: owed true, series recorded true, armed true"}
+			if !slices.Equal(steps, want) {
+				t.Fatalf("the series armed and the seat's mail held as %q; want %q", steps, want)
+			}
+		})
 	}
 }

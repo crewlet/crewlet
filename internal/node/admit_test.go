@@ -534,7 +534,7 @@ type resumeHook struct {
 	hook func()
 }
 
-func (q *resumeHook) ResumeTopic(ctx context.Context, topic, group, reason string) error {
+func (q *resumeHook) ResumeTopic(ctx context.Context, topic, group string, at queue.Attachment, reason string) error {
 	q.mu.Lock()
 	hook := q.hook
 	if strings.HasPrefix(reason, node.HoldSeatTurn) {
@@ -544,7 +544,7 @@ func (q *resumeHook) ResumeTopic(ctx context.Context, topic, group, reason strin
 	if hook != nil && strings.HasPrefix(reason, node.HoldSeatTurn) {
 		hook()
 	}
-	return q.EventQueue.ResumeTopic(ctx, topic, group, reason)
+	return q.EventQueue.ResumeTopic(ctx, topic, group, at, reason)
 }
 
 // A TURN ADMITTED AS THE LAST ONE LETS GO KEEPS ITS OWN HOLD. The release frees

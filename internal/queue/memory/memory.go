@@ -246,6 +246,7 @@ func (b *Broker) Client(opts ...Option) *Queue {
 		broker:          b,
 		maxRedeliveries: defaultMaxRedeliveries,
 		pauses:          map[subKey]map[string]struct{}{},
+		current:         map[subKey]queue.Attachment{},
 		quiescing:       map[subKey]struct{}{},
 	}
 	// Options are applied under the broker lock because one of them
@@ -269,9 +270,9 @@ func (b *Broker) Client(opts ...Option) *Queue {
 // on every client: Publish, Subscribe, SubscribeBatch, EnsureSubscription,
 // DeleteSubscription, ListSubscriptions, SubscribeStream, Serve, Ask, Broadcast,
 // Listen and the three dead-letter verbs. The verbs about a client's OWN
-// attachments (Quiesce, Unquiesce, Detach, PauseTopic, ResumeTopic) still
-// answer, because on the broker this twin stands for they are the client's own
-// state and touch no server, and a node
+// attachments (Quiesce, Unquiesce, Detach, Attachment, PauseTopic,
+// ResumeTopic) still answer, because on the broker this twin stands for they
+// are the client's own state and touch no server, and a node
 // that cannot prove it owns a seat quiesces it on exactly the outage this
 // models. Nothing is delivered, and no client is stopped by it: a queue whose
 // broker went away is still live, which is the difference between
@@ -463,9 +464,15 @@ type Queue struct {
 	// state: every gate here describes THIS process's consumer, and a
 	// subscription-level answer would let one node's pause hold, or one
 	// node's shutdown, stop a peer from serving the seat it owns.
-	running   bool
-	paused    bool
-	pauses    map[subKey]map[string]struct{}
+	running bool
+	paused  bool
+	pauses  map[subKey]map[string]struct{}
+	// current is each pair's current attachment and minted the last one
+	// this client minted: see [Queue.Attachment]. minted is never reset,
+	// a restart included, so no two attachments of this client share a
+	// value.
+	current   map[subKey]queue.Attachment
+	minted    queue.Attachment
 	quiescing map[subKey]struct{}
 	listeners []queue.PublishListener
 
@@ -538,6 +545,7 @@ func (q *Queue) Start(context.Context) error {
 	// queue that has been started serves, and is never silently gated by
 	// state from a previous one.
 	clear(q.pauses)
+	clear(q.current)
 	clear(q.quiescing)
 	q.broker.mu.Unlock()
 
@@ -561,6 +569,7 @@ func (q *Queue) Stop(ctx context.Context) error {
 		q.dropMembersLocked(sub)
 	}
 	clear(q.pauses)
+	clear(q.current)
 	clear(q.quiescing)
 	q.broker.streams = slices.DeleteFunc(q.broker.streams, func(s *streamSub) bool {
 		return s.owner == q
@@ -922,9 +931,11 @@ func (q *Queue) Detach(_ context.Context, topic, group string) (bool, error) {
 	}
 	// Holds and the quiesce flag describe THIS attachment, so they are
 	// released with it — unconditionally, before the attachment is even
-	// looked up. One that outlived a detach would leave a node that
-	// re-attached later silently deaf.
+	// looked up. And the attachment ENDS, so a hold asked for it after
+	// this is refused. One that outlived a detach, or was taken for it
+	// after one, would leave a node that re-attached later silently deaf.
 	delete(q.pauses, key)
+	delete(q.current, key)
 	delete(q.quiescing, key)
 
 	sub, ok := q.broker.subs[key]
@@ -1204,7 +1215,28 @@ func (q *Queue) PauseDelivery(context.Context) error {
 	return nil
 }
 
-// PauseTopic takes one reason's hold on this client's attachment.
+// Attachment answers the pair's current attachment on this client, minting
+// it on the first read since the pair's last Detach (or this client's last
+// start).
+func (q *Queue) Attachment(_ context.Context, topic, group string) (queue.Attachment, error) {
+	key := subKey{topic, group}
+	q.broker.mu.Lock()
+	defer q.broker.mu.Unlock()
+	if q.notStartedLocked() {
+		return 0, ErrNotStarted
+	}
+	at, ok := q.current[key]
+	if !ok {
+		q.minted++
+		at = q.minted
+		q.current[key] = at
+	}
+	return at, nil
+}
+
+// PauseTopic takes one reason's hold on this client's attachment: the one at
+// names, which it refuses unless at is the pair's current attachment: a hold
+// asked for an attachment a Detach has ended would otherwise gate the next.
 //
 // It does NOT create the subscription, and used to. A hold is process-local
 // state about one attachment; on a real broker it gates local dispatch and
@@ -1223,13 +1255,18 @@ func (q *Queue) PauseDelivery(context.Context) error {
 // mail it gates) was answering a question the contract already answers the
 // other way: publishing to a topic with no subscription drops the event, and
 // EnsureSubscription is how a caller asks for retention.
-func (q *Queue) PauseTopic(_ context.Context, topic, group, reason string) error {
+func (q *Queue) PauseTopic(_ context.Context, topic, group string, at queue.Attachment, reason string) error {
 	key := subKey{topic, group}
 	reason = normalizeReason(reason)
 	q.broker.mu.Lock()
 	if q.notStartedLocked() {
 		q.broker.mu.Unlock()
 		return ErrNotStarted
+	}
+	if cur, ok := q.current[key]; !ok || cur != at {
+		q.broker.mu.Unlock()
+		return fmt.Errorf("memory: hold %q on %s/%s for attachment %d: %w",
+			reason, topic, group, at, queue.ErrAttachmentGone)
 	}
 	held, ok := q.pauses[key]
 	if !ok {
@@ -1243,18 +1280,24 @@ func (q *Queue) PauseTopic(_ context.Context, topic, group, reason string) error
 	return nil
 }
 
-// ResumeTopic releases one reason's hold, flushing when none remain.
+// ResumeTopic releases one reason's hold on the attachment at names, flushing
+// when none remain. Under an attachment that has ended it lifts nothing: the
+// Detach that ended it dropped every hold it carried.
 //
 // A topic stays paused while ANY reason holds it. With one flat hold, a
 // second subsystem gating the same inbox would un-gate the first by lifting
 // its own hold, on a completely ordinary code path.
-func (q *Queue) ResumeTopic(ctx context.Context, topic, group, reason string) error {
+func (q *Queue) ResumeTopic(ctx context.Context, topic, group string, at queue.Attachment, reason string) error {
 	key := subKey{topic, group}
 	reason = normalizeReason(reason)
 	q.broker.mu.Lock()
 	if q.notStartedLocked() {
 		q.broker.mu.Unlock()
 		return ErrNotStarted
+	}
+	if cur, ok := q.current[key]; !ok || cur != at {
+		q.broker.mu.Unlock()
+		return nil
 	}
 	held := q.pauses[key]
 	if len(held) == 0 {

@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/accessreview"
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
@@ -385,6 +386,19 @@ func (r Request) Ask() []*events.Event {
 //     that is a different question from "did it fail", and why answering it
 //     with `err != nil` alone replayed a turn's external writes up to
 //     twenty-five times.
+//
+// A FAILURE OF THIS NODE'S IS NEVER THE MAIL'S OWN. Where the requeue of a
+// partition's tail or of a park's delivery fails, or the turn does, the NAK
+// asks [nodesFailure] through [nakFailure], the answer the seat's sandbox
+// control topic NAKs by too ([controlOutcome]), so an outage, a queue
+// no longer live, a stop or drain that ended the delivery's context, or a
+// coordination store, a state log, a store or a disk that failed the turn is
+// NAK'd as the node's ([queue.NakNode]) and a delivery whose budget it spends
+// is kept with its group's unhandled deliveries, never with its poison. A
+// dispatcher built with no requeue path NAKs that tail and that park as the
+// mail's, for a wiring defect rather than a requeue that failed, and the
+// engine builds none: it fills in [Dispatcher.Park] where its caller left it
+// nil.
 //
 // NO PANIC LEAVES THIS FRAME. A phase that panics is recovered inside the turn
 // loop and comes back as an ordinary broken turn; anything else that panics
@@ -804,8 +818,10 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			// is ever this delivery's to settle, and the tail, its copies
 			// waiting for the seat, is never gone with it ([goneBy]).
 			held.events, held.requeued = head, tail
+			// A requeue that failed for a reason of this node's is NAK'd
+			// as the node's own, never the mail's ([nakFailure]).
 			if err := d.Park(ctx, handle, tail); err != nil {
-				return queue.Nak(fmt.Errorf("engine: requeue %s: %w", handle, err))
+				return nakFailure(ctx, fmt.Errorf("engine: requeue %s: %w", handle, err))
 			}
 			routing = inbox.Routing{
 				WorkKey: headKey, Events: head,
@@ -1002,7 +1018,15 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			// worked through, so this delivery is dropped when it comes
 			// round rather than answered a second time, out of order.
 			// See workedthrough.go.
-			return queue.Nak(fmt.Errorf("engine: turn for %s: %w", handle, err))
+			//
+			// THE NODE'S OWN where the queue tells the failure as this
+			// node's, or it is a condition of the infrastructure
+			// ([nakFailure]): a turn a drain ended, one whose publish the
+			// broker did not answer, or one that could not read where its
+			// writes are minted from a coordination store that did not
+			// answer, failed for nothing the mail did, so a delivery it
+			// spends is never kept as poison.
+			return nakFailure(ctx, fmt.Errorf("engine: turn for %s: %w", handle, err))
 		}
 		return d.abandon(ctx, handle, req, err, reason)
 	}
@@ -1577,9 +1601,10 @@ func (d *Dispatcher) SpendAnswer(ctx context.Context, handle string, evs []*even
 }
 
 // park requeues a delivery and acks it, or NAKs where it could not be
-// requeued. Only behind a pause hold ([inbox.ActionPauseAndPark]): the copies
-// land on the inbox the delivery came from, and with nothing stopping the
-// consumer they would be fetched straight back.
+// requeued, as the node's own where the requeue failed for a reason of this
+// node's ([nakFailure]). Only behind a pause hold ([inbox.ActionPauseAndPark]):
+// the copies land on the inbox the delivery came from, and with nothing
+// stopping the consumer they would be fetched straight back.
 //
 // It takes the EVENTS rather than the screening that asked for them, so the
 // list it requeues is stated where it is decided.
@@ -1601,9 +1626,103 @@ func (d *Dispatcher) park(ctx context.Context, handle string, evs []*events.Even
 	// that settles its original ([goneBy]).
 	held.requeued = evs
 	if err := d.Park(ctx, handle, evs); err != nil {
-		return queue.Nak(fmt.Errorf("engine: park %s: %w", handle, err))
+		return nakFailure(ctx, fmt.Errorf("engine: park %s: %w", handle, err))
 	}
 	return queue.Ack()
+}
+
+// nakFailure NAKs a seat's mail that failed, for a retry: as THIS NODE'S OWN
+// failure ([queue.NakNode]) where [nodesFailure] says it is one, and as the
+// mail's ([queue.Nak]) otherwise. Both return the delivery on the same
+// backoff behind its conversation's newer mail and spend the same budget; what
+// differs is where a delivery whose budget is spent is kept
+// ([queue.RetiredTo]). Counted as the mail's, an outage or a drain spending it
+// put a healthy message with its group's poison, which nothing replays; as the
+// node's, it is kept with the group's unhandled deliveries, as one no member
+// handled.
+//
+// The requeue of a partition's tail, a park's requeue and a turn's failure all
+// answer through it, so a failure one of them keeps out of the poison is one
+// the others keep out too.
+func nakFailure(ctx context.Context, err error) queue.Result {
+	if nodesFailure(ctx, err) {
+		return queue.NakNode(err)
+	}
+	return queue.Nak(err)
+}
+
+// nodesFailure reports whether err, the failure of a delivery a seat was
+// handed, is THIS NODE'S OWN or its infrastructure's rather than the work's:
+// the one answer both handlers of a seat's deliveries NAK by, its mailbox's
+// ([nakFailure]) and its sandbox control topic's ([controlOutcome]), and the
+// one the sandbox coordinator counts a failed resume toward the give-up that
+// ends its run by ([sandbox.CoordinatorOptions.NodesFailure]): only the run's
+// own failures count. One answer, because the same failure reaches all
+// three: a turn and a resumed turn read where their writes are minted from
+// the same coordination store ([rebaseFor]), and a copy of the rule at each
+// handler had already let the control topic count that read's outage against
+// the message while the mailbox kept it out of the poison.
+//
+// The node's, in four ways:
+//   - THE QUEUE TELLS IT AS THE NODE'S ([queue.NodeFault]): a broker that did
+//     not answer, a queue no longer live, a delivery whose context this
+//     node's stop or seat move ended, the test internal/notify's wakes ask
+//     too.
+//   - A CONDITION OF THE INFRASTRUCTURE the engine runs on, which the queue
+//     cannot tell: a coordination store that did not answer (a turn whose work
+//     began past the operation ledger's horizon reads where its writes are
+//     minted before it runs, [rebaseFor]), a state log, a data node or a
+//     store that could not take the write, a file store, a disk, the fleet's
+//     nodes holding different keys or builds. Read by the one classification of
+//     conditions, which every tool's refusal reads and a failed turn's record
+//     names a condition by ([builtin.ConditionKind],
+//     [builtin.InfrastructureKind] decides each kind's side and says why),
+//     never by a list of its own; and read off the failure rather than off
+//     its record, so a provider's failure that wraps one (a harness whose
+//     prompt a full disk could not take) is the node's though its record
+//     names the provider's own kind. A coding sandbox's class is put on a
+//     side by whether a mail can cause it: a provider that did not answer,
+//     at its account's limit, wanting it paid for or refusing the company's
+//     credentials, a setup download failing on the far side and a
+//     configuration the deployment cannot start are the node's. A deadline,
+//     an abandoned wait and a write the state log refused for what the write
+//     itself is stay the work's.
+//   - THE COORDINATION STORE'S SILENCE on a step of the sandbox coordinator's
+//     ([sandbox.ErrStoreSilent]).
+//   - A HAND-BACK MADE WHILE NO WAITER CAN ANNOUNCE ITS JOB
+//     ([sandbox.ErrUnannounced], [controlOutcome] says why).
+//
+// The last two are marks the sandbox coordinator makes on a completion's
+// claim, collection, park and refusal record and on its hand-backs, which
+// only the seat's control topic delivers: no step a mailbox's turn asks of
+// the coordinator, its executor's launch ([sandbox.Coordinator.Launch]),
+// makes either. The mailbox reads them as the node's all the same, so the
+// two handlers cannot come to disagree on one.
+//
+// NOT A RESUME ANOTHER NODE OR BUILD CAN MAKE ([sandbox.ErrResumeElsewhere]):
+// the control topic hands that back as the node's as well ([controlOutcome]),
+// but it is no failure of this node's, and the give-up counts it once no live
+// node reads the version of the run's parked state
+// ([sandbox.CoordinatorOptions.ResumableElsewhere]) rather than never, which
+// this answer would make it. A mailbox's turn never meets it.
+func nodesFailure(ctx context.Context, err error) bool {
+	return storeUnheard(err) || queue.NodeFault(ctx, err) || infrastructureFailure(err)
+}
+
+// storeUnheard reports whether err carries one of the sandbox coordinator's
+// marks for a store that did not answer it: a step's silence
+// ([sandbox.ErrStoreSilent]) or a hand-back no waiter can announce again
+// ([sandbox.ErrUnannounced]).
+func storeUnheard(err error) bool {
+	return errors.Is(err, sandbox.ErrStoreSilent) || errors.Is(err, sandbox.ErrUnannounced)
+}
+
+// infrastructureFailure reports whether err is a condition of the
+// infrastructure the engine runs on, by the one classification of conditions
+// ([builtin.ConditionKind], [builtin.InfrastructureKind]).
+func infrastructureFailure(err error) bool {
+	kind, ok := builtin.ConditionKind(err)
+	return ok && builtin.InfrastructureKind(kind)
 }
 
 // dropWorked removes the events the completion ledger has already recorded.

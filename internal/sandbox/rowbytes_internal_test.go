@@ -555,17 +555,66 @@ func worstRow(t *testing.T) PendingRun {
 	// was read, and read by a take that named itself — the engine's takes name
 	// themselves by a fresh UUID — and was settled unanswered, and then by a
 	// launch's brief that told it again, keeping that take's read beside its
-	// own: every field of both reads at its widest.
+	// own: every field of both reads at its widest, marked restarted too. And
+	// each served to one job's hooks as often as a note may be
+	// ([MaxNoteServes]), every serve lost to a cancel, at the widest step, and
+	// keeping the call it answered at the widest the store keeps one, through
+	// the rule that keeps it ([keptCallOf]): each half at [MaxNoteCallBytes]
+	// in the id charset, which the encoder writes as itself, the id a JSON
+	// string, whose two quotes are the only bytes of a kept call it escapes.
+	//
+	// EVERY COUNTER AT THE WIDTH OF WHAT IT COUNTS. A read's and a serve's
+	// iteration is its job's, which the launch's own record below holds at
+	// math.MaxInt, turn_engine.max_iterations having no ceiling. A note's and
+	// an item's Seq is the turn's numbering ([RunSteer.Seq], at math.MaxInt
+	// below): a relaunch keeps it while its write removes every item, so the
+	// items a turn's jobs file push it past any index of the twenty the row
+	// holds. A read's round is the review's, which takes a handful, or a
+	// job's one: 99 is past both.
+	widestCall := NoteCall{Session: plain(MaxNoteCallBytes), ID: `"` + plain(MaxNoteCallBytes-2) + `"`}
+	if keptCallOf(&widestCall) == nil {
+		t.Fatalf("the store keeps no call at its widest, %+v", widestCall)
+	}
+	// AND NONE WIDER AS WRITTEN: a call at the bound holding one byte the
+	// encoder escapes, in its session, in a quoted id or in a bare one, would
+	// be written up to six bytes a byte, which this model never measures.
+	for _, escaping := range []NoteCall{
+		{Session: plain(MaxNoteCallBytes-1) + "<", ID: "7"},
+		{Session: plain(MaxNoteCallBytes), ID: `"` + plain(MaxNoteCallBytes-3) + `<"`},
+		{Session: plain(MaxNoteCallBytes), ID: plain(MaxNoteCallBytes-1) + "<"},
+	} {
+		if keptCallOf(&escaping) != nil {
+			t.Fatalf("the store keeps a call holding a byte its encoder escapes, %+v: a kept call is no longer "+
+				"written as itself, so this row no longer models its calls at their widest", escaping)
+		}
+	}
 	read := func() *NoteRead {
-		return &NoteRead{At: worstAt, Order: math.MaxInt, Phase: "execute", Iteration: 99, Round: 99,
-			Boundary: "tool_batch", Launch: uuid.NewString(), Take: uuid.NewString(), Unanswered: true}
+		return &NoteRead{At: worstAt, Order: math.MaxInt, Phase: "execute", Iteration: math.MaxInt, Round: 99,
+			Boundary: "tool_batch", Launch: uuid.NewString(), Take: uuid.NewString(), Unanswered: true,
+			Restarted: true}
+	}
+	serves := func() []HookServed {
+		out := make([]HookServed, MaxNoteServes)
+		for i := range out {
+			out[i] = HookServed{Take: uuid.NewString(), Launch: uuid.NewString(), Boundary: "tool_batch",
+				Iteration: math.MaxInt, At: worstAt, Lost: ServeCancelled, Call: keptCallOf(&widestCall)}
+		}
+		return out
 	}
 	notes := make([]RunNote, 10)
 	for i := range notes {
 		told := read()
 		told.Retold = read()
-		notes[i] = RunNote{ID: uuid.NewString(), Seq: i + 1, Sealed: []byte(plain(MaxNoteSealedBytes)), At: worstAt,
-			Served: uuid.NewString(), Read: told}
+		notes[i] = RunNote{ID: uuid.NewString(), Seq: math.MaxInt - i, Sealed: []byte(plain(MaxNoteSealedBytes)),
+			At: worstAt, Served: uuid.NewString(), Place: math.MaxInt, Serves: serves(), Read: told}
+	}
+	// AND A JOB'S ITEMS, as many as the row holds ([MaxJobItems]), each sealed
+	// at a note's bound, for a job, served as often and read by its job's own
+	// step: no brief tells an item again, the next launch removing it.
+	for range MaxJobItems {
+		notes = append(notes, RunNote{ID: uuid.NewString(), Seq: math.MaxInt - len(notes),
+			Sealed: []byte(plain(MaxNoteSealedBytes)), At: worstAt, Served: uuid.NewString(), Place: math.MaxInt,
+			Serves: serves(), For: uuid.NewString(), Read: read()})
 	}
 	// THE READS A BRIEF LEFT OUT, as a launch records them on the job's record
 	// and a capture states them: a whole log's calls ([MaxBridgeCalls]), each a
@@ -589,6 +638,15 @@ func worstRow(t *testing.T) PendingRun {
 	}
 	if err := capture.Bounded(); err != nil {
 		t.Fatalf("the worst capture is past what the row carries: %v", err)
+	}
+	// THE SAVE UNDER WAY ([PendingRun.Saving]) is a third capture at the same
+	// bounds, but for what a save never is: final, holding a note, or stood by
+	// for (zeroInTheWorstRow says why).
+	save := *capture
+	save.Final, save.NoteCursor = false, 0
+	save.StandbyTaker, save.StandbyTakerEpoch, save.StandbyAt = "", 0, time.Time{}
+	if err := save.Bounded(); err != nil {
+		t.Fatalf("the worst save is past what the row carries: %v", err)
 	}
 	// THE DECISION THE HELD CALL CARRIES OUT ([HeldAct]), each field at the
 	// widest its source admits: the question, which for one asked in words is
@@ -714,7 +772,11 @@ func worstRow(t *testing.T) PendingRun {
 		// release writes none that is no window (BudgetWindow.Valid), and of
 		// the three periods a day spells the widest pair, written as itself.
 		RelaunchRefusedIn: BudgetWindow{Period: period.Day, Label: period.At(period.Day, worstAt, nil).Label},
-		EndedAtDeadline:   true, HarnessEnd: HarnessEnd(plain(32)),
+		EndedAtDeadline:   true, HostStoreSilentSince: worstAt, HarnessEnd: HarnessEnd(plain(32)),
+		// A REFUSAL THE SEAT'S HOLDER OWES, its condition at the longest
+		// the record takes, in the bytes that escape the most: nothing but
+		// that bound holds a condition's spelling ([MaxOwedConditionBytes]).
+		RefusalOwed: Condition(markup(MaxOwedConditionBytes)), RefusalOwedSince: worstAt,
 		// WHAT THE COPY IN ITS BOX CARRIED, at its widest: a figure of
 		// nineteen digits, a source as long as an end's word, and the job it
 		// names a launch id as the begin mints one ([LaunchRecord.Context]).
@@ -825,7 +887,7 @@ func worstRow(t *testing.T) PendingRun {
 		// THE RUN ITS TURN'S LEADS ARE KEPT FOR, a launch id as the create
 		// writes it, and how many leads that part has taken, at its widest.
 		LeadsRun: uuid.NewString(), LeadsAppended: math.MaxInt,
-		BoxSince: worstAt, Capture: capture, Kept: capture, Base: &base,
+		BoxSince: worstAt, Capture: capture, Kept: capture, Saving: &save, Base: &base,
 		ExhaustedSessions: slices.Repeat([]string{plain(executorkeep.SessionIDMaxBytes)},
 			executorkeep.ExhaustedMaxSessions),
 		OwedEnd: end, EndRecorded: true,
@@ -982,6 +1044,11 @@ func TestARunsValuesAreBudgetedToWhatOneKeyOfTheStoreHolds(t *testing.T) {
 // Grow or shrink a note's seal by a byte, and every other field no longer
 // weighs the figure the table states; grow or shrink the turn's read of its
 // conversation by a byte, and the rest no longer leaves the spare it states.
+//
+// And hold a served call to its length alone (keptCallOf's raw-length rule
+// before the id charset), which keeps a call its encoder escapes, and the
+// worst row refuses to be built: its calls would no longer be measured at
+// their widest.
 func TestTheWholeRowFitsItsBudget(t *testing.T) {
 	t.Parallel()
 	run := worstRow(t)
@@ -1050,13 +1117,26 @@ var zeroInTheWorstRow = func() map[string]string {
 		"Steer.Notes[0].Read.Retold.Retold": "a brief that tells a note again keeps the marked take's read " +
 			"beside its own (openNotes), and that read is never one a brief told: only a read marked unanswered " +
 			"is told again, a settle marks only a read naming its take, and a read a brief told names none",
+		"Steer.Notes[0].For": "the walk reads the first note, a person's, which is an item of the whole turn and " +
+			"names no job (RunNote.For); the worst row's job items, as many as it holds (MaxJobItems), each name " +
+			"theirs",
 	}
 	// WHERE A CAPTURE'S RUN BEGAN is one of two (RunStart): a run that began its
 	// session names no message it began after, and the worst capture names one at
 	// its bound, the wider of the two (RunAfter).
-	for _, capture := range []string{"Capture", "Kept"} {
+	for _, capture := range []string{"Capture", "Kept", "Saving"} {
 		zero[capture+".RunBegan"] = "a run that began its session names no message it began after, which the " +
 			"worst capture names at its bound, the wider of the two (RunStart, keptRunStart)"
+	}
+	// WHAT A SAVE NEVER IS ([PendingRun.Saving]): the store reserves none that
+	// says otherwise (reservable), and no read stands by for one.
+	zero["Saving.Final"] = "a save is of a job still working, and its reservation refuses a final one (reservable)"
+	zero["Saving.NoteCursor"] = "a save is cut off and holds no note, and its reservation refuses one that " +
+		"says otherwise (reservable)"
+	for _, field := range []string{"StandbyTaker", "StandbyTakerEpoch", "StandbyAt"} {
+		zero["Saving."+field] = "the section names no read standing by: the reservation that writes it " +
+			"refuses a save naming one (reservable), and the save's later stamps are kept there without one " +
+			"(stampOnto, savingAfter)"
 	}
 	// THE CALL A PERSON APPROVED, on the held call and owed to the log
 	// ([OwedCall]), as approvedCall keeps it from a call with every field set

@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1039,6 +1040,106 @@ func (e *Engine) useSandbox(pending sandbox.PendingStore, coordinator *sandbox.C
 		e.sandboxSeats = map[string]bool{}
 	}
 	e.sandbox.Store(&sandboxRuntime{pending: pending, coordinator: coordinator})
+}
+
+// THE COORDINATOR COUNTS A FAILED RESUME TOWARD ITS GIVE-UP BY THE ANSWER THE
+// SEAT'S DELIVERIES ARE NAKED BY (nodesFailure): a resume the coordination
+// store, the queue or a stop failed is the node's, and ends no run, while one
+// the run itself failed, a deadline among them, is counted. Unwired, every
+// failure is the run's, and half an hour of an outage ends every run whose job
+// finished during it.
+//
+// Mutation: leave NodesFailure off the coordinator's options, or hand it any
+// answer but nodesFailure's, and a row goes red.
+func TestTheEnginesCoordinatorCountsOnlyTheRunsOwnFailures(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	e := &Engine{backends: &Backends{Queue: queuememory.New()}, answers: testAnswers()}
+	opts := e.coordinatorOptions(nil, nil)
+	if opts.NodesFailure == nil {
+		t.Fatal("the coordinator is built with no answer to whose a failed resume is")
+	}
+	for name, tc := range map[string]struct {
+		err   error
+		nodes bool
+	}{
+		"a coordination store that did not answer": {err: fmt.Errorf("engine: read the rebase: %w: "+
+			"nats: timeout", coord.ErrUnavailable), nodes: true},
+		"a step the coordination store was silent on": {err: fmt.Errorf("%w: sandbox: read run t1",
+			sandbox.ErrStoreSilent), nodes: true},
+		"a resume that ran past its deadline": {err: fmt.Errorf("runner: %w", context.DeadlineExceeded)},
+		"the run's own":                       {err: errors.New("the turn could not be re-entered")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := opts.NodesFailure(ctx, tc.err); got != tc.nodes || got != nodesFailure(ctx, tc.err) {
+				t.Errorf("the coordinator reads %v as the node's = %v, want %v, as nodesFailure does",
+					tc.err, got, tc.nodes)
+			}
+		})
+	}
+}
+
+// THE ENGINE'S COORDINATOR BOUNDS A RESUME ANOTHER BUILD CAN MAKE BY THE LIVE
+// NODES' BUILDS: a parked state a newer build wrote is resumable elsewhere
+// while a node that reads its version is live, so the give-up counts nothing,
+// and not once none is, so it counts; a state of this build's version is
+// resumable elsewhere only where another node reads it, and a run with no
+// parked state, or bytes that are no state, nowhere. The resumer answers the
+// newer state with sandbox.ErrResumeElsewhere, which the bound reads.
+//
+// Mutation: leave ResumableElsewhere off the coordinator's options, read a
+// state this build does not decode as this build's version, or mark the newer
+// state's resume as the plain sandbox.ErrResumeUnavailable, and a row goes red.
+func TestTheEnginesCoordinatorCountsAResumeAnotherBuildCanMakeOnlyOnceNoneIsLive(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	newer := execstate.Version + 1
+	err := (&resumer{engine: &Engine{backends: &Backends{Coord: memory.New()}}}).resume(ctx,
+		sandbox.ResumeRequest{Run: runParkedAtVersion(t, newer)})
+	if !errors.Is(err, sandbox.ErrResumeElsewhere) {
+		t.Fatalf("the resume of a newer state = %v, want it marked as one another build can make", err)
+	}
+	for name, tc := range map[string]struct {
+		run       sandbox.PendingRun
+		live      []int
+		elsewhere bool
+	}{
+		"a newer state, a node of its build live": {run: runParkedAtVersion(t, newer),
+			live: []int{execstate.Version, newer}, elsewhere: true},
+		"a newer state, none of its build live": {run: runParkedAtVersion(t, newer),
+			live: []int{execstate.Version}},
+		"a newer state, no other node live": {run: runParkedAtVersion(t, newer)},
+		"this build's state, another of it live": {run: runParkedAtVersion(t, execstate.Version),
+			live: []int{execstate.Version}, elsewhere: true},
+		"this build's state, alone": {run: runParkedAtVersion(t, execstate.Version)},
+		"no parked state": {run: sandbox.PendingRun{TurnID: "t1"},
+			live: []int{execstate.Version, newer}},
+		"bytes that are no state": {run: sandbox.PendingRun{TurnID: "t1", ExecuteState: json.RawMessage(`[1]`)},
+			live: []int{execstate.Version, newer}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			backend := memory.New()
+			present(ctx, t, backend, "node-self", execstate.Version)
+			for i, v := range tc.live {
+				present(ctx, t, backend, "node-"+strconv.Itoa(i), v)
+			}
+			e := &Engine{backends: &Backends{Queue: queuememory.New(), Coord: backend},
+				answers: testAnswers(), testNode: "node-self"}
+			opts := e.coordinatorOptions(nil, nil)
+			if opts.ResumableElsewhere == nil {
+				t.Fatal("the coordinator is built with no bound on a resume another build can make")
+			}
+			got, err := opts.ResumableElsewhere(ctx, tc.run)
+			if err != nil {
+				t.Fatalf("the fleet's answer: %v", err)
+			}
+			if got != tc.elsewhere {
+				t.Errorf("resumable elsewhere = %v, want %v", got, tc.elsewhere)
+			}
+		})
+	}
 }
 
 // THE ENGINE'S COORDINATOR HOLDS THIS PROCESS'S TAKER LEASE IN THE NODE'S LEASE

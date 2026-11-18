@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -16,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -287,4 +292,146 @@ func TestEverySandboxClassIsACondition(t *testing.T) {
 	if builtin.RetryAfter(timedOut, time.Second) != 0 {
 		t.Error("a refused key whose request also ran out of time was told to wait")
 	}
+}
+
+// EVERY CONDITION KIND IS THE NODE'S OR THE WORK'S, AND NEVER BOTH. A seat's
+// mail that failed on a condition of the infrastructure is handed back as the
+// failing node's own, and one that failed on anything else as the mail's, by
+// [builtin.InfrastructureKind] over the kind its record carries; so the side
+// of every kind is decided once, here. The work's side is exactly the kinds
+// worksKinds names, each one a piece of work can cause (a write the state log
+// refused for what it is, a deadline, an abandoned wait), and any coding
+// sandbox class sandboxClassSides leaves with the work, which today is none.
+// Every other condition, and every other kind the package declares, is the
+// node's. A state log's refusal of
+// the write itself and its every other refusal are two kinds, one a side
+// each, held for every reason the log names; and every class the sandbox
+// names has a side decided here, so a class added there fails until one is.
+//
+// Mutation: take a declared kind off InfrastructureKind's list and its rows go
+// red; put a kind of the work's on it and theirs do; read every state-log
+// write refusal under one kind and the write rows of the work's reasons do;
+// move a sandbox class to the work's side, or read every class as the work's,
+// and its rows do; declare a kind no condition is recorded under and the
+// declaration's row does.
+func TestEveryConditionKindIsTheNodesOrTheWorks(t *testing.T) {
+	t.Parallel()
+	works := func(kind string) bool {
+		if class, ok := strings.CutPrefix(kind, builtin.SandboxKindPrefix); ok {
+			nodes, decided := sandboxClassSides[sandbox.Why(class)]
+			return decided && !nodes
+		}
+		return worksKinds[kind]
+	}
+	for _, why := range sandbox.Whys {
+		if _, decided := sandboxClassSides[why]; !decided {
+			t.Errorf("the sandbox class %q has no side decided here: say whether a mail can "+
+				"cause it, here and in builtin's sandboxClassIsTheNodes", why)
+		}
+	}
+	for why := range sandboxClassSides {
+		if !why.Valid() {
+			t.Errorf("%q is decided here and is not a class the sandbox names", why)
+		}
+	}
+	recorded := map[string]bool{}
+	for name, err := range everyCondition() {
+		kind, ok := builtin.ConditionKind(err)
+		if !ok {
+			t.Errorf("%s is recorded under no kind", name)
+			continue
+		}
+		recorded[kind] = true
+		if nodes := builtin.InfrastructureKind(kind); nodes == works(kind) {
+			t.Errorf("%s (kind %q): the node's = %v and the work's = %v, want exactly one",
+				name, kind, nodes, works(kind))
+		}
+	}
+	for _, reason := range statelog.Reasons() {
+		err := fmt.Errorf("worklet: decide: %w", &statelog.Unavailable{Reason: reason, OpID: "op-1"})
+		want := builtin.KindStateLogUnavailable
+		if reason.RefusesTheWrite() {
+			want = builtin.KindStateLogWriteRefused
+		}
+		if kind, _ := builtin.ConditionKind(err); kind != want {
+			t.Errorf("a write refused %s is recorded under %q, want %q", reason, kind, want)
+		}
+	}
+	for _, kind := range declaredKinds(t) {
+		if !recorded[kind] {
+			t.Errorf("the declared kind %q is recorded for no condition", kind)
+		}
+		if builtin.InfrastructureKind(kind) == worksKinds[kind] {
+			t.Errorf("the declared kind %q: the node's = %v, want %v", kind,
+				builtin.InfrastructureKind(kind), !worksKinds[kind])
+		}
+	}
+	for _, kind := range []string{"", types.ErrorKindUnclassified, "sandbox"} {
+		if builtin.InfrastructureKind(kind) {
+			t.Errorf("%q, no kind of a condition, is the node's", kind)
+		}
+	}
+}
+
+// sandboxClassSides is every coding sandbox class's side, true for the node's:
+// a provider that did not answer, at its account's limit, wanting it paid for
+// or refusing its credentials, a setup download failing on the far side and a
+// configuration the deployment cannot start are no mail's doing.
+var sandboxClassSides = map[sandbox.Why]bool{
+	sandbox.WhyProviderUnavailable: true,
+	sandbox.WhySetupUnavailable:    true,
+	sandbox.WhyProviderLimit:       true,
+	sandbox.WhyProviderBilling:     true,
+	sandbox.WhyConfiguration:       true,
+	sandbox.WhyProviderRefused:     true,
+}
+
+// worksKinds is every kind outside a coding sandbox's classes that is the
+// work's rather than the node's: each one what was asked can cause.
+var worksKinds = map[string]bool{
+	builtin.KindStateLogWriteRefused: true,
+	llm.KindTimeout.String():         true,
+	llm.KindCancelled.String():       true,
+}
+
+// declaredKinds is every kind constant conditionkind.go declares, read from
+// its source so a kind added there is held to a side without being listed
+// here too.
+func declaredKinds(t *testing.T) []string {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), "conditionkind.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			value, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range value.Names {
+				if !strings.HasPrefix(name.Name, "Kind") || i >= len(value.Values) {
+					continue
+				}
+				lit, ok := value.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					t.Fatalf("%s is not a string literal", name.Name)
+				}
+				kind, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				kinds = append(kinds, kind)
+			}
+		}
+	}
+	if len(kinds) == 0 {
+		t.Fatal("conditionkind.go declares no kind: the walk read nothing")
+	}
+	return kinds
 }

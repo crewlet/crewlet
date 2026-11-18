@@ -971,6 +971,15 @@ func (s *refusingStore) MarkLost(ctx context.Context, turnID, launch string, los
 	return s.inner.MarkLost(ctx, turnID, launch, loss)
 }
 
+func (s *refusingStore) MarkClaimLost(ctx context.Context, turnID, launch string, loss JobLoss,
+	fence Fence,
+) (bool, error) {
+	if s.called("MarkClaimLost") {
+		return false, errRefusedCall
+	}
+	return s.inner.MarkClaimLost(ctx, turnID, launch, loss, fence)
+}
+
 func (s *refusingStore) AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) error {
 	if s.called("AttachSandbox") {
 		return errRefusedCall
@@ -1225,6 +1234,20 @@ func (s *refusingStore) SettleTake(ctx context.Context, turnID string, settle No
 	return s.inner.SettleTake(ctx, turnID, settle)
 }
 
+func (s *refusingStore) ServeHook(ctx context.Context, turnID string, serve HookServe) ([]RunNote, error) {
+	if s.called("ServeHook") {
+		return nil, errRefusedCall
+	}
+	return s.inner.ServeHook(ctx, turnID, serve)
+}
+
+func (s *refusingStore) SettleHook(ctx context.Context, turnID string, settle HookSettle) ([]RunNote, error) {
+	if s.called("SettleHook") {
+		return nil, errRefusedCall
+	}
+	return s.inner.SettleHook(ctx, turnID, settle)
+}
+
 func (s *refusingStore) MarkPulled(ctx context.Context, turnID, launch string) (bool, error) {
 	if s.called("MarkPulled") {
 		return false, errRefusedCall
@@ -1237,6 +1260,15 @@ func (s *refusingStore) MarkSessionStart(ctx context.Context, turnID, launch str
 		return false, errRefusedCall
 	}
 	return s.inner.MarkSessionStart(ctx, turnID, launch, start)
+}
+
+func (s *refusingStore) OweRefusal(ctx context.Context, turnID, launch string, owed OwedRefusal,
+	fence Fence,
+) (bool, error) {
+	if s.called("OweRefusal") {
+		return false, errRefusedCall
+	}
+	return s.inner.OweRefusal(ctx, turnID, launch, owed, fence)
 }
 
 func (s *refusingStore) MarkEndedAtDeadline(ctx context.Context, turnID, launch string) (bool, error) {
@@ -1281,6 +1313,13 @@ func (s *refusingStore) SettleBegun(ctx context.Context, turnID string, capture 
 		return false, errRefusedCall
 	}
 	return s.inner.SettleBegun(ctx, turnID, capture)
+}
+
+func (s *refusingStore) ReserveSave(ctx context.Context, turnID string, save SessionCapture) (bool, error) {
+	if s.called("ReserveSave") {
+		return false, errRefusedCall
+	}
+	return s.inner.ReserveSave(ctx, turnID, save)
 }
 
 func (s *refusingStore) StandBy(ctx context.Context, turnID string, capture SessionCapture) (bool, error) {

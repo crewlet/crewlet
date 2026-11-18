@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -426,10 +427,21 @@ func newCoordRigWith(t *testing.T, with func(*CoordinatorOptions)) *coordRig {
 
 // recoverSeat takes the seat for this rig's coordinator under owner and epoch,
 // as a seat host's acquisition does: the lease the coordinator writes on the
-// seat's behalf under from then on, and its recovery pass over the seat's runs.
+// seat's behalf under from then on, and its recovery pass over the seat's runs,
+// for the attachment [rigInbox].
 func (r *coordRig) recoverSeat(ctx context.Context, owner string, epoch int64) error {
+	return r.recoverSeatOn(ctx, owner, epoch, rigInbox)
+}
+
+// rigInbox is the attachment of the seat's inbox a rig's recovery is handed:
+// any one, since a rig's holds are taken on a spy that keeps no queue.
+const rigInbox queue.Attachment = 1
+
+// recoverSeatOn is [coordRig.recoverSeat] for the attachment inbox names.
+func (r *coordRig) recoverSeatOn(ctx context.Context, owner string, epoch int64,
+	inbox queue.Attachment) error {
 	r.coordinator.lease = leased(Fence{Owner: owner, Epoch: epoch})
-	return r.coordinator.RecoverSeat(ctx, "swe", owner, epoch)
+	return r.coordinator.RecoverSeat(ctx, "swe", owner, epoch, inbox)
 }
 
 // fireRetries runs every owed-answer attempt the coordinator has scheduled
@@ -457,7 +469,18 @@ func (r *coordRig) failures() []types.ExecutorFailed {
 
 // completion is the signal the waiter raises for the job the row holds now.
 func (r *coordRig) completion(turnID string) (types.ExecutorFinished, *events.Event) {
-	run := r.get(turnID)
+	return r.completionIn(r.t.Context(), turnID)
+}
+
+// completionIn is completion from inside a call the coordinator made, under
+// that call's context.
+//
+// IT SAYS NO READ OF THE RUN'S ROW ([rowAskedField]), so it is never read as
+// the waiter's announcement made from a read since a clock on the store of the
+// job's box's host started ([announcedAfter]): a case that has the waiter
+// announce the job from a later read says that read itself ([askedRow]).
+func (r *coordRig) completionIn(ctx context.Context, turnID string) (types.ExecutorFinished, *events.Event) {
+	run := r.getIn(ctx, turnID)
 	payload := types.ExecutorFinished{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 		TurnID: run.TurnID, LaunchID: run.LaunchID,
@@ -2039,8 +2062,8 @@ func (r *coordRig) failPublishes(err error) {
 }
 
 // A COMPLETION THAT OUTLIVED ITS JOB. A failed resume leaves two completions in
-// flight for one job, the NAK'd delivery and the one the next poll tick
-// publishes, and the retry that wins resumes the turn, which may relaunch its
+// flight for one job, the NAK'd delivery and the waiter's next announcement of
+// it, and the retry that wins resumes the turn, which may relaunch its
 // executor. The other then arrived at a row holding the NEXT job,
 // still running, and claimed it: it collected a half-written result, resumed
 // the turn on it and tore the new job's box down.
@@ -2584,7 +2607,7 @@ func TestAFailedResumeDoesNotReviveARunTheSeatsNextOwnerReaped(t *testing.T) {
 	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 1000})
 	successor := rig.withResumer(t, &resumeSpy{})
 	coordinator := rig.withResumer(t, relaunchThenBreak{relaunch: func(ctx context.Context, _ PendingRun) {
-		if err := successor.RecoverSeat(ctx, "swe", "node-b:1", 2); err != nil {
+		if err := successor.RecoverSeat(ctx, "swe", "node-b:1", 2, rigInbox); err != nil {
 			t.Errorf("the successor's recovery: %v", err)
 		}
 	}})
@@ -2595,7 +2618,7 @@ func TestAFailedResumeDoesNotReviveARunTheSeatsNextOwnerReaped(t *testing.T) {
 	}
 	// The reap ended the run, and the hand-back leaves it ended.
 	rig.finished("t1")
-	if err := successor.RecoverSeat(t.Context(), "swe", "node-c:1", 3); err != nil {
+	if err := successor.RecoverSeat(t.Context(), "swe", "node-c:1", 3, rigInbox); err != nil {
 		t.Fatalf("a later recovery: %v", err)
 	}
 	if successor.SeatHeldBySandbox("swe") {

@@ -3,7 +3,10 @@ package engine
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"os"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,11 +18,13 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -97,7 +102,7 @@ func TestAResumeAtItsModelsLimitIsAWaitNotAFailure(t *testing.T) {
 	if got := e.node.InFlightTurns(); got != turns {
 		t.Errorf("a refused resume kept the node's admission: %d turns in flight, want %d", got, turns)
 	}
-	if got := controlOutcome(err).Outcome; got != queue.OutcomeAck {
+	if got := controlOutcome(t.Context(), err).Outcome; got != queue.OutcomeAck {
 		t.Errorf("the control topic hands a limited resume back as %s, want ack", got)
 	}
 
@@ -248,7 +253,7 @@ func TestACompletionDuringALimitIsNeverHandedBackAndResumesOnce(t *testing.T) {
 	if !errors.As(err, &refused) || refused.Condition != waitProvider {
 		t.Fatalf("an announcement of the held job = %v, want the limit's refusal", err)
 	}
-	if got := controlOutcome(err).Outcome; got != queue.OutcomeAck {
+	if got := controlOutcome(t.Context(), err).Outcome; got != queue.OutcomeAck {
 		t.Fatalf("the control topic hands the held job back as %s, want ack", got)
 	}
 	if got := admitted.Load(); got != settled {
@@ -408,7 +413,7 @@ func (lr *limitedResume) probe(t *testing.T) {
 }
 
 // announce offers the run's completion to the coordinator as the waiter's
-// next poll would, and returns what the coordinator answered.
+// next announcement would, and returns what the coordinator answered.
 func (lr *limitedResume) announce(t *testing.T) error {
 	t.Helper()
 	run := lr.r.run(t, lr.e, "t1")
@@ -503,10 +508,10 @@ func TestACompletionAtALimitWaitsForItsParkNotItsInstant(t *testing.T) {
 }
 
 // A PUBLISHED COMPANY BUILDS EVERY ENTRY AFRESH, so a completion kept for a
-// limit is re-checked under it at once rather than at the waiter's next poll or
-// the park's probe: one its resume met mid-turn, and one whose collected
-// resume met a limit its entry already knew. Each parked its seat, and the new
-// models release the park and re-fire the job.
+// limit is re-checked under it at once rather than at the waiter's next
+// announcement or the park's probe: one its resume met mid-turn, and one whose
+// collected resume met a limit its entry already knew. Each parked its seat,
+// and the new models release the park and re-fire the job.
 //
 // Mutation: drop the release of a park whose models changed from the converge
 // (reconcileProviderParks), and each parked seat's completion waits for a probe.
@@ -784,12 +789,18 @@ func TestTheWaitsAStopDecidesAreTheResumesWaits(t *testing.T) {
 // review minutes long, so the park can land after the release has forgotten
 // the seat's parks. It outlived the seat here: a provider park's probe went on
 // calling the models and publishing the seat parked while a peer ran it, a
-// budget park's alarm fired into a seat a peer ran, and either one's hold,
-// taken after the detach that drops holds, kept the inbox shut on this node.
-// And a budget park on a launch's refusal below its floor takes with it the
-// window it recorded for that delivery here: the record is the park's, and a
-// node that holds no park of the seat keeps nothing of it, the seat's next
-// holder recording its own.
+// budget park's alarm fired into a seat a peer ran, and either one's hold kept
+// the inbox shut on this node. And a budget park on a launch's refusal below
+// its floor takes with it the window it recorded for that delivery here: the
+// record is the park's, and a node that holds no park of the seat keeps nothing
+// of it, the seat's next holder recording its own.
+//
+// Each park's hold names the attachment of the seat's inbox it is for, so a
+// park asked once the release has ended that attachment is refused and records
+// nothing (the case after this one). The park this case undoes is one whose
+// hold the queue took, for an attachment still current as it was asked, before
+// the release reached its re-check: staged here by handing the drained engine
+// an attachment of the seat's inbox again, which the queue takes a hold for.
 //
 // Mutation: drop the seat's re-check from providerPark, or from budgetPark,
 // and that park, its probe or alarm, and its hold stay on a seat this node no
@@ -798,18 +809,12 @@ func TestTheWaitsAStopDecidesAreTheResumesWaits(t *testing.T) {
 func TestAParkTakenAfterItsSeatLeftIsUndone(t *testing.T) {
 	t.Parallel()
 	// drained is a rig's engine once its drain has handed every seat back,
-	// with the parks' alarms fired by the case.
+	// with the parks' alarms fired by the case, and an attachment of the
+	// seat's inbox the park's hold is taken for.
 	drained := func(t *testing.T, doc string) (*Engine, *fakeAlarms) {
 		t.Helper()
-		r := newDrainRig(t)
-		r.doc = doc
-		e := r.start(t)
-		alarms := &fakeAlarms{}
-		e.providerParks.after, e.budgetParks.after = alarms.after, alarms.after
-		e.Drain(t.Context())
-		if _, held := e.launchFence("swe"); held {
-			t.Fatal("the premise: the drained node still holds the seat")
-		}
+		e, alarms := drainedEngine(t, doc)
+		takeInbox(t, e, e.backends.Queue, seatIn(t, e, "swe"))
 		return e, alarms
 	}
 	t.Run("a provider park", func(t *testing.T) {
@@ -871,6 +876,131 @@ func TestAParkTakenAfterItsSeatLeftIsUndone(t *testing.T) {
 		}
 		if holds := inboxHolds(t, e, "swe"); slices.Contains(holds, pauseReasonBudget) {
 			t.Fatalf("the seat's inbox is held %v by a park on a seat this node no longer holds", holds)
+		}
+	})
+}
+
+// A RESUME'S PARK ON A SEAT THIS NODE HAS LET GO OF IS NO WARNING. A resume
+// runs in no delivery, its review minutes long, so its seat can be released
+// under it, and the park its limit then asks for names the attachment that
+// release ended, which the queue refuses. That is the ordinary answer for a
+// seat that moved, not a park that failed: said as a warning, every seat a
+// drain hands on under a resume reads as a fault in the node's log.
+//
+// NOT PARALLEL: it reads the process's log, which [logging.Configure] owns,
+// and Go resumes every parallel test only after the sequential ones end.
+//
+// Mutation: say every park a resume could not take as a warning, and this
+// fails.
+func TestAResumesParkOnASeatLetGoOfIsNoWarning(t *testing.T) {
+	ctx := t.Context()
+	logs := &syncBuffer{}
+	logging.Configure(slog.LevelDebug, logging.FormatText, logs)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
+
+	e, q := engineOn(t)
+	id := seatIn(t, e, "ceo")
+	// THE RELEASE: the inbox detached, then the engine told.
+	if _, err := q.Detach(ctx, topics.AgentInbox(id), topics.AgentInboxGroup(id)); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	e.detachInbox(id)
+
+	refusal := &llm.Error{Kind: llm.KindRateLimit, Key: "default", RetryAt: time.Now().Add(time.Hour),
+		Err: errors.New("You've hit your 5-hour limit")}
+	limit, limited := chain.Limited(&chain.Error{Attempted: []string{"default"},
+		Failures: []error{refusal}, Err: refusal})
+	if !limited {
+		t.Fatalf("the fixture's refusal is not a limit: %v", refusal)
+	}
+	e.parkOnLimit(ctx, "ceo", limit)
+
+	if n := countLogLines(logs, "seat_provider_park_attachment_ended"); n != 1 {
+		t.Errorf("%d lines say the park met the attachment its seat's release ended, want 1", n)
+	}
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(line, "msg=seat_provider_park_") && !strings.Contains(line, "level=DEBUG") {
+			t.Errorf("a park refused for a seat this node let go of was said above debug: %s", line)
+		}
+	}
+}
+
+// drainedEngine is a drain rig's engine once its drain has handed every seat
+// back, with the parks' alarms fired by the case.
+func drainedEngine(t *testing.T, doc string) (*Engine, *fakeAlarms) {
+	t.Helper()
+	r := newDrainRig(t)
+	r.doc = doc
+	e := r.start(t)
+	alarms := &fakeAlarms{}
+	e.providerParks.after, e.budgetParks.after = alarms.after, alarms.after
+	e.Drain(t.Context())
+	if _, held := e.launchFence("swe"); held {
+		t.Fatal("the premise: the drained node still holds the seat")
+	}
+	return e, alarms
+}
+
+// A PARK ASKED ONCE ITS SEAT'S RELEASE HAS DETACHED THE INBOX IS REFUSED, and
+// records nothing: its hold names the attachment the seat held here, which the
+// release ended, and the queue refuses a hold for an ended attachment rather
+// than carry it onto the inbox's next attachment on this node. Taken anyway, as
+// it was when holds were keyed by the subscription alone, the hold landed on
+// the inbox this node attaches if it takes the seat back, which then consumed
+// nothing, with no park left to lift it.
+//
+// Mutation: take a park's hold for the inbox's current attachment rather than
+// the one the seat held, and each park is taken, its hold left on the inbox.
+func TestAParkAskedAfterItsSeatsReleaseIsRefused(t *testing.T) {
+	t.Parallel()
+	t.Run("a provider park", func(t *testing.T) {
+		t.Parallel()
+		e, alarms := drainedEngine(t, "")
+		refusal := &llm.Error{Kind: llm.KindRateLimit, Key: "default", RetryAt: time.Now().Add(time.Hour),
+			Err: errors.New("You've hit your 5-hour limit")}
+		limit, limited := chain.Limited(&chain.Error{Attempted: []string{"default"},
+			Failures: []error{refusal}, Err: refusal})
+		if !limited {
+			t.Fatalf("the fixture's refusal is not a limit: %v", refusal)
+		}
+		_, parked, err := e.providerPark(t.Context(), "swe", limit)
+		if !errors.Is(err, queue.ErrAttachmentGone) || parked {
+			t.Fatalf("providerPark = %v, %v; want it refused, the seat's attachment ended", parked, err)
+		}
+		if parking := e.providerParks.parking(seatIn(t, e, "swe")); parking != nil {
+			t.Fatal("a park refused its hold was recorded")
+		}
+		if live := alarms.live(); len(live) != 0 {
+			t.Fatalf("%d probe alarms armed for a park refused its hold, want none", len(live))
+		}
+		if holds := inboxHolds(t, e, "swe"); len(holds) != 0 {
+			t.Fatalf("the seat's inbox is held %v after its release", holds)
+		}
+	})
+	t.Run("a budget park", func(t *testing.T) {
+		t.Parallel()
+		e, alarms := drainedEngine(t, cappedSWEDoc)
+		if _, err := e.backends.Fleet.PostCharge(t.Context(), coord.AgentScope(seatIn(t, e, "swe").String()),
+			1000, coord.WindowsAt(time.Now(), time.UTC)); err != nil {
+			t.Fatalf("PostCharge: %v", err)
+		}
+		refused := &floorRefusal{floor: staticFloor(e.Company()), left: 0}
+		delivery := []*events.Event{{ID: uuid.New(), Type: "task_assigned"}}
+		_, parked, err := e.budgetPark(t.Context(), "swe", delivery, refused)
+		if !errors.Is(err, queue.ErrAttachmentGone) || parked {
+			t.Fatalf("budgetPark = %v, %v; want it refused, the seat's attachment ended", parked, err)
+		}
+		if parking := e.budgetParks.parking(seatIn(t, e, "swe")); parking != nil {
+			t.Fatal("a park refused its hold was recorded")
+		}
+		if waited := e.floorWaits.waited(seatIn(t, e, "swe"), deliveryOf(delivery)); len(waited) != 0 {
+			t.Fatalf("a park refused its hold left the window %+v for the delivery's next launch", waited[0])
+		}
+		if live := alarms.live(); len(live) != 0 {
+			t.Fatalf("%d reset alarms armed for a park refused its hold, want none", len(live))
+		}
+		if holds := inboxHolds(t, e, "swe"); len(holds) != 0 {
+			t.Fatalf("the seat's inbox is held %v after its release", holds)
 		}
 	})
 }

@@ -872,6 +872,74 @@ func TestAHostTakesEveryBoxReadAsItArrives(t *testing.T) {
 	})
 }
 
+// A READ WAITING FOR A SLOT WHEN ITS HOST WITHDRAWS IS ANSWERED WITHDRAWN. The
+// host is draining or restarting, not busy: answered busy, its asker would hold
+// the host present and start its silence again on every ask of a node on its
+// way out, where a host that withdrew mid-read is heard as one that did not
+// answer at once. So a read the withdrawal finds waiting for one of the host's
+// slots is answered as the host stopping, never as busy, and reads nothing.
+//
+// Mutation: answer busy whatever ended the wait for a slot, and the reply is a
+// busy host's.
+func TestAReadWaitingForASlotWhenItsHostWithdrawsIsAnsweredWithdrawn(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		_, a, b, _ := hostFleetServing(t, 1, 1)
+		reads := (&watchedReads{hold: 1}).watch(a)
+		held := make(chan error, 1)
+		go func() {
+			_, _, err := b.reads.ReadBox(context.Background(), remoteRun("t1"), sandbox.BoxReadCollect)
+			held <- err
+		}()
+		synctest.Wait()
+		run := remoteRun("t2")
+		sealed, err := a.reads.wire.SealRequest(sandbox.BoxReadRequest{
+			Version: sandbox.BoxReadWireVersion, ID: "withdrawn-t2",
+			Deadline: time.Now().Add(time.Minute), BudgetMS: (2 * time.Second).Milliseconds(),
+			Node: "node-a", TurnID: run.TurnID, LaunchID: run.LaunchID, SandboxID: run.SandboxID,
+			Read: sandbox.BoxReadCollect,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// THE ANSWERER'S OWN LIFETIME, which its withdrawal cancels.
+		serving, withdraw := context.WithCancel(t.Context())
+		type answered struct {
+			body []byte
+			err  error
+		}
+		done := make(chan answered, 1)
+		go func() {
+			body, err := a.reads.answer(serving, sealed)
+			done <- answered{body, err}
+		}()
+		synctest.Wait()
+		withdraw()
+		got := <-done
+		if got.err != nil {
+			t.Fatalf("the read the withdrawal found waiting = %v; want a reply", got.err)
+		}
+		reply, why, err := a.reads.wire.OpenReply(got.body, "withdrawn-t2")
+		if err != nil {
+			t.Fatalf("open the reply: %v (%s)", err, why)
+		}
+		if !reply.Withdrawn || reply.Busy {
+			t.Errorf("the reply = withdrawn %v, busy %v; want the host stopping, never busy",
+				reply.Withdrawn, reply.Busy)
+		}
+		if err := reply.Err(); !errors.Is(err, sandbox.ErrBoxHostSilent) || errors.Is(err, sandbox.ErrBoxHostBusy) {
+			t.Errorf("the reply reads %v; want a host that did not answer, never a busy one", err)
+		}
+		if made := len(reads.made()); made != 1 {
+			t.Errorf("the host made %d reads, want only the one it held", made)
+		}
+		close(reads.release)
+		if err := <-held; err != nil {
+			t.Fatalf("the held read = %v; want it read", err)
+		}
+	})
+}
+
 // A READ IS HELD ONLY WITH SOME OF ITS SHARE LEFT. A slot taken for a request
 // whose share had already run out would hand the read no time to make, an
 // error its asker reads as the box unread, so the slot is freed at once and

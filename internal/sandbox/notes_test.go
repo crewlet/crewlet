@@ -201,17 +201,35 @@ func TestAnEndingWhoseNotesCouldNotBeRecordedKeepsItsRecord(t *testing.T) {
 // and their steps reported them; and a job that started still started once
 // its box, and the row's command with it, is forgotten.
 //
+// A NOTE A HOOK WAS SERVED is reported at that serve: UNCONFIRMED at its live
+// serve, the step the hook answered, whether or not a read that handed nothing
+// over read it after (a brief whose job never started, or a take marked
+// unanswered, the review's, told again by such a brief or not); at the job a
+// later poll served it to, where one did, the hook's serve no longer live; and
+// MISSED at the last of its serves where every one was lost, a cancel or its
+// session proving it never took it, and no step read it since, a brief whose
+// job never started included. And an ITEM FOR ONE JOB is reported as nothing
+// at all, waiting, served or read: what becomes of a job's item is its
+// filer's to say.
+//
 // Mutation: count a brief read unread whatever the job's record, read the
 // witness off the row's command, leave the never-started job's out, report a
 // marked read as nothing or as expired, a served note as expired, a note told
 // again as nothing, as missed or as delivered where its job started, as
 // expired or as delivered where its job never started, report it at the brief
 // rather than the take it kept, or put the served or the marked ahead of a
-// note told again, and this goes red.
+// note told again, and this goes red. And: report a hook's live serve at no
+// step, or at none once a take marked unanswered read the note, take a serve
+// as live once a later poll moved Served on, report a note whose serves were
+// all lost as expired, or report an item, and this goes red.
 func TestEachNoteEndsAsItsRecordKnowsIt(t *testing.T) {
 	t.Parallel()
 	read := func(launch, boundary string) *NoteRead {
 		return &NoteRead{Phase: "execute", Round: 1, Boundary: boundary, Launch: launch}
+	}
+	serve := func(launch string, lost ServeLoss) []HookServed {
+		return []HookServed{{Take: "take-" + launch, Launch: launch, Boundary: "tool_batch", Iteration: 3,
+			Lost: lost}}
 	}
 	marked := func(launch, boundary string) *NoteRead {
 		r := read(launch, boundary)
@@ -223,6 +241,8 @@ func TestEachNoteEndsAsItsRecordKnowsIt(t *testing.T) {
 		r.Retold = marked(took, "tool_batch")
 		return r
 	}
+	reviewRetold := read("job-2", "brief")
+	reviewRetold.Retold = marked("", "round")
 	notes := []RunNote{
 		{ID: "waiting"},
 		{ID: "briefed", Read: read("job-2", "brief")},
@@ -238,11 +258,24 @@ func TestEachNoteEndsAsItsRecordKnowsIt(t *testing.T) {
 		{ID: "retold", Read: retold("job-2", "job-1")},
 		{ID: "retold-earlier", Read: retold("job-1", "job-0")},
 		{ID: "handed-retold", Served: "job-1", Read: retold("job-2", "job-1")},
+		{ID: "hook-live", Served: "job-1", Place: 7, Serves: serve("job-1", "")},
+		{ID: "hook-polled-later", Served: "job-2", Place: 7, Serves: serve("job-1", "")},
+		{ID: "hook-lost", Place: 7, Serves: serve("job-1", ServeCancelled)},
+		{ID: "hook-live-briefed", Served: "job-1", Place: 7, Serves: serve("job-1", ""),
+			Read: read("job-2", "brief")},
+		{ID: "hook-lost-briefed", Place: 7, Serves: serve("job-1", ServeAbsent), Read: read("job-2", "brief")},
+		{ID: "hook-live-review-missed", Served: "job-1", Place: 7, Serves: serve("job-1", ""),
+			Read: marked("", "round")},
+		{ID: "hook-live-review-retold", Served: "job-1", Place: 7, Serves: serve("job-1", ""), Read: reviewRetold},
+		{ID: "item", For: "job-2"},
+		{ID: "item-served", For: "job-2", Served: "job-2", Place: 7, Serves: serve("job-2", "")},
+		{ID: "item-lost", For: "job-2", Place: 7, Serves: serve("job-2", ServeCancelled)},
 	}
 	ends := func(want ...string) []string {
 		out := append([]string{}, want...)
 		out = append(out, "missed:missed", "review-missed:missed", "handed:unconfirmed",
-			"handed-missed:unconfirmed", "retold-earlier:delivered")
+			"handed-missed:unconfirmed", "retold-earlier:delivered", "hook-live:unconfirmed",
+			"hook-polled-later:unconfirmed", "hook-lost:missed", "hook-live-review-missed:unconfirmed")
 		return out
 	}
 	sorted := func(s []string) []string { s = slices.Clone(s); slices.Sort(s); return s }
@@ -253,8 +286,9 @@ func TestEachNoteEndsAsItsRecordKnowsIt(t *testing.T) {
 	// before that brief.
 	neverStarted := PendingRun{LaunchID: "job-2", Steer: RunSteer{Notes: notes}}
 	if got, want := endsOf(neverStarted), ends("waiting:expired", "briefed:expired",
-		"handed-briefed:unconfirmed", "retold:missed", "handed-retold:unconfirmed"); !slices.Equal(sorted(got),
-		sorted(want)) {
+		"handed-briefed:unconfirmed", "retold:missed", "handed-retold:unconfirmed",
+		"hook-live-briefed:unconfirmed", "hook-lost-briefed:missed",
+		"hook-live-review-retold:unconfirmed"); !slices.Equal(sorted(got), sorted(want)) {
 		t.Errorf("a record whose job never started ends %v, want %v", got, want)
 	}
 	// EACH AT THE STEP THE RECORD NAMES.
@@ -262,8 +296,11 @@ func TestEachNoteEndsAsItsRecordKnowsIt(t *testing.T) {
 		out := map[string]string{}
 		for _, n := range run.EndedNotes() {
 			out[n.Note.ID] = string(n.Outcome) + "@"
-			if n.Read != nil {
+			switch {
+			case n.Read != nil:
 				out[n.Note.ID] += n.Read.Launch + "/" + n.Read.Boundary
+			case n.Serve != nil:
+				out[n.Note.ID] += "serve:" + n.Serve.Launch + "/" + n.Serve.Boundary
 			}
 		}
 		return out
@@ -271,7 +308,12 @@ func TestEachNoteEndsAsItsRecordKnowsIt(t *testing.T) {
 	for id, want := range map[string]string{"retold": "missed@job-1/tool_batch",
 		"missed": "missed@job-1/tool_batch", "review-missed": "missed@/round",
 		"retold-earlier": "delivered@job-1/brief", "handed-retold": "unconfirmed@", "waiting": "expired@",
-		"briefed": "expired@"} {
+		"briefed": "expired@", "hook-live": "unconfirmed@serve:job-1/tool_batch",
+		"hook-polled-later": "unconfirmed@", "hook-lost": "missed@serve:job-1/tool_batch",
+		"hook-live-briefed":       "unconfirmed@serve:job-1/tool_batch",
+		"hook-lost-briefed":       "missed@serve:job-1/tool_batch",
+		"hook-live-review-missed": "unconfirmed@serve:job-1/tool_batch",
+		"hook-live-review-retold": "unconfirmed@serve:job-1/tool_batch"} {
 		if got := at(neverStarted)[id]; got != want {
 			t.Errorf("a record whose job never started reports note %s %s, want %s", id, got, want)
 		}
@@ -282,13 +324,18 @@ func TestEachNoteEndsAsItsRecordKnowsIt(t *testing.T) {
 	started := neverStarted
 	started.CommandID = "4242"
 	started.Launch.Started = true
-	wantStarted := ends("waiting:expired", "retold:delivered", "handed-retold:delivered")
+	wantStarted := ends("waiting:expired", "retold:delivered", "handed-retold:delivered",
+		"hook-live-review-retold:delivered")
 	if got := endsOf(started); !slices.Equal(sorted(got), sorted(wantStarted)) {
 		t.Errorf("a record whose job started ends %v, want %v", got, wantStarted)
 	}
 	if got := at(started)["retold"]; got != "delivered@job-2/brief" {
 		t.Errorf("a record whose job started reports the note it told again %s, want it delivered at its brief",
 			got)
+	}
+	if got := at(started)["hook-live-review-missed"]; got != "unconfirmed@serve:job-1/tool_batch" {
+		t.Errorf("a record whose job started reports the note a hook served and a marked take read %s, want it "+
+			"unconfirmed at the hook's serve", got)
 	}
 	boxForgotten := started
 	boxForgotten.CommandID = ""
@@ -316,9 +363,12 @@ func TestEachNoteEndsAsItsRecordKnowsIt(t *testing.T) {
 	}
 	for _, run := range []PendingRun{neverStarted, started} {
 		for _, n := range run.EndedNotes() {
+			missedAt := (n.Read != nil && n.Read.Unanswered) || (n.Serve != nil && n.Serve.Lost != "")
 			if !n.Outcome.Valid() || (n.Outcome == types.SteerDelivered && (n.Read == nil || n.Read.Retold == nil)) ||
-				(n.Outcome == types.SteerMissed && (n.Read == nil || !n.Read.Unanswered)) {
-				t.Errorf("note %s ends %q at %+v, which an ending never reports of it", n.Note.ID, n.Outcome, n.Read)
+				(n.Outcome == types.SteerMissed && !missedAt) ||
+				(n.Outcome == types.SteerUnconfirmed && n.Serve != nil && n.Serve.Lost != "") || n.Note.For != "" {
+				t.Errorf("note %s ends %q at %+v (serve %+v), which an ending never reports of it", n.Note.ID,
+					n.Outcome, n.Read, n.Serve)
 			}
 		}
 	}
