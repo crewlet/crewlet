@@ -50,6 +50,10 @@ const EXCEPTIONS: Record<string, { form: Form; why: string }> = {
     form: "words",
     why: "a byline whose face is on the timeline's rail: the verb arrives as a prop",
   },
+  "routes/gitlet/commit/Provenance.tsx#Row": {
+    form: "words",
+    why: "a provenance row's time at its end, the close of the row's sentence",
+  },
   "routes/gitlet/repo/Branches.tsx#MovedBy": {
     form: "words",
     why: "a byline: who moved the branch arrives as a prop",

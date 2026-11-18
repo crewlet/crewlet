@@ -206,3 +206,58 @@ test("a commit's page holds its width at 390 px", async () => {
   const head = content.querySelectorAll(".code-file__head")[2]!;
   expect(head.scrollWidth).toBeLessThanOrEqual(head.clientWidth);
 });
+
+/** The provenance card's landing row: its sentence, second line and time. */
+async function landedRow() {
+  return eventually(() => {
+    const rows = host!.querySelectorAll<HTMLElement>(".code-prov__row");
+    expect(rows.length).toBe(2);
+    const row = rows[1]!;
+    const time = row.querySelector(".code-prov__time");
+    expect(time).not.toBeNull();
+    return {
+      sentence: row.querySelector(".code-prov__sentence")!.getBoundingClientRect(),
+      more: row.querySelector(".code-prov__more")!.getBoundingClientRect(),
+      time: time!.getBoundingClientRect(),
+      row: row.getBoundingClientRect(),
+    };
+  });
+}
+
+// A ROW'S TIME ENDS ITS FIRST LINE where the card is wide. Mutation: drop
+// the time's grid row, and it falls under the second line.
+test("the provenance card keeps its time at the row's end at 1024 px", async () => {
+  await page.viewport(1024, 800);
+  mount(1024 - 240);
+  const { sentence, time, row } = await landedRow();
+  expect(time.left).toBeGreaterThanOrEqual(sentence.right - 0.5);
+  expect(time.top).toBeLessThan(sentence.bottom);
+  expect(row.right - time.right).toBeLessThan(40);
+});
+
+// ON A PHONE THE TIME GOES UNDER ITS SECOND LINE, nothing sideways.
+// Mutation: drop the card's container query.
+test("the provenance card's time goes under its row at 390 px", async () => {
+  await page.viewport(390, 800);
+  mount(390);
+  const { more, time } = await landedRow();
+  expect(time.top).toBeGreaterThanOrEqual(more.bottom - 0.5);
+  const card = host!.querySelector(".code-prov-card")!;
+  expect(overflowing(card)).toEqual([]);
+});
+
+// A NAME SITS ON ITS SENTENCE'S LINE, its face beside it. Mutation: restore
+// `display: inline-flex` on `.code-prov__who`, and the name rides above the line.
+test("a name in the provenance card sits on its sentence's text line, at 1440 px", async () => {
+  await page.viewport(1440, 800);
+  mount(1150);
+  const { name, lead } = await eventually(() => {
+    const sentence = host!.querySelector(".code-prov__row .code-prov__sentence")!;
+    const strong = sentence.querySelector(".code-prov__who strong");
+    expect(strong).not.toBeNull();
+    const range = document.createRange();
+    range.selectNodeContents(sentence.firstChild!);
+    return { name: strong!.getBoundingClientRect(), lead: range.getBoundingClientRect() };
+  });
+  expect(Math.abs(name.bottom - lead.bottom)).toBeLessThan(1);
+});

@@ -47,7 +47,10 @@ const TURN = "6f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f";
 
 const ORG = withDerived({
   name: "Acme",
-  roles: [{ name: "CTO", handle: "cto" }],
+  roles: [
+    { name: "CTO", handle: "cto" },
+    { name: "Code Reviewer", handle: "reviewer" },
+  ],
   units: [{ id: "engineering", name: "Engineering", roles: [] }],
   services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
 }) as unknown as OrgProjection;
@@ -344,35 +347,78 @@ function holdSectionsFar() {
   vi.stubGlobal("IntersectionObserver", NearBy);
 }
 
-// WHO PUSHED IT IS THE ENGINE'S RECORD: the seat, its turn, its executor
-// and its work item from the push that introduced the commit, never the
-// author line; and the change it heads a revision of links its page. The
-// executor is linked by its turn, which is what the executors board is keyed
-// by. Mutation: name the pusher from the author, drop the executor, or link
-// it by its job id, and this fails.
+/** An element's words without the faces beside its names. */
+function wordsOf(el: Element): string {
+  const copy = el.cloneNode(true) as Element;
+  for (const face of copy.querySelectorAll('[aria-hidden="true"], .crewlet-avatar, svg')) {
+    face.remove();
+  }
+  return (copy.textContent ?? "").replace(/\s+/g, " ").trim();
+}
+
+/** The provenance card's rows: each sentence, its second line and its time, in words. */
+async function provenance() {
+  const card = await screen.findByRole("region", { name: "Provenance" });
+  return [...card.querySelectorAll(".code-prov__row")].map((row) => ({
+    row: row as HTMLElement,
+    sentence: wordsOf(row.querySelector(".code-prov__sentence")!),
+    more: row.querySelector(".code-prov__more")
+      ? wordsOf(row.querySelector(".code-prov__more")!)
+      : "",
+    time: row.querySelector("time"),
+  }));
+}
+
+const MERGE = "c71d0e9a2b4f68135ea0d7c2b9f4e61a3d8c5b02";
+const TIP = "9a8b7c6d5e4f30211f2e3d4c5b6a79881a2b3c4d";
+
+/** web!41 merged direct by CTO, approved by Code Reviewer, its 2 required checks passed. */
+const landing = (extra: Record<string, unknown> = {}, gate: Record<string, unknown> = {}) => ({
+  repo: "web",
+  ref: "web!41",
+  title: "Cache the badge",
+  state: "merged",
+  merge_oid: MERGE,
+  merged_at: "2026-10-20T12:00:00Z",
+  merged_via: "direct",
+  merged_by: "cto",
+  merged_by_kind: "agent",
+  gate: {
+    approvals: [{ handle: "reviewer", kind: "agent", revision: 1 }],
+    checks_on: SHA,
+    checks: { state: "passed", counts: { passed: 2 }, required: 2, required_passed: 2 },
+    ...gate,
+  },
+  ...extra,
+});
+
+// WHO PUSHED IT IS THE ENGINE'S RECORD: the seat, its run linking its turn, and
+// its executor linked by turn. Mutation: name the pusher from the author line,
+// or link the executor by its job id.
 test("a commit's page says who pushed it, from which turn and run, and its changes", async () => {
   stubEngine();
   mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`);
 
-  const pushed = await screen.findByRole("region", { name: "Pushed" });
-  expect(within(pushed).getByText("CTO")).toBeTruthy();
-  expect(within(pushed).getByRole("link", { name: TURN }).getAttribute("href")).toBe(
-    `#/live/turns/${TURN}`,
-  );
-  expect(within(pushed).getByRole("link", { name: RUN }).getAttribute("href")).toBe(
+  const [push, revision] = await provenance();
+  expect(push!.sentence).toBe("Pushed by CTO, a run for ENG-42, with git");
+  expect(push!.more).toBe(`A git push · which refs it moved is no longer kept · executor ${RUN}`);
+  expect(
+    within(push!.row).getByRole("link", { name: "a run for ENG-42" }).getAttribute("href"),
+  ).toBe(`#/live/turns/${TURN}`);
+  expect(within(push!.row).getByRole("link", { name: RUN }).getAttribute("href")).toBe(
     `#/live/executors/${TURN}`,
   );
-  expect(within(pushed).getByText("ENG-42")).toBeTruthy();
-  const changes = screen.getByRole("region", { name: "Changes" });
-  expect(within(changes).getByRole("link", { name: "web!7" }).getAttribute("href")).toBe(
+  expect(revision!.sentence).toBe("Revision 2 of web!7 Merged");
+  expect(revision!.more).toBe("How it landed is unavailable on this fleet yet.");
+  expect(within(revision!.row).getByRole("link", { name: "web!7" }).getAttribute("href")).toBe(
     "#/gitlet/repos/web/changes/7",
   );
   expect(screen.getByText("Retry the flaky upload")).toBeTruthy();
 });
 
-// THE CHANGES CARD WEARS EACH CHANGE'S STATE PILL, and "Refs it moved" draws a
-// branch as its chip with its glyph and a tag as its name, a comma between.
-// Mutation: drop the comma, draw the tag as a chip, or the chip without its glyph.
+// A CHANGE WEARS ITS STATE PILL, and the refs a push moved are said after
+// "to", a branch as its chip with its glyph and a tag as its name. Mutation:
+// draw the tag as a chip, or the refused command as moved.
 test("a commit's changes wear their state pill, and the refs it moved a branch chip", async () => {
   const command = (ref: string, result = "ok") => ({ ref, old: PARENT, new: SHA, result });
   stubEngine({
@@ -388,18 +434,167 @@ test("a commit's changes wear their state pill, and the refs it moved a branch c
   });
   mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`);
 
-  const changes = await screen.findByRole("region", { name: "Changes" });
-  const pill = within(changes).getByText("Merged").closest<HTMLElement>(".code-state");
+  const [push, revision] = await provenance();
+  const pill = within(revision!.row).getByText("Merged").closest<HTMLElement>(".code-state");
   expect(pill?.dataset.state).toBe("merged");
-  const pushed = screen.getByRole("region", { name: "Pushed" });
-  const value = within(pushed).getByText("v1.2").parentElement!;
-  expect(value.textContent).toBe("main, v1.2");
-  const chips = [...value.querySelectorAll(".code-branch-chip")];
+  expect(push!.sentence).toBe("Pushed by CTO, a run for ENG-42, with git, to main, v1.2");
+  expect(push!.more.startsWith("A git push · it moved 2 refs")).toBe(true);
+  const chips = [...push!.row.querySelectorAll(".code-branch-chip")];
   expect(chips.map((c) => c.textContent)).toEqual(["main"]);
   expect(chips[0]!.querySelector("svg")).not.toBeNull();
-  const tag = within(pushed).getByText("v1.2");
+  const tag = within(push!.row).getByText("v1.2");
   expect(tag.classList.contains("code-branch-chip")).toBe(false);
-  expect(tag.querySelector("svg")).toBeNull();
+});
+
+// A DIRECT MERGE'S LANDING IS SAID WITH ITS GATE: the merge commit, the merger,
+// approvals, checks and when, titled with the date. Mutation: name the merge
+// commit's author as the merger.
+test("a direct merge's landing is said in sentences with its gate", async () => {
+  stubEngine({ commitAnswer: commit({ revisions: [{ change: landing(), n: 1 }] }) });
+  mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`);
+
+  const [, landed] = await provenance();
+  expect(landed!.sentence).toBe("Landed with web!41 Merged in merge commit c71d0e9 by Gitlet");
+  expect(landed!.more).toBe(
+    "CTO merged it through its gate: approved by Code Reviewer; 2 of 2 required checks passed.",
+  );
+  expect(within(landed!.row).getByRole("link", { name: "c71d0e9" }).getAttribute("href")).toBe(
+    `#/gitlet/repos/web/commits/${MERGE}`,
+  );
+  expect(landed!.time?.getAttribute("dateTime")).toBe("2026-10-20T12:00:00Z");
+  expect(landed!.time?.getAttribute("title")).toBeTruthy();
+  expect(landed!.time?.textContent).toMatch(/ago|at /);
+});
+
+// A QUEUE LANDING NAMES THE TRAIN'S CHECKS by the commit they ran on, which
+// links its page. Mutation: draw the merged head's checks for a queue landing.
+test("a queue landing names the train's checks by the commit they ran on", async () => {
+  stubEngine({
+    commitAnswer: commit({
+      revisions: [{ change: landing({ merged_via: "queue" }, { checks_on: TIP }), n: 1 }],
+    }),
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`);
+
+  const [, landed] = await provenance();
+  expect(landed!.more).toBe(
+    "CTO added it to the merge queue, and it landed through its gate: approved by Code Reviewer; the train's checks on 9a8b7c6 2 of 2 required checks passed.",
+  );
+  expect(within(landed!.row).getByRole("link", { name: "9a8b7c6" }).getAttribute("href")).toBe(
+    `#/gitlet/repos/web/commits/${TIP}`,
+  );
+});
+
+// THE MERGE COMMIT SAYS GITLET MERGED THE CHANGE into the branch its push
+// moved, for the merger, and draws no push row beside it. Mutation: draw
+// the push row too.
+test("the merge commit says Gitlet merged the change into its branch for the merger", async () => {
+  stubEngine({
+    commitAnswer: commit({
+      pushed_by: {
+        push_id: "p2",
+        position: POSITION,
+        at: "2026-10-20T12:00:00Z",
+        principal: { kind: "agent", seat: "cto" },
+        via: "merge",
+      },
+      push: { commands: [{ ref: "refs/heads/main", old: PARENT, new: SHA, result: "ok" }] },
+      merged: [landing({ merge_oid: SHA })],
+      revisions: [],
+    }),
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`);
+
+  const rows = await provenance();
+  expect(rows).toHaveLength(1);
+  expect(rows[0]!.sentence).toBe("Gitlet merged web!41 Merged into main for CTO");
+  expect(rows[0]!.more).toBe(
+    "CTO merged it through its gate: approved by Code Reviewer; 2 of 2 required checks passed.",
+  );
+});
+
+// A SEAT'S PUSH THROUGH THE ENGINE is one sentence with its run and branch.
+test("a seat's push through the engine says its run, its branch and that it moved one branch", async () => {
+  stubEngine({
+    commitAnswer: commit({
+      pushed_by: { ...commit().pushed_by, via: "engine" },
+      push: { commands: [{ ref: "refs/heads/retry", old: PARENT, new: SHA, result: "ok" }] },
+    }),
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`);
+
+  const [push] = await provenance();
+  expect(push!.sentence).toBe("Pushed by CTO, a run for ENG-42, via the engine, to retry");
+  expect(push!.more).toBe(
+    `A commit the engine built from a tool's call · it moved one branch · executor ${RUN}`,
+  );
+});
+
+// THE GATE'S OTHER WORDS, each as the rows keep them, never a guess.
+test.each([
+  [
+    "failing checks are named",
+    landing(
+      {},
+      {
+        checks: {
+          state: "failing",
+          counts: { failed: 1, passed: 1 },
+          required: 2,
+          required_passed: 1,
+          failing: [{ name: "unit", state: "failed", required: true }],
+        },
+      },
+    ),
+    "CTO merged it through its gate: approved by Code Reviewer; unit failed.",
+  ],
+  [
+    "checks past retention are no longer kept",
+    landing({}, { checks: undefined, checks_on: undefined, gone: true }),
+    "CTO merged it through its gate: approved by Code Reviewer; its checks are no longer kept.",
+  ],
+  [
+    "no check ran",
+    landing({}, { checks: undefined, checks_on: undefined }),
+    "CTO merged it through its gate: approved by Code Reviewer; no check ran on what it merged.",
+  ],
+  [
+    "no approval",
+    landing({}, { approvals: undefined }),
+    "CTO merged it through its gate: with no approval; 2 of 2 required checks passed.",
+  ],
+  [
+    "an override",
+    landing({ override_reason: "hotfix" }),
+    "CTO merged it past its gate: “hotfix”. As it stood: approved by Code Reviewer; 2 of 2 required checks passed.",
+  ],
+  [
+    "a push merge",
+    landing({ merged_via: "push" }),
+    "It merged when its head was pushed to its branch.",
+  ],
+] as const)("the gate's words: %s", async (_what, change, said) => {
+  stubEngine({ commitAnswer: commit({ revisions: [{ change, n: 1 }] }) });
+  mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`);
+
+  const [, landed] = await provenance();
+  expect(landed!.more).toBe(said);
+});
+
+// A LIVE CHANGE'S REVISION reads as its revision, with no gate and no time.
+// Mutation: draw a live revision as landed.
+test("a live change's revision head reads as its revision", async () => {
+  stubEngine({
+    commitAnswer: commit({
+      revisions: [{ change: { repo: "web", ref: "web!42", title: "Next", state: "open" }, n: 3 }],
+    }),
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`);
+
+  const [, revision] = await provenance();
+  expect(revision!.sentence).toBe("Revision 3 of web!42 Open");
+  expect(revision!.more).toBe("");
+  expect(revision!.time).toBeNull();
 });
 
 // A COMMIT'S DIFF IS AGAINST ITS FIRST PARENT, read by both whole ids, and

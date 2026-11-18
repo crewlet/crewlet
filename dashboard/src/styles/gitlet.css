@@ -3192,22 +3192,90 @@
   color: var(--color-text-secondary);
 }
 
-/* HOW IT ARRIVED AND ITS CHANGES, side by side where there is room. */
-.code-commit-cards {
+/* A COMMIT'S PROVENANCE: a row a fact, its glyph in a quiet disc, its time at the row's end
+   (under its second line where the card is narrow). */
+.code-prov-card {
+  container: code-prov / inline-size;
+}
+
+.code-prov {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.code-prov__row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--spacing-4);
+  grid-template-columns: var(--size-control-sm) minmax(0, 1fr) auto;
+  gap: var(--spacing-1) var(--spacing-3);
   align-items: start;
+  padding: var(--spacing-3) var(--spacing-4);
 }
 
-@container page (width < 720px) {
-  .code-commit-cards {
-    grid-template-columns: minmax(0, 1fr);
+.code-prov__row + .code-prov__row {
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-prov__disc {
+  display: inline-flex;
+  grid-row: span 2;
+  align-items: center;
+  justify-content: center;
+  inline-size: var(--size-control-sm);
+  block-size: var(--size-control-sm);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-inset);
+  color: var(--color-text-tertiary);
+}
+
+.code-prov__sentence {
+  grid-column: 2;
+  margin: 0;
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.code-prov__more {
+  grid-column: 2;
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.code-prov__time {
+  grid-column: 3;
+  grid-row: 1;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+/* A NAME AND ITS FACE stay together when a sentence wraps. */
+.code-prov__who {
+  white-space: nowrap;
+}
+
+.code-prov__ref {
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-prov__bound {
+  margin: 0;
+  padding: 0 var(--spacing-4) var(--spacing-3);
+}
+
+@container code-prov (width < 640px) {
+  .code-prov__row {
+    grid-template-columns: var(--size-control-sm) minmax(0, 1fr);
   }
-}
 
-.code-commit-card {
-  min-width: 0;
+  .code-prov__time {
+    grid-column: 2;
+    grid-row: auto;
+  }
 }
 
 /* ---- The workspace's listings ---------------------------------------------- */
