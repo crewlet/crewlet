@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/steer"
@@ -531,9 +532,12 @@ const steerPeekBytes = 4 << 10
 // steerFront is what the bridge reads of every POST before the SDK does, the
 // package doc's "A hook's cancel is heard before the SDK": it drops a box-sent
 // [steerCallHeader]; it peeks at most [steerPeekBytes] of the body, handing
-// the SDK those bytes and the rest; and of one JSON-RPC message it sets the
-// header to a steer_take call's id, or hands a cancel to the opening's inbox
-// ([binding.cancelInbox]), which never blocks. Anything else goes straight on.
+// the SDK those bytes and the rest; and of one JSON-RPC message, decoded as
+// the SDK decodes it (jsonrpc.DecodeMessage, keys matched exactly, [rpcParam])
+// so the two never read one body two ways, it sets the header to a steer_take
+// call's id, or hands a cancel to the opening's inbox ([binding.cancelInbox]),
+// which never blocks. Either id is named as a serve keeps it
+// ([sandbox.NoteCallID]). Anything else goes straight on.
 func (b *Bridge) steerFront(r *http.Request, opened *binding) {
 	r.Header.Del(steerCallHeader)
 	if r.Method != http.MethodPost || r.Body == nil || r.Body == http.NoBody {
@@ -549,32 +553,28 @@ func (b *Bridge) steerFront(r *http.Request, opened *binding) {
 	if n > steerPeekBytes || (err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF)) {
 		return
 	}
-	var msg struct {
-		ID     json.RawMessage `json:"id"`
-		Method string          `json:"method"`
-		Params json.RawMessage `json:"params"`
-	}
-	if json.Unmarshal(peek, &msg) != nil {
+	msg, err := jsonrpc.DecodeMessage(peek)
+	if err != nil {
 		return
 	}
-	switch msg.Method {
+	req, isRequest := msg.(*jsonrpc.Request)
+	if !isRequest {
+		return
+	}
+	switch req.Method {
 	case "tools/call":
-		var params struct {
-			Name string `json:"name"`
-		}
-		if json.Unmarshal(msg.Params, &params) == nil && params.Name == SteerTool {
-			if id, ok := noteCallID(msg.ID); ok {
-				r.Header.Set(steerCallHeader, id)
-			}
-		}
-	case "notifications/cancelled":
-		var params struct {
-			RequestID json.RawMessage `json:"requestId"`
-		}
-		if json.Unmarshal(msg.Params, &params) != nil {
+		if name, _ := rpcParam(req.Params, "name").(string); name != SteerTool {
 			return
 		}
-		id, ok := noteCallID(params.RequestID)
+		if id, ok := sandbox.NoteCallID(req.ID.Raw()); ok {
+			r.Header.Set(steerCallHeader, id)
+		}
+	case "notifications/cancelled":
+		requested, idErr := jsonrpc.MakeID(rpcParam(req.Params, "requestId"))
+		if idErr != nil {
+			return
+		}
+		id, ok := sandbox.NoteCallID(requested.Raw())
 		session := r.Header.Get(sessionHeader)
 		if !ok || session == "" {
 			return
@@ -585,30 +585,22 @@ func (b *Bridge) steerFront(r *http.Request, opened *binding) {
 	}
 }
 
-// noteCallID is a JSON-RPC id as canonical JSON text, where it is one a serve
-// keeps (internal/sandbox's keptCallOf): a JSON integer's text, or a JSON
-// string of letters, digits, `-` and `_`, quoted, at most
-// [sandbox.MaxNoteCallBytes] in all. False for any other, which no real call
-// has.
-func noteCallID(raw json.RawMessage) (string, bool) {
-	raw = bytes.TrimSpace(raw)
-	if len(raw) == 0 || len(raw) > sandbox.MaxNoteCallBytes {
-		return "", false
+// rpcParam is the value under key in a JSON-RPC message's params, decoded as
+// into an any (a number a float64, as the SDK reads a request id), or nil
+// where there is none: the key matched exactly, as the SDK matches it, never
+// case-insensitively as encoding/json matches a struct's fields.
+func rpcParam(params json.RawMessage, key string) any {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(params, &fields) != nil {
+		return nil
 	}
-	if raw[0] == '"' {
-		var s string
-		if json.Unmarshal(raw, &s) != nil || s == "" || strings.ContainsFunc(s, func(r rune) bool {
-			return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_'
-		}) {
-			return "", false
-		}
-		return `"` + s + `"`, true
+	raw, ok := fields[key]
+	if !ok {
+		return nil
 	}
-	text := string(raw)
-	digits := strings.TrimPrefix(text, "-")
-	if digits == "" || strings.ContainsFunc(digits, func(r rune) bool { return r < '0' || r > '9' }) ||
-		(len(digits) > 1 && digits[0] == '0') {
-		return "", false
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return nil
 	}
-	return text, true
+	return v
 }

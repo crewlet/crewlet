@@ -130,6 +130,27 @@ func TestACancelReachesTheInboxBeforeTheSDK(t *testing.T) {
 	}
 }
 
+// THE FRONT READS A BODY AS THE SDK DOES: a key the SDK does not match, being
+// matched exactly, names no cancel to the front either, so a box cannot give
+// up a call through the front that the SDK reads as no message of its own.
+//
+// Mutation: decode with encoding/json's case-insensitive struct match, and the
+// inbox hears both cancels.
+func TestTheFrontReadsABodyAsTheSDKDoes(t *testing.T) {
+	t.Parallel()
+	f := newSteerFixture(t, 0)
+	sess := dial(t, f.url)
+	for _, body := range []string{
+		`{"jsonrpc":"2.0","Method":"notifications/cancelled","params":{"requestId":9}}`,
+		`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"RequestId":9}}`,
+	} {
+		rawPost(t, f.url, sess.ID(), body, map[string]string{"Mcp-Protocol-Version": versionOf(sess)})
+	}
+	if got := f.inbox.cancelled(); len(got) != 0 {
+		t.Errorf("the inbox heard %+v from keys the SDK does not match, want nothing", got)
+	}
+}
+
 // THE PEEK LEAVES THE REQUEST WHOLE: a hook's call the front read is handed to
 // the SDK byte for byte, so it is answered as ever, under the id it carried.
 //
