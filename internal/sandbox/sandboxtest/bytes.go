@@ -497,16 +497,13 @@ func callAt(name string, seq int, started time.Time, digest string) sandbox.Brid
 }
 
 // AN APPEND IS THE SAME CALL ONLY AT ITS PLACE, INSTANT, NAME AND IDENTITY. The
-// log knows a call it already holds by all four as it keeps them, so an append
-// asked again lands once; and a call that differs from one the log holds in
-// any ONE of them is another call, and is listed beside it. Each has a call
-// behind it that the other three cannot tell apart: a session opened again on
-// the job numbers its calls after the log's last, so a call the closed session
-// had in flight can land at a place the new one reuses (the place alone); a
-// model that makes the same call again in a reopened session makes it at
-// another instant (the instant); and calls made side by side, or one tool
-// after another, are told apart by what they asked for and which tool they
-// named (the identity, the name).
+// log knows a call it already holds by all four, so an append asked again lands
+// once; a call differing in any ONE of them is another call, listed beside it.
+// Each has a case the other three cannot tell apart: a reopened session numbers
+// its calls after the log's last, so an in-flight call of the closed one can
+// land at a place the new one reuses (the place); the same call made again in
+// a reopened session is at another instant; calls side by side differ in what
+// they asked for and the tool they named (the identity, the name).
 //
 // Mutation: drop any one of the four from the comparison, and the call that
 // differs from the landed one in it alone is answered as the landed one's
@@ -594,15 +591,13 @@ func replyBatch(n, size int) sandbox.RecordedAnswer {
 }
 
 // AN ANSWER PAST ITS SHARE IS REFUSED, BEFORE ANYTHING IS WRITTEN. A reply is
-// recorded on the run's row as its answer — its words sealed, and every
-// delivery it was made of as the event it is — and a batch of long messages in
-// markup, whose every byte the row's encoder escapes six-fold, weighs
-// megabytes there: twice over with the copies a decline would owe. So the
-// store holds a recorded answer to its share (sandbox's MaxAnswerBytes) and
-// refuses one past it by name, leaving the run waiting on its question, for
-// the caller to record the reply's refusal in its place
-// ([sandbox.PendingStore.RecordRefusal]). A reply within its share is
-// recorded.
+// recorded on the run's row as its answer (words sealed, every delivery as the
+// event it is), and a batch of long messages in markup, whose every byte the
+// row's encoder escapes six-fold, weighs megabytes there, twice over with the
+// copies a decline would owe. So the store holds an answer to its share
+// (sandbox's MaxAnswerBytes) and refuses one past it by name, leaving the run
+// waiting on its question for the caller to record the refusal in its place
+// ([sandbox.PendingStore.RecordRefusal]). A reply within its share is recorded.
 //
 // Mutation: keep the events whole whatever they weigh, and twenty messages
 // of 32 KiB of markup are recorded as the run's answer, megabytes of it.
@@ -809,14 +804,12 @@ func rewriteLog(t *testing.T, runs coord.SandboxRuns, turnID string, change func
 }
 
 // A CAPTURE STAMP PAST ITS BOUNDS IS REFUSED, BEFORE ANYTHING IS WRITTEN. What a
-// box says of its session — the release of the harness that wrote it, read off
-// a file the run's own agent can write — reaches the row on the capture's
-// stamp, twice once it lands (the place, and the turn's kept capture). The
-// store holds every such field to the bound the executor log holds it to and
-// refuses a stamp past one by name, leaving the record as it was; a stamp
-// within them is taken. So is the process the stamp names as its taker held to
-// what a run's row carries of a process incarnation, and the reads its job's
-// brief left out to what a round's log lists.
+// box says of its session (the harness release, read off a file the run's own
+// agent can write) reaches the row on the capture's stamp, twice once it lands
+// (the place, and the turn's kept capture). The store holds every such field to
+// the executor log's bound and refuses a stamp past one by name, leaving the
+// record as it was. The taker is held to a process incarnation's size, and the
+// reads the brief left out to what a round's log lists.
 //
 // Mutation: stamp the capture whatever it carries, and a release of a megabyte
 // of digits is on the row; drop the taker from the stamp's bounds, and a

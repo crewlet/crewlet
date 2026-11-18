@@ -59,54 +59,24 @@ func (bb BenchBackend) reportRequests(b *testing.B, requests int64) {
 type BenchFactory func(b *testing.B) BenchBackend
 
 // Bench runs every object-store benchmark against backends newBackend builds,
-// one backend per case, so no case measures another's objects.
-//
-// Every case goes through [objstore.Store] where a caller would — a put is
-// counted and hashed on the way in, a whole read checked against its row on
-// the way out — except `get`, which is the backend's own stream with nothing
-// checked, so the two figures side by side say what the store's verification
-// costs on top of the backend and its transport; and `stat` and `list`, which
-// are the backend's own verbs, as the collector calls them. The cases, by the
-// names a comparison keys on:
-//
-//   - put/size=…: [objstore.Store.Put] of a fresh object.
-//   - put/streams=8/size=16MiB: eight puts of fresh objects at once, the
-//     figure reported for all eight together — a node's uploads under way
-//     together (a person's file, a push's bundle, seats' files), which share
-//     whatever the backend gives one node: its connection, its window of
-//     messages out, its allowance of spare parts.
-//   - get/size=…: [objstore.Backend.Get] of a whole object, unverified.
-//   - open/size=…: [objstore.Store.Open] of a whole object, every byte
-//     verified and the last one held back until it is.
-//   - ranged/size=64KiB/of=128MiB: [objstore.Store.ReadAt] of one page at a
-//     random offset of a large object — what a seat's page read pays.
-//   - parallel/streams=8/size=16MiB: eight verified whole reads at once, the
-//     figure reported for all eight together.
-//   - stat/objects=1/workers=…: [objstore.Backend.Stat] of ONE object over
-//     and over, from one goroutine and from a pool of 32 — the hottest a
-//     store can be (one name, one index entry, one block in cache), and so
-//     the most a backend can give.
-//   - stat/objects=10000/order=…/workers=…: Stat across a POPULATION of ten
-//     thousand objects of mixed sizes, in key order — the audit's, which
-//     walks the references by key — and in a random one, from one goroutine
-//     and from 32: what an audit of a store that holds something pays.
-//   - list/objects=…: one whole [objstore.Backend.List] of a store holding
-//     ten thousand one-byte objects, then a hundred thousand — the
-//     collector's every pass — reported in names a second.
-//
-// EVERY READ IS WARM. Each read case reads objects the case wrote moments
-// before, again and again, so a read figure is what a node gets reading
-// something recently written — never a read from a cold disk or from a
-// provider's colder storage, which can only cost more. On a backend this
-// process or a broker beside it holds — the twin, the broker, the fake bucket
-// — the bytes are wherever that machine keeps what it just wrote or read (the
-// operating system's page cache, the broker's own block cache, the fake's
-// memory), and reading through several objects in turn would not make them
-// cold, since anything a case can afford to write fits in that machine's
-// memory. A real bucket's reads are of objects its provider stored seconds
-// before, in whatever storage class the bucket writes, and say nothing about
-// one a colder class holds.
+// one backend per case, so no case measures another's objects. Cases go
+// through [objstore.Store] as a caller would, except `get` (the backend's
+// unchecked stream, so the pair prices verification) and `stat` and `list`
+// (the backend's verbs, as the collector calls them). Cases, by the names a
+// comparison keys on: put/size=…, put/streams=8/size=16MiB (eight at once, one
+// figure), get/size=…, open/size=… (every byte verified), ranged/size=64KiB/
+// of=128MiB (a seat's page read), parallel/streams=8/size=16MiB,
+// stat/objects=1/workers=… (one hot object, 1 and 32 goroutines),
+// stat/objects=10000/order=…/workers=… (mixed sizes, key order as the audit
+// walks or random) and list/objects=… (ten thousand, then a hundred thousand
+// one-byte objects, in names a second). Reads are warm: see the body.
 func Bench(b *testing.B, newBackend BenchFactory) {
+	// EVERY READ IS WARM: each read case reads objects it wrote moments before,
+	// so a figure is what a node gets reading something recently written, never
+	// a cold disk or a provider's colder storage, which can only cost more. On a
+	// backend this process or a broker beside it holds, reading several objects
+	// in turn would not make them cold: whatever a case can write fits in that
+	// machine's memory. A real bucket's figure says nothing of a colder class.
 	for _, s := range benchSizes {
 		b.Run("put/size="+s.name, func(b *testing.B) { benchPut(b, newBackend(b), s.n) })
 	}

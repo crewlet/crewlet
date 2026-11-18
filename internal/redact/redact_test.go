@@ -82,25 +82,16 @@ func runToken(subject string) string {
 
 // A RUN TOKEN IS TAKEN WHOLE AND ONCE: the engine's own per-run token is one
 // marker however its subject reads, and redacting it again changes nothing.
+// Its subject is anything but the dot that ends it, so a vendor's prefix and
+// body can be spelled inside one, and one can follow a vendor's key: it is
+// taken FIRST, else a piece of its subject is replaced and its signature
+// left, or `crewlet_rt1` is read as the end of the key before it. Its subject
+// may be EMPTY (a runtoken signs one). It takes no line break or space (it
+// rides a URL path) and no marker's bracket, so a second pass never reads a
+// redacted value as a subject.
 //
-// ITS TAG AND SIGNATURE ARE BASE64URL AND ITS SUBJECT ANYTHING BUT THE DOT
-// THAT ENDS IT, so a vendor's prefix and body can be spelled inside one — an
-// artifact view ticket's subject is base64url of its claims — and one can be
-// written straight after a vendor's key. So it is taken FIRST: taken after the
-// vendors' rules, a piece of its subject would be replaced and the rest of the
-// token, its signature among it, left in the text; and a token run into the
-// key before it would have its own `crewlet_rt1` read as the end of that key,
-// and the rest left. Its subject may be EMPTY, since a runtoken signs and
-// answers an empty one. And what it takes is a token and no more: no line
-// break and no space, since a token rides a URL path, and no marker's
-// bracket, so a value another rule redacted where a subject would stand is
-// not read, on a second pass, as a subject.
-//
-// Mutation: take the run token after the vendors' rules, and the rows with a
-// vendor's shape inside it or before it fail; admit a space or a line break
-// in its subject, and the rows split across one fail; admit a bracket, and a
-// second pass over the value redacted where a subject would stand changes it;
-// require a subject, and the empty one is published.
+// Mutation: take the run token after the vendors' rules, admit a space, line
+// break or bracket in its subject, or require a subject, and a row fails.
 func TestARunTokenIsTakenWholeAndOnce(t *testing.T) {
 	t.Parallel()
 	m := redact.Marker + "run-token]"
@@ -140,24 +131,15 @@ func TestARunTokenIsTakenWholeAndOnce(t *testing.T) {
 }
 
 // A RUN TOKEN NEVER TAKES AN ESCAPED LINE BREAK: its subject holds no
-// backslash, so a token's shape whose subject runs across the lines of a
-// string is no token, as one across real lines is not. A key's lines are read
-// across an escaped break as across a real one, and what a rule replaces takes
-// no line break of either kind ([redact.Secrets]): a subject that took one put
-// the lines it crossed into the token's marker, which a second pass read as one
-// line where the first had read several. So a token's shape spanning escaped
-// lines between a key's body and its END stopped the first pass's read back
-// from the END, its lines claimed by the token, and the second pass, the token
-// one marker line, read the key's lines back across it and redacted them:
-// redacting twice was not redacting once. Now the first pass reads them back
-// across the lines the token's shape spans, and a second pass changes nothing.
-// Each comes out as given, redacting it again changes nothing, and shown as it
-// settles, a byte at a time or in pieces, it is the same.
+// backslash, so a shape whose subject runs across the lines of a string is no
+// token, as across real lines. A rule's replacement takes no line break of
+// either kind ([redact.Secrets]): a subject that took one put the lines it
+// crossed into the marker, which a second pass read as one line. Each comes out
+// as given, redacting it again changes nothing, and shown as it settles it is
+// the same.
 //
-// Mutation: admit a backslash in a run token's subject, as the pattern did,
-// and the subjects holding one are redacted as tokens, the key above the
-// token's shape is published by the first pass and redacted by the second, and
-// the key lines the shape's subject spans are taken as the token's.
+// Mutation: admit a backslash in a run token's subject, and the key above the
+// shape is published by the first pass and redacted by the second.
 func TestARunTokenNeverTakesAnEscapedLineBreak(t *testing.T) {
 	t.Parallel()
 	sig := strings.Repeat("S", 40) + "a_-"
@@ -198,37 +180,15 @@ func TestARunTokenNeverTakesAnEscapedLineBreak(t *testing.T) {
 
 // A SESSION'S CREDENTIAL IS TAKEN WHOLE AND ONCE, as a run prints it: the key
 // id STS opens an AWS session's with, ASIA, and a Google access token, `ya29.`
-// and its base64url body — a service account's in segments a dot apart, as its
-// metadata server writes it. The body ends on a character of its own, so the
-// full stop after a token that ends a sentence stays the sentence's, and runs
-// to twenty characters at least, so prose naming the prefix is left as it is:
-// nineteen are kept, twenty taken.
-//
-// AND A GOOGLE TOKEN IS TAKEN BEFORE THE VENDORS' RULES AND AFTER THE RUN
-// TOKEN. Its body is base64url, which spells `sk-`, `sk-ant-` or `sk-proj-` and
-// a key's body by chance: a vendor's rule taken first replaced that piece and
-// left the token's head, or, the token written straight after a vendor's key,
-// read its `ya29` as the key's end and left its body. And its body takes dots,
-// as a run token's segments are joined: taken before the run token, it read on
-// from a subject that ends in `ya29` to the signature, and left the run
-// token's head.
-//
-// Each comes out as given, and redacting it again changes nothing. Shown as it
-// settles, a byte at a time or in pieces, it is the same, over the texts of
-// several lines here too — the AWS CLI's answer a member a line, a token above
-// a password whose value is on the line after its key: a session's shapes read
-// no line but their own, so a live view shows each line as it lands, redacted
-// as the whole text is.
-//
-// Mutation: drop the ASIA rule, and the key id is published; take a Google
-// token's body without its dots, and the metadata server's token is; take the
-// dot that ends one, and the sentence loses its full stop; ask nineteen
-// characters of a body or twenty-one, and the row at the floor is redacted or
-// published; take the Google token after any of the vendors' rules, and a
-// token whose body spells that vendor's key keeps its head, and the one after
-// a vendor's key its body; take it before the run token, and the run token's
-// head is published; read a token's body across a line break, and the body
-// broken over two lines is redacted as one.
+// and a base64url body (dots between a service account's segments). The body
+// ends on a character of its own, so a sentence's full stop stays, and runs to
+// twenty characters at least: nineteen are kept. A Google token is taken AFTER
+// THE RUN TOKEN AND BEFORE THE VENDORS' RULES: its body can spell `sk-` or a
+// key's body, so a vendor's rule first leaves its head or reads `ya29` as a
+// key's end; its dots would read on from a run token's subject ending in
+// `ya29`. Each is stable under a second pass and as it settles. Mutation: drop
+// the ASIA rule or a body's dots, move the floor, reorder the rules, or read a
+// body across a line break, and a row turns.
 func TestASessionsCredentialIsTakenWholeAndOnce(t *testing.T) {
 	t.Parallel()
 	aws, google, api := redact.Marker+"aws-key]", redact.Marker+"google-token]", redact.Marker+"api-key]"
@@ -295,32 +255,15 @@ func TestASessionsCredentialIsTakenWholeAndOnce(t *testing.T) {
 }
 
 // AN AWS SESSION'S SECRETS ARE TAKEN BY THE KEYS THEY ARE WRITTEN UNDER, in
-// every format that writes them: STS's answer as the CLI prints it, a member a
-// line; a credential process's on one line, as the file a box is handed holds
-// it; what Python, Go and JavaScript print of an SDK's; the environment the
-// CLI exports, the older variable, the credentials file, a command setting
-// one, a flag; a request's header in either case; and a presigned URL's
-// parameter, its base64 escaped. The value alone goes, so the text still says
-// what was there. A secret access key is taken however it reads, being forty
-// characters; a shorter value only where it reads as random, sixteen
-// characters at least — fifteen are kept.
-//
-// AND WHAT SUCH A KEY NAMES THAT IS NO SECRET IS LEFT: a name a program gives
-// a variable, a placeholder, a reference, prose, a declaration's type, and a
-// value on the line after its key, which the rule never reads, so it holds no
-// line back from a live view.
-//
-// Each comes out as given, redacting it again changes nothing, and shown as it
-// settles, a byte at a time or in pieces, its lines arriving apart, it is the
-// same.
-//
-// Mutation: drop a spelling from the keys, and its row publishes the secret;
-// replace the key with the value, and every row loses its key; take a value on
-// into a `-`, and the row written up to an armour takes the armour's dashes;
-// ask no digit of a short value, and the name a program gives is taken; ask
-// one of a long value, and the secret with none is published; take fifteen
-// characters, or ask seventeen, and a row at the floor turns; read the value
-// across a line break, and the key ending its line takes the next line's word.
+// every format that writes them: the CLI's, a credential process's, an SDK's
+// printed by Python, Go and JavaScript, exported environment, credentials file,
+// a flag, a request's header in either case, a presigned URL's escaped
+// parameter. The value alone goes. A secret access key is taken however it
+// reads, being forty characters; a shorter value only where it reads as random,
+// sixteen characters at least. What such a key names that is no secret is left,
+// and so is a value on the line after the key, which the rule never reads.
+// Mutation: drop a spelling, take a value on into a `-`, move a digit rule or
+// the floor, or read across a line break, and a row turns.
 func TestAnAWSSessionsSecretsAreTakenByTheirKeys(t *testing.T) {
 	t.Parallel()
 	id := "ASIA" + "QWERTYUIOP234567"
@@ -446,24 +389,16 @@ func TestTwoPrivateKeysDoNotSwallowWhatIsBetweenThem(t *testing.T) {
 
 // A PASSWORD'S VALUE IS ALL ITS RULE REPLACES: the key and the separator stay
 // as they were, line breaks and all, real or escaped in a string, and the value
-// ends where no password goes on — at an armour line's armour, a marker, and
-// an escaped line break that what follows to the next space says is the
-// string's: punctuation alone, the quote closing it. An escaped line break
-// with a letter or a digit after it stays where it is, the value redacted on
-// either side of it, so a password holding a backslash and an `n` or an `r`
-// is not published past them, nor one ending in a backslash and punctuation.
-// A token's match that runs into an armour stops at it. Each comes out as
-// given, and redacting it again changes nothing.
+// ends where no password goes on: at an armour line's armour, a marker, and an
+// escaped line break that only punctuation follows to the next space (the
+// string's closing quote). An escaped break followed by a letter or digit stays
+// in the value, redacted on either side, so a password holding a backslash and
+// an `n` or `r` is not published past them. A token's match stops at an armour.
+// Each is stable under a second pass.
 //
-// Mutation: replace the whole match, as the rule did, and the key goes with
-// its value, its line break too; replace the value whole, and the escaped
-// break in it goes with it; end it at every escaped break, and what follows
-// the break is published; at none, and the closing quote is taken; read an
-// escaped CRLF as its `\n` alone, and the `\r` goes into the marker; end it
-// at a backslash with nothing after it but punctuation, as at a break, and
-// `\!` is published; through an armour, and the END goes with it; through a
-// marker, and a value already redacted is replaced again; let a token run into
-// an armour, and the END is taken with it.
+// Mutation: replace the whole match, end at every escaped break or at none,
+// read an escaped CRLF as its `\n` alone, end at a backslash and punctuation,
+// or run through an armour or a marker, and a row turns.
 func TestAPasswordsValueIsAllItsRuleReplaces(t *testing.T) {
 	m := redact.Marker + "password]"
 	key := "-----BEGIN RSA PRIVATE KEY----- " + strings.Repeat("Ab1", 22) + " -----END RSA PRIVATE KEY-----"
@@ -509,56 +444,18 @@ func TestAPasswordsValueIsAllItsRuleReplaces(t *testing.T) {
 	}
 }
 
-// A PASSWORD'S KEY IS READ AS THE TEXT WRITES IT: closed by the quote or the
-// markup it is written in, and separated from its value by the operator the
-// language assigns or compares with. A JSON object's key is quoted, a
-// Markdown label bold, Go declares with `:=` and PHP maps with `=>`, and read
-// with a bare `:` or `=` straight after the key, the quoted key and the bold
-// one were no key at all and their values published, and an operator's second
-// character was taken for the value. The markup that closes what the key's
-// line opened before its label — a bold label's `**`, a code span's backtick,
-// a table cell's `|` — is the key's, and the value is read after it: on its
-// line, or where nothing follows it, on a line below, as after a separator;
-// read as the value, it was replaced and the value beside it or under it
-// published. A quote is no such markup, since a logged string closes with
-// one and what follows it is the next field. And a quote closes the key only
-// where it closes the key's own string, a name ending in the key: a longer
-// string ending in the key's word is a string, and what follows it no value.
-// Each comes out as given, redacting it again changes nothing, and shown as
-// it settles, a byte at a time or in pieces, it is the same.
-//
-// Mutation: read no quote or markup closing the key, and the JSON, PHP and
-// bold-key cases publish their values; read the operators as their first
-// character, or try the one character before the two, and `:=`, `==` and
-// `=>` lose their second character to the marker; read no markup past the
-// separator, and the bold label's and the table cell's values are published;
-// take a quote for markup, and the logged prompt's next field is redacted;
-// take any markup after the separator, whatever the key's line opened, and
-// the word after a prompt's pipe is; read the opening only where it stands
-// against the key, and the value of a label of two words is published, or
-// read it past a word's own `_`, and an identifier's `_` after its
-// separator is passed over, or past any `_`, and an underscored bold label's
-// value is published, or over letters and spaces alone, and so is a label's
-// with a parenthesis in it; read punctuation after the markup from the
-// markup's own start — the value where no line repeats it, before another
-// key on its line, or before one past an escaped break — and the markup is
-// replaced and the punctuation kept; take any key on an echoed line for one
-// that names its value, a string ending in the key's word too, and the echo's
-// quote is taken for the value and the value published; read past markup that is a word's start only
-// where the whole word is markup, and the value under a list's bold label is
-// published; read the markup past the separator before the key's own
-// close has taken its opening, and a bold value after a bold key keeps its
-// opening `**`; read the opening as written rather than as the rule leaves
-// it, and a second pass reads a table row's last pipe as a value; take the
-// markup alone as no suffix, and a compact table row loses its closing pipe,
-// or as the suffix every line must end in, and the value under a bold label
-// is published, or the whole of it as the suffix rather than its outermost
-// closing, and a table's blank row under a bold label in a cell is read as
-// the value's; take any quote after the key for its own, and the string
-// after a route's and a choice's is; hold the name before a quoted key to
-// letters alone, and the `db_password` key's value is published; read a key
-// at the end of a text whose separator is still to come as only a bare key,
-// and shown in pieces, an arrow on the line below publishes its value.
+// A PASSWORD'S KEY IS READ AS THE TEXT WRITES IT: closed by the quote or markup
+// it is written in, and separated from its value by the operator the language
+// assigns or compares with (`:=`, `==`, `=>`; an operator's second character is
+// never taken for the value). Markup that closes what the key's line opened
+// before its label (a bold `**`, a code span's backtick, a table cell's `|`)
+// is the key's, and the value is read after it, on its line or the next. A
+// quote is no such markup, since a logged string closes with one and the next
+// field follows; and it closes the key only where it closes the key's own
+// string, not a longer one ending in the key's word. Each is stable under a
+// second pass and as it settles in pieces. Mutation: change what closes a key,
+// an operator, a markup's opening or suffix, or where its punctuation is read
+// from, and a row turns.
 func TestAPasswordsKeyIsReadAsTheTextWritesIt(t *testing.T) {
 	t.Parallel()
 	m := redact.Marker + "password]"
@@ -702,62 +599,18 @@ func TestEveryMatchingRuleStillFiresWhenSeveralDo(t *testing.T) {
 	}
 }
 
-// A PASSWORD'S VALUE IS READ WHERE ITS WRAPPING PUTS IT. Its key and its value
-// a line apart are two lines of whatever wraps every line of the text, and
-// the value is on the key's line only when what follows the separator there
-// holds one: the quote an `echo` closes, the `\n" +` of a string concatenated
-// across lines, the next line's number, a blank numbered line and a diff's
-// `+` are the wrapping's, and the value is on the line after them, behind the
-// gutter every line repeats, moving its numbers on, and before the suffix it
-// ends in — or before what a list's or a concatenation's last line closes
-// with instead, or the `>>` that appends to the file the key's line opened
-// with `>`. Read from the first word past the separator, as the rule read it,
-// most of these published hunter2x9 with no key anywhere in the text, and
-// others redacted it together with the line's number or mark.
-// The value alone is replaced: the gutter, the suffix and the blank lines
-// stay. Each comes out as given, redacting it again changes nothing, and shown
-// as it settles, a byte at a time or in pieces, it is the same.
-//
-// Mutation: take the value from the first word past the separator, as the
-// rule did, and the wrapped cases fail; read no line past one that opens with
-// punctuation alone (no suffix) and the `echo`, the lists, the table, JSON
-// lines and the double-quoted scalar fail; read past no rest of a line an
-// escaped break ended the key's line on, and the cases written with `\n`
-// after the key in a wrapping that closes the line fail; read no closing for
-// a list's last line, and the list's last element is published; read no
-// line appending to a file as the line that opened it, and the value under
-// `> creds.txt` is published; read a timestamp's fraction as runs of its
-// own, and the stamps with and without one redact the stamp; read no
-// gutter, and the numbered, grep, diff, timestamp and nl cases redact the
-// gutter; read the gutter off the key's piece of its string where the read
-// crossed a real line break, and the concatenations whose key follows an
-// earlier break redact the line's number, `+` or quote; read no quote after
-// it, and the concatenation's first line fails; read any punctuation as that
-// quote, and a list's `(9)` loses its `(`; take the gutter with its line's
-// trailing spaces trimmed, and the nl and timestamp cases redact the blank
-// line; pass no punctuation that closes a real line after an escaped break,
-// and the concatenations fail; read the rest of the key's line as the suffix
-// where another escaped break follows it on its real line, and the value
-// under a quoted scalar whose key's line goes on to `--\n` is published; end
-// a value at no escaped break with punctuation alone after it, and the quoted scalar, the JSON string and the
-// string escaped twice replace the quote that closes them; end a value on a
-// later line at its line's escaped break, as a value on the key's own line is
-// not, and what follows the break is published; take an escaped break written
-// at the end of a real line for the string's, and the diff's `+` on the line
-// after is a suffix no line ends in, so the value is published; stop the
-// gutter at every marker, and the values under a token on every line are
-// published; match a marker by its shape, and a second pass cuts the value's
-// marker where the token's began; match a password's marker in the gutter by
-// the one a first pass wrote below it, and a second pass reads that line as a
-// blank one of the wrapping and redacts the line after; take a word a key's
-// word opens as a key and its separator there, and a file named
-// passwords.txt makes the `echo`'s quote the value; read the key's line as
-// written rather than as the rule leaves it, and a second pass replaces the
-// quote the first kept under `new_password=`; end a gutter inside a rune, and
-// the value's marker starts on a broken one; read a value of digits whole as the shape of the number a
-// key's line opens with, and the numbered list's value is published; read the
-// gutter from past a key's block on the key's line, as though what stands
-// before it were the key's, and the timestamp under a key's END is the value.
+// A PASSWORD'S VALUE IS READ WHERE ITS WRAPPING PUTS IT. A key and its value a
+// line apart are two lines of whatever wraps every line, and the value is on
+// the key's line only when what follows the separator holds one: an `echo`'s
+// closing quote, a concatenation's `\n" +`, the next line's number and a
+// diff's `+` are the wrapping's. The value is then on the line after, behind
+// the gutter every line repeats and before the suffix it ends in (or what a
+// list's, a concatenation's last line or a `>>` append closes with instead).
+// Read from the first word past the separator, most of these published the
+// value or redacted a line's number. Only the value is replaced; each is
+// stable under a second pass and as it settles. Mutation: read from the first
+// word, or change the gutter, suffix, closing, marker or escaped-break rules,
+// and the wrapped rows fail.
 func TestAPasswordsValueIsReadWhereItsWrappingPutsIt(t *testing.T) {
 	t.Parallel()
 	m := redact.Marker + "password]"
@@ -946,66 +799,15 @@ func TestAPasswordsValueIsReadWhereItsWrappingPutsIt(t *testing.T) {
 
 // A PASSWORD'S VALUE IS READ NO FURTHER THAN A VALUE IS. The first line after
 // the key that is no blank line of the wrapping ends the read: its first word
-// past the gutter is the value, unless the line holds a password's key where
-// that value would be (`password:` over `  password: hunter2x9`, which
-// published hunter2x9 when the first key took the second for its value), or a
-// value already redacted or an armour stands there. A key further along the
-// line is that line's own: the value before it is the first key's, and the
-// key reads its own beside it, as the rule leaves it. Punctuation that no line
-// after it ends in is a value on the key's line (`***`), an empty quoted
-// string is one, in either quote, a word in any script is one, and so is the
-// punctuation after an escaped break that no line after it closes with. A
-// gutter ends where a word of both lines does: read by shape alone, `4567`
-// under a key whose line opens with a number was that number's shape and
-// published, `4567x9` lost its digits, and `2024.Summer!` under `1. Password:`
-// its `2024.`. And a line ends the way the key's did only by the same suffix,
-// or by what a list's last line closes with instead: a call closing a string
-// after an escaped break, under a key whose string closed there, is prose.
-//
-// What is still published: a wrapping whose gutter holds an escaped break of
-// its own (each line `printf`ed with `'%s\n'`), which every line is broken
-// at; a blank line of a wrapping that lost the space or the tab after its
-// gutter — nl's number, a log's timestamp — read as the value; a value shaped
-// like the word the key's line opens with, a space after it on both
-// (`pass2 next` under `pass1 Retype password:`), read as a gutter, as one
-// timestamp is under another; the first word of a YAML block scalar, after
-// the `|` its key's line ends in; the value under a blank line of the
-// wrapping whose gutter holds a password's key, which ends the read as any
-// line holding one does; under a wrapping's suffix, a value beside a key of
-// its own, whose line the key's value would no longer end as the wrapping's
-// once redacted, so the key's own punctuation is its value; and punctuation
-// alone after an escaped break inside a value (`pwd=abc\n!!`), which is the
-// string's.
-//
-// Mutation: read past a line holding a key of its own, and the nested key's
-// value is the first key's, published; end the read at every line holding a
-// key, and the value before that key is published; read past a key of its own
-// on a line under a suffix, and a second pass takes the `echo`'s quote the
-// first left; read a value of digits whole as the gutter's shape,
-// and the numbered cases publish; end a gutter inside a word of the key's
-// line the value's line runs on past, and the list's and the timestamp's
-// values lose their start; take punctuation alone after the separator as a
-// suffix whatever the line after it, and `***` is published, and so is
-// `!@#$%` after an escaped break; read only ASCII letters and digits as a
-// value's, and `Пароль` is taken for punctuation and the value below
-// published; take any line closing a string after an escaped break as the key's wrapping, and
-// the call on the line after loses its first word; pass over punctuation
-// alone wherever it stands, or after an escaped break whether or not the real
-// line ends there, not only where it closes a real line after an escaped
-// break, and `!@#$%^` on the line after the key is published; read an empty
-// quoted string, in either quote, as punctuation, and the value is taken off
-// the next line that ends in one; take punctuation as a suffix with another
-// key after it on its line, and the value is taken off the line after; read a
-// gutter into an armour, and `-----END` loses a dash to the value's marker; end
-// a value at every escaped break before a line holding a key, and the half of
-// `Xk9\nQ2#vL8` after the break is published, and `cd` before `pwd="`; run it
-// into a key in the word after the break, and the key goes into the value's
-// marker; read a line's ending off punctuation after an escaped break that a
-// further escaped break follows, or read punctuation closing a real line
-// after an escaped break as a line with a value in it where an escaped break
-// ends that line, and the punctuation there is taken for the value, so a
-// second pass, the line before the break no longer ending as the key's,
-// takes the key's own.
+// past the gutter is the value, unless a password's key, a redacted value or an
+// armour stands there. A key further along a line is that line's own.
+// Punctuation no later line ends in, an empty quoted string and a word in any
+// script are values; a gutter ends where a word of both lines does, never by
+// shape alone; a line ends as the key's did only by the same suffix.
+// Still published: a gutter holding an escaped break of its own, a blank line
+// that lost the space after its gutter, a value shaped like the word the key's
+// line opens with, a YAML block scalar's first word, and punctuation alone
+// after an escaped break inside a value (`pwd=abc\n!!`).
 func TestAPasswordsValueIsReadNoFurtherThanAValueIs(t *testing.T) {
 	t.Parallel()
 	m := redact.Marker + "password]"

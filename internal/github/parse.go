@@ -12,38 +12,16 @@ import (
 
 // Routing a hosted code host.
 //
-// # Two layers, and the difference between them is what a seat is asked for
+// A DIRECTED event names its recipient in the payload (assignee added, review
+// requested, your name written): it routes with no reads and survives a lapsed
+// credential. THREAD ACTIVITY (comment, close, merge) concerns everyone taking
+// part, which the payload lacks; it costs one read per event, else degrades to
+// the author and assignees (reach lost only on the watching layer).
 //
-// A DIRECTED event names its recipient in the payload: an assignee was
-// added, a review was requested, somebody wrote your name, somebody asked
-// for changes on your pull request. Those route from the payload alone, need
-// no reads, and survive a lapsed credential.
-//
-// THREAD ACTIVITY — a comment, a close, a merge — concerns everyone taking
-// part, and GitHub does not put that set in the payload either. It costs one
-// read per event, and without one it degrades to the author and assignees
-// the payload does carry. That degradation is deliberate and bounded: it can
-// only ever cost reach on the watching layer, never on the directed one.
-//
-// # Three places this deliberately differs from the self-hosted host
-//
-// GITHUB NAMES THE PARTY, so there is no diff. An assignment arrives as
-// `action: assigned` with `assignee` set, and a review request as
-// `action: review_requested` with `requested_reviewer` set — one event per
-// party. The self-hosted host sends one `update` carrying the whole list and
-// leaves the reader to diff it against the previous one, which is where its
-// `added()` comes from. Reading a list here would ping every assignee each
-// time anybody was added.
-//
-// THE AUTHOR IS IN THE PAYLOAD. `pull_request.user.login` and
-// `issue.user.login` are logins rather than opaque ids, so the person who
-// opened the thing can be told what happened to it without a lookup. The
-// self-hosted host carries only `author_id` and cannot.
-//
-// A CLOSED PULL REQUEST IS TWO EVENTS WEARING ONE NAME. GitHub sends
-// `action: closed` for a merge and for an abandonment, distinguished only by
-// `pull_request.merged` — and to the author they are opposite outcomes. They
-// are separated here, at the only point that can still tell them apart.
+// GITHUB NAMES THE PARTY (one `assigned` or `review_requested` per party), so
+// there is no list to diff, and the author is a login in the payload, no lookup.
+// A CLOSED PULL REQUEST IS TWO EVENTS WEARING ONE NAME: merge and abandonment
+// differ only in `pull_request.merged`, so they are split here.
 
 // Routing reasons, doubling as the event types the prompt dispatches on.
 //
@@ -423,25 +401,16 @@ func targetsOf(names []string, reason string) []target {
 
 // build turns the target list into one notification per recipient.
 //
-// THE SINGLE CHOKE POINT where every fan-out meets the parties the engine
-// can actually route to. A repository has contributors who are not seats
-// here, and a comment naming three of them would otherwise produce three
-// notifications the service cannot deliver — each one an undeliverable
-// warning and a skip record, by the dozen on a busy repository.
+// THE SINGLE CHOKE POINT where every fan-out meets the parties the engine can
+// route to: a comment naming three contributors who are not seats would
+// otherwise yield three undeliverable warnings and skip records.
 //
-// FIRST REASON PER PERSON WINS, and the list arrives in priority order, so a
-// mentioned author is woken once — as a mention, which is the stronger claim
-// on their attention and the one the prompt renders differently.
+// FIRST REASON PER PERSON WINS and targets arrive in priority order, so a
+// mentioned author is woken once, as a mention.
 //
-// The ACTOR is not filtered here. It is stamped on the metadata under the
-// one key every third-party app uses and suppressed by the spine, which knows the
-// exception ([Prompt.WakesActor]) and can resolve an actor across identity
-// namespaces — neither of which a parser comparing logins can do.
-//
-// A NIL REGISTRY LETS EVERYTHING THROUGH, which is right for the one caller
-// that has none: a test exercising the routing rules themselves, where the
-// question is which logins a payload implies rather than which of them work
-// here.
+// The ACTOR is not filtered here: the spine suppresses it, knowing the
+// exception ([Prompt.WakesActor]) and resolving actors across identity
+// namespaces. A NIL REGISTRY LETS EVERYTHING THROUGH, for tests of the routing.
 func build(h hook, targets []target, reg *notify.Registry) []notify.Routed {
 	var (
 		out     []notify.Routed

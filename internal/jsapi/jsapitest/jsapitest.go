@@ -260,14 +260,13 @@ func (h *Held) Count() int {
 // however late the broker hands it over, which [Held.Count] read straight
 // after the read that sent them cannot promise.
 //
-// A FENCE, through the reads' own path: a request of Fence's own, published
-// on nc to the held subject, reaches the interception after every message nc
-// published before it, since a subscriber hears one connection's messages in
-// the order they were published, and Fence takes each read until the fence.
-// So nc must be the connection the reads were sent on, and the reads must
-// still be held: a fence sent after [Held.Release] reaches the stream's
-// leader instead, and Fence waits for ctx. The fence is counted by
-// [Held.Count] and taken here.
+// A FENCE, through the reads' own path: a request of Fence's own, published on
+// nc to the held subject, reaches the interception after every message nc
+// published before it (a subscriber hears one connection's messages in order),
+// and Fence takes each read until the fence. So nc must be the connection the
+// reads were sent on, and they must still be held: a fence sent after
+// [Held.Release] reaches the stream's leader and Fence waits for ctx. The
+// fence is counted by [Held.Count] and taken here.
 func (h *Held) Fence(ctx context.Context, nc *nats.Conn) (int, error) {
 	fence := fmt.Sprintf("jsapitest.fence.%d", heldSeq.Add(1))
 	if err := nc.PublishRequest(h.subject, fence, nil); err != nil {

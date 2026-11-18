@@ -11,23 +11,16 @@ import (
 
 // Prompt is what a code-host event asks of the seat it reached.
 //
-// Like the tracker's, it dispatches on the ROUTING REASON the parser
-// stamped, because one merge request event reaches a reviewer, an assignee
-// and a watcher and asks each for something different. What is particular to
-// a code host is the FOURTH shape: an event that reports the outcome of the
-// recipient's own action. Only the hosted code host's failed run and the
-// tracker's unblocked notice share it.
+// It dispatches on the ROUTING REASON the parser stamped: one merge request
+// event reaches a reviewer, an assignee and a watcher, each asked for something
+// different. A code host adds a FOURTH shape, the outcome of the recipient's
+// own action.
 //
-// WHAT IT SAYS IS WHAT ONLY THE ENGINE KNOWS: why the seat is reading this,
-// the item by the reference a person would paste, the product facts a model
-// would not assume (a close that means stop, who makes an issue's code change
-// and under whose name), and how each ask is declined on this host. How to
-// review a diff or fix a red pipeline is the model's own, and that a direct
-// ask may not end in silence is the executor's contract — neither is restated
-// here.
-//
-// NOTHING HERE NAMES A TOOL — the deployed MCP server's tool names are not
-// knowable by the engine. See docs/concepts/tool-capabilities.md.
+// IT SAYS WHAT ONLY THE ENGINE KNOWS: why the seat is reading this, the item by
+// the reference a person would paste, product facts a model would not assume,
+// and how each ask is declined here; not how to review a diff.
+// NOTHING HERE NAMES A TOOL: the engine cannot know the deployed MCP server's
+// tool names. See docs/concepts/tool-capabilities.md.
 type Prompt struct{}
 
 var _ notify.Prompt = Prompt{}
@@ -323,16 +316,14 @@ func writeRef(b *strings.Builder, label string, n notify.Inbound) {
 // ItemRef is the human reference for whatever this event names — and the
 // CONVERSATION KEY, which is the same question asked by a different caller.
 //
-// One rendering, exported, because it is simultaneously what a person would
-// paste, what the model fetches with, and what decides whether two events
-// coalesce. Three renderings of one reference is how two of them come to
-// disagree about which separator a merge request uses.
+// One exported rendering, because it is what a person would paste, what the
+// model fetches with, and what decides whether two events coalesce; separate
+// renderings would disagree about a merge request's separator.
 //
-// PROJECT-QUALIFIED, because an iid is unique only within its project: two
-// repositories both have a !1, and a bare number would merge a comment on
-// one with a review request on the other. An event naming no item — a
-// pipeline for a branch push — yields "", so it is never merged with
-// anything, which is right: two unrelated builds failing are two problems.
+// PROJECT-QUALIFIED, because an iid is unique only within its project: a bare
+// number would merge a comment on one repository's !1 with a review request on
+// another's. An event naming no item (a branch-push pipeline) yields "" and is
+// never merged: two unrelated failing builds are two problems.
 func ItemRef(metadata map[string]string) string {
 	project := metadata["project"]
 	if project == "" {

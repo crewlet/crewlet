@@ -32,18 +32,16 @@ var credentialParams = []string{
 
 // URL is raw with every credential in it withheld:
 //
-//   - in the query, the value of each parameter whose name marks it as a
-//     credential ([credentialParams]), and of any other parameter this
-//     package's text pass would redact ([Contains]);
-//   - in the path, each segment the text pass would redact: a path has no
-//     names to judge, so only a known credential's shape is withheld there;
-//   - in the fragment, the same rule as the query where it is a list of
-//     parameters (`#access_token=...&state=...`), and the text pass over the
-//     whole of it otherwise;
-//   - the user name and password of an address that carries them.
+//   - in the query, the value of each parameter named as a credential
+//     ([credentialParams]) or that the text pass would redact ([Contains]);
+//   - in the path, each segment the text pass would redact (a path has no
+//     names to judge, so only a known credential's shape);
+//   - in the fragment, the query's rule where it is a parameter list
+//     (`#access_token=...&state=...`), the text pass otherwise;
+//   - the user name and password.
 //
-// An address that does not parse as a URL is passed through the text pass
-// whole ([Secrets]), since it can still carry a key.
+// An address that does not parse is passed through [Secrets] whole, since it
+// can still carry a key.
 func URL(raw string) string {
 	if raw == "" {
 		return raw

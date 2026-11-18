@@ -63,6 +63,9 @@
 // that were published, sees nothing at all; the engine reads each feed's
 // outage into the alarm table instead (`feed_stopped`).
 //
+// The ceiling is `statelog.FeedReopenCeiling` (half the stall grace), and the
+// series begins again only after a consumer that stayed open for that long.
+//
 // # Two independent dedupe layers, and why both
 //
 // A feed message can be redelivered (a node that died after publishing but
@@ -78,6 +81,17 @@
 //     collapse the duplicate that the open claim let through. Without it the
 //     ids would be random and neither dedupe could recognise the pair.
 //
+// A first-party wake also carries the COMMITTING RECORD'S POSITION
+// (`trigger_position`), and the turn it starts observes it before its first
+// read, so a woken seat never reads the change that woke it as not there yet,
+// whichever node answers. Each published wake is recorded as `wake_latency`,
+// timed from the record's broker instant ([Record].StoredAt) to the publish.
+//
+// A translator may hold this node's DECISIONS (chat's `NodeDecisions`) and
+// withhold the wake of a record this node's own applier refused. It FAILS OPEN
+// wherever none is decided yet: the record carries its own routing snapshot,
+// so the company's wakes never wait on one node's applier.
+//
 // # A record this node cannot read is handed back, never acknowledged
 //
 // The group is the fleet's, so an ACK IS THE FLEET'S: a record one node acks
@@ -92,8 +106,10 @@
 // THE BROKER CAPS NO REDELIVERY, so the feed bounds it: a record handed back
 // for [DeadLetterAge] is kept whole as a dead letter in the queue's
 // dead-letter stream ([DeadLetters]) — its sealed frame the entry's body, and
-// what the feed recorded of it the entry's header ([DeadLetter]), which every
-// listing reads without the frame — and only then acked, so it stops holding
+// what the feed recorded of it the entry's header ([DeadLetter]: one line of
+// compact ASCII JSON, every rune past ASCII escaped, so a record at its log's
+// ceiling still fits the transport and every listing reads the header without
+// the frame) — and only then acked, so it stops holding
 // a slot of the consumer's pending set without anybody's wake being lost.
 // The entry is kept under the record's IDENTITY, the message the broker stored
 // for it — its log, its position there and the broker's instant for it, which
@@ -112,7 +128,11 @@
 // behind the keep's own bytes. An entry is kept for the event stream's retention and then expires;
 // the first node whose feed starts able to read it replays it ([Feed.replay])
 // through the same claim a delivery passes — the one reader of its frame — and
-// drops it; and an operator who has decided its wake can be lost discards it
+// drops it; each wake a replay publishes is MARKED (`types.RawWebhook.Replayed`),
+// since a replay comes in a burst, so the notification service paces it by the
+// seat's rate valve rather than skipping it. The keyring is restart-only, so a
+// feed's start is when a key's arrival reaches a dead letter. An operator who
+// has decided its wake can be lost discards it
 // (the engine's operator surface, `crewlet feeds discard`). ADR-0012's
 // amendment records the decision.
 package changefeed
@@ -154,17 +174,15 @@ const ClaimTTL = 5 * time.Minute
 // nakDelay is how long a failed handle waits before coming back.
 //
 // Two seconds: long enough that a broker reconnect or a leader election
-// completes inside one delay rather than being retried through, short enough
-// that a person waiting on a notification does not notice.
+// completes inside one delay, short enough that a person waiting on a
+// notification does not notice.
 //
 // THE BROKER CAPS NO RETRY: a domain feed's consumer sets `MaxDeliver: -1`
-// deliberately (internal/queue/jetstream's domainconsumer.go), since a budget
-// that ran out would drop a wake silently. So the FEED bounds what it hands
-// back. A publish that failed — the broker, a moment ago — comes back every
-// two seconds until it lands. A record this node has decided nothing about —
-// one DEFERRED to a peer, or one no build here can translate — backs off from
-// this delay to [DeferCap] instead ([DeferDelay]), and once it is
-// [DeadLetterAge] old the feed keeps it as a dead letter and lets it go.
+// (domainconsumer.go), since an exhausted budget would drop a wake silently,
+// so the FEED bounds what it hands back. A failed publish comes back every
+// two seconds until it lands. A record this node has decided nothing about
+// (DEFERRED to a peer, or untranslatable here) backs off to [DeferCap]
+// ([DeferDelay]), and at [DeadLetterAge] is kept as a dead letter and let go.
 const nakDelay = 2 * time.Second
 
 // The reopen schedule: how long a feed waits before each attempt to bring its
@@ -198,29 +216,17 @@ type Source struct {
 	// scope of this estate's claim keys — "work", "page", "chat".
 	Name string
 
-	// Group is the durable consumer's name, and it is STABLE for the
-	// deployment's life: the name is where the fleet is. A rename is a
-	// fresh consumer, and a fresh one starts from the log's first retained
-	// record, so it redelivers every record the log still holds as a wake —
-	// only the two dedupe layers in the package doc hold those back, and
-	// only within their own retention windows — and until it catches up its
-	// acknowledgement floor holds back the log's trim.
+	// Group is the durable consumer's name, STABLE for the deployment's
+	// life: a rename is a fresh consumer, which starts from the log's first
+	// retained record and redelivers all of it as wakes (only the package
+	// doc's two dedupe layers hold those back) and, until it catches up,
+	// holds back the log's trim. On the broker the durable name derives from
+	// the group AND the stream.
 	//
-	// On the broker the consumer is not literally named this: its durable
-	// name is derived from the group AND the stream it reads, so one group
-	// on two streams is two consumers.
-	//
-	// EACH ESTATE DECLARES ITS OWN, as a constant beside the translator
-	// that reads it. The helper that used to derive one from a document
-	// family is gone with the families — and what it was for survives as
-	// a rule rather than a function: a name is chosen once and never
-	// improved.
-	//
-	// A state log's DOMAIN declares the same name
-	// ([statelog.Domain.FeedGroup]), because the log's trim waits on this
-	// consumer from nodes that build no translator — and the engine
-	// refuses to start a feed whose group is not the one its domain
-	// declares.
+	// EACH ESTATE DECLARES ITS OWN, a constant beside its translator. A state
+	// log's DOMAIN declares the same name ([statelog.Domain.FeedGroup]), since
+	// its trim waits on this consumer from nodes with no translator, and the
+	// engine refuses a feed whose group differs from its domain's.
 	Group string
 }
 
@@ -499,15 +505,12 @@ type Outage struct {
 // the broker's instant for the record that wakes somebody to the wake on the
 // inbound edge.
 //
-// HERE, because every domain that wakes anybody wakes them through this feed,
-// so one recording site times the tracker's, the knowledge base's and chat's
-// alike — and the wake is derived from the durable record, so from its storing
-// to the inbound edge is the engine's whole share of a wake before the
-// notification service routes it. ONE EVENT PER PUBLISHED WAKE: a record that
-// wakes nobody is a decision and no wake; a record another node already
-// claimed was that node's event; and a publish that failed is no event of its
-// own, since the redelivery that publishes it is timed from the same stored
-// instant and so carries the delay. Satisfied by [*objectives.Meter].
+// HERE, because every domain wakes through this feed, so one site times them
+// all: the engine's whole share of a wake before the notification service
+// routes it. ONE EVENT PER PUBLISHED WAKE: a record that wakes nobody is no
+// wake; one another node claimed was that node's event; a failed publish is
+// none, since its redelivery is timed from the same stored instant and so
+// carries the delay. Satisfied by [*objectives.Meter].
 type Objectives interface {
 	RecordSince(n objectives.Name, stamp time.Time, answered bool)
 }
@@ -755,20 +758,16 @@ func (f *Feed) handle(ctx context.Context, msg *Message) {
 	case outcomeDeferred:
 		f.deferRecord(ctx, msg, deferral)
 	case outcomeUntranslatable:
-		// A translation failure is a RECORD THIS BUILD CANNOT READ, and a
-		// redelivery will not make it readable here. It is handed back
-		// all the same, because the alternative — acking — would drop a
-		// wake permanently on a build that is about to be upgraded past
-		// the problem, and a peer on that build is somewhere in the group.
+		// A RECORD THIS BUILD CANNOT READ, which redelivery will not fix
+		// here. Handed back all the same: acking would drop a wake for good
+		// on a build about to be upgraded past the problem, and a peer on
+		// that build may be in the group.
 		//
-		// WITH THE DEFERRAL'S BACKOFF AND ITS BOUND: the broker caps no
-		// redelivery of a domain feed's consumer (`MaxDeliver: -1`, a
-		// budget that ran out would drop a wake silently), so the feed
-		// does — handed back from two seconds to thirty, and dead-lettered
-		// once it is [DeadLetterAge] old, so it stops holding a slot in
-		// the consumer without anybody's wake being lost. Its only other
-		// symptom is a wake that never comes, so it is counted, and the
-		// count is what `feed_unreadable` fires on.
+		// WITH THE DEFERRAL'S BACKOFF AND BOUND (the broker caps no
+		// redelivery, `MaxDeliver: -1`): two seconds to thirty, dead-lettered
+		// at [DeadLetterAge], so it stops holding a consumer slot without
+		// losing a wake. Its only other symptom is a wake that never comes,
+		// so it is counted, which `feed_unreadable` fires on.
 		f.count(metrics.TrackerFeedUnreadable)
 		log.WarnContext(ctx, "changefeed_untranslatable", "source", f.translator.Source().Name,
 			"key", msg.Key, "position", msg.Position, "stream", msg.Stream, "generation", msg.Gen,
@@ -811,15 +810,14 @@ const (
 // the wake it derives published through the claim.
 //
 // ONE PATH FOR A DELIVERY ([Feed.handle]) AND A DEAD LETTER'S REPLAY
-// ([Feed.replay]), so a replayed wake passes the dedupe a delivered one does:
-// two nodes starting together and replaying the same entry publish it once.
+// ([Feed.replay]), so a replayed wake passes the same dedupe: two nodes
+// starting together and replaying the same entry publish it once.
 //
-// replayed says which, and the wake says it too (types.RawWebhook.Replayed):
-// a replay publishes the wakes a roll piled up one after another, a burst the
-// live path would have spread over the roll, so the notification service paces
-// each by the seat's rate valve rather than skip one the valve refuses — the
-// replay drops an entry once its wake is published, so a skipped wake was lost
-// with its entry.
+// replayed says which, and the wake carries it (types.RawWebhook.Replayed):
+// a replay is a burst the live path would have spread out, so the
+// notification service paces each wake by the seat's rate valve rather than
+// skip one, since the replay drops an entry once published and a skipped wake
+// would be lost with it.
 func (f *Feed) derive(ctx context.Context, rec Record, replayed bool) (outcome, *Deferral, error) {
 	body, wake, err := f.translator.Translate(ctx, rec)
 	if d, ok := deferralOf(err); ok {
@@ -923,31 +921,16 @@ var errNoDeadLetters = errors.New("changefeed: this feed keeps no dead letters "
 
 // deadLetter keeps msg — a record handed back for [DeadLetterAge] — in its
 // feed's dead-letter subject ([DeadLetterSubject]) as a self-contained entry,
-// and only THEN acks it: an ack before the entry is durable is a wake lost
-// between the two.
+// and only THEN acks it: an earlier ack is a wake lost between the two.
 //
-// A KEEP ANSWERED WITH AN ERROR hands the record back with the backoff, and
-// claims and counts nothing. The error says the keep was refused or its answer
-// lost, never that nothing was stored ([queue.ErrUnavailable]): its entry may
-// be stored even so, and the record's next keep is then answered already kept.
-//
-// A KEEP ANSWERED STORED OR ALREADY KEPT settles the record: either way an
-// entry of it was stored under the record's identity ([keepID]) — by this
-// keep, a peer's, or this node's own earlier one — and is still held, or has
-// been dropped since: an operator discarded it, or a feed start's replay
-// derived its wake. The record's dead-lettering is COUNTED ONCE, by whichever
-// node takes its dead-letter claim ([Feed.countsDeadLetter]): that node counts
-// `crewlet.tracker.feed.dead_lettered` and logs the record's line, which says
-// the entry is held only where this keep stored it, and every other keep of
-// the record says it was counted already and counts nothing. Never by the answer: of two keeps of one record whichever
-// lands first is stored — the slow first keeper's as often as a peer's — and
-// the keep that stored the entry may be the one whose answer was lost, which
-// counted nothing.
-//
-// THE ORDER IS COUNT, THEN ACK: the ack is what lets the record go fleet-wide,
-// so it comes after everything this node owes the record, and a delivery
-// handed back because its ack was lost finds the identity already kept and the
-// claim held, and counts nothing again.
+// A KEEP ANSWERED WITH AN ERROR hands the record back with the backoff,
+// counting nothing: it means refused or answer lost, never that nothing was
+// stored ([queue.ErrUnavailable]). A KEEP ANSWERED STORED OR ALREADY KEPT
+// settles it, COUNTED ONCE by whichever node takes its dead-letter claim
+// ([Feed.countsDeadLetter]) as `crewlet.tracker.feed.dead_lettered`, never by
+// the answer (the storing keep's may have been lost). COUNT, THEN ACK: the ack
+// lets the record go fleet-wide, and a redelivery after a lost ack finds the
+// claim held.
 func (f *Feed) deadLetter(ctx context.Context, msg *Message, d *Deferral, age time.Duration) {
 	src := f.translator.Source()
 	subject := DeadLetterSubject(src)
@@ -1074,74 +1057,32 @@ func (f *Feed) keep(ctx context.Context, src Source, subject string, msg *Messag
 }
 
 // keepID is the identity a record's dead letter is kept under
-// ([queue.EventQueue.KeepDeadLetter]): the record's STORED MESSAGE — the feed's
-// source, the log it was delivered from, its position there, and the broker's
-// own instant for it ([Record.StoredAt]), in nanoseconds since the epoch.
+// ([queue.EventQueue.KeepDeadLetter]): feed source, log, position and the
+// broker's instant ([Record.StoredAt], ns since the epoch). All four come off
+// the delivery, never the frame, so every node keys one record alike whether
+// or not it can open the envelope, and a second keep is answered already kept.
+// The instant tells one incarnation of a log from the next (a reanchored log
+// renumbers); the generation is no substitute (a remade or restored stream
+// keeps it) and only a node that read the envelope knows it.
 //
-// WHAT IS KEPT, NEVER THE DELIVERY, AND NOTHING READ OUT OF THE FRAME: every
-// node handed the record reads all four off the delivery itself, whether or
-// not it can open the envelope — whichever delivery of it reached them and
-// however many times it was delivered before — so a second keep of it, a
-// peer's handed the record while a keep of it was still crossing a link, or
-// this node's own after an answer that was lost, is answered already kept
-// rather than kept twice. The instant is what tells one incarnation of a log
-// from the next: a reanchored or rebuilt log numbers its records again, and
-// the record at a reused position was stored at another instant. The log's
-// generation is no substitute: a stream deleted and remade, or restored from
-// an older copy and written past, keeps its generation, which only a reanchor
-// moves. It is LEFT OUT besides, because only a node that read the envelope
-// knows it: a node that could not would key the same record apart from one
-// that could, and both entries would be kept.
-//
-// NEVER ZERO HERE: the broker stamps every message it stores, and a record its
-// estate dates nothing for is never dead-lettered ([Feed.ageOf]). Quoted, so no
-// source or stream name can run into another's.
+// NEVER ZERO: an undated record is never dead-lettered ([Feed.ageOf]). Quoted,
+// so no name can run into another's.
 func keepID(src Source, rec Record) string {
 	return fmt.Sprintf("%q %q %d %d", src.Name, rec.Stream, rec.Position, rec.StoredAt.UnixNano())
 }
 
 // replay re-derives every dead letter this feed's group holds, once a process,
-// at the first open whose listing answered, before the first delivery is
-// handled. It reports whether the listing answered.
+// at the first open whose listing answered, before the first delivery.
 //
-// # Why at the start, and only there
-//
-// What makes an entry readable is a change of THIS NODE: a newer build, or a
-// key it did not hold. Both arrive only with a restart — the build obviously,
-// and the keyring because a node's [recordseal.Verifier] is built once and
-// never changes (it is read at boot, and the rotation runbook restarts every
-// node to add a key) — so the start of a feed is the one moment an entry this
-// node could not read before may have become one it can, and a replay there
-// covers a key's arrival as well as a build's.
-//
-// # What becomes of each entry
-//
-// The listing names each entry by its header alone ([DeadLetter]), and the
-// replay is the one reader of a FRAME: each entry's is read by its sequence,
-// from the broker itself ([DeadLetters]), only when the replay acts on it. A
-// record already settled by this replay, under another entry of it, needs no
-// frame at all, and an entry gone by the time its frame is asked for — a
-// peer's replay or an operator's discard dropped it, or the retention let it
-// go — is nothing this replay has to settle. The listing is a copy's, which
-// may be a moment behind the broker: an entry kept in that moment is replayed
-// by the next start, as one kept a moment after this start is.
-//
-// Each frame is opened again exactly as a delivery is ([Records.Reopen]): the
-// frame verified, the envelope read, the translator asked. A record that wakes
-// somebody is published through the same claim a delivery passes
-// ([Feed.derive]), and its entry is DROPPED once the wake is published, or once
-// the translator decided it wakes nobody — and so is every other entry of the
-// same record, kept further apart than the window its broker holds the
-// record's identity for ([keepID]). One whose claim a peer holds
-// is LEFT for that peer, which drops it once its publish lands: dropped on the
-// claim's word, it would be a wake nobody has the moment the peer's publish
-// failed. One this node still cannot read (any deferral, a record it cannot
-// translate, an entry a newer build wrote) is LEFT for a node that can, and so
-// is one whose frame could not be read. A frame this fleet did not write is
-// dropped, loudly, since no node will ever act on it. Nothing else this
-// package does clears an entry: an operator's discard (internal/engine's
-// FeedDeadLetters, through the same [DeadLetters]) and the retention are the
-// other two ways one goes.
+// ONLY AT THE START: what makes an entry readable is a change of THIS NODE (a
+// newer build or key), which needs a restart ([recordseal.Verifier] is built
+// at boot). A FRAME is read ([DeadLetters]) only when acted on, then reopened
+// as a delivery is ([Records.Reopen]). A waking record publishes through the
+// delivery's claim ([Feed.derive]), and its entry is DROPPED once published or
+// decided to wake nobody, as is every other of that record. One whose claim a
+// peer holds is LEFT for it (dropped on the claim's word, a failed publish
+// would lose the wake), as is one this node cannot read. A frame this fleet
+// did not write is dropped, loudly.
 func (f *Feed) replay(ctx context.Context, src Source, records Records) bool {
 	if f.deadLetters == nil {
 		return true

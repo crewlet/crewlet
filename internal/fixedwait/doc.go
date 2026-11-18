@@ -3,6 +3,7 @@
 // walks every Go file of the module and fails on a wait, or a reading of
 // elapsed time, in test code that nothing takes out of the class and the
 // inventory in allowed.go does not hold.
+// Nothing imports it: its own suite is the gate.
 //
 // # The class
 //

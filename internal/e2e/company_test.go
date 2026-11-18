@@ -32,28 +32,15 @@ import (
 // A golden company: two seats, one scripted model, one embedded broker.
 //
 // Its model entry is a REAL harness entry whose harness is this test binary
-// ([scriptedEntry]), rather than a `mock` provider type, deliberately. A mock
-// type would be test-only machinery in shipped config — a thing an operator
-// could set and a thing this suite could get right while the real backend was
-// wrong. Driving the REAL backend against a scripted harness tests what sits
-// between the model and everything asserted here: the transcript a run is
-// handed, the system prompt's own channel, the process launched in a seat's
-// own home on an allowlisted environment, the seat's tools served to the harness's
-// own loop over MCP and every call it makes through them, each model request
-// and its usage read off the harness's record, and the fallback chain.
+// ([scriptedEntry]), not a test-only `mock` provider type, so the REAL backend
+// is tested against a scripted harness: transcript, system prompt channel,
+// process launch on an allowlisted environment, tools over MCP, usage, fallback.
 //
-// The model entry is one of TWO, because the executor is not a run on this
-// host. Every
-// agent seat's executor is its harness's own run in a box, and only a harness
-// with an in-box runner can take one — which `custom` has not. So every seat
-// here names the chain `[scripted, coder]`: the scripted harness at the head, which
-// every phase on this host takes (onboarding, the reviewer, workers, side passes), and
-// `coder`, a Claude Code entry, which the executor's launch takes, skipping the
-// head. Its run happens in a real `direct` box whose `claude` is this binary
-// again ([harnessEnv]), asking the SAME scripted model each round.
-//
-// The three `%s` are the box catalogue, the scripted entry and the coder entry
-// — rendered by [goldenCompany], which is the one way to fill them.
+// There are TWO entries because the executor is its harness's own run in a box,
+// which `custom` cannot take. Every seat names the chain `[scripted, coder]`:
+// the head takes every host phase, `coder` (Claude Code) takes the executor's
+// launch in a real `direct` box whose `claude` is this binary ([harnessEnv]),
+// asking the SAME scripted model. The three `%s` are filled by [goldenCompany].
 const companyDoc = `
 name: Nimbus
 providers:
@@ -137,13 +124,11 @@ const directoryRefresh = 250 * time.Millisecond
 //
 // NOT A FLEET MEMBER'S, which runs the production cadence
 // ([stream.HealthInterval]; see [buildMember]). On a cluster every tick is
-// several certified coordination listings — the live nodes and their apply
-// status for the health envelope, the seat leases for placement — and each
-// listing creates and deletes an ordered consumer through the broker's
-// metadata group, which every member has to apply. Measured on a fleet that
-// only idled for thirty seconds: 113 cpu-s at 25 ms against 61 at five
-// seconds, close to two cores spent on ticks nobody reads — no fleet case
-// reads a push; every one reads REST or the engines.
+// several certified coordination listings (live nodes and apply status for the
+// health envelope, seat leases for placement), each creating and deleting an
+// ordered consumer through the metadata group every member applies. An idle
+// fleet over thirty seconds took 113 cpu-s at 25 ms against 61 at five
+// seconds, for ticks no fleet case reads: they read REST or the engines.
 const tickInterval = 25 * time.Millisecond
 
 // harnessActivation is the instant this harness's company was "activated".
@@ -161,34 +146,15 @@ var harnessActivation = time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
 // middayZone names a fixed-offset zone whose local time is within half an hour
 // of noon when it is called, spelled as a company's `timezone` takes it.
 //
-// FOR A CASE WHOSE PREMISE IS ONE COMPANY DAY. A token budget's windows are cut
-// on the company's clock at the instant each charge is made (ADR-0019), so a
-// turn that runs across the company's midnight charges its later rounds to the
-// next day — correctly. A case that sizes a ceiling to bite partway through one
-// turn, or reads back the day a refusal was stamped in, therefore holds only
-// while no midnight falls inside it, and on the wall clock and UTC one falls
-// inside some run every night: the onboarding round charged at 23:59:59.95 and
-// the execute round at 00:00:00.03 each fit a fresh day, nothing is refused,
-// and the case waits out its budget for a refusal that never comes. With the
-// company's local time at noon when the case starts, the nearest boundary of
-// every window — a day, an ISO week and a month all turn over at a local
-// midnight — is eleven and a half hours away, which no case here outlives.
-//
-// THE ZONE MOVES AND THE CLOCK DOES NOT. Pinning the engine's clock to a
-// synthetic noon was the other way to put the run mid-day, and it splits the
-// process in two: the engine shares it with the API, the live projection and
-// the coordination store, which all read the wall clock — the projection
-// judges whether a refused window has ended against it, and the store stamps a
-// refusal with it — so the gate would count a day the screens beside it had
-// already seen end, a node no deployment produces. Moving where the company's
-// day falls keeps every reader on the one calendar a deployment runs: the
-// gate, the park, the live meter, the budgets answer, a refusal's stamp and
-// the case's own read, each on the wall clock and the company's zone. A case
-// reads the zone back from the engine ([engine.Engine.Zone]) rather than
-// loading this name itself, so it judges the day on the clock the gate cut.
-//
-// Etc/GMT names count WEST as positive, so Etc/GMT-5 is five hours ahead of
-// UTC; every offset this takes, -12 to +12, has one.
+// FOR A CASE WHOSE PREMISE IS ONE COMPANY DAY. Token budget windows are cut on
+// the company's clock at each charge (ADR-0019), so a turn across its midnight
+// charges later rounds to the next day, and a ceiling sized to bite mid-turn
+// never does. On UTC a midnight falls inside some run every night; at local
+// noon every window's nearest boundary is 11.5 hours away. THE ZONE MOVES AND
+// THE CLOCK DOES NOT: a synthetic engine clock would split the process, whose
+// API, projection and store read the wall clock. A case reads the zone back
+// ([engine.Engine.Zone]). Etc/GMT names count WEST as positive, so Etc/GMT-5 is
+// five hours ahead of UTC; every offset, -12 to +12, has one.
 func middayZone() string { return middayZoneAt(time.Now()) }
 
 // middayZoneAt is [middayZone] at the instant now.
@@ -340,18 +306,15 @@ type nodeSpec struct {
 
 // nodeEnvironment is the environment a node in this package resolves its
 // `${VAR}` references from: the harness's own variables and the case's,
-// HANDED to the engine ([engine.Options.Environment]) and never read from the
+// HANDED to the engine ([engine.Options.Environment]), never read from the
 // process.
 //
-// HANDED because the process environment is the one input every case in a
-// binary shares. A case that configured a node through it had to set it with
-// t.Setenv, which Go refuses beside t.Parallel, so eight cases ran alone for
-// no other reason — and a case asserting that a reference resolves to NOTHING
-// held only on a runner that happened not to export the variable.
-//
-// The harness itself resolves nothing through it: the scripted harness signs in to
-// nothing, and what its child needs is written into its entry's own `env`
-// ([scriptedEntry]).
+// The process environment is the one input every case in a binary shares: a
+// case using it needs t.Setenv, which Go refuses beside t.Parallel, and one
+// asserting a reference resolves to NOTHING held only where the runner did not
+// export the variable. The harness resolves nothing through it: the scripted
+// harness signs in to nothing, and its child's needs are in its entry's own
+// `env` ([scriptedEntry]).
 func nodeEnvironment(vars map[string]string) config.MapSource {
 	env := config.MapSource{}
 	maps.Copy(env, vars)
@@ -426,26 +389,16 @@ func startNode(t *testing.T, spec nodeSpec) *node {
 }
 
 // newEngine builds a node's engine as `crewlet run` builds it: [engine.New],
-// and straight after it the process's chat hub ([api.NewEngineChatLive]) —
-// started, and attached to the engine whether or not the node will serve an
-// API. A node that serves one mounts its socket over the same hub
-// ([serveAPI]); a node that serves none still answers the fleet's presence
-// probe for the indicators its seats raise, which is what the hub exists on
-// such a node for.
+// then the process's chat hub ([api.NewEngineChatLive]), started and attached
+// whether or not the node serves an API; one without still answers the fleet's
+// presence probe for its seats' indicators. NEVER built in the API's wiring
+// ([wireAPI]) (TestRunBuildsTheChatHubOnEveryNode).
 //
-// NEVER a sequence written out at each boot path. The hub used to be built by
-// the API's wiring here ([wireAPI]), which is exactly where `crewlet run` must
-// not build it (TestRunBuildsTheChatHubOnEveryNode): a node the harness stood
-// up with no API — the stateless pair's seats-only member — attached none, and
-// an indicator its seat raised was answered for by nobody.
-//
-// THE TEARDOWN IS RETURNED in the order the two came up, for the caller to run
-// in reverse ([stopInReverse]) — the hub before the engine, in `crewlet run`'s
-// shutdown order: the engine's appliers announce into the hub until it stops,
-// and its teardown closes the broker the hub's answerer is subscribed on. Both
-// on [context.WithoutCancel], because the context a boot runs under has often
-// ended by the time its teardown runs. Returned on failure too, holding
-// whatever did come up. The caller starts the engine.
+// THE TEARDOWN IS RETURNED in come-up order, for the caller to run in reverse
+// ([stopInReverse]): the hub first, as `crewlet run` shuts down, since the
+// engine's appliers announce into it and its teardown closes the broker its
+// answerer subscribes on. Both on [context.WithoutCancel], as the boot context
+// has often ended. Returned on failure too. The caller starts the engine.
 func newEngine(ctx context.Context, opts engine.Options) (
 	*engine.Engine, *api.EngineChatLive, []func(), error) {
 
@@ -474,17 +427,14 @@ func bootEngine(t *testing.T, opts engine.Options) (*engine.Engine, *api.EngineC
 }
 
 // seedStore writes the migrated store image where boot's store will open, so a
-// node boots onto a store this binary migrated once rather than running every
-// migration again for every node it stands up — the cost [storetest.Seed]
-// exists to remove, and none of these cases is about migrating.
+// node boots onto a store this binary migrated once instead of migrating for
+// every node ([storetest.Seed]); none of these cases is about migrating.
 //
-// THE ENGINE'S OWN RULE for what a fresh node holds, so a seeded node is one a
-// fresh boot would have produced: the node file unless the store is scratch
-// (discarded at open, so a seed would only be deleted), and the replicated file
-// only on a node that holds the estate ([engine.HoldsEstate]) — a node without
-// `data` has none, and a backup or an estate check would find one that was put
-// there. A file already there is left as it is, which is what lets the restart
-// case boot twice on one path and reopen its own.
+// THE ENGINE'S OWN RULE for what a fresh node holds: the node file unless the
+// store is scratch (discarded at open), and the replicated file only on a node
+// that holds the estate ([engine.HoldsEstate]), since a backup or an estate
+// check would find one put on a node without `data`. A file already there is
+// left, which lets the restart case boot twice on one path and reopen its own.
 //
 // Call it once boot is final and before engine.New, ON THE TEST'S GOROUTINE:
 // a seed that cannot be written fails the test, which only that goroutine may.
@@ -895,31 +845,18 @@ func auxiliaryAnswer(pass string) string {
 	}
 }
 
-// sawRequest records everything ONE model request is known by, in ONE
-// critical section: the phase it was, the tools it was offered, the system
-// prompt it was shown, its run's transcript and the tool results it carried.
+// sawRequest records everything ONE model request is known by, in ONE critical
+// section: the phase, the tools offered, the system prompt, the run's
+// transcript and the tool results it carried.
 //
-// # Why they cannot be appended separately
-//
-// Because every reader PAIRS THEM BY INDEX — [executorPrompt] finds "execute"
-// in calls and reads systems at the same position — and that only holds if one
-// request appends to all of them without another getting in between. It did
-// not. serve appended the prompt, the tools and the body before the switch (it
-// has to: the phase is not known until the request is read), released the
-// lock, and saw appended the phase after. Two requests in flight — two seats,
-// or a seat and one of the prefetch's auxiliary passes, which is the ordinary
-// case — interleave between those two sections, and from then on calls[i] and
-// systems[i] are different requests.
-//
-// Measured: the end-to-end skills case read a prompt with no "## Tool skills"
-// section and failed on a section that was there all along, having been handed
-// an auxiliary pass's prompt where it asked for the executor's. Intermittent
-// by construction, and invisible under -race because both halves were locked
-// — it is a pairing bug, not a data race.
-//
-// So the phase is what the record is BUILT WITH rather than appended
-// alongside, which is the same rule the engine's own write authority states:
-// take one snapshot and decide inside it.
+// They cannot be appended separately because every reader PAIRS THEM BY INDEX
+// ([executorPrompt] finds "execute" in calls and reads systems at that
+// position), which holds only if one request appends to all of them without
+// another interleaving. Two requests in flight (two seats, or a seat and a
+// prefetch auxiliary pass) would leave calls[i] and systems[i] as different
+// requests, and the skills case failed intermittently on an auxiliary pass's
+// prompt. It is a pairing bug, not a data race, so -race cannot see it. The
+// phase is what the record is BUILT WITH: take one snapshot and decide inside it.
 func (m *scriptedModel) sawRequest(phase string, req modelRequest) {
 	tools := strings.Join(slices.Sorted(slices.Values(req.Tools)), "+")
 	results := req.toolResults()
@@ -1016,31 +953,14 @@ func (m *scriptedModel) toolResults() []string {
 
 // waitBudget is how long every wait in this suite gets.
 //
-// # Why it is this large
+// It is large because the conditions are a seat claimed through a lease, an
+// engine booted, an executor recovered from a row, on a race-detector CI
+// runner where single-engine cases run beside each other ([testing.T.Parallel]).
 //
-// The conditions here are not in-process flags: they are a seat claimed
-// through a lease, an engine booted, a detached executor recovered from a
-// row. And the machine they run on is not this one — CI runs the suite under
-// the race detector, with this package's single-engine cases running beside
-// each other, as many at once as the runner has cores ([testing.T.Parallel]),
-// so an engine here boots while three others do. This package is alone on the
-// runner ([solo.Run]); its own cases are what it competes with.
-//
-// # What a long budget does NOT fix
-//
-// A wait that will never complete. When this was raised from thirty seconds
-// the reasoning was that a loaded machine missed the budget — and that was
-// wrong: the restart case was losing a RACE, because its stand-in executor
-// slept for a fixed three seconds and a loaded second boot took longer, so
-// recovery found a run that had already finished and the seat was never
-// parked. The test then waited out whatever budget it had and failed at
-// thirty-six seconds, and at ninety-six, and would have at any number.
-//
-// That case now holds its job open until the test releases it. The budget
-// stays generous because these waits really do cover multi-second fleet
-// operations on a shared runner, and it costs nothing when the condition is
-// met — but a wait that times out here is a staging bug to find, not a number
-// to raise.
+// A long budget does NOT fix a wait that never completes: the restart case
+// lost a RACE (its stand-in executor slept a fixed three seconds) and failed at
+// any budget, so it now holds its job open until released. A timeout here is a
+// staging bug, not a number to raise.
 const waitBudget = 90 * time.Second
 
 // waitFor polls until cond holds, failing the test if it never does.
@@ -1077,16 +997,14 @@ func hydrated(t *testing.T, e *engine.Engine) func() bool {
 // called tool successfully, as this node's own event store holds it, or nil
 // while it holds none.
 //
-// WHAT SAYS THE TURN DELIVERED rather than only acted. A script that served
-// its citing submission ([chatScript.submitted], or the last call a capture
-// queued with [scriptedModel.callOnExecute]) knows what it SENT, and the
-// engine may still have refused it — after which the turn ends on the rescue
-// path, with an outcome the engine wrote rather than one the model chose
-// ([types.AgentPhaseCompleted.RescueFired]). Only the phase record says which.
+// WHAT SAYS THE TURN DELIVERED rather than only acted: a script that served its
+// citing submission ([chatScript.submitted], [scriptedModel.callOnExecute])
+// knows what it SENT, and the engine may still have refused it, ending the turn
+// on the rescue path ([types.AgentPhaseCompleted.RescueFired]). Only the phase
+// record says which.
 //
-// n IS THE NODE WHOSE STORE HOLDS THE TURN'S RECORDS: the node that ran it,
-// whose publish listener stores what it publishes — or, for a node that holds
-// no data, the data member its audit trail lands on.
+// n IS THE NODE WHOSE STORE HOLDS THE TURN'S RECORDS: the node that ran it, or,
+// for a node that holds no data, the data member its audit trail lands on.
 func turnRecordCalling(t *testing.T, n *node, tool string) *types.AgentPhaseCompleted {
 	t.Helper()
 	stored := n.engine.Backends().Store.Events()

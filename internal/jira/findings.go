@@ -25,31 +25,18 @@ func (r *Result) Findings() []integration.Finding {
 	}
 	var out []integration.Finding
 
-	// # WHAT IS SAID ABOUT INGRESS, and what is deliberately not
+	// INGRESS. [Result.Hooked] is the webhook this RUN registered, empty in
+	// three unlike states: a read-only pass; a working CLOUD company (its
+	// webhook belongs to an app, events arrive via the Forge relay); a Data
+	// Center instance with no address.
 	//
-	// [Result.Hooked] is the webhook this RUN registered, not the one the
-	// instance holds, and it is empty in three states that are nothing
-	// like each other: a read-only pass registers nothing by construction;
-	// a fully working CLOUD company registers nothing either, because a
-	// Cloud webhook belongs to an app rather than to an API token and
-	// those events arrive through the Forge relay; and a Data Center
-	// instance with nowhere to deliver to registers nothing because there
-	// is no address to put in a hook.
-	//
-	// So an empty Hooked is not the question. [Result.NoIngress] is: the
-	// pass records whether it HAD an address, on the one deployment where
-	// a hook is how events arrive, and that is reported here. Everything
-	// else stays silent, because reading a healthy Cloud company as
-	// unhooked would park it on a block nobody can clear.
-	//
-	// The public base used to be described here as absent from the
-	// integrations block, with ingress left "to the subcommand that has
-	// the URL". It is Tier A's webhook address — `api.public.external_url`
-	// behind a public listener, `api.external_url` otherwise — and the
-	// reconcile loop feeds it into every pass, so the silence meant a Data
-	// Center company that never set it saw Jira reported Ready. The
-	// finding names the key the address was READ from, which only the
-	// caller holding the Tier A can say ([Result.NoIngressKey]).
+	// So [Result.NoIngress] is the question: whether the pass HAD an address,
+	// on the one deployment where a hook is how events arrive. Everything
+	// else stays silent, since reading a healthy Cloud company as unhooked
+	// would park it on a block nobody can clear. The finding names the Tier A
+	// key the address was READ from (`api.public.external_url` or
+	// `api.external_url`), which only the caller can say
+	// ([Result.NoIngressKey]).
 	if r.NoIngress != "" {
 		out = append(out, integration.Finding{
 			Kind:    integration.FindingIngressBlocked,
@@ -108,21 +95,16 @@ func (r *Result) Findings() []integration.Finding {
 		// project read that failed stopped being a finding at all and
 		// became the fault it is — see checkProjects.
 		if !project.Exists {
-			// BOTH HALVES OF THE 404, because Jira answers the same
-			// status for a project that is not there and for one this
-			// credential may not browse — the conflation this tree's
-			// GitHub side already names at [github.ensureRepoWebhook].
-			// Told only the first half, an operator goes looking for a
-			// typo in a key they are staring at in the Jira UI.
+			// BOTH HALVES OF THE 404: Jira answers the same status for a
+			// project that is not there and for one this credential may
+			// not browse (see [github.ensureRepoWebhook]). Told only the
+			// first half, an operator hunts a typo in a key they can see.
 			//
-			// AND NOT AS AN ACCESS TIER. This borrowed
-			// FindingUnknownTier, whose closed-set doc defines it as "an
-			// access tier the company document names that this
-			// third-party app does not have" and whose fallback sentence
-			// says exactly that — a sentence about tiers, on a finding
-			// about a project key. A routing path that will not fix
-			// itself, owed by the admin who can grant the permission or
-			// correct the key, is FindingIngressBlocked.
+			// NOT AN ACCESS TIER: FindingUnknownTier's closed-set doc and
+			// fallback sentence are about tiers, not project keys. A
+			// routing path that will not fix itself, owed by the admin who
+			// can grant permission or correct the key, is
+			// FindingIngressBlocked.
 			out = append(out, integration.Finding{
 				Kind:    integration.FindingIngressBlocked,
 				Subject: project.Key,

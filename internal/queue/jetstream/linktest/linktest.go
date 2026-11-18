@@ -56,7 +56,7 @@
 // client's CONNECT names none, and a TLS or websocket link shows the relay
 // none — is never one of them. Every link the package builds does this, and
 // for a leaf that dials again only behind a member that advertises the link
-// ([Link]'s "The link is the only way").
+// ([Link.To] says why).
 //
 // # What a node's socket says, against what the link carried
 //
@@ -116,98 +116,46 @@ const Quantum = 1460
 const readChunk = 64 << 10
 
 // SocketBuffer is the receive buffer and the send buffer the relay asks the
-// kernel for on every socket it carries over, its listener's and every one
-// it dials, and what a case allows for wherever an assertion rests on what a
-// kernel holds that the relay has not read ([Link]'s "Its sockets' buffers
-// are pinned"; [Link.Buffers] is what the kernel granted).
+// kernel for on every socket it carries over ([Buffers] says what a case
+// allows for; [Link.Buffers] is what the kernel granted).
 //
-// 64 KiB, THE SMALLEST THAT TAKES A WHOLE LOOPBACK SEGMENT: loopback's MTU of
-// 65,536 bytes makes a segment 65,483, and Linux grants twice what is asked
-// and advertises only the part of the grant its accounting of each
-// segment's overhead leaves (since 6.6 the measured ratio of a segment's
-// payload to the memory it takes, about nine tenths on loopback), so an ask
-// of 32 KiB would advertise a window short of one segment, hold a loopback
-// sender to segments of less than one and slow every link the package
-// builds. It is no larger, because every byte of it is a byte a
-// sender's kernel counts as delivered that the relay never carried: a case
-// that reads a node's acknowledged bytes off its socket allows for it
-// whole.
+// 64 KiB, THE SMALLEST THAT TAKES A WHOLE LOOPBACK SEGMENT: loopback's MTU
+// makes a segment 65,483 bytes, and Linux grants twice the ask but advertises
+// only the part its per-segment overhead accounting leaves (since 6.6 about
+// nine tenths on loopback), so 32 KiB would advertise a window short of one
+// segment and slow every link the package builds. No larger, because every
+// byte of it is one a sender's kernel counts as delivered that the relay never
+// carried: a case reading a node's acknowledged bytes allows for it whole.
 const SocketBuffer = 64 << 10
 
 // Buffers is what the kernel holds a socket the relay carries over to, in
 // bytes: what it takes in that the relay has not read, and what it keeps of
 // what the relay wrote that the far end has not taken.
+//
+// The relay pins both to [SocketBuffer], its listener's before it listens and
+// every socket it dials before it connects. A sender's kernel counts a byte as
+// delivered once the RELAY'S kernel has taken it, so a node's delivered bytes
+// run ahead of what the link carried by up to the relay's receive buffer,
+// which unpinned grows from 128 KiB to 6 MiB: pinned, a node's acknowledged
+// bytes are at most [Link.Count]'s read plus Receive. What the relay carried
+// runs ahead of what a slow reader has read by up to Send plus that side's own
+// receive buffer, which autotunes, so read what a side has taken at that side.
 type Buffers struct {
 	Receive int
 	Send    int
 }
 
-// Link is a TCP relay a case puts between a node and the broker it
-// reaches across a link — a leaf and its member's leaf listener, a client and
-// an external server — which carries what the NODE sends at rate bytes a
-// second, and what the broker sends back either at once ([Slow]) or at a rate
-// of its own ([SlowEachWay]): a write's bytes cross towards the broker, and a
-// read's reply — a stream leader's message of megabytes, base64-encoded a
-// third larger — crosses back, on a real link as slowly. A case may also hold
-// the broker's bytes back for a while ([Link.Delay]), as a reply is held on a
-// slow link behind what was sent ahead of it. A link may instead LAG
-// ([Lagging]): carry every byte at once but each a fixed while after it was
-// sent, each way, as a loaded broker answers every request a while late. Or
-// every connection it carries may share one bottleneck, fair
-// ([SharedEachWay]) or first in, first out ([SharedFIFO]).
-//
-// # It reads what each side sends as fast as it comes
-//
-// and holds what the link has not carried yet, so neither side's writes wait
-// on it: what is paced is the DELIVERY to the other side, as on a slow network
-// the sender's buffers take its bytes and the receiver hears them at the
-// link's pace. A relay that paced its reads instead would push back into the
-// sender's socket, and a broker whose writes stop moving closes its link once
-// its own write deadline passes — so a case meant to show a write, or a read's
-// reply, waiting on a slow link would show a link torn down instead, and a
-// node's client, whose library publishes from a buffer of its own, would block
-// in its write rather than wait for its acknowledgement.
-//
-// [SharedFIFO] alone pushes back, and only past a connection's inflight: that
-// is the bottleneck it plays, whose senders' socket buffers fill once their
-// window is out, and its doc says what a case keeps clear of.
-//
-// # Its sockets' buffers are pinned
-//
-// to [SocketBuffer] each way, its listener's before it listens and every
-// socket it dials before it connects, and [Link.Buffers] is what the kernel
-// granted. A sender's kernel counts a byte as delivered once the RELAY'S
-// kernel has taken it, not once the relay has read it, so what a node's
-// socket says it has delivered runs ahead of what the link has carried by up
-// to the relay's receive buffer. Left to the kernel that buffer starts at
-// 128 KiB on Linux and grows with the traffic to 6 MiB, and a case could not
-// say by how much; pinned, a case allows for [Buffers.Receive], which bounds
-// it: a node's acknowledged bytes are at most what the relay has read
-// ([Link.Count]) plus it. The send buffer bears where the relay writes to a
-// side that is slow to read it: what the relay has carried runs ahead of
-// what that side has read by up to [Buffers.Send] plus that side's own
-// receive buffer, which the relay does not pin — a node's or a broker's
-// socket autotunes it, to 6 MiB on Linux — so a case reads what a side has
-// taken at that side, never off what the relay carried.
-//
-// # The link is the only way
-//
-// only while the broker tells the node of no other. A member hands every leaf
-// the leaf URLs it advertises — its own listener's address, unless told
-// otherwise — and a leaf that dials again tries those BEFORE the URL it was
-// configured with (nats-server's doUpdateLNURLs and pickNextURL), so behind
-// an ordinary member every redial walks around the link onto loopback: a
-// [Link.Cut] or [Link.Drop] then cuts nothing, and a link that closed for any
-// reason is slow no more. A member skips an advertised URL that is the
-// leaf's configured one, so a case whose leaf may dial again opens the link
-// with no target, starts the member advertising the link's [Link.Addr]
-// (nats-server's LeafNode.Advertise, the jetstream package's LeafAdvertise),
-// and then names the member's listener with [Link.To] — on a real network
-// the address a member advertises is reached over the same link. A member
-// that advertises nothing (LeafNode.NoAdvertise) serves as well.
-//
-// It ends with the case that started it: its listener, every connection it
-// carries and every goroutine it runs.
+// Link is a TCP relay a case puts between a node and the broker it reaches (a
+// leaf and its member's leaf listener, a client and an external server). It
+// carries what the NODE sends at rate bytes a second and what the broker sends
+// back at once ([Slow]) or at its own rate ([SlowEachWay]), as a real link
+// does a read's reply of megabytes; it may hold the broker's bytes
+// ([Link.Delay]), LAG ([Lagging]) or share one fair ([SharedEachWay]) or FIFO
+// ([SharedFIFO]) bottleneck. It ends, with every connection and goroutine,
+// with the case. It reads each side as fast as it comes and holds what it has
+// not carried, so only DELIVERY is paced: pacing reads would push back into
+// the sender's socket, and a broker whose writes stall closes its link, tearing
+// down what a case meant to show waiting. [SharedFIFO] alone pushes back.
 type Link struct {
 	ln net.Listener
 	// dial opens the relay's own connection to the broker for each one it
@@ -346,18 +294,12 @@ func Distant(t testing.TB, target string, rate int64) *Link {
 // lag ([Link.Lag]), and from then on every chunk either side sends that lag
 // after it was sent.
 //
-// A LAG, NOT A RATE, so what it plays is a loaded broker rather than a narrow
-// link: every round trip costs twice the lag, every time, however much the
-// two sides send, where a rate lets a stream of small long-poll requests
-// build a backlog that grows. Set once the node has linked, since a link's
-// own handshake keeps deadlines a lag of hundreds of milliseconds each way
-// already misses, and what a lagging link is for is the traffic after it.
-//
-// AND SIZE EVERY WINDOW THE NODE WAITS IN FOR AN ANSWER TO THE ROUND TRIP: a
-// window that ends before its answer crosses back does not wait for it, it
-// loses it, so a case whose windows suit a loopback that answers at once
-// shows answers lost, not answers late (jetstream's lagging leaf says which
-// windows, and what it measured when they were not).
+// A LAG, NOT A RATE: it plays a loaded broker, where every round trip costs
+// twice the lag however much is sent and a rate would let small long-poll
+// requests build a growing backlog. Set it once the node has linked, since the
+// handshake keeps deadlines a lag of hundreds of milliseconds already misses.
+// SIZE EVERY WINDOW THE NODE WAITS IN TO THE ROUND TRIP: a window that ends
+// before its answer crosses back loses it (jetstream's lagging leaf says which).
 func Lagging(t testing.TB, target string) *Link {
 	t.Helper()
 	return open(t, target, carrier{lagging: true}, carrier{lagging: true})
@@ -389,25 +331,17 @@ func sharedEachWay(rate int64) (toward, back carrier) {
 }
 
 // SharedFIFO listens on a loopback port and carries every connection made to
-// it on to target until the case ends, every connection's bytes in each
-// direction crossing ONE first-in, first-out queue at rate bytes a second:
-// the link behind a bottleneck with no fair queueing, where a small write
-// waits behind every byte the other connections queued ahead of it.
+// it on to target until the case ends, all bytes in each direction crossing
+// ONE first-in, first-out queue at rate bytes a second: a bottleneck with no
+// fair queueing, where a small write waits behind every queued byte.
 //
-// INFLIGHT IS A CONNECTION'S CONGESTION WINDOW. The relay reads a connection
-// only while fewer than inflight of the bytes it has read of it in that
-// direction are still to be written to the far side — queued on the
-// bottleneck, crossed and not yet written, or held by a [Link.Blackhole] —
-// and never more than that, so each flow keeps at most inflight bytes
-// between its sender and its receiver, as TCP's window does, and what the
-// link has read of it runs ahead of what it carried ([Link.Count]) by at most
-// inflight, however slowly the far side reads or a [Link.Watch]er returns.
-// Past that the sender's socket buffer
-// fills and its writes block: a nats.go client then holds its connection's
-// lock in its write, and a broker's write stalls. A member's leaf writes keep
-// moving within its write deadline (10 s) only while inflight / rate stays
-// under it, so a case keeps inflight below ten seconds of its rate.
-// What the broker sends is held back for as long as a [Link.Delay] says.
+// INFLIGHT IS A CONNECTION'S CONGESTION WINDOW: the relay reads a connection
+// only while fewer than inflight of its bytes in that direction await writing
+// to the far side (queued, or held by a [Link.Blackhole]), so what it read
+// runs ahead of [Link.Count]'s carried by at most inflight. Past that the
+// sender's socket buffer fills and its writes block. A member's leaf writes
+// keep within their 10 s deadline only while inflight / rate stays under it:
+// keep inflight below ten seconds of rate. [Link.Delay] holds the broker's bytes.
 func SharedFIFO(t testing.TB, target string, rate int64, inflight int) *Link {
 	t.Helper()
 	positive(t, rate)
@@ -518,18 +452,14 @@ func (l *Link) start(t testing.TB) {
 func (l *Link) Addr() string { return l.ln.Addr().String() }
 
 // Buffers is the most the kernel granted any socket the relay has carried
-// over, each way, for [SocketBuffer] asked of each: what a case allows for
-// where an assertion rests on what a kernel holds that the relay has not
-// read or the far side has not taken ([Link]'s "Its sockets' buffers are
-// pinned").
+// over, each way, for [SocketBuffer] asked of each ([Buffers] says what a case
+// allows for it).
 //
-// READ IT ONCE THE CONNECTION A CASE ASSERTS ABOUT IS CARRIED: Linux grants
-// on the ask, so every socket holds what the listener was granted from the
-// start, but darwin rounds each buffer of a socket up to a whole number of
-// its segments as the connection's handshake settles them (XNU's tcp_mss),
-// on the socket it accepted and the one it dialled and never on the
-// listener, so there a connection's sockets hold more than the listener was
-// granted, and the link reports it from when it carries them.
+// READ IT ONCE THE CONNECTION A CASE ASSERTS ABOUT IS CARRIED: Linux grants on
+// the ask, but darwin rounds each buffer of an accepted or dialled socket up
+// to whole segments as the handshake settles them (XNU's tcp_mss), never on
+// the listener, so there a connection's sockets hold more than the listener
+// was granted, and the link reports it from when it carries them.
 func (l *Link) Buffers() Buffers {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -617,15 +547,12 @@ func (l *Link) Unread(account string, way Way) (int, error) {
 // account's connections in its way once it has: so a case reads what a node's
 // socket says at the moment the link has carried a known count.
 //
-// F RUNS ON THE GOROUTINE THAT WROTE THE PIECE, one for each connection and
-// way, so it is called concurrently — both ways of one connection, and
-// different connections, at once — and must be safe for that; the pieces of
-// one connection in one way reach it in the order the link carried them,
-// and nothing orders the rest. That connection's way waits for f to return,
-// every other carries on; a shared link's pacer carries the next piece
-// meanwhile and the leg writes it once f returns, and a first-in, first-out
-// link reads no more of the connection than its inflight ahead of what f has
-// been handed ([SharedFIFO]).
+// F RUNS ON THE GOROUTINE THAT WROTE THE PIECE, one per connection and way, so
+// it is called concurrently and must be safe for that; one connection's pieces
+// in one way arrive in carried order, and nothing orders the rest. That
+// connection's way waits for f to return, every other carries on; a
+// first-in, first-out link reads no more of it than its inflight ahead of
+// what f has been handed ([SharedFIFO]).
 func (l *Link) Watch(f func(Crossing)) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -634,9 +561,16 @@ func (l *Link) Watch(f func(Crossing)) {
 
 // To names target as the broker every connection the link takes from now on
 // is carried to: for a link opened with no target, which refuses every
-// connection until it has one. Open the link first, start the broker
-// advertising its [Link.Addr], and then name the broker's own listener here
-// ([Link]'s "The link is the only way").
+// connection until it has one.
+//
+// THE LINK IS THE ONLY WAY only while the broker tells the node of no other. A
+// member hands every leaf the leaf URLs it advertises, its own listener's
+// unless told otherwise, and a redialling leaf tries those BEFORE its
+// configured URL (nats-server's doUpdateLNURLs and pickNextURL), so behind an
+// ordinary member a [Link.Cut] or [Link.Drop] cuts nothing. So open the link
+// with no target, start the member advertising [Link.Addr] (LeafNode.Advertise,
+// the jetstream package's LeafAdvertise; LeafNode.NoAdvertise serves too), then
+// name the member's listener here.
 func (l *Link) To(target string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -684,25 +618,17 @@ func (l *Link) Cut(account string) {
 }
 
 // Blackhole stops reading what every connection that binds account sends,
-// either way, from now on and for every one that binds it later, until
-// [Link.Mend], without closing any of them: a path that drops every packet.
-// It returns once the link reads none of them any more, so what
-// [Link.Count] says it read of them stands still from then on, and what they
-// had sent before is carried as it would have been. A connection that binds
-// the account LATER — a leaf's redial — is stopped as it binds, and brings
-// into the count what the link read of it to learn its account (its INFO and
-// the CONNECT naming it), which the count then holds still too.
+// either way, now and for every one that binds it later (a leaf's redial),
+// until [Link.Mend], without closing any: a path that drops every packet. It
+// returns once the link reads none, so [Link.Count] stands still, a later
+// connection's count including what was read to learn its account (INFO, CONNECT).
 //
-// IT STOPS READING, RATHER THAN READ AND HOLD, because a sender's kernel
-// counts what the relay's kernel takes as delivered: a link that read on
-// would let a node's socket say it delivered everything it sent across a
-// link that carries nothing. Stopped, the relay's kernel takes what fits its
-// pinned receive buffer ([Link.Unread], at most [Buffers.Receive]) and then
-// shuts its window, and the rest waits in the sender's socket, as behind a
-// path that drops every packet the sender's own retransmissions wait. A read
-// the link was in when it was called is held, and [Link.Mend] carries it on
-// first and then reads on, in order; the link answers nothing meanwhile, so
-// whatever liveness the two ends keep is what notices.
+// IT STOPS READING, RATHER THAN READ AND HOLD: a sender's kernel counts what
+// the relay's kernel takes as delivered, so reading on would let a node say it
+// delivered everything across a link that carries nothing. The relay's kernel
+// takes what fits its pinned receive buffer ([Link.Unread], at most
+// [Buffers.Receive]) and shuts its window. A read in progress is held and
+// [Link.Mend] carries it on first; whatever liveness the ends keep notices.
 func (l *Link) Blackhole(account string) {
 	ps := l.bound(account, func(a *accountState) { a.silent = true })
 	for _, p := range ps {

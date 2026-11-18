@@ -12,13 +12,12 @@ import (
 
 // A WAIT ON A JOURNAL ENDS ON A PAUSE, NEVER ON ITS OWN LENGTH (#1204): a
 // backend that keeps handing a case its deliveries, each a little short of
-// stallFor after the one before, is waited for however long the whole takes —
-// here three pauses of stallFor less a second, nearly three times stallFor —
-// and the wait returns on the last delivery, not a moment later.
+// stallFor after the one before, is waited for however long the whole takes
+// (here three pauses of stallFor less a second) and the wait returns on the
+// last delivery, not a moment later.
 //
-// In a bubble, so each pause is exactly its length and the case costs no
-// wall time: the claim is about the bound's arithmetic, and a loaded runner
-// would only blur it.
+// In a bubble, so each pause is exactly its length: the claim is about the
+// bound's arithmetic, and a loaded runner would only blur it.
 //
 // Mutation: restart nothing on a delivery (the bound from the start, as
 // settleFor's was), and both journals' waits end at stallFor with one delivery
@@ -150,18 +149,14 @@ func TestAWaitWhoseDeliveriesStopOrNeverMeetItEnds(t *testing.T) {
 // A WAIT FOR AN EXACT EXPECTATION ENDS THE MOMENT WHAT IT SAW CAN NO LONGER
 // BECOME IT, as diverged, rather than a stallFor later: a journal only grows,
 // so a sequence that went wrong, or a label delivered more often than
-// expected, is wrong for good. A record still on its way — a prefix, a part of
-// the multiset — never ends a wait early, and a record that meets the
-// condition is met however the judge would read it.
+// expected, is wrong for good. A record still on its way (a prefix, part of
+// the multiset) never ends a wait early, and one that meets the condition is
+// met however the judge would read it. In a bubble, so "the moment" is exact.
 //
-// In a bubble, so "the moment" is exact: the wrong delivery comes a second in
-// and the wait returns a second in.
-//
-// Mutation: drop the judge from a journal's wait, and the diverged waits run
-// on to a stall; have a judge call a prefix diverged, and the waits still on
-// their way end early; let a multiset take a label twice, and the surplus
-// runs on to a stall; read the judge before the condition, and the met
-// record ends as diverged.
+// Mutation: drop the judge from a journal's wait, and diverged waits run on to
+// a stall; have a judge call a prefix diverged, and waits end early; let a
+// multiset take a label twice, and the surplus runs on to a stall; read the
+// judge before the condition, and the met record ends as diverged.
 func TestAWaitEndsAsSoonAsItsExpectationCannotBeMet(t *testing.T) {
 	cases := []struct {
 		name   string

@@ -10,28 +10,16 @@ import (
 
 // A KEYED SCAN FINDS EXACTLY WHAT ITS PATTERN FINDS. A [keyed] pattern is tried
 // only where one of its words opens ([keyed.begins]) rather than stepped
-// through every byte, which is exact only if no match can begin anywhere else
-// and the scan reads a word as (?i) does. Fed every way a word's spellings, its
-// case folds, its fragments, the separators and the bytes around them can
-// follow one another — escaped line breaks among the separators, since the
-// password rule's runs across them — the scan's matches, its replacement, its
-// answer to "is there one" and where its first match begins are the pattern's
-// own — for the patterns the password rule is built from, and for a list
-// whose words open with runes that fold outside ASCII (k to the Kelvin sign, s
-// to ſ), so the scan is certified for whatever word [passwordKeys] gains rather
-// than for the three it holds today. For the two held to the text's end, the
-// scan tried near the end alone ([keyed.indexAtEnd]) begins where the
-// pattern's first match does too.
-//
-// The texts are built from the list itself, so a word added to it is in them.
-// Seeded, so a failure names a text that fails every time.
-//
-// Mutation: compare a word's runes by their ASCII case alone and the ſ and
-// Kelvin spellings are missed; leave the last word out of what [keyed.begins]
-// tries and every pwd is missed; resume after a match from its start rather
-// than its end and the scan's replacements overlap where the pattern's never
-// do; measure the widest word in the bytes it is written with, not the most
-// any of its spellings takes, and a prompt spelt with ſ is missed at the end.
+// through every byte, which is exact only if no match can begin elsewhere and
+// the scan reads a word as (?i) does. Fed every way a word's spellings, case
+// folds, fragments, separators (escaped line breaks included) and surrounding
+// bytes can follow one another, the scan's matches, replacement, "is there one"
+// and first-match start are the pattern's own, for the password rule's patterns
+// and a list whose words fold outside ASCII (k to the Kelvin sign, s to ſ). Texts
+// are built from the list, so a word added to [passwordKeys] is in them. Seeded.
+// Mutation: compare runes by ASCII case alone; leave the last word out of
+// [keyed.begins]; resume after a match from its start; measure the widest word
+// in bytes, not its widest spelling.
 func TestAKeyedScanFindsWhatItsPatternFinds(t *testing.T) {
 	t.Parallel()
 	for name, k := range map[string]*keyed{
@@ -148,20 +136,14 @@ func spellings(word string) []string {
 
 // EVERY RULE OPENS WITH A LITERAL OR IS KEYED. Go's regexp skips ahead to a
 // pattern's literal prefix with a byte scan and starts its machine only there;
-// a pattern with none steps the machine through every byte of every text
-// redacted, which is what the password rule cost before it was [keyed] — 42 ms
-// of a 45 ms pass over a two-mebibyte transcript. A rule added without either
-// would bring that back with every test still passing, so this is what notices.
+// a pattern with none steps it through every byte of every text redacted (42 ms
+// of a 45 ms pass over 2 MiB for the password rule before it was [keyed]), which
+// no other test would notice.
 //
-// AND THE LITERAL IS TWO BYTES AT LEAST, since one is a literal in name only:
-// an `A` is one byte in 64 of base64, which a transcript carries by the
-// mebibyte — an image the model read — so the machine would still start every
-// few dozen bytes. That is what folding the AWS key ids into one rule would
-// cost: `A[KS]IA` leaves RE2 the `A` alone.
-//
-// Mutation: build the password rule as a plain rule over its pattern, with no
-// keyed scan, or fold the AWS key ids into one rule over `A[KS]IA`, and this
-// fails.
+// AND THE LITERAL IS TWO BYTES AT LEAST: an `A` is one byte in 64 of base64,
+// which transcripts carry by the mebibyte. Folding the AWS key ids into
+// `A[KS]IA` leaves RE2 the `A` alone. Mutation: build the password rule plain,
+// or fold the key ids into one rule over `A[KS]IA`.
 func TestEveryRuleOpensWithALiteralOrIsKeyed(t *testing.T) {
 	t.Parallel()
 	for _, r := range rules() {

@@ -45,20 +45,16 @@ func spellsMethod(src []byte) bool {
 
 // firstMethod is the first selector in f that may refer to one of
 // [instantMethods] on a time.Time, or nil: a selector of one of their names,
-// since only the receiver's type says whose it is — a value's, an
-// embedding's, an alias's or a method expression's alike.
+// since only the receiver's type says whose it is.
 //
 // BUT THE WAIT OF THE SAME NAME: time.After, through the file's own name for
-// package time where the enclosing declaration declares no local of that
-// name, is package time's function, which [timeRefs] counts as a wait, and
-// never a method, since Go lets no package declare a name its files import a
-// package by. It is the one counted name package time spells both ways, and
-// the module's tests spell it as the wait far more often than as the method:
-// left in, it would type-check a package for every test waiting on
-// time.After, and refuse as untyped every such test on a platform the gate
-// does not run on. Only time's own name is told apart here — another
-// package's name for itself is its package clause, which a file's imports do
-// not say, so an identifier that might be one is left to the types.
+// package time where no local shadows it, is the function ([timeRefs] counts
+// it as a wait), never a method. It is the one name time spells both ways,
+// and left in it would type-check a package for every test waiting on it, and
+// refuse as untyped each such test on a platform the gate does not run on.
+// Only time's own name is told apart here (another package's name for itself
+// is its package clause, which imports do not say), so any other identifier
+// that might be one is left to the types.
 func firstMethod(f *ast.File) *ast.Ident {
 	timeName := importName(f, "time")
 	for _, d := range f.Decls {

@@ -11,44 +11,26 @@ import (
 
 // runReentrancy certifies that a subscription dispatches ONE handler at a time.
 //
-// This is the property the engine's inbox guards are allowed to assume, and it
-// is worth a contract group of its own because assuming it wrongly is silent.
-// A seat's handler runs a whole turn. If a publish made from inside that turn —
-// an A2A ask that wakes the asker, a task the seat assigns itself, a
-// notification it emits about its own work — could be delivered back to the
-// same seat before the turn returned, the second delivery would be handled by
-// a seat that is already busy, and on a backend that dispatches inline it
-// would run inside the first turn's own stack.
-//
-// That is a real failure and it is normally met with a guard: an inline
-// dispatch that re-enters the handler on the same task makes waiting for the
-// agent wait on the task doing the waiting. Every backend here forecloses it
-// structurally instead — the pull loops fetch again
-// only after a handler returns, and the in-process twin defers a nested drain
-// to the loop already running rather than starting a second one — which is why
-// no such guard exists in this codebase.
-//
-// So this group is not testing a feature. It is pinning the reason a guard was
-// not written: here, the halves every backend can show, and beside each
-// backend the half only it can decide exactly — the twin's in a bubble
-// (memory's TestAHandlerNeverRunsBesideItself), JetStream's by where its code
-// sits (jetstream's TestAHandlerRunsInlineOnTheGoroutineThatTookItsDelivery).
+// The engine's inbox guards assume this, and assuming it wrongly is silent: a
+// publish from inside a seat's turn (an A2A ask that wakes the asker) delivered
+// back to the busy seat would, on an inline backend, run inside the first
+// turn's own stack. Every backend forecloses that structurally, so no guard
+// exists: pull loops fetch again only after a handler returns, and the twin
+// defers a nested drain to the loop already running. This group pins the
+// reason: the halves every backend can show, and beside each the half only it
+// can decide (memory's TestAHandlerNeverRunsBesideItself, jetstream's
+// TestAHandlerRunsInlineOnTheGoroutineThatTookItsDelivery).
 func (s *suite) runReentrancy(t *testing.T) {
 	ctx := t.Context()
 
-	// NOT RE-ENTERED, of which this case decides the half no window has to.
-	// A backend that dispatched the published event INSIDE the publish, on
-	// the handler's own stack as an inline dispatch with no guard does, has
-	// run the handler a second time before the publish returns, so the depth
-	// below reads 2 however the runner schedules it. One that dispatched it
-	// BESIDE the running handler, on another goroutine, leaves an absence a
-	// case here could read only behind a quiet window: this one held the
-	// first handler 50 ms for a concurrent dispatch to show, and a dispatch
-	// the runner made later passed it with the bug present. That half is
-	// decided where it can be exact, in the two tests the group's doc names.
-	// The rest is a positive: the publish from inside the handler succeeds and
-	// both events are handled, read once they are, a wait for deliveries that
-	// must happen, so it needs await's liveness bound and no other.
+	// NOT RE-ENTERED, the half no window has to decide. A backend dispatching
+	// the event INSIDE the publish, on the handler's own stack, runs the handler
+	// a second time before the publish returns, so the depth below reads 2
+	// however the runner schedules it. One dispatching BESIDE the running
+	// handler leaves an absence only a quiet window could read; that half is
+	// decided in the two tests the group's doc names. The rest is a positive
+	// (the nested publish succeeds, both events are handled), so it needs
+	// await's liveness bound and no other.
 	//
 	// Mutation: let the twin's publish from inside a handler start a drain of
 	// its own rather than ask the running one to go round again, and the

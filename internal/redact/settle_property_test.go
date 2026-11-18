@@ -9,41 +9,14 @@ import (
 )
 
 // transcriptLines are the lines an executor's transcript is made of, as far as
-// the key reader is concerned: the armour lines bare and wrapped, glued to a
-// body's line or on one line with it, a body's full and short lines bare and
-// wrapped — one with no digit among them — blank lines bare and wrapped, the
-// wrapping's own punctuation, headers, another block's armour, base64 that is
-// not a key's in one case and in both (a path in mixed case, a Go test's
-// name), prose and a line another process wrote, a key already redacted, a
-// password key (spaced from its separator too, or an `=` ending its line) and
-// its value, and what a rule writes into a line a key is read across: a
-// password's key with its value on the next line, in a string — broken after
-// its key, its breaks kept — or written up to an armour, a key's line written
-// up to a BEGIN and repeated with a quote after it, and tokens before a key's
-// line or an armour, after one, or written up to one, and one on a line of its
-// own — a session's among them, an STS key id and a Google access token in a
-// header in its dotted segments, before a full stop and written up to an
-// armour, and an AWS session's secret access key and session token under
-// their keys, exported, a JSON member, a key run into its value and a value
-// written up to an armour — and what a cut leaves of a key: a line's head
-// before a tool's mark, its tail after one, both with the mark between them
-// and a head with no digit, a head narrower than a full line before a bare
-// ellipsis, a window's first line, a key on one line cut between its armours
-// and a body a window kept before its END, a mark on a line of its own and
-// the tail it kept, a head cut short with no mark, a cut between a BEGIN's
-// armour and its break —
-// and prose holding what reads like a piece of a key at the start of its line,
-// at its end and in its middle, or in brackets; and what another rule claims
-// that reads like such a piece: a password's key holding a digit, a value that
-// does, an indented one, and a token after a `_` — and a password's key and its
-// value a line or two apart in every wrapping a line is written in, with the
-// wrapping's blank lines between: echoed into a file, concatenated in a
-// string, under a reader's line numbers, a grep's context marks, a diff's
-// `+`, a log's timestamps and nl's, in a list of strings, a table's row, a
-// JSON line and a YAML string, a key nested under another, digits under a key
-// whose line opens with a number, a token on every line, an escaped break
-// written at a line's end, a value with one in it and another key after it,
-// and a key beside a value naming its own further down.
+// the key reader is concerned: armour lines bare, wrapped and glued to a body's
+// line, full and short body lines, blank and wrapping lines, headers, other
+// base64, prose, a key already redacted, password keys and their values (in
+// every wrapping a line is written in, with the wrapping's blank lines
+// between), what a rule writes into a line a key is read across (markers,
+// tokens, an AWS session's keys and secrets, in every placement), what a cut
+// leaves of a key (heads, tails, marks, a window's first line), and prose
+// or another rule's matches that read like a piece of a key.
 var transcriptLines = []string{
 	"-----BEGIN RSA PRIVATE KEY-----",
 	"-----END RSA PRIVATE KEY-----",

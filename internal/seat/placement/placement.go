@@ -101,17 +101,13 @@ const (
 	// RoleGitlet serves Gitlet: the company's git repositories, over smart
 	// HTTP at /git/ on the API listener, with a disposable cache of them on
 	// this node's disk (internal/gitlet/cache). It needs RoleIngress, whose
-	// listener it is served on (and so RoleData, which ingress needs). It does
-	// nothing for a company that does not set code.backend: gitlet, which is
-	// why the fleet's unmanned-role check asks whether it is NEEDED before it
-	// warns (seat.Config.RoleNeeded).
+	// listener it is served on (and so RoleData). It does nothing for a company
+	// without code.backend: gitlet, so the unmanned-role check asks whether it
+	// is NEEDED first (seat.Config.RoleNeeded).
 	//
-	// A NODE THAT DECLARES NO ROLES HAS IT, like every role: the
-	// single-process deployment, and every fleet that never wrote
-	// node.roles, serves Gitlet the moment its company sets code.backend:
-	// gitlet — which is what a person running one node expects. A node that
-	// LISTS its roles serves Gitlet only where the list names it, so adding the
-	// role to the vocabulary changes no listed node's behaviour.
+	// A NODE THAT DECLARES NO ROLES HAS IT, like every role. A node that LISTS
+	// its roles serves Gitlet only where the list names it, so adding the role
+	// to the vocabulary changes no listed node's behaviour.
 	RoleGitlet NodeRole = "gitlet"
 
 	// RoleIngress terminates inbound traffic: the HTTP API, the dashboard,
@@ -154,17 +150,12 @@ var ErrUnknownRole = errors.New("unknown node role")
 
 // RoleSet is the set of roles a node has declared.
 //
-// THE NIL SET MEANS EVERY ROLE, not none — the one place this package
-// deliberately breaks Go's "a nil map reads as empty". A node that declared
-// nothing does everything, and the alternative reading is an incident: a
-// peer whose row this build cannot read, or a profile built by a caller that
-// never set this, would drop out of the seat denominator and every other node
-// would compute too large a share of the seats. "Declared nothing" and "does
-// nothing" must never be the same answer.
-//
-// An empty non-nil set reads the same way for the same reason, and is also
-// not expressible on the wire: a "roles": [] row round-trips to every role.
-// Treat a RoleSet as immutable once it is in a profile.
+// THE NIL SET MEANS EVERY ROLE, not none, deliberately breaking Go's "a nil map
+// reads as empty": a peer whose row this build cannot read would otherwise drop
+// out of the seat denominator and every other node would compute too large a
+// share. "Declared nothing" and "does nothing" must never be the same answer.
+// An empty non-nil set reads the same way, and a "roles": [] row round-trips to
+// every role. Treat a RoleSet as immutable once it is in a profile.
 type RoleSet map[NodeRole]struct{}
 
 // DefaultRoles returns the every-role set an undeclared node resolves to.
@@ -330,34 +321,23 @@ func (p SeatPlacement) String() string {
 //
 // It rides on the node's own presence lease (node:{id}) so every peer can
 // answer "who is eligible for this seat" with no membership service. A node
-// that is PRESENT but does not run seats must not count in the seat
-// denominator — it would shrink everyone's share and strand the difference.
+// PRESENT but not running seats must not count in the seat denominator, or it
+// would shrink everyone's share and strand the difference.
 //
-// The zero value is a node with no id that does everything and carries no
-// labels; see [RoleSet] for why an unset role set is every role rather than
-// none.
-//
-// NOTHING ABOUT THE OBJECT STORE rides here, deliberately. A data node's share
-// of it was once a field of this profile; the store is now one the whole fleet
-// shares — the broker's own bucket or an S3 bucket — so no node holds a share
-// of it to advertise.
-//
-// THE BROKER DOES, because it is a fact about the PROCESS rather than about a
-// disk: the broker starts and stops with the node, so the lease that says the
-// node is running is the one that says what its broker is.
+// The zero value does everything and carries no labels; see [RoleSet]. NOTHING
+// ABOUT THE OBJECT STORE rides here: the fleet shares one. THE BROKER DOES, a
+// fact about the PROCESS that starts and stops with the node's lease.
 type NodeProfile struct {
 	ID     string
 	Roles  RoleSet
 	Labels map[string]string
 
-	// Held is how many seat leases the node says it holds on PLACEABLE
-	// seats — the seats it runs and the ones whose teardown it could not
-	// prove, less any lease on a seat its last plan found no live node may
-	// run — as of its last presence renewal (see [HeldKey]). The only
-	// reader compares the fleet's sum with the placeable seats, so a lease
-	// on any other seat would stand in for a free one. A count the row does
-	// not carry readably reads as zero, which errs toward trying: the sweep
-	// claims nothing on the counts, so a low sum costs a pass, never a seat.
+	// Held is how many seat leases the node says it holds on PLACEABLE seats
+	// (running, or undead, less any on a seat no live node may run), as of its
+	// last presence renewal (see [HeldKey]). The fleet's sum is compared with
+	// the placeable seats, so a lease on any other seat would stand in for a
+	// free one. An unreadable count reads zero, which errs toward trying: a low
+	// sum costs a pass, never a seat.
 	Held int
 
 	// Broker is how this node's broker takes part in the fleet's. Read off
@@ -366,18 +346,16 @@ type NodeProfile struct {
 	Broker BrokerKind
 
 	// Withdrawn says the node runs seats but has stepped out of placement
-	// for now: it cannot serve its seats' work at all, so it gives back
-	// every seat it holds and claims none until that clears. It is not
-	// counted among the nodes a group's share divides by ([Compute]), so
-	// its peers take up the share it would otherwise leave free, and a
-	// group only it matches is reported unplaceable — which, while it is
-	// withdrawn, is exactly what that group is. Written by the seat host
-	// beside the profile (see [WithdrawnKey]); a row that does not say
-	// reads as not withdrawn, the reading every build before it gave.
+	// for now: it cannot serve its seats' work, so it gives back every seat
+	// and claims none until that clears. It is not counted in the nodes a
+	// group's share divides by ([Compute]), so peers take up its share, and a
+	// group only it matches is reported unplaceable. Written beside the
+	// profile (see [WithdrawnKey]); a row that does not say reads as not
+	// withdrawn.
 	//
-	// NOT a node that is merely not ready to claim yet. That one keeps
-	// serving every seat it holds, so its share is not free: counting it
-	// out would have its peers report a group it is serving as unplaceable.
+	// NOT a node merely not ready to claim yet: that one keeps serving every
+	// seat it holds, so counting it out would make peers report a group it
+	// serves as unplaceable.
 	Withdrawn bool
 }
 
@@ -445,17 +423,11 @@ func (n NodeProfile) Meta() map[string]any {
 
 // FromMeta reads a peer's profile back off its presence lease.
 //
-// It returns no error, deliberately. Every malformed shape has exactly one
-// correct reading — a node that does everything and is labelled with
-// nothing — and a peer's bad row must not take down the reader's sweep. An
-// error return would create a branch whose only safe body is "use that
-// reading anyway", and the tempting wrong body (skip the peer) is the
-// incident: a live seat-running node missing from the denominator makes every
-// other node claim more than its share.
-//
-// The broker follows the same rule with its own safe reading: anything this
-// build cannot read is [BrokerUnknown], which a question counting members
-// treats as one, and never a leaf.
+// It returns no error, deliberately: every malformed shape has one correct
+// reading (a node that does everything, labelled with nothing), and the tempting
+// wrong body, skipping the peer, drops a live seat-running node from the
+// denominator so every other node claims more than its share. The broker's safe
+// reading is [BrokerUnknown], which a count of members treats as one.
 func FromMeta(nodeID string, meta map[string]any) NodeProfile {
 	return NodeProfile{
 		ID:     nodeID,
@@ -642,23 +614,14 @@ type Plan struct {
 // Room is how many more seats this node may claim in each of [Plan.Groups],
 // index for index. NEGATIVE is how many of that group's running seats it
 // holds past what it may keep — exactly what the host gives back. It is the
-// ONE bound: claiming and giving back both read it, and there is no total
-// beside it (see the package doc for what a second, pooled bound strands).
-//
-// running reports a seat this node runs. stuck are the seat leases it holds
-// and cannot give back yet — a teardown it could not prove, still renewed so
-// no peer runs the seat twice — in a group or in none (a role it may no
-// longer run). They count against what it may hold because this process may
-// still be serving them, and they are charged FIRST, since they cannot be
-// put down. What is left of [Plan.Capacity] then goes to the groups in their
-// order, most constrained first, each up to its share less its own stuck
-// seats. So a stuck lease squeezes the least constrained group before the
-// pinned seat with no other home, and a group whose stuck seats alone reach
-// its share keeps none of its running ones.
-//
-// Once the node holds what Room allows, every group is within its share and
-// the whole holding within capacity, except where stuck leases alone exceed
-// them, which no give-back can mend.
+// ONE bound: claiming and giving back both read it, with no total beside it
+// (package doc). running reports a seat this node runs. stuck are the leases it cannot give
+// back yet (a teardown it could not prove, still renewed so no peer runs the
+// seat twice), in a group or in none. They count against what it may hold and
+// are charged FIRST, being unable to be put down. What is left of
+// [Plan.Capacity] goes to the groups most constrained first, each up to its
+// share less its own stuck seats, so a stuck lease squeezes the least
+// constrained group before a pinned seat with no other home.
 func (p Plan) Room(running func(handle string) bool, stuck []string) []int {
 	index := make(map[string]int)
 	for i, g := range p.Groups {
@@ -690,25 +653,16 @@ func (p Plan) Room(running func(handle string) bool, stuck []string) []int {
 
 // Compute works out this node's share of a placement-constrained company.
 //
-// me is always counted as live whether or not the presence read returned it:
-// before the first successful renew there is no row yet, and a store blip
-// must not make a node invisible to itself. A node that does not place seats
-// itself — it runs none, or it has withdrawn — is eligible for nothing and
-// counts in no group, the same arithmetic its peers run on it.
+// me is always counted as live whether or not the presence read returned it
+// (no row exists before the first renew). A node that does not place seats, or
+// has withdrawn, is eligible for nothing, as its peers compute it. me also WINS
+// over any profile for its id in live: the row may be its previous
+// incarnation's, with roles or labels this process no longer has.
 //
-// me also WINS over any profile for the same id in live. Its own presence
-// row may have been written by its previous incarnation and can describe
-// roles or labels this process no longer has; believing the row over the
-// process would make a node claim seats it is no longer configured for.
-//
-// Seats are grouped by placement, and each group's share is
-// ceil(group size / nodes eligible for that group) — a bound on that group
-// alone (see the package doc for why a summed, fungible capacity strands a
-// pinned seat). The share is a CEILING, and that is what makes the host's
-// give-back settle instead of oscillating: a group's shares over its
-// eligible nodes sum to at least its size, so a node that has shed a group
-// down to its share has no room in it to immediately re-claim what it just
-// let go.
+// Each group's share is ceil(group size / nodes eligible for it), a bound on
+// that group alone (package doc: a fungible capacity strands a pinned seat).
+// The CEILING makes the give-back settle: shares sum to at least the size, so
+// a node shed down to its share cannot re-claim what it let go.
 func Compute(seats []Seat, me NodeProfile, live []NodeProfile) Plan {
 	seatNodes := seatRunners(me, live)
 
