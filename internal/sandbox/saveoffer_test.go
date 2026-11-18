@@ -504,6 +504,7 @@ func TestAStoppingCoordinatorTakesNoSaveAndStampsTheOneItCut(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
 		rig, _, _ := savingRig(t, memory.NewFleet(), newTakerStore())
+		rig.coordinator.pending = stampsAcrossTheWire{PendingStore: rig.coordinator.pending}
 		rig.launchKept(t, "t1")
 		rig.now = rig.now.Add(rigSaveInterval)
 		streaming := make(chan struct{})
@@ -536,6 +537,20 @@ func TestAStoppingCoordinatorTakesNoSaveAndStampsTheOneItCut(t *testing.T) {
 				again != nil, attaches)
 		}
 	})
+}
+
+// stampsAcrossTheWire answers a capture's stamp a second after it is asked,
+// and refuses one whose context ended meanwhile, as the fleet's store over the
+// wire does and the in-memory twin, which applies a first attempt whatever its
+// context, does not: a stamp the stop's grace cut leaves the place begun.
+type stampsAcrossTheWire struct{ PendingStore }
+
+func (s stampsAcrossTheWire) StampCapture(ctx context.Context, turnID string, stamp SessionCapture) (bool, error) {
+	time.Sleep(time.Second) //fixedwait:simulated a stamp crossing to the store, on the case's bubble clock
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	return s.PendingStore.StampCapture(ctx, turnID, stamp)
 }
 
 // AN OPENCODE RUN IS OFFERED NO SAVE: a runner whose harness takes no save of
