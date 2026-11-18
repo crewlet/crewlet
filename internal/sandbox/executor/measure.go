@@ -81,8 +81,8 @@ import (
 // ([threadReader.Next]), a message's blocks and their results among them, which
 // neither of the walk's readings reads, beside the scrub's rewrite, gzip and
 // checksum of the same bytes (BenchmarkTheMeterAtItsBounds measures both): at
-// the plaintext a 32 MiB archive holds, the meter took 1.4 s where the scrub
-// took 7.0 s, on two cores.
+// the plaintext a 32 MiB archive holds, the meter took 1.47 to 1.52 s where
+// the scrub took 11.7 to 12.2 s, on two dedicated cores.
 
 // contextMeter reads an archive written to it and keeps the whole input of the
 // last request its transcript records and what Claude Code counts it at.
