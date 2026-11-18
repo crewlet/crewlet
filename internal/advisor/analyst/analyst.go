@@ -58,6 +58,8 @@ func Run(ctx context.Context, deps Deps, d Data, ceiling int) advisor.Analysis {
 		Provider: deps.Provider, ProviderKey: deps.ProviderKey, Surface: surf, Host: deps.Host,
 		ServerTitle: "advisor", Messages: opening(), MaxRounds: MaxRounds, OwnPrompt: true,
 		TerminateAfter: []string{SubmitTool}, Budget: meter, Now: deps.Now,
+		// NO SEAT TO FENCE: its tools read only this run's Data, and one run at a time is its claim.
+		Fence: nil,
 	})
 	if res != nil {
 		out.InputTokens, out.OutputTokens = res.InputTokens, res.OutputTokens

@@ -99,7 +99,8 @@ func (s *surface) Admit(name string, _ map[string]any) toolloop.Admitted {
 		}
 		t, ok := tools[name]
 		if !ok {
-			return toolloop.ToolResult{Output: fmt.Sprintf("there is no tool %q", name), Failed: true}, nil
+			return toolloop.ToolResult{Output: fmt.Sprintf("there is no tool %q", name), Failed: true,
+				Cause: mcp.RefusalNotFound}, nil
 		}
 		answer, records := t.answer(s.data)
 		if err := s.served.Serve(name, answer, records); err != nil {
@@ -118,7 +119,8 @@ func (s *surface) submit(args map[string]any) toolloop.ToolResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.attempts++; s.attempts > maxSubmissions {
-		return toolloop.ToolResult{Failed: true, Output: "this run's submissions are spent"}
+		return toolloop.ToolResult{Failed: true, Output: "this run's submissions are spent",
+			Cause: mcp.RefusalNotRunning}
 	}
 	raw, err := json.Marshal(args)
 	var sub struct {
@@ -130,8 +132,9 @@ func (s *surface) submit(args map[string]any) toolloop.ToolResult {
 		err = dec.Decode(&sub)
 	}
 	if err != nil {
-		return toolloop.ToolResult{Failed: true, Output: "the findings do not match the schema: " +
-			err.Error() + "; write them again, exactly as the schema says."}
+		return toolloop.ToolResult{Failed: true, Cause: mcp.Classify(mcp.RefusalInvalid, err),
+			Output: "the findings do not match the schema: " + err.Error() +
+				"; write them again, exactly as the schema says."}
 	}
 	s.submitted, s.accepted = sub.Findings, true
 	return toolloop.ToolResult{Output: "received"}
