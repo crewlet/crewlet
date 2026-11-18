@@ -21,7 +21,11 @@
 // brief on either harness, never by the held one's verdict: it drops held
 // calls and may add sections of its own, so it is ordered against neither
 // default, and it may ride beside the summarized telling, a shorter brief
-// that sends whole where the held one compacts.
+// that sends whole where the held one compacts. The restart values a verdict
+// reads read a count only for a harness [firstRequest.judges]. A continuation
+// carries its harness's estimate of the session's next request for the
+// engine's floor ([Continuation.NextRequest]): the job's record's where it
+// holds one, else the newest capture's (inPlaceNextRequest).
 //
 // A SESSION THE RUN STARTED OF ITS OWN IS TOLD ITS TASK AGAIN where it may be a
 // summary (leads.go): every launch whose run may start a session on its fresh

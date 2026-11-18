@@ -1099,9 +1099,8 @@ const relaunchCaptureWait = 15 * time.Second
 // the session its conversation's last turn left as its first launch froze it,
 // as [BaseContinuityOf] decides of the turn's own row ([ContinuedSession.Base],
 // [Coordinator.continuedWithout]) — or why there is none, in words for the
-// log; and either way what that job's session's last request carried
-// ([ContinuedSession.Context]) and what its harness estimates its next one at
-// ([ContinuedSession.NextRequest]).
+// log; and either way what that job's session's last request carried and
+// what its harness estimates its next one at (both on [ContinuedSession]).
 //
 // WHAT IS UNSETTLED IS SETTLED FIRST, within that same wait — see the file
 // comment: a capture whose taker is gone, from the turn's row on the log, as

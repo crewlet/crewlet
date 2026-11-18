@@ -7,57 +7,15 @@ import (
 )
 
 // WHAT CLAUDE CODE ESTIMATES A SESSION'S NEXT REQUEST AT, read off the
-// session's own main thread ([nextReading], internal/sandbox's
-// [sandbox.NextRequest]).
-//
-// A launch that continues a session sends it again before a word of its
-// brief, so its floor is that request with the brief (internal/engine's
-// continuedFloor). The last request's input ([contextReading]) is not that
-// request: it lacks the reply that request was answered with and every record
-// after it, and past a compaction no request has followed it is the
-// compacted-away conversation's. So the floor reads the harness's OWN ESTIMATE
-// of the next request, by the rule Claude Code decides whether to compact by
-// (resumed.go's file comment), run forward over the thread:
-//
-//   - THE ANCHOR, by the count's own rule ([countedReplyOf]): the last
-//     main-thread reply whose usage counts, at its input, cache writes, cache
-//     reads and OUTPUT, placed at the first record of its message id;
-//   - EVERY CHAINED MAIN-THREAD RECORD AFTER THAT PLACE at the harness's own
-//     estimate of it: a user or assistant record's content
-//     ([threadLine.Estimate]), an attachment's stored rendering or a PDF
-//     read's pages ([threadLine.AttachmentEstimate]), and an attachment the
-//     harness renders again by its type at two bytes a token of its line
-//     ([sandbox.ClaudeCharge]), which bounds any rendering of what the line
-//     holds; a system record and every other record nothing, as the harness
-//     charges them;
-//   - A MAIN COMPACT BOUNDARY restarts it: no anchor, and the estimate of the
-//     stretch the compaction kept before the boundary, which the harness
-//     relinks after its summary, beside every record after the boundary
-//     ([nextReading.preserved]). Where that stretch cannot be found in what
-//     the reading kept of the thread, there is no figure.
-//
-// AT BOTH RATES the harness counts text at ([threadEstimate]), since which
-// model the next request goes to is the launch's to pick
-// ([sandbox.NextRequest.At]); the anchor's counts are the same at both.
-//
-// NO FIGURE, where the thread was not read whole (a line the layer refused, a
-// walk ended on an error, no chained line), where a reply's usage does not
-// read since the last boundary, where a record after the anchor holds a
-// content the harness's own estimate throws on or a PDF read whose pages do
-// not read, and where the release that wrote the thread is none the count's
-// rules were read in ([claudeCountFloor]): the floor then reads the last
-// request's input, as it did before this reading existed. A server's clearing
-// of old tool results is not charged: the figure is what the request the
-// server is sent carries once the clearing has dropped them, which is what a
-// window has to hold, while the harness counts them back only to decide when
-// to compact.
-//
-// WHAT IT KEEPS FROM LINE TO LINE IS BOUNDED, whatever a line holds: its sums,
-// the digest of its run's message id, and of the records since the last
-// boundary at most [threadChainMaxRecords], each the 16 bytes of its uuid and
-// the running sums through it (32 bytes an entry, 4 MiB at the bound), from
-// which the stretch a boundary kept is charged ([nextReading.stretch]). Never a
-// string the thread chose the length of.
+// session's own main thread ([nextReading], [sandbox.NextRequest]): the last
+// counted reply at its input, cache and output ([countedReplyOf]), and the
+// harness's own estimate of every main-thread record after it, restarted at a
+// main compact boundary from the stretch the compaction kept. The floor reads
+// it rather than the last request's input, which lacks the reply and what
+// came after it, and past a compaction is the compacted-away conversation's;
+// where it makes no figure, the floor reads that input. The package doc ("What
+// Claude Code estimates a session's next request at") has the rules, the
+// cases with no figure, and the bound on what it keeps.
 
 // nextReading is the estimate of a session's next request as a reading of the
 // one walk of its main thread ([threadReading]): handed every whole line in

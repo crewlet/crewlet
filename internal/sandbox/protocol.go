@@ -220,6 +220,31 @@
 // start on it is told it as a lead its brief told, while a continuation that
 // may be a summary is told every lead the run keeps (leads.go).
 //
+// AND THE HARNESS'S OWN ESTIMATE OF A SESSION'S NEXT REQUEST, read in the same
+// read as its count, of a Claude Code job's main thread or an OpenCode job's
+// export (asksMainThread): stamped on a capture
+// ([SessionCapture.NextRequestTokens], [TakenSession.Next]) and written in the
+// collection's one write ([EndRead.Next], [LaunchRecord.NextRequestTokens]),
+// never carried and never on the executor log, and handed to the floor beside
+// the last request's input ([ContinuedSession.NextRequest]). An OpenCode count
+// names the provider of the reply it is anchored on BESIDE it, never in it
+// ([SessionCapture.CountProvider], [LaunchRecord.CountProvider],
+// [ValidCountProvider]), written and cleared with the count
+// (LaunchRecord.counted), so no record names one count's provider beside
+// another's figure. internal/sandbox/executor's package doc says how each is
+// read.
+//
+// The estimate is held AT BOTH RATES Claude Code counts text at
+// ([NextRequest]'s Tokens and OlderTokens), since which model the next
+// request goes to is the launch's to pick ([NextRequest.At]). Zero is no
+// figure (a thread not read whole, a release whose rules were not read, a
+// compaction whose kept stretch could not be found), and its reader then
+// reads the last request's input. It is NEVER CARRIED along a session's
+// lineage, as [ResumedCount] is not: a job that made no request of its own
+// may have grown its copy by its brief, so a figure carried from its basis
+// would under-state it. And never on the executor log: a stamp settled off
+// the log carries the last request's input alone.
+//
 // See docs/concepts/code-sandbox.md.
 package sandbox
 

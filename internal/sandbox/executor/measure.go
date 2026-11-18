@@ -18,25 +18,22 @@ import (
 // WHAT A SESSION'S LAST REQUEST CARRIED, read off its archive as a take streams
 // it out of its box ([sandbox.TakenSession.Context]).
 //
-// A launch that continues a session sends the session's whole context again
-// before it reads a word of its brief, so its budget floor is that context and
-// the brief, never the static floor alone (internal/engine's launch floor).
-// That context is the harness's own estimate of the next request where the
-// take read one (nextrequest.go); the harness's own record of its last
-// request, cache included, is the figure the floor reads where it read none:
+// A launch continuing a session sends its whole context before a word of its
+// brief, so its floor is that context and the brief (internal/engine's launch
+// floor): the take's estimate of the next request (nextrequest.go), else the
+// harness's own record of its last request, cache included:
 //
 //   - Claude Code's transcript keeps every assistant message with the usage
 //     of the request that produced it, so the last one on the main thread (a
 //     subagent's messages are sidechains, or files of their own) is the
 //     input the session's last request carried: its uncached input, its cache
 //     reads and its cache writes;
-//   - OpenCode's export keeps every settled assistant message with its
-//     tokens, and the newest that measured a prompt is the input the
-//     session's last request carried, its input, cache reads and cache
-//     writes, by ONE RULE for every reader of an OpenCode session's measure
-//     ([measuredPrompt]): this one, read in the one walk of the export that
-//     counts it too ([meterExport]), and the read that measures the copy a
-//     job's box holds as the job ends, off its session's own message list
+//   - OpenCode's export keeps every settled assistant message with its tokens,
+//     and the newest that measured a prompt is the input the session's last
+//     request carried, its input, cache reads and cache writes, by ONE RULE for
+//     every reader of an OpenCode session's measure ([measuredPrompt]): this
+//     one ([meterExport]), and the read that measures the copy a job's box
+//     holds as the job ends, off its session's own message list
 //     ([openCodeContext]).
 //
 // READ OFF THE ARCHIVE AS IT IS KEPT, the scrub's output, so it is the session a
@@ -44,24 +41,18 @@ import (
 // beside the take, which every byte reaches and which never holds the take up:
 // what it cannot read it says nothing about (zero), and it drains the rest.
 //
-// AND WHAT THE HARNESS COUNTS THE SESSION AT before its next request
-// ([sandbox.TakenSession.Count]: Claude Code's in resumed.go, OpenCode's in
-// opencodecount.go, with the provider of the reply it is anchored on), and
-// what it estimates that request at ([sandbox.TakenSession.Next]: Claude
-// Code's in nextrequest.go, OpenCode's its count's bound), off the same read:
-// an OpenCode export is walked ONCE, on the scanner, for the floor's figure
-// and the count ([meterExport]); and
-// a Claude Code archive's main thread is walked ONCE, through the line layer
-// ([walkThread]), by three readings, the last request's input
-// ([contextReading]), the count ([resumedReading]) and the estimate of the
-// next request ([nextReading]). So the meter DECIDES something now (whether a relaunch
-// that continues the capture is told it as a cut-off one), and reads its
-// archive's members by the layer's rules: a member named absolutely or with a
-// `..` element, or a main thread held twice, leaves the count unread, since the
-// member it would read need not be the file a resumed session holds; a saved
-// compaction under either of its names marks it ([claudePrecompact]); and a
-// thread written by a release older than the count's floor is no count of a
-// session ([claudeCountFloor]).
+// AND WHAT THE HARNESS COUNTS THE SESSION AT and estimates its next request at
+// ([sandbox.TakenSession.Count], [sandbox.TakenSession.Next]; package doc), off
+// the same read: an OpenCode export walked ONCE ([meterExport]), a Claude Code
+// main thread ONCE through the line layer ([walkThread]) by three readings
+// ([contextReading], [resumedReading], [nextReading]). So the meter DECIDES
+// something now (whether a relaunch that continues the capture is told it as a
+// cut-off one), and reads its archive's members by the layer's rules: a member
+// named absolutely or with a `..` element, or a main thread held twice, leaves
+// the count unread, since the member it would read need not be the file a
+// resumed session holds; a saved compaction under either of its names marks it
+// ([claudePrecompact]); and a thread written by a release older than the
+// count's floor is no count of a session ([claudeCountFloor]).
 //
 // THE FLOOR'S FIGURE IS WHAT THE LAYER READS OF A REPLY ([contextReading]):
 // the input side of the last reply of the main thread's own
@@ -186,12 +177,10 @@ func (m *contextMeter) next() sandbox.NextRequest {
 // marked where the archive's members say so (the file comment) and unread
 // where the archive does not read to its end, and the estimate is none where
 // the count is unread or of a release its rules were not read in; err is the
-// archive's own, where its gzip or tar framing failed.
-//
-// A SAVED COMPACTION LEAVES THE ESTIMATE STANDING: it marks the count, since
-// the harness may swap it in for the session, but what the harness swaps in is
-// smaller than the session it replaces, so the estimate of the session whole
-// is what the floor holds the launch to, the safe side.
+// archive's own, where its gzip or tar framing failed. A SAVED COMPACTION
+// LEAVES THE ESTIMATE STANDING: it marks the count, since the harness may swap
+// it in, but what it swaps in is smaller than the session it replaces, so the
+// estimate of the session whole is the floor's safe side.
 func meterArchive(ctx context.Context, r io.Reader, session, release string) (int64, *sandbox.ResumedCount,
 	sandbox.NextRequest, error) {
 

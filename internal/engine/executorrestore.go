@@ -127,25 +127,16 @@ func storedSession(row executorkeep.TurnRow) executordomain.Session {
 
 // ProbeSession answers which session a launch of the turn continues
 // ([runner.SessionProber]): on the turn's FIRST launch, the head its dispatch
-// read and the turn will freeze, answered from that read with no other
-// ([conversationRead.basis]); on a relaunch, the kept capture of the job it
-// follows, else the base the turn's first launch froze where the turn has kept
-// nothing, as [sandbox.Coordinator.ContinuedCapture] decides it for the seat's
-// chain — where the runner of a member that could take the launch restores it —
-// or why it continues none, which is logged, but for a conversation's first
-// turn, which had nothing to continue; and either way what the job before's
-// session's last request carried and what its harness estimates its next one
-// at, which the in-place floor is made of.
-//
-// ANY MEMBER OF THE CHAIN, never one picked here: the launch picks its member
-// once, as it launches ([agentLauncher.member]), and a member's plan can be
-// spent or come back between this and that pick. Asked for one member, the
-// probe answered for a member the launch then passed over — holding the launch
-// to the floor of a session it would start fresh, or writing no continuation
-// for a session its member could have taken up. So the briefs that continue the
-// session are written wherever some member restores it, and the launch hands
-// them on only where the member it picked runs the harness that wrote the
-// session ([SessionBasis.Harness], [agentLauncher.continuedFloor]).
+// read and the turn will freeze, from that read alone ([conversationRead.basis]);
+// on a relaunch, the kept capture of the job it follows, else the base the
+// first launch froze where the turn kept nothing, as
+// [sandbox.Coordinator.ContinuedCapture] decides it for the seat's chain, or
+// why it continues none (logged, but for a conversation's first turn); and
+// either way what the job before's session's last request carried and what
+// its harness estimates its next one at, which the in-place floor is made of.
+// For ANY MEMBER OF THE CHAIN, never one picked here
+// ([runner.SessionBasis.Harness], [agentLauncher.continuedFloor]): the
+// package doc's "Executor launch floor" says why.
 func (l *agentLauncher) ProbeSession(ctx context.Context) runner.SessionBasis {
 	basis := l.probeSession(ctx)
 	// AND THE WINDOW EVERY PATH'S FIRST REQUEST IS JUDGED UNDER, on every basis

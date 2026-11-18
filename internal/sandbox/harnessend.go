@@ -101,28 +101,15 @@ type RequestMeasure struct {
 
 // NextRequest is the harness's own estimate of the NEXT request a session
 // sends, before a word of the brief that continues it: its last counted
-// reply's input, cache reads, cache writes and output, and what the harness
-// estimates every record after that reply at, restarted at a compaction from
-// what the compaction left (internal/sandbox/executor's nextReading). What a
-// launch that continues the session is held to with its brief
-// (internal/engine's continuedFloor), where the last request's input
-// ([RequestMeasure], [SessionCapture.ContextTokens]) under-counts it by the
-// reply's output and everything after it, and over-counts it past a
-// compaction no request has followed.
-//
-// AT BOTH RATES CLAUDE CODE COUNTS TEXT AT, since which model the next request
-// goes to is the launch's to pick: Tokens at three characters a token, the
-// rate of every current model, and OlderTokens at four, the rate of the
-// fourteen older models ([ClaudeTextRate]); OlderTokens 0 where the harness
-// counts one rate. Zero is no figure: a thread not read whole, a release whose
-// rules were not read, a compaction whose kept stretch could not be found,
-// each read by its reader as the last request's input.
-//
-// NEVER CARRIED along a session's lineage, as [ResumedCount] is not: a job
-// that made no request of its own may have grown its copy by its brief, so a
-// figure carried from its basis would under-state it. Never on the executor
-// log either: a stamp settled off the log carries the last request's input
-// alone.
+// reply's input, cache and output, and its estimate of every record after
+// that reply, restarted at a compaction (internal/sandbox/executor's
+// nextReading). A continuing launch is held to it with its brief
+// (internal/engine's continuedFloor) rather than to the last request's input
+// ([RequestMeasure]), which under-counts the reply and what followed and
+// over-counts past a compaction. Tokens at three characters a token,
+// OlderTokens at four ([ClaudeTextRate]; 0 where the harness counts one
+// rate); zero is no figure. Never carried and never on the executor log: the
+// package doc ("the harness's own estimate of a session's next request").
 type NextRequest struct {
 	Tokens      int64
 	OlderTokens int64

@@ -17,12 +17,11 @@ import (
 // launch sends its session again before a word of its brief, and that request
 // is the harness's own estimate of it: the last request's input with its reply
 // and everything after it, restarted at a compaction. So a session whose
-// capture or job's record holds that estimate is held to it, in a box of its
-// own and in the job's own box alike, a compacted session to the smaller figure
-// and never the larger, which is the compacted-away conversation's; and one
-// that holds none (an older build's record, a stamp settled off the executor
-// log) to its last request's input, as before. The job's record's estimate
-// reaches the floor through the resume a person's answer drives.
+// capture or job's record holds that estimate is held to it, in its own box or
+// another, a compacted one to the smaller figure, never the larger (the
+// compacted-away conversation's); one that holds none (an older build's
+// record, a stamp settled off the executor log) to its last request's input.
+// The job's record's estimate reaches the floor through an answer's resume.
 //
 // Mutation: read the last request's input whatever the record holds, and this
 // goes red.

@@ -79,10 +79,9 @@ func ocFixture(t *testing.T, path ...string) []byte {
 // tokens, then an interrupted step), the real export of 2.0.32 this package
 // keeps, and a reply that reports reasoning: each figure is the one an
 // independent reading of the same rule over the file's spans finds. The
-// floor's last-request figure, read in the same walk, is unchanged.
-//
-// Mutation: drop the output, or the reasoning, from the figure, or leave the
-// reply's tool results out of the tail, and a case goes red.
+// floor's last-request figure, read in the same walk, is unchanged. Mutation:
+// drop the output or the reasoning, or leave the reply's tool results out of
+// the tail, and a case goes red.
 func TestAnOpenCodeExportIsCountedAsOpenCodeCountsIt(t *testing.T) {
 	t.Parallel()
 	reasoned := ocReply("msg_r", `"stub"`, `[]`, 100, 20, 3, 30, 7)

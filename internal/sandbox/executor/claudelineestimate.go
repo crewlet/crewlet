@@ -10,64 +10,14 @@ import (
 	"unicode/utf8"
 )
 
-// WHAT CLAUDE CODE ESTIMATES A LINE'S CONTENT AT.
-//
-// Before a request, Claude Code decides whether to compact by its own count of
-// the conversation: the last reply whose usage counts, and an ESTIMATE of every
-// record after it (2.1.322's Xh and k7o @294311543, 2.1.310's Zg and KFo
-// @247646809). These are the facts a reader of that count reads of a line
-// ([threadLine.Estimate], [threadLine.AttachmentEstimate]), filled once, as the
-// line is read ([factsOf]), by the harness's own rules:
-//
-//   - A USER OR ASSISTANT RECORD is its message's content (EX, 2.1.322
-//     @292455010; zY in 2.1.310): a string at its length, a list element by
-//     element (n7e @292455428; GJn): a string or a `text` block at its text's
-//     length; `thinking` at its text, `redacted_thinking` at its data (the
-//     signature is not charged); a `tool_use` at its name's length plus its
-//     input's JSON, which is the input as the line writes it, since the
-//     harness writes a line with JSON.stringify; a `tool_result` at its
-//     content, by these rules again; a `document` whose source is text at its
-//     data, at TWO characters a token where its title's last dotted part is
-//     `json`, `jsonl` or `jsonc` in any case, and whose source is content at
-//     that content (a string, or its list's objects alone); an `image`, or a
-//     `document` of any other source, 2,000 flat (`m=2000`); and any other
-//     element at its JSON as written. On 2.1.322 the record also charges
-//     2,000 for each image its MCP task delivery carries (Ebs), which 2.1.310
-//     does not, so a figure read on that release holds 2,000 an image more
-//     than its own count did: the floor's safe side.
-//   - AN ATTACHMENT RECORD is what its record stores as its rendering, the
-//     record's own `rendered` (rTe and qLe @298643213, its shape held by
-//     Cje's schema @298645370): every rendered message's content, a non-empty
-//     string or a non-empty list of `text` blocks of non-empty text; plus, on
-//     a queued command, 2,000 for each image its task delivery carries. A PDF
-//     read is 3,000 a page whatever it stores (vbs, `kbs=3000` @292454941).
-//     Where no rendering is stored, or the one stored does not hold to that
-//     shape, the harness renders the attachment again by its type (VCt
-//     @298645939), a template this layer does not hold, so the estimate does
-//     not read ([threadLine.AttachmentEstimate]'s false): so too always for
-//     a type the harness renders again whatever it stores (`poll_events`,
-//     `project_doc_reads`; L_r @298641216). Only an attachment of no type,
-//     and one of the five types the harness renders as no message (`Nh`
-//     @283080639), reads as nothing where it stores no rendering, as none of
-//     the five does.
-//
-// LENGTH IS JAVASCRIPT'S: a string's length in UTF-16 code units, two for a
-// character past the basic plane, never capped ([quotedUnits]; the skill
-// listing's [textUnits] stops past a name's bound). And EACH ELEMENT IS
-// ROUNDED AS THE HARNESS ROUNDS IT, Math.round(length / n) (y @292454158),
-// half up, before the elements are summed, so a list of short texts charges
-// less than their summed length would ([estimateUnits]).
-//
-// AT BOTH RATES ([threadEstimate]): the harness reads four characters a token
-// for exactly fourteen older models and three for every other (2.1.322's F_
-// @286842850, 2.1.310's ry @240809635), and which model counts is the reader's
-// to say, so the facts hold the two sums.
-//
-// ONE PASS OVER A VALUE, HOLDING NO TEXT: a content value is walked once, as
-// its decoder reads it ([estimateWalk]), each element's charge read as it
-// passes and the length of what an element writes read off the value where it
-// lies, so a value nested a thousand levels deep costs its bytes once, never
-// once a level, and nothing of a text is kept but its length.
+// WHAT CLAUDE CODE ESTIMATES A LINE'S CONTENT AT: the facts a reader of its
+// count reads of a line ([threadLine.Estimate], [threadLine.AttachmentEstimate]),
+// filled once as the line is read ([factsOf]) by the harness's own rules: a
+// user or assistant record at its message's content, an attachment at its
+// stored rendering, each element rounded as the harness rounds it, in
+// JavaScript's lengths, at both of its text rates, in one pass over a value
+// that holds no text. The package doc ("What Claude Code estimates a line's
+// content at") has each rule and the shipped code it was read in.
 
 // threadEstimate is Claude Code's estimate of a value's tokens at each of the
 // two rates it counts text at: At3 at three characters a token, the rate of
@@ -709,7 +659,7 @@ var attachmentsOfNoMessage = [...]string{"prompt_snapshot", "prompt_render_point
 // attachmentEstimate is an attachment's charge, its keys raw: its `type`, a
 // PDF read's `reads`, a queued command's `taskDelivery`, and the record's own
 // `rendered`; false where the estimate does not read ([lineFacts]'s rules,
-// claudelineestimate.go). A type that is no string reads as not reading: its
+// in the package doc). A type that is no string reads as not reading: its
 // accessor answers the type's error first.
 func attachmentEstimate(typ, reads, delivery, rendered json.RawMessage) (threadEstimate, bool) {
 	kind, err := wireString("attachment.type", typ)
@@ -832,21 +782,16 @@ func pdfReadsEstimate(reads json.RawMessage) (threadEstimate, bool) {
 }
 
 // Estimate is Claude Code's estimate of a user or assistant record after the
-// last reply its count reads ([lineFacts]'s rules, claudelineestimate.go): its
+// last reply its count reads ([lineFacts]'s rules, in the package doc): its
 // message's content, and on a record whose content is no empty string the
 // images its task delivery carries. Nothing, and no error, on every record of
 // another type.
 //
-// ITS READER is the reading of the size of a session's next request, which
-// sums it over every record after that reply, at the rate the model the next
-// request goes to is counted at.
-//
-// ITS ERRORS ARE THE MESSAGE'S ([threadLine.Message]), and where the
-// harness's own estimate throws on the content (a document's title that is
-// there and no string, a call's name that is no string), that.
-//
-// Read once, as the line is decoded ([factsOf]): never a second read of the
-// line.
+// Its reader sums it over every record after that reply ([nextReading]). ITS
+// ERRORS ARE THE MESSAGE'S ([threadLine.Message]), and where the harness's own
+// estimate throws on the content (a document's title that is there and no
+// string, a call's name that is no string), that. Read once, as the line is
+// decoded ([factsOf]).
 func (l threadLine) Estimate() (threadEstimate, error) {
 	if _, err := l.Message(); err != nil {
 		return threadEstimate{}, err
@@ -862,18 +807,16 @@ func (l threadLine) Estimate() (threadEstimate, error) {
 }
 
 // AttachmentEstimate is Claude Code's estimate of an attachment record after
-// the last reply its count reads ([lineFacts]'s rules,
-// claudelineestimate.go): what its stored rendering holds, or a PDF read's
+// the last reply its count reads ([lineFacts]'s rules, in the package
+// doc): what its stored rendering holds, or a PDF read's
 // pages; and whether that reads, false where the harness renders the
 // attachment again by its type, a template this layer does not hold, so its
 // reader bounds it otherwise. Nothing, read, on an attachment record with no
 // attachment and on every record of another type, which the harness charges
 // nothing as an attachment.
 //
-// ITS ERRORS ARE THE TYPE'S ([threadLine.AttachmentType]).
-//
-// Read once, as the line is decoded ([factsOf]): never a second read of the
-// line.
+// ITS ERRORS ARE THE TYPE'S ([threadLine.AttachmentType]). Read once, as the
+// line is decoded ([factsOf]).
 func (l threadLine) AttachmentEstimate() (threadEstimate, bool, error) {
 	if _, err := l.AttachmentType(); err != nil {
 		return threadEstimate{}, false, err

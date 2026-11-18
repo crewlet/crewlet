@@ -117,10 +117,8 @@ var leMessageCases = []leMessageCase{
 // other element at its JSON; on a user or assistant record, plus 2,000 an
 // image its task delivery carries. And where the harness's own estimate
 // throws (a text document whose title is there and no string), the estimate
-// answers an error rather than a figure.
-//
-// Mutation: sum a list's strings and round once, and a result of two
-// one-unit strings charges a token.
+// answers an error rather than a figure. Mutation: sum a list's strings and
+// round once, and a result of two one-unit strings charges a token.
 func TestAThreadLineEstimatesItsContentAsClaudeCodeDoes(t *testing.T) {
 	t.Parallel()
 	for _, tc := range leMessageCases {
@@ -229,10 +227,8 @@ var leAttachmentCases = []leAttachmentCase{
 // the harness renders it again by its type: no rendering stored, one of
 // another shape, a PDF read whose pages do not read, and the two types it
 // renders again whatever they store. An attachment that is no object answers
-// its type's error.
-//
-// Mutation: take the stored rendering's own JSON as its length, and the
-// rendering of `abcdefgh` charges its quotes and keys.
+// its type's error. Mutation: take the stored rendering's own JSON as its
+// length, and the rendering of `abcdefgh` charges its quotes and keys.
 func TestAnAttachmentIsEstimatedByItsRendering(t *testing.T) {
 	t.Parallel()
 	for _, tc := range leAttachmentCases {

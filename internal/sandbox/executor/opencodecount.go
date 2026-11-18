@@ -13,49 +13,14 @@ import (
 )
 
 // WHAT OPENCODE COUNTS A SESSION AT BEFORE ITS NEXT REQUEST, read off the
-// session's export ([openCodeCountReading]).
-//
-// OpenCode decides before every request, the first of a continued run
-// included, whether to compact the session first: it counts the conversation
-// from its last counted reply (that reply's input, cache reads and writes,
-// output and reasoning, as its provider reported them) and an estimate of
-// every message after it, the reply's own tool results among them, at a
-// rounded quarter of their text's UTF-16 length; and it restarts that count at
-// its newest completed compaction (read in the shipped code of every release
-// in [openCodeCountReleases], and measured to the token at each one's
-// boundaries). The engine bounds that count FROM ABOVE, at both places a
-// session's export is read whole: the take's meter, over the archive it keeps
-// ([newContextMeter]), and the collection's read of the export the job's
-// script left in its box ([OpenCode.readMainThread]).
-//
-// THE TAIL IS CHARGED AT A QUARTER OF ITS BYTES, rounded up: every message
-// after the reply at its whole span as the export holds it, and the reply's
-// own tool results at the spans of their answers and failures. OpenCode
-// renders a message to its model from the strings the message stores and at
-// most a fixed template, whose bytes the message's own keys exceed; a
-// string's UTF-8 bytes are never fewer than its UTF-16 units; and JSON's
-// escapes only add. So the charge is never under OpenCode's estimate. It is
-// over it by the export's keys and indentation, about 95 tokens a message on
-// the real exports this package keeps (testdata/opencode), which holds a
-// launch to a little more and never less. A file is the exception: OpenCode
-// charges a PDF or an image by what it is, not by its bytes, so a file after
-// the reply marks the count ([sandbox.CountPDF], [sandbox.CountMedia]).
-//
-// AND WHERE IT RESTARTS: the id of the newest compaction message, whatever
-// its status ([openCodeRestart]), the transcript's own restart rule, so a job
-// whose compaction failed reads as restarted (the side that tells more) while
-// its count goes on from its last reply, as OpenCode's does.
-//
-// AND THE PROVIDER OF THE REPLY IT IS ANCHORED ON, beside it: the figure is
-// what that provider reported, and a continuation on another provider's
-// model is not held to it.
-//
-// ONE WALK of the export, on the scanner (internal/jsonscan), which never
-// holds a string: each message's small values are captured at
-// [exportValueMaxBytes], its content is walked for the spans of its tool
-// results and the files it names, and every other value is passed over, its
-// bytes checked and none held. The floor's last-request figure
-// ([measuredPrompt]) is read in the same walk.
+// session's export ([openCodeCountReading]) in ONE WALK on the scanner, which
+// holds no string: the last counted reply's input, cache, output and
+// reasoning, and every message after it, the reply's tool results among them,
+// at a quarter of its bytes rounded up, never under OpenCode's own estimate;
+// restarted at the newest completed compaction, its restart the newest
+// compaction of any status, the reply's provider beside it. The package doc
+// ("What OpenCode counts a session at before its next request") says why the
+// charge bounds OpenCode's, and where each rule was read.
 
 // exportReading is what one walk of an OpenCode export read
 // ([meterExport]).
