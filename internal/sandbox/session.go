@@ -1464,17 +1464,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	if standing {
 		place = current.Capture.CaptureSeq
 	}
-	stamp := SessionCapture{
-		LaunchSeq: current.LaunchSeq, CaptureSeq: place, Launch: run.LaunchID,
-		State: CaptureBegun, Final: at.final, Interrupted: at.cutOff,
-		NoteCursor: notesHeld(current, at.cutOff), At: c.now().UTC(),
-		Taker: hold.holder, TakerEpoch: hold.epoch,
-		Harness: taken.Archive.Harness, HarnessVersion: taken.Archive.Version,
-		SessionID: taken.Archive.SessionID, ArchiveFormat: taken.Archive.Format,
-		RunBegan: taken.Archive.RunStart.Began, RunAfter: taken.Archive.RunStart.After,
-		Home: box.Home(), Workspace: path.Join(box.Home(), WorkspaceSubdir),
-		SeatBudget: policy.SeatBudget,
-	}
+	stamp := captureStamp(current, run.LaunchID, place, at.final, at.cutOff, hold, taken, box, policy)
 	// PLACED BY THE READ ABOVE, made ONLY WHERE ITS HARNESS ENDED ITS OWN RUN —
 	// the job over, its harness gone cleanly by itself and its script packing
 	// it, nothing cut off — which wrote every call it made before it exited.
@@ -1497,6 +1487,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	} else {
 		stamp.placeAtNewest(savePlaces{run: current})
 	}
+	stamp.At = c.now().UTC()
 	// THE PLACE IS RESERVED WITHIN THE TAKE'S OWN TIME — the room its context
 	// keeps for the reservation beside the pack's budget
 	// ([Coordinator.reserveRoom]) — never past it: a reservation answered
@@ -1539,6 +1530,26 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 			return c.standBy(ctx, by, reserveBy, run, placed, taken, at)
 		}
 		stamp = placed
+	}
+}
+
+// captureStamp is the begun stamp of a take of row's launch at place, with
+// what the take found in box: unplaced ([SessionCapture.placeAt],
+// [SessionCapture.placeAtNewest]) and with no instant, which its caller stamps
+// last, right before the reservation, so the instant a peer reads the take by
+// ([SessionCapture.sameTake]) comes after every step the take made before it.
+func captureStamp(row PendingRun, launch string, place int64, final, interrupted bool, hold takerHold,
+	taken TakenSession, box Sandbox, policy SessionPolicy) SessionCapture {
+
+	return SessionCapture{
+		LaunchSeq: row.LaunchSeq, CaptureSeq: place, Launch: launch,
+		State: CaptureBegun, Final: final, Interrupted: interrupted,
+		NoteCursor: notesHeld(row, interrupted), Taker: hold.holder, TakerEpoch: hold.epoch,
+		Harness: taken.Archive.Harness, HarnessVersion: taken.Archive.Version,
+		SessionID: taken.Archive.SessionID, ArchiveFormat: taken.Archive.Format,
+		RunBegan: taken.Archive.RunStart.Began, RunAfter: taken.Archive.RunStart.After,
+		Home: box.Home(), Workspace: path.Join(box.Home(), WorkspaceSubdir),
+		SeatBudget: policy.SeatBudget,
 	}
 }
 
@@ -2122,18 +2133,28 @@ func (c *Coordinator) keepLater(ctx context.Context, spooled *spooledCapture) {
 	if spooled == nil {
 		return
 	}
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
+	if !c.joinKeeps() {
 		c.dropSpool(ctx, spooled, "the node stopped before the session could be uploaded")
 		return
 	}
-	c.keeping.Add(1)
-	c.mu.Unlock()
 	go func() {
 		defer c.keeping.Done()
 		c.keepCapture(c.keepLife, spooled)
 	}()
+}
+
+// joinKeeps counts a keep about to start in the keeps [Coordinator.Stop] waits
+// for, and reports false, counting nothing, once the coordinator is stopping:
+// checked and counted under one lock, so no keep starts after Stop has begun
+// its wait.
+func (c *Coordinator) joinKeeps() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return false
+	}
+	c.keeping.Add(1)
+	return true
 }
 
 // dropSpool refuses a spooled capture that will not be kept, saying why, and
