@@ -143,9 +143,12 @@ type ReviewInput struct {
 // which its log took after that run was replaced. True of a call of an earlier
 // job of the round, and of one of an earlier round, alike. Without them the
 // reviewer reads it as the reviewed run's own, and judges that run on a call
-// it never made.
-const ReviewLateCall = "(an earlier run of this task made this call; it finished after that run " +
-	"was replaced, so the run under review did not make it)"
+// it never made. And ONE call: the round whose collection read it in flight
+// lists it under the earlier rounds, its outcome unknown, which the duplicate
+// rule would otherwise read as a second send.
+const ReviewLateCall = "(made once, by an earlier run of this task that was replaced before the call " +
+	"finished; an earlier round may list this same call with its outcome unknown, which is not a " +
+	"second call)"
 
 // BuildReview renders the Review-phase system prompt, and its outline.
 //

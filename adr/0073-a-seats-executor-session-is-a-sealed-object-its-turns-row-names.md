@@ -4610,11 +4610,12 @@ run of the work made.
 **The mark is the record's.** It is `ledger.Call.Late`, which the round's record
 (`turn.Work.Calls`) and a parked turn's closed rounds carry, and which every
 reader of the runner's view reads unchanged. The reviewer's log ends a late
-call's line with words saying an earlier run of the task made it, finished after
-that run was replaced, and that the run under review did not
-(`prompts.ReviewLateCall`), put by the call's place in the record, so a name the
-log skips moves them onto no other line. The line itself, which the item and
-the briefs draw, is unchanged.
+call's line with words saying an earlier run of the task, replaced before the
+call finished, made it once, and that an earlier round may list the same call
+with its outcome unknown, which is no second call (`prompts.ReviewLateCall`),
+put by the call's place in the record, so a name the log skips moves them onto
+no other line. The line itself, which the item and the briefs draw, is
+unchanged.
 
 **The delivery checks stay turn-wide.** The submission's citations, `turn.Check`
 and `turn.OverrideDone` count a late call as the turn's, as they count a closed
