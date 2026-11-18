@@ -60,6 +60,7 @@ function view(patch: Partial<ModelView> & { raw: Record<string, unknown> }): Mod
       last_success: null,
       waiting: null,
       used_by: [],
+      limits: [],
     },
     admin: null,
     uses: noUses(),

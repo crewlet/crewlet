@@ -231,6 +231,10 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "failed checks and Re-request, each a WriteButton held with the gate's sentence",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
   },
+  "routes/gitlet/checks/Rerun.tsx": {
+    why: "one check run again (code_rerun_checks)",
+    suite: "routes/gitlet/Checks.test.tsx",
+  },
   "routes/gitlet/ImportRepo.tsx": {
     why:
       "the repositories' Import a repository — one code_import_repo, a new repository " +

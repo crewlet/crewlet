@@ -272,6 +272,9 @@ func boundBox(result Result) Result {
 		// reader it has classifies a decoded document or nothing.
 		result.Event = ""
 	}
+	if len(result.Limits) > MaxRunEventBytes {
+		result.Limits = ""
+	}
 	return result
 }
 

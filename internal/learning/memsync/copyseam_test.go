@@ -7,6 +7,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -20,7 +21,7 @@ func newSyncer(db *store.DB, js jetstream.JetStream, agentID AgentIDFor) *Syncer
 // newSyncerAcross is [New] for a node across a link from its changelog, a
 // leaf's, unmetered.
 func newSyncerAcross(db *store.DB, js jetstream.JetStream, agentID AgentIDFor) *Syncer {
-	return mustNew(db, js, agentID, Config{AcrossLink: true})
+	return mustNew(db, js, agentID, Config{AcrossLink: true, Window: jsapi.NewLinkWindow()})
 }
 
 func mustNew(db *store.DB, js jetstream.JetStream, agentID AgentIDFor, cfg Config) *Syncer {
@@ -66,5 +67,10 @@ func stallOf(s *Syncer, maxBytes int) time.Duration { return s.stall(maxBytes) }
 // pullBytesOf is the transport's bound of s's pulls.
 func pullBytesOf(s *Syncer) int { return s.pullBytes() }
 
-// windowOf is s's window across a link.
-func windowOf(s *Syncer) int { return s.window }
+// windowOf is the size of s's window across a link, 0 where it has none.
+func windowOf(s *Syncer) int {
+	if s.window == nil {
+		return 0
+	}
+	return s.window.Size()
+}

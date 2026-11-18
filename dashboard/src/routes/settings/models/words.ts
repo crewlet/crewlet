@@ -15,6 +15,7 @@ import {
   type ModelCheckName,
   type ModelHealth,
   type ModelDeviceStatus,
+  type ModelLimitState,
   type ModelLimitWindow,
   type ModelSignInRoute,
 } from "~/contract/models.ts";
@@ -56,6 +57,31 @@ export const WINDOW: Record<ModelLimitWindow, string> = {
   model: "model limit",
   unknown: "usage limit",
 };
+
+/** A limit window's name when the vendor gives no length: "Session", "Weekly". */
+export const LIMIT_WINDOW: Record<ModelLimitWindow, string> = {
+  session: "Session",
+  weekly: "Weekly",
+  model: "Model",
+  unknown: "Usage",
+};
+
+/** A window's state in a word, the figure of a window whose fraction is unknown. */
+export const LIMIT_STATE: Record<ModelLimitState, string> = {
+  ok: "OK",
+  warning: "Near limit",
+  reached: "Reached",
+};
+
+/** The meter's verdict for each state (`MeterState`). */
+export const LIMIT_METER: Record<ModelLimitState, "ok" | "near" | "refusing"> = {
+  ok: "ok",
+  warning: "near",
+  reached: "refusing",
+};
+
+/** What a model whose harness reports no window says. */
+export const NO_LIMITS = "None reported";
 
 /** One line of a model's test, by what it measured. */
 export const CHECK: Record<ModelCheckName, string> = {

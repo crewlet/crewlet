@@ -198,8 +198,8 @@
 // # What silence is
 //
 // ACROSS A LINK, THE LINK'S. A replay's words cross a link behind whatever
-// else it carries (the node's own downloads, an event or fleet record of
-// megabytes, which no window bounds), and neither broker nor client sees any
+// else it carries (an event or fleet record of megabytes, which the link's
+// window does not hold), and neither broker nor client sees any
 // of a message until its last byte is in, so a replay behind an 8 MiB message
 // at the floor hears nothing for four minutes from a copy that answered at
 // once. Only the link's own socket meter ([Config.Link]) tells that from a
@@ -226,22 +226,18 @@
 //
 // # A window across a link
 //
-// A replay's pull window ([pullWindow]) is the hydration's own, and bounds
-// only what crosses the link toward the node. Until crewlet/crewlet#1035 puts
-// one window across the link, both directions and the object store's
-// downloads inside it, the object store's upload window is another, for what
-// crosses outbound (internal/objstore/natsobj, linkWindow), so a request
-// whose bytes cross behind an upload and whose reply crosses behind a pull
-// waits behind both: 7.75 seconds at the floor beyond its own round trip,
-// past its term, a lease renewal sent there among them. (A node hydrates one
-// seat at a time: the seat host's placement pass claims them one after
-// another.) And nothing windows the rest of what crosses toward the node: a
-// download holds four of the object store's 128 KiB messages in hand
-// (natsobj, readAhead), fifteen seconds at the floor, for each download in
-// flight, and an event delivered to one of the node's seats crosses whole, so
-// a request whose reply queues behind them waits for all of it. A replay's
-// next row queued there refuses no seat: across a metered link the replay
-// waits while the link moves ("What silence is").
+// A replay's pulls take from the ONE window of the node's link
+// ([Config.Window], internal/jsapi's Window), which the object store's
+// uploads, downloads and walks on the same link take from too, so what the
+// node's bulk transfers hold out across the link, both ways together, never
+// crosses the floor in more than a request's term leaves after its own round
+// trip, and a lease renewal sent behind them is answered inside its term.
+// (A node hydrates one seat at a time: the seat host's placement pass claims
+// them one after another.) What the window does not hold is an event
+// delivered to one of the node's seats, which crosses whole, and a request
+// whose reply queues behind it waits for it. A replay's next row queued
+// there refuses no seat: across a metered link the replay waits while the
+// link moves ("What silence is").
 //
 // # What is deliberately not replicated
 //

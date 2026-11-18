@@ -221,6 +221,277 @@
   font-weight: var(--font-weight-medium);
 }
 
+/* WHERE CHECKS STAND: the list, and the open run's pane beside it while one is open. */
+.code-checks-bar__pickers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-inline-start: auto;
+}
+
+.code-checks {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--spacing-4);
+  align-items: start;
+}
+
+.code-checks[data-open] {
+  grid-template-columns: minmax(0, 1fr) minmax(22rem, 28rem);
+}
+
+.code-checks__list {
+  min-width: 0;
+}
+
+.code-checks__pane {
+  position: sticky;
+  top: calc(var(--sticky-top) + var(--spacing-4));
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-block-size: calc(100cqb - var(--sticky-top) - 2 * var(--spacing-4));
+}
+
+.code-checks__pane > .code-check-pane {
+  flex: 1 1 auto;
+}
+
+.code-checks-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  inline-size: 100%;
+}
+
+.code-checks-head__words {
+  flex: 1 1 auto;
+  margin: 0;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.code-checks-head__words strong {
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.code-checks-row__name {
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-checks-row__oid {
+  color: var(--color-text-secondary);
+}
+
+.code-checks-row__facts {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--spacing-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.code-checks-row__took {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.code-checks-row__took[data-tone="info"] {
+  color: var(--color-feedback-info-ink);
+}
+
+/* A PHONE'S ROW: the duration and the time on one line under the words. */
+@container code-list (width < 640px) {
+  .code-checks-row__facts {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--spacing-1) var(--spacing-3);
+  }
+}
+
+/* A NARROW PAGE: the pane above the list, in the page's flow, the page scrolling it. */
+@container page (width < 720px) {
+  .code-checks[data-open] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .code-checks__pane {
+    position: static;
+    order: -1;
+    max-block-size: none;
+  }
+}
+
+/* A RUN OF A CHECK, read whole in its pane. */
+.code-check-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-block-size: 0;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-subtle);
+}
+
+.code-check-pane__head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3) var(--spacing-4);
+  border-block-end: 1px solid var(--color-border-default);
+}
+
+.code-check-pane__title {
+  flex: 0 1 auto;
+  margin: 0;
+  min-width: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.code-check-pane__close {
+  margin-inline-start: auto;
+}
+
+.code-check-pane__body {
+  flex: 1 1 auto;
+  min-block-size: 0;
+  overflow-y: auto;
+  padding: var(--spacing-4);
+}
+
+.code-check-pane__later {
+  margin: 0 0 var(--spacing-3);
+}
+
+.code-check-pane__tests {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  margin: 0;
+  font-weight: var(--font-weight-medium);
+}
+
+.code-check-pane__tests[data-tone="danger"] {
+  color: var(--color-feedback-danger-ink);
+}
+.code-check-pane__tests[data-tone="success"] {
+  color: var(--color-feedback-success-ink);
+}
+.code-check-pane__tests[data-tone="info"] {
+  color: var(--color-feedback-info-ink);
+}
+
+.code-check-pane__change {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+.code-check-pane__change-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-check-pane__run {
+  padding: 0 var(--spacing-1);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-surface-inset);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+.code-check-pane__part {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* THE END OF ITS OUTPUT: numbered lines, never wrapped; the box scrolls sideways alone. */
+.code-check-tail__head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-check-tail__head > .code-check-pane__part {
+  margin-inline-end: auto;
+}
+
+.code-check-tail__range {
+  font-variant-numeric: tabular-nums;
+}
+
+.code-check-tail {
+  overflow-x: auto;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-inset);
+}
+
+.code-check-tail pre {
+  margin: 0;
+  padding: var(--spacing-2) 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  line-height: var(--font-line-height-body);
+}
+
+.code-check-tail code {
+  display: block;
+  min-inline-size: max-content;
+  font: inherit;
+}
+
+.code-check-tail__line {
+  display: block;
+  padding-inline: var(--spacing-2) var(--spacing-3);
+  border-inline-start: 2px solid transparent;
+  white-space: pre;
+}
+
+.code-check-tail__n {
+  display: inline-block;
+  min-inline-size: 5ch;
+  margin-inline-end: var(--spacing-3);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+/* A FAILING LINE: the danger state's soft ground carrying its own ink, and its edge. */
+.code-check-tail__line[data-fail] {
+  border-inline-start-color: var(--color-feedback-danger-line);
+  background-color: var(--color-feedback-danger-soft);
+  color: var(--color-feedback-danger-ink);
+}
+.code-check-tail__line[data-fail] .code-check-tail__n {
+  color: var(--color-feedback-danger-ink);
+}
+
+@media (forced-colors: active) {
+  .code-check-tail__line[data-fail] {
+    border-inline-start-color: Mark;
+    color: CanvasText;
+  }
+}
+
 /* A TAG NAMING A COMMIT, and a change's pill as a link: no underline, the focus ring kept. */
 .code-tag-chip,
 .code-change-ref {
@@ -3648,31 +3919,127 @@
   margin-inline-start: auto;
 }
 
-/* A PUSH'S REFS: a ref a line — its glyph, its name, what became of it and
-   the commits it moved between. */
+/* A PUSH'S REFS: one bordered block a ref, its glyph, what became of it, its name and its ids. */
 .code-push-refs {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: var(--spacing-1);
   min-width: 0;
 }
 
 .code-push-ref {
-  display: flex;
+  display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-1) var(--spacing-2);
+  max-width: 100%;
   min-width: 0;
+  padding: var(--spacing-1) var(--spacing-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
 }
 
 .code-push-ref__name {
-  font-family: var(--font-family-mono);
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
 .code-push-ref__word {
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-push-ref__ids {
+  white-space: nowrap;
+}
+
+/* THE PUSHES FEED: a sentence a push, its chips under it, its time and pack at its end. */
+.code-pushes-feed .code-list__aside {
+  margin-inline-start: 0;
+  font-weight: var(--font-weight-medium);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+
+.code-push-sentence {
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-secondary);
+}
+
+.code-push-sentence > strong {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.code-push-change {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-push-facts {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--spacing-1);
+  align-self: start;
   font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+
+.code-push-pack {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+/* THE TOTAL at the toolbar's end, on its own line's end once the toolbar wraps. */
+.code-pushes-total {
+  margin-inline-start: auto;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.code-pushes-total > strong {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+/* A RULE'S PATTERN on its own line, its words under it. */
+.code-pushes-rule {
+  display: block;
+}
+
+/* A REFUSED HISTORY: the engine's sentence, then Clear filters while narrowed. */
+.code-pushes-refused {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+}
+
+.code-push-stored {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  margin: var(--spacing-2) 0 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+@container code-list (width < 640px) {
+  .code-push-facts {
+    flex-direction: row;
+    gap: var(--spacing-2);
+  }
 }
 
 /* ---- Gitlet › Search ------------------------------------------------------ */

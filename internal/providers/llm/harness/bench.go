@@ -362,6 +362,11 @@ type RunEnd struct {
 	// fields — a status code — beside the words of Answer and Error.
 	Event string
 
+	// Limits is the run's last limit report, verbatim, where its harness
+	// writes one ([harnessprofile.LimitReport]): where the plan's windows
+	// stood as the run ended, and the reset of a limit it met.
+	Limits string
+
 	// At is when the run's ending was first read back: what a reset the
 	// vendor names as a time of day, or as a delay, is read against, and
 	// the instant the ending is dated by — the window a limit report opens
@@ -409,6 +414,7 @@ func (p *Provider) RunEnded(ctx context.Context, end RunEnd) bool {
 	if at.IsZero() {
 		at = p.now()
 	}
+	p.observeLimits(end.Limits, at)
 	hit, out, ok := p.endedHit(end, at)
 	if ok && hit.Kind == llm.KindAuth {
 		// A REFUSED SIGN-IN IS THE SIGN-IN'S, as a call's is: the readiness
@@ -467,6 +473,9 @@ func (p *Provider) endedHit(end RunEnd, at time.Time) (markerHit, harnessOutput,
 	out := harnessOutput{said: nonEmpty(end.Answer, end.Error), stderr: end.Error,
 		failed: end.Failed, at: at, zone: p.zone}
 	var lines []string
+	if limits := strings.TrimSpace(end.Limits); limits != "" {
+		lines = append(lines, limits)
+	}
 	if event := strings.TrimSpace(end.Event); event != "" {
 		lines = append(lines, event)
 	}
