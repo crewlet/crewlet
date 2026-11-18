@@ -239,8 +239,6 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/gitlet/change/Merge.tsx": "modal: an override's reason, in its dialog",
   "routes/gitlet/change/ReviewDialog.tsx": "modal: a review's summary, in its dialog",
   "routes/gitlet/ImportRepo.tsx": "modal: a repository to import, in its dialog",
-  "routes/gitlet/Search.tsx":
-    "not an editor: its path and ref filters narrow a code search, and change nothing",
   "routes/chatlet/Dialogs.tsx":
     "modal: a new room, a room's topic or description, people to add, in their dialogs",
   "routes/inbox/NoticeActions.tsx": "modal: a snooze's time",
