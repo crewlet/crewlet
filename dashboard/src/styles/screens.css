@@ -7690,6 +7690,15 @@ a.live-row:hover {
 .inbox-pane-back {
   align-self: flex-start;
 }
+/* An item nobody holds, in one column: the way back on top, the word centred under it. */
+.inbox-pane-missing {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  place-items: center;
+}
+.inbox-pane-missing .inbox-pane-back {
+  justify-self: start;
+}
 .inbox-evidence {
   margin-top: var(--spacing-1);
 }

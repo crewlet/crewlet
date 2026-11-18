@@ -1456,7 +1456,8 @@ a screen, and every workspace and section the code declares is below.
 | Route | Page | Params |
 |---|---|---|
 | `#/` · `#/home` | **Home** — the landing screen: the company's day, the engine's one sentence, the pulse figures and what needs a decision | |
-| `#/inbox` | **Inbox**: what waits on your decision, and what reached you *(no access needed for the page: each half lists under its own app, Worklet's notices with Worklet access and Gitlet's with Gitlet access)* | `row=` (which item the pane is on) |
+| `#/inbox` | **Inbox**: what waits on your decision, and what reached you *(no access needed for the page: each half lists under its own app, Worklet's notices with Worklet access and Gitlet's with Gitlet access)* | |
+| `#/inbox/ask/{id}` · `#/inbox/run/{turn_id}` · `#/inbox/run/{turn_id}/{id}` · `#/inbox/seat/{handle}` · `#/inbox/condition/{id}` · `#/inbox/notice/{id}` · `#/inbox/change/{id}/{id}` · `#/inbox/artifact/{id}` | **Inbox** with one item open, by its own address ([The Inbox is where you act](#the-inbox-is-where-you-act)) | |
 | `#/me` | **My work › Queue**: what one person holds, by due date or in the order somebody put it, reordered by dragging a row *(needs Worklet access, as every section of My work but Reviews does)* | `order=due\|priorities` · `handle=` (whoever leads somebody, or an admin, reading their day, kept across the sections) · on the queue, `shape=`, `cols.list=` / `cols.table=` and the filter grammar with the assignee LOCKED |
 | `#/me/asked-of-me` · `#/me/unblocked` · `#/me/holding-up` · `#/me/collaborating` · `#/me/watching` · `#/me/checklist` | **My work** — Asked of me (answered in place) · Unblocked · Holding up (their open work that other work waits on, the most waited on first) · Collaborating · Watching · Checklist, each with the engine's own total on its tab | `handle=` |
 | `#/me/asked-by-me` | **My work › Asked by me** — the work this person asked a question on that is still waiting for its answer: the work list, held to the asker | `handle=` · `shape=` and the filter grammar, with the asker LOCKED |
@@ -3495,6 +3496,24 @@ ones are listed), and both page forward fifty at a time with **Show more**.
 Home's **Review** and **Open inbox** land on `#/inbox`, whose list opens with
 every decision they counted. A change the person made themselves is never
 one of the updates: they write as the seat the inbox is kept under.
+
+**Every item has its own address** under `#/inbox`, which carries ids alone:
+`ask/<comment>`, `run/<turn>` (an executor's open question, whichever it
+asks now) and `run/<turn>/<launch>` (one it answered), `seat/<seat>`,
+`condition/<id>`, `notice/<record>`, `change/<record>/<change>` and
+`artifact/<record>`. An ask keeps its address once answered, and `run/<turn>`
+opens the question the executor answered last once none is open.
+Every row is a real link to it, so a modified or middle press opens a tab and
+its link copies. Opening an item (a press, Enter, `j` or `k`) pushes, so Back
+and Forward step between the items read; the screen's own moves (the next item
+after an answer, an address said another way) replace. The address opens its
+item in a new tab, after a reload and on another device, wherever it is now:
+an answered, put-off, snoozed or read item opens its group, and a notice no
+loaded page holds is read by its id (`inbox{record, snoozed: include}`, from
+the reader's own record). One that resolves nowhere says "This item is not in
+your inbox" in the pane rather than opening another. On a narrow screen the
+address opens the item alone, and its Back returns to the list. A `?row=`
+address names an item the earlier way and is replaced by the item's own.
 
 **Every row says the same three things.** Who: the seat behind it, with its
 avatar; a person's change is drawn as the seat the engine recorded it under,

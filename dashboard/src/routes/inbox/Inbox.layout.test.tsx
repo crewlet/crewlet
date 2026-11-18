@@ -100,7 +100,7 @@ let host: HTMLElement | null = null;
 beforeEach(() => {
   vi.stubGlobal("WebSocket", InertWebSocket);
   vi.stubGlobal("fetch", actsApplied());
-  location.hash = "#/inbox?row=ask%3Ac-1";
+  location.hash = "#/inbox/ask/c-1";
 });
 
 afterEach(() => {
@@ -150,7 +150,7 @@ test("the next item after an answer opens at its head, wherever the last one was
 
 test("the open item's title fills its first line to within one word, at every width", async () => {
   await page.viewport(1440, 900);
-  location.hash = "#/inbox?row=ask%3Ac-2";
+  location.hash = "#/inbox/ask/c-2";
   const loose: string[] = [];
   for (let width = 760; width <= 1240; width += 40) {
     ANSWERS.decisions = {
@@ -235,7 +235,7 @@ test("a held call's 400-character command and reason stay inside the reading col
     },
     executors: { runs: [run] },
   };
-  location.hash = "#/inbox?row=run%3Aturn-9";
+  location.hash = "#/inbox/run/turn-9";
   const outside: string[] = [];
   for (const [width, height] of [
     [1440, 900],

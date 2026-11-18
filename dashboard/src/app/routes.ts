@@ -199,11 +199,53 @@ export function artifactStandalonePath(id: string): string[] {
 
 /**
  * The page an address opens: an artifact's standalone page is its artifact's
- * page, so a recent or a star kept from either is the one artifact.
+ * page, so a recent or a star kept from either is the one artifact, and an
+ * Inbox item's address is the Inbox.
  */
 export function pagePath(path: readonly string[]): string[] {
   const where = resolve([...path]);
+  if (where.resolved && where.screen === "inbox") return ["inbox"];
   return where.resolved && where.screen === "artifact" ? artifactPath(where.id) : [...path];
+}
+
+/** The kinds of item the Inbox lists, each its row key's prefix and its address's first segment. */
+export const INBOX_ITEM_KINDS = [
+  "ask",
+  "run",
+  "seat",
+  "condition",
+  "notice",
+  "change",
+  "artifact",
+] as const;
+
+export type InboxItemKind = (typeof INBOX_ITEM_KINDS)[number];
+
+/**
+ * An Inbox item's own address, from its row key (`<kind>:<id>`): `#/inbox/<kind>/<id>`, with
+ * a `/` in an id kept as a segment break. An executor's open question is `run/<turn>`, whichever
+ * it asks now, and an answered one `run/<turn>/<launch>`. Here for the reason [artifactPath] is:
+ * Home links to an item.
+ */
+export function inboxItemPath(key: string): string[] {
+  const cut = key.indexOf(":");
+  const kind = key.slice(0, cut);
+  const id = key.slice(cut + 1);
+  if (cut <= 0 || !id || !INBOX_ITEM_KINDS.includes(kind as InboxItemKind)) return ["inbox"];
+  if (kind !== "run") return ["inbox", kind, ...id.split("/")];
+  const at = id.indexOf(":");
+  const turn = at < 0 ? id : id.slice(0, at);
+  const launch = at < 0 ? "" : id.slice(at + 1);
+  return ["inbox", "run", turn, ...(launch ? launch.split("/") : [])];
+}
+
+/** The row key an Inbox address's tail (after `inbox`) names, or null where it names none. */
+export function inboxItemKey(tail: readonly string[]): string | null {
+  const [kind, ...id] = tail;
+  if (!kind || id.length === 0 || !INBOX_ITEM_KINDS.includes(kind as InboxItemKind)) return null;
+  if (kind === "run")
+    return id.length === 1 ? `run:${id[0]}` : `run:${id[0]}:${id.slice(1).join("/")}`;
+  return `${kind}:${id.join("/")}`;
 }
 
 /**
@@ -300,7 +342,8 @@ export type SignInScreen =
 /** Every screen the frame draws, with what its path names. */
 export type FramedScreen =
   | { screen: "home" }
-  | { screen: "inbox" }
+  /** `item` is the open item's row key ([inboxItemKey]). */
+  | { screen: "inbox"; item?: string }
   | { screen: "me"; section: MeSection }
   | { screen: "worklet-projects" }
   | { screen: "worklet-tasks" }
@@ -450,8 +493,11 @@ export function resolve(path: string[]): Route {
   switch (head) {
     case "home":
       return rest.length ? missing("home", under("Home")) : screen({ screen: "home" });
-    case "inbox":
-      return rest.length ? missing("inbox", under("Inbox")) : screen({ screen: "inbox" });
+    case "inbox": {
+      if (rest.length === 0) return screen({ screen: "inbox" });
+      const item = inboxItemKey(rest);
+      return item ? screen({ screen: "inbox", item }) : missing("inbox", under("Inbox"));
+    }
     case "me": {
       if (rest.length === 0) return screen({ screen: "me", section: "queue" });
       const [section] = rest;
