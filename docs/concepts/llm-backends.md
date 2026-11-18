@@ -1596,8 +1596,11 @@ harness cancelled — Claude Code and OpenCode cancel a call at its server's
 timeout, which the box is handed as the bridge's own bound, and the model reads
 the call as timed out — or hung up on, which the next progress the bridge keeps
 its answer going with finds, is listed as its run's own and marked as one
-nobody waited for, which every continuation of its round is told whatever its
-save point — as is one still running as its job's session on the bridge ended,
+nobody waited for, which its job is handed while it works and every
+continuation of its round is told whatever its save point, but one of a
+session that took it ([A relaunch continues the turn's
+session](code-sandbox.md#a-relaunch-continues-the-turns-session)) — as is one
+still running as its job's session on the bridge ended,
 which that end answered at once that it was still running ([The tool
 bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box));
 one it stopped waiting for while it still read the call's response,

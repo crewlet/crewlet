@@ -1682,6 +1682,33 @@
 // ([unansweredNotes]), the record of a note delivered ([runSteers.delivered])
 // and the ending ([sandbox.PendingRun.EndedNotes]).
 //
+// # A late call is handed to the job working as it lands
+//
+// The one item the store files is a LATE-CALL ITEM ([sandbox.RunNote.LateCall]):
+// a call of the round the session of the job working on it lacks, late or given
+// up on by the job's own harness. It is the log's account, UNSEALED, so the
+// inbox routes it by its kind before any seal is opened ([runSteers.waitingItems]):
+// an item names its job and carries no seal, and anything else claiming a call
+// is handed to nobody and said once. Never as anybody's note: it is rendered in
+// the engine's own words for a late call ([lateItemMessage]), its call drawn as
+// the brief's late section draws one, every payload past the ledger's budget
+// omitted by size and digest (no model runs on a hook's path, and a cut would
+// read as the payload), every line break flattened ([ledger.CallLine]), and
+// neutralised under the session's fence token, which the inbox is bound with
+// ([runInbox.Bind]), so nothing a tool wrote can close a fence the session's
+// answers open or head an entry of its own.
+//
+// CLAUDE CODE AT A TOOL BATCH ONLY, a person's notes fitted first: a job at its
+// finish makes no more calls, so the duplicate an item prevents cannot happen
+// there, and the review judges the run on its report, which an item at the
+// finish would replace with the answer after it; the item waits, and the next
+// launch removes it, whose continuation tells the call. OPENCODE AT ITS NEXT
+// STEP BOUNDARY, which can follow its final step, since nothing tells its
+// plugin whether a step will call a tool: the run then goes on, and its report
+// is the answer after the item, which the item's words say. An account is held
+// to [maxLateItemUnits], so it always shares one hook answer with a person's
+// widest note.
+//
 // # A continued session's floor
 //
 // A launch's floor for a session it may continue is that session's own

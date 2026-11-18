@@ -217,7 +217,7 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		if made {
 			// AND THE JOB'S LOG, a new run's: whatever a key of that
 			// name held is no call of this run's.
-			last, opened, openErr := s.openLog(ctx, run.TurnID, run.LaunchID,
+			last, _, opened, openErr := s.openLog(ctx, run.TurnID, run.LaunchID,
 				logOpening{round: created.Round})
 			if openErr != nil {
 				return PendingRun{}, unopened(run.LaunchID, openErr)
@@ -444,6 +444,11 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 			existing.Steer.Seat = bytes.Clone(run.Steer.Seat)
 		}
 		existing.Steer.Pulled = ""
+		// AND THE TELLINGS ARE THE ROUND'S: a new round's log numbers its calls
+		// afresh, so no telling names one of them ([RunSteer.Tellings]).
+		if !run.Continues {
+			existing.Steer.Tellings = nil
+		}
 		openNotes(&existing.Steer, run, run.LaunchID, s.clock())
 		return true
 	})
@@ -470,13 +475,18 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// dropped with the rest when it does not; after the opening, it lists one
 	// of a round carried on marked late, its spend dropped with its job
 	// ([BridgeLog.take]).
-	last, logged, err := s.openLog(ctx, run.TurnID, opened.LaunchID, opening)
+	last, walked, logged, err := s.openLog(ctx, run.TurnID, opened.LaunchID, opening)
 	switch {
 	case err != nil:
 		return PendingRun{}, false, unopened(opened.LaunchID, err)
 	case !logged:
 		return PendingRun{}, false, endedUnderLaunch(run.TurnID)
 	}
+	// AND EVERY CALL THE OPENING WALKED, handed to the job it opens, in a
+	// write after it: the reset above removed the items of the job before,
+	// and only the opening decides which calls are late. Never the launch's
+	// failure ([CoordStore.fileLateItems]).
+	s.fileLateItems(ctx, run.TurnID, opened.LaunchID, opening.round, walked)
 	opened.OpenedAfter = last
 	return opened, true, nil
 }
@@ -532,6 +542,25 @@ type logOpening struct {
 	told *int
 }
 
+// walks reports whether the opening o of l walks l's calls past the read the
+// relaunch's briefs were built from ([BridgeLog.lateAfter]): one that carries
+// l's round on, that read known.
+func (o logOpening) walks(l BridgeLog) bool { return l.Round == o.round && o.told != nil }
+
+// walked is every call of l, as the opening o leaves it, that o walked
+// ([logOpening.walks]): taken after the briefs' read, a person's approved call
+// apart, late already or not. What the opening hands the job it opens
+// ([CoordStore.fileLateItems]).
+func (o logOpening) walked(l BridgeLog) []BridgeCall {
+	var out []BridgeCall
+	for _, call := range l.Calls {
+		if call.Appended > *o.told && !call.Approved {
+			out = append(out, call)
+		}
+	}
+	return out
+}
+
 // opened is l as the opening o of job launch leaves it — see
 // [CoordStore.openLog], whose one write it decides.
 func (l BridgeLog) opened(launch string, o logOpening) BridgeLog {
@@ -546,7 +575,7 @@ func (l BridgeLog) opened(launch string, o logOpening) BridgeLog {
 		if o.answered != "" && l.CutFor != o.answered {
 			next.AnsweredThrough, next.CutFor = l.LastSeq(), o.answered
 		}
-		if o.told != nil {
+		if o.walks(l) {
 			next = next.lateAfter(*o.told)
 		}
 	}
@@ -592,8 +621,8 @@ func (l BridgeLog) lateAfter(told int) BridgeLog {
 }
 
 // openLog opens turnID's log to job launch, answering the place of the last
-// call it keeps from before the job ([BridgeLog.LastSeq]) and whether it was
-// written — false for a run whose record is gone.
+// call it keeps from before the job ([BridgeLog.LastSeq]), the calls it walked
+// ([logOpening.walked]) and whether it was written (false: the record is gone).
 //
 // ONE COMPARE-AND-SWAP OF THE LOG decides what the job keeps and moves the log
 // onto it, so no append of the replaced job can land between the two: an append
@@ -624,24 +653,30 @@ func (l BridgeLog) lateAfter(told int) BridgeLog {
 // calls gone from the log and missing from the fold. The call a person approved
 // that the log is owed ([OwedCall]) is appended first, in the same write, so it
 // is kept with its round or folded with it.
-func (s *CoordStore) openLog(ctx context.Context, turnID, launch string, o logOpening) (int, bool, error) {
+func (s *CoordStore) openLog(ctx context.Context, turnID, launch string, o logOpening) (int, []BridgeCall, bool,
+	error) {
 	last := 0
+	var walked []BridgeCall
 	_, opened, err := s.runs.MutateSandboxRunPart(ctx, turnID, coord.RunLog, func(current coord.Record, found bool) ([]byte, error) {
 		next := BridgeLog{Launch: launch, Round: o.round}
+		walked = nil
 		if found {
 			var held BridgeLog
 			if err := json.Unmarshal(current.Value, &held); err != nil {
 				return nil, fmt.Errorf("sandbox: decode the log of run %s: %w", turnID, err)
 			}
 			next = held.opened(launch, o)
+			if o.walks(held) {
+				walked = o.walked(next)
+			}
 		}
 		last = next.LastSeq()
 		return json.Marshal(next)
 	})
 	if err != nil {
-		return 0, false, fmt.Errorf("sandbox: open the log of run %s to its job: %w", turnID, err)
+		return 0, nil, false, fmt.Errorf("sandbox: open the log of run %s to its job: %w", turnID, err)
 	}
-	return last, opened, nil
+	return last, walked, opened, nil
 }
 
 // unionHolds is held with keys added — each key once, in the order first
@@ -1986,6 +2021,8 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 			run.Launch.Brief = box.Brief
 			run.Launch.BriefOmitted = slices.Clone(box.BriefOmitted)
 			run.Launch.FreshOmitted = slices.Clone(box.FreshOmitted)
+			run.Launch.BriefLateOmitted = slices.Clone(box.BriefLateOmitted)
+			run.Launch.FreshLateOmitted = slices.Clone(box.FreshLateOmitted)
 			// AND WHICH LEADS ITS BRIEF TOLD, by their numbers in the run's
 			// leads part, which took the brief's own before this write
 			// ([LaunchRecord.LeadMarks]): only where the row still names the
@@ -2440,24 +2477,22 @@ func (s *CoordStore) ReleaseBox(ctx context.Context, turnID string) error {
 // withdrawal of an entry whose call was then not run ([AppendStep]).
 //
 // NO FENCE, and that is deliberate. Every other mutation here is an ownership
-// decision — a claim, a status flip, a pause — and a node whose lease has
-// moved must not make one. This is a LOG APPEND: a record's call already ran
-// and its effect already happened, and refusing to record it because the seat
-// moved mid-run would lose evidence of something that is true either way; a
-// begin records a call its opening admitted under the seat's fence. The log's
-// own version still guards the write, so two concurrent appends serialise
-// rather than clobbering each other.
+// decision, which a node whose lease has moved must not make. This is a LOG
+// APPEND: a record's call already ran and its effect happened, and refusing to
+// record it because the seat moved mid-run would lose evidence of something
+// true either way; a begin records a call its opening admitted under the
+// seat's fence. The log's own version still guards the write.
 //
-// ON THE LOG ALONE: the condition — the log is open for the call's job, or
-// for its round — is the log's own field, so each step is one compare-and-swap
-// of one key, and the run's record is neither read nor written for it. The
-// job's spend is the one fact the record keeps of an append, written after a
-// record is in the log, only for the log's own job and only where the total
-// moved: a call answered by a builtin costs the engine nothing, and its record
-// leaves the record alone, and so does a late call of the round, whose spend
-// is dropped with its job, and every begin and withdrawal ([BridgeLog.take]).
-// THE ONE WRITER of a call's steps and of its spend, so the job check and the
-// spend stay in one place whichever step a call is at.
+// ON THE LOG: the condition — the log is open for the call's job, or for its
+// round — is the log's own field, so each step is one compare-and-swap of one
+// key. The record keeps two facts of an append, each written after a record is
+// in the log: the job's spend, only for the log's own job and only where the
+// total moved (a builtin's call, a late call of the round, whose spend is
+// dropped with its job, and every begin and withdrawal leave it alone,
+// [BridgeLog.take]); and a call the log lists late, or as given up on by its
+// own job's harness, handed to the job the log is open to, which never fails
+// the append ([CoordStore.fileLateItems]). THE ONE WRITER of a call's steps
+// and of its spend, so the job check and the spend stay in one place.
 //
 // A run whose log is gone is not an error: the run ended while a late call was
 // in flight, which is the ordinary shape of a box shutting down. Nor is a call
@@ -2480,15 +2515,15 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a Brid
 		return call
 	}
 	// SET ON EVERY ASK OF decide, which runs again on a lost race: what the
-	// log as the last attempt read it takes the append for, and whether that
-	// attempt had anything to write.
+	// log as the last attempt read it takes the append for, whether that
+	// attempt had anything to write, and the log it decided on.
 	taken, wrote := takeNone, false
+	var logged BridgeLog
 	_, won, err := s.runs.MutateSandboxRunPart(ctx, turnID, coord.RunLog, func(current coord.Record, found bool) ([]byte, error) {
-		taken, wrote = takeNone, false
+		taken, wrote, logged = takeNone, false, BridgeLog{}
 		if !found {
 			return nil, nil
 		}
-		var logged BridgeLog
 		if err := json.Unmarshal(current.Value, &logged); err != nil {
 			return nil, fmt.Errorf("sandbox: decode the log of run %s: %w", turnID, err)
 		}
@@ -2515,6 +2550,11 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a Brid
 		// A LATE CALL OF THE ROUND, in the log and paid by nobody: the row
 		// holds a later job, whose resume would pay it as its own. Said, so a
 		// caller asking again for an earlier attempt's spend stops asking.
+		// HANDED TO THE JOB THE LOG IS OPEN TO, as the log lists it, which
+		// files it once however often the append is asked.
+		if listed, ok := logged.listedAs(a.Call); ok {
+			s.fileLateItems(ctx, turnID, logged.Launch, logged.Round, []BridgeCall{listed})
+		}
 		return true, ErrJobReplaced
 	}
 	// Onto THIS job's record, and only while the row holds it: the log's
@@ -2537,6 +2577,12 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a Brid
 	})
 	if err != nil {
 		return true, fmt.Errorf("sandbox: record what run %s's bridged calls cost: %w", turnID, err)
+	}
+	// A CALL ITS OWN HARNESS GAVE UP ON, handed to its job as the log lists
+	// it, once its spend is written: an error above is answered as it was,
+	// and the ledger's ask again, finding the call listed, files it then.
+	if listed, ok := logged.listedAs(a.Call); ok && listed.Abandoned {
+		s.fileLateItems(ctx, turnID, a.Launch, logged.Round, []BridgeCall{listed})
 	}
 	return true, nil
 }
@@ -2841,13 +2887,13 @@ func (s *CoordStore) RecordAsk(ctx context.Context, turnID, launch string, ask A
 // reviewer read the run's outcome by, and dropped from the middle, a long
 // run's record lost the question it parked on or the submission it was
 // corrected by. A call NO SAVE POINT HOLDS ([BridgeCall.unheld]: a late one,
-// or one its harness stopped waiting for) is told to every continuation of its
-// round by its mark, which a dropped call keeps none of: dropped, it is only
-// counted ([BridgeLog.LateElided]) and told as a count, past every save point,
-// beside the calls that tally names. So the call dropped is the oldest
-// ordinary one after the head, never the one just made; and only a log with no
-// ordinary call left there gives up the oldest of the others, so the log stays
-// at its cap whatever the run calls.
+// or one its harness stopped waiting for) is told by its mark to every
+// continuation no telling credits, and a dropped call keeps none: dropped, it
+// is only counted ([BridgeLog.LateElided]) and told as a count, past every
+// save point, beside the calls that tally names. So the call dropped is the
+// oldest ordinary one after the head, never the one just made; and only a log
+// with no ordinary call left there gives up the oldest of the others, so the
+// log stays at its cap whatever the run calls.
 func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCall, int, []BridgeCall) {
 	calls = append(calls, next)
 	if len(calls) <= MaxBridgeCalls {
