@@ -10,28 +10,14 @@ import (
 // FeedMark is how far a wake feed's fleet-wide group had acknowledged on one
 // log, as the broker last reported it to a node consuming the group.
 //
-// # Why the group's own position is not enough
-//
-// A durable consumer IS the fleet's position on its log, and while it exists
-// nothing else is needed: a restart, a reopen after a broker blip and a peer
-// joining all resume from it. But a consumer can go while its log stays (an
-// operator's delete, a broker that lost its consumer state), and the group is
-// then created again. Created with nothing to start from, it starts at the
-// log's first retained record, which on a company's chat or tracker log is a
-// week of records: every one of them was derived into a wake again, and the
-// two dedupe layers behind the feed remember minutes, not days, so agents
-// were woken a second time for work they had already done.
-//
-// So each node consuming a group records the group's acknowledgement floor
-// here as it advances, and a group created again starts at the record after
-// it. What is replayed is what was acknowledged in the moments before the
-// mark was last written, which those dedupe layers do collapse.
-//
-// # In the positions bucket
-//
-// A key class beside the node rows and the trim floors, for the reason they
-// share it: it has no age. A mark that expired would read as a group that has
-// never been consumed, which is the replay it exists to prevent.
+// The durable consumer is the group's position while it exists, but it can go
+// while its log stays (an operator's delete, lost consumer state), and a group
+// created from nothing starts at the log's first retained record: days of
+// records re-derived into wakes, past the minutes the feed's dedupe layers
+// remember. So every consuming node records the acknowledgement floor here and
+// a recreated group starts after it; only the last moments replay, which the
+// dedupe collapses. No age: an expired mark would read as a group never
+// consumed, the replay it exists to prevent ([PositionKey]).
 type FeedMark struct {
 	// Stream is the log's stream name, and Group the feed's group as its
 	// domain declares it ([statelog.Domain.FeedGroup]). Together they are
@@ -58,13 +44,12 @@ type FeedMark struct {
 type FeedMarkRegister interface {
 	// RaiseFeedMark writes a mark unless the one held for its log and group
 	// is at the same generation and already at or above its floor, and
-	// reports whether it wrote. A mark at a higher generation replaces one
-	// at a lower, whatever its floor.
+	// reports whether it wrote. A higher generation replaces a lower one,
+	// whatever its floor.
 	//
-	// RAISE-ONLY, because every node consuming the group writes it, from a
-	// floor it read a moment earlier: two nodes' writes can land in the
-	// opposite order to their reads, and a plain write would then move the
-	// mark back to a floor the group has already passed.
+	// RAISE-ONLY because every consuming node writes from a floor it read a
+	// moment earlier: two writes can land in the opposite order to their
+	// reads, and a plain write would move the mark back.
 	RaiseFeedMark(ctx context.Context, m FeedMark) (bool, error)
 
 	// FeedMark reads one log's mark for one group, and false when none has

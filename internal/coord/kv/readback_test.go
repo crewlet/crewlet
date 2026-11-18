@@ -14,18 +14,12 @@ import (
 )
 
 // A COORDINATION VALUE IS HELD TO WHAT ITS LEADER'S READ CARRIES BACK ACROSS A
-// LINK.
-//
-// Every read of a key is the stream leader's, whose reply carries the value
-// base64-encoded, a third larger — and a leaf's server closes its whole link
-// to the fleet on a reply past the transport, every lease and mailbox the node
-// holds across it with it (crewlet/crewlet#1031). So the contract's bound on
-// a value, coord.MaxValueBytes, is the largest whose message — with the most
-// header a write of the client's carries — that reply carries back over a
-// leaf's link, and a settled bucket refuses a value past it: one at the bound
-// is written through a leaf and read back through it whole, from the leader,
-// and one a byte past it is refused, by a put and by an update alike, before
-// anything is sent, as coord.ErrValueTooLarge — never an outage.
+// LINK. The leader's reply carries the value base64-encoded, a third larger,
+// and a leaf closes its whole link on a reply past the transport. So
+// coord.MaxValueBytes, with the client's largest write header, is the most
+// that reply carries over a leaf: a value at it round-trips whole from the
+// leader, and one a byte past is refused by Put and Update before sending, as
+// coord.ErrValueTooLarge, never an outage.
 //
 // Mutation: drop the bound from Put or from Update, and its write a byte past
 // it is stored; or state the contract's bound past what the reply carries,
@@ -34,8 +28,7 @@ func TestACoordinationValueIsHeldToWhatItsLeadersReadCarriesBackAcrossALink(t *t
 	t.Parallel()
 	ctx := t.Context()
 	client := leafClient(t)
-	// THROUGH THE ONE DOOR EVERY BUCKET IS OPENED BY, which waits out a leaf
-	// whose link to its member is not up yet.
+	// openBucket waits out a leaf whose link is not up yet.
 	raw, _, err := openBucket(ctx, client, false, jetstream.KeyValueConfig{
 		Bucket: fmt.Sprintf("readback%d", bucketSeq.Add(1))})
 	if err != nil {
@@ -79,14 +72,10 @@ func TestACoordinationValueIsHeldToWhatItsLeadersReadCarriesBackAcrossALink(t *t
 	}
 }
 
-// A CREATE REFUSED FOR ITS VALUE'S SIZE WAS NEVER SENT.
-//
-// A create writes through the bucket and, where the write's answer is
-// anything but a refusal, marks it as one that may have landed — the mark a
-// chat read's flush turns into "the write may have landed" for the person who
-// made it. A value past what a key holds is refused before anything is sent,
-// so its create says so as it is: too large, never unanswered, and nothing is
-// written.
+// A CREATE REFUSED FOR ITS VALUE'S SIZE WAS NEVER SENT. A create whose answer
+// is not a refusal is marked as one that may have landed, which a person is
+// told; a value past what a key holds is refused before sending, so its create
+// reports too large, never unanswered, and nothing is written.
 //
 // Mutation: let the create mark a value's refusal as unanswered, and it reads
 // as a write that may have landed.
@@ -111,13 +100,9 @@ func TestACreateRefusedForItsValuesSizeWasNeverSent(t *testing.T) {
 }
 
 // A REFUSAL MADE BEFORE ANYTHING WAS SENT IS NEVER AN OUTAGE, NOR A WRITE THAT
-// MAY HAVE LANDED.
-//
-// The store marks what it could not hear as unavailable, and a write whose
-// answer it lost as one that may have landed; a value past what a key holds
-// is refused before it is sent, a definite answer no retry changes, and
-// marked either way its caller retried it for good or told a person a change
-// that never went out may have landed.
+// MAY HAVE LANDED. A value too large is a definite answer no retry changes;
+// marked unavailable or unknown, its caller would retry it forever or tell a
+// person a change that never went out may have landed.
 //
 // Mutation: mark a value's refusal as unavailable, or as unknown, and its row
 // reads as an outage.

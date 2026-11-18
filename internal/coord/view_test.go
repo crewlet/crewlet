@@ -123,10 +123,8 @@ func (s *stubLister) set(err error, leases ...coord.Lease) {
 
 // awaitListing waits for the lister's next call to RETURN.
 //
-// That is not the moment the view has the answer: the view records a listing
-// after the call returns, under its own lock, so a case that reads the view
-// straight after this can see the answer from before it. A case asserting what
-// a listing changed waits for the change itself ([awaitAnswer]).
+// The view records the listing only after that, under its own lock, so a case
+// asserting what a listing changed waits for the change itself ([awaitAnswer]).
 func (s *stubLister) awaitListing(t *testing.T) {
 	t.Helper()
 	select {
@@ -140,10 +138,8 @@ func (s *stubLister) awaitListing(t *testing.T) {
 // last answer if it never does.
 //
 // A POLL ON THE ANSWER ITSELF, because that is what a case asserts: the only
-// other signal is the lister's call returning, which comes before the view has
-// recorded what it returned — and a case that read the view on that signal
-// failed whenever the reader won the race (in about one run in thirty under
-// the race detector).
+// other signal, the lister's call returning, comes before the view has
+// recorded what it returned.
 func awaitAnswer(t *testing.T, view *coord.LeaseView, what string,
 	ok func(leases []coord.Lease, err error) bool) {
 
@@ -208,10 +204,8 @@ func runView(t *testing.T, view *coord.LeaseView) {
 	})
 }
 
-// A VIEW ANSWERS FROM MEMORY between listings, which is its whole reason to
-// exist: a stateless node's every tool call used to list every presence lease
-// in the fleet, across its leaf link, for an answer that changes only when a
-// node comes or goes.
+// A VIEW ANSWERS FROM MEMORY between listings, its whole reason to exist: a
+// listing is an O(fleet) read, across the leaf link on a node without `data`.
 func TestAViewAnswersFromMemoryBetweenListings(t *testing.T) {
 	t.Parallel()
 	store := newStubLister(node("a"), node("b"))
@@ -368,12 +362,10 @@ func (h *heldLister) ListLive(ctx context.Context, _ coord.Class) ([]coord.Lease
 // A LISTING IS DATED WHEN IT WAS ASKED, and trusted for a TTL from then — never
 // from when its answer arrived.
 //
-// A lease in the answer was live at some instant between the two, so it is
-// renewed or lapsed a TTL after that instant. Dated on arrival, a listing that
-// took half a TTL to answer was trusted half a TTL past anything the store
-// said, naming as live a node whose lease could have lapsed — and the estate
-// view, which judges this half's staleness by the same instant, read fresher
-// than the store it was built from.
+// Dated on arrival, a listing that took half a TTL was trusted half a TTL past
+// anything the store said, naming as live a lease that could have lapsed — and
+// the estate view, judging staleness by the same instant, read fresher than
+// its store.
 func TestAListingIsDatedWhenItWasAsked(t *testing.T) {
 	t.Parallel()
 	clock := &fakeClock{now: time.Date(2031, 1, 1, 0, 0, 0, 0, time.UTC)}
@@ -469,12 +461,9 @@ func heldNode(id string, epoch int64) coord.Lease {
 
 // A CLAIM REACHES THE VIEW AT ONCE, NOT AT ITS CADENCE.
 //
-// A roster listed only on a heartbeat named a node that joined up to a
-// heartbeat late — and a fleet booted at once, every node's first listing
-// taken before any presence lease existed, routed as though each node were
-// alone for its whole first heartbeat. The view hears the claim on its watch
-// and lists then: its cadence here is an hour, so a listing within seconds
-// can only be the watch's.
+// Listed only on a heartbeat, a fleet booted at once routed as though each node
+// were alone for its first heartbeat. The view's cadence here is an hour, so a
+// listing within seconds can only be the watch's.
 func TestAClaimReachesTheViewAtOnceNotAtItsCadence(t *testing.T) {
 	t.Parallel()
 	store := newStubLister()
@@ -499,13 +488,10 @@ func TestAClaimReachesTheViewAtOnceNotAtItsCadence(t *testing.T) {
 
 // ONLY A WRITE THAT MOVES THE ROSTER LISTS IT AGAIN.
 //
-// Every node renews its presence once a heartbeat, so every view hears the
-// whole fleet's renewals; a view that listed on each would list the class N
-// times a heartbeat instead of once. A renewal names the holder and the tenure
-// the listing already holds and asks for nothing, and so does a release of a
-// lease the listing does not name — while a tenure the listing names under
-// another epoch (a takeover, or the same node back after a lapse) asks for a
-// listing.
+// Every view hears the whole fleet's renewals each heartbeat; listing on each
+// would list the class N times a heartbeat. A renewal, or a release of a lease
+// the listing does not name, asks for nothing; a named tenure under another
+// epoch (a takeover, or the node back after a lapse) asks for a listing.
 func TestOnlyAWriteThatMovesTheRosterListsItAgain(t *testing.T) {
 	t.Parallel()
 	store := newStubLister(heldNode("a", 1))

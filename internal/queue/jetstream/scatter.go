@@ -16,28 +16,21 @@ import (
 
 // THE SCATTER VERBS RUN ON CORE NATS, DELIBERATELY OUTSIDE JETSTREAM.
 //
-// Every other verb in this backend goes through [Queue.streamFor], which
-// provisions a stream and makes the message durable. That is exactly wrong for
-// this one, and in four separate ways: a request would be retained for the
-// event retention window, a reply with it; the event store's publish listener
-// would write an audit row per query; a consumer restarted mid-flight would be
-// handed a request whose asker left minutes ago; and a subject per in-flight
-// ask would provision a stream per query.
-//
-// So Ask and Serve use the connection's own request/reply, which is what core
-// NATS is for: no stream, no consumer, no ack, no retention, and a reply
-// mailbox that exists only while its asker is waiting on it. A request nobody
-// serves is a request that never existed.
+// [Queue.streamFor]'s durability is wrong here four ways: the request and its
+// reply kept for the event retention window, an audit row per query from the
+// event store's publish listener, a restarted consumer handed a request whose
+// asker left long ago, and a stream per in-flight ask. Core request/reply has
+// no stream, consumer, ack or retention, and a reply mailbox that lives only
+// while its asker waits: a request nobody serves never existed.
 
 // ErrNilHandler is returned when an answerer is registered with no function.
 var ErrNilHandler = errors.New("jetstream: answerer is nil")
 
 // Serve makes this process one of subject's answerers.
 //
-// A QUEUE GROUP IS NOT USED, which is the difference between this and
-// [Queue.Subscribe]: every server of a subject must see every request, because
-// a scatter divides work by what the request NAMES rather than by who happens
-// to receive it.
+// NO QUEUE GROUP, unlike [Queue.Subscribe]: every server of a subject sees
+// every request, because a scatter divides work by what the request NAMES,
+// not by who receives it.
 func (q *Queue) Serve(ctx context.Context, subject string, answers int,
 	h queue.AnswerFunc) (queue.Unsubscribe, error) {
 
@@ -56,30 +49,21 @@ func (q *Queue) Serve(ctx context.Context, subject string, answers int,
 	}
 
 	// THE ANSWERER'S OWN LIFETIME, cancelled by the returned Unsubscribe.
-	// A core NATS callback carries no context of its own, and the one the
-	// caller passed to Serve is a registration scope rather than a
-	// process one — so an answerer handed it would be cancelled the moment
-	// whoever registered it moved on, while its subscription kept
-	// delivering.
+	// ctx is a registration scope, not a process one: an answerer handed it
+	// would be cancelled once its registrar moved on, while its subscription
+	// kept delivering.
 	serving, retire := context.WithCancel(context.WithoutCancel(ctx))
 
-	// stopped gates dispatch rather than relying on the unsubscribe alone,
-	// for the reason [Queue.SubscribeStream] gives: a message can already
-	// be in the client's callback path when the caller unsubscribes, and
-	// an answerer that keeps answering after it withdrew is a registration
-	// that never really ended.
+	// stopped gates dispatch besides the unsubscribe, for the reason
+	// [Queue.SubscribeStream] gives: a message already in the callback path
+	// would otherwise be answered after the withdrawal.
 	var stopped atomic.Bool
 
-	// ONE GOROUTINE PER ANSWER, never the callback's own. A core NATS
-	// subscription delivers its messages one at a time on one goroutine, so
-	// an answer run inside the callback held every later request behind it
-	// — every asker in the fleet waited for the sum of the answers ahead of
-	// it — while the in-memory twin answered them in parallel and certified
-	// the contract clean. The registration's own slots bound it (answers),
-	// and a request past them waits in the callback, which is backpressure
-	// on this one subscription rather than a dropped request — and on no
-	// other: every subscription is delivered on a goroutine of its own, so
-	// a registration whose slots are full holds nothing of another's.
+	// ONE GOROUTINE PER ANSWER, never the callback's own: a core NATS
+	// subscription delivers on one goroutine, so an answer run inline holds
+	// every later request behind it. The registration's slots (answers)
+	// bound it; a request past them waits in the callback, backpressure on
+	// this subscription alone, since each is delivered on its own goroutine.
 	sub, err := q.nc.Subscribe(subject, func(msg *nats.Msg) {
 		if stopped.Load() || msg.Reply == "" {
 			return
@@ -89,18 +73,13 @@ func (q *Queue) Serve(ctx context.Context, subject string, answers int,
 		}
 		go func() {
 			defer gate.Leave()
-			// THE PROCESS'S OWN CONTEXT, not a request's: a core NATS
-			// callback carries none, and the answerer's deadline is the
-			// ASKER's — enforced there, because only the asker knows it.
-			// What bounds this side is the asker walking away, which
-			// frees the reply mailbox and makes the respond below a
-			// no-op.
+			// NO REQUEST CONTEXT: the deadline is the ASKER's, enforced
+			// there. Its walking away frees the reply mailbox and makes the
+			// respond below a no-op.
 			reply, err := answer(serving, subject, h, msg.Data)
 			if err != nil {
-				// AN ERROR ANSWERS NOTHING — see [queue.AnswerFunc].
-				// Nothing is published, so the asker counts this
-				// server as one that did not answer, which is the
-				// same fact as a server that was not running.
+				// AN ERROR ANSWERS NOTHING ([queue.AnswerFunc]): the
+				// asker counts this server as one not running.
 				q.log.Debug("scatter_answer_failed",
 					"subject", subject, "error", err.Error())
 				return
@@ -117,21 +96,15 @@ func (q *Queue) Serve(ctx context.Context, subject string, answers int,
 		retire()
 		return nil, fmt.Errorf("serve %s: %w", subject, q.brokerFailed(ctx, err))
 	}
-	// FLUSHED BEFORE RETURNING, and it is a correctness requirement rather
-	// than tidiness. A core NATS subscription is registered when the
-	// interest reaches the SERVER, not when Subscribe returns — so an
-	// asker on this same server that scattered immediately after this call
-	// could publish before this answerer existed, and would count a running
-	// node as one that did not answer. Measured: the conformance suite's
-	// peer arm failed exactly that way under load, intermittently, which is
-	// the worst shape a missing flush has.
+	// FLUSHED BEFORE RETURNING, for correctness: the subscription exists
+	// once its interest reaches the SERVER, so an asker on this server
+	// scattering right after could miss it and count a running node as
+	// silent (the conformance suite's peer arm, intermittently, under load).
 	//
-	// THE FLUSH REACHES THIS CONNECTION'S OWN SERVER AND NO FURTHER. On a
-	// cluster the other servers hear of the interest over their routes
-	// afterwards, so an asker connected elsewhere can still miss this
-	// answerer for that moment — which [queue.EventQueue] states, and
-	// which no flush from this side could close: the client holds no route
-	// and cannot see when a peer server has heard.
+	// THE FLUSH REACHES ONLY THIS CONNECTION'S OWN SERVER: cluster peers hear
+	// of the interest over their routes later, so an asker connected
+	// elsewhere can miss this answerer for that moment ([queue.EventQueue]
+	// states it). No client flush closes that: it cannot see a peer hear.
 	if err := q.flush(ctx); err != nil {
 		retire()
 		_ = sub.Unsubscribe()
@@ -145,10 +118,9 @@ func (q *Queue) Serve(ctx context.Context, subject string, answers int,
 		stopped.Store(true)
 		q.unanswer(subject, gate)
 		var unsubErr error
-		// A SUBSCRIPTION ALREADY GONE IS NO FAILURE: a second withdrawal
-		// finds the one the first closed (nats.ErrBadSubscription), which
-		// is what that call made true ([queue.Unsubscribe]), and Listen's
-		// withdrawal passes over the same answer.
+		// A SUBSCRIPTION ALREADY GONE IS NO FAILURE ([queue.Unsubscribe]):
+		// a second withdrawal finds nats.ErrBadSubscription, which Listen's
+		// withdrawal passes over too.
 		if err := sub.Unsubscribe(); err != nil && !q.isClosed() &&
 			!errors.Is(err, nats.ErrBadSubscription) {
 			unsubErr = fmt.Errorf("stop serving %s: %w", subject, err)
@@ -192,10 +164,9 @@ func (q *Queue) unanswer(subject string, gate *queue.AnswerGate) {
 // they are running and the requests they are holding for a slot — the sum of
 // their gates' [queue.AnswerGate.Occupancy].
 //
-// Reported so the conformance suite can see a registration's bound hold a
-// request. Here the one it holds is the subscription's own callback, parked in
-// the gate, and nothing the connection reports tells it from a request the
-// client has not yet handed to that callback: both are pending to it.
+// It lets the conformance suite see a registration's bound hold a request: the
+// subscription's callback parked in the gate, which the connection's own
+// pending count cannot tell from a request not yet handed to the callback.
 func (q *Queue) Answering(subject string) (running, waiting int) {
 	q.mu.Lock()
 	gates := slices.Clone(q.answering[subject])
@@ -208,17 +179,13 @@ func (q *Queue) Answering(subject string) (running, waiting int) {
 }
 
 // flushBudget bounds the round trip that confirms the broker holds what this
-// connection has sent, where the caller's context sets no shorter deadline of
-// its own.
+// connection has sent, where the caller's context sets no shorter deadline.
 //
-// TEN SECONDS IS THE CLIENT'S OWN Flush() DEFAULT, which both scatter verbs
-// called before this existed, and the value is kept: on a connection that is
-// up the round trip is a PING and a PONG, and on one that is down it ends when
-// the connection returns, so a registration that has heard nothing in ten
-// seconds is on a connection the reconnect budget is deciding about — waiting
-// longer would only defer that decision to it. What changed is that the
-// caller's own deadline and cancellation now end the wait as well, because
-// Flush() honours neither.
+// Ten seconds, the client's own Flush() default: on a live connection the
+// round trip is a PING and a PONG, and on a down one it ends when the
+// connection returns, so ten silent seconds leave it to the reconnect budget
+// and waiting longer only defers that. Unlike Flush(), the caller's deadline
+// and cancellation end the wait too.
 const flushBudget = 10 * time.Second
 
 // flush waits for the broker to confirm what this connection has sent, for at
@@ -266,20 +233,17 @@ func (q *Queue) AskEach(ctx context.Context, subject string, request []byte, eac
 		return fmt.Errorf("ask %s: %d bytes exceeds the %d-byte limit: %w",
 			subject, len(request), queue.MaxPayloadBytes, queue.ErrTooLarge)
 	}
-	// NOT INTO A CONNECTION THAT IS DOWN. The client would take the request
-	// into its reconnect buffer and answer nothing, and the buffer would
-	// send it once the connection came back — to servers answering a
-	// mailbox nobody reads, after this asker had already been told the
-	// ask failed. A scatter retains nothing, its requests included; see
-	// [queue.EventQueue.Ask].
+	// NOT INTO A CONNECTION THAT IS DOWN: its reconnect buffer would send
+	// the request later, to servers answering a mailbox nobody reads, after
+	// this asker was told the ask failed. A scatter retains nothing, its
+	// requests included ([queue.EventQueue.Ask]).
 	if err := q.reachable(); err != nil {
 		return fmt.Errorf("ask %s: %w", subject, err)
 	}
 
-	// ONE REPLY MAILBOX, SUBSCRIBED BEFORE THE REQUEST GOES OUT. A server
-	// on the same host can answer inside a microsecond, so a subscription
-	// established after the publish would miss the fastest answerer in the
-	// fleet — the one a fan-out most wants.
+	// ONE REPLY MAILBOX, SUBSCRIBED BEFORE THE REQUEST GOES OUT: a server on
+	// the same host can answer inside a microsecond, and a subscription made
+	// after the publish would miss the fleet's fastest answerer.
 	inbox := nats.NewInbox()
 	replies, err := q.nc.SubscribeSync(inbox)
 	if err != nil {
@@ -288,12 +252,10 @@ func (q *Queue) AskEach(ctx context.Context, subject string, request []byte, eac
 	}
 	defer func() { _ = replies.Unsubscribe() }()
 	if err := q.nc.PublishRequest(subject, inbox, request); err != nil {
-		// TOO LARGE FOR THIS SERVER, inside the contract's ceiling: a
-		// server announcing less is refused when the queue opens, but
-		// the connection may since have reached one that does — a
-		// cluster member configured apart, a server restarted with less
-		// — and a request the check above admitted can be one it
-		// refuses. It is the same permanent refusal, so it answers the
+		// TOO LARGE FOR THIS SERVER, though inside the contract's ceiling:
+		// the connection may since have reached a server announcing less
+		// than the one checked at open (a member configured apart, one
+		// restarted with less). The same permanent refusal, so the
 		// contract's error.
 		if errors.Is(err, nats.ErrMaxPayload) {
 			return fmt.Errorf("%s: %w: %w", tooLarge(q.nc, "ask", subject,
@@ -301,22 +263,15 @@ func (q *Queue) AskEach(ctx context.Context, subject string, request []byte, eac
 		}
 		return fmt.Errorf("ask %s: %w", subject, q.brokerFailed(ctx, err))
 	}
-	// BOUNDED BY THE ASK'S OWN DEADLINE, which the client's Flush() was
-	// not: it waits ten seconds whatever its caller has, so an ask given
-	// two seconds against a connection that dropped after the check above
-	// took ten — the one thing this verb promises not to do.
+	// BOUNDED BY THE ASK'S OWN DEADLINE, which Flush() ignores.
 	//
-	// AND A FLUSH THAT FAILS IS NOT A FAILED ASK. The request is already in
-	// the connection's outbound buffer, and the flush only waits for the
-	// broker to confirm it: what failed is that confirmation, so the
-	// request may have reached a server — and goes out with the buffer if
-	// it has not. An error here says the ask could not be made at all,
-	// which a caller reads as "nobody received it": a routed write told
-	// its caller it was NOT made, and a note to a running turn that nothing
-	// was sent, when either may have been served. So the collection below
-	// runs as it would have: what arrives before the deadline is the
-	// answer, and a deadline already spent, or a connection closed for
-	// good, ends it at once with whatever that is.
+	// AND A FLUSH THAT FAILS IS NOT A FAILED ASK: only the broker's
+	// confirmation failed, so the buffered request may have reached a server
+	// or still go out. An error would read "nobody received it" — a routed
+	// write told it was NOT made, a note to a running turn that nothing was
+	// sent — when either may have been served. So collection runs as usual:
+	// what arrives before the deadline is the answer, and a spent deadline
+	// or a connection closed for good ends it at once.
 	if err := q.flush(ctx); err != nil {
 		q.log.Debug("scatter_ask_unflushed", "subject", subject,
 			"error", q.brokerFailed(ctx, err).Error())
@@ -325,10 +280,9 @@ func (q *Queue) AskEach(ctx context.Context, subject string, request []byte, eac
 	for {
 		msg, err := replies.NextMsgWithContext(ctx)
 		if err != nil {
-			// WHAT ARRIVED, NOT AN ERROR. A deadline reached
-			// mid-scatter is the ordinary outcome this verb is
-			// written for, and only the caller knows what a
-			// missing answer costs it.
+			// WHAT ARRIVED, NOT AN ERROR: a deadline mid-scatter is
+			// this verb's ordinary outcome, and only the caller knows
+			// what a missing answer costs it.
 			return nil
 		}
 		if !each(msg.Data) {

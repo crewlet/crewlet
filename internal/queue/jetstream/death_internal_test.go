@@ -16,42 +16,17 @@ import (
 )
 
 // A BROKER THAT CANNOT USE ITS STORE REFUSES ITS BOOT AT ONCE, WITH ITS OWN
-// REASON — and a clustered member is not told its route port was taken.
+// REASON — and a clustered member is not told its route port was taken
+// ([ErrRoutePortTaken], which harnesses retry, for a fault no port fixes).
 //
-// # The failure this pins
+// The store's `jetstream` directory is a FILE: refused whoever runs the suite,
+// where a read-only directory is writable to root. The store directory itself
+// is a directory, so [StoreDirLock] lets the start reach nats-server.
 //
-// nats-server reports a JetStream that will not start through its logger's
-// Fatalf and returns from Start there, before it opens a listener. The logger
-// used to log that at Error and nothing else, so the boot waited out its whole
-// readiness budget for a server that was never going to be ready — thirty
-// seconds solo, two minutes clustered — and a clustered member, whose route
-// listener Start never reached, was then reported as one whose route port had
-// been taken: [ErrRoutePortTaken], which the harnesses retry on, for a fault no
-// port can fix.
-//
-// # The input
-//
-// A store whose `jetstream` directory is a FILE. nats-server refuses it ("not a
-// directory") whoever runs the test — a directory made read-only would be
-// writable anyway to a suite running as root, and pass for the wrong reason.
-// The store directory itself is a directory, so the lock taken in it
-// ([StoreDirLock]) lets the start through to nats-server, which is the refusal
-// this case is about; a store directory that is itself a file is refused by the
-// lock instead, and has a case of its own.
-//
-// # At once, and how a boot that is not is told apart
-//
-// A boot that missed the refusal waits out the whole listener budget for a
-// server that never opens a listener, and only then says anything. So the
-// budget here is AN HOUR ([startTiming]): such a boot is still waiting long
-// after the case's patience ends it, and fails it on that, while one that
-// heard the refusal answers at once. It used to be measured: the boot timed
-// from the case's own clock and held under the thirty-second budget, which a
-// runner that lost thirty seconds anywhere in the boot failed.
-//
-// Mutation: hand the boot a death nobody declares, or read the death only once
-// the listeners have answered, and the boot is still waiting when the case's
-// patience ends.
+// The listener budget is AN HOUR ([startTiming]), so a boot that missed the
+// refusal is still waiting when the case's minute ends; no clock is measured.
+// Mutation: hand the boot a death nobody declares, or read it only once the
+// listeners answer, and the boot is still waiting.
 func TestABrokerThatCannotUseItsStoreRefusesItsBootAtOnce(t *testing.T) {
 	t.Parallel()
 	for _, clustered := range []bool{false, true} {
@@ -256,10 +231,9 @@ func TestADeathNamesATakenPortOnlyFromTheBindThatFailed(t *testing.T) {
 
 // A SERVER THAT IS SIMPLY NOT READY IS NEVER TOLD A PORT WAS TAKEN.
 //
-// Every listener nats-server cannot bind is a Fatalf, so a taken port ends the
-// wait as a death. What reaches the budget is a server still starting, and
-// calling that a taken route port — which is what a listener not bound YET
-// used to be read as — sends an operator to a port nobody holds.
+// A taken port is a Fatalf, so it ends the wait as a death; what reaches the
+// budget is a server still starting, and blaming a port for it sends an
+// operator to a port nobody holds.
 func TestAServerNotYetReadyIsNotToldAPortWasTaken(t *testing.T) {
 	t.Parallel()
 	for _, clustered := range []bool{false, true} {
@@ -277,12 +251,10 @@ func TestAServerNotYetReadyIsNotToldAPortWasTaken(t *testing.T) {
 
 // A FATALF AFTER THE BOOT IS DECLARED WHERE THE ENGINE WATCHES FOR IT.
 //
-// No Fatalf of nats-server v2.15.1 is reachable after the boot on the options
-// this package sets, so the server is asked to make one — through its own
-// Fatalf, which is the path every call site takes to the logger this package
-// installed. The engine ends the node on [Server.Death]; that is only worth
-// anything if the declaration reaches it, with the reason and the error value
-// nats-server reported.
+// No post-boot Fatalf is reachable on this package's options, so the case
+// calls the server's own Fatalf, every call site's path to this package's logger.
+// The engine ends the node on [Server.Death], so the declaration must reach it
+// with nats-server's reason and error value.
 func TestAFatalfAfterTheBootIsDeclaredOnTheServersDeath(t *testing.T) {
 	t.Parallel()
 	srv, err := StartServer(t.Context(), Config{})

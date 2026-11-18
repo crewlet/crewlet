@@ -9,16 +9,11 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
-// AN ANSWER PAST THE BOUND IS COUNTED AS HELD, and only while it is: the gate's
-// own decision to hold it is what the conformance suite reads a registration's
-// bound off (queuetest's
-// a_registration_answers_up_to_its_own_bound_and_holds_no_other), so a count
-// that missed it, kept it once it was admitted or kept one whose context ended
-// would certify a bound nothing holds, or report one holding what it does not.
-//
-// In a bubble, where synctest.Wait returns once every other goroutine of the
-// case is durably blocked: an Enter the gate holds is parked on its slots, so
-// the count is read once the gate has decided, never after a pause.
+// AN ANSWER PAST THE BOUND IS COUNTED AS HELD, and only while it is: queuetest's
+// a_registration_answers_up_to_its_own_bound_and_holds_no_other reads the
+// bound off this count, so one that missed a held answer, or kept an admitted
+// or abandoned one, would certify a bound nothing holds. In a bubble, so the
+// count is read once a held Enter is durably parked, never after a pause.
 //
 // Mutation: drop the increment in Enter, and the held answer is reported as
 // nothing.
@@ -70,15 +65,10 @@ func TestAnAnswerPastTheBoundIsCountedWhileTheGateHoldsIt(t *testing.T) {
 }
 
 // A CLOSE WAITS FOR THE ANSWERS IT ADMITTED, bounded by its context, and a
-// bound that ends first is answered with that bound's error — the rule every
-// withdrawal of Serve and Listen rests on, on both backends, through this one
-// gate. A close that returned with an answer admitted would let its caller
-// tear down what the answer reads; one that answered success when its bound
-// ended would say so with the answer still running.
-//
-// In a bubble, so the close not having returned is read once every goroutine
-// but the case's is durably blocked: a close that was going to return without
-// waiting has returned by then.
+// bound that ends first is answered with that bound's error: every Serve and
+// Listen withdrawal rests on it, or its caller tears down what a running
+// answer reads. In a bubble, so a close that would return without waiting has
+// returned before the case looks.
 //
 // Mutation: return from Close without waiting while an answer is admitted, and
 // the first half fails; answer an ended bound with nil, and the second does.

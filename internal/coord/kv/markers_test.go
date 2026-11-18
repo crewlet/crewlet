@@ -18,8 +18,8 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// streamMessages is how many messages kv's stream holds — the one count a
-// marker the sweep removed, or a value it must not have, shows up in.
+// streamMessages is how many messages kv's stream holds: the count a removed
+// marker, or a wrongly removed value, shows up in.
 func streamMessages(ctx context.Context, t *testing.T, f *FleetStore, kv jetstream.KeyValue) uint64 {
 	t.Helper()
 	stream, err := f.js.Stream(ctx, bucketStream(kv))
@@ -35,11 +35,9 @@ func streamMessages(ctx context.Context, t *testing.T, f *FleetStore, kv jetstre
 
 // THE SWEEP REMOVES EXACTLY THE MARKERS OLDER THAN ITS CUTOFF.
 //
-// Older, because the horizon is the whole of what the job decides: a marker
-// written after the cutoff stays, and a live value is never touched at any
-// cutoff. Counted from the broker's own answer — messages the purge REMOVED —
-// and checked against the stream's message count, so a sweep that counted
-// what it asked for rather than what went cannot pass.
+// A marker written after the cutoff stays, and a live value is never touched
+// at any cutoff. The count is the broker's (messages the purge REMOVED),
+// checked against the stream's, so a sweep counting what it asked for fails.
 func TestTheSweepRemovesExactlyTheMarkersOlderThanItsCutoff(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -51,9 +49,8 @@ func TestTheSweepRemovesExactlyTheMarkersOlderThanItsCutoff(t *testing.T) {
 	if err := f.budgets.Delete(ctx, encodeKey("old")); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	// The broker stamps a marker with its own clock, which on an embedded
-	// broker is this process's: a gap either side of the cutoff keeps the
-	// two markers on their own sides of it.
+	// An embedded broker stamps markers with this process's clock: a gap
+	// either side of the cutoff keeps the two markers on their sides of it.
 	time.Sleep(20 * time.Millisecond)
 	cutoff := time.Now()
 	time.Sleep(20 * time.Millisecond)
@@ -95,14 +92,10 @@ func TestTheSweepRemovesExactlyTheMarkersOlderThanItsCutoff(t *testing.T) {
 
 // THE SWEEP NEVER REMOVES A VALUE WRITTEN AFTER ITS PASS SAW THE MARKER.
 //
-// The client's own PurgeDeletes collects markers with a watcher and then
-// purges each one's subject outright, so a key created again between the
-// watcher delivering its marker and the purge lost its new value — a sweep of
-// records nobody needs deleting a record somebody had just written. The purge
-// here is bounded at the marker's own revision and the broker applies the
-// bound, so the later value survives with no read to race. The pass is
-// replayed from before the re-creation, which is that interleaving every time
-// rather than once in a thousand.
+// The client's PurgeDeletes purges a marker's subject outright, losing a key
+// re-created after its watcher saw the marker; the purge here is bounded at the
+// marker's revision by the broker, so the later value survives. The pass is
+// replayed from before the re-creation, forcing that interleaving every time.
 func TestTheSweepNeverRemovesAValueWrittenAfterItsPassSawTheMarker(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -138,11 +131,9 @@ func TestTheSweepNeverRemovesAValueWrittenAfterItsPassSawTheMarker(t *testing.T)
 
 // EVERY BUCKET THE BROKER NEVER AGES IS SWEPT, and no other.
 //
-// The set is DERIVED from the retention each bucket is opened with, and this
-// holds it against the broker's own account of every stream the store made —
-// so a bucket added without an age is swept without anybody remembering to
-// list it, and a bucket with one is left to its age. A hand-kept list would
-// miss an ageless bucket and keep sweeping one that took an age.
+// The set is DERIVED from each bucket's retention, held here against the
+// broker's account of every stream the store made: a hand-kept list would miss
+// a new ageless bucket and keep sweeping one that took an age.
 func TestEveryBucketTheBrokerNeverAgesIsSwept(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -181,9 +172,8 @@ func TestEveryBucketTheBrokerNeverAgesIsSwept(t *testing.T) {
 			t.Errorf("the %s bucket removes records and has no age, and the sweep does not cover it", must)
 		}
 	}
-	// AND A BUCKET WITH AN AGE IS LEFT TO IT: the token counters' windows
-	// are aged by the broker, so sweeping them too would be a second
-	// retention over the same markers.
+	// AND A BUCKET WITH AN AGE IS LEFT TO IT: sweeping the broker-aged
+	// token counters' windows would be a second retention.
 	if slices.Contains(swept, "budgets") {
 		t.Error("the sweep covers the budgets bucket, which the broker ages")
 	}
@@ -194,13 +184,11 @@ func TestEveryBucketTheBrokerNeverAgesIsSwept(t *testing.T) {
 
 // A CREATE OVER A MARKER THE SWEEP REMOVES MID-WAY STILL CREATES.
 //
-// The interleaving [createKey] exists for. It reads a marker and writes over
-// it at the marker's revision; the sweep removes the marker in between; that
-// write is refused against a subject that now holds nothing. The client's own
-// Create reported that refusal as the key existing — a removed mailbox record a
-// node then believed was registered, a released claim a replay could never
-// take. Read again from the leader, the key holds nothing, and the create
-// writes at zero and wins.
+// The interleaving [createKey] exists for: it reads a marker, the sweep removes
+// it, and the write at the marker's revision is refused against an empty
+// subject. The client's Create reported that as the key existing (a removed
+// mailbox still registered, a released claim never retaken); read again from
+// the leader, the key holds nothing, and the create writes at zero and wins.
 func TestACreateOverAMarkerTheSweepRemovesMidWayStillCreates(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -237,10 +225,9 @@ func TestACreateOverAMarkerTheSweepRemovesMidWayStillCreates(t *testing.T) {
 	}
 }
 
-// racedCreate is a bucket whose write over a marker is preceded by the sweep
-// removing that marker: the first conditional write at a NON-ZERO revision —
-// which is only ever a create stepping over the marker it read — first purges
-// the subject through that revision, exactly as [sweepMarkers] would.
+// racedCreate is a bucket whose first conditional write at a NON-ZERO revision
+// (only ever a create stepping over the marker it read) first purges the
+// subject through that revision, exactly as [sweepMarkers] would.
 type racedCreate struct {
 	jetstream.KeyValue
 	sweep  func(ctx context.Context, key string, revision uint64) error
@@ -260,11 +247,9 @@ func (k *racedCreate) Update(ctx context.Context, key string, value []byte, revi
 // A CREATE OVER A LIVE VALUE IS REFUSED AS THE KEY EXISTING, read from the
 // leader; A CREATE OVER A MARKER CREATES.
 //
-// The two ordinary answers, with the one property the client's Create did not
-// have: the question "is this a marker or a value" is asked of the stream
-// LEADER, never by a direct get a replica that is behind answers — that
-// replica still holds a removed value, and a create over a key the leader had
-// removed reported it as held.
+// "Marker or value?" is asked of the stream LEADER, never by a direct get: a
+// lagging replica still holds a removed value, and the client's Create
+// reported a key the leader had removed as held.
 func TestACreateAsksTheLeaderWhatTheKeyHolds(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -301,13 +286,11 @@ func TestACreateAsksTheLeaderWhatTheKeyHolds(t *testing.T) {
 // NOTHING IN THIS PACKAGE CREATES THROUGH THE BUCKET HANDLE, OR SWEEPS THROUGH
 // THE CLIENT.
 //
-// Both are one call away and both look right: the bucket's Create is what a
-// create-only write reaches for, and the client's PurgeDeletes is a sweep of
-// exactly these markers. The first conditions on a marker the sweep may remove
-// and asks a replica whether the key is one; the second purges a subject
-// outright and takes a value written after it looked (markers.go says both).
-// Neither fails a test by itself on one server, so the source is read: no call
-// to a method named Create or PurgeDeletes anywhere in this package's own code.
+// Both look right: the bucket's Create conditions on a marker the sweep may
+// remove and asks a replica whether the key is one; PurgeDeletes purges a
+// subject outright and takes a value written after it looked (markers.go says
+// both). Neither fails a test on one server, so the source is read: no call to
+// a method named Create or PurgeDeletes in this package's own code.
 func TestNothingCreatesThroughTheBucketHandleOrSweepsThroughTheClient(t *testing.T) {
 	t.Parallel()
 	found := callsInPackage(t, func(method string, _ *ast.CallExpr) bool {
@@ -323,25 +306,15 @@ func TestNothingCreatesThroughTheBucketHandleOrSweepsThroughTheClient(t *testing
 
 // NOTHING IN THIS PACKAGE READS A KEY THROUGH A DIRECT GET.
 //
-// kv.go's rule — every single-key read is the stream LEADER's, through
-// [getLatest] or a [leaderReader] — is one behaviour holds only in part: a
-// direct get answers from whichever replica the broker picks, and that
-// replica is current on one server, through a leaf, and on every member of a
-// cluster that is not mid-write, which is every conformance case. The
-// partition case in shared_cluster_test.go cuts a member off so its copy is
-// behind for certain and reads a lease (Get, Renew, Release) and one fleet
-// record, a mailbox, through it — which holds the lease store's reader and
-// [FleetStore.get] itself, the one function every fleet record is read
-// through. What no behaviour holds is a CALL SITE stepping off them: every
-// other keyed read — fleet.go's records (the secrets among them), the
-// positions, follows, counters, object-store records and seat pauses, the
-// epoch and hint reads — is a call of its own, and one moved onto its bucket
-// handle's Get passes every behavioural case here and answers a record the
-// quorum holds as absent on the first fleet whose replica is behind. So the
-// source is read, as for the create above: no call to the bucket handle's Get
-// (which takes a context and a key — the one-argument Gets here are a
-// header's and the logger's) or GetRevision, and none to the stream's GetMsg
-// or GetLastMsgForSubject, which are the same direct get by another name.
+// The rule that every single-key read is the LEADER's ([getLatest] or a
+// [leaderReader]; package doc, "Every single-key read is the leader's") is held
+// by behaviour only in part: a direct get's replica is current in every
+// conformance case, and shared_cluster_test.go's partition case covers only
+// the lease reader and [FleetStore.get]. A CALL SITE moved onto its bucket
+// handle's Get passes every case and answers a quorum-held record as absent on
+// a lagging replica. So the source is read: no bucket Get (two arguments; the
+// one-argument Gets are a header's and the logger's) or GetRevision, and no
+// stream GetMsg or GetLastMsgForSubject, the same direct get by other names.
 func TestNothingReadsAKeyThroughADirectGet(t *testing.T) {
 	t.Parallel()
 	found := callsInPackage(t, func(method string, call *ast.CallExpr) bool {
@@ -364,8 +337,8 @@ func TestNothingReadsAKeyThroughADirectGet(t *testing.T) {
 // callsInPackage parses this package's own non-test source and answers the
 // position of every method call match accepts, by the method's name.
 //
-// It fails the case outright when it read too few files to be this package,
-// because a gate that parsed nothing reports nothing and certifies nothing.
+// It fails outright on too few files to be this package: a gate that parsed
+// nothing certifies nothing.
 func callsInPackage(t *testing.T, match func(method string, call *ast.CallExpr) bool) []string {
 	t.Helper()
 	files, err := filepath.Glob("*.go")

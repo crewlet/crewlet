@@ -16,26 +16,14 @@ import (
 // that runs it, or on the node holding the one seat it was tested for ("Test
 // now" on a server's page).
 //
-// # Who has to agree on it
-//
-// The whole company, now. A test is asked through one node and answered by
-// the nodes that run the server, and its result is shown on the server's page
-// to every administrator, whichever node serves them. So it is one record per
-// server in the coordination store, the CURRENT VALUE ONLY: a later test
-// replaces it, and the apply that removes the server deletes it.
-//
-// # Bounded
-//
-// A record names at most [MaxMCPCheckNodes] nodes, each with its stages and
-// every sentence cut to [MaxMCPErrorBytes]: what a test listed (the tools, with
-// their schemas) is the answer to the person who asked, never stored. The
-// writer bounds it ([MCPCheck.Validate] refuses one it did not).
-//
-// # The later test wins
-//
-// Two people testing one server at once want to know how it is now, and the
-// later stamp answers that: a write keeps whichever test is LATER
-// ([MCPChecks.PutMCPCheck]).
+// The whole company must agree on it (asked through one node, answered by the
+// nodes that run the server, shown to every administrator), so it is one
+// coordination-store record per server, CURRENT VALUE ONLY: a later test
+// replaces it, and the apply that removes the server deletes it. The writer
+// bounds it to [MaxMCPCheckNodes] nodes and [MaxMCPErrorBytes] a sentence
+// ([MCPCheck.Validate] refuses one it did not); what a test listed is the
+// asker's answer, never stored. Of two tests at once the LATER stamp wins
+// ([MCPChecks.PutMCPCheck]): the question is how the server is now.
 
 // MCPCheck is one server's latest test, as the coordination store holds it.
 type MCPCheck struct {

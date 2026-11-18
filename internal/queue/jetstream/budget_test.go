@@ -36,12 +36,9 @@ func fileQueue(t *testing.T) *Queue {
 
 // sizedFileQueue is [fileQueue] with its cap declared at
 // [brokertest.StoreMaxBytes], for a case that reserves gibibytes and whose
-// subject is not where the cap comes from.
-//
-// DECLARED, because a derived cap is three quarters of the runner's free
-// space: a case reserving three gibibytes against one fails on a runner with
-// less than four free, whatever the code under test does. A case whose
-// subject IS the cap a volume gives keeps [fileQueue].
+// subject is not where the cap comes from: a derived cap is three quarters of
+// the runner's free space, so a case reserving three gibibytes would fail on
+// a runner with less than four free.
 func sizedFileQueue(t *testing.T) *Queue {
 	t.Helper()
 	return newQueueWith(t, Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
@@ -59,11 +56,10 @@ func budgetLog(name string, ceiling int64) DomainStream {
 
 // AN EMBEDDED BROKER'S BUDGET IS ITS OWN CAP, AND RESERVATIONS SPEND IT.
 //
-// Its account states no limit at all, so a budget read from the account alone
-// is "unlimited" on exactly the topology that refused a boot for want of room.
-// And the broker compares a new ceiling against the ceilings it has granted,
-// not against what they store: a stream reserving bytes and holding nothing has
-// spent them.
+// Its account states no limit, so a budget read from the account alone is
+// "unlimited" on exactly the topology that refuses a boot for want of room.
+// The broker compares a new ceiling against the ceilings it has granted, not
+// what they store: a stream reserving bytes and holding nothing has spent them.
 func TestAnEmbeddedBrokersBudgetIsItsOwnCap(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -84,10 +80,9 @@ func TestAnEmbeddedBrokersBudgetIsItsOwnCap(t *testing.T) {
 				t.Fatalf("budget = %+v, want a stated limit from %s", before, tc.want)
 			}
 
-			// A GIBIBYTE OR HALF WHAT IS LEFT, whichever is smaller: the
-			// file store's cap is derived from this runner's free disk,
-			// which is this row's subject, so a fixed gibibyte would fail
-			// it on a disk with less than a third more than that free.
+			// A GIBIBYTE OR HALF WHAT IS LEFT, whichever is smaller: this
+			// row's subject is a cap derived from the runner's free disk,
+			// which a fixed gibibyte could exceed.
 			ceiling := min(int64(1)<<30, before.Available()/2)
 			if err := q.EnsureDomainStream(t.Context(), budgetLog("SPEND", ceiling)); err != nil {
 				t.Fatalf("EnsureDomainStream: %v", err)
@@ -107,12 +102,11 @@ func TestAnEmbeddedBrokersBudgetIsItsOwnCap(t *testing.T) {
 
 // AN OPERATOR'S BROKER THAT STATES NO LIMIT STILL STATES WHAT IT RESERVED.
 //
-// Its servers hold a cap this client cannot read, so a node sizes from its own
-// free space in place of the limit, and every ceiling already granted on the
-// broker (the object bucket's, created before the state logs) is spent from
-// that figure as it is from the cap. A budget that dropped the reservations
-// with the limit sized the logs into bytes the bucket held, and the server
-// refused the last log created.
+// A node sizes from its own free space in place of the cap it cannot read,
+// and every ceiling already granted (the object bucket's, created before the
+// state logs) is spent from that figure. Dropping the reservations with the
+// limit would size the logs into bytes the bucket holds, and the server would
+// refuse the last log created.
 func TestAnUnstatedBrokersBudgetCarriesItsReservations(t *testing.T) {
 	t.Parallel()
 	q := newQueueWith(t, Config{URL: externaltest.StartUnstated(t, queue.MaxPayloadBytes).URL(),
@@ -139,13 +133,10 @@ func TestAnUnstatedBrokersBudgetCarriesItsReservations(t *testing.T) {
 }
 
 // THE TEST SUITES' EXTERNAL BROKER STATES ITS ACCOUNT'S LIMIT, and it is the
-// shared test size.
-//
-// A node on a broker whose account states nothing sizes its state logs from
-// its own volume's free space, so every suite booting a node against
-// externaltest's server would again pass or fail on how full the runner's disk
-// is — the derivation the stated limit exists to take out of the suites. Read
-// through StreamBudget, as a node reads it.
+// shared test size: on a broker stating none, a node sizes its state logs from
+// its volume's free space, so every suite booting against externaltest's
+// server would pass or fail on how full the runner's disk is. Read through
+// StreamBudget, as a node reads it.
 func TestTheTestSuitesExternalBrokerStatesItsAccountLimit(t *testing.T) {
 	t.Parallel()
 	q := newQueueWith(t, Config{URL: externaltest.Start(t, queue.MaxPayloadBytes).URL(),
@@ -161,11 +152,9 @@ func TestTheTestSuitesExternalBrokerStatesItsAccountLimit(t *testing.T) {
 }
 
 // A RESERVATION THE BROKER REFUSES FOR WANT OF ROOM IS NAMED, and one it can
-// grant is granted.
-//
-// The broker says `insufficient storage resources available` and nothing
-// else, so a caller that has to say what was needed and what to change must
-// be able to recognise the refusal without speaking this backend's codes.
+// grant is granted. The broker says only `insufficient storage resources
+// available`, so a caller must recognise the refusal without speaking this
+// backend's codes to say what was needed and what to change.
 func TestARefusedReservationIsNamed(t *testing.T) {
 	t.Parallel()
 	q := sizedFileQueue(t)
@@ -183,15 +172,12 @@ func TestARefusedReservationIsNamed(t *testing.T) {
 	}
 }
 
-// AND A REFUSED RESERVATION IS NOT READ BACK, because nothing was placed.
-//
-// The peer-race read-back exists for a create the broker may still be
-// committing. A refused reservation is the opposite: the limits check runs
-// only once no peer holds an assignment for the name, so there is no object to
-// become visible. Left to fall through it spent the whole read-back window per
-// refused log and then wrapped the one error a refused boot needs — the bytes,
-// the limit and the Tier A field — in "(and it is not there: stream not
-// found)", which reads as the cause.
+// AND A REFUSED RESERVATION IS NOT READ BACK, because nothing was placed: the
+// limits check runs only once no peer holds an assignment for the name, so
+// the peer-race read-back has no object to wait for. Falling through would
+// spend the whole read-back window per refused log and wrap the error a
+// refused boot needs (the bytes, the limit, the Tier A field) in "(and it is
+// not there: stream not found)", which reads as the cause.
 func TestARefusedReservationIsNotReadBack(t *testing.T) {
 	t.Parallel()
 	q := sizedFileQueue(t)
@@ -276,16 +262,13 @@ type droppedCeilingJS struct {
 	ceiling int64
 	drops   int
 
-	// mu guards what follows: a request nobody answered stays outstanding
-	// while the next is asked, so two of them can be recorded at once.
+	// mu guards what follows: an unanswered request is still outstanding
+	// while the next is asked, so two can be recorded at once.
 	mu sync.Mutex
-	// deadlines is the deadline each request was handed, in order — the
-	// zero time for one handed none at all — and sent when each was sent.
-	// What a request was given to answer in is the one less the other, and
-	// the case takes it inside its bubble, where both instants are the
-	// bubble's: the time left read here, in a method declared outside the
-	// bubble, reads as the machine's clock to anything reading the source
-	// (internal/fixedwait).
+	// deadlines is the deadline each request was handed (zero for none) and
+	// sent when each was sent. The case subtracts them inside its bubble,
+	// where both are the bubble's instants; the time left computed here,
+	// outside the bubble, reads as the machine's clock (internal/fixedwait).
 	deadlines []time.Time
 	sent      []time.Time
 }
@@ -321,47 +304,24 @@ func (s ceilingStream) CachedInfo() *jetstream.StreamInfo {
 
 // A DOMAIN STREAM'S CEILING IS A READ: a request nobody answered is asked
 // again, and a stream nobody would describe is unknown rather than absent.
+// State-log start sizes the logs while booting peers create these streams and
+// a member drops a read of one in flight ([jsprovision.ReadTerm]); the sizing
+// counts unknown as absent, so a log sized off a dropped read keeps a ceiling
+// short of what the stream holds, for good.
 //
-// # What it was
-//
-// One request on the boot's context, which carries no deadline, so nats.go's
-// five-second default decided it. It is asked while the logs are sized at
-// state-log start — on a fleet, while the peers booting beside this node are
-// creating these same streams, which is when a member drops a read of a stream
-// another node has in flight ([jsprovision.ReadTerm]). A dropped request cost
-// the boot five seconds and came back unknown, and the sizing counts an unknown
-// as absent: a log created beside it was sized without what the stream holds,
-// and kept that ceiling for good.
-//
-// # The two stagings
-//
-// A first request dropped, which must be asked again — a read term and a
-// re-ask after it, never on the caller's open-ended context nor at a write's
-// term — and then answered with the ceiling. And every request dropped until
-// the lookup ceiling is spent, which must come back as the silence it is:
-// reported as a missing stream, it would be sized as one and nothing would say
-// so.
-//
-// IN A SYNCTEST BUBBLE ([inBubble]), where the read's timers fire at exactly
-// their time, so the re-ask is held to its cadence to the nanosecond.
-// On the machine's clock the case allowed a read term of slack instead. That
-// was a bound on how late a loaded race-detector run wakes a timer's goroutine,
-// which the read never promised. Its sibling on the provisioning path failed
-// that way, a re-ask 63 ms behind its 70 ms cadence. What each ask was handed
-// is read there too: its deadline less the instant it was sent, both the
-// bubble's.
-//
-// Mutation: hand the read no deadline of its own, and an ask carries none; ask
-// it on a write's term, and an ask is handed one past the lookup ceiling.
+// Staged twice, in a synctest bubble ([inBubble]) so the re-ask cadence holds
+// to the nanosecond: a first request dropped, asked again after a read term
+// and a re-ask, then answered; every request dropped, which must come back as
+// the silence it is. Mutation: hand the read no deadline and an ask carries
+// none; ask it on a write's term and an ask is handed past the lookup ceiling.
 func TestADomainStreamsCeilingIsAReadAskedAgainWhenDropped(t *testing.T) {
 	t.Parallel()
-	// THE READ TERM AND THE PAUSE SCALED DOWN, and the lookup ceiling with
-	// them, because each dropped request is presumed lost only once its
-	// term ends: at the production second apiece the first staging costs two
-	// seconds and the second thirty. The write's term stays production's
-	// clustered fifteen seconds, so a read asked as a write is told apart by
-	// when its next request was sent — and by a ceiling it could never fit
-	// inside.
+	// THE READ TERM AND PAUSE SCALED DOWN, the lookup ceiling with them: a
+	// dropped request is presumed lost only when its term ends, so
+	// production's second apiece would cost the stagings two and thirty
+	// seconds. The write's term stays production's clustered fifteen seconds,
+	// so a read asked as a write shows in its next request's timing and its
+	// ceiling.
 	timing := jsprovision.Clustered(true).Timing()
 	timing.ReadTerm, timing.ReAsk = 50*time.Millisecond, 20*time.Millisecond
 	timing.Lookup = 10 * (timing.ReadTerm + timing.ReAsk)
@@ -468,11 +428,9 @@ func TestAnAccountsBudgetIsInCeilingUnits(t *testing.T) {
 			replicas: 3,
 			want:     StorageBudget{Limit: 30 * gib, Committed: 4 * gib, Source: BudgetAccount},
 		},
-		// UNDER ITS OWN SOURCE, which is the half a bare zero could not
-		// carry. The server refuses every create on such an account
-		// before it compares a byte, so the answer is not a capacity
-		// that happens to be spent and what clears it is a setting
-		// rather than room.
+		// UNDER ITS OWN SOURCE, which a bare zero could not carry: the
+		// server refuses every create on such an account before comparing a
+		// byte, so what clears it is a setting rather than room.
 		"tiered, no tier for this replica count": {
 			info: jetstream.AccountInfo{Tiers: map[string]jetstream.Tier{
 				"R1": limited(30*gib, 0, 0, 0),
@@ -481,9 +439,8 @@ func TestAnAccountsBudgetIsInCeilingUnits(t *testing.T) {
 			replicas: 3,
 			want:     StorageBudget{Limit: 0, Source: BudgetAccountNoTier},
 		},
-		// A TIER THAT IS THERE AND STATES NOTHING is the same refusal
-		// wearing the other shape. The account's report lists a class it
-		// merely holds OBJECTS in, with no limit ever set for it, so
+		// A TIER THAT IS THERE AND STATES NOTHING is the same refusal: the
+		// account's report lists a class it merely holds OBJECTS in, so
 		// "present" does not mean "declared".
 		"tiered, this node's class present with no limit on it": {
 			info: jetstream.AccountInfo{Tiers: map[string]jetstream.Tier{
@@ -506,9 +463,8 @@ func TestAnAccountsBudgetIsInCeilingUnits(t *testing.T) {
 			want:     StorageBudget{Limit: -1, Source: BudgetUnstated},
 		},
 		// AND THE DISCRIMINATOR IS THE PRESENCE OF TIERS, NOT OF THIS
-		// ONE: asked the second question, the case above fell through
-		// to the un-tiered branch and read that account's unset
-		// top-level MaxStore as a limit somebody had set.
+		// ONE: asking the second sends the case above to the untiered
+		// branch, which reads its unset top-level MaxStore as a set limit.
 		"tiered, and this node's class is the only one": {
 			info: jetstream.AccountInfo{Tiers: map[string]jetstream.Tier{
 				"R3": limited(30*gib, 0, uint64(gib), 0),
@@ -517,9 +473,8 @@ func TestAnAccountsBudgetIsInCeilingUnits(t *testing.T) {
 			want:     StorageBudget{Limit: 30 * gib, Committed: gib, Source: BudgetAccount},
 		},
 		// AND WHAT IT HAS RESERVED IS CARRIED WITHOUT ONE: a node sizing
-		// from its own disk in place of the limit spends the ceilings
-		// already granted (the object bucket's, say) from that figure, and
-		// dropping them sized the state logs into bytes the bucket held.
+		// from its own disk spends the ceilings already granted (the object
+		// bucket's, say) from that figure.
 		"no limit stated": {
 			info:     jetstream.AccountInfo{Tier: limited(-1, -1, uint64(3*gib), 0)},
 			replicas: 1,

@@ -8,11 +8,8 @@ import (
 )
 
 // A CHECK NOBODY ENDED IS LOST AT ITS DEADLINE, AND EVERY CHECK LAPSES A
-// LINGER AFTER IT IS OVER. A page polling a check reads a running one as
-// running until the deadline its node gives it up at, and past it as lost,
-// since nothing will end it; and it reads how a check ended for a linger
-// after the end, or after the deadline for one that never ended, and then
-// nothing, since the record answers no page past that.
+// LINGER AFTER IT IS OVER: after its end, or after its deadline for one that
+// never ended.
 //
 // Mutation: read a running check's lifetime from its start rather than its
 // deadline, or let an ended check be lost, and this is red.

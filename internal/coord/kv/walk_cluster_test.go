@@ -16,31 +16,18 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 )
 
-// A CERTIFYING READ IS NEVER ANSWERED BY A REPLICA THAT IS BEHIND.
+// A CERTIFYING READ IS NEVER ANSWERED BY A REPLICA THAT IS BEHIND: a key the
+// leader's index named and the pass never delivered is read from the leader or
+// the listing fails, never "not found" from a replica's copy.
 //
-// The certification exists for one conclusion: a key the leader's index named
-// and the pass never delivered is either read back or the listing fails. Read
-// back through the bucket's own Get, it was read by a DIRECT get, which every
-// replica answers from its own copy — so a replica that had not applied the
-// key answered "not found", the listing read that as "deleted since the
-// index", and a key live throughout the listing was absent from it.
-//
-// A member cut off from its peers is the deterministic form of "behind": the
-// majority commits the key, and the cut member never receives it. The case
-// first proves THAT PREMISE — the cut member's own direct get answers "not
-// found" for a key the quorum holds — because without it the assertions below
-// would pass against the very read they exist to rule out. Then it holds both
-// halves of the certification to the leader:
-//
-//   - the certifying read, sent through the cut member, FAILS (never "not
-//     found"), both while the member still believes in the old leader and
-//     after it knows it has none;
-//   - the key index, which a member answers from its own copy once its group
-//     has no leader, is refused rather than taken as the leader's.
-//
-// And before the cut, the same read through the same member IS answered —
-// by the leader, over the member's routes — so a read that simply never
-// worked cannot pass either.
+// A member cut off from its peers is the deterministic "behind": the majority
+// commits the key and the cut member never receives it. The case first proves
+// that premise (the cut member's direct get answers "not found"), then holds
+// the certifying read through the cut member to FAIL, both while it believes
+// in the old leader and once it knows it has none, and the key index it
+// answers from its own copy while leaderless to be refused. Before the cut the
+// same read through the same member IS answered, by the leader over the
+// member's routes, so a read that never worked cannot pass.
 func TestACertifyingReadIsNeverAnsweredByAReplicaThatIsBehind(t *testing.T) {
 	t.Parallel()
 	c := jetstreamtest.StartPartitionableCluster(t, 3, js.Config{})
@@ -116,9 +103,8 @@ func TestACertifyingReadIsNeverAnsweredByAReplicaThatIsBehind(t *testing.T) {
 	// THE PREMISE: the cut member's direct get answers from a copy without
 	// the key. A member joins the direct-get group only on a timer after it
 	// first follows a leader (nats-server jetstream_cluster.go, the direct
-	// access monitor), so until it has, the read finds no responder at all
-	// on its side of the cut — which is no answer rather than a wrong one,
-	// and is waited out.
+	// access monitor); until then the read finds no responder, which is no
+	// answer rather than a wrong one, and is waited out.
 	premise := time.Now().Add(30 * time.Second)
 	for {
 		directCtx, cancelDirect := context.WithTimeout(ctx, 3*time.Second)
@@ -150,10 +136,9 @@ func TestACertifyingReadIsNeverAnsweredByAReplicaThatIsBehind(t *testing.T) {
 	}
 	assertRefused("while the cut member's own direct get answers \"not found\"")
 
-	// The key index, through the cut member, until that member stops staying
-	// silent and answers from its own copy — which it does once it has
-	// decided its group has no leader, NATS's own timing rather than this
-	// engine's. Every answer before that is a timeout or a refusal.
+	// The key index through the cut member, until it answers from its own
+	// copy once it decides its group has no leader (NATS's timing, not this
+	// engine's). Every answer before that is a timeout or a refusal.
 	deadline := time.Now().Add(90 * time.Second)
 	var last error
 	for {
@@ -179,20 +164,16 @@ func TestACertifyingReadIsNeverAnsweredByAReplicaThatIsBehind(t *testing.T) {
 	assertRefused("once the cut member knows its group has no leader")
 }
 
-// A TOMBSTONE A REPLICA SERVED IS READ FROM THE LEADER, ON A CLUSTER.
+// A TOMBSTONE A REPLICA SERVED IS READ FROM THE LEADER, ON A CLUSTER: the pass
+// is an R1 consumer on a random member, so a key deleted and created again
+// before the listing began comes back as a MARKER from a member that applied
+// the delete and not yet the re-creation, and the listing must still hold the
+// key, live throughout it.
 //
-// The failure lives only here: the pass is an R1 consumer the broker places
-// on a random member of a replicated bucket's group, so a key deleted and
-// created again before the listing began comes back as a MARKER from a member
-// that applied the delete and not yet the re-creation — and a listing that
-// took the marker as the key's answer dropped a key live throughout it.
-//
-// The broker offers no way to put a pass on a chosen member, so the member's
-// answer is REPLAYED at the pass boundary: the pass the bucket gave before
-// the re-creation, recorded through a follower, is what that member delivers.
-// Everything after the boundary is the cluster's own — the index answered by
-// the stream leader, and the certifying read sent through the follower and
-// answered by the leader over the member's routes.
+// The broker cannot place a pass on a chosen member, so that member's answer
+// is REPLAYED at the pass boundary: the pass recorded through a follower before
+// the re-creation. Everything after is the cluster's own: the leader's index,
+// and the certifying read sent through the follower and answered by the leader.
 func TestATombstoneAReplicaServedIsReadFromTheLeaderOnACluster(t *testing.T) {
 	t.Parallel()
 	c := jetstreamtest.StartCluster(t, 3, js.Config{})

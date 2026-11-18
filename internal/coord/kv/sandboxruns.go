@@ -29,13 +29,9 @@ func (f *FleetStore) SandboxRun(ctx context.Context, turnID string) (coord.Recor
 	return coord.Record{Key: turnID, Value: entry.Value(), Version: entry.Revision()}, true, nil
 }
 
-// The bucket's two kinds of key: a run's RECORD is its turn id, one segment
-// ([encodeKey]), and a PART beside it is the turn id and the part's name
-// ([coord.RunPart]), two ([runPartKey]). A subject token path, so the broker
-// tells them apart: a listing of records filters on [runRecordKeys] and never
-// moves a part. The sweep of parts left behind reads them off the marker
-// sweep's own pass of the bucket ([FleetStore.sweepRunParts]), which walks
-// every key anyway.
+// runRecordKeys matches a run's RECORD key, one segment ([encodeKey]), and
+// never a PART beside it, two ([runPartKey]), so a listing of records filters
+// at the broker. Parts are swept off the marker pass ([FleetStore.sweepRunParts]).
 const runRecordKeys = "*"
 
 // runPartKey is the key of part beside turnID's run.
@@ -43,13 +39,10 @@ func runPartKey(turnID string, part coord.RunPart) string {
 	return coord.DocumentKey(turnID, string(part))
 }
 
-// longestRunKey is how long the longest key a write of a run's value is sent
-// under is, as the bucket spells it: a run's keys are its record's and its
-// parts' ([runPartKey]), each under its turn id, which the engine mints a
-// UUIDv7 of 36 bytes (internal/engine's newRunID) — so the key of its
-// longest part. What a write of a run's value is counted at beside the value
-// ([Reach.valueCrossing]), as the store counts every write's own key
-// ([settledBucket.budget]).
+// longestRunKey is the length of the longest key a run's value is written
+// under: its longest part's, under a 36-byte UUIDv7 turn id (internal/engine's
+// newRunID). [Reach.valueCrossing] counts it beside the value, as
+// [settledBucket.budget] counts every write's key.
 var longestRunKey = func() int {
 	turnID := uuid.Nil.String()
 	longest := len(encodeKey(turnID))
@@ -73,16 +66,11 @@ func partOf(turnID string, part coord.RunPart) error {
 
 // SandboxRuns returns every record, by turn id — the records alone.
 func (f *FleetStore) SandboxRuns(ctx context.Context) ([]coord.Record, error) {
-	// A listing that quietly dropped a run would tell the seat's new owner
-	// there is nothing to recover, which abandons a billed box — the exact
-	// failure this bucket exists to end. eachEntryUnder raises on a short
-	// answer rather than returning one, which is what makes that true.
-	//
-	// RECORDS ONLY, filtered by the broker: the parts beside them — a log
-	// of up to two hundred calls each with their arguments and output, a
-	// sealed set of secrets — are what the record is kept small of, and this
-	// listing — the busy check, the recovery pass, the pause reaper — never
-	// reads one.
+	// A short answer raises rather than returns: a dropped run would tell
+	// the seat's new owner there is nothing to recover, abandoning a billed
+	// box. RECORDS ONLY, filtered by the broker: the parts (a call log, a
+	// sealed secret set) are kept out of the record, and this listing
+	// never reads one.
 	var out []coord.Record
 	err := f.eachUnder(ctx, f.runs, runRecordKeys, "the sandbox runs", func(kve jetstream.KeyValueEntry) error {
 		turnID, ok := decodeKey(kve.Key())
@@ -119,37 +107,14 @@ func (f *FleetStore) CreateSandboxRun(ctx context.Context, turnID string, value 
 }
 
 // MutateSandboxRun changes one run's record by a decision taken on the record
-// as the stream LEADER holds it.
-//
-// ONE ATTEMPT is a leader read, the decision, and a write conditioned on the
-// revision read — an Update for a Put, a Purge bound to that revision for a
-// Delete — and an attempt another writer beat is a LOST RACE, decided again
-// through [casRetry], within the bound every fleet key shares
-// ([fleetCASAttempts]). A record gone
-// between the read and the write is one too: the next attempt reads it absent
-// and decides nothing. The read is the leader's for the reason every
-// single-key read here is (kv.go): a replica behind the newest write would hand
-// the decision a revision it can never win at, and every attempt would lose
-// until the replica caught up.
-//
-// NOT COALESCED ON A LINE ([writeLines]), though the record has many
-// writers — every tool call its box makes over the bridge, from as many as
-// twenty subagents at once, beside its seat's own turns, a peer recovering
-// it, a person's answer and a person's stop — because the decision may itself
-// read or write the store ([coord.SandboxRuns]), and a line runs every
-// write's decision on the goroutine leading its batch, where a decision that
-// wrote the same record would wait on its own line. Each call is its own loop
-// instead, and the bound still holds them: twice [fleetWriters] attempts,
-// each waiting a window of round trips after a loss, outlast the overlap of
-// the calls one run's box can make at once.
-//
-// The decision is handed a COPY of the bytes read, and the record answered is
-// another, so neither a decision nor its caller can write through the client's
-// buffer into what the next attempt reads.
-//
-// PURGED, the standing rule for a bucket no clock ages — see markers.go, "Every
-// removal is a purge", and [FleetStore.SweepMarkers] for what removes the
-// marker it leaves.
+// as the stream LEADER holds it (package doc, "Every single-key read is the
+// leader's"). An attempt is a read, the decision, and a write conditioned on
+// the revision read; a lost race, or a record gone meanwhile, is decided again
+// through [casRetry] within [fleetCASAttempts]. NOT COALESCED ON A LINE
+// ([writeLines]): the decision may itself write the store, and would wait on
+// its own line; twice [fleetWriters] attempts outlast the overlap of one box's
+// calls. The decision and the caller get COPIES, so neither writes through the
+// client's buffer. A delete PURGES (markers.go, "Every removal is a purge").
 func (f *FleetStore) MutateSandboxRun(ctx context.Context, turnID string,
 	decide func(coord.Record) (coord.SandboxRunChange, error)) (coord.Record, bool, error) {
 
@@ -189,8 +154,7 @@ func (f *FleetStore) MutateSandboxRun(ctx context.Context, turnID string,
 			if err == nil {
 				result, changed = read, true
 				// THEN ITS PARTS, never before: a delete decided again
-				// on a record reopened under it must find its parts
-				// still there. See [FleetStore.removeRunPart].
+				// must find them still there ([FleetStore.removeRunPart]).
 				for _, part := range coord.RunParts() {
 					f.removeRunPart(ctx, turnID, part)
 				}
@@ -209,9 +173,8 @@ func (f *FleetStore) MutateSandboxRun(ctx context.Context, turnID string,
 		case err == nil:
 			return true, nil
 		case lostUpdateRace(err):
-			// ANOTHER WRITER LANDED between the read and the write, or the
-			// record went: decided again on what is there now, never sent
-			// again as it was.
+			// ANOTHER WRITER LANDED, or the record went: decided again on
+			// what is there now, never resent.
 			return false, nil
 		default:
 			return false, unavailable("write the sandbox run", err)
@@ -226,38 +189,20 @@ func (f *FleetStore) MutateSandboxRun(ctx context.Context, turnID string,
 	return result, changed, nil
 }
 
-// ValueCrossing is how long a write of a run's value at what one key holds
-// takes to cross this node's connection to the buckets, for every send the
-// store gives it — see [coord.SandboxRuns.ValueCrossing]: the crossing at the
-// slowest pace a link is allowed where the node reaches the buckets across
-// one, and none in process ([Reach]).
+// ValueCrossing is how long a write of a run's largest value takes to cross
+// this node's link to the buckets at the slowest allowed pace, and zero in
+// process ([Reach], [coord.SandboxRuns.ValueCrossing]).
 func (f *FleetStore) ValueCrossing() time.Duration { return f.reach.valueCrossing() }
 
-// WatchSandboxRun streams one run's record, its first state certified.
-//
-// A KV watcher over the run's own KEY, so the broker sends this record and no
-// other run's. Deletes are NOT ignored: a purge is what a finished run looks
-// like on the wire, and a watch that dropped it would hold a run that is gone.
-//
-// # The first state is a certified answer, and the call waits for it
-//
-// [watchUnder]'s, certified against the bucket's key index exactly as a
-// listing is, for the reason [watchRecords] gives: the client's own end of the
-// initial values ends them on a guess, and never at all for a consumer whose
-// pending messages were removed before it reached them. A record live
-// throughout is therefore never answered absent. The pass is a replica's copy
-// (walk.go), so a record it delivered can be a revision behind the leader; the
-// consumer then delivers the newer one, as the next update.
-//
-// # A change after it is the consumer's, and filtered by revision
-//
-// Every later state comes off the same consumer, in the order the stream holds
-// them, so a state can be late but never out of order — and the revision the
-// watch last delivered keeps the consumer's own late copy of one it already
-// sent from being sent again, a marker's revision included. The bucket keeps
-// ONE revision per key, so a state overwritten before the consumer reached it
-// is gone from the stream and is passed over: what the watch carries is the
-// record's current state, which is what [coord.SandboxRuns] promises.
+// WatchSandboxRun streams one run's record over a watcher on its own KEY.
+// Deletes are NOT ignored: a purge is how a finished run looks on the wire.
+// The first state is [watchUnder]'s certified answer, for the reason
+// [watchRecords] gives, so a live record is never answered absent; it may be
+// a revision behind the leader, and the consumer then sends the newer one.
+// Later states come in stream order, and the revision last delivered (a
+// marker's included) filters out a copy already sent. The bucket keeps ONE
+// revision per key, so an overwritten state is skipped: the watch carries the
+// current state, which is what [coord.SandboxRuns] promises.
 func (f *FleetStore) WatchSandboxRun(ctx context.Context, turnID string) (<-chan coord.SandboxRunUpdate, error) {
 	if turnID == "" {
 		return nil, errors.New("coord/kv: a sandbox run needs a turn id")
@@ -265,11 +210,9 @@ func (f *FleetStore) WatchSandboxRun(ctx context.Context, turnID string) (<-chan
 	return f.watchRunKey(ctx, turnID, encodeKey(turnID), "the sandbox run "+turnID)
 }
 
-// WatchSandboxRunPart streams the part beside turnID's run, its first state
-// certified: [FleetStore.WatchSandboxRun]'s watch, on the part's own key, so a
-// write of the record or of another part reaches it not at all, and the part's
-// removal with its record — a delete or purge marker on its key — is delivered
-// as a part that is gone.
+// WatchSandboxRunPart is [FleetStore.WatchSandboxRun]'s watch on the part's
+// own key: no other key's write reaches it, and a marker on it is delivered as
+// a part that is gone.
 func (f *FleetStore) WatchSandboxRunPart(ctx context.Context, turnID string, part coord.RunPart,
 ) (<-chan coord.SandboxRunUpdate, error) {
 	if err := partOf(turnID, part); err != nil {
@@ -279,18 +222,15 @@ func (f *FleetStore) WatchSandboxRunPart(ctx context.Context, turnID string, par
 		"the sandbox run "+turnID+"'s "+string(part))
 }
 
-// watchRunKey streams one key of the runs bucket that holds turnID's run — its
-// record, or a part beside it — as [FleetStore.WatchSandboxRun] describes:
-// its first state certified, each later one filtered by revision. what names
-// the key in an error.
+// watchRunKey streams one key of turnID's run, record or part, as
+// [FleetStore.WatchSandboxRun] describes. what names the key in an error.
 func (f *FleetStore) watchRunKey(ctx context.Context, turnID, key, what string,
 ) (<-chan coord.SandboxRunUpdate, error) {
 	current, w, err := watchUnder(ctx, f.js, f.runs, key, what)
 	if err != nil {
 		return nil, err
 	}
-	// held is the revision of the state last delivered — a marker's too,
-	// since a delete the answer saw is a revision of the key like any other.
+	// held is the revision last delivered, a marker's included.
 	var held uint64
 	first := coord.SandboxRunUpdate{}
 	if kve, ok := current[key]; ok {
@@ -319,16 +259,14 @@ func (f *FleetStore) watchRunKey(ctx context.Context, turnID, key, what string,
 				return
 			case kve, ok := <-w.Updates():
 				if !ok {
-					// The client ended the watch. Closing is the contract's
-					// word for "stopped hearing", which the consumer answers
-					// by watching again — never by reading it as a delete.
+					// Closing means "stopped hearing": the consumer watches
+					// again, never reading it as a delete.
 					return
 				}
 				if kve == nil || kve.Key() != key || kve.Revision() <= held {
-					// The client's end of the initial values, which the
-					// certified answer has already ended; or NOT A CHANGE —
-					// a revision the watch already delivered, or an older
-					// one the consumer reached after the leader's read.
+					// The client's end of initial values (the certified
+					// answer already ended them), or NOT A CHANGE: a
+					// revision already delivered or older.
 					continue
 				}
 				held = kve.Revision()
@@ -352,10 +290,8 @@ func sandboxRunState(turnID string, kve jetstream.KeyValueEntry) coord.SandboxRu
 	}}
 }
 
-// SandboxRunPart reads the part beside turnID's run as the stream LEADER holds
-// it ([FleetStore.get]): a replica behind the quorum would hand a resume a log
-// short of the calls appended a moment ago, and the resumed turn would judge
-// the run on it.
+// SandboxRunPart reads the part beside turnID's run from the stream LEADER
+// ([FleetStore.get]): a lagging replica would hand a resume a short call log.
 func (f *FleetStore) SandboxRunPart(ctx context.Context, turnID string, part coord.RunPart) (coord.Record, bool, error) {
 	if err := partOf(turnID, part); err != nil {
 		return coord.Record{}, false, err
@@ -370,23 +306,13 @@ func (f *FleetStore) SandboxRunPart(ctx context.Context, turnID string, part coo
 	return coord.Record{Key: turnID, Value: bytes.Clone(entry.Value()), Version: entry.Revision()}, true, nil
 }
 
-// MutateSandboxRunPart changes the part beside turnID's run by a decision
-// taken on the part as the stream LEADER holds it —
-// [FleetStore.MutateSandboxRun]'s loop, on the part's key and within the same
-// bound.
-//
-// AN UPDATE needs nothing more: the record's removal is followed by the
-// part's ([FleetStore.removeRunPart]), so an update lands before that and is
-// removed with it, or after it and loses its race, and is decided again on a
-// part that is gone.
-//
-// A CREATE ASKS FOR THE RECORD ONCE IT HAS LANDED, from the leader, and
-// removes what it wrote where the record is gone. That read is what closes the
-// one race an update cannot lose: the record removed, then its (absent) part,
-// then this create. The record read after the create either finds it — and
-// the record's removal, and so the part's, comes after the create and takes
-// it — or finds it gone, and the create is undone here, through the revision
-// it wrote, so a part a later writer put there is untouched.
+// MutateSandboxRunPart is [FleetStore.MutateSandboxRun]'s loop on the part's
+// key. AN UPDATE needs nothing more: the part is removed after its record
+// ([FleetStore.removeRunPart]), so an update lands first and goes with it, or
+// loses its race. A CREATE then reads the record from the leader, closing the
+// race of record removed, part removed, part created: a record still there
+// will take the part with it; a record gone means the create is undone here,
+// through the revision it wrote, so a later writer's part is untouched.
 func (f *FleetStore) MutateSandboxRunPart(ctx context.Context, turnID string, part coord.RunPart,
 	decide func(coord.Record, bool) ([]byte, error)) (coord.Record, bool, error) {
 
@@ -445,17 +371,15 @@ func (f *FleetStore) MutateSandboxRunPart(ctx context.Context, turnID string, pa
 		_, err = f.get(ctx, f.runs, encodeKey(turnID))
 		switch {
 		case errors.Is(err, jetstream.ErrKeyNotFound):
-			// THE RUN ENDED UNDER THE CREATE: undone, through the
-			// revision written. A loss here is a later write, which is
-			// the record's own successor's and not this one's to remove.
+			// THE RUN ENDED UNDER THE CREATE: undone at the revision
+			// written; a loss here is a successor's write, not ours.
 			if perr := f.runs.Purge(ctx, key, jetstream.LastRevision(revision)); perr != nil &&
 				!lostUpdateRace(perr) {
 				return false, unavailable("remove the "+string(part)+" written beside a run that ended", perr)
 			}
 			return true, nil
 		case err != nil:
-			// The create stands: the record is read again by the sweep,
-			// which removes the part if the run is in fact gone.
+			// The create stands; the sweep removes it if the run is gone.
 			return false, unavailable("read the sandbox run under its new "+string(part), err)
 		}
 		result, changed = coord.Record{Key: turnID, Value: bytes.Clone(put), Version: revision}, true
@@ -471,30 +395,15 @@ func (f *FleetStore) MutateSandboxRunPart(ctx context.Context, turnID string, pa
 }
 
 // removeRunPart removes the part beside a run whose record this node has just
-// removed.
-//
-// ASKED FIRST, of the leader: a run that never opened a job has no log, nor a
-// handed set, nor leads, and a purge of a key holding nothing leaves a marker
-// behind for every such run, which the marker sweep and every walk of the
-// bucket would then read. Asking first loses nothing to a create racing it: a
-// create that lands after this read finds the record already gone and removes
-// itself ([FleetStore.MutateSandboxRunPart]).
-//
-// NEVER A PART BESIDE A RECORD: the run's turn may have been launched again
-// between the record's removal and this call, its new record created and the
-// log opened to its job — a log this removal must not take, since no append
-// ever creates one and every call of the new job would be dropped. So the
-// part is read, then the record, and a record there leaves the part to that
-// run: its launch writes its own job's parts, whatever an earlier run left.
-// Only a part with no record beside it is purged, and THROUGH THE REVISION
-// READ, so a part written after that read — by a launch whose record came
-// after the record's read — is untouched; that loss reads both again, within
-// the bound every write on the bucket shares ([casRetry]).
-//
-// A FAILURE IS LOGGED, NOT RETURNED: the record's removal has landed, and an
-// error would tell its caller the decision did not — a caller that retried
-// would find no record and decide nothing. The part is left to the sweep
-// ([FleetStore.sweepRunParts]), which removes a part whose run has no record.
+// removed. ASKED FIRST, of the leader: purging an absent key would leave a
+// marker every walk reads; a racing create removes itself
+// ([FleetStore.MutateSandboxRunPart]). NEVER A PART BESIDE A RECORD: the turn
+// may have relaunched, and taking its new log would drop its calls (no append
+// creates one). So a part is purged only with no record beside it, THROUGH THE
+// REVISION READ so a part written since is untouched, a loss retried within
+// [casRetry]. A FAILURE IS LOGGED, NOT RETURNED: the record's removal landed,
+// and an error would make a caller retry a decision with no record;
+// [FleetStore.sweepRunParts] gets the part.
 func (f *FleetStore) removeRunPart(ctx context.Context, turnID string, part coord.RunPart) {
 	key := runPartKey(turnID, part)
 	ctx = context.WithoutCancel(ctx)
@@ -536,13 +445,9 @@ func (f *FleetStore) removeRunPart(ctx context.Context, turnID string, part coor
 
 // sweepRunParts removes every part written before cutoff whose run has no
 // record, off the runs bucket's marker pass, reporting how many messages went
-// — see [coord.Markers].
-//
-// A CANDIDATE IS READ OFF THE PASS: a part whose record key the same pass
-// holds no value for — absent, or a marker. Each is then confirmed against its
-// record from the LEADER, so a record written under the turn again after the
-// pass keeps its parts; and each part is purged THROUGH THE REVISION THE PASS
-// SAW ([leaderPurge]), so a part written again since is untouched.
+// ([coord.Markers]). A candidate's record is confirmed absent from the LEADER,
+// so a run recreated after the pass keeps its parts, and the part is purged
+// THROUGH THE REVISION THE PASS SAW ([leaderPurge]), sparing one written since.
 func (f *FleetStore) sweepRunParts(ctx context.Context, pass sweepPass, cutoff time.Time) (int64, error) {
 	what := "the sandbox runs' parts"
 	keys := make([]string, 0)
@@ -557,8 +462,7 @@ func (f *FleetStore) sweepRunParts(ctx context.Context, pass sweepPass, cutoff t
 		}
 		keys = append(keys, key)
 	}
-	// KEY ORDER, as the marker sweep's, so a failure part-way names the same
-	// key on every retry.
+	// KEY ORDER, so a failure part-way names the same key on every retry.
 	slices.Sort(keys)
 	var swept int64
 	for _, key := range keys {

@@ -8,54 +8,31 @@ import (
 )
 
 // MaxLeaseMetaBytes is the largest Meta a lease carries, as the store encodes
-// it ([LeaseMetaBytes]): 8 KiB. Every backend refuses a claim whose Meta is
-// larger before anything is sent ([HoldLeaseMeta]).
+// it ([LeaseMetaBytes]): 8 KiB, refused before anything is sent ([HoldLeaseMeta]).
 //
-// # Why this figure
-//
-// The one lease that carries a Meta is a node's presence, and it is
-// re-sent on EVERY heartbeat: a renewal waits on its whole record crossing the
-// node's link, so a Meta nothing bounded is a renewal nothing bounds. Its
-// worst case is computed from the engine's own limits — the roles, at most
-// sixteen labels of a 63-byte key and a 64-byte value
-// (internal/seat/placement's MaxLabels, MaxLabelKeyBytes and
-// MaxLabelValueBytes, which Tier A refuses past), the held count, the
-// withdrawal, a Gitlet node's budget, and the status core with the build cut
-// to [MaxBuildBytes] and one alarm mark per kind of the alarm table — each at
-// its most expensive encoding. That is under 8 KiB, and this is it rounded up
-// to the next kibibyte: internal/engine's
-// TestThePresenceLeaseAtItsWorstFitsItsBound builds that worst case through
-// the seat host's own assembler and holds this constant equal to it rounded
-// up, so a new alarm kind or a new core field that pushes it past moves this
-// figure deliberately rather than failing a node's presence at run time.
-//
-// A record adds its envelope beside it — the resource, the owner, the epoch,
-// the TTL, the protocol, the tenure's start and the hint — some four hundred
-// bytes: a presence record is at most about 8.6 KB, a quarter second at the
-// slowest pace the engine allows a link (internal/objstore's MiBPace).
-//
-// A NODE OVER IT LOSES ITS STATUS, NEVER ITS PRESENCE: the seat host measures
-// its own Meta before it claims and, past this, publishes the placement half
-// alone with an error naming the size (internal/seat, presenceMeta). The
-// refusal here is the backstop that holds every other caller to the same
-// bound.
+// Only a node's presence carries a Meta, re-sent on EVERY heartbeat, so an
+// unbounded Meta is an unbounded renewal. This is its worst case (the label
+// limits of internal/seat/placement, [MaxBuildBytes], one alarm mark per kind)
+// rounded up to the next KiB, held there by internal/engine's
+// TestThePresenceLeaseAtItsWorstFitsItsBound; with its ~400-byte envelope a
+// record crosses in a quarter second at internal/objstore's MiBPace. A NODE
+// OVER IT LOSES ITS STATUS, NEVER ITS PRESENCE: the seat host publishes the
+// placement half alone (internal/seat, presenceMeta), and this refusal is the
+// backstop for every other caller.
 const MaxLeaseMetaBytes = 8 << 10
 
 // MaxBuildBytes is the most of a node's build name its status carries
-// ([NodeStatus.Build]): 64 bytes. Every form internal/version writes is under
-// fifty (a dirty build past a tag, a pseudo-version with "+dirty", is 42), and the cut is what makes the presence's bound TOTAL — a build name
-// is whatever its linker was handed, and the one field of the status no
-// table bounds.
+// ([NodeStatus.Build]): 64 bytes, above every form internal/version writes
+// (at most 42). The cut makes the presence's bound TOTAL: a build name is
+// whatever the linker was handed, the one status field no table bounds.
 const MaxBuildBytes = 64
 
 // EncodeLeaseRecord is how a lease's record, and so its Meta, is written to
-// the store: JSON, without the HTML escapes encoding/json applies by default.
+// the store: JSON without encoding/json's default HTML escapes.
 //
 // ONE ENCODING, which [LeaseMetaBytes] measures by and the KV backend writes
-// by, so the bound is a bound on the bytes that cross. Without HTML escaping
-// because a lease record is no HTML: `<`, `>` and `&` would each cost six
-// bytes for nothing, and the worst case the bound is derived from would
-// triple.
+// by, so the bound is on the bytes that cross. `<`, `>` and `&` would cost six
+// bytes each and triple the worst case the bound is derived from.
 func EncodeLeaseRecord(v any) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -85,12 +62,8 @@ func LeaseMetaBytes(meta map[string]any) (int, error) {
 // HoldLeaseMeta refuses a claim of resource whose meta is past
 // [MaxLeaseMetaBytes], with [ErrValueTooLarge] naming the resource, the size
 // and the bound; nil for one that fits. The one rule every backend refuses a
-// lease's Meta by, before anything is sent.
-//
-// ErrValueTooLarge rather than a sentinel of its own, for the reason that
-// error states: it is a definite answer about the write's size, refused before
-// anything reached the store, which no retry changes — the same fact a value
-// past what a key holds is.
+// lease's Meta by, before anything is sent: [ErrValueTooLarge] because it is a
+// definite answer about the write's size, which no retry changes.
 func HoldLeaseMeta(resource string, meta map[string]any) error {
 	size, err := LeaseMetaBytes(meta)
 	if err != nil {

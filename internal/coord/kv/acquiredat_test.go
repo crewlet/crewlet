@@ -30,15 +30,13 @@ func TestTheTenureStartIsTheWinningWritesOwnTimestamp(t *testing.T) {
 	if got := rawLease(ctx, t, s.leases, seat).AcquiredAt; !got.Equal(lease.AcquiredAt) {
 		t.Fatalf("the stored record says %v, the claim answered %v", got, lease.AcquiredAt)
 	}
-	// The LEADER's copy, as every read in this package is: a direct get
-	// may be a replica's, behind the commit it is meant to read.
+	// The LEADER's copy (package doc, "Every single-key read is the leader's").
 	kve, err := s.leases.read.last(ctx, encodeResource(seat))
 	if err != nil {
 		t.Fatalf("read the committed record: %v", err)
 	}
-	// The committed record is the claim's SECOND write (claim, then commit
-	// the token), so its own timestamp is at or after the stamp — never
-	// before it, which would be a clock that is not the store's.
+	// The committed record is the claim's SECOND write, so its timestamp is
+	// at or after the stamp; before it would be a clock not the store's.
 	if kve.Created().Before(lease.AcquiredAt) {
 		t.Fatalf("tenure start %v is after the store's commit of it at %v",
 			lease.AcquiredAt, kve.Created())

@@ -15,130 +15,26 @@ import (
 	"github.com/crewlet/crewlet/internal/jsapi"
 )
 
-// A DOMAIN CONSUMER'S STANDING PULL, made by hand, because the client library
-// makes neither half of it in the shape an applier needs.
+// A DOMAIN CONSUMER'S STANDING PULL, made by hand: each pull bounded by both a
+// count and a byte total, answered on one inbox for the handle's life (package
+// doc, "A pull allocates for what it receives, never for what it may").
 //
-// # What the library offers, and what each one costs
-//
-// A domain applier needs every pull bounded by BOTH a count and a byte total —
-// a count because one pull is one transaction's worth of records, bytes
-// because a record may be a barrier's hundred bytes or a bulk write's
-// megabytes. The server's own request carries both (`batch` and `max_bytes`
-// on `CONSUMER.MSG.NEXT`) and enforces both. The library does not let a
-// caller send that request as a fetch:
-//
-//   - FetchBytes sends `max_bytes` with the batch FIXED at a million, and
-//     sizes the two channels it delivers through by that million — 32 MiB
-//     allocated on every call, measured, whatever the log holds. An idle
-//     applier pulls twice a second per domain, so three idle consumers
-//     allocated 181 MiB/s, and a process running a few hundred of them was
-//     OOM-killed at 12.7 GB inside a minute.
-//   - Fetch sends a count and no byte bound at all, and sizes the same two
-//     channels by the count: ~172 KiB per idle pull at the applier's four
-//     thousand, which is the right order of defect rather than a fix.
-//
-// And both are a POLL: an inbox subscribed for one request and dropped when
-// the client decides the request is over. The server decides that too, on its
-// own clock, and under load the two disagree — a request the client has given
-// up on is still being served, and a record the server delivers to it lands
-// on an inbox nobody holds. That record is in flight against the consumer
-// until the ACK WINDOW redelivers it, thirty seconds later. Measured on a
-// three-member cluster under CPU contention: apply latency up to 30.8–34 s,
-// and 57,000-record drains taking 28–99 s instead of about one. A poll also
-// holds whatever reached it until its request ENDS — the whole wait on a quiet
-// log — so a record appended a millisecond into a half-second pull was applied
-// half a second later: 500 ms and more at the 99th percentile across 129
-// streams.
-//
-// # So the pull STANDS
-//
-// One inbox for the life of the handle, which every request of the consumer is
-// answered on, and a buffer of what it delivered that no fetch has taken. A
-// delivery can then reach nothing but the buffer — whichever request it
-// answers, and however long after the client stopped counting that request —
-// so nothing waits out an ack window for a reader that was there all along,
-// and the next fetch hands it over at once. A fetch returns as soon as a burst
-// of records is in, which is what [statelog.Fetcher] asks ("waiting up to
-// wait for the first one"): the newest delivery's own count of what is still
-// pending behind it says when a burst is complete, and the runner decides
-// whether to fetch again. Measured on the same cluster, a standing pull with a
-// message cap and a byte cap applied at a p99 of 3–13 ms, and an idle one
-// costs 9–13 KiB/s. Measured here, against one embedded member: a record
-// appended into a standing fetch reaches its caller in 57 µs at the median and
-// 318 µs at the 99th percentile, where the fetch that held it for its wait
-// took the whole half-second; an idle fetch allocates about 5 KiB.
-//
-// The library's own standing pull (Consume / Messages) is not used, for the
-// reason the poll's allocation was not accepted: it keeps requests standing
-// ahead of the reader by itself, so what it has delivered and nobody has
-// asked for is in flight whether or not an applier is running, and it needs a
-// Stop that nothing on the applier's side calls — a runner stopped and
-// another started over the same handle would find the first one's prefetch
-// holding the consumer's whole in-flight ceiling. Here a request is sent only
-// by a fetch, one at a time, so what stands is at most one fetch's worth, and
-// the buffer that holds what it delivered is the handle's — the next runner
-// over it takes what the last one left.
-//
-// # And a handle nobody will read again GIVES IT BACK
-//
-// "The next runner over it" is true only while the handle has one. A reader
-// that is done with the consumer for good — an engine stopping, while the
-// process and its connection go on and a new engine opens its own handle on
-// the same consumer — leaves the handle holding whatever the buffer has and a
-// request the server is still serving, and the server serves requests oldest
-// first: a record appended next was delivered to the abandoned handle rather
-// than to the new one's request queued behind it, and sat in a buffer nobody
-// would read until the ack window redelivered it. Measured in the engine's own
-// case: a read barrier appended 42 ms into the second engine went to the first
-// one's inbox and was redelivered ten seconds later, so the node stayed
-// unhydrated past its ten-second bound. So a handle is RELEASED
-// ([DomainConsumer.Close]): what it holds is negatively acknowledged, which
-// the broker redelivers at once, and its inbox is drained, so a request it
-// left standing has a reply nobody is interested in and the server serves the
-// next request of the consumer instead — measured on a member that serves
-// leaves as well as on one that does not.
-//
-// # And so does a pull that FAILS
-//
-// A status that ends a request as a failure — the consumer deleted under it,
-// its leader moving — is reported by the next fetch, and what the buffer held
-// is handed back with it rather than to the fetch after. The applier reads a
-// failed fetch as the moment from which the log may be another history (a
-// broker restored under a running node ends its pulls), and gives back every
-// record it held from before it ([statelog.Fetcher]); one this buffer kept
-// would reach it after the failure, read as delivered by the broker as it now
-// is when it was delivered by the one before.
-//
-// # A status is matched to the request it NAMES, never to the oldest
-//
-// Every request is answered on the one inbox, but each is sent with a reply
-// subject of its own beneath it (`<inbox>.<n>`), and that is where the server
-// addresses the status that ends it. A record names no request — it arrives
-// under the subject it was stored on — so records are counted against the
-// request standing, of which a fetch keeps one. Statuses had been counted the
-// same way, against the oldest request, and the server sends one the client
-// has nothing left to count it against: a request carrying a byte bound whose
-// BATCH fills with bytes to spare is ended, and then followed by a
-// `409 Batch Completed` (nats-server's consumer.go, after the delivery that
-// filled it). The client had already counted that request out on its last
-// record, so the status ended the NEXT fetch's request instead, the fetch
-// sent another, and the server held two — measured in
-// TestAPullHonoursBothOfItsBounds as five records in flight after pulls that
-// returned four, whenever the status reached the callback after the next
-// request was sent. Addressed by its own subject, a status for a request no
-// longer counted — that trailing one, or a `408` for a request presumed gone
-// — ends nothing.
+// Not the library's Consume / Messages: its prefetch keeps requests standing
+// ahead of the reader, holding records in flight whether or not an applier
+// runs, and needs a Stop nothing on the applier's side calls. Here only a fetch
+// sends a request, one at a time, and the buffer is the handle's, so the next
+// runner over it takes what the last left. A handle given up for good is
+// released ([puller.release]); a failed pull hands its buffer back with the
+// failure ([puller.fetch]); a status ends the request whose own reply subject
+// (`<inbox>.<n>`) it arrived on, never the oldest ([puller.deliver]).
 
 // pullGrace is how long past its own expiry a request is still counted as one
 // the server may be serving.
 //
-// The server ends an expired request with a `408`, measured from when IT
-// received the request, so the client's view runs late by a request's transit
-// and the status's return. One second covers a leaf link across a network
-// with room to spare. Past it the request is presumed gone and a fetch sends
-// another — and a delivery it does still make lands in the buffer like any
-// other, so a server running later than this costs a second request rather
-// than a record.
+// The server's `408` is timed from when IT received the request, so the
+// client's view runs late by a round trip; one second covers a leaf link with
+// room to spare. A server later than this costs a second request, never a
+// record: what it still delivers lands in the buffer like any other.
 const pullGrace = time.Second
 
 // puller is one consumer's standing pull.
@@ -208,18 +104,12 @@ func (q *Queue) newPuller(stream, consumer string) (*puller, error) {
 	}
 	p := &puller{nc: q.nc, log: q.log, subject: subject, inbox: q.nc.NewInbox(),
 		wake: make(chan struct{}, 1)}
-	// A CALLBACK SUBSCRIPTION rather than a channel one. A channel the
-	// library delivers into drops what finds it full, and a dropped
-	// delivery is a record in flight that nobody holds until the ack
-	// window returns it — so it would have to be sized by the largest
-	// batch, which is the allocation this file exists to remove. The
-	// callback's queue grows with what arrives.
-	//
-	// ONE WILDCARD rather than a subscription per request, so that every
-	// reply subject is covered before its request is sent: a subscription
-	// made per request has to reach the server — and across a leaf link,
-	// the hub — before the request does, or the server finds no interest
-	// in the reply and drops the request.
+	// A CALLBACK SUBSCRIPTION: a channel one drops what finds it full, leaving
+	// a record in flight until the ack window, so it would have to be sized by
+	// the largest batch, the allocation this file removes. ONE WILDCARD, so
+	// every reply subject is covered before its request is sent: a per-request
+	// subscription that has not yet reached the server (and across a leaf link,
+	// the hub) leaves no interest in the reply, and the request is dropped.
 	if p.sub, err = q.nc.Subscribe(p.inbox+".*", p.deliver); err != nil {
 		return nil, fmt.Errorf("jetstream: subscribe the pulls on %s: %w", consumer, err)
 	}
@@ -232,13 +122,15 @@ func (q *Queue) newPuller(stream, consumer string) (*puller, error) {
 // [puller.release]d instead.
 func (p *puller) close() { _ = p.sub.Unsubscribe() }
 
-// release gives the pull up for good, for a consumer that stays: what the
-// buffer holds is handed back, and the inbox is DRAINED rather than dropped —
-// the server stops routing to it, and whatever had already reached this
-// client is still passed to [puller.deliver], which hands it back too, where
-// an unsubscribe would discard it in flight. A request still standing on the
-// server then has a reply nobody is interested in, and the server skips it
-// for the next request of the consumer. Called once no fetch will run again.
+// release gives the pull up for good, for a consumer that stays (an engine
+// stopping while the process and a new engine's handle go on). The server
+// serves a consumer's requests oldest first, so this handle's buffer and
+// standing request would otherwise take the next records, stranded until the
+// ack window. What the buffer holds is handed back, and the inbox is DRAINED
+// rather than dropped: what had already reached this client still passes to
+// [puller.deliver], which hands it back too, and a request still standing has a
+// reply nobody is interested in, so the server skips to the consumer's next.
+// Called once no fetch will run again.
 func (p *puller) release() {
 	p.mu.Lock()
 	p.released = true
@@ -257,12 +149,10 @@ func (p *puller) release() {
 // handBack negatively acknowledges records no reader will take, which the
 // broker redelivers at once to whichever request of the consumer is waiting.
 //
-// A hand-back that fails leaves the record where an unread delivery always
-// was — in flight until the ack window redelivers it — and says so, since
-// that is thirty seconds of a strict log standing still. ONCE FOR THE CALL,
-// naming how many and the first: a failed pull hands back everything it held
-// over the connection that just failed, and a line a record was thousands of
-// lines about one broken connection.
+// A failed hand-back leaves the record in flight until the ack window, thirty
+// seconds of a strict log standing still, so it is logged: ONCE FOR THE CALL,
+// naming how many and the first, since a failed pull hands back everything
+// over the connection that just failed.
 func (p *puller) handBack(msgs []*nats.Msg) {
 	failed, seq := 0, uint64(0)
 	var first error
@@ -360,8 +250,12 @@ func (p *puller) deliver(msg *nats.Msg) {
 		p.mu.Unlock()
 		return
 	default:
-		// THE REQUEST THE STATUS NAMES, wherever it stands, and none if
-		// it names one no longer counted — see the head of this file.
+		// THE REQUEST THE STATUS NAMES, wherever it stands, and none if it
+		// names one no longer counted. Matching the oldest was wrong: a
+		// request with a byte bound whose batch fills is followed by a
+		// `409 Batch Completed` after its last record was counted, which then
+		// ended the next fetch's request, and the server held two
+		// (TestAPullHonoursBothOfItsBounds).
 		for i, r := range p.requests {
 			if r.reply == msg.Subject {
 				p.requests = append(p.requests[:i:i], p.requests[i+1:]...)
@@ -411,12 +305,10 @@ func (p *puller) fetch(ctx context.Context, maxMessages, maxBytes int,
 		p.mu.Lock()
 		if failure := p.failure; failure != nil {
 			// WHAT THE PULL HELD GOES BACK WITH THE FAILURE, never to the
-			// next fetch: the applier reads a failure as the moment after
-			// which the broker may be another history — a restore under a
-			// running node ends its pulls — and hands back everything it
-			// held from before it, so a record this buffer kept from before
-			// the failure would reach it as though delivered after. Handed
-			// back, the broker delivers it again at once, as it now is.
+			// next fetch: the applier reads a failure as the point after which
+			// the broker may be another history (a restore under a running
+			// node), so a record kept from before it would arrive as though
+			// delivered after. Handed back, the broker redelivers it as it is.
 			held := p.buffered
 			p.buffered, p.failure = nil, nil
 			p.mu.Unlock()
@@ -469,18 +361,14 @@ func (p *puller) fetch(ctx context.Context, maxMessages, maxBytes int,
 
 // wakeAt is when a fetch waiting at now has to look again without being woken:
 // its deadline, or the instant the oldest standing request is presumed gone,
-// whichever is first — and past the deadline, always the latter. Held under
+// whichever is first, and past the deadline always the latter. Held under
 // p.mu, with a request standing.
 //
 // THE PRESUMPTION IS WHAT BOUNDS THE WAIT, because a request's ending status
-// is not guaranteed to arrive: a connection that drops takes the server's copy
-// of the request with it and nobody is left to send the `408`, and a slow
-// consumer's inbox drops a status like anything else. Evaluated only when a
-// delivery woke the fetch, the rule [pullGrace] states did nothing on exactly
-// those paths — past its deadline a fetch waited out an hour's timer on a
-// request nothing was serving, and before it, a request left standing by an
-// earlier fetch kept this one from sending its own until its whole wait had
-// passed, so a record appended meanwhile was delivered to nobody.
+// may never arrive: a dropped connection takes the server's copy with it, and
+// a slow consumer's inbox drops statuses. Checked only on a delivery, a fetch
+// past its deadline would wait on a request nothing serves, and one before it
+// could not send its own while an earlier fetch's request stood.
 func (p *puller) wakeAt(now, deadline time.Time) time.Time {
 	until := p.requests[0].until
 	if !now.Before(deadline) || until.Before(deadline) {
@@ -490,19 +378,14 @@ func (p *puller) wakeAt(now, deadline time.Time) time.Time {
 }
 
 // undelivered is how many records of the consumer no fetch has taken yet: what
-// the pull delivered and still holds, and what the newest delivery's own
-// metadata counted behind it — every record the pull delivers carries the
-// consumer's count of what follows it, which is the same count the consumer's
-// info answers, as of that delivery. False until a delivery's metadata could
-// be read, since nothing has counted anything then.
+// the pull holds, plus what the newest delivery's metadata counted behind it
+// (the consumer info's count, as of that delivery). False until a delivery's
+// metadata could be read.
 //
-// IT ASKS THE BROKER NOTHING, which is why it is here rather than a consumer
-// info: the applier asks it on every run it holds records for, and an info is
-// a request only the consumer's leader answers — after its main API queue
-// drains — on the commit path. A record appended after the newest delivery is
-// counted once the request standing delivers it, as it does at once while one
-// stands; with none standing, the next fetch is what finds it, exactly as a
-// count read a moment earlier would have missed it.
+// IT ASKS THE BROKER NOTHING, unlike a consumer info: the applier asks on
+// every run that holds records, and an info is answered only by the consumer's
+// leader, behind its API queue, on the commit path. A record appended after
+// the newest delivery is counted once a standing request delivers it.
 func (p *puller) undelivered() (uint64, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

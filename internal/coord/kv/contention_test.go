@@ -13,12 +13,10 @@ import (
 )
 
 // BenchmarkAnOrgCounterChargedThroughLeaves measures what one hot key costs a
-// fleet of leaves: every node a leaf of its own on one member, each running
-// sixty-four charging goroutines in a closed loop against the org's counter —
-// the shape of a fleet whose every seat is mid-round — and reports, per
-// batch, how many attempts it took to land and how many charges it carried,
-// and per charge how long it waited. A batch that runs out of attempts fails
-// the benchmark: it is a healthy round failed closed.
+// fleet of leaves: each node a leaf on one member running sixty-four charging
+// goroutines in a closed loop against the org's counter (every seat mid-round),
+// reporting per batch its attempts and charges, and per charge its wait. A
+// batch out of attempts fails the benchmark: a healthy round failed closed.
 func BenchmarkAnOrgCounterChargedThroughLeaves(b *testing.B) {
 	for _, nodes := range []int{1, 3, 8, 16, 32, 64, 128} {
 		b.Run(fmt.Sprintf("nodes=%d", nodes), func(b *testing.B) {

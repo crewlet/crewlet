@@ -25,10 +25,10 @@ func merge(t *testing.T, state coord.ChatReadState, delta coord.ChatReadDelta) c
 	return out
 }
 
-// A ROOM REACHES ITS READER AT ONE LEVEL. The muted set and the every-message
-// set are two lists of one fact, so a level moves a room between them and a
-// mute takes it out of every message: a room in both would be muted and loud
-// at once, and which the screens drew would depend on which they read first.
+// A ROOM REACHES ITS READER AT ONE LEVEL. The muted and every-message sets
+// are two lists of one fact, so a level moves a room between them and a mute
+// takes it out of every message: a room in both would draw as whichever set a
+// screen read first.
 //
 // Mutation: drop a mute's lift of every message and the first case keeps the
 // room in both sets.
@@ -72,10 +72,8 @@ func TestARoomReachesItsReaderAtOneLevel(t *testing.T) {
 	}
 }
 
-// A SAVE IS KEPT AS IT WAS FIRST MADE, so a flush sent again after its answer
-// was lost leaves the record exactly as the first did. A save that lifted the
-// message to the top again would make the store's own retry visible as a
-// reordered list.
+// A SAVE IS KEPT AS IT WAS FIRST MADE, so a flush resent after its answer was
+// lost leaves the record as the first did, not reordered by the store's retry.
 //
 // Mutation: overwrite an existing save's instant and the retry moves it.
 func TestASaveSentTwiceIsOneSave(t *testing.T) {
@@ -189,11 +187,9 @@ func TestAThreadMarkPastTheCapDropsTheOldest(t *testing.T) {
 	}
 }
 
-// A REWIND IS THE ONE WAY A CURSOR MOVES BACK, and it moves exactly where it
-// is told: "mark unread" sets the room's place before a message, which the
-// forward merge would ignore. Zero forgets the place. Naming a room both to
-// advance and to rewind is two facts about one place and is refused. Thread
-// cursors take the forward rule of room cursors.
+// A REWIND IS THE ONE WAY A CURSOR MOVES BACK ("mark unread"), exactly where
+// it is told, which the forward merge would ignore; zero forgets the place. A room both
+// advanced and rewound is refused. Thread cursors stay forward-only.
 //
 // Mutation: apply a rewind through the forward merge and the first case keeps
 // the cursor at 500.
@@ -228,10 +224,9 @@ func TestARewindSetsTheCursorExactly(t *testing.T) {
 	}
 }
 
-// THE DASHBOARD'S CAP ON THE READER'S MARKS IS THE ENGINE'S. The Rooms panel
-// and the message toolbar say a star or a save is past the cap before the
-// press; a copy too low greys out a gesture the engine would take, and one too
-// high moves the refusal from the control to the write.
+// THE DASHBOARD'S CAP ON THE READER'S MARKS IS THE ENGINE'S: a copy too low
+// greys out a gesture the engine would take, one too high moves the refusal
+// from the control to the write.
 func TestTheDashboardsReaderMarkCapIsTheEngines(t *testing.T) {
 	t.Parallel()
 	raw, err := clientsource.Scalar(clientsource.Tree(t), "MAX_READER_MARKS")
