@@ -5022,10 +5022,9 @@ download `503` and finishes one it began. A download is recorded on a
 `visibility: unit` repository ([Who read it](#who-read-it)) once its first
 byte is written, with the bytes it was sent.
 
-**An older Gitlet node** answers `404 no_route` for both routes, and its
-classifier calls the request a push. `HEAD` of either route is the probe that
-tells the two apart: this build answers `405` with `Allow: GET` before it reads
-any repository or runs any git.
+**A download is a `GET`**: `HEAD` of either route is answered `405` with
+`Allow: GET` before any repository is read or any git runs. The dashboard links
+both routes once it knows the commit, and asks neither first.
 
 ---
 
