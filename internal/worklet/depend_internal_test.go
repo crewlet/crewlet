@@ -8,13 +8,8 @@ import (
 
 // A DEPENDENCY RESULT FOLDS EVERY COMMIT the sequence made into one answer:
 // the latest position, the least certain outcome, and the version of the
-// call's OWN task.
-//
-// The answer used to be whichever commit landed last, whole. That handed a
-// caller the BLOCKER's version whenever a mirror landed after the authored
-// edge — an If-Match with it refuses the caller's next edit of its own item —
-// and reported an authored edge whose outcome was `unknown` as `applied`
-// because a mirror after it was confirmed.
+// call's OWN task — never a blocker's, whose If-Match would refuse the caller's
+// next edit, and never `applied` over an unknown authored edge.
 func TestADependencyResultFoldsEveryCommit(t *testing.T) {
 	t.Parallel()
 	at := func(seq uint64) statelog.Position {

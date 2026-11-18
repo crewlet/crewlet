@@ -263,8 +263,8 @@
   text-decoration: none;
 }
 
-/* THE TAB ROW'S NOTE: the head's lines added and removed in the diff family's
-   inks, five squares told by shape too (filled added, hollow removed). */
+/* A DIFFSTAT: lines added and removed in the diff family's inks, five squares
+   told by shape too (filled added, hollow removed). */
 .code-diffstat {
   display: inline-flex;
   align-items: center;
@@ -924,9 +924,21 @@
   align-items: start;
 }
 
+.code-files[data-tree="hidden"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 @container page (width < 720px) {
   .code-files {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .code-files__pane {
+    position: static;
+  }
+
+  .code-files__pane .code-tree__scroll {
+    max-block-size: calc(100cqb / 2);
   }
 }
 
@@ -936,10 +948,9 @@
   color: var(--color-text-tertiary);
 }
 
-/* THE FILE TREE: directories with their glyph, files a row each — status
-   letter, name, counts — the one on screen pressed. */
-.code-ftree,
-.code-ftree__nested {
+/* THE FILE TREE: the kit's tree rows (`.code-tree__item`), each file's
+   badges, counts and status square at its end. */
+.code-ftree {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-0);
@@ -949,74 +960,40 @@
   min-width: 0;
 }
 
-.code-ftree__nested {
-  padding-inline-start: var(--spacing-4);
-}
-
-.code-ftree__dir {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.code-ftree__dirname {
-  display: flex;
+.code-ftree__facts {
+  display: inline-flex;
   align-items: center;
   gap: var(--spacing-2);
-  padding: var(--spacing-1) var(--spacing-2);
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-  overflow-wrap: anywhere;
-}
-
-.code-ftree__file {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  width: 100%;
-  padding: var(--spacing-1) var(--spacing-2);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: inherit;
-  font: inherit;
-  font-size: var(--font-size-sm);
-  text-align: start;
-  cursor: pointer;
-}
-
-.code-ftree__file:hover {
-  background: var(--color-surface-hover);
-}
-
-.code-ftree__file[aria-current="true"] {
-  background: var(--color-surface-pressed);
-  font-weight: var(--font-weight-medium);
-}
-
-.code-ftree__status {
-  flex: none;
-  display: inline-grid;
-  place-items: center;
-  inline-size: var(--spacing-4);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-xs);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-secondary);
-}
-
-.code-ftree__name {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow-wrap: anywhere;
+  font-size: var(--font-size-xs);
 }
 
 .code-ftree__counts {
-  flex: none;
-  font-size: var(--font-size-xs);
+  display: inline-flex;
+  gap: var(--spacing-1);
+  font-family: var(--font-family-mono);
   font-variant-numeric: tabular-nums;
+}
+
+/* A FILE'S STATUS in the kit's file ink, beside its word in the row's name. */
+.code-ftree__status {
+  display: inline-flex;
   color: var(--color-text-tertiary);
+}
+
+.code-ftree__status[data-status="A"] {
+  color: var(--color-file-added-ink);
+}
+
+.code-ftree__status[data-status="M"] {
+  color: var(--color-file-modified-ink);
+}
+
+.code-ftree__status[data-status="D"] {
+  color: var(--color-file-deleted-ink);
+}
+
+.code-ftree__status[data-status="R"] {
+  color: var(--color-file-renamed-ink);
 }
 
 /* ONE FILE'S DIFF: its head — path, what became of it, its counts, the way
@@ -1845,6 +1822,8 @@
 }
 
 .code-tree__item .code-ftree__name {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1862,7 +1841,8 @@
 }
 
 /* THE FILE ON SCREEN: the selected tint and the accent edge; forced colours paint its outline. */
-.code-tree__item[aria-current="page"] {
+.code-tree__item[aria-current="page"],
+.code-tree__item[aria-current="true"] {
   background: var(--color-surface-selected);
   box-shadow: inset 2px 0 0 var(--color-brand-accent);
   outline: 2px solid transparent;
@@ -3570,4 +3550,347 @@
 
 .code-repo-title__link:hover {
   color: var(--color-text-primary);
+}
+
+/* THE FILES' TOOLBAR: the tree's toggle, what is compared, Go to file, then
+   the layout and Finish review at its end; it wraps by groups. */
+.code-files-bar {
+  flex-wrap: wrap;
+}
+
+.code-files-bar__words {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.code-files-bar .code-files-bar__find {
+  flex: 0 1 16rem;
+  inline-size: auto;
+  min-inline-size: 10rem;
+}
+
+.code-files-bar__end {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-inline-start: auto;
+}
+
+@container page (width < 640px) {
+  .code-files-bar__layout {
+    display: none;
+  }
+
+  .code-files-bar .code-files-bar__find {
+    flex: 1 1 10rem;
+  }
+}
+
+/* THE PANE'S FOOT: what the files are compared with, and what lies on them. */
+.code-tree__foot {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-block-start: 1px solid var(--color-border-default);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.code-tree__said {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* THE STACK: every file a card, its head stuck under the toolbar as its body scrolls by. */
+.code-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+.code-stack > .code-file {
+  gap: 0;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
+  overflow: clip;
+  scroll-margin-top: var(--sticky-top);
+}
+
+/* A HEAD'S LEAD wraps inside itself; its counts and menu keep the first line's end. */
+.code-file__head {
+  position: sticky;
+  top: var(--sticky-top);
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--spacing-2);
+  padding: var(--spacing-1) var(--spacing-2);
+  border-block-end: 1px solid var(--color-border-default);
+  background: var(--color-surface-subtle);
+}
+
+/* THE LEAD IS A LINE OF TEXT, so the copy and tags follow the path's last word. */
+.code-file__lead {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.code-file__lead > * {
+  vertical-align: middle;
+}
+
+.code-file__lead > :not(:last-child) {
+  margin-inline-end: var(--spacing-1);
+}
+
+.code-file__path {
+  display: inline;
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  word-break: break-all;
+}
+
+.code-file__dir {
+  color: var(--color-text-secondary);
+  font-weight: var(--font-weight-regular);
+}
+
+.code-file__fold[aria-expanded="false"] svg {
+  rotate: -90deg;
+}
+
+.code-file__end {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-block-size: var(--size-control-sm);
+}
+
+.code-file__binary {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.code-file__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+  padding: var(--spacing-2);
+}
+
+/* THE DIFF IS FLUSH WITH THE CARD under its head; what is said around it keeps its padding. */
+.code-stack .code-file__body {
+  gap: 0;
+  padding: 0;
+}
+
+.code-file__outdated,
+.code-file__unplaced {
+  padding: var(--spacing-2);
+}
+
+.code-file__unplaced {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  border-block-end: 1px solid var(--color-border-default);
+}
+
+.code-file__unplaced > .code-file__note {
+  padding: 0;
+}
+
+.code-file__note {
+  margin: 0;
+  padding: var(--spacing-1) var(--spacing-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.code-file__pending {
+  padding: var(--spacing-2);
+}
+
+.code-file__pager {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2);
+}
+
+/* A GAP'S ROW: its controls in the numbers' gutter, git's hunk line in the code's column;
+   the gutter's width is in the code's face, as a line's. */
+.code-gap {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--spacing-2);
+  min-block-size: var(--size-control-sm);
+  padding: 0 var(--spacing-3) 0 var(--spacing-2);
+  background: var(--color-diff-hunk-row);
+  color: var(--color-text-tertiary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-compact);
+}
+
+/* UNDER A LINE, the row is the last of its notes and reaches the diff's edges. */
+.code-gap:not(.code-gap--lead, .code-gap--trail) {
+  margin: 0 calc(-1 * var(--spacing-3)) calc(-1 * var(--spacing-2));
+}
+
+.code-gap:not(.code-gap--lead, .code-gap--trail):first-child {
+  margin-block-start: calc(-1 * var(--spacing-2));
+}
+
+.code-gap--lead {
+  border-block-end: 1px solid var(--color-border-default);
+}
+
+.code-gap--trail {
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-gap__controls {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-inline-size: calc(var(--code-gap-digits) * 2ch + 2ch + var(--spacing-2) * 2);
+}
+
+.code-gap[data-split] .code-gap__controls {
+  min-inline-size: calc(var(--code-gap-digits) * 1ch + 2ch + var(--spacing-2));
+}
+
+:where(.code-gap__controls) > * {
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-xs);
+}
+
+.code-gap__header {
+  grid-column: 2;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.code-gap__failed {
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+/* FINISH REVIEW's words and the count of the head's drafts. */
+.code-finish {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+.code-finish__count {
+  min-inline-size: 1.25rem;
+  padding-inline: var(--spacing-1);
+  border-radius: var(--radius-pill);
+  background: color-mix(in oklab, var(--color-text-on-accent) 24%, transparent);
+  color: var(--color-text-on-accent);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+/* THE PANE'S HEAD: Filter files and its options, the options' dot when any narrows. */
+.code-files__filter {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+.code-files__words {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.code-files__options {
+  position: relative;
+  display: inline-flex;
+}
+
+.code-files__dot {
+  position: absolute;
+  inset-block-start: 2px;
+  inset-inline-end: 2px;
+  inline-size: 6px;
+  block-size: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-brand-accent);
+}
+
+.code-files__popover {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3);
+}
+
+.code-files__set {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.code-files__set > legend {
+  margin-block-end: var(--spacing-1);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+}
+
+.code-files__showing {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1);
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.code-tree__foot .code-files__showing {
+  font-size: inherit;
+}
+
+.code-files__counts > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.code-ftree__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--color-text-secondary);
+}
+
+/* A DRAFTED FINDING: the reader's own, dashed until a review sends it. */
+.code-finding[data-draft] {
+  border-style: dashed;
+  background: var(--color-surface-subtle);
+}
+
+.code-finding__aside {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }

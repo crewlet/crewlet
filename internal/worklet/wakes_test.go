@@ -11,18 +11,10 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// EVERY CHANGE KIND IS CLASSIFIED, and this is the guard the tree did not have.
-//
-// `prioritised` was in the enum, was Valid(), passed Validate(), rode a real
-// record — and was absent from taskCommit(), so a task's priority change woke
-// no assignee, no collaborator and no watcher. Nothing in the build caught it,
-// because the allowlist inside taskCommit has no compiler link to ChangeKinds:
-// a kind added to one and forgotten in the other is a kind that routes to
-// nobody, silently, for ever.
-//
-// So the table below is that link, written out. A new kind fails this test
-// until somebody DECIDES which half it is in — which is the whole point: the
-// decision is cheap and the omission is invisible.
+// EVERY CHANGE KIND IS CLASSIFIED as a task commit or not. Nothing links
+// taskCommit's allowlist to ChangeKinds at compile time, and a kind missing
+// from the allowlist routes to nobody, silently; this table is that link, so a
+// new kind fails here until somebody decides which half it is in.
 func TestEveryChangeKindIsClassifiedAsTaskOrNot(t *testing.T) {
 	t.Parallel()
 	// The kinds that are NOT about a task's own routing. Everything else
@@ -41,11 +33,9 @@ func TestEveryChangeKindIsClassifiedAsTaskOrNot(t *testing.T) {
 		worklet.ChangeViewDeleted:    true,
 		worklet.ChangeCatalogue:      true,
 
-		// A person's own bookkeeping — a pin, an inbox mark, a snooze.
-		// It writes a history row like every other document's, which is
-		// why it needs a kind at all, and it wakes nobody: the one
-		// person write that announces itself is `prioritised`, above,
-		// because somebody else reordered your day.
+		// A person's own bookkeeping (a pin, an inbox mark, a snooze):
+		// a kind for its history row, and it wakes nobody. The person
+		// write that does is `prioritised`, above.
 		worklet.ChangePersonUpdated: true,
 
 		// A project's files, read from the project rather than woken
@@ -62,12 +52,9 @@ func TestEveryChangeKindIsClassifiedAsTaskOrNot(t *testing.T) {
 	}
 }
 
-// AND EVERY ROUTABLE SUBJECT HAS A PROMPT FRAME.
-//
-// The parser's gate and the prompt's dispatch are two halves of one set, with
-// nothing linking them: a kind admitted by [worklet.ObjectKind.Routable] and
-// missing from the prompt's switch renders an EMPTY body, which reaches a seat
-// as a turn with nothing in it.
+// AND EVERY ROUTABLE SUBJECT HAS A PROMPT FRAME: nothing links
+// [worklet.ObjectKind.Routable] to the prompt's switch, and a kind missing
+// from the switch reaches a seat as an empty turn.
 func TestEveryRoutableObjectRendersAPrompt(t *testing.T) {
 	t.Parallel()
 	for _, kind := range worklet.ObjectKinds {
@@ -82,11 +69,9 @@ func TestEveryRoutableObjectRendersAPrompt(t *testing.T) {
 	}
 }
 
-// A NON-TASK WAKE NEVER CALLS ITSELF A TASK, which is the failure lifting the
-// parser's gate alone would have produced: a fully rendered, non-empty,
-// actively wrong prompt — "**Task:** a task: prioritised" with four steps
-// about moving the task to an active status — delivered to a real seat with no
-// error anywhere on the path.
+// A NON-TASK WAKE NEVER CALLS ITSELF A TASK: rendered through the task frame
+// it would be a non-empty, wrong prompt ("**Task:** a task: prioritised")
+// with no error anywhere on the path.
 func TestANonTaskWakeIsNotRenderedAsATask(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -108,12 +93,9 @@ func TestANonTaskWakeIsNotRenderedAsATask(t *testing.T) {
 	}
 }
 
-// THE PRIORITISED WAKE NAMES THE TASK AND ASKS FOR AN ANSWER.
-//
-// It is the one Addressed non-task wake — the spec's "a seat starts it, or
-// says why not" — and Addressed is ENFORCED: the turn is sent back for more
-// rounds until a tool call delivered. A seat obliged to deliver on a task it
-// was never told the identity of is the worst shape this change could take.
+// THE PRIORITISED WAKE NAMES THE TASK AND ASKS FOR AN ANSWER. It is the one
+// Addressed non-task wake, and Addressed is enforced (the turn is sent back
+// until a tool call delivers), so a seat must be told which task.
 func TestThePrioritisedWakeIsActionable(t *testing.T) {
 	t.Parallel()
 	wake := objectWake(worklet.KindPerson, worklet.ChangePrioritised)
@@ -130,19 +112,15 @@ func TestThePrioritisedWakeIsActionable(t *testing.T) {
 			"silently — and the person who wrote the list cannot tell whether " +
 			"it was seen")
 	}
-	// AND IT IS NOT A POINTER. It carries the task, the person who put it
-	// there and the position, so turning the recon on would cost the seat
-	// its own memory and episode recall to fetch what it was already told.
+	// AND IT IS NOT A POINTER: it carries the task, who put it there and
+	// the position, so the recon would only re-fetch what it was told.
 	if (worklet.Prompt{}).RequiresRecon(wake) {
 		t.Error("a prioritised wake asks for reconnaissance it does not need")
 	}
 }
 
-// A WAKE ABOUT A NON-TASK OBJECT KEYS ITS CONVERSATION ON THAT OBJECT.
-//
-// Falling through to an empty key would put every priorities write in the
-// company into ONE ledger — a conversation key is what separates threads, and
-// a shared empty one merges them all.
+// A WAKE ABOUT A NON-TASK OBJECT KEYS ITS CONVERSATION ON THAT OBJECT: an
+// empty key would merge every priorities write in the company into one thread.
 func TestNonTaskWakesDoNotShareOneConversation(t *testing.T) {
 	t.Parallel()
 	seen := map[string]string{}
@@ -151,9 +129,8 @@ func TestNonTaskWakesDoNotShareOneConversation(t *testing.T) {
 			continue
 		}
 		wake := objectWake(kind, "")
-		// The person wake carries a task and keys on it, which is right:
-		// a priorities write IS about that task. Without one it is about
-		// nothing but the person's own list.
+		// The person wake keys on its task where it carries one, and
+		// otherwise on the person's own list.
 		delete(wake.Metadata, worklet.MetaTaskKey)
 		delete(wake.Metadata, worklet.MetaTaskID)
 		key := worklet.Prompt{}.PartitionKey(wake.Metadata, "")
@@ -161,11 +138,9 @@ func TestNonTaskWakesDoNotShareOneConversation(t *testing.T) {
 			t.Errorf("%q has no partition key", kind)
 			continue
 		}
-		// THE OBJECT IS BOTH KEYS: a task (or the object a non-task wake
-		// names) is one thing that is both the merge unit and the durable
-		// thread, so the identity delegates. A divergence would let one
-		// coalesced trigger's conversation depend on which constituent
-		// sorted first.
+		// THE OBJECT IS BOTH KEYS, merge unit and durable thread: a
+		// divergence would let a coalesced trigger's conversation depend
+		// on which constituent sorted first.
 		if got := (worklet.Prompt{}).ConversationIdentity(wake.Metadata, ""); got != key {
 			t.Errorf("%q: identity %q diverged from the partition key %q", kind, got, key)
 		}
@@ -176,12 +151,9 @@ func TestNonTaskWakesDoNotShareOneConversation(t *testing.T) {
 	}
 }
 
-// objectWake is one non-task notification as the parser stamps it.
-//
-// BUILT FROM THE PARSER'S OWN CONSTANTS rather than from literals, because the
-// existing prompt suite hard-codes `item_key: ENG-1` into every case it builds
-// — which is exactly why it stayed green while a non-task wake rendered as a
-// task. A fixture that cannot represent the failure cannot catch it.
+// objectWake is one non-task notification as the parser stamps it, built
+// from the parser's own constants: a fixture with a hard-coded `item_key`
+// cannot represent a non-task wake rendered as a task, so cannot catch it.
 func objectWake(object worklet.ObjectKind, kind worklet.ChangeKind) notify.Inbound {
 	if kind == "" {
 		if object == worklet.KindPerson {
@@ -215,9 +187,8 @@ func reasonFor(kind worklet.ChangeKind) worklet.Reason {
 	return worklet.ReasonWatcher
 }
 
-// A ROUTABLE KIND AND A PROMPT FRAME ARE THE SAME SET, stated from the other
-// side: a kind the prompt can render and the parser drops is a wake nobody
-// receives, which is the state all of these were in.
+// A ROUTABLE KIND AND A PROMPT FRAME ARE THE SAME SET, from the other side: a
+// kind the prompt renders and the parser drops is a wake nobody receives.
 func TestTheRoutableSetIsExactlyTheTwoKinds(t *testing.T) {
 	t.Parallel()
 	var routable []worklet.ObjectKind
@@ -269,9 +240,8 @@ func TestWritingSomebodyElsesPrioritiesWakesThem(t *testing.T) {
 	if wake.Snapshot.Person != "alice" {
 		t.Errorf("the wake is routed to %q, want alice", wake.Snapshot.Person)
 	}
-	// IT NAMES THE TASK, which is what makes it actionable: "your list
-	// changed" sends a seat to read the whole list and work out what is
-	// new, and the list does not record what was new.
+	// IT NAMES THE TASK: the list does not record what was new, so "your
+	// list changed" is not actionable.
 	if wake.Snapshot.Key != task.Key {
 		t.Errorf("the wake names %q, want the task at the top (%q)",
 			wake.Snapshot.Key, task.Key)
@@ -288,14 +258,10 @@ func TestWritingSomebodyElsesPrioritiesWakesThem(t *testing.T) {
 
 // A PERSON REORDERING A REPORT'S QUEUE IS NAMED AS THEIR SEAT — on the stamp
 // the report reads, in the wake the report's seat is given and on the history
-// row — and the credential they held rides beside it.
-//
-// A person acts AS the seat the identity directory binds them to
-// ([iam.ActorFor]): the actor is the seat, of kind human, and the credential
-// is the operator id. So there is one name for who decided the order, the one
-// every screen resolves, and the audit trail still says which credential made
-// the change. A writer whose actor was the credential named a token's label on
-// the stamp — a secret's name rather than anybody the report knows.
+// row — and the credential they held rides beside it. A person acts AS their
+// seat ([iam.ActorFor]), so the one name every screen resolves is who decided,
+// while the audit trail keeps the credential; the credential as actor would
+// put a token's label on the stamp.
 func TestAReorderByAPersonNamesTheirSeatBesideTheirCredential(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -334,9 +300,8 @@ func TestAReorderByAPersonNamesTheirSeatBesideTheirCredential(t *testing.T) {
 	}
 }
 
-// AND WRITING YOUR OWN WAKES NOBODY. Re-ordering your own queue is not news to
-// anybody, least of all to you — the one tracker write that vetoes its own
-// delivery per call.
+// AND WRITING YOUR OWN WAKES NOBODY: the one tracker write that vetoes its
+// own delivery per call.
 func TestWritingYourOwnPrioritiesWakesNobody(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -355,15 +320,10 @@ func TestWritingYourOwnPrioritiesWakesNobody(t *testing.T) {
 
 // ---- helpers ------------------------------------------------------------ //
 
-// A CHECKLIST WAKE IS ABOUT THE ITEM, NOT WHERE IT SITS OR HOW IT WAS READ.
-//
-// It compared whole items with `!=`, and an item carries its nesting as a
-// POINTER: the stored reading and a write's re-sent reading of one unchanged
-// nested item hold two addresses, so every nested item's assignee was woken by
-// any edit to the list. And an item carries its position: dragging one line
-// renumbered its neighbours and woke everybody on them — the positional diff
-// the function's own doc rules out. Only a change to the text, the done flag
-// or the holder is news to the person holding the item.
+// A CHECKLIST WAKE IS ABOUT THE ITEM, NOT WHERE IT SITS OR HOW IT WAS READ:
+// an item's nesting is a pointer (two readings, two addresses) and its
+// position moves when a neighbour is dragged, so comparing whole items wakes
+// people for nothing. Only the text, the done flag or the holder is news.
 func TestAChecklistWakeIsAboutTheItemNotItsLayout(t *testing.T) {
 	t.Parallel()
 	items := func(orderA, orderB int, doneC bool) []worklet.ChecklistItem {
@@ -400,12 +360,9 @@ type fixedLeads struct{ project, unit string }
 func (f fixedLeads) ProjectLead(string) string { return f.project }
 func (f fixedLeads) UnitLead(string) string    { return f.unit }
 
-// lastWake reads the notification off the newest record on the log.
-//
-// OFF THE LOG rather than out of a return value, because the wake is what
-// TRAVELS: the node that routes it is rarely the node that wrote it, and a
-// test asserting a struct the writer held in memory would pass for a
-// notification that never reached the wire.
+// lastWake reads the notification off the newest record on the log, not a
+// return value: the wake is what travels to the routing node, and an
+// in-memory struct would pass for one that never reached the wire.
 func (r *roundTrip) lastWake() *worklet.Notify {
 	r.t.Helper()
 	last, err := r.log.End(r.t.Context())
@@ -431,15 +388,11 @@ func candidateHandles(wake *worklet.Notify) []string {
 	return out
 }
 
-// AN OPERATOR MAY WRITE ANYBODY'S PRIORITIES, and a SEAT may not.
-//
-// This is the case that decides whether the wake above can fire at all.
-// `set_priorities` is registered on the operator MCP alone, and an operator's
-// actor is an API TOKEN's name — never a handle in the chart — so no ancestor
-// walk can match it and `Lead` is false for every operator by construction.
-// With the gate reading `own || Lead`, the only shipped surface for this verb
-// refused every cross-person write, and omitting the handle silently wrote a
-// person record for the token instead.
+// AN OPERATOR MAY WRITE ANYBODY'S PRIORITIES, and a SEAT may not. This decides
+// whether the wake above can fire: `set_priorities` is on the operator MCP
+// alone, and an operator's actor is a token's name, never a chart handle, so
+// `Lead` is false for every operator and a gate of `own || Lead` would refuse
+// every cross-person write.
 func TestWhoMayWriteSomebodyElsesPriorities(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -457,9 +410,8 @@ func TestWhoMayWriteSomebodyElsesPriorities(t *testing.T) {
 			worklet.PersonAuthority{Authorized: true}, true},
 		"a lead": {"lead", worklet.AuthorAgent,
 			worklet.PersonAuthority{Authorized: true}, true},
-		// A SEAT IS THE ONE PARTY THAT MAY NOT. An agent re-ordering a
-		// colleague's list is a hand-off in disguise: an Addressed wake
-		// that bypasses the guarded take and the reassignment budget.
+		// A SEAT MAY NOT: re-ordering a colleague's list is a hand-off
+		// bypassing the guarded take and the reassignment budget.
 		"a plain seat": {"peer", worklet.AuthorAgent,
 			worklet.PersonAuthority{}, false},
 	} {
@@ -482,15 +434,10 @@ func TestWhoMayWriteSomebodyElsesPriorities(t *testing.T) {
 	}
 }
 
-// AN EXCERPT SAYS WHEN IT WAS CUT, and the marker fits inside the cap.
-//
-// A card is the whole of what most recipients read, so a comment cut at
-// exactly MaxExcerpt and handed over unmarked reads as a comment that ENDED
-// there — a different message from the one somebody wrote. The marker has to
-// be counted against the budget rather than added outside it, because
-// [worklet.Notify.Validate] REFUSES an excerpt above the cap: an ellipsis that
-// pushed it three bytes over would turn every long comment into a failed write
-// instead of a marked one.
+// AN EXCERPT SAYS WHEN IT WAS CUT, and the marker fits inside the cap. An
+// unmarked cut reads as a comment that ended there; the marker counts against
+// MaxExcerpt because [worklet.Notify.Validate] refuses an excerpt above it,
+// so an ellipsis outside the budget fails every long comment's write.
 func TestALongExcerptIsMarkedAndStillFits(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("x", worklet.MaxExcerpt*2)
@@ -515,8 +462,7 @@ func TestALongExcerptIsMarkedAndStillFits(t *testing.T) {
 			"comment that ended there: %q", clipForTest(wake.Excerpt))
 	}
 
-	// AND A SHORT ONE IS UNTOUCHED, or every comment in the company gains
-	// an ellipsis it did not earn.
+	// AND A SHORT ONE IS UNTOUCHED.
 	short := "one line"
 	got := worklet.Wake{
 		Kind:    worklet.ChangeComment,
@@ -535,19 +481,10 @@ func clipForTest(s string) string {
 	return s[:80] + "..."
 }
 
-// A SCHEDULE CHANGE CARRIES WHAT IT CHANGED.
-//
-// A due date, a start, an estimate and a size had no producer in this tree
-// until the write tools gained one, so their absence from
-// [worklet.TaskDeltas] was invisible: nothing could move them, so nothing
-// reported the move. With a producer, a re-estimate wrote a history row and a
-// notification card carrying NO deltas at all — which every renderer falls
-// back on the bare KIND for, so a card announced a change with nothing in
-// it.
-//
-// It also matters beyond display: the applier rebuilds a task's spans from the
-// history row's deltas, and a row with none is a commit the reports derived
-// from those spans cannot see.
+// A SCHEDULE CHANGE CARRIES WHAT IT CHANGED in [worklet.TaskDeltas]: due,
+// start, estimate and size. Without deltas a card announces a bare kind, and
+// the applier, which rebuilds a task's spans from the history row's deltas,
+// would hide the commit from every report derived from them.
 func TestAScheduleChangeCarriesTheValuesThatMoved(t *testing.T) {
 	t.Parallel()
 	day := func(iso string) *time.Time {
@@ -569,14 +506,12 @@ func TestAScheduleChangeCarriesTheValuesThatMoved(t *testing.T) {
 
 	moved := worklet.TaskDeltas(before, after, nil)
 	for field, want := range map[string]worklet.Delta{
-		// THE WHOLE INSTANT: a day compares equal to itself
-		// whenever a move stays inside one, and it names the wrong
-		// day for any company that is not on UTC.
+		// THE WHOLE INSTANT: a day hides a same-day move and names
+		// the wrong day off UTC.
 		"due":      {From: "2031-04-16T00:00:00Z", To: "2031-04-23T00:00:00Z"},
 		"start":    {From: "", To: "2031-04-17T00:00:00Z"},
 		"estimate": {From: "90m", To: "120m"},
-		// A HALF POINT STILL PRINTS: a scale with halves in it is a
-		// scale somebody chose.
+		// A HALF POINT STILL PRINTS.
 		"points": {From: "3", To: "5.5"},
 	} {
 		if got := moved[field]; got.From != want.From || got.To != want.To || got.Added != nil || got.Removed != nil {
@@ -589,16 +524,10 @@ func TestAScheduleChangeCarriesTheValuesThatMoved(t *testing.T) {
 }
 
 // CLEARING A SIZE IS A CHANGE, although a zero renders as the absence it is.
-//
-// [worklet.Task.Points] and [worklet.Task.EstimateMinutes] are a plain float64
-// and a plain int over NOT NULL columns, so nothing anywhere in this package
-// can tell "never sized" from "sized at nothing" — a workload sums the zero
-// and a total adds it — and a card
-// printing "0" would be the one surface claiming a fact the rest of the engine
-// does not hold. What makes the clearing visible is not a distinction between
-// two zeroes: it is that the FROM side is a number and the TO side is not, so
-// "8" → "" differs and is recorded like any other delta. Only 0 → 0 folds away,
-// and that is not a change.
+// [worklet.Task.Points] and [worklet.Task.EstimateMinutes] are NOT NULL, so
+// nothing tells "never sized" from "sized at nothing", and a card printing "0"
+// would claim a fact the engine does not hold. The clearing shows because
+// "8" → "" differs; only 0 → 0 folds away.
 func TestClearingASizeIsAChange(t *testing.T) {
 	t.Parallel()
 	sized := worklet.Task{ID: "t-1", Points: 8, EstimateMinutes: 45}
@@ -610,22 +539,15 @@ func TestClearingASizeIsAChange(t *testing.T) {
 	if got := moved["estimate"]; got.From != "45m" || got.To != "" {
 		t.Errorf("estimate = %+v, want 45m → nothing", got)
 	}
-	// And a task that never had either reports no change at all, rather
-	// than two deltas from nothing to nothing.
+	// A task that never had either reports no change at all.
 	if moved := worklet.TaskDeltas(cleared, cleared, nil); len(moved) != 0 {
 		t.Errorf("an unchanged task moved %+v", moved)
 	}
 }
 
-// A MOVE INSIDE ONE DAY IS STILL A MOVE.
-//
-// The delta is text and a field is only recorded when the two sides DIFFER, so
-// rendering a schedule instant as a calendar day made every same-day change
-// compare equal to itself: pulling a due time from the morning to the end of
-// the afternoon produced no `due` entry at all, and the history row and the
-// notification card carried the change's kind with nothing it changed. That is
-// the same failure the schedule fields were added to these deltas to end, one
-// granularity down.
+// A MOVE INSIDE ONE DAY IS STILL A MOVE: a field is recorded only when its
+// text sides differ, so a schedule rendered as a calendar day would drop a
+// same-day move from the history row and the card.
 func TestASameDayScheduleMoveIsRecorded(t *testing.T) {
 	t.Parallel()
 	at := func(iso string) *time.Time {
@@ -658,15 +580,11 @@ func TestASameDayScheduleMoveIsRecorded(t *testing.T) {
 	}
 }
 
-// AND AN ALL-DAY DATE KEEPS THE DAY ITS COMPANY MEANT.
-//
-// An all-day due date is stored as the COMPANY's own midnight, so a company
-// east of UTC stores the 16th as the 15th at 22:00Z. Truncated to a UTC
-// calendar day that delta read "2031-04-15" — a day nobody chose, for every
-// company not on UTC. The instant cannot be wrong about which day it is,
-// and the applier that writes this row has no company zone to consult: these
-// rows are the state log's N identical copies, so text derived from live
-// configuration would differ between two nodes at different epochs.
+// AND AN ALL-DAY DATE KEEPS THE DAY ITS COMPANY MEANT. It is stored as the
+// company's midnight (the 16th in Berlin is the 15th at 22:00Z), so a UTC day
+// would name the wrong one. The delta keeps the instant: the applier has no
+// company zone, and text derived from live config would differ between nodes
+// at different epochs on the log's identical copies.
 func TestAnAllDayDueDateIsNotTruncatedToTheWrongDay(t *testing.T) {
 	t.Parallel()
 	at := func(iso string) *time.Time {

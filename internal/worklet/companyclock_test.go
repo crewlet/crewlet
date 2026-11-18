@@ -11,17 +11,12 @@ import (
 // THE DUE BANDS, A PERSON'S DAY AND THE WORKLOAD ARE CUT AT THE COMPANY'S
 // MIDNIGHT — ALL THREE, ON ONE CLOCK (ADR-0018).
 //
-// 23:30 on Wednesday 16 April in Los Angeles is 06:30 on Thursday in UTC. A
-// task due at noon on that Wednesday is due TODAY on the company's calendar,
-// and overdue on UTC's. The board's due band, the overdue mark on the same row
-// in a person's own day, and that person's overdue count on the workload are
-// three readers of one day, and every one of them was once cut on UTC — so for
-// the last seven hours of every Los Angeles day a board said "today" beside a
-// row marked overdue.
-//
-// The UTC half of each assertion is the control: it is what proves the case
-// sits inside the window where the two clocks disagree, so a reader that
-// ignored the zone it was handed cannot pass by coincidence.
+// 23:30 Wednesday in Los Angeles is Thursday in UTC, so a task due at noon
+// Wednesday is due today on the company's calendar and overdue on UTC's; the
+// board's band, the row's overdue mark in a person's day and their workload
+// count must all agree on the first. The UTC half of each assertion is the
+// control: it proves the case sits where the clocks disagree, so a reader
+// ignoring its zone cannot pass by coincidence.
 func TestDueBandsCutAtCompanyMidnight(t *testing.T) {
 	t.Parallel()
 	losAngeles, err := time.LoadLocation("America/Los_Angeles")
@@ -114,14 +109,10 @@ func TestDueBandsCutAtCompanyMidnight(t *testing.T) {
 }
 
 // A TASK PAGE STANDS ITS DUE DATE ON THE COMPANY'S CALENDAR, AND ON THE
-// BOARD'S PREDICATE.
-//
-// The rail used to print the browser's own "1d ago" for a task two company
-// days late that the board and the calendar drew red — so the detail carries
-// the standing, computed where the row's overdue mark is: whole calendar days
-// from the company's today to the due day, and "overdue" only for open work.
-// The UTC half is the control, as in the case above: 23:30 in Los Angeles is
-// already tomorrow in UTC, so a standing cut on UTC reads one day fewer.
+// BOARD'S PREDICATE: whole calendar days from the company's today to the due
+// day, computed where the row's overdue mark is, and "overdue" only for open
+// work. The UTC half is the control, as above: on UTC a standing reads one
+// day fewer.
 func TestATaskPageStandsItsDueDateOnTheCompanyCalendar(t *testing.T) {
 	t.Parallel()
 	losAngeles, err := time.LoadLocation("America/Los_Angeles")
@@ -162,8 +153,7 @@ func TestATaskPageStandsItsDueDateOnTheCompanyCalendar(t *testing.T) {
 		{"late", -2, true},
 		{"today", 0, false},
 		{"later", 12, false},
-		// PAST ITS DATE AND NOT LATE: finished work is done, not overdue —
-		// the same open-status half [TaskRow.Overdue] carries.
+		// Finished work is not overdue, as in [TaskRow.Overdue].
 		{"finished", -2, false},
 	} {
 		got := standing(c.id, losAngeles)
@@ -177,8 +167,8 @@ func TestATaskPageStandsItsDueDateOnTheCompanyCalendar(t *testing.T) {
 		t.Fatalf("on UTC the task due today stands %+v, so this case is not inside "+
 			"the window where the two clocks disagree", got)
 	}
-	// NO DATE, NO STANDING — and no clock, no standing either, rather than a
-	// guess on the process's own zone.
+	// No date, no standing; no clock, no standing either, rather than a guess
+	// on the process's own zone.
 	if got := standing("undated", losAngeles); got != nil {
 		t.Fatalf("an undated task stands %+v", got)
 	}

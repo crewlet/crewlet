@@ -24,14 +24,12 @@ func keyPath(project, key string) statelog.ScopeSet {
 
 // EVERY RECORD THAT MOVES A KEY NAMES IT.
 //
-// Which task a key opens is decided in log order — the directory is
-// first-writer-wins, and a purge hands a claimant's key to the lowest id still
-// holding it — and records about different tasks are reordered on a node that
-// retained one of them unless their scopes meet. So a create of a task, a move
-// that re-keys it and its purge each state every key whose claim they create,
-// release or hand on: named by its task alone, a purge overtook a retained
-// create of a duplicate on the node that retained it and handed the key to a
-// different task there than on every other node, for good.
+// Who holds a key is decided in log order (the comment atop keyscope.go), and
+// records about different tasks reorder on a node that retained one unless
+// their scopes meet. So a create, a re-keying move and a purge each state every
+// key they claim, release or hand on: a purge named by its task alone overtakes
+// a retained duplicate's create and hands the key elsewhere on that node, for
+// good.
 func TestEveryRecordThatMovesAKeyNamesIt(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -102,11 +100,10 @@ func TestEveryRecordThatMovesAKeyNamesIt(t *testing.T) {
 
 // A PURGE IS HELD BACK BY A RECORD DEFERRED UNDER ANY KEY IT HANDS ON.
 //
-// The writer's own probe is the request's scope, and that is the scope the
-// applier files the purge's deferral under on every other node — so a record
-// this node retained under the purged task's current key, or under a former key
-// that sits in the project the task left, must refuse the purge here exactly as
-// it would hold it back there.
+// The request's scope is both this writer's probe and the scope every other node
+// defers the purge under, so a record retained under the task's current key, or
+// under a former key in the project it left, must refuse it here as it would
+// hold it back there.
 func TestAPurgeIsHeldBackByARecordDeferredUnderAKeyItHandsOn(t *testing.T) {
 	t.Parallel()
 	for name, key := range map[string]struct{ project, key string }{
@@ -141,14 +138,11 @@ func TestAPurgeIsHeldBackByARecordDeferredUnderAKeyItHandsOn(t *testing.T) {
 
 // AN EDIT NEVER CLAIMS A KEY.
 //
-// Only a record that names a key may decide who holds it, and an ordinary edit
-// names none. The applier used to re-assert every key a task carried on every
-// apply, so a duplicate that had moved off a key another task claimed — whose
-// move's alias claim left that key alone, because it was never the
-// duplicate's address — took the key the moment the claimant was purged and
-// the duplicate was next edited: on whichever node applied the edit first,
-// under a scope that named no key, so a node that had retained the edit handed
-// the key elsewhere.
+// Only a record that names a key may decide who holds it, and an edit names
+// none. An apply that re-asserted a task's keys would let a duplicate that moved
+// off a contested key (its alias claim never touched it) take that key on its
+// first edit after the claimant's purge, under a scope naming no key, so a node
+// that retained the edit handed the key elsewhere.
 func TestAnEditNeverClaimsAKey(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -200,14 +194,11 @@ func TestAnEditNeverClaimsAKey(t *testing.T) {
 	}
 }
 
-// reKeyedBehind is two nodes on one log where the PEER has moved a task out
-// of ENG and back — re-keying it twice — and THIS node has applied neither
-// move, so whatever it reads before a request names the task's first key
-// alone. Its decide then waits for the peer's appends and sees the keys the
-// task holds now.
-//
-// It answers this node, the task as this node read it, and the task as the
-// peer left it.
+// reKeyedBehind is two nodes on one log where the PEER has moved a task out of
+// ENG and back, re-keying it twice, and THIS node has applied neither move: its
+// read before a request names the first key alone, while its decide waits for
+// the peer's appends and sees the keys held now. It answers this node, the task
+// as this node read it, and the task as the peer left it.
 func reKeyedBehind(t *testing.T) (*roundTrip, worklet.Task, worklet.Task) {
 	t.Helper()
 	a := newRoundTrip(t)
@@ -262,12 +253,10 @@ func TestAPurgeOfATaskReKeyedAfterItsScopeWasReadIsRefused(t *testing.T) {
 
 // A MOVE KEEPS EVERY KEY ITS TASK HOLDS WHERE THE MOVE DECIDES.
 //
-// The former-key list travels whole on the record, and the walk used to form
-// it from the read that started it: a task moved away and back since — which
-// the move's own project condition lets through, since it is back where it was
-// read — was re-keyed with only the keys it held then, and the two it had
-// gained since dropped off it. They went on opening it with nothing on the
-// task saying so, and its purge never handed them on.
+// The former-key list travels whole on the record, so one formed from the
+// walk's starting read would drop the keys a task gained by moving away and
+// back since (the move's project condition lets that through): they would go on
+// opening it unrecorded, and its purge would never hand them on.
 func TestAMoveKeepsEveryKeyItsTaskHoldsWhereTheMoveDecides(t *testing.T) {
 	t.Parallel()
 	a, task, peer := reKeyedBehind(t)
@@ -326,12 +315,11 @@ func TestAReKeyOfATaskReKeyedAfterItsKeysWereReadIsRefused(t *testing.T) {
 
 // A WRITE TO A BLOCKER SOMEBODY FILLED STAYS UNDER THE SCOPE CAP.
 //
-// Every write to a task names its dependents, because its apply rewrites the
-// edge each of them holds; a blocker may have [worklet.MaxDependents] of them
-// and its own term besides, one past [worklet.MaxScopeTerms]. The scope the
-// write stated was refused inside its decide, on every attempt — so a blocker
-// somebody had filled could never be edited, closed or commented on again. The
-// cap's own rule folds the enumeration into the project instead.
+// Every write to a task names its dependents (its apply rewrites their edges),
+// and a full blocker's [worklet.MaxDependents] plus its own term is one past
+// [worklet.MaxScopeTerms]: a scope enumerating them is refused in every decide,
+// so the blocker could never be written again. The cap's own rule folds the
+// enumeration into the project instead.
 func TestAWriteToAFilledBlockerStaysUnderTheScopeCap(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

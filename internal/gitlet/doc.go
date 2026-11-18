@@ -170,8 +170,9 @@
 // for the few it keeps. A live state asked by when its changes moved
 // ([ChangeSortUpdated]) walks its lifecycle's and its conversations' indexes
 // in step (changesort.go). A listing narrowed by its words takes its candidates
-// from this node's own index of them and judges each in its snapshot
-// (changetext.go, ADR-0156). One change ([ReadChange]) is read by its number on
+// from this node's own index of them and judges each in its snapshot, saying
+// how far back the index reaches while it is first built (changetext.go,
+// ADR-0156). One change ([ReadChange]) is read by its number on
 // its repository, its revisions paged newest first beside it. Both are held to
 // the asker's grant on the change's repository ([JudgeRead]): a listing that
 // names a repository, and a read of one change, are refused whole where the

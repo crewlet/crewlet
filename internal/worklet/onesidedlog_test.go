@@ -15,20 +15,16 @@ import (
 
 // A PASS'S LINE SAYS WHICH EDGES IT MIRRORED AND WHICH IT GAVE UP ON.
 //
-// `tracker_one_sided_repaired` counted every edge a pass settled, and the work
-// tracker guide said it counted the ones it MIRRORED — so a pass whose
-// blockers were all gone logged a number an operator reads as that many
-// repairs, when every one of them was a dependency somebody now has to resolve
-// by hand. One pass here settles one edge of each kind, which is the only shape
-// that tells a split count from a total.
+// A stamped edge is a dependency a person must resolve by hand, so counting it
+// as mirrored reads as the repair working. One pass settles one edge of each
+// kind, the only shape that tells a split count from a total.
 func TestTheOneSidedPassSaysWhatItMirroredAndWhatItStamped(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	for _, id := range []string{"dep-a", "blk-a", "dep-b", "blk-b"} {
 		filedTask(t, r, id)
 	}
-	// THE AUTHORED HALF ALONE, twice: the residue a gesture leaves when
-	// its mirror step did not run.
+	// THE AUTHORED HALF ALONE, twice: a gesture whose mirror step did not run.
 	for _, edge := range []struct{ dependent, blocker string }{
 		{"dep-a", "blk-a"}, {"dep-b", "blk-b"},
 	} {
@@ -54,8 +50,7 @@ func TestTheOneSidedPassSaysWhatItMirroredAndWhatItStamped(t *testing.T) {
 			DB: r.db, Writer: r.writer, NodeID: "node-a",
 			Logger: slog.New(slog.NewJSONHandler(logs, nil)),
 		}),
-		// Past the repair's age, so neither edge reads as a gesture
-		// still in flight.
+		// Past the repair's age, so neither edge reads as still in flight.
 		Now: func() time.Time { return wednesday.AddDate(1, 0, 0) },
 	})
 	if err != nil {

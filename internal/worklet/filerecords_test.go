@@ -47,18 +47,16 @@ func rewritten(t *testing.T, payload []byte, fn func(map[string]any)) []byte {
 	return out
 }
 
-// A FILE RECORD NAMES THE OBJECT ITS ROW NAMES (ADR-0082). A backup reads the
-// tracker's log past its store copy and carries every object a record names,
-// because a restore replays those records into the rows — so what the
-// declaration's reader says one record writes has to be what the applier
-// wrote: the same row, spelled as the table's walk spells it, and the same
-// object, or none for a removal. Read here off the bytes the real writer
-// published, applied by the real applier, and compared with the real walk.
+// A FILE RECORD NAMES THE OBJECT ITS ROW NAMES (ADR-0082): a backup carries
+// the objects of records past its copy, which a restore replays, so the
+// declaration's reader must say what the applier wrote — the same row, spelled
+// as the walk spells it, and the same object or none for a removal. Checked
+// against the real writer, applier and walk.
 //
-// AND EVERY OTHER RECORD ON THE LOG IS ANSWERED: none for one that writes no
-// file, a refusal the backup recognises for a record this build cannot read
-// that may write one — of any kind ([unreadableRecords]) — and the applier's
-// own refusal for one it would not apply.
+// AND EVERY OTHER RECORD IS ANSWERED: none for one that writes no file,
+// [objstore.ErrRecordUnreadable] for an unreadable one of any kind that may
+// write one ([unreadableRecords]), and the applier's own refusal for one it
+// would not apply.
 func TestAFileRecordNamesTheObjectItsRowNames(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -147,11 +145,10 @@ func TestAFileRecordNamesTheObjectItsRowNames(t *testing.T) {
 	}
 }
 
-// unreadableRecords holds what a record this build cannot read is answered as:
-// WHETHER IT MAY WRITE A FILE is read from what every build reads of it — its
-// kind and the scope its writer stated, the complete set of objects its apply
-// may write — and never from what this build's applier does with the kind,
-// which says nothing about what a newer build's does.
+// unreadableRecords holds that WHETHER a record this build cannot read MAY
+// WRITE A FILE is read from what every build reads of it (its kind and its
+// writer's scope), never from this build's applier, which says nothing about
+// a newer build's.
 func unreadableRecords(t *testing.T, records func([]byte) ([]objstore.RecordReference, error),
 	put, project []byte) {
 	t.Helper()
@@ -177,17 +174,14 @@ func unreadableRecords(t *testing.T, records func([]byte) ([]objstore.RecordRefe
 		payload []byte
 		refused bool
 	}{
-		// A KIND THIS BUILD HAS NEVER HEARD OF: it cannot say what a
-		// newer build's applier writes for it, nor even which object the
+		// AN UNKNOWN KIND: this build cannot even say which object the
 		// exactly-the-subject sentinel names.
 		{"a kind this build does not know, a newer build's", at(put, newer, kind("filecopy")), true},
 		{"a kind this build does not know, at a version it reads", at(put, worklet.RecordVersion, kind("filecopy")), true},
 		{"a kind this build does not know, on a project's subject", at(project, newer, kind("archive")), true},
-		// A KNOWN KIND IS ANSWERED BY ITS SCOPE, which a newer build's
-		// writer states: the sentinel is its own object, so only a file
-		// subject reaches a file; an enumeration reaches one through a
-		// container, the domain, a term this build cannot interpret or a
-		// file's own object.
+		// A KNOWN KIND IS ANSWERED BY ITS SCOPE: an enumeration reaches a
+		// file through a container, the domain, a term this build cannot
+		// interpret or a file's own object.
 		{"a project record reaching its container", at(project, newer, scope(
 			map[string]any{"k": "container", "i": "ENG"})), true},
 		{"a record reaching the domain", at(project, newer, scope(

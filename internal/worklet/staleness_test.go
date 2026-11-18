@@ -13,25 +13,15 @@ import (
 // EVERY READER CARRIES THE CALLER'S STALENESS BOUND INTO THE FRAMEWORK'S OWN
 // QUERY, and this is the hop nothing above this package can see.
 //
-// A surface builds a `worklet.ViewQuery` with `MaxLagSeq: 250` and hands it
-// over; whether the field then reaches [statelog.Query.MaxLagSeq] is a
-// line inside each reader, and a reader that dropped it produces an answer
-// identical in every visible respect to one that honoured it — same rows, same
-// `read_level`, same position. The only way to observe the difference is to
-// put the node BEHIND the caller's bound and require the refusal.
-//
-// That is the defect this file exists for rather than a hypothetical: the
-// board's `max_lag_seconds` was checked against the level and then dropped, so
-// a tile polling every twenty seconds and declaring a twenty-second bound was
-// served an answer of any age and rendered it live. `max_lag_seq` was the same
-// shape, fixed for the board and left standing for nine other questions that
-// never read the key at all.
+// Whether a caller's bound reaches [statelog.Query.MaxLagSeq] is a line inside
+// each reader, and a reader that dropped it answers exactly as one that
+// honoured it (same rows, `read_level` and position). Only a node BEHIND the
+// caller's bound, required to refuse, tells them apart.
 func TestEveryReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
 	// FAR BEHIND, so a bound of one record and of one second are both
-	// exceeded — the two units are two readings of one distance and a
-	// reader that carried only one of them must still go red.
+	// exceeded: a reader that carried only one unit must still go red.
 	log, err := statelogtest.LocalReaderBehind(worklet.Domain{}, h.db,
 		statelog.Position{Stream: worklet.Domain{}.Stream().Name, Generation: 1, Seq: h.seq},
 		100_000)
@@ -47,9 +37,8 @@ func TestEveryReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 
 	for _, tc := range []struct {
 		what string
-		// seconds and records run the same question twice, once per
-		// unit, because a reader that threads one field and forgets the
-		// other is the exact shape this package already shipped.
+		// seconds and records run the same question once per unit: a
+		// reader may thread one field and forget the other.
 		seconds func() error
 		records func() error
 	}{
@@ -159,10 +148,8 @@ func TestEveryReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 				}, now, time.UTC)
 				return err
 			}},
-		// THE POINT READS TOO. They took the level alone, on the claim
-		// that a single row has no set for a bound to be enforced
-		// against — but the bound is about this node's LAG, and one
-		// row's read is exactly as far behind as a listing's.
+		// THE POINT READS TOO: the bound is about this node's LAG, and one
+		// row's read is as far behind as a listing's.
 		{"work_item",
 			func() error {
 				_, err := reader.Task(ctx, "ENG-1", worklet.DetailWants{},
@@ -203,8 +190,7 @@ func TestEveryReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 // THE CONTROL: with no bound, the same reads on the same behind node ANSWER.
 //
 // Without it every case above would pass against a reader that refused
-// everything — which is the other way to make a staleness bound meaningless,
-// and the one a test written only for the refusal cannot see.
+// everything, which a test of the refusal alone cannot see.
 func TestAReaderWithNoBoundAnswersHoweverFarBehindItIs(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)

@@ -14,97 +14,46 @@ import (
 )
 
 // Custom-field VALUES: how a value on a task's document becomes a row a filter
-// can reach.
+// can reach. [Task.Fields] stays the record (it survives an unseen declaration
+// and a rename never re-points a value); `tracker_field_values` exists so the
+// `f.<slug>` filters have something to seek.
 //
-// # Why the document is not enough
-//
-// A task carries its field values as [Task.Fields] — a map keyed by field ID,
-// opaque JSON per entry — which is the right shape for a record: it survives a
-// declaration this build has never seen, and a rename never re-points a stored
-// value. What it cannot do is be FILTERED. `tracker_field_values` exists for
-// that, with four partial indexes each named in the DDL for a different
-// column, and until this the applier wrote no row into it: every `f.<slug>`
-// filter in the grammar had an index, a plan-test entry, and no data.
-//
-// # Why the column depends on the DECLARATION and not on the JSON
-//
-// A value is stored under the column its field's TYPE says — a number in
-// `num`, an instant in `at`, a choice's id in `ref`, prose in `text` — because
-// that is the column its index is on. Reading the type off the JSON instead
-// would put `"3"` in `text` and `3` in `num` for one field, and a filter on
-// either would silently miss half the corpus. So the apply reads the
-// declaration, and a value whose field is not declared ANYWHERE is kept on the
-// document and written to no row: it is a value for a field nobody can filter
-// on yet, which is exactly what it is.
-//
-// # A DECLARATION THAT ARRIVES LATER DOES NOT BACKFILL
-//
-// The rows are written when the TASK is applied, from the declarations in
-// force at that instant — so a field declared after a task was last written
-// has no value row for it, even though the task's document carries one. That
-// is deliberate rather than a gap to sweep: backfilling would mean walking
-// every task in the company on every catalogue edit, inside the apply
-// transaction that edit commits in, and a company declaring a field would
-// stall its own fleet for as long as that walk took.
-//
-// What makes it harmless is that a value for a field nobody had declared was
-// never filterable in the first place: the filter could not resolve the ref.
-// The row appears on the task's next write, which is the first moment the
-// value means anything to anybody.
-//
-// # And why `hidden` is a column rather than a delete
-//
-// An ARCHIVED field's values leave the filterable set and stay on the
-// document, which is what makes the archive one-way rather than destructive —
-// see [FieldDef.Archived]. `hidden = 1` is that state, and every index is
-// partial on `hidden = 0`.
+// A value goes in the column its field's DECLARED type names, never the JSON's:
+// reading the JSON would put `"3"` in `text` and `3` in `num` for one field.
+// Rows are written from the declarations in force when the TASK applies, and a
+// later declaration does not backfill: that would walk every task inside the
+// catalogue edit's apply. The value was unfilterable until declared anyway, and
+// gains its row on the task's next write. An archived field's rows stay with
+// `hidden = 1` ([FieldDef.Archived]); every index is partial on `hidden = 0`.
 
-// The value KINDS, which are not the field's type.
-//
-// The DDL's own head comment on `tracker_field_values` says what this column
-// is for: "`hidden` and `kind` carry the two non-live states: every filter and
-// total adds `hidden = 0 AND kind <> 'foreign'`". So `hidden` is the archived
-// DECLARATION and `kind` is the value's PROVENANCE — a value this engine's
-// write path produced, or one mirrored in from a tracker a company runs
-// beside it.
-//
-// A FOREIGN VALUE IS STORED AND NOT FILTERED ON. It is there so a renderer can
-// show what the other system holds, and it is out of every predicate because
-// the native grammar's operators are defined against the native catalogue's
-// declared types — comparing them against a foreign system's own would answer
-// a question nobody asked with a number nobody can check.
+// The value KINDS: a value's PROVENANCE, not its field's type — produced by
+// this engine's write path, or mirrored in from a tracker run beside it. Per
+// the `tracker_field_values` DDL, `hidden` (the archived declaration) and
+// `kind` are the two non-live states. A FOREIGN value is stored for a renderer
+// and kept out of every predicate: the native grammar's operators are defined
+// against the native catalogue's declared types, not a foreign system's.
 const (
 	FieldValueNative  = "native"
 	FieldValueForeign = "foreign"
 )
 
-// liveFieldValue is the predicate every filter and every total adds.
-//
-// ONE STRING, because the DDL states the rule once and three call sites read
-// it — the filter, the aggregate and the group — and a fourth spelling is how
-// one of them stops matching the other three.
+// liveFieldValue is the predicate every filter, aggregate and group adds,
+// spelled once so the three cannot drift apart.
 const liveFieldValue = `v.hidden = 0 AND v.kind <> '` + FieldValueForeign + `'`
 
-// MaxFieldValueSeq bounds how many entries one multi-valued field contributes.
-//
-// A LABELS OR PEOPLE FIELD IS A SET, and each member is its own row so an
-// `f.<slug>=<one>` filter is an index seek rather than a JSON scan. The cap is
-// [MaxOptions]'s, because the set a value can draw from is the declaration's
-// own option list and nothing can honestly exceed it.
+// MaxFieldValueSeq bounds how many entries one multi-valued field contributes:
+// each member of a labels or people set is its own row (so `f.<slug>=<one>` is
+// an index seek), and a set cannot honestly exceed its declaration's option
+// list, [MaxOptions].
 const MaxFieldValueSeq = MaxOptions
 
-// explodeFieldValues rewrites the rows one task's field values produce.
+// explodeFieldValues rewrites the rows one task's field values produce; the
+// delete is the caller's ([Applier.explodeTask]), so a cleared field leaves no
+// row.
 //
-// The delete is the caller's, exactly as it is for every other collection —
-// see [Applier.explodeTask] — so a record that cleared a field leaves no row
-// behind.
-//
-// THE DECLARATIONS ARE HANDED IN rather than read here, because the apply's
-// other reader of them is [TaskDeltas] and two reads of one document in one
-// transaction is waste that can also drift. [Applier.applyTask] reads them
-// exactly when a side of the commit carries values, which is precisely when
-// the guard below does not return — so a non-empty `task.Fields` and a nil map
-// cannot both be true.
+// The declarations are handed in because [TaskDeltas] reads them too, and two
+// reads in one transaction can drift. [Applier.applyTask] reads them whenever
+// a side carries values, so a non-empty `task.Fields` never meets a nil map.
 func (a *Applier) explodeFieldValues(ctx context.Context, tx *sql.Tx,
 	task Task, declared map[string]FieldDef, c applyContext) (int, error) {
 
@@ -112,23 +61,17 @@ func (a *Applier) explodeFieldValues(ctx context.Context, tx *sql.Tx,
 		return 0, nil
 	}
 	written := 0
-	// SORTED BY FIELD ID, so two nodes applying one record write the same
-	// rows in the same order — which is what makes the `seq` a multi-value
-	// takes a property of the RECORD rather than of a map iteration.
+	// Sorted, so every node writes the same rows in the same order and a
+	// multi-value's `seq` is the record's, not a map iteration's.
 	for _, id := range sortedRawKeys(task.Fields) {
 		field, held := declared[id]
 		if !held {
-			// A VALUE FOR A FIELD NOBODY DECLARES IS FOREIGN, and it
-			// gets a row saying so rather than no row at all. With no
-			// declaration there is no type and therefore no column,
-			// so nothing here guesses one — the row carries the
-			// value's own JSON and is both hidden and kinded
-			// `foreign`, which is what [liveFieldValue] excludes it
-			// by. What it buys is that the value has a local
-			// representation: a cross-project move orphans values,
-			// and a task that still holds them must not read as a
-			// task that lost them. A declaration arriving later
-			// re-explodes it as native on the task's next write.
+			// AN UNDECLARED FIELD'S VALUE IS FOREIGN: with no type there
+			// is no column, so its row holds the raw JSON, hidden and
+			// kinded `foreign` (out of [liveFieldValue]). It still gets a
+			// row because a cross-project move orphans values, and a task
+			// holding them must not read as having lost them. A later
+			// declaration re-explodes it as native on the next write.
 			rows, err := writeForeignValue(ctx, tx, task.ID, id, task.Fields[id])
 			if err != nil {
 				return 0, err
@@ -146,11 +89,9 @@ func (a *Applier) explodeFieldValues(ctx context.Context, tx *sql.Tx,
 	return written, nil
 }
 
-// appliesTo reports whether a declaration covers a task of this type.
-//
-// AN EMPTY LIST IS EVERY TYPE. It is the declaration that says nothing about
-// types, not one that applies to none — and reading it the other way would
-// hide every value of every field nobody restricted.
+// appliesTo reports whether a declaration covers a task of this type. An
+// empty list is EVERY type: reading it as none would hide every value of every
+// field nobody restricted.
 func appliesTo(field FieldDef, taskType string) bool {
 	if len(field.AppliesTo) == 0 {
 		return true
@@ -164,12 +105,8 @@ func appliesTo(field FieldDef, taskType string) bool {
 }
 
 // writeForeignValue records one value whose field this project does not
-// declare.
-//
-// ONE ROW WHATEVER THE VALUE IS, because a foreign value has no type to
-// explode by: a list stays a list, in the JSON the document holds. It is
-// bounded already — [MaxFieldValueBytes] caps what a write may carry per
-// field — so nothing is cut here.
+// declare, as ONE row whatever it is: with no type there is nothing to explode
+// by. [MaxFieldValueBytes] already bounds it, so nothing is cut here.
 func writeForeignValue(ctx context.Context, tx *sql.Tx, taskID, fieldID string,
 	raw json.RawMessage) (int, error) {
 
@@ -188,12 +125,10 @@ func writeForeignValue(ctx context.Context, tx *sql.Tx, taskID, fieldID string,
 	return affected(res)
 }
 
-// declaredFields is every field a task's project can carry, keyed by id.
-//
-// THE WORKSPACE'S PLUS THE PROJECT'S, which is the union [MaxFieldsPerDocument]
-// bounds at twice one document by construction. A project declaration of the
-// same id SHADOWS the workspace one, because that is what a field in the middle
-// of a move between them looks like and the project is the nearer scope.
+// declaredFields is every field a task's project can carry, keyed by id: the
+// workspace's plus the project's, at most twice [MaxFieldsPerDocument]. A
+// project declaration of the same id SHADOWS the workspace one: that is a
+// field mid-move between them, and the project is the nearer scope.
 func declaredFields(ctx context.Context, tx *sql.Tx, project string) (
 	map[string]FieldDef, error) {
 
@@ -227,11 +162,10 @@ func writeFieldValue(ctx context.Context, tx *sql.Tx, taskID string,
 
 	values, err := fieldRows(field, raw)
 	if err != nil {
-		// A VALUE THAT DOES NOT DECODE IS NOT AN APPLY FAILURE. The
-		// document keeps it, every node reaches the same conclusion, and
-		// the alternative — refusing the record — would let one
-		// malformed field value stop a task's every later change on
-		// every node in the fleet.
+		// A VALUE THAT DOES NOT DECODE IS NOT AN APPLY FAILURE: the
+		// document keeps it, every node agrees, and refusing the record
+		// would let one malformed value block the task's every later
+		// change fleet-wide.
 		//nolint:nilerr // Deliberate: see the paragraph above — the
 		// applier salvages, because refusing here would wedge the task.
 		return 0, nil
@@ -239,25 +173,15 @@ func writeFieldValue(ctx context.Context, tx *sql.Tx, taskID string,
 	if len(values) > MaxFieldValueSeq {
 		values = values[:MaxFieldValueSeq]
 	}
-	// HIDDEN IS TWO FACTS, not one. An ARCHIVED field's values stay on
-	// their tasks and leave the filterable set; so do the values of a
-	// field whose AppliesTo excludes this task's TYPE, which is what a
-	// task re-typed from bug to task leaves behind. Reading only the first
-	// left a `severity` filterable, groupable and totalled on a task the
-	// field does not apply to — a live value of a field that is not there.
+	// HIDDEN IS TWO FACTS: an archived field, and a field whose AppliesTo
+	// excludes this task's type (what a re-typed task leaves behind), else
+	// a value of a field that does not apply is filtered and totalled.
 	hidden := field.Archived || !appliesTo(field, taskType)
-	// ONE STATEMENT PER FIELD rather than per VALUE — and per FIELD rather
-	// than for the whole task, because `seq` is the member's index within
-	// this field's own set and the error below names the field whose value
-	// the engine could not write. A task carrying many single-valued
-	// fields is still a statement apiece; what this removes is the
-	// multi-valued case, where a labels or people field is up to
-	// [MaxFieldValueSeq] members and was up to that many statements.
-	//
-	// [store.InsertRows] DIRECTLY rather than through [insertMany],
-	// because `seq` IS the index: insertMany hands its builder the item so
-	// a call site reads as the collection it writes, and this is the one
-	// place that needs the position instead.
+	// ONE STATEMENT PER FIELD, not per value (a set is up to
+	// [MaxFieldValueSeq] members) nor per task: `seq` is the member's index
+	// within this field's set, and the error names the field.
+	// [store.InsertRows] directly, not [insertMany], whose builder gets the
+	// item rather than the index `seq` needs.
 	written, err := store.InsertRows(ctx, tx, maxVariables, `
 		INSERT INTO tracker_field_values
 			(task_id, field_id, seq, kind, hidden, num, text, at, ref)
@@ -284,12 +208,9 @@ type fieldValueRow struct {
 }
 
 // MultiValued reports whether one task may hold several values of this field.
-//
-// IT DECIDES TWO THINGS and they pull in opposite directions: a board grouped
-// on such a field puts a task on EVERY column it chose (a tag board), and a
-// sort on one has to pick exactly ONE value or the join multiplies every task
-// by its own value count. Naming it once is what keeps the two agreeing about
-// which fields those are.
+// It decides both that a board grouped on it puts a task in EVERY column it
+// chose and that a sort on it picks exactly ONE value (or the join multiplies
+// tasks); named once so the two agree on which fields those are.
 func MultiValued(t FieldType) bool {
 	switch t {
 	case FieldLabels, FieldPeople, FieldRelationship:
@@ -298,10 +219,9 @@ func MultiValued(t FieldType) bool {
 	return false
 }
 
-// FieldValueColumn is the column a field type's values are filtered on.
-//
-// ONE PLACE, because the apply writes it and the query reads it and a
-// disagreement between the two is a filter that silently matches nothing.
+// FieldValueColumn is the column a field type's values are filtered on, named
+// once because the apply writes it, the query reads it, and a disagreement is
+// a filter that silently matches nothing.
 func FieldValueColumn(t FieldType) string {
 	switch t {
 	case FieldNumber, FieldProgress, FieldCheckbox, FieldRollup:
@@ -309,9 +229,8 @@ func FieldValueColumn(t FieldType) string {
 	case FieldDate:
 		return "at"
 	case FieldDropdown, FieldLabels, FieldRelationship, FieldPeople:
-		// THE ID, NOT THE LABEL: a stored value holds the option's id,
-		// so a renamed option keeps every task that chose it. The query
-		// resolves a slug a caller typed to that id before it compares.
+		// The option's ID, not its label, so a renamed option keeps its
+		// tasks; the query resolves a typed slug to the id first.
 		return "ref"
 	}
 	return "text"
@@ -319,44 +238,26 @@ func FieldValueColumn(t FieldType) string {
 
 // fieldValueIndex is the partial index a filter on a field type's values
 // seeks: `(field_id, <its value column>) WHERE hidden = 0`, one per column,
-// declared by replicated migration 0002.
-//
-// DERIVED FROM [FieldValueColumn], so the column a filter compares and the
-// index it names cannot disagree — a filter naming another column's index
-// seeks `field_id` alone, which is the plan naming the index exists to stop.
+// declared by replicated migration 0002. Derived from [FieldValueColumn] so
+// the compared column and the named index cannot disagree: another column's
+// index would seek `field_id` alone.
 func fieldValueIndex(t FieldType) string {
 	return "tracker_field_values_" + FieldValueColumn(t) + "_idx"
 }
 
 // fieldValuesKey is the value table's primary key, `(task_id, field_id, seq)`,
-// as this engine names it — the index every read of ONE TASK'S values of a
-// field names: a sort's join, a grouping's join and its column filter, and a
-// total's read of the answer's own values.
-//
-// # Why a read of one task's values NAMES the key
-//
-// Because the four value indexes ([fieldValueIndex]) lead with `field_id` and
-// are partial on `hidden = 0`, which every such read states — so with no
-// statistics (nothing here runs ANALYZE) the planner took one of them and
-// sought `field_id` alone: every value the field holds in the company, read
-// again for every task the statement visited. Measured on the plan fixture: a
-// page sorted by a choice field, a board grouped by one and that board's
-// column counts each read the field's every value once per task, one column's
-// rows read the field's every value and then the project's whole board once
-// per value, and a total over a number field read the field's every value
-// through the choice column's index from the heap. Named, each is a seek on
-// the task and the field — on its first value too, for a sort or a
-// single-valued grouping — so it costs the tasks the statement already reads.
-//
-// A FILTER IS THE OTHER READ, and names the other index: it asks which tasks
-// hold a value, which the field's own column's index answers as one range, so
-// it is driven from there ([fieldClause]).
+// as this engine names it: the index every read of ONE TASK'S values of a
+// field names (a sort's join, a grouping's join and column filter, a total's
+// read of its answer's values). The [fieldValueIndex] indexes lead with
+// `field_id` and are partial on `hidden = 0`, which these reads also state, so
+// with no statistics (nothing runs ANALYZE) the planner picks one and reads
+// the field's every value once per task. Named, each read is a seek on the
+// task and the field. A FILTER asks which tasks hold a value, so it is driven
+// from the field's column index instead ([fieldClause]).
 const fieldValuesKey = "sqlite_autoindex_tracker_field_values_1"
 
-// fieldRows turns one declared field's JSON value into its rows.
-//
-// A MULTI-VALUED FIELD IS N ROWS, one per member, because that is what makes
-// `f.<slug>=<one>` an index seek rather than a scan over every task's JSON.
+// fieldRows turns one declared field's JSON value into its rows: one per
+// member of a multi-valued field, so `f.<slug>=<one>` is an index seek.
 func fieldRows(field FieldDef, raw json.RawMessage) ([]fieldValueRow, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, nil
@@ -364,22 +265,15 @@ func fieldRows(field FieldDef, raw json.RawMessage) ([]fieldValueRow, error) {
 	column := FieldValueColumn(field.Type)
 	var members []json.RawMessage
 	if err := json.Unmarshal(raw, &members); err != nil {
-		// NOT A LIST IS ONE MEMBER, which is what a single-valued field
-		// carries and what a multi-valued one carries when somebody set
-		// exactly one.
+		// Not a list is one member: a single-valued field, or a
+		// multi-valued one set to exactly one.
 		members = []json.RawMessage{raw}
 	}
-	// THE OPTION SPELLINGS, resolved HERE and not at the query: a stored
-	// ref holds the option's ID, so a value written as the slug or the
-	// name has to become that id before it is stored. It did not, and the
-	// query resolved anyway — so a task set to the slug a person types was
-	// invisible to every filter, grouping and total on the field it had
-	// just set. [OptionIDs] is the one spelling of the rule both sides now
-	// read.
-	//
-	// A FIELD WITH NO OPTION LIST resolves nothing, which is the honest
-	// answer for a relationship or a people field: its ref is a task id or
-	// a handle the caller already holds and no catalogue knows.
+	// OPTION SPELLINGS RESOLVE HERE too: a stored ref holds the option's ID,
+	// so a value written as its slug or name must become that id or every
+	// filter, grouping and total misses it. [OptionIDs] is the rule both
+	// sides read. A field with no option list (relationship, people)
+	// resolves nothing: its ref is a task id or a handle.
 	var options map[string]string
 	if column == "ref" {
 		options = OptionIDs(field.Config.Options)
@@ -397,10 +291,9 @@ func fieldRows(field FieldDef, raw json.RawMessage) ([]fieldValueRow, error) {
 			if id, known := options[strings.ToLower(text)]; known {
 				row.Ref = id
 			}
-			// AN UNKNOWN WORD IS STORED AS IT WAS WRITTEN, exactly as
-			// the query passes one through: refusing it would drop a
-			// value the document keeps, and the two sides agreeing on
-			// the raw text is what still makes them match.
+			// AN UNKNOWN WORD IS STORED AS WRITTEN, as the query passes
+			// one through: refusing would drop a value the document
+			// keeps, and both sides holding the raw text still match.
 		}
 		out = append(out, row)
 	}
@@ -428,10 +321,9 @@ func fieldRow(column string, kind FieldType, raw json.RawMessage) (
 	default:
 		var text string
 		if err := json.Unmarshal(raw, &text); err != nil {
-			// A NON-STRING RENDERS RATHER THAN FAILING: a caller that
-			// set a dropdown's option as a number means the option
-			// whose id reads that way, and refusing it would leave
-			// the value on the document and out of every filter.
+			// A NON-STRING RENDERS RATHER THAN FAILING: a dropdown
+			// option set as a number means the option whose id reads
+			// that way; refusing would keep it out of every filter.
 			text = strings.Trim(string(raw), `"`)
 		}
 		if text = strings.TrimSpace(text); text == "" {
@@ -454,9 +346,8 @@ func decodeNumber(kind FieldType, raw json.RawMessage) (float64, bool) {
 	}
 	var flag bool
 	if err := json.Unmarshal(raw, &flag); err == nil {
-		// A CHECKBOX IS A NUMBER IN THE STORE, because its index is the
-		// numeric one and `checked = true` and `checked = 1` are the
-		// same fact written two ways.
+		// A CHECKBOX IS A NUMBER: its index is the numeric one, and
+		// `checked = true` and `checked = 1` are one fact.
 		if flag {
 			return 1, true
 		}

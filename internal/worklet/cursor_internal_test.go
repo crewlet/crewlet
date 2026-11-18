@@ -8,13 +8,9 @@ import (
 )
 
 // EVERY CURSOR A LISTING CANNOT RESUME IS AN ErrBadCursor, and so an
-// ErrBadQuery: each surface answers it as a refusal of the request (a 400
-// `bad_params`, a tool's "drop the cursor"), never as this node's fault.
-//
-// Every refusal the three cursor readers make, the work list's keyset
-// ([cursorArms]), a priority list's offset ([pageListed]) and a thread's place
-// ([parseCommentCursor]), because one spelled as a plain error was answered
-// 500 to a reader pressing "Load more" after somebody added a seat.
+// ErrBadQuery, answered as a refusal of the request (a 400 `bad_params`),
+// never a 500: across all three readers, [cursorArms], [pageListed] and
+// [parseCommentCursor].
 //
 // Mutation: build any one of the refusals with a plain fmt.Errorf and its case
 // goes red.
@@ -92,9 +88,7 @@ func TestEveryCursorRefusalIsABadCursor(t *testing.T) {
 // AN ORDER'S DIGEST CARRIES WHAT ITS TERMS BIND AND ARE RELATIVE TO, so a
 // cursor is refused by an order that renders the same and reads other values:
 // a field sort of another field, and the seats' order after a chart apply
-// moved it. Digested from the rendered order alone, `sort=f.effort`'s cursor
-// resumed `sort=f.cost` at a value of another field, and a seat added to the
-// chart moved every place after it with the old cursor still accepted.
+// moved it.
 //
 // Mutation: digest [renderOrder] alone and every case goes red.
 func TestAnOrdersDigestCarriesWhatItsTermsBind(t *testing.T) {
@@ -128,9 +122,8 @@ func TestAnOrdersDigestCarriesWhatItsTermsBind(t *testing.T) {
 }
 
 // A NAME IS ORDERED BY THE ROOT COLLATION, not by its lowercased bytes, which
-// put every accented initial after every ASCII one: "Émile" after "Zoe". In
-// the root collation an accent or a case orders only names otherwise equal,
-// and the name's bytes and then the handle settle a tie, so the order is total.
+// put "Émile" after "Zoe". An accent or a case orders only names otherwise
+// equal, and the name's bytes then the handle settle a tie, so the order is total.
 //
 // Mutation: compare strings.ToLower of the names and the first case goes red;
 // drop the handle and the last does.

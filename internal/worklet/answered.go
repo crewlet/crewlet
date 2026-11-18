@@ -13,46 +13,22 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The asks put to one person that were closed recently: answered, by them or
-// by somebody else, or resolved without an answer. It is the other half of
-// [Reader.Decisions], which lists what is still open: an ask leaves that list
-// at the read after its answer, and without this one a person could not see
-// what they decided last Tuesday, or that a colleague answered a question put
-// to them.
-//
-// # The same rows, closed
-//
-// An ask is the comment that asked it (`tracker_comments.ask`), read through
-// the same function as an open one ([askRowsOf]), so the two lists describe an
-// ask identically. What closes it is the answer comment that names it
-// (the ask's `answered_by` holds its id), whose author and instant are who
-// answered and when, and whose document holds the option chosen; or, for an
-// ask resolved without an answer, the ask's own `resolved_by` and
+// The asks put to one person and closed recently (answered, by anyone, or
+// resolved without an answer): the other half of [Reader.Decisions], which
+// lists the open ones. Both read an ask through [askRowsOf], so they describe
+// it identically. What closed it is the answer comment its `answered_by`
+// names (author, instant, chosen option), or its own `resolved_by` and
 // `resolved_at`.
 //
-// # Bounded twice
-//
-// By [AnsweredWindow], because this is "what did I decide lately" rather than
-// an archive: every answer stays on its task's thread for good, and the
-// thread is where an older one is read. And by [MaxAnswered] rows, the page
-// every listing in this API shares, with [AnsweredAnswer.Truncated] saying the
-// window held more.
-//
-// # What the asker did next
-//
-// [AnsweredAsk.FollowedUp] is the asker's first record on the task after the
-// commit that closed the ask: the change the answer led to, or at least the
-// sign it was read. It is the tracker's fact. Whether the asker is working on
-// the task right now, or is paused, is live seat state, which the overview
-// already pushes; a surface reads it there rather than from a copy here that
-// would be stale by the time it was drawn.
+// Bounded by [AnsweredWindow] (an older answer is read on its task's thread)
+// and by [MaxAnswered] rows, [AnsweredAnswer.Truncated] saying the window held
+// more. [AnsweredAsk.FollowedUp] is the tracker's fact of what the asker did
+// next; whether it is working on the task now is live seat state, read from
+// the overview rather than from a copy here that would be stale.
 
-// AnsweredWindow is how far back the answered read reaches.
-//
-// SEVEN DAYS, a working week and its weekend: long enough that a person back
-// from a long weekend still finds what they decided before it, and short
-// enough that the list stays a list of recent decisions rather than the
-// company's history. An older answer is on its task's thread.
+// AnsweredWindow is how far back the answered read reaches: seven days, so a
+// person back from a long weekend still finds what they decided before it,
+// while the list stays recent decisions rather than the company's history.
 const AnsweredWindow = 7 * 24 * time.Hour
 
 // MaxAnswered bounds one page of answered asks: [MaxDecisions], the ceiling
@@ -129,13 +105,10 @@ type AnsweredAnswer struct {
 }
 
 // answeredAsksFrom and answeredAsksWhere are the closed asks put to one
-// person, bound to their record name as the one argument.
-//
-// THE PREDICATE IS THE INDEX'S, term for term, so the planner proves the
-// implication and searches `tracker_comments_answered_asks_idx` (asserted by
-// TestTheAnsweredReadSearchesItsIndex): `c.ask <> ”` is stated even beside
-// `c.ask = ?`, because a bound parameter proves nothing about the empty
-// string.
+// person, bound to their record name. The predicate is
+// `tracker_comments_answered_asks_idx`'s term for term so the planner uses it
+// (TestTheAnsweredReadSearchesItsIndex): `c.ask <> ”` stays beside
+// `c.ask = ?` because a bound parameter proves nothing about the empty string.
 const (
 	answeredAsksFrom = `tracker_comments c
 		JOIN tracker_tasks t ON t.id = c.task_id
@@ -162,19 +135,12 @@ const answeredStatement = `
 	LIMIT ?`
 
 // followUpStatement is the asker's first record on the task after the commit
-// that closed the ask.
-//
-// THAT COMMIT IS NAMED BY ITS RECORD, the history row's key, so the position
-// is one primary-key read whether or not the commit woke anybody (only a loud
-// commit names its comment in the history). For an answer it is the record
-// that posted it, which the answer's row carries (`record_id`, which an edit
-// leaves alone, so an answer reworded later still closed its ask when it was
-// posted). For an ask resolved without one it is the newest record that
-// resolved it, which no row carries ([resolvedStatement]).
-//
-// IN LOG ORDER, not by clock: "after" is the position, which is a total order
-// over the task's commits, where two writers' authored instants can tie or run
-// backwards.
+// that closed the ask, in log order: two writers' authored instants can tie or
+// run backwards. That commit is named by its record, the history row's key, so
+// it is one primary-key read even for a commit that woke nobody (only a loud
+// one names its comment). For an answer it is the answer row's `record_id`,
+// which an edit leaves alone; for an ask resolved without one, the record
+// [resolvedStatement] finds.
 const followUpStatement = `
 	SELECT h.created_at, h.kind, h.excerpt, h.fields_json, h.comment_id
 	FROM tracker_history h
@@ -184,15 +150,10 @@ const followUpStatement = `
 	LIMIT 1`
 
 // resolvedStatement is every record on one task that resolved a remark after
-// a commit, newest first, each with its mutation: the commit that closed an
-// ask resolved without an answer is the newest of them about that ask.
-//
-// READ FROM THE HISTORY because no row says where a resolve landed: it writes
-// the resolution and nothing else ([resolveComment]), and the ask's own
-// `record_id` is the record that posted it. A history row keeps its record's
-// mutation, and a resolve's names the remark it resolved, so the rows are read
-// newest first until one names this ask ([readResolve]). After the ask's own
-// post, since nothing resolved before it was posted closed it.
+// the ask's own post, newest first, each with its mutation; [readResolve] takes
+// the first naming the ask as the commit that closed it. Read from the history
+// because no row says where a resolve landed: [resolveComment] writes only the
+// resolution, and the ask's `record_id` is its post.
 const resolvedStatement = `
 	SELECT h.id, h.document
 	FROM tracker_history h
@@ -365,13 +326,10 @@ func withdrawnFrom(ctx context.Context, tx *sql.Tx, ask askRecord) (*Withdrawn, 
 }
 
 // readResolve answers the newest record on the task that resolved this ask
-// after the record that posted it (posted), or none where the history holds
-// no such record.
-//
-// A ROW WHOSE MUTATION DOES NOT DECODE NAMES NO REMARK rather than failing the
-// read, for [statedHandOffs]' reason: its record decoded once already, when it
-// was applied, and where a resolve landed is what the answer shows, never a
-// reason to refuse it.
+// after the record that posted it (posted), or "" when there is none. A row
+// whose mutation does not decode names no remark rather than failing the read,
+// for [statedHandOffs]' reason: where a resolve landed is shown, never a reason
+// to refuse the answer.
 func readResolve(ctx context.Context, tx *sql.Tx, task, ask, posted string) (string, error) {
 	rows, err := tx.QueryContext(ctx, resolvedStatement, task,
 		string(ChangeCommentResolved), posted)

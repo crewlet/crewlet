@@ -706,7 +706,9 @@ func Catalogue() []Instrument {
 			Attributes: []string{"outcome"},
 			Shows: "What each work pickup decided for an idle agent seat this " +
 				"node holds (ADR-0112): `woken` when it handed the seat its " +
-				"next ready item, `nothing_ready` when the seat holds no " +
+				"next ready item (an urgent one also to a seat that was " +
+				"running a turn or had mail waiting, ADR-0159), " +
+				"`nothing_ready` when the seat holds no " +
 				"ready work, `all_offered` when it was handed every ready " +
 				"item at its current version already, `cooldown` and " +
 				"`claimed` when the fleet's claims held it back, and " +

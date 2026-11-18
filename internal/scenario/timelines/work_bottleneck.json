@@ -1,0 +1,146 @@
+{
+  "name": "work_bottleneck",
+  "pattern": "work_bottleneck",
+  "seats": [
+    {
+      "handle": "owner",
+      "kind": "person"
+    },
+    {
+      "handle": "backend",
+      "kind": "agent"
+    },
+    {
+      "handle": "qa",
+      "kind": "agent"
+    }
+  ],
+  "steps": [
+    {
+      "at": 0,
+      "actor": "owner",
+      "verb": "file",
+      "item": "W-1",
+      "assignee": "backend",
+      "expect": {
+        "woken": [
+          "backend"
+        ]
+      }
+    },
+    {
+      "at": 20,
+      "actor": "owner",
+      "verb": "file",
+      "item": "W-2",
+      "assignee": "qa",
+      "expect": {
+        "woken": [
+          "qa"
+        ]
+      }
+    },
+    {
+      "at": 30,
+      "actor": "owner",
+      "verb": "file",
+      "item": "W-3",
+      "assignee": "qa",
+      "expect": {
+        "woken": [
+          "qa"
+        ]
+      }
+    },
+    {
+      "at": 40,
+      "actor": "owner",
+      "verb": "file",
+      "item": "W-4",
+      "assignee": "qa",
+      "expect": {
+        "woken": [
+          "qa"
+        ]
+      }
+    },
+    {
+      "at": 50,
+      "actor": "owner",
+      "verb": "file",
+      "item": "W-5",
+      "assignee": "qa",
+      "expect": {
+        "woken": [
+          "qa"
+        ]
+      }
+    },
+    {
+      "at": 60,
+      "actor": "owner",
+      "verb": "file",
+      "item": "W-6",
+      "assignee": "qa",
+      "expect": {
+        "woken": [
+          "qa"
+        ]
+      }
+    },
+    {
+      "at": 100,
+      "actor": "qa",
+      "verb": "wait",
+      "item": "W-2",
+      "on": "W-1",
+      "expect": {
+        "woken": [
+          "backend"
+        ]
+      }
+    },
+    {
+      "at": 110,
+      "actor": "qa",
+      "verb": "wait",
+      "item": "W-3",
+      "on": "W-1",
+      "expect": {
+        "woken": [
+          "backend"
+        ]
+      }
+    },
+    {
+      "at": 120,
+      "actor": "qa",
+      "verb": "wait",
+      "item": "W-4",
+      "on": "W-2",
+      "expect": {
+        "woken": []
+      }
+    },
+    {
+      "at": 130,
+      "actor": "qa",
+      "verb": "wait",
+      "item": "W-5",
+      "on": "W-3",
+      "expect": {
+        "woken": []
+      }
+    },
+    {
+      "at": 140,
+      "actor": "qa",
+      "verb": "wait",
+      "item": "W-6",
+      "on": "W-4",
+      "expect": {
+        "woken": []
+      }
+    }
+  ]
+}

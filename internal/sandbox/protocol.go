@@ -833,6 +833,11 @@ type Result struct {
 	// succeed, and the box's word, as ContextExhausted is.
 	RequestRefused bool
 
+	// RoundCapped says the run ended on the round cap its launch handed it
+	// before it finished (types.ExecutorErrorMaxTurns): Claude Code's
+	// `error_max_turns`. Read only on a run that did not succeed.
+	RoundCapped bool
+
 	// Event is how the harness said its run ended IN FIELDS, beside the words of
 	// Text and Error: its own terminal event, verbatim — Claude Code's
 	// result line, whose `api_error_status` names a spent plan however the

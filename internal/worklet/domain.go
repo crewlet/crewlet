@@ -10,62 +10,47 @@ import (
 
 // Domain is the tracker as the state-log framework sees it.
 //
-// A DECLARATION, not a behaviour: every method answers a question the
-// framework asks before it applies anything, and each one has a failure mode
-// that is silent if the answer is wrong. What tables exist decides what a
-// donated snapshot scrubs and what an identity claim compares; which kinds
-// arbitrate decides where an anchor row is written; whether a record installs
-// a gate decides whether an unknown version stops the applier or is filed for
-// later.
+// A declaration: each method answers a question the framework asks before it
+// applies anything, and a wrong answer fails silently. The tables decide what a
+// donated snapshot scrubs and what an identity claim compares; the arbitrated
+// kinds decide where an anchor row is written; InstallsGate decides whether an
+// unknown version stops the applier or is filed for later.
 type Domain struct{}
 
 // Name is the register key, the manifest key and the operator's own column.
 func (Domain) Name() string { return "tracker" }
 
-// TrackerLogMaxBytes is the ceiling this domain declares for its log, which is
-// what the framework's own suites provision the stream with. A node sizes the
-// stream from Tier A (`stream.tracker_log_max_bytes`) instead, together with
-// every other state log, inside what the broker can actually grant.
+// TrackerLogMaxBytes is this log's declared ceiling, which the framework's
+// suites provision (a node sizes it from `stream.tracker_log_max_bytes`).
+// Crossing it REFUSES an append rather than dropping the oldest record: nothing
+// here is derivable, so shedding history is data loss.
 //
-// Crossing it REFUSES an append rather than dropping the oldest record —
-// nothing on this stream is derivable from anything else, so shedding history
-// is data loss with a tidy name.
-//
-// SIXTEEN GIBIBYTES IS FIVE YEARS OF THE REFERENCE COMPANY'S RECORDS,
-// MEASURED: its day takes 9.9 MB of this log (the package doc's "What a day
-// costs the log, measured"), which fills it in 4.7 years, and
-// TestTheMutationLogsCeilingIsFiveYearsOfAMeasuredDay holds that day within a
-// tenth of this ceiling's five years — signed records included, which ADR-0031
-// made forty bytes longer each and which moved the day from 9.7 MB, inside
-// that tenth, so the ceiling stays. Its seats' linearizable reads add 2.2 MB
-// a day of barriers, so a completely blocked trim reaches it in nearly four
-// years — an unmistakable operator failure rather than a surprise — and the
+// Five years of the reference company, measured: its day takes 9.9 MB of this
+// log (package doc, "What a day costs the log, measured"), which fills it in
+// 4.7 years (TestTheMutationLogsCeilingIsFiveYearsOfAMeasuredDay holds it
+// within a tenth of five). Its seats' linearizable reads add 2.2 MB a day of
+// barriers, so a completely blocked trim reaches it in nearly four years; the
 // operator dial is real because at a three-year-old company whose trim never
 // ran the ceiling is under a year away.
 const TrackerLogMaxBytes = 16 << 30
 
 // TrackerMaxRecordBytes is the largest record this domain publishes
-// ([statelog.StreamSpec.MaxRecordBytes]).
-//
-// THE LARGEST THE TRANSPORT CARRIES ([statelog.MaxTransportRecordBytes]),
-// because a smaller declaration would buy this log nothing. What the
-// declaration sizes is the fleet term of the gate reserve, and at the
-// tracker's gibibyte floor a sixteenth of the ceiling is already the larger
-// term — 64 MiB against the 57 seven peers' records at this size can overshoot
-// by — so the reserve is the same whatever is declared here, and what the
-// declaration would otherwise bound (a task's description, a comment's body, a
-// batch of fields) each has a cap of its own. Not the transport's own eight
-// mebibytes: that limit is on the signed message, so a record declared at it
-// was admitted here and refused by the broker.
+// ([statelog.StreamSpec.MaxRecordBytes]): the largest the transport carries
+// ([statelog.MaxTransportRecordBytes]), since a smaller one buys nothing. The
+// declaration sizes only the gate reserve's fleet term, and at the tracker's
+// gibibyte floor a sixteenth of the ceiling, 64 MiB, already exceeds the 57
+// seven peers' records at this size can overshoot by; what it would otherwise
+// bound (a description, a comment body, a batch of fields) has a cap of its
+// own. Not the transport's eight mebibytes: that limit is on the signed
+// message, so a record declared at it would pass here and be refused by the
+// broker.
 const TrackerMaxRecordBytes = statelog.MaxTransportRecordBytes
 
-// TrackerLogDuplicates is the window the broker collapses a repeated
-// operation id in.
-//
-// AN OPTIMISATION, NEVER A MECHANISM: the operation ledger is what actually
-// makes a retry idempotent, and this only saves the round trip. Two minutes,
-// because it must outlast a publisher's whole retry budget and no longer —
-// every message in the window costs memory on the server.
+// TrackerLogDuplicates is the window the broker collapses a repeated operation
+// id in: an optimisation saving a round trip, never what makes a retry
+// idempotent (the operation ledger is). Two minutes outlasts a publisher's
+// whole retry budget, and no longer, since every message in the window costs
+// server memory.
 const TrackerLogDuplicates = 2 * time.Minute
 
 // Stream is the mutation log, at the domain's whole budget.
@@ -78,21 +63,17 @@ func (Domain) Stream() statelog.StreamSpec {
 		MaxRecordBytes: TrackerMaxRecordBytes,
 		Duplicates:     TrackerLogDuplicates,
 		Replay:         statelog.ReplayStrict,
-		// EVERY KIND BUT THREE. A turn is additive and races
-		// nobody; a barrier shares one subject across the whole company,
-		// so an expectation there would serialise every linearizable
-		// read behind every other one and write an anchor row per read
-		// into the transaction holding this store's only writer; and the
-		// trim's trimmed record removes anchors, so arbitrated it would
-		// write one of its own on every apply (ADR-0080).
+		// Every kind but three (ADR-0080): a turn is additive and races nobody; a
+		// barrier's one company-wide subject would serialise every linearizable read
+		// and write an anchor row per read inside this store's only writer; and the
+		// trim's record removes anchors, so arbitrated it would write one per apply.
 		ArbitratedKinds: arbitratedKinds(),
 	}
 }
 
-// arbitratedKinds is every kind but those three, derived from the enum rather
-// than typed again — a list written twice is a kind that arbitrates in one
-// place and not the other, which wedges that subject the first time a gate
-// drops a record.
+// arbitratedKinds is every kind but those three, derived from the enum: a list
+// typed twice is a kind arbitrated in one place and not the other, which wedges
+// that subject the first time a gate drops a record.
 func arbitratedKinds() []string {
 	out := make([]string, 0, len(ObjectKinds))
 	for _, k := range ObjectKinds {
@@ -127,21 +108,18 @@ func (Domain) Envelope(payload []byte) (statelog.Envelope, error) {
 // InstallsGate reports a record whose unknown version must STOP the applier
 // rather than be filed for later.
 //
-// Answered from the envelope alone, because that is all a node has when it
-// cannot decode the payload. An eviction is a gate by its kind and a purge is
-// one by its op — and a deferred gate licenses every later record on this
-// node with no inverse that repairs it.
+// Answered from the envelope alone, all a node has when it cannot decode the
+// payload: an eviction is a gate by its kind, a purge by its op. A deferred
+// gate would license every later record on this node with no inverse to repair
+// it.
 func (Domain) InstallsGate(env statelog.Envelope) bool {
 	return ObjectKind(env.Kind).InstallsGate() || OpKind(env.Op) == OpPurge
 }
 
-// NodeGate reports a node's eviction or readmission — the one record a write
-// flagged [statelog.Request.NodeGate] may carry.
-//
-// BY ITS KIND, which nothing but a node's eviction or readmission is published
-// under — and deliberately not InstallsGate: the purge is this log's other
-// gate, and it is an ordinary write that the gate reserve and the fences a
-// node gate is excused must hold.
+// NodeGate reports a node's eviction or readmission, the one record a write
+// flagged [statelog.Request.NodeGate] may carry. By kind, and deliberately not
+// InstallsGate: the purge, this log's other gate, is an ordinary write that the
+// gate reserve and the fences a node gate is excused must hold.
 func (Domain) NodeGate(env statelog.Envelope) bool {
 	return ObjectKind(env.Kind) == KindEviction
 }
@@ -174,27 +152,24 @@ func (Domain) Evicts(payload []byte) (bool, error) {
 
 // Tables is every durable table this domain writes, with its class.
 //
-// THE SCRUB LIST, THE IDENTITY CLAIM AND THE LOCAL SWEEP ARE ALL DERIVED FROM
-// THIS MAP, which is why a table missing from it is three lists that are
-// silently short rather than one error. It is built from the exported
-// inventories rather than typed a fourth time.
+// The scrub list, the identity claim and the local sweep all derive from this
+// map, so a missing table silently shortens three lists. It is built from the
+// exported inventories rather than typed again.
 func (Domain) Tables() map[string]statelog.TableClass {
 	out := make(map[string]statelog.TableClass,
 		len(ReproducibleTables)+len(MachineryTables))
 	for _, table := range ReproducibleTables {
 		out[table] = statelog.Replicated
 	}
-	// THE ONE DIVERGENT TABLE. It is written only by an applied commit and
-	// TRAVELS inside a snapshot — so it is not Local — but it is excluded
-	// from the identity claim, because the applier applies the inbox
-	// horizon from the epoch it was given and two nodes briefly on
-	// different epochs legitimately write different rows.
+	// The one divergent table: written only by an applied commit and carried in a
+	// snapshot (so not Local), but outside the identity claim, because the applier
+	// applies the inbox horizon from its epoch and two nodes briefly on different
+	// epochs legitimately write different rows.
 	out["tracker_notifications"] = statelog.Divergent
 	for _, table := range MachineryTables {
 		out[table] = statelog.Local
 	}
-	// THE LEDGER TRAVELS — see [statelog.Domain.OpsTable] and
-	// [MachineryTables].
+	// The ledger travels: see [statelog.Domain.OpsTable] and [MachineryTables].
 	out[Domain{}.OpsTable()] = statelog.Divergent
 	return out
 }
@@ -208,41 +183,24 @@ func (Domain) ScopeIndex() string { return "tracker_log_deferred_scope" }
 // OpsTable is contract 3's first layer: what this node has already applied.
 func (Domain) OpsTable() string { return "tracker_ops" }
 
-// GatesSeatAdmission reports that a seat depends on this domain's copy.
-//
-// TRUE, because every seat's tools read this log on every turn, and a strict
-// replay's stall is a FAULT rather than a coverage number: a node behind on the
-// mutation log serves rows that are simply wrong, where a node behind on a
-// compacted domain serves an answer that is merely less complete and says so.
-// Its copy is judged like every domain's, and a wrong one goes out of service
-// for the tracker's operations alone — ADR-0079.
+// GatesSeatAdmission reports that a seat depends on this domain's copy: true,
+// because every seat's tools read this log every turn, and a node behind on a
+// strict replay serves rows that are wrong, not merely less complete as on a
+// compacted domain. A wrong copy goes out of service for the tracker's
+// operations alone (ADR-0079).
 func (Domain) GatesSeatAdmission() bool { return true }
 
 // ClaimsIdentity reports that every data node's Replicated tables must be
-// byte-identical.
+// byte-identical: the claim the design rests on, N copies of one SQL state
+// derived from one ordered log by one deterministic applier.
 //
-// TRUE, and it is the claim the whole design rests on: N copies of one SQL
-// state, derived from one ordered log by one deterministic applier.
-//
-// # It is ASSERTED and not verified, and this is where that is written down
-//
-// A checksum over each node's identity-claimed tables, published and compared,
-// is what would turn "should be identical" into something a fleet reports on.
-// Nothing builds one. This sentence used to say it was checkable in a way that
-// read as though something checked it — the shape
-// [internal/statelog]'s own vocabulary gate exists to catch, since a paragraph
-// describing a mechanism nobody built is an instruction to build it.
-//
-// A checksum written today would also be WRONG, and the reason is worth
-// keeping beside the claim: `tracker_projects.rank_duplicate_pending` is an
-// applier-local hint, set by each node's own applier from its own probe and
-// cleared ONLY by the fleet-singleton duty's local write on the node that
-// holds the duty — see [duty.clearProbe], which states the same thing from
-// the other end, including that the apply path has no clear at all. So two
-// nodes legitimately hold different values for it at one checkpoint, and a
-// peer's copy stays set until it restarts. So the claim is really "identical
-// in every column a RECORD owns", and a verification has to exclude the
-// columns no record does before it can mean anything.
+// It is ASSERTED, not verified: nothing publishes and compares a checksum of
+// the claimed tables. One written today would also be wrong:
+// `tracker_projects.rank_duplicate_pending` is an applier-local hint each node
+// sets from its own probe, cleared only by the fleet-singleton duty's local
+// write ([duty.clearProbe]), so nodes legitimately differ on it and a peer's
+// copy stays set until it restarts. The claim is really "identical in every
+// column a RECORD owns", and a verification must exclude the other columns.
 func (Domain) ClaimsIdentity() bool { return true }
 
 // FeedGroup is the change feed's own consumer on this log: [FeedGroup], the

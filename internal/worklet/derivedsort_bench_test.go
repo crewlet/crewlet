@@ -19,13 +19,11 @@ import (
 //
 //	go test ./internal/worklet -run '^$' -bench BenchmarkADerivedOrder -benchtime 10x
 //
-// EACH READ A PAGE MAKES: the first page, a page from the middle of the order,
-// and where one task sits with its neighbours (`around=`). The assignee order
-// reads a row's place through one seek of the roster's places
-// ([assigneeOrder]), so every read here costs about what the title's does, at
-// either chart size and at any depth. Spelled as a CASE naming every seat, it
-// cost 3 to 5 s for a first page and 10 to 18 s for a later one or a task's
-// neighbours at 5 000 seats, past the estate's read budget.
+// EACH READ A PAGE MAKES: the first page, a middle page, and one task with its
+// neighbours (`around=`). The assignee order seeks a row's place in the
+// roster's places ([assigneeOrder]), so every read costs about the title's, at
+// either size and any depth; a CASE naming every seat took seconds at 5 000
+// seats, past the estate's read budget.
 func BenchmarkADerivedOrder(b *testing.B) {
 	for _, seats := range []int{500, 5_000} {
 		db := derivedOrderStore(b, seats)

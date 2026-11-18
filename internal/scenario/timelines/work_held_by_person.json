@@ -1,0 +1,92 @@
+{
+  "name": "work_held_by_person",
+  "pattern": "work_held_by_person",
+  "seats": [
+    {
+      "handle": "owner",
+      "kind": "person"
+    },
+    {
+      "handle": "app",
+      "kind": "agent"
+    }
+  ],
+  "steps": [
+    {
+      "at": 0,
+      "actor": "owner",
+      "verb": "file",
+      "item": "W-1",
+      "assignee": "owner",
+      "expect": {
+        "woken": []
+      }
+    },
+    {
+      "at": 20,
+      "actor": "owner",
+      "verb": "file",
+      "item": "W-2",
+      "assignee": "app",
+      "expect": {
+        "woken": [
+          "app"
+        ]
+      }
+    },
+    {
+      "at": 30,
+      "actor": "owner",
+      "verb": "file",
+      "item": "W-3",
+      "assignee": "app",
+      "expect": {
+        "woken": [
+          "app"
+        ]
+      }
+    },
+    {
+      "at": 40,
+      "actor": "owner",
+      "verb": "file",
+      "item": "W-4",
+      "assignee": "app",
+      "expect": {
+        "woken": [
+          "app"
+        ]
+      }
+    },
+    {
+      "at": 100,
+      "actor": "app",
+      "verb": "wait",
+      "item": "W-2",
+      "on": "W-1",
+      "expect": {
+        "woken": []
+      }
+    },
+    {
+      "at": 110,
+      "actor": "app",
+      "verb": "wait",
+      "item": "W-3",
+      "on": "W-1",
+      "expect": {
+        "woken": []
+      }
+    },
+    {
+      "at": 120,
+      "actor": "app",
+      "verb": "wait",
+      "item": "W-4",
+      "on": "W-1",
+      "expect": {
+        "woken": []
+      }
+    }
+  ]
+}

@@ -10,30 +10,13 @@ import (
 
 // EVERY `fields_json` THIS BUILD WRITES IS A MAP OF FROM/TO PAIRS.
 //
-// It is the one thing that makes [Reader.Activity]'s decode safe. That read
-// unmarshals the column into `map[string]Delta` and, on failure, drops the
-// WHOLE map for that row (`record.Fields = nil`) so the feed renders the kind
-// alone — while a task detail's own history decodes the same column into
-// `map[string]any` and cannot fail. So the day a producer writes a value that
-// is not a pair, `#/worklet/history` and an item's History tab start describing
-// one record differently, silently, and only on the records that carry the new
-// shape.
-//
-// THE INVARIANT IS PRODUCED RATHER THAN DECLARED, which is why this is a
-// round trip over real writes instead of a table of literals: the column has
-// exactly one writer (`Applier.stampHistory`) and exactly two sources, the
-// applier's own `TaskDeltas` and the record's `Notify.Fields`, and BOTH are
-// `map[string]Delta`. A third source, or either of those two changing type, is
-// what this case is here to catch — in the place where it is cheap, rather
-// than as a feed that quietly stops saying what moved.
-//
-// IT EXISTS BECAUSE THE OPPOSITE WAS WRITTEN DOWN AND BELIEVED. A comment in
-// `dashboard/src/lib/work.ts` asserted for a long time that the engine writes
-// "the notification's own fields where it cannot compare two documents (a
-// comment, a mention, an ask)" — and `apply_history.go` refutes exactly that
-// sentence in its own words, but nothing held the two against each other, so
-// the false half was read as a defect report against the feed. A claim about
-// what a column holds is worth what checks it.
+// [Reader.Activity] decodes the column into `map[string]Delta` and drops the
+// whole map on failure, while a task's own history decodes `map[string]any`:
+// a value that is not a pair makes the feed and the History tab silently
+// disagree. A round trip over real writes, because the invariant is produced:
+// the one writer (`Applier.stampHistory`) has two sources, `TaskDeltas` and
+// `Notify.Fields`, both `map[string]Delta`; a third source or a type change
+// is what this catches.
 func TestEveryHistoryRowRecordsFromToPairsAndNothingElse(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -41,9 +24,8 @@ func TestEveryHistoryRowRecordsFromToPairsAndNothingElse(t *testing.T) {
 	created := r.createTask("who owns the rollback")
 	filedInto(t, r, "ENG", "t-blocker")
 
-	// THE RECORD THE FALSE CLAIM NAMED: a comment carrying mentions and an
-	// ask, which is the one the engine was supposed to describe by value
-	// rather than by delta.
+	// A comment carrying mentions and an ask: still recorded as deltas,
+	// not by value.
 	if _, err := r.writer.UpdateTask(t.Context(), "op-comment", created.ID, "ENG",
 		worklet.NoIfMatch, worklet.TaskPatch{Comment: &worklet.Comment{
 			ID: "cm-1", Task: created.ID, Author: "bo",
@@ -70,8 +52,7 @@ func TestEveryHistoryRowRecordsFromToPairsAndNothingElse(t *testing.T) {
 	}
 	r.drain()
 
-	// AND THE OTHER PRODUCER FAMILY: a document write rather than a task
-	// commit, which reaches the same column through the same frame.
+	// The other producer family: a document write, not a task commit.
 	seedProject(t, r, worklet.Project{Key: "OPS", Name: "Operations"})
 
 	rows := r.strings(`SELECT kind || ' ' || fields_json FROM tracker_history
@@ -83,9 +64,8 @@ func TestEveryHistoryRowRecordsFromToPairsAndNothingElse(t *testing.T) {
 	carried := 0
 	for _, row := range rows {
 		kind, body, _ := strings.Cut(row, " ")
-		// THE TWO SPELLINGS OF "NOTHING MOVED" are not values and are not
-		// what this is about — see `Applier.stampHistory` on why the
-		// column holds `{}` rather than `null`.
+		// "Nothing moved" is not a value (`Applier.stampHistory` on why `{}`
+		// rather than `null`).
 		if body == "" || body == "{}" || body == "null" {
 			continue
 		}

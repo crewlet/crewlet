@@ -6,11 +6,9 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// A token or a service account acting as no seat files and watches items like
-// anybody, and holds no Inbox and no turn: a notice to one is read by nobody.
-// So the writer leaves every credential out of the handles a record's snapshot
-// offers as recipients, and the applier, whose rule is unchanged, writes no
-// notice row for one; the item itself still names it as its reporter.
+// A credential acting as no seat files and watches items but holds no Inbox
+// and no turn, so the writer leaves it out of a snapshot's recipients and the
+// applier writes it no notice; the item still names it as reporter.
 
 // withoutCredentials is n with no credential among the handles its snapshot
 // offers as recipients; nil stays nil.

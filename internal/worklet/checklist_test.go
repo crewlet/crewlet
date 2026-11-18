@@ -31,11 +31,9 @@ func checklistGesture(t *testing.T, r *roundTrip, opID, id string,
 
 // TICKING ONE ITEM KEEPS A LINE SOMEBODY ELSE ADDED.
 //
-// The collection is carried whole, so a tick formed from a caller's own read
-// of the checklist — which is the only way a caller can form one — lands
-// second and discards whatever arrived between that read and the write. The
-// gesture is resolved against the task as the decide snapshot holds it, so the
-// tick and the addition both survive in either order.
+// A whole collection formed from the ticker's own read would discard whatever
+// arrived between that read and the write; the gesture is resolved inside the
+// decide snapshot, so the tick and the addition both survive.
 func TestTickingOneChecklistItemKeepsAConcurrentAdd(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -95,8 +93,7 @@ func TestAChecklistGesturePastTheCapIsRefused(t *testing.T) {
 	err := checklistGesture(t, r, "op-over", "t-full", worklet.ChecklistIntent{
 		Op: worklet.ChecklistAddItem, List: "big", Item: "one-more", Name: "one more",
 	})
-	// THE TASK'S STATE, which the same line meets until one is removed —
-	// never the request's, since one line is not too many on its own.
+	// THE TASK'S STATE, never the request's: one line is not too many.
 	if !errors.Is(err, worklet.ErrState) || errors.Is(err, worklet.ErrInvalid) ||
 		!strings.Contains(err.Error(), "the most a list can") {
 		t.Fatalf("a sixty-fifth line was %v, want the task's state naming the cap", err)
@@ -159,9 +156,8 @@ func TestApplyChecklist(t *testing.T) {
 		intent worklet.ChecklistIntent
 		check  func(t *testing.T, got []worklet.Checklist)
 		refuse string
-		// mark is the refusal's class mark, ErrInvalid unless the case
-		// says otherwise: an id another list or line holds is a
-		// collision, ErrTaken.
+		// mark is the refusal's class mark, ErrInvalid when unset (an id
+		// already held is ErrTaken).
 		mark error
 	}{
 		"add a list with its first lines": {
@@ -306,8 +302,8 @@ func TestApplyChecklist(t *testing.T) {
 	}
 }
 
-// AND THE INPUT IS NEVER WRITTEN THROUGH, because the decide runs again on a
-// retry and the caller's snapshot is the tool's read.
+// AND THE INPUT IS NEVER WRITTEN THROUGH: the decide reruns on a retry, and
+// the caller's snapshot is the tool's read.
 func TestApplyChecklistLeavesItsInputAlone(t *testing.T) {
 	t.Parallel()
 	lists := launchList()

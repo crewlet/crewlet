@@ -8,13 +8,12 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A DATE COMES OFF BY ITS FLAG. A patch takes a start or a due date off with
-// clear_start or clear_due — a date has no empty value to point at — and the
-// applier takes it off; a patch that names neither the date nor its flag leaves
+// A DATE COMES OFF BY ITS FLAG, clear_start or clear_due, since a date has no
+// empty value to point at; a patch naming neither the date nor its flag leaves
 // it as it is.
 //
-// Mutation: read a patch's dates by StartAt and DueAt alone, as the applier did
-// before the flags, and the dates the clear named stay set.
+// Mutation: read a patch's dates by StartAt and DueAt alone and the dates the
+// clear named stay set.
 func TestADateComesOffByItsFlag(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -44,13 +43,11 @@ func TestADateComesOffByItsFlag(t *testing.T) {
 	}
 }
 
-// THE ZERO INSTANT IS NO DATE A WRITE CARRIES. Stored, it is January of year
-// one — a due date every overdue predicate reads as the most overdue task the
-// company ever had — and it is no value the estate's wire carries as itself: a
-// pointer at it crosses as no date at all. So a patch setting a date to it, a
-// patch both setting and clearing one date, a create whose task holds it as any
-// of its instants and a comment resolved at it are each refused as the content
-// they are, naming the field to send instead.
+// THE ZERO INSTANT IS NO DATE A WRITE CARRIES: stored, it is the most overdue
+// due date the company ever had, and the estate's wire carries a pointer at it
+// as no date at all. A patch setting a date to it or both setting and clearing
+// one, a create holding it as any instant, and a comment resolved at it are
+// each refused as content ([ErrInvalid]).
 //
 // Mutation: drop CheckDates from Writer.UpdateTask, or the CheckInstants calls
 // from createTask, and the zero instant is accepted.

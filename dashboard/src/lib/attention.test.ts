@@ -1020,7 +1020,9 @@ test("an advisor that could not read everything says so, once", () => {
   const runs = attentionQueue(input({ setupUnread: ["runs"] })).find(
     (a) => a.id === "setup-unread",
   );
-  expect(runs?.detail).toMatch(/a sandbox that ran out of memory may be missing/);
+  expect(runs?.detail).toMatch(
+    /a sandbox that ran out of memory or runs that ended on their round cap may be missing/,
+  );
   expect(rows[0]?.path).toEqual(["settings", "advisor"]);
 });
 

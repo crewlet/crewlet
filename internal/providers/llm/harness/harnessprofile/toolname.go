@@ -1,8 +1,11 @@
 package harnessprofile
 
 import (
+	"cmp"
 	"fmt"
 	"regexp"
+	"slices"
+	"strings"
 	"sync"
 )
 
@@ -63,6 +66,30 @@ var toolNameMax = sync.OnceValue(func() int {
 		}
 	}
 	return toolNameRoom(all)
+})
+
+// ModelToolPrefixes is every prefix a built-in profile puts in front of the
+// engine's tool names for its model, longest first: the spellings a model may
+// write when it names one of those tools in an argument.
+func ModelToolPrefixes() []string { return slices.Clone(modelToolPrefixes()) }
+
+var modelToolPrefixes = sync.OnceValue(func() []string {
+	var out []string
+	for _, goos := range Platforms {
+		table, err := decodeTable(profilesYAML, goos)
+		if err != nil {
+			panic(fmt.Sprintf("harnessprofile: profiles.yaml: %v", err))
+		}
+		for _, p := range table {
+			if prefix := p.ModelToolPrefix(); prefix != "" && !slices.Contains(out, prefix) {
+				out = append(out, prefix)
+			}
+		}
+	}
+	slices.SortFunc(out, func(a, b string) int {
+		return cmp.Or(len(b)-len(a), strings.Compare(a, b))
+	})
+	return out
 })
 
 // toolNameRoom is what the longest model prefix among profiles leaves of

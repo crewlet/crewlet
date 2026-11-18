@@ -9,18 +9,13 @@ import (
 )
 
 // EVERY CLOSED AXIS HAS AN ADMISSION ARM, and with nothing narrowing the query
-// it admits the whole declared set.
-//
-// [groupAxis.Order] is what marks an axis closed and [admittedColumns] switches
-// on the key by name, so an axis that gained an order without gaining an arm
-// would silently fall back to "only what is present" — which is the state this
-// fill exists to end. Walked over the grammar's own list so a grouping added
-// to it cannot slip past.
+// it admits the whole declared set. [admittedColumns] switches on the key by
+// name, so an axis that gained a [groupAxis.Order] without an arm would fall
+// back to "only what is present"; walked over [groupKeys] so a new grouping
+// cannot slip past.
 func TestEveryClosedAxisAdmitsItsWholeSetWhenNothingNarrowsIt(t *testing.T) {
 	t.Parallel()
-	// A RESOLVED CALENDAR, because one axis refuses to compile without one
-	// — see [dueBucketAxis] — and a zero window is the silent answer it
-	// refuses in order to avoid.
+	// A RESOLVED CALENDAR, because [dueBucketAxis] refuses a zero one.
 	start := time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC)
 	window := dayWindow{
 		Start:   start,
@@ -76,14 +71,9 @@ func TestFillColumnsKeepsAPresentColumnOutsideTheDeclaredSet(t *testing.T) {
 	}
 }
 
-// THE RELATIVE DUE BANDS ARE NARROWED BY TWO DIFFERENT FILTERS, and this walks
-// both halves of [admittedDueBands] one narrowing at a time.
-//
-// The axis is the one closed set whose columns are not a stored value, so
-// which of them a query could hold is arithmetic rather than a lookup: the
-// status half decides Overdue and Earlier, the `due=` filter decides the four
-// that are intervals, and the alias is the one value that is both at once.
-// Each case names what it narrows and the bands that survive it.
+// THE RELATIVE DUE BANDS ARE NARROWED BY TWO DIFFERENT FILTERS: the status
+// half decides Overdue and Earlier, the `due=` filter the four intervals, and
+// the alias is both. Each case walks one narrowing of [admittedDueBands].
 func TestWhichDueBandsAQueryAdmits(t *testing.T) {
 	t.Parallel()
 	start := time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC) // a Wednesday
@@ -103,15 +93,13 @@ func TestWhichDueBandsAQueryAdmits(t *testing.T) {
 		q:    Query{ShowClosed: ShowClosed{All: true}},
 		want: []string{"overdue", "earlier", "today", "this_week", "later", ""},
 	}, {
-		// THE DEFAULT BOARD IS OPEN WORK, so nothing in it can be work
-		// that was finished late — which is the whole of what Earlier is.
+		// THE DEFAULT BOARD IS OPEN WORK, so nothing in it was finished
+		// late, which is all Earlier holds.
 		name: "open work only, which is the default",
 		q:    Query{},
 		want: []string{"overdue", "today", "this_week", "later", ""},
 	}, {
-		// AND THE MIRROR: a board of finished work has no open row to be
-		// past its date, so Overdue would claim nothing is late about a
-		// set that could not hold a late thing.
+		// AND THE MIRROR: finished work has no open row to be overdue.
 		name: "narrowed to one finished status",
 		q: Query{
 			Status: []Status{StatusDone}, ShowClosed: ShowClosed{All: true},
@@ -128,7 +116,7 @@ func TestWhichDueBandsAQueryAdmits(t *testing.T) {
 		want: []string{"overdue"},
 	}, {
 		// THE SAME INTERVAL WITHOUT THE ALIAS is both bands before the
-		// day start, because a task finished late is in it too.
+		// day start: a task finished late is in it too.
 		name: "everything before today, finished work included",
 		q: Query{
 			ShowClosed: ShowClosed{All: true},
@@ -152,9 +140,7 @@ func TestWhichDueBandsAQueryAdmits(t *testing.T) {
 		},
 		want: []string{"later"},
 	}, {
-		// A DATE FILTER ON ANOTHER COLUMN NARROWS NOTHING HERE. `created=`
-		// bounds when the row was written, which says nothing about when
-		// its work is due.
+		// A DATE FILTER ON ANOTHER COLUMN NARROWS NOTHING HERE.
 		name: "a bound on a different date column",
 		q: Query{
 			ShowClosed: ShowClosed{All: true},
@@ -162,9 +148,8 @@ func TestWhichDueBandsAQueryAdmits(t *testing.T) {
 		},
 		want: []string{"overdue", "earlier", "today", "this_week", "later", ""},
 	}, {
-		// `group=` IS READ BY PRESENCE, and the empty string names the
-		// band holding the rows with no due date — which on this axis is
-		// a declared column rather than an absence.
+		// `group=` IS READ BY PRESENCE; the empty string names the
+		// undated band, a declared column on this axis.
 		name: "group= naming the undated band",
 		q: Query{
 			ShowClosed: ShowClosed{All: true}, Group: named(""),
@@ -193,12 +178,9 @@ func TestWhichDueBandsAQueryAdmits(t *testing.T) {
 	}
 }
 
-// AND A PRESENT-EMPTY `group=` ON AN AXIS WITH NO UNSET COLUMN PADS NOTHING.
-//
-// A status is never empty and neither is a priority, so the empty string names
-// no declared value there — and a board narrowed to a column the axis does not
-// have is honestly a board with no column to draw, rather than the whole board
-// the absent narrowing would have given.
+// AND A PRESENT-EMPTY `group=` ON AN AXIS WITH NO UNSET COLUMN PADS NOTHING:
+// no status or priority is empty, so the narrowed board honestly has no column
+// to draw, not the whole board an absent narrowing gives.
 func TestAPresentEmptyGroupAdmitsNothingWhereTheAxisHasNoUnsetColumn(t *testing.T) {
 	t.Parallel()
 	empty := ""

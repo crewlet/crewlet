@@ -1,17 +1,14 @@
 package worklet
 
-// The statements the applier writes and reads a task's relation rows and the
-// dependency mirror with, outside the query grammar, named so the plan gate
-// plans the statement that runs rather than a copy of it — the relation and
-// mirror tables are among the tables it holds every reader of to an index.
-// They are the applier's own, which is why they live in an apply file: the
-// replicated estate's write side is the appliers' alone, and the store's
-// exclusivity gate admits a tracker write from the applier's files and from
-// nowhere else in the package.
+// The applier's statements over a task's relation rows and the dependency
+// mirror, outside the query grammar, named so the plan gate plans the
+// statement that runs rather than a copy. They live in an apply file because
+// the store's exclusivity gate admits a tracker write from the applier's files
+// alone.
 
 // The statements a task's relations and their mirror are written with, named
 // for the plan test: each relation row one-sided unless its blocker's mirror
-// row already lists the task — a probe of that one row by its key — and the
+// row already lists the task (a probe of that one row by its key), and the
 // mirror rows the blocker's own commit writes.
 const (
 	relationsInsertPrefix = `

@@ -120,6 +120,14 @@ func failedRow(col func(string) string) (string, []any) {
 		" IN (" + holders + "))", args
 }
 
+// turnFailedRow is [failedRow] over a turn's OWN records. A nested record
+// (`host_phase` set: a worker, or a phase's round-cap judge) fails only
+// itself: the phase that called it reads its failure as an answer.
+func turnFailedRow() (string, []any) {
+	expr, args := failedRow(nil)
+	return "(" + expr + " AND host_phase = '')", args
+}
+
 // errorText and kindText are a failure record's message and class: the
 // record's own fields, a provider chain's `last_error` fields where it ran
 // out, and for the kind the failure's event type where the record names no
@@ -248,14 +256,15 @@ type Turn struct {
 	Phases     int `json:"phases"`
 	Iterations int `json:"iterations"`
 
-	// Failed is whether ANY event of this turn was a failure, which is a
-	// different question from the outcome: a turn can recover from a
+	// Failed is whether ANY of this turn's own events was a failure, which
+	// is a different question from the outcome: a turn can recover from a
 	// failed provider call and still end well, and an operator looking for
-	// what is going wrong wants both.
+	// what is going wrong wants both. A worker's or a judge's failure is
+	// that record's alone ([turnFailedRow]).
 	Failed bool `json:"failed"`
 
 	// Error and ErrorKind are WHY IT FAILED: the message and the class of a
-	// failure record of this turn, empty for a turn that carried none. The
+	// failure record of this turn's own, empty for a turn that carried none. The
 	// turn's own completion speaks first (its `error` is the failure that
 	// ended it), then any other failed record (a failed phase, a provider
 	// chain that ran out, a breached guard), so a turn that died before it
@@ -374,8 +383,9 @@ type TurnQuery struct {
 	Server string
 	Tool   string
 
-	// Failed narrows to turns that carried a failure, or to those that did
-	// not. Nil is both, which is not the same as false.
+	// Failed narrows to turns that carried a failure of their own
+	// ([Turn.Failed]), or to those that did not. Nil is both, which is not
+	// the same as false.
 	Failed *bool
 
 	// Before is an exclusive cursor on the listing's own order — the turn's
@@ -1103,7 +1113,7 @@ const (
 // its derived table selects, so each aggregate, the HAVING and the ORDER BY
 // read a column it carries.
 const turnColumns = `turn_id, work_key, agent_id, agent_role, event_time, event_type,
-	iteration, tags, payload, input_tokens, output_tokens, total_tokens,
+	iteration, host_phase, tags, payload, input_tokens, output_tokens, total_tokens,
 	cache_read_tokens, cache_write_tokens, model, spend_stage`
 
 // partialsSQL is the statement [EventLog.TurnPartials] and
@@ -1186,7 +1196,7 @@ func (q TurnQuery) partialsSQL(at time.Time, read turnRead, probe int, from time
 	// could be selected by `failed=true` and then render without the mark,
 	// which is the same defect one layer down from the one [failedRow]
 	// describes.
-	failedExpr, failedArgs := failedRow(nil)
+	failedExpr, failedArgs := turnFailedRow()
 	failedAgg := "MAX(CASE WHEN " + failedExpr + " THEN 1 ELSE 0 END)"
 	if q.Failed != nil && !shares {
 		want := "0"

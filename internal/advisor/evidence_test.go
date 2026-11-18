@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -241,9 +242,9 @@ func TestAnEvidenceFindingIsTheEnginesAndOffersNothingToSend(t *testing.T) {
 	ledger := []usage.TurnLedgerRow{started("app", "work_item:pickup", "words", 10),
 		started("app", "work_item:pickup", "nothing", 10), spent("app", 500_000, 500_000), absorbed("app", 10)}
 	found := advisor.Detect(advisor.Evidence{Work: work, Ledger: ledger}, kindOf)
-	// Every class but the owner's two (approval.rubber_stamp and
-	// integration.inbound_silent), each held on its own.
-	if len(found) != len(advisor.WorkClasses())-2+len(advisor.LedgerClasses()) {
+	// Every class but the owner's (approval.rubber_stamp, integration.inbound_silent
+	// and the open work's two), each held on its own.
+	if len(found) != len(advisor.WorkClasses())-4+len(advisor.LedgerClasses()) {
 		t.Fatalf("raised %d findings, want one per engine class the work patterns and the ledger raise", len(found))
 	}
 	// A COUNT NAMES NO RECORD: these classes read totals, not rows to open.
@@ -384,11 +385,14 @@ func TestARubberStampIsOneFindingPerAgent(t *testing.T) {
 		bySeat[f.Subject.Seat] = f
 	}
 	pm := bySeat["pm"]
-	if !strings.Contains(pm.Title, "admin2 and owner") || !strings.Contains(pm.Title, "39 of 42") {
-		t.Errorf("pm's finding says %q, want both people and their 39 of 42", pm.Title)
+	if !strings.Contains(pm.Item, "admin2 and owner") || !strings.Contains(pm.Item, "39 of 42") {
+		t.Errorf("pm's finding says %q, want both people and their 39 of 42", pm.Item)
 	}
-	if bySeat["cto"].Title == "" || strings.Contains(bySeat["cto"].Title, "admin2") {
+	if bySeat["cto"].Item == "" || strings.Contains(bySeat["cto"].Item, "admin2") {
 		t.Errorf("cto's finding = %+v, want owner's alone", bySeat["cto"])
+	}
+	if pm.Title != bySeat["cto"].Title || pm.Why != bySeat["cto"].Why {
+		t.Errorf("the two say different things: %q / %q", pm.Title, bySeat["cto"].Title)
 	}
 }
 
@@ -478,8 +482,10 @@ func TestASeatPausedForAFailureIsOneFindingPerKind(t *testing.T) {
 // a spike, and an unread source raises nothing.
 func TestARunStoppedForMemoryTwiceIsTheOwnersToSize(t *testing.T) {
 	t.Parallel()
-	ev := advisor.Evidence{MemoryKills: []advisor.MemoryKill{
-		{Seat: "app", MemoryBytes: 2 << 30}, {Seat: "app", MemoryBytes: 2 << 30}, {Seat: "ops"},
+	oom := types.ExecutorErrorOutOfMemory
+	ev := advisor.Evidence{Runs: []advisor.EndedRun{
+		{Seat: "app", Kind: oom, MemoryBytes: 2 << 30}, {Seat: "app", Kind: oom, MemoryBytes: 2 << 30},
+		{Seat: "ops", Kind: oom}, {Seat: "ops", Kind: types.ExecutorErrorMaxTurns},
 	}}
 	found := advisor.Detect(ev, kindOf)
 	if len(found) != 1 {
@@ -565,14 +571,14 @@ func TestAnIdleReviewNamesWhoItWaitsOn(t *testing.T) {
 			got[f.Subject.Seat] = f
 		}
 	}
-	for seat, want := range map[string]struct{ title, why string }{
-		"qa":       {"waited a day for the agent holding it", "held by qa"},
-		"owner":    {"waited a day for a person's answer", "2 items in review waited the last 24 hours on owner"},
-		"designer": {"has no reviewer", "designer moved into review itself"},
+	for seat, want := range map[string]struct{ title, item string }{
+		"qa":       {"waited a day for the agent holding it", "1 item in review"},
+		"owner":    {"waited a day for a person's answer", "2 items in review"},
+		"designer": {"has no reviewer", "1 item in review"},
 	} {
 		f, ok := got[seat]
-		if !ok || !strings.Contains(f.Title, want.title) || !strings.Contains(f.Why, want.why) {
-			t.Errorf("the finding about %s is %+v, want %q saying %q", seat, f, want.title, want.why)
+		if !ok || !strings.Contains(f.Title, want.title) || f.Item != want.item {
+			t.Errorf("the finding about %s is %+v, want %q about %q", seat, f, want.title, want.item)
 		}
 	}
 	if len(got) != 3 {

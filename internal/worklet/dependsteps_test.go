@@ -10,14 +10,10 @@ import (
 )
 
 // A DEPENDENCY CHANGE'S STEPS ARE NAMED BY THE TASK THEY WRITE, so a retry whose
-// lists moved still answers each step with its own write.
-//
-// A caller recomputes a whole-set change against what the first run already
-// landed, so a retry's lists are not the first run's: an edge that landed is
-// not authored again, and every step after it moves up a place. Named by
-// position, the moved step was answered with the ledger row of the step that
-// used to hold its place — a row on another task, refused as an operation that
-// landed elsewhere — and its own write was never made.
+// lists moved still answers each step with its own write: a retry recomputed
+// against what landed authors no landed edge again, so every later step moves
+// up a place, and named by position it would be answered with another task's
+// ledger row and its own write never made.
 func TestADependencyRetryAnswersEachStepWithItsOwnWrite(t *testing.T) {
 	t.Parallel()
 
@@ -31,9 +27,8 @@ func TestADependencyRetryAnswersEachStepWithItsOwnWrite(t *testing.T) {
 		lossy, lost := r.lossyWriter(t)
 		op := statelog.NewOpID(time.Now(), "depend")
 
-		// THE FIRST RUN: this task now waits on blk and blocks dnt. Its
-		// mirrors are blk's and then its own, and its own is refused — the
-		// broker's log full — once blk's has landed.
+		// THE FIRST RUN: dep waits on blk and blocks dnt; its own mirror,
+		// second after blk's, is refused once blk's has landed.
 		lost.afterAppendTo("blk", func() { lost.refuse("dep") })
 		first, err := lossy.Depend(t.Context(), op, worklet.DependencyChange{
 			Task: "dep", Project: "ENG", WaitingOnAdd: []string{"blk"},
@@ -46,9 +41,8 @@ func TestADependencyRetryAnswersEachStepWithItsOwnWrite(t *testing.T) {
 		lost.refuse("")
 		r.drain()
 
-		// THE RETRY, recomputed against what landed: blk's edge is already
-		// there, so only the blocking half is left — and this task's own
-		// mirror is now the first.
+		// THE RETRY, recomputed against what landed: only the blocking half
+		// is left, so this task's own mirror is now the first.
 		retry, err := lossy.Depend(t.Context(), op, worklet.DependencyChange{
 			Task: "dep", Project: "ENG", BlockingAdd: []string{"dnt"},
 		}, fixedLeads{project: "eng-lead"})
@@ -103,16 +97,10 @@ func TestADependencyRetryAnswersEachStepWithItsOwnWrite(t *testing.T) {
 }
 
 // A DEPENDENCY CHANGE REPORTS ITS OWN TASK'S VERSION, at its last commit's
-// position, and an outcome whatever its mirrors did.
-//
-// The result used to be the LAST COMMIT's, whole, and a dependency change's
-// last commit is usually another task's — a blocker's mirror, a dependent's
-// edge. A caller reporting its version as the version of the task it named
-// handed back an `if_match` that task never had, refused as stale. And a
-// `blocking`-only change whose own mirror was left one-sided reported nothing
-// at all: the authored edges on the other tasks were never counted, so it
-// answered the zero result — an outcome that is none of the three, and no
-// position.
+// position, and an outcome whatever its mirrors did: its last commit is
+// usually another task's, whose version as an `if_match` is refused as stale,
+// and a `blocking`-only change whose own mirror is one-sided still landed the
+// edges it authored on the other tasks.
 func TestADependencyChangeReportsItsOwnTasksVersion(t *testing.T) {
 	t.Parallel()
 

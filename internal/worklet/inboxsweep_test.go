@@ -9,20 +9,14 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// TestTheInboxSweepDeletesWhatAgedOutAndNothingElse is the finding. The table
-// shipped `tracker_notifications_swept_idx ON (created_at)` for "the per-node
-// inbox retention sweep, which is a range delete", the horizon is a validated
-// company setting with a default and bounds, and its own doc calls it "the one
-// horizon here that deletes anything" — and nothing deleted anything. Every
-// routed change wrote a row per recipient and kept it for the life of the
-// deployment, on every node.
+// TestTheInboxSweepDeletesWhatAgedOutAndNothingElse: rows past the company's
+// inbox horizon are range-deleted on every node, and nothing else is.
 func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 
-	// TWO NOTICES A YEAR APART, authored by moving the harness's clock —
-	// the sweep compares on the AUTHORED instant, which is the column the
-	// index is on and the one the applier's own horizon compares against.
+	// TWO NOTICES A YEAR APART, authored by moving the harness's clock: the
+	// sweep compares the AUTHORED instant, as the applier's horizon does.
 	old := wednesday.Add(-400 * 24 * time.Hour)
 	r.at = old
 	routeTo(t, r, "t-1", "ENG-1", "bob")
@@ -35,24 +29,22 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 	}
 
 	// THE HORIZON IS ASKED AT EVERY TICK, because the applier reads it off
-	// the epoch at every batch and the two must agree: a first tick under
-	// a longer horizon keeps the year-old notice, and the next, after the
-	// company shortened it, deletes it — the same job, rebuilt by nothing.
+	// the epoch at every batch and the two must agree: a first tick under a
+	// longer horizon keeps the year-old notice, and the next, after the company
+	// shortened it, deletes it, from the same job.
 	horizon := 500 * 24 * time.Hour
 	jobs := worklet.InboxJobs(r.db, func() time.Duration { return horizon })
 	if len(jobs) != 1 {
 		t.Fatalf("InboxJobs returned %d jobs, want 1", len(jobs))
 	}
-	// NODE-LOCAL, because `tracker_notifications` is Divergent: each node
-	// holds its own rows, so a fleet singleton would sweep one and let the
-	// table grow for ever on every other — which looks exactly like a
-	// sweep that works to the operator who checks the node it ran on.
+	// NODE-LOCAL, because `tracker_notifications` is Divergent: a fleet
+	// singleton would sweep one node and let every other grow for ever.
 	if jobs[0].Scope != maintenance.NodeLocal {
 		t.Fatalf("the inbox sweep has scope %q, so it tidies one node's "+
 			"rows and lets every peer's grow for ever", jobs[0].Scope)
 	}
-	// THE JOB'S HORIZON IS THE SOURCE, asked rather than copied: a value
-	// taken once is the one that stayed at the boot company's.
+	// THE JOB'S HORIZON IS THE SOURCE, asked rather than copied, or it stays
+	// at the boot company's.
 	if jobs[0].Horizon == nil {
 		t.Fatal("the job declares no horizon, so the worker would hand it " +
 			"the sweep's own instant as its cutoff and every notice would go")
@@ -61,12 +53,11 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 		t.Fatalf("the job's horizon is %s, want the retention it was given", got)
 	}
 
-	// THE SWEEP RUNS BESIDE A LIVE APPLIER, which holds the estate's pin
-	// for the life of the process: a sweep that asked for one of its own
-	// was refused on every tick of a running node.
+	// THE SWEEP RUNS BESIDE A LIVE APPLIER, which holds the estate's pin for
+	// the process's life, so a sweep asking for its own would be refused.
 	holdTheAppliersPin(t, r)
-	// THE CUTOFF IS THE WORKER'S, derived from the job's horizon asked at
-	// this sweep, so each tick here derives it exactly as the worker does.
+	// The cutoff is derived as the worker derives it, from the horizon asked
+	// at this sweep.
 	sweep := func() (int64, error) {
 		return jobs[0].Run(t.Context(), wednesday, wednesday.Add(-jobs[0].Horizon()))
 	}
@@ -98,17 +89,16 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 			after.Notices[0].SubjectKey)
 	}
 
-	// AND THE HISTORY IS UNTOUCHED, which is what the config doc
-	// promises: a notice is a POINTER at a history row, and the history
-	// answers for ever.
+	// AND THE HISTORY IS UNTOUCHED, as the config doc promises: a notice is a
+	// POINTER at a history row.
 	if got := r.strings(`SELECT id FROM tracker_history
 		WHERE subject_id = 'ENG-1' OR subject_id = 't-1'`); len(got) == 0 {
 
 		t.Fatal("the sweep deleted the history the notice pointed at")
 	}
 
-	// A SECOND SWEEP IS A NO-OP, so a tick with nothing to do costs one
-	// range delete and reports zero rather than re-reporting the first.
+	// A SECOND SWEEP IS A NO-OP, reporting zero rather than re-reporting the
+	// first.
 	again, err := sweep()
 	if err != nil {
 		t.Fatalf("second sweep: %v", err)
@@ -118,9 +108,8 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 	}
 }
 
-// TestTheInboxSweepDeclinesWithNoStore keeps the zero guard honest: a node
-// with no tracker to sweep contributes no job rather than a job that fails on
-// its first tick.
+// TestTheInboxSweepDeclinesWithNoStore: a node with no tracker contributes no
+// job rather than one that fails on its first tick.
 func TestTheInboxSweepDeclinesWithNoStore(t *testing.T) {
 	t.Parallel()
 	if jobs := worklet.InboxJobs(store.ReplicatedHandle{}, maintenance.Fixed(time.Hour)); jobs != nil {

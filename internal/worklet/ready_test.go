@@ -54,7 +54,7 @@ func TestReadyWorkComesStartedFirstThenTheListThenTheQueue(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	fileFor(t, r, "low", "ana", worklet.StatusTodo, worklet.PriorityLow)
-	fileFor(t, r, "urgent", "ana", worklet.StatusTodo, worklet.PriorityUrgent)
+	fileFor(t, r, "high", "ana", worklet.StatusTodo, worklet.PriorityHigh)
 	fileFor(t, r, "listed", "ana", worklet.StatusTodo, worklet.PriorityLow)
 	fileFor(t, r, "started", "ana", worklet.StatusInProgress, worklet.PriorityLow)
 	fileFor(t, r, "theirs", "bob", worklet.StatusTodo, worklet.PriorityUrgent)
@@ -65,7 +65,7 @@ func TestReadyWorkComesStartedFirstThenTheListThenTheQueue(t *testing.T) {
 	r.drain()
 
 	got := r.readyWork("ana")
-	if ids := readyIDs(got); !slices.Equal(ids, []string{"started", "listed", "urgent", "low"}) {
+	if ids := readyIDs(got); !slices.Equal(ids, []string{"started", "listed", "high", "low"}) {
 		t.Fatalf("ready work = %v, want started, then the list, then the queue", ids)
 	}
 	for i, want := range []types.PickupWhy{types.PickupInProgress, types.PickupPriorityList,
@@ -105,6 +105,38 @@ func TestReadyWorkComesStartedFirstThenTheListThenTheQueue(t *testing.T) {
 		worklet.AuthorHuman)
 	if after := r.readyWork("ana").Items[3].Moved; after <= before {
 		t.Errorf("a person's comment left the item's key at %d", after)
+	}
+}
+
+// URGENT WORK COMES FIRST, STARTED WORK INCLUDED. A seat holding three started
+// items was handed one of them on every idle pass, and an urgent item assigned
+// to it waited hours behind them. Urgent is the one priority that pre-empts:
+// below it, started work still comes first, and among urgent items too, so a
+// seat does not start one item after another as priorities change.
+//
+// Mutation: order the blocks with no urgent pass, and the urgent item waits
+// behind every started one.
+func TestUrgentWorkComesBeforeStartedWork(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	fileFor(t, r, "s-high", "ana", worklet.StatusInProgress, worklet.PriorityHigh)
+	fileFor(t, r, "s-normal", "ana", worklet.StatusInProgress, worklet.PriorityNormal)
+	fileFor(t, r, "s-low", "ana", worklet.StatusInProgress, worklet.PriorityLow)
+	fileFor(t, r, "fire", "ana", worklet.StatusTodo, worklet.PriorityUrgent)
+	fileFor(t, r, "burning", "ana", worklet.StatusInProgress, worklet.PriorityUrgent)
+	fileFor(t, r, "next", "ana", worklet.StatusTodo, worklet.PriorityHigh)
+	r.drain()
+
+	got := r.readyWork("ana")
+	want := []string{"burning", "fire", "s-high", "s-normal", "s-low", "next"}
+	if ids := readyIDs(got); !slices.Equal(ids, want) {
+		t.Fatalf("ready work = %v, want %v", ids, want)
+	}
+	for i, why := range []types.PickupWhy{types.PickupInProgress, types.PickupUrgent,
+		types.PickupInProgress, types.PickupInProgress, types.PickupInProgress, types.PickupQueue} {
+		if got.Items[i].Why != why {
+			t.Errorf("%s sits there because %q, want %q", got.Items[i].ID, got.Items[i].Why, why)
+		}
 	}
 }
 
@@ -249,7 +281,7 @@ func TestReadyWorkSaysWhomTheWorkIsFor(t *testing.T) {
 }
 
 // THE PICKUP READS AN ASSIGNMENT BY ITS ASSIGNEE DELTA, WHATEVER KIND ITS
-// RECORD ENDED WITH (ADR-0112, #930). A write that hands an item over and moves
+// RECORD ENDED WITH (ADR-0112). A write that hands an item over and moves
 // another field in the same call is filed under the other change's kind, and
 // the turn the pickup starts works for that write's writer, not for whoever
 // assigned the item before it. Another agent's reassertion to the seat that
@@ -402,7 +434,7 @@ func TestReadyWorkIsPaged(t *testing.T) {
 func TestAReviewIsReadyForTheSeatThatHoldsIt(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	fileFor(t, r, "queued", "ana", worklet.StatusTodo, worklet.PriorityUrgent)
+	fileFor(t, r, "queued", "ana", worklet.StatusTodo, worklet.PriorityHigh)
 	fileFor(t, r, "started", "ana", worklet.StatusInProgress, worklet.PriorityLow)
 	fileFor(t, r, "asked", "ana", worklet.StatusInReview, worklet.PriorityLow)
 	ana := r.writer.As("ana", worklet.AuthorAgent, aTurnNobodyWoke())

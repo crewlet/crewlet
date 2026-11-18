@@ -30,11 +30,9 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// The reference company's day, the corpus the storage forecast in
-// docs/guides/retention.md is stated for: 100 000 tasks a year, 300 000
-// comments, 1 000 edits a day and 3 000 turns a day — and the read barriers
-// beside them, its 100 agent seats' linearizable reads at
-// statelog.LinearizableReadsPerSeatDay and the object collector's 25.
+// The reference company's day, the corpus docs/guides/retention.md's storage
+// forecast is stated for, and the read barriers beside it: its 100 agent
+// seats' linearizable reads and the object collector's 25.
 const (
 	referenceTasksADay    = 100_000.0 / 365
 	referenceCommentsADay = 300_000.0 / 365
@@ -44,67 +42,30 @@ const (
 	referenceBarriersADay = referenceSeatReads + 25
 
 	// referenceKeyGrowth is how many bytes longer a key is at a five-year-old
-	// project of the reference company's than at the new one the corpus
-	// files into — two digits to five — and referenceKeysADay how many times
-	// a day one is written: three on a create (the counter's value, the
-	// task's key, its snapshot's), once on a comment or an edit.
+	// project than at a new one (two digits to five); referenceKeysADay is how
+	// many keys a day are written: three a create (the counter's value, the
+	// task's key, its snapshot's), one a comment or an edit.
 	referenceKeyGrowth = 3
 	referenceKeysADay  = 3*referenceTasksADay + referenceCommentsADay + referenceEditsADay
 )
 
-// THE CODE LOG'S DAY, which config sizes the code log's ceiling against this
-// log's by (DerivedCodeLogNumerator's reason, and gitlet's CodeLogMaxBytes): at
-// the ratio of the two days a blocked trim fills both logs in the same time,
-// so that ratio is a figure derived from this log's published day. A push is a
-// SEAT'S, as every one of the reference company's is — a hundred seats pushing
-// thirty times a day — alone in its record, and priced as its CODING BOX'S, the
-// most a seat's push takes of the log: internal/gitlet's measured figure for a
-// person's push (BenchmarkPushLogBytes, its package doc's "What a push costs,
-// measured") and what a box's principal — the seat, the run behind it and the
-// executor that pushed — its way, the company day its quota counted it on and
-// whom it was made for take of the log beyond it (its push=box arm). A seat's
-// push the engine builds for a tool takes 139 bytes less (its push=agent arm),
-// and which of a company's seats push from their boxes and which through their
-// tools is no figure the reference company has, so the day prices every push at
-// the box's, at its least as at its most — as it prices the compactions at the
-// most the reference company's pushes cost them. The COMPACTIONS that merge
-// those pushes' packs take the log a push too, and so do the code-retention
-// duty's SWEEPS of the rows they retired, a day later:
-// internal/gitlet/compact's measured figures (BenchmarkCompact's
-// steady/pushes=1200/rate=1/min/min-merge=16 arm, its record-B/push and
-// sweep-B/push, in its package doc's "Measured"), a repository pushed once a
-// minute, so every merge takes the floor's gitlet.CompactMinMerge packs and is
-// about a quarter hour from the next — every merge's retirements swept by a
-// record of their own. That is the reference company's shape: 3 000 pushes a
-// day over its repositories are a few a minute, which never leave a pass more
-// than the floor to merge. A merge of more costs less a push (43 bytes where a
-// minute's merge takes three hundred), and so do a quarter hour's merges swept
-// together, so these two figures are the most the reference company's pushes
-// cost the log, and the day prices both terms at them, at its least as at its
-// most. They are a MERGE's figures and nothing else's: the steady arm's
-// compactor publishes no layer, so no compaction it makes carries one. A
-// PUBLICATION — the compaction a repository's maintainer appends to publish a
-// multi-pack-index layer, naming every pack the layer covers — is a term of its
-// own, at internal/gitlet's measured figures (codeChange… below). The barriers
-// are its git clients' linearizable reads: a seat's push asks the log three
-// times (its advertisement, its receive's sync and the fetch before it), thirty
-// people fetch every three minutes of an eight-hour day, and a CI polls ten
-// repositories a minute where one runs.
-//
-// A push's box names the work item its run was launched for by its identity
-// and its project (gitlet.RunProvenance.WorkID, a native task's UUID, and
-// .WorkProject, its project's key), and a seat's push names whom it was made
-// for (gitlet.PushEntry.WorkingFor: the person who assigned the work its run
-// does, a human seat by its handle), which the push=box arm carries: 287
-// bytes beside a person's push, 49 of them that identity, 21 that project and
-// 47 whom it was made for.
+// THE CODE LOG'S DAY, against which config sizes the code log's ceiling
+// (DerivedCodeLogNumerator, gitlet's CodeLogMaxBytes): at the two days' ratio
+// a blocked trim fills both logs in the same time. Every push is a seat's,
+// priced as its coding box's, the most a seat's push takes (gitlet's
+// BenchmarkPushLogBytes push=box arm, 287 bytes over a person's for its work
+// item's id, project and WorkingFor), since no figure says how many push
+// through tools instead. Merges and sweeps are BenchmarkCompact's
+// steady/pushes=1200/rate=1/min/min-merge=16 arm: a few pushes a minute leave
+// each pass the floor's gitlet.CompactMinMerge packs, the most a push costs.
+// That arm publishes no layer, so a publication is a term of its own. The
+// barriers: three a seat's push, thirty people fetching every three minutes of
+// an eight-hour day, and a CI polling ten repositories a minute.
 const (
 	referencePushesADay = 3_000
 	codePushRecordBytes = 1_667
-	// codeEnginePushRecordBytes is a seat's push the engine builds for a
-	// tool, alone in its record (BenchmarkPushLogBytes's push=agent arm):
-	// no term of the day, which prices every push at the box's, and printed
-	// beside it.
+	// codeEnginePushRecordBytes is a seat's push the engine builds for a tool
+	// (the push=agent arm): no term of the day, printed beside the box's.
 	codeEnginePushRecordBytes = 1_528
 	codeCompactionBytes       = 108
 	codeSweepBytes            = 44
@@ -113,39 +74,18 @@ const (
 	referenceCIReads          = 10 * 60 * 24
 )
 
-// A CHANGE'S RECORDS, each what internal/gitlet's
-// TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt holds it to
-// (its changeRecordBytes, which states the same figures): every record of a
-// change's life as this build's writers form it at the reference company's
-// text — a 2 KiB description, a 1 KiB summary, comment and finding body —
-// alone in its record, by the log's growth. A publication is a compaction,
-// measured there beside them because the committer's compact path forms it.
-//
-// A record carries its change's routing only where somebody hears of it
-// (internal/gitlet's routingFor): the facts, the merge, the comments and the
-// thread resolved of the reference change concern nobody, so theirs are
-// measured without one. A re-evaluation that keeps its row's outcome — a
-// recheck of a moved target that merges as before, a refresh whose readiness
-// is the row's — records what it moved alone (gitlet.MergeabilityKept): the
-// recheck its tip, the refresh the versions and the checks position it was
-// judged at. The refresh that turns the change ready is the full record,
-// routed to whoever may merge it.
-//
-// Every write the reference change's seats make is made for the person who
-// assigned its work item, as a pickup of an assigned item works for whom it
-// was assigned (ADR-0109): the open's, the merge's and the enqueue's payload
-// carry them, and so do the routings of the ask, the reviews and the answer,
-// each of which wakes a seat — a human seat by its handle, 47 bytes a record.
-// The home's own records carry none: its facts of a revision and a failed
-// check of a head carry whom the revision was pushed for only where they wake
-// a seat, and the reference revisions' facts ask nobody and the reference
-// checks pass; a readiness is no principal's act; the queue's landing carries
-// whom each entry's enqueue was made for only where it wakes a seat, and the
-// reference landing wakes none, its one author being the seat that queued the
-// change, who is not told of their own act; and the queue's ejection and a
-// close it could not make carry it beside no actor, where the reference day
-// ejects nothing and its settle closed the item, which routes nobody. Neither
-// does the merge's routing, which tells only its author, who merged it.
+// A CHANGE'S RECORDS, as internal/gitlet's
+// TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt holds them (its
+// changeRecordBytes): each formed by this build's writers at the reference
+// text (a 2 KiB description; a 1 KiB summary, comment and finding body), alone
+// in its record. A publication is a compaction, measured there because the
+// committer's compact path forms it. A record carries routing only where
+// somebody hears of it (gitlet's routingFor), and a re-evaluation keeping its
+// row's outcome records only what it moved (gitlet.MergeabilityKept). Whom a
+// seat's write was made for (ADR-0109) rides the open's, the merge's and the
+// enqueue's payloads and the routings of the ask, the reviews and the answer,
+// 47 bytes each; why the home's own records carry none is routingReasons'
+// "working_for".
 const (
 	codeChangeOpenBytes           = 3_160
 	codeChangeEditBytes           = 2_770
@@ -182,88 +122,60 @@ const (
 	codePublicationOneBytes       = 1_110
 )
 
-// THE REFERENCE COMPANY'S CHANGES, a STATED JUDGEMENT rather than a
-// measurement, since no deployment has reported a day of them: every push is
-// a revision of the change its executor works on, ten pushes a change, so
-// its 3 000 pushes a day are 300 changes. Each change is opened by a seat's
+// THE REFERENCE COMPANY'S CHANGES, a STATED JUDGEMENT, since no deployment has
+// reported a day of them: ten pushes a change. Each is opened by
 // code_open_change, asks one reviewer, takes a review asking for changes with
-// two findings, an answer resolving them, two comments and a thread resolved,
-// then an approving review, and is merged deleting its source — and its home
-// records every revision's facts and its merge into the target, and the
-// readiness it stores again after the ask, the two reviews and the answer
-// (gitlet.Mergeability.Refresh): three that keep it not ready, each recorded by
-// the versions it moved, and the approval's, which turns the change ready
-// and tells its owner, the full record. That is the day at its least: no
-// checks file, no queue, and a target that never moves under a live change.
-// At its most, every change is queued first, its home rechecks it at every
-// pass while its target moves (internal/gitlet/home's MergeabilityRefresh, ten
-// minutes, over a working day of eight hours) — each recheck merging clean
-// again, so recorded by its tip alone — and its target's checks file defines
-// three checks, every revision's queued together by its head's dispatch, the
-// one record naming the head and carrying its three attempts (internal/gitlet's
-// CheckDispatched.Attempts), and each claimed, its box named and ended. A
-// head's check is queued in a record of its own only when it is queued again,
-// requeued after its runner was lost or its box or its setup failed, or rerun
-// by hand, and the reference company's checks pass. A head's checks move its
-// readiness's inputs too (internal/gitlet's changesdue.go, refreshDue: an
-// attempt queued or ended past the row's checks position), so its home
-// refreshes once for the three its dispatch queued together, in one pass, and
-// once for each ending — four a revision at the most, every one keeping the
-// readiness (the one a change that turns it ready is the approval's, above, at
-// the most as at the least: either the approval or the last ending turns it,
-// never both). And a moved target's checks file is read again where no head
-// is dispatched, a dispatch of no head (internal/gitlet/home's
-// ChecksFileRefresh, ten minutes) —
-// at the most one for every change's target at every pass, as if no two
-// changes shared one. A queued change lands through its home's queue
-// worker: a train of it — one candidate of one entry, since a queue that
-// keeps up batches nothing (internal/gitlet/home's BatchOf: min(batch,
-// ⌈waiting/depth⌉) entries a candidate) — and the landing of that tested
-// prefix, telling its authors it merged — its candidate checked first by its
-// target's required checks, at the most all three, queued by the queue worker
-// naming the candidate, each claimed, its box named and ended. It appends no
-// merge record, so the most, which prices both, errs high by a merge a change. And at the
-// most every change's landing lies above its target's green row — landed
-// ahead of its checks, as a person's override merge or push into a branch
-// whose gate requires them lands — so its home's tip work checks it: the three
-// checks queued on the landed commit (purpose tip, no dispatch record),
-// each claimed, its box named and ended, and a green moving the target's
-// green row onto it. One a change is the most, since each landing is the
-// newest when its tip is judged; a burst landing faster than its checks
-// coalesces onto its newest and costs less. A broken is a red tip's, at the
-// rate a merged result fails a check both heads passed, which the reference
-// company's day has none of (codeLogNegligible).
-//
-// A PUBLICATION names every pack its layer covers. At the least the
-// reference company's packs are each named once, in a busy repository's tail
-// of compact.PublishPacks (64); at the most, beside that, every push is
-// published on its own, as a young repository's tail is once it holds a
-// share of its objects — a repository published at most every
-// compact.PublishMinInterval (ten minutes), which its pushes, a few an hour,
-// never outrun.
+// two findings, an answer resolving them, two comments, a thread resolved and
+// an approving review, and merges deleting its source; its home records every
+// revision's facts and merge, and refreshes its readiness after the ask, the
+// reviews and the answer (gitlet.Mergeability.Refresh). That is the least: no
+// checks file, no queue, no moving target. The most queues every change, moves
+// its target under it and runs three checks a head; each term's shape in
+// codeLogDay names what it counts.
 const (
-	referenceChangesADay           = referencePushesADay / 10
-	referenceRevisionsADay         = referencePushesADay
+	referenceChangesADay   = referencePushesADay / 10
+	referenceRevisionsADay = referencePushesADay
+	// Three refreshes keep the change not ready; the approval's turns it ready
+	// at the least and the most alike, since the approval or the last check
+	// ending turns it, never both.
 	referenceKeptRefreshesAChange  = 3
 	referenceReadyRefreshesAChange = 1
-	referenceRechecksAChange       = 8 * 60 / 10
-	referenceChecksAHead           = 3
-	referenceCheckRefreshesAHead   = 1 + referenceChecksAHead
-	referenceChecksATip            = referenceChecksAHead
-	referenceChecksACandidate      = referenceChecksAHead
-	referencePublishPacks          = 64
+	// At the most its target moves at every pass of its home over an
+	// eight-hour day (gitlet/home's MergeabilityRefresh and ChecksFileRefresh,
+	// ten minutes): a recheck merging clean again, and the checks file read
+	// again, as if no two changes shared a target.
+	referenceRechecksAChange = 8 * 60 / 10
+	// A head's three checks are queued by its one dispatch record
+	// (gitlet.CheckDispatched.Attempts); a check gets a record of its own only
+	// when requeued or rerun, and the reference checks pass. They move the
+	// readiness's inputs (gitlet's refreshDue): one refresh for the dispatch,
+	// one for each ending.
+	referenceChecksAHead         = 3
+	referenceCheckRefreshesAHead = 1 + referenceChecksAHead
+	// At the most every landing lies above its target's green row (landed
+	// ahead of its checks, as an override merge does), so the home's tip work
+	// checks it once and moves the green row: once a change, since a burst
+	// coalesces onto its newest.
+	referenceChecksATip = referenceChecksAHead
+	// A queued change lands as a train of one candidate (a queue that keeps up
+	// batches nothing: gitlet/home's BatchOf), checked by the target's required
+	// checks. A landing appends no merge record, so the most, pricing both,
+	// errs high by a merge a change.
+	referenceChecksACandidate = referenceChecksAHead
+	// At the least each pack is published once in a busy repository's tail of
+	// compact.PublishPacks; at the most every push is also published alone, as
+	// a young repository's tail is, at most every compact.PublishMinInterval
+	// (ten minutes), which a few pushes an hour never outrun.
+	referencePublishPacks = 64
 )
 
-// codeLogTerm is one term of the code log's day: the bytes a day one SHAPE of
-// one op's records takes at the reference company — the records its figure
-// was measured on — at the least of its day and at the most: the barriers
-// without a CI and with one, every other term the same at both.
+// codeLogTerm is one term of the code log's day: what one SHAPE of an op's
+// records takes a day, at the day's least and its most.
 //
-// A term is a shape's and not its op's, because one op is appended by more
-// than one writer, at sizes and rates no one figure covers: a publication is
-// a compaction, and a merge's 108 bytes a push say nothing of the layer one
-// names. So an op's records of another shape are a term of their own beside
-// its first, never folded into a figure measured without them.
+// A term is a shape's, not an op's: one op has writers at sizes and rates no
+// one figure covers (a publication is a compaction, and a merge's 108 bytes a
+// push say nothing of the layer one names), so another shape is a term of its
+// own, never folded into a figure measured without it.
 type codeLogTerm struct {
 	op gitlet.OpKind
 	// shape is which of the op's records the term prices: the ones its
@@ -272,17 +184,11 @@ type codeLogTerm struct {
 	least, most float64
 }
 
-// codeLogDay is the code log's day, a term for each shape of record it
-// prices: a seat's push, priced as its coding box's, a merge of the pushes'
-// packs — a plain merge, since the steady arm its figure is measured on
-// publishes nothing — and a publication of their layers, the sweep of what
-// the merges retired, its git clients' barriers at gitlet.BarrierRecordBytes,
-// and every record of the reference company's changes: their lifecycle,
-// their conversation, their home's facts, merges and readiness, their merges,
-// and at the most their queue — its entry, its train, its candidate's checks
-// and its landing — their checks, and their landings' tip checks and green.
-// What the day is summed from, so a term priced here is a term of every
-// figure TestTheDocsPrintTheMeasuredDay holds.
+// codeLogDay is the code log's day, a term for each shape of record it prices:
+// a seat's push at its coding box's, the merges, publications and sweeps of
+// the pushes' packs, the git clients' barriers at gitlet.BarrierRecordBytes,
+// and every record of the reference company's changes. Every figure
+// TestTheDocsPrintTheMeasuredDay holds is summed from it.
 func codeLogDay() []codeLogTerm {
 	changes, revisions := float64(referenceChangesADay), float64(referenceRevisionsADay)
 	checks := revisions * referenceChecksAHead
@@ -402,30 +308,25 @@ func codeLogOp(day []codeLogTerm, op gitlet.OpKind) codeLogTerm {
 }
 
 // codeHoldRecordBytes is the most one hold record of a scratch repository
-// takes the code log as the engine writes one — a turn's run id, an operation
-// id at statelog.MaxCallerOpIDBytes and a seat handle at iam.MaxLogin —
-// measured as the day measures a push, by the log's growth: internal/gitlet's
-// TestAHoldRecordCostsTheLogOneSmallRecord measures 865 bytes and holds a hold
-// at most this (its holdRecordBytes, which says what the rest covers). The
-// hold's reason in codeLogNegligible weighs the turns' holds by it.
+// takes the code log as the engine writes one (a turn's run id, an operation
+// id at statelog.MaxCallerOpIDBytes, a seat handle at iam.MaxLogin), by the
+// log's growth: internal/gitlet's TestAHoldRecordCostsTheLogOneSmallRecord
+// holds a hold to it (its holdRecordBytes). codeLogNegligible's hold reason
+// weighs the turns' holds by it.
 const codeHoldRecordBytes = 896
 
 // codeExpungeScanRecordBytes is the most one clean scan's record takes the
-// code log as the engine writes one — internal/gitlet's
-// TestACleanScanCostsTheLogOneSmallRecord holds a scan at most this (its
-// expungeScanRecordBytes). The scan's reason in codeLogNegligible weighs a
+// code log, as internal/gitlet's TestACleanScanCostsTheLogOneSmallRecord holds
+// it (its expungeScanRecordBytes). codeLogNegligible's scan reason weighs a
 // fleet's weekly scans by it.
 const codeExpungeScanRecordBytes = 736
 
-// codeLogNegligible is every op of the code domain whose records the code
-// log's day leaves out, and why: each is appended at the rate a person edits
-// the company's document or runs a command, at the rate the company makes,
-// renames and retires repositories (each manager's rate argued in
-// codeLogManagers), or as the trim and the code-retention duty sweep what the
-// log no longer needs — a few records a day beside 3 000 pushes and the tens
-// of thousands of reads around them — or, a live turn's hold, at a rate the
-// reference company's day has none of, argued with the figures
-// TestTheHoldsReasonWeighsEveryTurnsHoldAgainstTheDay holds.
+// codeLogNegligible is every code-domain op the day leaves out, and why: each
+// comes at the rate a person edits the company's document or runs a command,
+// the company manages repositories (codeLogManagers), or the trim and the
+// code-retention duty sweep, a few records a day beside 3 000 pushes; or, a
+// live turn's hold, at a rate the reference day has none of
+// (TestTheHoldsReasonWeighsEveryTurnsHoldAgainstTheDay).
 var codeLogNegligible = map[gitlet.OpKind]string{
 	gitlet.OpCreate: "a repository is created when an activation of the company's document " +
 		"declares it, or a person's or a seat's tool makes one: once a repository",
@@ -475,18 +376,13 @@ var codeLogNegligible = map[gitlet.OpKind]string{
 		"a person runs, one record each, a later one widening the purge already open",
 	// AN EXPUNGE'S TWO RECORDS, appended by the repository's maintainer
 	// (internal/gitlet/compact's expunge loop, polling gitlet.ReadExpungeDue),
-	// come at two rates, each bounded by what it frees rather than by the
-	// clock: a person's purge above, and the maintainer's own WEEKLY
-	// SCHEDULE (gitlet.ExpungeInterval) — at most one cycle a repository a
-	// week, and only once what no ref, no drop within gitlet.PruneGrace and no
-	// row in flight reaches, in the packs older than the grace, is more than
-	// a quarter (gitlet.ExpungeShare) of the repository's live bytes and at
-	// least gitlet.ExpungeMinBytes. A cycle takes that garbage out, so a
-	// repository is due again only once another quarter of it has become
-	// unreachable and aged past the grace: even a repository churning that
-	// fast appends a begin and a commit a week, beside the 21 000 pushes of
-	// the reference company's week. A clean scan's record is its own op
-	// below.
+	// are bounded by what they free, not the clock: a person's purge, or the
+	// weekly schedule (gitlet.ExpungeInterval) once more than gitlet.ExpungeShare
+	// and at least gitlet.ExpungeMinBytes of the live bytes lie unreachable past
+	// gitlet.PruneGrace. A cycle takes that garbage out, so a repository is due
+	// again only once another share has aged unreachable: even one churning that
+	// fast appends a begin and a commit a week, beside the reference week's
+	// 21 000 pushes. A clean scan is its own op below.
 	gitlet.OpExpungeBegin: "the begin of an expunge: one for each cycle its repository's maintainer runs — " +
 		"serving a person's purge, as many as its live packs need (one or two for a repository at the " +
 		"default ceiling, gitlet.MaxExpungeOutputs), or on its own weekly schedule at most one a repository " +
@@ -498,21 +394,18 @@ var codeLogNegligible = map[gitlet.OpKind]string{
 	gitlet.OpExpungeCommit: "the commit that ends an expunge its begin opened: one a begin, at the begin's rate " +
 		"— a purge's, or the weekly schedule's — retiring its dropping packs and adding their rescue, each at " +
 		"most gitlet.MaxExpungeOutputs",
-	// A CLEAN SCAN is its maintainer's record that a repository owes no
-	// expunge, which takes the repository out of every Gitlet node's weekly
-	// listing for gitlet.ExpungeInterval: one a repository a week at the most,
-	// and none for one an expunge committed in that week. Held to a bound in
-	// TestTheCodeLogsDayPricesEveryRecordItTakes.
+	// A CLEAN SCAN is its maintainer's record that a repository owes no expunge,
+	// taking it out of every Gitlet node's weekly listing for
+	// gitlet.ExpungeInterval: one a repository a week at the most. Its bound is
+	// held in TestTheCodeLogsDayPricesEveryRecordItTakes.
 	gitlet.OpExpungeScan: "a repository's maintainer's record that its scan on its own schedule found no " +
 		"expunge due: at most one a repository every gitlet.ExpungeInterval (a week), each at most " +
 		"codeExpungeScanRecordBytes — even a company at config.CodeMaxRepos projects, every one judged " +
 		"clean every week, appends them under a twentieth of the day's least, and the reference company's " +
 		"day, which makes no scratch repository (codeLogManagers), judges only the repositories it has",
-	// A PERSON'S MARK is their own gesture, never a seat's: code_mark_inbox
-	// is human-only and the operator catalogue's alone, so its rate is the
-	// presses of a person's Inbox buttons and their assistant's calls — and the
-	// reference company's day, whose changes are its seats', reaches its few
-	// persons as notices, not as records of theirs.
+	// A PERSON'S MARK is never a seat's: code_mark_inbox is human-only and the
+	// operator catalogue's alone, so it comes at the rate of a person's presses
+	// and their assistant's calls.
 	gitlet.OpMarks: "a person's gesture over their own code notices — a notice read, unread, " +
 		"snoozed or unsnoozed, or everything read through a position — one record a press of " +
 		"an Inbox button or an assistant's call, persons only: a person marking their day's " +
@@ -524,13 +417,10 @@ var codeLogNegligible = map[gitlet.OpKind]string{
 	gitlet.OpViewedKey: "a repository's viewed key: one record a repository ever, before the first mark of " +
 		"any of its files, about two hundred bytes",
 	// A GESTURE ON A CHANGE beside its open, its reviews and its merge: the
-	// reference company's changes are opened ready, on the target they merge
-	// into, and merged, so its day makes none of them. Each is one record
-	// of code_update_change or code_close_change, the largest an edit that
-	// rewrites the whole description (codeChangeEditBytes, measured beside
-	// the change's other records), and a change edited once a day would
-	// append under a twentieth of the day's least
-	// (TestTheCodeLogsDayPricesEveryRecordItTakes holds that bound).
+	// reference changes are opened ready on their target and merged, so its day
+	// makes none. The largest is an edit rewriting the whole description
+	// (codeChangeEditBytes); its bound is held by
+	// TestTheCodeLogsDayPricesEveryRecordItTakes.
 	gitlet.OpChangeEdit: "a change's title, description or work item set by code_update_change: a few " +
 		"times a change at most, each at most an edit rewriting the description (codeChangeEditBytes, " +
 		"measured) — under a twentieth of the day's least were every change edited once",
@@ -542,11 +432,7 @@ var codeLogNegligible = map[gitlet.OpKind]string{
 		"takes: once a change at most, a record naming the change and a reason, smaller than an edit",
 	gitlet.OpChangeReopen: "a closed change reopened by code_close_change: once a close at most, a " +
 		"record naming the change, smaller than an edit",
-	// A CHANGE'S ASKS SETTLED with its lifecycle: a review settles its own
-	// reviewer's ask on its record, so only a change that closes or merges
-	// with an ask still unanswered — or is reopened holding asks its end
-	// left — takes one, and the reference company's changes are each
-	// reviewed by the reviewer they ask before they merge.
+	// A CHANGE'S ASKS SETTLED with its lifecycle, only where an ask outlives it.
 	gitlet.OpAsks: "a change's asks for review settled by its repository's home Gitlet node through the " +
 		"estate's code.conversation — ended once it closed or merged with asks still waiting, asked again " +
 		"once it is reopened holding asks its end left: at most once a close, a merge or a reopen of a " +
@@ -560,11 +446,8 @@ var codeLogNegligible = map[gitlet.OpKind]string{
 	gitlet.OpChecksSweep: "the code-retention pass's sweep of an idle repository's check attempts past " +
 		"gitlet.CheckHistory once they have outlived it by gitlet.CheckSweepGrace: a record an idle " +
 		"repository holding them, a day at most, as a pack sweep's",
-	// A BROKEN is a red tip's: a merged result failing a required check its
-	// changes' heads each passed, which the reference company's day has none
-	// of, and which a revert or a fix forward then moves past. Every change's
-	// landing broken once would append under a twentieth of the day's least
-	// (TestTheCodeLogsDayPricesEveryRecordItTakes holds that bound).
+	// A BROKEN is a red tip's, a merged result failing a check its heads passed;
+	// its bound is held by TestTheCodeLogsDayPricesEveryRecordItTakes.
 	gitlet.OpBroken: "a landing above its target's green row marked broken by its home's tip work, a " +
 		"required check having failed on it: once a red tip at most, each a record naming the landing " +
 		"and its failed checks (codeBrokenBytes, measured) — under a twentieth of the day's least were " +
@@ -576,9 +459,7 @@ var codeLogNegligible = map[gitlet.OpKind]string{
 		"and its landings below their green rows past gitlet.QueueHistory once they have outlived it by " +
 		"gitlet.QueueSweepGrace: a record an idle repository holding them, a day at most, as a pack " +
 		"sweep's",
-	// A QUEUE ENTRY'S END OTHER THAN ITS LANDING: an entry ends once, so
-	// each comes at most once an enqueue, and the reference company's queued
-	// changes each land (codeLogDay at the most).
+	// A QUEUE ENTRY'S END OTHER THAN ITS LANDING: at most once an enqueue.
 	gitlet.OpDequeue: "an entry taken out of its queue before it lands by code_dequeue_change, a person's or " +
 		"a seat's gesture: at most once an enqueue, a record naming the entry, who asked and its change's " +
 		"routing, smaller than an edit; the reference company's queued changes each land",
@@ -590,10 +471,8 @@ var codeLogNegligible = map[gitlet.OpKind]string{
 		"bisect that finds a red candidate's culprit probes its batch at that rate too. The reference " +
 		"company's queued changes merge cleanly onto their targets and pass their checks, so its day " +
 		"ejects none",
-	// AN IMPORT AND A PULL MIRROR'S SYNCS fill a repository from another
-	// host, which the reference company's day never does: its repositories
-	// are its own, and its pushes go to those it already has
-	// (codeLogManagers).
+	// AN IMPORT AND A PULL MIRROR'S SYNCS fill a repository from another host,
+	// which the reference day never does (codeLogManagers).
 	gitlet.OpImportChunk: "an import's chunk, landed by its repository's home polling imports_due: an import " +
 		"is named by a person's or the company's document's create of the repository " +
 		"(gitlet.CreateRepo.Import), or is a pull mirror's first fill, once a repository, in chunks of at " +
@@ -614,39 +493,17 @@ var codeLogNegligible = map[gitlet.OpKind]string{
 		"crewlet.statelog.log.bytes_per_day",
 }
 
-// codeLogUnwritten is every op of the code domain that no node of this build
-// appends, with the one name of the code domain its writer must spell, and
-// how: the day leaves the op out while no file the crewlet binary is built
-// from spells that name (codeLogSpelled), and
-// TestTheCodeLogsDayPricesEveryRecordItTakes fails the day one does. A writer
-// is one of two things, and each has its name:
-//
-//   - a LOOP, which polls a LISTING for its work: a gitlet.ReadKind the code
-//     domain declares for that loop, and serves before the loop exists
-//     (listing);
-//   - an ASKER — a tool, a route, the engine's own work — which builds the
-//     PAYLOAD the op's records carry and asks the repository's committer to
-//     decide it: the type the code domain decodes those records into
-//     (payload), which the estate carries to the committer inside its
-//     proposal without ever naming it.
-//
-// KEYED BY THE NAME, NOT BY A FILE: the plan names a writer's files, and an
-// implementer names them after the code they land beside — the compactor's
-// loop and its decide, planned in compact.go and decide_compact.go, landed in
-// compactor.go, poll.go and compaction.go — so a file the plan names may never
-// exist while its writer runs, and a tripwire on it would never fire. Every
-// loop polls its listing and every asker builds its payload, whatever its
-// files are called, and both are the code domain's own declarations. The
-// compactor's poll names gitlet.ReadCompactionDue, and the gate holds that it
-// finds it there, so a walk that would find no writer at all fails rather
-// than passes.
-//
-// EMPTY while every op the code domain declares has its writer in this build:
-// the home's import and mirror loop polls imports_due and mirrors_due,
-// code_dequeue_change asks for a dequeue, and the home's queue worker builds
-// trains, ejects and lands — each priced into the day or argued out of it
-// above. An op the domain declares before its writer exists goes here, with
-// the name that writer will spell.
+// codeLogUnwritten is every code-domain op no node of this build appends, with
+// the name its writer must spell: the day leaves it out while no file the
+// crewlet binary is built from spells that name (codeLogSpelled), and
+// TestTheCodeLogsDayPricesEveryRecordItTakes fails the day one does. A LOOP is
+// named by the LISTING it polls (a gitlet.ReadKind); an ASKER (a tool, a
+// route, the engine's own work) by the PAYLOAD type it builds for the
+// committer to decide. Keyed by name, not file: a writer's files are named
+// after the code they land beside, so a tripwire on a planned file may never
+// fire. The walk must find the compactor's gitlet.ReadCompactionDue, so one
+// finding no writer at all fails. Empty while every declared op has its
+// writer.
 var codeLogUnwritten = map[gitlet.OpKind]struct {
 	listing gitlet.ReadKind
 	payload reflect.Type
@@ -654,12 +511,9 @@ var codeLogUnwritten = map[gitlet.OpKind]struct {
 }{}
 
 // codeLogPushVias is every way a push's pack is built (gitlet.PushVias), and
-// how the day counts the pushes built that way. A WAY IS A SHAPE OF PUSH the
-// code tells apart — who builds the pack, for what, carrying how many refs,
-// at what rate — and a way added (a ref expiry's, a merge queue's, a
-// mirror's) is a writer of pushes the push term was not measured on, so
-// TestTheCodeLogsDayPricesEveryRecordItTakes fails on it until its pushes are
-// priced into the day or argued out of it here.
+// how the day counts those pushes. A new way is a writer of pushes the push
+// term was not measured on, so TestTheCodeLogsDayPricesEveryRecordItTakes
+// fails until it is priced into the day or argued out of it here.
 var codeLogPushVias = map[gitlet.PushVia]string{
 	gitlet.ViaEngine: "a write the engine builds for a tool: a seat's takes the log less than its " +
 		"coding box's push (1 528 bytes alone in its record against 1 667, BenchmarkPushLogBytes), " +
@@ -693,13 +547,11 @@ var codeLogPushVias = map[gitlet.PushVia]string{
 }
 
 // codeLogManagers is everything that may manage a repository
-// (gitlet.ManagedBys), and how the day counts the creates, settings changes,
-// deletions, restores and purges of the repositories each manages. A MANAGER
-// IS A SHAPE OF LIFECYCLE the code tells apart: one added — the code tools'
-// own repositories, a seat's scratch ones among them — creates and deletes
-// repositories at its own rate, which no reason of codeLogNegligible states,
-// so TestTheCodeLogsDayPricesEveryRecordItTakes fails on it until those
-// records are priced into the day or argued out of it here.
+// (gitlet.ManagedBys), and how the day counts the lifecycle records of the
+// repositories each manages. A new manager creates and deletes at a rate no
+// codeLogNegligible reason states, so
+// TestTheCodeLogsDayPricesEveryRecordItTakes fails until it is priced into the
+// day or argued out of it here.
 var codeLogManagers = map[gitlet.ManagedBy]string{
 	gitlet.ManagedConfig: "a repository code.repos declares: an activation of the company's " +
 		"document creates, settles, deletes and restores it, and its purge follows its " +
@@ -827,17 +679,12 @@ func absent(reasons ...map[string]string) map[string]string {
 	return all
 }
 
-// codeLogFields is every key the payload of an op the day prices declares, as
-// the day's terms for its records were measured: the keys the measured records
-// CARRY, and every other one with why the terms' records never carry it — an
-// absent key naming a whole subtree where they carry none of it. A KEY IS A
-// SHAPE OF RECORD the payload tells apart: one declared since the term was
-// measured — a box's push naming its work item's identity, as it was until the
-// push term was measured with it — is a record of that op the term was not
-// measured on, larger by what the key spells in every record that carries it,
-// so TestTheCodeLogsDayPricesEveryRecordItTakes fails on it until the term is
-// measured again and restated, or the key is listed here with why the term's
-// records never carry it.
+// codeLogFields is every key a priced op's payload declares: the keys its
+// terms' measured records CARRY, and every other one with why they never do
+// (an absent key naming a whole subtree where they carry none of it). A key
+// declared since a term was measured makes a record the term never saw, so
+// TestTheCodeLogsDayPricesEveryRecordItTakes fails until the term is
+// remeasured or the key is listed here as absent.
 //
 // The ENVELOPE every record carries is no op's: a barrier is nothing else,
 // and internal/gitlet's census test holds what one costs.
@@ -1227,11 +1074,10 @@ var codeLogKinds = map[gitlet.ObjectKind]string{
 }
 
 // The reference company's chart, as a seat's tools hold it. Its work is filed
-// into ENG, which the chart gives to the Engineering unit — a unit with no
-// `id`, as the shipped example's are, so its key is its name — and the unit's
-// lead is the project's lead, because a project a unit declares is owned by
-// that unit's lead ([org.Organization.LeadsBy]). Both are on every routing
-// snapshot a seat's write takes, and the unit on every task it files.
+// into ENG, which the chart gives to the Engineering unit (no `id`, as the
+// shipped example's units, so its key is its name), whose lead owns the
+// project ([org.Organization.LeadsBy]). Both are on every routing snapshot a
+// seat's write takes, and the unit on every task it files.
 const (
 	referenceUnit = "Engineering"
 	referenceLead = "eng-lead"
@@ -1244,37 +1090,18 @@ type referenceChart struct{}
 func (referenceChart) ProjectLead(string) string { return referenceLead }
 func (referenceChart) UnitLead(string) string    { return referenceLead }
 
-// THE FIGURES THE DOCS PRINT: what each gesture of the reference company's
-// day costs the mutation log, in bytes, as Worklet's package doc ("What a
-// day costs the log, measured") and docs/guides/retention.md's storage
-// forecast print them, and as config's and gitlet's arithmetic for the code
-// log's share of the broker reads the day they make.
-//
-// The text the records carry is a STATED ASSUMPTION, not a measurement: how
-// long a description or a comment is belongs to the company, and the
-// measurement is of everything else a record carries — its ids, its envelope,
-// the routing snapshot its notification takes, and what the broker stores
-// beside it. Agents write at length, so the corpus takes a description of two
-// kibibytes (about three hundred words), a comment of one, and a turn's
-// summary at its MaxTurnSummary cap, which the engine rewrites a longer
-// account to fit; and half that text is printed beside it, because the text
-// is the term a company moves.
-//
-// THE KEYS ARE A NEW PROJECT'S, one or two digits, which is the one
-// identifier here shorter than a company's: a project of the reference
-// company's (100 000 tasks a year over 50 projects) reaches four digits in its
-// first year and five by its fifth, three bytes more by then wherever a key is
-// written — the counter's value, the task's key and its snapshot's on a
-// create, the snapshot's on a comment or an edit — about 8 kB of the day, under
-// a tenth of one percent, which the docs state rather than this measuring a
-// counter ten thousand creates deep.
-//
-// Each is HELD to what the broker counts within publishedTolerance
+// THE FIGURES THE DOCS PRINT: what each gesture of the reference company's day
+// costs the mutation log, in bytes (package doc, "What a day costs the log,
+// measured"; docs/guides/retention.md), and config's and gitlet's code-log
+// arithmetic derives from. The text is a STATED ASSUMPTION, its length being
+// the company's: a 2 KiB description, a 1 KiB comment and a summary at
+// MaxTurnSummary, with half that text printed beside it. The keys are a new
+// project's, one or two digits; five by a project's fifth year add about 8 kB
+// a day, which the docs state rather than this measuring. Each is held to the
+// broker's count within publishedTolerance
 // (TestTheMutationLogsCeilingIsFiveYearsOfAMeasuredDay), and every page that
 // prints one, or a figure derived from them, to these
-// (TestTheDocsPrintTheMeasuredDay): a change to what a record carries fails
-// naming the figure to restate rather than leaving the forecast behind its
-// code.
+// (TestTheDocsPrintTheMeasuredDay).
 const (
 	publishedCreateBytes  = 5_266
 	publishedCommentBytes = 3_037
@@ -1286,24 +1113,19 @@ const (
 	publishedHalfTextCreateBytes  = 4_242
 	publishedHalfTextCommentBytes = 2_436
 
-	// publishedTolerance is how far a measured gesture may sit from the
-	// figure printed for it: a hundredth. The measurement is of
-	// fixed-length ids and fixed text, so it repeats to the byte, and a
-	// hundredth is the most a printed figure may be wrong by — a dozen
-	// bytes added to every record already move an edit past it, which is a
-	// change the figures are to be restated for.
+	// publishedTolerance is how far a measured gesture may sit from its printed
+	// figure: a hundredth. The measurement repeats to the byte, and a dozen
+	// bytes more in every record already move an edit past it, a change the
+	// figures are to be restated for.
 	publishedTolerance = 0.01
 )
 
-// THE BARRIER FIGURES THE DOCS PRINT: what one linearizable read's barrier
-// costs the mutation log at the log's first generation, whose envelope carries
-// none; from its second generation to its tenth, which is more reanchors than
-// a log meets in its life and the figure the forecast prices every barrier at
-// (gitlet.BarrierRecordBytes, which the pages say it costs "too"); and at the
-// last a generation can be, ten digits a log never reaches. Each is a signed
-// frame (ADR-0031) under this suite's two-byte key id, which every record
-// carries (gitlet.BarrierRecordBytes says what a longer one adds). Each is HELD to
-// what the broker counts within publishedTolerance
+// THE BARRIER FIGURES THE DOCS PRINT: one linearizable read's barrier on the
+// mutation log at its first generation, whose envelope carries none; from its
+// second to its tenth, more reanchors than a log meets in its life, the figure
+// the forecast prices every barrier at (gitlet.BarrierRecordBytes); and at the
+// last, ten digits. Each is a signed frame (ADR-0031) under this suite's
+// two-byte key id, held to the broker's count within publishedTolerance
 // (TestABarrierCostsTheMutationLogWhatTheForecastPricesItAt), and the pages to
 // these (TestTheDocsPrintTheMeasuredDay).
 const (
@@ -1354,27 +1176,16 @@ func (g gestures) day() float64 {
 }
 
 // THE MUTATION LOG'S CEILING IS FIVE YEARS OF THE REFERENCE COMPANY'S RECORDS,
-// MEASURED.
-//
-// worklet.TrackerLogMaxBytes says a completely blocked trim reaches it in years
-// rather than months, and the storage forecast derives the log's healthy size
-// from the same day: each claim is a rate of bytes a day times a number of
-// days, and the rate was the ceiling's own five years divided back out until
-// something measured it. So each gesture of the corpus's day is written here
-// the way the engine writes it — a create through the project's counter into
-// the unit the chart gave the project, a comment carrying the commenter's
-// watch, a status change, a turn charged to its task — each with the
-// notification a seat's tools attach, routed through the company's chart (a
-// project's lead and its unit's on every snapshot), and the identifiers
-// production mints, through the real writer onto a real broker, and the
-// stream's own growth is what each costs.
-//
-// Each gesture must cost what the docs print for it within publishedTolerance,
-// at both corpora. And the day the reference text makes must lie within a
-// tenth of the rate the ceiling is sized at, either way: past it the ceiling
-// fills sooner than its reason says and the forecast understates the log;
-// under it the forecast overstates the log, and the code log's share of the
-// broker — a ratio to this day (config.DerivedCodeLogNumerator) — is set too
+// MEASURED. worklet.TrackerLogMaxBytes's reason and the storage forecast are
+// each a rate a day times days, so each gesture is written as the engine
+// writes it (a create through the project's counter into the chart's unit, a
+// comment with the commenter's watch, a status change, a turn charged to its
+// task, each with a seat's notification routed through the chart) through the
+// real writer onto a real broker, and costed by the stream's growth. Each
+// must cost its printed figure within publishedTolerance at both corpora, and
+// the reference day lie within a tenth of the ceiling's rate: above, the
+// ceiling fills sooner than its reason says; below, the forecast overstates
+// the log and the code log's share (config.DerivedCodeLogNumerator) is set too
 // small.
 func TestTheMutationLogsCeilingIsFiveYearsOfAMeasuredDay(t *testing.T) {
 	t.Parallel()
@@ -1550,22 +1361,15 @@ func measureADay(t *testing.T, c corpus) gestures {
 	return out
 }
 
-// A BARRIER COSTS THE MUTATION LOG WHAT THE FORECAST PRICES IT AT.
-//
-// The storage forecast and config's arithmetic for the code log's share price
-// a linearizable read's barrier on this log at gitlet.BarrierRecordBytes, the
-// code log's measured figure — a barrier here names a longer subject and
-// carries another scope, so it is measured on its own stream at each
-// generation the docs print a figure for: the first, whose envelope carries
-// none; the second and the tenth, the two ends of the run of one-digit
-// generations, which is more reanchors than a log meets in its life; and the
-// last a generation can be, whose ten digits grow it by a byte each.
-//
-// Each must cost what the docs print for it within publishedTolerance, and
-// every generation a log meets no more than the forecast prices it at: past
-// that, the forecast understates the barriers and every figure derived from
-// them, and the census sized from gitlet.BarrierRecordBytes allows more of them
-// than the log has room for.
+// A BARRIER COSTS THE MUTATION LOG WHAT THE FORECAST PRICES IT AT. The forecast
+// and config price a barrier here at gitlet.BarrierRecordBytes, the code log's
+// figure, but one here names a longer subject and another scope, so it is
+// measured on its own stream at each generation the docs print: the first
+// (none in its envelope), the second and the tenth (the ends of the one-digit
+// run), and the last (ten digits). Each must cost its printed figure within
+// publishedTolerance, and every generation a log meets no more than the
+// forecast's price: past it the forecast understates the barriers, and the
+// census sized from gitlet.BarrierRecordBytes allows more than the log holds.
 func TestABarrierCostsTheMutationLogWhatTheForecastPricesItAt(t *testing.T) {
 	t.Parallel()
 	for _, arm := range []struct {
@@ -1627,33 +1431,18 @@ func TestABarrierCostsTheMutationLogWhatTheForecastPricesItAt(t *testing.T) {
 	}
 }
 
-// THE DOCS PRINT THE MEASURED DAY: every page that states what a gesture costs
-// the mutation log, or a figure derived from the day those costs make, states
-// it from the published figures — so a figure restated for a change in what a
-// record carries fails here until every page says it, rather than one page
-// moving and four keeping the old day.
-//
-// The pages are the storage forecast in docs/guides/retention.md, this
-// package's doc ("What a day costs the log, measured") and TrackerLogMaxBytes's
-// reason, and the reasons that size the code log's share of the broker against
-// this day (config's DerivedCodeLogNumerator and its prose in
-// docs/guides/replication.md, gitlet's CodeLogMaxBytes and GitReadsShare), the
-// count of barriers a day that is the reference company's line for a code log
-// at half this log's ceiling among them — and what the code log keeps of the
-// reference company's day beside its barriers (internal/gitlet's "What a push
-// costs, measured" and the code log's column in docs/concepts/scaling.md's
-// table of what every data node holds). Each figure is computed here from the
-// published costs, the corpus's rates, the published barriers, the code log's
-// day (codeLogDay, every term of it), gitlet.BarrierRecordBytes and
-// config.DefaultMinAge, and rounded as the pages round it; the few the pages
-// put in words are held to the range the words are true over.
-//
-// Mutation: change any published figure, a corpus's rate or text,
-// MaxTurnSummary, a term of the code log's day, gitlet.BarrierRecordBytes or
-// config.DefaultMinAge, and a page no longer says what this package measures;
-// tell a company to set the code log from its two logs' bytes_per_day before
-// its first boot, on any page that sizes the code log, and it fails naming the
-// sentence.
+// THE DOCS PRINT THE MEASURED DAY: every page stating a gesture's cost, or a
+// figure derived from the day, states it from the published figures, so a
+// restated figure fails here until every page says it. The pages: the
+// forecast (docs/guides/retention.md), this package's doc, TrackerLogMaxBytes,
+// the code log's sizing (config's DerivedCodeLogNumerator, replication.md,
+// gitlet's CodeLogMaxBytes and GitReadsShare) and its own day (gitlet's "What
+// a push costs, measured", docs/concepts/scaling.md). Each is computed from
+// the published costs, the rates, codeLogDay, gitlet.BarrierRecordBytes and
+// config.DefaultMinAge, rounded as the page rounds it; words are held to the
+// range they are true over. Mutation: change any of those, or tell a page to
+// set the code log from bytes_per_day before its first boot, and it fails
+// naming the sentence.
 func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 	t.Parallel()
 	whole, half := referenceCorpus.cost, halfTextCorpus.cost
@@ -1692,10 +1481,8 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 		}
 	}
 	codeLeast, codeMost := codeLeastBytes/day, codeMostBytes/day
-	// THE DAY OF A COMPANY WHOSE SEATS ONLY PUSH: every term but the
-	// changes', which is the day the share was sized at before the
-	// publications and the changes were priced, and where the pages say two
-	// thirds still sits.
+	// THE DAY OF A COMPANY WHOSE SEATS ONLY PUSH: every term but the changes',
+	// where the pages say two thirds still sits.
 	pushOnlyLeast := (codeLeastBytes - changeLeast) / day
 	pushOnlyMost := (codeMostBytes - changeMost) / day
 	share := float64(config.DerivedCodeLogNumerator) / config.DerivedCodeLogDenominator
@@ -1960,18 +1747,14 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 	}
 
 	// THE CODE LOG IS SIZED IN TWO STEPS, AND NEITHER NAMES WHAT IS NOT THERE
-	// YET. Before the first boot neither log exists, so no bytes_per_day has
-	// been measured: a page telling a company whose seats work through changes
-	// to set the code log from its two logs' bytes_per_day before its first
-	// boot gives it a step nobody can follow, and it boots on the derived two
-	// thirds, far below its day (above). So every page that sizes the code log
-	// gives the step before the first boot from the reference company's day —
-	// the ratio's least, and what a ceiling set at it costs — and the measured
-	// ratio only once the streams exist, and no sentence of any of them names
-	// a first boot and bytes_per_day together. The YAML reference's comment is
-	// read with its markers off, as a reader reads it. A page that names
-	// both words and gives no step of its own (deployment.md, retention.md)
-	// is scanned all the same.
+	// YET: before the first boot no log has measured a bytes_per_day, so a page
+	// telling a company to set the code log from it then gives a step nobody can
+	// follow, and it boots on the derived two thirds, far below its day. So every
+	// page sizing the code log gives the first step from the reference day (the
+	// ratio's least and its cost) and the measured ratio once the streams exist,
+	// and no sentence names a first boot and bytes_per_day together. The YAML
+	// reference is read with its comment markers off; a page naming both words
+	// with no step of its own is scanned all the same.
 	steps := map[string]string{
 		"internal/config/retention.go": "Before the first boot neither log exists and nothing of its own " +
 			"has been measured, so the reference company's day above is the figure it has: it sets " +
@@ -2019,45 +1802,18 @@ func uncommented(page string) string {
 	return strings.Join(kept, " ")
 }
 
-// THE CODE LOG'S DAY PRICES EVERY RECORD THE LOG TAKES, or says why one is not
-// in it.
-//
-// The day sizes the code log's share (config's DerivedCodeLogNumerator) and
-// says where that share sits against what the log takes. A kind of record
-// the log takes and the day leaves out makes it quietly short, and no figure
-// TestTheDocsPrintTheMeasuredDay reads moves when it joins the log: the
-// change, review, merge, queue and check records this build's tools, its home
-// Gitlet nodes and its check runners append would come on top of a day that has
-// no room for them — as they did until they were priced here.
-//
-// So every op the code domain declares is exactly one of three: priced by the
-// day (codeLogDay, a term for each shape of its records it prices),
-// negligible beside it for the reason given (codeLogNegligible), or appended
-// by no node of this build (codeLogUnwritten) — and that only while no file
-// the crewlet binary is built from names the listing its loop would poll or
-// the payload its asker would build. Every kind of object the log's records
-// are on says how the day counts them (codeLogKinds).
-//
-// AN OP IS CLASSIFIED ONCE, AND ITS RECORDS CHANGE SHAPE UNDER IT: a later
-// writer appends the same op's records at a size or a rate its term was not
-// measured on, or its reason does not describe, and nothing above moves. So
-// the shapes are held too, each by what the code itself tells it apart by:
-// every way a push's pack is built and everything that may manage a
-// repository, each closed set classified whole (codeLogPushVias,
-// codeLogManagers); and every key a priced op's payload declares, against the
-// keys its terms were measured on (codeLogFields).
-//
-// A new op, kind, way, manager or payload key, or the writer of an unwritten
-// op, fails here until its records are priced into the day — and the share's
-// place restated on the pages TestTheDocsPrintTheMeasuredDay holds — or argued
-// out of it. The one negligible reason that prints a bound on a measured
-// figure, a change's edits, is held to it here.
-//
-// Mutation: declare an op, a kind, a way or a manager in the code domain, add
-// a key to a priced op's payload, or take an op out of codeLogDay and
-// codeLogNegligible both — drop the land's term from codeLogDay, say — and
-// this fails naming it; take the compactor's poll off gitlet.ReadCompactionDue
-// and it fails saying the walk found no writer.
+// THE CODE LOG'S DAY PRICES EVERY RECORD THE LOG TAKES, or says why not: the
+// day sizes the code log's share (config's DerivedCodeLogNumerator), and a
+// record it leaves out makes it quietly short. So every code-domain op is one
+// of: priced (codeLogDay), negligible for a stated reason
+// (codeLogNegligible), or appended by no node of this build
+// (codeLogUnwritten) while no binary file spells its writer's name; every
+// object kind says how it is counted (codeLogKinds). An op's records change
+// shape under it, so the shapes are held too: the push ways and managers, each
+// closed set whole, and a priced op's payload keys (codeLogFields). Mutation:
+// declare an op, kind, way, manager or payload key, drop the land's term, or
+// take the compactor's poll off gitlet.ReadCompactionDue, and this fails
+// naming it.
 func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 	t.Parallel()
 	const remedy = "price its records into codeLogDay — and restate the code log's share on the " +
@@ -2187,12 +1943,9 @@ func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 		}
 	}
 
-	// THE WRITERS, each by the name it spells — a loop by the listing it polls,
-	// an asker by the payload it builds: an unwritten op or shape stays
-	// unwritten while no file the crewlet binary is built from spells its
-	// writer's name. The walk that looks must find the compactor's listing,
-	// whose merges the day prices, or it is a walk that would find no writer
-	// at all.
+	// THE WRITERS, each by the name it spells: a loop by the listing it polls, an
+	// asker by the payload it builds. The walk must find the compactor's listing,
+	// or it is a walk that would find no writer at all.
 	var payloads []reflect.Type
 	for op, unwritten := range codeLogUnwritten {
 		if unwritten.payload == nil {
@@ -2305,16 +2058,13 @@ func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 	}
 }
 
-// THE HOLD'S REASON WEIGHS EVERY TURN'S HOLD AGAINST THE DAY. A hold record is
-// no deliberate act but a turn's — one for each turn that names a scratch
-// repository idle gitlet.HoldRecordAfter or more, recurring in every turn while
-// neither a read nor a hold moves the idle clock — so codeLogNegligible keeps
-// it out of the day only on a stated bound: what the reference company's
-// 3 000 turns a day would append, each naming one such repository, at the most
-// a hold record takes as the engine writes one (codeHoldRecordBytes), beside
-// the day's least. This holds the figures the reason prints to that
-// arithmetic, so a restated frame or day re-opens the judgement rather than
-// leaving a figure nothing computes.
+// THE HOLD'S REASON WEIGHS EVERY TURN'S HOLD AGAINST THE DAY. A hold is a
+// turn's, not a deliberate act: one each turn naming a scratch repository idle
+// gitlet.HoldRecordAfter or more, recurring since neither a read nor a hold
+// moves the idle clock. So codeLogNegligible keeps it out only on a stated
+// bound, the reference 3 000 turns a day each naming one at
+// codeHoldRecordBytes beside the day's least, and this holds the figures the
+// reason prints to that arithmetic.
 //
 // Mutation: change codeHoldRecordBytes, referenceTurnsADay or a term of the
 // day — the reason no longer prints what they make, red.
@@ -2367,12 +2117,9 @@ func under(key, parent string) bool {
 
 // payloadKeys is every key a payload of type rt declares, as its encoding
 // spells it, a nested key after its parent's and a dot: a struct the code
-// domain declares is walked into — through a pointer or a slice, and inlined
-// where the encoder inlines it — and every other value, a string, a number,
-// an instant, another package's type or anything that encodes itself, is one
-// key. Read off the type and not a record, so a key a record leaves out
-// (omitempty) is a key all the same: what the payload can carry, not what one
-// sample did.
+// domain declares is walked into (through a pointer or a slice, inlined where
+// the encoder inlines it), and anything else, or a type that encodes itself,
+// is one key. Read off the type, not a record, so an omitempty key counts.
 func payloadKeys(t *testing.T, rt reflect.Type) []string {
 	t.Helper()
 	domain := reflect.TypeFor[gitlet.PushBatch]().PkgPath()
@@ -2422,17 +2169,14 @@ func encodesItself(rt reflect.Type) bool {
 	return false
 }
 
-// codeLogSpelled is what the code domain's writers spell that a file the
-// crewlet binary is built from names: every listing of the domain (a
-// gitlet.ReadKind), which a loop polls, and each of payloads, which an asker
-// builds. A file is a non-test file, read as go/build reads it for this
-// platform, of a package cmd/crewlet reaches through its imports — so no test,
-// and no package only tests import (the suites' harnesses, gitlettest among
-// them, poll a listing and build a payload to check them) — outside the code
-// domain's own package, which declares and serves them. Each is found by the
-// domain's own identifier for it, read off its declaration rather than spelled
-// here — a listing's constant, a payload's type — so one renamed is the one
-// the walk looks for.
+// codeLogSpelled is what of the code domain's writers' names a file the
+// crewlet binary is built from spells: every listing (a gitlet.ReadKind),
+// which a loop polls, and each of payloads, which an asker builds. A file is a
+// non-test file for this platform (as go/build reads it) of a package
+// cmd/crewlet reaches through its imports, outside internal/gitlet itself, so
+// not the suites' harnesses (gitlettest among them), which poll and build to
+// check them. Each name is read off its declaration, so a renamed one is the
+// one looked for.
 func codeLogSpelled(t *testing.T, payloads []reflect.Type) (polled map[gitlet.ReadKind]bool,
 	built map[reflect.Type]bool) {
 	t.Helper()

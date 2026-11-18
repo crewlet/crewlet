@@ -100,6 +100,8 @@ type Company struct {
 	// on which models, and the bounds of one turn. See [Assistant].
 	Assistant Assistant `yaml:"assistant,omitempty" json:"assistant,omitzero"`
 
+	Advisor Advisor `yaml:"advisor,omitempty" json:"advisor,omitzero" desc:"The setup advisor's own settings: its analyst, which reads the week's records with a model and lists only what it can cite."`
+
 	// DelegatedDecisions is which requests agent seats decide in a person's
 	// place, within the engine's rules. See [DelegatedDecisions].
 	DelegatedDecisions DelegatedDecisions `yaml:"delegated_decisions,omitempty" json:"delegated_decisions,omitzero"`
@@ -387,7 +389,7 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 		c.validateAvatars(),
 		c.validateLLMKeys(), c.validateLLMCredentials(), c.validateLLMModels(), c.validateSetupFileHomes(),
 		c.validateRunOptionalKeys(), c.validateReservedSandboxEnv(), c.validateUnitRooms(),
-		c.validateFileRules(), c.validateMCPNames(), c.validateAssistant(), c.validateSeatAccess(),
+		c.validateFileRules(), c.validateMCPNames(), c.validateAssistant(), c.validateAdvisor(), c.validateSeatAccess(),
 		c.validateMCPRegistry(), c.validateMCPAccess(o), c.validateBoxToolLevels(),
 		c.validateMCPLimits(o), c.Code.validateAdmission(field("code")), c.validateSSHApprovers(),
 		c.validateDelegatedDecisions(o))

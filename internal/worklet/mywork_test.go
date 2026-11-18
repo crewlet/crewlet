@@ -24,9 +24,8 @@ func (r *roundTrip) myWork(handle string) worklet.MyWork {
 	return out
 }
 
-// askOn writes one comment onto a task, which is how a comment is written at
-// all: a comment is a MUTATION of its task, arbitrated by the task's own
-// version, so it rides the task's write rather than having a verb of its own.
+// askOn writes one comment onto a task: a comment is a mutation of its task,
+// arbitrated by the task's version, with no verb of its own.
 func askOn(t *testing.T, r *roundTrip, opID, task string, comment worklet.Comment) {
 	t.Helper()
 	if _, err := r.writer.UpdateTask(t.Context(), opID, task, "ENG",
@@ -47,17 +46,15 @@ func assign(t *testing.T, r *roundTrip, id, handle string) {
 	r.drain()
 }
 
-// PRIORITIES COME BACK IN THEIR STORED ORDER, because the order IS the
-// content: it is what somebody decided, and re-sorting it by anything at all
-// discards the decision.
+// PRIORITIES COME BACK IN THEIR STORED ORDER: the order is what somebody
+// decided, and any re-sort discards it.
 func TestMyWorkKeepsThePriorityOrder(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	for _, id := range []string{"a", "b", "c"} {
 		assign(t, r, id, "ana")
 	}
-	// DELIBERATELY NOT ALPHABETICAL and not creation order, so an answer
-	// sorted by either is visibly wrong.
+	// Neither alphabetical nor creation order, so a sort by either shows.
 	if _, err := r.writer.WritePriorities(t.Context(), "op-prio", "ana",
 		[]string{"c", "a", "b"}, nil, worklet.PersonAuthority{}); err != nil {
 		t.Fatalf("WritePriorities: %v", err)
@@ -75,9 +72,8 @@ func TestMyWorkKeepsThePriorityOrder(t *testing.T) {
 			order)
 	}
 
-	// A FINISHED TASK DROPS OUT OF THE LIST WITHOUT THE LIST BEING
-	// REWRITTEN. A read must not write to somebody's own object, so it
-	// filters — and the next write to the list drops it for good.
+	// A FINISHED TASK DROPS OUT WITHOUT THE LIST BEING REWRITTEN: a read
+	// must not write somebody's own object.
 	done := worklet.StatusDone
 	if _, err := r.writer.UpdateTask(t.Context(), "op-done", "a", "ENG",
 		worklet.NoIfMatch, worklet.TaskPatch{Status: &done}, worklet.ChangeStatus, nil); err != nil {
@@ -96,16 +92,14 @@ func TestMyWorkKeepsThePriorityOrder(t *testing.T) {
 	}
 }
 
-// THE SEVEN BLOCKS ARE SEVEN DIFFERENT CLAIMS, and a seat that saw only its
-// assignments would miss six of them.
+// ASSIGNED AND COLLABORATING ARE DIFFERENT CLAIMS, and never overlap.
 func TestMyWorkSeparatesTheSevenClaims(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	assign(t, r, "mine", "ana")
 	assign(t, r, "theirs", "bob")
 
-	// COLLABORATING: brought on without owning. It is a separate block
-	// precisely because it is not an assignment.
+	// COLLABORATING: brought on without owning.
 	if _, err := r.writer.UpdateTask(t.Context(), "op-collab", "theirs", "ENG",
 		worklet.NoIfMatch, worklet.TaskPatch{
 			Collaborators: &[]string{"ana"},
@@ -122,8 +116,7 @@ func TestMyWorkSeparatesTheSevenClaims(t *testing.T) {
 		t.Fatalf("collaborating is %+v, want the task she was brought onto",
 			got.Collaborating)
 	}
-	// AND THE TWO NEVER OVERLAP: a task already in `assigned` listed again
-	// under `collaborating` is one row spending two of the seven blocks.
+	// AND THE TWO NEVER OVERLAP: an owned task is in `assigned` only.
 	for _, row := range got.Collaborating {
 		if row.Assignee == "ana" {
 			t.Errorf("%s is in collaborating and ana holds it — the block is "+
@@ -137,11 +130,9 @@ func TestMyWorkSeparatesTheSevenClaims(t *testing.T) {
 
 // WATCHING IS WHAT A PERSON WATCHES AND DOES NOT HOLD, MINUS WHAT THEY MUTED.
 //
-// The block is read from the person's own watcher rows, and each of its terms
-// keeps a different task out: one somebody else watches is not theirs, one they
-// hold is in `assigned` instead, and a row they muted is one they asked to stop
-// hearing about. The plan gate holds the read to the person's index; this holds
-// it to the answer.
+// Each term keeps a different task out: one only somebody else watches, one
+// they hold (it is in `assigned`), one they muted. The plan gate holds the
+// read to the person's index; this holds it to the answer.
 func TestMyWorkWatchingIsWhatAPersonWatchesUnmuted(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -176,10 +167,8 @@ func TestMyWorkWatchingIsWhatAPersonWatchesUnmuted(t *testing.T) {
 	}
 }
 
-// AN ASK CARRIES THE CALL THAT ANSWERS IT.
-//
-// A model handed a comment id still has to compose the answer, and every one
-// it composes differently is a round spent being refused.
+// AN ASK CARRIES THE CALL THAT ANSWERS IT, so a model spends no round composing
+// one and being refused; an answered ask leaves the block.
 func TestMyWorkCarriesTheAnswerForm(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -210,8 +199,7 @@ func TestMyWorkCarriesTheAnswerForm(t *testing.T) {
 		t.Error("the ask carries no task key, so it cannot be opened")
 	}
 
-	// AND AN ANSWERED ASK LEAVES THE BLOCK, because the block is what is
-	// still waiting.
+	// AND AN ANSWERED ASK LEAVES THE BLOCK.
 	answers := ask.Comment
 	askOn(t, r, "op-answer", "asked", worklet.Comment{
 		ID: "c-2", Task: "asked", Author: "ana", AuthorKind: worklet.AuthorHuman,
@@ -223,9 +211,8 @@ func TestMyWorkCarriesTheAnswerForm(t *testing.T) {
 	}
 }
 
-// MY_WORK NAMES SOMEBODY, always. A day with nobody's name on it is
-// everybody's, and a reader that defaulted the viewer would answer about
-// whoever it happened to pick.
+// MY_WORK NAMES SOMEBODY, AND A LEVEL: a reader that defaulted the viewer
+// would answer about whoever it picked.
 func TestMyWorkNamesSomebody(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -242,22 +229,13 @@ func TestMyWorkNamesSomebody(t *testing.T) {
 	}
 }
 
-// A COLLECTION IS EMPTY OR ABSENT — NEVER NULL, and this is the one place in
-// the tree where that is a wire contract rather than a preference.
-//
-// A nil Go slice marshals to `null`. Every client type declares these keys as
-// arrays, so a screen reads `mine.priorities.length` — which throws on a null
-// and takes the whole page down rather than drawing "nothing here". That is
-// precisely what a person with nothing assigned saw: seven blocks of nothing
-// is the ORDINARY state of this answer, so the empty case is the case it has
-// to be right about.
-//
-// The three-valued nulls elsewhere in this tree are pointers and maps for
-// exactly this reason: a nil SLICE here means one thing and nothing else.
+// A COLLECTION IS EMPTY, NEVER NULL: a wire contract. A nil slice marshals to
+// `null`, clients declare these keys as arrays, and `.length` on a null throws
+// and takes the page down. Empty blocks are this answer's ORDINARY state.
 func TestAnEmptyDayCarriesEmptyCollectionsRatherThanNulls(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	// Nobody by this handle holds anything at all, which is the case.
+	// Nobody by this handle holds anything.
 	got := r.myWork("nobody")
 
 	for _, block := range []struct {
@@ -278,7 +256,7 @@ func TestAnEmptyDayCarriesEmptyCollectionsRatherThanNulls(t *testing.T) {
 		}
 	}
 
-	// The wire is what the claim is about, so assert on the wire.
+	// The claim is about the wire, so assert on it.
 	raw, err := json.Marshal(got)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -288,12 +266,9 @@ func TestAnEmptyDayCarriesEmptyCollectionsRatherThanNulls(t *testing.T) {
 	}
 }
 
-// A BLOCK IS A PAGE AND ITS TOTAL IS THE CLAIM.
-//
-// Every block carries at most [worklet.MyWorkRows] rows, so a count drawn from
-// a block's length says twenty for the person holding twenty-five — the page
-// size reported as a fact about their day. The total is counted by the block's
-// own predicate, in the same transaction as the page.
+// A BLOCK IS A PAGE AND ITS TOTAL IS THE CLAIM: a block's length says
+// [worklet.MyWorkRows] for the person holding more, so the total counts every
+// row by the block's own predicate.
 func TestMyWorkTotalsExceedThePageCap(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -304,9 +279,8 @@ func TestMyWorkTotalsExceedThePageCap(t *testing.T) {
 		ids = append(ids, id)
 		assign(t, r, id, "ana")
 	}
-	// A PRIORITY LIST LONGER THAN THE PAGE whose head is finished work: the
-	// page is cut AFTER the finished entries are dropped, so the first open
-	// twenty are what the block carries and the total is every open entry.
+	// A priority list longer than the page with a finished head: the page
+	// is cut AFTER the filter, and the total is every open entry.
 	if _, err := r.writer.WritePriorities(t.Context(), "op-prio", "ana", ids,
 		nil, worklet.PersonAuthority{}); err != nil {
 		t.Fatalf("WritePriorities: %v", err)
@@ -359,15 +333,15 @@ func TestMyWorkTotalsExceedThePageCap(t *testing.T) {
 	if want := (worklet.ClaimTotal{Total: asks}); got.Totals.AskedOfMe != want {
 		t.Errorf("asked_of_me's total is %+v, want %+v", got.Totals.AskedOfMe, want)
 	}
-	// AND A BLOCK WITH NOTHING IN IT COUNTS ZERO, not "not counted".
+	// AN EMPTY BLOCK COUNTS ZERO.
 	if got.Totals.Collaborating != (worklet.ClaimTotal{}) {
 		t.Errorf("collaborating's total is %+v over an empty block",
 			got.Totals.Collaborating)
 	}
 }
 
-// EVERY BLOCK HAS A TOTAL, under the block's own name. A block added to the
-// answer without one is the block whose heading falls back to a length.
+// EVERY BLOCK HAS A TOTAL, under its own name, or its heading falls back to a
+// length.
 func TestEveryMyWorkBlockHasATotal(t *testing.T) {
 	t.Parallel()
 	totals := map[string]bool{}
@@ -397,10 +371,9 @@ func TestEveryMyWorkBlockHasATotal(t *testing.T) {
 	}
 }
 
-// AN ASK IS WHOLE OR BY REFERENCE, NEVER CUT. Its body is the question; a body
-// cut at six hundred bytes is a question whose condition is past the cut. The
-// block carries whole bodies up to its budget — the first always — and lists
-// the rest with their size and the read that returns them.
+// AN ASK IS WHOLE OR BY REFERENCE, NEVER CUT: whole bodies up to the budget,
+// the first always, and the rest with their size and the read that returns
+// them.
 func TestMyWorkCarriesAsksWholeOrByReference(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

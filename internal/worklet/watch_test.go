@@ -19,13 +19,10 @@ func oneTask(t *testing.T, r *roundTrip, id string) worklet.Task {
 	return detail.Task
 }
 
-// A WATCH GESTURE ADDS ONE PERSON AND REMOVES NOBODY.
-//
-// A patch's collections are carried WHOLE, so "watch this" cannot be spelled
-// as `watchers: [me]` — that is the whole set, and writing it dropped everyone
-// already watching while the wake's own kind announced their removal. The
-// gesture is resolved by the writer inside its own snapshot instead, which is
-// the only place a single consistent read of the set exists.
+// A WATCH GESTURE ADDS ONE PERSON AND REMOVES NOBODY. A patch carries
+// collections WHOLE, so `watchers: [me]` would drop everyone else; the writer
+// resolves the gesture inside its own snapshot, the one consistent read of the
+// set.
 func TestAWatchGestureAddsOnePersonAndRemovesNobody(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -55,9 +52,8 @@ func TestAWatchGestureAddsOnePersonAndRemovesNobody(t *testing.T) {
 		t.Fatalf("carol watching muted %v", after.Muted)
 	}
 
-	// AND UN-WATCHING MUTES THE ONE PERSON rather than clearing the set.
-	// Both halves travel, because "not a watcher" and "watching but muted"
-	// are the distinction those two fields exist to keep.
+	// AND UN-WATCHING MUTES THE ONE PERSON rather than clearing the set:
+	// "never watched" and "un-watched" are what the two fields keep apart.
 	if _, err := r.writer.UpdateTask(t.Context(), "op-unwatch", "t-watch", "ENG", 0,
 		worklet.TaskPatch{Watch: &worklet.WatchIntent{Handle: "bob", Watch: false}}, worklet.ChangeFields,
 		nil); err != nil {
@@ -104,12 +100,9 @@ func TestAPatchCarryingBothAWatchGestureAndASetIsRefused(t *testing.T) {
 	}
 }
 
-// AND THE ROUTING CAP IS ENFORCED WHERE THE SET GROWS BY ONE.
-//
-// MaxWatchers was declared as "the routing cap and the fan-out cap at once"
-// and enforced by nothing in this package. The gesture is the only place a
-// watcher set grows one at a time, so it is the place that can refuse: past
-// the cap an item is an announcement, and a comment on it wakes everybody.
+// AND THE ROUTING CAP IS ENFORCED WHERE THE SET GROWS BY ONE: the gesture is
+// the one place a watcher set grows singly, so it refuses past MaxWatchers,
+// beyond which a comment on the item wakes everybody.
 func TestAWatchGestureRefusesPastTheRoutingCap(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

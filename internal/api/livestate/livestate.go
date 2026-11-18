@@ -798,7 +798,7 @@ func (s *LiveState) applyTurnEvent(agent *agentLive, env Envelope, payload map[s
 			agent.turn = nil
 		}
 	default:
-		if env.Failed && agent.turn != nil && turnID != "" && agent.turn.TurnID == turnID {
+		if ownFailure(env, payload) && agent.turn != nil && turnID != "" && agent.turn.TurnID == turnID {
 			agent.turn.failed = true
 		}
 	}
@@ -874,7 +874,7 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 
 	case env.Type == "agent_phase_completed":
 		agent.working()
-		if flag(payload, "failed") {
+		if ownFailure(env, payload) {
 			s.recordPhaseFailure(agent, env, payload)
 		}
 		s.finishLiveCall(agent, env, payload)
