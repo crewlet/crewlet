@@ -14,46 +14,31 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
-// The Atlassian tracker, wired.
+// The Atlassian tracker, wired: inbound only, like the other tracker, since an
+// agent's Jira work runs through its own MCP server under its own credential;
+// the engine only decides which seats an event concerns and tells them.
 //
-// Inbound-only, like the other tracker and for the same reason: an agent's
-// Jira work happens through its own MCP server under its own credential. The
-// engine never transitions an issue or posts a comment on a seat's behalf —
-// it only decides which seats an event concerns and tells them.
-//
-// # Seat identity is the whole integration, and it is DERIVED
-//
-// A Jira webhook names people by account id, and nothing in the org model
-// says which account a seat holds. Without that mapping every event names a
-// stranger, the routing gate drops every target, and the integration is
-// silently inert.
-//
-// So the engine asks: it calls /myself with the seat's OWN credential and
-// registers whatever account answers. A declared account id beside the token
-// would be cheaper and is the wrong shape — a declaration that disagrees
-// with the credential is a misroute nothing can detect.
+// Seat identity is the whole integration, and it is DERIVED: a webhook names
+// people by account id, so the engine calls /myself with each seat's OWN
+// credential and registers the account that answers. Without it every event
+// names a stranger and the integration is silently inert. A declared account
+// id beside the token is wrong: one that disagrees with the credential
+// misroutes undetectably.
 
 // jiraIdentities remembers which account each seat credential authenticates
-// as.
+// as. The cache's rules are [identityCache]'s; this adds the client, the
+// account id Jira routes by and what a failed lookup logs.
 //
-// KEYED ON THE CREDENTIAL, and the cache's rules — one request per credential
-// however many callers want it, a failed lookup left for the next pass — are
-// [identityCache]'s. What is this surface's own is the client it builds, the
-// account id Jira routes by, and what it logs when a lookup fails.
-//
-// The EMAIL is part of the key, not just the token: Jira Cloud authenticates
-// base64(email:token), so the same token under a different address is a
-// different credential and may well resolve to a different account.
+// KEYED ON THE CREDENTIAL, email included: Jira Cloud authenticates
+// base64(email:token), so the same token under another address may resolve to
+// another account.
 type jiraIdentities struct {
 	identityCache[atlassian.Credential]
 }
 
-// resolve fills in the accounts behind any credentials not already known.
-//
-// See [identityCache.resolve] for what "fills in" promises: one request per
-// credential however many callers race it, and a caller that waited holds the
-// answer by the time this returns, which is what the register below depends
-// on.
+// resolve fills in the accounts behind any credentials not already known, on
+// [identityCache.resolve]'s promise that a caller that waited holds the answer
+// when it returns, which register depends on.
 func (j *jiraIdentities) resolve(ctx context.Context, url string, declared atlassianhost.Deployment, creds []atlassian.Credential) {
 	j.identityCache.resolve(ctx, creds, func(cred atlassian.Credential) string {
 		client, err := jira.NewClient(jira.ClientOptions{
@@ -73,11 +58,9 @@ func (j *jiraIdentities) resolve(ctx context.Context, url string, declared atlas
 	})
 }
 
-// register binds each resolved seat to its account in the given registry.
-//
-// NO I/O. It takes the registry rather than reading the live one because an
-// apply builds a NEW registry from the new company, and a config-derived
-// binding has to be rebuilt into it at that moment.
+// register binds each resolved seat to its account in reg, with NO I/O. It
+// takes the registry rather than reading the live one because an apply builds
+// a NEW registry from the new company and must rebuild this binding into it.
 func (j *jiraIdentities) register(reg *notify.Registry, c *Company, env *config.Resolver) int {
 	known := j.snapshot()
 
@@ -92,10 +75,9 @@ func (j *jiraIdentities) register(reg *notify.Registry, c *Company, env *config.
 			continue
 		}
 		if err := reg.Register(jira.Backend, account, seat.Handle()); err != nil {
-			// Two seats sharing one account, or a seat that is not in
-			// this org. Both are faults an operator has to fix, and both
-			// are silent otherwise: that account's events go to whichever
-			// seat won.
+			// Two seats sharing an account, or a seat not in this org: an
+			// operator's fault, silent otherwise (the account's events go
+			// to whichever seat won).
 			log.Warn("jira_seat_identity_refused", "seat", seat.Handle(),
 				"account", account, "error", err.Error())
 			continue
@@ -113,10 +95,8 @@ func (e *Engine) startJira(ctx context.Context, c *Company, cfg *config.Jira) (*
 	env := e.resolver()
 	base := jiraBaseURL(cfg, env)
 	if base == "" {
-		// A reference that did not resolve. The validator already refuses
-		// a jira block with neither url nor cloud_id, so this is a
-		// missing variable — and starting anyway would point every lookup
-		// at "" and fail with a much less useful message.
+		// A missing variable (the validator refuses a block with neither):
+		// starting anyway would fail every lookup at "" with a worse message.
 		return nil, fmt.Errorf(
 			"engine: jira: neither url (%q) nor cloud_id (%q) resolved to "+
 				"anything", cfg.URL, cfg.CloudID)
@@ -124,10 +104,9 @@ func (e *Engine) startJira(ctx context.Context, c *Company, cfg *config.Jira) (*
 	declared := c.Config.Integrations.Atlassian.Declared()
 	deploy := jira.DeploymentOf(base, declared)
 
-	// THE ORG CREDENTIAL IS OPTIONAL and its absence is a documented
-	// degradation rather than a failure: without it an event reaches
-	// whoever the payload names — the assignee, anyone mentioned — and
-	// only the people merely watching the issue go unheard.
+	// THE ORG CREDENTIAL IS OPTIONAL, a documented degradation: without it an
+	// event still reaches whoever the payload names (assignee, mentions), and
+	// only the issue's watchers go unheard.
 	var watchers jira.Watchers
 	if token := strings.TrimSpace(env.Value(cfg.Token)); token != "" {
 		client, err := jira.NewClient(jira.ClientOptions{
@@ -137,14 +116,10 @@ func (e *Engine) startJira(ctx context.Context, c *Company, cfg *config.Jira) (*
 			return nil, fmt.Errorf("engine: jira: %w", err)
 		}
 		watchers = jira.Lookup{Client: client}
-		// NOT VERIFIED at boot. A /myself here would turn an instance
-		// that is briefly down into a company that will not start, to
-		// learn something the first real lookup learns anyway — and that
-		// one degrades instead of refusing.
-		//
-		// The SEAT credentials below are the opposite case, and the
-		// difference is what the request buys: verifying this one buys
-		// nothing, while resolving those is the entire integration.
+		// NOT VERIFIED at boot: a /myself here would turn a briefly-down
+		// instance into a company that will not start, to learn what the
+		// first lookup learns anyway, degrading instead. The SEAT credentials
+		// below are resolved because they are the whole integration.
 	} else {
 		log.WarnContext(ctx, "jira_has_no_org_token",
 			"detail", "an issue's watchers cannot be read, so events reach "+
@@ -156,11 +131,9 @@ func (e *Engine) startJira(ctx context.Context, c *Company, cfg *config.Jira) (*
 		return e.notify.jira.register(reg, c, env)
 	})
 	if registered == 0 {
-		// Configured with no seat identity is a company mid-setup —
-		// `crewlet jira provision` has not run — or an instance that
-		// refused every lookup. Logged loudly either way, because the
-		// integration is completely inert in this state and nothing else
-		// will say so.
+		// Setup unfinished (`crewlet jira provision` has not run) or every
+		// lookup refused: loud, as the integration is inert and nothing
+		// else says so.
 		log.WarnContext(ctx, "jira_has_no_seat_identities", "url", base,
 			"detail", "every tracker webhook will name a stranger, and every "+
 				"issue will fall through to its project's lead")
@@ -177,14 +150,11 @@ func (e *Engine) startJira(ctx context.Context, c *Company, cfg *config.Jira) (*
 	}), nil
 }
 
-// reconcileJira rebuilds the tracker for a newly applied epoch.
-//
-// Two things move on an apply, and only one of them is the parser. The seat
-// identities are rebuilt into the new registry by refreshParties, from the
-// cache, with no I/O; this re-resolves — picking up a seat the revision
-// ADDED and a credential it ROTATED — and swaps the parser, whose own
-// company-derived inputs are the org credential and the lead map. A node
-// that skipped it would keep routing a renamed project to its old lead.
+// reconcileJira rebuilds the tracker for a newly applied epoch. refreshParties
+// rebuilds the seat identities into the new registry from the cache; this
+// re-resolves (a seat ADDED, a credential ROTATED) and swaps the parser, whose
+// company-derived inputs are the org credential and the lead map, so a
+// renamed project stops routing to its old lead.
 func (e *Engine) reconcileJira(ctx context.Context, c *Company) {
 	cfg := c.Config.Integrations.Jira
 	e.notify.mu.Lock()
@@ -193,12 +163,10 @@ func (e *Engine) reconcileJira(ctx context.Context, c *Company) {
 	if svc == nil {
 		return
 	}
-	// RETIRED when the revision no longer declares it. Every reconciler
-	// here converged only toward "configured", so removing the `integrations.jira` block — the
-	// gesture an operator makes after a credential leak — applied
-	// cleanly, changed nothing, and left the boot-time parser routing
-	// deliveries under the credential being revoked, while RoutedSources
-	// went on listing it as reachable.
+	// RETIRED when the revision no longer declares it: removing the
+	// `integrations.jira` block is how an operator answers a credential leak,
+	// and a kept parser would route under the revoked credential while
+	// RoutedSources listed it as reachable.
 	if cfg == nil {
 		if svc.Unregister(jira.Backend) {
 			log.InfoContext(ctx, "jira_retired",
@@ -209,9 +177,8 @@ func (e *Engine) reconcileJira(ctx context.Context, c *Company) {
 	}
 	parser, err := e.startJira(ctx, c, cfg)
 	if err != nil || parser == nil {
-		// THE PREVIOUS PARSER KEEPS RUNNING, same posture as the other
-		// two: routing by a stale credential is worse than the new one
-		// and much better than not routing at all.
+		// THE PREVIOUS PARSER KEEPS RUNNING, as for the other two: a stale
+		// credential routes worse than the new one, far better than none.
 		log.ErrorContext(ctx, "jira_reconcile_failed", "error", errorText(err),
 			"detail", "the previous tracker wiring is still current")
 		return
@@ -229,11 +196,9 @@ func jiraBaseURL(cfg *config.Jira, env *config.Resolver) string {
 	return cfg.ResolvedBaseURL(env.Value)
 }
 
-// jiraShareableURL is the base a person's browser can open.
-//
-// EMPTY for a cloud id with no site url, and deliberately: the API gateway
-// is not a place a browser goes, so a link built from it looks right and
-// opens nothing. The prompt omits the link rather than printing a dead one.
+// jiraShareableURL is the base a person's browser can open: EMPTY for a cloud
+// id with no site url, since a link to the API gateway looks right and opens
+// nothing, and the prompt omits a link rather than print a dead one.
 func jiraShareableURL(cfg *config.Jira, env *config.Resolver) string {
 	resolved := config.Jira{
 		URL:     strings.TrimSpace(env.Value(cfg.URL)),
@@ -242,13 +207,9 @@ func jiraShareableURL(cfg *config.Jira, env *config.Resolver) string {
 	return resolved.ShareableBaseURL()
 }
 
-// jiraSeatCredentials are the distinct credentials the company's agent seats
-// hold.
-//
-// DISTINCT because several seats may legitimately share one — a company
-// mid-migration, or one that has not provisioned per-seat accounts yet — and
-// resolving the same credential once per seat would spend N requests to
-// learn one answer.
+// jiraSeatCredentials are the DISTINCT credentials the company's agent seats
+// hold: seats may share one (mid-migration, no per-seat accounts yet), and one
+// answer should cost one request, not one per seat.
 func jiraSeatCredentials(c *Company, env *config.Resolver) []atlassian.Credential {
 	held := map[atlassian.Credential]bool{}
 	for seat := range c.Org.AllRoles() {
@@ -271,13 +232,10 @@ func jiraSeatCredentials(c *Company, env *config.Resolver) []atlassian.Credentia
 func jiraPrompt() notify.Prompt { return jira.Prompt{} }
 
 // unresolved names the seats holding a tracker credential that resolves to no
-// account.
-//
-// THE COMPLEMENT OF [jiraIdentities.register], read from the same two inputs,
-// so the two can never disagree about which seats are routable. A seat with no
-// credential at all is NOT here: it has opted out of the surface, which is a
-// choice rather than a fault, and reporting it would put every human seat in
-// the company on the card.
+// account: THE COMPLEMENT OF [jiraIdentities.register] over the same inputs,
+// so the two never disagree. A seat with no credential has opted out, a
+// choice rather than a fault, and listing it would put every human seat on
+// the card.
 func (j *jiraIdentities) unresolved(c *Company, env *config.Resolver) []string {
 	known := j.snapshot()
 

@@ -157,7 +157,6 @@ function Excerpt({ finding, excerpt }: { finding: CodeFindingRow; excerpt: CodeE
     <div className="code-excerpt">
       <DiffView
         hunks={hunks}
-        hue="code"
         tokens={tokens}
         picked={(line) => ownLine(finding, line)}
         aria-label={`Lines ${from} to ${to} of ${finding.path} at revision ${finding.revision}, ${linesWord(finding)} marked`}
@@ -187,7 +186,6 @@ function Suggestion({ finding, own }: { finding: CodeFindingRow; own: readonly D
         <div className="code-excerpt">
           <DiffView
             hunks={hunks}
-            hue="code"
             tokens={tokens}
             aria-label={`The lines suggested in place of ${linesWord(finding)} of ${finding.path}`}
           />

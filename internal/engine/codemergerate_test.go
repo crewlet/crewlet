@@ -20,13 +20,13 @@ import (
 )
 
 // behindQueue is a Gitlet node's home change work's code seam and chain builder
-// with one merge queue in it — repository rateRepo's main, at depth
-// rateDepth and batch rateBatch, one change waiting — asked MergeRateScan
-// enqueues within the window: the queue worker builds its train through the
-// chain builder, the train's record is answered applied and the queue's next
-// reads show the train standing, so the worker times a real round of its own
-// while its queue is asked past what any round of seconds can land. Every
-// other read and write passes to the node's own seam.
+// with one merge queue in it (rateRepo's main at depth rateDepth and batch
+// rateBatch, one change waiting), asked MergeRateScan enqueues within the
+// window: the worker builds its train through the chain builder, the train's
+// record is answered applied and the queue's next reads show it standing, so
+// the worker times a real round of its own while its queue is asked past what
+// any round of seconds can land. Every other read and write passes to the
+// node's own seam.
 type behindQueue struct {
 	gitlethome.Estate
 
@@ -105,19 +105,17 @@ func (q *behindQueue) trainRecorded() (string, int) {
 }
 
 // THE MERGE-RATE ALARM BORROWS THE QUEUE'S CAPACITY (M5-D28, ADR-0015), through
-// the wiring a running node has: a STARTED Gitlet node, alone the home of every
-// repository, whose queue worker builds a train onto a merge queue at depth
-// rateDepth and batch rateBatch and times it standing — so its reading prices
-// the queue at exactly config.LandingCapacity of those figures at the round it
-// timed, over gitlet.MergeRateWindow, and names the queue's MergeRateScan
-// enqueues against it — which the retention loop's reading carries into the
-// alarm table, so code_merge_rate_over_capacity stands on that node naming the
-// branch. The threshold is the queue's own: no figure the alarm holds.
+// a running node's wiring: a STARTED Gitlet node, home of every repository,
+// whose worker times a train standing at depth rateDepth and batch rateBatch
+// prices the queue at exactly config.LandingCapacity of those figures at that
+// round over gitlet.MergeRateWindow and names its MergeRateScan enqueues
+// against it; the retention loop raises code_merge_rate_over_capacity naming
+// the branch. The threshold is the queue's own: no figure the alarm holds.
 //
 // Mutations: leave the home's half out of the reading (codeReading), and the
 // alarm never fires; price the round at any figure but the one the worker
-// timed, or the capacity at any depth or batch but the queue's, and the
-// reading's capacity is not LandingCapacity's.
+// timed, or the capacity at any depth or batch but the queue's, and it is not
+// LandingCapacity's.
 func TestTheMergeRateAlarmBorrowsTheQueuesCapacity(t *testing.T) {
 	t.Parallel()
 	b := gitletNodeBootstrap(t, nil)
@@ -140,13 +138,11 @@ func TestTheMergeRateAlarmBorrowsTheQueuesCapacity(t *testing.T) {
 	}
 
 	// THE HOME'S READING, read until it names the queue: the worker's first
-	// turn — once this node is listed as the repository's home — builds the
-	// train, and a later one finds it standing and prices the queue at its
-	// age. The case runs the home's passes itself (engine.PollHomeForTest)
-	// rather than waiting for the loop's ticker, whose gitlethome.Backstop
-	// minute between passes was most of the case's time on CI; a pass is the
-	// same pass either way. The deadline is room for a loaded machine, and
-	// only ends the wait.
+	// turn once this node is listed as the home builds the train, and a later
+	// one finds it standing and prices the queue at its age. The case runs the
+	// home's passes itself (engine.PollHomeForTest) rather than waiting out the
+	// loop's gitlethome.Backstop minute; a pass is the same pass either way. The
+	// deadline is room for a loaded machine, and only ends the wait.
 	deadline := time.Now().Add(time.Minute)
 	var reading statelog.Reading
 	for {

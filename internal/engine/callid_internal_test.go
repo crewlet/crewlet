@@ -14,14 +14,12 @@ import (
 )
 
 // A BRIDGED CALL CARRIES ITS HARNESS'S ID FROM ITS ENTRY TO ITS RECORD. A box's
-// harness hands each call it makes its own id in the request's `_meta`, under
-// the key the runner that starts the box declares: the launch names the job
-// with that key, the session the bridge opens for the job reads each call's id
-// under it, and the run's log carries the id on the call's entry while its
-// tool runs and on the finished call its one update lists — through the real
-// launcher, the bridge, the session's ledger and the run's store. Under a key
-// no profile names, beside Claude Code's under its own, so the id on the log
-// is the one read under the runner's key and no other.
+// harness gives each call an id in the request's `_meta` under the key its
+// runner declares: the launch names the job with that key, the bridge's
+// session reads each call's id under it, and the run's log carries the id on
+// the in-flight entry and on the finished call, through the real launcher,
+// bridge, ledger and store. Under a key no profile names, beside Claude
+// Code's under its own, so the id logged is the runner's key's and no other.
 //
 // Mutation: name the job without its runner's key (launch-names-no-key), and
 // the call is on its run's log with no id.
@@ -75,14 +73,12 @@ func TestABridgedCallCarriesItsHarnessIDFromItsEntryToItsRecord(t *testing.T) {
 	}
 }
 
-// A RECOVERED RUN'S CALLS CARRY THE IDS THEIR HARNESS GAVE THEM. A node that
-// takes a running job's seat over opens the job's session again, its box still
-// dialing with the token it was handed, and reads each call the box makes from
-// then on under the key THIS NODE'S runner of the job's harness declares: the
-// bridge reading the box's calls is this node's, the launch's session was
-// another node's, or this one's before a restart, and the run's row records no
-// key. Launched here under a runner that declared none, and recovered once it
-// declares one, so the id on the log is the recovery's own reading.
+// A RECOVERED RUN'S CALLS CARRY THE IDS THEIR HARNESS GAVE THEM. A node taking
+// over a running job's seat reopens the job's session and reads each later
+// call under the key THIS NODE'S runner of the harness declares: the launch's
+// session was another node's (or this one's before a restart), and the run's
+// row records no key. Launched under a runner that declared none and
+// recovered once it declares one, so the id logged is the recovery's reading.
 //
 // Mutation: open the recovered job's session naming no key
 // (reopen-names-no-key), and the call the box makes after the recovery is on

@@ -6,15 +6,10 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
-// brokerLoss is what the engine asks of the queue it runs on about the
-// connection under it: the jetstream backend's [jetstream.Queue.Lost],
-// [jetstream.Queue.LostCause], [jetstream.Queue.AcksLost] and
-// [jetstream.Queue.LostDuring].
-//
-// DECLARED HERE, by the one consumer, rather than on the queue contract: the
-// memory twin holds no connection that can be closed under it, so it has
-// nothing to promise and does not have these — and a queue that does not is
-// one this engine never reports a loss for, which is the true answer for it.
+// brokerLoss is what the engine asks the jetstream queue about the connection
+// under it. Declared here rather than on the queue contract: the memory twin
+// has no connection to lose, so it lacks these and the engine never reports a
+// loss for it, which is the true answer.
 type brokerLoss interface {
 	Lost() <-chan struct{}
 	LostCause() error
@@ -23,17 +18,12 @@ type brokerLoss interface {
 }
 
 // lostDuring is err, from a boot that failed over q, carrying the cause of a
-// broker connection NATS closed for good beside it — prefixed as
-// [Engine.FatalCause] prefixes the same sentence, so a node that could not
-// start and a node that stopped itself name one cause in one way. err
-// unchanged where nothing was lost, and on a queue with no connection to lose.
-//
-// For the step that failed BECAUSE the connection closed: in its own words it
-// says "connection closed" and nothing an operator can act on, while the
-// sentence naming why — refused credentials, a max_payload lowered under the
-// node, its own embedded broker gone — and what to change is recorded on the
-// queue. Its callers ask it BEFORE their own cleanup closes the backends; see
-// [jetstream.Queue.LostDuring] for why that order.
+// broker connection NATS closed for good, prefixed as [Engine.FatalCause]
+// prefixes it so a failed start and a self-stop name one cause one way; err
+// unchanged when nothing was lost. The failed step itself only says
+// "connection closed"; the actionable why (refused credentials, a lowered
+// max_payload, the embedded broker gone) is on the queue. Callers ask it BEFORE
+// their cleanup closes the backends ([jetstream.Queue.LostDuring]).
 func lostDuring(q queue.EventQueue, err error) error {
 	lost, ok := q.(brokerLoss)
 	if !ok || err == nil || lost.LostCause() == nil {
@@ -42,24 +32,18 @@ func lostDuring(q queue.EventQueue, err error) error {
 	return fmt.Errorf("engine: stream: %w", lost.LostDuring(err))
 }
 
-// Fatal is closed once this node has lost something it cannot run without, and
-// [Engine.FatalCause] then says what: today, a broker connection the NATS
-// client closed FOR GOOD — the queue's own, or on an embedded broker the
-// coordination store's beside it ([jetstream.Queue.DialWatched]). An embedded
-// broker that declares itself dead is the one loss that does not come through
-// here: it closes no connection for a drain to fail on, so the engine ends the
-// node itself ([Engine.watchBroker]).
+// Fatal is closed once this node has lost something it cannot run without,
+// and [Engine.FatalCause] then says what: a broker connection the NATS client
+// closed FOR GOOD, the queue's own or an embedded broker's coordination store's
+// ([jetstream.Queue.DialWatched]). An embedded broker declaring itself dead
+// closes no connection, so the engine ends the node itself
+// ([Engine.watchBroker]).
 //
-// # Why the engine reports it rather than acts on it
+// The engine reports the loss rather than stopping: `crewlet run` owns the one
+// shutdown order (drain, listener, teardown), and a second path inside the
+// engine would be a second order to keep correct.
 //
-// What a node does about it is stop — the seat watchdog's rule for a process
-// that can no longer do its work, since leaving is what lets a supervisor start
-// it again — and stopping is the CALLER's: `crewlet run` owns the one shutdown
-// a signal takes, the drain, the listener and the teardown in their order, and
-// a second path inside the engine would be a second order to keep correct. So
-// the engine carries the loss up and the caller waits on it beside its signals.
-//
-// Nil — a channel that never closes — on a queue with no connection to lose.
+// Nil (never closes) on a queue with no connection to lose.
 func (e *Engine) Fatal() <-chan struct{} {
 	if lost, ok := e.backends.Queue.(brokerLoss); ok {
 		return lost.Lost()
@@ -81,17 +65,12 @@ func (e *Engine) FatalCause() error {
 }
 
 // AcksLost is closed once the loss behind [Engine.Fatal] includes the QUEUE'S
-// OWN connection — the one every delivery is acknowledged over — rather than
-// only the coordination store's beside it.
+// OWN connection, which every delivery is acked over, not only the
+// coordination store's. The drain then cancels the running turns, whose
+// conclusions cannot be acked ([node.Node.Drain]); this is for `crewlet run`'s
+// engine_draining line, which otherwise promises they finish first.
 //
-// The drain reads the same fact from the queue itself and acts on it: it stops
-// waiting for the turns still running and cancels them, because nothing they
-// conclude can be acknowledged and a peer will run each of them again (see
-// [node.Node.Drain]). This is for a caller that has to SAY so before the drain
-// begins — `crewlet run`'s engine_draining line, which otherwise promises an
-// operator that the running turns finish first.
-//
-// Nil — a channel that never closes — on a queue with no connection to lose.
+// Nil (never closes) on a queue with no connection to lose.
 func (e *Engine) AcksLost() <-chan struct{} {
 	if lost, ok := e.backends.Queue.(brokerLoss); ok {
 		return lost.AcksLost()

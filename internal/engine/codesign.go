@@ -10,37 +10,16 @@ import (
 )
 
 // codeSigner names an engine-built commit (host.Signer, ADR-0092) from the
-// CURRENT epoch — read per write, so a revision that renames a seat or moves
-// the identity domain signs from its activation on, with no restart, and read
-// ONCE a signature, the seat's role and the domain off the same epoch:
-//
-//   - the AUTHOR is the acting principal's seat — an agent's, or the human
-//     seat a person's credential is bound to, since a person writes only
-//     through a credential bound to one (gitlet.EngineWrite.Validate) and one
-//     person holds many credentials (iam.ActorFor) — named by its role's name
-//     and its role's email address AS WRITTEN in the company document. A
-//     name or an address git would not write as given (gitproc's
-//     IdentityRefusal), an address that is not one `<local>@<domain>` of at
-//     most 254 bytes, and a `${VAR}` reference — which names no address
-//     until something resolves it — fall back to the seat's handle and to
-//     `<handle>@<code.identity_domain>`. NEVER org.Role.ResolvedEmail: it
-//     reads THIS node's environment, which a retry on another Gitlet node need
-//     not share — two nodes would build two commits of one write — and an
-//     address a company kept out of its document would be written into
-//     history for good.
-//   - the COMMITTER is the engine, `Crewlet <engine@<code.identity_domain>>`:
-//     a CONVENTION that marks the commits the host built in a cooperating
-//     client's history, never an authentication — any git client can write
-//     it, and only the push row's `via engine` and its principal say who
-//     built a commit. A coding box's pack may hold no commit under it that
-//     the repository does not already hold (Committer, the same address,
-//     spelled once: engineCommitter). Its name and local part are
-//     gitlet.EngineCommitterName and EngineCommitterLocal, the spelling a
-//     history's read marks a commit engine_committed by.
-//
-// A node with no epoch, or whose chart holds no such seat, signs nothing:
-// gitlet.ErrNotServing, about this node, so the write runs nothing here and the
-// walk asks a Gitlet node serving a chart that holds it.
+// CURRENT epoch, read once a signature. The AUTHOR is the acting seat (a person
+// writes only through a credential bound to their human seat), by its role's
+// name and email AS WRITTEN in the document, else by [authorOf]'s fallback;
+// NEVER org.Role.ResolvedEmail, which reads this node's environment (a retry
+// elsewhere would build another commit) and would put a kept-out address in
+// history for good. The COMMITTER is [engineCommitter], a CONVENTION marking
+// host-built commits (Committer holds a box's pack to none the repository
+// lacks; history reads mark engine_committed by gitlet.EngineCommitterName and
+// EngineCommitterLocal), never an authentication: only the push row's `via
+// engine` says who built one. No epoch or seat signs nothing: ErrNotServing.
 type codeSigner struct{ e *Engine }
 
 // maxIdentityEmailBytes is the most an address a commit names may be: RFC
@@ -48,8 +27,7 @@ type codeSigner struct{ e *Engine }
 const maxIdentityEmailBytes = 254
 
 // engineCommitter is the address the engine commits as on the identity
-// domain domain: the ONE spelling of it, which every commit Sign names and
-// every box push Committer holds carry alike.
+// domain domain: the ONE spelling Sign and Committer share.
 func engineCommitter(domain string) string { return gitlet.EngineCommitterLocal + "@" + domain }
 
 func (s codeSigner) Sign(p gitlet.Principal) (host.Signature, error) {
@@ -70,12 +48,10 @@ func (s codeSigner) Sign(p gitlet.Principal) (host.Signature, error) {
 }
 
 // Author is how a commit names seat handle as its author where the engine did
-// not act as it — a squash's owner, its other authors' trailers (U43 a): as
-// Sign names an acting seat, from the CURRENT epoch's chart, and for a seat
-// that chart no longer holds, by its handle at the identity domain — a seat
-// that left still wrote what it wrote, and refusing its name would leave a
-// change it opened unmergeable by squash. A node with no epoch names nobody:
-// gitlet.ErrNotServing.
+// not act as it (a squash's owner, its other authors' trailers), as Sign does.
+// A seat the chart no longer holds is named by its handle at the identity
+// domain: refusing it would leave a change it opened unmergeable by squash. A
+// node with no epoch names nobody: gitlet.ErrNotServing.
 func (s codeSigner) Author(handle string) (string, string, error) {
 	c := s.e.Company()
 	if c == nil || c.Org == nil || c.Config == nil {
@@ -106,12 +82,11 @@ func authorOf(handle, roleName, roleEmail, domain string) (string, string) {
 	return name, email
 }
 
-// Committer is the address Sign names every commit's committer by, off the
-// CURRENT epoch as Sign reads it — so a revision that moves the identity
-// domain holds a box's push to the new address from its activation on, and a
-// commit the engine built under the old one, which a box brings back, is no
-// longer matched (the repository holds it in any case). A node with no epoch
-// names none: gitlet.ErrNotServing.
+// Committer is the address Sign names every committer by, off the CURRENT
+// epoch: once the identity domain moves, a box's push is held to the new
+// address, and an engine commit under the old one is no longer matched (the
+// repository holds it anyway). A node with no epoch names none:
+// gitlet.ErrNotServing.
 func (s codeSigner) Committer() (string, error) {
 	c := s.e.Company()
 	if c == nil || c.Config == nil {

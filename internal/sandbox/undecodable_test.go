@@ -33,8 +33,8 @@ func untouched(t *testing.T, store *CoordStore) {
 
 // EVERY LISTING SKIPS A RECORD IT CANNOT DECODE and returns the rest: the
 // dashboard's and the observer's (ListActive), a seat's (ListActiveForSeat)
-// and a retiring mailbox's (ListActiveForSeatID). Failing the listing failed
-// every reader of every seat's runs on one record.
+// and a retiring mailbox's (ListActiveForSeatID). Failing the listing would
+// fail every reader of every seat's runs over one record.
 func TestEveryListingSkipsARecordItCannotDecode(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -68,8 +68,8 @@ func TestTheWaiterPollsBesideARecordItCannotDecode(t *testing.T) {
 	untouched(t, rig.pending)
 }
 
-// A SEAT'S RECOVERY TAKES OVER EVERY RUN IT CAN READ beside one it cannot,
-// rather than failing, which handed back every seat the node claimed.
+// A SEAT'S RECOVERY TAKES OVER EVERY RUN IT CAN READ beside one it cannot:
+// failing would hand back every seat the node claimed.
 func TestASeatRecoversBesideARecordItCannotDecode(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -85,7 +85,7 @@ func TestASeatRecoversBesideARecordItCannotDecode(t *testing.T) {
 }
 
 // A REPLY STILL REACHES ITS PARKED RUN beside a record nothing can read: the
-// answer lookup lists the seat's runs, and failing it handed every reply back.
+// answer lookup lists the seat's runs, and failing it hands every reply back.
 func TestAnAnswerIsRecordedBesideARecordItCannotDecode(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -117,8 +117,8 @@ func TestARetirementLeavesARecordItCannotDecode(t *testing.T) {
 }
 
 // A SKIPPED RECORD IS SAID ONCE AT ERROR, and at debug on every listing after:
-// the runs are listed on every poll and every dashboard load, and an error per
-// listing was a line every few seconds for as long as the record stayed.
+// runs are listed on every poll and dashboard load, so an error per listing is
+// a line every few seconds for as long as the record stays.
 func TestASkippedRecordIsReportedAtErrorOnce(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer

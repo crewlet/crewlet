@@ -8,18 +8,12 @@ import (
 )
 
 // EVERY COORDINATION STORE ON A BROKER CONNECTION IS OPENED KNOWING WHETHER IT
-// CROSSES A LINK, BY ONE READING.
-//
-// A member reaches its broker's JetStream in its own process; a leaf reaches
-// the members' across its link, and a client of an external cluster across
-// the network. The coordination store cannot see which from the connection it
-// is handed, and a store told "in process" over a link holds a large write —
-// an MCP listing every node with seats writes — to the request term alone, so
-// it fails as an outage while its bytes cross. So every store a node opens —
-// the fleet store, and the lease store or the epochs counter beside it — takes
-// its configuration from the one function every opening site reads
-// (coordinationStoresOf), and that tells it, from the same reading the engine
-// hands the object store's window.
+// CROSSES A LINK, BY ONE READING: a member's JetStream is in process, a leaf's
+// and an external cluster's client's across a link. The store cannot tell from
+// its connection, and one told "in process" over a link holds a large write to
+// the request term alone and fails as an outage. So the fleet, lease and epochs
+// stores all take it from coordinationStoresOf, the reading the object store's
+// window gets too.
 //
 // Mutation: open any of the stores as though every connection were a
 // member's, or as though every one crossed a link, and a row goes red.

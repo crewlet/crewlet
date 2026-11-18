@@ -17,28 +17,15 @@ import (
 // A NODE CLAIMS ITS SEATS THE MOMENT ITS CLAIM GATE OPENS, NOT AT THE SWEEP'S
 // NEXT TICK.
 //
-// The host's only synchronous claim is [seat.Host.Start]'s first pass, and it
-// claims only while the gate admits: on the commonest boot it does not yet — a
-// data node is still catching up with its logs — and nothing asked again
-// until the sweep's next tick, so every seat the node could run sat unclaimed
-// for up to that interval after the gate had opened. Here the gate is held
-// shut at the start by the one input of it a case can hold from outside, the
-// fleet's view never having listed (a node whose company runs a native half
-// cannot route its seats' calls before it has), and opened after: the sweep's
-// next tick is an HOUR away, so only the gate's own opening can be what claims
-// the seats, and the wait below is how long a claim takes once it has —
-// nowhere near the hour on any machine.
+// [seat.Host.Start]'s first pass is the host's only synchronous claim, and on
+// the commonest boot the gate does not admit it yet. Here the gate is held
+// shut by the fleet's view never having listed (a node whose company runs a
+// native half routes no seat's calls before it has) and opened after; the
+// sweep's next tick is an HOUR away, so only the gate's opening can claim.
 //
-// AT THE SHIPPED LEASE TTL, with the view asked to list as the roster answers
-// ([engine.RelistFleetView]) rather than waited for at its cadence, a third of
-// the TTL — fifteen seconds at the shipped one, the whole of the wait below.
-// The case shortened the TTL to three seconds instead, only so the view would
-// list again within a second, and a TTL is also the threshold of the watchdog
-// that ends the process when the seat host's heartbeat stops turning: with
-// eight copies of this package's binary sharing four CPUs, the heartbeat went
-// more than three seconds without a beat and the watchdog ended the whole test
-// binary (exit 75) mid-run, every other case in it with it. The subject is the
-// gate, not the lease, so the case takes no lease timing at all.
+// The shipped lease TTL is kept and the view relisted ([engine.RelistFleetView]):
+// a TTL is also the seat host's watchdog threshold, and a short one ended the
+// whole test binary (exit 75) on a loaded runner.
 func TestSeatsAreClaimedTheMomentTheClaimGateOpens(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {

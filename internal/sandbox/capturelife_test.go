@@ -21,22 +21,17 @@ import (
 )
 
 // A CAPTURE'S BUDGETS COUNT EVERY STEP OF ITS LIFE AT THE SLOWEST CROSSING, and
-// read it on another machine's clock within twice the skew the engine allows
-// one. Each figure is its terms: a change of a run's row another node reads at
-// the slowest crossing a link is allowed; a keep's two reads beside its upload
-// and its record; a take's life from its instant (the rest of its take with its
-// reservation's room, its digest, its keep and its stamp) and a takeover's
-// (the takeover, the standby's withdrawal and its read of the row back where
-// the store did not answer it, its keep and its stamp); a standby's wait (the
-// longer life and one read), its window from its own instant (the rest of its
-// take and its digest, the wait, and three changes past it: a settle the wait's
-// last pass may still be writing, its last read and its takeover); the spool's
-// longest wait for its keep; and each reading across machines, the one-clock
-// figure and two hours. And the figures the docs state at today's bounds are
-// these, to the nanosecond.
+// a reading on another machine's clock adds twice the skew allowed one. A keep
+// is two reads, upload and record; a take's life from its instant, the rest of
+// its take with its reservation's room, its digest, keep and stamp; an
+// unanswered takeover's, the takeover, the standby's withdrawal and read back,
+// keep and stamp; a standby's wait, the longer life and one read; its window,
+// the rest of its take, its digest and three changes past the wait (a settle
+// still writing, its last read, its takeover); a spool's longest wait, its
+// digest, the wait, five changes and two reads. Each is the docs' figure at
+// today's bounds, to the nanosecond.
 //
-// Mutation: drop any one term of any figure, or the skew from either reading,
-// and its row goes red.
+// Mutation: drop any term, or the skew from either reading, and its row goes red.
 func TestACapturesBudgetsCountEveryStepAtTheSlowestCrossing(t *testing.T) {
 	t.Parallel()
 	change := sessionRecordBudget + coord.MaxValueCrossing
@@ -75,12 +70,10 @@ func TestACapturesBudgetsCountEveryStepAtTheSlowestCrossing(t *testing.T) {
 }
 
 // A CAPTURE'S AGE IS READ AS ANY TWO NODES' CLOCKS ALLOW. A stamp's instant is
-// its taker's clock's, and a node reading its age reads it on its own, which the
-// engine holds within two hours of any other's. So a begun capture is read in
-// flight, by a reader whose clock stands two hours ahead of its taker's, until
-// its whole life has passed in real time and no longer; a read standing by,
-// until its window has; and with the clocks in step, until the life and the two
-// hours, and the window and the two hours.
+// its taker's clock's and a reader reads its age on its own, which the engine
+// holds within two hours of any other's. So a reader two hours ahead holds a
+// begun capture in flight until its life has passed in real time, and a standby
+// until its window has; a reader in step, for each plus two hours.
 //
 // Mutation: read a begun capture against its life alone, or a standby against
 // its window alone, and the reader ahead releases one still being kept.
@@ -117,21 +110,18 @@ func TestACapturesAgeIsReadAsAnyTwoNodesClocksAllow(t *testing.T) {
 	}
 }
 
-// AN UNANSWERED RECORD IS ASKED AGAIN WHATEVER ITS KEY'S AGE READS HERE. A
-// capture's key is minted on the clock of the node that spooled it, and the
-// executor log refuses a record naming it past objstore.RecordWithin by its own
-// deciding clock, which the engine holds only within two hours of the asking
-// node's. So the turn's end asks the record again whatever its key's age reads
-// on the end's clock, and the log decides: the end's clock two hours ahead of
-// the log's, a key eleven hours old to the log is asked and lands, and one past
-// the window to the log is asked and refused, the end naming it unkept for the
-// log's reason. And a reader holds a capture whose record awaits its answer
-// until the window and two hours have passed on its own clock, and no longer.
+// AN UNANSWERED RECORD IS ASKED AGAIN WHATEVER ITS KEY'S AGE READS HERE. The
+// executor log refuses a record whose key is past objstore.RecordWithin on its
+// own clock, which may stand two hours from the asker's, so the turn's end asks
+// again whatever the key's age reads here and the log decides: with the end two
+// hours ahead, a key eleven hours old to the log lands, and one past the window
+// is refused and named unkept for the log's reason. A reader holds a capture
+// whose record awaits its answer until the window and two hours have passed on
+// its own clock, and no longer.
 //
-// Mutation: refuse the record unasked once its key reads past the window on the
-// asker's clock, and the end names unkept a capture the log would have taken;
-// read the reader's window without the skew, and a capture the log may still
-// take is read as answered.
+// Mutation: refuse the record unasked once its key reads past the window here,
+// and the end names unkept a capture the log would take; read the reader's
+// window without the skew, and one the log may still take reads as answered.
 func TestAnUnansweredRecordIsAskedWhateverItsKeysAgeReadsHere(t *testing.T) {
 	t.Parallel()
 	ahead := 2 * objstore.AssumedClockSkew
@@ -285,20 +275,18 @@ func (s *unansweredListing) listed() (began, cut time.Time) {
 	return s.began, s.cut
 }
 
-// A KEEP'S READS LEAVE ITS UPLOAD ITS WHOLE PACE. A keep reads the coordination
-// store twice before it uploads (the turn's operations minted, the seat's runs
-// listed for its budget), and each is held to a room of its own beside the
-// upload's pace in the keep's budget, so a store that answers them slowly, or
-// never, costs the upload nothing. A listing that never answers is cut at its
-// room and decides nothing: the session is uploaded, handed at least its pace
-// at the slowest a store may take it and its record's budget, and lands. A
-// mint that never answers is cut at its room and refuses the capture there, as
-// one that fails does, rather than at the keep's end. Exact, in a bubble.
+// A KEEP'S READS LEAVE ITS UPLOAD ITS WHOLE PACE. Its two reads of the
+// coordination store before the upload (the turn's operations minted, the
+// seat's runs listed) each have a room of their own beside the upload's pace in
+// the keep's budget, so a store slow or silent on them costs the upload
+// nothing. A listing that never answers is cut at its room and decides nothing:
+// the upload is handed at least its pace at the slowest and its record's
+// budget, and lands. A mint that never answers is cut at its room and refuses
+// the capture there, as a failed one does. Exact, in a bubble.
 //
-// Mutation: hold the reads to the keep's budget alone, and the listing runs to
-// the keep's end with nothing left to upload in, and the mint's refusal comes
-// at the keep's end; or refuse a capture whose listing ran past its room, and
-// one the log would take is not uploaded.
+// Mutation: hold the reads to the keep's budget alone, and the listing leaves
+// nothing to upload in and the mint refuses only at the keep's end; or refuse a
+// capture whose listing overran its room, and one the log would take is lost.
 func TestAKeepsReadsLeaveItsUploadItsWholePace(t *testing.T) {
 	t.Parallel()
 	take := func(t *testing.T, rig *coordRig) *spooledCapture {
@@ -359,21 +347,17 @@ func TestAKeepsReadsLeaveItsUploadItsWholePace(t *testing.T) {
 	})
 }
 
-// A SPOOL OUTLIVES THE LONGEST ITS KEEP WAITS TO OPEN IT. A read standing by
-// spools the job's session and its keep opens the spool only once the capture
-// it stood by for has come to something and it has taken the place after it:
-// at the longest, past its whole wait and every change of the row around its
-// takeover. A take on the same node sweeps the spools a crash left behind, by
-// their age on the machine's wall clock, which NTP may step forward by up to
-// the skew the engine assumes. So a standby's spool aged by that longest wait,
-// counted here step by step (its digest, its wait for the capture it stood by
-// for, five changes of the row at the slowest crossing and its keep's two
-// reads), and a step just short of the skew is still there when its keep opens
-// it, and the keep keeps it; a spool past both by a minute is swept.
+// A SPOOL OUTLIVES THE LONGEST ITS KEEP WAITS TO OPEN IT. A standby's keep
+// opens its spool only once the capture it stood by for has come to something
+// and it has taken the next place: at the longest, its digest, its wait, five
+// changes of the row at the slowest crossing and its keep's two reads. A take
+// on the same node sweeps the spools a crash left by their age on the wall
+// clock, which NTP may step forward by up to the assumed skew. So a spool aged
+// that longest wait and the skew less a minute survives the sweep and is kept;
+// one a minute past both is swept.
 //
-// Mutation: sweep at the longest wait alone, at twice a capture's life, or at a
-// longest wait one change of the row short, and the standby's spool is swept
-// before its keep opens it, which then keeps nothing.
+// Mutation: sweep at the longest wait alone, at twice a capture's life, or one
+// change short, and the standby's spool is swept before its keep opens it.
 func TestASpoolOutlivesTheLongestItsKeepWaitsToOpenIt(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -421,32 +405,17 @@ func TestASpoolOutlivesTheLongestItsKeepWaitsToOpenIt(t *testing.T) {
 }
 
 // A TURN'S END WAITS FOR EACH CAPTURE IT SEES ITS WHOLE LIFE FROM FIRST SIGHT,
-// on its own clock, and for each read it sees standing by its window.
+// on its own clock, and for each standby its window. Exact, in a bubble:
 //
-// A standby that stands after the end began: a read admitted on another
-// node's host keeps reading its box after a stop's ending is decided, and its
-// take, finding the stop's capture begun, stands by for it. That capture,
-// begun under a lease that holds, never stamps what came of it. The end waits
-// on: the standby's own wait outlasts the capture's whole life, it takes the
-// place after it and keeps its session there, and only then does the end's
-// wait return, the standby's capture landed and its record taken ahead of the
-// end's tombstone.
+//   - another node's late read stands by after the end began, beside a capture
+//     that never stamps: the end waits until its capture lands and is recorded;
+//   - a takeover lands after the end's last round, inside its window: the end
+//     reads the row once more past the window and waits for it;
+//   - a capture stamped hours ahead, so its age never ends it here: the end
+//     gives up on it a life after first sight, within a tick.
 //
-// A standby's takeover that lands in its window's last instants, after the
-// end's last round read the row: the end reads the row once more once the
-// window has passed, sees the takeover, and waits for what came of it.
-//
-// And a capture whose stamp's clock stands hours ahead, so its age never ends
-// it here, begun under a lease that holds and never stamped: the end gives up
-// on it its whole life after it first saw it, and within a tick of that.
-//
-// Exact, in a bubble.
-//
-// Mutation: cap the end at one capture's life from its own start, and it
-// returns before the late standby's takeover lands; decide off the last
-// round's read once every bound has passed, and it returns on the row before
-// the takeover; or hold each sighting to no bound of its own, and the end
-// waits on the stuck capture past its life.
+// Mutation: cap the end at one life from its own start, decide off the last
+// round's read, or hold no sighting to a bound of its own, and a case fails.
 func TestAnEndWaitsForEachCaptureItSeesItsWholeLifeFromFirstSight(t *testing.T) {
 	t.Parallel()
 	begin := func(t *testing.T, rig *coordRig, run PendingRun, ahead time.Duration) SessionCapture {
@@ -598,26 +567,17 @@ func TestAnEndWaitsForEachCaptureItSeesItsWholeLifeFromFirstSight(t *testing.T) 
 }
 
 // A READ STANDING BY TAKES THE NEXT PLACE ONCE ITS OWN WAIT OUTLASTS THE
-// CAPTURE. It waits for the capture it stood by for on its own clock, that
-// capture's whole life and one read, never by the capture's stamped instant,
-// which another machine's clock wrote. Then, the wait run out:
+// CAPTURE: the capture's life and one read on its own clock, never by the
+// capture's stamped instant, another machine's. Then, exact in a bubble:
 //
-//   - the capture still begun under a lease that holds, its stamp's clock two
-//     hours ahead so its age never ends it here, and never stamped: its taker
-//     sends nothing more that lands, so the standby takes the place after it
-//     and keeps its session there;
-//   - the capture's record sent and never answered, the log still silent: it
-//     may yet land, so the standby stands down and nothing is uploaded twice;
-//   - the coordinator stopping before the wait runs out: the standby stands
-//     down, withdrawn from the row, and takes nothing.
+//   - the capture still begun under a live lease, stamped hours ahead, never
+//     stamped again: the standby takes the place after it and keeps its session;
+//   - the capture's record sent and unanswered: it may yet land, so the
+//     standby stands down and nothing is uploaded twice;
+//   - the coordinator stopping first: the standby withdraws and takes nothing.
 //
-// Exact, in a bubble.
-//
-// Mutation: stand down at the wait's end whatever the row says, as a standby
-// did, and the stuck capture's session is never kept; take the next place
-// beside a record still unanswered, and the session is uploaded twice; or take
-// it however the wait ended, and a stopping coordinator takes a place it
-// cannot keep.
+// Mutation: stand down whatever the row says, take the place beside an
+// unanswered record, or take it however the wait ended, and a case fails.
 func TestAReadStandingByTakesTheNextPlaceOnceItsOwnWaitOutlastsTheCapture(t *testing.T) {
 	t.Parallel()
 	stuck := func(t *testing.T, rig *coordRig, run PendingRun) {
@@ -720,15 +680,13 @@ func TestAReadStandingByTakesTheNextPlaceOnceItsOwnWaitOutlastsTheCapture(t *tes
 	})
 }
 
-// atTheFloor is a run store across a link at the slowest pace a link is
-// allowed ([PendingStore.RowCrossing]), whose every change of a capture's
-// place on a run's row, and every read of the row held to one change's room,
-// spends what its room leaves but a second before the store underneath answers
-// it ([atTheFloor.last], which the case sets in its bubble): each step of a
-// capture's life at its bound. It notes the instant each was asked, and each
-// stamp of an outcome and each takeover the store made. Where loseTakeOver is
-// set, a takeover is made and its answer lost, as a store whose answer never
-// reached its asker loses it.
+// atTheFloor is a run store across a link at the slowest pace allowed
+// ([PendingStore.RowCrossing]): every change of a capture's place, and every
+// read held to one change's room, answers a second before its room ends
+// ([atTheFloor.last], set in the case's bubble), each step at its bound. It
+// notes the instant each step was asked and each outcome and takeover the store
+// made. loseTakeOver makes a takeover and loses its answer, as a store whose
+// answer never reached its asker does.
 type atTheFloor struct {
 	PendingStore
 	last         func(ctx context.Context, read bool)
@@ -859,36 +817,18 @@ func (a *floorArchive) Read(p []byte) (int, error) {
 	return a.body.Read(p)
 }
 
-// EVERY CAPTURE'S OUTCOME LANDS WITHIN ITS LIFE. Each step between a capture's
-// instant and the stamp of what came of it is answered a second inside its
-// room, a change of the run's row at the slowest crossing a link is allowed:
-// the reservation of its place, its spool to the end of the take, the digest
-// it leaves in the box, the keep's two reads, its upload at the pace of a
-// session at its bound and its record, and the stamp. So:
+// EVERY CAPTURE'S OUTCOME LANDS WITHIN ITS LIFE, each step answering a second
+// inside its room at the slowest crossing. A stop's take, and a collection's
+// while its box's pause blocks (its keep starts once spooled, not behind its
+// read), stamp within [takeLife] of their instant; a takeover the store never
+// answered, within [takeOverLife]; a standby whose stuck capture's taker goes in
+// the wait's last tick settles it, reads again and takes over within
+// [standbyWindow] of its own instant. Each lands within [captureLife] where a
+// capture's, and within a minute of its figure, the life the figure bounds.
 //
-//   - a stop's take stamps what came of it within a take's life ([takeLife])
-//     of the moment it reserved its place, its stamped instant;
-//   - a collection's take does the same while its box's pause blocks, its
-//     keep started once its take is spooled rather than behind its read;
-//   - a takeover the store made and never answered (the standby withdrawn
-//     after it, answered not taken, and its row read back) stamps what came
-//     of it within a takeover's life ([takeOverLife]) of its instant;
-//   - a read standing by for a capture that never stamps, whose taker goes in
-//     its wait's last tick, settles that capture at the wait's end in the
-//     room a settle is given past it, reads the row once more and takes the
-//     place after it within its window ([standbyWindow]) of its own instant;
-//
-// each within a capture's life ([captureLife]) where it is a capture's, and each
-// within a minute of its figure, so each figure is the life it bounds. Exact,
-// in a bubble.
-//
-// Mutation: drop a step from a take's life (its digest), or from a takeover's
-// (its read of the row back), and its row lands past it; start a collection's
-// keep only once its read returns, and nothing is stamped while its box's
-// pause blocks; drop one change of the row from a standby's window (the
-// settle still writing past its wait, its last read or its takeover), or wait
-// for the capture it stood by for as long as any node reads it as being kept,
-// and the takeover lands past the standby's window.
+// Mutation: drop a step from a figure (a take's digest, a takeover's read back,
+// one change past a standby's wait), start a collection's keep behind its read,
+// or wait as long as any node reads the capture as kept, and a case fails.
 func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 	t.Parallel()
 	// floor sets every fake of rig at the slowest crossing, and hands back
@@ -1022,12 +962,10 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 			if standby == nil || !standby.standby {
 				t.Fatalf("this node's read beside node-a's capture spooled %+v, want it standing by", standby)
 			}
-			// NODE-A'S LEASE GOES while the standby's wait's last read of the
-			// row crosses, which the store answers a second before the wait,
-			// begun as the keep begins, ends: that pass finds node-a gone and
-			// settles its capture, a write given its own room past the wait's
-			// end, and the wait's own read of the row and the takeover come
-			// after it.
+			// NODE-A'S LEASE GOES while the wait's last read of the row crosses,
+			// answered a second before the wait ends: that pass settles node-a's
+			// capture in its own room past the wait, and the wait's last read
+			// and the takeover follow it.
 			waitEnds := time.Now().Add(standbyWait)
 			go func() {
 				time.Sleep(time.Until(waitEnds) - 10*time.Second)
@@ -1122,11 +1060,9 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 const settleLate = 20 * time.Second
 
 // lateSettles is a run store slow to take the writes a wait decides: each one
-// [lateSettles.answer] names is answered only once that has let it, and one it
-// cuts first is not applied. A read made under a context that has ended
-// fails, as a store's read past its caller's deadline does. Every write of a
-// capture's stamp it is asked is noted. Every other call is the store
-// underneath's.
+// [lateSettles.answer] names is answered only once it lets it, and one it cuts
+// first is not applied. A read under an ended context fails, as a store's read
+// past its caller's deadline does. It notes every capture-stamp write asked.
 type lateSettles struct {
 	PendingStore
 	answer func(ctx context.Context, write string) error
@@ -1215,31 +1151,18 @@ func settledOnRelaunch(t *testing.T) (*coordRig, *keptRestore, SessionCapture, *
 	return rig, restore, kept, store
 }
 
-// A WAIT'S SETTLE IS WRITTEN IN ITS OWN ROOM PAST THE WAIT. A wait for a
-// capture bounds its waiting, and the reads and asks it makes, by its own
-// patience; each settle write it decides is this node's own, given a record's
-// budget and this node's crossing of the run's row, as every stamp made off a
-// read is. So a store that takes a settle only once the wait has ended still
-// takes it, and the wait answers what it settled:
+// A WAIT'S SETTLE IS WRITTEN IN ITS OWN ROOM PAST THE WAIT. A wait bounds its
+// reads and asks by its own patience, but each settle it decides gets a
+// record's budget and this node's crossing of the row, as any stamp off a read
+// does. So a store that answers a settle only after the wait ended still takes
+// it, and the wait answers what it settled: a relaunch's settle of a gone
+// taker's capture the log names landed, its withdrawal of a gone standby, its
+// stamp of what its ask landed, and an end's settle at a round's end. Each is
+// answered [settleLate] into its room, past [relaunchCaptureWait] and the round.
 //
-//   - a relaunch's settle of a capture whose taker is gone, which the log
-//     names landed: the store holds it landed, and the relaunch continues it;
-//   - a relaunch's withdrawal of a read standing by whose taker is gone: the
-//     store holds it withdrawn, and the relaunch does not read the capture as
-//     still being kept;
-//   - the stamp of a capture a relaunch's ask of its unanswered record landed,
-//     the ask answered within the wait: the store holds it landed;
-//   - a turn's end settling, at the end of a round of its wait, a capture whose
-//     taker's lease lapsed then: the end's wait answers it landed.
-//
-// Each settle is answered twenty seconds into its room, past the relaunch's
-// fifteen and past the end's round. Exact, in a bubble.
-//
-// Mutation: hold a settle's write to the wait's own deadline, as it was, and
-// each row's settle is cut unapplied: the capture is read as still being kept
-// or the store never holds what the ask landed; or leave a withdrawal the store
-// took off the wait's copy where the row cannot be read back after it, and the
-// relaunch still reads the standby as standing.
+// Mutation: hold a settle to the wait's deadline, and it is cut unapplied; or
+// leave a withdrawal off the wait's copy where the row cannot be read back,
+// and the relaunch still reads the standby as standing.
 func TestAWaitsSettleIsWrittenInItsOwnRoomPastTheWait(t *testing.T) {
 	t.Parallel()
 	if settleLate <= relaunchCaptureWait || settleLate >= sessionRecordBudget {
@@ -1390,17 +1313,12 @@ func TestAWaitsSettleIsWrittenInItsOwnRoomPastTheWait(t *testing.T) {
 	})
 }
 
-// AN ASK THAT LEAVES A RECORD UNANSWERED WRITES NOTHING. A capture whose
-// record was sent and never answered is asked again under its own operation;
-// where the log still gives no answer, the row already holds the capture
-// unresolved, the same take in the same state, so the ask stamps nothing: one
-// more write of the row whole would say what the row says, at a write's whole
-// room. A relaunch's ask that the log leaves unanswered asks the record again,
-// sends the store no write of the capture's stamp, and leaves the row as it
-// stood.
+// AN ASK THAT LEAVES A RECORD UNANSWERED WRITES NOTHING. The row already holds
+// the capture unresolved, the same take in the same state, so a relaunch's ask
+// the log leaves unanswered asks the record again and writes the store nothing:
+// another whole-row write would say what the row says, at a write's whole room.
 //
-// Mutation: stamp the unresolved answer as an ask did, and the store is asked
-// a stamp.
+// Mutation: stamp the unresolved answer, and the store is asked a stamp.
 func TestAnAskThatLeavesARecordUnansweredWritesNothing(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {

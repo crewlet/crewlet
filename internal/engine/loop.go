@@ -13,9 +13,8 @@ type loop struct {
 }
 
 // startLoop runs run at once, and again each time the wait it answered has
-// passed — the RUN answers it, so a loop paces itself on what that run found
-// rather than on a second reading taken beside it. wait sleeps for a duration
-// or until the context ends ([sleep]), a parameter for the tests.
+// passed: the RUN answers it, so the loop paces on what that run found rather
+// than on a second reading beside it. wait is [sleep] but for the tests.
 func startLoop(ctx context.Context, wait func(context.Context, time.Duration),
 	run func(context.Context) time.Duration) *loop {
 

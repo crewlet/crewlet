@@ -15,24 +15,14 @@ import (
 
 // EVERY VENDOR WIRING THE COMPANY DERIVES IS REBUILT ON AN APPLY.
 //
-// A third-party app's parser is built once from the applied company and then held. Two
-// halves of what it holds move when a revision lands: the ORG CHART it routes
-// by — a lead map, a project or space identity, a seat's own credential — and
-// the CREDENTIAL it reads with. A node that kept its boot-time wiring routes
-// the new revision's activity by the previous company's org chart, and reads
-// with a credential that may have been rotated out from under it.
-//
-// Both failures are SILENT. A lead-fallback notification looks identical
-// whoever it reached, and a 401 on an enrichment read degrades the thread it
-// was enriching rather than raising anything.
-//
-// This is not hypothetical and it is not a typo: `reconcileConfluence` did not
-// exist at all. The knowledge base shipped with a lead map built at boot and
-// never rebuilt, past four third-party apps that each had the edge, because nothing
-// connected the list of reconcilers to the list of calls. So the two lists are
-// derived from the source rather than written down — a reconciler added to the
-// package and not to the apply path works perfectly at boot and is discoverable
-// only by reading both files.
+// A third-party app's parser holds the org chart it routes by (a lead map, a
+// project or space identity, a seat's credential) and the credential it reads
+// with, both of which a revision moves. Kept boot-time wiring misroutes and
+// reads with a rotated-out credential, both SILENTLY: a lead-fallback
+// notification looks the same whoever it reached, and a 401 on an enrichment
+// read only degrades the thread. Nothing connects the reconcilers to the apply
+// path's calls, so both lists are derived from the source: a reconciler the
+// path misses works at boot and is otherwise found only by reading both files.
 func TestEveryVendorReconcilerRunsOnApply(t *testing.T) {
 	t.Parallel()
 
@@ -76,20 +66,10 @@ func reconcilerMethods(t *testing.T) []string {
 
 // reconcilersCalledBy are the `reconcile*` methods called from one function,
 // however deeply nested in its body, and from every method it delegates to,
-// however deep the delegation goes.
-//
-// THE APPLY IS SPLIT ACROSS SEVERAL FUNCTIONS: the exported entry point
-// validates and stores, and helpers do the swap. Following every e.X() the
-// path makes, transitively, is what keeps this test reading the whole path
-// rather than whichever part the calls happen to live in today. A method is
-// matched by NAME on any receiver, as a call through `e.` names it.
-//
-// A WORKLIST WITH A SEEN SET, each method expanded once. The walk this
-// replaced recursed into every delegate it met — about two hundred times from
-// Apply, re-parsing the package on each — so it cost two minutes under the
-// race detector, and a cycle among the methods Apply reaches would have
-// recursed until the stack overflowed and took every result in the engine's
-// test binary with it.
+// transitively, so the test reads the whole apply path wherever its calls
+// live. A method is matched by NAME on any receiver, as a call through `e.`
+// names it. A worklist with a seen set expands each method once, so a cycle
+// among the methods ends rather than overflowing the stack.
 func reconcilersCalledBy(t *testing.T, function string) []string {
 	t.Helper()
 	return reconcilersReachedFrom(enginePackage(t), function)
@@ -136,9 +116,8 @@ func reconcilersReachedFrom(files []*ast.File, function string) []string {
 
 // THE WALK FOLLOWS DELEGATION TRANSITIVELY AND ENDS ON A CYCLE, on source
 // whose answer is known: a reconciler two delegations deep is reached, one on
-// a method Apply never calls is not, and two methods that call each other —
-// on which the recursive walk this replaced never returned — are each
-// expanded once.
+// a method Apply never calls is not, and two methods that call each other are
+// each expanded once.
 func TestTheReconcilerWalkFollowsEveryDelegationOnce(t *testing.T) {
 	t.Parallel()
 	file, err := parser.ParseFile(token.NewFileSet(), "planted.go", `package engine
@@ -193,16 +172,10 @@ func receiverIsEngine(fn *ast.FuncDecl) bool {
 
 // enginePackage parses this package's own non-test source.
 //
-// The dispatch is read out of the SOURCE rather than exercised, because a
-// method that is never called cannot be observed at runtime — which is the
-// same reason the drift is invisible in the first place.
-//
-// The directory is walked by hand rather than through go/parser's own
-// ParseDir, which is deprecated for a reason that applies here: it ignores
-// build tags, so a file excluded from the build would still be read and a
-// reconciler behind one would be demanded by a test the compiler disagrees
-// with. This package has no tagged files, and the walk is the same length
-// either way.
+// The dispatch is read from the SOURCE because a method never called cannot be
+// observed at runtime. The directory is walked by hand, not by go/parser's
+// deprecated ParseDir, which ignores build tags and would demand a reconciler
+// the compiler excludes.
 func enginePackage(t *testing.T) []*ast.File {
 	t.Helper()
 	files, err := parsedEnginePackage()

@@ -8,9 +8,8 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
-// A NODE THAT DOES NOT RUN WORKERS REFUSES EVERY DUTY, and refuses rather
-// than abstaining: the duty function's nil means "no fleet, so always mine",
-// which is the exact opposite of what `roles: [seats]` asks for.
+// A NODE THAT DOES NOT RUN WORKERS REFUSES EVERY DUTY, never abstains: a nil
+// duty means "no fleet, so always mine", the opposite of `roles: [seats]`.
 func TestANodeWithoutTheWorkersRoleRefusesEveryDuty(t *testing.T) {
 	t.Parallel()
 	e := &Engine{profile: placement.NodeProfile{
@@ -30,9 +29,8 @@ func TestANodeWithoutTheWorkersRoleRefusesEveryDuty(t *testing.T) {
 	}
 }
 
-// A WORKER WITH NO COORDINATION STORE IS THE SINGLE-NODE CASE: nil, because
-// there is nobody to be a singleton among, and a wrapper that always said
-// yes would make a lone node report itself as a fleet member.
+// A WORKER WITH NO COORDINATION STORE IS THE SINGLE-NODE CASE: nil, since a
+// wrapper that always said yes would report a lone node as a fleet member.
 func TestALoneWorkerNodeGetsNoDutyFunctionAtAll(t *testing.T) {
 	t.Parallel()
 	e := &Engine{profile: placement.NodeProfile{
@@ -43,9 +41,8 @@ func TestALoneWorkerNodeGetsNoDutyFunctionAtAll(t *testing.T) {
 	}
 }
 
-// THE DEFAULT IS EVERY ROLE, which is what makes a single-node deployment
-// work with no `node:` block at all — and what stops this gate turning every
-// existing deployment into one that sweeps nothing.
+// THE DEFAULT IS EVERY ROLE, so a single-node deployment with no `node:` block
+// still runs its duties.
 func TestAnUnconfiguredNodeRunsWorkerDuties(t *testing.T) {
 	t.Parallel()
 	e := &Engine{profile: (&config.Bootstrap{}).Profile("n1")}

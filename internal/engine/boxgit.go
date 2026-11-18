@@ -12,16 +12,14 @@ import (
 // launchBoxGit is the box git environment of each launch of turn turnID's
 // executor ([sandbox.LaunchRequest.RunEnv]), minted per launch by
 // [Engine.boxGitEnv] over run, the run environment the launch assembled; nil
-// where this node gives a box no git: it has no [sandbox.BoxGitURLVar], or it
-// does not serve Gitlet now.
+// where this node gives a box no git: no [sandbox.BoxGitURLVar], or Gitlet not
+// served now.
 //
 // SERVED IS [OperatorCode]'s ANSWER, the seam every `code_checkout` of the run
-// resolves through ([CodeToolDeps]), so a box is given its git exactly where a
-// checkout can grant it a repository. Never [Engine.CodeUnserved], which is
-// asked only once Gitlet was found absent and says why: it has no
-// answer for a node that serves code, so a launch gated on it being nil was
-// given no git on every node, and each checkout it then made cloned from an
-// empty base.
+// resolves through ([CodeToolDeps]), so a box gets git exactly where a checkout
+// can grant it a repository. Never [Engine.CodeUnserved]: it answers only once
+// Gitlet was found absent, so gating on it gives no box git on any node and
+// every checkout clones from an empty base.
 func (e *Engine) launchBoxGit(seat *org.Role, turnID string,
 	run map[string]string) func(launchID string) (map[string]string, error) {
 
@@ -35,22 +33,16 @@ func (e *Engine) launchBoxGit(seat *org.Role, turnID string,
 }
 
 // boxGitEnv is the engine's git environment for ONE LAUNCH of a run on a node
-// that serves Gitlet, whatever the run goes on to check out
-// (ADR-0093), over run, the run environment the launch assembled from the
-// operator's configuration: the run's credential for this launch — a token
-// naming the turn and the launch id the store just minted, so a job a
-// relaunch superseded is refused — Gitlet's base, git's configuration
-// through the environment with the operator's own entries kept and the
-// engine's appended ([sandbox.BoxGit]). A commit's trailers are no part of
-// it: they come from the run's attribution hook, which the harness's launch
-// writes from [sandbox.CommitAttribution], and that hook is the only place
-// they are spelled, because a value here would name them twice.
+// serving Gitlet, whatever the run checks out (ADR-0093), over run, the run
+// environment the launch assembled: a token naming the turn and the launch id
+// the store just minted (so a job a relaunch superseded is refused), Gitlet's
+// base, and git's configuration, the operator's entries kept and the engine's
+// appended ([sandbox.BoxGit]). No commit trailers: the run's attribution hook
+// ([sandbox.CommitAttribution]) is the one place they are spelled.
 //
-// THE SEAT'S COMMIT IDENTITY IS THE ENGINE'S ONE RULE for a seat's commits —
-// its role's name and email as written, else its handle on the identity
-// domain ([codeSigner]) — so a commit the box makes names the seat as one the
-// engine builds does. Refused where the run environment's own git
-// configuration has a hole git refuses.
+// The commit identity is [codeSigner]'s, the engine's one rule for a seat's
+// commits, so the box's commits name the seat as the engine's do. Refused
+// where the run environment's git configuration has a hole git refuses.
 func (e *Engine) boxGitEnv(seat *org.Role, base string, ref host.BoxRunRef,
 	run map[string]string) (map[string]string, error) {
 

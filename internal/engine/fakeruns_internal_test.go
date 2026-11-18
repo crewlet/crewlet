@@ -28,31 +28,21 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// THE EXECUTOR, AS A TEST RUNS IT.
-//
-// Every seat's executor is its harness's own run in a box, so a case that
-// drives a turn has to give it one: a chain member that can take a launch, a
-// catalogue to place it in, a bridge its box can dial, and something that plays
-// the run. These are those, built the way `providers.sandbox.fake` builds them
-// in a deployment — the in-process double for every cell, the double's runner
-// for every harness — over the REAL launch, the real bridge and the real
-// coordinator, so a case that drives a turn exercises the path every turn
-// takes: the launch, the park, the bridged calls landing on the run's row, the
-// collection and the resume.
-//
-// What a run DOES is the case's: a [fakePlayer]. [modelPlayer] is the usual one
-// — the pick of the case's scripted harness ([phasedHarness]), played as the run,
-// calling the seat's tools over the bridge — so one fixture scripts the run
-// and the reviewer that judges it alike.
+// THE EXECUTOR, AS A TEST RUNS IT: a launchable chain member, a catalogue, a
+// bridge and a player, built as `providers.sandbox.fake` builds them (the
+// double for every cell and harness) over the REAL launch, bridge and
+// coordinator, so a driven turn takes every turn's path: launch, park, bridged
+// calls on the run's row, collection, resume. What a run DOES is the case's
+// [fakePlayer]; [modelPlayer] plays the case's [phasedHarness] script, so one
+// fixture scripts the run and its reviewer alike.
 
 // runnerKey is the providers.llm key a rigged seat's executor launches on.
 const runnerKey = "cli"
 
-// runnerEntry is a claude-code entry an executor can launch on and that no
-// phase on this host can ever reach: its binary does not exist. The run itself is played by
-// the rig's double, so the harness is never started — and a phase that fell
-// through to this entry by mistake fails on the missing binary rather than
-// starting a real harness on the machine running the suite.
+// runnerEntry is a claude-code entry an executor can launch on, whose binary
+// does not exist: the rig's double plays the run, and a phase that falls
+// through to it by mistake fails rather than starting a real harness on the
+// machine running the suite.
 func runnerEntry(t *testing.T) phase.Entry {
 	t.Helper()
 	provider, err := harness.New(harness.Config{
@@ -69,10 +59,9 @@ func runnerEntry(t *testing.T) phase.Entry {
 }
 
 // runnable is a model registry over entries with the runner entry appended
-// AFTER them, and every seat's `llm` ending on it: each seat's phases on this
-// host are still answered by the case's own model — the head of every chain — and its
-// executor launches on the one member that has an in-box runner, which the
-// launch's pick reaches by passing over the head.
+// AFTER them and ending every seat's `llm`: host phases still get the case's
+// model at the chain's head, and the launch's pick passes over it to the one
+// member with an in-box runner.
 func runnable(t *testing.T, entries []phase.Entry, seats ...*org.Role) *phase.Registry {
 	t.Helper()
 	models, err := phase.NewRegistry(append(entries, runnerEntry(t)))
@@ -93,10 +82,10 @@ type runRig struct {
 	runners map[string]*sandbox.FakeRunner
 }
 
-// rigRuns gives e an executor runtime whose every run play plays: a bridge
-// mounted on a listener of its own, the double for every cell and every harness,
-// and the engine's own coordinator over a run store on e's fleet — and its
-// company the fake catalogue the launch checks the epoch for.
+// rigRuns gives e an executor runtime whose every run play plays: a bridge on
+// its own listener, the double for every cell and harness, the engine's own
+// coordinator over a run store on e's fleet, and the fake catalogue on its
+// company's epoch.
 func rigRuns(t *testing.T, e *Engine, play fakePlayer) *runRig {
 	t.Helper()
 	if e.backends == nil || e.backends.Fleet == nil {
@@ -114,9 +103,7 @@ func rigRunsOn(t *testing.T, e *Engine, pending sandbox.PendingStore, play fakeP
 	bridge := bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: server.URL,
 	})
-	// EVERY ROUTE OF THE BRIDGE'S, as the engine's own listener mounts them
-	// (internal/api, mountBridge): a run's tools, each of its seat's MCP
-	// servers beneath them, and its notes route.
+	// Every bridge route, as internal/api's mountBridge mounts them.
 	mux := http.NewServeMux()
 	mux.Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
 	mux.Handle(mcpbridge.ServerPattern, bridge.Handler())
@@ -136,9 +123,8 @@ func rigRunsOn(t *testing.T, e *Engine, pending sandbox.PendingStore, play fakeP
 		t.Fatalf("NewManager: %v", err)
 	}
 	if e.answers == nil {
-		// THE SEAL EVERY ENGINE `crewlet run` builds holds, over its
-		// keyring ([Engine.answers]): an engine a case builds by hand has
-		// none, and its coordinator would refuse to be built without one.
+		// A hand-built engine lacks the seal `crewlet run` gives it
+		// ([Engine.answers]), and the coordinator refuses to build without one.
 		e.answers = testAnswers()
 	}
 	rt, err := e.sandboxRuntimeOn(pending, manager)
@@ -151,9 +137,7 @@ func rigRunsOn(t *testing.T, e *Engine, pending sandbox.PendingStore, play fakeP
 		if c.Config.Providers.Sandbox == nil {
 			c.Config.Providers.Sandbox = &config.SandboxProvider{Fake: true}
 		}
-		// THE EPOCH'S OWN CATALOGUE, as an apply pins it
-		// ([Company.catalogue]): the launches of its turns place their
-		// boxes by this manager.
+		// The epoch's catalogue, as an apply pins it ([Company.catalogue]).
 		c.catalogue = manager
 	}
 	rig := &runRig{engine: e, bridge: bridge, runners: map[string]*sandbox.FakeRunner{}}
@@ -193,20 +177,18 @@ func (r *runRig) calls(t *testing.T, turnID string) sandbox.BridgeLog {
 	return log
 }
 
-// collect delivers the completion of turnID's run the way the waiter's poll
-// announces one, to the coordinator that claims it: the run is played if it
-// has not been, collected, charged, and its turn resumed — the reviewer and
-// everything after the run, to the turn's end or its next launch. The error
-// is the coordinator's, which a control-topic delivery would be NAKed on.
+// collect delivers turnID's run completion as the waiter's poll announces one:
+// the run is played if not yet, collected, charged, and its turn resumed to
+// its end or next launch. The error is the coordinator's, which a
+// control-topic delivery would be NAKed on.
 func (r *runRig) collect(t *testing.T, turnID string) error {
 	t.Helper()
 	row := r.row(t, turnID)
 	if row.Status != sandbox.StatusRunning {
 		t.Fatalf("run %s is %s, want it running: the turn did not park on it", turnID, row.Status)
 	}
-	// POLLED FIRST, as the waiter's tick polls a running job before it
-	// announces the completion: the run does its work — its bridged calls
-	// landing on its row — before the completion's claim reads the row.
+	// POLLED FIRST, as the waiter's tick does, so the run's bridged calls land
+	// on its row before the completion's claim reads it.
 	runner, ok := r.runners[row.Harness]
 	if !ok {
 		t.Fatalf("run %s is on %q, which the rig has no runner for", turnID, row.Harness)
@@ -226,21 +208,14 @@ func (r *runRig) collect(t *testing.T, turnID string) error {
 	return r.engine.sandbox.Load().coordinator.OnCompleted(t.Context(), completion, ev)
 }
 
-// runToItsEnd runs req's turn to its end through its executor's run: the
-// dispatch parks on the launch, the run is played and collected, and the
-// resume reviews it — failing the case wherever the turn did not take that
-// path.
+// runToItsEnd runs req's turn through its executor's run (park on launch,
+// play, collect, resume and review), failing the case off that path.
 //
-// THE RESUME DECIDES THE RUN'S ENDING, AND THE ENDING DELETES THE RECORD: on
-// the resume's own frame where the record owes nothing more, and otherwise
-// just after it, by this node's retry of the ending. An engine that records on
-// an executor log owes every turn's end on the run's record
-// ([sandbox.Coordinator.OweEnd]), and the ending records that end off the
-// frame that decided it, before the delete: the log's write, and a capture
-// still being kept, are not for a completion's frame to wait on. So the record
-// is read as the resume left it, gone or its ending decided, and never a run
-// the turn launched again or a claim left standing; and then it is waited on
-// until it goes, which an ending that never finishes does not.
+// THE RESUME DECIDES THE ENDING, AND THE ENDING DELETES THE RECORD, possibly
+// just after the resume: a turn's end owed on the run's record
+// ([sandbox.Coordinator.OweEnd]) is written off the deciding frame, before the
+// delete. So the record must be gone or its ending decided right after the
+// resume (never relaunched or claimed), and is then waited on until it goes.
 func runToItsEnd(t *testing.T, e *Engine, rig *runRig, req Request) {
 	t.Helper()
 	res, err := e.runTurn(t.Context(), req)
@@ -265,19 +240,14 @@ func runToItsEnd(t *testing.T, e *Engine, rig *runRig, req Request) {
 		})
 }
 
-// modelPlayer plays a run as its harness would, with pick as the harness's
-// model: the seat's tools are the bridge's, listed over a real MCP session to
-// the run's own endpoint, and the run is the one pick chooses for the names
-// they offer — the pick a [phasedHarness] makes for a phase of the engine's own,
-// so a fixture scripts the run and the phases around it the same way. Each response's calls are made over that
-// session in order, so every call lands on the run's row exactly as a box's
-// would, and the run ends after its last response, or once it has submitted
-// its work. Its closing text is the run's report, and what its responses cost
-// — the cached share included — is the run's spend, as a harness reports its own.
-//
-// A failure to reach the bridge, or a run the script fails, is the run's
-// failure, with the reason, as a harness that could not start or whose vendor
-// refused it.
+// modelPlayer plays a run as its harness would, with pick as its model: the
+// bridge's tools are listed over a real MCP session to the run's endpoint, and
+// pick chooses the run for them as a [phasedHarness] does for the engine's
+// phases. Each response's calls go over that session in order, landing on the
+// run's row as a box's would; the run ends after its last response or a
+// successful submit. Its closing text is the report and its responses' cost,
+// cache included, the spend. An unreachable bridge or a failed script is the
+// run's failure, as a harness that could not start or was refused.
 func modelPlayer(t *testing.T, pick func(offered []string) llmtest.Run) fakePlayer {
 	t.Helper()
 	client := httpxtest.Pool(t)
@@ -335,10 +305,9 @@ func modelPlayer(t *testing.T, pick func(offered []string) llmtest.Run) fakePlay
 	}
 }
 
-// callBridged makes one of a script's calls over the run's bridge session and
-// answers what the model reads back: the tool's text, and whether it failed.
-// Arguments that do not parse fail the call as the harness's own client would,
-// before anything is sent.
+// callBridged makes one scripted call over the run's bridge session and
+// returns the tool's text and whether it failed. Unparseable arguments fail
+// before sending, as the harness's own client would.
 func callBridged(ctx context.Context, session *mcp.ClientSession, call llmtest.Call) (string, bool) {
 	var args map[string]any
 	if err := json.Unmarshal([]byte(cmp.Or(call.Args, "{}")), &args); err != nil {

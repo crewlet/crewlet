@@ -8,13 +8,10 @@ import (
 	"github.com/crewlet/crewlet/internal/github"
 )
 
-// A PULL REQUEST PREVIEW IS READ THROUGH THE WIRING IN FORCE AND NO OTHER: a
-// company with no GitHub reads nothing, a wiring's answer is reused while it
-// is fresh, and retiring or rewiring GitHub drops every answer the old
-// credential gave.
-//
-// Mutation: keep the cache across a rewire and the last read below answers
-// the retired wiring's cached failure instead of saying GitHub is gone.
+// A PULL REQUEST PREVIEW IS READ THROUGH THE WIRING IN FORCE AND NO OTHER: no
+// GitHub reads nothing, an answer is reused while fresh, and a rewire drops
+// every answer the old credential gave (kept, the last read answers the
+// retired wiring's cached failure).
 func TestAPullPreviewIsReadThroughTheWiringInForce(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2031, 5, 6, 7, 8, 0, 0, time.UTC)

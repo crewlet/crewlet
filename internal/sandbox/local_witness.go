@@ -11,43 +11,18 @@ import (
 	"github.com/crewlet/crewlet/internal/procgroup"
 )
 
-// Which engine process last saw a local box's job running, and whether it is
-// still here.
-//
-// A JOB ON THE ENGINE HOST CAN GO WITH ITS ENGINE. A `direct` box's job is a
-// process tree of the engine host, detached into a session of its own so that
-// it outlives the engine process ([directBox.StartBackground]) — which it does
-// when only that process dies. It does not survive what usually replaces an
-// engine: its container restarted, which takes every process in it; its
-// systemd unit stopped or restarted, which kills every process in the unit's
-// control group by default; its host rebooted, which also takes a `container`
-// box's job. Each kills the job in the same instant as the engine, mid-step,
-// before its wrapper writes the marker that says how it ended.
-//
-// AND NOTHING ON THE JOB SAYS SO. The next engine finds its wrapper gone and no
-// marker, which is exactly what a job that crashed on its own leaves — an OOM
-// kill, a harness that died — and that one's partial output IS its result, read and
-// judged as a failed run. Read the same way, a job its engine's restart killed
-// resumed its turn with a truncated run as though the run had failed, or, once
-// its box went too, ended the turn.
-//
-// THE BOX RECORDS ITS WITNESS: the engine process that last saw its job
-// running — the one that started it, and then whichever process of this
-// engine first finds it still running after a restart. A job that is not
-// running ended in that witness's sight while the witness is still here, and
-// is collected; a job whose witness is gone too went with it, or after it,
-// before any engine could see it end — and is lost ([JobLost]). The second
-// half is a window, not a point: a job that crashed on its own between the
-// last engine's death and the next engine's first look reads as lost as well.
-// Nothing can tell those two apart afterwards, and the loss is the answer that
-// costs least when wrong: the round is carried on in a fresh run, where
-// collecting a job its engine's restart killed costs the round.
-//
-// A PROCESS, NOT A NODE: a node is the same node across its restarts, and the
-// restart is what kills the job. A process is its pid and the moment the
-// kernel says it started ([procgroup.StartTime]), the pair that does not
-// repeat — a pid alone is handed out again, and a restarted container begins
-// its numbering anew.
+// A local box records its job's witness: the engine process that last saw the
+// job running — its starter, then whichever process first finds it running
+// after a restart. A `direct` job outlives its engine process alone
+// ([directBox.StartBackground]), but a container restart, a systemd stop or a
+// reboot kills it with the engine, before its wrapper writes its end marker:
+// the trace a crash of its own (an OOM kill) leaves, whose partial output IS
+// its result. So a job not running whose witness still runs ended and is
+// collected; one whose witness is gone too is lost ([JobLost]) and its round
+// carried on in a fresh run. A crash before the next engine looks reads as lost
+// too, the cheaper error: collecting a killed job costs the round. A witness is
+// a process, not a node (the restart kills the job): its pid and kernel start
+// time ([procgroup.StartTime]), since pids are reused and containers renumber.
 
 // engineProcess is one process of this engine on its host.
 type engineProcess struct {
@@ -101,13 +76,10 @@ func (p engineProcess) running() (bool, error) {
 	return found && !proc.Zombie && proc.Start == p.start, nil
 }
 
-// witnessJob records this engine process as the last to have seen the box's
-// job running, where the record names another — once per process per job, so
-// a poll that finds the job running costs one small read.
-//
-// NEVER FATAL. A box with no witness is read as a job that ENDED ([jobEnd]):
-// collected, as every job was before a job could be lost, which is the answer
-// that never starts a second run beside the first.
+// witnessJob records this engine process as the box's job's witness where the
+// record names another, so a poll that finds the job running costs one small
+// read. Never fatal: a box with no witness reads as ENDED ([jobEnd]), the
+// answer that never starts a second run beside the first.
 func witnessJob(l boxLayout) {
 	self, err := thisEngine()
 	if err != nil {
@@ -128,13 +100,10 @@ func witnessJob(l boxLayout) {
 }
 
 // jobEnd is how a box's job that is not running went: [JobEnded] while the
-// engine process that last saw it running is still here — it went in that
-// process's sight, a crash included — and [JobLost] once that process is gone
-// too. See the package rule above.
-//
-// A box with no witness, or with one this engine did not write, ended: nothing
-// says it was lost, and only a lost job is relaunched. A kernel that cannot be
-// asked is the error a caller reads as no answer at all.
+// engine process that last saw it running is still here, a crash included, and
+// [JobLost] once that process is gone too (the rule atop this file). A box with
+// no witness, or one this engine did not write, ended: only a lost job is
+// relaunched. An error (a kernel that could not be asked) is no answer at all.
 func jobEnd(l boxLayout) (JobState, error) {
 	raw, err := readRecord(l, witnessRecord)
 	switch {

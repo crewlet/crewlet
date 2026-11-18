@@ -16,13 +16,9 @@ import (
 // A FAULT IN A DOMAIN NO SEAT DEPENDS ON SHEDS NO SEAT AND WITHHOLDS NO CLAIM —
 // even on a node whose view of the fleet cannot name a peer — while a fault in
 // one a seat does still makes the node's seats depend on that view (ADR-0079).
-//
-// A wrong vectors copy goes out of service for the vectors alone: the seat copy
-// — the tracker and the knowledge base — is still this node's, so the node
-// answers its seats itself and needs no view to keep or claim them. A wrong
-// tracker copy takes the seat copy with it: its seats' tracker calls need a
-// peer, and a node that cannot name one gives them up — while its knowledge
-// base's copy, sound, keeps serving the operations that are its own.
+// A wrong vectors copy takes out the vectors alone; a wrong tracker copy takes
+// the seat copy with it, so a node that cannot name a peer gives its seats up,
+// while its sound knowledge base keeps serving its own operations.
 func TestAFaultInADomainThatGatesNoSeatShedsNone(t *testing.T) {
 	t.Parallel()
 	view, now := staleView(t)
@@ -83,10 +79,8 @@ func TestAFaultInADomainThatGatesNoSeatShedsNone(t *testing.T) {
 }
 
 // A LAGGING DOMAIN HOLDS BACK ONLY ITS OWN OPERATIONS: whether a copy answers
-// requests is its distance from ITS log, and no tracker read is held to the
-// knowledge base's — for the reason no floor on another domain's log is waited
-// for. When the answer was one AND over every domain, a pages log a burst put
-// past the snapshot slack made every tracker read on the node a last resort.
+// requests is its distance from ITS log, so a lagging knowledge base holds
+// back no tracker read.
 func TestALaggingDomainHoldsBackOnlyItsOwnOperations(t *testing.T) {
 	t.Parallel()
 	e := &Engine{backends: &Backends{}}
@@ -142,12 +136,9 @@ func TestTheSeatCopyIsTheDomainsThatGateSeats(t *testing.T) {
 	}
 }
 
-// A BLIP ON ONE DOMAIN KEEPS ONLY THAT DOMAIN'S VERDICT. A reading that could
-// not read one log's health says nothing about any other's: the domain it could
-// not read keeps what the verdict before it held, and every domain it did read
-// takes what it found — so a tracker found sound again is served at once, while
-// a knowledge base nobody could read stays as wrong as it was. When the carry
-// was the whole verdict, one unread log kept every domain where it had been.
+// A BLIP ON ONE DOMAIN KEEPS ONLY THAT DOMAIN'S VERDICT ([copyVerdict.carried]):
+// a tracker found sound again is served at once, while a knowledge base nobody
+// could read stays as wrong as it was.
 func TestABlipOnOneDomainKeepsOnlyThatDomainsVerdict(t *testing.T) {
 	t.Parallel()
 	now := time.Unix(1_700_000_000, 0)
@@ -229,8 +220,7 @@ func TestOnlyANewlyWrongCopyIsAnnounced(t *testing.T) {
 			t.Errorf("an unread reading after a shut file put %s back into service", name)
 		}
 	}
-	// AND AN UNREAD DOMAIN KEEPS THE FAULT IT WAS FOUND WITH, beside the
-	// verdict: the fault is what was read, and nothing new was.
+	// AND AN UNREAD DOMAIN KEEPS THE FAULT IT WAS FOUND WITH: nothing new was read.
 	kept := unreadOn(trackerName).carried(faultyOn(evicted, trackerName), true)
 	if got := kept.domains[trackerName]; !got.wrong || got.why != evicted {
 		t.Errorf("an unread domain found evicted before carried %+v", got)

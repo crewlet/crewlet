@@ -25,10 +25,9 @@ func clientNumber(t *testing.T, name string) int64 {
 	return n
 }
 
-// THE DASHBOARD KNOWS EVERY OUTCOME A TAIL ANSWERS, both ways. An outcome it
-// does not know is drawn as whatever its last branch is — `launching` was a
-// run "no longer running" — and one it names that the engine never sends is a
-// branch nothing reaches.
+// THE DASHBOARD KNOWS EVERY OUTCOME A TAIL ANSWERS, both ways: an outcome it
+// does not know is drawn as whatever its last branch is, and one it names that
+// the engine never sends is a branch nothing reaches.
 func TestTheDashboardKnowsEveryTailOutcome(t *testing.T) {
 	t.Parallel()
 	body, err := clientsource.Literal(clientsource.Tree(t), "EXECUTOR_TAIL_OUTCOMES")

@@ -131,12 +131,11 @@ func (c *fakeDutyClock) tick(t *testing.T, d time.Duration) {
 }
 
 // tickToTheEnd moves the clock on by d to where the window ends, and offers
-// the loop a tick until the work ends — ended is closed then. EITHER renewal
-// may notice the end: the one whose tick this is, or the renewal before it,
-// which looks at the clock again once its unanswered call returns — and the
-// test moves the clock as soon as that call has answered, while it is still
-// returning. Both end the work with the same cause and neither asks the
-// store, so only the end is waited for.
+// the loop a tick until the work ends (ended is closed then). EITHER renewal
+// may notice the end: this tick's, or the one before it, which reads the clock
+// again once its unanswered call returns (the clock moves while it is still
+// returning). Both end the work with the same cause and ask the store nothing,
+// so only the end is waited for.
 func (c *fakeDutyClock) tickToTheEnd(t *testing.T, d time.Duration, ended <-chan struct{}) {
 	t.Helper()
 	c.advance(d)
@@ -286,11 +285,9 @@ func TestARefusedRenewalStopsTheWorkAtOnce(t *testing.T) {
 }
 
 // A KEPT DUTY THIS NODE DECLINES ENDS ITS WORK UNRENEWED (ADR-0079): once a
-// copy the work decides from has gone out of service, the renewal due next
-// asks the store nothing, ends the work at once, and none is asked after it —
-// renewed, the work would go on deciding from the copy that went wrong. Stop
-// says DECLINED rather than lost or unconfirmed, because the lease is still
-// this node's and its holder has to give it back.
+// copy the work decides from goes out of service, the next renewal asks the
+// store nothing, ends the work, and none follows. Stop says DECLINED, not lost
+// or unconfirmed, because the lease is still this node's to give back.
 func TestADeclinedKeptDutyEndsItsWorkUnrenewed(t *testing.T) {
 	t.Parallel()
 	clk := newFakeDutyClock()
@@ -322,9 +319,8 @@ func TestADeclinedKeptDutyEndsItsWorkUnrenewed(t *testing.T) {
 
 // A RENEWAL THE STORE DOES NOT ANSWER IS NEITHER: the work goes on while the
 // last confirmation keeps every peer out, the next renewal is asked inside
-// that window, and the work ends — without asking again — only once the
-// window has run out with nothing confirming the duty, when a peer may hold
-// it. Stop says which: not held, with the store's own error.
+// that window, and the work ends, without asking again, only once the window
+// runs out unconfirmed. Stop says not held, with the store's own error.
 func TestAnUnansweredRenewalStopsTheWorkOnlyOnceItsLeaseMayHaveLapsed(t *testing.T) {
 	t.Parallel()
 	clk := newFakeDutyClock()
@@ -453,12 +449,10 @@ func TestAKeptDutysRenewalsEndWithItsWork(t *testing.T) {
 }
 
 // A RENEWAL NEVER COVERS WORK PAST THE WINDOW IT WAS TRYING TO EXTEND: one due
-// at the window's end is not asked — an answer then could not cover the work
-// done while asking — and one asked inside it that answers only once the
-// window has run out ends the work at once rather than at the next renewal,
-// an interval late. Each renewal is run here by hand, on the test's goroutine
-// (the loop is parked waiting for a tick nobody sends), so which instant it
-// reads is the test's alone.
+// at the window's end is not asked, and one asked inside it that answers after
+// the window has run out ends the work at once, not an interval late at the
+// next renewal. Each renewal runs by hand on the test's goroutine (the loop is
+// parked on a tick nobody sends), so the test alone decides the instant read.
 func TestARenewalNeverCoversWorkPastItsWindow(t *testing.T) {
 	t.Parallel()
 	const ttl = 4 * time.Minute // a renewal a minute: a window of three
@@ -504,10 +498,10 @@ func TestARenewalNeverCoversWorkPastItsWindow(t *testing.T) {
 	})
 }
 
-// holdOn is a claim the store holds on to — a request no member answers while
-// the coordination stream's leader moves — until the call's own deadline ends
-// it, for the calls numbered in hold (from zero), and held for the rest.
-// holding has a value each time one is being held on to.
+// holdOn is a claim the store holds on to (a request no member answers while
+// the coordination stream's leader moves) until the call's deadline, for the
+// calls numbered in hold (from zero), and held for the rest. holding has a
+// value each time one is being held on to.
 type holdOn struct {
 	hold    map[int]bool
 	holding chan struct{}
@@ -548,11 +542,9 @@ func (h *holdOn) held(t *testing.T) {
 }
 
 // A RENEWAL THE STORE HOLDS ON TO COSTS THE WORK NOTHING: its call gives up
-// after one renewal interval, so the next is asked inside the window the last
-// confirmation bought — straight away, being already due — and its answer
-// keeps the work going past that window. Bounded by the window alone, the one
-// call held the work until the window had run out, and the renewal after it
-// was never asked: a coordination store's leader election ended the pass.
+// after one renewal interval, so the next is asked at once, inside the window
+// the last confirmation bought, and its answer keeps the work going past it.
+// Bounded by the window alone, a leader election would end the pass.
 func TestARenewalTheStoreHoldsOnToCostsTheWorkNothing(t *testing.T) {
 	t.Parallel()
 	clk := newFakeDutyClock()
@@ -584,11 +576,10 @@ func TestARenewalTheStoreHoldsOnToCostsTheWorkNothing(t *testing.T) {
 }
 
 // RENEWALS ARE PHASED FROM THE CONFIRMATION, never from when the work began:
-// a claim that took half an interval to answer is renewed half an interval
-// after it returned, and one that took longer than an interval is renewed at
-// once — each then an interval after the one before. Phased from the work's
-// start, a slow claim pushed every renewal later against a window measured
-// from its asking, and the second fell past the window's end.
+// a claim that took half an interval is renewed half an interval after it
+// returned, one that took longer than an interval at once, each then an
+// interval after the one before. Phased from the work's start, a slow claim
+// pushes the second renewal past the window's end.
 func TestRenewalsArePhasedFromTheConfirmation(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -624,11 +615,10 @@ func TestRenewalsArePhasedFromTheConfirmation(t *testing.T) {
 	}
 }
 
-// EVERY KEPT DUTY SURVIVES ONE RENEWAL THE STORE DID NOT ANSWER — refused, or
-// held on to until its call gave up: at the TTL each is claimed with, no
-// renewal's call is given more than an interval, and the renewal after an
-// unanswered one is still asked inside the window, so a coordination store's
-// leader election costs a half-hour audit nothing.
+// EVERY KEPT DUTY SURVIVES ONE RENEWAL THE STORE DID NOT ANSWER (refused, or
+// held on to until its call gave up): at each duty's TTL no renewal's call is
+// given more than an interval, and the renewal after an unanswered one is
+// still asked inside the window.
 func TestEveryKeptDutyToleratesOneUnansweredRenewal(t *testing.T) {
 	t.Parallel()
 	for duty, ttl := range map[string]time.Duration{

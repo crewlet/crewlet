@@ -17,11 +17,9 @@ import (
 // THE ENVIRONMENT AN ENGINE IS HANDED IS THE ONE IT READS, AND THE ONLY ONE.
 //
 // A company's `${VAR}` references fall back to it, and the per-run endpoints'
-// settings are read from it. Read from the process instead, every case that
-// configured an engine through a variable had to set it with t.Setenv, which
-// Go refuses beside t.Parallel — so they ran one at a time. And read from the
-// process BEHIND the handed one, a case would pass on whatever its runner
-// happened to export: so a variable every process has must not be found.
+// settings are read from it, so cases configure an engine without t.Setenv
+// (which refuses t.Parallel). Nothing reads the process BEHIND it, or a case
+// would pass on whatever its runner exported: so PATH must not be found.
 func TestAnEngineReadsTheEnvironmentItIsHanded(t *testing.T) {
 	t.Parallel()
 	if _, ok := os.LookupEnv("PATH"); !ok {
@@ -48,13 +46,11 @@ func TestAnEngineReadsTheEnvironmentItIsHanded(t *testing.T) {
 }
 
 // A NODE THAT BOUND A LISTENER HANDS ITS OWN BOXES BOTH ROUTES THERE. The
-// address a `direct` box dials is derived by whoever bound the listener and
-// handed in as BoxHostURL, and it is the whole of what such a box needs: the
-// bridge is built from it with no fleet address set, so a seat pool with none
-// launches its executors; and where this node forwards telemetry — the
-// standard upstream variable set — the receiver is built from it too, so its
-// boxes' spans reach the collector the engine's own already do. Where it does
-// not forward, it builds no receiver, since every export would be dropped.
+// address a `direct` box dials is handed in as BoxHostURL by whoever bound the
+// listener, and is all such a box needs: the bridge is built from it with no
+// fleet address set, and where this node forwards telemetry (the standard
+// upstream variable set) so is the receiver. Where it does not forward, it
+// builds no receiver, since every export would be dropped.
 //
 // Mutation: build the bridge from the environment alone and the first engine
 // has none; build the receiver from the environment alone and it has no
@@ -80,11 +76,9 @@ func TestAnEngineHandsItsOwnBoxesTheListenerItWasGiven(t *testing.T) {
 	}
 }
 
-// AND A PERSON'S CONTACT IS READ FROM IT TOO, by the surfaces that name people
-// as well as by the configuration: a seat's lookup_colleague finds the founder
-// by an id the handed environment holds and no process sets. Read from the
-// process instead, notification routing — which resolves through the node's
-// chain — mentioned a person no lookup could find.
+// AND A PERSON'S CONTACT IS READ FROM IT TOO, by the surfaces that name people:
+// a seat's lookup_colleague finds the founder by an id only the handed
+// environment holds, as notification routing (through the node's chain) does.
 func TestAColleagueIsFoundByAnIdTheHandedEnvironmentHolds(t *testing.T) {
 	t.Parallel()
 	const variable = "CREWLET_ENGINE_TEST_HANDED_FOUNDER_SLACK"

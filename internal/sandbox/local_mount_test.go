@@ -19,20 +19,14 @@ import (
 	"time"
 )
 
-// What these cases protect: a container box is one directory shared by two
-// processes, and both ways that sharing can be broken are SILENT. A mount
-// that is not this filesystem loses everything the engine writes; a container
-// that writes it as another user leaves the engine unable to install the
-// agent's shim or reclaim the box's disk. Neither shows up as an error at the
-// point it happens.
+// These cases hold the two silent ways a container box's shared directory
+// breaks (local_mount.go): a mount on another filesystem, and a container
+// writing it as a user the engine cannot manage.
 
-// fakeRuntime writes a script under the runtime's own NAME — which is what
-// picks the probe — answering `info` with the given text, and ONLY when asked
-// with the template that runtime actually understands.
-//
-// The wrong template is a template error on a real harness, and answering it
-// anyway would let a probe that asked Podman a Docker question look like it
-// worked.
+// fakeRuntime writes a script under the runtime's NAME, which picks the
+// probe, answering `info` with the given text ONLY for the template that
+// runtime understands: a real one fails the wrong template, so a probe asking
+// Podman a Docker question must not look like it worked.
 func fakeRuntime(t *testing.T, name, wantFormat, info string, exit int) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), name)
@@ -47,31 +41,14 @@ exit %d
 }
 
 // writeExecutable writes a script a case is about to exec, where no process
-// this one forks can still hold it open.
-//
-// # A FRESHLY WRITTEN EXECUTABLE CAN BE ETXTBSY, and this package execs them
-//
-// os.WriteFile closes its own descriptor, but any goroutine that forked
-// while it was open inherited it, and Linux refuses to exec a file that any
-// process holds open for writing. The child closes it at its own exec — Go
-// opens with O_CLOEXEC — so the window is short. This package forks
-// constantly, and under -race on a loaded runner it is wide enough to hit:
-// measured at 17 failures in 200 execs of a just-written script with eight
-// goroutines forking alongside.
-//
-// The symptom was not an error anyone could read. runHost reported a start
-// failure, runtimeIsRootless turned that into "not rootless", and the
-// rootless subtest failed asserting on an argv that carried --user — a
-// result indistinguishable from the detection genuinely being wrong.
-//
-// syscall.ForkLock is what a fork takes for writing, so holding it for
-// reading while the file is open keeps every fork of this process out of
-// that window: no child can inherit the descriptor, rather than one that did
-// being waited out by running the script until it starts. Every script this
-// package's cases exec is written through it, the external suite's stubs too
-// ([WriteExecutable]). The harness suite (internal/sandbox/executor)
-// closes the same window another way: cp writes each of its stand-ins, so
-// that suite's own process never holds one open for a fork to inherit.
+// this one forks can still hold it open. A child forked while os.WriteFile's
+// descriptor is open inherits it until its own exec, and Linux refuses
+// (ETXTBSY) to exec a file held open for writing; under -race this package
+// forks often enough to hit it, and it reads as the code under test being
+// wrong. Holding syscall.ForkLock for reading, which a fork takes for
+// writing, keeps every fork out of that window. Every script this package's
+// cases exec goes through it, the external suite's too ([WriteExecutable]);
+// internal/sandbox/executor writes its stand-ins with cp instead.
 func writeExecutable(t *testing.T, path, script string) {
 	t.Helper()
 	syscall.ForkLock.RLock()
@@ -81,17 +58,15 @@ func writeExecutable(t *testing.T, path, script string) {
 	}
 }
 
-// The template each runtime answers. Docker carries the flag among its
-// top-level security options; Podman reports it as a boolean of its own.
+// The template each runtime answers (see runtimeIsRootless).
 const (
 	dockerRootlessFormat = "{{.SecurityOptions}}"
 	podmanRootlessFormat = "{{.Host.Security.Rootless}}"
 )
 
-// THE CONTAINER RUNS AS THE ENGINE USER ON A ROOTFUL RUNTIME, and does not on
-// a rootless one — where the user namespace already maps container root onto
-// this user, and --user would map it into the subuid range instead, leaving
-// the box unable to enter its own 0700 directory.
+// THE CONTAINER RUNS AS THE ENGINE USER ON A ROOTFUL RUNTIME, and not on a
+// rootless one, where --user would map into the subuid range and leave the
+// box unable to enter its own 0700 directory.
 func TestTheContainerRunsAsWhoeverCanManageTheMount(t *testing.T) {
 	t.Parallel()
 	want := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
@@ -108,18 +83,12 @@ func TestTheContainerRunsAsWhoeverCanManageTheMount(t *testing.T) {
 		{"rootless docker", "docker", dockerRootlessFormat,
 			`[name=rootless name=seccomp,profile=builtin]`, 0, false},
 		{"rootless podman", "podman", podmanRootlessFormat, `true`, 0, false},
-		// Podman answers the boolean itself, so "false" must not be read
-		// as a list that happens to mention the word.
+		// Podman's "false" is no Docker list mentioning the word.
 		{"rootful podman", "podman", podmanRootlessFormat, `false`, 0, true},
-		// An unanswered probe takes the LOUD side. --user against a
-		// rootless runtime fails the mount proof at creation with a
-		// message that names the cause; the opposite mistake is silent
-		// until the engine host is full of undeletable box directories.
-		//
-		// A NON-ZERO EXIT IS NOT AN ANSWER even when something reached
-		// stdout: `docker info` against an unreachable daemon still
-		// prints its client section — which lists plugins, `rootlesskit`
-		// among them — and fails afterwards.
+		// An unanswered probe takes the loud side (containerUserArgs).
+		// A NON-ZERO EXIT IS NOT AN ANSWER even with stdout: `docker
+		// info` against a down daemon prints its client section, which
+		// lists `rootlesskit`, then fails.
 		{"a daemon that is down mid-answer", "docker", dockerRootlessFormat,
 			`rootlesskit`, 1, true},
 		{"an answer this build does not recognise", "docker", dockerRootlessFormat,
@@ -147,9 +116,9 @@ func TestTheContainerRunsAsWhoeverCanManageTheMount(t *testing.T) {
 	}
 }
 
-// AN OPERATOR'S OWN run_args WIN, which is the escape hatch for an image that
-// genuinely needs root — and it works only because they are spliced last,
-// where both runtimes take the final occurrence of a repeated flag.
+// AN OPERATOR'S OWN run_args WIN, the escape hatch for an image that needs
+// root: they are spliced last, and both runtimes take a repeated flag's last
+// occurrence.
 func TestRunArgsComeAfterEverythingTheBackendChose(t *testing.T) {
 	t.Parallel()
 	l := &Local{
@@ -169,7 +138,7 @@ func TestRunArgsComeAfterEverythingTheBackendChose(t *testing.T) {
 	if argv[ours+1+theirs+1] != "0:0" {
 		t.Fatalf("argv = %v; the operator's --user must come last or it cannot override", argv)
 	}
-	// And the image and its command still close the line, or the operator's
+	// The image and its command still close the line, or the operator's
 	// flags would be arguments to `sleep`.
 	if argv[len(argv)-3] != "img" {
 		t.Fatalf("argv = %v, want the image third from the end", argv)
@@ -195,23 +164,20 @@ func madeBox(t *testing.T) string {
 type stubBox struct {
 	// root is the host directory the container sees as its home.
 	root string
-	// token, if set, is what `cat` answers instead of the file's content —
-	// a container reading a DIFFERENT filesystem.
+	// token, if set, is what `cat` answers instead of the file: a container
+	// reading a DIFFERENT filesystem.
 	token string
-	// asFile creates the probe's directory as a plain file, standing in for
-	// a container whose writes the engine cannot live in. Simulated this
-	// way rather than by ownership because a test cannot change uids, and
-	// the branch it exercises is the same one.
+	// asFile creates the probe's directory as a plain file: a container
+	// whose writes the engine cannot live in, since a test cannot change
+	// uids and the branch exercised is the same.
 	asFile bool
-	// linkTo, if set, makes the probe's directory a link to it, standing in
-	// for a container that made the directory the engine writes into a link
-	// out of its home.
+	// linkTo, if set, makes the probe's directory a link to it: a container
+	// that linked the engine's write target out of its home.
 	linkTo string
-	// refused is the runtime refusing the exec itself, with the exit a
-	// runtime's own failure has and its own words: the container gone.
+	// refused is the runtime refusing the exec itself: the container gone.
 	refused bool
-	// exit, if set, is the status the probe ends with whatever it read: 124
-	// for a probe that ran out of its time.
+	// exit, if set, is the probe's status whatever it read: 124 for a
+	// timeout.
 	exit int
 	// execErr is the runtime that could not be run at all.
 	execErr error
@@ -220,10 +186,8 @@ type stubBox struct {
 }
 
 // Exec reports a failure the way a real box does: a non-zero EXIT CODE, never
-// a Go error. runHost draws the same line — an error there means the runtime
-// could not be run at all, not that the command inside it failed. The probe's
-// own two exits are the command's: the file it reads not there, and the
-// directory it makes not made.
+// a Go error, which (as in runHost) means the runtime could not run at all.
+// The probe's own exits are probeUnread and probeUnmade.
 func (b *stubBox) Exec(context.Context, string, ExecOptions) (ExecResult, error) {
 	switch {
 	case b.execErr != nil:
@@ -270,8 +234,7 @@ func TestAFaithfulMountIsAccepted(t *testing.T) {
 	if err := verifyMount(t.Context(), &stubBox{root: homeOf(root)}, boxLayout{id: "b", root: root}); err != nil {
 		t.Fatalf("verifyMount: %v", err)
 	}
-	// AND IT LEAVES NOTHING BEHIND: a probe file the agent finds in its own
-	// home is a probe that became part of the brief.
+	// AND IT LEAVES NOTHING BEHIND for the agent to find in its home.
 	entries, err := os.ReadDir(filepath.Join(homeOf(root), ".crewlet"))
 	if err != nil {
 		t.Fatal(err)
@@ -283,9 +246,8 @@ func TestAFaithfulMountIsAccepted(t *testing.T) {
 	}
 }
 
-// A RUNTIME DRIVING A REMOTE DAEMON bind-mounts the DAEMON's filesystem, so
-// the box directory the engine wrote is not the one the container sees. The
-// agent would simply find no brief, no credentials and no shim.
+// A RUNTIME DRIVING A REMOTE DAEMON bind-mounts the daemon's filesystem, so
+// the agent would find no brief, no credentials and no shim.
 func TestAMountOnAnotherHostIsRefused(t *testing.T) {
 	t.Parallel()
 	root := madeBox(t)
@@ -297,21 +259,14 @@ func TestAMountOnAnotherHostIsRefused(t *testing.T) {
 	if !strings.Contains(err.Error(), "cannot see its own box directory") {
 		t.Fatalf("error = %v; it must name the cause, not the symptom", err)
 	}
-	// AND IT IS CLASSED AS THE HOST'S SETUP, which a person changes: the
-	// runtime is driving the wrong daemon, and no wait moves it.
+	// AND IT IS CLASSED AS THE HOST'S SETUP: no wait moves the wrong daemon.
 	if why, ok := WhyOf(err); !ok || why != WhyConfiguration {
 		t.Errorf("a mount on another host is classed %q (%v), want %q", why, ok, WhyConfiguration)
 	}
 }
 
-// A PROBE THAT NEVER READ ANYTHING IS NOT A MOUNT ON ANOTHER HOST. Each way the
-// probe can fail has its own class and its own words: a runtime that refused
-// to run it is the runtime's refusal (a configuration, as every refusal of
-// the runtime's is), one that ran out of its time is the runtime not
-// answering (a wait clears it), a box that could not make a directory in its
-// own home is a mount it may not write, and a runtime this host could not
-// start at all is the host's own fault, no class. Each was told as a daemon
-// on another host, which sent an operator looking for one that was not there.
+// A PROBE THAT NEVER READ ANYTHING IS NOT A MOUNT ON ANOTHER HOST: each way the
+// probe fails keeps the class and words probeFailed gives it.
 //
 // Mutation: fold any of them back into the remote-daemon message, or class
 // the host's own failure, and its row goes red.
@@ -350,9 +305,8 @@ func TestAProbeThatNeverReadIsToldApartFromOneThatReadElsewhere(t *testing.T) {
 		}
 	}
 
-	// A PROBE THAT RAN AND FOUND NOTHING THERE TO READ is the usual remote
-	// daemon, which bind-mounts a fresh empty directory of its own host: the
-	// probe's own exit for it is that, never the runtime refusing the exec.
+	// A PROBE THAT RAN AND FOUND NOTHING TO READ is the usual remote daemon,
+	// which mounts an empty directory of its own host; never a refusal.
 	// Mutation: read only a probe that read other bytes (exit 0) as a mount
 	// elsewhere, and this one is told as a refusal.
 	elsewhere := madeBox(t)
@@ -363,8 +317,7 @@ func TestAProbeThatNeverReadIsToldApartFromOneThatReadElsewhere(t *testing.T) {
 			"a configuration", err, why)
 	}
 
-	// AND A CALLER THAT STOPPED WAITING is told as that, never as a probe
-	// that ran out of its time.
+	// AND A CALLER THAT STOPPED WAITING is never told as a timed-out probe.
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	root := madeBox(t)
@@ -374,11 +327,9 @@ func TestAProbeThatNeverReadIsToldApartFromOneThatReadElsewhere(t *testing.T) {
 	}
 }
 
-// THE ENGINE MUST BE ABLE TO LIVE IN WHAT THE BOX CREATES. Under a rootful
-// runtime every directory the container makes in the mount is root-owned, and
-// the engine can then neither install the agent's shim into it nor reclaim the
-// box's disk — the failure that is otherwise invisible until an operator
-// wonders why the host is full of box directories.
+// THE ENGINE MUST BE ABLE TO LIVE IN WHAT THE BOX CREATES, or under a rootful
+// runtime it can neither install the agent's shim nor reclaim the box's disk,
+// silently.
 func TestABoxDirectoryTheEngineCannotManageIsRefused(t *testing.T) {
 	t.Parallel()
 	root := madeBox(t)
@@ -390,8 +341,7 @@ func TestABoxDirectoryTheEngineCannotManageIsRefused(t *testing.T) {
 	if !strings.Contains(err.Error(), "cannot manage") {
 		t.Fatalf("error = %v; it must name the cause, not the symptom", err)
 	}
-	// AND IT SAYS WHAT TO DO ABOUT IT: the operator's only lever is
-	// run_args, and an error that does not name it leaves them guessing.
+	// AND IT NAMES run_args, the operator's only lever.
 	if !strings.Contains(err.Error(), "run_args") {
 		t.Fatalf("error = %v; it must name the field the operator has to change", err)
 	}
@@ -401,10 +351,9 @@ func TestABoxDirectoryTheEngineCannotManageIsRefused(t *testing.T) {
 	}
 }
 
-// AN IMAGE THE RUNTIME WILL NOT START is the host's setup — the image, the
-// runtime, its daemon or the flags — which a person changes; and a directory
-// the engine host itself could not make is no class at all, but the node's own
-// fault.
+// AN IMAGE THE RUNTIME WILL NOT START is the host's setup, which a person
+// changes; a directory the engine host could not make is the node's own
+// fault, no class.
 //
 // Mutation: create the start refusal with localErrorf, and it reads as a fault
 // of the node.
@@ -436,10 +385,8 @@ func TestAnImageTheRuntimeWillNotStartIsConfiguration(t *testing.T) {
 }
 
 // A LAUNCH THIS NODE CANCELLED IS NO CLASS: the runtime's CLI is killed with
-// its tree, and the launch is told as abandoned, never as an image the runtime
-// would not start. runHost answered a caller's cancellation as its own timeout
-// (124), which Create classed a configuration, so a drain was recorded as a
-// setup somebody had to fix.
+// its tree, and the launch is told as abandoned, never as a configuration a
+// person must fix (a drain is not one).
 //
 // Mutation: answer a cancellation as 124 in runHost, or class whatever Create
 // met, and this goes red.
@@ -476,11 +423,10 @@ func TestALaunchItsCallerCancelledIsNoClass(t *testing.T) {
 	}
 }
 
-// stubRuntime is a container runtime that shares the box directory the way a
-// local daemon does, or — when told to — the way a remote one does not.
-//
-// It emulates the EFFECT a container has on the mount rather than parsing the
-// command line: what these cases are about is what Create does with the answer.
+// stubRuntime is a container runtime that shares the box directory as a
+// local daemon does, or, unless faithful, as a remote one does not. It
+// emulates the EFFECT on the mount rather than parsing the command line:
+// these cases are about what Create does with the answer.
 func stubRuntime(t *testing.T, stateDir string, faithful bool) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "docker")
@@ -500,18 +446,14 @@ rm) printf '%s' "$*" >> "` + filepath.Join(t.TempDir(), "removed") + `"; exit 0 
 *) exit 0 ;;
 esac
 `
-	// Written the way fakeRuntime writes, for the same reason: this script
-	// is exec'd by parallel subtests, which fork. It would fail differently
-	// here — Create's mount proof cannot start the container at all — and
-	// that reads as the proof legitimately refusing a box, which is exactly
-	// what these cases assert.
+	// Parallel subtests fork, and ETXTBSY here would read as the mount
+	// proof refusing a box, exactly what these cases assert.
 	writeExecutable(t, path, script)
 	return path
 }
 
-// CREATE PROVES THE MOUNT BEFORE IT HANDS THE BOX OUT. Without this the check
-// above is a function nothing calls, and both failures it catches are silent
-// at the moment they happen.
+// CREATE PROVES THE MOUNT BEFORE IT HANDS THE BOX OUT, or verifyMount is a
+// function nothing calls.
 func TestCreateRefusesABoxWhoseMountIsNotShared(t *testing.T) {
 	t.Parallel()
 	state := t.TempDir()
@@ -528,9 +470,8 @@ func TestCreateRefusesABoxWhoseMountIsNotShared(t *testing.T) {
 	if !strings.Contains(err.Error(), "cannot see its own box directory") {
 		t.Fatalf("error = %v", err)
 	}
-	// AND IT TAKES THE BOX WITH IT. A refusal that left the directory (and
-	// the container behind it) would leak one per attempt, on the path an
-	// operator retries hardest.
+	// AND IT TAKES THE BOX WITH IT, or every retry leaks a directory and a
+	// container.
 	entries, err := os.ReadDir(filepath.Join(state, "boxes"))
 	if err == nil && len(entries) > 0 {
 		t.Fatalf("the refused box left %d directory(ies) behind", len(entries))
@@ -554,20 +495,10 @@ func TestCreateAcceptsABoxWhoseMountIsShared(t *testing.T) {
 	}
 }
 
-// THE FAKE RUNTIME IS EXECUTABLE BY THE TIME fakeRuntime RETURNS.
-//
-// The guard for [writeExecutable]. Without it this package's own rootless
-// probe intermittently could not START the script it had just written —
-// Linux refuses to exec a file another process holds open for writing, and a
-// goroutine that forks while os.WriteFile has it open inherits exactly that.
-// runHost reported a start failure, runtimeIsRootless read that as "not
-// rootless", and TestTheContainerRunsAsWhoeverCanManageTheMount failed on an
-// argv carrying --user — a result indistinguishable from the detection being
-// wrong, which is what makes it worth a test of its own.
-//
-// The forkers are the point: this reproduces at ~8% without them being
-// goroutines of THIS process, and not at all with load applied from outside
-// it, because the inherited descriptor is what does the refusing.
+// THE FAKE RUNTIME IS EXECUTABLE BY THE TIME fakeRuntime RETURNS: the guard
+// for [writeExecutable], whose ETXTBSY would read as runtimeIsRootless
+// answering "not rootless". The forkers must be goroutines of THIS process:
+// the inherited descriptor does the refusing, and outside load never does.
 func TestAFakeRuntimeIsExecutableWhenItIsHandedOver(t *testing.T) {
 	t.Parallel()
 	stop := make(chan struct{})
@@ -586,16 +517,10 @@ func TestAFakeRuntimeIsExecutableWhenItIsHandedOver(t *testing.T) {
 	}
 	t.Cleanup(func() { close(stop); forkers.Wait() })
 
-	// Each probe is a SUBTEST, started from a goroutine of its own. The
-	// probes run at once because their own forks hold the window open
-	// beside the forkers' — with the guard removed, and counting whole runs
-	// of this 64-probe test under -race, probing one at a time let 4 runs
-	// in 20 pass, and probing at once 2 in 40 — and each is a subtest
-	// because fakeRuntime fails through FailNow, which only a test's own
-	// goroutine may call: from a goroutine of this test's, it ended that
-	// goroutine and marked this test finished while it ran on. t.Run,
-	// unlike FailNow, may be called from many goroutines at once, so long
-	// as every call returns before this test does.
+	// The probes run at once, since their own forks widen the window beside
+	// the forkers'. Each is a SUBTEST because fakeRuntime fails through
+	// FailNow, which only a test's own goroutine may call; t.Run may be
+	// called from many goroutines, so long as all return before this test.
 	var probes sync.WaitGroup
 	failures := make(chan string, 64)
 	for probe := range 64 {
@@ -618,20 +543,13 @@ func TestAFakeRuntimeIsExecutableWhenItIsHandedOver(t *testing.T) {
 	}
 }
 
-// EVERY EXECUTABLE THIS SUITE WRITES IS WRITTEN UNDER THE FORK LOCK, because
-// writeExecutable writes every one. A stub written any other way can be
-// inherited by a fork in flight, and its first exec fails ETXTBSY a few runs
-// in a few hundred, as an answer that reads as the code under test being
-// wrong: the paused-container case's stub was once written that way while
-// the two beside it were not, and with eight goroutines forking beside it, 3
-// of its 200 runs read a paused container as running.
+// EVERY EXECUTABLE THIS SUITE WRITES IS WRITTEN UNDER THE FORK LOCK, by
+// writeExecutable, or a fork can make its first exec fail ETXTBSY.
 //
-// It reads this package's own test files, the external suite's included, and
-// refuses every os.WriteFile, os.OpenFile and os.Chmod outside
-// writeExecutable whose mode carries an exec bit — and every mode it cannot
-// read as a literal, which it names rather than assumes harmless. A file no
-// case execs is written without one. It requires the one write
-// writeExecutable makes to be found as well, or a reader that recognised
+// Across this package's test files, the external suite's included, it refuses
+// every os.WriteFile, os.OpenFile and os.Chmod outside writeExecutable whose
+// mode has an exec bit, and every mode that is not a literal. It requires
+// writeExecutable's own write to be found, or a reader that recognised
 // nothing would pass on any tree.
 //
 // Mutation: write the paused-container stub with os.WriteFile(…, 0o700)

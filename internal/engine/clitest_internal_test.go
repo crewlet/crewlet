@@ -11,16 +11,12 @@ import (
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
-// A harness for a case that drives a WHOLE TURN through the engine.
-//
-// Every phase that offers tools reaches its harness through a session in the
-// engine's directory, and the harness calls them over MCP in its own loop — so a
-// case's model is a scripted harness on the real session ([llmtest.Script]), never
-// a provider that hands calls back in its answer. What this adds is the choice
-// of WHICH run a phase plays: a turn interleaves its phases with text calls
-// (its rewrites, its summaries) in an order a case should not have to
-// predict, so a run is picked from the tools the phase offers, the way the
-// phases themselves tell apart.
+// A harness for a case that drives a WHOLE TURN through the engine. A phase
+// that offers tools reaches its harness through a session in the engine's
+// directory, so a case's model is a scripted harness on the real session
+// ([llmtest.Script]), never a provider handing calls back in its answer. A turn
+// interleaves its phases with text calls in an order a case should not have to
+// predict, so the run a phase plays is picked from the tools it offers.
 
 // phasedHarness plays, for each call that offers tools, the run pick chooses from
 // the names the phase offers; a call that offers none is answered by text.

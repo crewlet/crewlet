@@ -14,25 +14,16 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// An agent's own GitHub App token, issued where the seat's values are read.
+// An agent's own GitHub App token: an installed app's installation token
+// ([github.Issuer]), named `${GITHUB_APP_TOKEN_<HANDLE>}` ([github.SeatVar])
+// and issued on the [seatIssuer] contract (issued.go). Three stories:
 //
-// A seat whose `role.integrations.github` app is created and installed acts
-// on GitHub as that app, and the only credential GitHub accepts from it is an
-// installation token ([github.Issuer]). Configuration names it as
-// `${GITHUB_APP_TOKEN_<HANDLE>}` ([github.SeatVar]), and the engine issues it
-// through the contract every credential issued at use shares (issued.go):
-// [githubSeatIssuer] is GitHub's implementation of [seatIssuer].
-//
-// GitHub's three stories:
-//
-//   - THE APP IS NOT CREATED OR NOT INSTALLED, or its key does not resolve
-//     ([github.ErrNotInstalled]). That is a person's step, and the GitHub
-//     integration's seat-app pass reports it on the card.
-//   - GITHUB REFUSED THE MINT, or could not be reached. The process's issuer
-//     holds the refusal for the restart schedule's wait
-//     ([github.Issuer.RetryWait], [Engine.seatRetryDelay]), and which of the
-//     two it was decides what the failure says ([mintPasses]).
-//   - THE GITHUB INTEGRATION IS NOT ENABLED. Nothing issues anything.
+//   - APP NOT CREATED OR INSTALLED, or its key unresolved
+//     ([github.ErrNotInstalled]): a person's step, on the integration's card.
+//   - MINT REFUSED or GitHub unreached: the issuer holds it for the restart
+//     schedule's wait ([github.Issuer.RetryWait], [Engine.seatRetryDelay]);
+//     [mintPasses] decides which the failure says.
+//   - GITHUB NOT ENABLED: nothing is issued.
 
 // githubSeatIssuer issues each agent its own app's installation token through
 // the process's one [github.Issuer], so an installation costs one mint an hour
@@ -49,8 +40,8 @@ func (githubSeatIssuer) variable(c *Company, handle string) string { return gith
 // issuing mints seat's token against its own installation, narrowed to the
 // seat's tier and repositories, from the app's key resolved through env.
 func (g githubSeatIssuer) issuing(c *Company, seat *org.Role, env *config.Resolver) issueFunc {
-	// AN OFF SEAT IS ISSUED NOTHING (D1): its installation is suspended,
-	// and a token minted before the suspension landed must not be handed on.
+	// AN OFF SEAT IS ISSUED NOTHING (D1): its installation is suspended, and
+	// a token minted before the suspension landed must not be handed on.
 	if seat.GitHub == nil || !seat.GitHub.Enabled {
 		return nil
 	}
@@ -85,9 +76,8 @@ func (githubSeatIssuer) words() issuedWords {
 		arrival: "the agent's GitHub App is installed",
 		refused: "it is not issued until somebody fixes the agent's GitHub App (its key, its " +
 			"installation or the permissions it asks for)",
-		// NOT "at the next attempt": the issuer holds a failed mint for the
-		// restart schedule's wait, and an attempt inside it is handed the
-		// same answer without a request ([github.Issuer.RetryWait]).
+		// NOT "at the next attempt": an attempt inside the restart wait gets
+		// the held answer without a request ([github.Issuer.RetryWait]).
 		retried: "GitHub is asked for it again on the restart schedule",
 	}
 }
@@ -97,13 +87,11 @@ func (githubSeatIssuer) words() issuedWords {
 // them), or answering that it could not just now (408, its rate limit, which
 // it answers 429 or 403 ([github.APIError.RateLimited]), a 5xx).
 //
-// ANYTHING ELSE IS A PERSON'S, and refused again at every ask until it is
-// taken: an answer refusing the app (401, 403, 404, 422: a key GitHub does not
-// take, an installation suspended or removed, a permission nobody approved),
-// and a key the engine cannot sign a request with, which never reached GitHub.
-// Told as a wait, a suspended app was said to be asked for again, as though
-// the asking would end it; told as a person's, one blip of GitHub's sent an
-// operator to fix an app nothing was wrong with.
+// ANYTHING ELSE IS A PERSON'S, refused at every ask until fixed: an answer
+// refusing the app (401, 403, 404, 422: a bad key, a suspended or removed
+// installation, an unapproved permission), and a key the engine cannot sign
+// with. Misread either way, a suspended app is promised a retry, or a blip
+// sends an operator to fix a healthy app.
 func mintPasses(err error) bool {
 	var answered *github.APIError
 	if errors.As(err, &answered) {
@@ -128,10 +116,9 @@ func githubIssuing(c *Company, env *config.Resolver) (string, bool) {
 }
 
 // githubIssued is the variable the GitHub integration issues for handle's
-// seat, or "" where it issues none: the company does not run GitHub, or the
-// handle is not an agent's. Declared for EVERY agent seat while GitHub runs,
-// app or not, because a seat naming its token before its app exists is
-// waiting on the step the integration's card asks a person for.
+// seat, or "" where it issues none (no GitHub, or not an agent's handle).
+// Declared for EVERY agent seat, app or not: a seat naming its token before
+// its app exists is waiting on the card's step, not misconfigured.
 func githubIssued(c *Company, handle string) string {
 	if c == nil {
 		return ""

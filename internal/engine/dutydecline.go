@@ -15,56 +15,17 @@ import (
 )
 
 // A FLEET DUTY DECLINED BY A NODE WHOSE COPY IT DECIDES FROM IS OUT OF SERVICE
-// — ADR-0079.
+// (ADR-0079). Such a duty decides for the whole fleet, so it asks the verdict
+// of every domain it decides from BEFORE it claims ([Engine.copyOutOfService]);
+// on a wrong copy it does not claim (nothing withdrawn, purged or deleted) and
+// GIVES THE LEASE BACK ([Engine.workerGiveBack]) for a serving node's next tick.
 //
-// A fleet-singleton duty that decides from a domain's rows decides for the
-// whole fleet. The embedding duty publishes the vectors every node applies,
-// and it withdraws the vector of every source its own copy no longer shows:
-// on a holder whose tracker copy stopped applying while its vectors copy kept
-// up, every task created since has a vector and no row, and the duty withdrew
-// those vectors fleet-wide. The trim counts the evictions this node's own rows
-// hold, and a holder whose copy applied an eviction and not the readmission
-// after it uncounted a node that was back and purged past its position. The
-// object collector pins its reads through the tracker's read authority, which
-// refuses a copy out of service, so its holder renewed the duty and collected
-// nothing for as long as the copy stayed wrong.
-//
-// So such a duty asks the verdict of every domain it decides from BEFORE it
-// claims ([Engine.copyOutOfService]), and a node whose copy of any of them is
-// out of service DECLINES: it does not claim, it GIVES THE DUTY'S LEASE BACK
-// if it holds it ([Engine.workerGiveBack]), and a node whose copies serve
-// takes the duty at its own next tick. Not claiming is the conservative
-// direction for every one of them — nothing withdrawn, nothing purged, nothing
-// deleted. Left to lapse instead, the lease kept the duty from every node for
-// its whole TTL — the trim's 45 minutes, plus a 15-minute tick, with no log
-// trimmed — over a fault that does not heal on its own. A single data node
-// whose copy is wrong runs none of them until it recovers, which that copy's
-// own `estate_copy_not_served` line and alarms already name.
-//
-// # A second reason, for a duty whose judgement against the revision has no undo
-//
-// The code-retention duty purges by the revision's code.deleted_retention_days,
-// and a purge cannot be undone. So it also declines, in the same way and on
-// the same two lines, while this node does not serve the revision the fleet's
-// activation pointer names ([Engine.servedFleetRevision]) — the rule the
-// mailbox retirement already followed. It is not the posture's shed folded
-// into every duty: a duty that only decides from rows a later apply corrects
-// keeps running on a node that is merely behind.
-//
-// # A decline that is no fault
-//
-// Not every reason is a fault, and the lines say which. A node is behind the
-// fleet's revision for a moment at EVERY activation and at EVERY boot — the
-// purge duty's first turn runs before `crewlet run` has built the reconciler
-// that says which epoch it serves — and a warning for that would be logged at
-// every deploy, which teaches whoever reads the log to ignore the one a node
-// that failed an apply raises. So a reason that clears by itself in seconds is
-// logged at DEBUG, and the duty ASKS AGAIN at the reconcile cadence rather than
-// a whole tick later ([declineReason.again], [dutyDecline.again]); a reason that
-// says something is wrong is a WARN. And a decline is ONE EPISODE however many
-// reasons it passes through: its `_resumed` line is logged at the loudest
-// level any of them asked for, so a node that warned and then went quiet on
-// its way back still says, at INFO, that it is back.
+// A duty with no undo (the code-retention purge) also declines while this node
+// does not serve the fleet's revision ([Engine.servedFleetRevision]); one whose
+// rows a later apply corrects keeps running on a node merely behind. A reason
+// that clears by itself in seconds (every activation, every boot) is DEBUG and
+// asked again at the reconcile cadence ([declineReason.again]); a fault is a
+// WARN. A decline is ONE EPISODE: `_resumed` logs at its loudest reason's level.
 
 // declinable is one duty as its decline is announced.
 type declinable struct {
@@ -75,9 +36,8 @@ type declinable struct {
 	duty string
 	// hazard is what deciding from a wrong copy would do — why it declines.
 	hazard string
-	// staleHazard is what judging by a revision the fleet has replaced would
-	// do, for a duty that waits for this node to serve the fleet's revision
-	// ([revisionDeclineReason]); empty for a duty that does not.
+	// staleHazard is what judging by a replaced revision would do, for a duty
+	// that waits on the fleet's revision ([revisionDeclineReason]); else empty.
 	staleHazard string
 }
 
@@ -103,8 +63,7 @@ var (
 // declineReason is why a duty declines on one turn. The zero value is no
 // reason: the duty runs.
 type declineReason struct {
-	// key tells one reason from another, so a turn that declines for the
-	// reason the last one did says nothing new; "" is no reason.
+	// key tells reasons apart, so a repeat says nothing new; "" is none.
 	key string
 	// attrs ride both of the reason's lines.
 	attrs []any
@@ -113,16 +72,14 @@ type declineReason struct {
 	level, resumed slog.Level
 	// detail and resumedDetail are the two lines' details.
 	detail, resumedDetail string
-	// again is how soon a turn declined for this reason asks again, for a
-	// reason that clears by itself sooner than the duty's own tick; zero is
-	// the duty's interval ([dutyDecline.again]).
+	// again is how soon a turn declined for a reason that clears by itself
+	// asks again; zero is the duty's own interval ([dutyDecline.again]).
 	again time.Duration
 }
 
-// copyDeclineReason is the reason a duty deciding from domains declines while
-// copies — [Engine.copyOutOfService] — finds one of them out of service on
-// this node, and that domain; no reason for a nil copies, a node that judges
-// no copy of its own.
+// copyDeclineReason is the reason a duty declines while copies
+// ([Engine.copyOutOfService]) finds one of domains out of service, and that
+// domain; none for a nil copies, a node that judges no copy of its own.
 func copyDeclineReason(ctx context.Context, of declinable,
 	copies func(context.Context, ...string) (string, bool), domains []string) (declineReason, string) {
 
@@ -145,29 +102,18 @@ func copyDeclineReason(ctx context.Context, of declinable,
 	}, domain
 }
 
-// revisionDeclineReason is the reason a duty whose judgement against the active
-// revision has no undo declines while this node does not serve the revision
-// the fleet's activation pointer names — served is [Engine.servedFleetRevision]
-// — and no reason where it does, or for a nil served, a node that judges no
-// revision.
+// revisionDeclineReason is the reason a duty with no undo declines while this
+// node does not serve the revision the fleet's activation pointer names
+// (served is [Engine.servedFleetRevision]); none for a nil served. Told apart
+// by whether it is a FAULT:
 //
-// Every answer of the helper but "serves it" is a reason, told apart by
-// whether it is a FAULT:
-//
-//   - BEHIND, a WARN naming both epochs: this node's lag on the fleet's epoch
-//     is CONFIRMED by the posture's own rule ([configplane.FleetView.LagConfirmed])
-//     — an attempt of its own at it failed, or it has been behind on it longer
-//     than propagation explains. A node that failed the fleet's apply is what
-//     this exists for, and a fleet whose only worker data node is stuck must
-//     say why its purges wait;
-//   - PROPAGATING, at DEBUG, asked again at the reconcile cadence: behind, but
-//     no more than every node is for the seconds an activation takes to apply,
-//     or a node booting is until its reconciler has been built and has read
-//     the pointer — which the posture reads as waiting too, by the same rule;
+//   - BEHIND, a WARN naming both epochs: the lag is CONFIRMED
+//     ([configplane.FleetView.LagConfirmed]), the case this exists for;
+//   - PROPAGATING, DEBUG, asked again at the reconcile cadence: behind only as
+//     every node is while an activation applies, or while booting;
 //   - UNKNOWN, a WARN naming why: the pointer could not be read;
-//   - NOTHING ACTIVATED, at DEBUG and asked again at the reconcile cadence, as
-//     the mailbox sweep logs `seat_mailboxes_not_judged`: a fresh deployment
-//     meets it for the seconds before the seed's first activation.
+//   - NOTHING ACTIVATED, DEBUG, asked again at the reconcile cadence (as
+//     `seat_mailboxes_not_judged`): a fresh deployment before its first one.
 func revisionDeclineReason(ctx context.Context, of declinable,
 	served func(context.Context) (*Company, error)) declineReason {
 
@@ -234,9 +180,8 @@ func revisionDeclineReason(ctx context.Context, of declinable,
 	}
 }
 
-// dutyDecline is what one duty remembers of its declining: the reason it is
-// declining for, none while it is not. The zero value has declined nothing and
-// logs to the engine's logger.
+// dutyDecline is the reason one duty is declining for, none while it is not.
+// The zero value has declined nothing and logs to the engine's logger.
 type dutyDecline struct {
 	// log is where the two lines go; nil is the engine's.
 	log *slog.Logger
@@ -245,10 +190,8 @@ type dutyDecline struct {
 	out declineReason
 }
 
-// check asks copies — [Engine.copyOutOfService] — whether any of domains is
-// out of service on this node, and reports the first that is, to decline
-// for ([dutyDecline.record]). A nil copies declines nothing — a node that
-// judges no copy of its own.
+// check reports the first of domains copies ([Engine.copyOutOfService]) finds
+// out of service, and whether the duty declines ([dutyDecline.record]).
 func (d *dutyDecline) check(ctx context.Context, of declinable,
 	copies func(context.Context, ...string) (string, bool), domains []string) (string, bool) {
 
@@ -257,18 +200,14 @@ func (d *dutyDecline) check(ctx context.Context, of declinable,
 }
 
 // record keeps reason as the duty's on this turn, and reports whether it
-// declines. It SAYS SO ON A CHANGE ONLY: a line when the duty starts declining
-// or declines for another reason, and one when it stops, naming the reason it
-// waited on — so a copy out of service for an hour is one line rather than one
-// a tick.
+// declines. It logs ON A CHANGE ONLY: when the duty starts declining or its
+// reason changes, and when it stops, naming the reason it waited on.
 func (d *dutyDecline) record(ctx context.Context, of declinable, reason declineReason) bool {
 	d.mu.Lock()
 	was := d.out
 	if reason.key != "" && was.key != "" {
-		// ONE EPISODE: the `_resumed` line that ends it is logged at the
-		// loudest level any of its reasons asked for, so a decline that
-		// began with a WARN and ends on a reason logged at DEBUG still
-		// says, where its WARN was read, that it ended.
+		// ONE EPISODE: `_resumed` takes the loudest level any reason
+		// asked for, so a WARN's reader also sees the decline end.
 		reason.resumed = max(reason.resumed, was.resumed)
 	}
 	d.out = reason
@@ -285,30 +224,23 @@ func (d *dutyDecline) record(ctx context.Context, of declinable, reason declineR
 	return reason.key != ""
 }
 
-// again is how soon the duty asks again when the turn just declined for a
-// reason that clears sooner than its own cadence and says when
-// ([declineReason.again]) — so a node that was only applying the fleet's
-// revision, or only starting, takes the duty a reconcile interval after it
-// can rather than a whole tick. Zero is no such reason: the duty waits its
-// own cadence, which is the duty's to name ([codeRetentionDuty.wait]) rather
-// than a parameter here, since only the duty knows it.
+// again is how soon the duty asks again after a turn declined for a reason
+// that clears sooner than its cadence ([declineReason.again]). Zero is no such
+// reason: the duty waits its own cadence ([codeRetentionDuty.wait]).
 func (d *dutyDecline) again() time.Duration {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.out.again
 }
 
-// giveBack gives the duty back where this node holds it ([Engine.workerGiveBack])
-// — on every tick that declines, so a give-back the store did not answer is
-// tried again a tick later rather than left to the lease's TTL. Nil release
-// gives back nothing: a node with no fleet holds no lease.
+// giveBack gives the duty back where this node holds it ([Engine.workerGiveBack]),
+// on every declining tick, so an unanswered give-back is retried a tick later
+// rather than left to the TTL. Nil release gives back nothing (no fleet).
 //
 // It reports whether the store ANSWERED that this node no longer holds the
-// duty — it gave the lease back, or held none to give — so a duty that keeps
-// state as its holder (the collector's gauges and alarm) can let it go as a
-// claim that answered "not held" lets it go. False is no such answer: a
-// give-back the store did not answer says nothing about who holds the duty,
-// and neither does a node with no lease to give, which runs the duty alone.
+// duty, so a duty keeping holder state (the collector's gauges and alarm) can
+// drop it as on a "not held" claim. False is no such answer: an error, or a
+// node with no lease to give, which runs the duty alone.
 func (d *dutyDecline) giveBack(ctx context.Context, of declinable,
 	release func(context.Context) (bool, error)) (notHeld bool) {
 

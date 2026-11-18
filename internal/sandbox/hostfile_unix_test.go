@@ -21,12 +21,12 @@ import (
 )
 
 // A LOCAL BOX READS ONLY A REGULAR FILE, AND NEVER WAITS TO FIND OUT WHAT IT
-// IS. The other side of a container box's mount is the agent's, and a plain
-// open of a named pipe it made blocks until a writer appears, uncancellably: a
-// pipe at the done marker wedged the completion poll, and every other box's
-// poll and keepalive behind it. Every read — whole, streamed, from the end —
-// answers at once with an error saying what the path is, never with an empty
-// file, which is the reading of a marker not written yet.
+// IS. A container box's side of the mount is the agent's, and a plain open of
+// a named pipe it made blocks uncancellably until a writer appears, wedging the
+// completion poll and every box's poll and keepalive behind it. Every read
+// (whole, streamed, from the end) answers at once with an error saying what
+// the path is, never with an empty file, which reads as a marker not written
+// yet.
 //
 // Mutation: open with a plain os.Open, and every read here blocks for good.
 func TestALocalBoxRefusesWhatIsNotARegularFileAtOnce(t *testing.T) {
@@ -60,10 +60,10 @@ func TestALocalBoxRefusesWhatIsNotARegularFileAtOnce(t *testing.T) {
 		},
 	}
 	if runtime.GOOS == "linux" {
-		// An open of a socket fails rather than blocking, so there is no
-		// descriptor to ask what it is: it was reported as a box that could
-		// not be read, which a collection retries until the run is lost.
-		// (Made with mknod, which Linux lets anybody use for a socket.)
+		// An open of a socket fails rather than blocking, leaving no
+		// descriptor to ask: it must not read as a box that could not be
+		// read, which a collection retries until the run is lost. Made with
+		// mknod, which Linux lets anybody use for a socket.
 		kinds["socket"] = func(t *testing.T, host string) {
 			if err := syscall.Mknod(host, syscall.S_IFSOCK|0o600, 0); err != nil {
 				t.Fatalf("mknod: %v", err)
@@ -138,15 +138,12 @@ func TestALocalBoxWritesOnlyARegularFileAtOnce(t *testing.T) {
 	}
 }
 
-// A WRITE REPLACES THE FILE, NEVER REWRITES IT. The file at the path is
-// swapped for a new one in a single step, so nothing that holds the old one is
-// written: another name the box gave the same file — a hard link — keeps the
-// old content, where a write in place changed both names at once and left
-// each empty for the moment between. And the new file has the mode a box's
-// files are written with, whatever the box made of the old one's, so new
-// content is never handed a mode the box widened. A write over a file, and as
-// a new one, still lands where the box asked, and no staged file is left
-// beside it.
+// A WRITE REPLACES THE FILE, NEVER REWRITES IT, in one step, so nothing that
+// holds the old file is written: another name the box gave it (a hard link)
+// keeps the old content, where a write in place changed both names and left
+// each empty in between. The new file has the mode a box's files are written
+// with, never one the box widened. A write over a file, and as a new one,
+// lands where the box asked, with no staged file left beside it.
 //
 // Mutation: open the file with O_TRUNC and write it in place, and the hard
 // link reads the new content and the widened mode is kept.

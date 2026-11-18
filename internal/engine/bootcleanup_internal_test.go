@@ -16,37 +16,22 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 )
 
-// A FAILED BOOT MUST LEAVE NOTHING RUNNING — THE SAME RULE ONE FRAME UP.
+// A FAILED BOOT MUST LEAVE NOTHING RUNNING: [Engine.startNative]'s unwind rule
+// one frame up, in [New]. An engine discarded with its runtime up can never be
+// stopped, and its loops run on against a store the failure path closed.
+// Observed the instant [New] returns, never by a wait, because both halves of
+// the unwind are synchronous:
 //
-// [Engine.startNative] unwinds what it started, and for a while [New] did not
-// unwind what IT started: every return below the native start closed the
-// backends and nothing else. The engine holding the running runtime was then
-// discarded, so nothing could ever be asked to stop it — the apply loops, the
-// position heartbeat, the snapshot donor, the lexical indexer and a
-// still-registered search-slice answerer all ran on, against a store the same
-// failure path had just closed underneath them.
-//
-// Two observations, both taken the instant [New] returns and neither of them a
-// wait, because both halves of the unwind are synchronous:
-//
-//   - every answerer the native start registered — the search slice — is
-//     WITHDRAWN, which is the first step of [native.shutdown] and therefore
-//     says the native half was stopped rather than abandoned;
-//   - this node's ADMISSION is gone, which says the unwind is the whole
-//     teardown rather than the native part alone. An admission left behind
-//     tells a coordinator this process may be publishing — and it is the
-//     handshake's whole purpose to be believed.
+//   - every answerer the native start registered is WITHDRAWN, the first step
+//     of [native.shutdown], so the native half was stopped, not abandoned;
+//   - this node's ADMISSION is gone, so the unwind was the whole teardown: an
+//     admission left behind tells a coordinator this process may be publishing.
 
-// bootCleanupCompany fails at the FIRST step after the native start.
-//
-// Its embeddings model is a `${VAR}` nothing sets, which validates (the width
-// and the limits are stated, so nothing has to be looked up in the model
-// table) and then
-// resolves to the empty string when `equip` builds the provider — the step
-// immediately after [Engine.startNative] has succeeded. A config-driven
-// failure rather than a broken broker verb, because the point of this case is
-// that the runtime is fully up and healthy when the boot dies of something
-// else entirely.
+// bootCleanupCompany fails at the FIRST step after the native start: its
+// embeddings model is a `${VAR}` nothing sets, which validates (width and
+// limits are stated, so no model-table lookup) and resolves to "" when `equip`
+// builds the provider. A config failure rather than a broken broker verb, so
+// the runtime is fully up and healthy when the boot dies.
 const bootCleanupCompany = `
 name: Acme
 providers:
@@ -68,21 +53,15 @@ roles:
     llm: zulu
 `
 
-// servedQueue is the real broker, counting the answerer registrations it hands
-// out and the withdrawals that follow, per subject.
+// servedQueue is the real broker, counting per subject the answerer
+// registrations it hands out and the withdrawals that follow.
 //
-// THE REGISTRATION IS THE OBSERVATION, and it is a better one than a goroutine
-// count or a connection: startNative registers this node as an answerer for
-// its peers' search fan-out, and a registration is a claim on buckets a
-// coordinator counts as answered. One left behind by a node whose boot failed
-// is not a leak somebody notices as memory — it is a peer's search silently
-// returning a sixty-fourth of the corpus as a complete answer.
-//
-// PER SUBJECT, because a node registers more than one answerer — the search
-// fan-out's, the fleet history's (internal/eventfan), the steer desk's — and
-// each is a claim a peer relies on: a history answerer left behind by a failed
-// boot answers peers from a store its caller is free to close. One total would
-// read a second answerer as a boot that started twice.
+// THE REGISTRATION IS THE OBSERVATION, better than a goroutine count: it is a
+// claim a peer relies on, and a search answerer left by a failed boot has a
+// peer's search silently return a sixty-fourth of the corpus as complete. PER
+// SUBJECT, because a node registers several (search, fleet history via
+// internal/eventfan, the steer desk, the estate server), and one total would
+// let one leak while another was withdrawn twice.
 type servedQueue struct {
 	*jetstream.Queue
 
@@ -91,10 +70,7 @@ type servedQueue struct {
 	withdrawn map[string]int
 }
 
-// Serve registers for real and wraps the withdrawal so it can be counted, per
-// subject: a search answerer and the estate server are different claims on
-// the fleet, and a count of both together would let one leak while the other
-// was withdrawn twice.
+// Serve registers for real and wraps the withdrawal so it is counted.
 func (q *servedQueue) Serve(ctx context.Context, subject string, answers int,
 	fn queue.AnswerFunc) (queue.Unsubscribe, error) {
 
@@ -145,10 +121,9 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 	}
 	watched := &servedQueue{Queue: real, served: map[string]int{},
 		withdrawn: map[string]int{}}
-	// BORROWED backends, so the failure path leaves them open for the
-	// assertions — and so this case sees what an embedded caller sees,
-	// which is the deployment where nothing at all was closed and the
-	// loops outlived the failed boot by the life of the process.
+	// BORROWED backends: the failure path leaves them open for the
+	// assertions, as an embedded caller's are, where leaked loops outlive
+	// the failed boot by the life of the process.
 	borrowed := *back
 	borrowed.Queue = watched
 
@@ -166,10 +141,9 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 			"failed before the native half was up, so this case is no "+
 			"longer testing what it says", got)
 	}
-	// AND THE ESTATE SERVER, registered before the native start: a data
-	// node whose boot failed must not stay on the fleet's stateless nodes'
-	// list of who to ask, answering from a runtime that is being torn down.
-	// Asserted registered, so the withdrawal loop below has it to judge.
+	// AND THE ESTATE SERVER, registered before the native start: a failed
+	// data node must not stay on the stateless nodes' list of who to ask.
+	// Asserted registered, so the withdrawal loop below judges it.
 	nodeID, err := config.ResolveNodeID(&b, nil)
 	if err != nil {
 		t.Fatalf("resolve the node id: %v", err)
@@ -183,9 +157,8 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 				"native start, so this case expects exactly one each", subject, got)
 		}
 	}
-	// THE HISTORY ANSWERER TOO, which is armed before the native start on
-	// every node: a case that saw only the search answerer could pass with
-	// the history one never registered at all.
+	// THE HISTORY ANSWERER TOO, armed before the native start on every
+	// node: asserted registered, so its withdrawal is judged.
 	if got := served[topics.ObserveRead]; got != 1 {
 		t.Fatalf("this node registered %d history answerers, want 1 — the "+
 			"history answerer is armed before the native start, so this case "+
@@ -213,13 +186,10 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 	}
 }
 
-// A FAILED BOOT WITHDRAWS GITLET'S STATUS ANSWERER TOO. Gitlet is
-// built inside the native start, and its status answerer registered beside it
-// (codestatus.go), so a boot that dies after the native start — the embedding
-// model resolving to nothing, as above — must leave no node answering the
-// fleet's code status for a host its own unwind has stopped: an answerer left
-// behind would tell every asker of a cache that is gone. The same company
-// hosting code, on a node whose roles are every role.
+// A FAILED BOOT WITHDRAWS GITLET'S STATUS ANSWERER TOO: it registers beside
+// Gitlet inside the native start (codestatus.go), so a boot dying after it
+// must not leave the node answering the fleet's code status for a host its
+// unwind stopped. The same company hosting code, on an every-role node.
 //
 // Mutation: withdraw nothing in native.stopGitletHost, and the answerer is left
 // registered.
@@ -259,18 +229,12 @@ func TestAFailedBootWithdrawsItsGitletStatus(t *testing.T) {
 	}
 }
 
-// THE EARLIEST FAILURE REACHES THE TEARDOWN WITH NOTHING STARTED AT ALL.
-//
-// A keyring that will not open is refused before the admission handshake,
-// before the native start and before [node.New], so every field the teardown's
-// order reaches for is still its zero value — and a teardown that dereferenced
-// one would turn a boot failure with a clear message into a nil-pointer panic,
-// which is strictly worse than the leak it replaced: a crash reports the
-// cleanup's bug and loses the configuration error that caused it.
-//
-// The zero engine is that state, and asserting on it is how the claim in
-// [Engine.teardown]'s doc — nil-safe and never-started-safe throughout — is
-// checked rather than believed.
+// THE EARLIEST FAILURE REACHES THE TEARDOWN WITH NOTHING STARTED AT ALL: a
+// keyring that will not open is refused before the admission handshake, the
+// native start and [node.New], so every field the teardown reaches for is
+// zero, and a dereference would bury the configuration error under a
+// nil-pointer panic. The zero engine is that state, checking [Engine.teardown]'s
+// claim to be nil-safe and never-started-safe throughout.
 func TestTheTeardownIsSafeOnAnEngineThatStartedNothing(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}

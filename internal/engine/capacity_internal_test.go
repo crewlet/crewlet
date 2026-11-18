@@ -29,11 +29,9 @@ import (
 )
 
 // capacityFixture is one node's half of the handshake: an engine with an
-// identity, a mode and a coordination store, and nothing else.
-//
-// The two halves this file exercises — admission and acknowledgement — run
-// BEFORE anything else in the constructor and touch nothing but the fleet
-// store, which is what makes them testable without a broker.
+// identity, a mode and a coordination store, and nothing else. Admission and
+// acknowledgement run before anything else in the constructor and touch only
+// the fleet store, so they test without a broker.
 func capacityFixture(t *testing.T, id string, mode statelog.MaintenanceMode) (
 	*Engine, *coordmem.Fleet) {
 
@@ -47,15 +45,11 @@ func capacityFixture(t *testing.T, id string, mode statelog.MaintenanceMode) (
 	}, fleet
 }
 
-// TestANormalNodeWritesItsAdmissionBeforeItReadsTheOperation.
-//
-// The order IS the guarantee. A node that read the operation absent and then
-// started publishing has a gap in which a coordinator can open a window and
-// send its request;
-// writing first means whichever write lands first wins and the loser can see
-// that it did. So the admission must be durable even on the path that then
-// refuses — and must be withdrawn again before the refusal returns, or a node
-// that correctly declined to start would block every later operation for ever.
+// TestANormalNodeWritesItsAdmissionBeforeItReadsTheOperation: the order IS the
+// guarantee. Reading first leaves a gap in which a coordinator opens a window
+// and sends its request; writing first lets the loser of the race see it lost.
+// So the admission is durable even on the refusing path, and withdrawn before
+// the refusal returns, or a declined node blocks every later operation.
 func TestANormalNodeWritesItsAdmissionBeforeItReadsTheOperation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -106,13 +100,9 @@ func TestANormalNodeWritesItsAdmissionBeforeItReadsTheOperation(t *testing.T) {
 }
 
 // A REFUSED BOOT IS TOLD THE MODE ITS WINDOW IS IN, and the status read in a
-// form the harness takes.
-//
-// The refusal told every node to restart into maintenance mode, whatever the
-// window's phase: from `baselined` on the fleet's next restart is into seal
-// mode, and a node that followed it then wrote an acknowledgement the seal
-// refuses and had to restart again. It also named the status read without
-// the log, which the harness refuses.
+// form the harness takes: from `baselined` on the restart is into seal mode
+// (the seal refuses a maintenance-mode acknowledgement), and the status read
+// names the log, which the harness requires.
 //
 // Mutation: name maintenance mode at every phase, or drop -stream, and this
 // fails.
@@ -137,13 +127,10 @@ func TestARefusedBootIsToldTheModeItsWindowIsIn(t *testing.T) {
 	}
 }
 
-// A CEILING ALREADY AT THE TARGET OPENS NO WINDOW.
-//
-// With no window open, the verb opened one whatever the log's ceiling was, so
-// running it again after its own window had closed (its answer lost on the way
-// back, the retry an operator reaches for) opened a new window to set the
-// ceiling it already had, and asked for three more fleet-wide restarts. A
-// window already open on the same target is still a resume.
+// A CEILING ALREADY AT THE TARGET OPENS NO WINDOW: a retry after the verb's
+// own window closed (its answer lost) must not ask for three more fleet-wide
+// restarts to set the ceiling the log has. A window already open on the same
+// target is still a resume.
 //
 // Mutation: drop the check and a window opens.
 func TestACeilingAlreadyAtTheTargetOpensNoWindow(t *testing.T) {
@@ -164,12 +151,9 @@ func TestACeilingAlreadyAtTheTargetOpensNoWindow(t *testing.T) {
 	}
 }
 
-// TestAnUnreadableOperationIsNotAnAbsentOne.
-//
-// Reading a coordination failure as "no maintenance" is the exact admission
-// the two-sided handshake exists to make impossible: the node would start
-// publishing into a fleet mid-window on the one failure that most plausibly
-// accompanies one.
+// TestAnUnreadableOperationIsNotAnAbsentOne: reading a coordination failure as
+// "no maintenance" would admit a publisher mid-window on the failure most
+// likely to accompany one, the admission the handshake exists to prevent.
 func TestAnUnreadableOperationIsNotAnAbsentOne(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -214,10 +198,8 @@ func TestOnlyANormalNodeAdmitsAndOnlyAMaintenanceNodeAcknowledges(t *testing.T) 
 	}
 
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeNormal)
-	// WITH AN OPERATION OPEN, which is the only state in which an
-	// acknowledgement is written at all — a normal-mode node that stayed
-	// silent merely because there was nothing to answer would prove
-	// nothing about the mode.
+	// WITH AN OPERATION OPEN, the only state that writes an acknowledgement:
+	// silence with nothing to answer would prove nothing about the mode.
 	if _, _, err := fleet.OpenMaintenance(ctx, coord.MaintenanceOperation{
 		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-1",
 		TargetMaxBytes: 1 << 33, Phase: coord.PhaseOpened, Attempt: 1,
@@ -258,18 +240,12 @@ var (
 // THE ADMISSION A CRASHED PROCESS LEFT IS GONE BY THE BOOT THAT ENTERS A
 // WINDOW, and nothing else is touched.
 //
-// An admission says one process may be publishing. A crashed process never ran
-// the orderly stop that withdraws it, and the key has no age, so a node
-// restarted into a maintenance mode (which admits nothing) left the dead
-// process's claim standing for good. Each case boots a new incarnation of the
-// node while nobody holds the node's presence (no lease store here), which is
-// the evidence that the old one is gone: into a maintenance mode it retires
-// the claim; in service a data node's own
-// admission replaces it, as it always did, and a node without data leaves it
-// to the window's first restart, which then retires it. That last row is
-// pinned on purpose: a boot in service makes no coordination read for a key
-// that is almost never there, so the bounds a deployment sizes a boot by
-// count no such step.
+// A crashed process never withdrew its admission, and the key has no age. Each
+// case boots a new incarnation with nobody holding the presence (no lease
+// store), the evidence the old one is gone: a maintenance mode retires the
+// claim, a data node in service replaces it, and a node without data leaves it
+// to the window's first restart, deliberately: a boot in service makes no
+// coordination read for a rare key, so boot bounds count no such step.
 //
 // Mutation: make supersede return at once and the two maintenance cases, and
 // every case's window restart, fail.
@@ -351,10 +327,9 @@ func TestABootRetiresTheAdmissionItsNodesCrashedProcessLeft(t *testing.T) {
 // A BOOT THAT CANNOT READ THE ADMISSIONS STILL BOOTS INTO A MAINTENANCE MODE,
 // AND SAYS WHAT IT LEFT.
 //
-// The node publishes nothing there, so refusing its boot over a key it could
-// not clear would cost the window the participant it needs to hear from: it
-// still acknowledges the window. The key does what it always did, standing in
-// the window's way by name, and the boot's log says so.
+// The node publishes nothing there, so refusing it over a key it could not
+// clear would cost the window a participant: it still acknowledges. The key
+// still blocks the window by name, and the boot logs that it left it.
 //
 // Process-wide logging, so not parallel. Mutation: return from supersede before
 // its warning, or drop the acknowledgement from the handshake, and this fails.
@@ -394,14 +369,12 @@ func TestAnUnreadableAdmissionDoesNotRefuseAMaintenanceBoot(t *testing.T) {
 // A MAINTENANCE BOOT WITHDRAWS ANOTHER PROCESS'S ADMISSION ONLY WHEN THAT
 // PROCESS IS NOT RUNNING.
 //
-// A new incarnation of a node is not on its own proof that the one the
-// admission names is gone: a second process under a live node's id boots
-// exactly like a restart, and withdrawing on its word baselined a window past
-// a publisher that was still running. So the boot reads who holds the node's
-// presence, which a running process renews in every mode. Held by the
-// process the admission names, the claim stays; lapsed, or held by another
-// process of the node, it goes; and a presence nobody can read leaves it,
-// since nobody can say its process is gone.
+// A new incarnation is no proof the admission's process is gone: a second
+// process under a live node's id boots exactly like a restart. So the boot
+// reads who holds the node's presence, which a running process renews in every
+// mode: held by the admission's process, the claim stays; lapsed or held by
+// another process, it goes; unreadable, it stays, since nobody can say its
+// process is gone.
 //
 // Mutation: drop the presence check from supersede and the first row fails;
 // treat an unreadable presence as nobody's and the last row fails.
@@ -459,12 +432,10 @@ func TestAMaintenanceBootLeavesTheAdmissionOfAProcessStillRunning(t *testing.T) 
 // A CRASHED NODE RESTARTED INTO MAINTENANCE MODE NO LONGER HOLDS THE WINDOW
 // SHUT, which is the restart the refusal tells the operator to make.
 //
-// node-a crashes in normal mode, holding its admission. While that process
-// might still be running, its admission stops the window sending anything:
-// that is what the key is evidence of. Restarted into maintenance mode, as the
-// refusal says, it used to leave the dead process's claim behind, so the
-// window stayed shut and its refusal sent the operator to make the same
-// restart again, for ever.
+// node-a crashes in normal mode holding its admission, which keeps the window
+// shut while that process might be running. The restart the refusal asks for
+// must retire the dead claim, or the refusal sends the operator round the same
+// restart for ever.
 func TestACrashedNodeRestartedIntoMaintenanceLetsTheWindowProceed(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -516,20 +487,18 @@ func openWindow(t *testing.T, e *Engine) coord.MaintenanceOperation {
 	return op
 }
 
-// TestAnAcknowledgementCarriesTheModeItWasMadeIn.
-//
-// The seal is established only from SEAL mode, because that mode cannot write
-// configuration — so the process making the claim cannot be the one holding
-// the request it is retiring. An ack that did not carry its mode would let a
-// maintenance-mode node's restart satisfy the barrier.
+// TestAnAcknowledgementCarriesTheModeItWasMadeIn: the seal is established only
+// from SEAL mode, which cannot write configuration, so the claimant cannot hold
+// the request it retires. An ack without its mode would let a maintenance-mode
+// restart satisfy the barrier.
 func TestAnAcknowledgementCarriesTheModeItWasMadeIn(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeSeal)
 
-	// NO OPERATION IS NOT A FAILURE — a fleet restarted into maintenance
-	// mode before the verb ran is the ordinary first step — and the boot
-	// still records which process it is, in which mode, bound to nothing.
+	// NO OPERATION IS NOT A FAILURE (restarting into maintenance before the
+	// verb runs is the ordinary first step): the boot still records which
+	// process it is, in which mode, bound to nothing.
 	e.acknowledge(ctx, []string{"CREWLET_TRACKER_LOG"})
 	acks, err := fleet.MaintenanceAcks(ctx, "CREWLET_TRACKER_LOG")
 	if err != nil {
@@ -589,11 +558,9 @@ func TestABootThatCouldNotReadAWindowRecordsNoWindowlessRestart(t *testing.T) {
 // A LOG WITH NO WINDOW OPEN IS RECORDED AS SUCH WHATEVER ANOTHER LOG HOLDS.
 //
 // A boot reads each log's window on its own, and the restart it records for a
-// log with no window open is what that log's next window baselines from. It
-// used to be one record per node, written only when no log had a window, so a
-// fleet that restarted while the tracker's window was open wrote nothing for
-// the pages log, and a window opened there next found no restart recorded for
-// any node but its coordinator: one more fleet-wide restart, for nothing.
+// windowless log is what that log's next window baselines from. Withheld
+// because another log has a window open, the next window there finds no
+// restart but its coordinator's and asks for one more fleet-wide restart.
 //
 // Mutation: withhold a log's windowless record whenever another log has a
 // window open and the pages window's baseline refuses node-b.
@@ -669,16 +636,11 @@ func TestAnUnreadableLogCostsOnlyItsOwnRecord(t *testing.T) {
 // THE CAPACITY PROCEDURE RUNS IN THE RESTARTS IT NAMES, on a fleet with a node
 // that crashed in service.
 //
-// This is the whole of what went wrong, end to end. node-a crashed holding its
-// admission; every node is restarted into maintenance mode, as the procedure's
-// first step says, before anybody runs the verb; the verb runs from node-b.
-// The window used to refuse to open over node-a's admission and tell the
-// operator to restart node-a into the mode it was in. With that fixed, the
-// baseline found no acknowledgement from anyone but the coordinator, since a
-// boot with no window open recorded nothing, and sent the operator to restart
-// the whole fleet again. Now the verb baselines and applies in the one call,
-// and after the one seal restart the verb run again seals, verifies and
-// confirms the window, which closes.
+// End to end: node-a crashed holding its admission; every node restarts into
+// maintenance mode before anybody runs the verb, the procedure's first step;
+// the verb from node-b baselines and applies in one call; and after the one
+// seal restart the verb run again seals, verifies and confirms the window,
+// which closes. No step may ask for a further restart.
 //
 // Mutation: drop the windowless acknowledgement and the baseline refuses
 // node-a and node-c; drop the boot's admission retirement and it refuses
@@ -766,16 +728,13 @@ func TestTheCapacityProcedureRunsInTheRestartsItNames(t *testing.T) {
 	}
 }
 
-// A WINDOW OUT OF ATTEMPTS CLOSES THE WAY ITS SENTENCE SAYS, and never the way
-// the sentence used to say.
+// A WINDOW OUT OF ATTEMPTS CLOSES THE WAY ITS SENTENCE SAYS.
 //
-// Once the last attempt's verify has failed nothing sends the target again, so
-// "find out why the broker isn't applying it and run set-capacity again" got
-// the same block back on every run. What the sentence names now is run here as
-// written: set-capacity alone stays blocked, and abandoning the window and
-// running set-capacity from a node in seal mode closes it at the ceiling the
-// log has, sending nothing. The fleet's seal acknowledgements from the failed
-// attempt still hold the seal, so no restart is asked for.
+// After the last attempt's verify failed nothing sends the target again, so
+// set-capacity alone stays blocked; abandoning the window and running
+// set-capacity from seal mode closes it at the log's ceiling, sending nothing.
+// The failed attempt's seal acknowledgements still hold the seal, so no
+// restart is asked for.
 //
 // Mutation: let the verify after an abandon compare against the target again,
 // or make the abandon clear what the seal already holds, and this fails.
@@ -806,8 +765,8 @@ func TestAWindowOutOfAttemptsClosesTheWayItsSentenceSays(t *testing.T) {
 	}
 	resized := &ceilingLog{max: 1 << 32}
 
-	// SET-CAPACITY ALONE is blocked again, which is why the sentence no
-	// longer offers it.
+	// SET-CAPACITY ALONE is blocked again, which is why the sentence doesn't
+	// offer it.
 	if _, err := seal["node-a"].driveCapacity(ctx, resized, op); err == nil {
 		t.Fatal("set-capacity on a window out of attempts went through")
 	}
@@ -852,13 +811,10 @@ func TestAWindowOutOfAttemptsClosesTheWayItsSentenceSays(t *testing.T) {
 
 // A SEAL STILL WAITING ON A NODE IS AN ANSWER, NOT A FAULT.
 //
-// Running the verb from seal mode before every node has restarted into it is
-// the ordinary way to ask what the seal still waits on. The seal wrote the
-// window back on every pass whether or not anything had moved, so the drive
-// never saw it settle and answered that the operation "didn't settle in 7
-// transitions, more than the table has phases": an invariant breach, which the
-// route reports as a fault, for a window doing exactly what it should. A pass
-// that moves nothing writes nothing.
+// Running the verb from seal mode before every node restarted is the ordinary
+// way to ask what the seal waits on. A pass that moves nothing writes nothing:
+// a window rewritten every pass never settles, and the drive reports the
+// "didn't settle" invariant breach, which the route answers as a fault.
 //
 // Mutation: make the seal write the window whatever it found and the first run
 // from seal mode fails with the breach.
@@ -923,13 +879,10 @@ func TestASealStillWaitingOnANodeIsAnAnswerNotAFault(t *testing.T) {
 // WINDOWS ON TWO LOGS RUN IN THE SAME RESTARTS, and each seals on its own
 // acknowledgements.
 //
-// A fleet resizing two logs restarts once into maintenance mode, runs the
-// verb for each, restarts once into seal mode and runs the verb for each
-// again. Every boot acknowledges each log's window. The acknowledgements were
-// kept one per node, so the boot's second write replaced its first, and the
-// window whose acknowledgement went first read "acknowledged another
-// operation" from every node for as long as the other was open: no restart
-// could seal it.
+// A fleet resizing two logs restarts once into each mode, running the verb per
+// log, so every boot acknowledges each log's window. Keyed by node alone, the
+// boot's second acknowledgement replaces its first, and the other window reads
+// "acknowledged another operation" from every node: no restart seals it.
 //
 // Mutation: key an acknowledgement by its node alone and the tracker's window
 // never closes.
@@ -993,16 +946,12 @@ func TestWindowsOnTwoLogsSealInTheSameRestarts(t *testing.T) {
 // A NODE RESTARTED BETWEEN THE BASELINE AND THE REQUEST IS NOT SEALED BY THAT
 // RESTART.
 //
-// The seal's evidence is that the process each participant was running when
-// the request left is gone. The incarnations it compares against were recorded
-// once, at the baseline, and a coordinator that stopped there left the request
-// to whoever ran the verb next, maybe much later and after other nodes had
-// restarted. Here node-b baselines and stops as its request would leave (the
-// outcome unknown), node-c is restarted into seal mode while the window waits,
-// and node-b, restarted into maintenance mode, runs the verb again, which sends
-// the request. node-c's seal-mode process was running as that request left, yet
-// its incarnation differs from the baseline's, so the seal passed on a restart
-// older than the request without node-c restarting again.
+// The seal's evidence is that each participant's process running as the
+// request left is gone, so who runs is recorded as it leaves, not only at the
+// baseline. Here node-b baselines and stops as its request would leave
+// (outcome unknown), node-c restarts into seal mode meanwhile, and node-b,
+// restarted, sends the request with node-c's seal-mode process running: a
+// restart older than the request, which must not seal it.
 //
 // Mutation: send the resumed request without recording who is running first
 // and the window closes with node-c never restarted after it.
@@ -1101,12 +1050,10 @@ func TestARestartBeforeTheRequestDoesNotSealIt(t *testing.T) {
 // A READ-BACK THAT ISN'T THE TARGET SENDS ONE REQUEST AND ANSWERS.
 //
 // The window waits at `baselined` while a request's outcome is open, and from
-// maintenance mode that phase is a step that sends a request. A broker that
-// accepted the request and reads back the old ceiling left the window there,
-// written at a new revision, so the drive went round again: seven requests,
-// seven journal records for the seal to retire, and then the invariant fault
-// for a window doing exactly what the broker made it do. The drive sends one,
-// says what it read and what retires it, and leaves the request for the seal.
+// maintenance mode that phase sends a request. When the broker reads back the
+// old ceiling, the drive must stop after one, say what it read and what
+// retires it, and leave the request for the seal: going round again sends
+// seven, each a journal record for the seal, and ends in the invariant fault.
 //
 // Mutation: drop the refusal after the read-back and the drive sends seven
 // requests and answers the fault.
@@ -1163,11 +1110,11 @@ func (l *unmovedCeiling) Stats(context.Context) (jetstream.LogStats, error) {
 
 // A REQUEST IS COMPLETED ONLY BY ITS OWN READ-BACK.
 //
-// Every request leaves with a journal record of its own. A node that runs the
-// verb twice, the first request ending with its outcome unknown, issues two,
-// and the second's read-back says nothing about the first, which may still be
-// in flight: completing it there resolves it by a value somebody else's
-// request set, which the journal refuses. It stays issued for the seal.
+// Every request leaves with its own journal record. Running the verb twice,
+// the first outcome unknown, issues two, and the second's read-back says
+// nothing about the first, which may still be in flight: completing it by
+// another request's value is what the journal refuses. It stays issued for
+// the seal.
 //
 // Mutation: complete every record of the attempt the same process issued and
 // the first record reads completed.
@@ -1205,12 +1152,10 @@ func TestARequestIsCompletedOnlyByItsOwnReadBack(t *testing.T) {
 
 // A RELEASE THAT LOST ITS RACE RELEASES THE WINDOW AS IT NOW STANDS.
 //
-// The delete that ends a window is conditional on the revision the drive read.
-// An exclusion landing between the verify and the release moves the record,
-// and the refused delete was taken as the release: the node logged the fleet
-// released, and the drive's next pass asked to delete it at no revision, which
-// the store refuses, so the verb answered a fault for a window that was still
-// open. And a release that landed asked the store to delete the window again.
+// The delete that ends a window is conditional on the revision the drive read,
+// so an exclusion landing between the verify and the release refuses it. A
+// refused delete is not a release: the drive releases the window at the
+// revision it moved to, and a release that landed is not asked again.
 //
 // Mutation: take a moved record as released and the window is left open; drop
 // the early return for a released window and the store is asked to delete it a
@@ -1268,11 +1213,10 @@ func TestAReleaseThatLostItsRaceReleasesTheWindowAsItNowStands(t *testing.T) {
 
 // WHAT HOLDS THE FLEET OUT OF SERVICE IS READ ON EVERY LOG, three-valued.
 //
-// A node won't start in service while any log has a window open, or while it
-// can't read whether one has, so the answer to a gesture that closes a window
-// names both: an unreadable log is never read as one with no window. And an
-// abandonment that clears its window answers none, since there's no window
-// left to show.
+// A node won't start in service while any log has a window open or can't be
+// read, so the answer to a closing gesture names both: an unreadable log is
+// never one with no window. An abandonment that clears its window answers
+// none.
 //
 // Mutation: drop the unread log, or read it as having no window, and the
 // first half fails; answer the cleared window and the second does.
@@ -1309,12 +1253,10 @@ func TestTheWindowsLeftAreEveryOpenLogAndEveryUnreadOne(t *testing.T) {
 // AN ABANDONED WINDOW CLOSES AT THE CEILING ITS SEAL FINDS.
 //
 // Abandoning a window past `opened` stops it trying to reach its target; it
-// still crosses the seal, because a request it sent may be in flight. The
-// verify after that seal compared the ceiling with the target as for any
-// window, so an abandoned window whose request never landed started another
-// attempt at the target the operator had given up on, and the next step it
-// named was sending that request again. It closes now, with the ceiling the
-// seal found recorded as the outcome, and nothing more is sent.
+// still crosses the seal, since a request it sent may be in flight. The verify
+// after that seal must not compare against the target, which would start
+// another attempt the operator gave up on: it closes with the ceiling the seal
+// found as the outcome, and sends nothing more.
 //
 // Mutation: verify an abandoned window against its target and it stands at
 // opened, attempt 2, instead of closing.
@@ -1425,11 +1367,9 @@ func (l *ceilingLog) Stats(context.Context) (jetstream.LogStats, error) {
 	return jetstream.LogStats{MaxBytes: l.max}, nil
 }
 
-// TestTheBarrierRefusesEveryWayAnAcknowledgementCanBeTheWrongOne.
-//
-// One table over the four ways an ack fails to be evidence, because each of
-// them looks like a satisfied barrier from a distance and each would confirm
-// an operation whose request may still be outstanding.
+// TestTheBarrierRefusesEveryWayAnAcknowledgementCanBeTheWrongOne: each wrong
+// ack looks like a satisfied barrier and would confirm an operation whose
+// request may still be outstanding.
 func TestTheBarrierRefusesEveryWayAnAcknowledgementCanBeTheWrongOne(t *testing.T) {
 	t.Parallel()
 	op := coord.MaintenanceOperation{
@@ -1486,9 +1426,8 @@ func TestTheBarrierRefusesEveryWayAnAcknowledgementCanBeTheWrongOne(t *testing.T
 			if len(incarnations) != 2 {
 				t.Fatalf("the barrier held but named %d incarnations", len(incarnations))
 			}
-			// THE SAME EVIDENCE THE SEAL PREDICATE READS: a retirement
-			// established from a different reading than the seal would
-			// retire a record the seal then refuses to accept.
+			// THE SAME EVIDENCE THE SEAL PREDICATE READS, or a retirement
+			// retires a record the seal then refuses.
 			out := statelog.Retire(op, statelog.BarrierEvidence{
 				Incarnations: incarnations, ObservedMaxBytes: 1 << 33,
 				At: time.Now().UTC(),
@@ -1528,13 +1467,11 @@ func TestAnExcludedParticipantIsTheOnlyThingThatWaivesAnAcknowledgement(t *testi
 // WHO EXCLUDED A NODE AND WHO ABANDONED THE WINDOW ARE ON THE WINDOW.
 //
 // An exclusion is the one fact the seal takes on somebody's word, and an
-// abandonment the decision the fleet goes on carrying out until the seal
-// restart; both used to be said only in the serving node's log, while the
-// window named the person who OPENED it — so the one record every node reads
-// showed its opener as the author of whatever it had become. Mutation: record
-// either gesture without its party and its half goes red; check the
-// abandonment's confirmation after the update, or not at all, and the refused
-// abandonment changes the window.
+// abandonment a decision the fleet carries out until the seal restart, so the
+// one record every node reads names who made each, not only its opener.
+// Mutation: record either gesture without its party and its half goes red;
+// check the abandonment's confirmation after the update, or not at all, and
+// the refused abandonment changes the window.
 func TestWhoExcludedANodeAndWhoAbandonedTheWindowAreOnTheWindow(t *testing.T) {
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
@@ -1612,13 +1549,11 @@ func TestWhoExcludedANodeAndWhoAbandonedTheWindowAreOnTheWindow(t *testing.T) {
 
 // THE REPORT AT OPENED SAYS WHAT THE BASELINE WAITS ON.
 //
-// `crewlet retention status` and the dashboard's banner say who a window is
-// waiting on. At opened they said every participant, because they counted
-// acknowledgements bound to this window and no node writes one before the
-// verb runs, and they never named the admission actually holding it. So at
-// opened the report names the participants with no restart recorded and the
-// admissions; past it, the seal's acknowledgements, and no admission, since
-// no step reads one there.
+// `crewlet retention status` and the dashboard's banner say who a window waits
+// on. At opened no node has written an acknowledgement bound to it, so the
+// report names the participants with no restart recorded and the admissions;
+// past it, the seal's acknowledgements and no admission, since no step reads
+// one there.
 //
 // Mutation: count bound acknowledgements at opened, or drop the admissions,
 // and the opened half fails; keep the admissions past opened and the
@@ -1678,13 +1613,10 @@ func TestTheReportAtOpenedSaysWhatTheBaselineWaitsOn(t *testing.T) {
 	}
 }
 
-// PAST `opened` THE REPORT WAITS ON WHO THE SEAL WAITS ON.
-//
-// The report counted any acknowledgement of the window's attempt, whatever its
-// mode and whatever process made it, so a node restarted into maintenance mode
-// after the window opened, and one still the process recorded as the request
-// left, read as nothing outstanding while the seal waited on both, and the
-// banner said the window was waiting on its operator.
+// PAST `opened` THE REPORT WAITS ON WHO THE SEAL WAITS ON: an acknowledgement
+// of the attempt counts only as the seal would take it, so a node restarted
+// into maintenance mode, or still the process recorded as the request left, is
+// outstanding.
 //
 // Mutation: count every acknowledgement of the attempt and node-1 and node-2
 // drop out of the list.
@@ -1726,9 +1658,9 @@ func TestTheReportPastOpenedWaitsOnWhoTheSealWaitsOn(t *testing.T) {
 
 	// ONCE IT HAS SEALED IT WAITS ON NOBODY BUT ITS OPERATOR, whatever the
 	// nodes have written since: the verify and the release read no
-	// acknowledgement, and the seal's rule applied to a node restarted again
-	// after it (here into maintenance mode, which a boot refused in service
-	// is told to do) named a node nothing waits on.
+	// acknowledgement, and the seal's rule would name a node restarted after
+	// it (here into maintenance mode, as a refused boot is told to) that
+	// nothing waits on.
 	// Mutation: judge every phase past opened by the seal's rule and these
 	// fail.
 	for _, phase := range []coord.MaintenancePhase{coord.PhaseSealed, coord.PhaseConfirmed} {
@@ -1749,11 +1681,7 @@ func TestTheReportPastOpenedWaitsOnWhoTheSealWaitsOn(t *testing.T) {
 }
 
 // THE REPORT NAMES EVERY OPEN WINDOW, the oldest first, each with what it
-// waits on.
-//
-// A window is per log and two can be open at once. The report carried the
-// oldest alone, so while both were open the banner said nothing of what the
-// other was waiting on until the first had closed.
+// waits on, since a window is per log and two can be open at once.
 //
 // Mutation: report the oldest window alone and the pages log's is missing.
 func TestTheReportNamesEveryOpenWindow(t *testing.T) {
@@ -1813,10 +1741,9 @@ func onlyWindow(t *testing.T, rows []statelog.MaintenanceReport) statelog.Mainte
 }
 
 // toldRefusal is err's told sentence ([statelog.Told]) as an error, failing the
-// case where err tells its operator nothing or carries the package it was
-// written in: the retention routes answer the sentence alone, so a refusal an
-// operator acts on that isn't told is answered as a fault with its remedy in
-// this node's log, and an `engine:` in it is a package a person reads.
+// case where err tells nothing or names its package: the retention routes
+// answer the sentence alone, so an untold refusal is answered as a fault with
+// its remedy only in this node's log, and `engine:` is no word for a person.
 func toldRefusal(t *testing.T, err error) error {
 	t.Helper()
 	said, told := statelog.Tell(err)
@@ -1829,15 +1756,11 @@ func toldRefusal(t *testing.T, err error) error {
 	return errors.New(said)
 }
 
-// TestABaselineOfNothingIsRefusedRatherThanRecorded.
-//
-// The record names the process each participant was running as the request
-// left, and an empty one names none: a request sent past it leaves with
-// nobody shown to have reached the procedure's first restart on that node. So
-// the window sends nothing until it can name every participant's process, and
-// says so; it used to give a reason the code can't produce, that the seal
-// could pass on a node that never came back, when the only acknowledgement a
-// seal takes is written by a later boot of that node.
+// TestABaselineOfNothingIsRefusedRatherThanRecorded: the record names each
+// participant's process as the request left, and an empty one shows nobody
+// reached the first restart. So the window sends nothing until it can name
+// every participant's process, and never says the seal could pass on a node
+// that never came back: it takes only a later boot's acknowledgement.
 func TestABaselineOfNothingIsRefusedRatherThanRecorded(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -1856,12 +1779,11 @@ func TestABaselineOfNothingIsRefusedRatherThanRecorded(t *testing.T) {
 	if !strings.Contains(err.Error(), "node-2") {
 		t.Errorf("the refusal does not name who has not restarted: %v", err)
 	}
-	// THE COMMAND IT NAMES IS ONE THE HARNESS RUNS, for this window's stream
-	// and this node, and the sentence reads right for one node: it named a
-	// `--exclude` flag nothing parses, and said `"node-2" have not
-	// restarted`. And it says no restart is RECORDED, since a node that did
-	// restart and could not write its acknowledgement is the same refusal.
-	// Mutation: put any of them back and this fails.
+	// THE COMMAND IT NAMES IS ONE THE HARNESS RUNS (no `--exclude`), for this
+	// window's stream and node, in a sentence that reads right for one node.
+	// It says no restart is RECORDED: a node that restarted but couldn't
+	// write its acknowledgement is the same refusal.
+	// Mutation: break any of them and this fails.
 	for _, want := range []string{
 		"no restart into a maintenance mode is recorded for \"node-2\"",
 		"`crewlet retention maintenance exclude -stream CREWLET_TRACKER_LOG " +
@@ -1904,13 +1826,10 @@ func TestABaselineOfNothingIsRefusedRatherThanRecorded(t *testing.T) {
 	}
 }
 
-// TestEveryMachineThatCouldHoldARequestMustAcknowledge.
-//
-// The participant set is about whose PROCESS could hold an outstanding
-// request, so it is every node the fleet has a position for, union everything
-// holding a presence lease, union this node — not the retention counted set,
-// which is about whose position pins the trim. A node evicted from that is
-// still a machine that can run a publisher.
+// TestEveryMachineThatCouldHoldARequestMustAcknowledge: the participants are
+// whose PROCESS could hold an outstanding request (every node with a position,
+// every presence holder, and this node), not the retention counted set, whose
+// position pins the trim: a node evicted from it can still run a publisher.
 func TestEveryMachineThatCouldHoldARequestMustAcknowledge(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -1948,13 +1867,11 @@ func TestEveryMachineThatCouldHoldARequestMustAcknowledge(t *testing.T) {
 // A NODE THAT CAME UP WHILE THE WINDOW WAITED TAKES PART IN IT, and one the
 // window recorded stays in it.
 //
-// A window waits at `opened` for as long as an admission or a missing
-// acknowledgement holds it, and its participants were read once, as it opened.
-// A broker member that came up in that time was never waited for: the seal
-// passed without its restart, and its broker could still hold the request the
-// window sent. Read again at the baseline and joined with what the window
-// recorded, it is asked for, and a node recorded at the open is not dropped
-// for having gone quiet since.
+// A window waits at `opened` as long as an admission or a missing
+// acknowledgement holds it, so participants are read again at the baseline and
+// joined with those recorded at the open: a broker member that came up
+// meanwhile could hold the request, and a recorded node is not dropped for
+// going quiet.
 //
 // Mutation: baseline over the recorded set alone and the first refusal goes
 // missing; over the set read now alone and the second does.
@@ -2055,11 +1972,10 @@ func TestAnUnreadablePresenceListingRefusesRatherThanShrinkingTheSet(t *testing.
 // and the refusal names the way past it and the way out.
 //
 // node-9 holds an admission and nobody holds its presence: a process that
-// stopped without giving it back. The window opens, since it has sent nothing
-// and is where the operator's way past is recorded, and what it refuses is its
-// FIRST REQUEST: naming the node, the restart, the exclusion for that node,
-// and the abandonment that closes the window, because an open window refuses
-// every node that starts in service while it waits.
+// stopped without giving it back. The window opens (it has sent nothing, and
+// it records the operator's way past) and refuses its FIRST REQUEST, naming
+// the node, the restart, the exclusion, and the abandonment, since an open
+// window refuses every boot in service while it waits.
 //
 // Mutation: drop the admission check from the baseline and this goes red;
 // check it without the window's exclusions and
@@ -2116,14 +2032,12 @@ func (stuckClose) CloseMaintenance(context.Context, string, string, uint64) erro
 
 // A SERVING NODE'S ADMISSION LEAVES NO WINDOW BEHIND.
 //
-// node-9 is running in service: it holds an admission and its process holds
-// the node's presence. A window left open over it waited at opened while the
-// fleet went on publishing, refused every node that restarted in service and
-// told it to restart into maintenance mode, taking a serving node out of
-// service. So the window is closed again as soon as it is opened and the verb
-// is refused, as it was before the window opened at all; and so it is when
-// nobody can read the admissions. A close that does not land leaves
-// the window, and the refusal says how to close it.
+// node-9 runs in service: it holds an admission and its process holds the
+// node's presence. A window left open over it would refuse every node
+// restarting in service and send it into maintenance mode, so the window is
+// closed again as soon as it opens and the verb refused, as also when nobody
+// can read the admissions. A close that does not land leaves the window, and
+// the refusal says how to close it.
 //
 // Mutation: keep the window whatever the presence says, and the first row
 // fails; keep it when the admissions can't be read, and the second does.
@@ -2249,13 +2163,12 @@ func TestANodeRunningAtTheBaselineIsNamedWithTheWayOut(t *testing.T) {
 // A NODE RESTARTED INSIDE ITS CRASHED PROCESS'S LEASE IS RETIRED ONCE IT HOLDS
 // THE PRESENCE.
 //
-// node-a crashed in service and was restarted into maintenance mode at once,
-// so its boot found the crashed process still holding the node's presence and
-// left the admission: it could not tell the crash from a duplicate. A window
-// opened then sees a process that may be publishing and is closed again. Once
-// the old lease lapses and the restarted process holds the presence, the same
-// evidence says the crashed one is gone, and the window withdraws the
-// admission and goes on without anybody excluding a node that is running.
+// node-a crashed in service and restarted into maintenance at once, with the
+// crashed process still holding the presence, so its boot left the admission:
+// it can't tell a crash from a duplicate, and a window opened then is closed
+// again. Once the old lease lapses and the restarted process holds the
+// presence, the window withdraws the admission and goes on, with nobody
+// excluding a running node.
 //
 // Mutation: drop the withdrawal of a replaced admission and the window stays
 // shut on the second open.
@@ -2353,11 +2266,10 @@ func (f *slipFleet) OpenMaintenance(ctx context.Context, op coord.MaintenanceOpe
 
 // A NODE ADMITTED JUST BEFORE THE WINDOW EXISTED IS SEEN BY ITS FIRST REQUEST.
 //
-// The coordinator read the admissions and then wrote the window. A node that
-// wrote its admission between the two and read the window before the create
-// saw nothing either way: it started publishing, and the window baselined and
-// resized the log under it. Read after the window's record lands, as the
-// handshake needs, the admission is seen.
+// A node admitting itself between the coordinator's read of the admissions and
+// its write of the window sees no window and starts publishing, so the
+// admissions are read again after the window's record lands, as the handshake
+// needs.
 func TestAnAdmissionWrittenBeforeTheWindowLandedIsSeen(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -2383,12 +2295,9 @@ func (stuckAdmissions) ForgetAdmission(context.Context, string, string) error {
 
 // AN EXCLUDED NODE'S ADMISSION STOPS COUNTING EVEN WHERE IT COULD NOT BE
 // WITHDRAWN. The exclusion is the operator's word that the process is
-// stopped, recorded on the window, and the window's first request reads it
-// there: one that went on counting the key a store blip left would refuse
-// the very node it was told is gone. And the key it left is said in the log,
-// which is the whole of what it leaves behind: the exclusion once read the
-// admissions through a helper that answered a failed read as none, so a store
-// blip withdrew nothing and said nothing.
+// stopped, recorded on the window where its first request reads it: counting
+// the key a store blip left would refuse the node it was told is gone. The key
+// left behind is said in the log, never swallowed.
 //
 // Process-wide logging, so not parallel. Mutation: swallow the withdrawal's
 // failure and the log half fails.
@@ -2422,12 +2331,10 @@ func TestAnExcludedNodesAdmissionNoLongerStopsTheWindow(t *testing.T) {
 // A DEAD NODE'S ADMISSION IS WITHDRAWN BY EXCLUDING IT.
 //
 // node-a crashed holding its admission and will never boot again, so nothing
-// retires its claim on its behalf. The window used to refuse to open over it,
-// and an exclusion is a gesture on an open window, so the fleet could never
-// resize that log again. Now the window opens, stops before its first request,
-// and the exclusion — the operator's word that the process is stopped,
-// recorded with their name — withdraws the admission and waives the dead
-// node's acknowledgement in the same breath.
+// retires its claim for it. The window opens (an exclusion is a gesture on an
+// open window) and stops before its first request, and the exclusion, the
+// operator's word recorded with their name, withdraws the admission and waives
+// the node's acknowledgement together.
 func TestADeadNodesAdmissionIsWithdrawnByExcludingIt(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -2482,12 +2389,10 @@ func TestADeadNodesAdmissionIsWithdrawnByExcludingIt(t *testing.T) {
 
 // A TARGET THE LOG ALREADY HOLDS MORE THAN IS REFUSED BEFORE THE WINDOW OPENS.
 //
-// A resize is decided against the usage the log is at, which is the whole
-// reason it runs with nothing publishing, and nothing decided against it: a
-// target under what the log held was carried through three restarts to a log
-// that refused every append the moment it applied. Lowering a ceiling is a real
-// gesture (a log created larger than its budget allows is the common case), so
-// the line is drawn at the usage and nowhere else.
+// A resize is decided against the log's usage, the reason it runs with nothing
+// publishing: a target under it reaches, after three restarts, a log refusing
+// every append. Lowering a ceiling is a real gesture (a log created larger
+// than its budget allows), so the line is at the usage and nowhere else.
 func TestATargetTheLogAlreadyExceedsIsRefused(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -2523,9 +2428,8 @@ func TestATargetTheLogAlreadyExceedsIsRefused(t *testing.T) {
 		t.Errorf("the window recorded an original ceiling of %d, want %d",
 			op.OriginalMaxBytes, current.MaxBytes)
 	}
-	// WHO OPENED IT, and through what: the operation is the one record of
-	// who is restarting the fleet three times, and one that named only
-	// the author could not tell their own gesture from their token's.
+	// WHO OPENED IT, and through what: the one record of who restarts the
+	// fleet three times tells the author's own gesture from their token's.
 	if op.By != "ops-3" || op.OperatorID != "pat:0192f00d-0000-7000-8000-00000000000a" {
 		t.Errorf("the window records %q through %q, want ops-3 through the "+
 			"token it was opened with", op.By, op.OperatorID)
@@ -2534,17 +2438,11 @@ func TestATargetTheLogAlreadyExceedsIsRefused(t *testing.T) {
 
 // A TARGET ONLY THE GATE RESERVE IS ABOVE THE USAGE IS A FULL LOG TOO.
 //
-// Ordinary writes on a log that claims identity are refused at the target less
-// its gate reserve, so a target that clears the usage by less than the reserve
-// was carried through three restarts to a log that refused every ordinary
-// append the moment it applied — which is what refusing a target at the usage
-// exists to prevent, measured against the wrong line. A log that keeps no
-// reserve is still measured against its whole ceiling, and the target the
-// refusal names is exact: it opens, and a byte less does not.
-//
-// EVERY REGISTERED LOG, each on the side its claim puts it: the identity
-// estate keeps a reserve as the tracker's and the knowledge base's logs do,
-// and a list of two left it unasked.
+// On a log that claims identity, ordinary writes are refused at the target
+// less its gate reserve, so the usage is measured against that line; a log
+// keeping no reserve, against its whole ceiling. The target the refusal names
+// is exact: it opens, and a byte less does not. Every registered log is asked,
+// each on the side its claim puts it.
 func TestATargetOnlyTheGateReserveClearsIsRefused(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -2618,14 +2516,11 @@ func TestATargetOnlyTheGateReserveClearsIsRefused(t *testing.T) {
 
 // A TARGET UNDER A LOG'S FLOOR IS REFUSED, AND ITS FLOOR IS ITS FIELD'S.
 //
-// Tier A refuses an explicit ceiling below its field's floor; the capacity
-// verb was the one way round it. And the floor differs by log: the verb held
-// every log to a gibibyte, calling it the floor Tier A enforces, while Tier A
-// takes the identity estate's and the usage log's down to 64 MiB — so a
-// target Tier A would accept on either was refused with a reason that was not
-// true of it. The floor each case expects is read from Tier A's own
-// validation of the field, not from the register the verb reads, so the two
-// cannot agree by sharing a mistake.
+// Tier A refuses an explicit ceiling below its field's floor, and the verb
+// must too, at each log's own floor (not one gibibyte for all: the identity
+// estate's and usage log's go to 64 MiB). The expected floor is read from Tier
+// A's own validation, not the register the verb reads, so the two cannot agree
+// by sharing a mistake.
 func TestATargetUnderTheFloorIsRefused(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -2702,11 +2597,10 @@ var unstatedRoom = jetstream.StorageBudget{Limit: -1, Source: jetstream.BudgetUn
 
 // A RAISE THE BROKER CANNOT RESERVE IS REFUSED BEFORE THE WINDOW OPENS.
 //
-// The broker refuses that update when the window applies it, and an apply that
-// returned an error is an unknown only the seal retires: a raise past the
-// broker's room cost the fleet its restarts, and its attempts, to learn a
-// number the node could read before any of them. So the room is decided with
-// the usage, and only where it is stated.
+// The broker refuses it at apply, and a failed apply is an unknown only the
+// seal retires, costing the fleet restarts and attempts to learn a number the
+// node can read up front. So the room is decided with the usage, and only
+// where it is stated.
 func TestARaiseTheBrokerCannotReserveIsRefused(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -2757,12 +2651,9 @@ func TestARaiseTheBrokerCannotReserveIsRefused(t *testing.T) {
 	}
 }
 
-// TestAnOpenOperationIsResumedAtItsOwnTargetAndNeverRetargeted.
-//
-// The target is chosen once for the life of an operation: a verify compares
-// the observed ceiling against it, so a target that moved mid-window would
-// make a mismatch unreadable — nobody could tell an unapplied request from a
-// changed mind.
+// TestAnOpenOperationIsResumedAtItsOwnTargetAndNeverRetargeted: the verify
+// compares against the target, so one moved mid-window makes an unapplied
+// request indistinguishable from a changed mind.
 func TestAnOpenOperationIsResumedAtItsOwnTargetAndNeverRetargeted(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -2798,12 +2689,10 @@ func TestAnOpenOperationIsResumedAtItsOwnTargetAndNeverRetargeted(t *testing.T) 
 	}
 }
 
-// TestAnUnknownCreateRetriesWithTheSameIdRatherThanOpeningASecondWindow.
-//
-// An unknown create establishes nothing: the request may never have been
-// received and may still be outstanding. A retry with a fresh id would open a
-// SECOND window on a stream that may already have one — and the loser of that
-// race is an exclusion nobody can find.
+// TestAnUnknownCreateRetriesWithTheSameIdRatherThanOpeningASecondWindow: an
+// unknown create may still be outstanding, so a fresh id could open a SECOND
+// window on the stream, and the loser of that race is an exclusion nobody can
+// find.
 func TestAnUnknownCreateRetriesWithTheSameIdRatherThanOpeningASecondWindow(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -2851,11 +2740,9 @@ func TestAnUnknownCreateThatNeverResolvesRefusesRatherThanReportingNoWindow(t *t
 	}
 }
 
-// TestOnlyAPeerAtALaterGenerationHasReanchoredTheStream.
-//
-// ONE DEFINITION, because the permission check counts these and the refusal
-// names them: if the two disagreed, a reanchor would refuse naming nobody, or
-// permit while naming someone.
+// TestOnlyAPeerAtALaterGenerationHasReanchoredTheStream: ONE DEFINITION, as the
+// permission check counts these and the refusal names them; disagreeing, a
+// reanchor would refuse naming nobody, or permit while naming someone.
 func TestOnlyAPeerAtALaterGenerationHasReanchoredTheStream(t *testing.T) {
 	t.Parallel()
 	rows := []coord.NodePositions{
@@ -2863,9 +2750,9 @@ func TestOnlyAPeerAtALaterGenerationHasReanchoredTheStream(t *testing.T) {
 			"tracker": {Generation: 4, AppliedThrough: 900},
 		}},
 		// A PEER STILL AT THIS NODE'S GENERATION is on the stream this
-		// node's rows came from — however much it applied there — and is
-		// the most-caught-up rule's to weigh, never a refusal of its own:
-		// counted here, every peer on a lost stream refused every reanchor.
+		// node's rows came from, however much it applied, and is the
+		// most-caught-up rule's to weigh, never a refusal: counted here,
+		// every peer on a lost stream would refuse every reanchor.
 		{NodeID: "on-the-lost-stream", Domains: map[string]coord.DomainPosition{
 			"tracker": {Generation: 3, AppliedThrough: 900},
 		}},
@@ -2957,19 +2844,14 @@ func (b *blindFleet) OpenMaintenance(ctx context.Context, op coord.MaintenanceOp
 }
 
 // budgetHost is a broker that answers the two capacity questions and nothing
-// else.
+// else. The provisioning half of [domainHost] is unreachable here by
+// construction (a refusal creates nothing), so those stubs panic, which stops
+// a later change quietly depending on one.
 //
-// The PROVISIONING half of [domainHost] is unreachable from every caller here
-// by construction — a refusal creates nothing — so those stubs panic rather
-// than pretending to work, which is what stops a later change quietly
-// depending on one.
-//
-// The embedded [queue.EventQueue] is NIL and deliberately so. It is what lets
-// this sit in the engine's own Queue slot, which is where [Engine.capacityHost]
-// reads its broker from — so these cases exercise the path production takes
-// rather than a field a test set for it, which is the arrangement under which
-// the constructor's omission was invisible. Every verb it contributes panics
-// on a nil interface, exactly as the named stubs below do on purpose.
+// The embedded [queue.EventQueue] is deliberately NIL: it lets this sit in the
+// engine's own Queue slot, where [Engine.capacityHost] reads its broker, so
+// these cases take production's path rather than a field a test set. Every
+// verb it contributes panics on the nil interface, as the stubs below do.
 type budgetHost struct {
 	queue.EventQueue
 	room jetstream.StorageBudget
@@ -3003,12 +2885,9 @@ func (budgetHost) DomainConsumer(context.Context, string, string, uint64) (*jets
 }
 
 // capacityNode is an engine holding ONE domain and a broker that answers about
-// capacity and nothing else.
-//
-// Everything the refusals below reach runs before the first broker call on the
-// log itself, which is what makes them testable without one: the target's
-// shape is decided before the exclusion is opened, and that ordering is the
-// point rather than an implementation detail.
+// capacity and nothing else. Every refusal below runs before the first broker
+// call on the log: the target's shape is decided before the exclusion opens,
+// and that ordering is the point.
 func capacityNode(t *testing.T, host budgetHost) (*Engine, *coordmem.Fleet, string) {
 	t.Helper()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
@@ -3022,10 +2901,9 @@ func capacityNode(t *testing.T, host budgetHost) (*Engine, *coordmem.Fleet, stri
 
 // A TARGET PAST int64 IS THE UNBOUNDED SETTING WEARING A LARGE NUMBER.
 //
-// A stream's ceiling is an int64 on the wire, so a target above that wraps
-// NEGATIVE — and a negative MaxBytes is how JetStream spells "unbounded". It
-// is the same stream a target of zero would have produced, which this verb
-// already refuses by name, reached from the opposite-looking input.
+// A stream's ceiling is an int64 on the wire, so a larger target wraps
+// NEGATIVE, JetStream's "unbounded": the stream a target of zero gives, which
+// the verb refuses by name.
 func TestACapacityTargetPastInt64IsRefused(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -3050,14 +2928,12 @@ func TestACapacityTargetPastInt64IsRefused(t *testing.T) {
 
 // A REFUSED CONFIGURATION REQUEST IS NOT AN UNKNOWN ONE.
 //
-// The apply wrapped every failure as "the outcome is unknown and the operation
-// stays open", which is right for a transport error — the request may have
-// landed — and wrong for a broker that checked the ceiling against its limit
-// and declined to propose it. That one wrote nothing, and the number it
-// compared against is readable, so reporting it as an unknown costs the
-// operator both facts: what went wrong, and that waiting for the seal will not
-// tell them anything more. The journal record stays `issued` either way, which
-// is why even this half says to abandon rather than to walk away.
+// A transport error may have landed, so its outcome is unknown and the
+// operation stays open. A broker that checked the ceiling against its limit
+// and declined wrote nothing, and its numbers are readable, so the refusal
+// says what went wrong and that the seal will tell nothing more. The journal
+// record stays `issued` either way, which is why this half too says to
+// abandon.
 func TestARefusedCeilingIsReportedAsARefusalAndNotAsAnUnknown(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -3137,13 +3013,12 @@ func TestARefusalWithNoReadableRoomIsStillARefusal(t *testing.T) {
 }
 
 // WHO TAKES PART IN A CAPACITY SEAL IS DECIDED BY THE ESTATE AND BY THE
-// BROKER, asked apart. The seal's proof is that every broker process restarted
-// and every publisher was admitted, so a live node takes part when it holds the
-// estate — every data node does, whatever its broker — or when its broker is a
-// member (it queues requests) — and when its presence does not say what its
-// broker is, or what its roles are, because leaving out a node that may be a
-// member or a publisher could pass a seal it should hold. A leaf or a client
-// of an external cluster that holds no data does neither.
+// BROKER, asked apart. The seal proves every broker process restarted and
+// every publisher was admitted, so a live node takes part when it holds the
+// estate (every data node, whatever its broker), when its broker is a member
+// (it queues requests), or when its presence doesn't say its broker or roles,
+// since leaving out a possible member or publisher could pass a seal. A
+// dataless leaf or external-cluster client does neither.
 func TestWhoTakesPartInACapacitySealIsTheEstateAndTheBrokerMembers(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -3202,23 +3077,17 @@ func TestWhoTakesPartInACapacitySealIsTheEstateAndTheBrokerMembers(t *testing.T)
 }
 
 // TestADatalessMemberMustAcknowledgeASeal: a broker member that holds no data
-// is a participant, and restarted into seal mode it acknowledges — so the seal
+// is a participant, and restarted into seal mode it acknowledges, so the seal
 // holds once it has, and not before.
 //
-// Tier A refuses a broker member without `data`, so this node's own
-// configuration never produces the pairing — but [Engine.capacityParticipants]
-// reads every OTHER node's presence, not this node's configuration, and a
-// presence advertising one is a participant it cannot rule out, so it is
-// waited for. The profile is built here to certify the engine's half of the
-// handshake against that presence. Left out of the participants, its broker
-// could still hold a queued request to resize the log after the seal passed;
-// named but unable to acknowledge, it would wedge every seal for ever.
-//
-// ITS PARTICIPATION IS FOUND FROM WHAT A SEAL-MODE NODE LEAVES BEHIND, never
-// from a lease the case writes for it: such a node has no position and no
-// admission, so the presence its seat host renews — in every mode, claiming no
-// seat — is the one record there is. Each node here boots that host exactly as
-// the engine does, behind the engine's own claim gate.
+// Tier A refuses such a member in this node's configuration, but
+// [Engine.capacityParticipants] reads OTHER nodes' presences, and one
+// advertising it cannot be ruled out. Left out, its broker could hold a queued
+// resize past the seal; named but unable to acknowledge, it wedges every seal.
+// ITS PARTICIPATION IS FOUND FROM WHAT A SEAL-MODE NODE LEAVES BEHIND, never a
+// lease the case writes: with no position or admission, the presence its seat
+// host renews in every mode is the one record, so each node boots that host as
+// the engine does, behind its claim gate.
 func TestADatalessMemberMustAcknowledgeASeal(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

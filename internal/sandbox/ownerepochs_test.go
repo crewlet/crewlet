@@ -40,7 +40,7 @@ func TestOwnerEpochsIsTheHighestEachSeatsRunsCarry(t *testing.T) {
 }
 
 // ONE RECORD THAT DOES NOT DECODE IS SKIPPED, and every other seat is still
-// floored: failing the read over it stopped every node starting.
+// floored: failing the read over it would stop every node starting.
 func TestOwnerEpochsSkipsARecordItCannotDecode(t *testing.T) {
 	t.Parallel()
 	fleet := memory.NewFleet()

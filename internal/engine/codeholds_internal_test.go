@@ -188,17 +188,13 @@ func TestAnUnreadHoldsSourceIsAnError(t *testing.T) {
 }
 
 // A NODE HOLDING NO SEAT NEVER STANDS IN FOR A HOLDER. Every engine answers
-// the holds question, whatever its roles, so a node with no seat lease — a git
-// or ingress node, a data node without seats, one a fleet with fewer seats
-// than nodes left none — answers it too, and the read must wait for the
-// holders the seat leases NAME, never for as many replies as there are
-// holders: the first answers to arrive would fill that count with a non-holder's
-// and leave a holder's unread. Two nodes on one broker, both answering: node-a
-// asks and holds no seat, and its own answer reaches the reader before node-b
-// answers at all; node-b holds the only seat lease. Every read hears node-b,
-// and what node-a's stopping turn holds is believed beside it. A holder the
-// leases name that serves nothing is the only one an error names, and an ask
-// that ended before its budget claims no silence of the budget's length.
+// the holds question, so the read waits for the holders the seat leases NAME,
+// never for as many replies as there are holders. Two nodes on one broker:
+// node-a asks, holds no seat, and its answer reaches the reader before node-b
+// answers; node-b holds the only seat lease. Every read hears node-b, and what
+// node-a's stopping turn holds is believed beside it. A named holder that
+// serves nothing is the only one an error names, and an ask that ended before
+// its budget claims no silence of the budget's length.
 //
 // Mutation: end the ask once it has as many replies as the leases name
 // holders — node-a's answer fills it, and every read names node-b silent, red.
@@ -297,16 +293,14 @@ func TestANodeHoldingNoSeatNeverStandsInForAHolder(t *testing.T) {
 	}
 }
 
-// A HOLD MOVING ONTO ITS TURN'S FIRST ROW IS NEVER MISSED. A native turn's
-// first launch writes its holds on a NEW row (BeginLaunch), and the turn
-// suspends and forgets them in memory as its frame returns. A row written
-// after the reader listed the run store, by a turn whose frame returned before
-// the running turns were asked, was in neither answer, and the pass expired a
-// scratch repository the parked run depends on (M3-decisions M3-O61). Here
-// the run store lists no row first and, as it answers, the turn launches — its
-// row written, its frame returned — so the running turns hold nothing when
-// asked: the rows read after the ask hold the key. And a listing after the
-// ask that fails is an unknown, named, like the first.
+// A HOLD MOVING ONTO ITS TURN'S FIRST ROW IS NEVER MISSED (M3-decisions
+// M3-O61). A first launch writes its holds on a NEW row (BeginLaunch) and its
+// frame forgets them as it returns, so a row written after the reader listed
+// the run store, by a frame that returned before the running turns were asked,
+// is in neither answer. Here the turn launches as the first listing answers,
+// so the running turns hold nothing when asked: the rows read after the ask
+// hold the key. A listing after the ask that fails is an unknown, named, like
+// the first.
 //
 // Mutations: drop the listing after the ask — repo-s reads unheld, red; read
 // its failure as nothing held — no error, red.
@@ -366,15 +360,14 @@ func TestATurnHoldsWhatItsRowMay(t *testing.T) {
 	}
 }
 
-// A RUN'S CHANGE TITLE IS BOUND AS GITLET BOUNDS IT. An executor's ask to
-// open a change rides its run's row with its title, which the sandbox holds to
-// a bound of its own because it imports nothing of Gitlet — so the two
-// must be one figure: a sandbox bound under Gitlet's refuses a title
-// Gitlet would open, and one over it lets the row carry more than its
-// budget counts.
+// A RUN'S CHANGE TITLE IS BOUND AS GITLET BOUNDS IT. An executor's ask to open
+// a change rides its run's row with its title, which the sandbox bounds itself
+// because it imports nothing of Gitlet: a bound under Gitlet's refuses a title
+// Gitlet would open, and one over it lets the row carry more than its budget
+// counts.
 //
-// Mutation: set the sandbox's bound to anything but Gitlet's, and this
-// goes red.
+// Mutation: set the sandbox's bound to anything but Gitlet's, and this goes
+// red.
 func TestARunsChangeTitleIsBoundAsGitletBoundsIt(t *testing.T) {
 	t.Parallel()
 	if sandbox.MaxChangeTitleBytes != gitlet.MaxChangeTitleBytes {

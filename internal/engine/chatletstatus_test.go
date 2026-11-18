@@ -12,14 +12,12 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
-// THE CHATLET WORKING INDICATOR FOLLOWS THE COMPANY, at boot and on every apply.
-//
-// The setting `chat.chatlet.typing_status` had no reader: nothing built a
-// driver over the hub, at boot or later. These cases go through the engine's
-// own entry points — [engine.New] with a company, the hub attached after it as
-// a process attaches one ([engine.Engine.SetChatLive]), and
-// [engine.Engine.Apply] with the next revision — and read the answer back the
-// way a turn does, through [engine.Engine.Status].
+// THE CHATLET WORKING INDICATOR FOLLOWS THE COMPANY (its
+// `chat.chatlet.typing_status`), at boot and on every apply. These cases go
+// through the engine's own entry points ([engine.New] with a company, the hub
+// attached after it ([engine.Engine.SetChatLive]), and [engine.Engine.Apply]
+// with the next revision) and read the answer back as a turn does, through
+// [engine.Engine.Status].
 
 // indicatorDoc is a company on the engine's own chat (it declares no vendor
 // chat surface, so its chat derives chatlet), with its typing_status a hole.

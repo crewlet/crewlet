@@ -18,26 +18,19 @@ import (
 )
 
 // EVERY ALARM WHOSE INPUT A NODE ASSEMBLES FOR ITSELF FIRES THROUGH THE WIRING
-// A RUNNING NODE HAS — not through helpers a case calls directly.
-//
-// Each has three links that a helper-level test cannot see: the retention loop
-// the engine builds has to hold the watch or the measurement, the evaluation it
-// runs has to take them, and the report every surface reads has to carry them
-// to the table. With any one of those gone an alarm is dead on a real node
-// while every case beside it passes — which is how `deferred_old` and
-// `floor_unknown` shipped unable to fire, and `trim_blocked` able to fire on
-// every fresh fleet.
+// A RUNNING NODE HAS — not through helpers a case calls directly — because
+// three links a helper-level test cannot see each kill an alarm on a real node:
+// the engine's retention loop holding the watch or measurement, its evaluation
+// taking them, and the report every surface reads carrying them to the table.
 
 // A LOG WHOSE CEILING CANNOT HOLD ITS REPLAY WINDOW FIRES `log_ceiling_short`
 // — and the evaluation measures every strict log's intake on the way.
 //
-// The intake cannot be made real here: a stream is created now, and the
-// measurement waits out a log's first two days by design. So the clock is put
-// three days ahead — which makes every strict log MEASURED (at nothing, the
-// day behind the clock holding none of its records), proving the evaluation
-// took the measurement and the report carries it — and then one log's intake
-// is the figure a busy company would have. The ceiling and the replay window
-// are the node's own.
+// A real intake waits out a new log's first two days by design, so the clock
+// is put three days ahead (every strict log measured, at nothing, proving the
+// evaluation took the measurement and the report carries it), then one log's
+// intake is set to a busy company's. The ceiling and replay window are the
+// node's own.
 func TestTheCeilingAlarmFiresOnARunningNode(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -94,19 +87,12 @@ func TestTheCeilingAlarmFiresOnARunningNode(t *testing.T) {
 // PAST THE WINDOW IS NAMED: through the trim's own tick, the floor it publishes
 // and the report every surface reads.
 //
-// A fresh node is the young fleet: its trim is blocked from the first tick,
-// because nothing has been backed up. The report's clock is then put a whole
-// window and more ahead, so the block is older than the threshold by every
-// measure the clock has, and the log must be named nowhere, because the age
-// term the tick published keeps every record the log holds. Then the published
-// floor is what the duty would publish once the records had aged (the same
-// block, its age term past the log's head) and the log's hold must be named,
-// under the alarm whose remedy it is: the BACKUP's, since the backup term is
-// what holds it and that log's own `backup_age` is up on a node that has never
-// taken one, so it raises no `trim_blocked` of its own and the one cause reads
-// as one problem.
-// A floor published at another generation must not be read as this log's at
-// all.
+// A fresh node's trim is blocked from the first tick (nothing backed up); with
+// the clock a window and more ahead the log is named nowhere, since the age
+// term keeps every record. With the age term moved past the log's head (as the
+// duty publishes once records age) the hold is named under `backup_age`, the
+// alarm whose remedy it is, and no `trim_blocked` of its own, so one cause
+// reads as one problem. A floor from another generation is not this log's.
 func TestABlockedTrimIsNamedOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -238,23 +224,15 @@ func TestABlockedTrimIsNamedOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 }
 
 // A RECORD FROM A NEWER BUILD, HELD PAST THE DEFERRAL GRACE, FIRES ONE
-// `deferred_old` STANDING ON EVERY LOG HOLDING ONE, each with its own
-// measurement — from a real deferral on a real applier, dated by the real
-// position heartbeat — and each log's entry says that this node's copy of
-// THAT LOG goes out of service at the grace.
+// `deferred_old` STANDING ON EVERY LOG HOLDING ONE, each with its own position
+// and version, and each entry says this node's copy of THAT LOG goes out of
+// service at the grace.
 //
-// The alarm could not fire before: the report stood the grace in for the age
-// whenever a record was held, and the rule fires past the grace. The records
-// here are what a peer one build ahead would publish — signed under this
-// fleet's keyring, at a record version this build does not read — so the
-// appliers retain them exactly as a rolling upgrade makes them. And the node
-// holds one on TWO logs at once, which is what a build that moved two record
-// versions leaves behind. Every log's copy is judged on its own (ADR-0079), the
-// identity log's included, so the grace takes each log's copy out of service
-// and nothing else — the tracker's operations go to a peer while every other
-// log's copy keeps serving here, and the seats stay where they are for both.
-// An alarm carrying only the node's oldest record named one log for both;
-// each log the alarm stands on now carries its own position and version.
+// The records are what a peer one build ahead publishes (signed under this
+// fleet's keyring, at a record version this build does not read), held by the
+// real appliers and dated by the real heartbeat, on TWO logs at once. Each
+// log's copy is judged on its own (ADR-0079), the identity log's included: the
+// grace takes only that copy out of service, and the seats stay where they are.
 func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -401,13 +379,9 @@ func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 }
 
 // A FLOOR THIS NODE CANNOT USE FOR FOUR HEARTBEATS FIRES `floor_unknown` —
-// observed on the heartbeat, through the fleet's own published floors.
-//
-// The floor is one the fleet published at a LATER generation than this node's
-// applier, which every read on this node refuses on: what a fleet looks like
-// to a node that was not re-anchored with it. It could not fire before: the
-// branch that set its input was unreachable behind a health read that failed on
-// the same floor.
+// observed on the heartbeat, through the fleet's own published floors. The
+// floor is published at a LATER generation than this node's applier, which
+// every read here refuses: a node not re-anchored with its fleet.
 func TestTheFloorUnknownAlarmFiresOnARunningNode(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -473,13 +447,10 @@ func TestTheFloorUnknownAlarmFiresOnARunningNode(t *testing.T) {
 // domainAt is a log's bounds as a case read them.
 type domainAt struct{ First, Last uint64 }
 
-// THE TABLE IS EVALUATED ON THE HEARTBEAT, not on the trim's quarter-hour.
-//
-// Every alarm there fires at a threshold of a minute or more, and an evaluation
-// paced by the trim silently raised each of them to fifteen minutes: the
-// floor watch this node runs is observed on every beat, so a second
-// observation arriving within one [statelog.AlarmInterval] of the first is the
-// heartbeat running.
+// THE TABLE IS EVALUATED ON THE HEARTBEAT, not on the trim's quarter-hour,
+// which would stretch every threshold of a minute or more to fifteen. The
+// floor watch is observed on every beat, so two observations within one
+// [statelog.AlarmInterval] are the heartbeat running.
 func TestTheAlarmTableIsEvaluatedOnTheHeartbeat(t *testing.T) {
 	t.Parallel()
 	e := bootDirectoryNode(t, nil)

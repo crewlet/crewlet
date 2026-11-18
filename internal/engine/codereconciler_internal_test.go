@@ -18,8 +18,7 @@ func reconcileAt(i int) time.Time {
 	return time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(i) * time.Minute)
 }
 
-// nextBegun is the activation the next reconcile began for, or a failure
-// after a while.
+// nextBegun is the activation the next reconcile began for, or a failure.
 func nextBegun(t *testing.T, began <-chan time.Time, what string) time.Time {
 	t.Helper()
 	select {
@@ -33,19 +32,15 @@ func nextBegun(t *testing.T, began <-chan time.Time, what string) time.Time {
 
 // THE NEWEST ACTIVATION'S RECONCILE WINS.
 //
-// One reconcile runs at a time. Asked for a newer activation while one runs,
-// the reconciler ENDS the running one, with [gitlet.ErrSuperseded] as its cause
-// — the newer reconcile decides every repository again, and its fence refuses
-// what the older would still write — and of the requests made meanwhile runs
-// only the newest. A request for the activation running, or an older one, is
-// dropped: nothing runs after the newest but what is asked for later. And the
-// ended reconcile is never run again, though it answers its ending as what it
-// left undone: the newer one decides every repository it would have.
+// One reconcile runs at a time. A newer activation's request ENDS the running
+// one with [gitlet.ErrSuperseded] — the newer decides every repository again,
+// and its fence refuses what the older would still write — and of the requests
+// made meanwhile only the newest runs. A request for the running or an older
+// activation is dropped, and the ended reconcile is never retried.
 //
-// Mutation: let the older reconcile run to its end and the newer never begins
-// while it is held; keep every request and an older activation is reconciled
-// after the newest; retry a reconcile its context ended and the older one runs
-// again.
+// Mutation: let the older run to its end and the newer never begins while it
+// is held; keep every request and an older activation runs after the newest;
+// retry an ended reconcile and the older runs again.
 func TestTheNewestActivationsReconcileWins(t *testing.T) {
 	t.Parallel()
 	type ran struct {
@@ -58,9 +53,8 @@ func TestTheNewestActivationsReconcileWins(t *testing.T) {
 	)
 	began := make(chan time.Time, 8)
 	release := make(chan struct{})
-	// asked holds an ended reconcile from returning until the case has made
-	// both its newer requests, so the loop cannot begin the first of them
-	// between the two.
+	// asked holds an ended reconcile until both newer requests are made, so
+	// the loop cannot begin the first between the two.
 	asked := make(chan struct{})
 	r := newCodeReconciler(func(ctx context.Context, w codeReposWanted) error {
 		began <- w.at
@@ -115,9 +109,8 @@ func TestTheNewestActivationsReconcileWins(t *testing.T) {
 
 // STOPPING ENDS THE RECONCILE IN FLIGHT, WAITS FOR IT, AND BEGINS NO MORE: the
 // engine stops it before withdrawing its admission, so stop returns only once
-// the reconcile has — which was ended with the engine's stop as its cause —
-// and a request after it is dropped. A reconciler never asked runs nothing, and
-// stops at once.
+// the reconcile, ended with errCodeReconcileStopped, has; a later request is
+// dropped. A reconciler never asked runs nothing and stops at once.
 //
 // Mutation: return from stop without waiting for the loop and the reconcile
 // is still running when it does.
@@ -136,8 +129,7 @@ func TestStoppingEndsTheReconcileInFlightAndBeginsNoMore(t *testing.T) {
 	r := newCodeReconciler(func(ctx context.Context, w codeReposWanted) error {
 		began <- w.at
 		<-ctx.Done()
-		// A reconcile ending takes a moment: the decisions in flight
-		// return first.
+		// An ending takes a moment: the decisions in flight return first.
 		time.Sleep(50 * time.Millisecond)
 		cause.Store(context.Cause(ctx))
 		returned.Store(true)
@@ -169,13 +161,9 @@ func TestStoppingEndsTheReconcileInFlightAndBeginsNoMore(t *testing.T) {
 // TIME, UNTIL IT LEAVES NOTHING.
 //
 // The apply that asked has already reported its revision applied, so nothing
-// else runs it again: a node whose decisions were refused while it caught up
-// on the activation's fence, an outcome the log did not answer, a listing it
-// could not read — each left code.repos not in force until somebody edited the
-// configuration or restarted the node, while the control plane reported the
-// epoch applied. So the reconciler runs the same activation again after each
-// such run, the wait after the n-th in a row asked for n failures — the
-// backoff grows — and a run that leaves nothing undone ends it.
+// else runs it again: a refused decision, an unanswered outcome or an unread
+// listing would leave code.repos not in force until the next edit or restart.
+// The wait after the n-th failure in a row is asked for n, so the backoff grows.
 //
 // Mutation: drop the retry and the activation runs once; reset the count at
 // each retry and every wait is the first.
@@ -219,13 +207,10 @@ func TestAFailedReconcileIsRunAgainUntilItApplies(t *testing.T) {
 // A RETRY WAITS FOR NOTHING BUT ITS OWN TIME: A NEWER ACTIVATION RUNS AT ONCE
 // AND THE RETRY IS DROPPED, AND A STOP RETURNS AT ONCE.
 //
-// A newer activation decides every repository again from its own document,
-// so a request for one while an older activation waits for its retry runs now
-// and the older one is never run again. And the engine stops the reconciler
-// before withdrawing its admission, so a stop does not wait out a retry — five
-// minutes at the ceiling — and nothing runs after it. A request for the
-// activation waiting to be run again is dropped, as one for the activation
-// running is.
+// A newer activation decides every repository again, so it runs now and the
+// waiting older one never runs again. The engine stops the reconciler before
+// withdrawing its admission, so a stop does not wait out a retry (five minutes
+// at the ceiling). A request for the activation awaiting retry is dropped.
 //
 // Mutation: keep the retry past a newer request and the reconciler never goes
 // idle; wait out the retry in stop and the stop takes the hour.
@@ -240,8 +225,8 @@ func TestANewerRequestOrAStopEndsTheRetry(t *testing.T) {
 			return nil
 		}
 	}
-	// waiting is a retry an hour away, saying it was asked for on recorded:
-	// the failure is held by the time anything waiting there hears of it.
+	// waiting is a retry an hour away, signalling recorded once the failure
+	// is held.
 	waiting := func(recorded chan<- struct{}) func(int) time.Duration {
 		return func(int) time.Duration {
 			recorded <- struct{}{}
@@ -299,12 +284,10 @@ func TestANewerRequestOrAStopEndsTheRetry(t *testing.T) {
 
 // AN APPLY ASKS FOR THE RECONCILE AND DOES NOT WAIT FOR IT.
 //
-// A reconcile writes a record for every repository that changed — ten
-// thousand at the most a document may declare — and an apply that waited for
-// them stayed behind on its epoch for as long, past the grace after which a
-// node behind its peers is shed. So an apply hands its epoch to the reconciler
-// and returns: here the reconcile is held until the test ends, and the apply
-// has returned with the epoch it asked for in hand.
+// A reconcile writes a record per changed repository (up to ten thousand), and
+// an apply waiting for them could stay behind its peers past the shedding
+// grace. Here the reconcile is held until the test ends, yet the apply returns
+// having asked for its epoch.
 //
 // Mutation: decide the reconcile inside the apply and this one's held
 // reconciler is never asked.

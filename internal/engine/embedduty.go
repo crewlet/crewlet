@@ -15,103 +15,55 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The embedding duty, armed — the loop that fills the semantic half.
+// The embedding duty: the fleet singleton and only publisher of the vector
+// log. Without it semantic search answers nothing while `search_degraded`
+// stays clean, since an empty corpus skips no semantic half. One node holds it
+// under a named lease because an embedding is a billed provider call every
+// node needs identically; it lives in engine, as the trim does, the one
+// package holding the provider, the state log's publisher and the leases.
 //
-// # Without it the vector domain is a log nobody writes to
-//
-// Everything downstream of a vector existed and was certified: the domain is
-// registered, its applier writes `kb_vectors` on every data node, the
-// two-stage retrieval reads them and the fusion ranks them. What did not exist was the
-// only thing that ever PUBLISHES a vector record — so a company's semantic
-// search returned nothing, for ever, while every surface reported a healthy
-// domain applying a log that happened to be empty. That is the worst shape a
-// missing wire has: `search_degraded` is a fraction of answers that skipped the
-// semantic half, and an answer over an empty corpus does not skip it.
-//
-// # Why it is a fleet singleton and why it is here
-//
-// An embedding is a provider call the company is BILLED for, and every node
-// needs the same vector. Run per node it would be N bills for one value, and
-// N nodes racing to publish records whose subject is the source's own identity
-// — which the broker would arbitrate correctly and charge for anyway. So one
-// node holds a named lease, publishes, and every data node's applier writes
-// the rows. This file is where that lands for the same reason the trim's is:
-// `engine` is the entanglement point, the one package that holds the company's
-// provider, the state log's publisher and the fleet's leases at once.
-//
-// # What a tick costs, and why a caught-up company pays almost nothing
-//
-// A tick on a caught-up company reads the semantic index's head, its per-list
-// counts (at most a few thousand rows) and one count of the embedding space
-// over kb_vectors' model index, then runs one indexed anti-join that returns
-// no rows, and stops there — no provider call, no publish. A tick with a
-// backlog embeds at most [search.EmbedSourcesPerTick] sources in at most
-// [search.EmbedRequestsPerTick] requests, which is what bounds the provider
-// bill per minute.
-//
-// # The one tick that is long, and how it keeps its lease
-//
-// A tick that TRAINS the semantic index (ADR-0028) reads every code and makes
-// one exact pass over the wide table, then runs a k-means and files every code
-// on HALF the cores and never fewer than two, leaving the rest to the seats
-// and the searches — about 120 µs a source for the reading and ≈ 125 s of
-// k-means and filing at the largest list count on two workers of four busy
-// cores (≈ 130 s on both of two), which projects to a little over three
-// minutes at the ≈ 545 000 sources a node searches inside its budget through
-// an index (BenchmarkIndexTraining, BenchmarkIVFTrainingShare,
-// [search.IVFMaxLists]). A training tick is longer than the interval and
-// within reach of the lease's TTL, so the tick RENEWS the lease while it runs
-// ([dutyRenewal.keep]) and is cut off the moment a renewal answers that another
-// node holds the duty, or once no renewal has confirmed it for as long as the
-// lease is sure to last; a renewal the store refuses, or holds on to while its
-// leader moves, costs it nothing, and a step cut off publishes nothing, so the
-// singleton never has two writers. Each renewal first asks whether a copy the
-// duty decides from has gone out of service since the tick began (ADR-0079):
-// if one has, the tick is cut off unrenewed, and gives the duty back once it
-// has returned ([embedDuty.declinedMidTick]).
-//
-// And every tick is bounded by [embedTickBudget], because a renewal is also
-// what would keep a WEDGED tick holding the duty for ever — a budget of
-// PROGRESS rather than of time ([tickBound]). On a node allowed one core,
-// shared with the searches it answers, the same training is about three and a
-// half minutes of reading and seven and a half of arithmetic, every moment of
-// it advancing: a budget of five minutes of time cut every one of them off and
-// began it again the next tick, so that node spent five minutes of its only
-// core a tick for ever on an index it never got. Bounded by its progress, it
-// finishes once.
+// A caught-up tick reads the index head, its list counts and one count of the
+// embedding space, runs one indexed anti-join that returns nothing and calls
+// no provider; a backlog tick is capped at [search.EmbedSourcesPerTick]
+// sources in [search.EmbedRequestsPerTick] requests, bounding the bill.
+
+// A training tick (ADR-0028) runs minutes: about three at the ≈ 545 000
+// sources a node searches through an index, its k-means on half the cores and
+// never fewer than two (BenchmarkIndexTraining, BenchmarkIVFTrainingShare,
+// [search.IVFMaxLists]), past the interval and near the lease's TTL. So it
+// renews the lease as it runs ([dutyRenewal.keep]) and is cut off once a
+// renewal says another node holds it, or none has confirmed it for as long as
+// the lease is sure to last; a refused or stalled renewal costs nothing and a
+// cut-off step publishes nothing, so the singleton never has two writers. A
+// renewal first asks whether a copy the duty decides from went out of service
+// (ADR-0079); if one has, the tick is cut off unrenewed and gives the duty
+// back once it has returned ([embedDuty.declinedMidTick]).
+
+// Every tick is bounded by PROGRESS rather than time ([embedTickBudget],
+// [tickBound]): renewals alone would let a wedged tick hold the duty for ever,
+// and a time budget cuts off a one-core node's eleven-minute training, every
+// moment of it advancing, on every tick, so it never finishes.
 
 // embedDutyName is the fleet singleton the embedding duty claims.
 const embedDutyName = "embeddings"
 
-// embedDutyTTL is how long the duty survives without a re-claim.
-//
-// Three ticks, the ratio every other singleton here uses: one missed tick must
-// not hand the duty to a peer, because two nodes embedding at once is two
-// provider bills for one company — the exact cost the singleton exists to
-// avoid.
+// embedDutyTTL is how long the duty survives without a re-claim: three ticks,
+// as every singleton here, so one missed tick does not hand it to a peer and
+// bill the company twice.
 const embedDutyTTL = 3 * search.EmbedInterval
 
 // embedTickBudget is how long one tick may go without showing progress
-// before it is cut off, the lease renewed or not ([tickBound]).
-//
-// FIVE MINUTES, more than the longest stretch a LIVE tick goes without
-// showing any. A tick shows progress at every step that has a natural end: a
-// provider request answered — each sent through a call of its own and bounded
-// by its own ceiling ([embeddings.BatchTimeout], a minute, with no retries) —
-// each vector it publishes or withdraws, which is one publish (up to 128 a
-// request, and 1 024 withdrawals a corpus after a bulk purge, so reported one
-// by one rather than as a stretch), a batch of the
-// index's rollout published, every 1 024 rows the training's reading and
-// its exact pass stream, which on the slowest node measured, one core shared
-// with two searchers, are a third of a second apart (BenchmarkIndexTraining
-// -cpu 1 pinned to one CPU: 331 µs a row for the exact pass, the slowest part
-// of the reading), and the end of the index's arithmetic, which runs exempt
-// ([search.Budget]) because it cannot wedge. What is left between two of them
-// is one of the tick's reads that do not stream — the index's state, a
-// corpus's stale selection, the evaluation's sample (12 µs a source there) —
-// seconds at the largest corpus. A tick that shows nothing for five minutes
-// was waiting on something that did not answer. Cut off, it publishes nothing
-// more and the next tick starts over.
+// before it is cut off, the lease renewed or not ([tickBound]); cut off, it
+// publishes nothing more and the next tick starts over.
+// Five minutes, longer than any stretch a LIVE tick goes without progress. It
+// shows progress at each provider answer (bounded by [embeddings.BatchTimeout],
+// a minute, no retries), each vector published or withdrawn (one by one, since
+// a bulk purge withdraws 1 024 a corpus), each rollout batch, and every 1 024
+// rows the training reads, a third of a second apart on the slowest node
+// measured (BenchmarkIndexTraining -cpu 1: 331 µs a row); the index's
+// arithmetic runs exempt ([search.Budget]) because it cannot wedge. The reads
+// between them that do not stream take seconds at the largest corpus, so five
+// silent minutes is a wait on something that never answered.
 const embedTickBudget = 5 * time.Minute
 
 // embedDuty is the loop.
@@ -122,9 +74,9 @@ type embedDuty struct {
 	claim     func(context.Context) (bool, error)
 	metrics   *metrics.Recorder
 
-	// log is the vector log this duty embeds into, whose runner and stream
-	// the index step's standing is read from, and db the node whose
-	// replicated estate the corpora are read from.
+	// log is the vector log this duty embeds into (its runner and stream give
+	// the index step's standing), and db the node whose replicated estate the
+	// corpora are read from.
 	log *runningLog
 	db  *store.DB
 
@@ -138,21 +90,19 @@ type embedDuty struct {
 	// and a test's shorter one.
 	budget time.Duration
 
-	// refusals is what the provider has refused alone, kept ACROSS ticks —
-	// the search package's duty is rebuilt every tick — and refusalsFor the
-	// configuration it belongs to ([embedConfiguration]). A refusal is a
-	// fact about the provider as it was configured, so a provider configured
-	// otherwise starts with none ([search.Refusals]); one an apply merely
-	// built again the same keeps it. Touched only by the loop's own ticks.
+	// refusals is what the provider refused alone, kept ACROSS ticks because
+	// the search package rebuilds its duty every tick, and refusalsFor the
+	// configuration it belongs to ([embedConfiguration]): a provider configured
+	// otherwise starts with none ([search.Refusals]), one an apply rebuilt the
+	// same keeps them. Touched only by the loop's own ticks.
 	refusals    *search.Refusals
 	refusalsFor embedConfiguration
 
-	// copies names the first of the domains given whose copy on this node is
-	// out of service ([Engine.copyOutOfService]) — nil judges no copy, and
-	// every one serves; declines is whether this node is declining the duty
-	// because a copy it decides from is ([embedDuty.decidesFrom]), and
-	// giveBack gives the duty back where this node holds it when it does
-	// ([Engine.workerGiveBack]) — nil holds no lease to give.
+	// copies names the first of the given domains whose copy on this node is
+	// out of service ([Engine.copyOutOfService]; nil: every copy serves);
+	// declines is whether this node declines the duty because a copy it
+	// decides from is ([embedDuty.decidesFrom]); giveBack gives a held duty
+	// back when it does ([Engine.workerGiveBack]; nil: no lease to give).
 	copies   func(ctx context.Context, domains ...string) (string, bool)
 	declines dutyDecline
 	giveBack func(context.Context) (bool, error)
@@ -178,19 +128,17 @@ type tickReport struct {
 
 // startEmbedding arms the duty, or does nothing on a node that cannot run it.
 //
-// THE GATE IS THE PUBLISHER, not the provider: a company with no
-// `providers.embeddings` legitimately has no vectors, and that is checked per
-// TICK rather than here — an epoch that adds the block must start embedding
-// without a restart, and one that removes it must stop.
+// THE GATE IS THE PUBLISHER, not the provider: `providers.embeddings` is
+// checked per TICK, so an epoch that adds the block starts embedding without
+// a restart and one that removes it stops.
 func (e *Engine) startEmbedding(ctx context.Context, s *stateLog) {
 	d := e.newEmbedDuty(s)
 	if d == nil {
 		return
 	}
-	// DETACHED from the caller's context, for the reason every other
-	// long-running loop here is: a loop bound to a signal context stops at
-	// SIGTERM, which would make its lifetime differ from the appliers it
-	// publishes into for no reason a reader could find.
+	// DETACHED from the caller's context, like every long-running loop here:
+	// bound to a signal context it would stop at SIGTERM, unlike the appliers
+	// it publishes into.
 	loop, stop := context.WithCancel(context.WithoutCancel(ctx))
 	d.stop = stop
 	e.embedding = d
@@ -239,24 +187,16 @@ func (e *Engine) stopEmbedding() {
 
 // corpora is every source kind this node can embed out of the replicated estate.
 //
-// ONE CONSTRUCTION SITE, because the coverage gauge and the duty must be
-// counting and filling the same set: a corpus the duty embeds and the gauge
-// does not reports a company as permanently short of coverage, and the reverse
-// reports it as complete while a whole source kind is unsearchable by meaning.
+// ONE CONSTRUCTION SITE, because the coverage gauge and the duty must count
+// and fill the same set, or the gauge reports a company permanently short, or
+// complete while a source kind is unsearchable by meaning.
 func (e *Engine) corpora(estate store.ReplicatedReader) []search.Corpus {
 	if e.backends == nil || e.backends.Store == nil || estate.IsZero() {
 		return nil
 	}
-	// BOTH SOURCE KINDS. A duty that embedded only one would leave the
-	// other unsearchable by meaning for ever, with a coverage gauge
-	// reporting the half it did cover as the whole — which is the reading
-	// an operator would act on.
-	//
-	// AND NOT CHAT, deliberately: a conversation is a keyword corpus and
-	// takes no vectors (ADR-0071). A year of a company's messages is
-	// several times the whole vector budget the knowledge base is sized
-	// for, so a chat corpus here would be the knowledge base's own
-	// embeddings paying for it.
+	// NOT CHAT: a conversation is a keyword corpus with no vectors
+	// (ADR-0071), since a year of messages is several times the whole vector
+	// budget the knowledge base is sized for.
 	return []search.Corpus{
 		search.TaskCorpus{DB: estate},
 		search.PageCorpus{DB: estate},
@@ -266,11 +206,9 @@ func (e *Engine) corpora(estate store.ReplicatedReader) []search.Corpus {
 // embedModel is the model id and width the current epoch embeds at, and false
 // when this company has no embeddings configured.
 //
-// READ PER TICK rather than captured at start, because the provider is
-// replaced on every config apply: a duty holding the embedder it was built
-// with would go on writing rows at the retired model's id after an operator
-// changed it, and the rows a change is meant to supersede would never be
-// selected again.
+// READ PER TICK, never captured at start: every config apply replaces the
+// provider, and a captured one would go on writing rows at a retired model's
+// id, so the rows a change supersedes would never be selected again.
 func (e *Engine) embedModel() (embeddings.BatchEmbedder, string, bool) {
 	held := e.embeddings.Load()
 	if held == nil || *held == nil {
@@ -278,11 +216,9 @@ func (e *Engine) embedModel() (embeddings.BatchEmbedder, string, bool) {
 	}
 	batch, ok := (*held).(embeddings.BatchEmbedder)
 	if !ok {
-		// A PROVIDER THAT CANNOT BATCH DOES NOT RUN THIS DUTY. One
-		// source per round trip is 110 000 round trips for a cold fill,
-		// which does not fit in the tick — and the one-at-a-time
-		// fallback belongs to the callers that embed a single thing,
-		// never to a corpus walk.
+		// A PROVIDER THAT CANNOT BATCH DOES NOT RUN THIS DUTY: a cold fill
+		// one source a round trip is 110 000 round trips, past a tick. The
+		// one-at-a-time fallback is for callers embedding a single thing.
 		return nil, "", false
 	}
 	company := e.Company()
@@ -294,14 +230,10 @@ func (e *Engine) embedModel() (embeddings.BatchEmbedder, string, bool) {
 		return nil, "", false
 	}
 	if !company.Config.VectorsEnabled() {
-		// `knowledge.vectors: false` IS AN ANSWER, and it is the only
-		// thing that reads it: a company that keeps an embeddings
-		// provider for its diary and does not want its corpus embedded.
-		// It stops the duty, the coverage gauge and the query vector
-		// together, because all three read this one function — the
-		// switch was declared, validated and documented while every one
-		// of them ignored it, so a company that turned it off was billed
-		// for a vector per document all the same.
+		// `knowledge.vectors: false` is read here alone: a company keeping
+		// a provider for its diary without its corpus embedded. The duty,
+		// the coverage gauge and the query vector all read this function,
+		// so it stops all three.
 		return nil, "", false
 	}
 	model := e.resolver().Value(cfg.Model)
@@ -313,10 +245,9 @@ func (e *Engine) embedModel() (embeddings.BatchEmbedder, string, bool) {
 
 // queryModel is [Engine.embedModel] as a search's query vector reads it.
 //
-// THE SAME FUNCTION as the duty's, so a query is embedded at exactly the model
-// and width the corpus is: a query vector from any other space ranks against
-// no row, and a search that ranked by meaning against no row would answer
-// empty and call itself complete.
+// THE SAME FUNCTION as the duty's, so a query is embedded at exactly the
+// corpus's model and width: a vector from another space ranks against no row,
+// and the search would answer empty and call itself complete.
 func (e *Engine) queryModel() (embeddings.Embedder, string, bool) {
 	provider, model, on := e.embedModel()
 	if !on {
@@ -375,9 +306,8 @@ func (d *embedDuty) declinedMidTick(ctx context.Context) bool {
 // reports what it did.
 //
 // IT DECLINES FIRST, before it claims, while this node's copy of a domain it
-// decides from is out of service ([dutyDecline]): the vectors it would publish
-// and withdraw are every node's, decided from rows this node has stopped
-// serving.
+// decides from is out of service ([dutyDecline]): the vectors it publishes are
+// every node's, and would be decided from rows this node stopped serving.
 func (d *embedDuty) tick(ctx context.Context) tickReport {
 	var report tickReport
 	if domain, out := d.declines.check(ctx, embedDecline, d.copies, d.decidesFrom()); out {
@@ -396,19 +326,17 @@ func (d *embedDuty) tick(ctx context.Context) tickReport {
 		if !mine {
 			return report
 		}
-		// FROM HERE THE TICK KEEPS THE DUTY AS IT RUNS, so a training may
-		// outlive any number of leases ([dutyRenewal.keep]), and is cut off
-		// the moment a copy it decides from goes out of service under it
-		// ([embedDuty.declinedMidTick]). Nothing else the tick ends with
-		// depends on Stop's answer: what it published the broker
-		// arbitrated, and the next tick claims afresh.
+		// FROM HERE THE TICK KEEPS THE DUTY AS IT RUNS ([dutyRenewal.keep]),
+		// cut off once a copy it decides from goes out of service
+		// ([embedDuty.declinedMidTick]). Nothing else depends on Stop's
+		// answer: the broker arbitrated what it published, and the next
+		// tick claims afresh.
 		var kept *keptDuty
 		work, kept = d.renewal.declining(d.declinedMidTick).keep(ctx, d.claim, asked)
 		defer func() {
-			// A TICK CUT OFF BECAUSE A COPY WENT OUT OF SERVICE gives the
-			// duty back once it has RETURNED, never from the renewal that
-			// cut it off: a publish already on its way would otherwise
-			// land after another node had taken the duty.
+			// A TICK CUT OFF FOR A COPY OUT OF SERVICE gives the duty back
+			// once it has RETURNED, never from the renewal that cut it off,
+			// or a publish on its way lands after another node took it.
 			if _, err := kept.Stop(); errors.Is(err, errDutyDeclined) {
 				d.declines.giveBack(ctx, embedDecline, d.giveBack)
 			}
@@ -419,7 +347,7 @@ func (d *embedDuty) tick(ctx context.Context) tickReport {
 		return report
 	}
 	// THE MEMORY FOLLOWS THE CONFIGURATION, read off the very provider this
-	// tick embeds with, so no apply landing between two reads can pair one
+	// tick embeds with, so an apply between two reads cannot pair one
 	// provider's refusals with another's.
 	if configuration := configurationOf(provider); d.refusals == nil || d.refusalsFor != configuration {
 		d.refusals, d.refusalsFor = search.NewRefusals(), configuration
@@ -428,8 +356,7 @@ func (d *embedDuty) tick(ctx context.Context) tickReport {
 	defer release()
 	duty, err := search.NewEmbedder(search.EmbedDeps{
 		Publisher: d.publisher,
-		// THE REPLICATED ESTATE AND THE VECTOR LOG, for the semantic
-		// index the duty keeps beside its vectors (ADR-0028).
+		// For the semantic index the duty keeps beside its vectors (ADR-0028).
 		Estate:   d.db.Replicated().Reader(),
 		Log:      d.log.spec.Name,
 		Standing: d.standing,
@@ -437,19 +364,15 @@ func (d *embedDuty) tick(ctx context.Context) tickReport {
 		Model:    model,
 		Corpora:  d.corpora,
 		Refusals: d.refusals,
-		// THE TICK'S OWN BOUND, which the duty's steps show their
-		// progress to: see [tickBound].
+		// The tick's own bound, which its steps show progress to ([tickBound]).
 		Budget: bound,
-		// No Logger: an absent one is the search package's own, so the
-		// duty's batch failures say `component=search` like every other
-		// line that package writes.
+		// No Logger: the search package's own default says
+		// `component=search`, like every other line it writes.
 	})
 	if err != nil {
-		// REFUSED WIRING IS AN OPERATOR'S PROBLEM, said once a tick
-		// rather than swallowed: every case [search.NewEmbedder]
-		// refuses is a company that will never get a vector, and a
-		// silent return here is indistinguishable from a corpus that is
-		// already complete.
+		// REFUSED WIRING IS SAID ONCE A TICK: every case
+		// [search.NewEmbedder] refuses is a company that never gets a
+		// vector, and silence looks like a complete corpus.
 		log.WarnContext(ctx, "embed_duty_unwired", "err", err)
 		report.unwired = true
 		return report
@@ -480,17 +403,13 @@ func (d *embedDuty) tick(ctx context.Context) tickReport {
 // standing is the vector log as the index step must know it
 // ([search.LogStanding]): whether this node has applied all of it.
 //
-// THE END IS READ BEFORE THE POSITION, which is the only order in which a
-// position at or past it means this node applied everything the log held
-// when the step began; the other order reads a record that landed between the
-// two as one this node missed. A node holding a deferred record is not
-// current either: its rows are the log's minus that record.
+// THE END IS READ BEFORE THE POSITION: only in that order does a position at
+// or past it mean this node applied all the log held when the step began. A
+// node holding a deferred record is not current either.
 //
 // THE REACHED POSITION ([statelog.Runner.Reached]), never the committed
 // checkpoint: the question is whether this node's ROWS are the log's state,
-// and a barrier at the log's end whose checkpoint has not committed — its
-// fsync stalled — leaves them exactly as whole. Read off the checkpoint, such
-// a barrier held the index step back a tick as though a record were missing.
+// and a barrier at the end whose checkpoint fsync stalled leaves them whole.
 func (d *embedDuty) standing(ctx context.Context) (search.LogStanding, error) {
 	var out search.LogStanding
 	stats, err := d.log.log.Stats(ctx)
@@ -505,10 +424,9 @@ func (d *embedDuty) standing(ctx context.Context) (search.LogStanding, error) {
 // vectorCoverage is the fraction of this node's sources carrying a current
 // vector, and false when this company has no embeddings configured.
 //
-// FROM THE SAME CORPORA THE DUTY EMBEDS, at the model and width it is
-// embedding at right now. A coverage measured against a different model would
-// read as zero the instant an operator changed one — which is true of the rows
-// and useless as an alarm, because the duty is already refilling them.
+// FROM THE SAME CORPORA THE DUTY EMBEDS, at its current model and width: one
+// measured against another model reads zero the instant an operator changes
+// it, useless as an alarm while the duty is already refilling the rows.
 func (e *Engine) vectorCoverage(ctx context.Context) (float64, bool, error) {
 	provider, model, configured := e.embedModel()
 	if !configured {
@@ -517,17 +435,14 @@ func (e *Engine) vectorCoverage(ctx context.Context) (float64, bool, error) {
 	return search.Coverage(ctx, e.corpora(e.domainEstate()), model, provider.Width())
 }
 
-// indexReading is the semantic index's alarm input (ADR-0028): the latest
-// measurement of the index against the exact scan — the worst
-// query shape's recall and the floor its training judged it against, the
-// evaluation's own curve borrowed rather than restated (ADR-0015).
+// indexReading is the semantic index's alarm input (ADR-0028): its latest
+// measurement against the exact scan, the worst query shape's recall and the
+// floor its training judged it against (ADR-0015).
 //
-// ONLY FOR THE SPACE THE COMPANY EMBEDS IN NOW. An index trained under a
-// model the company has since changed serves no query — every one is in the
-// new space and scans until the duty retrains — so its recall describes
-// nothing a search does, and alarming on it would page an operator about a
-// model they have already left. A read that fails reports nothing, for
-// vectorCoverage's reason: an unreadable index is not a failing one.
+// ONLY FOR THE SPACE THE COMPANY EMBEDS IN NOW: an index trained under a
+// retired model serves no query until the duty retrains, so alarming on its
+// recall pages about a model already left. A failed read reports nothing: an
+// unreadable index is not a failing one.
 func (e *Engine) indexReading(ctx context.Context, out *statelog.Reading) {
 	provider, model, configured := e.embedModel()
 	if !configured || e.backends == nil || e.backends.Store == nil {

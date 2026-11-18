@@ -73,9 +73,9 @@
 // reader answers io.EOF itself — never at a body cut short — with no publish
 // retry and its messages out held to a WINDOW the connection's puts share
 // ([window]: [linkWindow] across a leaf's link or to an external cluster,
-// sized from the node's own lease heartbeat so a lease renewal queued behind
-// it at the floor still lands inside a heartbeat; [memberWindow] on a
-// member's own client); it is ended only when
+// sized so a request queued behind it alone at the floor is still answered
+// inside its term, and what else it waits behind is "The window across a
+// link" below; [memberWindow] on a member's own client); it is ended only when
 // the broker has acknowledged nothing for [objstore.Stall] while messages are
 // out ([objstore.ErrStalled]); and a put that fails, the caller giving up among
 // the ways, drains what is out and purges what it stored under a context that
@@ -143,6 +143,55 @@
 //     pieces no metadata names, which a put killed before its last message
 //     and a delete interrupted between its purges both leave, and which no
 //     listing of the names shows. The library has no word for them at all.
+//
+// # The window across a link
+//
+// Every put on a connection shares one window of messages out ([window]),
+// and across a link it is [linkWindow], SIZED BY THE REQUESTS QUEUED BEHIND
+// IT. A link carries what the node sends in the order it was sent, so a
+// request sent while the window is full crosses only once the window has: a
+// read, a small write or a lease renewal on the same connection — the
+// coordination store's, which every lease renewal of the node rides — or on
+// another connection crossing the same link or a bottleneck on it that queues
+// first in first out. Every one of them is held to its term
+// ([jsapi.RequestTerm]) and is unknown past it, so the window crosses the
+// floor within what that term leaves after the request's own round trip,
+// [jsapi.WindowCrossing]: four seconds, at every lease TTL. Sized by the
+// node's lease heartbeat instead, as it was, the shipped lease's window of
+// four messages held such a request fifteen seconds at the floor, past its
+// term. AT LEAST ONE, because a put holds a message out to move at all; one
+// message's crossing, 3.75 seconds, is inside the four.
+//
+// NOT SIZED BY A MEASURED RATE, which would recover a fast link's throughput:
+// a link that drops to the floor mid-transfer (a satellite's rain fade) then
+// holds a request behind a window sized for the faster rate, sixteen messages
+// a minute at the floor, past every term and the shipped lease. The floor is a
+// promise about the slowest link the engine allows, and the window keeps it
+// there. It is also what keeps a stall honest across the link: no message
+// waits behind more than the window, so at the floor every one's bytes have
+// crossed within four seconds of its publish, its acknowledgement a round
+// trip behind them, and a leaf's compressed link, which delivers what it
+// flushed as one block, never more than the window in one.
+//
+// What a window of one costs is throughput on a fast link (measured below):
+// about half a fast link's through a leaf on loopback, and on a link with a
+// longer round trip the share lost is larger, since a window of one moves
+// 128 KiB a round trip: 1.31 MB/s across 100 ms, where four moved 5.24. That
+// is the price, on a link that did not need the bound, of a connection whose
+// small requests are answered inside their term on one that does, and every
+// node across a link pays it: one without `data` through its leaf, and every
+// node on an external broker, data nodes included.
+//
+// The window is the puts' alone, for what crosses the link outbound. Until
+// crewlet/crewlet#1035 puts one window across the link, both directions and
+// the downloads and walks inside it, a memory replay's pull window is
+// another, for what crosses inbound (internal/learning/memsync), so a request
+// behind both waits past its term (jsapi's package doc); and this package's
+// own reads cross inbound unwindowed: a download's hand ([readAhead], four
+// whole messages), a walk's ([walkAhead], five hundred names' metadata or
+// messages' headers), and a read's question to the stream's leader of what
+// follows ([reading.caughtUp]), answered with a whole message. A request whose
+// reply crosses behind any of them waits for all of it.
 //
 // # What it costs, measured
 //
@@ -216,14 +265,14 @@
 //     ms against 5.8–6.2 — and sixty-four shared, beside sixteen in a run of
 //     its own, 48–69 MB/s alone against 59–68 and 42–65 eight at once
 //     against 50–62: nothing a member measured bought by a wider one.
-//   - THE LINK'S WINDOW ON A SHORTER LEASE ([linkWindow] follows the
-//     lease's heartbeat), through a leaf, interleaved runs of each on one
-//     machine (2026-10-18, `stream.sync: always`, four vCPUs running other
-//     work; four rounds, a fifth that overlapped another run left out): one
-//     message out — a lease under 22.5 s — ran a lone 16 MiB put at
-//     47–83 MB/s and eight at once at 56–78 together; two, at 109–125 and
-//     102–122; four, the shipped lease's, at 120–139 and 130–135. A 64 KiB
-//     put, one message whatever the window, took 2.3–4.0 ms in all three.
+//   - THE LINK'S WINDOW ([linkWindow], one message), through a leaf,
+//     interleaved runs of each on one machine (2026-10-18, `stream.sync:
+//     always`, four vCPUs running other work; four rounds, a fifth that
+//     overlapped another run left out): one message out ran a lone 16 MiB put
+//     at 47–83 MB/s and eight at once at 56–78 together; two, at 109–125 and
+//     102–122; four, the window the shipped lease's heartbeat once sized, at
+//     120–139 and 130–135. A 64 KiB put, one message whatever the window, took
+//     2.3–4.0 ms in all three.
 package natsobj
 
 import (
@@ -281,20 +330,12 @@ type Config struct {
 	// Clustered says the broker is a cluster, which is what the
 	// provisioning budget branches on (see [jsprovision]).
 	Clustered bool
-	// AcrossLink says the connection reaches the stream across a LINK the
-	// node's leases and events ride too — a leaf's link to its members, or
-	// a dial to an external cluster — rather than to the node's own member
-	// in its own process: it decides the puts' [window] ([linkWindow],
-	// [memberWindow]).
+	// AcrossLink says the connection reaches the stream across a LINK — a
+	// leaf's link to its members, or a dial to an external cluster — where
+	// every request the node sends after a put waits behind what it has out,
+	// rather than to the node's own member in its own process: it decides
+	// the puts' [window] ([linkWindow], [memberWindow]).
 	AcrossLink bool
-	// LeaseHeartbeat is how often the node renews the leases its connection
-	// carries — the seat and presence leases' heartbeat, the lease TTL IN
-	// FORCE over seat.HeartbeatRatio, never the shipped one — which sizes
-	// the window across a link ([linkWindow]). Required with AcrossLink,
-	// and refused as zero there rather than read as some default, because
-	// a window sized for a lease the node does not hold is the one that
-	// loses its seats; read nowhere else.
-	LeaseHeartbeat time.Duration
 
 	// MaxBytes is the byte reservation a bucket this node creates is given
 	// (store.objects.nats_max_bytes, or the share the engine derives),
@@ -339,11 +380,10 @@ type Backend struct {
 }
 
 // Window is how many messages the puts on b's connection may hold out at
-// once: [linkWindow] for [Config.LeaseHeartbeat] where [Config.AcrossLink]
-// said the connection crosses a link to the stream, [memberWindow] where it
-// did not. Whoever opens the bucket decides which, and the engine's choice —
-// by the node's broker kind, at the heartbeat of the lease in force — is held
-// by a test of its own that reads it here.
+// once: [linkWindow] where [Config.AcrossLink] said the connection crosses a
+// link to the stream, [memberWindow] where it did not. Whoever opens the
+// bucket decides which, and the engine's choice — by the node's broker kind —
+// is held by a test of its own that reads it here.
 func (b *Backend) Window() int { return b.window.size }
 
 // Open binds to the bucket, creating it first if it is not there.
@@ -389,11 +429,6 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 		return nil, fmt.Errorf("natsobj: the %s bucket needs a byte reservation, and "+
 			"this node was given %d: a bucket with no ceiling grows into the broker "+
 			"remainder the fleet's coordination records live in", Bucket, cfg.MaxBytes)
-	}
-	if cfg.AcrossLink && cfg.LeaseHeartbeat <= 0 {
-		return nil, fmt.Errorf("natsobj: a bucket reached across a link needs the "+
-			"node's lease heartbeat (Config.LeaseHeartbeat), which sizes the window "+
-			"its uploads share; got %v", cfg.LeaseHeartbeat)
 	}
 	replicas := max(cfg.Replicas, 1)
 	// ONE BREADCRUMB OVER THE WHOLE OF IT, because either half can be the
@@ -469,7 +504,7 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 	// before it is asked again, where the read term asks it at two.
 	size, pieces := memberWindow, leader
 	if cfg.AcrossLink {
-		size, pieces = linkWindow(cfg.LeaseHeartbeat), leader.Carrying(MessageBytes, objstore.MiBPace)
+		size, pieces = linkWindow, leader.Carrying(MessageBytes, objstore.MiBPace)
 	}
 	return &Backend{js: js, stream: stream, leader: leader, pieces: pieces,
 		stall: objstore.Stall, beginPace: listBeginPace, window: newWindow(size)}, nil

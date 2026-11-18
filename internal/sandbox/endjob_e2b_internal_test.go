@@ -18,12 +18,9 @@ func procStatus(state, ids string) string {
 }
 
 // THE KILL OF AN E2B JOB WAITS ONLY ON ITS USER'S LIVING PROCESSES. In a VM,
-// kill(-1) answers success wherever it counts a process, root's it is refused
-// included, so the kill waits on the box user's processes read off /proc
-// instead: one the kill reaches — its real or its saved user id the sender's,
-// as the kernel lets a sender signal — that has not exited, and that is not the
-// waiting shell itself. A zombie, another user's process and the shell are
-// nothing to wait for, and the wait ends as soon as only they are left.
+// kill(-1) answers success even for root's processes it may not signal, so the
+// kill reads /proc for processes it reaches (real or saved uid the sender's, as
+// the kernel checks), not exited, and not the waiting shell itself.
 //
 // Mutations: count the shell itself, or a zombie, and the wait never ends
 // early; read the effective id where the saved one is meant, and a process
@@ -52,8 +49,7 @@ func TestAnE2BKillWaitsOnlyOnItsUsersLivingProcesses(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			// THE WAITING SHELL'S OWN RECORD, the user's and living, which the
-			// walk must pass over.
+			// The waiting shell's own record, the user's and living: skipped.
 			script := "u=1000\n" + userLive(root) +
 				`mkdir -p "$ROOT/$$" && printf '` + strings.ReplaceAll(procStatus("R (running)",
 				"1000 1000 1000 1000"), "\t", `\t`) + `' > "$ROOT/$$/status"` + "\n" +

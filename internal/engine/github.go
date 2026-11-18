@@ -12,43 +12,24 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// The hosted code host, wired.
+// The hosted code host, wired. Inbound-only: an agent acts on GitHub inside
+// its sandbox, through its own tools; the engine only tells the seat.
 //
-// Inbound-only, for the same reason the self-hosted one is: an agent's work
-// on a code host happens INSIDE its sandbox, under its own identity, through
-// its own tools. The engine never pushes a commit or opens a pull request on
-// a seat's behalf — it only tells the seat something happened.
-//
-// # Seat identity is the whole integration, and it is DERIVED
-//
-// A GitHub delivery names people by login, and nothing in the org model says
-// which account a seat holds. Without that mapping every event names a
-// stranger, the routing gate drops every target, and the integration is
-// silently inert.
-//
-// So the engine asks: it calls GET /user with the seat's OWN credential and
-// registers whatever account answers. A declared login beside the token
-// would be cheaper and is the wrong shape — a declaration that disagrees
-// with the credential is a misroute nothing can detect, and it would make
-// the engine name a tool-specific variable that the seat's actual tools do
-// not read.
+// A delivery names people by login, so without a seat-to-account mapping
+// every target is a stranger and the integration is silently inert. The
+// mapping is DERIVED from the seat's own credential (GET /user), never
+// declared: a declared login that disagrees with the credential is a
+// misroute nothing can detect.
 
-// githubIdentities remembers which account each seat token authenticates as.
-//
-// KEYED ON THE TOKEN, and the cache's rules — one request per credential
-// however many callers want it, a failed lookup left for the next pass — are
-// [identityCache]'s. What is this surface's own is the client it builds, the
-// account GitHub calls a login, and what it logs when a lookup fails.
+// githubIdentities remembers which account each seat token authenticates as,
+// keyed on the token; the cache's rules are [identityCache]'s.
 type githubIdentities struct {
 	identityCache[string]
 }
 
-// resolve fills in the accounts behind any tokens not already known.
-//
-// See [identityCache.resolve] for what "fills in" promises: one request per
-// token however many callers race it, and a caller that waited holds the
-// answer by the time this returns, which is what the register below depends
-// on.
+// resolve fills in the accounts behind any tokens not already known, on
+// [identityCache.resolve]'s terms: register depends on a waiting caller
+// holding the answer when this returns.
 func (g *githubIdentities) resolve(ctx context.Context, api, web string, tokens []string) {
 	g.identityCache.resolve(ctx, tokens, func(token string) string {
 		client, err := github.NewClient(github.ClientOptions{
@@ -68,13 +49,10 @@ func (g *githubIdentities) resolve(ctx context.Context, api, web string, tokens 
 	})
 }
 
-// register binds each resolved seat to its account in the given registry.
-//
-// NO I/O. It takes the registry rather than reading the live one because an
-// apply builds a NEW registry from the new company, and a config-derived
-// binding has to be rebuilt into it at that moment. (A chat backend's
-// identities are the opposite — facts about a live server, carried across an
-// apply by the transport that resolved them.)
+// register binds each resolved seat to its account in the given registry,
+// with no I/O. It takes the registry rather than the live one because an
+// apply builds a NEW registry, and a config-derived binding is rebuilt into
+// it then.
 func (g *githubIdentities) register(reg *notify.Registry, c *Company, env *config.Resolver) int {
 	known := g.snapshot()
 
@@ -83,17 +61,12 @@ func (g *githubIdentities) register(reg *notify.Registry, c *Company, env *confi
 		byApp      = map[string]bool{}
 	)
 
-	// AN AGENT'S OWN APP IS ITS IDENTITY, and it costs no request at all:
-	// GitHub derives an app's account from its slug, which the engine wrote
-	// down when it created the app. Registered FIRST, because a seat that
-	// has one acts as it, and the token below would otherwise overwrite the
-	// mapping with whatever account a leftover credential authenticates as.
+	// AN AGENT'S OWN APP IS ITS IDENTITY, at no request: its account is its
+	// slug. Registered FIRST, so a leftover token below cannot overwrite it.
 	//
-	// TWO SPELLINGS, one identity. A person writing a mention types the
-	// slug; every payload reporting what the app did carries the slug with
-	// `[bot]`. Nothing relates them, and the registry is a bijection per
-	// namespace, so the bot login goes in the companion namespace that
-	// exists for exactly this — the same shape Slack and Mattermost use.
+	// TWO SPELLINGS: a mention types the slug, a payload carries `slug[bot]`.
+	// The registry is a bijection per namespace, so the bot login goes in the
+	// companion namespace, as Slack's and Mattermost's do.
 	for seat := range c.Org.AllRoles() {
 		app := seat.GitHub
 		if !seat.IsAgent() || app == nil {
@@ -101,9 +74,7 @@ func (g *githubIdentities) register(reg *notify.Registry, c *Company, env *confi
 		}
 		slug := github.NormalizeLogin(app.AppSlug)
 		if slug == "" {
-			// The app has not been created yet. The seat is on the
-			// roster with a click outstanding, and it acts as nobody
-			// until somebody makes it one.
+			// The app is not created yet: the seat acts as nobody.
 			continue
 		}
 		handle := seat.Handle()
@@ -114,9 +85,8 @@ func (g *githubIdentities) register(reg *notify.Registry, c *Company, env *confi
 		}
 		if bot := github.BotLogin(slug); bot != "" {
 			if err := reg.Register(notify.BotNamespace(github.Backend), bot, handle); err != nil {
-				// THE MENTION STILL WORKS. What is lost is recognising
-				// this agent's own activity in a payload, so it is a
-				// warning and not a reason to drop the seat.
+				// THE MENTION STILL WORKS; only recognising the agent's
+				// own activity is lost, so the seat is kept.
 				log.Warn("github_seat_bot_identity_refused", "seat", handle,
 					"login", bot, "error", err.Error())
 			}
@@ -138,10 +108,9 @@ func (g *githubIdentities) register(reg *notify.Registry, c *Company, env *confi
 			continue
 		}
 		if err := reg.Register(github.Backend, login, seat.Handle()); err != nil {
-			// Two seats sharing one account, or a seat that is not in
-			// this org. Both are faults an operator has to fix, and
-			// both are silent otherwise: that account's events go to
-			// whichever seat won.
+			// Two seats sharing one account, or a seat not in this org:
+			// an operator's fault, silent otherwise (the events go to
+			// whichever seat won).
 			log.Warn("github_seat_identity_refused", "seat", seat.Handle(),
 				"login", login, "error", err.Error())
 			continue
@@ -159,49 +128,29 @@ func (e *Engine) startGitHub(ctx context.Context, c *Company, cfg *config.GitHub
 	}
 	env := e.resolver()
 
-	// THE URL IS OPTIONAL AND IS RESOLVED THROUGH THE SAME CHAIN, because
-	// an Enterprise Server address is as much a ${VAR} as a credential is
-	// — it differs between a staging deployment and a production one. An
-	// empty result is github.com, which is the documented default and not
-	// an error: there is no way to tell "unset" from "resolved to nothing"
-	// here, and refusing would break every company that simply uses
-	// github.com.
+	// THE URL MAY BE A ${VAR} (an Enterprise Server differs per deployment).
+	// Empty is github.com, the documented default: "unset" and "resolved to
+	// nothing" cannot be told apart here.
 	resolved := *cfg
 	resolved.URL = strings.TrimSpace(env.Value(cfg.URL))
 	api, web := resolved.APIBase(), resolved.WebURL()
 
-	// THE SIGNING SECRET IS NOT OPTIONAL, and it is checked HERE rather
-	// than left to the first delivery.
-	//
-	// Config already refuses an enabled GitHub with no webhook_secret, so
-	// reaching this line with an empty value means a ${VAR} that did not
-	// resolve. That is invisible from anywhere else: the route answers 503
-	// to every delivery, GitHub's own settings page shows a hook whose
-	// deliveries keep failing, and no log line anywhere names the
-	// variable.
-	//
-	// It is not a boot refusal: the caller logs github_unavailable and the
-	// company runs on without its code host. That is the honest outcome,
-	// because the integration IS unavailable — the alternative is one that
-	// reports itself enabled and is inert.
+	// THE SIGNING SECRET IS CHECKED HERE, not at the first delivery: config
+	// refuses an empty one, so empty here is a ${VAR} that did not resolve,
+	// otherwise visible only as 503s on every delivery with no log naming
+	// the variable. Not a boot refusal: the caller logs github_unavailable
+	// and the company runs on without its code host, rather than reporting
+	// an integration enabled that is inert.
 	if err := githubWirable(cfg, env); err != nil {
 		return nil, err
 	}
 
-	// WHO ELSE IS TAKING PART, read through the agents' OWN apps.
+	// WHO ELSE IS TAKING PART, read through the agents' OWN apps: every tier
+	// grants the two reads a participant lookup needs, scoped to what that
+	// agent may see, with no shared organization token to paste and rotate.
 	//
-	// This took a shared organization token an operator pasted in, and the
-	// token had nothing else left to do: an agent that acts as itself
-	// already holds a credential that answers the question, installed on
-	// the repositories it works in, and every tier grants the two reads a
-	// participant lookup needs. So the reader is there for free, scoped to
-	// what that agent may see rather than to whatever the person who made
-	// the token could reach, and there is one fewer credential to paste,
-	// rotate and be warned about.
-	//
-	// NOT VERIFIED at boot. A probe here would turn a rate-limited API
-	// into a company that will not start, to learn what the first real
-	// lookup learns anyway, and that one degrades instead of refusing.
+	// NOT VERIFIED at boot: a probe would turn a rate-limited API into a
+	// company that will not start; the first real lookup degrades instead.
 	lookup := &github.SeatLookup{Opts: github.SeatAppOptions{
 		APIBase: api, WebBase: web, Org: githubOrg(cfg),
 		Seats: e.githubSeatApps(c, env),
@@ -213,20 +162,15 @@ func (e *Engine) startGitHub(ctx context.Context, c *Company, cfg *config.GitHub
 	})
 	switch pending := githubAppsPending(c); {
 	case registered == 0 && len(pending) > 0:
-		// A COMPANY WHOSE AGENTS ARE GETTING THEIR OWN APPS, which is a
-		// step a person is part way through rather than a fault: each of
-		// these seats' identity is its app's slug, written when the app is
-		// created, and the card names the click that is left. Said once
-		// per wiring, at info, so it reads as the wait it is.
+		// AGENTS WAITING ON THEIR OWN APPS: a person's step part way
+		// through, not a fault, so said once per wiring at info.
 		log.InfoContext(ctx, "github_seat_identities_waiting", "api", api, "seats", pending,
 			"detail", "each of these agents acts on GitHub as its own app, which is not "+
 				"created yet; its identity is registered once the app exists")
 	case registered == 0:
-		// Enabled with no seat identity is a company mid-setup
-		// (`crewlet github provision` has not run) or a deployment that
-		// refused every lookup. Logged loudly either way, because the
-		// integration is completely inert in this state and nothing else
-		// will say so.
+		// Mid-setup (`crewlet github provision` has not run) or every
+		// lookup refused: the integration is inert and nothing else will
+		// say so, hence a warning.
 		log.WarnContext(ctx, "github_has_no_seat_identities", "api", api,
 			"detail", "every code-host webhook will name a stranger")
 	}
@@ -239,15 +183,10 @@ func (e *Engine) startGitHub(ctx context.Context, c *Company, cfg *config.GitHub
 }
 
 // reconcileGitHub rebuilds the hosted code host for a newly applied epoch.
-//
-// Two things move on an apply, and only one of them is the parser. The seat
-// identities are rebuilt into the new registry by refreshParties, from the
-// cache, with no I/O; this re-resolves — picking up a seat the revision
-// ADDED and a credential it ROTATED — and swaps the parser, whose own
-// company-derived input is the engine credential. A node that skipped it
-// would keep answering with the old credential, which after a rotation means
-// every participants lookup 401s and every thread quietly narrows to its
-// author and assignees.
+// refreshParties rebuilds the seat identities from the cache; this
+// re-resolves (a seat ADDED, a credential ROTATED) and swaps the parser.
+// Skipped, a rotation leaves every participants lookup 401ing and every
+// thread narrowed to its author and assignees.
 func (e *Engine) reconcileGitHub(ctx context.Context, c *Company) {
 	cfg := c.Config.Integrations.GitHub
 	e.notify.mu.Lock()
@@ -256,12 +195,9 @@ func (e *Engine) reconcileGitHub(ctx context.Context, c *Company) {
 	if svc == nil {
 		return
 	}
-	// RETIRED when the revision no longer declares it. Every reconciler
-	// here converged only toward "configured", so setting `integrations.github.enabled: false` — the
-	// gesture an operator makes after a credential leak — applied
-	// cleanly, changed nothing, and left the boot-time parser routing
-	// deliveries under the credential being revoked, while RoutedSources
-	// went on listing it as reachable.
+	// RETIRED when the revision no longer enables it: `enabled: false` is
+	// how an operator answers a credential leak, and must stop routing
+	// and drop it from RoutedSources.
 	if cfg == nil || !cfg.Enabled {
 		e.githubPulls.wire(nil, nil)
 		if svc.Unregister(github.Backend) {
@@ -273,9 +209,8 @@ func (e *Engine) reconcileGitHub(ctx context.Context, c *Company) {
 	}
 	parser, err := e.startGitHub(ctx, c, cfg)
 	if err != nil || parser == nil {
-		// THE PREVIOUS PARSER KEEPS RUNNING, same posture as the
-		// self-hosted host's: routing by a stale credential is worse than
-		// the new one and much better than not routing at all.
+		// THE PREVIOUS PARSER KEEPS RUNNING: a stale credential routes
+		// better than none.
 		log.ErrorContext(ctx, "github_reconcile_failed", "error", errorText(err),
 			"detail", "the previous hosted code-host wiring is still current")
 		return
@@ -289,21 +224,14 @@ func (e *Engine) reconcileGitHub(ctx context.Context, c *Company) {
 }
 
 // githubSeatApps reads every agent's own app out of the company document,
-// with its key resolved. A seat with no block at all is skipped: it is a
-// company that has not started, not a seat with a fault.
+// with its key resolved, skipping a seat with no block (not started, not a
+// fault). ONE READING for the reconcile and the participant lookup, so the
+// two cannot disagree about which apps exist.
 //
-// ONE READING, used by both halves that need it: the reconcile, which asks
-// what is still outstanding, and the participant lookup, which asks whose
-// credential can read a thread. Two readers of one roster would be free to
-// disagree about which apps exist.
-//
-// THE COMPANY IS PASSED IN, never read off the live epoch, because one caller
-// is the APPLY. A revision is wired before it is published, so
-// [Engine.Company] there is still the OUTGOING one: reading it would build
-// the new revision's participant lookup from the old revision's seat apps,
-// and a seat whose app was created, rotated or removed in the very apply
-// being wired would be looked up as whatever it was before. Every other input
-// [Engine.startGitHub] uses already comes from its own argument.
+// THE COMPANY IS PASSED IN, never read off the live epoch: in an APPLY the
+// revision is wired before it is published, so [Engine.Company] is still
+// the outgoing one, and an app created, rotated or removed in that apply
+// would be looked up as it was before.
 func (e *Engine) githubSeatApps(company *Company, env *config.Resolver) []github.SeatApp {
 	out := []github.SeatApp{}
 	if company == nil {
@@ -319,10 +247,8 @@ func (e *Engine) githubSeatApps(company *Company, env *config.Resolver) []github
 }
 
 // githubSeatApp is one agent's own app as the company document records it,
-// with its key resolved. The caller has checked the seat carries a block.
-//
-// ONE READING of a seat's app for every reader of it: the roster above, and
-// the token a seat's own values are resolved with ([Engine.seatResolver]).
+// with its key resolved; the caller has checked the seat carries a block.
+// The one reading for the roster and [Engine.seatResolver]'s token.
 func githubSeatApp(seat *org.Role, env *config.Resolver) github.SeatApp {
 	app := seat.GitHub
 	return github.SeatApp{
@@ -353,16 +279,13 @@ func githubAppsPending(c *Company) []string {
 	return out
 }
 
-// githubPrompt is the hosted code host's trigger builder. A value, held by
-// nothing.
+// githubPrompt is the hosted code host's trigger builder.
 func githubPrompt() notify.Prompt { return github.Prompt{} }
 
-// githubWirable reports whether this revision's code host can be wired at all.
-//
-// ONE IMPLEMENTATION for the two callers, on the terms [gitlabWirable] states:
-// the boot and apply wiring, and the reconcile loop's identity retry. A retry
-// that skipped it would resolve seat identities behind a route answering 503
-// to every delivery, and report the agents as wired.
+// githubWirable reports whether this revision's code host can be wired at
+// all, shared by the wiring and the identity retry on [gitlabWirable]'s
+// terms: a retry that skipped it would report agents wired behind a route
+// answering 503.
 func githubWirable(cfg *config.GitHub, env *config.Resolver) error {
 	if strings.TrimSpace(env.Value(cfg.WebhookSecret)) == "" {
 		// NAMES ONLY, never the value: this line goes to a log file.
@@ -376,15 +299,9 @@ func githubWirable(cfg *config.GitHub, env *config.Resolver) error {
 }
 
 // unresolved names the seats holding a code-host credential that resolves to
-// no account.
-//
-// A SEAT WITH ITS OWN APP IS NEVER HERE, and that is the one way this differs
-// from the other two: GitHub derives an app's account from its slug, which
-// this engine wrote down when it created the app, so such a seat is routable
-// with no lookup at all. Reporting it as unresolved because its leftover token
-// happened not to answer would put a working seat on the card as broken.
-//
-// See [jiraIdentities.unresolved] for the rest of the contract.
+// no account, on [jiraIdentities.unresolved]'s contract. A SEAT WITH ITS OWN
+// APP IS NEVER HERE: its slug routes it, and a leftover token that did not
+// answer must not put a working seat on the card as broken.
 func (g *githubIdentities) unresolved(c *Company, env *config.Resolver) []string {
 	known := g.snapshot()
 

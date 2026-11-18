@@ -11,12 +11,11 @@ import (
 
 // EVERY SEAT IS TOLD THE NEWEST KIT THIS BUILD EMBEDS. The artifacts skill
 // links `/_crewlet/kit/${crewlet_kit_version}/`, and a page pinned to an older
-// kit never reads the brand slots a newer one added, so a stale value would
-// keep every page an agent writes off the company's brand without anything
-// failing. The value is the embedded tree's newest release, whatever else the
-// company declares, and a company with no variables of its own still gets it.
-// (static's TestTheNewestKitIsTheLedgersLast holds the same release to the
-// end of the ledger of shipped kits.)
+// kit never reads a newer one's brand slots, so a stale value silently keeps
+// agents' pages off the company's brand. It is the embedded tree's newest
+// release whatever the company declares, variables of its own or none.
+// (static's TestTheNewestKitIsTheLedgersLast holds that release to the
+// ledger's end.)
 func TestEverySkillIsToldTheNewestEmbeddedKit(t *testing.T) {
 	t.Parallel()
 	tree, err := fs.Sub(static.FS(), kitTree)

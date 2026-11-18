@@ -14,14 +14,10 @@ import (
 )
 
 // A RESUME IS HANDED THE CALL A PERSON APPROVED ONCE, whether or not its log
-// holds it yet. The coordinator reads a resumed turn's calls off the job's
-// log with the approved call the row still carries ([BridgeLog.withHeld]): a
-// later attempt at a resume whose relaunch was refused after the call was
-// made finds that call on the row alone, since the write that appends it to
-// the log never landed, and the run carrying the round on is judged on it.
-// Where the append did land, the log already holds it under its held id, and
-// the resume is handed it once, not twice. A held call not made yet, or
-// another round's, adds nothing.
+// holds it yet ([BridgeLog.withHeld]): when a refused relaunch's append never
+// landed, the call is on the row alone and the round is judged on it; when it
+// landed, the log holds it under its held id and it is not added twice. A held
+// call not made yet, or another round's, adds nothing.
 //
 // Mutation: drop the held-id check from withApproved and the logged case
 // holds the call twice; skip withHeld's Made check and the unmade case
@@ -84,29 +80,23 @@ func TestAResumeIsHandedTheApprovedCallOnce(t *testing.T) {
 	}
 }
 
-// AND THE COORDINATOR HANDS IT SO. A person allows a held call once; the
-// first attempt at the answer makes the call and records it on the row, stops
-// before the write that appends it to the job's log lands, and its relaunch is
-// refused, so the claim is given back and the answer tried again. The next
-// opening that would append it never came, so the later attempt finds the
-// call on the row alone: the resume it hands the runner holds it, once, as the
-// round's own. And the count of the read it hands beside them
-// ([ResumeRequest.BridgedRead]) is the log's own, the call on the row alone not
-// among it: the log takes that call for good only at its own append or the
-// opening, numbered after any call of the job that lands in between, which the
-// opening marks late by this count.
+// AND THE COORDINATOR HANDS IT SO. The first attempt at an allow-once answer
+// makes the call and records it on the row, stops before the log append lands,
+// and its relaunch is refused; the later attempt's resume holds the call once,
+// from the row. [ResumeRequest.BridgedRead] counts the log's calls only: the
+// log takes the row's call at its own append or the opening, numbered after any
+// call landing in between, which the opening marks late by this count.
 //
-// Mutation: drop withHeld from the coordinator's resume read
-// ([Coordinator.resumeAndSettle]), and the later attempt's turn is judged on
-// a round that never made the call it was allowed; count the read once the
-// held call is added, or count none, and the count is not the log's.
+// Mutation: drop withHeld from [Coordinator.resumeAndSettle] and the later
+// attempt is judged on a round that never made its allowed call; count the
+// read after adding the held call, or count none, and the count is not the
+// log's.
 func TestALaterAttemptAtAnAnswerIsHandedTheCallTheFirstMade(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
-	// ONE CALL OF THE JOB'S OWN, in its log beside the call the row alone
-	// will hold.
+	// ONE CALL OF THE JOB'S OWN, in its log beside the row-only call.
 	launched := rig.get("t1")
 	if ok, err := rig.pending.AppendBridgeCall(t.Context(), "t1", BridgeAppend{Launch: launched.LaunchID,
 		Round: launched.Round, Call: BridgeCall{Name: "read_work_item", Seq: 1, StartedAt: rig.now}}); err != nil || !ok {
@@ -114,8 +104,8 @@ func TestALaterAttemptAtAnAnswerIsHandedTheCallTheFirstMade(t *testing.T) {
 	}
 	id := parksOnAHeldCall(t, rig, "t1")
 
-	// THE FIRST ATTEMPT makes the call and records it, then its relaunch is
-	// refused after the turn began.
+	// THE FIRST ATTEMPT makes and records the call; its relaunch is refused
+	// mid-turn.
 	rig.resumer.failsInTurn = true
 	rig.resumer.failWith(errors.New("the relaunch's session floor refused it"))
 	rig.resumer.during = func(ctx context.Context, run PendingRun) {
@@ -129,12 +119,12 @@ func TestALaterAttemptAtAnAnswerIsHandedTheCallTheFirstMade(t *testing.T) {
 			t.Errorf("RecordHeldResult = %v, %v", ok, err)
 			return
 		}
-		// THE APPEND THAT FOLLOWS THE RESULT, AS NEVER LANDED: the attempt
-		// stopped between the two writes, and the log holds no approved call.
+		// THE APPEND AFTER THE RESULT NEVER LANDED: the attempt stopped
+		// between the two writes, so the log holds no approved call.
 		if _, _, err := rig.pending.runs.MutateSandboxRunPart(ctx, "t1", coord.RunLog,
 			func(current coord.Record, found bool) ([]byte, error) {
-				// Two failures, kept apart: a missing record has no error to
-				// wrap, and folding it into one Errorf would print %!w(<nil>).
+				// Kept apart: a missing record has no error to wrap, and one
+				// Errorf would print %!w(<nil>).
 				if !found {
 					return nil, errors.New("the job opened no log")
 				}

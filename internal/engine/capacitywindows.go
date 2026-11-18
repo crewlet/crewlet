@@ -11,57 +11,26 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// WHETHER A CAPACITY WINDOW IS OPEN, read the one way every reader reads it.
+// WHETHER A CAPACITY WINDOW IS OPEN, read one way by every reader. A log has a
+// window open, has none, or this node couldn't read which, and the third is
+// never the second: a window stops every publisher, and the outage that blocks
+// the read is often why somebody looks. So there is ONE READ ([readWindows])
+// over ONE SET of logs ([maintenanceStreams]), and every reader takes it whole:
+// the gestures ([Engine.CapacityWindows]), the report's `maintenance` and
+// `maintenance_unread`, and the alarm.
 //
-// # Three answers, never two
-//
-// A log has a window open, has none, or this node couldn't read which. The
-// third is not the second: a window stops every publisher in the fleet, and
-// the moment somebody opens the retention screen to ask why the company has
-// gone quiet is very often the coordination outage that stops the read. The
-// report and the alarm used to skip a log whose window they couldn't read, so
-// during that outage `crewlet retention status`, the dashboard's banner and
-// `maintenance_open` all said there was no window, while a node's boot, which
-// reads the same register, refused to start because there might be one.
-//
-// So there is ONE READ ([readWindows]) over ONE SET of logs (every log a
-// window can be opened on, [maintenanceStreams]), and every reader takes its
-// answer whole: the gestures' `open_windows` and `unread_windows`
-// ([Engine.CapacityWindows]), the report's `maintenance` and
-// `maintenance_unread`, and the alarm reading. Two readers walking two sets of
-// logs, each deciding for itself what an error meant, is how they came to
-// disagree.
-//
-// # What the alarm does with "couldn't read"
-//
-// It keeps what it last knew ([windowWatch]). A coordination blip that fails
-// one read must neither clear a `maintenance_open` that is firing nor raise one,
-// which is the rule the alarm table's other coordination inputs keep: a window
-// this node last read open stays open for the alarm AS OLD AS IT WAS WHEN IT WAS
-// READ, its detail saying when that was and that the window can't be read now,
-// and a log it never read open raises nothing. Aged on this node's clock
-// instead, a window last read open at 59 minutes crossed the hour during a
-// two-minute blip and raised the alarm about a window that might have closed in
-// the meantime. The screens say "couldn't read" outright, since they report
-// this read rather than judge a condition over time.
-//
-// # Which read is newer
-//
-// The watch is fed by every report, and a report is assembled for the alarm
-// heartbeat and for every API caller at once, so two reads of one log can reach
-// it in the other order from the one they were taken in. Each log's read is
-// numbered before it is sent ([windowReads]), and the watch keeps the answer of
-// the newest read that answered: applied in arrival order, a read taken before
-// a window closed and observed after one that found it closed put the window
-// back, and the next blip raised the alarm about it.
+// On "couldn't read" the alarm keeps what this node last read ([windowWatch]):
+// a blip neither clears nor raises `maintenance_open`, a held window is aged as
+// of that read rather than on this node's clock, and the newest read wins by
+// the number it was sent under ([windowReads]), never by arrival order.
 
 // errNoFleet is why a node with no coordination store reads no window.
 var errNoFleet = errors.New("engine: this node has no coordination store")
 
 // windowReads numbers every read of one log's capacity window this process
-// sends, so a watch can tell an older read from a newer one whatever order the
-// two reach it in. Process-wide because every reader reads through
-// [readWindows], the gestures' included.
+// sends, so a watch tells an older read from a newer one whatever order they
+// arrive in: reports are assembled concurrently. Process-wide because every
+// reader reads through [readWindows].
 var windowReads atomic.Uint64
 
 // windowsRead is one read of every log's capacity window.
@@ -72,20 +41,15 @@ type windowsRead struct {
 	// order.
 	unread []string
 	// errs is why each unread log couldn't be read, keyed by stream, for the
-	// log line: the gestures write one per gesture ([Engine.CapacityWindows])
-	// and the report's watch one each time a log starts failing and stops
-	// ([windowWatch.observe]).
+	// log lines of [Engine.CapacityWindows] and [windowWatch.observe].
 	errs map[string]error
-	// taken is the number each log's read was sent under ([windowReads]),
-	// keyed by stream.
+	// taken is each log's read number ([windowReads]), keyed by stream.
 	taken map[string]uint64
 }
 
 // readWindows reads whether a capacity window is open on every log one can be
-// opened on.
-//
-// A NODE WITH NO COORDINATION STORE READS NOTHING, and says so for every log
-// rather than answering that none has a window: it can't know.
+// opened on. A NODE WITH NO COORDINATION STORE names every log unread rather
+// than answering that none has a window: it can't know.
 func readWindows(ctx context.Context, fleet coord.Fleet) windowsRead {
 	out := windowsRead{taken: map[string]uint64{}}
 	for _, stream := range maintenanceStreams() {
@@ -109,9 +73,8 @@ func readWindows(ctx context.Context, fleet coord.Fleet) windowsRead {
 			out.open = append(out.open, op)
 		}
 	}
-	// THE OLDEST FIRST, because it has been holding the fleet longest: two
-	// windows open at once each wait on their own nodes, and the one that
-	// has waited longest is the one a reader looks at first.
+	// THE OLDEST FIRST: it has held the fleet longest, so a reader looks at
+	// it first.
 	sort.SliceStable(out.open, func(i, j int) bool {
 		if !out.open[i].EnteredAt.Equal(out.open[j].EnteredAt) {
 			return out.open[i].EnteredAt.Before(out.open[j].EnteredAt)
@@ -124,24 +87,21 @@ func readWindows(ctx context.Context, fleet coord.Fleet) windowsRead {
 // windowWatch is what this node last read of each log's capacity window, for
 // the alarm's third answer.
 //
-// IN MEMORY, because it is a fact about this node's reads and nobody else's,
-// and because what it holds is only ever the last thing a read here found: a
-// node that restarts mid-outage starts knowing nothing, and raises nothing
-// for a log it never read.
+// IN MEMORY: it is a fact about this node's reads alone, so a node that
+// restarts mid-outage knows nothing and raises nothing for a log it never read.
 type windowWatch struct {
 	mu sync.Mutex
 	// known is each log's window as the newest read that answered found it,
 	// open or not, with when it was read and that read's number.
 	known map[string]knownWindow
-	// latest is the number of the newest read of each log the watch has taken
-	// account of, answered or not, and failing whether that read failed: the
-	// state the log line is written on the change of.
+	// latest is the number of each log's newest read taken account of,
+	// answered or not, and failing whether it failed: the log line is written
+	// when failing changes.
 	latest  map[string]uint64
 	failing map[string]bool
-	// parts is every part of an open window the report couldn't read on its
-	// last try (its acknowledgements, the admissions), keyed by stream and
-	// part, so the log line is written once when a read starts failing and
-	// once when it stops ([windowWatch.part]).
+	// parts is every part of an open window ([windowParts]) the report's last
+	// try couldn't read, keyed by [partKey], so its log line is written once
+	// per change ([windowWatch.part]).
 	parts map[string]bool
 }
 
@@ -168,19 +128,13 @@ type judgedWindow struct {
 }
 
 // observe takes one read at now and answers the windows the alarm judges: for
-// every log, the window the newest read that answered found open there, if it
-// found one, marked unreadable where the newest read of it failed.
+// every log, the window the newest answering read found open there, marked
+// unreadable where the newest read of it failed.
 //
-// THE NEWEST READ WINS, by the number it was sent under, never by when it
-// arrives here: an older read observed after a newer one changes nothing the
-// newer one decided.
-//
-// A READ THE CALLER'S OWN CONTEXT ENDED says nothing about coordination, so it
-// changes nothing remembered: a log it couldn't read is judged on what was
-// known.
-//
-// A NIL WATCH REMEMBERS NOTHING, which judges exactly what this read found: an
-// unread log raises nothing, since nothing here ever saw a window on it.
+// THE NEWEST READ WINS by the number it was sent under, never by arrival. A
+// read the caller's own context ended says nothing about coordination, so it
+// changes nothing remembered. A NIL WATCH remembers nothing, so it judges
+// exactly this read: an unread log raises nothing.
 func (w *windowWatch) observe(ctx context.Context, now time.Time, read windowsRead) []judgedWindow {
 	if w == nil {
 		out := make([]judgedWindow, 0, len(read.open))
@@ -206,8 +160,7 @@ func (w *windowWatch) observe(ctx context.Context, now time.Time, read windowsRe
 			op, found := open[stream]
 			w.known[stream] = knownWindow{op: op, open: found, at: now, taken: taken}
 			if !found {
-				// A LOG WITH NO WINDOW has no parts to read, so whatever
-				// failed on the last one starts again from nothing.
+				// A LOG WITH NO WINDOW has no parts: their failures reset.
 				for _, part := range windowParts {
 					delete(w.parts, partKey(stream, part))
 				}
@@ -250,11 +203,10 @@ var windowParts = []string{partAcks, partAdmissions}
 
 func partKey(stream, part string) string { return stream + " " + part }
 
-// part notes one read of a part of an open window, and writes the log line
-// when its reads start failing and when they stop: the report says it couldn't
-// read the part, and this is where the reason is. Once per change rather than
-// per report, which the alarm heartbeat assembles every ten seconds. A NIL
-// WATCH remembers nothing, so it writes every failure.
+// part notes one read of a part of an open window and logs the reason when its
+// reads start failing and when they stop: once per change, not per report,
+// which the alarm heartbeat assembles every ten seconds. A NIL WATCH remembers
+// nothing, so it logs every failure.
 func (w *windowWatch) part(ctx context.Context, stream, part string, err error) {
 	if err != nil && ctx.Err() != nil {
 		return

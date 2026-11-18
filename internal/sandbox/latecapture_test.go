@@ -19,14 +19,12 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// appliedLog is the executor log as one data node applies and reads it — the
-// shipped applier and the shipped reader (executordomaintest) — answering this
-// package's records as the engine's adapter answers them (internal/engine's
-// executorRecords): a capture the turn's row names once it is applied has
-// LANDED, one the apply wrote nothing for was PASSED OVER, and an end is taken;
-// and reading a turn's row as the engine's restore reads it (its
-// executorRestore), the log's not-found as [ErrTurnRowNotFound]. Every end
-// asked of it is kept, for a case to read the end its coordinator made.
+// appliedLog is the executor log as one data node applies and reads it (the
+// shipped applier and reader, executordomaintest), answering as internal/engine's
+// executorRecords and executorRestore do: a capture the turn's row names once
+// applied LANDED, one the apply wrote nothing for was PASSED OVER, an end is
+// taken, and the log's not-found reads as [ErrTurnRowNotFound]. Every end asked
+// of it is kept, for a case to read.
 type appliedLog struct {
 	log *executordomaintest.Log
 
@@ -120,9 +118,8 @@ func (a *appliedLog) ended() []EndRecord {
 }
 
 // recordedLate is the run store whose first settle of a begun capture lets land
-// go next: the record that capture's taker handed on before its lease's window
-// closed — to a data node, or to its broker connection's buffer — which the log
-// takes only once the settle has read the turn's row there and stamped the
+// go next: a record the taker handed on before its lease's window closed, which
+// the log takes only after the settle read the turn's row and stamped the
 // capture refused, the one order the fence cannot rule out (session.go, "WHAT
 // THE FENCE CANNOT REACH").
 type recordedLate struct {
@@ -160,28 +157,18 @@ func (r *recordedLate) late() (*SessionCapture, LogAnswer, error) {
 	return r.settled, r.landed, r.err
 }
 
-// A CAPTURE RECORDED AFTER ITS SETTLE IS KEPT THROUGH THE TURN'S END. A record
-// its taker handed on before its lease's window closed can be taken by the log
-// only after another node's settle read the turn's row there, found no such
-// capture, and stamped it refused — the one order the fence cannot rule out —
-// and NO REFUSAL OF THE SETTLE'S GOES TO THE LOG, since one ordered there would
-// have the applier refuse that late capture and lose a session. So the log
-// takes the late record as any other, and the turn's row names it; the turn's
-// end names the run's newest capture as unkept — the settled stamp, at the
-// place the row now names, no newer than it — and the applier, deciding on the
-// row's own place, releases nothing; and the next read of the turn's row, the
-// one a session read and the conversation's next turn make, has it kept: its
-// object named, its conversation's head, and no account of it as not kept.
-// DRIVEN THROUGH THE SHIPPED APPLIER AND READER (executordomaintest), never a
-// double's reading of the end's release.
+// A CAPTURE RECORDED AFTER ITS SETTLE IS KEPT THROUGH THE TURN'S END. The log
+// takes the late record (recordedLate) as any other: NO SETTLE'S REFUSAL GOES
+// TO THE LOG (ADR-0073), or the applier would refuse it and lose a session. The
+// end names the settled stamp unkept, no newer than the row's place; the
+// applier, deciding on that place, releases nothing; the next read (a session
+// read, the conversation's next turn) has it kept: object named, the head, not
+// told unkept. Driven through the shipped applier and reader (executordomaintest).
 //
-// Mutation: decide the end's release at or past the row's own place
-// (executordomain's unkeptSupersedes as at-or-after), and the end takes the
-// late capture off the row; name the end's unkept capture past the run's
-// newest stamp (unkeptOf), and it releases the capture the row names; answer
-// executordomain's Session.Unkept off the ending alone, and the kept row tells
-// its own session as not kept; or record the settle's refusal on the log, as
-// ADR-0073 declines to, and the late record is refused.
+// Mutation: executordomain's unkeptSupersedes as at-or-after takes the capture
+// off the row; unkeptOf past the run's newest stamp releases it; Session.Unkept
+// off the ending alone tells the kept row not kept; recording the settle's
+// refusal on the log refuses the late record.
 func TestACaptureRecordedAfterItsSettleIsKeptThroughTheTurnsEnd(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {

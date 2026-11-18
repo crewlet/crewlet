@@ -24,67 +24,43 @@ import (
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
-// A DEVICE SIGN-IN, the engine's half (M11 of the Models design): a person
-// signs a harness in from the Models page without a terminal on the node. The node
-// that takes the request runs the harness's own device-code login
-// ([harness.DeviceLogin]), relays its verification address and one-time code
-// through a coordination record ([coord.DeviceSignIn]), and waits for the
-// person to approve it in their browser. Nothing is pasted back through
-// Crewlet.
-//
-// # One session per entry, across the fleet
-//
-// The record is filed under the entry, and a start creates it only where
-// none is running: a second start is refused with the running session
-// ([ErrSignInInProgress]). A record whose session has ended, lapsed, or whose
-// node is gone is replaced.
-//
-// # On approval the login reaches every node
-//
-// The harness wrote its login into this node's credential directory. The node
-// exports it as the entry's credential bundle, seals it in the secret store
-// ([secrets.SourceModels]), and re-activates the revision so every node
-// rebuilds the entry and restores the bundle, the newest login winning over an
-// older one it holds (harness's bundle restore). A failed re-activation leaves
-// the login sealed and says so on the record: the next apply carries it.
-//
-// # A session outlives nothing it should not
-//
-// A cancel reaches the running node through the record (status
-// cancel_requested), which every node watches. A node that stops ends its
-// sessions as failed ("the node signing in stopped; start again"), and every
-// node's sweep marks failed a session whose node is gone and removes a record
-// past its lifetime ([coord.DeviceSignIn.Lapsed]).
+// A device sign-in signs a harness in from the Models page with no terminal
+// on the node: the node taking the request runs the harness's device-code
+// login ([harness.DeviceLogin]), relays its address and code through a
+// coordination record ([coord.DeviceSignIn]), and the person approves in their
+// browser; nothing is pasted back. One session runs per entry fleet-wide
+// ([ErrSignInInProgress]). On approval the login is sealed as the entry's
+// bundle ([secrets.SourceModels]) and the revision re-activated so every node
+// restores it, the newest login winning; a failed re-activation is said on the
+// record and the next apply carries it. A cancel reaches the running node
+// through the record; a stopping node fails its sessions, and every node's
+// sweep fails a session whose node is gone and removes a lapsed record.
 
-// deviceCodeWait is how long a start waits for the harness to print its address and
-// code before it answers that the sign-in is unavailable: TWENTY SECONDS, past a
-// harness's cold start and its first round trip to the vendor, and the bound the
-// API promises a person waiting on the dialog.
+// deviceCodeWait is how long a start waits for the harness's address and code
+// before answering the sign-in unavailable: past a harness's cold start and its
+// first round trip to the vendor, and the bound the API promises the dialog.
 const deviceCodeWait = 20 * time.Second
 
-// deviceCodeLifetime is how long a session is held for before the harness has said
-// how long its code lives: OpenAI's documented fifteen minutes for a device
-// code, plus the thirty-second grace harness's device login allows past it.
+// deviceCodeLifetime holds a session until the harness says how long its code
+// lives: OpenAI's documented fifteen minutes, plus the thirty-second grace
+// harness's device login allows past it.
 const deviceCodeLifetime = 15*time.Minute + 30*time.Second
 
-// deviceSweepInterval is how often a node sweeps the sessions: the coordination
-// heartbeat, which is the cadence a node that died stops renewing its presence
-// at, so its sessions are failed within a beat of its lease lapsing.
+// deviceSweepInterval is the coordination heartbeat, the cadence a dead node
+// stops renewing its presence at, so its sessions fail within a beat of its
+// lease lapsing.
 const deviceSweepInterval = coord.ReconcileInterval
 
-// deviceFinalWriteBudget bounds the write that records how a session ended,
-// made after the session's own context may be gone: ten seconds, a few store
-// round trips. A FRESH budget of its own, never what the approval before it
-// left over: a re-activation that took its whole budget must still leave the
-// session saying how it ended.
+// deviceFinalWriteBudget bounds the write recording how a session ended, made
+// after its context may be gone: a few store round trips. A fresh budget, never
+// the approval's leftover, so a re-activation that took its whole budget still
+// leaves the session saying how it ended.
 const deviceFinalWriteBudget = 10 * time.Second
 
-// deviceApproveBudget bounds what an approval does before that write: export
-// the login, seal it, and re-activate the revision so every node restores it.
-// The budget the engine already gives the re-activation a sealed credential
-// asks for ([setup.RecordDeadline], which [Engine.rebuildForSealedSecrets]
-// runs under): an apply rebuilds every entry, which the export and the seal
-// are seconds beside.
+// deviceApproveBudget bounds an approval's export, seal and re-activation: the
+// budget a sealed credential's re-activation already runs under
+// ([Engine.rebuildForSealedSecrets]), since the apply rebuilding every entry
+// dwarfs the export and the seal.
 const deviceApproveBudget = setup.RecordDeadline
 
 var (
@@ -271,9 +247,8 @@ func (e *Engine) StartDeviceSignIn(ctx context.Context, key string, by iam.Actor
 			})
 			if werr != nil {
 				// A CODE NOBODY CAN READ IS NO SIGN-IN: the person
-				// is shown nothing to approve, so the session ends
-				// here, saying why, rather than waiting out a code
-				// on a record that never got it.
+				// sees nothing to approve, so the session ends here
+				// rather than waiting out an unrecorded code.
 				werr = fmt.Errorf("the device code could not be recorded for the person to read: %w", werr)
 				log.WarnContext(sessionCtx, "device_sign_in_not_recorded", "provider", key, "error", werr)
 				cancel(werr)
@@ -355,9 +330,8 @@ func (e *Engine) reserveDeviceSession(record coord.DeviceSignIn) (reservedSessio
 	if running := d.running[record.Entry]; running != nil {
 		return reservedSession{}, nil, &SignInInProgressError{Running: running.record}
 	}
-	// THE NODE'S LIFETIME, NOT THE REQUEST'S: the session outlives the
-	// request that started it (the person approves minutes later), and ends
-	// with the node, which fails it ([Engine.stopDeviceSignIns]).
+	// THE NODE'S LIFETIME, NOT THE REQUEST'S: the person approves minutes
+	// after the request; the node's stop fails it ([Engine.stopDeviceSignIns]).
 	ctx, cancel := context.WithCancelCause(d.base)
 	session := &deviceSession{id: record.ID, record: record, cancel: cancel, done: make(chan struct{})}
 	if d.running == nil {
@@ -554,11 +528,10 @@ func (e *Engine) endDeviceSignIn(sessionCtx context.Context, key string, id uuid
 	return final
 }
 
-// publishSignInEnded puts how a device sign-in ended into the audit trail, as
-// a `model_acted` of the person who started it: the route that started it
-// answered with a pending code, and the login it stored, or did not, is
-// decided minutes later on the node that ran it. faulted is an approved
-// session whose login could not be stored or carried to the fleet.
+// publishSignInEnded audits how a device sign-in ended, as a `model_acted` of
+// the person who started it: its route answered with a pending code, and the
+// outcome is decided minutes later on the node that ran it. faulted is an
+// approved session whose login could not be stored or carried to the fleet.
 func (e *Engine) publishSignInEnded(ctx context.Context, key string,
 	status coord.DeviceSignInStatus, faulted bool, actorName, actorKind, operatorID string) {
 

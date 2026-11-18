@@ -12,16 +12,14 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A run that holds a call for approval is put to the people its tool's
-// approver policy admits, never to the seat's manager chain as such and never
-// to an agent: no agent may approve a call, and a question an agent receives
-// is one nobody who may answer it sees. An SSH operate command's approvers are
-// the administrators and the people integrations.ssh.approvers names
-// (ssh.operate.approve), after the people its delegated-decisions rule puts
-// an escalation to where it was put to delegates; a merge's or a deploy's are
-// the people its rule names in escalate_to, the seat's leads and the
-// administrators (release.approve); any other held call's are the people among
-// the seat's leads and the administrators (tools.approve).
+// A held call is put to the people its tool's approver policy admits, never to
+// the seat's manager chain as such and never to an agent: no agent may approve a
+// call, so one put to an agent reaches nobody who may answer. An SSH operate
+// command's approvers are the administrators and integrations.ssh.approvers
+// (ssh.operate.approve), after the people a delegated-decisions rule names
+// where the call was put to delegates; a merge's or a deploy's are its rule's
+// escalate_to, the seat's leads and the administrators (release.approve); any
+// other's are the seat's leads and the administrators (tools.approve).
 
 // heldAudienceRead bounds the directory read that names the administrators.
 const heldAudienceRead = 10 * time.Second

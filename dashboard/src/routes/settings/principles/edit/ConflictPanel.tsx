@@ -47,8 +47,9 @@ export function ConflictPanel({
       <ConflictNote
         subject={subject.charAt(0).toUpperCase() + subject.slice(1)}
         labels={{
+          // THE BUTTONS BESIDE IT NAME THE TWO ANSWERS, so the sentence does not.
           changed: (name) =>
-            `${name} changed while you were editing. Your draft is kept: compare, then keep yours or use theirs.`,
+            `${name} changed while you were editing. Your draft is kept, and what changed is below.`,
         }}
         actions={
           <>

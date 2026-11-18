@@ -46,12 +46,10 @@ func chartCompany(purpose string) string {
 	return strings.Replace(chartDoc, "PURPOSE", purpose, 1)
 }
 
-// A BOOT STAMPS THE CHART WITH THE INSTANT ITS COMPANY WAS ACTIVATED.
-//
-// It used to be the boot's own clock, so a node that restarted on a revision
-// the fleet had since replaced stamped NOW — later than the newer revision's
-// apply — and walked every project's names back to its own old ones. The
-// activation instant is the same on every node and at every boot.
+// A BOOT STAMPS THE CHART WITH THE INSTANT ITS COMPANY WAS ACTIVATED, the same
+// on every node and at every boot. The boot's own clock would let a node
+// restarting on a replaced revision stamp a time later than the newer
+// revision's apply, walking every project's names back to its own.
 func TestABootStampsTheChartWithItsCompanysActivation(t *testing.T) {
 	t.Parallel()
 	activated := time.Date(2026, 3, 2, 10, 0, 0, 250_000_000, time.UTC)
@@ -94,12 +92,9 @@ func TestAnUnactivatedCompanyIsChartedByItsActivation(t *testing.T) {
 	}
 }
 
-// AN OLDER ACTIVATION APPLIED LATE DOES NOT WALK THE CHART BACK.
-//
-// Two nodes applying two revisions is ordinary during a rollout, and so is a
-// node applying the older one second. Stamped with each apply's own clock the
-// later APPLY won whatever it carried; stamped with the activation, the later
-// ACTIVATION does.
+// AN OLDER ACTIVATION APPLIED LATE DOES NOT WALK THE CHART BACK. Two nodes
+// applying two revisions, the older one second, is ordinary during a rollout:
+// stamped with the activation, the later ACTIVATION wins, not the later apply.
 func TestAnOlderActivationAppliedLateDoesNotWalkTheChartBack(t *testing.T) {
 	t.Parallel()
 	newer := time.Date(2026, 3, 2, 10, 0, 1, 0, time.UTC)
@@ -120,7 +115,7 @@ func TestAnOlderActivationAppliedLateDoesNotWalkTheChartBack(t *testing.T) {
 			"newer one's (\"ships it\", %d)", purpose, epoch, configplane.ActivationStamp(newer))
 	}
 	// AND THE UNIT'S KNOWLEDGE SPACE, which the same apply writes from the
-	// same chart and which walked back the same way until it was stamped.
+	// same chart and stamps the same way.
 	space := containerRow(t, e, "ENGDOCS")
 	if space.Purpose != "ships it" || space.ChartEpoch != configplane.ActivationStamp(newer) {
 		t.Errorf("after the older activation the container is (%q, %d), want the "+
@@ -149,14 +144,11 @@ func TestReapplyingOneActivationPutsNoRecordOnTheLog(t *testing.T) {
 	}
 }
 
-// A RESTART ON THE SAME ACTIVATION WRITES NOTHING.
-//
-// The restart is the same store and the same stream opened again, which is
-// what `crewlet run` does after a crash or an upgrade. It applies the chart at
-// boot like any boot, and finding the project already carrying this
-// activation's stamp and values, it decides there is nothing to write — a
-// reconcile, never an operation the ledger is asked to recognise, so it holds
-// however long ago the activation was.
+// A RESTART ON THE SAME ACTIVATION WRITES NOTHING: the same store and stream
+// reopened, as `crewlet run` does after a crash or an upgrade, find the project
+// already carrying this activation's stamp and values. A reconcile, never an
+// operation the ledger is asked to recognise, so it holds however long ago the
+// activation was.
 func TestARestartOnOneActivationWritesNothing(t *testing.T) {
 	t.Parallel()
 	dir := brokertest.TempDir(t)

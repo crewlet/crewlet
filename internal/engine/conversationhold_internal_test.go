@@ -247,11 +247,10 @@ func refusedRun(conversation string, continued bool) *events.Event {
 }
 
 // A REQUEST THE PROVIDER REFUSED TWICE IN A ROW, THE SECOND TIME ON A FRESH
-// SESSION, HOLDS ITS CONVERSATION, which is what tells an administrator: a
-// schedule whose every fire is refused stops firing into the refusal and stands
-// as a notice. A refusal of a continued session is the session's, which is
-// retired, and a run that finished in between starts the count again. The hold
-// is judged against the models and the tool servers a request is built from.
+// SESSION, HOLDS ITS CONVERSATION, so a schedule whose every fire is refused
+// stops firing and stands as a notice. A continued session's refusal is the
+// session's, which is retired; a run that finished in between restarts the
+// count. The hold is judged against the models and the tool servers.
 //
 // Mutation: drop the kind from conversationFailures, hold on a continued
 // session's refusal, or fingerprint the models alone, and this goes red.

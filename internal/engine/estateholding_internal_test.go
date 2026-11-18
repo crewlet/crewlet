@@ -18,12 +18,9 @@ import (
 // backup copies it.
 //
 // Holding is a fact about the node: a company that moved its tracker off
-// Worklet leaves a data node's file on disk with every row its log ever
-// derived. While the file was opened only by the native half's runtime, such a
-// node held nothing open, and its backup wrote a manifest for its own file
-// alone and reported success. So a data node that runs no native half at all —
-// this one has no company — must hold the replicated estate open from boot,
-// and a backup built on the engine's answer must carry it.
+// Worklet still leaves every derived row in the node's file. So a data node
+// running no native half (this one has no company) holds the estate open from
+// boot, or its backup would copy its own file alone and report success.
 func TestADataNodeHoldsItsEstateWhateverItsCompanyRuns(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
@@ -77,11 +74,10 @@ func TestADataNodeHoldsItsEstateWhateverItsCompanyRuns(t *testing.T) {
 
 // A NODE KEEPS ITS REPLICATED ESTATE WHEN ITS STATE LOG STOPS.
 //
-// The state log runs the logs of what the node holds; the store's own Close is
-// what gives the file back. A runtime that closed it on its way out left a
-// node — an apply that failed after its runtime came up, an engine stopped
-// over backends that outlive it — holding nothing a backup, a retention report
-// or the next runtime would find.
+// Only the store's own Close gives the file back. A runtime closing it on its
+// way out (an apply failed after its runtime came up, an engine stopped over
+// backends that outlive it) leaves nothing for a backup, a retention report or
+// the next runtime.
 func TestANodeKeepsItsEstateWhenItsStateLogStops(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
@@ -97,10 +93,9 @@ func TestANodeKeepsItsEstateWhenItsStateLogStops(t *testing.T) {
 
 // A NODE WITHOUT `data` HOLDS NOTHING, and opens nothing.
 //
-// Its store is scratch, deleted at every boot, and a replicated estate opened
-// in it would be an empty database answering as a company with nothing in it
-// — and the backup, which reads the same answer, would copy a file there that
-// no engine ever opens. (`crewlet migrate` refuses the scratch store outright.)
+// Its store is scratch, deleted at every boot: an estate opened there would
+// answer as an empty company, and the backup would copy a file no engine
+// opens.
 func TestANodeWithoutDataHoldsNothing(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()

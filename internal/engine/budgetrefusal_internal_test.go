@@ -24,12 +24,11 @@ func woke(l *refusalLatch) bool {
 
 // A WINDOW'S FIRST REFUSAL WAKES THE LIVE METERS, AND ONLY ITS FIRST.
 //
-// The first refusal is the moment a header has to change — the company, or a
-// seat, has stopped — and every refusal after it in the same window changes
-// nothing a header draws, so it rides the reporter's tick rather than putting
-// one frame per refused round on the fleet's stream. "First" is as the counter
-// counts it: an admitted charge clears the scope's stamps, so a refusal after
-// one is a first again, and a window that is no longer current is forgotten.
+// The first refusal is when a header changes (the company or a seat stopped);
+// a repeat in the same window changes nothing a header draws, so it rides the
+// reporter's tick rather than putting a frame per refused round on the stream.
+// "First" is as the counter counts it: an admitted charge clears the scope's
+// stamps, and a window no longer current is forgotten.
 func TestAWindowsFirstRefusalWakesTheMetersAndOnlyItsFirst(t *testing.T) {
 	t.Parallel()
 	l := newRefusalLatch()
@@ -75,10 +74,9 @@ func TestAWindowsFirstRefusalWakesTheMetersAndOnlyItsFirst(t *testing.T) {
 
 // EVERY REFUSAL THE COUNTER ANSWERS REACHES THE LATCH.
 //
-// The counter's answer is the one point every refusal passes, so the gate's
-// counter is where the meters are told: a charge refused names its window, an
-// admitted one clears both scopes it charged, and a refusal recorded without a
-// charge names every window it stamped.
+// The counter's answer is the one point every refusal passes: a refused charge
+// names its window, an admitted one clears both scopes it charged, and a
+// refusal recorded without a charge names every window it stamped.
 func TestEveryRefusalTheCounterAnswersReachesTheLatch(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, time.September, 23, 12, 0, 0, 0, time.UTC)
@@ -107,9 +105,8 @@ func TestEveryRefusalTheCounterAnswersReachesTheLatch(t *testing.T) {
 	if got := charge(1, caps); got.OK || woke(l) {
 		t.Fatalf("a second refusal in the window (%+v) woke the meters again", got)
 	}
-	// A CHARGE OF NOTHING is admitted without the counter looking and clears
-	// no stamp, so the refusal after it is still a repeat — not a first that
-	// wakes the meters once for every phase a provider reports no usage for.
+	// A CHARGE OF NOTHING is admitted unread and clears no stamp, so the
+	// refusal after it stays a repeat, not a wake per phase with no usage.
 	if got := charge(0, caps); !got.OK || woke(l) {
 		t.Fatalf("a charge of nothing (%+v) was refused or woke the meters", got)
 	}
@@ -156,9 +153,8 @@ func TestEveryRefusalTheCounterAnswersReachesTheLatch(t *testing.T) {
 
 // A TURN'S METER AND A PERSON'S ANSWER CHARGE THROUGH THE COUNTER THAT TELLS.
 //
-// The two places a gate is built — every turn's meter, and the company's
-// answer budget — each take this node's counter, and either one built over the
-// bare fleet store would refuse with the header none the wiser.
+// Both places a gate is built (a turn's meter, the answer budget) take this
+// node's counter; one built over the bare fleet store refuses unseen.
 func TestTheGatesChargeThroughTheCounterThatTellsTheMeters(t *testing.T) {
 	t.Parallel()
 	lead := &org.Role{Name: "Lead"}

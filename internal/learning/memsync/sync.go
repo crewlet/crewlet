@@ -177,7 +177,7 @@ type Syncer struct {
 	pace time.Duration
 
 	// window is what a replay pull carries at most across a link
-	// ([Syncer.pullBound]), and 0 in a member's own process.
+	// ([pullWindow], [Syncer.pullBound]), and 0 in a member's own process.
 	window int
 
 	// link is the meter of the link this node's connection crosses
@@ -220,8 +220,8 @@ type Syncer struct {
 // pulls, which are bounded by this connection's own limit ([Syncer.pullBytes]),
 // so no answer of its can be larger than the link carries ([Syncer.replay]).
 // What the topology changes is how long each request is given and how much a
-// pull carries across a link ([Config]). A node across a link that names no
-// lease heartbeat is refused, by name.
+// pull carries across a link ([Config]). A node in its broker's own process
+// handed a link's meter is refused, by name: it crosses no link to meter.
 func New(db *store.DB, js jetstream.JetStream, agentID AgentIDFor, cfg Config) (*Syncer, error) {
 	if db == nil || js == nil || agentID == nil {
 		return nil, nil
@@ -229,12 +229,7 @@ func New(db *store.DB, js jetstream.JetStream, agentID AgentIDFor, cfg Config) (
 	s := &Syncer{db: db, js: js, agentID: agentID, marks: map[markKey]int64{},
 		holdings: map[string]*seatHolding{}, timing: jsprovision.Clustered(cfg.Clustered).Timing()}
 	if cfg.AcrossLink {
-		if cfg.LeaseHeartbeat <= 0 {
-			return nil, fmt.Errorf("memsync: a node that reaches the memory changelog across a "+
-				"link needs its lease heartbeat (Config.LeaseHeartbeat), which sizes the window "+
-				"its replays' pulls share with its lease renewals; got %v", cfg.LeaseHeartbeat)
-		}
-		s.pace, s.window, s.link = objstore.MiBPace, windowFor(cfg.LeaseHeartbeat), cfg.Link
+		s.pace, s.window, s.link = objstore.MiBPace, pullWindow, cfg.Link
 	} else if cfg.Link != nil {
 		return nil, errors.New("memsync: a node whose connection reaches the memory changelog " +
 			"in its own process crosses no link, so it has none to meter (Config.Link is set " +
@@ -242,6 +237,13 @@ func New(db *store.DB, js jetstream.JetStream, agentID AgentIDFor, cfg Config) (
 	}
 	return s, nil
 }
+
+// Window is the most a replay pull carries across this node's link
+// ([pullWindow]), or 0 where [Config.AcrossLink] said the connection crosses
+// none and a pull carries the connection's own bound ([Syncer.pullBytes]).
+// Whoever builds the syncer decides which, and the engine's choice — by the
+// node's broker kind — is held by a test of its own that reads it here.
+func (s *Syncer) Window() int { return s.window }
 
 // info logs one of a hydration's lines at info, and hands it to the said seam
 // where a case set one.
@@ -1201,8 +1203,8 @@ func (s *Syncer) checkIdentity(ctx context.Context) error {
 // has out, which the acknowledgement queues behind on the same connection
 // ([Syncer.endBarrierArrival]) — so an end barrier is presumed lost after
 // about 9.0 seconds in a member's own process at the transport's bound and
-// asked again at 10, and across a link at the window after about 16.5 seconds
-// and asked again at 17.5, rather than asked again behind the bytes the first
+// asked again at 10, and across a link at the window after about 5.2 seconds
+// and asked again at 6.2, rather than asked again behind the bytes the first
 // is waiting on; the identity reads and the hydration's first barrier, which
 // wait behind no pull, are asked every two seconds. Only the stream's leader takes a publish — no other member
 // subscribes to the stream's subjects (nats-server stream.go, setLeader) — and
